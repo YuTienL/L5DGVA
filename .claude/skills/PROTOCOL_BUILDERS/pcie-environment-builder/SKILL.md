@@ -32,6 +32,12 @@ scaffolding only -- none invent protocol-specific register maps, VIP class names
 checker/scoreboard semantics; those must still come from current evidence (previous
 section), supplied into the manifest/topology JSON, never fabricated. Read each
 module's own docstring "WHAT THIS DOES NOT DO" section before assuming more than this.
+
+For LTSSM/link-training content specifically, use
+`dv_harness/uvm_generator/pcie_ltssm_generator.py` (a real LTSSM
+transition model, CLI: `tools/generate_pcie_ltssm_environment.py`) instead
+of hand-authoring link-training state logic — it already implements the
+transition model this section's "LTSSM/link training" bullet asks for.
 - VIP topology
 - LTSSM/link training
 - configuration space
