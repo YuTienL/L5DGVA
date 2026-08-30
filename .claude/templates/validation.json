@@ -1,0 +1,60 @@
+{
+  "claude_startup": {
+    "command": "claude --dangerously-skip-permissions",
+    "status": "REQUIRED"
+  },
+  "push": {
+    "status": "NOT_RUN",
+    "branch": null,
+    "commit": null
+  },
+  "remote_sync": {
+    "status": "NOT_RUN",
+    "host": null,
+    "remote_commit": null,
+    "commit_match": false
+  },
+  "build": {
+    "status": "NOT_RUN",
+    "coverage": "OFF",
+    "command": null,
+    "log": null
+  },
+  "verify": {
+    "status": "NOT_RUN",
+    "coverage": "OFF",
+    "testcase": null,
+    "command": null,
+    "log": null
+  },
+  "wave_run": {
+    "status": "NOT_RUN",
+    "WAVE": 1,
+    "coverage": "OFF",
+    "dump_start": "time=0",
+    "dump_end": "simulation_end",
+    "fsdb": null
+  },
+  "fsdbreport": {
+    "status": "NOT_RUN",
+    "command": null,
+    "report": null,
+    "findings": []
+  },
+  "reference_gates": {
+    "branch_b_vip_evidence": "NOT_APPLICABLE",
+    "branch_a_dut_evidence": "NOT_APPLICABLE"
+  },
+  "source_quality": {
+    "stale_comment_cleanup": "NOT_CHECKED",
+    "semantic_naming": "NOT_CHECKED"
+  },
+  "review": {
+    "status": "NOT_RUN",
+    "findings": []
+  },
+  "signoff": {
+    "status": "NOT_RUN",
+    "residual_risk": []
+  }
+}

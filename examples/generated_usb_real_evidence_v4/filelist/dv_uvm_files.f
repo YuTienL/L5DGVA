@@ -1,0 +1,10 @@
+tb/env/usb_config.sv
+tb/env/usb_coverage.sv
+tb/env/usb_env.sv
+tb/env/usb_env_pkg.sv
+tb/env/usb_scoreboard.sv
+tb/seq/usb_base_vseq.sv
+tb/seq/usb_virtual_sequencer.sv
+tb/tests/usb_base_test.sv
+tb/tests/usb_connect_test.sv
+tb/top/tb_top.sv

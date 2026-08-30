@@ -1,0 +1,12 @@
+{
+  "evidence_items": [
+    {
+      "evidence_id": "E1",
+      "source": "sim.log",
+      "captured_at": "ISO8601",
+      "revision": "rtl_sha",
+      "content_hash": "sha256",
+      "approved_cross_revision_use": false
+    }
+  ]
+}

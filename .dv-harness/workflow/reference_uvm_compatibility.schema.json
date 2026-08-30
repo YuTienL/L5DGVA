@@ -1,0 +1,16 @@
+{
+  "reference_name": "USB_UVM_REFERENCE_BASE",
+  "reference_revision": "sha",
+  "reference_hash": "sha256",
+  "compatibility_analysis": {
+    "protocol_role": "string",
+    "interface_mapping": "string",
+    "config_mapping": "string",
+    "sequence_reuse": "string",
+    "scoreboard_checker_reuse": "string"
+  },
+  "reuse_decision": "REUSE|PARTIAL_REUSE|REFERENCE_ONLY",
+  "adaptation_plan": [
+    "string"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "name": "_pre_restore_1788099898",
+  "note": "auto-backup before restoring '2026-08-30_usb_gap_closing_progress'",
+  "saved_at": 1788099899.0398052,
+  "saved_by": "peter.lin",
+  "current_stage": "ENV_CHECK",
+  "active_stages": [],
+  "overall_status": "NOT_STARTED",
+  "git_sha": null,
+  "server_sha": null,
+  "files": [
+    "state.json",
+    "control.json",
+    "config.json",
+    "events.jsonl"
+  ],
+  "dirs": [
+    "blackboard",
+    "plans",
+    "react",
+    "agents",
+    "telemetry",
+    "lsf"
+  ],
+  "missing": [
+    "project_meta.json"
+  ]
+}

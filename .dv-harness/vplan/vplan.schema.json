@@ -1,0 +1,34 @@
+{
+  "vplan_id": "string",
+  "protocol_or_domain": "string",
+  "scope": "IP|SUBSYSTEM|SYSTEM_LEVEL",
+  "spec_revision": "string",
+  "requirements": [
+    {
+      "req_id": "SPEC-XXX",
+      "spec_ref": "section/page",
+      "title": "string",
+      "requirement_text": "string",
+      "support_status": "SUPPORTED|UNSUPPORTED_BY_DUT|NOT_APPLICABLE|UNKNOWN",
+      "waiver": {
+        "allowed": true,
+        "reason": "",
+        "evidence": [],
+        "approved": false
+      },
+      "verification_targets": [
+        "testcase",
+        "assertion",
+        "scoreboard",
+        "coverage",
+        "formal",
+        "emulation",
+        "prototype"
+      ],
+      "testcase_ids": [],
+      "coverage_ids": [],
+      "status": "UNPLANNED|PLANNED|IMPLEMENTED|VERIFIED|WAIVED|NOT_APPLICABLE|BLOCKED"
+    }
+  ],
+  "coverage_goal": "100_PERCENT_SPEC_ACCOUNTING"
+}

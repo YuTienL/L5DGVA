@@ -1,0 +1,14 @@
+{
+  "pytest_rc": 0,
+  "status": "PASS",
+  "skills": 260,
+  "iron_rules": 145,
+  "features": [
+    "scoreboard analyzer",
+    "checker analyzer",
+    "assertion analyzer",
+    "placement plan",
+    "implementation skeleton",
+    "regression closure"
+  ]
+}

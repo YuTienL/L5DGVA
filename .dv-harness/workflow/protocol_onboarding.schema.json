@@ -1,0 +1,15 @@
+{
+  "protocol_name": "string",
+  "spec_sources": [],
+  "dut_mapping": {},
+  "vip_strategy": {},
+  "state_model": {},
+  "transaction_model": {},
+  "error_recovery_model": {},
+  "verification_mechanism_plan": {},
+  "vplan_mapping": {},
+  "test_generation_strategy": {},
+  "coverage_model": {},
+  "qualification_plan": {},
+  "evidence_refs": []
+}

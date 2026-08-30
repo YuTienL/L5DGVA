@@ -1,0 +1,49 @@
+{
+  "protocol": "eDP",
+  "roles": [
+    "Source",
+    "Sink"
+  ],
+  "boundaries": [
+    "AUX",
+    "MainLink",
+    "PHY"
+  ],
+  "must_discover": [
+    "role",
+    "lane_count",
+    "link_rates",
+    "AUX",
+    "DPCD",
+    "training_patterns",
+    "video_timing"
+  ],
+  "minimum_smoke": [
+    "AUX_access",
+    "link_training",
+    "main_link_enable",
+    "basic_video"
+  ],
+  "scoreboard_semantics": [
+    "AUX_response",
+    "training_state",
+    "video_payload"
+  ],
+  "coverage_dimensions": [
+    "lane",
+    "rate",
+    "training",
+    "AUX",
+    "video_format",
+    "error_recovery"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

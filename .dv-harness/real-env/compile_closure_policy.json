@@ -1,0 +1,16 @@
+{
+  "flow": [
+    "generate",
+    "compile",
+    "classify_error",
+    "inspect_current_evidence",
+    "patch_generated_source",
+    "recompile"
+  ],
+  "stop_conditions": [
+    "compile_pass",
+    "explicit_external_blocker",
+    "max_repair_cycles_reached"
+  ],
+  "no_fake_pass": true
+}

@@ -1,0 +1,29 @@
+{
+  "mode": "SUBSYSTEM|SYSTEM_LEVEL",
+  "target_name": "string",
+  "selected_subsystems": [],
+  "protocols": [],
+  "requested_features": [],
+  "required_artifacts": {
+    "protocol_spec": [],
+    "dut_design_spec": [],
+    "register_programming_guide": [],
+    "phy_interface_spec": [],
+    "clock_reset_spec": [],
+    "address_map": [],
+    "interrupt_spec": [],
+    "power_spec": [],
+    "vip_docs_examples_source": [],
+    "rtl_top_or_interface_files": [],
+    "existing_uvm_env": [],
+    "existing_vplan": [],
+    "existing_testcases": [],
+    "command_txt": [],
+    "regression_testlist": [],
+    "coverage_reports": [],
+    "known_unsupported_features": [],
+    "known_waivers": [],
+    "system_level_use_cases": []
+  },
+  "readiness": "NOT_STARTED|COLLECTING|READY_FOR_VPLAN|BLOCKED"
+}

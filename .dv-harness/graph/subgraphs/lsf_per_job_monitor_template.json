@@ -1,0 +1,81 @@
+{
+  "template": "LSF_PER_JOB_MONITOR",
+  "dynamic_key": "JOB_ID",
+  "nodes": [
+    {
+      "id": "JOB_STATE_QUERY",
+      "agent": "regression-agent",
+      "skills": [
+        "lsf-per-job-agent-monitor"
+      ]
+    },
+    {
+      "id": "SIMLOG_ANALYSIS",
+      "agent": "regression-agent",
+      "skills": [
+        "per-job-simlog-analysis"
+      ]
+    },
+    {
+      "id": "EARLY_FAIL_GATE",
+      "agent": "regression-agent",
+      "skills": [
+        "failure-triage"
+      ]
+    },
+    {
+      "id": "EARLY_KILL",
+      "agent": "regression-agent",
+      "skills": [
+        "lsf-early-fail-stop"
+      ]
+    },
+    {
+      "id": "JOB_DEBUG",
+      "agent": "debug-agent",
+      "skills": [
+        "failure-triage",
+        "systematic-debug"
+      ]
+    },
+    {
+      "id": "FIX_PROPOSAL",
+      "agent": "debug-agent",
+      "skills": [
+        "workflow-closure-loop"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "JOB_STATE_QUERY",
+      "target": "SIMLOG_ANALYSIS",
+      "condition": "ANY"
+    },
+    {
+      "source": "SIMLOG_ANALYSIS",
+      "target": "EARLY_FAIL_GATE",
+      "condition": "ANY"
+    },
+    {
+      "source": "EARLY_FAIL_GATE",
+      "target": "JOB_STATE_QUERY",
+      "condition": "CONTINUE"
+    },
+    {
+      "source": "EARLY_FAIL_GATE",
+      "target": "EARLY_KILL",
+      "condition": "TERMINAL_FAIL"
+    },
+    {
+      "source": "EARLY_KILL",
+      "target": "JOB_DEBUG",
+      "condition": "PASS"
+    },
+    {
+      "source": "JOB_DEBUG",
+      "target": "FIX_PROPOSAL",
+      "condition": "PASS"
+    }
+  ]
+}

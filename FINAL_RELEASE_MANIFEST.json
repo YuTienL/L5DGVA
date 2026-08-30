@@ -1,0 +1,29 @@
+{
+  "name": "DV Agent Harness L5",
+  "baseline": "Ultimate Industrial",
+  "primary_agents": 15,
+  "skills": 315,
+  "main_graph_nodes": 37,
+  "conditional_edges": 48,
+  "iron_rules": 290,
+  "features": [
+    "Graph Orchestration",
+    "Plan-and-Execute",
+    "Multi-Agent",
+    "Blackboard",
+    "Verification Memory",
+    "Autonomous Inference",
+    "Multi-Source Evidence Consensus",
+    "Independent Synthesis",
+    "Evidence-Grounded ReAct",
+    "Per-Job LSF Agents",
+    "Change-Only Alerts",
+    "Periodic Job Snapshots",
+    "Exact-Job Early Stop",
+    "Git/Server SHA Gate",
+    "Batch Closure",
+    "Final Deep Audit",
+    "Human Control",
+    "Stage Execution Profile"
+  ]
+}

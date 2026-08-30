@@ -1,0 +1,206 @@
+{
+  "built_in": [
+    "PCIe",
+    "Ethernet",
+    "MIPI_CSI2",
+    "MIPI_DSI",
+    "AMBA4_MMxMS",
+    "eDP",
+    "eMMC",
+    "SD_SDIO",
+    "UCIe",
+    "USB"
+  ],
+  "new_interface": true,
+  "new_spec_revision": true,
+  "protocols": {
+    "PCIe": {
+      "roles": [
+        "RC",
+        "EP",
+        "Switch",
+        "PHY",
+        "Retimer"
+      ],
+      "boundaries": [
+        "SERDES",
+        "PIPE",
+        "TLP"
+      ],
+      "tests": [
+        "link_training",
+        "enumeration",
+        "config_rw",
+        "memory_rw"
+      ]
+    },
+    "Ethernet": {
+      "roles": [
+        "MAC",
+        "PCS",
+        "PMA",
+        "PHY"
+      ],
+      "boundaries": [
+        "MII",
+        "GMII",
+        "XGMII",
+        "USXGMII",
+        "SXGMII",
+        "SERDES"
+      ],
+      "tests": [
+        "link_bringup",
+        "tx_frame",
+        "rx_frame",
+        "crc"
+      ]
+    },
+    "MIPI_CSI2": {
+      "roles": [
+        "TX",
+        "RX"
+      ],
+      "boundaries": [
+        "D_PHY",
+        "C_PHY",
+        "Protocol"
+      ],
+      "tests": [
+        "phy_bringup",
+        "short_packet",
+        "long_packet",
+        "frame"
+      ]
+    },
+    "MIPI_DSI": {
+      "roles": [
+        "Host",
+        "Device"
+      ],
+      "boundaries": [
+        "D_PHY",
+        "C_PHY",
+        "Protocol"
+      ],
+      "tests": [
+        "phy_bringup",
+        "command_packet",
+        "video_packet"
+      ]
+    },
+    "AMBA4_MMxMS": {
+      "roles": [
+        "Master",
+        "Slave",
+        "Interconnect"
+      ],
+      "boundaries": [
+        "AXI3",
+        "AXI4",
+        "AXI4_Lite",
+        "AXI_Stream",
+        "AHB",
+        "AHB_Lite",
+        "APB"
+      ],
+      "tests": [
+        "1x1_rw",
+        "all_masters",
+        "all_slaves",
+        "parallel_rw",
+        "backpressure"
+      ]
+    },
+    "eDP": {
+      "roles": [
+        "Source",
+        "Sink"
+      ],
+      "boundaries": [
+        "AUX",
+        "MainLink",
+        "PHY"
+      ],
+      "tests": [
+        "aux_access",
+        "link_training",
+        "video"
+      ]
+    },
+    "eMMC": {
+      "roles": [
+        "Host",
+        "Device"
+      ],
+      "boundaries": [
+        "CMD",
+        "DATA",
+        "PHY"
+      ],
+      "tests": [
+        "identify",
+        "select",
+        "read",
+        "write"
+      ]
+    },
+    "SD_SDIO": {
+      "roles": [
+        "Host",
+        "SD_Card",
+        "SDIO_Device",
+        "Combo"
+      ],
+      "boundaries": [
+        "CMD",
+        "DATA",
+        "PHY"
+      ],
+      "tests": [
+        "identify",
+        "read_write",
+        "sdio_function"
+      ]
+    },
+    "UCIe": {
+      "roles": [
+        "Die_A",
+        "Die_B",
+        "Protocol",
+        "Adapter",
+        "PHY"
+      ],
+      "boundaries": [
+        "Protocol",
+        "Adapter",
+        "PHY"
+      ],
+      "tests": [
+        "link_bringup",
+        "basic_transaction",
+        "recovery"
+      ]
+    },
+    "USB": {
+      "roles": [
+        "Host",
+        "Device",
+        "Hub"
+      ],
+      "boundaries": [
+        "UTMI",
+        "ULPI",
+        "PIPE",
+        "SERDES",
+        "Controller"
+      ],
+      "tests": [
+        "attach_connect",
+        "enumeration",
+        "control_transfer",
+        "data_transfer"
+      ]
+    }
+  }
+}

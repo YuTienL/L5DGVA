@@ -1,0 +1,20 @@
+{
+  "soc_name": null,
+  "composition_id": null,
+  "selected_subsystems": [],
+  "excluded_subsystems": [],
+  "subsystem_versions": {},
+  "connectivity": [],
+  "shared_clocks": [],
+  "shared_resets": [],
+  "address_map": [],
+  "interrupt_map": [],
+  "dma_paths": [],
+  "shared_memory_model": {},
+  "cross_subsystem_scenarios": [],
+  "end_to_end_scoreboards": [],
+  "system_coverage": [],
+  "compile_status": "NOT_RUN",
+  "smoke_status": "NOT_RUN",
+  "baseline_status": "NOT_READY"
+}

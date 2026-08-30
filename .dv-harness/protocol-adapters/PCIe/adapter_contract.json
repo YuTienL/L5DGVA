@@ -1,0 +1,54 @@
+{
+  "protocol": "PCIe",
+  "roles": [
+    "RC",
+    "EP",
+    "Switch",
+    "PHY",
+    "Retimer"
+  ],
+  "boundaries": [
+    "SERDES",
+    "PIPE",
+    "Controller/TLP"
+  ],
+  "must_discover": [
+    "role",
+    "gen",
+    "lane_width",
+    "boundary",
+    "config_space",
+    "BARs",
+    "MSI_MSIX",
+    "LTSSM_observability"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "link_training",
+    "enumeration",
+    "config_rw",
+    "memory_rw"
+  ],
+  "scoreboard_semantics": [
+    "request_completion_match",
+    "memory_data_integrity",
+    "ordering_basic"
+  ],
+  "coverage_dimensions": [
+    "LTSSM",
+    "TLP_type",
+    "completion_status",
+    "BAR",
+    "interrupt",
+    "error_recovery"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

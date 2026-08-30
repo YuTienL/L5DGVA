@@ -1,0 +1,15 @@
+{
+  "commands": {
+    "STATUS": "show graph/plan/agent/job state",
+    "WHY": "show engineering reasoning summary",
+    "EVIDENCE": "show evidence and confidence",
+    "REVIEW": "independent review-agent assessment",
+    "PAUSE": "safe pause",
+    "RESUME": "continue from persisted state",
+    "REDIRECT": "preserve evidence, update Blackboard, replan",
+    "APPROVE": "approve pending critical action",
+    "REJECT": "reject pending action and replan",
+    "STOP": "stop workflow safely",
+    "TAKEOVER": "human takes control"
+  }
+}

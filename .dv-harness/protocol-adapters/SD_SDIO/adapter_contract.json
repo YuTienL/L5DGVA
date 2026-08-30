@@ -1,0 +1,51 @@
+{
+  "protocol": "SD_SDIO",
+  "roles": [
+    "Host",
+    "SD_Card",
+    "SDIO_Device",
+    "Combo"
+  ],
+  "boundaries": [
+    "Command",
+    "Data",
+    "PHY"
+  ],
+  "must_discover": [
+    "role",
+    "SD_SDIO_combo",
+    "bus_width",
+    "speed_modes",
+    "function_count"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "identify",
+    "select",
+    "read_write",
+    "sdio_function_access"
+  ],
+  "scoreboard_semantics": [
+    "command_response",
+    "data_integrity",
+    "function_access"
+  ],
+  "coverage_dimensions": [
+    "command",
+    "response",
+    "speed",
+    "bus_width",
+    "function",
+    "transfer",
+    "error"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

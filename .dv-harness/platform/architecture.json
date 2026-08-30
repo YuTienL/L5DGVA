@@ -1,0 +1,30 @@
+{
+  "platform": "DV Agent Harness L5",
+  "environment_levels": [
+    "IP/Block",
+    "Subsystem",
+    "System-Level/Full-SoC"
+  ],
+  "built_in_protocols": [
+    "PCIe",
+    "USB",
+    "Ethernet",
+    "MIPI CSI-2",
+    "MIPI DSI",
+    "AMBA4 Multi-Master x Multi-Slave",
+    "eDP",
+    "eMMC",
+    "SD/SDIO",
+    "UCIe"
+  ],
+  "extension": [
+    "New Interface",
+    "New Specification Revision"
+  ],
+  "remote_control": {
+    "type": "cross-cutting execution layer",
+    "not_peer_to_env_mode": true,
+    "flow": "PC/Web <-> secure sync/control <-> Linux Server <-> build/sim/regression/debug <-> evidence return"
+  },
+  "expert_feedback_closed_loop": true
+}

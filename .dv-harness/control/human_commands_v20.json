@@ -1,0 +1,14 @@
+{
+  "STATUS": "current graph/plan/agents/jobs/findings/next action",
+  "WHY": "engineering reasoning summary",
+  "EVIDENCE": "current supporting evidence",
+  "HYPOTHESIS": "ranked hypotheses + counter evidence + missing evidence + next-best-action",
+  "REVIEW": "independent review-agent challenge",
+  "PAUSE": "safe pause and persist state",
+  "RESUME": "resume persisted state",
+  "REDIRECT": "preserve evidence, update blackboard, partial replan",
+  "APPROVE": "approve gated action",
+  "REJECT": "reject gated action",
+  "STOP": "stop workflow safely",
+  "TAKEOVER": "human assumes control"
+}

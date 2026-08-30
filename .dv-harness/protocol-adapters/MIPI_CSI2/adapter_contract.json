@@ -1,0 +1,49 @@
+{
+  "protocol": "MIPI_CSI2",
+  "roles": [
+    "TX",
+    "RX"
+  ],
+  "boundaries": [
+    "D_PHY",
+    "C_PHY",
+    "Protocol"
+  ],
+  "must_discover": [
+    "role",
+    "phy_type",
+    "lane_count",
+    "VC",
+    "DT",
+    "LP_HS_behavior"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "phy_bringup",
+    "short_packet",
+    "long_packet",
+    "frame"
+  ],
+  "scoreboard_semantics": [
+    "packet_match",
+    "frame_line_integrity",
+    "ECC_CRC"
+  ],
+  "coverage_dimensions": [
+    "VC",
+    "DT",
+    "lane",
+    "packet",
+    "ECC_CRC",
+    "LP_HS"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

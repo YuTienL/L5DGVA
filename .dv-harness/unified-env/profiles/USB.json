@@ -1,0 +1,25 @@
+{
+  "protocol": "USB",
+  "roles": [
+    "Host",
+    "Device",
+    "Hub"
+  ],
+  "boundaries": [
+    "UTMI",
+    "ULPI",
+    "PIPE",
+    "SERDES",
+    "Controller"
+  ],
+  "smoke_tests": [
+    "attach_connect",
+    "enumeration",
+    "control_transfer",
+    "data_transfer"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

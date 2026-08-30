@@ -1,0 +1,10 @@
+protocol: AMBA
+supported_buses: [APB2, APB3, AHB, AHB-Lite, AXI3, AXI4, ACE-Lite, AXI-Stream]
+critical_fields:
+  - bus_type
+  - topology
+  - roles
+  - address_width
+  - data_width
+  - clock_reset_domains
+  - response_error_model

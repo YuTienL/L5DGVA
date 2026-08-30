@@ -1,0 +1,54 @@
+{
+  "protocol": "Ethernet",
+  "roles": [
+    "MAC",
+    "PCS",
+    "PMA",
+    "PHY"
+  ],
+  "boundaries": [
+    "MII",
+    "GMII",
+    "XGMII",
+    "USXGMII",
+    "SXGMII",
+    "SERDES"
+  ],
+  "must_discover": [
+    "boundary",
+    "speed_modes",
+    "lane_or_bus_width",
+    "MAC_addressing",
+    "flow_control"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "link_bringup",
+    "tx_frame",
+    "rx_frame",
+    "CRC_check"
+  ],
+  "scoreboard_semantics": [
+    "frame_match",
+    "payload_integrity",
+    "CRC",
+    "ordering"
+  ],
+  "coverage_dimensions": [
+    "frame_size",
+    "frame_type",
+    "speed",
+    "pause_PFC",
+    "error",
+    "concurrency"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

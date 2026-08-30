@@ -1,0 +1,16 @@
+{
+  "protocol": "eDP",
+  "supported_roles": [
+    "Source",
+    "Sink"
+  ],
+  "minimum_smoke_tests": [
+    "aux",
+    "link_training",
+    "video"
+  ],
+  "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_DISCOVER_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

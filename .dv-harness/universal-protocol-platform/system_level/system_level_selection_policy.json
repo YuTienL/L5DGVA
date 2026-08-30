@@ -1,0 +1,24 @@
+{
+  "prefer": [
+    "PRODUCTION_QUALIFIED",
+    "REGRESSION_QUALIFIED",
+    "PROTOCOL_QUALIFIED"
+  ],
+  "allow_lower_status_only_with_explicit_user_ack": true,
+  "missing_or_insufficient_subsystem": "route_to_SUBSYSTEM_MODE_then_return",
+  "composition_outputs": [
+    "soc_tb_top",
+    "subsystem_registry",
+    "connectivity",
+    "clock_reset_model",
+    "address_map",
+    "interrupt_map",
+    "dma_dataflow",
+    "shared_memory_model",
+    "soc_virtual_sequencer",
+    "cross_subsystem_scenarios",
+    "end_to_end_scoreboard",
+    "system_coverage",
+    "regression_plan"
+  ]
+}

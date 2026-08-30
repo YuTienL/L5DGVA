@@ -1,0 +1,135 @@
+from __future__ import annotations
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+class Stage(str, Enum):
+    # Mechanism-first canonical order (per project direction, 2026-08-27):
+    # Intake -> five-source discovery (spec/RTL/command.txt/USB reference/DE
+    # local sim) -> DE baseline reproduction (-> BASELINE_LOCKED) -> RTL-first
+    # DUT architecture discovery -> project model -> protocol capability
+    # discovery -> requirements/waiver -> vPlan -> verification architecture
+    # (+ observability) -> implement (monitors/checkers/tests) -> build/verify
+    # (command.txt<->sim.log semantic check, false-pass defense, TRUE_PASS) ->
+    # LSF regression -> coverage closure -> failure recovery (RCA/replay/fix/
+    # non-regression) -> system-level -> expert feedback closed loop ->
+    # requirement closure -> promotion readiness -> signoff.
+    ENV_CHECK = "ENV_CHECK"
+    INTAKE = "INTAKE"
+    DISCOVERY = "DISCOVERY"
+    COMMAND_PATTERN = "COMMAND_PATTERN"
+    DE_BASELINE_REPRODUCTION = "DE_BASELINE_REPRODUCTION"
+    ARCH_DISCOVERY = "ARCH_DISCOVERY"
+    ARCH_CALIBRATION = "ARCH_CALIBRATION"
+    PROJECT_MODEL = "PROJECT_MODEL"
+    PROTOCOL_CAPABILITY = "PROTOCOL_CAPABILITY"
+    REQUIREMENTS_TRACEABILITY = "REQUIREMENTS_TRACEABILITY"
+    SOC_SCENARIO_PLANNER = "SOC_SCENARIO_PLANNER"
+    INFRASTRUCTURE_AUDIT = "INFRASTRUCTURE_AUDIT"
+    VPLAN = "VPLAN"
+    VERIFICATION_ARCHITECTURE = "VERIFICATION_ARCHITECTURE"
+    IMPLEMENT = "IMPLEMENT"
+    CHANGE_IMPACT = "CHANGE_IMPACT"
+    GIT_SYNC = "GIT_SYNC"
+    GIT_PUSH = "GIT_PUSH"
+    SERVER_SYNC = "SERVER_SYNC"
+    BUILD = "BUILD"
+    BUILD_DEBUG = "BUILD_DEBUG"
+    VERIFY = "VERIFY"
+    WAVE_ANALYSIS = "WAVE_ANALYSIS"
+    REGRESSION_SELECT = "REGRESSION_SELECT"
+    REGRESSION = "REGRESSION"
+    REGRESSION_MONITOR = "REGRESSION_MONITOR"
+    COVERAGE_CLOSURE = "COVERAGE_CLOSURE"
+    INFRA_RECOVERY = "INFRA_RECOVERY"
+    FAILURE_RECOVERY = "FAILURE_RECOVERY"
+    RE_AUDIT = "RE_AUDIT"
+    SYSTEM_LEVEL = "SYSTEM_LEVEL"
+    EXPERT_FEEDBACK_LOOP = "EXPERT_FEEDBACK_LOOP"
+    REQUIREMENT_CLOSURE = "REQUIREMENT_CLOSURE"
+    PROMOTION_READINESS = "PROMOTION_READINESS"
+    SIGNOFF = "SIGNOFF"
+
+class Status(str, Enum):
+    NOT_STARTED = "NOT_STARTED"
+    RUNNING = "RUNNING"
+    PASS = "PASS"
+    FAIL = "FAIL"
+    PARTIAL = "PARTIAL"
+    BLOCKED = "BLOCKED"
+    RETRY = "RETRY"
+    WAIT_USER = "WAIT_USER"
+    CLOSED = "CLOSED"
+    ACCEPTED_RISK = "ACCEPTED_RISK"
+
+@dataclass
+class StageState:
+    stage: str
+    status: str = Status.NOT_STARTED.value
+    attempts: int = 0
+    session_id: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    last_message: str = ""
+    evidence: List[str] = field(default_factory=list)
+    blocking_reason: str = ""
+    # Set only by engine.py's inner ReAct loop (dv_harness/react_loop.py) when
+    # its chosen action is REROUTE -- consulted (never required) by loop()'s
+    # retry-exhaustion branch as a preference over the static graph FAIL edge,
+    # never instead of it. None means "no content-driven reroute hint for
+    # this attempt", the byte-identical default for every stage that never
+    # runs the inner loop (react:false nodes, or verdict never reached
+    # GATE_FAIL/DV_REVIEW_PENDING in the first place).
+    react_reroute_target: Optional[str] = None
+
+@dataclass
+class HarnessState:
+    version: str = "15.0.0"
+    # project / findings_total / findings_closed / findings_open (2026-08-29
+    # reconciliation): read-only mirrors DVHarness keeps synced FROM the
+    # blackboard (engine.py's _sync_project_from_blackboard/
+    # _sync_findings_state) -- never assign these directly from anywhere
+    # else, or they will drift out of agreement with the real records
+    # (blackboard "project" topic's target_name; blackboard "findings"
+    # topic's items registry) again.
+    project: str = ""
+    scope: str = "unknown"
+    current_stage: str = Stage.ENV_CHECK.value
+    overall_status: str = Status.NOT_STARTED.value
+    git_sha: Optional[str] = None
+    server_sha: Optional[str] = None
+    closure_iteration: int = 0
+    findings_total: int = 0
+    findings_closed: int = 0
+    findings_open: int = 0
+    last_session_id: Optional[str] = None
+    stages: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Graph-level parallel fan-out/join (2026-08-29, extended 2026-08-29 by
+    # the active_stages read-site audit): current_stage stays a scalar
+    # string, exactly as before, and is never itself restructured --
+    # active_stages is purely additive: empty ([]) means "no fan-out in
+    # flight, current_stage alone is authoritative"; engine.py's
+    # _advance_with_fanout() populates it with the real branch ids for the
+    # duration of a live fan-out (current_stage itself stays parked on the
+    # fan-out's source node throughout) and clears it back to [] once the
+    # join resolves and current_stage advances past it.
+    #
+    # Consumers that deliberately still read current_stage alone (assessed,
+    # not oversights): engine.py's run_stage()/loop() internal stage-walk,
+    # mark()/commands.cmd_mark()/cmd_takeover() (no way yet for a caller to
+    # name one specific branch -- see their own NOTEs), and
+    # commands.cmd_set_stage()/cmd_advance()'s from_stage audit field (they
+    # operate on current_stage by design). Consumers upgraded by that audit
+    # to also read active_stages/effective_active_stages() so a live
+    # fan-out is visible, not just its parked source node: engine.py's
+    # summary(), cli.py's explain/evidence (no --stage given), dashboard.py's
+    # /api/state active_stages_detail, graph-highlight, and showExplain(),
+    # and session_snapshot.py's saved-session manifest.
+    active_stages: List[str] = field(default_factory=list)
+
+    def effective_active_stages(self) -> List[str]:
+        return self.active_stages or [self.current_stage]
+
+    def ensure_stages(self):
+        for s in Stage:
+            self.stages.setdefault(s.value, asdict(StageState(stage=s.value)))

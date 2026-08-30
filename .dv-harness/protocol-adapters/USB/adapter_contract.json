@@ -1,0 +1,53 @@
+{
+  "protocol": "USB",
+  "roles": [
+    "Host",
+    "Device",
+    "Hub"
+  ],
+  "boundaries": [
+    "UTMI",
+    "ULPI",
+    "PIPE",
+    "SERDES",
+    "Controller"
+  ],
+  "must_discover": [
+    "role",
+    "USB2_USB3",
+    "speed_modes",
+    "ports",
+    "endpoints",
+    "descriptors",
+    "boundary"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "attach_connect",
+    "enumeration",
+    "control_transfer",
+    "basic_data_transfer"
+  ],
+  "scoreboard_semantics": [
+    "endpoint_transfer_match",
+    "data_integrity",
+    "completion_status"
+  ],
+  "coverage_dimensions": [
+    "speed",
+    "port",
+    "endpoint",
+    "transfer_type",
+    "link_state",
+    "error_recovery"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

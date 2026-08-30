@@ -1,0 +1,8 @@
+{
+  "mandatory": true,
+  "PURE_LOCAL_READ_ANALYSIS": "純本地讀檔分析（不碰伺服器、不跑 VCS）",
+  "REMOTE_EXECUTION_REQUIRED": "Remote execution: 需要連 Linux server / 跑 VCS compile/simulation/regression",
+  "rule": "Never mix execution modes in status reporting.",
+  "validator": "tools/real_env/execution_mode_validator.py",
+  "hard_gate": true
+}

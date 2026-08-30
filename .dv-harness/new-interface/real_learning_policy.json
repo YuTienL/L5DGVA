@@ -1,0 +1,29 @@
+{
+  "supports_new_interface": true,
+  "supports_new_spec_revision": true,
+  "with_vip": [
+    "discover_vip_api",
+    "build_adapter",
+    "generate_uvm",
+    "compile",
+    "smoke",
+    "qualify"
+  ],
+  "without_vip": [
+    "learn_semantics",
+    "generate_native_uvc",
+    "generate_uvm",
+    "compile",
+    "smoke",
+    "qualify"
+  ],
+  "spec_revision": [
+    "extract_old",
+    "extract_new",
+    "diff",
+    "impact",
+    "update_semantic_model",
+    "regenerate_affected",
+    "requalify"
+  ]
+}

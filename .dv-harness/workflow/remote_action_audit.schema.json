@@ -1,0 +1,12 @@
+{
+  "actions": [
+    {
+      "timestamp": "ISO8601",
+      "actor": "user|agent",
+      "command": "STATUS|WHY|EVIDENCE|REVIEW|PAUSE|RESUME|REDIRECT|APPROVE|REJECT|STOP|TAKEOVER",
+      "target_stage": "optional",
+      "reason": "required for mutating actions",
+      "evidence_snapshot": "required for mutating actions"
+    }
+  ]
+}

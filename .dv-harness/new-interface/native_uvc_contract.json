@@ -1,0 +1,28 @@
+{
+  "no_vip_path": [
+    "sequence_item",
+    "sequencer",
+    "driver",
+    "monitor",
+    "agent",
+    "config",
+    "interface",
+    "assertions",
+    "scoreboard",
+    "coverage",
+    "smoke_tests"
+  ],
+  "semantic_inputs": [
+    "roles",
+    "signals",
+    "clock_reset",
+    "transactions",
+    "state_machine",
+    "flow_control",
+    "timing",
+    "registers",
+    "errors",
+    "performance"
+  ],
+  "qualification_required": true
+}

@@ -1,0 +1,12 @@
+{
+  "soc_name": null,
+  "goal": null,
+  "selected_subsystems": [],
+  "required_use_cases": [],
+  "required_cross_subsystem_flows": [],
+  "shared_resources": [],
+  "memory_map": [],
+  "interrupt_requirements": [],
+  "performance_targets": [],
+  "coverage_targets": []
+}

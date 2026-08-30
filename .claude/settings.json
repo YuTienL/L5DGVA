@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Read(//d/DV/Task/USB/**)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(sed -n:*)",
+      "Bash(awk:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(cut:*)",
+      "Bash(pdftotext:*)",
+      "Bash(file:*)",
+      "Bash(stat:*)"
+    ],
+    "deny": [
+      "Write(//d/DV/Task/USB/DUT/**)",
+      "Edit(//d/DV/Task/USB/DUT/**)",
+      "Write(//d/DV/Task/USB/VIP/**)",
+      "Edit(//d/DV/Task/USB/VIP/**)"
+    ]
+  },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-destructive.ps1",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/post-edit-diff-check.ps1",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ]
+  }
+}

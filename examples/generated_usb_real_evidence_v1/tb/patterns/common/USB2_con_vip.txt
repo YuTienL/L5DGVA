@@ -1,0 +1,272 @@
+//=========================================================================
+// File Name    : USB2_con_vip.txt
+// Description  : Hand-authored VIP conversion of the real BFM pattern
+//                D:/DV/Task/USB/patterns/USB2_con.txt (347 lines), following
+//                D:/DV/Task/DV_Agent_Harness_L5/v50/.claude/skills/CORE/
+//                ip-uvm-dv-gen/SKILL.md's "Converting a BFM pattern" rule
+//                (line ~310-320): Keep verbatim every access that programs
+//                THE DUT; delete everything that programs the far side the
+//                VIP replaces; add VIP task calls in its place.
+//
+// Far-side identification (evidence, not assumption): every deleted block
+// below targets `HOSTWRITE*B(32'h1614_xxxx / 0x161A_xxxx, ...)`,
+// `sysn063.u_usbmodel_host.<...>`, or that instance's
+// `u_axi_slave.u_memory.mem_array[]` -- i.e. the standalone HOST BFM MODEL
+// instance `u_usbmodel_host`, not the DUT. Every kept line targets
+// `CPUWRITE*B(32'h1270/1271/1272_xxxx, ...)` or
+// `` `SS_VOUT.u_usbtop[0].<...>` `` -- the real DUT device-controller
+// register space and DUT hierarchy (same instance/signal this project's
+// own bind topology already probes: see
+// examples/generated_usb_real_evidence_v1/manifest_inputs/usb_bind_topology.json,
+// target_instance "`SS_VOUT.u_usbtop[0]", port "phy0_sram_init_done",
+// citing this same original pattern at USB2_con.txt:49).
+//
+// HONESTY NOTE: this is a PARTIAL, ILLUSTRATIVE conversion, not a compiling
+// testbench file. Every "// VIP:" comment below is a TODO placeholder
+// describing WHAT must happen, citing the real VIP class/file where one was
+// found; NONE of them is a verified, compilable VIP method-call signature --
+// this pass did not read far enough into any sequence class's body/task
+// declarations to confirm exact call syntax, and the SKILL.md's own
+// "Converting a BFM pattern" step ("prove equivalence: resolve address
+// macros to literals, compare register writes one-for-one") was not run
+// against this file end-to-end. Treat every "// VIP:" line as a worklist
+// item, not working code.
+//=========================================================================
+`include "wave.txt"
+reg             reset_n;
+reg     [ 7:0]  regdata1B;
+reg     [15:0]  regdata2B;
+reg     [31:0]  regdata4B;
+integer         i;
+
+initial
+begin
+  // -- SoC-level global bring-up: not host- or device-specific, applies
+  //    identically whether the far side is the real BFM host model or a
+  //    VIP host agent. KEPT VERBATIM from USB2_con.txt:18-30.
+  `ifdef FPGA
+    force `IO.iotrap[9:0]=10'b00000_0_0_0_11;
+  `else
+    force `IO.iotrap[9:0]=10'b00000_0_0_0_01;
+  `endif
+
+  `GMODEL.GLOBAL_INIT;
+  $display("!!!!!!!!!!!!!  Global Ini Done    !!!!!!!!!!!!!!");
+  `CPUWRITE1B(32'h1000_0A81, 8'h77); //phyrefclk=20M
+  `CPUWRITE1B(32'h1000_0A8A, 8'h2F); //lowclk=50M
+  `SS_VOUT_MODEL.ss_vout_init_flow;
+
+  // -- DELETED (was USB2_con.txt:32-41): HOSTWRITE4B/1B programming the
+  //    HOST BFM MODEL's (sysn063.u_usbmodel_host) bme/bus_filter_bypass/
+  //    ext_ctrl_sel/sup_pre_hp/PLLBTUNE/commononn/u3phyrst/u2phyrst.
+  // VIP: svt_usb_agent (real class, D:/DV/Task/USB/VIP/src/sverilog/vcs/
+  //      svt_usb_agent.sv) configured in HOST role via its real
+  //      svt_usb_agent_configuration (D:/DV/Task/USB/VIP/src/sverilog/vcs/
+  //      svt_usb_agent_configuration.sv) should own PHY pre-init/reset
+  //      sequencing internally. TODO: exact configuration field names for
+  //      "bus_filter_bypass"/"host_force_gen1"/PLLBTUNE-equivalent were not
+  //      looked up in this pass -- not invented here.
+  $display("=>Host pre setting done");
+  $display("=>All resets off");
+
+  // -- DUT device-controller reset sequencing. KEPT VERBATIM from
+  //    USB2_con.txt:44-47 (0x1270_xxxx = usb ctrl / usb3 phy / usb2 phy
+  //    reset, real DUT register space, same range family as the UDC init
+  //    block below).
+  `CPUWRITE2B(32'h1270_0200, 16'h200); //usb ctrl rst=1
+  `CPUWRITE2B(32'h1270_0200, 16'h0  ); //usb ctrl rst=0
+  `CPUWRITE1B(32'h1270_0400, 8'h10);  //usb3 phy rst=0
+  `CPUWRITE1B(32'h1270_0500, 8'h0 );  //usb2 phy rst=0
+
+  // Device PHY sram_init_done=1 is faster -- REAL DUT hierarchy signal,
+  // KEPT VERBATIM (USB2_con.txt:49); this is the exact signal this
+  // project's own step-5 bind topology probes (see usb_bind_topology.json).
+  wait(`SS_VOUT.u_usbtop[0].phy0_sram_init_done);
+  #100;
+  `CPUWRITE1B(32'h1270_0407, 8'h2);  //phy0_sram_ext_ld_done = 1'b1;
+  $display("=>bypass=0, ext_ld_done=1");
+  $display("Dev SRAM init done");
+  #100;
+
+  // -- DELETED (was USB2_con.txt:56-58): wait on the HOST MODEL's own PHY
+  //    sram_init_done + HOSTWRITE1B ext_ld_done=1. A real VIP host agent
+  //    does not expose/require this internal PHY-model bookkeeping step at
+  //    all -- it is host-BFM-model-specific plumbing, not DUT-facing
+  //    protocol. No VIP call needed here (this is a genuine deletion with
+  //    no replacement, not an unresolved TODO).
+
+  // -- DELETED (was USB2_con.txt:63-68, "Host 1st init"): HOSTWRITE4B
+  //    GCTL/GUCTL/GUSB2PHYCFG/GUSB3PIPECTL0/GUCTL3/GFLADJ on the HOST BFM
+  //    MODEL's own global-control register space (0x1614_xxxx).
+  // VIP: svt_usb_configuration (real class name per D:/DV/Task/USB/.claude/
+  //      skills/usb-vip-lookup/SKILL.md:65, "全域設定（速度、generation、
+  //      host/device 角色）") set to role=HOST before starting the agent.
+  //      TODO: which of its fields correspond one-for-one to GUSB2PHYCFG/
+  //      GUSB3PIPECTL0/GFLADJ was not confirmed in this pass.
+  $display("=>Host init done");
+
+  // -- DELETED (was USB2_con.txt:75-77 HOSTWRITE half only): HOST MODEL
+  //    TCA Type-C settings (0x161A_xxxx: xa_timeout_evt_en/xa_ack_evt_en,
+  //    DRP mode, usb_p2_switch_en/ss_hdshk_req).
+  // VIP: TODO -- no confirmed real VIP config field for Type-C DRP/TCA
+  //      handshake was found in this pass; left as an explicit gap rather
+  //      than invented.
+  // -- KEPT VERBATIM (USB2_con.txt:76,78): the DEVICE-side TCA settings,
+  //    real DUT register space 0x1272_xxxx.
+  `CPUWRITE4B (32'h1272_0004, 32'hFFFF); //
+  `CPUWRITE4B (32'h1272_0010, 32'h11  ); //Dev mode
+  $display("=>TCA settings done");
+
+  // -- DELETED (was USB2_con.txt:85,87,89): HOST MODEL side "NC to USB"
+  //    HOSTWRITE + wait on the host model's own tca.inst_tca_reg.xa_ack_evt.
+  // -- KEPT VERBATIM (USB2_con.txt:86,88,90): DEVICE-side NC-to-USB
+  //    transition, including the real DUT hierarchy wait on
+  //    `SS_VOUT.u_usbtop[0]`'s own tca.inst_tca_reg.xa_ack_evt (same
+  //    "`SS_VOUT.u_usbtop[0]" instance family probed by this project's
+  //    step-5 bind entry).
+  `CPUWRITE4B (32'h1272_0014, 32'h11); //NC to USB
+  wait(`SS_VOUT.u_usbtop[0].u_udc_usb31_top.u_udc_usb31_phy.phy0.tca.inst_tca_reg.xa_ack_evt);
+  `CPUWRITE4B (32'h1272_0008, 32'h1); //xa_ack_evt clear
+  $display("=>PHY NC to USB done");
+
+  // -- DELETED (was USB2_con.txt:96, 100-114): a direct backdoor memory
+  //    fill into the HOST MODEL's own AXI-slave DRAM model
+  //    (u_usbmodel_host.u_axi_slave.u_memory.mem_array) plus HOSTWRITE4B
+  //    programming the HOST MODEL's own xHCI registers (CRCR/MaxSlotsEn/
+  //    DCBAAP/ERSTSZ/ERDP/ERSTBA/IMOD/IMAN) -- this is the host model
+  //    standing in for a real xHCI host controller's command/event-ring
+  //    setup.
+  // VIP: a real xHCI-class host agent normally owns command-ring/event-
+  //      ring setup internally as part of its host-role init sequence.
+  //      TODO: the exact sequence/class that performs this (candidates
+  //      found but not confirmed: svt_usb_base_system_virtual_sequence,
+  //      D:/DV/Task/USB/VIP/src/sverilog/vcs/
+  //      svt_usb_base_system_virtual_sequence.sv, started on a
+  //      svt_usb_system_virtual_sequencer per
+  //      D:/DV/Task/USB/VIP/src/sverilog/vcs/
+  //      svt_usb_system_virtual_sequencer.sv) was not verified against its
+  //      actual task list in this pass.
+  $display("=>XHCI init done (VIP-owned, no explicit ring setup needed here -- TODO verify)");
+
+  // -- DEVICE controller ("UDC") 1st + 2nd init and endpoint-0 DEPCMD
+  //    programming. KEPT VERBATIM from USB2_con.txt:118-166 -- this is the
+  //    core real-DUT register programming this pattern exists to exercise,
+  //    unchanged regardless of what drives the far side.
+  `CPUWRITE4B(32'h1271_c110,32'h30c12234); //GCTL PRTCAPDIR=0x2(Dev )
+  `CPUWRITE4B(32'h1271_c11c,32'h1001988 ); //GUCTL1
+  `CPUWRITE4B(32'h1271_c12c,32'ha454802 ); //GUCTL
+  `CPUWRITE4B(32'h1271_c200,32'h2102507 ); //GUSB2PHYCFG
+  `CPUWRITE4B(32'h1271_c2c0,32'h1001182 ); //GUSB3PIPECTL0 (ssic_en=1 to reset databuswidth)
+  `CPUWRITE4B(32'h1271_c2c0,32'h1001102 ); //GUSB3PIPECTL0 (ssic_en=0)
+  `CPUWRITE4B(32'h1271_c60c,32'h45570c  ); //GUCTL3
+  `CPUWRITE4B(32'h1271_c630,32'hc800020 ); //GFLADJ
+  `CPUWRITE4B(32'h1271_c638,32'h102     ); //GUCTL5 (HST_DYNAMIC_DISABLE_DIS=1)
+  `CPUWRITE4B(32'h1271_c700,32'h480800  ); //DCFG, [2:0]speed
+  `CPUWRITE4B(32'h1271_c704,32'hf00a00  ); //DCTL
+  `CPUWRITE4B(32'h1271_c708,32'h1f      ); //DEVTEN
+  `CPUWRITE4B(32'h1271_c720,32'h3       ); //DALEPENA
+  `CPUWRITE4B(32'h1271_c200,32'h40002407);
+  #1000;
+  `CPUWRITE4B(32'h1271_c400,32'h20010000); //EVNTADRLO
+  `CPUWRITE4B(32'h1271_c404,32'h0       ); //EVNTADRHI
+  `CPUWRITE4B(32'h1271_c408,32'h1000    ); //GEVNTSIZ
+  `CPUWRITE4B(32'h1271_c40c,32'h0       ); //GEVNTCOUNT
+  `CPUWRITE4B(32'h1271_c80c,32'h409     ); //DEPCMD0
+  #740;
+  `CPUWRITE4B(32'h1271_c804,32'h700     ); //DEPCMDPAR1
+  `CPUWRITE4B(32'h1271_c808,32'h1000    ); //DEPCMDPAR0
+  `CPUWRITE4B(32'h1271_c80c,32'h401     ); //DEPCMD0-0
+  #740;
+  `CPUWRITE4B(32'h1271_c814,32'h2000700 ); //DEPCMDPAR1
+  `CPUWRITE4B(32'h1271_c818,32'h1000    ); //DEPCMDPAR0
+  `CPUWRITE4B(32'h1271_c81c,32'h401     ); //DEPCMD0-1
+  #740;
+  `CPUWRITE4B(32'h1271_c824,32'h4000700 ); //DEPCMDPAR1
+  `CPUWRITE4B(32'h1271_c828,32'h3c02004 ); //DEPCMDPAR0
+  `CPUWRITE4B(32'h1271_c82c,32'h401     ); //DEPCMD0-2
+  #740;
+  `CPUWRITE4B(32'h1271_c808,32'h1       ); //DEPCMDPAR0
+  `CPUWRITE4B(32'h1271_c80c,32'h402     ); //DEPCMD0-0
+  #760;
+  `CPUWRITE4B(32'h1271_c818,32'h1       ); //DEPCMDPAR0
+  `CPUWRITE4B(32'h1271_c81c,32'h402     ); //DEPCMD0-1
+  #760;
+  `CPUWRITE4B(32'h1271_c828,32'h1       ); //DEPCMDPAR0
+  `CPUWRITE4B(32'h1271_c82c,32'h402     ); //DEPCMD0-2
+  #760;
+  $display("=>Dev Ctrl init done");
+
+  // -- DELETED (was USB2_con.txt:172-173): HOSTWRITE4B USBCMD run/stop on
+  //    the HOST MODEL's own xHCI command register.
+  // VIP: TODO -- host agent run-state start, exact call not confirmed.
+  `CPUWRITE4B (32'h1271_c704,32'h80f00a00);
+  `CPUWRITE4B (32'h1271_c40c,32'h4       ); //GEVNTCOUNT
+  `CPUWRITE4B (32'h1271_c720,32'hff      ); //DALEPENA
+  $display("=>Start rx detect");
+
+  // -- DELETED (was USB2_con.txt:180-186, 191-207, 212-244, 249-263 (host
+  //    half), 270-284, 289-312 (host half), 328-341): all HOST MODEL event-
+  //    ring polling (wait on xhc_usbsts_reg PCD/EINT bits), HOSTWRITE4B
+  //    interrupt-clear/ERDP writes, and the Enable-Slot/Address-Device/
+  //    Configure-Endpoint xHCI command sequences (doorbell HOSTWRITE4B +
+  //    backdoor mem_array TRB pokes into u_usbmodel_host.u_axi_slave.
+  //    u_memory) that together perform "HS reset handshake" and USB device
+  //    enumeration (Enable Slot / Address Device / Get Descriptor /
+  //    Configure Endpoint) entirely on the host-model side.
+  // VIP: this whole block is exactly the standard USB enumeration sequence
+  //      a real host-role VIP agent is built to run automatically.
+  //      Candidate real base class (found, not verified for this exact use):
+  //      svt_usb_base_system_virtual_sequence
+  //      (D:/DV/Task/USB/VIP/src/sverilog/vcs/
+  //      svt_usb_base_system_virtual_sequence.sv), run on a
+  //      svt_usb_system_virtual_sequencer. The concrete leaf sequence class
+  //      that performs "reset -> enable slot -> address device -> get
+  //      descriptor -> configure endpoint" was NOT identified in this pass
+  //      (would require reading svt_usb_agent_system_virtual_sequence_
+  //      collection.sv and/or svt_usb_device_framework_response_virtual_
+  //      sequence_collection.sv task bodies, which this pass only located
+  //      by filename, per D:/DV/Task/USB/.claude/skills/usb-vip-lookup/
+  //      SKILL.md's own "先解檔名，再讀檔" method -- the "讀檔" step was not
+  //      done here). This is the single largest honest gap in this
+  //      conversion.
+  $display("=>[VIP TODO] host-side enumeration (reset/enable-slot/address-device/get-descriptor/configure-endpoint) not yet mapped to a confirmed VIP sequence call");
+
+  // -- KEPT (was USB2_con.txt:251-263, 293-300): `SMEMMODEL.RBC_CONFG` /
+  //    `SMEMMODEL.FILLMEM` preload the SoC's own shared-SRAM/DRAM model
+  //    with the device-side control-transfer response data
+  //    (dev_ctrltrb.hex / dev_gdtrb.hex / dev_gddat.hex) that the DUT's own
+  //    DMA reads when it responds to SETUP/GET_DESCRIPTOR -- this is
+  //    DUT-side response data setup, not host-BFM traffic, so it is kept,
+  //    NOT deleted. Flagged rather than silently kept: whether a VIP-driven
+  //    flow still needs this same backdoor preload (vs. the VIP host
+  //    driving real bus reads the device answers live) was not resolved in
+  //    this pass.
+  `SMEMMODEL.RBC_CONFG(32'h2000_1000, 32'hF000, 2'h3, 2'h3, 4'h0, 1'b0, 32'h0, 1'b0, 32'h0);
+  `SMEMMODEL.FILLMEM("/home/vendoruser/PROJECT/LAN063/CMD/USB/dev_ctrltrb.hex", 4, 40'h2000_1000, 'd32);
+  `CPUWRITE4B (32'h1271_c720,32'hFF       );    //DALEPENA
+  `CPUWRITE4B (32'h1271_c804,32'h2000_1000);    //DEPCMDPAR1
+  `CPUWRITE4B (32'h1271_c808,32'h00       );    //DEPCMDPAR0
+  `CPUWRITE4B (32'h1271_c80c,32'h506      );    //DEPCMD0
+  `CPUWRITE4B (32'h1271_c700,32'h480808   );    //DCFG, [9:3]address
+  `CPUWRITE4B (32'h1271_c814,32'h2000_1010);    //DEPCMDPAR1
+  `CPUWRITE4B (32'h1271_c818,32'h0        );    //DEPCMDPAR0
+  `CPUWRITE4B (32'h1271_c81c,32'h506      );    //DEPCMD0
+
+  `SMEMMODEL.FILLMEM("/home/vendoruser/PROJECT/LAN063/CMD/USB/dev_gdtrb.hex", 4, 40'h2000_1200, 'd48);
+  `SMEMMODEL.FILLMEM("/home/vendoruser/PROJECT/LAN063/CMD/USB/dev_gddat.hex", 4, 40'h2000_A000, 'd32);
+  `CPUWRITE4B (32'h1271_c720,32'hFF       );    //DALEPENA
+  `CPUWRITE4B (32'h1271_c804,32'h2000_1200);    //DEPCMDPAR1
+  `CPUWRITE4B (32'h1271_c808,32'h0        );    //DEPCMDPAR0
+  `CPUWRITE4B (32'h1271_c80c,32'h506      );    //DEPCMD0
+  `CPUWRITE4B (32'h1271_c814,32'h2000_1210);    //DEPCMDPAR1
+  `CPUWRITE4B (32'h1271_c818,32'h00       );    //DEPCMDPAR0
+  `CPUWRITE4B (32'h1271_c81c,32'h506      );    //DEPCMD0
+  `CPUWRITE4B (32'h1271_c804,32'h2000_1220);    //DEPCMDPAR1
+  `CPUWRITE4B (32'h1271_c808,32'h00       );    //DEPCMDPAR0
+  `CPUWRITE4B (32'h1271_c80c,32'h506      );    //DEPCMD0
+
+  $display("=>[VIP TODO] Configure Endpoint Command host-side doorbell/event-ring wait (USB2_con.txt:328-341) has no kept DUT-side counterpart in this excerpt -- fully VIP-owned, sequence class not confirmed");
+
+  //#200;
+  $finish;
+end

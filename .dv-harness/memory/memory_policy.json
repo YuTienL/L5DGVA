@@ -1,0 +1,44 @@
+{
+  "edition": "Verification Memory Edition",
+  "principle": "Memory is prior knowledge, not current evidence.",
+  "levels": {
+    "working": "current node/plan/task/hypothesis",
+    "job": "JOB_ID/pattern/options/sim.log/failure/root-cause",
+    "project": "topology/VIP/UVM/build/run/known issues",
+    "engineering": "closed bug -> root cause -> fix -> verify -> regression -> re-audit",
+    "organizational": "cross-project reusable methods and lessons"
+  },
+  "consolidation_gate": {
+    "finding_status": [
+      "CLOSED",
+      "VERIFIED"
+    ],
+    "single_sim": "PASS",
+    "regression": [
+      "PASS",
+      "NOT_REQUIRED"
+    ],
+    "reaudit": "CLEAN",
+    "confidence": "CONFIRMED"
+  },
+  "retrieval_policy": {
+    "memory_can_prioritize_hypothesis": true,
+    "memory_cannot_prove_current_root_cause": true,
+    "current_evidence_required": true,
+    "context_compatibility_required": true
+  },
+  "security": {
+    "credentials_forbidden": true,
+    "passwords_forbidden": true,
+    "tokens_forbidden": true
+  },
+  "evidence_truth_rule": {
+    "claude_md_is_evidence": false,
+    "memory_is_evidence": false,
+    "historical_agent_conclusion_is_evidence": false,
+    "current_rtl_source_required_when_relevant": true,
+    "current_waveform_measurement_required_when_relevant": true,
+    "current_log_checker_register_doc_evidence_required": true,
+    "conflict_resolution": "current_evidence_wins"
+  }
+}

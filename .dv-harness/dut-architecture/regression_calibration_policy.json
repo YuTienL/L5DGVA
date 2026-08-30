@@ -1,0 +1,30 @@
+{
+  "loop": [
+    "DISCOVER_ARCHITECTURE",
+    "BUILD_ARCHITECTURE_MODEL",
+    "COMPARE_WITH_SPEC_AND_VPLAN",
+    "GENERATE_OR_ADJUST_VERIFICATION_ENV",
+    "COMPILE",
+    "PROTOCOL_SMOKE",
+    "REGRESSION",
+    "COLLECT_FAILURE_AND_COVERAGE_EVIDENCE",
+    "ARCHITECTURE_HYPOTHESIS_CHECK",
+    "CALIBRATE_MODEL",
+    "IMPACT_ANALYSIS",
+    "PATCH_VPLAN_ENV_TEST_CHECKER",
+    "RERUN",
+    "PROMOTE_CONFIDENCE"
+  ],
+  "calibration_triggers": [
+    "unexpected port/interface behavior",
+    "wrong DUT role/topology assumption",
+    "clock/reset dependency mismatch",
+    "address-map mismatch",
+    "interrupt/DMA routing mismatch",
+    "unexpected protocol state transition",
+    "scoreboard mismatch caused by model error",
+    "coverage hole revealing missing feature dependency",
+    "waveform contradicts architecture model"
+  ],
+  "stop_condition": "Architecture and environment are evidence-consistent for the qualified scope; unresolved unknowns stay explicit."
+}

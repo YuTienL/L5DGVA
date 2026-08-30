@@ -1,0 +1,12 @@
+protocol: CAN-FD
+critical_fields:
+  - classical_can
+  - can_fd
+  - iso_mode
+  - nominal_bit_timing
+  - data_bit_timing
+  - brs
+  - identifier_modes
+  - filter_model
+  - error_state_model
+  - busoff_recovery

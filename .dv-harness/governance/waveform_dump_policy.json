@@ -1,0 +1,13 @@
+{
+  "user_confirmation_required": true,
+  "required_fields": [
+    "scope",
+    "level_or_depth"
+  ],
+  "default_strategy": "minimum_sufficient_waveform",
+  "full_chip_full_depth_default": false,
+  "expand_only_when_evidence_insufficient": true,
+  "record_decision": true,
+  "local_analysis_can_recommend_only": true,
+  "remote_execution_required_for_runtime_waveform_evidence": true
+}

@@ -1,0 +1,54 @@
+{
+  "template": "MULTI_SOURCE_EVIDENCE_CONSENSUS",
+  "parallel_group": "EVIDENCE_G1",
+  "nodes": [
+    {
+      "id": "DUT_RTL_EVIDENCE",
+      "agent": "analysis-agent",
+      "skills": [
+        "multi-source-evidence-consensus"
+      ]
+    },
+    {
+      "id": "PHY_DOC_EVIDENCE",
+      "agent": "analysis-agent",
+      "skills": [
+        "multi-source-evidence-consensus"
+      ]
+    },
+    {
+      "id": "REGISTER_GUIDE_EVIDENCE",
+      "agent": "analysis-agent",
+      "skills": [
+        "multi-source-evidence-consensus"
+      ]
+    },
+    {
+      "id": "VIP_REFERENCE_EVIDENCE",
+      "agent": "analysis-agent",
+      "skills": [
+        "multi-source-evidence-consensus"
+      ]
+    },
+    {
+      "id": "INDEPENDENT_SYNTHESIS",
+      "agent": "review-agent",
+      "skills": [
+        "independent-evidence-synthesis",
+        "counter-evidence-review",
+        "evidence-gap-analysis"
+      ]
+    }
+  ],
+  "join": "INDEPENDENT_SYNTHESIS",
+  "completion_gate": [
+    "supporting_evidence",
+    "counter_evidence",
+    "missing_evidence",
+    "conflicts",
+    "root_cause_candidates",
+    "solution",
+    "change_impact",
+    "verification_plan"
+  ]
+}

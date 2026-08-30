@@ -1,0 +1,19 @@
+{
+  "changed_items": [
+    "spec:sec5",
+    "rtl:pcie_top.sv"
+  ],
+  "spec_changed": true,
+  "rtl_interface_or_arch_changed": true,
+  "required_revalidation_artifacts": [
+    "vplan",
+    "architecture",
+    "mechanism",
+    "tests",
+    "coverage"
+  ],
+  "completed_revalidation_artifacts": [],
+  "vplan_reanalyzed": false,
+  "architecture_rediscovered": false,
+  "mechanism_plan_revalidated": false
+}

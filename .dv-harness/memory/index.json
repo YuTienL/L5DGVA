@@ -1,0 +1,75 @@
+[
+  {
+    "memory_id": "MEM-7A4F454771",
+    "level": "engineering",
+    "title": "USB2 HS scoreboard port ownership",
+    "protocol": "USB2",
+    "scope": "subsystem",
+    "symptoms": [
+      "scoreboard",
+      "port ownership",
+      "enumeration"
+    ],
+    "root_cause": "global expected queue",
+    "confidence": "CONFIRMED",
+    "status": "ACTIVE",
+    "path": ".dv-harness/memory/engineering/MEM-7A4F454771.json",
+    "last_used_at": null,
+    "reuse_count": 0
+  },
+  {
+    "memory_id": "MEM-95C1FFE3A0",
+    "level": "job",
+    "title": "LSF regression rerun blocked by build/config identity drift",
+    "protocol": "USB2",
+    "scope": "regression",
+    "symptoms": [
+      "regression",
+      "rerun",
+      "build_id_mismatch"
+    ],
+    "root_cause": "rerun batch mixed two different build IDs across seeds",
+    "confidence": "CONFIRMED",
+    "status": "ACTIVE",
+    "path": ".dv-harness\\memory\\job\\MEM-95C1FFE3A0.json",
+    "created_at": 1787982833.8129914,
+    "last_used_at": null,
+    "reuse_count": 0
+  },
+  {
+    "memory_id": "MEM-8177FAA771",
+    "level": "project",
+    "title": "USB subsystem VIP/DUT topology",
+    "protocol": "USB2",
+    "scope": "subsystem",
+    "symptoms": [
+      "topology",
+      "vip",
+      "utmi"
+    ],
+    "root_cause": null,
+    "confidence": "CONFIRMED",
+    "status": "ACTIVE",
+    "path": ".dv-harness\\memory\\project\\MEM-8177FAA771.json",
+    "created_at": 1787982833.817575,
+    "last_used_at": null,
+    "reuse_count": 0
+  },
+  {
+    "memory_id": "MEM-5574094467",
+    "level": "working",
+    "title": "Working-memory tier backing-store completeness seed",
+    "protocol": "USB2",
+    "scope": "subsystem",
+    "symptoms": [
+      "tier_completion_seed"
+    ],
+    "root_cause": null,
+    "confidence": "UNKNOWN",
+    "status": "ACTIVE",
+    "path": ".dv-harness\\memory\\working\\MEM-5574094467.json",
+    "created_at": 1787982833.822809,
+    "last_used_at": null,
+    "reuse_count": 0
+  }
+]

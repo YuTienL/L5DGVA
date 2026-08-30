@@ -1,0 +1,31 @@
+{
+  "stages": [
+    "DOCUMENT_EXTRACTION",
+    "RTL_DISCOVERY",
+    "INTERFACE_SCHEMA_DISCOVERY",
+    "VIP_DISCOVERY_IF_AVAILABLE",
+    "MULTI_AGENT_EVIDENCE_ACQUISITION",
+    "INDEPENDENT_EVIDENCE_SYNTHESIS",
+    "PROTOCOL_MODEL_BUILD",
+    "PLUGIN_OR_NATIVE_UVC_GENERATION",
+    "ENVIRONMENT_GENERATION",
+    "COMPILE",
+    "SMOKE",
+    "SELF_REPAIR",
+    "QUALIFICATION",
+    "REGISTRY_PROMOTION"
+  ],
+  "without_vip_outputs": [
+    "sequence_item",
+    "sequencer",
+    "driver",
+    "monitor",
+    "agent",
+    "config",
+    "assertions",
+    "scoreboard",
+    "coverage",
+    "smoke_tests"
+  ],
+  "truth_rule": "Similarity to an existing protocol is never sufficient evidence."
+}

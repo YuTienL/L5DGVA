@@ -1,0 +1,23 @@
+{
+  "golden_rule": "DV Expert Suggestion != Fact",
+  "flow": [
+    "DV_EXPERT_SCAN",
+    "STRUCTURED_FEEDBACK",
+    "HYPOTHESIS",
+    "EVIDENCE_VALIDATION",
+    "ACCEPT_MODIFY_REJECT_NEED_EVIDENCE",
+    "IMPACT_ANALYSIS",
+    "PATCH_OR_REGENERATE",
+    "COMPILE",
+    "PROTOCOL_SMOKE",
+    "REGRESSION_COVERAGE",
+    "EXPERT_REREVIEW",
+    "KNOWLEDGE_PROMOTION_GATE",
+    "CLOSE"
+  ],
+  "knowledge_layers": {
+    "PROJECT": "project-only",
+    "PROTOCOL": "verified reusable protocol knowledge",
+    "PLATFORM": "generic broadly validated rule"
+  }
+}

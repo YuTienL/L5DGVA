@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "goal": "Select validated subsystem verification environments based on user requirements and compose a System-Level/SoC verification environment.",
+  "selection_source": "validated subsystem environment registry",
+  "user_driven_selection": true,
+  "subsystem_reuse_rule": "reuse completed subsystem environments; do not regenerate unless incompatible or stale",
+  "required_checks": [
+    "subsystem_baseline_ready",
+    "protocol_plugin_compatible",
+    "git_sha_or_release_identity_known",
+    "interfaces_declared",
+    "clock_reset_requirements_declared",
+    "interrupt_dma_memory_dependencies_declared",
+    "scoreboard_hooks_declared",
+    "coverage_hooks_declared"
+  ]
+}

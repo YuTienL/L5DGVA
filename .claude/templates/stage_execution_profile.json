@@ -1,0 +1,19 @@
+{
+  "stage_id": "",
+  "stage_name": "",
+  "graph_node": "",
+  "stage_wall_clock_sec": 0,
+  "aggregate_agent_runtime_sec": 0,
+  "input_tokens": null,
+  "output_tokens": null,
+  "cache_read_tokens": null,
+  "cache_write_tokens": null,
+  "total_tokens": null,
+  "tool_calls": 0,
+  "retries": 0,
+  "finding_count": 0,
+  "closed_finding_count": 0,
+  "parallel_saving_sec": 0,
+  "parallelism_efficiency": 0,
+  "status": "UNKNOWN"
+}

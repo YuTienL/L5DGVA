@@ -1,0 +1,9 @@
+{
+  "job_id": 103167,
+  "pattern": "usb3_gen2_enum port1 only",
+  "lsf_status": "DONE",
+  "dv_analysis_status": "ANALYSIS_PENDING",
+  "uvm_error_count": null,
+  "uvm_fatal_count": null,
+  "agent_action": "inspect sim.log"
+}

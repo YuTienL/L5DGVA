@@ -1,0 +1,22 @@
+{
+  "required_preflight_declaration": true,
+  "modes": {
+    "LOCAL_ANALYSIS": {
+      "user_message": "這個是純本地讀檔分析（不碰伺服器、不跑 VCS）。",
+      "network": false,
+      "remote_server": false,
+      "vcs_simulation": false,
+      "lsf": false
+    },
+    "REMOTE_EXECUTION": {
+      "user_message": "這個需要連伺服器/跑模擬。",
+      "must_list_external_actions": true
+    },
+    "MIXED": {
+      "must_split_phases": true,
+      "phase_transition_redeclare_mode": true
+    }
+  },
+  "local_findings_must_not_be_labeled_runtime_verified": true,
+  "ambiguous_mode_action": "STOP_AT_PREFLIGHT"
+}

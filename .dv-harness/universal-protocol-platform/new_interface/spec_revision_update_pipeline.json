@@ -1,0 +1,24 @@
+{
+  "stages": [
+    "OLD_SPEC_BASELINE",
+    "NEW_SPEC_EXTRACTION",
+    "SPEC_DIFF",
+    "IMPACT_ANALYSIS",
+    "TARGETED_BUILDER_UPDATE",
+    "COMPILE",
+    "SMOKE",
+    "REQUALIFICATION"
+  ],
+  "impact_targets": [
+    "transaction",
+    "driver",
+    "monitor",
+    "sequence",
+    "checker",
+    "scoreboard",
+    "RAL",
+    "coverage",
+    "assertions",
+    "tests"
+  ]
+}

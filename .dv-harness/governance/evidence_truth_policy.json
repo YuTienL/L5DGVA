@@ -1,0 +1,15 @@
+{
+  "claude_md_is_current_evidence": false,
+  "memory_is_current_evidence": false,
+  "previous_agent_summary_is_current_evidence": false,
+  "guess_is_current_evidence": false,
+  "current_evidence_priority": [
+    "current_rtl_source",
+    "current_waveform_fsdb_measurement",
+    "current_simlog_assertion_scoreboard_transaction",
+    "current_register_readback_programming_state",
+    "versioned_phy_programming_vip_documents"
+  ],
+  "conflict_rule": "current_evidence_wins",
+  "unverified_label": "HYPOTHESIS/UNVERIFIED"
+}

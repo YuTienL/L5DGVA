@@ -1,0 +1,12 @@
+protocol: USB
+roles: [Host, Device]
+usb2_modes: [FS, HS]
+usb3_modes: [Gen1, Gen2]
+critical_fields:
+  - role
+  - enabled_modes
+  - phy_boundary
+  - clock_reset
+  - vip_role
+  - enumeration_scope
+  - transfer_types

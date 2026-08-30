@@ -1,0 +1,48 @@
+{
+  "protocol": "UCIe",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "Die_A",
+    "Die_B",
+    "Protocol_Layer",
+    "Adapter",
+    "PHY"
+  ],
+  "required_discovery": [
+    "protocol_mode",
+    "adapter_boundary",
+    "PHY_boundary",
+    "lane_or_module_topology",
+    "link_state_observability"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "link_bringup",
+    "basic_transaction",
+    "flow_control",
+    "error_status"
+  ],
+  "minimum_coverage_dimensions": [
+    "link_state",
+    "transaction_type",
+    "flow_control",
+    "retry_recovery",
+    "error",
+    "concurrency"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

@@ -1,0 +1,39 @@
+{
+  "enabled": true,
+  "default_interval_minutes": 30,
+  "report_even_if_no_change": true,
+  "immediate_alerts": true,
+  "separate_lsf_and_dv_status": true,
+  "done_is_not_pass": true,
+  "required_columns": [
+    "job_id",
+    "pattern",
+    "lsf_status",
+    "dv_analysis_status",
+    "uvm_error",
+    "uvm_fatal",
+    "agent_action",
+    "note"
+  ],
+  "immediate_event_triggers": [
+    "PEND->RUN",
+    "RUN->DONE",
+    "RUN->EXIT",
+    "DV UNKNOWN->PASS",
+    "DV UNKNOWN->FAIL",
+    "UVM_ERROR 0->>0",
+    "UVM_FATAL 0->>0",
+    "EARLY_KILL",
+    "ROOT_CAUSE_FOUND",
+    "FIX_READY",
+    "RERUN_SUBMITTED"
+  ],
+  "snapshot_sections": [
+    "summary",
+    "job_table",
+    "attention",
+    "active_analysis",
+    "next_actions"
+  ],
+  "gav_behavior": "snapshot is observability only and must not pause autonomous execution"
+}

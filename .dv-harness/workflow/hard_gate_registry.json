@@ -1,0 +1,688 @@
+{
+  "gates": [
+    {
+      "gate_id": "agent_skill_binding_gate",
+      "tool": "tools/verification_flow/agent_skill_binding_gate.py"
+    },
+    {
+      "gate_id": "architecture_calibration_conflict_gate",
+      "tool": "tools/verification_flow/architecture_calibration_conflict_gate.py"
+    },
+    {
+      "gate_id": "architecture_calibration_gate",
+      "tool": "tools/verification_flow/architecture_calibration_gate.py"
+    },
+    {
+      "gate_id": "artifact_dependency_closure_gate",
+      "tool": "tools/verification_flow/artifact_dependency_closure_gate.py"
+    },
+    {
+      "gate_id": "assertion_vacuity_and_reachability_gate",
+      "tool": "tools/verification_flow/assertion_vacuity_and_reachability_gate.py"
+    },
+    {
+      "gate_id": "assertion_vacuity_gate",
+      "tool": "tools/verification_flow/assertion_vacuity_gate.py"
+    },
+    {
+      "gate_id": "branch_fw_interrupt_contract_gate",
+      "tool": "tools/verification_flow/branch_fw_interrupt_contract_gate.py"
+    },
+    {
+      "gate_id": "branch_topology_gate",
+      "tool": "tools/verification_flow/branch_topology_gate.py"
+    },
+    {
+      "gate_id": "build_failure_triage_gate",
+      "tool": "tools/verification_flow/build_failure_triage_gate.py"
+    },
+    {
+      "gate_id": "checker_independence_gate",
+      "tool": "tools/verification_flow/checker_independence_gate.py"
+    },
+    {
+      "gate_id": "checker_semantic_trace_consistency_gate",
+      "tool": "tools/verification_flow/checker_semantic_trace_consistency_gate.py"
+    },
+    {
+      "gate_id": "closed_loop_promotion_gate",
+      "tool": "tools/verification_flow/closed_loop_promotion_gate.py"
+    },
+    {
+      "gate_id": "command_catalog_lifecycle_gate",
+      "tool": "tools/verification_flow/command_catalog_lifecycle_gate.py"
+    },
+    {
+      "gate_id": "command_catalog_reference_scan_gate",
+      "tool": "tools/verification_flow/command_catalog_reference_scan_gate.py"
+    },
+    {
+      "gate_id": "command_intent_semantic_closure_gate",
+      "tool": "tools/verification_flow/command_intent_semantic_closure_gate.py"
+    },
+    {
+      "gate_id": "command_migration_integrity_gate",
+      "tool": "tools/verification_flow/command_migration_integrity_gate.py"
+    },
+    {
+      "gate_id": "control_plane_bidirectional_test_gate",
+      "tool": "tools/verification_flow/control_plane_bidirectional_test_gate.py"
+    },
+    {
+      "gate_id": "coverage_checker_linkage_gate",
+      "tool": "tools/verification_flow/coverage_checker_linkage_gate.py"
+    },
+    {
+      "gate_id": "coverage_credit_consistency_gate",
+      "tool": "tools/verification_flow/coverage_credit_consistency_gate.py"
+    },
+    {
+      "gate_id": "coverage_credit_revocation_gate",
+      "tool": "tools/verification_flow/coverage_credit_revocation_gate.py"
+    },
+    {
+      "gate_id": "coverage_credit_source_integrity_gate",
+      "tool": "tools/verification_flow/coverage_credit_source_integrity_gate.py"
+    },
+    {
+      "gate_id": "coverage_failure_state_linkage_gate",
+      "tool": "tools/verification_flow/coverage_failure_state_linkage_gate.py"
+    },
+    {
+      "gate_id": "coverage_hole_regeneration_gate",
+      "tool": "tools/verification_flow/coverage_hole_regeneration_gate.py"
+    },
+    {
+      "gate_id": "coverage_hole_to_test_generation_gate",
+      "tool": "tools/verification_flow/coverage_hole_to_test_generation_gate.py"
+    },
+    {
+      "gate_id": "coverage_quality_gate",
+      "tool": "tools/verification_flow/coverage_quality_gate.py"
+    },
+    {
+      "gate_id": "coverage_regression_drift_gate",
+      "tool": "tools/verification_flow/coverage_regression_drift_gate.py"
+    },
+    {
+      "gate_id": "coverage_signoff_verdict_gate",
+      "tool": "tools/verification_flow/coverage_signoff_verdict_gate.py"
+    },
+    {
+      "gate_id": "cross_domain_evidence_bundle_gate",
+      "tool": "tools/verification_flow/cross_domain_evidence_bundle_gate.py"
+    },
+    {
+      "gate_id": "cross_protocol_scenario_gate",
+      "tool": "tools/verification_flow/cross_protocol_scenario_gate.py"
+    },
+    {
+      "gate_id": "cross_run_evidence_consistency_gate",
+      "tool": "tools/verification_flow/cross_run_evidence_consistency_gate.py"
+    },
+    {
+      "gate_id": "de_baseline_reproduction_gate",
+      "tool": "tools/verification_flow/de_baseline_reproduction_gate.py"
+    },
+    {
+      "gate_id": "deep_rca_evidence_gate",
+      "tool": "tools/verification_flow/deep_rca_evidence_gate.py"
+    },
+    {
+      "gate_id": "dut_request_record_gate",
+      "tool": "tools/verification_flow/dut_request_record_gate.py"
+    },
+    {
+      "gate_id": "end_to_end_trace_chain_gate",
+      "tool": "tools/verification_flow/end_to_end_trace_chain_gate.py"
+    },
+    {
+      "gate_id": "environment_readiness_status_gate",
+      "tool": "tools/verification_flow/environment_readiness_status_gate.py"
+    },
+    {
+      "gate_id": "error_injection_coverage_gate",
+      "tool": "tools/verification_flow/error_injection_coverage_gate.py"
+    },
+    {
+      "gate_id": "evidence_bundle_run_consistency_gate",
+      "tool": "tools/verification_flow/evidence_bundle_run_consistency_gate.py"
+    },
+    {
+      "gate_id": "evidence_freshness_gate",
+      "tool": "tools/verification_flow/evidence_freshness_gate.py"
+    },
+    {
+      "gate_id": "evidence_source_priority_gate",
+      "tool": "tools/verification_flow/evidence_source_priority_gate.py"
+    },
+    {
+      "gate_id": "execution_evidence_gate",
+      "tool": "tools/verification_flow/execution_evidence_gate.py"
+    },
+    {
+      "gate_id": "expected_data_provenance_gate",
+      "tool": "tools/verification_flow/expected_data_provenance_gate.py"
+    },
+    {
+      "gate_id": "experience_applicability_gate",
+      "tool": "tools/verification_flow/experience_applicability_gate.py"
+    },
+    {
+      "gate_id": "experience_knowledge_gate",
+      "tool": "tools/verification_flow/experience_knowledge_gate.py"
+    },
+    {
+      "gate_id": "expert_feedback_closure_gate",
+      "tool": "tools/verification_flow/expert_feedback_closure_gate.py"
+    },
+    {
+      "gate_id": "fabric_topology_completeness_gate",
+      "tool": "tools/verification_flow/fabric_topology_completeness_gate.py"
+    },
+    {
+      "gate_id": "failure_signature_recurrence_gate",
+      "tool": "tools/verification_flow/failure_signature_recurrence_gate.py"
+    },
+    {
+      "gate_id": "false_pass_false_fail_arbitration_gate",
+      "tool": "tools/verification_flow/false_pass_false_fail_arbitration_gate.py"
+    },
+    {
+      "gate_id": "false_pass_resistance_gate",
+      "tool": "tools/verification_flow/false_pass_resistance_gate.py"
+    },
+    {
+      "gate_id": "feature_continuity_gate",
+      "tool": "tools/verification_flow/feature_continuity_gate.py"
+    },
+    {
+      "gate_id": "fix_effectiveness_gate",
+      "tool": "tools/verification_flow/fix_effectiveness_gate.py"
+    },
+    {
+      "gate_id": "fix_regression_non_regression_gate",
+      "tool": "tools/verification_flow/fix_regression_non_regression_gate.py"
+    },
+    {
+      "gate_id": "fix_risk_approval_gate",
+      "tool": "tools/verification_flow/fix_risk_approval_gate.py"
+    },
+    {
+      "gate_id": "flaky_test_policy_gate",
+      "tool": "tools/verification_flow/flaky_test_policy_gate.py"
+    },
+    {
+      "gate_id": "focused_wave_debug_window_gate",
+      "tool": "tools/verification_flow/focused_wave_debug_window_gate.py"
+    },
+    {
+      "gate_id": "gate_dependency_consistency",
+      "tool": "tools/verification_flow/gate_dependency_consistency.py"
+    },
+    {
+      "gate_id": "gate_io_contract_consistency_gate",
+      "tool": "tools/verification_flow/gate_io_contract_consistency_gate.py"
+    },
+    {
+      "gate_id": "gate_manifest_registry_consistency_gate",
+      "tool": "tools/verification_flow/gate_manifest_registry_consistency_gate.py"
+    },
+    {
+      "gate_id": "generated_artifact_boundary_gate",
+      "tool": "tools/verification_flow/generated_artifact_boundary_gate.py"
+    },
+    {
+      "gate_id": "git_sync_safety_gate",
+      "tool": "tools/verification_flow/git_sync_safety_gate.py"
+    },
+    {
+      "gate_id": "hard_gate_coverage_evidence_gate",
+      "tool": "tools/verification_flow/hard_gate_coverage_evidence_gate.py"
+    },
+    {
+      "gate_id": "hard_gate_positive_negative_coverage_gate",
+      "tool": "tools/verification_flow/hard_gate_positive_negative_coverage_gate.py"
+    },
+    {
+      "gate_id": "hard_gate_registry_audit",
+      "tool": "tools/verification_flow/hard_gate_registry_audit.py"
+    },
+    {
+      "gate_id": "input_source_contract_gate",
+      "tool": "tools/verification_flow/input_source_contract_gate.py"
+    },
+    {
+      "gate_id": "interactive_evidence_intake_gate",
+      "tool": "tools/verification_flow/interactive_evidence_intake_gate.py"
+    },
+    {
+      "gate_id": "interrupt_storm_latency_gate",
+      "tool": "tools/verification_flow/interrupt_storm_latency_gate.py"
+    },
+    {
+      "gate_id": "issue_triage_classification_gate",
+      "tool": "tools/verification_flow/issue_triage_classification_gate.py"
+    },
+    {
+      "gate_id": "knowledge_center_registry_consistency_gate",
+      "tool": "tools/verification_flow/knowledge_center_registry_consistency_gate.py"
+    },
+    {
+      "gate_id": "lsf_per_job_monitor_gate",
+      "tool": "tools/verification_flow/lsf_per_job_monitor_gate.py"
+    },
+    {
+      "gate_id": "manual_lookup_before_edit_gate",
+      "tool": "tools/verification_flow/manual_lookup_before_edit_gate.py"
+    },
+    {
+      "gate_id": "master_requirement_completeness_gate",
+      "tool": "tools/verification_flow/master_requirement_completeness_gate.py"
+    },
+    {
+      "gate_id": "mechanism_readiness_gate",
+      "tool": "tools/verification_flow/mechanism_readiness_gate.py"
+    },
+    {
+      "gate_id": "multi_port_fairness_qos_gate",
+      "tool": "tools/verification_flow/multi_port_fairness_qos_gate.py"
+    },
+    {
+      "gate_id": "negative_test_effectiveness_gate",
+      "tool": "tools/verification_flow/negative_test_effectiveness_gate.py"
+    },
+    {
+      "gate_id": "nondeterminism_attribution_gate",
+      "tool": "tools/verification_flow/nondeterminism_attribution_gate.py"
+    },
+    {
+      "gate_id": "observability_sufficiency_gate",
+      "tool": "tools/verification_flow/observability_sufficiency_gate.py"
+    },
+    {
+      "gate_id": "one_click_pipeline_gate",
+      "tool": "tools/verification_flow/one_click_pipeline_gate.py"
+    },
+    {
+      "gate_id": "pattern_registry_completeness_gate",
+      "tool": "tools/verification_flow/pattern_registry_completeness_gate.py"
+    },
+    {
+      "gate_id": "per_port_queue_starvation_gate",
+      "tool": "tools/verification_flow/per_port_queue_starvation_gate.py"
+    },
+    {
+      "gate_id": "per_port_verification_matrix_gate",
+      "tool": "tools/verification_flow/per_port_verification_matrix_gate.py"
+    },
+    {
+      "gate_id": "pipeline_artifact_handoff_gate",
+      "tool": "tools/verification_flow/pipeline_artifact_handoff_gate.py"
+    },
+    {
+      "gate_id": "pipeline_hash_continuity_gate",
+      "tool": "tools/verification_flow/pipeline_hash_continuity_gate.py"
+    },
+    {
+      "gate_id": "platform_capability_completeness_gate",
+      "tool": "tools/verification_flow/platform_capability_completeness_gate.py"
+    },
+    {
+      "gate_id": "project_model_topology_completeness_gate",
+      "tool": "tools/verification_flow/project_model_topology_completeness_gate.py"
+    },
+    {
+      "gate_id": "promotion_chain_audit_gate",
+      "tool": "tools/verification_flow/promotion_chain_audit_gate.py"
+    },
+    {
+      "gate_id": "promotion_readiness_gate",
+      "tool": "tools/verification_flow/promotion_readiness_gate.py"
+    },
+    {
+      "gate_id": "promotion_rollback_gate",
+      "tool": "tools/verification_flow/promotion_rollback_gate.py"
+    },
+    {
+      "gate_id": "protocol_builder_registry_conformance_gate",
+      "tool": "tools/verification_flow/protocol_builder_registry_conformance_gate.py"
+    },
+    {
+      "gate_id": "protocol_corner_case_matrix_gate",
+      "tool": "tools/verification_flow/protocol_corner_case_matrix_gate.py"
+    },
+    {
+      "gate_id": "protocol_family_qualification_gate",
+      "tool": "tools/verification_flow/protocol_family_qualification_gate.py"
+    },
+    {
+      "gate_id": "protocol_generator_binding_gate",
+      "tool": "tools/verification_flow/protocol_generator_binding_gate.py"
+    },
+    {
+      "gate_id": "protocol_onboarding_gate",
+      "tool": "tools/verification_flow/protocol_onboarding_gate.py"
+    },
+    {
+      "gate_id": "protocol_profile_version_gate",
+      "tool": "tools/verification_flow/protocol_profile_version_gate.py"
+    },
+    {
+      "gate_id": "protocol_qualification_ladder_gate",
+      "tool": "tools/verification_flow/protocol_qualification_ladder_gate.py"
+    },
+    {
+      "gate_id": "protocol_qualification_status_gate",
+      "tool": "tools/verification_flow/protocol_qualification_status_gate.py"
+    },
+    {
+      "gate_id": "protocol_scheduler_gate",
+      "tool": "tools/verification_flow/protocol_scheduler_gate.py"
+    },
+    {
+      "gate_id": "protocol_structural_completeness_gate",
+      "tool": "tools/verification_flow/protocol_structural_completeness_gate.py"
+    },
+    {
+      "gate_id": "protocol_test_coverage_gate",
+      "tool": "tools/verification_flow/protocol_test_coverage_gate.py"
+    },
+    {
+      "gate_id": "qualification_matrix_consistency_gate",
+      "tool": "tools/verification_flow/qualification_matrix_consistency_gate.py"
+    },
+    {
+      "gate_id": "rca_confidence_escalation_gate",
+      "tool": "tools/verification_flow/rca_confidence_escalation_gate.py"
+    },
+    {
+      "gate_id": "rca_replay_fix_closure_gate",
+      "tool": "tools/verification_flow/rca_replay_fix_closure_gate.py"
+    },
+    {
+      "gate_id": "reference_uvm_adaptation_gate",
+      "tool": "tools/verification_flow/reference_uvm_adaptation_gate.py"
+    },
+    {
+      "gate_id": "reference_uvm_compatibility_gate",
+      "tool": "tools/verification_flow/reference_uvm_compatibility_gate.py"
+    },
+    {
+      "gate_id": "regression_infra_functional_triage_gate",
+      "tool": "tools/verification_flow/regression_infra_functional_triage_gate.py"
+    },
+    {
+      "gate_id": "regression_replay_equivalence_gate",
+      "tool": "tools/verification_flow/regression_replay_equivalence_gate.py"
+    },
+    {
+      "gate_id": "regression_result_uniqueness_gate",
+      "tool": "tools/verification_flow/regression_result_uniqueness_gate.py"
+    },
+    {
+      "gate_id": "regression_selection_completeness_gate",
+      "tool": "tools/verification_flow/regression_selection_completeness_gate.py"
+    },
+    {
+      "gate_id": "regression_submission_policy_gate",
+      "tool": "tools/verification_flow/regression_submission_policy_gate.py"
+    },
+    {
+      "gate_id": "release_attestation_gate",
+      "tool": "tools/verification_flow/release_attestation_gate.py"
+    },
+    {
+      "gate_id": "release_reproducibility_gate",
+      "tool": "tools/verification_flow/release_reproducibility_gate.py"
+    },
+    {
+      "gate_id": "remote_action_audit_gate",
+      "tool": "tools/verification_flow/remote_action_audit_gate.py"
+    },
+    {
+      "gate_id": "remote_action_replay_gate",
+      "tool": "tools/verification_flow/remote_action_replay_gate.py"
+    },
+    {
+      "gate_id": "remote_control_supervisory_gate",
+      "tool": "tools/verification_flow/remote_control_supervisory_gate.py"
+    },
+    {
+      "gate_id": "remote_state_transition_gate",
+      "tool": "tools/verification_flow/remote_state_transition_gate.py"
+    },
+    {
+      "gate_id": "requirement_runtime_evidence_gate",
+      "tool": "tools/verification_flow/requirement_runtime_evidence_gate.py"
+    },
+    {
+      "gate_id": "rerun_determinism_gate",
+      "tool": "tools/verification_flow/rerun_determinism_gate.py"
+    },
+    {
+      "gate_id": "reset_clock_power_sequence_gate",
+      "tool": "tools/verification_flow/reset_clock_power_sequence_gate.py"
+    },
+    {
+      "gate_id": "reset_power_cdc_corner_gate",
+      "tool": "tools/verification_flow/reset_power_cdc_corner_gate.py"
+    },
+    {
+      "gate_id": "rollback_consistency_gate",
+      "tool": "tools/verification_flow/rollback_consistency_gate.py"
+    },
+    {
+      "gate_id": "root_cause_attribution_consistency_gate",
+      "tool": "tools/verification_flow/root_cause_attribution_consistency_gate.py"
+    },
+    {
+      "gate_id": "root_cause_evidence_gate",
+      "tool": "tools/verification_flow/root_cause_evidence_gate.py"
+    },
+    {
+      "gate_id": "rtl_first_architecture_discovery_gate",
+      "tool": "tools/verification_flow/rtl_first_architecture_discovery_gate.py"
+    },
+    {
+      "gate_id": "run_environment_reproducibility_gate",
+      "tool": "tools/verification_flow/run_environment_reproducibility_gate.py"
+    },
+    {
+      "gate_id": "run_identity_consistency_gate",
+      "tool": "tools/verification_flow/run_identity_consistency_gate.py"
+    },
+    {
+      "gate_id": "runtime_default_policy_gate",
+      "tool": "tools/verification_flow/runtime_default_policy_gate.py"
+    },
+    {
+      "gate_id": "schema_reference_integrity_gate",
+      "tool": "tools/verification_flow/schema_reference_integrity_gate.py"
+    },
+    {
+      "gate_id": "scoreboard_reference_model_independence_gate",
+      "tool": "tools/verification_flow/scoreboard_reference_model_independence_gate.py"
+    },
+    {
+      "gate_id": "scoreboard_transaction_liveness_gate",
+      "tool": "tools/verification_flow/scoreboard_transaction_liveness_gate.py"
+    },
+    {
+      "gate_id": "seed_diversity_and_corner_case_gate",
+      "tool": "tools/verification_flow/seed_diversity_and_corner_case_gate.py"
+    },
+    {
+      "gate_id": "seed_reproducibility_gate",
+      "tool": "tools/verification_flow/seed_reproducibility_gate.py"
+    },
+    {
+      "gate_id": "semantic_evidence_strength_gate",
+      "tool": "tools/verification_flow/semantic_evidence_strength_gate.py"
+    },
+    {
+      "gate_id": "sequence_coverage_closure_gate",
+      "tool": "tools/verification_flow/sequence_coverage_closure_gate.py"
+    },
+    {
+      "gate_id": "server_sync_identity_gate",
+      "tool": "tools/verification_flow/server_sync_identity_gate.py"
+    },
+    {
+      "gate_id": "shared_elaboration_collision_gate",
+      "tool": "tools/verification_flow/shared_elaboration_collision_gate.py"
+    },
+    {
+      "gate_id": "signoff_bundle_completeness_gate",
+      "tool": "tools/verification_flow/signoff_bundle_completeness_gate.py"
+    },
+    {
+      "gate_id": "signoff_snapshot_immutability_gate",
+      "tool": "tools/verification_flow/signoff_snapshot_immutability_gate.py"
+    },
+    {
+      "gate_id": "signoff_trace_crosscheck_gate",
+      "tool": "tools/verification_flow/signoff_trace_crosscheck_gate.py"
+    },
+    {
+      "gate_id": "simulation_completion_recheck_gate",
+      "tool": "tools/verification_flow/simulation_completion_recheck_gate.py"
+    },
+    {
+      "gate_id": "simulation_semantic_trace_gate",
+      "tool": "tools/verification_flow/simulation_semantic_trace_gate.py"
+    },
+    {
+      "gate_id": "simulation_semantic_validation_gate",
+      "tool": "tools/verification_flow/simulation_semantic_validation_gate.py"
+    },
+    {
+      "gate_id": "spec_rtl_change_impact_gate",
+      "tool": "tools/verification_flow/spec_rtl_change_impact_gate.py"
+    },
+    {
+      "gate_id": "spec_to_vplan_requirement_quality_gate",
+      "tool": "tools/verification_flow/spec_to_vplan_requirement_quality_gate.py"
+    },
+    {
+      "gate_id": "stop_after_simv_policy_gate",
+      "tool": "tools/verification_flow/stop_after_simv_policy_gate.py"
+    },
+    {
+      "gate_id": "subsystem_environment_registration_gate",
+      "tool": "tools/verification_flow/subsystem_environment_registration_gate.py"
+    },
+    {
+      "gate_id": "system_level_change_impact_gate",
+      "tool": "tools/verification_flow/system_level_change_impact_gate.py"
+    },
+    {
+      "gate_id": "system_level_composition_gate",
+      "tool": "tools/verification_flow/system_level_composition_gate.py"
+    },
+    {
+      "gate_id": "system_level_cross_domain_gate",
+      "tool": "tools/verification_flow/system_level_cross_domain_gate.py"
+    },
+    {
+      "gate_id": "system_level_deadlock_livelock_gate",
+      "tool": "tools/verification_flow/system_level_deadlock_livelock_gate.py"
+    },
+    {
+      "gate_id": "system_level_dependency_graph_gate",
+      "tool": "tools/verification_flow/system_level_dependency_graph_gate.py"
+    },
+    {
+      "gate_id": "system_level_release_evidence_consistency_gate",
+      "tool": "tools/verification_flow/system_level_release_evidence_consistency_gate.py"
+    },
+    {
+      "gate_id": "system_level_release_pinning_gate",
+      "tool": "tools/verification_flow/system_level_release_pinning_gate.py"
+    },
+    {
+      "gate_id": "system_level_resource_contention_gate",
+      "tool": "tools/verification_flow/system_level_resource_contention_gate.py"
+    },
+    {
+      "gate_id": "system_level_subsystem_set_completeness_gate",
+      "tool": "tools/verification_flow/system_level_subsystem_set_completeness_gate.py"
+    },
+    {
+      "gate_id": "system_level_subsystem_verdict_gate",
+      "tool": "tools/verification_flow/system_level_subsystem_verdict_gate.py"
+    },
+    {
+      "gate_id": "system_level_traceability_gate",
+      "tool": "tools/verification_flow/system_level_traceability_gate.py"
+    },
+    {
+      "gate_id": "system_remote_lsf_coverage_gate",
+      "tool": "tools/verification_flow/system_remote_lsf_coverage_gate.py"
+    },
+    {
+      "gate_id": "test_collection_health_gate",
+      "tool": "tools/verification_flow/test_collection_health_gate.py"
+    },
+    {
+      "gate_id": "test_oracle_independence_gate",
+      "tool": "tools/verification_flow/test_oracle_independence_gate.py"
+    },
+    {
+      "gate_id": "test_result_provenance_gate",
+      "tool": "tools/verification_flow/test_result_provenance_gate.py"
+    },
+    {
+      "gate_id": "testcase_name_semantics_gate",
+      "tool": "tools/verification_flow/testcase_name_semantics_gate.py"
+    },
+    {
+      "gate_id": "traceability_consistency_gate",
+      "tool": "tools/verification_flow/traceability_consistency_gate.py"
+    },
+    {
+      "gate_id": "unknown_failure_escalation_gate",
+      "tool": "tools/verification_flow/unknown_failure_escalation_gate.py"
+    },
+    {
+      "gate_id": "verification_effectiveness_consistency_gate",
+      "tool": "tools/verification_flow/verification_effectiveness_consistency_gate.py"
+    },
+    {
+      "gate_id": "verification_intent_gate",
+      "tool": "tools/verification_flow/verification_intent_gate.py"
+    },
+    {
+      "gate_id": "verification_verdict_consistency_gate",
+      "tool": "tools/verification_flow/verification_verdict_consistency_gate.py"
+    },
+    {
+      "gate_id": "vip_api_drift_gate",
+      "tool": "tools/verification_flow/vip_api_drift_gate.py"
+    },
+    {
+      "gate_id": "waiver_revalidation_gate",
+      "tool": "tools/verification_flow/waiver_revalidation_gate.py"
+    },
+    {
+      "gate_id": "waiver_revision_freshness_gate",
+      "tool": "tools/verification_flow/waiver_revision_freshness_gate.py"
+    },
+    {
+      "gate_id": "waiver_scope_consistency_gate",
+      "tool": "tools/verification_flow/waiver_scope_consistency_gate.py"
+    },
+    {
+      "gate_id": "wave0_post_sim_semantic_gate",
+      "tool": "tools/verification_flow/wave0_post_sim_semantic_gate.py"
+    },
+    {
+      "gate_id": "workflow_registry_orphan_gate",
+      "tool": "tools/verification_flow/workflow_registry_orphan_gate.py"
+    },
+    {
+      "gate_id": "workflow_second_pass_clean_gate",
+      "tool": "tools/verification_flow/workflow_second_pass_clean_gate.py"
+    }
+  ]
+}

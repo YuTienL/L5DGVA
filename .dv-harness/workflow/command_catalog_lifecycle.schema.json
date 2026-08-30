@@ -1,0 +1,17 @@
+{
+  "commands": [
+    {
+      "command_id": "CMD-001",
+      "verification_level": "BLOCK_IP|SUBSYSTEM|SYSTEM_LEVEL",
+      "category": "BRINGUP|FUNCTIONAL|NEGATIVE|RECOVERY|PERFORMANCE|REGRESSION|DEBUG|QUALIFICATION",
+      "destination": "verification_commands/..."
+    }
+  ],
+  "obsolete_directories": [
+    {
+      "path": "old/path",
+      "safe_to_delete": true,
+      "reference_scan_clean": true
+    }
+  ]
+}

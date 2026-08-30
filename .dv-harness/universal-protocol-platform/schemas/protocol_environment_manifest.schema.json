@@ -1,0 +1,28 @@
+{
+  "required": [
+    "protocol",
+    "dut",
+    "role",
+    "interfaces",
+    "clocks",
+    "resets",
+    "vip",
+    "tests",
+    "scoreboards",
+    "coverage"
+  ],
+  "fields": {
+    "protocol": "string",
+    "dut": "object",
+    "role": "string_or_array",
+    "interfaces": "array",
+    "clocks": "array",
+    "resets": "array",
+    "vip": "object",
+    "tests": "array",
+    "scoreboards": "array",
+    "coverage": "array",
+    "evidence": "array",
+    "qualification": "object"
+  }
+}

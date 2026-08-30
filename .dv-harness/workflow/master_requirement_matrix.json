@@ -1,0 +1,172 @@
+{
+  "requirements": [
+    {
+      "requirement_id": "STEP_BY_STEP_INTERACTIVE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "FIVE_CORE_INPUTS",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "SPEC",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "COMMAND_TXT",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "USB_STANDARD_REFERENCE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "REFERENCE_UVM",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "RTL_FIRST_ARCH_DISCOVERY",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "DE_LOCAL_SIM_BASELINE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "VPLAN_FIRST",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "VERIFICATION_ARCHITECTURE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "SCOREBOARD_CHECKER_ASSERTION",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "TEST_GENERATION",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "NEGATIVE_TEST",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "LOCAL_SIM",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "COMMAND_SIMLOG_SEMANTIC",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "FALSE_PASS_DEFENSE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "DUT_TB_BUG_CLASSIFICATION",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "WAVEFORM_RCA",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "PROTOCOL_CORNER_CASE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "LSF_REGRESSION",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "PER_JOB_MONITOR",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "REMOTE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "COVERAGE_CLOSURE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "SYSTEM_LEVEL",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "EXPERT_FEEDBACK",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "SIGNOFF",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "FEATURE_CONTINUITY",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    },
+    {
+      "requirement_id": "EVIDENCE_PROVENANCE",
+      "implemented": true,
+      "pytest_evidence": "validated",
+      "hard_gate": "registered"
+    }
+  ]
+}

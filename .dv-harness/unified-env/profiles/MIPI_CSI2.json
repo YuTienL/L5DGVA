@@ -1,0 +1,22 @@
+{
+  "protocol": "MIPI_CSI2",
+  "roles": [
+    "TX",
+    "RX"
+  ],
+  "boundaries": [
+    "D_PHY",
+    "C_PHY",
+    "Protocol"
+  ],
+  "smoke_tests": [
+    "phy_bringup",
+    "short_packet",
+    "long_packet",
+    "frame"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

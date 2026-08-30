@@ -1,0 +1,75 @@
+{
+  "protocol": "PCIe",
+  "role": "EP",
+  "dut_top": "pcie_ep_dut",
+  "interfaces": [
+    {
+      "name": "pcie_link",
+      "boundary": "DISCOVER_FROM_CURRENT_DUT"
+    }
+  ],
+  "clocks": [
+    {
+      "name": "refclk"
+    }
+  ],
+  "resets": [
+    {
+      "name": "perst_n"
+    }
+  ],
+  "vip": {
+    "package_imports": [
+      "pcie_vip_pkg"
+    ],
+    "agent_type": "pcie_vip_agent",
+    "agent_instance": "pcie_vip"
+  },
+  "transactions": [
+    {
+      "name": "CfgRd"
+    },
+    {
+      "name": "CfgWr"
+    },
+    {
+      "name": "MemRd"
+    },
+    {
+      "name": "MemWr"
+    }
+  ],
+  "scoreboard_rules": [
+    {
+      "name": "completion_matching"
+    },
+    {
+      "name": "memory_data_integrity"
+    }
+  ],
+  "coverage_points": [
+    {
+      "name": "ltssm_state"
+    },
+    {
+      "name": "tlp_type"
+    },
+    {
+      "name": "completion_status"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "name": "link_training"
+    },
+    {
+      "name": "enumeration"
+    },
+    {
+      "name": "memory_rw"
+    }
+  ],
+  "metadata": {
+    "vip_binding_status": "PLACEHOLDER_UNTIL_CURRENT_VIP_EVIDENCE"
+  }
+}

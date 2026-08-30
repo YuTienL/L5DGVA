@@ -1,0 +1,21 @@
+{
+  "_evidence_notes": "target_instance and its port use the real hierarchical path/signal already used in production BFM pattern D:/DV/Task/USB/patterns/USB2_con.txt:49 (`wait(`SS_VOUT.u_usbtop[0].phy0_sram_init_done);`) and :88 (deeper path `...u_udc_usb31_top.u_udc_usb31_phy.phy0.tca.inst_tca_reg.xa_ack_evt`). `SS_VOUT` is a backtick macro used throughout the pattern set (not resolved to its literal defining path in this pass -- that resolution is an honest gap, not fabricated). u_usbtop[0] is confirmed to be an ARRAYED instance (index required) per D:/DV/Task/USB/.claude/skills/usb-tb-scaffold/SKILL.md:110 ('現況是 u_usbtop[1:0] 陣列，要帶 index').",
+  "protocol": "usb",
+  "bind_entries": [
+    {
+      "target_instance": "`SS_VOUT.u_usbtop[0]",
+      "bind_module": "dv_uvm_probe",
+      "inst_name": "u_usb0_sram_init_probe",
+      "ports": ["phy0_sram_init_done"],
+      "reason": "phy0_sram_init_done observed directly in real production pattern D:/DV/Task/USB/patterns/USB2_con.txt:49 as the gate for device-side PHY SRAM init completion before the device controller registers (CPUWRITE 0x1271_xxxx) are safely programmed; u_usbtop is a 2-wide array per usb-tb-scaffold SKILL.md:110 so index [0] must be explicit, never assumed."
+    }
+  ],
+  "macro_redirects": {
+    "CPUWRITE1B": "dv_uvm_cpuwrite1b",
+    "CPUWRITE2B": "dv_uvm_cpuwrite2b",
+    "CPUWRITE4B": "dv_uvm_cpuwrite4b"
+  },
+  "top_scope_decls": [
+    "// TODO_PLACEHOLDER: bridge instance(s) connecting dv_uvm_cpuwrite*b to the real DUT register-write path go here -- not yet designed in this pass (needs the same APB/CPU-side path evidence as ss_cpu_m_* signals at DUT.RTLCAT.TOP_ALL.v:25950-25959, which this pass only located but did not yet wire)."
+  ]
+}

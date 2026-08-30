@@ -1,0 +1,10 @@
+protocol: MIPI-DSI
+critical_fields:
+  - dut_role
+  - phy_type
+  - operating_mode
+  - lane_or_trio_count
+  - pixel_formats
+  - lp_hs_behavior
+  - ecc_crc
+  - error_reporting

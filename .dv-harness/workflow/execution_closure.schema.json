@@ -1,0 +1,25 @@
+{
+  "requirements": [
+    {
+      "req_id": "SPEC-XXX",
+      "status": "VERIFIED|WAIVED|NOT_APPLICABLE|BLOCKED",
+      "support_status": "SUPPORTED|UNSUPPORTED_BY_DUT|NOT_APPLICABLE|UNKNOWN",
+      "mechanism_ids": [
+        "MECH-XXX"
+      ],
+      "execution_evidence": [
+        "sim.log:line",
+        "vip_trace:event",
+        "waveform:time",
+        "coverage:bin"
+      ],
+      "approved_alternate_verification_method": "optional",
+      "waiver": {
+        "approved": false,
+        "evidence": []
+      },
+      "not_applicable_evidence": []
+    }
+  ],
+  "gate": "READY_FOR_CLOSURE"
+}

@@ -1,0 +1,213 @@
+"""Tests for dv_harness/uvm_generator/amba_fabric_generator.py -- the real
+AMBA M x N generator (see plan-amba-mxn-generator design pass, 2026-08-28)."""
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from dv_harness.uvm_generator.amba_fabric_generator import (
+    AMBAFabricGenerator, AddressMapError, ScoreboardMatrixError,
+    compute_address_regions, compute_id_width, build_scoreboard_matrix, parse_addr,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+# ---- pure-function tests (no I/O) ------------------------------------------
+
+def test_compute_id_width_examples():
+    assert compute_id_width([{"id": "m0", "id_width": 4}, {"id": "m1", "id_width": 6}]) == 7  # ceil(log2(2))+6=1+6=7
+    assert compute_id_width([{"id_width": 4}, {"id_width": 6}, {"id_width": 4}, {"id_width": 4}]) == 8  # ceil(log2(4))+6=2+6=8
+    assert compute_id_width([{"id_width": 3}]) == 3  # M=1: ceil(log2(1))+3=0+3=3
+
+
+def test_compute_id_width_requires_at_least_one_master():
+    with pytest.raises(ValueError):
+        compute_id_width([])
+
+
+def test_compute_address_regions_detects_overlap():
+    slaves = [{"id": "s0", "base_addr": "0x0", "size": "0x1000"},
+              {"id": "s1", "base_addr": "0x800", "size": "0x1000"}]
+    with pytest.raises(AddressMapError) as exc:
+        compute_address_regions(slaves, [], addr_width=16)
+    assert exc.value.reason == "ADDRESS_MAP_OVERLAP"
+
+
+def test_compute_address_regions_detects_undeclared_gap():
+    slaves = [{"id": "s0", "base_addr": "0x0", "size": "0x1000"},
+              {"id": "s1", "base_addr": "0x2000", "size": "0x1000"}]
+    reserved = [{"name": "rsvd_top", "base_addr": "0x3000", "size": "0xd000", "decerr": True}]
+    with pytest.raises(AddressMapError) as exc:
+        compute_address_regions(slaves, reserved, addr_width=16)
+    assert exc.value.reason == "ADDRESS_MAP_GAP"
+
+
+def test_compute_address_regions_passes_full_coverage():
+    slaves = [{"id": "s0", "base_addr": "0x0", "size": "0x1000"},
+              {"id": "s1", "base_addr": "0x1000", "size": "0x1000"}]
+    reserved = [{"name": "rsvd_top", "base_addr": "0x2000", "size": "0xe000", "decerr": True}]
+    regions = compute_address_regions(slaves, reserved, addr_width=16)
+    assert [r["owner"] for r in regions] == ["s0", "s1", "rsvd_top"]
+    assert regions[0]["start"] == 0 and regions[-1]["end"] == 1 << 16
+
+
+def test_compute_address_regions_fails_without_full_coverage():
+    slaves = [{"id": "s0", "base_addr": "0x0", "size": "0x1000"}]
+    with pytest.raises(AddressMapError) as exc:
+        compute_address_regions(slaves, [], addr_width=16)
+    assert exc.value.reason == "ADDRESS_MAP_NOT_FULL_COVERAGE"
+
+
+def test_parse_addr_handles_hex_underscore_and_int():
+    assert parse_addr("0x1000") == 0x1000
+    assert parse_addr("0x0010_0000") == 0x00100000
+    assert parse_addr(4096) == 4096
+
+
+def test_build_scoreboard_matrix_requires_explicit_evidence():
+    masters = [{"id": "m0"}]
+    slaves = [{"id": "s0"}]
+    with pytest.raises(ScoreboardMatrixError) as exc:
+        build_scoreboard_matrix(masters, slaves, connectivity=None, assume_full_connectivity=False)
+    assert exc.value.reason == "NO_CONNECTIVITY_EVIDENCE"
+
+
+def test_build_scoreboard_matrix_full_when_opted_in():
+    masters = [{"id": "m0"}, {"id": "m1"}]
+    slaves = [{"id": "s0"}, {"id": "s1"}]
+    matrix = build_scoreboard_matrix(masters, slaves, connectivity=None, assume_full_connectivity=True)
+    assert len(matrix) == 4
+    assert all(e["status"] == "IMPLEMENTED" for e in matrix)
+
+
+def test_build_scoreboard_matrix_unresolved_pair_fails():
+    masters = [{"id": "m0"}]
+    slaves = [{"id": "s0"}, {"id": "s1"}]
+    connectivity = {"m0": {"accessible_slaves": ["s0"]}}  # s1 neither accessible nor excluded
+    with pytest.raises(ScoreboardMatrixError) as exc:
+        build_scoreboard_matrix(masters, slaves, connectivity, assume_full_connectivity=False)
+    assert exc.value.reason == "UNRESOLVED_PAIR"
+    assert exc.value.detail["slave_id"] == "s1"
+
+
+def test_build_scoreboard_matrix_resolves_accessible_and_waived():
+    masters = [{"id": "m0"}, {"id": "m1"}]
+    slaves = [{"id": "s0"}, {"id": "s1"}]
+    connectivity = {
+        "m0": {"accessible_slaves": ["s0", "s1"]},
+        "m1": {"accessible_slaves": ["s0"], "excluded": [{"slave_id": "s1", "waiver_evidence": "no DMA path per u_decode"}]},
+    }
+    matrix = build_scoreboard_matrix(masters, slaves, connectivity, assume_full_connectivity=False)
+    by_pair = {(e["master_id"], e["slave_id"]): e for e in matrix}
+    assert by_pair[("m0", "s0")]["status"] == "IMPLEMENTED"
+    assert by_pair[("m0", "s1")]["status"] == "IMPLEMENTED"
+    assert by_pair[("m1", "s0")]["status"] == "IMPLEMENTED"
+    assert by_pair[("m1", "s1")]["status"] == "WAIVED"
+    assert by_pair[("m1", "s1")]["waiver_approved"] is True
+    assert "no DMA path" in by_pair[("m1", "s1")]["waiver_evidence"]
+
+
+# ---- generation + gate integration -----------------------------------------
+
+def _sample_topology():
+    return {
+        "fabric_name": "soc_fabric",
+        "addr_width": 16,
+        "masters": [{"id": "m0", "name": "cpu0", "id_width": 4}, {"id": "m1", "name": "dma0", "id_width": 6}],
+        "slaves": [{"id": "s0", "name": "sram", "base_addr": "0x0000", "size": "0x1000"},
+                   {"id": "s1", "name": "uart", "base_addr": "0x1000", "size": "0x1000"}],
+        "reserved_regions": [{"name": "rsvd0", "base_addr": "0x2000", "size": "0xe000", "decerr": True}],
+        "connectivity": {
+            "m0": {"accessible_slaves": ["s0", "s1"]},
+            "m1": {"accessible_slaves": ["s0"], "excluded": [{"slave_id": "s1", "waiver_evidence": "DMA has no UART path"}]},
+        },
+    }
+
+
+def test_generate_emits_expected_files_with_real_values():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        files = AMBAFabricGenerator(tmp).generate(_sample_topology())
+        assert "fabric_topology.json" in files
+        assert "environment_manifest.json" in files
+        assert "soc_fabric_addr_decoder.sv" in files
+
+        decoder_text = (tmp / "soc_fabric_addr_decoder.sv").read_text(encoding="utf-8")
+        # literal computed hex bounds, not placeholders
+        assert "16'h0" in decoder_text
+        assert "16'h1000" in decoder_text
+        assert "16'h2000" in decoder_text
+
+        pkg_text = (tmp / "soc_fabric_env_pkg.sv").read_text(encoding="utf-8")
+        assert "ID_WIDTH_OUT = 7" in pkg_text  # ceil(log2(2))+6=7, literal computed value
+
+        manifest = json.loads((tmp / "environment_manifest.json").read_text(encoding="utf-8"))
+        assert manifest["qualification_status"] == "ENV_GENERATED"
+        assert manifest["vip"]["binding_status"] == "PLACEHOLDER_UNTIL_CURRENT_VIP_EVIDENCE"
+        assert manifest["id_width_out"] == 7
+    finally:
+        shutil.rmtree(tmp)
+
+
+def _run_fabric_gate(topology_path):
+    script = ROOT / "tools" / "verification_flow" / "fabric_topology_completeness_gate.py"
+    r = subprocess.run([sys.executable, str(script), "--topology", str(topology_path)],
+                        capture_output=True, text=True, timeout=30)
+    out = json.loads((r.stdout or "").strip() or "{}")
+    return r.returncode, out
+
+
+def test_generated_fabric_topology_passes_gate():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        AMBAFabricGenerator(tmp).generate(_sample_topology())
+        rc, out = _run_fabric_gate(tmp / "fabric_topology.json")
+        assert rc == 0, out
+        assert out["status"] == "PASS"
+        assert out["masters"] == 2 and out["slaves"] == 2
+        assert out["scoreboard_pairs"] == 4
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_generated_fabric_topology_fails_gate_on_missing_pair():
+    # Mutate a known-valid generated file rather than trying to make the
+    # generator itself emit an invalid one (it refuses to, by design).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        AMBAFabricGenerator(tmp).generate(_sample_topology())
+        topo = json.loads((tmp / "fabric_topology.json").read_text(encoding="utf-8"))
+        topo["scoreboard_matrix"].pop()
+        mutated = tmp / "mutated_topology.json"
+        mutated.write_text(json.dumps(topo), encoding="utf-8")
+        rc, out = _run_fabric_gate(mutated)
+        assert rc != 0
+        assert out["reason"] == "MISSING_SCOREBOARD_PAIRS"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_cli_shim_generates_and_passes_gate():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        topo_path = tmp / "topology.json"
+        topo_path.write_text(json.dumps(_sample_topology()), encoding="utf-8")
+        out_dir = tmp / "out"
+        script = ROOT / "tools" / "generate_amba_fabric_environment.py"
+        r = subprocess.run(
+            [sys.executable, str(script), "--topology", str(topo_path), "--out", str(out_dir)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert r.returncode == 0, r.stderr
+        assert (out_dir / "fabric_topology.json").exists()
+        rc, out = _run_fabric_gate(out_dir / "fabric_topology.json")
+        assert rc == 0 and out["status"] == "PASS"
+    finally:
+        shutil.rmtree(tmp)

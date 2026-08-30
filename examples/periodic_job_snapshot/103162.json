@@ -1,0 +1,9 @@
+{
+  "job_id": 103162,
+  "pattern": "usb3_gen1_enum port0+port1",
+  "lsf_status": "EXIT",
+  "dv_analysis_status": "ROOT_CAUSE",
+  "uvm_error_count": 0,
+  "uvm_fatal_count": 0,
+  "agent_action": "early stop; exit reason analysis"
+}

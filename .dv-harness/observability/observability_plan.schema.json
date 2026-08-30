@@ -1,0 +1,32 @@
+{
+  "scope": "string",
+  "analysis_revision": "string",
+  "targets": [
+    {
+      "target_id": "OBS-XXX",
+      "architecture_nodes": [],
+      "feature_ids": [],
+      "requirement_ids": [],
+      "risk": "LOW|MEDIUM|HIGH|CRITICAL",
+      "failure_modes": [],
+      "recommended_mechanisms": [
+        {
+          "type": "SCOREBOARD|CHECKER|ASSERTION",
+          "placement": "string",
+          "purpose": "string",
+          "inputs": [],
+          "expected_model": "string",
+          "trigger_or_sampling": "string",
+          "severity": "INFO|WARNING|ERROR|FATAL",
+          "implementation_strategy": "string",
+          "traceability": {
+            "vplan_requirement_ids": [],
+            "feature_ids": [],
+            "coverage_ids": []
+          }
+        }
+      ],
+      "status": "PLANNED|IMPLEMENTED|VERIFIED|WAIVED"
+    }
+  ]
+}

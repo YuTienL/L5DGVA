@@ -1,0 +1,28 @@
+{
+  "with_vip": [
+    "interface_discovery",
+    "vip_api_learning",
+    "semantic_model",
+    "vip_binding",
+    "uvm_generation",
+    "compile",
+    "smoke",
+    "qualification"
+  ],
+  "without_vip": [
+    "interface_discovery",
+    "semantic_model",
+    "native_uvc_generation",
+    "uvm_generation",
+    "compile",
+    "smoke",
+    "qualification"
+  ],
+  "new_spec_revision": [
+    "old_new_spec_diff",
+    "impact_analysis",
+    "semantic_update",
+    "regenerate_affected_files",
+    "requalify"
+  ]
+}

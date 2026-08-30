@@ -1,0 +1,11 @@
+{
+  "pytest_status": "PASS",
+  "features": [
+    "vPlan-first",
+    "vPlan-driven testcase generation",
+    "100% Spec accounting",
+    "approved DUT unsupported waiver",
+    "traceability audit",
+    "spec revision replan"
+  ]
+}

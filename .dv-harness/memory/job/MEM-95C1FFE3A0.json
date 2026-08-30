@@ -1,0 +1,25 @@
+{
+  "title": "LSF regression rerun blocked by build/config identity drift",
+  "protocol": "USB2",
+  "scope": "regression",
+  "job_id": "J-2026-0431",
+  "pattern": "seed_mismatch",
+  "symptoms": [
+    "regression",
+    "rerun",
+    "build_id_mismatch"
+  ],
+  "root_cause": "rerun batch mixed two different build IDs across seeds",
+  "confidence": "CONFIRMED",
+  "note": "Illustrates CLAUDE.md rule: same regression batch must use the same source/build/config identity.",
+  "memory_id": "MEM-95C1FFE3A0",
+  "level": "job",
+  "created_at": 1787982833.8129914,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

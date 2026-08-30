@@ -1,0 +1,49 @@
+{
+  "enabled": true,
+  "scope": [
+    "Block/IP",
+    "Subsystem",
+    "Multi-Subsystem",
+    "Full SoC"
+  ],
+  "inputs": [
+    "DUT RTL",
+    "Protocol/Design Spec",
+    "PHY Docs",
+    "Programming Guide",
+    "Register Spec",
+    "VIP Manual",
+    "VIP Examples",
+    "VIP Source",
+    "VIP Class Reference"
+  ],
+  "outputs": [
+    "UVM top",
+    "env",
+    "agent topology",
+    "VIP integration",
+    "clock/reset",
+    "configuration model",
+    "RAL",
+    "virtual sequencer",
+    "sequence library",
+    "scoreboard/reference model",
+    "assertions",
+    "coverage",
+    "error injection",
+    "smoke tests",
+    "compile/simulation baseline"
+  ],
+  "required_gates": [
+    "execution_mode_gate",
+    "evidence_truth_gate",
+    "multi_agent_evidence_consensus",
+    "independent_synthesis",
+    "human_approval_for_high_risk_architecture_changes"
+  ],
+  "baseline_ready_requires": [
+    "compile_pass",
+    "smoke_test_pass",
+    "evidence_recorded"
+  ]
+}

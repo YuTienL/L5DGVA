@@ -1,0 +1,17 @@
+{
+  "simulation_passed": true,
+  "command_expectations": [
+    {
+      "expectation_id": "EXP001",
+      "command_text": "validation intent from command.txt",
+      "required": true,
+      "evidence_patterns": [
+        "expected sim.log evidence"
+      ],
+      "contradiction_patterns": [
+        "contradictory sim.log evidence"
+      ]
+    }
+  ],
+  "sim_log": "sim.log content"
+}

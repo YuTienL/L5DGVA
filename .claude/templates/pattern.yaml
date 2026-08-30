@@ -1,0 +1,23 @@
+name: example_pattern
+protocol: null
+role: null
+command_file: command.txt
+
+simulation:
+  testcase: null
+  wave: 0
+  pa: 0
+  fsdb_start: 0
+  fsdb_stop: simulation_end
+  timeout: null
+  coverage: false
+  options: []
+
+seed:
+  policy: random
+  reproduce_seed: null
+
+regression:
+  enabled: false
+  group: smoke
+  priority: normal

@@ -1,0 +1,18 @@
+{
+  "protocol": "UCIe",
+  "supported_roles": [
+    "Die_A",
+    "Die_B",
+    "Adapter",
+    "PHY"
+  ],
+  "minimum_smoke_tests": [
+    "link_bringup",
+    "basic_transaction",
+    "recovery"
+  ],
+  "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_DISCOVER_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

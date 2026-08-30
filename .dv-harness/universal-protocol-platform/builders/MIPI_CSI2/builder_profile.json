@@ -1,0 +1,48 @@
+{
+  "protocol": "MIPI_CSI2",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "CSI2_TX",
+    "CSI2_RX",
+    "D_PHY",
+    "C_PHY"
+  ],
+  "required_discovery": [
+    "lane_count",
+    "D_PHY_or_C_PHY",
+    "virtual_channels",
+    "data_types",
+    "LP_HS_boundary"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "phy_bringup",
+    "short_packet",
+    "long_packet",
+    "frame_start_end",
+    "ECC_CRC"
+  ],
+  "minimum_coverage_dimensions": [
+    "VC",
+    "data_type",
+    "lane",
+    "packet",
+    "ECC_CRC",
+    "LP_HS_transition"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

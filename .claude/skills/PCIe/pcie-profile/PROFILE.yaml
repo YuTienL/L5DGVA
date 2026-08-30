@@ -1,0 +1,13 @@
+protocol: PCIe
+generations: [Gen2, Gen3, Gen4, Gen5, Gen6]
+critical_fields:
+  - generation
+  - dut_role
+  - lane_width
+  - interface_boundary
+  - link_training_scope
+  - configuration_space
+  - transaction_types
+  - interrupt_model
+  - error_model
+optional_fields: [ASPM, AER, LTR, SR-IOV, ATS, PASID, PRI, Atomic]

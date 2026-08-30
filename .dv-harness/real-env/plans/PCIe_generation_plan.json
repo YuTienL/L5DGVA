@@ -1,0 +1,44 @@
+{
+  "protocol": "PCIe",
+  "discover": [
+    "role",
+    "gen",
+    "lane_width",
+    "boundary",
+    "config_space",
+    "BARs",
+    "MSI_MSIX",
+    "LTSSM_observability"
+  ],
+  "bind": [
+    "DUT",
+    "VIP_or_Native_UVC",
+    "clock_reset",
+    "config",
+    "analysis_ports"
+  ],
+  "generate": [
+    "env_pkg",
+    "config",
+    "virtual_sequencer",
+    "base_vseq",
+    "protocol_sequences",
+    "scoreboard",
+    "coverage",
+    "env",
+    "base_test",
+    "smoke_tests",
+    "tb_top",
+    "filelist",
+    "manifest"
+  ],
+  "compile_closure": true,
+  "smoke_closure": [
+    "reset",
+    "link_training",
+    "enumeration",
+    "config_rw",
+    "memory_rw"
+  ],
+  "qualification": "REAL_PROJECT_REQUIRED"
+}

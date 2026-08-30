@@ -1,0 +1,47 @@
+{
+  "protocol": "SD_SDIO",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "Host",
+    "SD_Memory",
+    "SDIO_Device"
+  ],
+  "required_discovery": [
+    "SD_or_SDIO_or_combo",
+    "bus_width",
+    "speed_modes",
+    "function_count",
+    "command_data_boundary"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "identify",
+    "select",
+    "SD_read_write_if_applicable",
+    "SDIO_function_access_if_applicable"
+  ],
+  "minimum_coverage_dimensions": [
+    "command",
+    "response",
+    "speed",
+    "bus_width",
+    "function",
+    "transfer",
+    "error"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

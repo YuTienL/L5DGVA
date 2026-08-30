@@ -1,0 +1,13 @@
+{
+  "pytest_rc": 0,
+  "status": "PASS",
+  "skills": 253,
+  "iron_rules": 140,
+  "features": [
+    "architecture discovery",
+    "topology model",
+    "vPlan link",
+    "architecture-aware env",
+    "regression calibration"
+  ]
+}

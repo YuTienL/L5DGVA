@@ -1,0 +1,24 @@
+{
+  "adapter": "cli",
+  "claude": {
+    "command": "claude",
+    "max_turns": 40,
+    "permission_mode": "dangerously-skip-permissions",
+    "output_format": "json",
+    "allowed_tools": []
+  },
+  "policy": {
+    "language": "zh-TW",
+    "max_stage_retries": 2,
+    "auto_advance_on_pass": true,
+    "stop_on_blocked": true,
+    "stop_on_wait_user": true,
+    "require_exact_server_sha": true,
+    "require_second_pass_audit": true,
+    "require_all_actionable_findings_closed": true
+  },
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 8765
+  }
+}

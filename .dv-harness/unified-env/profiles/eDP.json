@@ -1,0 +1,21 @@
+{
+  "protocol": "eDP",
+  "roles": [
+    "Source",
+    "Sink"
+  ],
+  "boundaries": [
+    "AUX",
+    "MainLink",
+    "PHY"
+  ],
+  "smoke_tests": [
+    "aux_access",
+    "link_training",
+    "video"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

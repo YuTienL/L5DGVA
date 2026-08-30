@@ -1,0 +1,629 @@
+---
+name: ip-uvm-dv-gen
+description: Use when working inside a Synopsys VIP-based IP-level UVM verification environment laid out as DUT/ Doc/ Spec/ VIP/ - building it, adding a UVM agent or sequence, wrapping a VIP sequence as a task, converting or auditing a command.txt BFM pattern, hooking into vcs.opt or the BFM model layer, writing the Makefile, filelists or Verdi setup, or producing the vPlan and user guide. Toolchain is VCS and Verdi. Target IP is a parameter: USB, PCIe, Ethernet, MIPI CSI-2, MIPI DSI, CAN-FD, eDP, eMMC, SDIO, AMBA4 or another.
+---
+
+# IP-level UVM DV environment -- working reference
+
+The operational companion to the **`IP_UVM_DV_Gen`** agent
+(`.claude/agents/IP_UVM_DV_Gen.md`). That agent carries the full
+end-to-end process, the reasoning behind each step, and the anti-patterns;
+this is what you keep open while doing the work.
+
+**Authority split (set explicitly, 2026-08-29 import/reconciliation pass):**
+the agent is authoritative for the process itself; **this skill is
+authoritative for the operational quick-reference and the confirmed-drift
+log** below -- dated real-project observations of where an actual
+environment diverged from the process, and whether that was a defect or a
+legitimate evolution. Where a step has real generator code backing it in
+`dv_harness/uvm_generator/`, both files point at the same module rather than
+restating its schema independently -- currently: `bind_mechanism_generator.py`
+(two-hook skeleton + evidence-gated `bind`), `address_map_verifier.py`
+(Step 3's three-independent-source address method), and `generator.py`'s
+`virtual_sequences`/`SCOREBOARD_CHECKS` DSLs (Steps 7/8). If this skill and
+the agent file ever read as contradictory on the same point, that is a bug in
+one of them, not an acceptable state -- fix the stale one rather than
+picking whichever you read first.
+
+**Use the agent when starting a new environment.** Use this skill when you
+are already inside one and need the rule for the thing in front of you.
+**`IP_UVM_DV_Gen.html`** is the offline console for the same process --
+workspaces, status bar, gates, and a kickoff-brief export.
+
+---
+
+## Fixed toolchain
+
+| Role | Tool | What it forces |
+|---|---|---|
+| Simulation | **Synopsys VCS** | Two-stage `vlogan` then `vcs`. Filelist paths resolve against the **working directory**. Partition compile rebuilds globally on any command-line change |
+| Debug | **Synopsys Verdi** | **FSDB only** -- never VCD or VPD. `-kdb` in **both** stages. `-debug_access`, not `+all`, for post-processing |
+| VIP | **Synopsys VC VIP (SVT)** | UVM flow includes the *unparameterised* interface. Needs `-ntb_opts uvm` plus the VIP's `use_sigprop`. Width defines truncate silently if unset |
+
+## Target settings
+
+Set by the user, recorded at the top of the environment's `CLAUDE.md`:
+
+| Setting | Values |
+|---|---|
+| `TARGET_IP` | `USB` `PCIe` `Ethernet` `MIPI_CSI` `MIPI_DSI` `CAN_FD` `eDP` `eMMC` `SDIO` `AMBA4` or another |
+| `IP_PREFIX` | `usb_` `pcie_` `eth_` `csi_` `dsi_` `canfd_` `edp_` `emmc_` `sdio_` `axi_` |
+| `DUT_ROLE` | **The VIP takes the opposite role.** Confirm from the RTL |
+| `ATTACH_LAYER` | `serial` (pads) or `digital` (controller-to-PHY). A build configuration, not a runtime switch |
+
+---
+
+## The tree
+
+```
+<project>/
+|-- DUT/          READ-ONLY except two guarded hook blocks
+|   |-- ENV/ MACRO/           libraries and hard macros
+|   |-- MODEL/                BFM model layer      <- HOOK 1 goes here
+|   |-- RTLCAT/               RTL, chip top, decoder, parameter header
+|   |-- command.txt           the existing test script
+|   `-- vcs.opt               DUT filelist         <- HOOK 2 goes here
+|-- Doc/          DUT and IP documents: databook, programming guide, register map
+|-- Spec/         protocol and interface standards
+|-- VIP/          READ-ONLY.  examples/ include/ lib/ src/
+|-- uvm/          YOU CREATE.  tb/ filelist/ hex/ docs/ vplan/
+`-- sim/          YOU CREATE.  scripts/ is input; everything else is a product
+```
+
+| Path variable | Value |
+|---|---|
+| `DUT_ROOT_PATH` | `<project>/DUT` -- the five directories and `vcs.opt` must be siblings, and here they are |
+| `VIP_HOME` | `<project>/VIP` -- must include the protocol VIP **and** the register-bus VIP **and** the DMA-bus VIP |
+| `UVM_ROOT_PATH` | `<project>/uvm` |
+| `SIM_ROOT_PATH` | `<project>/sim` |
+
+**Confirmed drift (2026-08-28, real project evidence, not hypothetical):** a
+live project had `ENV/`, `MACRO/`, `MODEL/`, and `command.txt` as siblings of
+`DUT/` at the project root instead of children of it -- the project's own
+build system (its Makefile) required the five items to be direct siblings
+of each other, and its own maintained notes had already flagged the mismatch
+as an open item. A staging/authoring checkout organically drifting away
+from this exact assumption has now been observed independently more than
+once -- treat it as a real, recurring shape, not an anomaly to route around
+silently. If you find this drift: (a) do not "fix" a live project's layout
+yourself, that's a decision for whoever owns it; (b) if you are instead
+**packaging** a fresh copy of the environment (see `environment-packaging`),
+reorganize the copy into the structurally required shape -- it's safe
+because it's a new copy, and it produces a package that's actually
+self-contained rather than perpetuating a layout that only works because
+someone else's build points `DUT_ROOT_PATH` somewhere with the correct
+nesting.
+
+### Where to look for what
+
+| Need | Go to |
+|---|---|
+| IP configuration, role, enabled features | `DUT/RTLCAT/**/*_params.svh` |
+| Register base addresses | **The decoder in `DUT/RTLCAT/`.** `Doc/` corroborates, never decides. Cross-checked mechanically (three independent sources: decoder + BFM-access histogram + doc) by `dv_harness/uvm_generator/address_map_verifier.py:verify_address_map` -- see the agent file's Step 3 for the method, that module's docstring for the schema |
+| Chip top ports, bus declarations, clock chain | `DUT/RTLCAT/` |
+| Where the register macros are defined | `DUT/MODEL/` -- the redirect must precede the model's task definitions |
+| Which `ifdef` branches are live | `DUT/vcs.opt` defines |
+| The IP initialisation table to audit patterns against | `Doc/` databook |
+| Clause numbers for the vPlan | `Spec/` |
+| Sequence collections, interfaces, class names | `VIP/src/`, `VIP/include/` |
+| DUT wiring templates, closest topology | `VIP/examples/` |
+
+---
+
+## Autonomy
+
+**Run the process without pausing for approval.** Take the settings that were
+given; for anything missing, adopt the profile default, state the assumption
+in one line, and proceed. Record missing facts as open items with a blocking
+level and continue on everything that does not depend on them. Mark each
+setting in `CLAUDE.md` as **given** or **assumed**, so an assumption that
+later proves wrong is traceable to everything it touched.
+
+**Confirmed drift (2026-08-28):** a live project's `CLAUDE.md` never
+contained this settings table at all -- it opened with a prose project-goal
+paragraph and a hand-grown "iron rules" list that read as accumulated
+post-mortem trap knowledge instead. Treat the settings table as the correct
+thing to write on day one, but don't be surprised when a mature project has
+replaced or buried it under organically-grown rules -- that's the project
+outgrowing the scaffold, not a defect to silently "fix" during unrelated
+work. If you're auditing an existing project and the table is gone, check
+whether its given/assumed facts survived in another form (a rules list, a
+docs/ file) before concluding the traceability this section promises was
+actually lost.
+
+Stop only for a destructive or irreversible action outside `uvm/` and `sim/`
+-- editing `DUT/` beyond the two hook blocks, or touching `VIP/`.
+
+---
+
+## Non-negotiables
+
+1. **The original flow still works.** Every DUT edit is a guarded hook block,
+   inert without one `+define+`. `grep -rn "DV_UVM HOOK"` lists all of them.
+2. **No UVM in a pattern file.** Named tasks and plain SystemVerilog only.
+3. **Pattern selection is a run-time plusarg.** Never a compile define -- one
+   elaboration must serve every pattern.
+4. **Cite `file:line`.** Never infer a fact from a name, a comment or a
+   directory.
+5. **"Statically checked" is not "compiles".** Say which one you mean.
+
+---
+
+## The two hooks
+
+**`DUT/MODEL/<model>.v`** -- replaces the one line that includes the test
+script:
+
+```systemverilog
+//==== DV_UVM HOOK -- begin ====
+`ifdef DV_UVM
+  `include "dv_uvm_hook.svh"
+`else
+  `include "command.txt"
+`endif
+//==== DV_UVM HOOK -- end ====
+```
+
+**`DUT/vcs.opt`** -- one appended line. A filelist has no `ifdef`, and needs
+none: the file it pulls in contains only search paths, defines, and one
+source file whose whole body is `` `ifdef DV_UVM ``.
+
+```
+-f $UVM_ROOT_PATH/filelist/dv_uvm_files.f
+```
+
+Use **absolute paths through environment variables**. A filelist path
+resolves against the working directory, which is `DUT_ROOT_PATH`, not against
+the filelist's own location.
+
+**Confirmed drift (2026-08-28):** a live project's actual hook line was
+`-f ../scripts/dv_uvm_files.f` -- a relative path, not an environment-variable
+absolute one -- and it worked, because the relative path was correct against
+`DUT_ROOT_PATH` as the resolution base (the same rule stated above, just
+expressed relatively instead of with a variable). The absolute-with-env-var
+form is still the safer default (it survives someone invoking the build from
+an unexpected directory), but don't flag a relative path as broken on sight
+-- check what it resolves against before concluding it violates this rule.
+
+### What must be at top-module scope (cannot be `bind`-ed)
+
+| What | Why |
+|---|---|
+| The bridge instances | Patterns reach them by hierarchical path |
+| **The macro redirect** | Preprocessing is sequential. Placed before the model's task definitions, every register access inside those tasks is redirected with no edit to any of them |
+| The pattern `initial` block | Declares the variables patterns use, under the original names |
+
+Everything else uses `bind`, targeted at **where the signals actually are** --
+signals declared at chip level with the subsystem merely connecting to them
+get bound at chip level.
+
+---
+
+## Bridges
+
+Two worlds that share nothing: the design database (modules, nets, static
+tasks, events -- exists before time 0, addressed by hierarchical path,
+visible in the waveform) and UVM's run-time objects (created by `run_test()`,
+addressed by handle, **invisible to the waveform viewer**).
+
+The only crossing is **static storage with a dynamic value**:
+
+```systemverilog
+module <ip>_seq_launcher;
+  string req_seq_name, req_target, req_argstr;
+  int    req_arg0, req_arg1;
+  bit    req_background, req_ok, ready;
+  event  req_posted;   // Verilog -> UVM
+  event  req_done;     // UVM -> Verilog
+  semaphore lock = new(1);
+```
+
+Build two: one for register access, one for sequence launching. Keep an
+owner/name field in each -- it makes the boundary readable in the waveform,
+which is how you tell "Verilog never posted" from "UVM never answered".
+
+**Real-code status:** `bind_mechanism_generator.py` emits the two hooks and
+evidence-gated `bind` statements, but accepts this bridge module's own
+content (`top_scope_decls`) as an opaque, already-authored string -- it does
+not yet generate the `req_seq_name`/`req_posted`/`req_done`/`semaphore lock`
+struct from a schema. See the agent file's Step 6 for the same note; not
+closed as of the 2026-08-29 pass.
+
+### Physical signal-level connections -- `tran` vs `assign` vs `force`
+
+A separate, lower-level bridge problem from the logical one above: wiring
+the VIP's pad-level interface signals to the DUT's actual pads. Confirmed
+against a real serial-protocol project (2026-08-28), generalizes to any
+protocol whose physical layer has bidirectional or multiply-driven pins
+(differential pairs, shared data/clock lines, open-drain buses):
+
+- **If the VIP declares the signal `wor`** (multiply-driven, resolved) **and
+  the DUT pad is `inout wire`**, connect with the `tran` primitive, never
+  `assign`. `assign` forces a single direction and silently breaks the
+  bidirectional/multiply-driven arbitration the real pins depend on --
+  it will not error at compile time, only misbehave at runtime once both
+  sides try to drive.
+- **Where a lane's direction is structurally fixed** (a differential
+  TX-only or RX-only lane in a point-to-point serial link), a plain
+  `assign` on that one directional lane is correct and simpler than `tran`
+  -- don't `tran` a signal that only ever has one driver.
+- **Sideband/control pins declared `inout`** (test-mode, reset, trap,
+  clock-select and similar) cannot be driven with a bare `assign` of a
+  constant either; drive them with a `reg` under real time-sequenced control
+  (or `tran` through a pullup/pulldown), matching how the real DUT bench
+  expects them to come up.
+- **When a VIP/AXI/APB-style bus VIP replaces a bus master via `force`**
+  (rather than a real port connection), **force only that master's
+  OUTPUTS** (address/data/valid/write-enable signals) onto the target bus.
+  **Never force the master's INPUTS** (ready/response/error signals) --
+  those must stay driven by the real slave logic and only be *observed* by
+  the VIP; forcing them breaks the handshake the slave is genuinely
+  driving, and the DUT will wait forever for a ready/response that a force
+  is now silently supplying a fixed value for instead of the real logic.
+
+### Termination -- silent failures live here
+
+> **A `run_phase` with no objection does not wait. It ends at time 0 and
+> reports a pass.**
+
+- A pattern in a Verilog `initial` cannot raise an objection. Give it a
+  module-scope `pattern_done` bit; the base test objects at time 0 and waits
+  on it. **Forgetting to set it = instant pass.**
+- Forking a sequence and returning without joining = same silent pass.
+- Three timeout layers, each naming what it waited for: per-request (fatal,
+  names the sequence) -> per-group join (bounded, **lists what has not
+  returned**) -> whole-pattern (error, epilogue, forced finish).
+- **The forced finish goes in `final_phase`, not `run_phase`** -- otherwise
+  the regression's result line never prints and a hang becomes "no verdict".
+- Time-0 ordering between the pattern's first access and `run_test()` is
+  undefined. The bridge **waits**; it does not check-and-fail.
+
+### Concurrency
+
+A capacity-1 semaphore held until the response event means **blocking
+wrappers can never overlap**, however the pattern is written -- `fork ... join`
+of three blocking tasks is sequential, in an unpredictable order. Real
+concurrency needs a separate non-blocking launch path plus an explicit join.
+
+**Never run register access concurrently with the bus VIP's random traffic**
+if both servers sit on the same sequencer: separate locks means they really
+do overlap, one sequencer means UVM interleaves them, and random-address
+writes land in the IP's register space with no error message at all.
+
+**A reusable multi-instance pattern architecture** (observed in a real
+multi-port project, 2026-08-28 -- consider for any target with >=2
+independent instances/ports, not USB-specific): one blocking "Global"
+section for once-only SoC bring-up (clock/PLL/reset), then per-instance
+controller/register bring-up branches (`branch_a<n>`) forked `join_none` so
+they run in parallel, then ONE background service branch (`branch_fw`) also
+forked `join_none` that internally services every instance rather than being
+duplicated per instance, and finally per-instance VIP-driven host-script
+branches (`branch_b<n>`) that the pattern itself `fork`s and `join`s (these
+are what actually gate the pattern's completion). The load-bearing
+distinction to preserve if you adopt this shape: the per-instance bring-up
+branches and the single shared service branch are NOT the same thing and
+must not be collapsed into one -- a background service loop that happens to
+serve multiple instances is not itself "the parallel per-instance work";
+that work is the separate bring-up branches running alongside it.
+
+---
+
+## Wrapping VIP sequences
+
+| Idiom | Randomizes | Consequence |
+|---|---|---|
+| `uvm_do` | **yes**, every unpinned `rand` field | Byte enables, protection attributes and lengths become random unless pinned |
+| `uvm_create` + `uvm_send` | **no** | Every field keeps its declared default -- and a wrong default is wrong *every* time |
+
+- **VIP constraints are often conditional on "that feature is disabled".**
+  Enabling a feature means owning all of its fields.
+- **Read the declaration; never guess arity from the name.**
+- **Response handshakes are mandatory** where defined -- read data is often
+  only valid after one, and skipping it overflows a response queue.
+- **Do not over-constrain the protocol path**; many VIPs derive direction and
+  addressing from configuration, and an extra constraint makes randomize fail.
+- **Configuration arrays are indexed by position**, not by the protocol's own
+  numbering.
+- **Compile-time width defines have narrow defaults** -- set data width,
+  address-user width and similar explicitly or they silently truncate.
+- Vendors ship **misspelled class names**; copy them verbatim.
+
+---
+
+## Converting a BFM pattern
+
+```
+Keep verbatim : every access that programs THE DUT
+Delete        : everything that programs the far side the VIP replaces
+Add           : a few VIP task calls in its place
+```
+
+Then **prove equivalence**: resolve address macros to literals, compare
+register writes one-for-one against the original, and classify every
+difference.
+
+**Confirmed drift (2026-08-29):** this abstract equivalence-proving method
+has a concrete, real implementation shape worth using as the target for a
+future generalized static-check layer — a real sibling project's
+`sim/scripts/check/reg_audit.py` (103 lines) scans every pattern file for
+named register-write calls (e.g. `` `CPUWRITE4B(`USB_GCTL/GUCTL/..., ...) ``),
+decodes named bit-fields, checks them against measured/derived required
+values, and reports results in an `inspected`/`DISAGREEMENT` vocabulary
+(run as `python3 reg_audit.py <tbdir> | grep -E 'inspected|DISAGREEMENT'`).
+Treat this as real worked-example prior art, not something to design from
+scratch, if/when this static-check concept is generalized beyond one
+project.
+
+Then **audit against the databook initialisation table in `Doc/`**. Expect:
+
+- a required step missing from nearly every pattern
+- steps in an order that matters, reversed
+- **enable masks that do not cover what was configured** -- compute the mask
+  from the configuration commands the file actually issues
+- a per-transfer resource armed once per pattern instead of per transfer
+- the IP's soft reset confused with the SoC wrapper's reset
+- hard-coded absolute paths into someone's home directory (a failed memory
+  load usually only *warns*, so the buffer is zeros and nothing happens)
+
+None of these fail compilation. The symptom is always a far-side timeout.
+
+---
+
+## Checkers and scoreboard
+
+- **Count the VIP's built-in checkers first.** Moving from BFM scripts (which
+  usually check nothing) to a VIP is the largest single increase in checking
+  the project gets.
+- Per-check coverage switches usually default **on for failures, off for
+  passes**. Turn the pass side on to answer "was this ever exercised".
+- **Find the real observation point.** Some agents publish on an analysis
+  port; some publish nothing and a protocol callback is the only hook. Check
+  the agent's ports before designing the connection.
+  **Confirmed drift (2026-08-29):** a real, concrete instance of this rule --
+  a sibling project's real debug sessions read the VIP monitor's plain-text
+  `transaction_trace` file directly (e.g.
+  `env.apb_env.master.monitor.transaction_trace`,
+  `env.apb_env.slave_0.monitor.transaction_trace`) with `wc -l`/`tail`/
+  `grep -c <addr>` to answer "did this register write actually reach the
+  bus", with no Verdi/FSDB session needed at all. Check whether the current
+  VIP exposes an equivalent plain-text trace file before reaching for a
+  waveform tool.
+- **Check the right response field** -- a scalar initialised to OK and
+  meaningful only for writes will pass every read error silently.
+- **Footprint is not payload.** `beats * bytes_per_beat` overstates a partial
+  final beat. Use the VIP's byte count or count asserted byte enables.
+- **Prefer invariants to reconstruction.** Do not compare beat-by-beat when
+  the DUT may legally split, reorder or relocate. **A scoreboard that
+  false-alarms gets switched off, and then it checks nothing.**
+- **Know when your observation fires** -- a protocol callback fires when the
+  protocol layer *sees* the transfer, not when data movement completes.
+- **Keep "our stimulus" and "the DUT's own traffic" in separate envs.** An
+  error on one means the testbench is wrong; on the other, the design is.
+- **`$realtime` is in the enclosing scope's timeunit.** Write
+  `$realtime / real'(1s)` so the ratio is seconds in any timescale.
+
+---
+
+## Build system
+
+- Two stages, both given the debug-database flag if a viewer will be used.
+- Consolidate the VIP examples' flags; cross-check against the tool manuals.
+- **Compute the timescale constraint** from the configured line rates and
+  `$(error)` on a mismatch:
+  `required clock = line_rate * oversample`, `half period = 1/(2*clock)`.
+  Computing the required resolution is not the same as knowing it will
+  actually simulate correctly: confirmed case (2026-08-28) where the
+  computed half-period for the fastest supported line rate came out at
+  12.5ps, but whether the DUT's own encrypted/vendor hard-macro models
+  (PLL, ADC, or similarly protected `.v.e`/`.vp` deliverables) accept a
+  timescale that fine was an open, unverified question, not something
+  derivable from the spec math -- flag it as a to-be-measured item rather
+  than assuming the arithmetic answer is automatically simulatable, and
+  don't commit the finest theoretical timescale to the Makefile until that's
+  actually been tried.
+- **One filelist owns the source list.** Every other filelist carries only
+  include paths and defines. A file in two lists is a duplicate-module error.
+- Partition compile treats **any** command-line change as a global rebuild.
+  Mark which variables force one in the help text.
+- Ship a **waveform signal-setup file grouped by the question being asked**
+  (did the pattern reach UVM? did the write reach the bus? did the link come
+  up?), not by hierarchy. Tolerate undumped signals: list them with the
+  remedy rather than failing.
+
+---
+
+## Static self-check (no compiler available)
+
+Run after every change to the testbench tree. In value order:
+
+1. **Call argument count against the declaration** -- by far the most
+   valuable. This error lives at the call site, each of which looks right
+   alone.
+2. Macro invocation arity against the `` `define `` parameter list
+3. Block and delimiter balance
+4. Undefined macros, and same-name-different-body macros
+5. Duplicate task/function/class/module names
+6. Format specifiers against argument count
+7. Orphan files unreachable from the entry points
+8. Pattern pool consistency: include, dispatch and definition agree
+9. Duplicate labels in one `case`
+10. `extern` with no definition
+11. Config-DB set/get key and type agreement
+
+> **The checker produces false positives. Fix the checker before drawing a
+> conclusion.** Known classes: mutually exclusive `ifdef`/`else` branches read
+> as duplicates; commas inside string literals read as argument separators;
+> macros compared against tasks across namespaces; keys built at run time with
+> a format function, which no static scan can see.
+
+---
+
+## What the environment must contain
+
+Same shape for every target, with `IP_PREFIX` substituted throughout.
+Reproduce the shape even where a protocol has no equivalent of a file --
+omitting it is a decision to record, not a default.
+
+```
+uvm/tb/top/       dv_uvm_all.sv          one compile entry, body `ifdef DV_UVM
+                  dv_uvm_hook.svh        included INTO the TB top; exports task macros
+                  <ip>_uvm_bind.sv       VIP interfaces, clocks, run_test()
+                  <ip>_uvm_bind_inst.sv  every bind, in ONE file
+                  <ip>_reg_arb.sv        register bridge
+                  <ip>_seq_launcher.sv   sequence bridge
+                  <ip>_dev_init.svh      the databook init table, as macros
+                  <ip>_stages.svh        named bring-up stages
+                  <ip>_mem_util.svh      descriptor/buffer fill, dump, compare
+                  *_vip_tasks.svh        wrapped VIP sequences, one file per protocol
+uvm/tb/env/       <ip>_top_env.sv / _top_cfg.sv / _reg_defs.svh / _hier_defs.svh
+                  <ip>_probe_if.sv       bind + interface for forced buses
+                  <ip>_<x>_check.sv      configuration-consistency checker
+                  <ip>_dma_mon.sv        HDL module bound into the subsystem
+                  <ip>_dma_scoreboard.sv / _perf_monitor.sv / _payload_publish_cb.sv
+                  <ip>_event_bridge.sv / _virtual_sequencer.sv
+uvm/tb/seq/       sequences, dispatchers, virtual sequences
+uvm/tb/agents/    clock/reset, sideband, register checker
+uvm/tb/tests/     ONE uvm_test -- variation comes from patterns
+uvm/tb/patterns/  README.md, dv_uvm_pattern_pool.svh (the +PATTERN dispatcher),
+                  basic .txt, sanity/ (converted BFM), <protocol>/ (VIP derived)
+                  -- this two/three-way split is the DAY-ONE starting shape, not
+                  the final one. Confirmed drift (2026-08-28): a live project
+                  migrated basic/sanity/<protocol> into ~10 functional category
+                  directories (enumeration/link/power/transfer/performance/...)
+                  as the pattern count grew, and its own build system tracks the
+                  migration in a comment rather than hiding it. Expect and allow
+                  this category taxonomy to grow past the initial split; don't
+                  treat a richer taxonomy as a deviation to correct back.
+uvm/filelist/     dv_uvm_files.f  SOLE owner of the source list
+                  <ip>.f          +incdir+ / +define+ only
+uvm/hex/          stimulus and descriptor images
+uvm/docs/         README.md, dut-request.md, <ip>-uvm-port-analysis.md,
+                  bfm-pattern-analysis.md, command-txt-uvm-migration.md,
+                  model-task-uvm-usability.md, uvm-reuse-map.md,
+                  <ip>-example-pattern-pool.md, checker-and-monitor-plan.md,
+                  <IP>_Verification_User_Guide.pdf + .html
+uvm/vplan/        README.md, <IP>_Verification_Plan.xlsx
+sim/scripts/      Makefile, waves.tcl
+<root>/           CLAUDE.md, README_PACKAGE.md,
+                  agents/IP_UVM_DV_Gen.md, reference/bfm_patterns/
+                  -- confirmed drift (2026-08-28): a live project shipped the
+                  process agent at .claude/agents/IP_UVM_DV_Gen.md instead (where
+                  Claude Code actually discovers agents) and never created a
+                  reference/ directory at all -- the untouched BFM originals
+                  (command.txt + a flat patterns/ of legacy .txt files) sat at
+                  <root> directly instead. Both are sensible, literal deviations
+                  from this manifest, not defects -- prefer .claude/agents/ for
+                  the process agent going forward, and treat an unwrapped
+                  original-patterns directory at <root> as an acceptable
+                  equivalent to reference/bfm_patterns/, not a missing deliverable.
+```
+
+---
+
+## The User Guide
+
+One self-contained HTML file (no external assets), rendered to PDF.
+**Fourteen sections, in reading order:**
+
+```
+ 1 Environment Overview            8 How to Create a Testing command.txt
+ 2 Architecture                    9 Scoreboard
+ 3 Directory Structure and Files  10 Checkers
+ 4 Changes to the Delivered Files 11 Performance Monitor
+ 5 Verification Work Flow         12 First suite  (converted BFM)
+ 6 How to Run a Pattern           13 Second suite (VIP derived)
+ 7 How to Enable Coverage         14 Verification Plan
+```
+
+- **Section 4 is the one to hand to the RTL owner**: each edit shown against
+  its original content, why it cannot be avoided, what is *not* modified, and
+  how to revert.
+- **Real vector diagrams, inline SVG. No ASCII art.**
+- **A status banner on the contents page** stating plainly what has and has
+  not been compiled.
+- **Regenerate the table of contents by measuring the rendered PDF, and
+  re-measure until the numbers stop moving.** Adding a section changes the
+  contents page height, which shifts every page after it -- one pass is
+  always wrong.
+
+---
+
+## The vPlan
+
+One `.xlsx`, **generated by a script, never hand-edited**, four sheets:
+
+| Sheet | Contents |
+|---|---|
+| Verification Plan | One row per item, lettered sections by feature area, auto-filter on, panes frozen at the pattern/task columns |
+| Coverage summary | Counts per state, then **the gaps ranked in the order worth closing** |
+| Speed / mode matrix | The per-instance configuration grid with the command for each cell |
+| Reference | How to run an item, what each suite means, line rates, register bases |
+
+```
+ID | Feature area | Verification item |
+testing pattern name | command.txt task name | suite | covered by |
+testing pattern description | spec section | constraint items |
+random or directed | speed | instance | checkers active | notes
+```
+
+- **`covered by`** colour coded: covered / `PARTIAL` / `NOT COVERED` / `N/A` /
+  `DEFERRED`.
+- **`spec section` cites `Spec/` by clause.** No specification available? Say
+  so in the sheet rather than filling it with chapter guesses.
+- **Validate before writing**: pattern file exists, task is a real
+  declaration, pattern is in the dispatcher. Refuse to write on a mismatch.
+- **Keep the NOT COVERED rows**, and mark which are blocked on information
+  rather than effort. A plan listing only what already runs is a report.
+
+---
+
+## Packaging
+
+A script that wipes and rebuilds from scratch, and **refuses to write the
+archive if verification fails**: no undecodable bytes, no unexpected
+character sets, line endings normalised, build-file conditionals balanced.
+Ship the process agent inside the package.
+
+**Concrete classification rules** (what actually goes in the archive vs
+stays behind -- RUN_NEEDED vs dev-scratch, deliverable docs vs process
+records, vendor-licensed content, structural-layout fixes, regenerating the
+User Guide/vPlan from current state, writing the install README) now live
+in `environment-packaging` -- use that skill when actually building a
+package rather than re-deriving these rules from this paragraph each time.
+
+---
+
+## Protocol profiles
+
+| `TARGET_IP` | Typical DUT role | Attach at | Where the schedule goes |
+|---|---|---|---|
+| **USB** | device or host | PIPE/UTMI, or the differential pairs | Enumeration, then link training; descriptors per transfer |
+| **PCIe** | endpoint or root complex | **PIPE** above Gen3; serial is very expensive | **Link training (LTSSM)**; TLP/DLLP/PHY means three observation levels |
+| **Ethernet** | MAC, sometimes PHY | **xMII** (GMII/RGMII/XGMII/USXGMII) | Descriptor rings; pause/flow control and timestamping are separate axes |
+| **MIPI_CSI** | almost always receiver | **PPI** unless the D-PHY model is proven | Frame and line structure -- checks are image-level; virtual channels multiply the stream count |
+| **MIPI_DSI** | usually transmitter/host | **PPI** | Command mode and video mode are two separate plans; bus turnaround is the hard timing item |
+| **CAN_FD** | node | **the pin pair, always** -- the bit rate makes it cheap | Arbitration and fault confinement, not payload; bit-rate switching is the FD axis |
+| **eDP** | source or sink | main-link lanes + AUX | **Link training over AUX**, then video timing and stream attributes |
+| **eMMC** | host controller | `CMD`/`DAT`/`CLK` bus pins | Device init and bus-width negotiation, then high-speed mode tuning |
+| **SDIO** | host controller | `CMD`/`DAT`/`CLK` bus pins | Card init and function abstraction; interrupt handling is the subtle part |
+| **AMBA4** | master or slave per port | **the bus is the interface** | Ordering, outstanding, exclusives, boundary rules. No attachment decision at all |
+
+For a target not listed, fill the same four columns from the IP databook
+before starting.
+
+---
+
+## Bring-up order (do not skip ahead)
+
+```
+1  one pattern touching only known-good addresses, no protocol   <- prove the chain
+2  single instance, slowest speed, connection only
+3  one transfer each direction
+4  multiple instances, sequentially
+5  multiple instances, concurrently
+6  mixed-bus concurrency
+7  performance
+```
+
+Skipping ahead makes a failure ambiguous between the new feature and a base
+path that never worked.

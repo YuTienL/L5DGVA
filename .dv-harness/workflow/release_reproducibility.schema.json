@@ -1,0 +1,15 @@
+{
+  "release_id": "REL-001",
+  "rtl_revision": "sha",
+  "tb_revision": "sha",
+  "vip_version": "string",
+  "tool_versions": {
+    "VCS": "version"
+  },
+  "config_hash": "sha",
+  "testlist_hash": "sha",
+  "seed_policy": "fixed|recorded|managed",
+  "evidence_bundle_hash": "sha",
+  "qualification_state": "REGRESSION_QUALIFIED|PRODUCTION_QUALIFIED",
+  "promotion_chain_hash": "sha"
+}

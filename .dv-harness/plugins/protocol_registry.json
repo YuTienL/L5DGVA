@@ -1,0 +1,15 @@
+{
+  "extensible": true,
+  "plugin_contract_version": "1.0",
+  "allow_new_standard": true,
+  "allow_proprietary_interface": true,
+  "allow_internal_bus": true,
+  "template": "protocol-template/protocol_plugin_manifest_template.json",
+  "required_gates": [
+    "evidence_truth_gate",
+    "protocol_isolation_gate",
+    "independent_synthesis",
+    "plugin_compatibility_gate",
+    "compile_smoke_self_test"
+  ]
+}

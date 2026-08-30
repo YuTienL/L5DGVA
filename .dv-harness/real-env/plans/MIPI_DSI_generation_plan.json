@@ -1,0 +1,41 @@
+{
+  "protocol": "MIPI_DSI",
+  "discover": [
+    "role",
+    "video_command_mode",
+    "phy_type",
+    "lane_count",
+    "packet_types",
+    "LP_HS_behavior"
+  ],
+  "bind": [
+    "DUT",
+    "VIP_or_Native_UVC",
+    "clock_reset",
+    "config",
+    "analysis_ports"
+  ],
+  "generate": [
+    "env_pkg",
+    "config",
+    "virtual_sequencer",
+    "base_vseq",
+    "protocol_sequences",
+    "scoreboard",
+    "coverage",
+    "env",
+    "base_test",
+    "smoke_tests",
+    "tb_top",
+    "filelist",
+    "manifest"
+  ],
+  "compile_closure": true,
+  "smoke_closure": [
+    "reset",
+    "phy_bringup",
+    "command_packet",
+    "video_packet"
+  ],
+  "qualification": "REAL_PROJECT_REQUIRED"
+}

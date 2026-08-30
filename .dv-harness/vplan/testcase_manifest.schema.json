@@ -1,0 +1,18 @@
+{
+  "testcase_id": "TC-XXX",
+  "name": "string",
+  "level": "IP|SUBSYSTEM|SYSTEM_LEVEL",
+  "protocol": "string",
+  "vplan_requirement_ids": [
+    "SPEC-XXX"
+  ],
+  "objective": "string",
+  "preconditions": [],
+  "stimulus": [],
+  "expected_results": [],
+  "checkers": [],
+  "coverage_points": [],
+  "negative_or_corner": false,
+  "generated_from_vplan": true,
+  "qualification_state": "GENERATED|COMPILE_PASS|SMOKE_PASS|REGRESSION_PASS|VERIFIED"
+}

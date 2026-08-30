@@ -1,0 +1,85 @@
+{
+  "_evidence_notes": {
+    "protocol": "USB DUT confirmed at D:/DV/Task/USB/DUT/RTLCAT/SS_VOUT_USB_CTRL.v:12556 (module udc_usb31_top) and :14492 (module usbtop). Chip top module confirmed at D:/DV/Task/USB/DUT/RTLCAT/TOP_ALL.v:23023 (module lan063), matching D:/DV/Task/USB/.claude/skills/usb-tb-scaffold/SKILL.md:25-29 ('RTL \u88e1\u6c92\u6709 sys063\u3002chip top \u662f lan063').",
+    "role": "device -- pattern D:/DV/Task/USB/patterns/USB2_con.txt programs the DUT's own USB31 device controller registers via `CPUWRITE*B(32'h1271_xxxx, ...)` (GCTL/DCFG/DCTL/DEVTEN/DALEPENA/DEPCMD0 at lines 118-319), while the USB31 HOST side is driven by a separate BFM model instance `sysn063.u_usbmodel_host` via `HOSTWRITE*B(32'h1614_xxxx,...)` and `wait(sysn063.u_usbmodel_host...)` (USB2_con.txt lines 32-321) -- i.e. the DUT under test is the USB device controller; the host is the 'far side' a VIP could replace.",
+    "clocks_evidence": "xtali: DUT.RTLCAT.TOP_ALL.v:23040 (inout wire xtali, lan063 port) and :25933 comment '[0]: xtali, 50M'; also driven as .XIN(xtali) at :38454. pclk: DUT.RTLCAT.TOP_ALL.v:25949 (APB clock into ss_cpu). usb0_refclk_p/usb0_refclk_m: DUT.RTLCAT.TOP_ALL.v:25854-25855 (PHY low-swing differential reference clock pair, ss_vout instance port).",
+    "resets_evidence": "xprstn: DUT.RTLCAT.TOP_ALL.v:23038 (inout wire xprstn, lan063 port); confirmed ACTIVE-LOW by D:/DV/Task/USB/.claude/skills/usb-tb-scaffold/SKILL.md:65,111 ('xprstn\uff08\u4f4e\u6709\u6548\uff09' / \u5e38\u898b\u932f\u8aa4: \u5beb xprstn \u5be6\u969b\u662f xprstn\uff0c\u4f4e\u6709\u6548)).",
+    "interfaces_evidence": "usb0_dp/usb0_dm/usb0_vbus0: DUT.RTLCAT.TOP_ALL.v:23056-23059 (lan063 inout ports) and :25850-25853 (ss_vout instance port mapping). usb-tb-scaffold SKILL.md:38-45 documents these must be wired with `tran` (wor on the VIP side, inout wire on the DUT pad side), not `assign`.",
+    "vip_evidence": "agent_type svt_usb_agent: real file D:/DV/Task/USB/VIP/src/sverilog/vcs/svt_usb_agent.sv. package import svt_usb_uvm_pkg: D:/DV/Task/USB/VIP/examples/tb_usb_svt_uvm_20_b2b_phy/top_test.sv:80. interface svt_usb_if: top_test.sv:111,116,121 and D:/DV/Task/USB/.claude/skills/usb-vip-lookup/SKILL.md:70-71 (must include svt_usb_if.uvm.svi, not svt_usb_if.svi). agent_instance is an HONEST PLACEHOLDER -- no real instance name for a host-role USB VIP agent exists anywhere in this project yet (only the two custom non-VIP agents clk_rst_agent/sideband_agent are named in usb-tb-scaffold SKILL.md:20-21); TODO once tb/agents/ is actually authored.",
+    "smoke_test_evidence": "'connect' smoke test name chosen to mirror the real BFM pattern this env is meant to eventually replace: D:/DV/Task/USB/patterns/USB2_con.txt (device connect + enumeration bring-up)."
+  },
+  "protocol": "usb",
+  "role": "device",
+  "interfaces": [
+    {
+      "name": "usb0_dp",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- DUT pad is inout wire (TOP_ALL.v:23058); VIP side is wor per usb-tb-scaffold SKILL.md:38, needs tran not assign"
+    },
+    {
+      "name": "usb0_dm",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- same as usb0_dp, TOP_ALL.v:23059"
+    },
+    {
+      "name": "usb0_vbus0",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- TOP_ALL.v:23056 / :25850"
+    }
+  ],
+  "vip": {
+    "package_imports": [
+      "svt_usb_uvm_pkg"
+    ],
+    "agent_type": "svt_usb_agent",
+    "agent_instance": "usb0_agent__TODO_NOT_YET_ESTABLISHED_IN_PROJECT"
+  },
+  "clocks": [
+    {
+      "name": "xtali",
+      "freq_note": "50MHz per TOP_ALL.v:25933 comment; crystal/XTAL_PLL input, TOP_ALL.v:23040"
+    },
+    {
+      "name": "pclk",
+      "freq_note": "APB register clock, TOP_ALL.v:25949 -- not independently confirmed frequency"
+    },
+    {
+      "name": "usb0_refclk_p",
+      "freq_note": "PHY differential ref clock (positive), TOP_ALL.v:25854 -- differential pair with usb0_refclk_m, frequency not confirmed in this pass"
+    }
+  ],
+  "resets": [
+    {
+      "name": "xprstn",
+      "polarity": "active_low",
+      "evidence": "usb-tb-scaffold SKILL.md:65,111; port decl TOP_ALL.v:23038"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "name": "connect"
+    }
+  ],
+  "scoreboard_rules": [
+    {
+      "TODO": "not enough real evidence gathered this pass to state a specific checking rule; real VIP example env at D:/DV/Task/USB/VIP/examples/tb_usb_svt_uvm_20_b2b_phy/env/usb_transfer_scoreboard.sv and usb_packet_scoreboard.sv show the NAMING convention a real scoreboard split uses (transfer-level vs packet-level), but that example is a PHY-level VIP<->VIP topology, not this project's VIP-host<->DUT-device topology, so its actual rule content is not evidence for this DUT"
+    }
+  ],
+  "coverage_points": [
+    {
+      "TODO": "no real coverage-point evidence gathered this pass; would need to read usb_shared_cfg.sv / a coverage_group file under VIP/src for real bin definitions before filling this in honestly"
+    }
+  ],
+  "generated_files": [
+    "filelist/dv_uvm_files.f",
+    "tb/env/usb_config.sv",
+    "tb/env/usb_coverage.sv",
+    "tb/env/usb_env.sv",
+    "tb/env/usb_env_pkg.sv",
+    "tb/env/usb_scoreboard.sv",
+    "tb/seq/usb_base_vseq.sv",
+    "tb/seq/usb_virtual_sequencer.sv",
+    "tb/tests/usb_base_test.sv",
+    "tb/tests/usb_connect_test.sv",
+    "tb/top/tb_top.sv",
+    "environment_manifest.json"
+  ],
+  "qualification_status": "ENV_GENERATED"
+}

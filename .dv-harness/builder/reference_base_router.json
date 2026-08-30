@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "default_reference_base": "USB UVM Environment",
+  "reference_usage": "generic architecture/framework patterns only",
+  "classification_required": [
+    "GENERIC_REUSABLE",
+    "PROTOCOL_ADAPTER",
+    "PROTOCOL_SPECIFIC",
+    "PROJECT_SPECIFIC"
+  ],
+  "target_protocol_specific_decisions_require_current_evidence": true,
+  "protocol_isolation_gate_required": true
+}

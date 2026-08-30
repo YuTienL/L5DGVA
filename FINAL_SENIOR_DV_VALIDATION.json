@@ -1,0 +1,15 @@
+{
+  "status": "PASS",
+  "validated_suites": {
+    "tests_senior_dv_final/test_reasoning.py": "4 passed",
+    "tests_observability/test_observability.py": "1 passed",
+    "tests_dut_arch/test_architecture.py": "1 passed",
+    "tests_vplan_intake/test_readiness.py": "4 passed"
+  },
+  "total_tests_passed": 10,
+  "skills": 315,
+  "primary_agents": 15,
+  "iron_rules": 290,
+  "zip_integrity": "PASS",
+  "package_files": 872
+}

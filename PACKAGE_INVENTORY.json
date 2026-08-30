@@ -1,0 +1,1646 @@
+{
+  "generated_utc": "2026-08-21T17:41:49.600608Z",
+  "source_package": "AI_Agent_Harness_L5.zip",
+  "file_count": 409,
+  "primary_agents": 15,
+  "skills": 315,
+  "iron_rules": 290,
+  "files": [
+    {
+      "path": "ONE_CLICK_START.md",
+      "bytes": 1372
+    },
+    {
+      "path": "ULTIMATE_QUICK_START.md",
+      "bytes": 867
+    },
+    {
+      "path": "README_DV_AGENT_HARNESS.md",
+      "bytes": 2174
+    },
+    {
+      "path": "README_FIRST.md",
+      "bytes": 1790
+    },
+    {
+      "path": "CAPABILITY_MATRIX.md",
+      "bytes": 2064
+    },
+    {
+      "path": "REMOTE_CONTROL_READINESS.ps1",
+      "bytes": 541
+    },
+    {
+      "path": "DV_STAGE_PROFILE.ps1",
+      "bytes": 102
+    },
+    {
+      "path": "AI_AGENT_HARNESS_L5.md",
+      "bytes": 574
+    },
+    {
+      "path": "START_DV_HARNESS_DASHBOARD.ps1",
+      "bytes": 111
+    },
+    {
+      "path": "START_AI_AGENT_HARNESS_L5.ps1",
+      "bytes": 564
+    },
+    {
+      "path": "ULTIMATE_PLATFORM_ARCHITECTURE.md",
+      "bytes": 2528
+    },
+    {
+      "path": "DV_AGENT_HARNESS_ARCHITECTURE.md",
+      "bytes": 1920
+    },
+    {
+      "path": "EVIDENCE_TRUTH_RULE.md",
+      "bytes": 640
+    },
+    {
+      "path": "GIT_DEVOPS_ONE_PAGE.md",
+      "bytes": 549
+    },
+    {
+      "path": "RELEASE_SUMMARY.md",
+      "bytes": 634
+    },
+    {
+      "path": "CREATE_ENVIRONMENT.md",
+      "bytes": 975
+    },
+    {
+      "path": "DV_MEMORY_GET.ps1",
+      "bytes": 174
+    },
+    {
+      "path": "STAGE_EXECUTION_PROFILE.md",
+      "bytes": 556
+    },
+    {
+      "path": "DV_REGRESSION_SNAPSHOT.ps1",
+      "bytes": 296
+    },
+    {
+      "path": "EXTENSIBLE_PROTOCOL_FRAMEWORK.md",
+      "bytes": 1072
+    },
+    {
+      "path": "START_CLAUDE_DV.cmd",
+      "bytes": 238
+    },
+    {
+      "path": "QUICK_START_DE_DV.md",
+      "bytes": 2063
+    },
+    {
+      "path": "REMOTE_CONTROL_MODE.md",
+      "bytes": 599
+    },
+    {
+      "path": "SOC_SYSTEM_LEVEL_COMPOSER.md",
+      "bytes": 618
+    },
+    {
+      "path": "DV_AGENT_HARNESS_L5_MASTER_OVERVIEW.md",
+      "bytes": 5426
+    },
+    {
+      "path": "LSF_PER_JOB_AGENT_MONITORING_v16_1.md",
+      "bytes": 983
+    },
+    {
+      "path": "DV_MEMORY_SEARCH.ps1",
+      "bytes": 392
+    },
+    {
+      "path": "REMOTE_CONTROL_STATUS.ps1",
+      "bytes": 410
+    },
+    {
+      "path": "ULTIMATE_ONE_CLICK_ARCHITECTURE.md",
+      "bytes": 3946
+    },
+    {
+      "path": "pyproject.toml",
+      "bytes": 371
+    },
+    {
+      "path": "ARCHITECTURE_ONE_PAGE.md",
+      "bytes": 1364
+    },
+    {
+      "path": "FINAL_RELEASE_MANIFEST.json",
+      "bytes": 681
+    },
+    {
+      "path": "START_HERE.md",
+      "bytes": 731
+    },
+    {
+      "path": "README_AI_AGENT_HARNESS_L5.md",
+      "bytes": 860
+    },
+    {
+      "path": "DV_AGENT_HARNESS_v16_ARCHITECTURE.md",
+      "bytes": 331
+    },
+    {
+      "path": "WORKFLOW_MANIFEST.json",
+      "bytes": 5671
+    },
+    {
+      "path": "GENERIC_DV_WORKFLOW_ONE_PAGE.md",
+      "bytes": 1117
+    },
+    {
+      "path": "README_DV_AGENT_HARNESS_L5_ULTIMATE_v19_MEMORY.md",
+      "bytes": 532
+    },
+    {
+      "path": "DV_GRAPH_STATUS.ps1",
+      "bytes": 295
+    },
+    {
+      "path": "START_ULTIMATE_AI_AGENT_HARNESS_L5.ps1",
+      "bytes": 628
+    },
+    {
+      "path": "LSF_STRICT_PER_JOB_IRON_RULES_v19_1.md",
+      "bytes": 552
+    },
+    {
+      "path": "CLAUDE.md",
+      "bytes": 3816
+    },
+    {
+      "path": "START_CLAUDE_DV.ps1",
+      "bytes": 356
+    },
+    {
+      "path": "START_DV_HARNESS.ps1",
+      "bytes": 958
+    },
+    {
+      "path": "AI_AGENT_HARNESS_L5_WORKFLOW.md",
+      "bytes": 2668
+    },
+    {
+      "path": "NEW_PROTOCOL_QUICK_START.md",
+      "bytes": 549
+    },
+    {
+      "path": "V14_VERIFICATION_INTELLIGENCE_ONE_PAGE.md",
+      "bytes": 1904
+    },
+    {
+      "path": "README_DV_AGENT_HARNESS_v16.md",
+      "bytes": 485
+    },
+    {
+      "path": "REMOTE_CONTROL_START.ps1",
+      "bytes": 738
+    },
+    {
+      "path": "requirements-harness.txt",
+      "bytes": 103
+    },
+    {
+      "path": "WORKFLOW_CLOSURE_ONE_PAGE.md",
+      "bytes": 937
+    },
+    {
+      "path": "DV_HARNESS_STATUS.ps1",
+      "bytes": 108
+    },
+    {
+      "path": "CLAUDE_ENVIRONMENT_READINESS_ONE_PAGE.md",
+      "bytes": 1027
+    },
+    {
+      "path": "INSTALL.ps1",
+      "bytes": 836
+    },
+    {
+      "path": "ULTIMATE_ENVIRONMENT_GENERATION_FLOW.md",
+      "bytes": 2115
+    },
+    {
+      "path": "REMOTE_CONTROL_STOP.ps1",
+      "bytes": 369
+    },
+    {
+      "path": "dv_harness/graph.py",
+      "bytes": 1966
+    },
+    {
+      "path": "dv_harness/cli.py",
+      "bytes": 1770
+    },
+    {
+      "path": "dv_harness/stage_profile_report.py",
+      "bytes": 1795
+    },
+    {
+      "path": "dv_harness/graph_runtime.py",
+      "bytes": 1304
+    },
+    {
+      "path": "dv_harness/storage.py",
+      "bytes": 1430
+    },
+    {
+      "path": "dv_harness/dashboard.py",
+      "bytes": 3007
+    },
+    {
+      "path": "dv_harness/memory_router.py",
+      "bytes": 1061
+    },
+    {
+      "path": "dv_harness/skill_resolver.py",
+      "bytes": 295
+    },
+    {
+      "path": "dv_harness/__main__.py",
+      "bytes": 29
+    },
+    {
+      "path": "dv_harness/engine.py",
+      "bytes": 6240
+    },
+    {
+      "path": "dv_harness/blackboard.py",
+      "bytes": 729
+    },
+    {
+      "path": "dv_harness/__init__.py",
+      "bytes": 23
+    },
+    {
+      "path": "dv_harness/regression_reporter.py",
+      "bytes": 2733
+    },
+    {
+      "path": "dv_harness/planner.py",
+      "bytes": 1071
+    },
+    {
+      "path": "dv_harness/stage_profile.py",
+      "bytes": 5588
+    },
+    {
+      "path": "dv_harness/doc_extraction.py",
+      "bytes": 2364
+    },
+    {
+      "path": "dv_harness/models.py",
+      "bytes": 2237
+    },
+    {
+      "path": "dv_harness/memory_cli.py",
+      "bytes": 1186
+    },
+    {
+      "path": "dv_harness/memory.py",
+      "bytes": 5675
+    },
+    {
+      "path": "dv_harness/multi_agent.py",
+      "bytes": 1379
+    },
+    {
+      "path": "dv_harness/router.py",
+      "bytes": 391
+    },
+    {
+      "path": "dv_harness/policy.py",
+      "bytes": 1032
+    },
+    {
+      "path": "dv_harness/react.py",
+      "bytes": 642
+    },
+    {
+      "path": "dv_harness/prompts.py",
+      "bytes": 5324
+    },
+    {
+      "path": "dv_harness/config.py",
+      "bytes": 1348
+    },
+    {
+      "path": ".claude/settings.local.json",
+      "bytes": 552240
+    },
+    {
+      "path": ".claude/settings.json",
+      "bytes": 1291
+    },
+    {
+      "path": ".claude/INDUSTRIAL_DV_WORKFLOW.md",
+      "bytes": 1152
+    },
+    {
+      "path": ".dv-harness/requirements.csv",
+      "bytes": 109
+    },
+    {
+      "path": ".dv-harness/state.json",
+      "bytes": 6767
+    },
+    {
+      "path": ".dv-harness/project.json",
+      "bytes": 174
+    },
+    {
+      "path": ".dv-harness/regression_selection.csv",
+      "bytes": 87
+    },
+    {
+      "path": ".dv-harness/findings.csv",
+      "bytes": 128
+    },
+    {
+      "path": ".dv-harness/change_impact.csv",
+      "bytes": 100
+    },
+    {
+      "path": ".dv-harness/config.json",
+      "bytes": 553
+    },
+    {
+      "path": ".dv-harness/soc_scenarios.csv",
+      "bytes": 136
+    },
+    {
+      "path": "docs/DV_Agent_Harness_L5_Detailed_User_Guide_TC.pdf",
+      "bytes": 186702
+    },
+    {
+      "path": "examples/verification_memory/MEM_USB2_FS_MPS.json",
+      "bytes": 695
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103162.json",
+      "bytes": 229
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103155.json",
+      "bytes": 238
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103156.json",
+      "bytes": 238
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103163.json",
+      "bytes": 224
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103165.json",
+      "bytes": 208
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103166.json",
+      "bytes": 223
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103151.json",
+      "bytes": 212
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103153.json",
+      "bytes": 221
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103167.json",
+      "bytes": 223
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103154.json",
+      "bytes": 244
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103152.json",
+      "bytes": 221
+    },
+    {
+      "path": "examples/periodic_job_snapshot/103164.json",
+      "bytes": 208
+    },
+    {
+      "path": "docs/poster/AI_Agent_Harness_L5_Architecture_Poster.png",
+      "bytes": 2073181
+    },
+    {
+      "path": ".dv-harness/soc-composer/subsystem_environment_registry_template.json",
+      "bytes": 22
+    },
+    {
+      "path": ".dv-harness/soc-composer/soc_composition_manifest_template.json",
+      "bytes": 480
+    },
+    {
+      "path": ".dv-harness/soc-composer/soc_composer_policy.json",
+      "bytes": 702
+    },
+    {
+      "path": ".dv-harness/soc-composer/soc_request_template.json",
+      "bytes": 268
+    },
+    {
+      "path": ".dv-harness/control/state.json",
+      "bytes": 140
+    },
+    {
+      "path": ".dv-harness/control/human_commands_v20.json",
+      "bytes": 596
+    },
+    {
+      "path": ".dv-harness/control/human_commands.json",
+      "bytes": 762
+    },
+    {
+      "path": ".dv-harness/control/command_schema.json",
+      "bytes": 534
+    },
+    {
+      "path": ".dv-harness/memory/memory_policy.json",
+      "bytes": 1417
+    },
+    {
+      "path": ".dv-harness/memory/index.json",
+      "bytes": 474
+    },
+    {
+      "path": ".dv-harness/memory/memory_router_policy.json",
+      "bytes": 824
+    },
+    {
+      "path": ".dv-harness/documents/doc_extraction_policy.json",
+      "bytes": 858
+    },
+    {
+      "path": ".dv-harness/environment-router/environment_mode_policy.json",
+      "bytes": 1567
+    },
+    {
+      "path": ".dv-harness/environment-router/environment_request_template.json",
+      "bytes": 367
+    },
+    {
+      "path": ".dv-harness/builder/environment_builder_policy.json",
+      "bytes": 964
+    },
+    {
+      "path": ".dv-harness/builder/protocol_builder_registry.json",
+      "bytes": 6383
+    },
+    {
+      "path": ".dv-harness/builder/environment_manifest_template.json",
+      "bytes": 756
+    },
+    {
+      "path": ".dv-harness/builder/reference_base_router.json",
+      "bytes": 388
+    },
+    {
+      "path": ".dv-harness/remote-control/session.json",
+      "bytes": 182
+    },
+    {
+      "path": ".dv-harness/l5/autonomy_policy.json",
+      "bytes": 841
+    },
+    {
+      "path": ".dv-harness/blackboard/project_model.json",
+      "bytes": 97
+    },
+    {
+      "path": ".dv-harness/blackboard/findings.json",
+      "bytes": 92
+    },
+    {
+      "path": ".dv-harness/blackboard/requirements.json",
+      "bytes": 96
+    },
+    {
+      "path": ".dv-harness/blackboard/verification_state.json",
+      "bytes": 102
+    },
+    {
+      "path": ".dv-harness/blackboard/git_state.json",
+      "bytes": 93
+    },
+    {
+      "path": ".dv-harness/blackboard/soc_scenarios.json",
+      "bytes": 97
+    },
+    {
+      "path": ".dv-harness/blackboard/regression_state.json",
+      "bytes": 100
+    },
+    {
+      "path": ".dv-harness/blackboard/build_state.json",
+      "bytes": 95
+    },
+    {
+      "path": ".dv-harness/blackboard/signoff_state.json",
+      "bytes": 97
+    },
+    {
+      "path": ".dv-harness/blackboard/server_state.json",
+      "bytes": 96
+    },
+    {
+      "path": ".dv-harness/inference/inference_policy.json",
+      "bytes": 706
+    },
+    {
+      "path": ".dv-harness/graph/main_graph.json",
+      "bytes": 12426
+    },
+    {
+      "path": ".dv-harness/graph/graph_state.json",
+      "bytes": 131
+    },
+    {
+      "path": ".dv-harness/lsf/early_fail_policy.json",
+      "bytes": 407
+    },
+    {
+      "path": ".dv-harness/lsf/job_state_schema.json",
+      "bytes": 532
+    },
+    {
+      "path": ".dv-harness/lsf/periodic_snapshot_policy.json",
+      "bytes": 828
+    },
+    {
+      "path": ".dv-harness/plugins/protocol_registry.json",
+      "bytes": 410
+    },
+    {
+      "path": ".dv-harness/qualification/protocol_qualification_policy.json",
+      "bytes": 624
+    },
+    {
+      "path": ".dv-harness/qualification/protocol_capability_registry.json",
+      "bytes": 1341
+    },
+    {
+      "path": ".dv-harness/closure/batch_closure_policy.json",
+      "bytes": 836
+    },
+    {
+      "path": ".dv-harness/plans/PLAN-D8DFAC2A.json",
+      "bytes": 1250
+    },
+    {
+      "path": ".dv-harness/agents/tasks.json",
+      "bytes": 427
+    },
+    {
+      "path": ".dv-harness/agents/ownership.json",
+      "bytes": 2
+    },
+    {
+      "path": ".dv-harness/governance/execution_mode_policy.json",
+      "bytes": 638
+    },
+    {
+      "path": ".dv-harness/governance/waveform_dump_policy.json",
+      "bytes": 385
+    },
+    {
+      "path": ".dv-harness/governance/first_failure_rerun_policy.json",
+      "bytes": 858
+    },
+    {
+      "path": ".dv-harness/governance/evidence_truth_policy.json",
+      "bytes": 524
+    },
+    {
+      "path": ".dv-harness/governance/simulation_observability_policy.json",
+      "bytes": 498
+    },
+    {
+      "path": ".dv-harness/governance/remote_control_policy.json",
+      "bytes": 420
+    },
+    {
+      "path": ".dv-harness/telemetry/stage_execution_profile_policy.json",
+      "bytes": 627
+    },
+    {
+      "path": ".dv-harness/plugins/protocol-template/protocol_plugin_manifest_template.json",
+      "bytes": 704
+    },
+    {
+      "path": ".dv-harness/plugins/protocol-template/evidence_schema_template.json",
+      "bytes": 258
+    },
+    {
+      "path": ".dv-harness/lsf/jobs/README.md",
+      "bytes": 157
+    },
+    {
+      "path": ".dv-harness/graph/subgraphs/multi_source_evidence_consensus.json",
+      "bytes": 1161
+    },
+    {
+      "path": ".dv-harness/graph/subgraphs/lsf_per_job_monitor_template.json",
+      "bytes": 1556
+    },
+    {
+      "path": ".dv-harness/reference-bases/usb-uvm/reusable_pattern_manifest.json",
+      "bytes": 1045
+    },
+    {
+      "path": ".dv-harness/reference-bases/usb-uvm/REFERENCE_BASE_POLICY.md",
+      "bytes": 1778
+    },
+    {
+      "path": ".dv-harness/memory/engineering/MEM-7A4F454771.json",
+      "bytes": 579
+    },
+    {
+      "path": ".claude/tools/start-dv-workflow.ps1",
+      "bytes": 1950
+    },
+    {
+      "path": ".claude/tools/dv-project-scan.ps1",
+      "bytes": 2119
+    },
+    {
+      "path": ".claude/tools/dv-preflight.ps1",
+      "bytes": 943
+    },
+    {
+      "path": ".claude/tools/check-claude-dv-env.ps1",
+      "bytes": 3859
+    },
+    {
+      "path": ".claude/tools/init-dv-workflow.ps1",
+      "bytes": 1550
+    },
+    {
+      "path": ".claude/tools/dv-readiness.ps1",
+      "bytes": 2610
+    },
+    {
+      "path": ".claude/reference/IP_UVM_DV_Gen.html",
+      "bytes": 81326
+    },
+    {
+      "path": ".claude/reference/IP_UVM_DV_Gen.md",
+      "bytes": 42883
+    },
+    {
+      "path": ".claude/hooks/post-edit-diff-check.ps1",
+      "bytes": 309
+    },
+    {
+      "path": ".claude/hooks/block-destructive.ps1",
+      "bytes": 682
+    },
+    {
+      "path": ".claude/templates/pattern.yaml",
+      "bytes": 325
+    },
+    {
+      "path": ".claude/templates/branch_fw.csv",
+      "bytes": 76
+    },
+    {
+      "path": ".claude/templates/claude_environment_inventory.csv",
+      "bytes": 57
+    },
+    {
+      "path": ".claude/templates/coverage_by_port_audit.csv",
+      "bytes": 106
+    },
+    {
+      "path": ".claude/templates/command_mapping.csv",
+      "bytes": 71
+    },
+    {
+      "path": ".claude/templates/workflow_closure.json",
+      "bytes": 345
+    },
+    {
+      "path": ".claude/templates/workflow_findings.csv",
+      "bytes": 134
+    },
+    {
+      "path": ".claude/templates/requirements_traceability.csv",
+      "bytes": 219
+    },
+    {
+      "path": ".claude/templates/vip_binding.csv",
+      "bytes": 91
+    },
+    {
+      "path": ".claude/templates/project_model.json",
+      "bytes": 939
+    },
+    {
+      "path": ".claude/templates/vip_topology.csv",
+      "bytes": 118
+    },
+    {
+      "path": ".claude/templates/amba_fabric.csv",
+      "bytes": 126
+    },
+    {
+      "path": ".claude/templates/promotion_history.csv",
+      "bytes": 111
+    },
+    {
+      "path": ".claude/templates/hierarchy.json",
+      "bytes": 40
+    },
+    {
+      "path": ".claude/templates/vplan.csv",
+      "bytes": 118
+    },
+    {
+      "path": ".claude/templates/branch_a.csv",
+      "bytes": 61
+    },
+    {
+      "path": ".claude/templates/generic_infrastructure_audit.csv",
+      "bytes": 124
+    },
+    {
+      "path": ".claude/templates/reference_context.json",
+      "bytes": 308
+    },
+    {
+      "path": ".claude/templates/tb_topology.json",
+      "bytes": 72
+    },
+    {
+      "path": ".claude/templates/validation.json",
+      "bytes": 1173
+    },
+    {
+      "path": ".claude/templates/remote_context.json",
+      "bytes": 377
+    },
+    {
+      "path": ".claude/templates/Makefile.patterns.mk",
+      "bytes": 1085
+    },
+    {
+      "path": ".claude/templates/pattern_registry.csv",
+      "bytes": 159
+    },
+    {
+      "path": ".claude/templates/devops_trace.csv",
+      "bytes": 179
+    },
+    {
+      "path": ".claude/templates/dma_scoreboard_by_port_audit.csv",
+      "bytes": 129
+    },
+    {
+      "path": ".claude/templates/lsf_jobs.csv",
+      "bytes": 104
+    },
+    {
+      "path": ".claude/templates/branch_b.csv",
+      "bytes": 66
+    },
+    {
+      "path": ".claude/templates/regression_selection.csv",
+      "bytes": 105
+    },
+    {
+      "path": ".claude/templates/scoreboard_by_port_audit.csv",
+      "bytes": 106
+    },
+    {
+      "path": ".claude/templates/change_impact.csv",
+      "bytes": 161
+    },
+    {
+      "path": ".claude/templates/DEVOPS_PIPELINE_REFERENCE.md",
+      "bytes": 338
+    },
+    {
+      "path": ".claude/templates/command_inventory.csv",
+      "bytes": 96
+    },
+    {
+      "path": ".claude/templates/interface_inventory.csv",
+      "bytes": 100
+    },
+    {
+      "path": ".claude/templates/git_state.json",
+      "bytes": 259
+    },
+    {
+      "path": ".claude/templates/regression_results.csv",
+      "bytes": 94
+    },
+    {
+      "path": ".claude/templates/performance_by_port_audit.csv",
+      "bytes": 115
+    },
+    {
+      "path": ".claude/templates/interrupt_map.csv",
+      "bytes": 138
+    },
+    {
+      "path": ".claude/templates/stage_execution_profile.json",
+      "bytes": 425
+    },
+    {
+      "path": ".claude/templates/evidence.csv",
+      "bytes": 44
+    },
+    {
+      "path": ".claude/templates/command_gap.csv",
+      "bytes": 84
+    },
+    {
+      "path": ".claude/templates/amba_resource_map.csv",
+      "bytes": 123
+    },
+    {
+      "path": ".claude/templates/dut_ports.csv",
+      "bytes": 109
+    },
+    {
+      "path": ".claude/templates/regression_patterns.csv",
+      "bytes": 124
+    },
+    {
+      "path": ".claude/templates/regression_summary.json",
+      "bytes": 150
+    },
+    {
+      "path": ".claude/templates/failure_clusters.csv",
+      "bytes": 79
+    },
+    {
+      "path": ".claude/templates/soc_scenarios.csv",
+      "bytes": 218
+    },
+    {
+      "path": ".claude/templates/branch_b_scenarios.csv",
+      "bytes": 143
+    },
+    {
+      "path": ".claude/agents/debug-agent.md",
+      "bytes": 4002
+    },
+    {
+      "path": ".claude/agents/build-agent.md",
+      "bytes": 1662
+    },
+    {
+      "path": ".claude/agents/implementation-agent.md",
+      "bytes": 3076
+    },
+    {
+      "path": ".claude/agents/dv-lead.md",
+      "bytes": 3570
+    },
+    {
+      "path": ".claude/agents/regression-agent.md",
+      "bytes": 4910
+    },
+    {
+      "path": ".claude/agents/review-agent.md",
+      "bytes": 5136
+    },
+    {
+      "path": ".claude/agents/analysis-agent.md",
+      "bytes": 3065
+    },
+    {
+      "path": ".claude/skills/USB/usb-profile/PROFILE.yaml",
+      "bytes": 213
+    },
+    {
+      "path": ".claude/skills/USB/usb-profile/SKILL.md",
+      "bytes": 1070
+    },
+    {
+      "path": ".claude/skills/USB/usb-tb-scaffold/SKILL.md",
+      "bytes": 4692
+    },
+    {
+      "path": ".claude/skills/USB/usb-vip-lookup/SKILL.md",
+      "bytes": 4094
+    },
+    {
+      "path": ".claude/skills/USB/usb-regression/SKILL.md",
+      "bytes": 9507
+    },
+    {
+      "path": ".claude/skills/USB/usb-vplan/SKILL.md",
+      "bytes": 4156
+    },
+    {
+      "path": ".claude/skills/CORE/branch-mapper/SKILL.md",
+      "bytes": 984
+    },
+    {
+      "path": ".claude/skills/CORE/next-best-action/SKILL.md",
+      "bytes": 507
+    },
+    {
+      "path": ".claude/skills/CORE/coverage-by-port-audit/SKILL.md",
+      "bytes": 593
+    },
+    {
+      "path": ".claude/skills/CORE/waveform-dump-scope-planner/SKILL.md",
+      "bytes": 1742
+    },
+    {
+      "path": ".claude/skills/CORE/dv-intake/SKILL.md",
+      "bytes": 1392
+    },
+    {
+      "path": ".claude/skills/CORE/confidence-gate/SKILL.md",
+      "bytes": 285
+    },
+    {
+      "path": ".claude/skills/CORE/lsf-early-fail-stop/SKILL.md",
+      "bytes": 1100
+    },
+    {
+      "path": ".claude/skills/CORE/generic-dv-environment-builder/SKILL.md",
+      "bytes": 655
+    },
+    {
+      "path": ".claude/skills/CORE/graph-workflow/SKILL.md",
+      "bytes": 292
+    },
+    {
+      "path": ".claude/skills/CORE/remote-control-readiness/SKILL.md",
+      "bytes": 432
+    },
+    {
+      "path": ".claude/skills/CORE/lsf-regression-monitor/SKILL.md",
+      "bytes": 1799
+    },
+    {
+      "path": ".claude/skills/CORE/regression-report/SKILL.md",
+      "bytes": 711
+    },
+    {
+      "path": ".claude/skills/CORE/regression-status-reporter/SKILL.md",
+      "bytes": 563
+    },
+    {
+      "path": ".claude/skills/CORE/vip-scenario-branch/SKILL.md",
+      "bytes": 986
+    },
+    {
+      "path": ".claude/skills/CORE/generic-infrastructure-audit/SKILL.md",
+      "bytes": 1407
+    },
+    {
+      "path": ".claude/skills/CORE/document-index/SKILL.md",
+      "bytes": 300
+    },
+    {
+      "path": ".claude/skills/CORE/git-pull-sync/SKILL.md",
+      "bytes": 776
+    },
+    {
+      "path": ".claude/skills/CORE/dv-workflow/SKILL.md",
+      "bytes": 14576
+    },
+    {
+      "path": ".claude/skills/CORE/execution-mode-gate/SKILL.md",
+      "bytes": 730
+    },
+    {
+      "path": ".claude/skills/CORE/periodic-regression-snapshot/SKILL.md",
+      "bytes": 577
+    },
+    {
+      "path": ".claude/skills/CORE/hypothesis-generation/SKILL.md",
+      "bytes": 509
+    },
+    {
+      "path": ".claude/skills/CORE/remote-linux-execution-bridge/SKILL.md",
+      "bytes": 529
+    },
+    {
+      "path": ".claude/skills/CORE/systematic-debug/SKILL.md",
+      "bytes": 710
+    },
+    {
+      "path": ".claude/skills/CORE/lsf-regression/SKILL.md",
+      "bytes": 812
+    },
+    {
+      "path": ".claude/skills/CORE/protocol-router/SKILL.md",
+      "bytes": 1118
+    },
+    {
+      "path": ".claude/skills/CORE/workflow-report/SKILL.md",
+      "bytes": 640
+    },
+    {
+      "path": ".claude/skills/CORE/approval-gate/SKILL.md",
+      "bytes": 291
+    },
+    {
+      "path": ".claude/skills/CORE/regression-core/SKILL.md",
+      "bytes": 535
+    },
+    {
+      "path": ".claude/skills/CORE/subsystem-to-soc-verification/SKILL.md",
+      "bytes": 1321
+    },
+    {
+      "path": ".claude/skills/CORE/per-job-simlog-analysis/SKILL.md",
+      "bytes": 1064
+    },
+    {
+      "path": ".claude/skills/CORE/user-role-router/SKILL.md",
+      "bytes": 943
+    },
+    {
+      "path": ".claude/skills/CORE/failure-triage/SKILL.md",
+      "bytes": 1811
+    },
+    {
+      "path": ".claude/skills/CORE/multi-agent-orchestrator/SKILL.md",
+      "bytes": 339
+    },
+    {
+      "path": ".claude/skills/CORE/simulation-observability-policy/SKILL.md",
+      "bytes": 1896
+    },
+    {
+      "path": ".claude/skills/CORE/interrupt-event-dispatch/SKILL.md",
+      "bytes": 1179
+    },
+    {
+      "path": ".claude/skills/CORE/project-model/SKILL.md",
+      "bytes": 1948
+    },
+    {
+      "path": ".claude/skills/CORE/route-resolver/SKILL.md",
+      "bytes": 277
+    },
+    {
+      "path": ".claude/skills/CORE/change-only-regression-notifier/SKILL.md",
+      "bytes": 1060
+    },
+    {
+      "path": ".claude/skills/CORE/project-memory/SKILL.md",
+      "bytes": 386
+    },
+    {
+      "path": ".claude/skills/CORE/register-document-normalizer/SKILL.md",
+      "bytes": 328
+    },
+    {
+      "path": ".claude/skills/CORE/gav-mode/SKILL.md",
+      "bytes": 353
+    },
+    {
+      "path": ".claude/skills/CORE/verification-blackboard/SKILL.md",
+      "bytes": 278
+    },
+    {
+      "path": ".claude/skills/CORE/evidence-truth-gate/SKILL.md",
+      "bytes": 1034
+    },
+    {
+      "path": ".claude/skills/CORE/dma-scoreboard-by-port-audit/SKILL.md",
+      "bytes": 609
+    },
+    {
+      "path": ".claude/skills/CORE/verdi-debug/SKILL.md",
+      "bytes": 747
+    },
+    {
+      "path": ".claude/skills/CORE/independent-evidence-synthesis/SKILL.md",
+      "bytes": 547
+    },
+    {
+      "path": ".claude/skills/CORE/performance-by-port-audit/SKILL.md",
+      "bytes": 611
+    },
+    {
+      "path": ".claude/skills/CORE/memory-retrieval/SKILL.md",
+      "bytes": 408
+    },
+    {
+      "path": ".claude/skills/CORE/waveform-analysis/SKILL.md",
+      "bytes": 639
+    },
+    {
+      "path": ".claude/skills/CORE/iron-rules/SKILL.md",
+      "bytes": 38875
+    },
+    {
+      "path": ".claude/skills/CORE/causal-reasoning/SKILL.md",
+      "bytes": 493
+    },
+    {
+      "path": ".claude/skills/CORE/make-pattern-api/SKILL.md",
+      "bytes": 938
+    },
+    {
+      "path": ".claude/skills/CORE/remote-control-status-publisher/SKILL.md",
+      "bytes": 487
+    },
+    {
+      "path": ".claude/skills/CORE/independent-review/SKILL.md",
+      "bytes": 307
+    },
+    {
+      "path": ".claude/skills/CORE/workflow-closure-loop/SKILL.md",
+      "bytes": 2552
+    },
+    {
+      "path": ".claude/skills/CORE/simulation-options/SKILL.md",
+      "bytes": 962
+    },
+    {
+      "path": ".claude/skills/CORE/evidence-grounded-react/SKILL.md",
+      "bytes": 344
+    },
+    {
+      "path": ".claude/skills/CORE/execution-profile-reporting/SKILL.md",
+      "bytes": 398
+    },
+    {
+      "path": ".claude/skills/CORE/remote-control-session-manager/SKILL.md",
+      "bytes": 444
+    },
+    {
+      "path": ".claude/skills/CORE/failure-recovery-loop/SKILL.md",
+      "bytes": 739
+    },
+    {
+      "path": ".claude/skills/CORE/vplan-core/SKILL.md",
+      "bytes": 1158
+    },
+    {
+      "path": ".claude/skills/CORE/hierarchy-discovery/SKILL.md",
+      "bytes": 915
+    },
+    {
+      "path": ".claude/skills/CORE/one-click-dv-workflow/SKILL.md",
+      "bytes": 3223
+    },
+    {
+      "path": ".claude/skills/CORE/devops-report/SKILL.md",
+      "bytes": 659
+    },
+    {
+      "path": ".claude/skills/CORE/working-memory/SKILL.md",
+      "bytes": 470
+    },
+    {
+      "path": ".claude/skills/CORE/memory-confidence-gate/SKILL.md",
+      "bytes": 404
+    },
+    {
+      "path": ".claude/skills/CORE/remote-executor/SKILL.md",
+      "bytes": 1493
+    },
+    {
+      "path": ".claude/skills/CORE/result-collector/SKILL.md",
+      "bytes": 832
+    },
+    {
+      "path": ".claude/skills/CORE/tb-topology-planner/SKILL.md",
+      "bytes": 1797
+    },
+    {
+      "path": ".claude/skills/CORE/memory-gc/SKILL.md",
+      "bytes": 402
+    },
+    {
+      "path": ".claude/skills/CORE/claude-plugin-skill-audit/SKILL.md",
+      "bytes": 573
+    },
+    {
+      "path": ".claude/skills/CORE/verification-change-impact/SKILL.md",
+      "bytes": 2017
+    },
+    {
+      "path": ".claude/skills/CORE/multi-source-evidence-consensus/SKILL.md",
+      "bytes": 496
+    },
+    {
+      "path": ".claude/skills/CORE/interface-topology/SKILL.md",
+      "bytes": 794
+    },
+    {
+      "path": ".claude/skills/CORE/document-extraction/SKILL.md",
+      "bytes": 596
+    },
+    {
+      "path": ".claude/skills/CORE/devops-pipeline/SKILL.md",
+      "bytes": 1341
+    },
+    {
+      "path": ".claude/skills/CORE/verification-signoff/SKILL.md",
+      "bytes": 1203
+    },
+    {
+      "path": ".claude/skills/CORE/scoreboard-by-port-audit/SKILL.md",
+      "bytes": 668
+    },
+    {
+      "path": ".claude/skills/CORE/command-gap-analysis/SKILL.md",
+      "bytes": 869
+    },
+    {
+      "path": ".claude/skills/CORE/stage-execution-profile/SKILL.md",
+      "bytes": 381
+    },
+    {
+      "path": ".claude/skills/CORE/job-memory/SKILL.md",
+      "bytes": 406
+    },
+    {
+      "path": ".claude/skills/CORE/dv-agent-harness/SKILL.md",
+      "bytes": 1089
+    },
+    {
+      "path": ".claude/skills/CORE/uvm-implementation-core/SKILL.md",
+      "bytes": 744
+    },
+    {
+      "path": ".claude/skills/CORE/skill-resolver/SKILL.md",
+      "bytes": 269
+    },
+    {
+      "path": ".claude/skills/CORE/remote-intake/SKILL.md",
+      "bytes": 2650
+    },
+    {
+      "path": ".claude/skills/CORE/git-push-gate/SKILL.md",
+      "bytes": 632
+    },
+    {
+      "path": ".claude/skills/CORE/vip-topology-planner/SKILL.md",
+      "bytes": 1060
+    },
+    {
+      "path": ".claude/skills/CORE/evidence-gap-analysis/SKILL.md",
+      "bytes": 447
+    },
+    {
+      "path": ".claude/skills/CORE/requirements-traceability/SKILL.md",
+      "bytes": 1868
+    },
+    {
+      "path": ".claude/skills/CORE/ci-config-discovery/SKILL.md",
+      "bytes": 710
+    },
+    {
+      "path": ".claude/skills/CORE/protocol-aware-env-builder/SKILL.md",
+      "bytes": 488
+    },
+    {
+      "path": ".claude/skills/CORE/reference-environment/SKILL.md",
+      "bytes": 1886
+    },
+    {
+      "path": ".claude/skills/CORE/git-workflow/SKILL.md",
+      "bytes": 2247
+    },
+    {
+      "path": ".claude/skills/CORE/inference-confidence-gate/SKILL.md",
+      "bytes": 463
+    },
+    {
+      "path": ".claude/skills/CORE/dv-agent-harness-v16/SKILL.md",
+      "bytes": 508
+    },
+    {
+      "path": ".claude/skills/CORE/counter-evidence-review/SKILL.md",
+      "bytes": 523
+    },
+    {
+      "path": ".claude/skills/CORE/soc-scenario-planner/SKILL.md",
+      "bytes": 1947
+    },
+    {
+      "path": ".claude/skills/CORE/claude-environment-readiness/SKILL.md",
+      "bytes": 3046
+    },
+    {
+      "path": ".claude/skills/CORE/engineering-memory/SKILL.md",
+      "bytes": 406
+    },
+    {
+      "path": ".claude/skills/CORE/command-inventory/SKILL.md",
+      "bytes": 752
+    },
+    {
+      "path": ".claude/skills/CORE/ip-uvm-dv-gen/SKILL.md",
+      "bytes": 21771
+    },
+    {
+      "path": ".claude/skills/CORE/vcs-build/SKILL.md",
+      "bytes": 599
+    },
+    {
+      "path": ".claude/skills/CORE/pattern-registry/SKILL.md",
+      "bytes": 813
+    },
+    {
+      "path": ".claude/skills/CORE/memory-consolidation/SKILL.md",
+      "bytes": 398
+    },
+    {
+      "path": ".claude/skills/CORE/signoff-ready-gate/SKILL.md",
+      "bytes": 307
+    },
+    {
+      "path": ".claude/skills/CORE/first-failure-waveform-rerun/SKILL.md",
+      "bytes": 2153
+    },
+    {
+      "path": ".claude/skills/CORE/single-sim-promotion/SKILL.md",
+      "bytes": 849
+    },
+    {
+      "path": ".claude/skills/CORE/verification-inference-engine/SKILL.md",
+      "bytes": 563
+    },
+    {
+      "path": ".claude/skills/CORE/remote-environment/SKILL.md",
+      "bytes": 1138
+    },
+    {
+      "path": ".claude/skills/CORE/plan-and-execute/SKILL.md",
+      "bytes": 346
+    },
+    {
+      "path": ".claude/skills/CORE/hypothesis-ranking/SKILL.md",
+      "bytes": 525
+    },
+    {
+      "path": ".claude/skills/CORE/human-control-plane/SKILL.md",
+      "bytes": 357
+    },
+    {
+      "path": ".claude/skills/CORE/organizational-memory/SKILL.md",
+      "bytes": 442
+    },
+    {
+      "path": ".claude/skills/CORE/lsf-per-job-agent-monitor/SKILL.md",
+      "bytes": 1257
+    },
+    {
+      "path": ".claude/skills/CORE/command-generator/SKILL.md",
+      "bytes": 882
+    },
+    {
+      "path": ".claude/skills/AMBA/amba-fabric-planner/SKILL.md",
+      "bytes": 693
+    },
+    {
+      "path": ".claude/skills/AMBA/amba-profile/PROFILE.yaml",
+      "bytes": 229
+    },
+    {
+      "path": ".claude/skills/AMBA/amba-profile/SKILL.md",
+      "bytes": 1993
+    },
+    {
+      "path": ".claude/skills/Ethernet/ethernet-profile/PROFILE.yaml",
+      "bytes": 202
+    },
+    {
+      "path": ".claude/skills/Ethernet/ethernet-profile/SKILL.md",
+      "bytes": 674
+    },
+    {
+      "path": ".claude/skills/CAN/canfd-profile/PROFILE.yaml",
+      "bytes": 207
+    },
+    {
+      "path": ".claude/skills/CAN/canfd-profile/SKILL.md",
+      "bytes": 663
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/ethernet-environment-builder/SKILL.md",
+      "bytes": 1210
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/canfd-environment-builder/SKILL.md",
+      "bytes": 1201
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/usb-environment-builder/SKILL.md",
+      "bytes": 1217
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/ucie-environment-builder/SKILL.md",
+      "bytes": 1225
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/edp-environment-builder/SKILL.md",
+      "bytes": 1224
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/mipi-dsi-environment-builder/SKILL.md",
+      "bytes": 1213
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/mipi-csi-environment-builder/SKILL.md",
+      "bytes": 1189
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/sd-environment-builder/SKILL.md",
+      "bytes": 1181
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/emmc-environment-builder/SKILL.md",
+      "bytes": 1190
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/pcie-environment-builder/SKILL.md",
+      "bytes": 1232
+    },
+    {
+      "path": ".claude/skills/PROTOCOL_BUILDERS/amba4-soc-environment-builder/SKILL.md",
+      "bytes": 1400
+    },
+    {
+      "path": ".claude/skills/PCIe/pcie-profile/PROFILE.yaml",
+      "bytes": 315
+    },
+    {
+      "path": ".claude/skills/PCIe/pcie-profile/SKILL.md",
+      "bytes": 705
+    },
+    {
+      "path": ".claude/skills/EXTENSIBILITY/plugin-compatibility-gate/SKILL.md",
+      "bytes": 476
+    },
+    {
+      "path": ".claude/skills/EXTENSIBILITY/new-protocol-onboarding/SKILL.md",
+      "bytes": 702
+    },
+    {
+      "path": ".claude/skills/EXTENSIBILITY/interface-schema-discovery/SKILL.md",
+      "bytes": 514
+    },
+    {
+      "path": ".claude/skills/EXTENSIBILITY/protocol-registry-manager/SKILL.md",
+      "bytes": 391
+    },
+    {
+      "path": ".claude/skills/EXTENSIBILITY/protocol-plugin-generator/SKILL.md",
+      "bytes": 453
+    },
+    {
+      "path": ".claude/skills/QUALIFICATION/capability-registry-manager/SKILL.md",
+      "bytes": 475
+    },
+    {
+      "path": ".claude/skills/QUALIFICATION/qualification-evidence-auditor/SKILL.md",
+      "bytes": 477
+    },
+    {
+      "path": ".claude/skills/QUALIFICATION/native-uvc-generator/SKILL.md",
+      "bytes": 481
+    },
+    {
+      "path": ".claude/skills/QUALIFICATION/protocol-production-qualification/SKILL.md",
+      "bytes": 689
+    },
+    {
+      "path": ".claude/skills/QUALIFICATION/spec-revision-diff-analyzer/SKILL.md",
+      "bytes": 601
+    },
+    {
+      "path": ".claude/skills/REFERENCE_BASE/usb-uvm-reference-base/SKILL.md",
+      "bytes": 780
+    },
+    {
+      "path": ".claude/skills/REFERENCE_BASE/protocol-isolation-gate/SKILL.md",
+      "bytes": 620
+    },
+    {
+      "path": ".claude/skills/REFERENCE_BASE/reference-pattern-extractor/SKILL.md",
+      "bytes": 590
+    },
+    {
+      "path": ".claude/skills/SOC_BUILDERS/soc-coverage-closure-builder/SKILL.md",
+      "bytes": 406
+    },
+    {
+      "path": ".claude/skills/SOC_BUILDERS/soc-cross-protocol-scenario-builder/SKILL.md",
+      "bytes": 512
+    },
+    {
+      "path": ".claude/skills/SOC_BUILDERS/soc-topology-discovery/SKILL.md",
+      "bytes": 497
+    },
+    {
+      "path": ".claude/skills/SOC_BUILDERS/soc-end-to-end-scoreboard-builder/SKILL.md",
+      "bytes": 406
+    },
+    {
+      "path": ".claude/skills/SOC_BUILDERS/soc-environment-composer/SKILL.md",
+      "bytes": 475
+    },
+    {
+      "path": ".claude/skills/ENVIRONMENT_ROUTER/system-level-composition-orchestrator/SKILL.md",
+      "bytes": 564
+    },
+    {
+      "path": ".claude/skills/ENVIRONMENT_ROUTER/verification-environment-mode-router/SKILL.md",
+      "bytes": 646
+    },
+    {
+      "path": ".claude/skills/ENVIRONMENT_ROUTER/subsystem-generation-orchestrator/SKILL.md",
+      "bytes": 475
+    },
+    {
+      "path": ".claude/skills/ENVIRONMENT_ROUTER/environment-selection-summary/SKILL.md",
+      "bytes": 478
+    },
+    {
+      "path": ".claude/skills/ENVIRONMENT_ROUTER/missing-subsystem-resolver/SKILL.md",
+      "bytes": 525
+    },
+    {
+      "path": ".claude/skills/MIPI/dsi-profile/PROFILE.yaml",
+      "bytes": 173
+    },
+    {
+      "path": ".claude/skills/MIPI/dsi-profile/SKILL.md",
+      "bytes": 653
+    },
+    {
+      "path": ".claude/skills/MIPI/csi2-profile/PROFILE.yaml",
+      "bytes": 196
+    },
+    {
+      "path": ".claude/skills/MIPI/csi2-profile/SKILL.md",
+      "bytes": 653
+    },
+    {
+      "path": ".claude/skills/SOC_COMPOSITION/system-level-coverage-composer/SKILL.md",
+      "bytes": 536
+    },
+    {
+      "path": ".claude/skills/SOC_COMPOSITION/cross-subsystem-sequence-planner/SKILL.md",
+      "bytes": 546
+    },
+    {
+      "path": ".claude/skills/SOC_COMPOSITION/user-driven-subsystem-selector/SKILL.md",
+      "bytes": 552
+    },
+    {
+      "path": ".claude/skills/SOC_COMPOSITION/soc-composition-manifest-generator/SKILL.md",
+      "bytes": 571
+    },
+    {
+      "path": ".claude/skills/SOC_COMPOSITION/soc-system-level-env-composer/SKILL.md",
+      "bytes": 575
+    },
+    {
+      "path": ".claude/skills/SOC_COMPOSITION/subsystem-environment-registry/SKILL.md",
+      "bytes": 571
+    },
+    {
+      "path": ".claude/skills/SOC_COMPOSITION/system-level-scoreboard-composer/SKILL.md",
+      "bytes": 530
+    },
+    {
+      "path": ".claude/skills/SOC_COMPOSITION/subsystem-compatibility-analyzer/SKILL.md",
+      "bytes": 576
+    },
+    {
+      "path": "dv_harness/adapters/base.py",
+      "bytes": 405
+    },
+    {
+      "path": "dv_harness/adapters/cli.py",
+      "bytes": 1808
+    },
+    {
+      "path": "dv_harness/adapters/__init__.py",
+      "bytes": 0
+    },
+    {
+      "path": "dv_harness/adapters/sdk.py",
+      "bytes": 1777
+    }
+  ]
+}

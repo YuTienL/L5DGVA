@@ -1,0 +1,18 @@
+{
+  "protocol": "Ethernet",
+  "supported_roles": [
+    "MAC",
+    "PHY",
+    "PCS",
+    "PMA"
+  ],
+  "minimum_smoke_tests": [
+    "link_bringup",
+    "tx_frame",
+    "rx_frame"
+  ],
+  "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_DISCOVER_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

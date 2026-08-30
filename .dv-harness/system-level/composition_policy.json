@@ -1,0 +1,34 @@
+{
+  "subsystem": {
+    "selectable": true,
+    "outputs": [
+      "UVM env",
+      "tests",
+      "scoreboard",
+      "coverage",
+      "manifest",
+      "qualification evidence"
+    ]
+  },
+  "system_level": {
+    "selectable": true,
+    "input": "user-selected completed subsystem environments",
+    "requires": [
+      "environment manifest",
+      "release/SHA",
+      "qualification state",
+      "interface compatibility",
+      "clock/reset compatibility",
+      "address/resource compatibility"
+    ],
+    "outputs": [
+      "system virtual sequencer",
+      "cross-subsystem scenario manager",
+      "cross-subsystem scoreboard",
+      "SoC coverage",
+      "system regression plan"
+    ]
+  },
+  "validator": "tools/real_env/system_level_validator.py",
+  "hard_gate": true
+}

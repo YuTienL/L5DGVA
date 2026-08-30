@@ -1,0 +1,19 @@
+{
+  "required_paths": [
+    "tools/verification_flow/verification_effectiveness_consistency_gate.py",
+    "tools/verification_flow/coverage_credit_source_integrity_gate.py",
+    "tools/verification_flow/waiver_scope_consistency_gate.py",
+    "tools/verification_flow/fix_regression_non_regression_gate.py",
+    "tools/verification_flow/expert_feedback_closure_gate.py",
+    "tools/verification_flow/run_environment_reproducibility_gate.py",
+    "tools/verification_flow/evidence_freshness_gate.py",
+    "tools/verification_flow/artifact_dependency_closure_gate.py",
+    "tools/verification_flow/rerun_determinism_gate.py",
+    "tools/verification_flow/signoff_bundle_completeness_gate.py",
+    "tools/verification_flow/run_identity_consistency_gate.py",
+    "tools/verification_flow/waiver_revision_freshness_gate.py",
+    "tools/verification_flow/nondeterminism_attribution_gate.py",
+    "tools/verification_flow/evidence_bundle_run_consistency_gate.py",
+    "tools/verification_flow/promotion_readiness_gate.py"
+  ]
+}

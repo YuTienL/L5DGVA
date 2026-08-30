@@ -1,0 +1,11 @@
+{
+  "qualified_vip_version": "v1",
+  "current_vip_version": "v2",
+  "current_vip_source_or_manual_hash": "sha",
+  "api_diff_analyzed": true,
+  "breaking_api_changes": false,
+  "adapter_updated": false,
+  "requalification_evidence": [
+    "run:PASS"
+  ]
+}

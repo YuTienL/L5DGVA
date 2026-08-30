@@ -1,0 +1,55 @@
+{
+  "enabled": true,
+  "modes": {
+    "SUBSYSTEM_MODE": {
+      "goal": "Generate/build a subsystem verification environment",
+      "examples": [
+        "PCIe",
+        "USB",
+        "Ethernet",
+        "MIPI-CSI",
+        "MIPI-DSI",
+        "CAN-FD",
+        "AMBA4",
+        "eMMC",
+        "SD/SDIO",
+        "eDP",
+        "UCIe",
+        "new protocol/interface"
+      ],
+      "flow": [
+        "user_requirement",
+        "protocol/subsystem_selection",
+        "current_evidence_acquisition",
+        "protocol_specific_builder",
+        "compile",
+        "smoke",
+        "self_repair",
+        "baseline_ready",
+        "register_subsystem_environment"
+      ]
+    },
+    "SYSTEM_LEVEL_MODE": {
+      "goal": "Select completed subsystem environments and compose a System-Level/Full-SoC verification environment",
+      "flow": [
+        "user_soc_goal",
+        "subsystem_registry",
+        "user_driven_subsystem_selection",
+        "compatibility_analysis",
+        "missing_subsystem_check",
+        "soc_composition_manifest",
+        "soc_environment_composer",
+        "cross_subsystem_sequences",
+        "end_to_end_scoreboard",
+        "system_coverage",
+        "compile",
+        "smoke",
+        "self_repair",
+        "soc_baseline_ready"
+      ]
+    }
+  },
+  "system_level_reuse_rule": "prefer BASELINE_READY/VERIFIED subsystem environments",
+  "missing_subsystem_behavior": "invoke SUBSYSTEM_MODE builder for missing required subsystem, register it, then return to SYSTEM_LEVEL_MODE",
+  "mode_must_be_explicit_before_generation": true
+}

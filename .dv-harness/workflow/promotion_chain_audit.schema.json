@@ -1,0 +1,12 @@
+{
+  "failure_detected": false,
+  "events": [
+    {
+      "stage": "INTAKE_READY|VPLAN_READY|ARCHITECTURE_READY|MECHANISM_READY|TESTS_READY|TRACEABILITY_READY|EXECUTION_EVIDENCE_READY|COVERAGE_QUALITY_READY|RCA_READY|RERUN_READY|EXPERT_REVIEW_READY|EXPERIENCE_READY|PROMOTABLE",
+      "timestamp": "ISO8601",
+      "evidence": [
+        "artifact/ref"
+      ]
+    }
+  ]
+}

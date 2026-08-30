@@ -1,0 +1,24 @@
+{
+  "labels": [
+    "BUILDER_AVAILABLE",
+    "EVIDENCE_READY",
+    "ENV_GENERATED",
+    "COMPILE_QUALIFIED",
+    "SMOKE_QUALIFIED",
+    "PROTOCOL_QUALIFIED",
+    "REGRESSION_QUALIFIED",
+    "PRODUCTION_QUALIFIED"
+  ],
+  "production_qualified_requires": [
+    "current_dut_evidence",
+    "current_spec_evidence",
+    "current_vip_or_native_uvc_evidence",
+    "compile_pass",
+    "smoke_pass",
+    "protocol_bringup_pass",
+    "traffic_checker_scoreboard_pass",
+    "qualification_regression_pass",
+    "traceable_release_identity"
+  ],
+  "rule": "Builder availability must never be represented as production qualification."
+}

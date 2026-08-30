@@ -1,0 +1,28 @@
+{
+  "protocol": "AMBA4_MMxMS",
+  "roles": [
+    "Master",
+    "Slave",
+    "Interconnect"
+  ],
+  "boundaries": [
+    "AXI3",
+    "AXI4",
+    "AXI4_Lite",
+    "AXI_Stream",
+    "AHB",
+    "AHB_Lite",
+    "APB"
+  ],
+  "smoke_tests": [
+    "1x1_rw",
+    "all_masters",
+    "all_slaves",
+    "parallel_rw",
+    "backpressure"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

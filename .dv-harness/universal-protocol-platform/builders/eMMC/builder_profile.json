@@ -1,0 +1,46 @@
+{
+  "protocol": "eMMC",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "Host",
+    "Device"
+  ],
+  "required_discovery": [
+    "bus_width",
+    "timing_modes",
+    "boot_support",
+    "partition_support",
+    "command_data_boundary"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "identify",
+    "select",
+    "read",
+    "write",
+    "mode_switch"
+  ],
+  "minimum_coverage_dimensions": [
+    "command",
+    "response",
+    "bus_width",
+    "timing_mode",
+    "partition",
+    "error"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

@@ -1,0 +1,253 @@
+{
+  "version": "ultimate",
+  "common_builder": "generic-dv-environment-builder",
+  "protocol_router": "protocol-aware-env-builder",
+  "protocols": {
+    "pcie": {
+      "display_name": "PCIe",
+      "skill": "pcie-environment-builder",
+      "discover": [
+        "RC/EP/Switch role",
+        "Gen2-Gen6",
+        "lane width",
+        "Serial/PIPE/controller boundary"
+      ],
+      "build": [
+        "VIP topology",
+        "LTSSM/link training",
+        "configuration space",
+        "BAR",
+        "TLP/completion scoreboard",
+        "MSI/MSI-X",
+        "AER/error injection",
+        "ASPM/LTR",
+        "SR-IOV/ATS/PASID/PRI where applicable",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "ethernet": {
+      "display_name": "Ethernet",
+      "skill": "ethernet-environment-builder",
+      "discover": [
+        "MAC/PCS/PMA boundary",
+        "speed/mode",
+        "GMII/XGMII/USXGMII/SXGMII",
+        "10G/25G and project modes"
+      ],
+      "build": [
+        "VIP topology",
+        "frame generator/monitor",
+        "CRC",
+        "VLAN",
+        "pause/PFC",
+        "frame scoreboard",
+        "error injection",
+        "throughput/latency checks",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "mipi-csi": {
+      "display_name": "MIPI CSI-2",
+      "skill": "mipi-csi-environment-builder",
+      "discover": [
+        "TX/RX role",
+        "CSI-2 version",
+        "C-PHY/D-PHY",
+        "lane count",
+        "VC/DT usage"
+      ],
+      "build": [
+        "packet model",
+        "short/long packet",
+        "ECC/CRC",
+        "frame/line scoreboard",
+        "VC/DT routing",
+        "PHY/lane configuration",
+        "error injection",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "mipi-dsi": {
+      "display_name": "MIPI DSI",
+      "skill": "mipi-dsi-environment-builder",
+      "discover": [
+        "Host/Peripheral role",
+        "Video/Command mode",
+        "C-PHY/D-PHY",
+        "lane count",
+        "VC/DT/DCS usage"
+      ],
+      "build": [
+        "DCS/packet sequences",
+        "LP/HS transitions",
+        "BTA/read response",
+        "video timing scoreboard",
+        "ECC/CRC",
+        "PHY configuration",
+        "error injection",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "canfd": {
+      "display_name": "CAN / CAN-FD",
+      "skill": "canfd-environment-builder",
+      "discover": [
+        "node/controller role",
+        "Classical CAN/CAN-FD",
+        "ISO/non-ISO",
+        "nominal/data bit timing"
+      ],
+      "build": [
+        "multi-node topology",
+        "arbitration",
+        "BRS/ESI",
+        "CRC",
+        "ACK",
+        "error frames",
+        "bus-off/recovery",
+        "fault injection",
+        "scoreboard",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "amba4-soc": {
+      "display_name": "AMBA4 SoC Multi-Master × Multi-Slave",
+      "skill": "amba4-soc-environment-builder",
+      "discover": [
+        "AXI3/AXI4/AXI4-Lite/AXI-Stream/AHB/AHB-Lite/APB3/APB4",
+        "master/slave topology",
+        "address map",
+        "ID namespace",
+        "clock/reset domains"
+      ],
+      "build": [
+        "master/slave registries",
+        "address decoder model",
+        "outstanding/ordering/interleave",
+        "exclusive access",
+        "QoS",
+        "backpressure",
+        "dependency/barrier",
+        "parallel virtual sequences",
+        "scoreboard matrix",
+        "coverage matrix",
+        "cross-master/slave scenarios",
+        "smoke tests"
+      ]
+    },
+    "emmc": {
+      "display_name": "eMMC",
+      "skill": "emmc-environment-builder",
+      "discover": [
+        "host/device role",
+        "bus width",
+        "timing modes",
+        "HS200/HS400 capability",
+        "partition/features"
+      ],
+      "build": [
+        "command/data sequences",
+        "boot",
+        "partition",
+        "RPMB",
+        "CMDQ where applicable",
+        "tuning",
+        "CRC/busy/error response",
+        "scoreboard",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "sd": {
+      "display_name": "SD / SDIO",
+      "skill": "sd-environment-builder",
+      "discover": [
+        "host/card role",
+        "SD/SDHC/SDXC/SDIO",
+        "bus width",
+        "speed/UHS modes"
+      ],
+      "build": [
+        "command/data sequences",
+        "single/multi-block",
+        "tuning",
+        "CRC",
+        "busy",
+        "SDIO interrupt/function flows",
+        "scoreboard",
+        "error injection",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "edp": {
+      "display_name": "eDP / DisplayPort",
+      "skill": "edp-environment-builder",
+      "discover": [
+        "source/sink role",
+        "link rate",
+        "lane count",
+        "AUX/DPCD",
+        "eDP/DP feature set"
+      ],
+      "build": [
+        "AUX transactions",
+        "DPCD model",
+        "link training",
+        "HPD",
+        "main-link model",
+        "scrambling",
+        "M/N and video timing",
+        "lane/rate fallback",
+        "error monitoring",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "ucie": {
+      "display_name": "UCIe",
+      "skill": "ucie-environment-builder",
+      "discover": [
+        "die/adapter role",
+        "UCIe version",
+        "PHY/adapter/protocol boundary",
+        "lane/module topology"
+      ],
+      "build": [
+        "link initialization/training",
+        "sideband",
+        "flit/adapter transactions",
+        "CRC/replay/retry",
+        "lane repair/degradation",
+        "power states",
+        "error injection",
+        "scoreboard",
+        "coverage/assertions/smoke tests"
+      ]
+    },
+    "usb": {
+      "display_name": "USB 2.0 / USB 3.x",
+      "skill": "usb-environment-builder",
+      "discover": [
+        "Host/Device role",
+        "USB2/USB3 mode",
+        "port topology",
+        "PHY/controller boundary"
+      ],
+      "build": [
+        "VIP topology",
+        "enumeration",
+        "USB2 speed modes",
+        "USB3 LTSSM/LFPS/TS patterns",
+        "endpoint/transfer sequences",
+        "scoreboard",
+        "error injection",
+        "coverage/assertions/smoke tests"
+      ]
+    }
+  },
+  "soc_builders": [
+    "soc-topology-discovery",
+    "soc-environment-composer",
+    "soc-cross-protocol-scenario-builder",
+    "soc-end-to-end-scoreboard-builder",
+    "soc-coverage-closure-builder"
+  ]
+}

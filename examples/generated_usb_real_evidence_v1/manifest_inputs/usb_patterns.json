@@ -1,0 +1,8 @@
+[
+  {
+    "name": "USB2_con_vip",
+    "suite": "connect",
+    "dir": "tb/patterns/common",
+    "file": "USB2_con_vip.txt"
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "policy": "All schemas are retained intentionally and catalogued; removal requires reference scan + migration proof.",
+  "schemas": [
+    "branch_topology.schema.json",
+    "closed_loop_promotion.schema.json",
+    "command_catalog_lifecycle.schema.json",
+    "coverage_quality.schema.json",
+    "evidence_freshness.schema.json",
+    "execution_closure.schema.json",
+    "fix_effectiveness.schema.json",
+    "mechanism_test_trace.schema.json",
+    "promotion_chain_audit.schema.json",
+    "protocol_onboarding.schema.json",
+    "protocol_scheduler.schema.json",
+    "reference_uvm_compatibility.schema.json",
+    "release_reproducibility.schema.json",
+    "remote_action_audit.schema.json",
+    "remote_control_supervisory.schema.json",
+    "reset_power_cdc_corner.schema.json",
+    "scoreboard_expected_provenance.schema.json",
+    "scoreboard_transaction_liveness.schema.json",
+    "sequence_coverage_closure.schema.json",
+    "simulation_semantic_validation.schema.json",
+    "spec_rtl_change_impact.schema.json",
+    "system_level_composition.schema.json",
+    "system_level_resource_contention.schema.json",
+    "system_level_traceability.schema.json",
+    "test_result_provenance.schema.json",
+    "vip_api_drift.schema.json",
+    "waiver_revalidation.schema.json"
+  ]
+}

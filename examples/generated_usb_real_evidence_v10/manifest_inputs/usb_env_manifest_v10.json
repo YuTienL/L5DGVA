@@ -1,0 +1,492 @@
+{
+  "_evidence_notes": {
+    "v9_call_construct_ifdef_statements_this_pass": "This v9 manifest is v8 plus 6 new \"connections\" entries, using the kind/guard/ifdef_macro extension added to _connect_phase this session (dv_harness/uvm_generator/generator.py, verified against dv_harness_tests/test_connection_call_statements.py -- 99 total tests passing repo-wide, 0 regressions). These 6 entries are exactly the 6 statements the round-9 Multi-Agent Evidence Consensus synthesis (3 independent blind reads + direct re-inspection of usb_top_env.sv lines 450-629 and the payload_cb declaration at line 85, resolving two summary-tally slips by two of the three reports) identified as the last real connect_phase wire-up statements this generator could not yet emit in any form: lines 506 (construct), 508/531/552/554 (call), and 535 (assign, newly carrying ifdef_macro). Every citation below was independently re-verified this pass against the real file (re-read in full, not trusted from the consensus spec's own quoted text) and matched verbatim. (1) Line 506, kind=\"construct\": payload_cb[p] = new($sformatf(\"payload_cb_%0d\", p), p); -- ctor_class=usb_payload_publish_cb per the member's declared type at usb_top_env.sv:85, confirmed by direct grep this pass, not guessed. RESOLVED IN v10: this exact construction is ALSO modeled in build_phase by this manifest's own pre-existing payload_cb vip_components entry (kind=plain_object, v6) -- in v9 the generator had no cross-phase dedup, so the generated usb_env.sv constructed payload_cb[p] via new() TWICE (once in build_phase, once in connect_phase), whereas the real file constructs it exactly once, in connect_phase. v10 closes this: generator.py's _env_multi_component now detects that this connections entry's kind=\"construct\" lhs (\"payload_cb[{p}]\") matches the payload_cb vip_components entry's instance_name, and (since that component's kind is \"plain_object\") skips its build_phase new() entirely, leaving connect_phase's new() as the sole construction site -- matching the real file exactly. See dv_harness_tests/test_connection_dedup_and_guards.py. (2) Line 508, kind=\"call\", call_style=\"static\": uvm_callbacks#(svt_usb_protocol)::add(usb_host_agent[p].prot, payload_cb[p]); same guard/loop as (1), NOT ifdef-guarded (line 508 sits above the `ifdef USB_UVM_DMA_MON` span, which starts at line 512 -- verified directly). (3) Line 531, kind=\"call\", call_style=\"instance\": dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export); inside `ifdef USB_UVM_DMA_MON` (512-556); guard is empty per the consensus spec -- the dma_sb[p]==null / dma_env==null||p>=dma_env.master.size() continue-checks above it (lines 523-530) are loop-plumbing continue-guards, not a runtime condition wrapping this specific statement, so they are excluded from `guard` (same convention already applied to every pre-existing port_indexed connections entry in this manifest). (4) Line 535, kind=\"assign\" (default, UNCHANGED kind) with NEW ifdef_macro=\"USB_UVM_DMA_MON\" and guard=[\"payload_cb[p] != null\"]: if (payload_cb[p] != null) payload_cb[p].dma_sb = dma_sb[p]; this is the proof case that ifdef_macro is orthogonal to kind (an assign entry can carry it too) and closes the exact schema gap the v7 evidence notes flagged as 'genuine, currently-unclosed' (dma_sb only exists under this same ifdef; wiring it unconditionally, as v7/v8 were forced to omit entirely, would have been a real compile error in a build without +define+USB_UVM_DMA_MON). (5)/(6) Lines 552/554, kind=\"call\", call_style=\"instance\", both ifdef_macro=\"USB_UVM_DMA_MON\": dma_env.master[0/1].monitor.item_observed_port.connect(ssmem_sb.dma_export_p0/p1); each carries a 2-entry `guard` array (the shared outer `ssmem_sb != null` plus its own `dma_env != null && dma_env.master.size() > 0/1`), AND-joined by the generator into one combined `if` per the documented rendering convention -- the real source instead nests two separate `if`s wrapping these two statements as siblings under one shared outer condition; modeling each statement independently (no cross-entry statement-grouping exists in this schema) makes the AND-joined single-if the correct, logically-equivalent per-statement rendering, not a literal transcription of the real nested shape. None of these 6 new entries are port_indexed except (1)/(2)/(3)/(4), which all use the manifest's existing top-level port_count:2 (the SAME `foreach (usb_host_agent[p])`/`foreach (dma_sb[p])` loops the pre-existing payload_cb/dma_sb-referencing entries in this same manifest already use `{p}` for) -- (5)/(6) are each a single non-indexed statement (dma_env.master[0] and dma_env.master[1] are two textually distinct real statements, not one loop, confirmed directly: the real source has no per-port loop here at all, just two sibling `if` blocks). This closes ALL 6 statements the round-9 consensus identified; see this session's implementation report for the resulting total-statement count against the real file's full connect_phase.",
+    "carried_forward_from_v1": "protocol/role/interfaces/clocks/resets/vip.package_imports/scoreboard_rules/coverage_points below are UNCHANGED from examples/generated_usb_real_evidence_v1/manifest_inputs/usb_env_manifest.json's _evidence_notes (DUT at D:/DV/Task/USB/DUT/RTLCAT/SS_VOUT_USB_CTRL.v, TOP_ALL.v; svt_usb_agent confirmed at D:/DV/Task/USB/VIP/src/sverilog/vcs/svt_usb_agent.sv). Not re-derived this pass -- see v1 file for the original citations.",
+    "vip_components_evidence": "Real component NAMES/CLASS TYPES read directly from the real target file this pass, D:/DV/Task/DV_Agent_Harness_L5/USB_UVM_Handoff/uvm/tb/env/usb_top_env.sv: usb_host_agent[0..1]/usb_mon_agent[0..1] are svt_usb_agent (lines 77-78, created lines 407-426); apb_env is svt_apb_system_env (line 148, created line 436); axi_env AND dma_env are both svt_axi_system_env (lines 151/116 -- dma_env is explicitly commented 'A SECOND AXI environment, separate from axi_env', lines 108-115); clk_rst_agent is usb_clk_rst_agent (line 154, created line 447); sideband_agent is usb_sideband_agent (line 157, created line 448); reg_seqr is usb_reg_sequencer (line 161, created line 450).",
+    "depends_on_honesty_caveat": "The depends_on edges below are NOT a transcription of usb_top_env.sv's real build_phase creation order -- read directly this pass, that order is (1) sys_virt_seqr/ep_check/perf_mon/xfer_sb/frame_util per-port loop, (2) dma_env (ifdef block, lines 356-367), (3) usb_host_agent/usb_mon_agent per-port loop (lines 386-428), (4) apb_env (436), (5) axi_env (443), (6) clk_rst_agent/sideband_agent (447-448), (7) reg_seqr/virt_seqr (450-451) -- i.e. clk_rst_agent is created NEAR THE END in the real file, not first, and the real file asserts no explicit inter-component ordering dependency via comments the way vip_components' depends_on models it (its ordering comments are about *file include* order for type visibility, e.g. lines 20-66, not about build_phase creation order). The one real, evidenced connect-time dependency is reg_seqr/virt_seqr wiring to apb_env.master.sequencer and axi_env.master[0].sequencer at lines 472-475, which DOES require apb_env/axi_env to already exist -- that edge below is real evidence. All other depends_on edges below (clk_rst_agent as a prerequisite for the agents/apb_env/axi_env, mon_agent depending on its paired host_agent) are ASSERTED BY THIS EXPERIMENT ONLY, as a plausible/conventional structural ordering (reset/clock-domain component before protocol agents; monitor sharing its active agent's config), to exercise topological_build_order() with a non-trivial dependency graph -- they are not claims about what usb_top_env.sv's real code requires.",
+    "v3_port_indexed_rewrite": "v2 (examples/generated_usb_real_evidence_v2/manifest_inputs/usb_env_manifest_v2.json, left UNCHANGED as a historical artifact) modeled the real dual-port usb_host_agent[NUM_USB_PORTS]/usb_mon_agent[NUM_USB_PORTS] arrays (usb_top_env.sv lines 77-78) as 4 SEPARATELY-NAMED FLAT SCALAR vip_components entries (host_agent0/host_agent1/mon_agent0/mon_agent1) -- an approximation that does NOT emit a real SV array or for-loop, unlike the real file. This v3 manifest replaces those 4 entries with 2 port_indexed:true entries (host_agent, mon_agent) plus a top-level port_count:2, using the port_indexed/port_count generator extension (dv_harness/uvm_generator/generator.py, InvalidPortCountError + _env_multi_component's port_indexed branch) added this session and verified directly against generator.py source + 32 passing tests in dv_harness_tests/test_per_port_env.py. instance_name is 'usb_host_agent'/'usb_mon_agent' (not 'host_agent'/'mon_agent') specifically so the generator's $sformatf(\"<instance_name>_%0d\", p) creation naming matches usb_top_env.sv's real per-port names verbatim (usb_host_agent_0/usb_host_agent_1/usb_mon_agent_0/usb_mon_agent_1, lines 407/414/426). All other vip_components entries (clk_rst_agent, sideband_agent, apb_env, axi_env, dma_env, reg_seqr) and every other real-evidence-cited field are UNCHANGED from v2 verbatim -- only the host_agent0/host_agent1/mon_agent0/mon_agent1 portion and the depends_on edge that referenced them (mon_agent -> host_agent, collapsed from mon_agent0->host_agent0 / mon_agent1->host_agent1 since both are now single graph nodes) were rewritten, plus the addition of top-level port_count. This still does NOT address the ~15 additional real per-port components usb_top_env.sv actually declares beyond host/mon (payload_cb, ep_check, perf_mon, xfer_sb, frame_util, dma_sb, sys_virt_seqr, and non-port-indexed dma_cfg/usb_top_cfg/virt_seqr/etc) -- see the v2 report's own gap list, still true here.",
+    "v7_connections_this_pass": "This v7 manifest is v6 plus one new top-level key, \"connections\", using the connect_phase-emitting extension added this session (dv_harness/uvm_generator/generator.py's _connect_phase / MissingConnectionEvidenceError, verified against dv_harness_tests/test_connect_phase.py -- 15 tests). usb_top_env.sv's connect_phase (lines 456-623) was re-read IN FULL this pass (not trusted from any prior summary or from this same file's own v6 depends_on_honesty_caveat, which only mentioned two of its wires in passing) and every wire-up statement in it was counted and individually triaged: 16 real wire-up statements total. 11 are wired below (assignment-shaped AND not gated behind a compile-time ifdef the connections schema cannot express). 5 are deliberately NOT wired, each for a stated schema-fidelity reason rather than silently omitted: (a) usb_top_env.sv:508, uvm_callbacks#(svt_usb_protocol)::add(usb_host_agent[p].prot, payload_cb[p]) -- a callback-registration CALL, not an 'lhs = rhs' assignment; the connections schema only emits '<from> = <to>;' and has no call-statement shape. (b) usb_top_env.sv:531, dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export) -- a TLM .connect() CALL, same non-assignment reason, AND inside the `ifdef USB_UVM_DMA_MON` guard. (c)/(d) usb_top_env.sv:552,554 -- same TLM .connect() shape, same ifdef guard, wiring ssmem_sb. (e) usb_top_env.sv:535, payload_cb[p].dma_sb = dma_sb[p] -- IS assignment-shaped, but dma_sb only exists under the SAME `ifdef USB_UVM_DMA_MON` guard (see this manifest's own dma_sb vip_components entry), and the connections schema has no ifdef_macro field of its own (unlike vip_components' declaration/creation, which does) -- wiring it here would emit an unconditional reference to a conditionally-declared handle, i.e. a real compile error in a build without +define+USB_UVM_DMA_MON. This is a genuine, currently-unclosed schema gap (connections needs its own ifdef_macro field, mirroring vip_components'), not something this pass's evidence-gathering can paper over. SECOND, SEPARATE CAVEAT ON ALL 11 WIRED CONNECTIONS: every one of the 11 real statements below sits behind at least one null/enable guard in the real file (an `if (...!= null)` wrapping the single line, or a `continue`/`if(...==null) continue` inside the enclosing loop) -- see each entry's own evidence string for the exact real guard. The connections schema emits only a bare assignment (scalar) or a bare `for` loop with one unconditional assignment inside (port_indexed); it has no conditional-body support, so EVERY guard is dropped in the generated connect_phase. This is real evidence-fidelity information, not a defect introduced by this pass -- the schema was built this session with exactly this bare-assignment/bare-loop shape, evidenced against usb_top_env.sv's simplest wires (usb_top_env.sv:472,475 in test_connect_phase.py), and this pass is the first to feed it usb_top_env.sv's OWN guarded wires back through it. THIRD CAVEAT, discovered while building this list: virt_seqr's class_type here is \"usb_virtual_sequencer\" -- the EXACT SAME class name this generator's own vseq() method independently generates (p='usb', so p+'_virtual_sequencer'='usb_virtual_sequencer'), and vseq()'s generated class only declares generic 'uvm_sequencer_base seqr_0/1/2;' handles (one per top-level 'interfaces' entry), never the real apb_seqr/axi_seqr/reg_seqr/usb_xfer_seqr[]/usb_sys_seqr[] fields usb_top_env.sv's real usb_virtual_sequencer class actually has and that 4 of the 11 connections below reference. So while every field name below is copied verbatim from the real file (never fabricated), the bundle this generator emits as a WHOLE would not compile standalone: the connect_phase this pass adds references fields the SAME generator's OTHER generated file (tb/seq/usb_virtual_sequencer.sv) never declares on that same class name. Closing this needs either a real, hand-authored usb_virtual_sequencer (genuine protocol-content authoring, out of this pass's scope) or a further generator schema extension letting vseq() take a manifest-declared field list -- recorded here as a found-not-fixed gap, not silently omitted.",
+    "v6_key_pattern_and_plain_object_extensions_this_pass": "This v6 manifest is v5 plus three changes, all applying the two additive generator.py schema fields added by the sibling task this session (config_db_key_pattern, kind=\"plain_object\") and re-verified directly against usb_top_env.sv this pass (re-read in full, not trusted from any prior summary): (1) FIX to the existing usb_if entry: adds \"config_db_key_pattern\": \"usb%0d_if\", closing the exact mismatch v5's own usb_if evidence text flagged (the generator's guessed default $sformatf(\"<instance_name>_%0d\", p) would produce \"usb_if_0\"/\"usb_if_1\", not the real config_db key \"usb0_if\"/\"usb1_if\" actually set by usb_top_env.sv:371, port_name = $sformatf(\"usb%0d_if\", p);). No other field on usb_if changed. (2) NEW err_catcher entry, kind=\"plain_object\", scalar: usb_top_env.sv:178 (declaration, svt_err_catcher err_catcher;), 182 (construction inside the env's own function new(), NOT build_phase: err_catcher = new({get_full_name(), \".err_catcher\"});). constructor_args reproduces the real argument verbatim. depends_on left empty: the real new() call references only get_full_name() (self), no other component. NOTE: this generator always emits plain_object creation in build_phase (a generator-composition choice, documented in generator.py's own PLAIN_OBJECT_EXTENSION docstring) -- the real file's own new()-in-constructor phase placement is NOT reproduced, only the \"plain new(), not type_id::create()\" shape and the real constructor-arg list. (3) NEW payload_cb entry, kind=\"plain_object\" + port_indexed:true: usb_top_env.sv:85 (declaration, usb_payload_publish_cb payload_cb [2];), 504-509 (construction inside a foreach (usb_host_agent[p]) loop in connect_phase, NOT build_phase: payload_cb[p] = new($sformatf(\"payload_cb_%0d\", p), p);). constructor_args reproduces the real two-argument call verbatim (the port-index format string, then the bare port index p). depends_on: [\"host_agent\"] is REAL EVIDENCE -- the real foreach loop at line 504 iterates usb_host_agent[p] and guards on usb_host_agent[p] != null (line 505) before constructing payload_cb[p], i.e. usb_host_agent must already exist; same generator build-phase-only caveat as err_catcher applies (real placement is connect_phase, not build_phase). This closes err_catcher and payload_cb, the last two of the three previously-flagged-missing components (payload_cb, ssmem_sb, err_catcher) named in the v4/v5 reports' gap lists -- ssmem_sb was already closed in v5. Everything else (every other vip_components entry, interfaces/clocks/resets/vip/scoreboard_rules/coverage_points) is UNCHANGED from v5 verbatim.",
+    "v5_interface_and_ifdef_extensions_this_pass": "This v5 manifest is v4 plus: (1) ONE new component, usb_if, using the newly-added kind=\"interface\" schema field (port_indexed virtual-interface array, no create()/for-loop-create emitted, a uvm_config_db GET emitted instead) -- see its own vip_components entry for full citation (usb_top_env.sv:75,369-378); this closes the ONE real top-level field a prior pass explicitly flagged as completely unaddressed (a virtual interface array had no representation in the schema before this session). (2) A new ssmem_sb component (usb_top_env.sv:128,366), using the newly-added ifdef_macro field, closing a SECOND previously-flagged gap. (3) ifdef_macro retrofitted onto the two v4 entries whose evidence text already said 'GUARDED by ifdef USB_UVM_DMA_MON' but did not actually apply that guard in the manifest schema (dma_sb, dma_cfg) -- v4's generated usb_env.sv therefore emitted those two fields UNCONDITIONALLY, which does not match the real file's own compile-time gating; v5 fixes that inconsistency using the mechanism the sibling task built this session. Both extensions were verified directly against generator.py's _env_multi_component and its 44 (now part of 759 total) passing tests before use here. Remaining known gap after v5: payload_cb (a plain `new()`-constructed callback object, not a uvm_component -- neither create() nor the interface/ifdef mechanism models a non-component new()) and err_catcher (constructed in `new()`, not build_phase, which this generator's build_phase-only creation model has no field for) are still NOT represented -- see the v5 report's own gap list.",
+    "v4_additional_components_this_pass": "This v4 manifest adds 9 new vip_components entries on top of v3's 8, ALL re-read and re-verified directly against usb_top_env.sv this pass (not trusted from any prior summary): 6 port_indexed:true entries -- sys_virt_seqr (svt_usb_system_virtual_sequencer, line 146/330), ep_check (usb_ep_check, line 89/332), perf_mon (usb_perf_monitor, line 95/335), xfer_sb (usb_xfer_scoreboard, line 100/343), frame_util (usb_frame_util_monitor, line 105/346), dma_sb (usb_dma_scoreboard, line 118/350, GUARDED by `ifdef USB_UVM_DMA_MON`) -- plus 3 singleton entries: dma_cfg (usb_dma_cfg, line 117/359, also `ifdef USB_UVM_DMA_MON`-guarded), usb_top_cfg (usb_top_cfg, line 163/309-313, itself conditionally built only as a fallback default), and virt_seqr (usb_virtual_sequencer, line 80/451). CORRECTION vs a prior pass's guess: sys_virt_seqr's real class_type is svt_usb_system_virtual_sequencer, a VIP type -- NOT a project usb_-prefixed custom type as the naming pattern of ep_check/perf_mon/xfer_sb might suggest; confirmed directly at declaration line 146 and create() call line 330. OBSERVED BUT NOT MODELED: ep_check[p]'s real create() call at line 332 (usb_ep_check::type_id::create($sformatf(\"ep_check_%0d\", p))) passes ONLY a name string, no parent-component argument -- unlike every other create() call in this file, which all pass `this` (or, for dma_cfg/cfg, are also called with only a name). The vip_components schema has no field for this nuance, so it is recorded here as a citation only. depends_on for the new per-port entries (sys_virt_seqr/ep_check/perf_mon/xfer_sb/frame_util/dma_sb) is usb_top_cfg only: real evidence is that all six are created inside the SAME per-port loop (lines 328-354) gated by `if (!cfg.enable_port[p]) continue;` at line 329, and cfg itself is built earlier at lines 309-313 -- both the real creation order AND the functional reference to cfg.enable_port[p] support this edge. TWO CANDIDATE EDGES WERE DELIBERATELY LEFT OUT despite a real connect_phase wire existing, because the real BUILD-PHASE creation order contradicts them: (1) sys_virt_seqr[p].host_virt_sequencer = usb_host_agent[p].virt_sequencer at connect_phase lines 485-488 might suggest sys_virt_seqr depends_on host_agent, but sys_virt_seqr is actually built at line 330, inside the FIRST per-port loop, strictly BEFORE usb_host_agent is built at line 414, inside a LATER per-port loop -- asserting that edge would misrepresent the real file; (2) dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export) at connect_phase lines 522-536 might suggest dma_sb depends_on dma_env, but dma_sb is built at line 350 (inside the first per-port loop, lines 328-354) strictly BEFORE dma_env is built at line 361 (a separate ifdef block, lines 356-367) -- same reasoning, edge omitted. virt_seqr's depends_on (host_agent, apb_env, axi_env, reg_seqr) is by contrast the STRONGEST-evidenced edge added this pass: it is corroborated by BOTH the real build_phase creation order (virt_seqr is created last, at line 451, strictly after usb_host_agent/apb_env/axi_env/reg_seqr at lines 414/436/443/450) AND real connect_phase references (lines 461-465, 472, 473, 475) that require all four to already exist. dma_cfg and usb_top_cfg both have empty depends_on: their own creation code (lines 359 and 309-313 respectively) makes no reference to any other component in this manifest, so no real edge was found for either, and none was invented.",
+    "v8_virtual_sequencer_fields_this_pass": "v8_virtual_sequencer_fields_this_pass: This v8 manifest is v7 plus one new top-level key, \"virtual_sequencer_fields\", using the vseq()-extension added this session (dv_harness/uvm_generator/generator.py's vseq() / MissingVirtualSequencerFieldEvidenceError, verified against dv_harness_tests/test_virtual_sequencer_fields.py). USB_UVM_Handoff's usb_virtual_sequencer.sv was re-read IN FULL this pass (not trusted from v7's own _evidence_notes, which only mentioned these field names in passing while discussing the OTHER gap this closes) and its 5 declared sequencer-handle fields were transcribed verbatim: line 21 (svt_usb_transfer_sequencer usb_xfer_seqr[2];), line 30 (svt_usb_system_virtual_sequencer usb_sys_seqr[2];), line 36 (svt_apb_master_sequencer apb_seqr;), line 37 (svt_axi_master_sequencer axi_seqr;), line 39 (usb_reg_sequencer reg_seqr;). These are EXACTLY the 5 distinct virt_seqr.<field> names this same manifest's own \"connections\" list already references (virt_seqr.apb_seqr, virt_seqr.axi_seqr, virt_seqr.reg_seqr, virt_seqr.usb_xfer_seqr[{p}], virt_seqr.usb_sys_seqr[{p}] -- 5 references, not 4; every prior _evidence_notes entry that counted these informally said 4, but a literal count of virt_seqr.<field> occurrences in the connections list below is 5). Adding this key closes the v7 _evidence_notes' own THIRD CAVEAT verbatim: 'vseq()'s generated class only declares generic uvm_sequencer_base seqr_0/1/2 handles ... never the real apb_seqr/axi_seqr/reg_seqr/usb_xfer_seqr[]/usb_sys_seqr[] fields usb_top_env.sv's real usb_virtual_sequencer class actually has' -- the generated tb/seq/usb_virtual_sequencer.sv now declares all 5 real fields, so the connect_phase this generator emits and the virtual-sequencer class it emits reference the same real field names by construction. port_indexed fields (usb_xfer_seqr, usb_sys_seqr) reuse this manifest's own top-level port_count:2, the same field build_phase's port-indexed vip_components and connect_phase's port-indexed connections already require. Field order below follows the real file's own declaration order (line 21, 30, 36, 37, 39), not the connections list's order. Everything else (every vip_components entry, every connections entry, interfaces/clocks/resets/vip/scoreboard_rules/coverage_points) is UNCHANGED from v7 verbatim.",
+    "v10_dedup_and_guards_this_pass": "This v10 manifest is v9 plus two fixes, both re-verified this pass directly against usb_top_env.sv's real connect_phase (lines 456-623) rather than trusted from v9's own evidence prose: (1) DEFECT 1, payload_cb double-construction: v9 constructed payload_cb[p] via new() twice (once in build_phase from the payload_cb vip_components entry, kind=\"plain_object\"; once in connect_phase from the kind=\"construct\" connections entry at usb_top_env.sv:506) -- the real file constructs it exactly once, in connect_phase. Fixed generically in generator.py's _env_multi_component (not USB-specific): a new _construct_collision_targets() helper detects when a \"connections\" entry's kind=\"construct\" \"lhs\" (array-index suffix stripped) matches a vip_components entry's instance_name; when that component's kind is \"plain_object\", its build_phase creation is skipped entirely (declaration kept), mirroring the pre-existing cfg/vseqr/sb/cov reserved-name-collision mechanism in the same method. A collision against any OTHER kind (class-handle default, or \"interface\") instead raises the new ConstructionCollisionError (\"AMBIGUOUS_CONSTRUCT_COLLISION\") rather than silently picking a behaviour, since build_phase is the ONLY real construction site for those kinds. No vip_components/connections field changed to produce this fix -- it is pure generator behaviour, verified by regenerating this same manifest's payload_cb entries unchanged. (2) DEFECT 2, missing guards on the 12 real kind=\"assign\" connections entries: each of the 12 assign-kind connections below now carries the real \"guard\" condition(s) actually gating that statement in usb_top_env.sv, independently re-verified this pass by direct re-reading of lines 456-623 (not copied from any prior summary): apb_seqr/axi_seqr (null guards, lines 472/473), usb_xfer_seqr (2-condition guard collapsed from two continues, lines 461-465), sys_virt_seqr.host_virt_sequencer (2-condition guard, lines 485-488), usb_sys_seqr (virt_seqr null guard, lines 492-493), payload_cb.filter (usb_host_agent null guard, lines 504-507), payload_cb.perf_mon / perf_mon.agent (shared 2-condition guard, lines 570-586), payload_cb.xfer_sb (2-condition guard, lines 592-602), payload_cb.frame_util (2-condition guard, lines 609-619); virt_seqr.reg_seqr (line 475) correctly stays unconditional -- no guard exists on it in the real file; payload_cb.dma_sb already carried its correct guard (payload_cb[{p}] != null, plus ifdef_macro USB_UVM_DMA_MON) since v9, unchanged here. The pre-existing \"guard\" AND-join mechanism in _connect_phase (added for the round-9 call/construct extension) required no new generator code to render these -- only the manifest's own guard fields needed populating. Everything else (vip_components, virtual_sequencer_fields, every non-assign connections entry, interfaces/clocks/resets/vip/scoreboard_rules/coverage_points) is UNCHANGED from v9 verbatim."
+  },
+  "protocol": "usb",
+  "role": "device",
+  "port_count": 2,
+  "interfaces": [
+    {
+      "name": "usb0_dp",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- DUT pad is inout wire (TOP_ALL.v:23058); VIP side is wor per usb-tb-scaffold SKILL.md:38, needs tran not assign"
+    },
+    {
+      "name": "usb0_dm",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- same as usb0_dp, TOP_ALL.v:23059"
+    },
+    {
+      "name": "usb0_vbus0",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- TOP_ALL.v:23056 / :25850"
+    }
+  ],
+  "vip": {
+    "package_imports": [
+      "svt_usb_uvm_pkg"
+    ]
+  },
+  "clocks": [
+    {
+      "name": "xtali",
+      "freq_note": "50MHz per TOP_ALL.v:25933 comment"
+    },
+    {
+      "name": "pclk",
+      "freq_note": "APB register clock, TOP_ALL.v:25949"
+    },
+    {
+      "name": "usb0_refclk_p",
+      "freq_note": "PHY differential ref clock, TOP_ALL.v:25854"
+    }
+  ],
+  "resets": [
+    {
+      "name": "xprstn",
+      "polarity": "active_low",
+      "evidence": "usb-tb-scaffold SKILL.md:65,111; port decl TOP_ALL.v:23038"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "name": "connect"
+    }
+  ],
+  "scoreboard_rules": [
+    {
+      "TODO": "not enough real evidence gathered this pass to state a specific checking rule -- unchanged from v1"
+    }
+  ],
+  "coverage_points": [
+    {
+      "TODO": "no real coverage-point evidence gathered this pass -- unchanged from v1"
+    }
+  ],
+  "vip_components": [
+    {
+      "name": "usb_if",
+      "class_type": "svt_usb_if",
+      "instance_name": "usb_if",
+      "kind": "interface",
+      "port_indexed": true,
+      "config_db_key_pattern": "usb%0d_if",
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:75 (declaration, virtual svt_usb_if usb_if[NUM_USB_PORTS];), 369-378 (build_phase, per-port uvm_config_db GET rather than a create(): for (int p = 0; p < NUM_USB_PORTS; p++) begin port_name = $sformatf(\"usb%0d_if\", p); if (!uvm_config_db#(virtual svt_usb_if)::get(null, get_full_name(), port_name, usb_if[p])) `uvm_fatal(...); end). v6 FIX: config_db_key_pattern now set to the real cited literal \"usb%0d_if\" (line 371), using the config_db_key_pattern extension added this session (dv_harness/uvm_generator/generator.py's _env_multi_component, verified against dv_harness_tests/test_plain_object_and_key_pattern.py) -- v5's own evidence text on this same entry had flagged that the generator's guessed default $sformatf(\"<instance_name>_%0d\", p) produces \"usb_if_0\"/\"usb_if_1\", NOT the real config_db key \"usb0_if\"/\"usb1_if\"; this field closes that exact mismatch, so the generated get() now looks up the same key usb_top_env.sv itself sets. depends_on left empty: this get()-loop (lines 369-378) is unconditional over NUM_USB_PORTS, NOT gated by cfg.enable_port[p] like the sys_virt_seqr/ep_check/etc loop above it, and does not reference any other component in its own code, so no real edge was asserted."
+    },
+    {
+      "name": "clk_rst_agent",
+      "class_type": "usb_clk_rst_agent",
+      "instance_name": "clk_rst_agent",
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:154,447"
+    },
+    {
+      "name": "sideband_agent",
+      "class_type": "usb_sideband_agent",
+      "instance_name": "sideband_agent",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:157,448 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "host_agent",
+      "class_type": "svt_usb_agent",
+      "instance_name": "usb_host_agent",
+      "port_indexed": true,
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:77 (declaration, svt_usb_agent usb_host_agent[NUM_USB_PORTS];), 407-414 (per-port creation loop: port_name=$sformatf(\"usb_host_agent_%0d\",p); usb_host_agent[p]=svt_usb_agent::type_id::create(port_name,this);). v3: rewritten from v2's 2 flat entries (host_agent0/host_agent1) into 1 port_indexed entry + top-level port_count:2, matching the real array declaration and for-loop this manifest previously only approximated. Ordering (depends_on clk_rst_agent) ASSERTED by this experiment, not real-coded."
+    },
+    {
+      "name": "mon_agent",
+      "class_type": "svt_usb_agent",
+      "instance_name": "usb_mon_agent",
+      "port_indexed": true,
+      "depends_on": [
+        "host_agent"
+      ],
+      "evidence": "usb_top_env.sv:78 (declaration, svt_usb_agent usb_mon_agent[NUM_USB_PORTS];), 416-427 (per-port creation loop, real: shares host_cfg[p] with host agent, lines 419-420). v3: rewritten from v2's 2 flat entries (mon_agent0/mon_agent1, each depending on its own host_agent0/host_agent1) into 1 port_indexed entry depending on the single host_agent node, since topological_build_order treats a port_indexed component as one node. Ordering itself ASSERTED by this experiment, not real-coded."
+    },
+    {
+      "name": "apb_env",
+      "class_type": "svt_apb_system_env",
+      "instance_name": "apb_env",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:148,436 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "axi_env",
+      "class_type": "svt_axi_system_env",
+      "instance_name": "axi_env",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:151,443 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "dma_env",
+      "class_type": "svt_axi_system_env",
+      "instance_name": "dma_env",
+      "depends_on": [
+        "axi_env"
+      ],
+      "evidence": "usb_top_env.sv:116,361 (real: comment calls it 'a SECOND AXI environment, separate from axi_env', lines 108-115; the depends_on EDGE ITSELF is ASSERTED by this experiment -- real code creates dma_env earlier, at line 361, before axi_env at line 443)"
+    },
+    {
+      "name": "reg_seqr",
+      "class_type": "usb_reg_sequencer",
+      "instance_name": "reg_seqr",
+      "depends_on": [
+        "apb_env",
+        "axi_env"
+      ],
+      "evidence": "usb_top_env.sv:161,450 REAL EVIDENCED EDGE: connect_phase lines 472-475 wire virt_seqr.apb_seqr=apb_env.master.sequencer and virt_seqr.axi_seqr=axi_env.master[0].sequencer and virt_seqr.reg_seqr=reg_seqr, i.e. apb_env/axi_env must already exist for this wiring -- the only depends_on edge in this manifest traceable to real code, not just asserted for the structural test"
+    },
+    {
+      "name": "sys_virt_seqr",
+      "class_type": "svt_usb_system_virtual_sequencer",
+      "instance_name": "sys_virt_seqr",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:146 (declaration, svt_usb_system_virtual_sequencer sys_virt_seqr[2];), 328-331 (creation inside the cfg.enable_port[p]-gated per-port loop: sys_virt_seqr[p] = svt_usb_system_virtual_sequencer::type_id::create($sformatf(\"sys_virt_seqr_%0d\", p), this);). class_type is a VIP type (svt_ prefix), NOT a project usb_-prefixed custom type -- confirmed directly at line 146/330, correcting any pattern-based guess. depends_on usb_top_cfg is REAL EVIDENCE: line 329 `if (!cfg.enable_port[p]) continue;` gates this same loop, and cfg is built earlier at lines 309-313. A connect_phase wire at lines 485-488 (sys_virt_seqr[p].host_virt_sequencer = usb_host_agent[p].virt_sequencer) might suggest a host_agent dependency too, but the real build_phase creates sys_virt_seqr (line 330) BEFORE usb_host_agent (line 414) -- that edge would contradict the real creation order, so it is deliberately NOT included."
+    },
+    {
+      "name": "ep_check",
+      "class_type": "usb_ep_check",
+      "instance_name": "ep_check",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:89 (declaration, usb_ep_check ep_check[2];), 332-333 (creation inside the same cfg.enable_port[p]-gated loop as sys_virt_seqr: ep_check[p] = usb_ep_check::type_id::create($sformatf(\"ep_check_%0d\", p)); ep_check[p].port = p;). NOTE: this real create() call passes ONLY the name string, no parent-component argument (unlike perf_mon/xfer_sb/frame_util/dma_sb below, which all pass `this`) -- verified directly at line 332, not assumed; the vip_components schema has no field for this nuance. depends_on usb_top_cfg is the same real evidence as sys_virt_seqr above (cfg.enable_port[p] gate at line 329, cfg built earlier at 309-313)."
+    },
+    {
+      "name": "perf_mon",
+      "class_type": "usb_perf_monitor",
+      "instance_name": "perf_mon",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:95 (declaration, usb_perf_monitor perf_mon[2];), 335-341 (creation inside the same cfg.enable_port[p]-gated loop: perf_mon[p] = usb_perf_monitor::type_id::create($sformatf(\"perf_mon_%0d\", p), this); perf_mon[p].port = p; perf_mon[p].set_speed_from_build();). depends_on usb_top_cfg is the same real evidence as sys_virt_seqr/ep_check above."
+    },
+    {
+      "name": "xfer_sb",
+      "class_type": "usb_xfer_scoreboard",
+      "instance_name": "xfer_sb",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:100 (declaration, usb_xfer_scoreboard xfer_sb[2];), 343-344 (creation inside the same cfg.enable_port[p]-gated loop: xfer_sb[p] = usb_xfer_scoreboard::type_id::create($sformatf(\"xfer_sb_%0d\", p), this);). depends_on usb_top_cfg is the same real evidence as the entries above."
+    },
+    {
+      "name": "frame_util",
+      "class_type": "usb_frame_util_monitor",
+      "instance_name": "frame_util",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:105 (declaration, usb_frame_util_monitor frame_util[2];), 346-348 (creation inside the same cfg.enable_port[p]-gated loop: frame_util[p] = usb_frame_util_monitor::type_id::create($sformatf(\"frame_util_%0d\", p), this); frame_util[p].port = p;). depends_on usb_top_cfg is the same real evidence as the entries above."
+    },
+    {
+      "name": "dma_sb",
+      "class_type": "usb_dma_scoreboard",
+      "instance_name": "dma_sb",
+      "port_indexed": true,
+      "ifdef_macro": "USB_UVM_DMA_MON",
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:118 (declaration, usb_dma_scoreboard dma_sb[2]; -- itself inside no ifdef, but see v5 note below), 349-353 (creation, GUARDED by `ifdef USB_UVM_DMA_MON`, still inside the same cfg.enable_port[p]-gated per-port loop, lines 328-354: dma_sb[p] = usb_dma_scoreboard::type_id::create($sformatf(\"dma_sb_%0d\", p), this); dma_sb[p].port = p;). CONDITIONAL COMPILATION: this component only exists in a build with +define+USB_UVM_DMA_MON. depends_on usb_top_cfg is the same real evidence as the entries above (cfg.enable_port[p] gate). A connect_phase wire at lines 522-536 (dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export)) might suggest a dma_env dependency too, but the real build_phase creates dma_sb (line 350, inside the FIRST per-port loop) BEFORE dma_env (line 361, inside a SEPARATE later ifdef block, lines 356-367) -- that edge would contradict the real creation order, so it is deliberately NOT included. v5 CORRECTION vs v4: v4 recorded the `ifdef USB_UVM_DMA_MON` guard only in this evidence prose and did not actually apply it -- generator.py's ifdef_macro field (added this session, dv_harness/uvm_generator/generator.py's _env_multi_component) now wraps BOTH the declaration and the creation/for-loop in `` `ifdef USB_UVM_DMA_MON``/`` `endif``, matching the real file's own guard on the create() call at lines 349-353 (the real declaration at line 118 itself is NOT inside the ifdef -- only the field's CREATION is guarded there -- so this generated output is stricter than usb_top_env.sv's own declaration placement, but never emits an uncompilable reference: a declaration that only exists under the same macro as its sole creation site is safe either way)."
+    },
+    {
+      "name": "dma_cfg",
+      "class_type": "usb_dma_cfg",
+      "instance_name": "dma_cfg",
+      "ifdef_macro": "USB_UVM_DMA_MON",
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:117 (declaration, usb_dma_cfg dma_cfg; -- not itself inside an ifdef in the real file, same caveat as dma_sb above), 359-361 (creation, GUARDED by `ifdef USB_UVM_DMA_MON`: dma_cfg = usb_dma_cfg::type_id::create(\"dma_cfg\"); uvm_config_db#(svt_axi_system_configuration)::set(this, \"dma_env\", \"cfg\", dma_cfg); -- no parent-component argument passed to create()). CONDITIONAL COMPILATION: only exists in a build with +define+USB_UVM_DMA_MON. No real evidence was found for any depends_on -- its creation at line 359 makes no reference to any other component in this manifest, so depends_on is left empty rather than inventing one. v5: ifdef_macro added for the same reason as dma_sb above (this session's generator.py extension, verified against dv_harness_tests/test_interface_and_conditional_components.py)."
+    },
+    {
+      "name": "ssmem_sb",
+      "class_type": "usb_dma_ssmem_scoreboard",
+      "instance_name": "ssmem_sb",
+      "ifdef_macro": "USB_UVM_DMA_MON",
+      "depends_on": [
+        "dma_env"
+      ],
+      "evidence": "usb_top_env.sv:128 (declaration, usb_dma_ssmem_scoreboard ssmem_sb; -- REAL evidence this one IS declared inside the `ifdef USB_UVM_DMA_MON` guard itself, lines 120-129, unlike dma_cfg/dma_sb above whose declarations sit outside any ifdef), 366 (creation, GUARDED by the SAME `ifdef USB_UVM_DMA_MON`, inside build_phase's ifdef block lines 356-367: ssmem_sb = usb_dma_ssmem_scoreboard::type_id::create(\"ssmem_sb\", this);). NEW in v5 -- not present in v3/v4. depends_on dma_env is REAL EVIDENCE, and unlike the sys_virt_seqr/dma_sb cases above this edge does NOT contradict build order: dma_env is created at line 361, ssmem_sb at line 366, both inside the same ifdef block, dma_env strictly first -- AND connect_phase lines 550-555 wire dma_env.master[0]/master[1].monitor.item_observed_port to ssmem_sb.dma_export_p0/p1, which requires dma_env to already exist. Both real build order and real connect-time reference agree, so this is a fully evidenced edge, not asserted. This closes one of the two components (`payload_cb`, `ssmem_sb`, `err_catcher`) the v4 report listed as still-missing top-level fields."
+    },
+    {
+      "name": "usb_top_cfg",
+      "class_type": "usb_top_cfg",
+      "instance_name": "cfg",
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:163 (declaration, usb_top_cfg cfg;), 309-313 (creation, CONDITIONAL: only built as a fallback default when uvm_config_db#(usb_top_cfg)::get(get_parent(), get_name(), \"cfg\", cfg) fails to find an externally-provided cfg: cfg = usb_top_cfg::type_id::create(\"cfg\"); cfg.setup_ss_capable_defaults();). This is the FIRST component-like object built in build_phase, before the per-port loop at line 328 and before every other vip_components entry in this manifest -- the real evidence basis for sys_virt_seqr/ep_check/perf_mon/xfer_sb/frame_util/dma_sb above all listing depends_on:[\"usb_top_cfg\"]. No earlier component is referenced in its own creation, so its own depends_on is left empty."
+    },
+    {
+      "name": "virt_seqr",
+      "class_type": "usb_virtual_sequencer",
+      "instance_name": "virt_seqr",
+      "depends_on": [
+        "host_agent",
+        "apb_env",
+        "axi_env",
+        "reg_seqr"
+      ],
+      "evidence": "usb_top_env.sv:80 (declaration, usb_virtual_sequencer virt_seqr;), 451 (creation: virt_seqr = usb_virtual_sequencer::type_id::create(\"virt_seqr\", this);) -- the LAST component created in build_phase, strictly after usb_host_agent (414), apb_env (436), axi_env (443) and reg_seqr (450), matching this depends_on list exactly. REAL EVIDENCED connect_phase wiring at lines 461-465 (virt_seqr.usb_xfer_seqr[p] = usb_host_agent[p].xfer_sequencer), 472 (virt_seqr.apb_seqr = apb_env.master.sequencer), 473 (virt_seqr.axi_seqr = axi_env.master[0].sequencer) and 475 (virt_seqr.reg_seqr = reg_seqr) all require these four components to already exist by connect_phase. This is the strongest depends_on evidence added this pass, since it is corroborated by BOTH the real build_phase creation order AND the real connect_phase reference, unlike sys_virt_seqr/dma_sb above where the two would have disagreed."
+    },
+    {
+      "name": "err_catcher",
+      "class_type": "svt_err_catcher",
+      "instance_name": "err_catcher",
+      "kind": "plain_object",
+      "constructor_args": [
+        "{get_full_name(), \".err_catcher\"}"
+      ],
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:178 (declaration, svt_err_catcher err_catcher;), 182 (construction inside the env's own function new(), NOT build_phase: err_catcher = new({get_full_name(), \".err_catcher\"});). NEW in v6, using the kind=\"plain_object\" extension added this session (dv_harness/uvm_generator/generator.py's _env_multi_component, verified against dv_harness_tests/test_plain_object_and_key_pattern.py). svt_err_catcher is used directly, never factory-registered/type_id::create()-ed -- confirmed at lines 170-172's own comment ('svt_err_catcher is used directly rather than subclassed'). constructor_args reproduces the real single argument verbatim. depends_on left empty: the real new() call references only get_full_name() (self), no other component in this manifest. GENERATOR CAVEAT (not silently hidden): this generator always emits plain_object creation in build_phase; the real call's own phase (the env's function new(), before build_phase even runs) is NOT reproduced -- only the 'plain new(), not type_id::create()' shape and the real constructor-arg list are."
+    },
+    {
+      "name": "payload_cb",
+      "class_type": "usb_payload_publish_cb",
+      "instance_name": "payload_cb",
+      "kind": "plain_object",
+      "port_indexed": true,
+      "constructor_args": [
+        "$sformatf(\"payload_cb_%0d\", p)",
+        "p"
+      ],
+      "depends_on": [
+        "host_agent"
+      ],
+      "evidence": "usb_top_env.sv:85 (declaration, usb_payload_publish_cb payload_cb [2];), 504-509 (construction inside foreach (usb_host_agent[p]) in connect_phase, NOT build_phase, guarded by if (usb_host_agent[p] != null): payload_cb[p] = new($sformatf(\"payload_cb_%0d\", p), p); payload_cb[p].filter = usb_payload_publish_cb::OUT_ONLY; uvm_callbacks#(svt_usb_protocol)::add(usb_host_agent[p].prot, payload_cb[p]);). NEW in v6, using the kind=\"plain_object\" + port_indexed extension added this session, verified port-indexed by this exact real evidence (dv_harness_tests/test_plain_object_and_key_pattern.py). constructor_args reproduces the real two-argument new() call verbatim (port-index format string, then the bare loop variable p). depends_on host_agent is REAL EVIDENCE: the real foreach loop at line 504 iterates usb_host_agent[p] and only constructs payload_cb[p] when usb_host_agent[p] != null (line 505), i.e. usb_host_agent must already exist. GENERATOR CAVEAT (not silently hidden): this generator always emits plain_object creation in build_phase; the real call's own phase (connect_phase) is NOT reproduced -- only the 'plain new(), not type_id::create()' shape and the real constructor-arg list are."
+    }
+  ],
+  "virtual_sequencer_fields": [
+    {
+      "class_type": "svt_usb_transfer_sequencer",
+      "field_name": "usb_xfer_seqr",
+      "port_indexed": true,
+      "evidence": "usb_virtual_sequencer.sv:21: svt_usb_transfer_sequencer       usb_xfer_seqr[2]; -- re-read directly this pass, not trusted from v7's own evidence prose."
+    },
+    {
+      "class_type": "svt_usb_system_virtual_sequencer",
+      "field_name": "usb_sys_seqr",
+      "port_indexed": true,
+      "evidence": "usb_virtual_sequencer.sv:30: svt_usb_system_virtual_sequencer usb_sys_seqr[2]; -- comment at lines 22-29 explains these MUST be separate objects from this sequencer because the VIP system virtual sequences declare p_sequencer as svt_usb_system_virtual_sequencer and use host_virt_sequencer/get_host_shared_status() from it."
+    },
+    {
+      "class_type": "svt_apb_master_sequencer",
+      "field_name": "apb_seqr",
+      "evidence": "usb_virtual_sequencer.sv:36: svt_apb_master_sequencer apb_seqr; -- comment at lines 32-35 explains APB carries register accesses, including traffic redirected from command.txt/GLOBAL_INIT via usb_apb_arb -> usb_apb_bridge_seq -> this sequencer."
+    },
+    {
+      "class_type": "svt_axi_master_sequencer",
+      "field_name": "axi_seqr",
+      "evidence": "usb_virtual_sequencer.sv:37: svt_axi_master_sequencer axi_seqr; -- same comment block, lines 32-35: AXI replaces the CPU DMA behaviour."
+    },
+    {
+      "class_type": "usb_reg_sequencer",
+      "field_name": "reg_seqr",
+      "evidence": "usb_virtual_sequencer.sv:39: usb_reg_sequencer reg_seqr;"
+    }
+  ],
+  "connections": [
+    {
+      "from": "virt_seqr.apb_seqr",
+      "to": "apb_env.master.sequencer",
+      "evidence": "usb_top_env.sv:472: if (apb_env != null) virt_seqr.apb_seqr = apb_env.master.sequencer; -- the `apb_env != null` guard is NOT reproduced (connections schema has no conditional-wrap support for a scalar entry); the emitted assignment is unconditional.",
+      "guard": [
+        "apb_env != null"
+      ]
+    },
+    {
+      "from": "virt_seqr.axi_seqr",
+      "to": "axi_env.master[0].sequencer",
+      "evidence": "usb_top_env.sv:473: if (axi_env != null) virt_seqr.axi_seqr = axi_env.master[0].sequencer; -- same null-guard-dropped caveat as apb_seqr above. Real evidence for the asymmetric svt_apb_system_env.master (single agent) vs svt_axi_system_env.master[0] (queue) shape is usb_top_env.sv's own comment at lines 468-471, citing svt_apb_system_env.sv:31 / svt_axi_system_env.sv:49.",
+      "guard": [
+        "axi_env != null"
+      ]
+    },
+    {
+      "from": "virt_seqr.reg_seqr",
+      "to": "reg_seqr",
+      "evidence": "usb_top_env.sv:475: virt_seqr.reg_seqr = reg_seqr; -- unconditional in the real file too, no guard dropped here."
+    },
+    {
+      "from": "virt_seqr.usb_xfer_seqr[{p}]",
+      "to": "usb_host_agent[{p}].xfer_sequencer",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:461-465: for (int p = 0; p < NUM_USB_PORTS; p++) begin if (!cfg.enable_port[p]) continue; if (usb_host_agent[p] == null) continue; virt_seqr.usb_xfer_seqr[p] = usb_host_agent[p].xfer_sequencer; end -- BOTH continue-guards dropped; the connections schema's port_indexed wrap is a bare for-loop with one unconditional assignment, no conditional body.",
+      "guard": [
+        "cfg.enable_port[{p}]",
+        "usb_host_agent[{p}] != null"
+      ]
+    },
+    {
+      "from": "sys_virt_seqr[{p}].host_virt_sequencer",
+      "to": "usb_host_agent[{p}].virt_sequencer",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:485-488: foreach (sys_virt_seqr[p]) begin if (usb_host_agent[p] != null && sys_virt_seqr[p] != null) sys_virt_seqr[p].host_virt_sequencer = usb_host_agent[p].virt_sequencer; end -- the double null-guard dropped, same schema limitation. svt_usb_agent declares virt_sequencer at svt_usb_agent.sv:1294 per the real file's own comment at lines 478-479.",
+      "guard": [
+        "usb_host_agent[{p}] != null",
+        "sys_virt_seqr[{p}] != null"
+      ]
+    },
+    {
+      "from": "virt_seqr.usb_sys_seqr[{p}]",
+      "to": "sys_virt_seqr[{p}]",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:492-493: foreach (sys_virt_seqr[p]) if (virt_seqr != null) virt_seqr.usb_sys_seqr[p] = sys_virt_seqr[p]; -- the `virt_seqr != null` guard dropped. Real comment at lines 490-491: this is what usb_seq_launcher_seq::resolve_target looks in for 'vseq0'/'vseq1'.",
+      "guard": [
+        "virt_seqr != null"
+      ]
+    },
+    {
+      "from": "payload_cb[{p}].filter",
+      "to": "usb_payload_publish_cb::OUT_ONLY",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:504-507: foreach (usb_host_agent[p]) begin if (usb_host_agent[p] != null) begin payload_cb[p] = new($sformatf(\"payload_cb_%0d\", p), p); payload_cb[p].filter = usb_payload_publish_cb::OUT_ONLY; ... end end -- the `usb_host_agent[p] != null` guard dropped. The `payload_cb[p] = new(...)` construction itself is modeled separately, by this manifest's own kind=\"construct\" connections entry (usb_top_env.sv:506) -- NOT by the payload_cb vip_components entry (kind=plain_object), whose own build_phase construction is skipped by generator.py's construct-collision dedup as of v10 (see this manifest's v10_dedup_and_guards_this_pass evidence note). Real comment at lines 499-501: OUT_ONLY so an IN transfer cannot overwrite the record between a pattern sending a Bulk OUT and checking the device buffer -- the filter applies to PUBLICATION only.",
+      "guard": [
+        "usb_host_agent[{p}] != null"
+      ]
+    },
+    {
+      "from": "payload_cb[{p}].perf_mon",
+      "to": "perf_mon[{p}]",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:570-580: foreach (perf_mon[p]) begin if (perf_mon[p] == null) continue; if (payload_cb[p] == null) begin `uvm_warning(...); continue; end payload_cb[p].perf_mon = perf_mon[p]; ... end -- both continue-guards (and the warning they gate) dropped, same schema limitation. Real comment at lines 558-561: deliberately OUTSIDE the DMA_MON ifdef guard, so this wire is unconditional in the real file regardless of +define+USB_UVM_DMA_MON.",
+      "guard": [
+        "perf_mon[{p}] != null",
+        "payload_cb[{p}] != null"
+      ]
+    },
+    {
+      "from": "perf_mon[{p}].agent",
+      "to": "usb_host_agent[{p}]",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:585 (same foreach (perf_mon[p]) loop as payload_cb[p].perf_mon above, lines 570-586): perf_mon[p].agent = usb_host_agent[p]; -- same continue-guards dropped as the entry above. Real comment at lines 582-584: hands the monitor the agent so it can read the VIP's own performance figures, which live on svt_usb_agent.shared_status (svt_usb_agent.sv:1036), not on the agent configuration.",
+      "guard": [
+        "perf_mon[{p}] != null",
+        "payload_cb[{p}] != null"
+      ]
+    },
+    {
+      "from": "payload_cb[{p}].xfer_sb",
+      "to": "xfer_sb[{p}]",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:592-602: foreach (xfer_sb[p]) begin if (xfer_sb[p] == null) continue; if (payload_cb[p] == null) begin `uvm_warning(...); continue; end payload_cb[p].xfer_sb = xfer_sb[p]; end -- guards dropped, same schema limitation. Real comment at lines 588-591: same handle-assignment shape as perf_mon above, same reason (no analysis port to connect to); kept its own loop deliberately so a change to one does not require touching the other.",
+      "guard": [
+        "xfer_sb[{p}] != null",
+        "payload_cb[{p}] != null"
+      ]
+    },
+    {
+      "from": "payload_cb[{p}].frame_util",
+      "to": "frame_util[{p}]",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:609-619: foreach (frame_util[p]) begin if (frame_util[p] == null) continue; if (payload_cb[p] == null) begin `uvm_warning(...); continue; end payload_cb[p].frame_util = frame_util[p]; end -- guards dropped, same schema limitation. Real comment at lines 605-608: same handle-assignment shape as perf_mon/xfer_sb above, its own loop for the same isolation reason.",
+      "guard": [
+        "frame_util[{p}] != null",
+        "payload_cb[{p}] != null"
+      ]
+    },
+    {
+      "kind": "construct",
+      "lhs": "payload_cb[{p}]",
+      "ctor_args": [
+        "$sformatf(\"payload_cb_%0d\", p)",
+        "p"
+      ],
+      "guard": [
+        "usb_host_agent[{p}] != null"
+      ],
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:504-506: foreach (usb_host_agent[p]) begin if (usb_host_agent[p] != null) begin payload_cb[p] = new($sformatf(\"payload_cb_%0d\", p), p); ... end end -- kind=\"construct\" per round-9 Multi-Agent Evidence Consensus; ctor_class=usb_payload_publish_cb resolved from the member's declared type at usb_top_env.sv:85 (usb_payload_publish_cb payload_cb [2];), confirmed by direct grep this pass. v10: the KNOWN DUPLICATION flagged in v9 (this same construction was ALSO emitted in build_phase by this manifest's pre-existing payload_cb vip_components entry, kind=plain_object) is now RESOLVED by generator.py's generic construct-collision dedup (_construct_collision_targets) -- build_phase skips payload_cb's new() entirely because this connections entry's lhs matches its instance_name, so payload_cb[p] is now constructed exactly once, in connect_phase, matching the real file."
+    },
+    {
+      "kind": "call",
+      "call_style": "static",
+      "class_scope": "uvm_callbacks#(svt_usb_protocol)",
+      "method": "add",
+      "args": [
+        "usb_host_agent[{p}].prot",
+        "payload_cb[{p}]"
+      ],
+      "guard": [
+        "usb_host_agent[{p}] != null"
+      ],
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:508: uvm_callbacks#(svt_usb_protocol)::add(usb_host_agent[p].prot, payload_cb[p]); -- same foreach(usb_host_agent[p])/if(usb_host_agent[p]!=null) guard as the construct entry above (lines 504-509). Not ifdef-guarded: line 508 sits above the `ifdef USB_UVM_DMA_MON` span, which starts at line 512 (verified directly this pass)."
+    },
+    {
+      "from": "payload_cb[{p}].dma_sb",
+      "to": "dma_sb[{p}]",
+      "guard": [
+        "payload_cb[{p}] != null"
+      ],
+      "ifdef_macro": "USB_UVM_DMA_MON",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:535: if (payload_cb[p] != null) payload_cb[p].dma_sb = dma_sb[p]; -- inside foreach(dma_sb[p]) (line 522), itself inside `ifdef USB_UVM_DMA_MON` (512-556). kind stays \"assign\" (default, omitted) -- the proof case that ifdef_macro is orthogonal to kind. dma_sb only exists under this same ifdef (see this manifest's own dma_sb vip_components entry); wiring it unconditionally (as v7/v8 were forced to omit this statement entirely to avoid) would be a real compile error in a build without +define+USB_UVM_DMA_MON. Closes the exact gap the v7 evidence notes flagged as 'genuine, currently-unclosed'."
+    },
+    {
+      "kind": "call",
+      "call_style": "instance",
+      "receiver": "dma_env.master[{p}].monitor.item_observed_port",
+      "method": "connect",
+      "args": [
+        "dma_sb[{p}].dma_export"
+      ],
+      "ifdef_macro": "USB_UVM_DMA_MON",
+      "port_indexed": true,
+      "evidence": "usb_top_env.sv:531: dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export); -- inside foreach(dma_sb[p]) (522), itself inside `ifdef USB_UVM_DMA_MON` (512-556). guard left empty: the dma_sb[p]==null / dma_env==null||p>=dma_env.master.size() checks at lines 523-530 are loop-plumbing continue-guards (with an uvm_error), not a runtime condition wrapping this one statement -- excluded from `guard` per the same convention already applied to every other port_indexed connections entry in this manifest."
+    },
+    {
+      "kind": "call",
+      "call_style": "instance",
+      "receiver": "dma_env.master[0].monitor.item_observed_port",
+      "method": "connect",
+      "args": [
+        "ssmem_sb.dma_export_p0"
+      ],
+      "guard": [
+        "ssmem_sb != null",
+        "dma_env != null && dma_env.master.size() > 0"
+      ],
+      "ifdef_macro": "USB_UVM_DMA_MON",
+      "evidence": "usb_top_env.sv:550-552: if (ssmem_sb != null) begin if (dma_env != null && dma_env.master.size() > 0) dma_env.master[0].monitor.item_observed_port.connect(ssmem_sb.dma_export_p0); ... end -- inside `ifdef USB_UVM_DMA_MON` (512-556). The two nested real `if`s are AND-joined into one combined `if` per the generator's documented guard-rendering convention: the real source nests them around TWO SIBLING statements (this one and line 554) sharing one outer condition, but this schema models each statement independently, so AND-joining is the logically-equivalent per-statement rendering, not a literal transcription of the nested shape. Not port_indexed: dma_env.master[0] is one specific textual statement, not a loop body."
+    },
+    {
+      "kind": "call",
+      "call_style": "instance",
+      "receiver": "dma_env.master[1].monitor.item_observed_port",
+      "method": "connect",
+      "args": [
+        "ssmem_sb.dma_export_p1"
+      ],
+      "guard": [
+        "ssmem_sb != null",
+        "dma_env != null && dma_env.master.size() > 1"
+      ],
+      "ifdef_macro": "USB_UVM_DMA_MON",
+      "evidence": "usb_top_env.sv:550,553-554: if (ssmem_sb != null) begin ... if (dma_env != null && dma_env.master.size() > 1) dma_env.master[1].monitor.item_observed_port.connect(ssmem_sb.dma_export_p1); end -- same AND-joining rationale and ifdef span as the master[0] entry above. Not port_indexed: dma_env.master[1] is the sibling statement to master[0], not a loop body."
+    }
+  ]
+}

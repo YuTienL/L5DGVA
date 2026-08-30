@@ -1,0 +1,34 @@
+{
+  "enabled": true,
+  "initial_simulation_fsdb": false,
+  "on_initial_failure": "targeted_waveform_rerun",
+  "stop_at_first_relevant_failure": true,
+  "failure_signatures": [
+    "UVM_ERROR",
+    "UVM_FATAL",
+    "explicit_FAIL",
+    "assertion_failure",
+    "scoreboard_mismatch",
+    "transaction_mismatch",
+    "expected_item_missing",
+    "response_missing",
+    "protocol_checker_failure",
+    "project_defined_terminal_signature"
+  ],
+  "ignore_benign_warning": true,
+  "waveform_scope_user_confirmation_required": true,
+  "waveform_level_user_confirmation_required": true,
+  "post_fail_margin_default": "minimal",
+  "full_testcase_rerun_default": false,
+  "record": [
+    "first_failure_time",
+    "failure_signature",
+    "component",
+    "log_location",
+    "waveform_stop_time",
+    "git_sha",
+    "server_sha",
+    "testcase",
+    "options"
+  ]
+}

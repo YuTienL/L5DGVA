@@ -1,0 +1,22 @@
+{
+  "protocol": "eMMC",
+  "roles": [
+    "Host",
+    "Device"
+  ],
+  "boundaries": [
+    "CMD",
+    "DATA",
+    "PHY"
+  ],
+  "smoke_tests": [
+    "identify",
+    "select",
+    "read",
+    "write"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

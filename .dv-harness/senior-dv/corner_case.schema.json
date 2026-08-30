@@ -1,0 +1,30 @@
+{
+  "corner_id": "CC-XXX",
+  "protocols": [],
+  "features": [],
+  "states": [],
+  "dimensions": {
+    "timing": [],
+    "traffic": [],
+    "concurrency": [],
+    "ordering": [],
+    "backpressure": [],
+    "resources": [],
+    "errors": [],
+    "recovery": [],
+    "reset": [],
+    "power": [],
+    "cross_feature": []
+  },
+  "risk": "P0|P1|P2|P3",
+  "risk_reasons": [],
+  "vplan_requirement_ids": [],
+  "testcase_ids": [],
+  "observability": {
+    "scoreboards": [],
+    "checkers": [],
+    "assertions": []
+  },
+  "coverage_ids": [],
+  "historical_evidence": []
+}

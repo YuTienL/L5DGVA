@@ -1,0 +1,19 @@
+{
+  "power_aware_design": false,
+  "corner_items": [
+    {
+      "corner_id": "RST-1",
+      "domain": "RESET",
+      "requirement_ids": [
+        "R1"
+      ],
+      "mechanism_ids": [
+        "A1"
+      ],
+      "testcase_ids": [
+        "T1"
+      ],
+      "async_or_partial_reset_covered": true
+    }
+  ]
+}

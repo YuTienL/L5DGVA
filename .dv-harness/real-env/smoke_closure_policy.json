@@ -1,0 +1,14 @@
+{
+  "flow": [
+    "run_smoke",
+    "stop_at_first_meaningful_failure",
+    "capture_log_vip_trace",
+    "waveform_if_needed_after_user_scope_level",
+    "root_cause",
+    "patch",
+    "rerun"
+  ],
+  "fsdb_default": "OFF",
+  "vip_trace": "ALLOWED",
+  "qualification_requires_real_execution": true
+}

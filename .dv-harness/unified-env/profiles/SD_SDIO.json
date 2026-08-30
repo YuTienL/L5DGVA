@@ -1,0 +1,23 @@
+{
+  "protocol": "SD_SDIO",
+  "roles": [
+    "Host",
+    "SD_Card",
+    "SDIO_Device",
+    "Combo"
+  ],
+  "boundaries": [
+    "CMD",
+    "DATA",
+    "PHY"
+  ],
+  "smoke_tests": [
+    "identify",
+    "read_write",
+    "sdio_function"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

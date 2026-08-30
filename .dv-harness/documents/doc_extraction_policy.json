@@ -1,0 +1,51 @@
+{
+  "enabled": true,
+  "supported_sources": [
+    "PDF",
+    "DOCX",
+    "HTML",
+    "TXT",
+    "Markdown",
+    "CSV",
+    "Excel",
+    "PHY documents",
+    "Programming Guide",
+    "Register Guide",
+    "VIP Manual",
+    "VIP Examples",
+    "VIP Source",
+    "VIP Class Reference",
+    "RTL comments"
+  ],
+  "extract": [
+    "text",
+    "section_hierarchy",
+    "tables",
+    "register_fields",
+    "code_examples",
+    "api_examples",
+    "captions",
+    "cross_references"
+  ],
+  "incremental": {
+    "enabled": true,
+    "identity": [
+      "sha256",
+      "document_version",
+      "mtime"
+    ],
+    "reuse_unchanged": true,
+    "reextract_changed_only": true
+  },
+  "traceability_required": [
+    "document",
+    "version",
+    "sha256",
+    "page",
+    "section",
+    "source_location",
+    "extracted_evidence",
+    "finding",
+    "root_cause"
+  ]
+}

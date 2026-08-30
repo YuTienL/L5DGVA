@@ -1,0 +1,22 @@
+{
+  "protocol": "ssh",
+  "host": null,
+  "user": null,
+  "shell": null,
+  "work_dir": null,
+  "build_dir": null,
+  "run_dir": null,
+  "source_commands": [],
+  "authentication": {
+    "mode": null,
+    "secret_persisted": false
+  },
+  "preflight": {
+    "status": "NOT_RUN",
+    "hostname": null,
+    "whoami": null,
+    "pwd": null,
+    "git_head": null,
+    "tools": {}
+  }
+}

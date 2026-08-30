@@ -1,0 +1,11 @@
+protocol: MIPI-CSI2
+critical_fields:
+  - direction
+  - phy_type
+  - lane_or_trio_count
+  - lane_rate
+  - virtual_channels
+  - enabled_data_types
+  - packet_boundary
+  - ecc_crc
+  - error_recovery

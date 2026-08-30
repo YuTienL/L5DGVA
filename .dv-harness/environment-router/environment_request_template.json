@@ -1,0 +1,17 @@
+{
+  "request_id": null,
+  "mode": "SUBSYSTEM_MODE|SYSTEM_LEVEL_MODE",
+  "goal": null,
+  "subsystem_protocol": null,
+  "selected_subsystems": [],
+  "required_use_cases": [],
+  "required_cross_subsystem_flows": [],
+  "inputs": {
+    "dut_rtl": [],
+    "specs": [],
+    "phy_docs": [],
+    "programming_guides": [],
+    "register_specs": [],
+    "vip_packages": []
+  }
+}

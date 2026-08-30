@@ -1,0 +1,119 @@
+{
+  "capabilities": [
+    {
+      "capability_id": "INTERACTIVE_INTAKE",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "SPEC_RTL_DISCOVERY",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "COMMAND_ANALYSIS",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "REFERENCE_UVM",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "DE_BASELINE",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "VPLAN",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "VERIFICATION_ARCHITECTURE",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "OBSERVABILITY",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "SCOREBOARD_CHECKER_ASSERTION",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "TEST_GENERATION",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "NEGATIVE_TEST",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "LOCAL_SIM",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "SEMANTIC_TRUE_PASS",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "FALSE_PASS_RESISTANCE",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "LSF_REGRESSION",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "REMOTE",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "RCA",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "DUT_TB_BUG_CLASSIFICATION",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "COVERAGE_CLOSURE",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "SYSTEM_LEVEL",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "EXPERT_FEEDBACK",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "SIGNOFF",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    },
+    {
+      "capability_id": "FEATURE_CONTINUITY",
+      "implemented": true,
+      "test_evidence": "pytest+hard_gate"
+    }
+  ]
+}

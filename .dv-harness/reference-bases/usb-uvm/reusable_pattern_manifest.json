@@ -1,0 +1,39 @@
+{
+  "reference_base": "USB UVM Environment",
+  "reuse_scope": "architecture_and_framework_patterns_only",
+  "reusable_patterns": [
+    "uvm_directory_structure",
+    "tb_top_env_agent_test_layering",
+    "uvm_config_db_pattern",
+    "virtual_sequencer",
+    "sequence_library",
+    "scenario_registry",
+    "dependency_barrier",
+    "scoreboard_framework",
+    "dma_scoreboard_framework",
+    "performance_calculator_framework",
+    "coverage_collector_framework",
+    "analysis_port_connectivity",
+    "config_object_pattern",
+    "ral_integration_pattern",
+    "clock_reset_pattern",
+    "make_build_run_interface",
+    "smoke_test_promotion",
+    "lsf_regression_integration",
+    "failure_replay_pattern",
+    "git_sha_evidence_provenance"
+  ],
+  "non_reusable_protocol_truth": [
+    "usb_signal_names",
+    "usb2_dp_dm",
+    "usb3_lfps",
+    "usb3_ts1_ts2",
+    "usb_ltssm",
+    "usb_endpoint_rules",
+    "usb_transfer_types",
+    "usb_register_assumptions",
+    "usb_vip_api_assumptions",
+    "usb_timing",
+    "usb_packet_semantics"
+  ]
+}

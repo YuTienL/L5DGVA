@@ -1,0 +1,70 @@
+from __future__ import annotations
+import json, time
+from pathlib import Path
+from datetime import datetime
+
+def load_jobs(project_root: Path):
+    d=project_root/'.dv-harness'/'lsf'/'jobs'
+    jobs=[]
+    if not d.exists(): return jobs
+    for p in sorted(d.glob('*.json')):
+        try:
+            x=json.loads(p.read_text(encoding='utf-8')); x['_file']=str(p); jobs.append(x)
+        except Exception: pass
+    return jobs
+
+def get_job(project_root: Path, job_id):
+    """Single-job lookup on top of load_jobs() -- the one shared
+    implementation dv_harness/dashboard.py's GET /api/lsf/jobs/<job_id> and
+    dv_harness/cli.py's `lsf <job_id>` both call, so job-id matching (str()
+    comparison -- job_id in the on-disk JSON may be an int or a str
+    depending on how the LSF client wrote it, and CLI/URL job ids always
+    arrive as str) lives in exactly one place. Returns None if no job with
+    that id exists, never raises."""
+    for j in load_jobs(project_root):
+        if str(j.get('job_id')) == str(job_id):
+            return j
+    return None
+
+def fmt(v, default='-'):
+    if v is None or v=='': return default
+    return str(v)
+
+def render_snapshot(jobs):
+    now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    counts={}
+    for j in jobs:
+        s=fmt(j.get('lsf_status'),'UNKNOWN'); counts[s]=counts.get(s,0)+1
+    reg_ids=sorted({j.get('regression_id') for j in jobs if j.get('regression_id')})
+    header=[f'DV Agent Harness L5 - Periodic Regression Snapshot',f'Snapshot Time: {now}']
+    if reg_ids:
+        header.append('Regression ID : '+(', '.join(reg_ids)))
+    lines=header + [
+           'SUMMARY: '+ ' | '.join([f'Total: {len(jobs)}']+[f'{k}: {v}' for k,v in sorted(counts.items())]),'',
+           f"{'Job':<10} {'Pattern / Combination':<36} {'LSF':<10} {'DV Analysis':<18} {'UVM_ERR':<9} {'UVM_FATAL':<10} Agent Action / Note",
+           '-'*130]
+    attention=[]
+    for j in jobs:
+        jid=fmt(j.get('job_id')); pat=fmt(j.get('pattern')); lsf=fmt(j.get('lsf_status'),'UNKNOWN')
+        dv=fmt(j.get('dv_analysis_status') or j.get('sim_status'),'UNKNOWN')
+        ue=fmt(j.get('uvm_error_count'),'pending' if lsf=='DONE' else '-')
+        uf=fmt(j.get('uvm_fatal_count'),'pending' if lsf=='DONE' else '-')
+        action=fmt(j.get('agent_action') or j.get('root_cause_status') or j.get('kill_reason'),'monitoring')
+        lines.append(f'{jid:<10} {pat[:35]:<36} {lsf:<10} {dv:<18} {ue:<9} {uf:<10} {action}')
+        if lsf=='EXIT' or dv in ('FAIL','ROOT_CAUSE','RERUN_REQUIRED') or (isinstance(j.get('uvm_error_count'),int) and j.get('uvm_error_count',0)>0):
+            attention.append(f"- {jid} {pat}: LSF={lsf}, DV={dv}, UVM_ERROR={ue}, action={action}")
+    lines += ['', 'ATTENTION'] + (attention or ['- none'])
+    lines += ['', 'NEXT ACTIONS','- Analyze DONE jobs whose DV result is still UNKNOWN/pending.','- Continue incremental monitoring of RUN jobs.','- Triage EXIT/FAIL jobs and rerun fixed patterns when ready.']
+    return '\n'.join(lines)
+
+def main(project_root='.', once=True, interval_minutes=30):
+    root=Path(project_root).resolve()
+    while True:
+        print(render_snapshot(load_jobs(root)), flush=True)
+        if once: break
+        time.sleep(max(1,interval_minutes)*60)
+
+if __name__=='__main__':
+    import argparse
+    ap=argparse.ArgumentParser(); ap.add_argument('--project-root',default='.'); ap.add_argument('--watch',action='store_true'); ap.add_argument('--interval-minutes',type=int,default=30)
+    a=ap.parse_args(); main(a.project_root,not a.watch,a.interval_minutes)

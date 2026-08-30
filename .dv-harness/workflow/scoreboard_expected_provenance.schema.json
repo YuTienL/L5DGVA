@@ -1,0 +1,10 @@
+{
+  "scoreboards": [
+    {
+      "scoreboard_id": "SB1",
+      "expected_source": "reference_model.py",
+      "expected_source_hash": "sha",
+      "prediction_method": "transaction-model"
+    }
+  ]
+}

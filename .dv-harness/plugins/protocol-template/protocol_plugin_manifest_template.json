@@ -1,0 +1,30 @@
+{
+  "protocol_id": "NEW_PROTOCOL",
+  "display_name": "New Protocol / Interface",
+  "versions": [],
+  "roles": [],
+  "boundaries": [],
+  "topology_schema": {},
+  "signal_schema": {},
+  "register_schema": {},
+  "vip_integration": {
+    "vendor": null,
+    "package": null,
+    "examples": [],
+    "manuals": [],
+    "source": [],
+    "class_reference": []
+  },
+  "builders": {
+    "environment_builder_skill": null,
+    "scoreboard_builder_skill": null,
+    "coverage_builder_skill": null,
+    "assertion_builder_skill": null,
+    "scenario_builder_skill": null
+  },
+  "smoke_tests": [],
+  "error_injection": [],
+  "performance_metrics": [],
+  "evidence_requirements": [],
+  "self_test_status": "NOT_RUN"
+}

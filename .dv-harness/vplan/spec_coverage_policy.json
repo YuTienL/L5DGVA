@@ -1,0 +1,15 @@
+{
+  "goal": "100% Spec Coverage Accounting",
+  "formula": "(VERIFIED + APPROVED_WAIVED + VALID_NOT_APPLICABLE) / TOTAL_SPEC_REQUIREMENTS = 100%",
+  "rules": [
+    "Generate vPlan from current spec before testcase creation.",
+    "Every testcase must trace to one or more vPlan requirement IDs.",
+    "Testcase existence alone gives no final coverage credit.",
+    "UNSUPPORTED_BY_DUT may be WAIVED only with explicit current design-spec evidence and approval.",
+    "UNKNOWN cannot be auto-waived.",
+    "100% means every requirement is VERIFIED, approved WAIVED, or validated NOT_APPLICABLE.",
+    "Verification architecture/mechanism planning must occur before testcase generation.",
+    "Every testcase must trace to at least one planned verification mechanism unless the requirement is legitimately covered by another approved verification method.",
+    "Coverage hit without an effective checker/scoreboard/assertion/reference evidence is not sufficient proof of verification."
+  ]
+}

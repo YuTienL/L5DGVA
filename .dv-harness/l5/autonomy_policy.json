@@ -1,0 +1,35 @@
+{
+  "classification": "DV Agent Harness Autonomy Classification",
+  "level": "L5",
+  "mode_name": "GAV",
+  "definition": "Goal-driven autonomous verification to evidence-closed SIGNOFF-READY with continuous human observability, intervention, approval, and takeover.",
+  "modes": [
+    "MANUAL",
+    "REVIEW",
+    "GAV"
+  ],
+  "default_mode": "REVIEW",
+  "critical_approval_gates": [
+    "high-impact DUT RTL change",
+    "force push/history rewrite",
+    "mass LSF kill",
+    "shared infrastructure change",
+    "mandatory regression removal",
+    "signoff policy change",
+    "credential persistence"
+  ],
+  "human_commands": [
+    "STATUS",
+    "WHY",
+    "EVIDENCE",
+    "REVIEW",
+    "PAUSE",
+    "RESUME",
+    "REDIRECT",
+    "APPROVE",
+    "REJECT",
+    "STOP",
+    "TAKEOVER"
+  ],
+  "final_authority": "Human/company signoff policy"
+}

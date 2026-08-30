@@ -1,0 +1,47 @@
+{
+  "protocol": "Ethernet",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "MAC",
+    "PCS",
+    "PMA",
+    "PHY"
+  ],
+  "required_discovery": [
+    "MII_GMII_XGMII_USXGMII_or_other",
+    "speed_modes",
+    "MAC_addressing",
+    "PCS_PMA_boundary"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "link_bringup",
+    "tx_frame",
+    "rx_frame",
+    "CRC_check",
+    "speed_mode_smoke"
+  ],
+  "minimum_coverage_dimensions": [
+    "frame_size",
+    "frame_type",
+    "speed",
+    "pause_flow_control",
+    "error",
+    "concurrency"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

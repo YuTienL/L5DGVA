@@ -1,0 +1,25 @@
+{
+  "title": "USB2 HS scoreboard port ownership",
+  "protocol": "USB2",
+  "scope": "subsystem",
+  "symptoms": [
+    "scoreboard",
+    "port ownership",
+    "enumeration"
+  ],
+  "root_cause": "global expected queue",
+  "fix": "per-port expected queue",
+  "confidence": "CONFIRMED",
+  "verification": {
+    "single_sim": "PASS",
+    "regression": "PASS",
+    "reaudit": "CLEAN"
+  },
+  "memory_id": "MEM-7A4F454771",
+  "level": "engineering",
+  "created_at": 1787199833.6814919,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true
+}

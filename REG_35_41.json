@@ -1,0 +1,37 @@
+[
+  {
+    "suite": "tests_v38",
+    "rc": 0,
+    "tail": "\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m                                                                   [100%]\u001b[0m\n"
+  },
+  {
+    "suite": "tests_v39",
+    "rc": 0,
+    "tail": "\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m                                                                   [100%]\u001b[0m\n"
+  },
+  {
+    "suite": "tests_command_catalog",
+    "rc": 0,
+    "tail": "\u001b[32m.\u001b[0m\u001b[32m                                                                        [100%]\u001b[0m\n"
+  },
+  {
+    "suite": "tests_dut_arch",
+    "rc": 0,
+    "tail": "\u001b[32m.\u001b[0m\u001b[32m                                                                        [100%]\u001b[0m\n"
+  },
+  {
+    "suite": "tests_observability",
+    "rc": 0,
+    "tail": "\u001b[32m.\u001b[0m\u001b[32m                                                                        [100%]\u001b[0m\n"
+  },
+  {
+    "suite": "tests_senior_dv_final",
+    "rc": 0,
+    "tail": "\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m                                                                     [100%]\u001b[0m\n"
+  },
+  {
+    "suite": "tests_vplan",
+    "rc": 0,
+    "tail": "\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m.\u001b[0m\u001b[32m                                                                     [100%]\u001b[0m\n"
+  }
+]

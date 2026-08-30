@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "paused": false,
+  "paused_reason": "",
+  "paused_at": null,
+  "takeover": {
+    "active": false,
+    "stage": null,
+    "message": "",
+    "taken_at": null,
+    "taken_by": null
+  },
+  "constraints": [],
+  "corrections": {},
+  "approvals": {},
+  "next_constraint_seq": 1
+}

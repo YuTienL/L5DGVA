@@ -1,0 +1,17 @@
+{
+  "enabled": false,
+  "type": "USB_UVM",
+  "server": null,
+  "path": null,
+  "access_mode": "READ_ONLY",
+  "branch": null,
+  "tag": null,
+  "commit": null,
+  "authoritative": false,
+  "preflight": {
+    "status": "NOT_RUN",
+    "path_exists": false,
+    "readable": false
+  },
+  "extracted_patterns": []
+}

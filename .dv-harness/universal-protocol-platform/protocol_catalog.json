@@ -1,0 +1,348 @@
+{
+  "built_in": [
+    "PCIe",
+    "USB",
+    "Ethernet",
+    "MIPI_CSI2",
+    "MIPI_DSI",
+    "AMBA4_MMxMS",
+    "eDP",
+    "eMMC",
+    "SD_SDIO",
+    "UCIe"
+  ],
+  "extensible": [
+    "NEW_INTERFACE",
+    "NEW_SPECIFICATION_REVISION"
+  ],
+  "protocols": {
+    "PCIe": {
+      "roles": [
+        "RC",
+        "EP",
+        "PHY",
+        "Retimer"
+      ],
+      "discovery": [
+        "link_interface",
+        "PIPE_or_SERDES",
+        "config_space",
+        "BARs",
+        "MSI_MSIX",
+        "LTSSM_observability"
+      ],
+      "smoke": [
+        "reset",
+        "link_training",
+        "enumeration",
+        "config_rw",
+        "memory_rw"
+      ],
+      "coverage": [
+        "LTSSM",
+        "TLP_type",
+        "completion_status",
+        "BAR",
+        "interrupt",
+        "error_recovery"
+      ]
+    },
+    "USB": {
+      "roles": [
+        "Host",
+        "Device",
+        "Hub"
+      ],
+      "discovery": [
+        "USB2_or_USB3",
+        "UTMI_ULPI_PIPE_or_SERDES",
+        "endpoints",
+        "descriptors",
+        "LTSSM_or_USB2_state"
+      ],
+      "smoke": [
+        "reset",
+        "attach_connect",
+        "enumeration",
+        "control_transfer",
+        "basic_bulk_interrupt_iso_as_applicable"
+      ],
+      "coverage": [
+        "speed",
+        "enumeration",
+        "endpoint",
+        "transfer_type",
+        "link_state",
+        "error_recovery"
+      ]
+    },
+    "Ethernet": {
+      "roles": [
+        "MAC",
+        "PCS",
+        "PMA",
+        "PHY"
+      ],
+      "discovery": [
+        "MII_GMII_XGMII_USXGMII_or_other",
+        "speed_modes",
+        "MAC_addressing",
+        "PCS_PMA_boundary"
+      ],
+      "smoke": [
+        "reset",
+        "link_bringup",
+        "tx_frame",
+        "rx_frame",
+        "CRC_check",
+        "speed_mode_smoke"
+      ],
+      "coverage": [
+        "frame_size",
+        "frame_type",
+        "speed",
+        "pause_flow_control",
+        "error",
+        "concurrency"
+      ]
+    },
+    "MIPI_CSI2": {
+      "roles": [
+        "CSI2_TX",
+        "CSI2_RX",
+        "D_PHY",
+        "C_PHY"
+      ],
+      "discovery": [
+        "lane_count",
+        "D_PHY_or_C_PHY",
+        "virtual_channels",
+        "data_types",
+        "LP_HS_boundary"
+      ],
+      "smoke": [
+        "reset",
+        "phy_bringup",
+        "short_packet",
+        "long_packet",
+        "frame_start_end",
+        "ECC_CRC"
+      ],
+      "coverage": [
+        "VC",
+        "data_type",
+        "lane",
+        "packet",
+        "ECC_CRC",
+        "LP_HS_transition"
+      ]
+    },
+    "MIPI_DSI": {
+      "roles": [
+        "DSI_Host",
+        "DSI_Device",
+        "D_PHY",
+        "C_PHY"
+      ],
+      "discovery": [
+        "lane_count",
+        "video_or_command_mode",
+        "D_PHY_or_C_PHY",
+        "packet_types",
+        "LP_HS_boundary"
+      ],
+      "smoke": [
+        "reset",
+        "phy_bringup",
+        "command_packet",
+        "video_packet_if_applicable",
+        "ECC_CRC"
+      ],
+      "coverage": [
+        "mode",
+        "packet_type",
+        "lane",
+        "ECC_CRC",
+        "LP_HS_transition",
+        "error_recovery"
+      ]
+    },
+    "AMBA4_MMxMS": {
+      "roles": [
+        "AXI_Master",
+        "AXI_Slave",
+        "Interconnect"
+      ],
+      "discovery": [
+        "master_count",
+        "slave_count",
+        "address_map",
+        "ID_widths",
+        "data_widths",
+        "QoS",
+        "exclusive_support"
+      ],
+      "smoke": [
+        "single_master_single_slave",
+        "all_masters",
+        "all_slaves",
+        "parallel_rw",
+        "backpressure",
+        "error_response"
+      ],
+      "coverage": [
+        "master_x_slave",
+        "burst",
+        "ID",
+        "outstanding",
+        "ordering",
+        "QoS",
+        "exclusive",
+        "response",
+        "backpressure"
+      ]
+    },
+    "eDP": {
+      "roles": [
+        "Source",
+        "Sink",
+        "AUX"
+      ],
+      "discovery": [
+        "lane_count",
+        "link_rates",
+        "AUX",
+        "main_link",
+        "video_timing",
+        "training_pattern_support"
+      ],
+      "smoke": [
+        "AUX_access",
+        "link_training",
+        "main_link_enable",
+        "basic_video_transport"
+      ],
+      "coverage": [
+        "lane",
+        "rate",
+        "training",
+        "AUX",
+        "video_format",
+        "error_recovery"
+      ]
+    },
+    "eMMC": {
+      "roles": [
+        "Host",
+        "Device"
+      ],
+      "discovery": [
+        "bus_width",
+        "timing_modes",
+        "boot_support",
+        "partition_support",
+        "command_data_boundary"
+      ],
+      "smoke": [
+        "reset",
+        "identify",
+        "select",
+        "read",
+        "write",
+        "mode_switch"
+      ],
+      "coverage": [
+        "command",
+        "response",
+        "bus_width",
+        "timing_mode",
+        "partition",
+        "error"
+      ]
+    },
+    "SD_SDIO": {
+      "roles": [
+        "Host",
+        "SD_Memory",
+        "SDIO_Device"
+      ],
+      "discovery": [
+        "SD_or_SDIO_or_combo",
+        "bus_width",
+        "speed_modes",
+        "function_count",
+        "command_data_boundary"
+      ],
+      "smoke": [
+        "reset",
+        "identify",
+        "select",
+        "SD_read_write_if_applicable",
+        "SDIO_function_access_if_applicable"
+      ],
+      "coverage": [
+        "command",
+        "response",
+        "speed",
+        "bus_width",
+        "function",
+        "transfer",
+        "error"
+      ]
+    },
+    "UCIe": {
+      "roles": [
+        "Die_A",
+        "Die_B",
+        "Protocol_Layer",
+        "Adapter",
+        "PHY"
+      ],
+      "discovery": [
+        "protocol_mode",
+        "adapter_boundary",
+        "PHY_boundary",
+        "lane_or_module_topology",
+        "link_state_observability"
+      ],
+      "smoke": [
+        "reset",
+        "link_bringup",
+        "basic_transaction",
+        "flow_control",
+        "error_status"
+      ],
+      "coverage": [
+        "link_state",
+        "transaction_type",
+        "flow_control",
+        "retry_recovery",
+        "error",
+        "concurrency"
+      ]
+    },
+    "NEW_INTERFACE": {
+      "roles": [
+        "DISCOVER_FROM_EVIDENCE"
+      ],
+      "discovery": [
+        "roles",
+        "signals",
+        "clock_reset",
+        "transactions",
+        "state_machine",
+        "flow_control",
+        "timing",
+        "registers",
+        "errors",
+        "performance"
+      ],
+      "smoke": [
+        "GENERATE_FROM_DISCOVERED_PROTOCOL_MODEL"
+      ],
+      "coverage": [
+        "GENERATE_FROM_DISCOVERED_PROTOCOL_MODEL"
+      ]
+    }
+  }
+}

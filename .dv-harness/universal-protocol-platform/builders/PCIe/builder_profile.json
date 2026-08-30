@@ -1,0 +1,48 @@
+{
+  "protocol": "PCIe",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "RC",
+    "EP",
+    "PHY",
+    "Retimer"
+  ],
+  "required_discovery": [
+    "link_interface",
+    "PIPE_or_SERDES",
+    "config_space",
+    "BARs",
+    "MSI_MSIX",
+    "LTSSM_observability"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "link_training",
+    "enumeration",
+    "config_rw",
+    "memory_rw"
+  ],
+  "minimum_coverage_dimensions": [
+    "LTSSM",
+    "TLP_type",
+    "completion_status",
+    "BAR",
+    "interrupt",
+    "error_recovery"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

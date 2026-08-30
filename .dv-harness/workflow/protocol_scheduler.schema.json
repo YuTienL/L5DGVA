@@ -1,0 +1,6 @@
+{
+  "protocol": "PCIe",
+  "mode": "N_TO_M_PARALLEL",
+  "independent_port_queues": true,
+  "cross_port_global_lock": false
+}

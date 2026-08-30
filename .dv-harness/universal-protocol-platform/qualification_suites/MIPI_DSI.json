@@ -1,0 +1,67 @@
+{
+  "protocol": "MIPI_DSI",
+  "preconditions": [
+    "current_dut_identity",
+    "current_spec_revision",
+    "current_vip_or_native_uvc_identity",
+    "toolchain_identity"
+  ],
+  "gates": [
+    {
+      "name": "EVIDENCE_READY",
+      "requires": [
+        "lane_count",
+        "video_or_command_mode",
+        "D_PHY_or_C_PHY",
+        "packet_types",
+        "LP_HS_boundary"
+      ]
+    },
+    {
+      "name": "ENV_GENERATED",
+      "requires": [
+        "generated_sources",
+        "manifest",
+        "filelist"
+      ]
+    },
+    {
+      "name": "COMPILE_QUALIFIED",
+      "requires": [
+        "compile_exit_zero",
+        "no_unwaived_compile_error"
+      ]
+    },
+    {
+      "name": "SMOKE_QUALIFIED",
+      "requires": [
+        "reset",
+        "phy_bringup",
+        "command_packet",
+        "video_packet_if_applicable",
+        "ECC_CRC"
+      ]
+    },
+    {
+      "name": "PROTOCOL_QUALIFIED",
+      "requires": [
+        "checker_or_scoreboard_pass",
+        "protocol_coverage_evidence"
+      ]
+    },
+    {
+      "name": "REGRESSION_QUALIFIED",
+      "requires": [
+        "qualification_regression_pass"
+      ]
+    },
+    {
+      "name": "PRODUCTION_QUALIFIED",
+      "requires": [
+        "traceable_release",
+        "all_previous_gates",
+        "no_unresolved_blocker"
+      ]
+    }
+  ]
+}

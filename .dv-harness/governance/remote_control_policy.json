@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "architecture": "Claude Web/App <-> Claude Code Remote Control <-> AI Agent Harness L5 <-> Linux DV Server",
+  "human_control_plane": "Claude Web/App",
+  "orchestrator": "Local Claude Code session running AI Agent Harness L5",
+  "execution_plane": "Linux DV Server",
+  "blackboard_is_system_of_record": true,
+  "remote_control_does_not_bypass_gates": true,
+  "linux_credentials_stay_local": true
+}

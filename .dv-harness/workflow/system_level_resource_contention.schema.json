@@ -1,0 +1,20 @@
+{
+  "shared_resources": [
+    "DDR",
+    "IRQ"
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "SC1",
+      "resources": [
+        "PCIe",
+        "DDR",
+        "USB"
+      ],
+      "arbitration_or_contention_policy": "QoS/arbitration",
+      "contention_testcase_ids": [
+        "TC1"
+      ]
+    }
+  ]
+}

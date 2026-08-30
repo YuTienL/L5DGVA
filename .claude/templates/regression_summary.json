@@ -1,0 +1,10 @@
+{
+  "total": 0,
+  "pass": 0,
+  "functional_fail": 0,
+  "infra_fail": 0,
+  "pending": 0,
+  "pass_rate": 0.0,
+  "clusters": [],
+  "status": "NOT_RUN"
+}

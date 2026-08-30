@@ -1,0 +1,13 @@
+{
+  "flow": [
+    "extract_old_spec",
+    "extract_new_spec",
+    "diff",
+    "impact_analysis",
+    "update_semantic_model",
+    "regenerate_affected_uvm",
+    "compile",
+    "smoke",
+    "requalify"
+  ]
+}

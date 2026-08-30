@@ -1,0 +1,46 @@
+{
+  "protocol": "USB",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "Host",
+    "Device",
+    "Hub"
+  ],
+  "required_discovery": [
+    "USB2_or_USB3",
+    "UTMI_ULPI_PIPE_or_SERDES",
+    "endpoints",
+    "descriptors",
+    "LTSSM_or_USB2_state"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "attach_connect",
+    "enumeration",
+    "control_transfer",
+    "basic_bulk_interrupt_iso_as_applicable"
+  ],
+  "minimum_coverage_dimensions": [
+    "speed",
+    "enumeration",
+    "endpoint",
+    "transfer_type",
+    "link_state",
+    "error_recovery"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

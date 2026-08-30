@@ -1,0 +1,13 @@
+{
+  "dut_port_count": 2,
+  "vip_port_count": 2,
+  "branches": [
+    "block",
+    "branch-a1",
+    "branch-a2",
+    "branch_fw",
+    "branch-b1",
+    "branch-b2"
+  ],
+  "branch_fw_interrupt_driven": true
+}

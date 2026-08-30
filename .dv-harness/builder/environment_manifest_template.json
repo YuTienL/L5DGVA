@@ -1,0 +1,39 @@
+{
+  "project": null,
+  "scope": "Block/IP|Subsystem|Multi-Subsystem|Full-SoC",
+  "dut": {
+    "root": null,
+    "role": null,
+    "interfaces": []
+  },
+  "evidence": {
+    "rtl": [],
+    "spec": [],
+    "phy_docs": [],
+    "programming_guides": [],
+    "register_docs": [],
+    "vip_manuals": [],
+    "vip_examples": [],
+    "vip_source": [],
+    "vip_class_reference": []
+  },
+  "topology": {
+    "protocols": [],
+    "masters": [],
+    "slaves": [],
+    "memory": [],
+    "dma": [],
+    "interrupts": []
+  },
+  "clock_reset": {
+    "clocks": [],
+    "resets": []
+  },
+  "address_map": [],
+  "generated_components": [],
+  "compile_status": "NOT_RUN",
+  "smoke_status": "NOT_RUN",
+  "baseline_status": "NOT_READY",
+  "git_sha": null,
+  "server_sha": null
+}

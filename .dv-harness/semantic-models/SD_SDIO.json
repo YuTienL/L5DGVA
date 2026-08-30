@@ -1,0 +1,17 @@
+{
+  "protocol": "SD_SDIO",
+  "supported_roles": [
+    "Host",
+    "Card",
+    "SDIO_Device"
+  ],
+  "minimum_smoke_tests": [
+    "identify",
+    "read_write",
+    "sdio_function"
+  ],
+  "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_DISCOVER_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

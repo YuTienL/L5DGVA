@@ -1,0 +1,25 @@
+{
+  "failure_id": "string",
+  "signature": "string",
+  "first_bad_event": {
+    "time": "string",
+    "location": "string",
+    "expected": "string",
+    "observed": "string"
+  },
+  "boundary_trace": [
+    {
+      "stage": "SEQUENCE|DRIVER|INTERFACE_IN|DUT_INTERNAL|INTERFACE_OUT|MONITOR|CHECKER|SCOREBOARD",
+      "expected": "string",
+      "observed": "string",
+      "evidence": []
+    }
+  ],
+  "classification": "DUT_BUG|TB_BUG|VIP_ISSUE|TEST_ISSUE|SPEC_AMBIGUITY|INFRA_ISSUE|UNKNOWN",
+  "root_cause_candidates": [],
+  "supporting_evidence": [],
+  "counter_evidence": [],
+  "confidence": "LOW|MEDIUM|HIGH|VERIFIED",
+  "minimal_reproducer": "string",
+  "impacted_artifacts": []
+}

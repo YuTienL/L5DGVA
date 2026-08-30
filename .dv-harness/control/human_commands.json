@@ -1,0 +1,17 @@
+{
+  "STATUS": "current graph/plan/agents/jobs/findings/next action",
+  "WHY": "engineering reasoning summary",
+  "EVIDENCE": "current evidence only",
+  "HYPOTHESIS": "ranked hypotheses, counter-evidence, missing evidence, next-best-action",
+  "REVIEW": "independent review",
+  "DOCS": "document extraction/index/version/traceability status",
+  "MEMORY": "memory routing/retrieval/consolidation status",
+  "PROFILE": "stage wall clock / aggregate agent runtime / token/tool/retry/finding metrics",
+  "PAUSE": "safe pause",
+  "RESUME": "resume persisted state",
+  "REDIRECT": "preserve evidence, update blackboard, partial replan",
+  "APPROVE": "approve gated action",
+  "REJECT": "reject gated action",
+  "STOP": "safe stop",
+  "TAKEOVER": "human takes control"
+}

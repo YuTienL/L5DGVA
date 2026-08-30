@@ -1,0 +1,34 @@
+{
+  "evidence_sources": [
+    "current RTL/source",
+    "current design specification",
+    "register/programming guide",
+    "clock/reset specification",
+    "address map",
+    "interrupt/DMA documentation",
+    "PHY/interface documentation",
+    "existing UVM environment",
+    "command.txt and regression testlists",
+    "compile/simulation logs",
+    "VIP trace",
+    "measured waveform when needed"
+  ],
+  "discover": [
+    "hierarchy and block ownership",
+    "protocol interfaces and DUT roles",
+    "master/slave/interconnect topology",
+    "clock/reset/power domains",
+    "address map and register blocks",
+    "interrupt/DMA routing",
+    "data and control paths",
+    "feature dependencies",
+    "cross-subsystem dependencies",
+    "unsupported/unknown behavior"
+  ],
+  "truth_rules": [
+    "CLAUDE.md/memory are navigation hints only.",
+    "Architecture claim from RTL must point to current RTL evidence.",
+    "Dynamic behavior must be calibrated with simulation/log/VIP trace/waveform evidence when applicable.",
+    "Unknown connections remain UNKNOWN; never invent topology."
+  ]
+}

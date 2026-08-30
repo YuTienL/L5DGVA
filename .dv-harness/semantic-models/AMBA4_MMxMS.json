@@ -1,0 +1,17 @@
+{
+  "protocol": "AMBA4_MMxMS",
+  "supported_roles": [
+    "Master",
+    "Slave",
+    "Interconnect"
+  ],
+  "minimum_smoke_tests": [
+    "1x1",
+    "parallel_rw",
+    "backpressure"
+  ],
+  "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_DISCOVER_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

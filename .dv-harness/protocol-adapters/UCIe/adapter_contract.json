@@ -1,0 +1,52 @@
+{
+  "protocol": "UCIe",
+  "roles": [
+    "Die_A",
+    "Die_B",
+    "Protocol",
+    "Adapter",
+    "PHY"
+  ],
+  "boundaries": [
+    "Protocol",
+    "Adapter",
+    "PHY"
+  ],
+  "must_discover": [
+    "role",
+    "ucie_version",
+    "boundary",
+    "lane_module_topology",
+    "link_state",
+    "protocol_mode"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "link_bringup",
+    "basic_transaction",
+    "flow_control",
+    "recovery"
+  ],
+  "scoreboard_semantics": [
+    "transaction_match",
+    "CRC_retry",
+    "ordering_basic"
+  ],
+  "coverage_dimensions": [
+    "link_state",
+    "transaction_type",
+    "flow_control",
+    "retry_recovery",
+    "error",
+    "concurrency"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

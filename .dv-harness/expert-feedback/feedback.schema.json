@@ -1,0 +1,51 @@
+{
+  "feedback_id": "DVFB-XXXX",
+  "reviewer_role": "DV_EXPERT",
+  "scope": {
+    "level": "IP|SUBSYSTEM|SYSTEM_LEVEL|PLATFORM",
+    "protocol": "optional",
+    "target": "required"
+  },
+  "category": "MISSING_SCENARIO|CHECKER_GAP|COVERAGE_GAP|WRONG_ASSUMPTION|DUT_BINDING|VIP_BINDING|PROTOCOL_KNOWLEDGE|PERFORMANCE|CORNER_CASE|STRATEGY|OTHER",
+  "suggestion": "text",
+  "reason": "text",
+  "status": "PROPOSED|NEED_EVIDENCE|ACCEPTED|MODIFIED|REJECTED|IMPLEMENTED|VERIFIED|CLOSED",
+  "confidence": "UNVERIFIED|PARTIAL|VERIFIED",
+  "evidence": {
+    "rtl": [],
+    "spec": [],
+    "register": [],
+    "log": [],
+    "vip_trace": [],
+    "waveform": [],
+    "simulation": [],
+    "coverage": []
+  },
+  "impact": {
+    "semantic_model": false,
+    "vplan": false,
+    "uvm_env": false,
+    "sequence": false,
+    "driver_monitor": false,
+    "scoreboard": false,
+    "assertion": false,
+    "coverage": false,
+    "test": false,
+    "regression": false,
+    "system_level": false,
+    "skill_rule": false
+  },
+  "closure": {
+    "patches": [],
+    "generated_tests": [],
+    "compile_result": null,
+    "simulation_result": null,
+    "regression_result": null,
+    "coverage_delta": null,
+    "expert_signoff": false
+  },
+  "promotion": {
+    "target": "PROJECT|PROTOCOL|PLATFORM|NONE",
+    "approved": false
+  }
+}

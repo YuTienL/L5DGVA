@@ -1,0 +1,68 @@
+{
+  "product_name": "DV Agent Harness L5",
+  "positioning": "Senior DV Engineering Reasoning & Closed-Loop Verification Platform",
+  "goal": "Approach the workflow, evidence discipline, debugging method, risk judgment and reusable experience loop of a true senior DV engineer.",
+  "verification_scopes": [
+    "BLOCK_IP",
+    "SUBSYSTEM",
+    "SYSTEM_LEVEL_FULL_SOC"
+  ],
+  "environment_selection": {
+    "SUBSYSTEM_ENV_MODE": "Generate one selected subsystem verification environment.",
+    "SYSTEM_LEVEL_ENV_MODE": "Compose user-selected qualified subsystem environments into a System-Level / Full-SoC environment."
+  },
+  "remote_control": {
+    "relationship": "REMOTE_CONTROL is a human-control layer over ENV MODE, not a peer environment-generation mode.",
+    "controls": [
+      "STATUS",
+      "WHY",
+      "EVIDENCE",
+      "REVIEW",
+      "PAUSE",
+      "RESUME",
+      "REDIRECT",
+      "APPROVE",
+      "REJECT",
+      "STOP",
+      "TAKEOVER"
+    ]
+  },
+  "reference_bases": [
+    "USB UVM reference environment",
+    "existing qualified subsystem environments",
+    "VIP examples/manual/source/class references",
+    "project verification assets"
+  ],
+  "built_in_protocols": [
+    "PCIe",
+    "USB",
+    "Ethernet",
+    "MIPI CSI-2",
+    "MIPI DSI",
+    "AMBA4 Multi-Master x Multi-Slave",
+    "eDP",
+    "eMMC",
+    "SD",
+    "SDIO",
+    "UCIe"
+  ],
+  "extensibility": "New Interface / New Specification onboarding through evidence-driven protocol profile, architecture discovery, vPlan regeneration, testcase/checker/coverage qualification and regression.",
+  "truth_priority": [
+    "current RTL",
+    "current design/protocol specification",
+    "current VIP evidence",
+    "current execution evidence",
+    "project docs",
+    "memory/navigation hints"
+  ],
+  "closed_loops": [
+    "vPlan-first Spec Coverage",
+    "DUT Architecture Discovery and Regression Calibration",
+    "Scoreboard/Checker/Assertion Observability Closure",
+    "DUT-vs-TB Failure Attribution",
+    "Waveform Root Cause",
+    "Protocol Corner-Case and Risk",
+    "DV Expert Feedback",
+    "Reusable Verification Experience"
+  ]
+}

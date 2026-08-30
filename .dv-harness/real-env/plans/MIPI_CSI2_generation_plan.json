@@ -1,0 +1,42 @@
+{
+  "protocol": "MIPI_CSI2",
+  "discover": [
+    "role",
+    "phy_type",
+    "lane_count",
+    "VC",
+    "DT",
+    "LP_HS_behavior"
+  ],
+  "bind": [
+    "DUT",
+    "VIP_or_Native_UVC",
+    "clock_reset",
+    "config",
+    "analysis_ports"
+  ],
+  "generate": [
+    "env_pkg",
+    "config",
+    "virtual_sequencer",
+    "base_vseq",
+    "protocol_sequences",
+    "scoreboard",
+    "coverage",
+    "env",
+    "base_test",
+    "smoke_tests",
+    "tb_top",
+    "filelist",
+    "manifest"
+  ],
+  "compile_closure": true,
+  "smoke_closure": [
+    "reset",
+    "phy_bringup",
+    "short_packet",
+    "long_packet",
+    "frame"
+  ],
+  "qualification": "REAL_PROJECT_REQUIRED"
+}

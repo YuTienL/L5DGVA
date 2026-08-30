@@ -1,0 +1,52 @@
+{
+  "protocol": "AMBA4_MMxMS",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "AXI_Master",
+    "AXI_Slave",
+    "Interconnect"
+  ],
+  "required_discovery": [
+    "master_count",
+    "slave_count",
+    "address_map",
+    "ID_widths",
+    "data_widths",
+    "QoS",
+    "exclusive_support"
+  ],
+  "minimum_smoke": [
+    "single_master_single_slave",
+    "all_masters",
+    "all_slaves",
+    "parallel_rw",
+    "backpressure",
+    "error_response"
+  ],
+  "minimum_coverage_dimensions": [
+    "master_x_slave",
+    "burst",
+    "ID",
+    "outstanding",
+    "ordering",
+    "QoS",
+    "exclusive",
+    "response",
+    "backpressure"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

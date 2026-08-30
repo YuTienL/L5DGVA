@@ -1,0 +1,156 @@
+{
+  "_evidence_notes": {
+    "carried_forward_from_v1": "protocol/role/interfaces/clocks/resets/vip.package_imports/scoreboard_rules/coverage_points below are UNCHANGED from examples/generated_usb_real_evidence_v1/manifest_inputs/usb_env_manifest.json's _evidence_notes (DUT at D:/DV/Task/USB/DUT/RTLCAT/SS_VOUT_USB_CTRL.v, TOP_ALL.v; svt_usb_agent confirmed at D:/DV/Task/USB/VIP/src/sverilog/vcs/svt_usb_agent.sv). Not re-derived this pass -- see v1 file for the original citations.",
+    "vip_components_evidence": "Real component NAMES/CLASS TYPES read directly from the real target file this pass, D:/DV/Task/DV_Agent_Harness_L5/USB_UVM_Handoff/uvm/tb/env/usb_top_env.sv: usb_host_agent[0..1]/usb_mon_agent[0..1] are svt_usb_agent (lines 77-78, created lines 407-426); apb_env is svt_apb_system_env (line 148, created line 436); axi_env AND dma_env are both svt_axi_system_env (lines 151/116 -- dma_env is explicitly commented 'A SECOND AXI environment, separate from axi_env', lines 108-115); clk_rst_agent is usb_clk_rst_agent (line 154, created line 447); sideband_agent is usb_sideband_agent (line 157, created line 448); reg_seqr is usb_reg_sequencer (line 161, created line 450).",
+    "depends_on_honesty_caveat": "The depends_on edges below are NOT a transcription of usb_top_env.sv's real build_phase creation order -- read directly this pass, that order is (1) sys_virt_seqr/ep_check/perf_mon/xfer_sb/frame_util per-port loop, (2) dma_env (ifdef block, lines 356-367), (3) usb_host_agent/usb_mon_agent per-port loop (lines 386-428), (4) apb_env (436), (5) axi_env (443), (6) clk_rst_agent/sideband_agent (447-448), (7) reg_seqr/virt_seqr (450-451) -- i.e. clk_rst_agent is created NEAR THE END in the real file, not first, and the real file asserts no explicit inter-component ordering dependency via comments the way vip_components' depends_on models it (its ordering comments are about *file include* order for type visibility, e.g. lines 20-66, not about build_phase creation order). The one real, evidenced connect-time dependency is reg_seqr/virt_seqr wiring to apb_env.master.sequencer and axi_env.master[0].sequencer at lines 472-475, which DOES require apb_env/axi_env to already exist -- that edge below is real evidence. All other depends_on edges below (clk_rst_agent as a prerequisite for the agents/apb_env/axi_env, mon_agent depending on its paired host_agent) are ASSERTED BY THIS EXPERIMENT ONLY, as a plausible/conventional structural ordering (reset/clock-domain component before protocol agents; monitor sharing its active agent's config), to exercise topological_build_order() with a non-trivial dependency graph -- they are not claims about what usb_top_env.sv's real code requires.",
+    "v3_port_indexed_rewrite": "v2 (examples/generated_usb_real_evidence_v2/manifest_inputs/usb_env_manifest_v2.json, left UNCHANGED as a historical artifact) modeled the real dual-port usb_host_agent[NUM_USB_PORTS]/usb_mon_agent[NUM_USB_PORTS] arrays (usb_top_env.sv lines 77-78) as 4 SEPARATELY-NAMED FLAT SCALAR vip_components entries (host_agent0/host_agent1/mon_agent0/mon_agent1) -- an approximation that does NOT emit a real SV array or for-loop, unlike the real file. This v3 manifest replaces those 4 entries with 2 port_indexed:true entries (host_agent, mon_agent) plus a top-level port_count:2, using the port_indexed/port_count generator extension (dv_harness/uvm_generator/generator.py, InvalidPortCountError + _env_multi_component's port_indexed branch) added this session and verified directly against generator.py source + 32 passing tests in dv_harness_tests/test_per_port_env.py. instance_name is 'usb_host_agent'/'usb_mon_agent' (not 'host_agent'/'mon_agent') specifically so the generator's $sformatf(\"<instance_name>_%0d\", p) creation naming matches usb_top_env.sv's real per-port names verbatim (usb_host_agent_0/usb_host_agent_1/usb_mon_agent_0/usb_mon_agent_1, lines 407/414/426). All other vip_components entries (clk_rst_agent, sideband_agent, apb_env, axi_env, dma_env, reg_seqr) and every other real-evidence-cited field are UNCHANGED from v2 verbatim -- only the host_agent0/host_agent1/mon_agent0/mon_agent1 portion and the depends_on edge that referenced them (mon_agent -> host_agent, collapsed from mon_agent0->host_agent0 / mon_agent1->host_agent1 since both are now single graph nodes) were rewritten, plus the addition of top-level port_count. This still does NOT address the ~15 additional real per-port components usb_top_env.sv actually declares beyond host/mon (payload_cb, ep_check, perf_mon, xfer_sb, frame_util, dma_sb, sys_virt_seqr, and non-port-indexed dma_cfg/usb_top_cfg/virt_seqr/etc) -- see the v2 report's own gap list, still true here."
+  },
+  "protocol": "usb",
+  "role": "device",
+  "port_count": 2,
+  "interfaces": [
+    {
+      "name": "usb0_dp",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- DUT pad is inout wire (TOP_ALL.v:23058); VIP side is wor per usb-tb-scaffold SKILL.md:38, needs tran not assign"
+    },
+    {
+      "name": "usb0_dm",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- same as usb0_dp, TOP_ALL.v:23059"
+    },
+    {
+      "name": "usb0_vbus0",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- TOP_ALL.v:23056 / :25850"
+    }
+  ],
+  "vip": {
+    "package_imports": [
+      "svt_usb_uvm_pkg"
+    ]
+  },
+  "clocks": [
+    {
+      "name": "xtali",
+      "freq_note": "50MHz per TOP_ALL.v:25933 comment"
+    },
+    {
+      "name": "pclk",
+      "freq_note": "APB register clock, TOP_ALL.v:25949"
+    },
+    {
+      "name": "usb0_refclk_p",
+      "freq_note": "PHY differential ref clock, TOP_ALL.v:25854"
+    }
+  ],
+  "resets": [
+    {
+      "name": "xprstn",
+      "polarity": "active_low",
+      "evidence": "usb-tb-scaffold SKILL.md:65,111; port decl TOP_ALL.v:23038"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "name": "connect"
+    }
+  ],
+  "scoreboard_rules": [
+    {
+      "TODO": "not enough real evidence gathered this pass to state a specific checking rule -- unchanged from v1"
+    }
+  ],
+  "coverage_points": [
+    {
+      "TODO": "no real coverage-point evidence gathered this pass -- unchanged from v1"
+    }
+  ],
+  "vip_components": [
+    {
+      "name": "clk_rst_agent",
+      "class_type": "usb_clk_rst_agent",
+      "instance_name": "clk_rst_agent",
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:154,447"
+    },
+    {
+      "name": "sideband_agent",
+      "class_type": "usb_sideband_agent",
+      "instance_name": "sideband_agent",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:157,448 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "host_agent",
+      "class_type": "svt_usb_agent",
+      "instance_name": "usb_host_agent",
+      "port_indexed": true,
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:77 (declaration, svt_usb_agent usb_host_agent[NUM_USB_PORTS];), 407-414 (per-port creation loop: port_name=$sformatf(\"usb_host_agent_%0d\",p); usb_host_agent[p]=svt_usb_agent::type_id::create(port_name,this);). v3: rewritten from v2's 2 flat entries (host_agent0/host_agent1) into 1 port_indexed entry + top-level port_count:2, matching the real array declaration and for-loop this manifest previously only approximated. Ordering (depends_on clk_rst_agent) ASSERTED by this experiment, not real-coded."
+    },
+    {
+      "name": "mon_agent",
+      "class_type": "svt_usb_agent",
+      "instance_name": "usb_mon_agent",
+      "port_indexed": true,
+      "depends_on": [
+        "host_agent"
+      ],
+      "evidence": "usb_top_env.sv:78 (declaration, svt_usb_agent usb_mon_agent[NUM_USB_PORTS];), 416-427 (per-port creation loop, real: shares host_cfg[p] with host agent, lines 419-420). v3: rewritten from v2's 2 flat entries (mon_agent0/mon_agent1, each depending on its own host_agent0/host_agent1) into 1 port_indexed entry depending on the single host_agent node, since topological_build_order treats a port_indexed component as one node. Ordering itself ASSERTED by this experiment, not real-coded."
+    },
+    {
+      "name": "apb_env",
+      "class_type": "svt_apb_system_env",
+      "instance_name": "apb_env",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:148,436 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "axi_env",
+      "class_type": "svt_axi_system_env",
+      "instance_name": "axi_env",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:151,443 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "dma_env",
+      "class_type": "svt_axi_system_env",
+      "instance_name": "dma_env",
+      "depends_on": [
+        "axi_env"
+      ],
+      "evidence": "usb_top_env.sv:116,361 (real: comment calls it 'a SECOND AXI environment, separate from axi_env', lines 108-115; the depends_on EDGE ITSELF is ASSERTED by this experiment -- real code creates dma_env earlier, at line 361, before axi_env at line 443)"
+    },
+    {
+      "name": "reg_seqr",
+      "class_type": "usb_reg_sequencer",
+      "instance_name": "reg_seqr",
+      "depends_on": [
+        "apb_env",
+        "axi_env"
+      ],
+      "evidence": "usb_top_env.sv:161,450 REAL EVIDENCED EDGE: connect_phase lines 472-475 wire virt_seqr.apb_seqr=apb_env.master.sequencer and virt_seqr.axi_seqr=axi_env.master[0].sequencer and virt_seqr.reg_seqr=reg_seqr, i.e. apb_env/axi_env must already exist for this wiring -- the only depends_on edge in this manifest traceable to real code, not just asserted for the structural test"
+    }
+  ],
+  "generated_files": [
+    "filelist/dv_uvm_files.f",
+    "tb/env/usb_config.sv",
+    "tb/env/usb_coverage.sv",
+    "tb/env/usb_env.sv",
+    "tb/env/usb_env_pkg.sv",
+    "tb/env/usb_scoreboard.sv",
+    "tb/seq/usb_base_vseq.sv",
+    "tb/seq/usb_virtual_sequencer.sv",
+    "tb/tests/usb_base_test.sv",
+    "tb/tests/usb_connect_test.sv",
+    "tb/top/tb_top.sv",
+    "environment_manifest.json"
+  ],
+  "qualification_status": "ENV_GENERATED"
+}

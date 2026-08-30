@@ -1,0 +1,16 @@
+{
+  "default": {
+    "fsdb": "OFF",
+    "vip_trace_report": "ALLOWED",
+    "stop_on_first_meaningful_failure": true
+  },
+  "failure_rerun": {
+    "waveform": "TARGETED_IF_NEEDED",
+    "ask_user": [
+      "dump scope",
+      "dump level"
+    ],
+    "stop_near": "first failure/error/fatal/missing/mismatch"
+  },
+  "rule": "No waveform root-cause claim without actual waveform measurement."
+}

@@ -1,0 +1,46 @@
+{
+  "protocol": "AMBA4_MMxMS",
+  "discover": [
+    "master_count",
+    "slave_count",
+    "address_map",
+    "ID_widths",
+    "data_widths",
+    "outstanding",
+    "ordering",
+    "QoS",
+    "exclusive"
+  ],
+  "bind": [
+    "DUT",
+    "VIP_or_Native_UVC",
+    "clock_reset",
+    "config",
+    "analysis_ports"
+  ],
+  "generate": [
+    "env_pkg",
+    "config",
+    "virtual_sequencer",
+    "base_vseq",
+    "protocol_sequences",
+    "scoreboard",
+    "coverage",
+    "env",
+    "base_test",
+    "smoke_tests",
+    "tb_top",
+    "filelist",
+    "manifest"
+  ],
+  "compile_closure": true,
+  "smoke_closure": [
+    "1x1_rw",
+    "all_masters",
+    "all_slaves",
+    "parallel_rw",
+    "backpressure",
+    "error_response"
+  ],
+  "qualification": "REAL_PROJECT_REQUIRED"
+}

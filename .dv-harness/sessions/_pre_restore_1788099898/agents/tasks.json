@@ -1,0 +1,18 @@
+[
+  {
+    "task_id": "TASK-C098CBE2",
+    "agent": "analysis-agent",
+    "route": "analysis-route",
+    "skills": [
+      "generic-infrastructure-audit",
+      "scoreboard-by-port-audit",
+      "dma-scoreboard-by-port-audit",
+      "performance-by-port-audit",
+      "coverage-by-port-audit"
+    ],
+    "parent_plan": "PLAN-D8DFAC2A",
+    "parallel_group": "ANALYSIS_G1",
+    "depends_on": [],
+    "status": "NOT_STARTED"
+  }
+]

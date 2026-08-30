@@ -1,0 +1,9 @@
+{
+  "job_id": 103156,
+  "pattern": "usb2_enum port1 FS only",
+  "lsf_status": "DONE",
+  "dv_analysis_status": "RERUN_REQUIRED",
+  "uvm_error_count": 0,
+  "uvm_fatal_count": 1,
+  "agent_action": "known FS MPS defect fixed; waiting rerun"
+}

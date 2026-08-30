@@ -1,0 +1,10 @@
+protocol: Ethernet
+critical_fields:
+  - dut_layer
+  - speed_set
+  - interface_type
+  - clocking
+  - frame_limits
+  - crc_fcs
+  - flow_control
+optional_fields: [VLAN, PTP, FEC, autoneg, training, jumbo]

@@ -1,0 +1,62 @@
+{
+  "protocol": "AMBA4_MMxMS",
+  "roles": [
+    "Master",
+    "Slave",
+    "Interconnect"
+  ],
+  "boundaries": [
+    "AXI3",
+    "AXI4",
+    "AXI4_Lite",
+    "AXI_Stream",
+    "AHB",
+    "AHB_Lite",
+    "APB"
+  ],
+  "must_discover": [
+    "master_count",
+    "slave_count",
+    "address_map",
+    "ID_widths",
+    "data_widths",
+    "outstanding",
+    "ordering",
+    "QoS",
+    "exclusive"
+  ],
+  "minimum_smoke": [
+    "1x1_rw",
+    "all_masters",
+    "all_slaves",
+    "parallel_rw",
+    "backpressure",
+    "error_response"
+  ],
+  "scoreboard_semantics": [
+    "master_slave_route",
+    "data_integrity",
+    "ordering",
+    "response_match"
+  ],
+  "coverage_dimensions": [
+    "master_x_slave",
+    "burst",
+    "ID",
+    "outstanding",
+    "ordering",
+    "QoS",
+    "exclusive",
+    "response",
+    "backpressure"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

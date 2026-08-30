@@ -1,0 +1,42 @@
+{
+  "protocol": "UCIe",
+  "discover": [
+    "role",
+    "ucie_version",
+    "boundary",
+    "lane_module_topology",
+    "link_state",
+    "protocol_mode"
+  ],
+  "bind": [
+    "DUT",
+    "VIP_or_Native_UVC",
+    "clock_reset",
+    "config",
+    "analysis_ports"
+  ],
+  "generate": [
+    "env_pkg",
+    "config",
+    "virtual_sequencer",
+    "base_vseq",
+    "protocol_sequences",
+    "scoreboard",
+    "coverage",
+    "env",
+    "base_test",
+    "smoke_tests",
+    "tb_top",
+    "filelist",
+    "manifest"
+  ],
+  "compile_closure": true,
+  "smoke_closure": [
+    "reset",
+    "link_bringup",
+    "basic_transaction",
+    "flow_control",
+    "recovery"
+  ],
+  "qualification": "REAL_PROJECT_REQUIRED"
+}

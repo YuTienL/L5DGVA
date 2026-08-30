@@ -1,0 +1,22 @@
+{
+  "title": "USB subsystem VIP/DUT topology",
+  "protocol": "USB2",
+  "scope": "subsystem",
+  "symptoms": [
+    "topology",
+    "vip",
+    "utmi"
+  ],
+  "topology": "Host/device dual-role VIP wraps DUT PHY via UTMI+ interface",
+  "confidence": "CONFIRMED",
+  "memory_id": "MEM-8177FAA771",
+  "level": "project",
+  "created_at": 1787982833.817575,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

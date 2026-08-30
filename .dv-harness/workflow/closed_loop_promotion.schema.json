@@ -1,0 +1,25 @@
+{
+  "passed_stages": [
+    "INTAKE_READY",
+    "VPLAN_READY",
+    "ARCHITECTURE_READY",
+    "MECHANISM_READY",
+    "TESTS_READY",
+    "EXECUTION_EVIDENCE_READY",
+    "COVERAGE_QUALITY_READY"
+  ],
+  "failure_detected": false,
+  "root_cause": {
+    "classification": "DUT_BUG|TB_BUG|VIP_ISSUE|TEST_ISSUE|SPEC_AMBIGUITY|INFRA_ISSUE|UNKNOWN",
+    "first_bad_event": "string",
+    "causal_chain": [],
+    "supporting_evidence": [],
+    "counter_evidence": [],
+    "confidence": "LOW|MEDIUM|HIGH|VERIFIED"
+  },
+  "calibration_or_fix_applied": false,
+  "rerun_evidence": [],
+  "expert_feedback_reviewed": true,
+  "experience_capture_status": "CAPTURED|NOT_APPLICABLE",
+  "gate": "PROMOTABLE"
+}

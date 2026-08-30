@@ -1,0 +1,46 @@
+{
+  "protocol": "eDP",
+  "status": "BUILDER_AVAILABLE",
+  "production_qualified": false,
+  "roles": [
+    "Source",
+    "Sink",
+    "AUX"
+  ],
+  "required_discovery": [
+    "lane_count",
+    "link_rates",
+    "AUX",
+    "main_link",
+    "video_timing",
+    "training_pattern_support"
+  ],
+  "minimum_smoke": [
+    "AUX_access",
+    "link_training",
+    "main_link_enable",
+    "basic_video_transport"
+  ],
+  "minimum_coverage_dimensions": [
+    "lane",
+    "rate",
+    "training",
+    "AUX",
+    "video_format",
+    "error_recovery"
+  ],
+  "generation_outputs": [
+    "env_pkg.sv",
+    "env.sv",
+    "virtual_sequencer.sv",
+    "base_virtual_sequence.sv",
+    "scoreboard.sv",
+    "coverage.sv",
+    "test_pkg.sv",
+    "tb_top.sv",
+    "filelist.f",
+    "environment_manifest.json",
+    "qualification_plan.json"
+  ],
+  "must_bind_to_current_evidence": true
+}

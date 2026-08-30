@@ -1,0 +1,30 @@
+{
+  "vplan_requirement_ids": [
+    "SPEC-XXX"
+  ],
+  "architecture_nodes": [
+    "ARCH-XXX"
+  ],
+  "verification_mechanisms": [
+    {
+      "mechanism_id": "MECH-XXX",
+      "type": "MONITOR|PREDICTOR|REFERENCE_MODEL|SCOREBOARD|CHECKER|ASSERTION|COVERAGE|OTHER_APPROVED",
+      "purpose": "string",
+      "placement": "string",
+      "evidence_refs": []
+    }
+  ],
+  "planned_testcases": [
+    {
+      "testcase_id": "TC-XXX",
+      "vplan_requirement_ids": [
+        "SPEC-XXX"
+      ],
+      "mechanism_ids": [
+        "MECH-XXX"
+      ],
+      "approved_alternate_verification_method": "optional"
+    }
+  ],
+  "gate": "READY_FOR_TEST_GENERATION"
+}

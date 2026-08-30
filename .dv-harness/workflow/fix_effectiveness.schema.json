@@ -1,0 +1,12 @@
+{
+  "failure_signature_before": "sigA",
+  "failure_signature_after": "none",
+  "root_cause_id": "RCA-1",
+  "fix_revision": "sha",
+  "rerun_evidence": [
+    "run:PASS"
+  ],
+  "targeted_reproducer_passed": true,
+  "broader_regression_passed": true,
+  "new_failures_introduced": false
+}

@@ -1,0 +1,24 @@
+{
+  "selected_subsystems": [
+    {
+      "name": "PCIe",
+      "environment_manifest": "path",
+      "release_sha": "sha",
+      "qualification_state": "SMOKE_QUALIFIED|REGRESSION_QUALIFIED|PRODUCTION_QUALIFIED",
+      "interface_compatibility": "PASS|FAIL",
+      "clock_reset_compatibility": "PASS|FAIL"
+    }
+  ],
+  "system_level_scenarios": [
+    {
+      "scenario_id": "SOC-SCEN-001",
+      "participating_subsystems": [
+        "PCIe",
+        "USB"
+      ],
+      "requirement_ids": [
+        "SOC-REQ-001"
+      ]
+    }
+  ]
+}

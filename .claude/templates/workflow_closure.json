@@ -1,0 +1,14 @@
+{
+  "workflow_run_id": null,
+  "initial_findings": 0,
+  "actionable_findings": 0,
+  "closed_findings": 0,
+  "blocked_findings": 0,
+  "accepted_risks": 0,
+  "implementation_complete": false,
+  "reverify_complete": false,
+  "second_pass_audit_complete": false,
+  "new_findings_after_reverify": 0,
+  "closure_iteration": 0,
+  "status": "NOT_RUN"
+}

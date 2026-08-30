@@ -1,0 +1,20 @@
+{
+  "title": "Working-memory tier backing-store completeness seed",
+  "protocol": "USB2",
+  "scope": "subsystem",
+  "symptoms": [
+    "tier_completion_seed"
+  ],
+  "note": "Seed record proving the working-memory tier has a real backing store; not a claim about live current task/hypothesis state.",
+  "confidence": "UNKNOWN",
+  "memory_id": "MEM-5574094467",
+  "level": "working",
+  "created_at": 1787982833.822809,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

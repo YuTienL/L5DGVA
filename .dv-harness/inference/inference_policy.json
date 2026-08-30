@@ -1,0 +1,33 @@
+{
+  "principle": "Evidence-grounded inference; memory is prior knowledge, not current evidence.",
+  "hypothesis_fields": [
+    "claim",
+    "category",
+    "supporting_evidence",
+    "counter_evidence",
+    "missing_evidence",
+    "confidence",
+    "next_action"
+  ],
+  "confidence_levels": [
+    "LOW",
+    "MEDIUM",
+    "HIGH",
+    "CONFIRMED"
+  ],
+  "high_risk_change_requires": [
+    "HIGH_or_CONFIRMED",
+    "current_evidence",
+    "change_impact",
+    "review_or_approval_policy"
+  ],
+  "next_best_action_utility": [
+    "information_gain",
+    "root_cause_discrimination",
+    "verification_value",
+    "runtime_cost",
+    "compute_cost",
+    "change_risk"
+  ],
+  "counter_evidence_required": true
+}

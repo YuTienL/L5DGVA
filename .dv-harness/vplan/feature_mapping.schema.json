@@ -1,0 +1,29 @@
+{
+  "feature_id": "FEAT-XXX",
+  "source_requirement_ids": [],
+  "feature_name": "string",
+  "scope": "SUBSYSTEM|SYSTEM_LEVEL",
+  "owner_subsystems": [],
+  "participating_subsystems": [],
+  "protocol_features": [],
+  "design_support_status": "SUPPORTED|UNSUPPORTED_BY_DUT|NOT_APPLICABLE|UNKNOWN",
+  "dependencies": {
+    "clock_reset": [],
+    "registers": [],
+    "address_map": [],
+    "interrupts": [],
+    "power": [],
+    "data_paths": [],
+    "other_features": []
+  },
+  "verification_mapping": {
+    "vplan_requirement_ids": [],
+    "testcase_ids": [],
+    "sequence_ids": [],
+    "checker_ids": [],
+    "assertion_ids": [],
+    "coverage_ids": [],
+    "system_scenario_ids": []
+  },
+  "waiver": {}
+}

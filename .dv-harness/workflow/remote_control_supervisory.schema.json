@@ -1,0 +1,6 @@
+{
+  "mode": "SUBSYSTEM_ENV_MODE|SYSTEM_LEVEL_ENV_MODE",
+  "remote_command": "STATUS|WHY|EVIDENCE|REVIEW|PAUSE|RESUME|REDIRECT|APPROVE|REJECT|STOP|TAKEOVER",
+  "target_stage": "optional",
+  "remote_control_as_environment_mode": false
+}

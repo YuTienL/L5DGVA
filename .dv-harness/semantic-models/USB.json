@@ -1,0 +1,17 @@
+{
+  "protocol": "USB",
+  "supported_roles": [
+    "Host",
+    "Device",
+    "Hub"
+  ],
+  "minimum_smoke_tests": [
+    "attach_enum",
+    "control_transfer",
+    "data_transfer"
+  ],
+  "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_DISCOVER_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

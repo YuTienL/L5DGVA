@@ -1,0 +1,1 @@
+USB2_con_vip connect tb/patterns/common/USB2_con_vip.txt

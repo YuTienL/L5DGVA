@@ -1,0 +1,111 @@
+from __future__ import annotations
+import json, os, tempfile
+from pathlib import Path
+from typing import Any, Dict
+
+DEFAULT_CONFIG = {
+    "adapter": "cli",
+    "claude": {
+        "command": "claude",
+        "max_turns": 40,
+        "permission_mode": "dangerously-skip-permissions",
+        "output_format": "json",
+        "allowed_tools": []
+    },
+    "policy": {
+        "language": "zh-TW",
+        "max_stage_retries": 2,
+        "auto_advance_on_pass": True,
+        "stop_on_blocked": True,
+        "stop_on_wait_user": True,
+        "require_exact_server_sha": True,
+        "require_second_pass_audit": True,
+        "require_all_actionable_findings_closed": True,
+        "require_stage_gate_evidence": True,
+        "require_dv_review_cosign": False,
+        # Content-driven inner ReAct loop (2026-08-29, evidence-grounded-react
+        # design pass) -- see dv_harness/react_loop.py. enable_inner_react_loop
+        # is the global escape hatch (per-stage opt-out is graph.Node.react);
+        # the two max_* values are safety backstops, never the intended
+        # termination path (see InnerReactLoop.run()'s priority-ordered
+        # termination conditions).
+        "enable_inner_react_loop": True,
+        "inner_react_max_iterations": 3,
+        "inner_react_max_adapter_calls": 2
+    },
+    "dashboard": {
+        "host": "127.0.0.1",
+        "port": 8765
+    },
+    "knowledge_center": {
+        # Cross-user shared knowledge center (Engineering/Organizational Memory
+        # + Corner-Case Library) on a fixed Linux-server path. Deliberately
+        # OFF and EMPTY by default: CLAUDE.md's SSH/Remote Transport
+        # Connection Intake rule requires the user to be asked before any
+        # remote path is assumed, and this harness must never guess or
+        # hardcode someone else's server path -- see `dv-harness knowledge
+        # setup`, which is the only code path allowed to fill `remote_root`
+        # in and always does so via an interactive prompt.
+        "enabled": False,
+        "remote_root": "",
+        "hop_script": "",
+        "categories": [
+            "usb", "pcie", "amba4", "ethernet", "mipi_csi2", "mipi_dsi",
+            "can_fd", "emmc", "sd_sdio", "_general"
+        ],
+        "sync_on_promote": True,
+        "max_age_days": 180,
+        "configured_by": "",
+        "configured_at": None
+    }
+}
+
+def load_config(project_root: Path) -> Dict[str, Any]:
+    p = project_root / ".dv-harness" / "config.json"
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
+        # BUG FIX (2026-08-28): this used to `return DEFAULT_CONFIG` -- the
+        # literal module-level dict object, not a copy. Any caller that
+        # mutates its own harness's cfg (e.g. `h.cfg["policy"][...] = X`,
+        # done throughout this test suite and by real callers adjusting
+        # policy at runtime) was silently corrupting the shared global
+        # default for every OTHER DVHarness in the same process whose
+        # config.json didn't exist yet -- confirmed via test-order-dependent
+        # failures (test_constraint_and_correction_are_folded_into_next_stage_prompt's
+        # `h.cfg["policy"]["require_stage_gate_evidence"] = False` leaked into
+        # later fresh-tmp-dir harnesses' gate evaluation). Deep-copy here,
+        # matching the pattern already used in the "file exists" branch below.
+        return json.loads(json.dumps(DEFAULT_CONFIG))
+    cfg = json.loads(p.read_text(encoding="utf-8"))
+    merged = json.loads(json.dumps(DEFAULT_CONFIG))
+    for k,v in cfg.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k].update(v)
+        else:
+            merged[k] = v
+    return merged
+
+
+def save_config(project_root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Durable write side of load_config(), added for the CLI/GUI
+    require_dv_review_cosign toggle (2026-08-28 GUI/CLI gap-closure pass):
+    before this, .dv-harness/config.json's policy block was hand-edit-only,
+    with no code path that ever wrote it back. Reuses the same atomic
+    tmpfile + os.replace pattern as storage.StateStore.save()/
+    dashboard._save_project_meta() rather than a plain write_text(), for the
+    same reason their docstrings give: a concurrent GET /api/state read
+    (dashboard.py's own _read_json_file, which already retries a transient
+    PermissionError on Windows) must never observe a half-written file."""
+    from .storage import _atomic_replace
+    p = project_root / ".dv-harness" / "config.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="config.", suffix=".json", dir=str(p.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        _atomic_replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return cfg

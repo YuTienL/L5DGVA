@@ -1,0 +1,21 @@
+{
+  "protocol": "MIPI_DSI",
+  "roles": [
+    "Host",
+    "Device"
+  ],
+  "boundaries": [
+    "D_PHY",
+    "C_PHY",
+    "Protocol"
+  ],
+  "smoke_tests": [
+    "phy_bringup",
+    "command_packet",
+    "video_packet"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

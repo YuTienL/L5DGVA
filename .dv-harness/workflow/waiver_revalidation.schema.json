@@ -1,0 +1,15 @@
+{
+  "waivers": [
+    {
+      "waiver_id": "W1",
+      "approved": true,
+      "evidence": [
+        "spec:sec5"
+      ],
+      "revision": "sha",
+      "expires_at": "ISO8601",
+      "revalidated_for_revision": false,
+      "trigger_conditions_changed": false
+    }
+  ]
+}

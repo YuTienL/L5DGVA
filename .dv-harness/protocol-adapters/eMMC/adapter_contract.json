@@ -1,0 +1,50 @@
+{
+  "protocol": "eMMC",
+  "roles": [
+    "Host",
+    "Device"
+  ],
+  "boundaries": [
+    "Command",
+    "Data",
+    "PHY"
+  ],
+  "must_discover": [
+    "role",
+    "bus_width",
+    "timing_modes",
+    "boot",
+    "partition",
+    "CMDQ"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "identify",
+    "select",
+    "read",
+    "write",
+    "mode_switch"
+  ],
+  "scoreboard_semantics": [
+    "command_response",
+    "data_integrity",
+    "busy_status"
+  ],
+  "coverage_dimensions": [
+    "command",
+    "response",
+    "bus_width",
+    "timing_mode",
+    "partition",
+    "error"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

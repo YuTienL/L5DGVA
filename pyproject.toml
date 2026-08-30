@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dv-agent-harness"
+version = "15.0.0"
+description = "Generic DE + DV Agent Harness for Claude Code based verification workflow"
+requires-python = ">=3.10"
+
+[project.scripts]
+dv-harness = "dv_harness.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dv_harness*"]
+
+[tool.pytest.ini_options]
+# Bare `pytest` at repo root previously crashed with an INTERNALERROR:
+# tools/verification_flow/test_*.py are standalone argparse CLI gate
+# scripts (not pytest tests) that happen to match the test_*.py glob and
+# call ap.parse_args()/sys.exit() at import time. Scope collection to the
+# real test suite instead of fixing pytest's default discovery globally.
+testpaths = ["dv_harness_tests"]

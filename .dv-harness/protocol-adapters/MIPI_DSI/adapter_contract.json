@@ -1,0 +1,48 @@
+{
+  "protocol": "MIPI_DSI",
+  "roles": [
+    "Host",
+    "Device"
+  ],
+  "boundaries": [
+    "D_PHY",
+    "C_PHY",
+    "Protocol"
+  ],
+  "must_discover": [
+    "role",
+    "video_command_mode",
+    "phy_type",
+    "lane_count",
+    "packet_types",
+    "LP_HS_behavior"
+  ],
+  "minimum_smoke": [
+    "reset",
+    "phy_bringup",
+    "command_packet",
+    "video_packet"
+  ],
+  "scoreboard_semantics": [
+    "packet_match",
+    "video_timing",
+    "ECC_CRC"
+  ],
+  "coverage_dimensions": [
+    "mode",
+    "packet_type",
+    "lane",
+    "ECC_CRC",
+    "LP_HS",
+    "error_recovery"
+  ],
+  "binding_requirements": [
+    "current_dut_port_binding",
+    "current_vip_or_native_uvc_class_binding",
+    "clock_reset_binding",
+    "config_binding",
+    "analysis_port_binding"
+  ],
+  "status": "GENERATOR_CAPABLE",
+  "production_qualified": false
+}

@@ -1,0 +1,17 @@
+{
+  "requirement_id": "SPEC-XXX",
+  "feature_id": "FEAT-XXX",
+  "architecture_nodes": [],
+  "interfaces": [],
+  "clock_domains": [],
+  "reset_domains": [],
+  "data_paths": [],
+  "control_paths": [],
+  "register_blocks": [],
+  "dependencies": [],
+  "testcase_ids": [],
+  "checker_ids": [],
+  "coverage_ids": [],
+  "evidence": [],
+  "calibration_status": "UNVERIFIED|CALIBRATED|VERIFIED"
+}

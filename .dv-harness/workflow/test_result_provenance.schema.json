@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "testcase_id": "TC1",
+      "run_id": "RUN1",
+      "rtl_revision": "sha",
+      "tb_revision": "sha",
+      "vip_version": "v",
+      "tool_version": "vcs",
+      "seed": 1,
+      "config_hash": "sha",
+      "result": "PASS|FAIL",
+      "log_hash": "sha",
+      "evidence_bundle_hash": "sha"
+    }
+  ]
+}

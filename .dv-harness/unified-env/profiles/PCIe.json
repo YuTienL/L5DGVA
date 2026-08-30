@@ -1,0 +1,25 @@
+{
+  "protocol": "PCIe",
+  "roles": [
+    "RC",
+    "EP",
+    "Switch",
+    "PHY",
+    "Retimer"
+  ],
+  "boundaries": [
+    "SERDES",
+    "PIPE",
+    "TLP"
+  ],
+  "smoke_tests": [
+    "link_training",
+    "enumeration",
+    "config_rw",
+    "memory_rw"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

@@ -1,0 +1,47 @@
+{
+  "working_memory": [
+    "_default_unclassified"
+  ],
+  "claude_project_memory": [
+    "project_instruction",
+    "coding_convention",
+    "workflow_rule",
+    "stable_tool_notes",
+    "user_preference"
+  ],
+  "blackboard": [
+    "current_state",
+    "active_hypothesis",
+    "graph_state",
+    "plan_state",
+    "current_evidence"
+  ],
+  "job_memory": [
+    "job_result",
+    "job_failure",
+    "job_rerun"
+  ],
+  "project_memory": [
+    "verified_project_fact",
+    "topology",
+    "tool_flow",
+    "known_issue"
+  ],
+  "engineering_memory": [
+    "verified_root_cause",
+    "verified_fix",
+    "debug_lesson"
+  ],
+  "organizational_memory": [
+    "verified_cross_project_lesson",
+    "methodology",
+    "best_practice"
+  ],
+  "forbidden": [
+    "credential",
+    "password",
+    "token",
+    "secret"
+  ],
+  "principle": "Memory is prior knowledge, not current evidence."
+}

@@ -1,0 +1,40 @@
+{
+  "golden_rule": "Do not create the final vPlan until scope and minimum evidence readiness are established.",
+  "subsystem_intake": [
+    "Ask which subsystem/protocol is being verified.",
+    "Ask DUT role/topology/boundary and intended verification level.",
+    "Ask for protocol specification and revision.",
+    "Ask for DUT design specification and supported/unsupported feature list.",
+    "Ask for register/programming guide where applicable.",
+    "Ask for PHY/interface and clock/reset documentation.",
+    "Ask for RTL top/interface sources or port list.",
+    "Ask for VIP manual/examples/source/class reference if VIP will be used.",
+    "Ask for existing UVM env/vPlan/tests/command.txt/regression/coverage if available.",
+    "Ask for known waivers and their design-spec evidence."
+  ],
+  "system_level_intake": [
+    "Ask which completed subsystems will be composed.",
+    "Ask for each subsystem manifest/release-SHA/qualification state.",
+    "Ask system-level use cases and end-to-end scenarios.",
+    "Ask cross-subsystem clock/reset/power dependencies.",
+    "Ask address/resource/interrupt/DMA/data-path relationships.",
+    "Ask cross-subsystem configuration sequence and boot dependencies.",
+    "Ask performance/QoS/concurrency requirements.",
+    "Ask existing system-level spec/use-case/architecture documents.",
+    "Ask unsupported combinations and approved waivers."
+  ],
+  "readiness_gate": {
+    "SUBSYSTEM": [
+      "target scope",
+      "protocol/design spec",
+      "DUT support matrix",
+      "interface/clock-reset evidence"
+    ],
+    "SYSTEM_LEVEL": [
+      "selected subsystems",
+      "subsystem identities",
+      "system use cases",
+      "cross-subsystem dependency evidence"
+    ]
+  }
+}

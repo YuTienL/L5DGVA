@@ -1,0 +1,243 @@
+{
+  "_evidence_notes": {
+    "carried_forward_from_v1": "protocol/role/interfaces/clocks/resets/vip.package_imports/scoreboard_rules/coverage_points below are UNCHANGED from examples/generated_usb_real_evidence_v1/manifest_inputs/usb_env_manifest.json's _evidence_notes (DUT at D:/DV/Task/USB/DUT/RTLCAT/SS_VOUT_USB_CTRL.v, TOP_ALL.v; svt_usb_agent confirmed at D:/DV/Task/USB/VIP/src/sverilog/vcs/svt_usb_agent.sv). Not re-derived this pass -- see v1 file for the original citations.",
+    "vip_components_evidence": "Real component NAMES/CLASS TYPES read directly from the real target file this pass, D:/DV/Task/DV_Agent_Harness_L5/USB_UVM_Handoff/uvm/tb/env/usb_top_env.sv: usb_host_agent[0..1]/usb_mon_agent[0..1] are svt_usb_agent (lines 77-78, created lines 407-426); apb_env is svt_apb_system_env (line 148, created line 436); axi_env AND dma_env are both svt_axi_system_env (lines 151/116 -- dma_env is explicitly commented 'A SECOND AXI environment, separate from axi_env', lines 108-115); clk_rst_agent is usb_clk_rst_agent (line 154, created line 447); sideband_agent is usb_sideband_agent (line 157, created line 448); reg_seqr is usb_reg_sequencer (line 161, created line 450).",
+    "depends_on_honesty_caveat": "The depends_on edges below are NOT a transcription of usb_top_env.sv's real build_phase creation order -- read directly this pass, that order is (1) sys_virt_seqr/ep_check/perf_mon/xfer_sb/frame_util per-port loop, (2) dma_env (ifdef block, lines 356-367), (3) usb_host_agent/usb_mon_agent per-port loop (lines 386-428), (4) apb_env (436), (5) axi_env (443), (6) clk_rst_agent/sideband_agent (447-448), (7) reg_seqr/virt_seqr (450-451) -- i.e. clk_rst_agent is created NEAR THE END in the real file, not first, and the real file asserts no explicit inter-component ordering dependency via comments the way vip_components' depends_on models it (its ordering comments are about *file include* order for type visibility, e.g. lines 20-66, not about build_phase creation order). The one real, evidenced connect-time dependency is reg_seqr/virt_seqr wiring to apb_env.master.sequencer and axi_env.master[0].sequencer at lines 472-475, which DOES require apb_env/axi_env to already exist -- that edge below is real evidence. All other depends_on edges below (clk_rst_agent as a prerequisite for the agents/apb_env/axi_env, mon_agent depending on its paired host_agent) are ASSERTED BY THIS EXPERIMENT ONLY, as a plausible/conventional structural ordering (reset/clock-domain component before protocol agents; monitor sharing its active agent's config), to exercise topological_build_order() with a non-trivial dependency graph -- they are not claims about what usb_top_env.sv's real code requires.",
+    "v3_port_indexed_rewrite": "v2 (examples/generated_usb_real_evidence_v2/manifest_inputs/usb_env_manifest_v2.json, left UNCHANGED as a historical artifact) modeled the real dual-port usb_host_agent[NUM_USB_PORTS]/usb_mon_agent[NUM_USB_PORTS] arrays (usb_top_env.sv lines 77-78) as 4 SEPARATELY-NAMED FLAT SCALAR vip_components entries (host_agent0/host_agent1/mon_agent0/mon_agent1) -- an approximation that does NOT emit a real SV array or for-loop, unlike the real file. This v3 manifest replaces those 4 entries with 2 port_indexed:true entries (host_agent, mon_agent) plus a top-level port_count:2, using the port_indexed/port_count generator extension (dv_harness/uvm_generator/generator.py, InvalidPortCountError + _env_multi_component's port_indexed branch) added this session and verified directly against generator.py source + 32 passing tests in dv_harness_tests/test_per_port_env.py. instance_name is 'usb_host_agent'/'usb_mon_agent' (not 'host_agent'/'mon_agent') specifically so the generator's $sformatf(\"<instance_name>_%0d\", p) creation naming matches usb_top_env.sv's real per-port names verbatim (usb_host_agent_0/usb_host_agent_1/usb_mon_agent_0/usb_mon_agent_1, lines 407/414/426). All other vip_components entries (clk_rst_agent, sideband_agent, apb_env, axi_env, dma_env, reg_seqr) and every other real-evidence-cited field are UNCHANGED from v2 verbatim -- only the host_agent0/host_agent1/mon_agent0/mon_agent1 portion and the depends_on edge that referenced them (mon_agent -> host_agent, collapsed from mon_agent0->host_agent0 / mon_agent1->host_agent1 since both are now single graph nodes) were rewritten, plus the addition of top-level port_count. This still does NOT address the ~15 additional real per-port components usb_top_env.sv actually declares beyond host/mon (payload_cb, ep_check, perf_mon, xfer_sb, frame_util, dma_sb, sys_virt_seqr, and non-port-indexed dma_cfg/usb_top_cfg/virt_seqr/etc) -- see the v2 report's own gap list, still true here.",
+    "v4_additional_components_this_pass": "This v4 manifest adds 9 new vip_components entries on top of v3's 8, ALL re-read and re-verified directly against usb_top_env.sv this pass (not trusted from any prior summary): 6 port_indexed:true entries -- sys_virt_seqr (svt_usb_system_virtual_sequencer, line 146/330), ep_check (usb_ep_check, line 89/332), perf_mon (usb_perf_monitor, line 95/335), xfer_sb (usb_xfer_scoreboard, line 100/343), frame_util (usb_frame_util_monitor, line 105/346), dma_sb (usb_dma_scoreboard, line 118/350, GUARDED by `ifdef USB_UVM_DMA_MON`) -- plus 3 singleton entries: dma_cfg (usb_dma_cfg, line 117/359, also `ifdef USB_UVM_DMA_MON`-guarded), usb_top_cfg (usb_top_cfg, line 163/309-313, itself conditionally built only as a fallback default), and virt_seqr (usb_virtual_sequencer, line 80/451). CORRECTION vs a prior pass's guess: sys_virt_seqr's real class_type is svt_usb_system_virtual_sequencer, a VIP type -- NOT a project usb_-prefixed custom type as the naming pattern of ep_check/perf_mon/xfer_sb might suggest; confirmed directly at declaration line 146 and create() call line 330. OBSERVED BUT NOT MODELED: ep_check[p]'s real create() call at line 332 (usb_ep_check::type_id::create($sformatf(\"ep_check_%0d\", p))) passes ONLY a name string, no parent-component argument -- unlike every other create() call in this file, which all pass `this` (or, for dma_cfg/cfg, are also called with only a name). The vip_components schema has no field for this nuance, so it is recorded here as a citation only. depends_on for the new per-port entries (sys_virt_seqr/ep_check/perf_mon/xfer_sb/frame_util/dma_sb) is usb_top_cfg only: real evidence is that all six are created inside the SAME per-port loop (lines 328-354) gated by `if (!cfg.enable_port[p]) continue;` at line 329, and cfg itself is built earlier at lines 309-313 -- both the real creation order AND the functional reference to cfg.enable_port[p] support this edge. TWO CANDIDATE EDGES WERE DELIBERATELY LEFT OUT despite a real connect_phase wire existing, because the real BUILD-PHASE creation order contradicts them: (1) sys_virt_seqr[p].host_virt_sequencer = usb_host_agent[p].virt_sequencer at connect_phase lines 485-488 might suggest sys_virt_seqr depends_on host_agent, but sys_virt_seqr is actually built at line 330, inside the FIRST per-port loop, strictly BEFORE usb_host_agent is built at line 414, inside a LATER per-port loop -- asserting that edge would misrepresent the real file; (2) dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export) at connect_phase lines 522-536 might suggest dma_sb depends_on dma_env, but dma_sb is built at line 350 (inside the first per-port loop, lines 328-354) strictly BEFORE dma_env is built at line 361 (a separate ifdef block, lines 356-367) -- same reasoning, edge omitted. virt_seqr's depends_on (host_agent, apb_env, axi_env, reg_seqr) is by contrast the STRONGEST-evidenced edge added this pass: it is corroborated by BOTH the real build_phase creation order (virt_seqr is created last, at line 451, strictly after usb_host_agent/apb_env/axi_env/reg_seqr at lines 414/436/443/450) AND real connect_phase references (lines 461-465, 472, 473, 475) that require all four to already exist. dma_cfg and usb_top_cfg both have empty depends_on: their own creation code (lines 359 and 309-313 respectively) makes no reference to any other component in this manifest, so no real edge was found for either, and none was invented."
+  },
+  "protocol": "usb",
+  "role": "device",
+  "port_count": 2,
+  "interfaces": [
+    {
+      "name": "usb0_dp",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- DUT pad is inout wire (TOP_ALL.v:23058); VIP side is wor per usb-tb-scaffold SKILL.md:38, needs tran not assign"
+    },
+    {
+      "name": "usb0_dm",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- same as usb0_dp, TOP_ALL.v:23059"
+    },
+    {
+      "name": "usb0_vbus0",
+      "note": "TODO_PLACEHOLDER_DIRECTION -- TOP_ALL.v:23056 / :25850"
+    }
+  ],
+  "vip": {
+    "package_imports": [
+      "svt_usb_uvm_pkg"
+    ]
+  },
+  "clocks": [
+    {
+      "name": "xtali",
+      "freq_note": "50MHz per TOP_ALL.v:25933 comment"
+    },
+    {
+      "name": "pclk",
+      "freq_note": "APB register clock, TOP_ALL.v:25949"
+    },
+    {
+      "name": "usb0_refclk_p",
+      "freq_note": "PHY differential ref clock, TOP_ALL.v:25854"
+    }
+  ],
+  "resets": [
+    {
+      "name": "xprstn",
+      "polarity": "active_low",
+      "evidence": "usb-tb-scaffold SKILL.md:65,111; port decl TOP_ALL.v:23038"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "name": "connect"
+    }
+  ],
+  "scoreboard_rules": [
+    {
+      "TODO": "not enough real evidence gathered this pass to state a specific checking rule -- unchanged from v1"
+    }
+  ],
+  "coverage_points": [
+    {
+      "TODO": "no real coverage-point evidence gathered this pass -- unchanged from v1"
+    }
+  ],
+  "vip_components": [
+    {
+      "name": "clk_rst_agent",
+      "class_type": "usb_clk_rst_agent",
+      "instance_name": "clk_rst_agent",
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:154,447"
+    },
+    {
+      "name": "sideband_agent",
+      "class_type": "usb_sideband_agent",
+      "instance_name": "sideband_agent",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:157,448 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "host_agent",
+      "class_type": "svt_usb_agent",
+      "instance_name": "usb_host_agent",
+      "port_indexed": true,
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:77 (declaration, svt_usb_agent usb_host_agent[NUM_USB_PORTS];), 407-414 (per-port creation loop: port_name=$sformatf(\"usb_host_agent_%0d\",p); usb_host_agent[p]=svt_usb_agent::type_id::create(port_name,this);). v3: rewritten from v2's 2 flat entries (host_agent0/host_agent1) into 1 port_indexed entry + top-level port_count:2, matching the real array declaration and for-loop this manifest previously only approximated. Ordering (depends_on clk_rst_agent) ASSERTED by this experiment, not real-coded."
+    },
+    {
+      "name": "mon_agent",
+      "class_type": "svt_usb_agent",
+      "instance_name": "usb_mon_agent",
+      "port_indexed": true,
+      "depends_on": [
+        "host_agent"
+      ],
+      "evidence": "usb_top_env.sv:78 (declaration, svt_usb_agent usb_mon_agent[NUM_USB_PORTS];), 416-427 (per-port creation loop, real: shares host_cfg[p] with host agent, lines 419-420). v3: rewritten from v2's 2 flat entries (mon_agent0/mon_agent1, each depending on its own host_agent0/host_agent1) into 1 port_indexed entry depending on the single host_agent node, since topological_build_order treats a port_indexed component as one node. Ordering itself ASSERTED by this experiment, not real-coded."
+    },
+    {
+      "name": "apb_env",
+      "class_type": "svt_apb_system_env",
+      "instance_name": "apb_env",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:148,436 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "axi_env",
+      "class_type": "svt_axi_system_env",
+      "instance_name": "axi_env",
+      "depends_on": [
+        "clk_rst_agent"
+      ],
+      "evidence": "usb_top_env.sv:151,443 (ordering ASSERTED by this experiment, not real-coded)"
+    },
+    {
+      "name": "dma_env",
+      "class_type": "svt_axi_system_env",
+      "instance_name": "dma_env",
+      "depends_on": [
+        "axi_env"
+      ],
+      "evidence": "usb_top_env.sv:116,361 (real: comment calls it 'a SECOND AXI environment, separate from axi_env', lines 108-115; the depends_on EDGE ITSELF is ASSERTED by this experiment -- real code creates dma_env earlier, at line 361, before axi_env at line 443)"
+    },
+    {
+      "name": "reg_seqr",
+      "class_type": "usb_reg_sequencer",
+      "instance_name": "reg_seqr",
+      "depends_on": [
+        "apb_env",
+        "axi_env"
+      ],
+      "evidence": "usb_top_env.sv:161,450 REAL EVIDENCED EDGE: connect_phase lines 472-475 wire virt_seqr.apb_seqr=apb_env.master.sequencer and virt_seqr.axi_seqr=axi_env.master[0].sequencer and virt_seqr.reg_seqr=reg_seqr, i.e. apb_env/axi_env must already exist for this wiring -- the only depends_on edge in this manifest traceable to real code, not just asserted for the structural test"
+    },
+    {
+      "name": "sys_virt_seqr",
+      "class_type": "svt_usb_system_virtual_sequencer",
+      "instance_name": "sys_virt_seqr",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:146 (declaration, svt_usb_system_virtual_sequencer sys_virt_seqr[2];), 328-331 (creation inside the cfg.enable_port[p]-gated per-port loop: sys_virt_seqr[p] = svt_usb_system_virtual_sequencer::type_id::create($sformatf(\"sys_virt_seqr_%0d\", p), this);). class_type is a VIP type (svt_ prefix), NOT a project usb_-prefixed custom type -- confirmed directly at line 146/330, correcting any pattern-based guess. depends_on usb_top_cfg is REAL EVIDENCE: line 329 `if (!cfg.enable_port[p]) continue;` gates this same loop, and cfg is built earlier at lines 309-313. A connect_phase wire at lines 485-488 (sys_virt_seqr[p].host_virt_sequencer = usb_host_agent[p].virt_sequencer) might suggest a host_agent dependency too, but the real build_phase creates sys_virt_seqr (line 330) BEFORE usb_host_agent (line 414) -- that edge would contradict the real creation order, so it is deliberately NOT included."
+    },
+    {
+      "name": "ep_check",
+      "class_type": "usb_ep_check",
+      "instance_name": "ep_check",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:89 (declaration, usb_ep_check ep_check[2];), 332-333 (creation inside the same cfg.enable_port[p]-gated loop as sys_virt_seqr: ep_check[p] = usb_ep_check::type_id::create($sformatf(\"ep_check_%0d\", p)); ep_check[p].port = p;). NOTE: this real create() call passes ONLY the name string, no parent-component argument (unlike perf_mon/xfer_sb/frame_util/dma_sb below, which all pass `this`) -- verified directly at line 332, not assumed; the vip_components schema has no field for this nuance. depends_on usb_top_cfg is the same real evidence as sys_virt_seqr above (cfg.enable_port[p] gate at line 329, cfg built earlier at 309-313)."
+    },
+    {
+      "name": "perf_mon",
+      "class_type": "usb_perf_monitor",
+      "instance_name": "perf_mon",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:95 (declaration, usb_perf_monitor perf_mon[2];), 335-341 (creation inside the same cfg.enable_port[p]-gated loop: perf_mon[p] = usb_perf_monitor::type_id::create($sformatf(\"perf_mon_%0d\", p), this); perf_mon[p].port = p; perf_mon[p].set_speed_from_build();). depends_on usb_top_cfg is the same real evidence as sys_virt_seqr/ep_check above."
+    },
+    {
+      "name": "xfer_sb",
+      "class_type": "usb_xfer_scoreboard",
+      "instance_name": "xfer_sb",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:100 (declaration, usb_xfer_scoreboard xfer_sb[2];), 343-344 (creation inside the same cfg.enable_port[p]-gated loop: xfer_sb[p] = usb_xfer_scoreboard::type_id::create($sformatf(\"xfer_sb_%0d\", p), this);). depends_on usb_top_cfg is the same real evidence as the entries above."
+    },
+    {
+      "name": "frame_util",
+      "class_type": "usb_frame_util_monitor",
+      "instance_name": "frame_util",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:105 (declaration, usb_frame_util_monitor frame_util[2];), 346-348 (creation inside the same cfg.enable_port[p]-gated loop: frame_util[p] = usb_frame_util_monitor::type_id::create($sformatf(\"frame_util_%0d\", p), this); frame_util[p].port = p;). depends_on usb_top_cfg is the same real evidence as the entries above."
+    },
+    {
+      "name": "dma_sb",
+      "class_type": "usb_dma_scoreboard",
+      "instance_name": "dma_sb",
+      "port_indexed": true,
+      "depends_on": [
+        "usb_top_cfg"
+      ],
+      "evidence": "usb_top_env.sv:118 (declaration, usb_dma_scoreboard dma_sb[2];), 349-353 (creation, GUARDED by `ifdef USB_UVM_DMA_MON`, still inside the same cfg.enable_port[p]-gated per-port loop, lines 328-354: dma_sb[p] = usb_dma_scoreboard::type_id::create($sformatf(\"dma_sb_%0d\", p), this); dma_sb[p].port = p;). CONDITIONAL COMPILATION: this component only exists in a build with +define+USB_UVM_DMA_MON. depends_on usb_top_cfg is the same real evidence as the entries above (cfg.enable_port[p] gate). A connect_phase wire at lines 522-536 (dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export)) might suggest a dma_env dependency too, but the real build_phase creates dma_sb (line 350, inside the FIRST per-port loop) BEFORE dma_env (line 361, inside a SEPARATE later ifdef block, lines 356-367) -- that edge would contradict the real creation order, so it is deliberately NOT included."
+    },
+    {
+      "name": "dma_cfg",
+      "class_type": "usb_dma_cfg",
+      "instance_name": "dma_cfg",
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:117 (declaration, usb_dma_cfg dma_cfg;), 359 (creation, GUARDED by `ifdef USB_UVM_DMA_MON`: dma_cfg = usb_dma_cfg::type_id::create(\"dma_cfg\"); -- no parent-component argument passed). CONDITIONAL COMPILATION: only exists in a build with +define+USB_UVM_DMA_MON. No real evidence was found for any depends_on -- its creation at line 359 makes no reference to any other component in this manifest, so depends_on is left empty rather than inventing one."
+    },
+    {
+      "name": "usb_top_cfg",
+      "class_type": "usb_top_cfg",
+      "instance_name": "cfg",
+      "depends_on": [],
+      "evidence": "usb_top_env.sv:163 (declaration, usb_top_cfg cfg;), 309-313 (creation, CONDITIONAL: only built as a fallback default when uvm_config_db#(usb_top_cfg)::get(get_parent(), get_name(), \"cfg\", cfg) fails to find an externally-provided cfg: cfg = usb_top_cfg::type_id::create(\"cfg\"); cfg.setup_ss_capable_defaults();). This is the FIRST component-like object built in build_phase, before the per-port loop at line 328 and before every other vip_components entry in this manifest -- the real evidence basis for sys_virt_seqr/ep_check/perf_mon/xfer_sb/frame_util/dma_sb above all listing depends_on:[\"usb_top_cfg\"]. No earlier component is referenced in its own creation, so its own depends_on is left empty."
+    },
+    {
+      "name": "virt_seqr",
+      "class_type": "usb_virtual_sequencer",
+      "instance_name": "virt_seqr",
+      "depends_on": [
+        "host_agent",
+        "apb_env",
+        "axi_env",
+        "reg_seqr"
+      ],
+      "evidence": "usb_top_env.sv:80 (declaration, usb_virtual_sequencer virt_seqr;), 451 (creation: virt_seqr = usb_virtual_sequencer::type_id::create(\"virt_seqr\", this);) -- the LAST component created in build_phase, strictly after usb_host_agent (414), apb_env (436), axi_env (443) and reg_seqr (450), matching this depends_on list exactly. REAL EVIDENCED connect_phase wiring at lines 461-465 (virt_seqr.usb_xfer_seqr[p] = usb_host_agent[p].xfer_sequencer), 472 (virt_seqr.apb_seqr = apb_env.master.sequencer), 473 (virt_seqr.axi_seqr = axi_env.master[0].sequencer) and 475 (virt_seqr.reg_seqr = reg_seqr) all require these four components to already exist by connect_phase. This is the strongest depends_on evidence added this pass, since it is corroborated by BOTH the real build_phase creation order AND the real connect_phase reference, unlike sys_virt_seqr/dma_sb above where the two would have disagreed."
+    }
+  ],
+  "generated_files": [
+    "filelist/dv_uvm_files.f",
+    "tb/env/usb_config.sv",
+    "tb/env/usb_coverage.sv",
+    "tb/env/usb_env.sv",
+    "tb/env/usb_env_pkg.sv",
+    "tb/env/usb_scoreboard.sv",
+    "tb/seq/usb_base_vseq.sv",
+    "tb/seq/usb_virtual_sequencer.sv",
+    "tb/tests/usb_base_test.sv",
+    "tb/tests/usb_connect_test.sv",
+    "tb/top/tb_top.sv",
+    "environment_manifest.json"
+  ],
+  "qualification_status": "ENV_GENERATED"
+}

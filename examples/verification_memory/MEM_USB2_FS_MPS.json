@@ -1,0 +1,30 @@
+{
+  "memory_id": "MEM-USB2-FS-MPS",
+  "level": "engineering",
+  "title": "USB2 FS enumeration t=0 fatal caused by FS MPS configuration",
+  "protocol": "USB2",
+  "scope": "subsystem",
+  "symptoms": [
+    "FS",
+    "enumeration",
+    "t=0",
+    "UVM_FATAL",
+    "MPS"
+  ],
+  "root_cause": "Incorrect Full-Speed MPS configuration",
+  "fix": "Correct FS MPS configuration according to validated DUT/VIP context",
+  "evidence": [
+    "sim.log",
+    "FSDB",
+    "single simulation PASS",
+    "regression PASS"
+  ],
+  "verification": {
+    "single_sim": "PASS",
+    "regression": "PASS",
+    "reaudit": "CLEAN"
+  },
+  "confidence": "CONFIRMED",
+  "reusable": true,
+  "current_evidence_required": true
+}

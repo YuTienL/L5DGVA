@@ -1,0 +1,28 @@
+{
+  "schema_version": "2.0",
+  "protocol": {
+    "value": "PCIe",
+    "source": "RTL",
+    "confidence": "HIGH",
+    "blocking": true,
+    "notes": null
+  },
+  "profile": {
+    "value": "PCIe/pcie-profile",
+    "source": "protocol-router",
+    "confidence": "HIGH",
+    "blocking": true,
+    "notes": null
+  },
+  "evidence": [
+    {"item":"Generation","value":"Gen5","source":"pcie_cfg.sv","confidence":"HIGH","blocking":true},
+    {"item":"Role","value":"Endpoint","source":"VIP config","confidence":"HIGH","blocking":true},
+    {"item":"Width","value":"x4","source":"RTL parameter","confidence":"HIGH","blocking":true},
+    {"item":"SR-IOV","value":"Enabled?","source":"testcase name","confidence":"LOW","blocking":false},
+    {"item":"MSI-X","value":"Enabled","source":"config register","confidence":"HIGH","blocking":false}
+  ],
+  "assumptions": [],
+  "open_questions": [],
+  "blocking_unknown_count": 0,
+  "readiness_overrides": {}
+}

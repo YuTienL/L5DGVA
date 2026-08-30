@@ -1,0 +1,27 @@
+{
+  "selected_subsystems": [
+    "PCIe",
+    "USB"
+  ],
+  "system_requirement_ids": [
+    "SOC-R1"
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "SC1",
+      "participating_subsystems": [
+        "PCIe",
+        "USB"
+      ],
+      "system_requirement_ids": [
+        "SOC-R1"
+      ],
+      "mechanism_ids": [
+        "M1"
+      ],
+      "coverage_ids": [
+        "C1"
+      ]
+    }
+  ]
+}

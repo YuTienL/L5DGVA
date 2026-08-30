@@ -1,0 +1,43 @@
+{
+  "protocol": "eMMC",
+  "discover": [
+    "role",
+    "bus_width",
+    "timing_modes",
+    "boot",
+    "partition",
+    "CMDQ"
+  ],
+  "bind": [
+    "DUT",
+    "VIP_or_Native_UVC",
+    "clock_reset",
+    "config",
+    "analysis_ports"
+  ],
+  "generate": [
+    "env_pkg",
+    "config",
+    "virtual_sequencer",
+    "base_vseq",
+    "protocol_sequences",
+    "scoreboard",
+    "coverage",
+    "env",
+    "base_test",
+    "smoke_tests",
+    "tb_top",
+    "filelist",
+    "manifest"
+  ],
+  "compile_closure": true,
+  "smoke_closure": [
+    "reset",
+    "identify",
+    "select",
+    "read",
+    "write",
+    "mode_switch"
+  ],
+  "qualification": "REAL_PROJECT_REQUIRED"
+}

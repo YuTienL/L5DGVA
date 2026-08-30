@@ -1,0 +1,19 @@
+{
+  "coverage_items": [
+    {
+      "coverage_id": "COV-XXX",
+      "requirement_ids": [
+        "SPEC-XXX"
+      ],
+      "hit": true,
+      "credit": true,
+      "checker_ids": [],
+      "scoreboard_ids": [],
+      "assertion_ids": [],
+      "approved_alternate_evidence": "optional",
+      "execution_evidence": [
+        "regression_run:123"
+      ]
+    }
+  ]
+}

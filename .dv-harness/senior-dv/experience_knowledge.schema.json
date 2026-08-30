@@ -1,0 +1,17 @@
+{
+  "knowledge_id": "DVK-XXX",
+  "title": "string",
+  "protocols": [],
+  "versions": [],
+  "architecture_preconditions": [],
+  "pattern": "string",
+  "failure_signature": [],
+  "root_cause": "string",
+  "recommended_tests": [],
+  "recommended_observability": [],
+  "risk": "P0|P1|P2|P3",
+  "evidence": [],
+  "expert_approved": false,
+  "applicability_constraints": [],
+  "superseded_by": "optional"
+}

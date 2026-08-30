@@ -1,0 +1,7 @@
+{
+  "missing_expected_transactions": 0,
+  "missing_actual_transactions": 0,
+  "duplicate_transactions": 0,
+  "max_transaction_latency": 100,
+  "observed_max_transaction_latency": 10
+}

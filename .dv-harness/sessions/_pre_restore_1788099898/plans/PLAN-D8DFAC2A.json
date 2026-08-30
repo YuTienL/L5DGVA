@@ -1,0 +1,49 @@
+{
+  "plan_id": "PLAN-D8DFAC2A",
+  "node_id": "INFRASTRUCTURE_AUDIT",
+  "goal": "sanity",
+  "status": "RUNNING",
+  "steps": [
+    {
+      "step_id": "P01",
+      "name": "generic-infrastructure-audit",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "generic-infrastructure-audit",
+      "status": "NOT_STARTED"
+    },
+    {
+      "step_id": "P02",
+      "name": "scoreboard-by-port-audit",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "scoreboard-by-port-audit",
+      "status": "NOT_STARTED"
+    },
+    {
+      "step_id": "P03",
+      "name": "dma-scoreboard-by-port-audit",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "dma-scoreboard-by-port-audit",
+      "status": "NOT_STARTED"
+    },
+    {
+      "step_id": "P04",
+      "name": "performance-by-port-audit",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "performance-by-port-audit",
+      "status": "NOT_STARTED"
+    },
+    {
+      "step_id": "P05",
+      "name": "coverage-by-port-audit",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "coverage-by-port-audit",
+      "status": "NOT_STARTED"
+    }
+  ],
+  "revision": 1
+}

@@ -1,0 +1,28 @@
+{
+  "name": "2026-08-30_usb_gap_closing_progress",
+  "note": "Rounds 1-18 complete this window: v8 branch-arch skills codified; multi-agent-evidence-consensus + independent-evidence-synthesis methodology; gap-closing-evidence-consensus reusable workflow; generator.py DSLs (virtual_sequences, scoreboard_rules, connections kind=assign/construct/call, address_map_verifier); IP_UVM_DV_Gen.md agent imported; sim_log_analysis.py real log parser; vplan_writer real xlsx generator (USB_vPlan_real.xlsx, honest 4.17%25 coverage); coverage dashboard wiring; one-click signoff; HarnessState multi-active-stage consumers; evidence-driven protocol routing; Blackboard findings/project reconciliation; genuine content-driven InnerReactLoop. .dv-workflow/command_inventory.csv has real 24-entry USB DE pattern inventory. Push gate still open (env content + command.txt conversion + scoreboard not all fully ready). Remote SIMV_GIT tree confirmed real with live vcs.log/FSDB/fsdbreport binary -- fsdbreport requires -lsfint per site LSF wrapper, still being verified via manual relay.",
+  "saved_at": 1788024918.6860716,
+  "saved_by": "peter.lin",
+  "current_stage": "ENV_CHECK",
+  "active_stages": [],
+  "overall_status": "NOT_STARTED",
+  "git_sha": null,
+  "server_sha": null,
+  "files": [
+    "state.json",
+    "control.json",
+    "config.json",
+    "events.jsonl"
+  ],
+  "dirs": [
+    "blackboard",
+    "plans",
+    "react",
+    "agents",
+    "telemetry",
+    "lsf"
+  ],
+  "missing": [
+    "project_meta.json"
+  ]
+}

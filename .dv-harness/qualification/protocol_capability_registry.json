@@ -1,0 +1,109 @@
+{
+  "note": "Initial status is intentionally conservative until real qualification evidence is recorded.",
+  "protocols": {
+    "USB_2_3x": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/USB/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/USB.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "PCIe": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/PCIe/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/PCIe.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "Ethernet": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/Ethernet/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/Ethernet.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "MIPI_CSI2": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/MIPI_CSI2/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/MIPI_CSI2.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "MIPI_DSI": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/MIPI_DSI/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/MIPI_DSI.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "CAN_FD": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "AMBA4_MULTI_MASTER_MULTI_SLAVE": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/AMBA4_MMxMS/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/AMBA4_MMxMS.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "eMMC": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/eMMC/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/eMMC.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "SD_SDIO": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/SD_SDIO/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/SD_SDIO.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "eDP_DisplayPort": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/eDP/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/eDP.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    },
+    "UCIe": {
+      "status": "REAL_GENERATION_READY",
+      "qualification_status": "BUILDER_AVAILABLE",
+      "builder_profile": ".dv-harness/universal-protocol-platform/builders/UCIe/builder_profile.json",
+      "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/UCIe.json",
+      "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
+      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
+      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+    }
+  },
+  "new_interface_framework": {
+    "status": "REAL_GENERATION_READY",
+    "paths": [
+      "VIP_ADAPTER",
+      "NATIVE_UVC"
+    ],
+    "qualification_status": "BUILDER_AVAILABLE"
+  }
+}

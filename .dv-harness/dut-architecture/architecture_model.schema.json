@@ -1,0 +1,53 @@
+{
+  "dut_name": "string",
+  "revision": "string",
+  "evidence_revision": "string",
+  "hierarchy": {
+    "top": "string",
+    "blocks": [],
+    "subsystems": []
+  },
+  "interfaces": [
+    {
+      "name": "string",
+      "protocol": "PCIe|USB|Ethernet|MIPI|AMBA|eDP|eMMC|SDIO|UCIe|OTHER",
+      "role": "string",
+      "boundary": "string",
+      "ports": [],
+      "connected_to": []
+    }
+  ],
+  "bus_topology": {
+    "masters": [],
+    "slaves": [],
+    "interconnects": [],
+    "address_map": []
+  },
+  "clock_domains": [
+    {
+      "name": "string",
+      "source": "string",
+      "frequency": "string",
+      "consumers": []
+    }
+  ],
+  "reset_domains": [
+    {
+      "name": "string",
+      "polarity": "string",
+      "dependencies": [],
+      "consumers": []
+    }
+  ],
+  "power_domains": [],
+  "interrupt_topology": [],
+  "dma_paths": [],
+  "data_paths": [],
+  "control_paths": [],
+  "register_blocks": [],
+  "memory_regions": [],
+  "feature_dependencies": [],
+  "unknowns": [],
+  "evidence": [],
+  "confidence": "LOW|MEDIUM|HIGH|VERIFIED"
+}

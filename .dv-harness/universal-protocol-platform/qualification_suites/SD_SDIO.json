@@ -1,0 +1,67 @@
+{
+  "protocol": "SD_SDIO",
+  "preconditions": [
+    "current_dut_identity",
+    "current_spec_revision",
+    "current_vip_or_native_uvc_identity",
+    "toolchain_identity"
+  ],
+  "gates": [
+    {
+      "name": "EVIDENCE_READY",
+      "requires": [
+        "SD_or_SDIO_or_combo",
+        "bus_width",
+        "speed_modes",
+        "function_count",
+        "command_data_boundary"
+      ]
+    },
+    {
+      "name": "ENV_GENERATED",
+      "requires": [
+        "generated_sources",
+        "manifest",
+        "filelist"
+      ]
+    },
+    {
+      "name": "COMPILE_QUALIFIED",
+      "requires": [
+        "compile_exit_zero",
+        "no_unwaived_compile_error"
+      ]
+    },
+    {
+      "name": "SMOKE_QUALIFIED",
+      "requires": [
+        "reset",
+        "identify",
+        "select",
+        "SD_read_write_if_applicable",
+        "SDIO_function_access_if_applicable"
+      ]
+    },
+    {
+      "name": "PROTOCOL_QUALIFIED",
+      "requires": [
+        "checker_or_scoreboard_pass",
+        "protocol_coverage_evidence"
+      ]
+    },
+    {
+      "name": "REGRESSION_QUALIFIED",
+      "requires": [
+        "qualification_regression_pass"
+      ]
+    },
+    {
+      "name": "PRODUCTION_QUALIFIED",
+      "requires": [
+        "traceable_release",
+        "all_previous_gates",
+        "no_unresolved_blocker"
+      ]
+    }
+  ]
+}

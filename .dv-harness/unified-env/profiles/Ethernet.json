@@ -1,0 +1,27 @@
+{
+  "protocol": "Ethernet",
+  "roles": [
+    "MAC",
+    "PCS",
+    "PMA",
+    "PHY"
+  ],
+  "boundaries": [
+    "MII",
+    "GMII",
+    "XGMII",
+    "USXGMII",
+    "SXGMII",
+    "SERDES"
+  ],
+  "smoke_tests": [
+    "link_bringup",
+    "tx_frame",
+    "rx_frame",
+    "crc"
+  ],
+  "generation_state": "GENERATOR_AVAILABLE",
+  "vip_binding": "MUST_LEARN_FROM_CURRENT_VIP",
+  "native_uvc_fallback": true,
+  "production_qualified": false
+}

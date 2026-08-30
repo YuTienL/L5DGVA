@@ -1,0 +1,67 @@
+{
+  "protocol": "eDP",
+  "preconditions": [
+    "current_dut_identity",
+    "current_spec_revision",
+    "current_vip_or_native_uvc_identity",
+    "toolchain_identity"
+  ],
+  "gates": [
+    {
+      "name": "EVIDENCE_READY",
+      "requires": [
+        "lane_count",
+        "link_rates",
+        "AUX",
+        "main_link",
+        "video_timing",
+        "training_pattern_support"
+      ]
+    },
+    {
+      "name": "ENV_GENERATED",
+      "requires": [
+        "generated_sources",
+        "manifest",
+        "filelist"
+      ]
+    },
+    {
+      "name": "COMPILE_QUALIFIED",
+      "requires": [
+        "compile_exit_zero",
+        "no_unwaived_compile_error"
+      ]
+    },
+    {
+      "name": "SMOKE_QUALIFIED",
+      "requires": [
+        "AUX_access",
+        "link_training",
+        "main_link_enable",
+        "basic_video_transport"
+      ]
+    },
+    {
+      "name": "PROTOCOL_QUALIFIED",
+      "requires": [
+        "checker_or_scoreboard_pass",
+        "protocol_coverage_evidence"
+      ]
+    },
+    {
+      "name": "REGRESSION_QUALIFIED",
+      "requires": [
+        "qualification_regression_pass"
+      ]
+    },
+    {
+      "name": "PRODUCTION_QUALIFIED",
+      "requires": [
+        "traceable_release",
+        "all_previous_gates",
+        "no_unresolved_blocker"
+      ]
+    }
+  ]
+}

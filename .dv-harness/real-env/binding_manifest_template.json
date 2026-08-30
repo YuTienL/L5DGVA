@@ -1,0 +1,18 @@
+{
+  "protocol": null,
+  "dut_top": null,
+  "role": null,
+  "dut_interfaces": [],
+  "vip": {
+    "package_imports": [],
+    "agent_type": null,
+    "agent_instance": "vip_agent",
+    "config_type": null,
+    "role_setting": null,
+    "interface_binding": [],
+    "analysis_exports": []
+  },
+  "clock_reset": [],
+  "register_model": {},
+  "status": "UNBOUND"
+}

@@ -1,0 +1,14 @@
+{
+  "repo": null,
+  "remote": null,
+  "branch": null,
+  "upstream": null,
+  "local_sha": null,
+  "remote_sha": null,
+  "ahead": null,
+  "behind": null,
+  "working_tree_clean": null,
+  "submodules": [],
+  "last_push_sha": null,
+  "server_verified_sha": null
+}

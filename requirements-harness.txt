@@ -1,0 +1,3 @@
+# Core harness uses Python standard library only.
+# Optional Anthropic Python adapter:
+claude-code-sdk

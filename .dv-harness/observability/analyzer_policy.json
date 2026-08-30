@@ -1,0 +1,40 @@
+{
+  "scoreboard_when": [
+    "transaction enters and exits a data path",
+    "request must match response/completion",
+    "multi-master/multi-slave routing or ordering must be checked",
+    "payload/data transformation needs end-to-end comparison",
+    "cross-subsystem result must match a reference model",
+    "DMA/memory movement needs data-integrity tracking"
+  ],
+  "checker_when": [
+    "protocol legality or sequencing must be validated",
+    "configuration/register programming must match expected behavior",
+    "state transition or response code must satisfy a semantic rule",
+    "packet/frame/TLP fields require semantic checking",
+    "resource/address/interrupt routing must be validated"
+  ],
+  "assertion_when": [
+    "cycle/local temporal property exists",
+    "handshake timing must hold",
+    "reset/clock sequencing must hold",
+    "signal stability is required",
+    "illegal state/transition must never occur",
+    "FIFO overflow/underflow or onehot/mutex property applies"
+  ],
+  "placement_rules": [
+    "assertion close to signal/property boundary",
+    "checker at protocol/state/config semantic boundary",
+    "scoreboard at transaction/data-path comparison boundary",
+    "avoid redundant duplicated mechanisms"
+  ],
+  "evidence_rules": [
+    "Calibrated architecture and regression evidence drive placement.",
+    "Inventory existing mechanisms before adding new ones.",
+    "Do not assert guessed DUT behavior.",
+    "Unknown architecture paths remain explicit gaps."
+  ],
+  "workflow_position": "AFTER_DUT_ARCHITECTURE_DISCOVERY_BEFORE_TEST_GENERATION",
+  "planning_before_test_generation": true,
+  "implementation_is_iterative": true
+}

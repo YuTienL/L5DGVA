@@ -1,0 +1,19 @@
+{
+  "priority": [
+    "Current RTL actually inspected",
+    "Current waveform actually measured",
+    "Current compile/simulation log",
+    "Current VIP trace/report",
+    "Current spec/register/PHY docs",
+    "Current VIP docs/examples/source",
+    "Qualified manifest/evidence",
+    "CLAUDE.md/memory",
+    "Inference"
+  ],
+  "rules": [
+    "CLAUDE.md and memory are hints, not proof.",
+    "RTL claims require actual current RTL/source inspection.",
+    "Waveform claims require actual waveform measurement when applicable.",
+    "Inference must remain labeled hypothesis until verified by evidence."
+  ]
+}

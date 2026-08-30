@@ -1,0 +1,9 @@
+{
+  "state": "NOT_STARTED",
+  "session_id": null,
+  "host": null,
+  "working_directory": null,
+  "started_at": null,
+  "last_status_update": null,
+  "remote_control_enabled": false
+}

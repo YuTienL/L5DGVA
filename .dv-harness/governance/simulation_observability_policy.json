@@ -1,0 +1,17 @@
+{
+  "default_fsdb_dump": false,
+  "default_waveform_dump": false,
+  "vip_trace_report_allowed": true,
+  "default_evidence_order": [
+    "sim.log",
+    "uvm_assertion",
+    "scoreboard_checker_transaction",
+    "vip_trace_report",
+    "targeted_logging",
+    "fsdb_waveform"
+  ],
+  "fsdb_enable_requires_user_scope_level_confirmation": true,
+  "fsdb_global_regression_default": false,
+  "vip_trace_must_use_verified_project_vip_mechanism": true,
+  "vip_trace_is_not_signal_waveform_evidence": true
+}
