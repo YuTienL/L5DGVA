@@ -1360,12 +1360,13 @@ def _run_and_parse_fsdb_report(fsdb_path: str, period: str = "", hier: str = "")
 def append_coverage_history_sample(root: Path, percent: float, timestamp: Any = None) -> list:
     """Thin wrapper over coverage_analysis.append_history_sample(), pointed
     at this project's default .dv-harness/coverage/history.json -- the real
-    production call a coverage-producing step (e.g. a future
-    COVERAGE_CLOSURE-stage script) makes to grow the history GET
-    /api/coverage's trend/trend_svg fields read. Not currently called by any
-    engine stage yet (no stage in this repo reduces a real coverage database
-    to a percent number today) -- this is the wiring so the next one that
-    does has a real, tested append path rather than hand-edited JSON."""
+    production call a coverage-producing step makes to grow the history GET
+    /api/coverage's trend/trend_svg fields read. Called by engine.py's
+    DVHarness._append_coverage_history_sample() on every real
+    COVERAGE_CLOSURE PASS (Task 6, 2026-08-31 poster-gap-closing round 2),
+    with the percent taken from coverage_signoff_verdict_gate's own
+    gate-verified coverage_credit_percent evidence field -- never a
+    placeholder."""
     from . import coverage_analysis as ca
     return ca.append_history_sample(_default_coverage_history_path(root), percent, timestamp)
 

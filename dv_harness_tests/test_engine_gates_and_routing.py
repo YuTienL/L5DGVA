@@ -631,6 +631,69 @@ def test_coverage_closure_requires_hole_regeneration_and_test_generation_gates()
     assert verdict2 == "PASS", reasons2
 
 
+def test_run_stage_appends_real_coverage_history_sample_on_coverage_closure_pass():
+    # Task 6 (poster-gap-closing round 2): dashboard.append_coverage_history_sample()
+    # was real, tested rendering/storage logic whose own docstring admitted "not
+    # currently called by any engine stage yet". A real COVERAGE_CLOSURE PASS
+    # must now grow .dv-harness/coverage/history.json with the actual
+    # coverage_signoff_verdict_gate-reported coverage_credit_percent (the one
+    # COVERAGE_CLOSURE gate whose evidence carries a real coverage percent --
+    # see coverage_signoff_verdict_gate.py's own `coverage_credit_percent`
+    # field) -- not a placeholder -- mirroring _promote_experience_knowledge's
+    # exact "helper method, gated on STAGE_GATES, called from the PASS branch"
+    # pattern.
+    from dv_harness.engine import DVHarness
+    from dv_harness.adapters.base import AgentResult
+
+    tmp = _mk_smoke_project()
+    try:
+        base = {
+            "signoff_requested": True, "true_pass": True, "active_failure_count": 0,
+            "coverage_credit_percent": 87, "waived_items": 0, "approved_waivers": True,
+        }
+        credit = {"active_failure_ids": [], "items": [
+            {"coverage_id": "c1", "credit": True, "active_checker_ids": ["chk1"],
+             "waived": False, "linked_failure_ids": []}]}
+        quality = {"coverage_items": [
+            {"coverage_id": "c1", "requirement_ids": ["r1"], "hit": True, "credit": True,
+             "checker_ids": ["chk1"], "execution_evidence": ["ev1"]}]}
+        complete_hole = {"coverage_holes": [
+            {"coverage_id": "c1", "waived": False, "root_cause_classification": "MISSING_TEST",
+             "regenerated_testcase_ids": ["t1"], "rerun_evidence": "rerun-ev-1"}]}
+        complete_item = {"items": [
+            {"id": "c1", "covered": False, "generated_test_ids": ["t1"], "closure_owner": "alice",
+             "trace_to_vplan": "vplan-item-1"}]}
+        text = (
+            f"```dv-harness-evidence:coverage_signoff_verdict_gate\n{json.dumps(base)}\n```\n"
+            f"```dv-harness-evidence:coverage_credit_consistency_gate\n{json.dumps(credit)}\n```\n"
+            f"```dv-harness-evidence:coverage_quality_gate\n{json.dumps(quality)}\n```\n"
+            f"```dv-harness-evidence:coverage_hole_regeneration_gate\n{json.dumps(complete_hole)}\n```\n"
+            f"```dv-harness-evidence:coverage_hole_to_test_generation_gate\n{json.dumps(complete_item)}\n```\n"
+            + _COVERAGE_CLOSURE_EXTRA_GATES
+        )
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h = DVHarness(tmp)
+        h.adapter = _PassAdapter()
+        h.set_stage("COVERAGE_CLOSURE")
+
+        history_path = tmp / ".dv-harness" / "coverage" / "history.json"
+        assert not history_path.exists()
+
+        h.run_stage("goal")
+        assert h.state.stages["COVERAGE_CLOSURE"]["status"] == Status.PASS.value
+
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+        assert len(history) == 1
+        assert history[0]["percent"] == 87
+        assert "timestamp" in history[0]
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_wave_analysis_requires_confirmed_dump_scope():
     # CLAUDE.md "Waveform Dump User Gate": found by the 2026-08-28 GUI/CLI
     # end-to-end confirmation audit to have a governance policy file

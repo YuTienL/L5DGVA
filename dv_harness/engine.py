@@ -562,6 +562,48 @@ class DVHarness:
             "gap": gap, "next_best_action": next_actions, "promotion": promotion,
         })
 
+    def _append_coverage_history_sample(self, stage: str, evidence_blocks: dict) -> None:
+        """Closed-loop wiring (Task 6, 2026-08-31 poster-gap-closing round 2):
+        dashboard.append_coverage_history_sample() was real, tested
+        rendering/storage logic whose own docstring admitted "not currently
+        called by any engine stage yet" -- nothing in a real stage run
+        produced the multi-timestamp history the coverage-trend chart
+        (compute_coverage_trend()/render_coverage_trend_svg()) needs. Same
+        pattern as _promote_experience_knowledge/_persist_subsystem_registry_entry/
+        _score_root_cause_confidence: reads the SAME evidence_blocks dict
+        run_stage() already computed, only fires on an actual gate-verified
+        PASS whose STAGE_GATES include the one COVERAGE_CLOSURE gate that
+        reports a real coverage percent -- coverage_signoff_verdict_gate.py's
+        own `coverage_credit_percent` field (see gates.py's STAGE_GATES
+        mapping and the gate script's own signoff_requested/coverage_credit_percent
+        check) -- never a placeholder, and a persistence failure never
+        downgrades an already-earned stage PASS.
+
+        Local import (not a module-level one) because dashboard.py itself
+        does lazy `from .engine import DVHarness` imports inside its own
+        functions (e.g. its background-run worker and control-plane
+        dispatcher) precisely to keep this engine<->dashboard boundary from
+        ever becoming a real circular import -- mirroring that existing
+        precedent here rather than adding a fresh module-level coupling."""
+        gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
+        if "coverage_signoff_verdict_gate" not in gate_ids:
+            return
+        block = evidence_blocks.get("coverage_signoff_verdict_gate")
+        if not isinstance(block, dict):
+            return
+        percent = block.get("coverage_credit_percent")
+        if not isinstance(percent, (int, float)) or isinstance(percent, bool):
+            return
+        from . import dashboard
+        try:
+            dashboard.append_coverage_history_sample(self.root, float(percent))
+        except Exception as exc:  # best-effort, must never break an already-earned PASS
+            self.store.event({"ts": now(), "stage": stage, "event": "COVERAGE_HISTORY_WRITE_FAILED",
+                               "percent": percent, "error": str(exc)})
+            return
+        self.store.event({"ts": now(), "stage": stage, "event": "COVERAGE_HISTORY_SAMPLE_APPENDED",
+                           "percent": percent})
+
     def _sync_findings_state(self) -> None:
         """The blackboard "findings" topic (Blackboard.findings_counts()) is
         the one real source of truth for finding counts -- this recomputes
@@ -805,6 +847,7 @@ class DVHarness:
                     self._promote_experience_knowledge(stage, evidence_blocks)
                     self._persist_subsystem_registry_entry(stage, evidence_blocks)
                     self._score_root_cause_confidence(stage, evidence_blocks)
+                    self._append_coverage_history_sample(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness
                 # design pass): previously this was indistinguishable from
