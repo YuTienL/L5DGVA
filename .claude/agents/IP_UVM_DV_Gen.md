@@ -667,6 +667,78 @@ protocol whose physical layer has bidirectional or multiply-driven pins
 > against. Not closed by this pass; flagged here so it is not mistaken for
 > already-solved.
 
+#### Never `disable fork`/named `disable` across instances sharing one lock
+
+> **Standing rule (2026-09-01, distilled from a real sibling project and
+> genericized per the reverse-distillation rule).** A bounded
+> `fork ... join_any` wait inside a per-instance branch (a bring-up
+> branch, a service-loop instance, anything the Multi-instance pattern
+> architecture above produces one-per-instance) must save each spawned
+> branch's own `process::self()` handle at fork time, and after
+> `join_any` returns must `.kill()` only the handles **this fork call
+> itself produced** -- never a bare `disable fork;` and never a named
+> `disable <label>;`, whenever multiple instances of the same branch kind
+> share one capacity-limited resource lock (e.g. the register/
+> sequence-dispatch bridge's semaphore from the Concurrency section
+> below).
+>
+> **The failure mode is not a clean timeout -- it is a silent, total,
+> permanent hang.** Per SystemVerilog's own semantics, `disable fork`
+> kills the *calling process's entire descendant subtree*, which in a
+> multi-instance architecture is not scoped to "just this one wait" --
+> it can reach into an unrelated sibling instance's own in-flight
+> activity. If that sibling happens to be mid-dispatch and holding the
+> shared lock at that exact instant, killing it never releases the lock,
+> and every future register/sequence access anywhere in the environment
+> -- any instance, any branch -- then hangs forever with **no error
+> message at all**. A named-`disable <label>` variant is worse still: two
+> per-instance forks can share an identical literal label, letting one
+> instance's disable reach into another instance's still-running,
+> same-named block.
+>
+> **Real worked example (USB, DWC_usb31 wrapper):** a sibling project hit
+> exactly this failure (its own internally-numbered "trap" for it) in two
+> forms -- a named-label collision between two ports' bring-up forks, and
+> a bare `disable fork` inside one port's interrupt-service wake killing
+> the *other* port's in-flight register dispatch mid-transaction. The
+> fix, applied at every bounded-wait site in that environment: each fork
+> branch saves `process::self()`; after `join_any`, only `.kill()` the
+> handles that fork itself spawned (checking `.status() != FINISHED`
+> first). The sole documented exception there was a single global,
+> non-instanced legacy scheduler with no sibling instance to collide
+> with -- a real absence of the multi-instance hazard, not a case where
+> the rule was skipped.
+
+#### Pattern completion contract: never `$finish`, always a name-matched final check
+
+> **Standing rule (2026-09-01, distilled and genericized).** A pattern
+> must never call the simulator's raw terminate primitive (`$finish`)
+> directly -- it skips whatever end-of-test hook prints the pass/fail
+> summary line regression tooling parses, turning a real failure (or even
+> a real pass) into an unparseable, unclassifiable run. Instead, every
+> pattern must end by invoking a project-defined final-check macro/task
+> that takes the pattern's own registered name as an argument and is
+> checked (by a static checker, or at minimum by convention) to actually
+> match that pattern's name -- catching a copy-pasted pattern that forgot
+> to update its own closing call.
+>
+> For a multi-instance/multi-config pattern that only applies to a
+> subset of instances (e.g. a pattern meaningful only for one speed/mode,
+> run against a build where an instance was configured differently), use
+> a shared run counter incremented only by an instance's branch when it
+> actually exercised applicable content, checked non-zero after all
+> branches join. If a build/config mismatch means nothing applicable ran
+> on any instance, that must produce an explicit error, not a silent
+> clean pass indistinguishable from a run that genuinely tested
+> something.
+>
+> **Real worked example (USB, DWC_usb31 wrapper):** a sibling project's
+> pattern framework enforces exactly this via a `FINAL_CHECK("<pattern
+> name>")` macro (name-match checked by a static checker) and a shared
+> `..._ports_run` counter checked non-zero after the host-script branches
+> join, with an explicit `ERROR: <name> exercised no port` message
+> otherwise.
+
 ### Concurrency
 
 A capacity-1 semaphore held until the response event means **blocking
@@ -680,6 +752,31 @@ return.
 when both servers sit on the same sequencer. Separate locks means they really
 do overlap; one sequencer means UVM interleaves them; and random-address
 writes land in the IP's own register space with no error message at all.
+
+> **Standing rule (2026-09-01, distilled and genericized): `join`, never
+> `join_any`, on the outer per-instance host-script fork once any
+> background service branch is independently forked.** Once `branch_fw`'s
+> per-instance service loops (above) run as their own independent
+> processes rather than blocking anything, the per-instance bring-up
+> branches finish long before either host script does -- closing the
+> pattern's outer fork with `join_any` then ends the WHOLE pattern the
+> instant the first branch to finish returns, which is typically a
+> bring-up branch finishing in microseconds, not a host script finishing
+> after real protocol traffic. The run reports 0 errors and looks like a
+> clean pass while having tested nothing. Close the outer per-instance
+> host-script fork with a plain `join`.
+>
+> Some patterns legitimately need a single coordinated closure across
+> instances instead of independent per-instance host-script branches
+> (e.g. the pattern's whole point is two instances coordinating against
+> each other) -- declare that deliberate deviation with an explicit,
+> project-chosen comment tag on its own line (a real sibling project uses
+> a literal `//SIX-BRANCH-EXC: <reason>` tag). A static checker should
+> treat an *undeclared* deviation from the plain-per-instance-`join`
+> shape as a hard FAIL, and a *declared-but-unused* exception (one that
+> turns out not to be needed) as a defect worth flagging too -- a stale
+> declared exception can silently hide the next real, undeclared
+> violation.
 
 ### Multi-instance pattern architecture -- `branch_a<n>` / `branch_fw` / `branch_b<n>`
 
@@ -736,6 +833,38 @@ bring-up branches running alongside it.
 > (one instance's already-pending interrupt sat unserviced while the
 > shared loop was still working through an unrelated instance's turn).
 > Do not regress to it even though it looks like less code.
+
+### Cross-branch synchronization -- one-way barrier flags
+
+> **Standing rule (2026-09-01, distilled and genericized).** The four
+> branch kinds above (`block`, `branch_a<n>`, `branch_fw`'s per-instance
+> processes, `branch_b<n>`) are not synchronized just by "they happen to
+> run in parallel" -- a `branch_b<n>` that starts protocol traffic before
+> its own `branch_a<n>` and `branch_fw` counterparts have actually
+> finished setup will exercise a DUT with nothing yet programmed to
+> answer it. Declare one one-way (set-once, never-cleared) module-scope
+> flag per synchronization point: one for `block`'s own completion, one
+> per `branch_a<n>` instance's own completion, and one per `branch_fw`
+> instance's own one-time-setup completion (these are three logically
+> distinct flags even when a given project only ever needs one or two of
+> them). A `branch_b<n>` that depends on more than one predecessor **must
+> wait on the AND of every flag it depends on, never on just one**, and
+> must report *which specific flag* is still unset on timeout -- not one
+> generic "not ready" message -- so a debugger doesn't have to guess
+> which predecessor stalled.
+>
+> **Real worked example (USB, DWC_usb31 wrapper):** a sibling project
+> declares exactly three such flags (block-done, per-port controller-
+> bring-up-done, per-port firmware-service-instance-setup-done) and its
+> `branch_b<n>` wait task ANDs the latter two, with two distinct named
+> error messages telling a branch-A-missing timeout apart from a
+> branch-fw-missing one. This mattered in practice: a fast controller
+> bring-up could raise its own "done" flag before that port's firmware
+> instance had finished its one-time setup, leaving a real window where
+> host-side traffic started before anything was programmed to answer it
+> -- exactly the bug this AND-of-both-flags rule prevents. As that
+> project's own pattern-framework documentation puts it: nothing else
+> locks these branches together; the flags are the only thing that does.
 
 ---
 
