@@ -552,6 +552,22 @@ protocol whose physical layer has bidirectional or multiply-driven pins
   constant either; drive them with a `reg` under real time-sequenced control
   (or `tran` through a pullup/pulldown), matching how the real DUT bench
   expects them to come up.
+- **Whether a VIP genuinely REPLACES an existing proven bus-master task
+  (taking real ownership) or the UVM bridge only wraps that task for
+  ordering/FSDB-visibility while the old task still does the real transfer
+  is an explicit decision to surface, not a default to assume.** A real
+  session (2026-08-31): the safer-by-default choice (keep the proven BFM
+  task as the real master; the bridge only adds serialization/visibility,
+  avoiding a two-master bus) was proposed and explicitly overridden by the
+  user, who wanted the VIP to take real bus ownership instead. Both are
+  legitimate; the point is to ask/state which one before building either,
+  the same way `ATTACH_LAYER` is confirmed rather than assumed. If replacing
+  the old master: **attach the new master at that master's own real,
+  top-level port** (found during Step 3's survey; a real case had this be
+  a CPU model's own port list, with the full real path from there through
+  the fabric to the target slave already known from the address-map work)
+  -- not at some point deep inside the interconnect near an arbiter, even
+  if that is where you first traced the old master's connection.
 - **When a VIP/AXI/APB-style bus VIP replaces a bus master via `force`**
   (rather than a real port connection), **force only that master's OUTPUTS**
   (address/data/valid/write-enable signals) onto the target bus. **Never
@@ -688,6 +704,19 @@ delivery** -- meaning the originals cannot run as delivered either. That is
 the strongest argument for converting: the VIP removes the dependency.
 
 ### Prove equivalence, then audit the procedure
+
+> **Confirmed drift (2026-08-31): a proven task's real behavior is bigger
+> than its headline protocol function -- enumerate all of it before
+> replacing the task, not just the obvious part.** A real session, asked
+> to verify whether an existing register-read task did byte-shift/lane
+> extraction before a new implementation replaced it, generalized this
+> correctly on its own: a reset-gate wait (`wait(<status>==0)` before
+> allowing access), conflict detection, byte-strobe generation, a specific
+> clock-relative timing offset, and existing logging a pattern author might
+> depend on were all named as separate candidates for the *same* class of
+> silent, right-transaction-wrong-data bug the byte-shift question was
+> originally about. Read every real behavior of a task being replaced --
+> not only the transaction it performs -- before claiming equivalence.
 
 **Prove it.** Resolve every address macro back to a literal and compare
 register writes one-for-one against the original. Then classify **every**

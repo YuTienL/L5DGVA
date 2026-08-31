@@ -283,6 +283,13 @@ protocol whose physical layer has bidirectional or multiply-driven pins
   constant either; drive them with a `reg` under real time-sequenced control
   (or `tran` through a pullup/pulldown), matching how the real DUT bench
   expects them to come up.
+- **Whether a VIP genuinely replaces an existing proven bus-master task or
+  the bridge only wraps it for ordering/visibility is a decision to state,
+  not assume.** Confirmed real case (2026-08-31): the safer default (keep
+  the proven task as real master) was explicitly overridden by the user in
+  favor of real VIP ownership. If replacing: attach the new master at the
+  old master's own real top-level port (found in Step 3's survey), not at
+  a point deep inside the interconnect near an arbiter.
 - **When a VIP/AXI/APB-style bus VIP replaces a bus master via `force`**
   (rather than a real port connection), **force only that master's
   OUTPUTS** (address/data/valid/write-enable signals) onto the target bus.
@@ -372,6 +379,14 @@ Add           : a few VIP task calls in its place
 Then **prove equivalence**: resolve address macros to literals, compare
 register writes one-for-one against the original, and classify every
 difference.
+
+**Confirmed drift (2026-08-31): a proven task's real behavior is bigger
+than its headline protocol function.** Before replacing one, enumerate ALL
+of it -- a real session named a reset-gate wait, conflict detection,
+byte-strobe generation, clock-relative timing, and existing logging as
+candidates for the same silent right-transaction-wrong-data bug class a
+byte-shift/lane-extraction question started from. Read every real
+behavior, not only the transaction performed, before claiming equivalence.
 
 **Confirmed drift (2026-08-29):** this abstract equivalence-proving method
 has a concrete, real implementation shape worth using as the target for a
