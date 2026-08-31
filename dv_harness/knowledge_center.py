@@ -70,16 +70,21 @@ class KnowledgeCenterClient:
             # would have found it. Now falls through to the same candidate
             # search used when no explicit hop_script is configured at all,
             # instead of giving up immediately.
-        # Fall back to searching next to the project root and one level up
-        # (matches how remote_hop.py/remote_login.sh have been shipped this
-        # session: alongside PACKAGE/, or copied into a project root), and
-        # the real in-repo relocated path (tools/remote/remote_hop.py, since
-        # the 2026-08-31 persistent-relay-scripts relocation).
+        # Fall back to the real in-repo relocated path first (tools/remote/
+        # remote_hop.py, the authoritative location since the 2026-08-31
+        # persistent-relay-scripts relocation), then legacy locations
+        # (alongside PACKAGE/, or copied into a project root/one level up)
+        # for backward compatibility. The in-repo path MUST be checked
+        # before the legacy ones: a stale, not-yet-deleted copy at the
+        # legacy repo-external location (Task 4's Step 7 deletion is
+        # deferred pending human confirmation) would otherwise silently
+        # win over the harness's own bundled, authoritative copy -- exactly
+        # the bug this ordering fixes (2026-08-31, post-merge discovery).
         candidates = []
         if self.project_root:
-            candidates += [self.project_root / "remote_hop.py",
-                           self.project_root.parent / "remote_hop.py",
-                           self.project_root / "tools" / "remote" / "remote_hop.py"]
+            candidates += [self.project_root / "tools" / "remote" / "remote_hop.py",
+                           self.project_root / "remote_hop.py",
+                           self.project_root.parent / "remote_hop.py"]
         candidates.append(Path.cwd() / "remote_hop.py")
         for c in candidates:
             if c.is_file():
