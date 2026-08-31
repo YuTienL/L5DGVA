@@ -360,8 +360,8 @@ def to_snapshot_row(state: JobState, *, agent_action: str, note: Optional[str] =
         "pattern": state.pattern,
         "lsf_status": state.lsf_status,
         "dv_analysis_status": state.sim_status,
-        "uvm_error": state.uvm_error_count,
-        "uvm_fatal": state.uvm_fatal_count,
+        "uvm_error_count": state.uvm_error_count,
+        "uvm_fatal_count": state.uvm_fatal_count,
         "agent_action": agent_action,
         "note": note,
     }

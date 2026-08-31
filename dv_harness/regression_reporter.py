@@ -108,16 +108,25 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         if epilogue:
             state.uvm_error_count = epilogue.get("uvm_error") or 0
             state.uvm_fatal_count = epilogue.get("uvm_fatal") or 0
-        discrepancies = detect_underreporting(asdict(state), parsed)
-        for d in discrepancies:
-            print(f"[reconciliation_cycle] job {jid} under-reporting: {d}", flush=True)
-        state.sim_status = "ANALYZED"
-        lsf_client.save_job_state(root, state)
-
         verdict = (epilogue or {}).get("verdict")
-        if state.pattern and verdict in ("PASSED", "FAILED"):
-            regression_list_path = Path(uvm_root_path) / "regression.list"
-            apply_verdict_to_file(regression_list_path, state.pattern, verdict == "PASSED")
+        try:
+            discrepancies = detect_underreporting(asdict(state), parsed)
+            for d in discrepancies:
+                print(f"[reconciliation_cycle] job {jid} under-reporting: {d}", flush=True)
+            if verdict == "PASSED":
+                state.sim_status = "PASS"
+            elif verdict == "FAILED":
+                state.sim_status = "FAIL"
+            else:
+                state.sim_status = "ANALYZED"
+            lsf_client.save_job_state(root, state)
+
+            if state.pattern and verdict in ("PASSED", "FAILED"):
+                regression_list_path = Path(uvm_root_path) / "regression.list"
+                apply_verdict_to_file(regression_list_path, state.pattern, verdict == "PASSED")
+        except Exception as e:
+            print(f"[reconciliation_cycle] job {jid} analysis failed: {e}", flush=True)
+            continue
 
     jobs_for_snapshot = []
     for j in live_jobs:
@@ -129,7 +138,7 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         else:
             row = {"job_id": jid, "pattern": j.get("job_name"),
                    "lsf_status": j.get("stat"), "dv_analysis_status": "UNREGISTERED",
-                   "uvm_error": None, "uvm_fatal": None,
+                   "uvm_error_count": None, "uvm_fatal_count": None,
                    "agent_action": "monitoring", "note": None}
         jobs_for_snapshot.append(row)
 
