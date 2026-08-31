@@ -76,6 +76,39 @@ machine name, ssh machine name, working path) may be recorded as connection evid
 not secrets by themselves.
 
 
+## Remote Linux Execution (Persistent Relay)
+
+Once a Linux DV server session has been established this session per the SSH/Remote Transport
+Connection Intake gate above (user confirmed, relay started by the user in their own terminal), do
+not ask the user to manually run and paste back individual Linux commands. Use:
+
+  python remote_exec.py "<command>"
+
+Check readiness first with `python remote_exec.py --status`. If READY, issue commands directly. If
+DOWN, run `python remote_exec.py --reconnect`; if that reports the relay cannot self-reauthenticate,
+ask the user to restart it in their own terminal (never embed VCPW in any Claude-issued command) and
+stop until they confirm it is back up.
+
+This does not remove the SSH/Remote Transport Connection Intake gate itself — establishing or
+re-establishing a relay for the first time in a session still requires that confirmation. It only
+removes the per-command manual-paste fallback once a relay is already confirmed READY.
+
+`remote_relay.py` (which actually performs the login) must never be invoked from a Claude Code tool
+call, including to test its own error paths — not even when the invocation doesn't type a password
+into the command text. A persistent OS-level environment variable can supply required credentials
+silently, defeating a "missing env vars" safety check without any password ever appearing in the
+command itself (confirmed real incident, 2026-08-31 — see
+`remote-linux-execution-bridge/SKILL.md`'s corresponding drift note). Test `remote_relay.py`'s logic
+via unit tests against its pure `RelayServer.handle_request()` function, never via a live `--start`.
+
+Source identity (PC vs. Linux) is verified per-project: git SHA comparison where a git remote exists
+between PC and Linux, or the md5sum-based `SOURCE_ID` token (`source_identity.py`, see
+`remote-linux-execution-bridge`) where it does not — never skipped outright.
+
+Never request or print passwords, tokens, or credentials in any `remote_exec.py` invocation or
+output.
+
+
 ## Waveform Dump User Gate
 
 Before any waveform-enabled simulation, ask the user to confirm dump scope and dump level/depth.

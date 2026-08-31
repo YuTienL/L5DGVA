@@ -106,3 +106,62 @@ persistent OS-level env var") the rule's current text doesn't name.
 literal command text Claude itself submits for approval — have the human
 `export` it in their own interactive shell first, so the value never
 appears in any string Claude Code's approval history could persist.**
+
+**Confirmed drift (2026-08-31): a persistent env var can defeat a
+script's own "missing credentials = safe no-op" check, even when the
+password is never typed into the command at all.** While smoke-testing
+the persistent-relay scripts below, an agent invoked `remote_relay.py
+--start` via its own tool call to exercise the "required env vars
+missing" early-exit path — expecting it to be safe because it never
+composed `VCPW` (or `VCUSER`/`VCHOST`/`VCHOP`) into the command text.
+But all four were already set as *persistent Windows user-level
+environment variables* (from earlier legitimate manual use in the same
+session), so the early-exit check never triggered: the script proceeded
+to actually attempt a real telnet+ssh login to the real server, from
+inside the tool call. The agent noticed, killed the process, and
+disclosed the incident — but could not confirm from buffered/truncated
+output whether the password had already been transmitted before the
+kill. **Concrete rule: a script whose docstring says "never invoke me
+from an AI agent tool call" must never be invoked from one at all, even
+to test its own argument-validation/error paths — "the vars aren't in my
+command" is not the same guarantee as "the vars aren't in my
+environment." Test such a script's logic via unit tests against extracted
+pure functions (e.g. a `handle_request()`/`RelayServer` class with no
+socket I/O), never via a live `--start`/subprocess invocation of the
+credential-consuming entry point itself.**
+
+## Persistent Relay (remote_relay.py + remote_exec.py)
+
+Per `docs/superpowers/specs/2026-08-30-persistent-remote-relay-design.md`
+(2026-08-31, implemented): the two-hop telnet+ssh transport above now has
+a persistent-session variant, at the project root next to `remote_hop.py`
+(mirrored to `PACKAGE/`):
+
+- **`remote_relay.py`** (human-run only, same credential-boundary rule as
+  `remote_hop.py` — never invoke from a Claude Code tool call): performs
+  the telnet→ssh→cd→source handshake ONCE using `remote_hop.py`'s own
+  `Session` class unchanged, then listens on a loopback-only
+  (`127.0.0.1`) TCP socket, auth'd by a random per-run token written to
+  `%LOCALAPPDATA%\dv_agent_harness\relay\<VCHOST>-<VCHOP>.json` (no
+  password in that file). Auto-exits after an idle timeout (default
+  7200s) so an authenticated session never sits open indefinitely.
+- **`remote_exec.py`** (the file Claude actually invokes): a thin client
+  that never reads `VCPW`, talks only to the loopback relay, and prints a
+  structured `REMOTE_HOST=/EXIT_CODE=/STATUS=` block so exit-code
+  branching is mechanical. `--reconnect` can redo the inner `ssh` hop on
+  its own (key-based, `BatchMode=yes`, no password needed) if only that
+  hop dropped; if the outer telnet session itself is dead, it prints
+  instructions for the human to restart `remote_relay.py` in their own
+  terminal — it cannot and must not self-reauthenticate.
+- **`source_identity.py`**: the md5sum three-way-diff recipe above,
+  collapsed into one comparable `SOURCE_ID = sha256(sorted "path:md5"
+  lines)` token — used in place of a git commit SHA for projects with no
+  git remote between PC and the Linux workdir (see
+  `remote-executor/SKILL.md`'s git-free PUSH variant).
+
+This does not remove the per-session SSH/Remote Transport Connection
+Intake confirmation (CLAUDE.md) — establishing or re-establishing a relay
+still requires that confirmation and is still done by the human, in their
+own terminal. It only removes the per-command "ask the user to manually
+run this and paste back the output" fallback once a relay is confirmed
+READY (`remote_exec.py --status`).
