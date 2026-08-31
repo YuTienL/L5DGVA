@@ -33,6 +33,19 @@ ProtocolEnvGenerator itself writes (environment_manifest.json,
 qualification_status ENV_GENERATED -- protocol_env_generator.py's own
 `generate()`) alongside a real `tb/` subdirectory, wherever it was actually
 generated under `root`.
+
+BUG FIX (2026-08-31, poster-gap-closing-round2 fix wave, finding C1): an
+unrestricted `root.rglob("environment_manifest.json")` also matches demo/
+example trees that are NOT this project's real testbench source -- against
+the real repo it matched a dozen `examples/generated_usb_real_evidence_v*/`
+fixture trees and would silently bundle one of them into the signoff
+deliverable as if it were real TB source (confidently wrong, worse than
+honestly reporting absence). `_find_tb_source_dir` now excludes
+`examples/`, `.claude/worktrees/` (nested worktrees carry their own copies
+of this whole project), `.claude/skills/_deprecated/`, and the signoff
+export's own `out_dir` (so a previous export's bundled copy is never
+rediscovered as if it were a fresh generation on a later run) from the
+search scope.
 """
 from __future__ import annotations
 
@@ -63,7 +76,35 @@ def _copy_dir(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, dirs_exist_ok=True)
 
 
-def _find_tb_source_dir(root: Path) -> Optional[Path]:
+# Directory-name markers that, if present anywhere in a manifest's path
+# parts (relative to `root`), disqualify it from being real signoff TB
+# source -- see finding C1 in the fix-wave report for the concrete
+# false-positive this excludes (examples/generated_usb_real_evidence_v*/).
+_TB_SOURCE_EXCLUDED_PARTS = {"examples", ".git"}
+
+
+def _is_excluded_tb_source_path(rel_parts: tuple, out_dir_rel_parts: Optional[tuple]) -> bool:
+    parts = list(rel_parts)
+    for excluded in _TB_SOURCE_EXCLUDED_PARTS:
+        if excluded in parts:
+            return True
+    # ".claude/worktrees/<name>/..." -- nested worktrees carry their own full
+    # copy of this project (including its own examples/ and .dv-harness/),
+    # none of which is real TB source for THIS signoff run.
+    if len(parts) >= 2 and parts[0] == ".claude" and parts[1] == "worktrees":
+        return True
+    # ".claude/skills/_deprecated/..." -- retired skill fixtures/snapshots.
+    if len(parts) >= 3 and parts[0] == ".claude" and parts[1] == "skills" and parts[2] == "_deprecated":
+        return True
+    # The signoff export's own out_dir -- excluded so a PREVIOUS export's
+    # bundled tb_source/ copy is never rediscovered as if it were a fresh
+    # generation on a later run into a different/same out_dir under root.
+    if out_dir_rel_parts is not None and tuple(parts[:len(out_dir_rel_parts)]) == out_dir_rel_parts:
+        return True
+    return False
+
+
+def _find_tb_source_dir(root: Path, out_dir: Optional[Path] = None) -> Optional[Path]:
     """Discover ProtocolEnvGenerator's real output location instead of
     guessing one -- its `--out` is always caller-supplied with no fixed
     default anywhere in this project (tools/generate_protocol_uvm_environment.py,
@@ -82,13 +123,28 @@ def _find_tb_source_dir(root: Path) -> Optional[Path]:
     tb/agents,env,seq,tests,top subdirectory-shaped output qualifies as real
     TB source.
 
+    Matches under `examples/`, `.claude/worktrees/`,
+    `.claude/skills/_deprecated/`, or `out_dir` itself are excluded from the
+    search scope entirely (see `_is_excluded_tb_source_path`) -- these are
+    demo/example/nested-copy/previous-export locations, never this run's
+    real signoff TB source, even when they carry a byte-identical
+    ENV_GENERATED marker + tb/ shape.
+
     If more than one real match exists, the most recently modified manifest
     wins (the freshest generation run is the one relevant to a current
     signoff); returns None -- honest absence, never a guess -- if none do.
     """
+    out_dir_rel_parts = None
+    if out_dir is not None:
+        try:
+            out_dir_rel_parts = Path(out_dir).resolve().relative_to(root).parts
+        except ValueError:
+            out_dir_rel_parts = None  # out_dir is outside root -- nothing to exclude
+
     candidates = []
     for manifest_path in root.rglob("environment_manifest.json"):
-        if ".git" in manifest_path.parts:
+        rel_parts = manifest_path.relative_to(root).parts
+        if _is_excluded_tb_source_path(rel_parts, out_dir_rel_parts):
             continue
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -174,7 +230,7 @@ def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
     # subdirectory-shaped output, located by its own environment_manifest.json
     # marker rather than a guessed fixed path, since no such fixed default
     # exists anywhere in this project.
-    tb_src = _find_tb_source_dir(root)
+    tb_src = _find_tb_source_dir(root, out_dir)
     rel = Path("tb_source")
     if tb_src is not None:
         _copy_dir(tb_src, out_dir / rel)

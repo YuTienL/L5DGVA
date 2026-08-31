@@ -192,9 +192,12 @@ POST /api/start already reads).</div>
 <div class="card" id="envModeCard"><h3>Environment Mode Router</h3>
 <div class="note">The two canonical modes CLAUDE.md's Environment Generation Mode gate defines
 (<code>environment-router/environment_mode_policy.json</code>), with the tile matching
-<code>environment_mode_selected</code> highlighted -- the real mode any stage this run has actually
-declared via an <code>environment_mode_selection</code> evidence block (read-only legend, no
-selection made yet, when no stage has declared one).</div>
+<code>environment_mode_selected</code> highlighted, IF any stage has ever recorded a
+<code>dv-harness-evidence:environment_mode_selection</code> block. No stage currently emits that
+block anywhere in this engine (no STAGE_GATES entry, prompt instruction, or writer produces it), so
+this highlight will only activate once one does -- see the pending-producer note on
+<code>_environment_mode_selected()</code> in dashboard.py. Until then this card is always the
+read-only legend below, with no tile highlighted.</div>
 <div id="envmodetiles" class="tiles" style="margin-top:8px"></div>
 </div>
 <div class="card" id="subsystemRegistryCard"><h3>Subsystem Registry</h3>
@@ -833,11 +836,14 @@ async function load(){
    : tile('-','No protocols registered');
 
  // Environment Mode Router: highlights whichever mode key matches
- // environment_mode_selected (real, from _environment_mode_selected() --
- // an environment_mode_selection evidence block some stage this run
- // actually recorded); falls back to the flat legend display when
- // s.environment_mode_selected is null/undefined -- never errors on
- // missing data.
+ // environment_mode_selected, from _environment_mode_selected() -- but no
+ // stage anywhere in this engine currently emits an
+ // environment_mode_selection evidence block (no STAGE_GATES entry, no
+ // prompts.py instruction, no writer), so s.environment_mode_selected is
+ // always null today and this always falls back to the flat legend display
+ // below with no tile highlighted. This is honest current behavior, not a
+ // bug: the highlight will start working the moment some stage's producer
+ // for that evidence block is implemented, with no dashboard change needed.
  let modes = s.environment_mode_policy||{};
  let modeKeys = Object.keys(modes);
  let selectedMode = s.environment_mode_selected;
@@ -1071,15 +1077,24 @@ def _execution_mode(root: Path):
 
 
 def _environment_mode_selected(root: Path):
-    """Real per-run counterpart to _environment_mode_policy()'s static
+    """Intended per-run counterpart to _environment_mode_policy()'s static
     policy reference: scans every stage's own recorded last_message (same
-    scan-all-stages shape _dv_review_pending() already uses -- unlike
-    execution_mode_validator, which ENV_CHECK alone ever emits, no single
-    canonical stage is nailed down yet for the environment_mode_selection
-    block) for a dv-harness-evidence environment_mode_selection block and
-    returns its declared environment_mode field (SUBSYSTEM_MODE/
-    SYSTEM_LEVEL_MODE, CLAUDE.md's Environment Generation Mode gate) -- or
-    None if no stage has recorded one yet."""
+    scan-all-stages shape _dv_review_pending() already uses) for a
+    dv-harness-evidence environment_mode_selection block and returns its
+    declared environment_mode field (SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE,
+    CLAUDE.md's Environment Generation Mode gate) -- or None otherwise.
+
+    HONEST STATUS (2026-08-31, poster-gap-closing-round2 fix wave, finding
+    C2): no stage anywhere in this engine currently EMITS an
+    environment_mode_selection block -- there is no STAGE_GATES entry
+    requiring it, no prompts.py instruction telling any agent to produce it,
+    and no engine writer generates it. This function therefore always
+    returns None in real usage today; the dashboard highlight it feeds is
+    permanently inactive, not selectively inactive. Deciding which stage
+    should declare this (and whether it is mandatory or optional) is a real
+    design decision intentionally left for separate, dedicated work -- not
+    made here. Once a real producer exists, this scan needs no change to
+    start working."""
     state_file = root / ".dv-harness" / "state.json"
     state = _read_json_file(state_file)
     if state is None:
@@ -1176,8 +1191,10 @@ def _environment_mode_policy(root: Path):
     the two canonical modes (SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE) CLAUDE.md's
     Environment Generation Mode gate defines. This is deliberately just the
     static policy reference; see _environment_mode_selected() below for
-    which mode (if any) the CURRENT run actually declared, via a real
-    environment_mode_selection evidence block."""
+    which mode (if any) the CURRENT run actually declared via an
+    environment_mode_selection evidence block -- as of this writing that is
+    always None, since no stage emits that block yet (see that function's
+    HONEST STATUS note)."""
     path = root / ".dv-harness" / "environment-router" / "environment_mode_policy.json"
     data = _read_json_file(path, default=None)
     if not isinstance(data, dict):

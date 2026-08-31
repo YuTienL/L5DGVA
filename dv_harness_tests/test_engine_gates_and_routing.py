@@ -866,6 +866,92 @@ def test_run_stage_with_no_relevant_memory_is_a_pure_no_op():
         shutil.rmtree(tmp)
 
 
+def test_run_stage_with_only_irrelevant_memory_is_a_pure_no_op():
+    # Finding I2 (2026-08-31 fix wave): the ORIGINAL no-op test above only
+    # proved "empty store" is a no-op -- it never proved "irrelevant record"
+    # is a no-op. MemoryRetriever.search() had an always-positive recency
+    # component (plus a confidence component independent of the query), so
+    # once ANY memory record exists -- guaranteed in normal operation by
+    # Task 9's own write sites (_promote_experience_knowledge,
+    # _promote_project_topology_knowledge, job-tier writes) -- a completely
+    # unrelated record could still be returned as "relevant" and leak into
+    # every stage's prompt. Seed one genuinely irrelevant record (unrelated
+    # protocol/scope/symptoms/text -- an ethernet/LSF record, matching the
+    # reviewer's own empirical repro) and confirm run_stage() is STILL a
+    # pure no-op: relevant_memory stays falsy and the prompt is byte-for-byte
+    # identical to the no-memory-kwarg prompt.
+    import dv_harness.engine as engine_mod
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import MemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        MemoryStore(tmp).add("project", {
+            "title": "Ethernet MAC LSF job stuck in PEND due to license checkout failure",
+            "protocol": "Ethernet", "scope": "lsf_infra",
+            "symptoms": ["lsf_pend", "license_checkout_failure"],
+            "root_cause": "LSF license server exhausted synopsys_vcs tokens during peak batch window",
+            "confidence": "CONFIRMED",
+        })
+
+        calls = []
+        captured = {}
+        real_build_stage_prompt = engine_mod.build_stage_prompt
+
+        def _spy(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = dict(kwargs)
+            return real_build_stage_prompt(*args, **kwargs)
+
+        class FakeAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                calls.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("DISCOVERY")
+        with patch.object(engine_mod, "build_stage_prompt", side_effect=_spy):
+            h.run_stage("investigate usb3 coverage closure holes in the scoreboard")
+
+        assert calls, "adapter was never called"
+        assert "kwargs" in captured
+        assert not captured["kwargs"].get("relevant_memory"), (
+            "an unrelated ethernet/LSF record leaked into an unrelated USB "
+            "coverage query's relevant_memory")
+        assert "Ethernet MAC LSF job" not in calls[0]
+
+        with_kwarg = real_build_stage_prompt(*captured["args"], **captured["kwargs"])
+        without_memory_kwarg = real_build_stage_prompt(
+            *captured["args"],
+            **{k: v for k, v in captured["kwargs"].items() if k != "relevant_memory"})
+        assert with_kwarg == without_memory_kwarg
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_memory_retriever_search_excludes_pure_recency_match():
+    # Unit-level companion to the run_stage-level no-op test above: directly
+    # exercises MemoryRetriever.search() (not through the engine) with the
+    # reviewer's exact empirical repro shape -- an unrelated ethernet/LSF
+    # record searched against an unrelated USB coverage query -- and proves
+    # it is excluded, not merely returned with a low score. Before the I2
+    # fix this returned the record at score 1.0 (pure recency, since the
+    # record's confidence defaults to "UNKNOWN" which contributes 0).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        store = MemoryStore(tmp)
+        store.add("project", {
+            "title": "Ethernet MAC LSF job stuck in PEND",
+            "protocol": "Ethernet", "scope": "lsf_infra",
+            "symptoms": ["lsf_pend"],
+            "root_cause": "LSF license server exhausted tokens",
+        })
+        hits = MemoryRetriever(store).search({"text": "usb3 coverage closure scoreboard"})
+        assert hits == []
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_wave_analysis_requires_confirmed_dump_scope():
     # CLAUDE.md "Waveform Dump User Gate": found by the 2026-08-28 GUI/CLI
     # end-to-end confirmation audit to have a governance policy file

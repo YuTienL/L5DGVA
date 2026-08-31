@@ -11,8 +11,34 @@ from pathlib import Path
 from typing import List
 
 
+def _is_real_agent_profile(path: Path) -> bool:
+    """A real agent profile is a `.claude/agents/*.md` file with YAML
+    frontmatter carrying a `description:` field -- the shape every real
+    agent profile in this project has (analysis-agent.md, debug-agent.md,
+    etc.). `ROSTER.md` (added by Task 2's live-checkable agent roster doc)
+    is a plain Markdown table with no frontmatter at all -- it lists agents,
+    it is not one -- and must not be counted as one itself."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if not text.startswith("---"):
+        return False
+    end = text.find("\n---", 3)
+    if end == -1:
+        return False
+    frontmatter = text[3:end]
+    return re.search(r"(?m)^description\s*:", frontmatter) is not None
+
+
 def list_agent_files(root: Path) -> List[Path]:
-    return sorted((root / ".claude" / "agents").glob("*.md"))
+    """Real agent profile files under .claude/agents/ -- excludes non-profile
+    Markdown files such as ROSTER.md (a roster/index document about the
+    agents, not an agent profile itself; see _is_real_agent_profile)."""
+    return sorted(
+        p for p in (root / ".claude" / "agents").glob("*.md")
+        if _is_real_agent_profile(p)
+    )
 
 
 def _skill_md_files(root: Path) -> List[Path]:

@@ -241,6 +241,77 @@ def test_signoff_bundle_tb_source_picks_most_recently_generated_when_multiple():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_signoff_bundle_excludes_examples_demo_tb_tree(tmp_path=None):
+    """Finding C1 regression test: a demo/example tree under `examples/`
+    that carries the EXACT real ProtocolEnvGenerator marker shape (a real
+    environment_manifest.json with qualification_status ENV_GENERATED, next
+    to a real tb/ subdirectory -- confirmed on the real repo as the shape of
+    examples/generated_usb_real_evidence_v*/) must NOT be discovered as
+    tb_source. Before the C1 fix, `_find_tb_source_dir`'s unrestricted
+    root.rglob() bundled exactly this kind of demo tree into the signoff
+    deliverable as if it were real TB source -- a confident false positive.
+    Only example-shaped content exists here (no real generation anywhere
+    else under root), so the correct, honest result is ABSENT, not bundled.
+    """
+    tmp = _fresh_project_with_tools()
+    out_dir = tmp / "signoff_out"
+    try:
+        demo_dir = tmp / "examples" / "generated_usb_real_evidence_v1" / "usb3_2_uvm_env"
+        ProtocolEnvGenerator(demo_dir).generate(USB_MANIFEST)
+        assert (demo_dir / "environment_manifest.json").exists()
+        assert (demo_dir / "tb").is_dir()
+
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        by_artifact = {m["artifact"]: m for m in result["manifest"]}
+        assert by_artifact["tb_source"]["present"] is False
+        assert by_artifact["tb_source"]["bundled_path"] is None
+        assert not (out_dir / "tb_source").exists()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_signoff_bundle_still_finds_real_tb_source_outside_excluded_dirs():
+    """Positive-control companion to the C1 exclusion test above: a real
+    generation at a path NOT under any excluded directory must still be
+    discovered and bundled -- the C1 fix must narrow the search scope, not
+    break discovery entirely."""
+    tmp = _fresh_project_with_tools()
+    out_dir = tmp / "signoff_out"
+    try:
+        generated_dir = tmp / "runs" / "usb3_2_uvm_env"
+        generated_files = ProtocolEnvGenerator(generated_dir).generate(USB_MANIFEST)
+
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        by_artifact = {m["artifact"]: m for m in result["manifest"]}
+        assert by_artifact["tb_source"]["present"] is True
+        bundled_rel = by_artifact["tb_source"]["bundled_path"]
+        assert bundled_rel is not None
+
+        tb_files = [f for f in generated_files if f.startswith("tb/")]
+        assert tb_files
+        for rel in tb_files:
+            dst = out_dir / bundled_rel / Path(rel).relative_to("tb")
+            assert dst.exists()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_signoff_export_real_repo_root_does_not_bundle_examples_tree():
+    """Live check against the REAL repo root (not a tmp_path fixture): the
+    real repo has multiple examples/generated_usb_real_evidence_v*/ demo
+    trees on disk. _find_tb_source_dir must never resolve into one of them.
+    Does not assert presence/absence of tb_source overall (that depends on
+    whatever real generation output happens to exist under ROOT outside
+    examples/ at test time) -- only that IF a tb_source is found, it is not
+    rooted under examples/, .claude/worktrees/, or .claude/skills/_deprecated/."""
+    found = signoff_export._find_tb_source_dir(ROOT, None)
+    if found is not None:
+        rel = found.resolve().relative_to(ROOT).parts
+        assert "examples" not in rel
+        assert not (len(rel) >= 2 and rel[0] == ".claude" and rel[1] == "worktrees")
+        assert not (len(rel) >= 3 and rel[0] == ".claude" and rel[1] == "skills" and rel[2] == "_deprecated")
+
+
 def test_signoff_bundle_includes_regression_manifest_when_present():
     """A real .dv-harness/regression.list (the plain grep/comm-friendly
     format regression_list_manager.py's record_verdict/record_suite produce,

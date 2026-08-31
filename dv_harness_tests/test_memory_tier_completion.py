@@ -244,6 +244,56 @@ def test_lsf_reconcile_writes_a_job_failure_tier_memory_record_on_real_failure_s
         shutil.rmtree(tmp)
 
 
+def test_lsf_reconcile_is_idempotent_across_repeated_polls_of_the_same_stuck_job():
+    # Finding I3 (2026-08-31 fix wave): lsf-reconcile is DESIGNED to be
+    # polled repeatedly (unlike _promote_experience_knowledge, which fires
+    # once per stage PASS) -- reconcile_job's CRITICAL sim_status->
+    # ANALYSIS_OWED discrepancy keeps firing on EVERY reconcile_batch() call
+    # while a job stays stuck at sim_status UNKNOWN with a terminal live LSF
+    # status. Before the fix, each poll minted a fresh memory_id, so 3
+    # reconciles of the same stuck job produced 3 duplicate Job-tier
+    # records. Reconcile the SAME stuck job 3 times and assert exactly ONE
+    # Job-tier record exists afterward, not three.
+    from dv_harness import lsf_client
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lsf_client.save_job_state(
+            tmp, lsf_client.JobState(job_id=504, lsf_status="RUN", sim_status="UNKNOWN",
+                                      pattern="usb2_hs_basic"))
+        payload = json.dumps({"RECORDS": [{"JOBID": "504", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(tmp, [504])
+            lsf_client.reconcile_batch(tmp, [504])
+            lsf_client.reconcile_batch(tmp, [504])
+
+        job_store = JobMemoryStore(tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job" and r.get("path")]
+        job_504_rows = [r for r in rows
+                        if (job_store.get(r["memory_id"]) or {}).get("job_id") == 504]
+        assert len(job_504_rows) == 1, (
+            f"expected exactly one Job-tier record after 3 reconciles of the "
+            f"same stuck job, found {len(job_504_rows)}: {job_504_rows}")
+
+        # The single record itself must be present and correct, not merely
+        # "count == 1 by accident" -- it must be the real record content.
+        rec = job_store.get(job_504_rows[0]["memory_id"])
+        assert rec["job_id"] == 504
+        assert rec["lsf_status"] == "DONE"
+        assert rec["kind"] == "job_result"
+
+        # Same guarantee at the on-disk file level: exactly one file under
+        # the job/ tier directory for this job, not three separate files.
+        job_dir = tmp / ".dv-harness" / "memory" / "job"
+        job_files = [
+            p for p in job_dir.glob("*.json")
+            if json.loads(p.read_text(encoding="utf-8")).get("job_id") == 504
+        ]
+        assert len(job_files) == 1, f"expected 1 file on disk, found {len(job_files)}: {job_files}"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_lsf_reconcile_does_not_write_job_tier_memory_when_no_terminal_signal():
     # A live RUN status (not DONE/EXIT) never fires reconcile_job's CRITICAL
     # ANALYSIS_OWED discrepancy -- no job outcome exists yet, so no Job

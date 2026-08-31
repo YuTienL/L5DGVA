@@ -379,7 +379,25 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
     same condition that stops the CRITICAL discrepancy itself from firing).
     Best-effort, mirrors engine.py's _promote_experience_knowledge pattern:
     a persistence failure here must never break an already-completed
-    reconciliation."""
+    reconciliation.
+
+    IDEMPOTENCY (2026-08-31 fix wave, finding I3): unlike
+    _promote_experience_knowledge (fires once per stage PASS),
+    lsf-reconcile is DESIGNED to be polled repeatedly, and this CRITICAL
+    discrepancy keeps firing on every reconcile_batch() call while a job
+    stays stuck at sim_status UNKNOWN/RUNNING with a terminal live LSF
+    status -- exactly the stuck-job case this write exists to record.
+    Without a stable key, each poll minted a fresh memory_id via
+    route_and_store (MemoryStore.add() only reuses an ID the caller already
+    supplies -- see memory.py's `mid=mem.get("memory_id") or f"MEM-..."`),
+    so 3 reconciles of the same stuck job produced 3 duplicate Job-tier
+    records. Keying `memory_id` deterministically on `job_id` makes repeat
+    polls of the SAME stuck job update the SAME record in place (add() is an
+    upsert-by-memory_id: it overwrites the file at
+    `<level>/<memory_id>.json` and replaces, not appends, that id's row in
+    index.json) instead of minting a new one -- no store-API change needed,
+    this only supplies the id the existing upsert behavior already keys on.
+    """
     if not any(d.field == "sim_status" and d.severity == "CRITICAL" for d in discrepancies):
         return
     kind = "job_failure" if (
@@ -387,6 +405,7 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
         or state.assertion_failure or state.simulator_crash
     ) else "job_result"
     record = {
+        "memory_id": f"JOB-{jid}-TERMINAL-RECONCILE",
         "kind": kind,
         "job_id": jid,
         "pattern": state.pattern,
