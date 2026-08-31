@@ -944,27 +944,50 @@ empty.
 > flagged as a good next target, not attempted in this pass.
 
 > **Standing rule (2026-09-01, explicit Human Override, permanent -- not
-> session-scoped): the generated environment's `sim/scripts/Makefile` is
-> based on `D:\DV\Task\USB_UVM_Handoff\sim\scripts\Makefile` as the
-> canonical build/infrastructure template, for every future protocol this
-> process generates, not only USB.** This is a deliberate, explicit,
-> repeated (three times) user authorization to reference this specific
-> file from the project's own reference-environment tree -- normally
-> forbidden as a generation source by CLAUDE.md's "No Golden-Reference
-> Content Mining" rule. The authorization is scoped to **build/
-> infrastructure mechanics only**: Makefile targets and structure, VCS/
-> Verdi flag conventions, LSF `bsub` submission and `bjobs` polling
-> pattern, filelist wiring. It does NOT extend to any other file in that
-> tree, and does NOT authorize using it as a source for any
-> protocol-behavior content (virtual sequences, scoreboard/checker logic,
-> coverage bins, vPlan entries, command.txt scenario content) -- that
-> boundary is unchanged and still fully in force for every protocol this
-> process generates. The path itself is a local Windows path on this
-> user's machine, not present on every future remote DV server -- read it
-> via a local `Read` tool call (not the remote relay) and adapt paths/
-> queue names/resource requests to whatever the current project's real LSF
-> environment actually uses; only the template's *shape* is canonical, not
-> its literal path strings.
+> session-scoped, updated 2026-09-01 to record internalization): the
+> generated environment's `sim/scripts/` build infrastructure is based on
+> a template now internalized into this harness at
+> `dv_harness/uvm_generator/templates/sim_scripts/`** -- copied
+> byte-identical from `D:\DV\Task\USB_UVM_Handoff\sim\scripts\` (the
+> project's reference-environment tree) after explicit, repeated (three
+> times) user authorization, and now a permanent DV Agent Harness L5 asset
+> in its own right. **The external `USB_UVM_Handoff` path no longer needs
+> to be read for this purpose** -- use the internal template location
+> directly; it travels with the harness onto any future project/server.
+> The internalized set (verified byte-identical against the source at
+> copy time): `Makefile` (179KB, the canonical build entry point),
+> `waves.tcl` (Verdi signal setup), `lsf_regress.sh`/`lsf_run.sh`/
+> `lsf_wait.sh` (LSF submission/polling), `ip_run.sh` (renamed from the
+> source's `usbrun.sh` at internalization time -- confirmed not invoked by
+> literal filename anywhere in the Makefile, so the rename is safe; a
+> standalone, manually-run build+run entry point, parameterized by env
+> vars, kept generic like every other `<ip>`-prefixed file in this
+> process's manifest rather than literally protocol-specific),
+> `gen_pattern_pool.py` (pattern-pool generation), and `check/` (Step 10's
+> static self-check family: `include_order.py`, `macro_selfcontained.py`,
+> `make_order.py`, `pattern_rules.py`, `reg_audit.py` -- the same
+> equivalence-proving tool already cited under "Converting a BFM pattern"
+> above, now a real internal asset instead of an external reference --
+> `vip_guards.py`, `vip_members.py`, `zero_delay_loops.py`). Scope
+> unchanged from the original authorization: **build/infrastructure
+> mechanics only** -- Makefile targets/structure, VCS/Verdi flags, LSF
+> `bsub`/`bjobs` pattern, filelist wiring, and the eleven-category static
+> self-check family. Does NOT extend to any other file in the
+> `USB_UVM_Handoff` tree, and does NOT authorize protocol-behavior content
+> (virtual sequences, scoreboard/checker logic, coverage bins, vPlan
+> entries, command.txt scenario content) from it -- that boundary is
+> unchanged and still fully in force. Adapt paths/queue names/resource
+> requests in the internalized template to whatever the current project's
+> real LSF environment actually uses; only the template's *shape* is
+> canonical, not its literal path/queue strings from the USB session that
+> produced it. **A real trap this template already documents, confirmed to
+> matter in practice (2026-09-01):** `bsub -K` ties the submitted job to
+> the submitting shell and reaps it (`TERM_OWNER`) the moment that shell
+> dies -- catastrophic over a transport with per-command timeouts (e.g.
+> this project's own telnet/relay bridge), where the submitting shell can
+> legitimately die while the job itself is still healthy. Use plain
+> `bsub` (detached) and poll `bjobs` separately whenever the submission
+> channel itself might not outlive the job.
 
 ---
 

@@ -475,20 +475,35 @@ None of these fail compilation. The symptom is always a far-side timeout.
 
 ## Build system
 
-> **Standing rule (2026-09-01, explicit Human Override, permanent -- not
-> session-scoped): `sim/scripts/Makefile` is based on
-> `D:\DV\Task\USB_UVM_Handoff\sim\scripts\Makefile` as the canonical
-> build/infrastructure template, for every future protocol, not only USB.**
-> Explicit, repeated user authorization to reference this one file from the
-> project's reference-environment tree -- normally forbidden as a
-> generation source. Scoped to build/infrastructure mechanics only
-> (Makefile targets/structure, VCS/Verdi flags, LSF `bsub`/`bjobs`
-> submission and polling, filelist wiring) -- does NOT extend to any other
-> file in that tree and does NOT authorize protocol-behavior content
+> **Standing rule (2026-09-01, explicit Human Override, permanent, updated
+> 2026-09-01 to record internalization): `sim/scripts/` build
+> infrastructure is based on a template now internalized at
+> `dv_harness/uvm_generator/templates/sim_scripts/`** -- copied
+> byte-identical from `D:\DV\Task\USB_UVM_Handoff\sim\scripts\` after
+> explicit, repeated user authorization, and now a permanent harness asset
+> in its own right. **The external path no longer needs to be read for
+> this purpose.** Internalized set: `Makefile` (canonical build entry
+> point), `waves.tcl`, `lsf_regress.sh`/`lsf_run.sh`/`lsf_wait.sh`,
+> `ip_run.sh` (renamed from the source's `usbrun.sh` -- not invoked by
+> literal filename in the Makefile, confirmed safe to rename, kept
+> `<ip>`-generic like every other file in this manifest),
+> `gen_pattern_pool.py`, and `check/`'s eleven-category static self-check
+> family (`include_order.py`, `macro_selfcontained.py`, `make_order.py`,
+> `pattern_rules.py`, `reg_audit.py` -- the same equivalence-proving tool
+> already cited under "Converting a BFM pattern" above, `vip_guards.py`,
+> `vip_members.py`, `zero_delay_loops.py`). Scope unchanged: build/
+> infrastructure mechanics only -- does NOT extend to any other file in
+> the reference tree and does NOT authorize protocol-behavior content
 > (sequences, scoreboard/checker logic, coverage, vPlan, command.txt
-> content) from it. Read via local `Read`, not the remote relay; adapt
-> paths/queue names/resource requests per project -- only the template's
-> shape is canonical, not its literal strings.
+> content) from it. Adapt paths/queue names/resource requests per project
+> -- only the template's shape is canonical, not its literal strings from
+> the USB session that produced it. **A real trap it documents:** `bsub
+> -K` ties a job to its submitting shell and reaps it (`TERM_OWNER`) the
+> moment that shell dies -- catastrophic over a transport with
+> per-command timeouts (e.g. a telnet/relay bridge) where the submitting
+> shell can legitimately die while the job stays healthy. Use plain
+> `bsub` (detached) and poll `bjobs` separately whenever the submission
+> channel might not outlive the job.
 
 - Two stages, both given the debug-database flag if a viewer will be used.
 - Consolidate the VIP examples' flags; cross-check against the tool manuals.
