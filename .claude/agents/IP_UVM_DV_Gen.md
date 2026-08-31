@@ -1650,11 +1650,18 @@ empty.
 >
 > The five plusargs `wave.txt` must read, all confirmed real via the
 > Makefile side that emits them (this file's own real internal
-> mechanism -- the exact `$fsdbDumpvars`/`$fsdbDumpon`/`$fsdbDumpoff`/
-> `$value$plusargs` API shape below is the standard, well-documented FSDB
-> dump API, **not independently confirmed against a real `wave.txt` file
-> for this specific project** -- no such file was found in the reference
-> tree searched, only Makefile comments describing its read side):
+> mechanism). Of the API calls in the skeleton below: **`$fsdbDumpfile(<path>)`
+> and `$fsdbDumpvars(<depth>, <scope>)` are confirmed-real FSDB call
+> signatures** (a string file path; a depth integer -- `0` meaning fully
+> recursive from the given scope -- followed by a hierarchical scope
+> reference) -- standard, independently-confirmed Verilog/PLI FSDB API,
+> not specific to any one project. **`$fsdbDumpon`/`$fsdbDumpoff` (the
+> window-control calls this skeleton uses for `fsdb_start`/`fsdb_stop`)
+> and the overall `$value$plusargs`/`$test$plusargs`-driven plusarg
+> contract remain NOT independently confirmed against a real `wave.txt`
+> file for this specific project** -- no such file was found in the
+> reference tree searched, only Makefile comments describing the read
+> side of the contract.
 >
 > | Plusarg | Meaning |
 > |---|---|

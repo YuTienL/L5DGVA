@@ -776,9 +776,11 @@ dropped the rate to ~20 MB/min with the simulator over 100% CPU
 scope is therefore a real bring-up step no Makefile-side knob can
 substitute for. See `IP_UVM_DV_Gen.md`'s "The `wave.txt` FSDB
 scope-control file" for the full plusarg table and a generic
-`$fsdbDumpvars`/`$fsdbDumpon`/`$fsdbDumpoff` skeleton (standard FSDB API
-shape, not independently confirmed against a real `wave.txt` file for
-this project -- kept doc-embedded rather than templated, since its dump
+`$fsdbDumpvars`/`$fsdbDumpon`/`$fsdbDumpoff` skeleton. `$fsdbDumpfile`/
+`$fsdbDumpvars`'s own call signatures are confirmed-real standard FSDB
+API; `$fsdbDumpon`/`$fsdbDumpoff` and the overall plusarg contract remain
+not independently confirmed against a real `wave.txt` file for this
+project -- kept doc-embedded rather than templated, since its dump
 scope must be re-derived from each project's own real RTL hierarchy,
 same treatment as `waves.tcl`'s signal hierarchy above). Windowing
 (rather than a size cap) was chosen after two alternatives were rejected
