@@ -1296,6 +1296,82 @@ def test_coverage_accepts_path_overrides_via_query_params():
         shutil.rmtree(tmp)
 
 
+# --- POST /api/waiver (dv_harness/waiver_store.py) -------------------------
+# Real HTTP requests against a real dashboard.serve() thread, same as every
+# other test in this file. waiver_store.append_waiver()/read_waivers()
+# themselves are exercised directly (not through HTTP) in
+# dv_harness_tests/test_waiver_store.py -- these tests confirm the HTTP layer
+# (routing, body-parsing, error-response convention) is genuinely wired to
+# that same implementation, called in-process (no subprocess), matching
+# _handle_signoff_export's direct-call-to-signoff_export pattern.
+
+def test_waiver_submit_valid_body_persists_and_reads_back():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _post(base, "/api/waiver", {
+            "gate_id": "coverage_hole_regeneration_gate",
+            "item_id": "cov-hole-42",
+            "approved": True,
+            "evidence": "manually reviewed against spec section 4.2",
+        })
+        assert status == 200
+        assert data["status"] == "OK"
+        assert data["waiver"]["gate_id"] == "coverage_hole_regeneration_gate"
+        assert "recorded_at" in data["waiver"]
+
+        from dv_harness.waiver_store import read_waivers
+        waivers = read_waivers(tmp)
+        assert len(waivers) == 1
+        assert waivers[0]["item_id"] == "cov-hole-42"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_waiver_submit_missing_evidence_returns_400_and_does_not_persist():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _post(base, "/api/waiver", {
+            "gate_id": "sequence_coverage_closure_gate",
+            "item_id": "seq-1",
+            "approved": True,
+            # evidence deliberately omitted
+        })
+        assert status == 400
+        assert data["error"] == "BAD_REQUEST"
+
+        from dv_harness.waiver_store import read_waivers
+        assert read_waivers(tmp) == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_waiver_form_present_in_dashboard_html():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with urllib.request.urlopen(base + "/", timeout=10) as resp:
+            html = resp.read().decode("utf-8")
+        assert 'doWaiverSubmit()' in html
+        assert "waiverGateId" in html and "waiverItemId" in html and "waiverEvidence" in html
+        assert "coverage_hole_regeneration_gate" in html
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_append_coverage_history_sample_is_the_real_production_write_path():
     """The real code path a future coverage-producing step calls (not just a
     synthetic file dropped in by a test) -- proves append_coverage_history_sample()

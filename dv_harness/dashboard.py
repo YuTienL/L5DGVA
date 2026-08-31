@@ -325,6 +325,34 @@ records present/absent honestly, never a fabricated placeholder. Leave out_dir b
 <div id="signoffExportResult" style="font-size:12px;margin-top:4px"></div>
 </div>
 
+<div class="card" id="waiverCard"><h3>Waiver Authoring</h3>
+<div class="note">Human-authored waivers, persisted to <code>.dv-harness/waivers/waivers.json</code>
+(POST /api/waiver, <code>waiver_store.append_waiver()</code>) -- the real form counterpart to an AI
+agent's own fenced <code>dv-harness-evidence:&lt;gate_id&gt;</code> waiver block. This store is not
+wired into any gate script's own <code>--waivers</code>/<code>--holes</code>/<code>--coverage</code>
+input today (each gate's payload is assembled ad hoc from the agent's evidence block at stage-run
+time, per gate's own bespoke schema -- see <code>waiver_store.py</code>'s module docstring); use this
+as the durable record of what a human actually approved, and copy its fields into the relevant
+evidence block's waiver entry when authoring one. Both <code>approved</code> and non-empty
+<code>evidence</code> are required -- a submission missing either is rejected with a 400.</div>
+<div class="ctrlrow">
+  <label>Gate <select id="waiverGateId">
+    <option value="waiver_scope_consistency_gate">waiver_scope_consistency_gate</option>
+    <option value="waiver_revision_freshness_gate">waiver_revision_freshness_gate</option>
+    <option value="waiver_revalidation_gate">waiver_revalidation_gate</option>
+    <option value="coverage_hole_regeneration_gate">coverage_hole_regeneration_gate</option>
+    <option value="coverage_hole_to_test_generation_gate">coverage_hole_to_test_generation_gate</option>
+    <option value="sequence_coverage_closure_gate">sequence_coverage_closure_gate</option>
+  </select></label>
+  <label>Item ID <input id="waiverItemId" size="24" placeholder="e.g. cov-hole-42"></label>
+</div>
+<div class="ctrlrow"><label style="align-items:flex-start">Evidence
+  <textarea id="waiverEvidence" rows="3" cols="60" placeholder="why this item is genuinely waived (reviewer, spec section, rationale)"></textarea></label></div>
+<div class="ctrlrow"><label><input type="checkbox" id="waiverApproved" checked> Approved</label>
+  <button onclick="doWaiverSubmit()">Submit Waiver</button></div>
+<div id="waiverResult" style="font-size:12px;margin-top:4px"></div>
+</div>
+
 <div class="card"><h3>Graph</h3><div id="graph"></div>
 <div class="note">Confidence is not shown here: no single-value "current confidence" field is tracked in HarnessState today (see engineering findings in root_cause/mechanism evidence blocks instead).</div>
 </div>
@@ -430,6 +458,13 @@ async function doSignoffExport(){
   let r = await postJSON('/api/signoff-export', body);
   showIn('signoffExportResult', r.ok, r.data);
   await load();
+}
+async function doWaiverSubmit(){
+  let body = {gate_id: val('waiverGateId'), item_id: val('waiverItemId'),
+              approved: document.getElementById('waiverApproved').checked,
+              evidence: val('waiverEvidence')};
+  let r = await postJSON('/api/waiver', body);
+  showIn('waiverResult', r.ok, r.data);
 }
 async function doConfigToggle(){
   let checked = document.getElementById('cosignEnforceToggle').checked;
@@ -1744,6 +1779,8 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 self._handle_upload()
             elif self.path == "/api/signoff-export":
                 self._handle_signoff_export()
+            elif self.path == "/api/waiver":
+                self._handle_waiver_submit()
             else:
                 self._send_json({"error": "NOT_FOUND", "message": f"no such POST endpoint: {self.path}"},
                                  status=404)
@@ -1895,6 +1932,30 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
             out_dir = Path(out_dir_raw) if out_dir_raw else _default_signoff_export_dir(project_root)
             result = signoff_export.collect_signoff_bundle(project_root, out_dir)
             self._send_json(result)
+
+        # POST /api/waiver: {"gate_id": ..., "item_id": ..., "approved": true,
+        # "evidence": "..."} -- the real human-facing counterpart to an AI
+        # agent's own fenced ```dv-harness-evidence:<gate_id>``` waiver block
+        # (see waiver_store.py's module docstring for why this store is a
+        # separate, durably-written source of truth rather than a forced
+        # integration into gates.run_gate()'s per-invocation tempfile
+        # assembly). Calls waiver_store.append_waiver() directly, in this
+        # same process -- no subprocess -- same pattern as
+        # _handle_signoff_export calling signoff_export.collect_signoff_bundle()
+        # directly above.
+        def _handle_waiver_submit(self):
+            from . import waiver_store
+            try:
+                body = self._read_json_body()
+            except ValueError as e:
+                self._send_json({"error": "BAD_REQUEST", "message": str(e)}, status=400)
+                return
+            try:
+                record = waiver_store.append_waiver(project_root, body)
+            except ValueError as e:
+                self._send_json({"error": "BAD_REQUEST", "message": str(e)}, status=400)
+                return
+            self._send_json({"status": "OK", "waiver": record})
 
         def _handle_setup(self):
             try:
