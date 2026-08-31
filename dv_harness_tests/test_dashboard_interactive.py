@@ -942,6 +942,99 @@ def test_state_endpoint_failure_attribution_none_before_stage_runs():
         shutil.rmtree(tmp)
 
 
+# --- Task 3: real interactivity for protocol/env-mode/iron-rules tiles -----
+# Mirrors test_state_endpoint_includes_failure_attribution_verdict/
+# test_state_endpoint_failure_attribution_none_before_stage_runs above exactly
+# -- environment_mode_selected() is the same scan-stage-evidence-block shape
+# as _failure_attribution()/_execution_mode(), just under a different gate id
+# (environment_mode_selection) and field name (environment_mode).
+
+def test_environment_mode_reflects_current_run_when_declared():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        state = {"stages": {"DISCOVERY": {"last_message": (
+            "```dv-harness-evidence:environment_mode_selection\n"
+            '{"environment_mode": "SYSTEM_LEVEL_MODE"}\n'
+            "```\n"
+        )}}}
+        (tmp / ".dv-harness" / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _get(base, "/api/state")
+        assert status == 200
+        assert data["environment_mode_selected"] == "SYSTEM_LEVEL_MODE"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_environment_mode_selected_none_before_declared():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _get(base, "/api/state")
+        assert status == 200
+        assert data["environment_mode_selected"] is None
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_protocol_tiles_are_clickable_elements():
+    # The rendered protocoltiles JS must attach a real click handler that
+    # wires each tile to the exact field POST /api/start already reads for
+    # scope (`goal`, submitted from #goalInput by doStart() -- see val('goalInput')
+    # a few lines above in dashboard.py) -- not a static, inert <div>.
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with urllib.request.urlopen(base + "/", timeout=10) as resp:
+            html = resp.read().decode("utf-8")
+
+        assert 'onclick="selectProtocol(' in html
+        import re
+        m = re.search(r"function selectProtocol\([^)]*\)\s*\{([^}]*)\}", html, re.S)
+        assert m, "selectProtocol() click handler function not found in served HTML"
+        body = m.group(1)
+        assert "goalInput" in body and ".value" in body
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_iron_rules_tile_uses_tier_driven_css_class():
+    # ironrulestiles must render CSS classes derived from real qualification
+    # tier data (qualification_tier_reached, from the live
+    # protocol_capability_registry.json), with real corresponding CSS rules
+    # in the page's <style> block -- not a flat unstyled tile.
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with urllib.request.urlopen(base + "/", timeout=10) as resp:
+            html = resp.read().decode("utf-8")
+
+        assert "tier-reached" in html
+        assert "tier-unreached" in html
+        style_block = html.split("<style>")[1].split("</style>")[0]
+        assert ".tier-reached" in style_block
+        assert ".tier-unreached" in style_block
+    finally:
+        shutil.rmtree(tmp)
+
+
 # --- POST /api/signoff-export (dv_harness/signoff_export.py) ---------------
 # Real HTTP requests against a real dashboard.serve() thread, same as every
 # other test in this file. collect_signoff_bundle() itself is exercised

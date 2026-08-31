@@ -14,6 +14,7 @@ from dv_harness.models import Stage as _Stage, Status
 from dv_harness.dashboard import (
     _lsf_summary, _graph_with_status, _first_failure, _execution_mode,
     _overall_progress, _coverage_credit, _failure_attribution,
+    _environment_mode_selected, _qualification_tier_reached,
 )
 from dv_harness.agent_profile import load_agent_profile
 from dv_harness.adapters.cli import ClaudeCLIAdapter
@@ -467,6 +468,51 @@ def test_dashboard_execution_mode_reads_env_check_evidence():
     finally:
         shutil.rmtree(tmp)
     assert _execution_mode(Path(tempfile.mkdtemp())) is None
+
+
+def test_dashboard_environment_mode_selected_reads_evidence_from_any_stage():
+    # Mirrors test_dashboard_execution_mode_reads_env_check_evidence() above
+    # exactly, for _environment_mode_selected()'s environment_mode_selection
+    # block -- except unlike execution_mode_validator (always ENV_CHECK-only),
+    # no single canonical stage is nailed down for this evidence block yet,
+    # so the scan covers every stage (same scan-all-stages shape
+    # _dv_review_pending() already uses), proven here by putting it on a
+    # stage other than ENV_CHECK.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / ".dv-harness").mkdir()
+        state = {"stages": {"DISCOVERY": {"last_message": (
+            "```dv-harness-evidence:environment_mode_selection\n"
+            '{"environment_mode": "SUBSYSTEM_MODE"}\n'
+            "```\n"
+        )}}}
+        (tmp / ".dv-harness" / "state.json").write_text(json.dumps(state))
+        assert _environment_mode_selected(tmp) == "SUBSYSTEM_MODE"
+    finally:
+        shutil.rmtree(tmp)
+    assert _environment_mode_selected(Path(tempfile.mkdtemp())) is None
+
+
+def test_dashboard_qualification_tier_reached_derives_highest_from_protocol_registry():
+    # _qualification_tier_reached() is the real per-run counterpart to
+    # _qualification_tiers()'s static ladder: the highest CANONICAL_LADDER
+    # tier actually reached by any protocol in this project's real
+    # protocol_capability_registry.json.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        registry_dir = tmp / ".dv-harness" / "qualification"
+        registry_dir.mkdir(parents=True)
+        (registry_dir / "protocol_capability_registry.json").write_text(json.dumps({
+            "protocols": {
+                "USB": {"qualification_status": "ENV_GENERATED"},
+                "PCIe": {"qualification_status": "SMOKE_QUALIFIED"},
+            }
+        }))
+        assert _qualification_tier_reached(tmp) == "SMOKE_QUALIFIED"
+    finally:
+        shutil.rmtree(tmp)
+    # No registry at all -> honest None, never a fabricated tier.
+    assert _qualification_tier_reached(Path(tempfile.mkdtemp())) is None
 
 
 def test_dashboard_graph_reflects_real_stage_status():

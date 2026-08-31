@@ -65,6 +65,9 @@ main{padding:24px;max-width:1200px;margin:auto}
 .icon{font-weight:bold}
 .PASS,.CLOSED,.SCRIPT_SMOKE_PASS{color:#25845b}.FAIL,.BLOCKED,.SCRIPT_SMOKE_FAIL{color:#b84444}
 .RUNNING,.RETRY{color:#2457a6}.PARTIAL,.WAIT_USER,.NO_SOURCE_DATA,.GATE_TOOL_MISSING{color:#b36a00}.NOT_STARTED{color:#9aa6bd}
+.protoTile{cursor:pointer}.protoTile:hover{border-color:#2457a6}.protoTile.selected{border-color:#2457a6;background:#eaf1fb}
+.modeTile.mode-selected{border-color:#2457a6;background:#eaf1fb}
+.tier-reached{border-color:#25845b;background:#e3f7ea}.tier-unreached{opacity:.5}
 code{background:#eef2f7;padding:3px 5px}
 .note{color:#8a97b3;font-size:12px}
 .err{color:#b84444}
@@ -159,8 +162,10 @@ Plane) -- this card just puts it in one place for a quick glance.</div>
 <div class="card" id="ironRulesCard"><h3>Iron Rules / Qualification Tiers</h3>
 <div class="note">Iron Rules count is a live count of "## 鐵則 N" headers in
 <code>.claude/skills/CORE/iron-rules/SKILL.md</code>. Qualification tiers below are the static 8-tier
-vocabulary from <code>dv_harness/qualification.py</code>'s <code>QualificationTier</code> enum -- no
-per-run current tier is tracked yet, so this is a reference legend, not this run's data.</div>
+vocabulary from <code>dv_harness/qualification.py</code>'s <code>QualificationTier</code> enum, each
+tile classed against <code>qualification_tier_reached</code> -- the highest tier actually reached by
+any protocol in this run's real <code>protocol_capability_registry.json</code> (tiers at/below that
+level render <code>tier-reached</code>, tiers above it render <code>tier-unreached</code>).</div>
 <div id="ironrulestiles" class="tiles" style="margin-top:8px"></div>
 <div class="note" style="margin-top:8px">Tier ladder (lowest -&gt; highest): <span id="qualtierlegend"></span></div>
 </div>
@@ -179,14 +184,17 @@ per-run current tier is tracked yet, so this is a reference legend, not this run
 
 <div class="card" id="protocolCard"><h3>Protocols</h3>
 <div class="note">Real registered protocols and their qualification_status (read from
-<code>qualification/protocol_capability_registry.json</code>) -- a data-backed reference list, not a
-functional selector; the Goal field below stays free text.</div>
+<code>qualification/protocol_capability_registry.json</code>) -- click a tile to fill the Goal field
+below with a start-run goal scoped to that protocol (the exact <code>goal</code> field
+POST /api/start already reads).</div>
 <div id="protocoltiles" class="tiles" style="margin-top:8px"></div>
 </div>
 <div class="card" id="envModeCard"><h3>Environment Mode Router</h3>
 <div class="note">The two canonical modes CLAUDE.md's Environment Generation Mode gate defines
-(<code>environment-router/environment_mode_policy.json</code>). No field anywhere tracks which mode the
-CURRENT run used, so this is read-only policy reference, not a live "current mode" indicator.</div>
+(<code>environment-router/environment_mode_policy.json</code>), with the tile matching
+<code>environment_mode_selected</code> highlighted -- the real mode any stage this run has actually
+declared via an <code>environment_mode_selection</code> evidence block (read-only legend, no
+selection made yet, when no stage has declared one).</div>
 <div id="envmodetiles" class="tiles" style="margin-top:8px"></div>
 </div>
 <div class="card" id="subsystemRegistryCard"><h3>Subsystem Registry</h3>
@@ -334,6 +342,16 @@ function icon(status){
   return '<span class="icon NOT_STARTED">&#9675;</span>';
 }
 function val(id){ let el=document.getElementById(id); return el? el.value : ''; }
+
+// Protocol tiles (Protocols card): a real click target wiring straight into
+// the exact field POST /api/start already reads for scope -- doStart() below
+// posts {goal: val('goalInput'), ...}, so filling #goalInput here is not a
+// new, uncomsumed field, it is the one the backend already consumes.
+function selectProtocol(el, name){
+  document.getElementById('goalInput').value = 'verify ' + name;
+  document.querySelectorAll('#protocoltiles .protoTile').forEach(t=>t.classList.remove('selected'));
+  if(el) el.classList.add('selected');
+}
 
 async function postJSON(url, body){
   let resp, text, data;
@@ -699,17 +717,28 @@ async function load(){
    tile(s.dv_review_pending_count||0,'Pending Review (Co-sign)')
  ].join('');
 
- // Protocols: real registered protocols + qualification_status.
+ // Protocols: real registered protocols + qualification_status, each tile a
+ // real click target (selectProtocol()) that fills the Goal field POST
+ // /api/start actually reads -- not a static reference-only div.
  document.getElementById('protocoltiles').innerHTML = (s.protocol_registry||[]).length
-   ? s.protocol_registry.map(p=>tile(p.name, p.qualification_status)).join('')
+   ? s.protocol_registry.map(p=>
+       `<div class="tile protoTile" onclick="selectProtocol(this,'${String(p.name).replace(/'/g,"\\'")}')"><div class="n">${p.name}</div><div class="l">${p.qualification_status}</div></div>`
+     ).join('')
    : tile('-','No protocols registered');
 
- // Environment Mode Router: static policy reference (no per-run "current
- // mode" field exists anywhere in state today).
+ // Environment Mode Router: highlights whichever mode key matches
+ // environment_mode_selected (real, from _environment_mode_selected() --
+ // an environment_mode_selection evidence block some stage this run
+ // actually recorded); falls back to the flat legend display when
+ // s.environment_mode_selected is null/undefined -- never errors on
+ // missing data.
  let modes = s.environment_mode_policy||{};
  let modeKeys = Object.keys(modes);
+ let selectedMode = s.environment_mode_selected;
  document.getElementById('envmodetiles').innerHTML = modeKeys.length
-   ? modeKeys.map(m=>tile(m, modes[m].goal||'')).join('')
+   ? modeKeys.map(m=>
+       `<div class="tile modeTile ${m===selectedMode?'mode-selected':''}"><div class="n">${m===selectedMode?'&#9654; ':''}${m}</div><div class="l">${modes[m].goal||''}</div></div>`
+     ).join('')
    : tile('-','No environment_mode_policy.json found');
 
  // Subsystem Registry: real runtime registry, honest empty state.
@@ -720,9 +749,21 @@ async function load(){
  ).join('');
  document.getElementById('subsystemTableBody').innerHTML = subRows || '<tr><td style="padding:4px" colspan="3">No subsystems registered yet.</td></tr>';
 
- // Iron Rules / Qualification Tiers.
- document.getElementById('ironrulestiles').innerHTML = tile(s.iron_rules_count!=null? s.iron_rules_count : '-','Iron Rules Enforced');
- document.getElementById('qualtierlegend').textContent = (s.qualification_tiers||[]).join(' -> ');
+ // Iron Rules / Qualification Tiers: the tier ladder tiles are classed
+ // against qualification_tier_reached (real, from
+ // _qualification_tier_reached() -- the highest tier any protocol in this
+ // run's live protocol_capability_registry.json has actually reached), not
+ // a flat unstyled tile -- tier-reached for tiers at/below that level,
+ // tier-unreached above it (every tier renders tier-unreached when no
+ // protocol is registered yet).
+ let tierList = s.qualification_tiers||[];
+ let reachedIdx = s.qualification_tier_reached ? tierList.indexOf(s.qualification_tier_reached) : -1;
+ document.getElementById('ironrulestiles').innerHTML =
+   tile(s.iron_rules_count!=null? s.iron_rules_count : '-','Iron Rules Enforced') +
+   tierList.map((t,i)=>
+     `<div class="tile tier ${i<=reachedIdx?'tier-reached':'tier-unreached'}"><div class="n">${i===reachedIdx?'&#9733;':(i<reachedIdx?'&#10003;':'')}</div><div class="l">${t}</div></div>`
+   ).join('');
+ document.getElementById('qualtierlegend').textContent = tierList.join(' -> ');
 
  let g=await (await fetch('/api/graph')).json();
  fillStageSelects((g.nodes||[]).map(n=>n.id));
@@ -923,6 +964,28 @@ def _execution_mode(root: Path):
     return payload.get("execution_mode") if payload else None
 
 
+def _environment_mode_selected(root: Path):
+    """Real per-run counterpart to _environment_mode_policy()'s static
+    policy reference: scans every stage's own recorded last_message (same
+    scan-all-stages shape _dv_review_pending() already uses -- unlike
+    execution_mode_validator, which ENV_CHECK alone ever emits, no single
+    canonical stage is nailed down yet for the environment_mode_selection
+    block) for a dv-harness-evidence environment_mode_selection block and
+    returns its declared environment_mode field (SUBSYSTEM_MODE/
+    SYSTEM_LEVEL_MODE, CLAUDE.md's Environment Generation Mode gate) -- or
+    None if no stage has recorded one yet."""
+    state_file = root / ".dv-harness" / "state.json"
+    state = _read_json_file(state_file)
+    if state is None:
+        return None
+    for stage_rec in (state.get("stages") or {}).values():
+        blocks = extract_evidence_blocks(stage_rec.get("last_message") or "")
+        payload = blocks.get("environment_mode_selection")
+        if payload:
+            return payload.get("environment_mode")
+    return None
+
+
 def _dv_review_pending(root: Path):
     """Mirrors _coverage_credit()/_execution_mode(): scans every stage's own
     recorded last_message for dv-harness-evidence blocks and reports, by
@@ -1005,11 +1068,10 @@ def _protocol_registry(root: Path):
 def _environment_mode_policy(root: Path):
     """Reads the real environment-router/environment_mode_policy.json --
     the two canonical modes (SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE) CLAUDE.md's
-    Environment Generation Mode gate defines. No stage evidence block or
-    state.json field anywhere tracks which mode the CURRENT run actually
-    used (checked: no engine/gates.py field for this) -- so this is
-    deliberately read-only policy reference, never a fabricated "current
-    mode" value."""
+    Environment Generation Mode gate defines. This is deliberately just the
+    static policy reference; see _environment_mode_selected() below for
+    which mode (if any) the CURRENT run actually declared, via a real
+    environment_mode_selection evidence block."""
     path = root / ".dv-harness" / "environment-router" / "environment_mode_policy.json"
     data = _read_json_file(path, default=None)
     if not isinstance(data, dict):
@@ -1038,14 +1100,28 @@ def _iron_rules_count(root: Path) -> int:
 
 
 def _qualification_tiers():
-    """Static reference legend: dv_harness.qualification.QualificationTier's
-    own 8-tier vocabulary, in enum declaration order. No per-run current
-    tier is tracked anywhere in state.json/blackboard today (the
-    subsystem registry -- see _subsystem_registry -- is where a real
-    per-subsystem qualification_state would eventually live), so this is
-    shown as a static legend rather than a fabricated "current tier"."""
+    """Static reference legend (the ladder itself): dv_harness.qualification.
+    QualificationTier's own 8-tier vocabulary, in enum declaration order.
+    See _qualification_tier_reached() below for which tier this run has
+    actually reached against that ladder."""
     from .qualification import QualificationTier
     return [t.value for t in QualificationTier]
+
+
+def _qualification_tier_reached(root: Path):
+    """Real per-run counterpart to _qualification_tiers()'s static ladder:
+    the highest CANONICAL_LADDER tier actually reached by any protocol in
+    this project's live protocol_capability_registry.json (_protocol_registry()
+    above) -- None if no protocol is registered yet, or none of the
+    registered qualification_status values is one of the 8 canonical tokens
+    (e.g. still a legacy/non-canonical vocabulary value)."""
+    from .qualification import CANONICAL_LADDER
+    protocols = _protocol_registry(root)
+    reached_ranks = [CANONICAL_LADDER.index(p["qualification_status"]) for p in protocols
+                     if p.get("qualification_status") in CANONICAL_LADDER]
+    if not reached_ranks:
+        return None
+    return CANONICAL_LADDER[max(reached_ranks)]
 
 
 # --- Coverage analysis (.dv-harness/coverage/summary.json + history.json) --
@@ -1511,9 +1587,11 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 # GUI surface -- see the matching cards below.
                 state["protocol_registry"] = _protocol_registry(project_root)
                 state["environment_mode_policy"] = _environment_mode_policy(project_root)
+                state["environment_mode_selected"] = _environment_mode_selected(project_root)
                 state["subsystem_registry"] = _subsystem_registry(project_root)
                 state["iron_rules_count"] = _iron_rules_count(project_root)
                 state["qualification_tiers"] = _qualification_tiers()
+                state["qualification_tier_reached"] = _qualification_tier_reached(project_root)
                 state["blackboard_topics"] = _blackboard_topics(project_root)
                 state["uploaded_files"] = _uploaded_files(project_root)
                 current_stage = state.get("current_stage")
