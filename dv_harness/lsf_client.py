@@ -157,6 +157,44 @@ def bjobs_query_many(job_ids: list[int]) -> dict:
     return result
 
 
+def discover_live_jobs(vcuser: str) -> list[dict]:
+    """Real LSF status for every job under `vcuser`, independent of whether
+    any of them were ever submitted via this module's own bsub_submit() or
+    registered via register_external_job(). Used by Part 2's reconciliation
+    cycle for baseline visibility -- a job with no registered JobState still
+    shows up here with RUN/DONE/EXIT/PEND status."""
+    argv = ["bjobs", "-u", vcuser, "-json", "-o",
+            "jobid stat queue exec_host job_name submit_time"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    except FileNotFoundError as e:
+        raise LsfUnavailableError(f"bjobs not found on PATH: {e}") from e
+    except subprocess.TimeoutExpired as e:
+        raise LsfUnavailableError(f"bjobs timed out: {e}") from e
+    try:
+        parsed = json.loads(proc.stdout)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise LsfUnavailableError(
+            f"failed to parse bjobs -json output: {e}; stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        ) from e
+    records = parsed.get("RECORDS") or []
+    result = []
+    for rec in records:
+        try:
+            jid = int(rec.get("JOBID"))
+        except (TypeError, ValueError):
+            continue
+        result.append({
+            "job_id": jid,
+            "stat": rec.get("STAT") or "",
+            "queue": rec.get("QUEUE") or "",
+            "exec_host": rec.get("EXEC_HOST") or "",
+            "job_name": rec.get("JOB_NAME") or "",
+            "submit_time": rec.get("SUBMIT_TIME") or "",
+        })
+    return result
+
+
 def map_bjobs_stat_to_lsf_status(raw_stat: Optional[str]) -> str:
     if not raw_stat:
         return "UNKNOWN"

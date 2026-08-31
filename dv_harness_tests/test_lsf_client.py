@@ -360,3 +360,42 @@ class TestEvaluateAutoKill:
         decision = lsf_client.evaluate_auto_kill(state, {})
         assert decision["should_kill"] is False
         assert decision["reason"] == "NO_AUTO_KILL_TRIGGER_CONDITION_MET"
+
+
+class TestDiscoverLiveJobs:
+    def test_parses_bjobs_json_output(self):
+        raw = json.dumps({
+            "RECORDS": [
+                {"JOBID": "111", "STAT": "RUN", "QUEUE": "normal",
+                 "EXEC_HOST": "host1", "JOB_NAME": "usb2_enum_1",
+                 "SUBMIT_TIME": "Sep  1 10:00"},
+                {"JOBID": "222", "STAT": "PEND", "QUEUE": "normal",
+                 "EXEC_HOST": "", "JOB_NAME": "usb3_gen1_2",
+                 "SUBMIT_TIME": "Sep  1 10:05"},
+            ]
+        })
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=_completed(stdout=raw)) as m:
+            jobs = lsf_client.discover_live_jobs("vcuser1")
+        argv = m.call_args.args[0]
+        assert argv[0] == "bjobs"
+        assert "-u" in argv and "vcuser1" in argv
+        assert jobs == [
+            {"job_id": 111, "stat": "RUN", "queue": "normal",
+             "exec_host": "host1", "job_name": "usb2_enum_1",
+             "submit_time": "Sep  1 10:00"},
+            {"job_id": 222, "stat": "PEND", "queue": "normal",
+             "exec_host": "", "job_name": "usb3_gen1_2",
+             "submit_time": "Sep  1 10:05"},
+        ]
+
+    def test_no_jobs_returns_empty_list(self):
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=_completed(stdout=json.dumps({"RECORDS": []}))):
+            assert lsf_client.discover_live_jobs("vcuser1") == []
+
+    def test_lsf_unavailable_raises(self):
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   side_effect=FileNotFoundError("no bjobs")):
+            with pytest.raises(lsf_client.LsfUnavailableError):
+                lsf_client.discover_live_jobs("vcuser1")
