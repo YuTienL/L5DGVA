@@ -399,3 +399,38 @@ class TestDiscoverLiveJobs:
                    side_effect=FileNotFoundError("no bjobs")):
             with pytest.raises(lsf_client.LsfUnavailableError):
                 lsf_client.discover_live_jobs("vcuser1")
+
+
+class TestRegisterExternalJob:
+    def setup_method(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_writes_job_state_matching_bsub_submit_shape(self):
+        lsf_client.register_external_job(self.tmp, 999, log_path="/proj/sim/run/foo_1/sim.log",
+                                          pattern="foo")
+        loaded = lsf_client.load_job_state(self.tmp, 999)
+        assert loaded.job_id == 999
+        assert loaded.pattern == "foo"
+        assert loaded.sim_log == "/proj/sim/run/foo_1/sim.log"
+        assert loaded.lsf_status == "UNKNOWN"
+
+    def test_pattern_optional(self):
+        lsf_client.register_external_job(self.tmp, 1000, log_path="/proj/sim/run/bar/sim.log")
+        loaded = lsf_client.load_job_state(self.tmp, 1000)
+        assert loaded.pattern is None
+
+    def test_reconcile_batch_treats_registered_job_like_bsub_submit_job(self):
+        lsf_client.register_external_job(self.tmp, 2000, log_path="/proj/sim/run/baz/sim.log",
+                                          pattern="baz")
+        live = {"JOBID": "2000", "STAT": "DONE", "EXIT_CODE": "0",
+                "EXEC_HOST": "host1", "QUEUE": "normal", "RUN_TIME": "10",
+                "SUBMIT_TIME": "x", "JOB_NAME": "baz"}
+        with patch("dv_harness.lsf_client._run_bjobs",
+                   return_value={"RECORDS": [live]}):
+            result = lsf_client.reconcile_batch(self.tmp, [2000])
+        state, discrepancies = result[2000]
+        assert state.lsf_status == "DONE"
+        assert any(d.field == "sim_status" and d.severity == "CRITICAL" for d in discrepancies)

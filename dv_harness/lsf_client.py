@@ -223,6 +223,19 @@ def bkill_job(job_id: int, *, verify: bool = True, poll_timeout_s: int = 30) -> 
     return False
 
 
+def register_external_job(root: Path, job_id: int, *, log_path: str,
+                           pattern: Optional[str] = None) -> None:
+    """Register a job that was submitted OUTSIDE this module's own
+    bsub_submit() -- e.g. a generated environment's own Makefile-native
+    `bsub` -- so reconcile_batch()/save_job_state() treat it identically to
+    a bsub_submit()-originated job. Writes a fresh JobState with
+    lsf_status="UNKNOWN" (the next reconcile_batch() call fills in the real
+    status from a live bjobs poll)."""
+    jid = _validate_job_id(job_id)
+    state = JobState(job_id=jid, pattern=pattern, sim_log=log_path)
+    save_job_state(root, state)
+
+
 def load_early_fail_policy(root: Path) -> dict:
     """Read .dv-harness/lsf/early_fail_policy.json (see EARLY_FAIL_POLICY_PATH).
 
