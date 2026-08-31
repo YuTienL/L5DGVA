@@ -1033,15 +1033,8 @@ def _subsystem_registry(root: Path):
 
 
 def _iron_rules_count(root: Path) -> int:
-    """Live count of '## 鐵則 N' headers in CORE/iron-rules/SKILL.md, counted
-    at read time (not a cached/hardcoded number) -- 0 if the file is
-    missing."""
-    path = root / ".claude" / "skills" / "CORE" / "iron-rules" / "SKILL.md"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return 0
-    return len(re.findall(r"(?m)^## 鐵則 \d+", text))
+    from .stats_snapshot import _iron_rule_count
+    return _iron_rule_count(root)
 
 
 def _qualification_tiers():
@@ -1649,6 +1642,9 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
                 self._send_json(user_info.summarize_user_access(
                     project_root, int(params.get("limit", "200"))))
+            elif self.path == "/api/stats":
+                from .stats_snapshot import compute_stats
+                self._send_json(compute_stats(project_root))
             else:
                 self._send(b"not found", "text/plain", status=404)
 

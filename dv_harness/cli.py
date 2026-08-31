@@ -44,6 +44,7 @@ def main():
 
     sub.add_parser("status")
     sub.add_parser("advance")
+    sub.add_parser("stats")
 
     pset = sub.add_parser("set-stage")
     pset.add_argument("stage", choices=[s.value for s in Stage])
@@ -353,6 +354,9 @@ def main():
 
     if args.cmd == "status":
         print(h.summary())
+    elif args.cmd == "stats":
+        from .stats_snapshot import compute_stats
+        print(json.dumps(compute_stats(h.root), ensure_ascii=False, indent=2))
     elif args.cmd == "explain":
         from .prompts import get_de_explainer
         from .control_plane import describe_stage
