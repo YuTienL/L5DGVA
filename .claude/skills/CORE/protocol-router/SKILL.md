@@ -14,6 +14,8 @@ AMBA -> `AMBA/amba-profile`
 MIPI CSI-2 -> `MIPI/csi2-profile`
 MIPI DSI -> `MIPI/dsi-profile`
 CAN-FD -> `CAN/canfd-profile`
+eMMC/MMC -> `PROTOCOL_BUILDERS/emmc-environment-builder`
+SD/SDIO -> `PROTOCOL_BUILDERS/sd-environment-builder`
 
 USB profile must further resolve Host vs Device.
 
@@ -28,6 +30,8 @@ CANFD / CAN FD
 AMAB4 -> AMBA when contextual
 AIX4 -> AXI4 when contextual
 AXIS / AXI Stream -> AXI-Stream
+MMC -> eMMC/MMC
+SDIO -> SD/SDIO
 
 For mixed-protocol SoCs, choose the protocol implicated by:
 user intent -> failing test -> active config -> modified files -> subsystem boundary.

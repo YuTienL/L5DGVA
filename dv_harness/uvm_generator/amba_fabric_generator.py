@@ -10,9 +10,11 @@ tools/verification_flow/fabric_topology_completeness_gate.py is a real
 VALIDATOR for a supplied topology JSON -- but nothing took M/N as parameters
 and actually emitted UVM/SV files for a multi-master/multi-slave
 interconnect. The only real SV-emitting generator in the repo (generator.py,
-this module's sibling) is orphaned AND structurally single-agent (one
-env/config/scoreboard/vseqr set per invocation) -- incapable of M x N output
-even if wired up.
+this module's sibling) has live per-class emit methods used by
+ProtocolEnvGenerator (for USB/protocol generation), but is not wired for
+AMBA M x N generation -- structurally single-agent (one env/config/
+scoreboard/vseqr set per invocation) and incapable of M x N output even if
+reused here.
 
 This module computes the REAL algorithms (address-decode overlap/gap/
 full-coverage check, the ID-width formula, per-pair scoreboard-matrix

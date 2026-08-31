@@ -1,9 +1,14 @@
-# NOTICE (added during industrial-grade audit, 2026-08-28): this module is
-# NOT invoked by any executing code path in dv_harness/ or .claude/agents/*.md
-# as of this audit -- it is standalone/orphaned code. Any WORKFLOW_MANIFEST.json
-# capability flag referencing this file's feature is aspirational, not a
-# statement that this code actually runs in the pipeline. See
-# CHANGELOG_v0_to_v50.md and the industrial-grade-deep-audit findings for detail.
+# NOTICE (corrected 2026-08-31, protocol-generalization-gap-closing Task 2):
+# the flat top-level generate() orchestration in this module is deprecated
+# -- ProtocolEnvGenerator (protocol_env_generator.py) is the one official
+# generation entry point, reachable via
+# tools/generate_protocol_uvm_environment.py. This module's per-class emit
+# methods (config/vseq/base_vseq/scoreboard/coverage/env/base_test/
+# smoke_test/tb_top/sv_id) remain live and authoritative for their DSL
+# schemas -- ProtocolEnvGenerator composes and reuses them unchanged, only
+# relocating their output into USB_UVM_Handoff's real subdirectory layout
+# instead of this module's own flat-file layout. Do not call this module's
+# top-level generate() directly; do not describe this module as orphaned.
 from pathlib import Path
 import json, re
 from ..qualification import QualificationTier

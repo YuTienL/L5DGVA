@@ -3,8 +3,11 @@ protocol UVM environment generator, superseding generator.py's flat-file
 layout.
 
 BUG FIX (2026-08-29, 9-policy audit / USB regen-fidelity plan Phase 1 item 4):
-generator.py (this module's sibling, itself orphaned/unwired -- see its own
-NOTICE) writes every emitted file into one flat directory. The catalogued
+generator.py (this module's sibling; its per-class emit methods are live
+and authoritative for their DSL schemas, but its own top-level flat
+generate() orchestration is deprecated in favor of this module -- see its
+own corrected NOTICE) writes every emitted file into one flat directory
+when called directly via that deprecated path. The catalogued
 USB_UVM_Handoff package's real tree is not flat: tb/agents, tb/env, tb/seq,
 tb/tests, tb/top, tb/patterns/common, filelist/ are real, separate
 subdirectories. This module reuses generator.py's per-class emit functions

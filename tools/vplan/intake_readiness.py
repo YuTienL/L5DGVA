@@ -19,6 +19,16 @@ if mode=="SUBSYSTEM":
     if empty("dut_design_spec"): missing.append("dut_design_spec")
     if empty("clock_reset_spec") and empty("phy_interface_spec") and empty("rtl_top_or_interface_files"):
         missing.append("interface_or_clock_reset_evidence")
+    protocols_lower = {str(p).lower() for p in (d.get("protocols") or [])}
+    if protocols_lower & {
+        "amba", "amba4-soc", "axi", "ahb", "apb",
+        "apb2", "apb3", "ahb-lite", "axi3", "axi4", "ace-lite", "axi-stream",
+    }:
+        if empty("fabric_topology_spec"):
+            missing.append("fabric_topology_evidence")
+    if protocols_lower & {"sd", "sdio", "sd-sdio"}:
+        if empty("uhs_tuning_spec"):
+            missing.append("uhs_tuning_evidence")
 elif mode=="SYSTEM_LEVEL":
     if not d.get("target_name"): missing.append("target_name")
     if not d.get("selected_subsystems"): missing.append("selected_subsystems")

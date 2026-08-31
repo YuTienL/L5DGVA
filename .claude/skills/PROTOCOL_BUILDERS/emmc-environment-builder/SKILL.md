@@ -33,6 +33,12 @@ scaffolding only -- none invent protocol-specific register maps, VIP class names
 checker/scoreboard semantics; those must still come from current evidence (previous
 section), supplied into the manifest/topology JSON, never fabricated. Read each
 module's own docstring "WHAT THIS DOES NOT DO" section before assuming more than this.
+
+For CMDQ/tuning content specifically, use
+`dv_harness/uvm_generator/emmc_cmdq_generator.py` instead of
+hand-authoring CMDQ queue-management or tuning-sequence logic — it already
+implements the mechanics this section's "CMDQ where applicable" and
+"tuning" bullets ask for.
 - command/data sequences
 - boot
 - partition

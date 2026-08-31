@@ -90,7 +90,7 @@ _INTAKE_EXTRA_GATES = (
 )
 _DISCOVERY_EXTRA_GATES = (
     '```dv-harness-evidence:evidence_source_priority_gate\n{"attempted_sources": ["EXISTING_PROJECT_FILES", "RTL_PARAMETERS_DEFINES", "DESIGN_DOCS"], "higher_priority_sources_exhausted": true}\n```\n'
-    '```dv-harness-evidence:input_source_contract_gate\n{"provided_source_classes": ["SPEC", "COMMAND_TXT", "USB_REFERENCE", "RTL_SOURCE", "DE_LOCAL_SIM"], "protocol_input_kind": "PUBLIC_STANDARD_SPEC", "forbidden_user_prerequisites": []}\n```\n'
+    '```dv-harness-evidence:input_source_contract_gate\n{"provided_source_classes": ["SPEC", "COMMAND_TXT", "PRIMARY_PROTOCOL_REFERENCE", "RTL_SOURCE", "DE_LOCAL_SIM"], "protocol_input_kind": "PUBLIC_STANDARD_SPEC", "forbidden_user_prerequisites": []}\n```\n'
 )
 
 # --- Evidence-block fixture for the multi-flag gate wired into
@@ -665,7 +665,7 @@ def test_requirement_closure_traceability_audit_two_evidence_flags():
     # just an isolated gate call.
     req_ids = [
         "STEP_BY_STEP_INTERACTIVE", "FIVE_CORE_INPUTS", "SPEC", "COMMAND_TXT",
-        "USB_STANDARD_REFERENCE", "REFERENCE_UVM", "RTL_FIRST_ARCH_DISCOVERY",
+        "PROTOCOL_STANDARD_REFERENCE", "REFERENCE_UVM", "RTL_FIRST_ARCH_DISCOVERY",
         "DE_LOCAL_SIM_BASELINE", "VPLAN_FIRST", "VERIFICATION_ARCHITECTURE",
         "SCOREBOARD_CHECKER_ASSERTION", "TEST_GENERATION", "NEGATIVE_TEST",
         "LOCAL_SIM", "COMMAND_SIMLOG_SEMANTIC", "FALSE_PASS_DEFENSE",

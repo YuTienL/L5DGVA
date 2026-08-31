@@ -25,7 +25,7 @@
       "hard_gate": "registered"
     },
     {
-      "requirement_id": "USB_STANDARD_REFERENCE",
+      "requirement_id": "PROTOCOL_STANDARD_REFERENCE",
       "implemented": true,
       "pytest_evidence": "validated",
       "hard_gate": "registered"

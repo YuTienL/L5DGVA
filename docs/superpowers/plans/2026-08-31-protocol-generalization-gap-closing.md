@@ -39,8 +39,13 @@ For each of the 21 directories above, read its `SKILL.md` frontmatter `name:` fi
 ```bash
 cd "D:/DV/Task/DV_Agent_Harness_L5/v50"
 NAME="pcie-production-builder"   # substitute each of the 21 names in turn
-grep -rn "$NAME" .dv-harness/builder/protocol_builder_registry.json .claude/skills/**/SKILL.md .claude/agents/*.md 2>/dev/null | grep -v "_deprecated/"
+find .claude/skills -name SKILL.md -print0 | xargs -0 grep -ln "$NAME" 2>/dev/null | grep -v "_deprecated/"
+grep -n "$NAME" .dv-harness/builder/protocol_builder_registry.json .claude/agents/*.md 2>/dev/null
 ```
+
+(the two-star glob `.claude/skills/**/SKILL.md` does not recurse correctly in
+plain bash without `shopt -s globstar` — `find` is used instead since the
+real skill directories are two levels deep, `CATEGORY/skill-name/SKILL.md`)
 
 Expected: no output for every one of the 21 names, except the grep matching the file's own `SKILL.md` inside its own (pre-move) directory, which is expected and not a "live reference" (a skill's own frontmatter naming itself is not a reference from elsewhere). If any OTHER file references the name, stop and report that directory instead of moving it — do not move a skill that turns out to be referenced.
 
