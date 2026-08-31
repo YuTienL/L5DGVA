@@ -131,6 +131,23 @@ then traceable to everything it touched.
 > already-concrete names back toward something generic -- genericization is
 > a property of the harness's own template assets, not of what those
 > templates produce.
+>
+> **The reverse direction of this same rule (2026-09-01): when DISTILLING a
+> real pattern from a sibling project's own real, protocol-specific files
+> (Iron Rules, a Makefile, any other accumulated real-project knowledge --
+> exactly what the "Provenance and reconciliation" note above already did
+> once) into a permanent DV Agent Harness L5 asset, the imported content
+> must be rewritten in protocol-agnostic/generic form** -- reworded so a
+> future PCIe or MIPI generation reads it as a general rule, not a USB
+> restatement with the protocol name changed. Do not simply copy the source
+> project's rule text verbatim with its concrete protocol/signal/task names
+> left in place; extract the underlying lesson and state it generically,
+> the same way this document's own Steps already separate "the reasoning
+> behind a rule" from "one project's concrete instance of it." A concrete
+> real-project example may still be cited as a worked illustration (this
+> document already does this throughout, e.g. the "Confirmed drift" notes)
+> -- the rule's own STATEMENT must be generic; a cited example may stay
+> concrete.
 
 > **Confirmed drift (2026-08-31, real INTAKE session):** for any target with
 > more than one independent instance/port (confirmed here: a 2-instance USB

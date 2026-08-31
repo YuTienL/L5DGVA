@@ -61,6 +61,15 @@ project signal/instance names) -- never leave literal `<ip>`/`IP_PREFIX`
 placeholder text in a real deliverable, and never genericize a real
 deliverable's already-concrete names back toward something generic.
 
+**The reverse direction (2026-09-01): when distilling a real pattern from
+a sibling project's own protocol-specific files (Iron Rules, a Makefile,
+any real-project knowledge) into a permanent harness asset, rewrite it in
+protocol-agnostic/generic form** -- do not copy the source's rule text
+verbatim with its concrete protocol/signal/task names left in place;
+extract the lesson and state it generically. A concrete real-project
+example may still be cited as an illustration; the rule's own statement
+must be generic.
+
 ---
 
 ## The tree
