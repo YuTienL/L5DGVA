@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -34,4 +36,16 @@ def test_deprecated_pcie_production_builder_not_resolvable_from_real_repo():
     resolver = SkillResolver(ROOT)
     assert "pcie-production-builder" not in resolver.index
     result = resolver.resolve(["pcie-production-builder"])[0]
+    assert result["found"] is False
+
+
+@pytest.mark.parametrize("skill_name", [
+    "usb-real-env-generator",
+    "usb-complete-env-generator",
+    "usb-production-builder",
+])
+def test_deprecated_usb_alternate_generators_not_resolvable_from_real_repo(skill_name):
+    resolver = SkillResolver(ROOT)
+    assert skill_name not in resolver.index
+    result = resolver.resolve([skill_name])[0]
     assert result["found"] is False
