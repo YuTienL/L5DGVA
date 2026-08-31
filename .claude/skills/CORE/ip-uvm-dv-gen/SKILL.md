@@ -194,7 +194,13 @@ checkable -- don't let stating it substitute for proving it.
 3. **Pattern selection is a run-time plusarg.** Never a compile define -- one
    elaboration must serve every pattern.
 4. **Cite `file:line`.** Never infer a fact from a name, a comment or a
-   directory.
+   directory. **Standing rule (2026-09-01, distilled/genericized):**
+   multi-MB RTL/parameter files -- grep for the specific fact, read only
+   the matching fragment; a project's own notes may not be UTF-8, try the
+   platform's legacy/regional encoding before calling a garbled read
+   "corrupt"; a vendor PDF with no HTML reference and no page-renderer --
+   standardize on a layout-preserving PDF text-extraction CLI, confirmed
+   installed first.
 5. **"Statically checked" is not "compiles".** Say which one you mean.
 
 ---
@@ -792,6 +798,17 @@ mode selection already used for the simulator binary). Carrying one
 shape's flag vocabulary to the other silently fails or breaks the
 invocation.
 
+**Waiting on a remote command/LSF job without polling, 2026-09-01,
+distilled/genericized:** a background wait loop must check BOTH success
+and every known failure literal in one anchored match -- an unanchored
+match is a real source of exiting the instant the condition text appears
+anywhere, including in something that merely echoes it back. Match what
+has no ambiguity window: anchored job-ID (not a loose name prefix,
+false-negatives during a queue-empty window), a scoped `pgrep` for a
+whole process (no such gap), raw byte-level grep for a log that may hold
+embedded non-text bytes (line-oriented grep can silently treat it as
+binary and match nothing).
+
 - `vlogan` analyze then `vcs` elaborate, both given the debug-database
   flag if a viewer will be used -- see "VCS compile flow" below for the
   real mechanism.
@@ -957,6 +974,23 @@ exists = may consume time, needs human judgment; (3) delay exists but
 every instance sits inside a conditional. Exclude a loop that advances
 its own exit condition internally (a countdown) -- normal control flow,
 not a hang shape.
+
+**Category 7 third outcome, 2026-09-01, distilled/genericized:** a file
+reachable only through a run-time factory STRING lookup compiles fine
+but still needs its OWN reachability check against the registering
+context's real include chain -- compiling clean is not sufficient; a
+class registered but outside that chain fails only at run time with a
+factory-lookup fatal, not a compile error.
+
+**More false-positive classes + a first-run noise expectation,
+2026-09-01, distilled/genericized:** beyond the four above -- a
+commented-out `` `include `` still followed as live; text inside a `/* */`
+block not stripped first; a macro-paste parameter token misread as
+undefined; a task's own declaration parentheses miscounted as a call
+site. Expect real noise on the first run against a fresh tree, dropping
+sharply on the second (a real project: mostly-checker-bugs first pass, a
+small real-defect count, then a much smaller all-false second pass) --
+fix the checker's own false positives before judging the signal.
 
 ---
 

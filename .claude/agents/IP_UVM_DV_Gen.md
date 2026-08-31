@@ -308,6 +308,21 @@ fact from a name.
 - **Distinguish "passes static checking" from "compiles".** Never report the
   second when you have only done the first.
 
+> **Standing rule (2026-09-01, distilled and genericized): how to actually
+> read the input tree's largest/oddest files, not just where to look.**
+> RTL and generated-parameter files in a real DUT delivery can run into
+> the multiple-megabyte, multi-thousand-line range -- grep for the
+> specific fact first, then read only the matching fragment with a
+> bounded offset/limit, never the whole file at once. A project's own
+> markdown/notes files are not guaranteed to be UTF-8 -- if a read
+> produces garbled text, try the platform's legacy/regional encoding
+> before concluding the file is corrupt. For a vendor databook/
+> programming-guide/PHY-manual delivered as a PDF with no HTML/text
+> reference and no page-image-rendering tool available, standardize on a
+> layout-preserving PDF-to-text extraction CLI (confirm which tool the
+> authoring host actually has before assuming one is installed) rather
+> than assuming a renderer is available.
+
 These rules are the same discipline CLAUDE.md's **Evidence Truth Rule**
 states at the harness level ("current evidence wins", "any current root
 cause must be revalidated with current evidence") applied specifically to
@@ -1770,6 +1785,30 @@ empty.
 > best (unrecognized flags ignored) or breaks the tool invocation outright
 > -- confirm which shape applies before reusing either path as-is.
 
+> **Standing rule (2026-09-01, distilled and genericized): waiting on a
+> long-running remote command or LSF job without polling needs a
+> correctly-anchored, dual-condition wait, not a loose text match.** A
+> background wait loop (`until <condition>; do sleep <N>; done`-shaped)
+> must check for BOTH success AND every known failure literal in one
+> anchored match -- an unanchored/loose match is a real, repeated source
+> of a wait exiting the instant its own condition text happens to appear
+> anywhere in the stream, including in something that merely ECHOES the
+> condition back (a submission script's own preflight logging the exact
+> string it's checking for; a status banner containing an unrelated
+> heartbeat line that happens to match). **Choose what you wait on to
+> match what actually has no ambiguity window**: an anchored job-ID-based
+> match (not a loose name prefix, which can false-negative during a
+> queue-empty window before the real job appears) for a specific
+> submitted job; a process-existence check (e.g. `pgrep` scoped to the
+> user and the specific command) for a whole build/run process with no
+> such gap; a raw byte-level grep (not a line-oriented one) for a log
+> file that may contain embedded non-text bytes, which can otherwise make
+> a text-mode grep silently treat the whole file as binary and match
+> nothing. A single unanchored/loose wait-condition match has, in a real
+> project, caused a wait to exit immediately against an unrelated
+> heartbeat line -- indistinguishable at the time from a genuine, fast
+> real pass.
+
 > **Genericization pass (2026-09-01):** the internalized template set above
 > was made actually protocol-agnostic, not just relocated. Every file got
 > a real `TARGET_IP`/`IP_PREFIX` parameterization (Makefile variables,
@@ -1861,6 +1900,38 @@ after every change. Thirteen categories, in value order:
 > an internally-incremented index) -- that is normal, correctly-progressing
 > control flow, not a hang shape, and an earlier, simpler version of this
 > class of check got exactly this case wrong.
+>
+> **Category 7 has a third outcome beyond reachable/unreachable, worth
+> naming explicitly: a file that compiles fine but is only ever reached
+> through a run-time factory STRING lookup (not any static `` `include ``
+> or reference).** Compiling cleanly is not sufficient for a
+> factory-registered class -- the file must additionally sit inside the
+> specific include chain the registering context (the base test, or
+> whatever walks the registration path) actually reaches, or the class
+> compiles fine and only fails with a run-time factory-lookup fatal, not
+> a compile error. Category 7's static reachability check cannot see this
+> by itself; treat a factory-registered class as needing its OWN
+> reachability confirmation against the registering context's real
+> include chain, not just "did anything `` `include `` it."
+
+> **Standing rule (2026-09-01, distilled and genericized): more known
+> false-positive classes than the four already listed, plus a realistic
+> first-run noise expectation.** Beyond mutually-exclusive-`ifdef`-branches,
+> commas-in-string-literals, cross-namespace macro/task comparison, and
+> run-time-built keys: (5) a commented-out `` `include `` still followed by
+> a macro-reachability scanner as if it were live; (6) text inside a
+> `/* */` block comment not stripped before scanning; (7) a macro-paste
+> parameter token misread as an undefined bare macro; (8) a task
+> declaration's own parameter-list parentheses miscounted as if they were
+> a call-site argument list. **Expect real noise on the very first run
+> against a fresh tree, and expect it to drop sharply on the second**: a
+> real sibling project's first pass produced a large batch of reports,
+> most of them the checker's own bugs (fixed once, not per-report) with a
+> small handful of genuine defects; a second run against the same,
+> now-fixed checker produced a much smaller report count, all false and
+> zero real. Don't mistake a noisy first run for the checker being
+> useless -- fix the checker's own false-positive classes first, then
+> re-run, before judging the signal.
 
 Category 1 has caught a task declared with zero arguments and called with one
 from **every pattern in the pool** -- which would have failed the first
@@ -2107,6 +2178,17 @@ apart. This is deliberate and worth the length. An environment's most valuable
 single artefact is its trap catalogue, and every entry in one comes from a
 header comment written at the moment the trap was found.
 
+> **Standing rule (2026-09-01, distilled and genericized): the
+> complementary rule to the one above -- a fact resolved from reading a
+> databook/programming-guide/PHY-manual chapter should ALSO get its own
+> short, persistent `docs/` note, not only the adjacent code's header
+> comment.** A conversation resets; a `docs/` note survives one. A real
+> sibling project's own two such notes each answered a question that had
+> already cost several simulation rounds to work out the first time --
+> written once, they turned a repeat investigation into a lookup. Treat
+> this as open-ended: one short note per manually-researched component
+> whose resolved facts are worth not re-deriving from scratch next time.
+
 ---
 
 ## How to work
@@ -2193,6 +2275,7 @@ RTL/DUT owner) can make -- which Human Override always settles regardless.
 | Put UVM constructs in a pattern file | Breaks commitment 2; the file stops being maintainable by its owner |
 | Select a pattern with a compile define | Breaks commitment 3; one elaboration per pattern |
 | Add a source file to more than one filelist | Duplicate module definition |
+| Add a new testbench file to the source filelist directly | **The positive procedure (2026-09-01, distilled and genericized):** add an `` `include `` line for it inside the single compile-entry file's own include chain instead -- the filelist owns the source LIST, the entry file owns what actually gets compiled from it. Adding a file to the filelist is exactly the duplicate-module-definition mistake in the row above |
 | Introduce VCD or VPD alongside FSDB | Two dump mechanisms, and the second one silently wins |
 | Guess a base address, a task's arity, or a field's default | All three have silent failure modes |
 | Trust a VIP field's default because it looks sensible | Step 7 |
