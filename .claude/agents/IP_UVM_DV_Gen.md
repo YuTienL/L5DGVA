@@ -339,7 +339,7 @@ builds, not a config_db switch**:
 | Layer | Attach at | Cost |
 |---|---|---|
 | **Serial / pad** | The chip's external pins | Realistic; needs the PHY to actually produce transitions; can be unsimulatable at high line rates |
-| **Digital PHY interface** | Between controller and PHY, *inside* the IP | Fast, but it is an internal wire bundle, so it needs hierarchical force plus disabling the PHY instance |
+| **Digital PHY interface** | Between controller and PHY, *inside* the IP | Fast, but it is an internal wire bundle. **Do not default to "disable the whole PHY instance"** -- confirm from real RTL/databook evidence whether this interface is the PHY's own digital-side boundary (PHY still genuinely in-path) before deciding what, if anything, to bypass (see the confirmed-drift note below this table) |
 
 See the Step 1 profile table for which is which per protocol. For a pure bus
 target this step does not apply.
@@ -367,6 +367,31 @@ supported speed, and use the fast modes only for short link-layer items.**
 > 12.5ps, and whether the DUT's own encrypted/vendor hard-macro models
 > accept a timescale that fine was an open, unverified question -- treat the
 > arithmetic answer as a to-be-measured item, not an automatic pass.
+
+> **Confirmed drift (2026-08-31): "disabling the PHY instance" for the
+> digital layer is not automatically correct, and was wrong in a real
+> case.** This step's own attachment-layer table describes the digital
+> choice as needing "hierarchical force plus disabling the PHY instance" --
+> an agent in a real session took this literally, disabled the whole PHY
+> instance for a PIPE4 attachment, and was directly corrected by the user:
+> "USB3 也是要經過 PHY，不是 PIPE 介面" (USB3 also goes through the PHY; PIPE
+> is not a full bypass of it). The likely real shape, still to be confirmed
+> per-project: **PIPE/UTMI/ULPI is often the PHY's OWN defined digital-side
+> boundary**, not a wire bundle floating entirely outside the PHY block --
+> meaning the PHY (or a specific sub-block within it, e.g. its digital
+> front-end vs. its analog SerDes) is still genuinely part of the path, and
+> only the analog serializer sub-block should be bypassed, not the whole
+> PHY instance. Before disabling anything: (1) find the real RTL hierarchy
+> *inside* the PHY instance and identify which sub-block the PIPE/UTMI/ULPI
+> signals actually originate from; (2) check the IP databook's own block
+> diagram for where the digital interface sits relative to the PHY
+> boundary; (3) **if the DUT has more than one physical layer speed mode
+> (e.g. USB2 and USB3), confirm whether they use one shared combo PHY model
+> or genuinely separate PHY models before assuming a disable of one instance
+> is scoped safely** -- confirmed in the same session that this DUT's USB2
+> and USB3 PHY models are separate, which ruled out one candidate
+> explanation (shared logic) but did not by itself justify the original
+> whole-instance disable either.
 
 **(b) Does the PHY actually drive the pads in simulation?**
 

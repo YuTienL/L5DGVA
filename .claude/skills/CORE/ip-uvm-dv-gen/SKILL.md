@@ -643,6 +643,18 @@ package rather than re-deriving these rules from this paragraph each time.
 For a target not listed, fill the same four columns from the IP databook
 before starting.
 
+**Confirmed drift (2026-08-31): "disable the whole PHY instance" for a
+digital/PIPE-style attachment is not automatically correct.** A real
+session did exactly that for a PIPE4 USB3 attachment and was directly
+corrected by the user -- the PHY was still genuinely in the real data
+path; PIPE/UTMI/ULPI is often the PHY's own digital-side boundary, not a
+wire bundle floating entirely outside it. Confirm from real RTL/databook
+evidence which sub-block (if any) to actually bypass before disabling
+anything, and if the DUT has more than one speed-mode PHY (e.g. USB2 and
+USB3), confirm whether they are one shared model or genuinely separate
+ones first (confirmed separate in this case) -- see the main agent file's
+Step 5 for the full three-part verification method.
+
 ---
 
 ## Bring-up order (do not skip ahead)
