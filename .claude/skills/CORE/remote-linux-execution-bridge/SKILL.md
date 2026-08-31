@@ -165,3 +165,46 @@ still requires that confirmation and is still done by the human, in their
 own terminal. It only removes the per-command "ask the user to manually
 run this and paste back the output" fallback once a relay is confirmed
 READY (`remote_exec.py --status`).
+
+### Four-layer credential boundary (2026-08-31, hardened after the drift above)
+
+A docstring saying "never invoke me from an AI agent" is not an
+enforceable boundary — it is prose. After the 2026-08-31 incident above,
+the boundary between "Claude can drive remote execution" and "Claude can
+never obtain the credential" is enforced at four independent layers:
+
+1. **Operational**: `VCPW` (and the other three required vars) should be
+   set only in the terminal that runs `remote_relay.py --start` — not in
+   whatever terminal/environment then launches `claude`. If both must
+   share a machine, `Remove-Item Env:VCPW` (or `unset VCPW`) before
+   starting the Claude Code process, so its process tree never inherits
+   it in the first place. This is the primary defense; the rest are
+   defense-in-depth for when this one is imperfectly followed.
+2. **Environment-marker guard** (secondary defense — an env var is not a
+   security primitive and can be unset/spoofed, but catches the common
+   case): `remote_relay.py`'s `main()` calls `running_inside_ai_agent()`,
+   which checks for `CLAUDECODE`/`CLAUDE_CODE`/`CLAUDE_CODE_ENTRYPOINT`/
+   `CLAUDE_CODE_SESSION_ID`/`ANTHROPIC_API_KEY` (all confirmed real,
+   actually-set markers in a live Claude Code environment) and refuses to
+   start (`exit 126`) before any networking if any are present. This is
+   exactly the check that would have caught the 2026-08-31 incident —
+   verified by re-running `remote_relay.py --start` from inside a real
+   Claude Code tool call after the fix landed: blocked immediately, no
+   connection attempted.
+3. **Zero-credential client**: `remote_exec.py` (the file Claude actually
+   invokes) contains no code path that reads `VCPW` at all — verified by
+   a source-scan test (`test_remote_exec_source_never_reads_vcpw_env_var`)
+   asserting `os.environ.get('VCPW'`/`os.environ['VCPW']` never appears in
+   its source. Claude's only capability is the localhost JSON protocol in
+   §7 above (`{"op": "run", "cmd": "..."}` etc.) — it never sees, sends,
+   or could construct the credential.
+4. **Credential-inspection command DENY list**: `RelayServer.handle_request`'s
+   `run` op refuses (`CREDENTIAL_INSPECTION_DENIED`, before touching the
+   session at all) any command matching `env`/`printenv`/`set`/`export`
+   (bare, no assignment) / `$VCPW`/`${VCPW}` / `os.environ` / a
+   `getenv('VCPW'...)`-shaped call — so even a fully-compromised or
+   confused caller cannot use the "run arbitrary remote command" surface
+   to read back the credential this whole boundary protects. This is
+   deliberately narrow (credential-inspection only) — it is not a general
+   destructive-command policy, which remains a human/skill-level review
+   responsibility per this design's own scope.
