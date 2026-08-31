@@ -393,6 +393,58 @@ This method resolves base-address questions that documents alone contradict.
 | Sequence collections | `VIP/src/**/*_sequence_collection.sv` -- the filenames state the test area directly, and this is your vPlan raw material |
 | Which classes are the env / configuration / transaction | Confirm from the package file; do not guess the name |
 
+### Navigating a large, undocumented VIP source tree
+
+> **Standing rule (2026-09-01, distilled and genericized): a Synopsys VIP
+> source tree is typically PARTITIONED BY SIMULATOR at the top level**
+> (one sibling directory per supported simulator, same class hierarchy
+> repeated in each) -- scope every search explicitly to the one directory
+> matching the Fixed toolchain's actual simulator, never `Glob`/`Grep`
+> the whole `VIP/src/` tree, or a name match in an unrelated simulator's
+> sibling directory produces a false hit or a wrong file read.
+>
+> **A large VIP tree (hundreds of files) with no HTML class reference
+> still has a decodable filename grammar -- learn it instead of grepping
+> the whole tree.** A fixed, small set of entry-point filenames exists
+> regardless of protocol: the agent, agent configuration, top-level
+> configuration, transaction (plus its exception variant), system virtual
+> sequencer, and system base sequence classes each follow one predictable
+> naming template; sequence-collection files separately follow their own
+> template encoding protocol/mode/topic. Search order: `Glob` to narrow
+> by the decoded filename pattern first, THEN `Grep` inside the narrowed
+> set for `class `/`function `/`task `/`rand `/`constraint `, then `Read`
+> with a bounded offset/limit -- not a `Grep -r` sweep of the whole tree
+> as the first move. **The literal `.uvm.` filename infix (as opposed to
+> a plain, otherwise-identical filename) is the actual discriminating
+> marker for which interface variant a UVM flow must include** -- do not
+> rely on inferring "the unparameterised one" from context; check for
+> this literal marker.
+
+### Verify simulator/VIP version compatibility before assuming it
+
+> **Standing rule (2026-09-01, distilled and genericized): confirm the
+> installed simulator/VIP version compatibility as an explicit,
+> discrete fact-finding step -- do not assume the Fixed toolchain's
+> simulator version and the installed VIP version are known to work
+> together.** Two vendor-supplied metadata sources answer this before any
+> compile is attempted: (1) the installed VIP/SVT version, typically
+> recorded in a small metadata file alongside the VIP install (e.g. a
+> `.dw_vip.cfg`-style file in the design/VIP directory); (2) the vendor's
+> own simulator-compatibility statement, published in that VIP version's
+> release-notes PDF (typically under the VIP install's own `doc/`
+> subdirectory). Record whichever this comes out to as an open item if it
+> cannot be confirmed, rather than silently assuming compatibility.
+>
+> **Reading a vendor PDF with no HTML/text reference and no PDF-rendering
+> tool available: standardize on a text-extraction CLI tool run with a
+> layout-preserving flag** (e.g. `pdftotext -layout <pdf> <txt>`, when
+> that specific tool is what the authoring host actually has) **rather
+> than a page-image-rendering tool, which may not be installed at all.**
+> Check which PDF-reading tool the actual authoring host has before
+> assuming either is available -- this is the same "confirm the tool
+> before scripting against it" discipline CLAUDE.md's Tool Usage
+> Verification Gate already requires elsewhere.
+
 Then **filter the VIP's test list by the Step 3 configuration.** Typically
 half or more does not apply: disabled optional features, the opposite role,
 interface variants the DUT does not expose.
@@ -436,6 +488,19 @@ builds, not a config_db switch**:
 
 See the Step 1 profile table for which is which per protocol. For a pure bus
 target this step does not apply.
+
+> **Standing rule (2026-09-01, distilled and genericized): a concrete
+> file-organization mechanism for switching between attachment-layer
+> builds.** Since Step 5's choice is a compile-time decision (a different
+> build, not a runtime switch), organize each interface configuration as
+> its own separate, identically-shaped wrapper file (one per attach
+> layer/mode), and select among them with a simple pre-compile copy step
+> (a `prescript`-style Makefile step copying the chosen wrapper to one
+> fixed canonical filename the build always compiles), driven by a
+> Makefile variable naming the desired configuration. This keeps the
+> per-configuration differences isolated to small, parallel files rather
+> than one file full of conditional compilation for every attach mode at
+> once.
 
 ### Two questions to answer before writing any wiring
 
@@ -1501,6 +1566,15 @@ empty.
   cross-check against the VCS manuals.
 - **Compute the timescale constraint** from the configured line rates and
   `$(error)` on a mismatch (Step 5a).
+- **Standing rule (2026-09-01, distilled and genericized): the
+  fail-immediately-with-`$(error)` idiom applies to EVERY required
+  environment variable the Makefile depends on, not only the timescale
+  case above.** Whenever the build depends on a variable the caller must
+  supply (a required path, a required tool location, a required mode
+  selection), check it and `$(error)` immediately with a message naming
+  the missing variable, rather than letting an unset/empty value silently
+  propagate into a build that fails much later with a confusing symptom
+  far from the real cause.
 - **Filelist ownership must be singular.** One file owns the source list;
   every other filelist carries only `+incdir+` and `+define+`. A file listed
   twice is a duplicate-module error.
@@ -2000,7 +2074,13 @@ random or directed | mode/speed | instance | checkers active | notes
   available, say so in the sheet rather than filling it with chapter guesses.
 - **Validate before writing the file**: every pattern name has a matching
   file, every task name is a real declaration, every pattern is in the
-  run-time dispatcher. Refuse to write on a mismatch.
+  run-time dispatcher, AND every `constraint items` entry names a
+  constraint that actually exists in the written SV source (2026-09-01,
+  distilled and genericized) -- extend the same refuse-on-mismatch
+  discipline to this column, not only pattern/task identity. Once this
+  column drifts from the real testbench code, the vPlan loses its
+  traceability value entirely, since a reader can no longer tell whether
+  a listed constraint is real or aspirational.
 - **Keep the `NOT COVERED` rows**, and mark which are blocked on information
   rather than effort. A plan listing only what already runs is a report, not a
   plan.
@@ -2118,6 +2198,7 @@ RTL/DUT owner) can make -- which Human Override always settles regardless.
 | Trust a VIP field's default because it looks sensible | Step 7 |
 | Write a scoreboard that can false-alarm on legal behaviour | It will be switched off, and then it checks nothing |
 | Report "done" for code no compiler has seen | The most damaging habit in this whole process |
+| Copy a vendor VIP example Makefile's own multi-simulator abstraction (a `USE_SIMULATOR=<sim>`-style variable, a simulator-agnostic shell) into a single-toolchain project | The Fixed toolchain above is deliberate and permanent for this project -- hardcode the one real simulator rather than reintroducing a portability layer nothing here needs |
 
 ## Methodology consolidation
 

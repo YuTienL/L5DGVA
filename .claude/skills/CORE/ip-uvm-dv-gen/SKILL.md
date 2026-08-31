@@ -124,8 +124,9 @@ nesting.
 | Which `ifdef` branches are live | `DUT/vcs.opt` defines |
 | The IP initialisation table to audit patterns against | `Doc/` databook |
 | Clause numbers for the vPlan | `Spec/` |
-| Sequence collections, interfaces, class names | `VIP/src/`, `VIP/include/` |
+| Sequence collections, interfaces, class names | `VIP/src/`, `VIP/include/` -- **standing rule (2026-09-01, distilled/genericized):** the tree is typically simulator-partitioned at the top level (one sibling dir per simulator, same class hierarchy repeated) -- scope every search to the one matching the Fixed toolchain's simulator, never sweep the whole tree. A fixed small entry-point filename set exists regardless of protocol (agent/agent-config/top-config/transaction[+exception]/system-virtual-sequencer/system-base-sequence); decode the filename grammar and `Glob`-narrow before `Grep`, don't sweep. The literal `.uvm.` filename infix, not context, is the real marker for which interface variant a UVM flow needs |
 | DUT wiring templates, closest topology | `VIP/examples/` |
+| Installed simulator/VIP version compatibility | **Standing rule (2026-09-01, distilled/genericized):** confirm explicitly, don't assume -- check the installed VIP/SVT version (a small metadata file alongside the VIP install, e.g. `.dw_vip.cfg`-style) and the vendor's release-notes PDF (typically under the VIP's own `doc/`) for its simulator-compatibility statement. No HTML/text reference and no PDF renderer available? Standardize on a layout-preserving PDF text-extraction CLI (e.g. `pdftotext -layout`) -- confirm which tool the authoring host actually has first, per the Tool Usage Verification Gate |
 | The DE's actual current compile/run script, by name | Not just `vcs.opt` -- ask for and read the real launcher (e.g. `runver_precomp`/`runver.sh`-style). **Confirmed drift (2026-08-31):** a real project had a second, plausible-looking launcher that silently built the wrong top-level config (an XMR-excluding `-top` override); the correct script's own header comment already documented the fix. A script's build-shaped name is not evidence it builds correctly |
 | Exact VIP interface bind location, per instance | Distinct from `ATTACH_LAYER` -- the real port-list entries on the real module each VIP interface connects to, confirmed per instance for `PORT_VIP_MAP`, never assumed to follow a naming pattern across instances |
 | Whether the existing DE model already drives chip-level bring-up pins correctly (test mode/reset/strap/crystal) | **Confirmed drift (2026-08-31):** a real project's existing model already had a complete, correct bring-up sequence for these pins -- reuse it verbatim in the new environment's `block` branch rather than re-deriving it from the databook |
@@ -855,6 +856,11 @@ needed:**
   than assuming the arithmetic answer is automatically simulatable, and
   don't commit the finest theoretical timescale to the Makefile until that's
   actually been tried.
+- **Standing rule (2026-09-01, distilled/genericized):** the
+  fail-immediately-with-`$(error)` idiom applies to EVERY required
+  environment variable, not only timescale -- check and `$(error)`
+  immediately with a message naming the missing variable, rather than
+  letting it silently propagate into a confusing far-later failure.
 - **One filelist owns the source list.** Every other filelist carries only
   include paths and defines. A file in two lists is a duplicate-module error.
 - Partition compile treats **any** command-line change as a global rebuild.
@@ -1078,7 +1084,11 @@ random or directed | speed | instance | checkers active | notes
 - **`spec section` cites `Spec/` by clause.** No specification available? Say
   so in the sheet rather than filling it with chapter guesses.
 - **Validate before writing**: pattern file exists, task is a real
-  declaration, pattern is in the dispatcher. Refuse to write on a mismatch.
+  declaration, pattern is in the dispatcher, AND (2026-09-01,
+  distilled/genericized) every `constraint items` entry names a
+  constraint that actually exists in the written SV source -- once this
+  column drifts from real code, the vPlan loses its traceability value
+  entirely. Refuse to write on a mismatch.
 - **Keep the NOT COVERED rows**, and mark which are blocked on information
   rather than effort. A plan listing only what already runs is a report.
 
@@ -1140,6 +1150,15 @@ anything, and if the DUT has more than one speed-mode PHY (e.g. USB2 and
 USB3), confirm whether they are one shared model or genuinely separate
 ones first (confirmed separate in this case) -- see the main agent file's
 Step 5 for the full three-part verification method.
+
+**Standing rule (2026-09-01, distilled/genericized): a concrete
+file-organization mechanism for switching attachment-layer builds.**
+Organize each interface configuration as its own separate,
+identically-shaped wrapper file (one per attach mode); select among them
+with a pre-compile copy step (a Makefile variable naming the desired
+configuration, a `prescript`-style copy to one fixed canonical filename
+the build always compiles) rather than one file full of conditional
+compilation for every mode.
 
 ---
 
