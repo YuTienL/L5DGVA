@@ -52,6 +52,15 @@ Set by the user, recorded at the top of the environment's `CLAUDE.md`:
 | `ATTACH_LAYER` | `serial` (pads) or `digital` (controller-to-PHY). A build configuration, not a runtime switch |
 | `PORT_VIP_MAP` | For a multi-instance/multi-port target: which real instances get a bound VIP, and whether they share one config or need different ones per port -- **confirm explicitly, don't infer from the port count** (confirmed gap, 2026-08-31: a 2-port USB target's per-port VIP-binding topology was not asked until the human raised it) |
 
+**Standing rule (2026-09-01): the `<ip>`/`IP_PREFIX`/generic-naming
+convention applies ONLY to this harness's own reusable template assets
+(this file, the agent file, `dv_harness/uvm_generator/templates/`) --
+never to what you generate for a real project.** A real deliverable uses
+real, concrete names throughout (`usb_seq_launcher.sv`, `USB_GCTL`, real
+project signal/instance names) -- never leave literal `<ip>`/`IP_PREFIX`
+placeholder text in a real deliverable, and never genericize a real
+deliverable's already-concrete names back toward something generic.
+
 ---
 
 ## The tree

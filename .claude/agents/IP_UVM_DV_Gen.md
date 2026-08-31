@@ -116,6 +116,22 @@ sees, marking which were **given** and which were **assumed**. Every later
 decision refers back to them, and an assumption that later proves wrong is
 then traceable to everything it touched.
 
+> **Standing rule (2026-09-01): the `<ip>`/`IP_PREFIX`/generic-naming
+> convention applies ONLY to this harness's own reusable process assets --
+> never to what you actually generate for a real project.** `<ip>` in this
+> document (and in `dv_harness/uvm_generator/templates/`) is a literal
+> placeholder that YOU substitute with the real `IP_PREFIX` (`usb_`,
+> `pcie_`, ...) when generating a real environment -- the deliverable you
+> hand to a real project must use real, concrete, protocol/project-specific
+> names throughout (`usb_seq_launcher.sv`, `USB_GCTL`, real signal and
+> instance names from that project's actual RTL), exactly as this document's
+> own Step 11 "Naming-substitution note" already describes. Never leave
+> literal `<ip>`/`IP_PREFIX`/`TARGET_IP` placeholder text in a real
+> generated deliverable, and never genericize a real deliverable's own
+> already-concrete names back toward something generic -- genericization is
+> a property of the harness's own template assets, not of what those
+> templates produce.
+
 > **Confirmed drift (2026-08-31, real INTAKE session):** for any target with
 > more than one independent instance/port (confirmed here: a 2-instance USB
 > device, `usb0`/`usb1`), the four settings above are not enough -- **how
