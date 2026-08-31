@@ -408,6 +408,28 @@ supported speed, and use the fast modes only for short link-layer items.**
 > explanation (shared logic) but did not by itself justify the original
 > whole-instance disable either.
 
+> **Confirmed drift (2026-08-31): an existing `` `ifdef ``/`` `ifndef DV_UVM ``
+> guard around a delivered BFM's own drive/force block is itself real
+> evidence of the delivery's intended architecture -- read it before
+> reasoning about the "safer" choice from first principles.** A real
+> session proposed the reasoned-sounding safer default (keep an existing
+> proven bus-master task live; the UVM bridge only adds ordering/
+> visibility) and was told by the user to replace it with a real VIP master
+> instead. Only later did reading the delivered RTL directly reveal
+> `` `ifndef DV_UVM `` already wrapped the old master's entire force block --
+> meaning the delivery itself deliberately severs that master the moment
+> `DV_UVM` is defined, so a UVM-side master was *always* required, not
+> merely preferred. The "safer default" was actually broken by
+> construction, and this was provable **empirically**, not just from
+> reading the guard: running the actual stage-1 smoke test produced a real
+> infinite hang (the downstream `pready` never asserts once the old
+> master's force block is skipped), not a clean pass or a clean fail.
+> **When a proposed architecture is questioned or overridden, look for this
+> class of evidence (existing conditional guards around what you're
+> proposing to keep or change) and, where runnable, actually run the
+> smallest real test that would falsify your reasoning** -- a hang is a
+> real, observable failure mode a static argument will not surface.
+
 **(b) Does the PHY actually drive the pads in simulation?**
 
 A PHY RTL deliverable is often only the digital encoder or PCS; the analogue
@@ -586,6 +608,16 @@ protocol whose physical layer has bidirectional or multiply-driven pins
   module-scope `pattern_done` bit; the base test raises an objection at time 0
   and waits on that bit. **Forgetting to set it = instant pass.**
 - Forking a sequence and returning without joining it: same silent pass.
+- **Both bridges need their own timeout layers -- the register bridge as
+  much as the sequence-launch bridge, not just one of them.** Confirmed
+  real gap (2026-08-31): a session implemented the three timeout layers
+  below only in the sequence launcher, leaving the register-access bridge
+  with none. A real architecture change then produced a genuine hang (a
+  downstream `pready` that never asserted), and because the register
+  bridge had no timeout, the failure surfaced as a dead simulation with no
+  diagnostic at all, instead of a message naming the stalled address. Give
+  every bridge that can block on an external response its own named
+  timeout, independently.
 - **Three timeout layers**, each naming what it waited for: per-request
   (fatal, names the sequence) -> per-group join (bounded; **lists what has not
   returned**, then returns) -> whole-pattern (error, epilogue, forced finish).
@@ -717,6 +749,18 @@ the strongest argument for converting: the VIP removes the dependency.
 > silent, right-transaction-wrong-data bug the byte-shift question was
 > originally about. Read every real behavior of a task being replaced --
 > not only the transaction it performs -- before claiming equivalence.
+> Following through on this in the same session found that the three
+> byte/halfword/word register-access widths were **not** governed by one
+> uniform shift rule: the narrowest width shifted fully by both low address
+> bits, the middle width used only one low bit (silently serving a
+> misaligned access as the aligned one below it), and the full-word width
+> ignored alignment entirely -- each verified from the real task bodies,
+> not inferred from the narrowest case. **Replicate quirks (including
+> silent misalignment handling) exactly as found -- do not "fix" them.**
+> Equivalence with the original is the requirement here; a correctness
+> improvement over an existing quirk is a separate, opt-in decision that
+> changes behavior for any existing pattern relying on the old shape,
+> silently, if made without flagging it first.
 
 **Prove it.** Resolve every address macro back to a literal and compare
 register writes one-for-one against the original. Then classify **every**

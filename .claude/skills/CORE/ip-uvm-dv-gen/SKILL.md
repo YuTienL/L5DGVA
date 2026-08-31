@@ -308,6 +308,10 @@ protocol whose physical layer has bidirectional or multiply-driven pins
   module-scope `pattern_done` bit; the base test objects at time 0 and waits
   on it. **Forgetting to set it = instant pass.**
 - Forking a sequence and returning without joining = same silent pass.
+- **Both bridges need their own timeout layers, not just the sequence
+  launcher.** Confirmed real gap (2026-08-31): a register bridge with no
+  timeout turned a real hang into a dead simulation with zero diagnostic,
+  instead of a message naming the stalled address.
 - Three timeout layers, each naming what it waited for: per-request (fatal,
   names the sequence) -> per-group join (bounded, **lists what has not
   returned**) -> whole-pattern (error, epilogue, forced finish).
@@ -387,6 +391,15 @@ byte-strobe generation, clock-relative timing, and existing logging as
 candidates for the same silent right-transaction-wrong-data bug class a
 byte-shift/lane-extraction question started from. Read every real
 behavior, not only the transaction performed, before claiming equivalence.
+Following through on this, a real audit of three register-access widths
+found NO uniform shift rule -- the narrowest width shifted fully on both
+low address bits, the middle width used only one bit (silently serving a
+misaligned access as the aligned one below it), and the full-word width
+ignored alignment entirely. **Replicate quirks (including silent
+misalignment handling) exactly -- do not "fix" them**; equivalence is the
+requirement, a correctness improvement is a separate, opt-in decision that
+can silently change behavior for an existing pattern relying on the old
+shape.
 
 **Confirmed drift (2026-08-29):** this abstract equivalence-proving method
 has a concrete, real implementation shape worth using as the target for a
@@ -666,6 +679,17 @@ package rather than re-deriving these rules from this paragraph each time.
 
 For a target not listed, fill the same four columns from the IP databook
 before starting.
+
+**Confirmed drift (2026-08-31): an existing `` `ifdef ``/`` `ifndef DV_UVM ``
+guard around a delivered BFM's drive/force block is itself real evidence of
+the delivery's intended architecture.** A session's reasoned "safer
+default" (keep a proven bus-master task live) turned out to be broken by
+construction -- the delivery already severed that master under `DV_UVM` --
+provable only by reading that guard and, further, by actually running the
+smallest real test: the smoke run hung (a downstream `pready` never
+asserted), which no static argument would have surfaced. When an
+architecture choice is questioned, look for this class of guard and run
+the smallest real falsifying test where one exists.
 
 **Confirmed drift (2026-08-31): "disable the whole PHY instance" for a
 digital/PIPE-style attachment is not automatically correct.** A real
