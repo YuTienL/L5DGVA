@@ -135,8 +135,8 @@ credential-consuming entry point itself.**
 Per `docs/superpowers/specs/2026-08-30-persistent-remote-relay-design.md`
 (2026-08-31, implemented): the two-hop telnet+ssh transport above now has
 a persistent-session variant, in `tools/remote/` within the `v50` project,
-next to `remote_hop.py` (mirrored to `industrial/tools/remote/` and
-`PACKAGE/tools/remote/`):
+next to `remote_hop.py` (to be mirrored to `industrial`'s and `PACKAGE`'s
+equivalent `tools/remote/` paths, pending):
 
 - **`remote_relay.py`** (human-run only, same credential-boundary rule as
   `remote_hop.py` — never invoke from a Claude Code tool call): performs
