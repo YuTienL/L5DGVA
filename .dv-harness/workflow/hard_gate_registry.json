@@ -457,6 +457,10 @@
       "tool": "tools/verification_flow/remote_control_supervisory_gate.py"
     },
     {
+      "gate_id": "remote_execution_provenance_gate",
+      "tool": "tools/verification_flow/remote_execution_provenance_gate.py"
+    },
+    {
       "gate_id": "remote_state_transition_gate",
       "tool": "tools/verification_flow/remote_state_transition_gate.py"
     },

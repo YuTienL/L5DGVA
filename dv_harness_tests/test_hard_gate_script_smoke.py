@@ -146,6 +146,7 @@ ALL_GATE_TOOL_FILES = [
     "tools/verification_flow/remote_action_audit_gate.py",
     "tools/verification_flow/remote_action_replay_gate.py",
     "tools/verification_flow/remote_control_supervisory_gate.py",
+    "tools/verification_flow/remote_execution_provenance_gate.py",
     "tools/verification_flow/remote_state_transition_gate.py",
     "tools/verification_flow/requirement_runtime_evidence_gate.py",
     "tools/verification_flow/rerun_determinism_gate.py",

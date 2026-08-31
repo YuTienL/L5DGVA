@@ -4530,3 +4530,23 @@ def test_project_model_topic_is_a_different_shape_and_does_not_feed_state_projec
         assert h.state.project == "USB_HOST_SUBSYSTEM"
     finally:
         shutil.rmtree(tmp)
+
+
+def test_remote_execution_provenance_gate_blocks_exit_code_mismatch_at_build(tmp_path):
+    transcript = tmp_path / "build_transcript.txt"
+    transcript.write_text("REMOTE_HOST=host-b\nEXIT_CODE=2\nSTATUS=FAIL\ncompile error\n", encoding="utf-8")
+    rc, out = _run_gate_script(
+        "verification_flow/remote_execution_provenance_gate.py", "--provenance",
+        {"transcript_path": str(transcript), "claimed_exit_code": 0},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "EXIT_CODE_MISMATCH"
+
+
+def test_remote_execution_provenance_gate_passes_at_verify_with_real_transcript(tmp_path):
+    transcript = tmp_path / "verify_transcript.txt"
+    transcript.write_text("REMOTE_HOST=host-b\nEXIT_CODE=0\nSTATUS=PASS\nUVM_INFO ... TEST PASSED\n", encoding="utf-8")
+    rc, out = _run_gate_script(
+        "verification_flow/remote_execution_provenance_gate.py", "--provenance",
+        {"transcript_path": str(transcript), "claimed_exit_code": 0},
+    )
+    assert rc == 0 and out["status"] == "PASS"

@@ -84,6 +84,7 @@
   "promotion_rule": "No verification scope is promotable until all required gates pass; failures additionally require valid RCA, fix/calibration, rerun evidence, expert review and experience-loop handling.",
   "system_level_composition_gate": "tools/verification_flow/system_level_composition_gate.py",
   "remote_control_supervisory_gate": "tools/verification_flow/remote_control_supervisory_gate.py",
+  "remote_execution_provenance_gate": "tools/verification_flow/remote_execution_provenance_gate.py",
   "experience_knowledge_gate": "tools/verification_flow/experience_knowledge_gate.py",
   "command_catalog_lifecycle_gate": "tools/verification_flow/command_catalog_lifecycle_gate.py",
   "remote_control_relationship": "Supervisory layer over SUBSYSTEM_ENV_MODE or SYSTEM_LEVEL_ENV_MODE; never a peer environment-generation mode.",

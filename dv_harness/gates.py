@@ -130,6 +130,7 @@ STAGE_GATES = {
         ("multi_port_fairness_qos_gate", "multi_port_fairness_qos_gate.py", "--ports"),
         ("negative_test_effectiveness_gate", "negative_test_effectiveness_gate.py", "--evidence"),
         ("per_port_queue_starvation_gate", "per_port_queue_starvation_gate.py", "--queues"),
+        ("remote_execution_provenance_gate", "remote_execution_provenance_gate.py", "--provenance"),
         ("rerun_determinism_gate", "rerun_determinism_gate.py", "--reruns"),
         ("run_environment_reproducibility_gate", "run_environment_reproducibility_gate.py", "--run"),
         ("scoreboard_transaction_liveness_gate", "scoreboard_transaction_liveness_gate.py", "--scoreboard"),
@@ -275,6 +276,7 @@ STAGE_GATES = {
     "BUILD": [
         ("shared_elaboration_collision_gate", "shared_elaboration_collision_gate.py", "--state"),
         ("stop_after_simv_policy_gate", "stop_after_simv_policy_gate.py", "--build"),
+        ("remote_execution_provenance_gate", "remote_execution_provenance_gate.py", "--provenance"),
     ],
     "CHANGE_IMPACT": [
         ("artifact_dependency_closure_gate", "artifact_dependency_closure_gate.py", "--graph"),
