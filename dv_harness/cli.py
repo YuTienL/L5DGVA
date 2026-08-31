@@ -182,9 +182,9 @@ def main():
     # local execution/audit binding, matching the lsf-submit/lsf-kill/
     # lsf-reconcile precedent above.
     prc = sub.add_parser("remote-control", help="Real state/gate binding for the Human Control Plane commands "
-                                                  "(STATUS/WHY/EVIDENCE/REVIEW/PAUSE/RESUME/REDIRECT/APPROVE/"
-                                                  "REJECT/STOP/TAKEOVER) arriving over an active Claude Code "
-                                                  "Remote Control session. See dv_harness/remote_control.py "
+                                                  "(STATUS/WHY/EVIDENCE/REVIEW/HYPOTHESIS/PAUSE/RESUME/REDIRECT/"
+                                                  "APPROVE/REJECT/STOP/TAKEOVER) arriving over an active Claude "
+                                                  "Code Remote Control session. See dv_harness/remote_control.py "
                                                   "for exactly what this does and does not do.")
     prc_sub = prc.add_subparsers(dest="rc_cmd", required=True)
     prc_bootstrap = prc_sub.add_parser("bootstrap", help="Establish a new session, landing directly on RUNNING "
@@ -197,7 +197,7 @@ def main():
     prc_cmd = prc_sub.add_parser("cmd", help="Validate and apply one Human Control Plane command through the "
                                               "real supervisory/transition/audit/replay gates.")
     prc_cmd.add_argument("command", choices=sorted(
-        ["STATUS", "WHY", "EVIDENCE", "REVIEW", "PAUSE", "RESUME", "REDIRECT",
+        ["STATUS", "WHY", "EVIDENCE", "REVIEW", "HYPOTHESIS", "PAUSE", "RESUME", "REDIRECT",
          "APPROVE", "REJECT", "STOP", "TAKEOVER"]))
     prc_cmd.add_argument("--target-stage", default=None, choices=[s.value for s in Stage], metavar="STAGE",
                           help="Required for APPROVE/REJECT/REDIRECT/STOP/TAKEOVER.")
