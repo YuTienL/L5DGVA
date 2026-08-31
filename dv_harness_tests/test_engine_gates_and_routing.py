@@ -38,6 +38,7 @@ _VERIFY_EXTRA_GATES = (
     '```dv-harness-evidence:multi_port_fairness_qos_gate\n{"ports": [{"port_id": "p0", "min_service_share_percent": 10, "observed_service_share_percent": 20, "qos_enabled": false}]}\n```\n'
     '```dv-harness-evidence:negative_test_effectiveness_gate\n{"checks": [{"id": "c1", "positive_passed": true, "negative_mutation_applied": true, "negative_control_result": "FAIL"}]}\n```\n'
     '```dv-harness-evidence:per_port_queue_starvation_gate\n{"ports": [{"port_id": "p0", "independent_queue": true, "max_wait_cycles": 100, "observed_wait_cycles": 50, "forward_progress_evidence": "log.txt"}]}\n```\n'
+    '```dv-harness-evidence:remote_execution_provenance_gate\n{"transcript_path": "/tmp/verify.txt", "claimed_exit_code": 0}\n```\n'
     '```dv-harness-evidence:rerun_determinism_gate\n{"runs": [{"input_fingerprint": "fp1", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "ck1"}, {"input_fingerprint": "fp1", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "ck1"}]}\n```\n'
     '```dv-harness-evidence:run_environment_reproducibility_gate\n{"rtl_hash": "abc", "testbench_hash": "def", "simulator_version": "vcs-2023", "vip_version": "1.0", "compile_options_hash": "co1", "runtime_options_hash": "ro1", "env_hash": "e1", "final_verdict": "PASS", "replay_command": "make replay"}\n```\n'
     '```dv-harness-evidence:scoreboard_transaction_liveness_gate\n{"missing_expected_transactions": 0, "missing_actual_transactions": 0, "duplicate_transactions": 0, "max_transaction_latency": 100, "observed_max_transaction_latency": 50}\n```\n'
@@ -238,27 +239,38 @@ def test_verify_stage_with_matching_evidence_passes():
     # supplies verified-PASS evidence for all of them so this test still
     # demonstrates the original 3-gate behavior without silently ignoring
     # the 16 new mandatory gates.
-    text = (
-        "```dv-harness-evidence:simulation_semantic_validation_gate\n"
-        '{"simulation_passed": true, "sim_log": "UVM_INFO enum PASS", '
-        '"command_expectations": [{"expectation_id": "e1", "required": true, '
-        '"evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}]}\n'
-        "```\n"
-        "```dv-harness-evidence:test_result_provenance_gate\n"
-        '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
-        '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
-        '"config_hash": "h", "result": "PASS", "log_hash": "lh", "evidence_bundle_hash": "eh"}]}\n'
-        "```\n"
-        "```dv-harness-evidence:false_pass_resistance_gate\n"
-        '{"positive_test_pass": true, "negative_test_detects_fault": true, '
-        '"checker_detects_injected_fault": true, "semantic_log_match": true, '
-        '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
-        "```\n"
-        + _VERIFY_EXTRA_GATES
-    )
-    verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
-    assert verdict == "PASS", reasons
-    assert reasons == []
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        transcript_path = tmp / "verify.txt"
+        transcript_path.write_text("REMOTE_HOST=host-b\nEXIT_CODE=0\nSTATUS=PASS\nVerification passed\n")
+        # Build VERIFY_EXTRA_GATES with real transcript path
+        verify_extra_with_transcript = _VERIFY_EXTRA_GATES.replace(
+            '```dv-harness-evidence:remote_execution_provenance_gate\n{"transcript_path": "/tmp/verify.txt", "claimed_exit_code": 0}\n```\n',
+            '```dv-harness-evidence:remote_execution_provenance_gate\n' + json.dumps({"transcript_path": str(transcript_path), "claimed_exit_code": 0}) + '\n```\n'
+        )
+        text = (
+            "```dv-harness-evidence:simulation_semantic_validation_gate\n"
+            '{"simulation_passed": true, "sim_log": "UVM_INFO enum PASS", '
+            '"command_expectations": [{"expectation_id": "e1", "required": true, '
+            '"evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}]}\n'
+            "```\n"
+            "```dv-harness-evidence:test_result_provenance_gate\n"
+            '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
+            '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
+            '"config_hash": "h", "result": "PASS", "log_hash": "lh", "evidence_bundle_hash": "eh"}]}\n'
+            "```\n"
+            "```dv-harness-evidence:false_pass_resistance_gate\n"
+            '{"positive_test_pass": true, "negative_test_detects_fault": true, '
+            '"checker_detects_injected_fault": true, "semantic_log_match": true, '
+            '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
+            "```\n"
+            + verify_extra_with_transcript
+        )
+        verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
+        assert verdict == "PASS", reasons
+        assert reasons == []
+    finally:
+        shutil.rmtree(tmp)
 
 
 def test_memory_router_was_previously_dead_code_now_wired():
@@ -531,6 +543,13 @@ def test_simulation_gate_reads_sim_log_from_real_file_path():
     try:
         log_path = tmp / "sim.log"
         log_path.write_text("UVM_INFO enum PASS at time 100")
+        transcript_path = tmp / "verify.txt"
+        transcript_path.write_text("REMOTE_HOST=host-b\nEXIT_CODE=0\nSTATUS=PASS\nVerification passed\n")
+        # Build VERIFY_EXTRA_GATES with real transcript path
+        verify_extra_with_transcript = _VERIFY_EXTRA_GATES.replace(
+            '```dv-harness-evidence:remote_execution_provenance_gate\n{"transcript_path": "/tmp/verify.txt", "claimed_exit_code": 0}\n```\n',
+            '```dv-harness-evidence:remote_execution_provenance_gate\n' + json.dumps({"transcript_path": str(transcript_path), "claimed_exit_code": 0}) + '\n```\n'
+        )
         text = (
             "```dv-harness-evidence:simulation_semantic_validation_gate\n"
             + json.dumps({
@@ -552,7 +571,7 @@ def test_simulation_gate_reads_sim_log_from_real_file_path():
             '"checker_detects_injected_fault": true, "semantic_log_match": true, '
             '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
             "```\n"
-            + _VERIFY_EXTRA_GATES
+            + verify_extra_with_transcript
         )
         verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
         assert verdict == "PASS", reasons
