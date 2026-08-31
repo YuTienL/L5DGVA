@@ -256,6 +256,18 @@ the actual signal/hierarchy names from current RTL before reuse per the
 Evidence Truth Rule — the technique generalizes, the exact signal names
 above do not.
 
+**Confirmed drift (2026-09-01, distilled from a real sibling project's own
+committed report scripts):** fsdbreport's report always lands in a FILE,
+never on stdout — an explicit `-o <path>`, or a default `report.txt` in
+the current directory if `-o` is omitted. Code that reads a wrapped
+subprocess's stdout for the report content will see nothing, on every
+real invocation. The fuller confirmed flag grammar is `fsdbreport <fsdb>
+-bt <t0> -et <t1> -s <hier_path> [<hier_path2> ...] [-verilog|-csv|-of h]
+-o <outfile>` (`-s` may repeat/batch several signals per call; flag order
+is not fixed; file path always comes first). See `dv_harness/fsdb_report.py`'s
+module docstring for the full detail and `build_fsdbreport_cmd()` for a
+helper that emits this grammar.
+
 
 # FINAL DE + DV INDUSTRIAL EXECUTION MODEL
 

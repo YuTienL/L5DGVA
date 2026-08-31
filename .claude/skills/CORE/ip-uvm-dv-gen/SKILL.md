@@ -355,16 +355,28 @@ multi-port project, 2026-08-28 -- consider for any target with >=2
 independent instances/ports, not USB-specific): one blocking "Global"
 section for once-only SoC bring-up (clock/PLL/reset), then per-instance
 controller/register bring-up branches (`branch_a<n>`) forked `join_none` so
-they run in parallel, then ONE background service branch (`branch_fw`) also
-forked `join_none` that internally services every instance rather than being
-duplicated per instance, and finally per-instance VIP-driven host-script
-branches (`branch_b<n>`) that the pattern itself `fork`s and `join`s (these
-are what actually gate the pattern's completion). The load-bearing
-distinction to preserve if you adopt this shape: the per-instance bring-up
-branches and the single shared service branch are NOT the same thing and
-must not be collapsed into one -- a background service loop that happens to
-serve multiple instances is not itself "the parallel per-instance work";
-that work is the separate bring-up branches running alongside it.
+they run in parallel, then ONE `branch_fw` CALL SITE forked `join_none`
+that itself forks **one independent per-instance service-loop process per
+instance** (not a single loop that internally iterates over every
+instance -- see "Correction (2026-09-01)" below), and finally per-instance
+VIP-driven host-script branches (`branch_b<n>`) that the pattern itself
+`fork`s and `join`s (these are what actually gate the pattern's
+completion). The load-bearing distinction to preserve if you adopt this
+shape: the per-instance bring-up branches and `branch_fw`'s own
+per-instance service-loop processes are NOT the same thing and must not
+be collapsed into one -- a background service loop that happens to serve
+multiple instances is not itself "the parallel per-instance work"; that
+work is the separate bring-up branches running alongside it.
+
+**Correction (2026-09-01, distilled from a real sibling project, matching
+the correction now in `IP_UVM_DV_Gen.md`):** this section previously
+described `branch_fw` as one shared loop internally servicing every
+instance -- wrong, and inconsistent with `interrupt-event-dispatch/
+SKILL.md`'s FW Service Loop section, which already had the correct
+per-instance-process shape. A single shared scheduler looping over
+instances in one process is a real, previously-tried, measured-worse
+alternative (a real cross-instance interrupt-service stall of several
+microseconds was measured when this was tried) -- do not regress to it.
 
 ---
 

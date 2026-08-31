@@ -701,19 +701,41 @@ pattern as:
    reset) -- runs to completion before anything else starts.
 2. **Per-instance controller/register bring-up branches**, `branch_a<n>`,
    forked `join_none` so they run in parallel across instances.
-3. **One background service branch**, `branch_fw`, also forked `join_none`,
-   that internally services every instance rather than being duplicated
-   per instance.
+3. **One `branch_fw` call site**, forked `join_none`, that itself forks
+   **one independent per-instance service-loop process per instance** --
+   NOT a single loop that internally iterates over every instance. There
+   is exactly one fork call (matching a pattern author's one-branch
+   mental model), but the thing it forks is N independent instances, each
+   with its own `forever` wait/decode/dispatch/clear loop, its own
+   per-instance waiter, and its own idempotency guard -- never one shared
+   loop body with a `for(instance=0; instance<N; ...)` inside it.
 4. **Per-instance VIP-driven host-script branches**, `branch_b<n>`, that the
    pattern itself `fork`s and `join`s -- these are what actually gate the
    pattern's completion.
 
 **The load-bearing distinction to preserve**: the per-instance bring-up
-branches (`branch_a<n>`) and the single shared service branch (`branch_fw`)
-are NOT the same thing and must not be collapsed into one. A background
-service loop that happens to serve multiple instances is not itself "the
-parallel per-instance work" -- that work is the separate bring-up branches
-running alongside it.
+branches (`branch_a<n>`) and `branch_fw`'s own per-instance service-loop
+processes are NOT the same thing and must not be collapsed into one. A
+background service loop that happens to serve multiple instances is not
+itself "the parallel per-instance work" -- that work is the separate
+bring-up branches running alongside it.
+
+> **Correction (2026-09-01, distilled from a real sibling project and
+> genericized per the reverse-distillation standing rule below):** an
+> earlier version of this section described `branch_fw` as one shared
+> loop that internally services every instance. That was wrong, and
+> `CORE/interrupt-event-dispatch/SKILL.md`'s FW Service Loop section
+> already had the correct shape ("每個 Port 一個獨立 service loop
+> instance...禁止用單一 loop 依序輪流服務所有 port") -- this section now
+> matches it; if the two ever again read as contradictory on this point,
+> treat that as a bug per the Authority-split rule in this document's own
+> header, not as two valid variants. **A single shared scheduler that
+> loops over instances inside one process is a real, previously-tried,
+> and measured-worse alternative** -- on a real sibling project it caused
+> a measured multi-microsecond cross-instance interrupt-service stall
+> (one instance's already-pending interrupt sat unserviced while the
+> shared loop was still working through an unrelated instance's turn).
+> Do not regress to it even though it looks like less code.
 
 ---
 
