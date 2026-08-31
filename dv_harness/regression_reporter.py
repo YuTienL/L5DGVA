@@ -1,7 +1,12 @@
 from __future__ import annotations
 import json, time
+from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
+
+from dv_harness import lsf_client
+from dv_harness.sim_log_analysis import parse_sim_log_file, detect_underreporting
+from dv_harness.uvm_generator.regression_list_manager import apply_verdict_to_file
 
 def load_jobs(project_root: Path):
     d=project_root/'.dv-harness'/'lsf'/'jobs'
@@ -56,6 +61,85 @@ def render_snapshot(jobs):
     lines += ['', 'ATTENTION'] + (attention or ['- none'])
     lines += ['', 'NEXT ACTIONS','- Analyze DONE jobs whose DV result is still UNKNOWN/pending.','- Continue incremental monitoring of RUN jobs.','- Triage EXIT/FAIL jobs and rerun fixed patterns when ready.']
     return '\n'.join(lines)
+
+def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> str:
+    """One pass of Part 2's reconciliation cycle: discover every live job
+    under vcuser, reconcile+analyze the ones dv_harness has a registered
+    JobState for (via bsub_submit() or register_external_job()), apply
+    Part 3's regression-list safety net for any job with a real PASS/FAIL
+    verdict and a known pattern, then render and persist the snapshot.
+
+    A single failed discover_live_jobs()/reconcile_batch() call is caught
+    and logged rather than raised, per the spec's error-handling
+    requirement -- one bad LSF poll must not kill the whole cycle."""
+    try:
+        live_jobs = lsf_client.discover_live_jobs(vcuser)
+    except lsf_client.LsfUnavailableError as e:
+        print(f"[reconciliation_cycle] discover_live_jobs failed: {e}", flush=True)
+        live_jobs = []
+
+    registered_ids = []
+    for j in live_jobs:
+        jid = j["job_id"]
+        state = lsf_client.load_job_state(root, jid)
+        if state.pattern is not None or state.sim_log is not None:
+            registered_ids.append(jid)
+
+    if registered_ids:
+        try:
+            reconciled = lsf_client.reconcile_batch(root, registered_ids)
+        except Exception as e:
+            print(f"[reconciliation_cycle] reconcile_batch failed: {e}", flush=True)
+            reconciled = {}
+    else:
+        reconciled = {}
+
+    for jid, (state, _discrepancies) in reconciled.items():
+        if state.lsf_status not in ("DONE", "EXIT"):
+            continue
+        if not state.sim_log:
+            continue
+        try:
+            parsed = parse_sim_log_file(state.sim_log)
+        except OSError as e:
+            print(f"[reconciliation_cycle] could not read {state.sim_log}: {e}", flush=True)
+            continue
+        epilogue = parsed.get("epilogue")
+        if epilogue:
+            state.uvm_error_count = epilogue.get("uvm_error") or 0
+            state.uvm_fatal_count = epilogue.get("uvm_fatal") or 0
+        discrepancies = detect_underreporting(asdict(state), parsed)
+        for d in discrepancies:
+            print(f"[reconciliation_cycle] job {jid} under-reporting: {d}", flush=True)
+        state.sim_status = "ANALYZED"
+        lsf_client.save_job_state(root, state)
+
+        verdict = (epilogue or {}).get("verdict")
+        if state.pattern and verdict in ("PASSED", "FAILED"):
+            regression_list_path = Path(uvm_root_path) / "regression.list"
+            apply_verdict_to_file(regression_list_path, state.pattern, verdict == "PASSED")
+
+    jobs_for_snapshot = []
+    for j in live_jobs:
+        jid = j["job_id"]
+        if jid in reconciled:
+            state, _ = reconciled[jid]
+            row = lsf_client.to_snapshot_row(state, agent_action="monitoring")
+            row["lsf_status"] = state.lsf_status
+        else:
+            row = {"job_id": jid, "pattern": j.get("job_name"),
+                   "lsf_status": j.get("stat"), "dv_analysis_status": "UNREGISTERED",
+                   "uvm_error": None, "uvm_fatal": None,
+                   "agent_action": "monitoring", "note": None}
+        jobs_for_snapshot.append(row)
+
+    snapshot = render_snapshot(jobs_for_snapshot)
+    snapshot_path = root / ".dv-harness" / "lsf" / "latest_snapshot.txt"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text(snapshot, encoding="utf-8")
+    print(snapshot, flush=True)
+    return snapshot
+
 
 def main(project_root='.', once=True, interval_minutes=30):
     root=Path(project_root).resolve()
