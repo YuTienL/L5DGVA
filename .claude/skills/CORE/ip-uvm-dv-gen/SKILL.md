@@ -566,6 +566,13 @@ None of these fail compilation. The symptom is always a far-side timeout.
   bus", with no Verdi/FSDB session needed at all. Check whether the current
   VIP exposes an equivalent plain-text trace file before reaching for a
   waveform tool.
+  **Standing rule (2026-09-01, distilled/genericized):** below even the
+  plain-text trace file, prefer a fixed-label tagged-line status script
+  over the run's text log plus a job-status query (e.g. `LATEST_TIME:`/
+  `JOBSTAT:`/`ERRCOUNT:`/`FINALCHECK:` each followed by its value) for a
+  cheap, greppable alive/pass/fail/progress check needing no waveform
+  tool at all -- the cheapest triage tier, before the fsdb-report tool,
+  before a full waveform viewer.
 - **Check the right response field** -- a scalar initialised to OK and
   meaningful only for writes will pass every read error silently.
 - **Footprint is not payload.** `beats * bytes_per_beat` overstates a partial
@@ -676,6 +683,20 @@ invocation.
   (did the pattern reach UVM? did the write reach the bus? did the link come
   up?), not by hierarchy. Tolerate undumped signals: list them with the
   remedy rather than failing.
+  **Standing rule (2026-09-01, distilled/genericized):** for a group tied
+  to a known failure symptom, state a reading order (what to check
+  1st/2nd/3rd, what each value means), not just the question, and
+  cross-reference any project trap/issue log entry that motivated it;
+  split a missing-signal remedy by likely cause (scope too narrow vs.
+  signal renamed) rather than one flat list.
+- **Standing rule (2026-09-01, distilled/genericized):** a headless,
+  purpose-named report script is the non-GUI complement to the TCL above
+  -- for a question answerable without Verdi, run the fsdb-report tool
+  once (or once per signal / batched) over a time window sized to the
+  question (narrow for a specific transaction/edge, full-run for a
+  sparse async signal), writing one output file per topic with a
+  non-empty sanity check. `dv_harness/fsdb_report.py`'s
+  `write_topic_report()` implements this.
 
 ---
 

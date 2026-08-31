@@ -1074,6 +1074,20 @@ Check the agent's actual ports before designing the connection.
 > VIP exposes an equivalent plain-text trace before reaching for a waveform
 > tool.
 
+> **Standing rule (2026-09-01, distilled and genericized): a
+> fixed-label, tagged-line status convention is the cheapest triage
+> tier, below even the plain-text trace file above.** For a quick alive/
+> pass/fail/progress check needing no waveform evidence at all, prefer a
+> small script that greps/tails/awks the run's own text log plus a
+> job-status query (e.g. `bjobs`-equivalent) and emits fixed-name label
+> lines (`LATEST_TIME:`, `JOBSTAT:`, `ERRCOUNT:`, `FINALCHECK:`, each
+> followed by its value) specifically so the output is trivially
+> greppable/parseable without a waveform tool or a structured log parser.
+> Reach for this before the fsdb-report tool, and reach for the
+> fsdb-report tool before a full waveform viewer -- consistent with
+> CLAUDE.md's FSDB-off-by-default posture and the general principle of
+> minimum sufficient evidence.
+
 ### Scoreboard rules
 
 - **Check the right response field.** A scalar response field initialised to
@@ -1167,6 +1181,31 @@ empty.
   up?) rather than by hierarchy. The characteristic failure is a stage that
   never started, which reads as one flat group under a busy one. Tolerate
   signals that were not dumped: list them with the remedy instead of failing.
+
+  > **Standing rule (2026-09-01, distilled and genericized): each
+  > signal group's comment should be richer than the one-line diagnostic
+  > question above.** For any group tied to a known failure symptom,
+  > state an explicit reading order (what to check 1st/2nd/3rd, and what
+  > each value means) rather than just naming the question, and
+  > cross-reference any project trap/issue log entry that motivated the
+  > group. When signals are missing at load time, split the remedy by
+  > likely cause -- dump scope too narrow (widen `WAVE=`) vs. a signal
+  > renamed in this build (re-derive the hierarchy path) -- rather than
+  > emitting one flat undifferentiated list.
+
+  > **Standing rule (2026-09-01, distilled and genericized): a headless,
+  > purpose-named report script is the non-GUI complement to this TCL.**
+  > For a diagnostic question answerable without opening Verdi at all,
+  > provide a small purpose-named report script per question (e.g. a
+  > bus-handshake-timing question, a line-state question, an interrupt/
+  > event question) that runs the fsdb-report tool once per signal (or
+  > once with a batched multi-signal call) over a time window sized to
+  > the question -- narrow (microseconds) for a specific transaction or
+  > edge, full-run for a sparse asynchronous signal such as an interrupt
+  > line -- writing one output file per topic and finishing with a
+  > non-empty sanity check. `dv_harness/fsdb_report.py`'s
+  > `write_topic_report()` (built on the corrected, file-based
+  > `run_fsdbreport()`) implements exactly this.
 - Offer the **Protocol Analyzer** where the VIP supports it. Seeing packets,
   handshakes and link states as protocol events rather than waveforms is the
   fastest route to *why* a transfer failed.
