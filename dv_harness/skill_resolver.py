@@ -9,5 +9,5 @@
 from pathlib import Path
 class SkillResolver:
  def __init__(self,root):
-  self.index={p.parent.name:str(p.relative_to(root)) for p in (Path(root)/'.claude'/'skills').rglob('SKILL.md')}
+  self.index={p.parent.name:str(p.relative_to(root)) for p in (Path(root)/'.claude'/'skills').rglob('SKILL.md') if '_deprecated' not in p.relative_to(root).parts}
  def resolve(self,names):return [{'skill':n,'path':self.index.get(n),'found':n in self.index} for n in names]

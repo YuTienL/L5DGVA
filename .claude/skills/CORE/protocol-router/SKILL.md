@@ -14,8 +14,8 @@ AMBA -> `AMBA/amba-profile`
 MIPI CSI-2 -> `MIPI/csi2-profile`
 MIPI DSI -> `MIPI/dsi-profile`
 CAN-FD -> `CAN/canfd-profile`
-eMMC/MMC -> `eMMC/emmc-profile`
-SD/SDIO -> `SD/sdio-profile`
+eMMC/MMC -> `PROTOCOL_BUILDERS/emmc-environment-builder`
+SD/SDIO -> `PROTOCOL_BUILDERS/sd-environment-builder`
 
 USB profile must further resolve Host vs Device.
 

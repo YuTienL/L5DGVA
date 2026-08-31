@@ -57,3 +57,20 @@ def test_pcie_intake_unaffected_by_new_fields(tmp_path):
     out = json.loads(result.stdout)
     assert "fabric_topology_evidence" not in out["missing"]
     assert "uhs_tuning_evidence" not in out["missing"]
+
+
+def test_amba_intake_axi4_spelling_still_flags_fabric_topology(tmp_path):
+    # "axi4" is a router-recognized AMBA spelling (protocol-router/SKILL.md
+    # lists AXI4 as a valid AMBA resolution) that was NOT in the original
+    # alias set -- it must still trigger the fabric_topology_evidence check.
+    payload = _base_subsystem(["axi4"])
+    result = run_gate(payload, tmp_path)
+    out = json.loads(result.stdout)
+    assert "fabric_topology_evidence" in out["missing"]
+
+
+def test_amba_intake_ahb_lite_spelling_still_flags_fabric_topology(tmp_path):
+    payload = _base_subsystem(["ahb-lite"])
+    result = run_gate(payload, tmp_path)
+    out = json.loads(result.stdout)
+    assert "fabric_topology_evidence" in out["missing"]

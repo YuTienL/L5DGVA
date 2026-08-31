@@ -20,7 +20,10 @@ if mode=="SUBSYSTEM":
     if empty("clock_reset_spec") and empty("phy_interface_spec") and empty("rtl_top_or_interface_files"):
         missing.append("interface_or_clock_reset_evidence")
     protocols_lower = {str(p).lower() for p in (d.get("protocols") or [])}
-    if protocols_lower & {"amba", "amba4-soc", "axi", "ahb", "apb"}:
+    if protocols_lower & {
+        "amba", "amba4-soc", "axi", "ahb", "apb",
+        "apb2", "apb3", "ahb-lite", "axi3", "axi4", "ace-lite", "axi-stream",
+    }:
         if empty("fabric_topology_spec"):
             missing.append("fabric_topology_evidence")
     if protocols_lower & {"sd", "sdio", "sd-sdio"}:

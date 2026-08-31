@@ -959,6 +959,8 @@ INTAKE_FIELD_QUESTIONS = {
     "system_level_use_cases": "這次 System-Level 驗證要涵蓋哪些使用情境（use case）？",
     "subsystem_identity_or_manifest": "有沒有既有的 UVM 環境或 manifest 可以參考已完成的 subsystem？",
     "valid_mode": "這次是要建立單一 subsystem 環境（SUBSYSTEM）還是 system-level 環境（SYSTEM_LEVEL）？",
+    "fabric_topology_evidence": "有沒有 AMBA fabric/topology 的規格文件（例如 master/slave 拓撲、互連架構）可以參考？請提供路徑或說明來源。",
+    "uhs_tuning_evidence": "有沒有 SD/SDIO UHS tuning 的規格文件（例如 tuning 流程、時序參數）可以參考？請提供路徑或說明來源。",
 }
 
 # BUG FIX (2026-08-29, poster-compliance-audit "INTAKE 問得太籠統" finding):
