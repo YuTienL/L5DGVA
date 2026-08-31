@@ -166,3 +166,20 @@ class TestRunReconciliationCycle:
         # into something bogus -- it simply never got past ANALYZED-or-later here.
         job_501 = lsf_client.load_job_state(tmp_path, 501)
         assert job_501.sim_status != "PASS"
+
+
+class TestMainWatchLoop:
+    def test_watch_false_calls_reconciliation_once(self, tmp_path):
+        with patch("dv_harness.regression_reporter.run_reconciliation_cycle",
+                   return_value="snapshot text") as m:
+            regression_reporter.main(project_root=str(tmp_path), once=True,
+                                      vcuser="vcuser1", uvm_root_path=str(tmp_path / "uvm"))
+        m.assert_called_once()
+
+    def test_missing_vcuser_falls_back_to_legacy_render(self, tmp_path, capsys):
+        # No vcuser supplied -- cannot discover live jobs at all, so fall back
+        # to the pre-existing load_jobs()/render_snapshot() behavior rather
+        # than crashing.
+        regression_reporter.main(project_root=str(tmp_path), once=True)
+        captured = capsys.readouterr()
+        assert "Periodic Regression Snapshot" in captured.out

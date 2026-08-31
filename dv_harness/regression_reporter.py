@@ -150,14 +150,30 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
     return snapshot
 
 
-def main(project_root='.', once=True, interval_minutes=30):
-    root=Path(project_root).resolve()
+def main(project_root='.', once=True, interval_minutes=30, vcuser=None, uvm_root_path=None):
+    root = Path(project_root).resolve()
     while True:
-        print(render_snapshot(load_jobs(root)), flush=True)
-        if once: break
-        time.sleep(max(1,interval_minutes)*60)
+        if vcuser:
+            uvm_root = Path(uvm_root_path) if uvm_root_path else root / 'uvm'
+            run_reconciliation_cycle(root, vcuser, uvm_root)
+        else:
+            # No vcuser means discover_live_jobs() has nothing to query --
+            # fall back to the pre-existing behavior of re-rendering
+            # whatever is already registered locally, rather than crashing.
+            print(render_snapshot(load_jobs(root)), flush=True)
+        if once:
+            break
+        time.sleep(max(1, interval_minutes) * 60)
 
 if __name__=='__main__':
     import argparse
-    ap=argparse.ArgumentParser(); ap.add_argument('--project-root',default='.'); ap.add_argument('--watch',action='store_true'); ap.add_argument('--interval-minutes',type=int,default=30)
-    a=ap.parse_args(); main(a.project_root,not a.watch,a.interval_minutes)
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--project-root', default='.')
+    ap.add_argument('--watch', action='store_true')
+    ap.add_argument('--interval-minutes', type=int, default=30)
+    ap.add_argument('--vcuser', default=None,
+                     help='LSF account to discover live jobs under; omit for legacy local-only mode')
+    ap.add_argument('--uvm-root-path', default=None,
+                     help='UVM_ROOT_PATH for regression.list; defaults to <project-root>/uvm')
+    a = ap.parse_args()
+    main(a.project_root, not a.watch, a.interval_minutes, a.vcuser, a.uvm_root_path)
