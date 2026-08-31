@@ -126,3 +126,20 @@ class TestApplyVerdictToFile:
         path = tmp_path / "nested" / "regression.list"
         apply_verdict_to_file(path, "usb2_enum", True)
         assert path.read_text().splitlines() == ["usb2_enum"]
+
+    def test_on_disk_bytes_use_lf_only_not_crlf(self, tmp_path):
+        """Verify actual on-disk bytes use LF (\\n) only, never CRLF (\\r\\n),
+        to remain grep/comm-friendly for Linux Makefile consumers.
+        This test catches cross-platform newline-translation bugs that
+        in-process round-trip tests would miss."""
+        path = tmp_path / "regression.list"
+        apply_verdict_to_file(path, "usb2_enum", True)
+        on_disk_bytes = path.read_bytes()
+        assert b"\r" not in on_disk_bytes, "File should use LF only, not CRLF"
+        assert on_disk_bytes == b"usb2_enum\n"
+
+        # Verify multi-line case also has no \r
+        apply_verdict_to_file(path, "usb3_gen1_enum", True)
+        on_disk_bytes = path.read_bytes()
+        assert b"\r" not in on_disk_bytes, "File should use LF only, not CRLF"
+        assert on_disk_bytes == b"usb2_enum\nusb3_gen1_enum\n"

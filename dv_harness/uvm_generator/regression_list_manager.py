@@ -38,12 +38,20 @@ def apply_verdict_to_file(regression_list_path, pattern: str, verdict_passed: bo
     """File-I/O wrapper around the pure record_verdict() -- reads the current
     regression.list (missing file treated as empty, matching a project's
     first-ever recorded pattern), applies record_verdict(), writes back.
-    record_verdict() itself is unchanged and untouched by this wrapper."""
+    record_verdict() itself is unchanged and untouched by this wrapper.
+
+    File format uses LF line endings (\\n only, never \\r\\n) to stay
+    grep/comm-friendly for the real Linux-side Makefile."""
     path = Path(regression_list_path)
-    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    if path.exists():
+        with path.open("r", encoding="utf-8", newline="") as f:
+            existing = f.read().splitlines()
+    else:
+        existing = []
     updated = record_verdict(existing, pattern, verdict_passed)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(updated) + ("\n" if updated else ""), encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(updated) + ("\n" if updated else ""))
 
 
 def record_suite(existing_lines, verdicts):
