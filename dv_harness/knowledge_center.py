@@ -56,14 +56,30 @@ class KnowledgeCenterClient:
         explicit = self.cfg.get("hop_script")
         if explicit:
             p = Path(explicit)
-            return p if p.is_file() else None
+            if not p.is_absolute() and self.project_root:
+                p = self.project_root / p
+            if p.is_file():
+                return p
+            # BUG FIX (2026-08-31 final-review, I2): previously returned None
+            # HERE unconditionally on a truthy-but-nonexistent explicit path
+            # -- e.g. config.json's hop_script left pointing at the
+            # pre-relocation, repo-external remote_hop.py path after Task 4
+            # moved the real script into tools/remote/. That silently broke
+            # Knowledge Center sync with no recovery, even though the real
+            # script still existed right where the fallback search below
+            # would have found it. Now falls through to the same candidate
+            # search used when no explicit hop_script is configured at all,
+            # instead of giving up immediately.
         # Fall back to searching next to the project root and one level up
         # (matches how remote_hop.py/remote_login.sh have been shipped this
-        # session: alongside PACKAGE/, or copied into a project root).
+        # session: alongside PACKAGE/, or copied into a project root), and
+        # the real in-repo relocated path (tools/remote/remote_hop.py, since
+        # the 2026-08-31 persistent-relay-scripts relocation).
         candidates = []
         if self.project_root:
             candidates += [self.project_root / "remote_hop.py",
-                           self.project_root.parent / "remote_hop.py"]
+                           self.project_root.parent / "remote_hop.py",
+                           self.project_root / "tools" / "remote" / "remote_hop.py"]
         candidates.append(Path.cwd() / "remote_hop.py")
         for c in candidates:
             if c.is_file():

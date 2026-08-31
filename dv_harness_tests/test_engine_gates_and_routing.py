@@ -4259,6 +4259,35 @@ def test_manual_lookup_gate_dut_side_passes_with_rtl_plus_one_source():
     assert rc == 0 and out["status"] == "PASS"
 
 
+def test_manual_lookup_gate_vip_side_rejects_forbidden_reference_tree_citation():
+    # Regression test for the 2026-08-31 final-review Critical finding: B1's
+    # forbidden-tree barrier used to live ONLY in protocol_isolation_gate.py's
+    # own, agent-optional evidence block -- an agent could cite
+    # USB_UVM_Handoff content right in THIS gate's real vip_evidence_refs
+    # (the block it is actually forced to supply) and still pass, as long as
+    # it left the separate isolation-gate block empty. This must now FAIL
+    # here, directly, independent of protocol_isolation_gate.py.
+    rc, out = _run_gate_script(
+        "verification_flow/manual_lookup_before_edit_gate.py", "--edit",
+        {"branch": "branch_b1", "vip_examples_checked": True, "vip_manual_checked": True,
+         "vip_source_checked": True, "vip_class_reference_checked": True,
+         "vip_evidence_refs": [{"path": "USB_UVM_Handoff/some_file.sv", "quote": "x"}]},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "REFERENCE_TREE_CITATION_FORBIDDEN"
+    assert out["forbidden_tree"] == "USB_UVM_Handoff"
+
+
+def test_manual_lookup_gate_dut_side_rejects_forbidden_reference_tree_citation():
+    # Same Critical-finding regression, DUT side (dut_rtl_evidence_refs).
+    rc, out = _run_gate_script(
+        "verification_flow/manual_lookup_before_edit_gate.py", "--edit",
+        {"branch": "branch_a1", "dut_rtl_checked": True,
+         "dut_rtl_evidence_refs": [{"path": "USB_UVM_Handoff/some_dut_file.sv", "quote": "x"}]},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "REFERENCE_TREE_CITATION_FORBIDDEN"
+    assert out["forbidden_tree"] == "USB_UVM_Handoff"
+
+
 def test_protocol_isolation_gate_blocks_forbidden_reference_citation():
     rc, out = _run_gate_script(
         "verification_flow/protocol_isolation_gate.py", "--edit",
@@ -4569,3 +4598,131 @@ def test_remote_execution_provenance_gate_passes_at_verify_with_real_transcript(
         {"transcript_path": str(transcript), "claimed_exit_code": 0},
     )
     assert rc == 0 and out["status"] == "PASS"
+
+
+def test_remote_execution_provenance_gate_not_applicable_escape_hatch_passes_with_reason():
+    # I4 (2026-08-31 final review): unlike fabric_topology_completeness_gate
+    # and its siblings, this gate had no not-applicable escape hatch at all
+    # -- every BUILD/VERIFY response was forced to supply a real transcript
+    # even when no remote_exec.py invocation was ever made. Same convention
+    # as the precedent gates: a reason is mandatory, not a bare boolean.
+    rc, out = _run_gate_script(
+        "verification_flow/remote_execution_provenance_gate.py", "--provenance",
+        {"provenance_applicable": False,
+         "provenance_not_applicable_reason": "local-only static lint pass, no remote execution performed"},
+    )
+    assert rc == 0 and out["status"] == "SKIPPED_NOT_APPLICABLE"
+    assert "no remote execution" in out["reason"]
+
+
+def test_remote_execution_provenance_gate_not_applicable_without_reason_fails():
+    rc, out = _run_gate_script(
+        "verification_flow/remote_execution_provenance_gate.py", "--provenance",
+        {"provenance_applicable": False},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "NOT_APPLICABLE_WITHOUT_JUSTIFICATION"
+
+
+# --- I3 (2026-08-31 final whole-branch review): the plan's Task 2/3/5
+# "run_stage()-level integration tests" all used _run_gate_script, a bare
+# subprocess call to the gate script alone that never touches STAGE_GATES or
+# evaluate_stage_evidence() -- proving nothing about real stage wiring. These
+# 4 tests call evaluate_stage_evidence(ROOT, "<STAGE>", text) directly (same
+# real signature/usage as test_verify_stage_with_matching_evidence_passes and
+# the many other full-stage tests above), with evidence for every OTHER gate
+# in that stage supplied as a genuine PASS so exactly ONE of the 3 new gates
+# fails and the resulting GATE_FAIL is unambiguously attributable to it.
+
+def test_protocol_isolation_gate_blocks_implement_stage_via_evaluate_stage_evidence():
+    text = (
+        '```dv-harness-evidence:traceability_consistency_gate\n'
+        '{"vplan_requirement_ids": ["R1"], "architecture_nodes": ["A1"], '
+        '"verification_mechanisms": [{"mechanism_id": "M1", "vplan_requirement_ids": ["R1"]}], '
+        '"planned_testcases": [{"testcase_id": "T1", "vplan_requirement_ids": ["R1"], '
+        '"mechanism_ids": ["M1"], "coverage_ids": ["C1"]}], "coverage_ids": ["C1"]}\n```\n'
+        '```dv-harness-evidence:checker_independence_gate\n{"checkers": []}\n```\n'
+        '```dv-harness-evidence:testcase_name_semantics_gate\n'
+        '{"tests": [{"testcase_id": "T1", "name": "usb_reset_recovery_test"}]}\n```\n'
+        '```dv-harness-evidence:verification_intent_gate\n'
+        '{"requirements": [{"req_id": "R1"}], "mechanisms": [{"mechanism_id": "M1"}], '
+        '"coverage": [{"coverage_id": "C1"}], "tests": [{"testcase_id": "T1", '
+        '"requirement_ids": ["R1"], "mechanism_ids": ["M1"], "coverage_ids": ["C1"]}]}\n```\n'
+        '```dv-harness-evidence:pattern_registry_completeness_gate\n'
+        '{"patterns": [{"name": "usb2_enum", "suite": "enumeration", "dir": "tb/patterns/enumeration"}], '
+        '"suite_names": ["enumeration"]}\n```\n'
+        '```dv-harness-evidence:manual_lookup_before_edit_gate\n{"branch": "block"}\n```\n'
+        '```dv-harness-evidence:protocol_isolation_gate\n'
+        '{"branch": "branch_b0", "vip_evidence_refs": '
+        '[{"path": "USB_UVM_Handoff/some_file.sv", "quote": "x"}]}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "IMPLEMENT", text)
+    assert verdict == "GATE_FAIL"
+    assert any("protocol_isolation_gate" in r and "REFERENCE_TREE_CITATION_FORBIDDEN" in r for r in reasons)
+
+
+def test_protocol_profile_binding_gate_blocks_protocol_capability_stage_via_evaluate_stage_evidence():
+    text = (
+        '```dv-harness-evidence:protocol_generator_binding_gate\n{"protocols": []}\n```\n'
+        '```dv-harness-evidence:protocol_profile_binding_gate\n'
+        '{"protocols": [{"protocol": "usb", "profile_skills_consulted": []}]}\n```\n'
+        '```dv-harness-evidence:protocol_onboarding_gate\n'
+        '{"protocol_name": "usb", "spec_sources": ["usb_spec.pdf"], "dut_mapping": "usb_dut.sv", '
+        '"vip_strategy": "synopsys usb vip", "state_model": "link state model", '
+        '"transaction_model": "transaction model", "error_recovery_model": "error recovery model", '
+        '"verification_mechanism_plan": "mechanism plan", "vplan_mapping": "vplan mapping", '
+        '"test_generation_strategy": "test gen strategy", "coverage_model": "coverage model", '
+        '"qualification_plan": "qualification plan", "evidence_refs": ["ev1"]}\n```\n'
+        '```dv-harness-evidence:protocol_profile_version_gate\n'
+        '{"protocol_name": "usb", "profile_version": "1.0", "spec_revision": "r1", '
+        '"profile_hash": "h1", "qualification_state": "DRAFT"}\n```\n'
+        '```dv-harness-evidence:protocol_qualification_status_gate\n{"protocols": []}\n```\n'
+        '```dv-harness-evidence:protocol_builder_registry_conformance_gate\n'
+        '{"registry_applicable": false, '
+        '"registry_not_applicable_reason": "stage-level regression test, not exercising checklist conformance"}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "PROTOCOL_CAPABILITY", text)
+    assert verdict == "GATE_FAIL"
+    assert any("protocol_profile_binding_gate" in r and "PROFILE_SKILL_NOT_CONSULTED" in r for r in reasons)
+
+
+def test_remote_execution_provenance_gate_blocks_build_stage_via_evaluate_stage_evidence():
+    text = (
+        '```dv-harness-evidence:shared_elaboration_collision_gate\n{"build_owner_count": 1}\n```\n'
+        '```dv-harness-evidence:stop_after_simv_policy_gate\n'
+        '{"build_fingerprint": "fp1", "simv_completion_marker": "m1", '
+        '"simv_completion_marker_build_fingerprint": "fp1"}\n```\n'
+        '```dv-harness-evidence:remote_execution_provenance_gate\n'
+        '{"transcript_path": "/no/such/build_transcript.txt", "claimed_exit_code": 0}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "BUILD", text)
+    assert verdict == "GATE_FAIL"
+    assert any("remote_execution_provenance_gate" in r and "TRANSCRIPT_FILE_NOT_FOUND" in r for r in reasons)
+
+
+def test_remote_execution_provenance_gate_blocks_verify_stage_via_evaluate_stage_evidence():
+    # Reuses _VERIFY_EXTRA_GATES WITHOUT substituting a real transcript path
+    # for remote_execution_provenance_gate (unlike
+    # test_verify_stage_with_matching_evidence_passes above) -- every other
+    # VERIFY gate gets real, valid evidence, so the resulting GATE_FAIL is
+    # unambiguously this one gate's TRANSCRIPT_FILE_NOT_FOUND.
+    text = (
+        "```dv-harness-evidence:simulation_semantic_validation_gate\n"
+        '{"simulation_passed": true, "sim_log": "UVM_INFO enum PASS", '
+        '"command_expectations": [{"expectation_id": "e1", "required": true, '
+        '"evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}]}\n'
+        "```\n"
+        "```dv-harness-evidence:test_result_provenance_gate\n"
+        '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
+        '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
+        '"config_hash": "h", "result": "PASS", "log_hash": "lh", "evidence_bundle_hash": "eh"}]}\n'
+        "```\n"
+        "```dv-harness-evidence:false_pass_resistance_gate\n"
+        '{"positive_test_pass": true, "negative_test_detects_fault": true, '
+        '"checker_detects_injected_fault": true, "semantic_log_match": true, '
+        '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
+        "```\n"
+        + _VERIFY_EXTRA_GATES
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
+    assert verdict == "GATE_FAIL"
+    assert any("remote_execution_provenance_gate" in r and "TRANSCRIPT_FILE_NOT_FOUND" in r for r in reasons)

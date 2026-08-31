@@ -7,12 +7,12 @@ This is the one file of the pair Claude Code is expected to invoke via a
 tool call.
 
 Usage:
-  python remote_exec.py --status
-  python remote_exec.py "pwd"
-  python remote_exec.py --timeout 1800 "make WAVE=1"
-  python remote_exec.py --reconnect
-  python remote_exec.py --put local_file remote_file
-  python remote_exec.py --get remote_file local_file
+  python tools/remote/remote_exec.py --status
+  python tools/remote/remote_exec.py "pwd"
+  python tools/remote/remote_exec.py --timeout 1800 "make WAVE=1"
+  python tools/remote/remote_exec.py --reconnect
+  python tools/remote/remote_exec.py --put local_file remote_file
+  python tools/remote/remote_exec.py --get remote_file local_file
 
 Requires VCHOST/VCHOP env vars (to locate the same relay info file
 remote_relay.py wrote) -- but never VCPW.
@@ -66,7 +66,7 @@ def _print_reconnect_instructions(vchost, vchop):
     print('[remote_exec] relay is DOWN and cannot self-reauthenticate (no password')
     print('in this process). Ask the user to run, in their OWN terminal:')
     print('  VCUSER=... VCPW=... VCHOST=%s VCHOP=%s VCWORKDIR=... \\' % (vchost, vchop))
-    print('    python remote_relay.py --start')
+    print('    python tools/remote/remote_relay.py --start')
 
 
 def main():

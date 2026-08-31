@@ -286,6 +286,42 @@ def test_client_missing_hop_script_reports_clear_error():
     assert result["error"] == "REMOTE_HOP_NOT_FOUND"
 
 
+def test_resolve_hop_script_falls_back_to_tools_remote_when_explicit_path_is_stale():
+    # Regression test for the 2026-08-31 final-review I2 finding:
+    # config.json's hop_script had drifted to the pre-relocation,
+    # repo-external path after Task 4 moved the real script into
+    # tools/remote/remote_hop.py -- _resolve_hop_script() used to give up
+    # immediately on a truthy-but-nonexistent explicit path instead of
+    # falling back to the candidate search, so a stale config value would
+    # silently break Knowledge Center once Task 4's Step 7 (deferred,
+    # pending human confirmation per the plan ledger) deletes the original
+    # repo-external files. Uses a deliberately fabricated stale path here
+    # (not the real pre-relocation path, which may still exist on disk on
+    # this machine until that deferred deletion happens) so this test proves
+    # the fallback mechanism itself, not today's incidental filesystem state.
+    from dv_harness.knowledge_center import KnowledgeCenterClient
+    project_root = Path(__file__).resolve().parents[1]
+    real_hop = project_root / "tools" / "remote" / "remote_hop.py"
+    assert real_hop.is_file(), "fixture assumption: tools/remote/remote_hop.py must exist"
+    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                 "hop_script": "D:/DV/Task/DV_Agent_Harness_L5/nonexistent_stale_remote_hop.py"}}
+    client = KnowledgeCenterClient(cfg, project_root=project_root)
+    resolved = client._resolve_hop_script()
+    assert resolved == real_hop
+
+
+def test_resolve_hop_script_resolves_configured_repo_relative_path():
+    # The real, now-updated config.json value ("tools/remote/remote_hop.py",
+    # relative) must resolve against project_root, not the process cwd.
+    from dv_harness.knowledge_center import KnowledgeCenterClient
+    project_root = Path(__file__).resolve().parents[1]
+    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                 "hop_script": "tools/remote/remote_hop.py"}}
+    client = KnowledgeCenterClient(cfg, project_root=project_root)
+    resolved = client._resolve_hop_script()
+    assert resolved == project_root / "tools" / "remote" / "remote_hop.py"
+
+
 def test_client_no_result_marker_reports_clear_error():
     cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc", "hop_script": __file__}}
     client = KnowledgeCenterClient(cfg)

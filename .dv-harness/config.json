@@ -29,7 +29,7 @@
   "knowledge_center": {
     "enabled": true,
     "remote_root": "/home/svcacct/AI/DB",
-    "hop_script": "D:/DV/Task/DV_Agent_Harness_L5/remote_hop.py",
+    "hop_script": "tools/remote/remote_hop.py",
     "categories": [
       "usb",
       "pcie",

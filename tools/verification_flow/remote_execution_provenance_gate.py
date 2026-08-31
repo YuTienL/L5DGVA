@@ -22,6 +22,20 @@ def main():
     a = ap.parse_args()
     d = json.loads(pathlib.Path(a.provenance).read_text())
 
+    # Escape hatch (2026-08-31 final-review I4 finding), same convention as
+    # fabric_topology_completeness_gate.py/protocol_structural_completeness_gate.py/
+    # protocol_builder_registry_conformance_gate.py/system_level_* gates: a
+    # reason is MANDATORY, never a bare boolean opt-out -- an agent must
+    # still justify why no real remote execution transcript applies (e.g. a
+    # BUILD/VERIFY response that made no remote_exec.py invocation at all).
+    if d.get("provenance_applicable") is False:
+        reason = d.get("provenance_not_applicable_reason")
+        if not reason:
+            print(json.dumps({"status": "FAIL", "reason": "NOT_APPLICABLE_WITHOUT_JUSTIFICATION"}))
+            return 5
+        print(json.dumps({"status": "SKIPPED_NOT_APPLICABLE", "reason": reason}))
+        return 0
+
     transcript_path = pathlib.Path(d.get("transcript_path", ""))
     if not transcript_path.is_file():
         print(json.dumps({"status": "FAIL", "reason": "TRANSCRIPT_FILE_NOT_FOUND",

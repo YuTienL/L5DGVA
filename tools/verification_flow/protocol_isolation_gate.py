@@ -44,6 +44,16 @@ def main():
     a = ap.parse_args()
     d = json.loads(pathlib.Path(a.edit).read_text())
 
+    # COUPLING NOTE (2026-08-31 final-review Critical fix): these 2 keys are
+    # hardcoded to match manual_lookup_before_edit_gate.py's REAL evidence-ref
+    # field names byte-for-byte -- that script's own `_verify_evidence_refs()`
+    # now ALSO runs this same forbidden-tree check (imported from this module)
+    # against the refs an agent is actually forced to supply for a VIP/DUT
+    # edit, which is what actually closes B1 (this gate's own evidence block
+    # is a separate, agent-optional block that PASSes empty by design -- see
+    # this file's module docstring). If manual_lookup_before_edit_gate.py
+    # ever grows a THIRD evidence-ref field, add it here too, or a citation
+    # through that new field silently escapes both checks.
     for key in ("vip_evidence_refs", "dut_rtl_evidence_refs"):
         hit = _check_refs(d.get(key))
         if hit:
