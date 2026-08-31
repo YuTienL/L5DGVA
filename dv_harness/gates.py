@@ -302,6 +302,7 @@ STAGE_GATES = {
     ],
     "PROTOCOL_CAPABILITY": [
         ("protocol_generator_binding_gate", "protocol_generator_binding_gate.py", "--binding"),
+        ("protocol_profile_binding_gate", "protocol_profile_binding_gate.py", "--binding"),
         ("protocol_onboarding_gate", "protocol_onboarding_gate.py", "--profile"),
         ("protocol_profile_version_gate", "protocol_profile_version_gate.py", "--profile"),
         ("protocol_qualification_status_gate", "protocol_qualification_status_gate.py", "--status"),

@@ -17,6 +17,18 @@ CAN-FD -> `CAN/canfd-profile`
 eMMC/MMC -> `PROTOCOL_BUILDERS/emmc-environment-builder`
 SD/SDIO -> `PROTOCOL_BUILDERS/sd-environment-builder`
 
+## Profile/VIP-Lookup Binding
+
+After detecting the protocol, read `.dv-harness/builder/protocol_builder_registry.json`'s
+entry for it and resolve `profile_skill` and `vip_lookup_skill` (either may
+be `null` -- several protocols have no profile skill yet). For every
+non-null value, actually read that skill file before proceeding, and
+record every consulted skill name in the DISCOVERY/PROTOCOL_CAPABILITY
+stage evidence block under `profile_skills_consulted`. This is enforced by
+`protocol_profile_binding_gate` at the PROTOCOL_CAPABILITY stage -- it
+cross-checks your list against the registry's real values, not your
+self-report alone.
+
 USB profile must further resolve Host vs Device.
 
 AMBA profile must further resolve:

@@ -123,6 +123,7 @@ ALL_GATE_TOOL_FILES = [
     "tools/verification_flow/protocol_generator_binding_gate.py",
     "tools/verification_flow/protocol_isolation_gate.py",
     "tools/verification_flow/protocol_onboarding_gate.py",
+    "tools/verification_flow/protocol_profile_binding_gate.py",
     "tools/verification_flow/protocol_profile_version_gate.py",
     "tools/verification_flow/protocol_qualification_ladder_gate.py",
     "tools/verification_flow/protocol_qualification_status_gate.py",

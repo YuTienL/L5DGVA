@@ -4258,6 +4258,23 @@ def test_protocol_isolation_gate_allows_real_source_citation():
     assert rc == 0 and out["status"] == "PASS"
 
 
+def test_protocol_profile_binding_gate_requires_usb_profile_and_vip_lookup():
+    rc, out = _run_gate_script(
+        "verification_flow/protocol_profile_binding_gate.py", "--binding",
+        {"protocols": [{"protocol": "usb", "profile_skills_consulted": []}]},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "PROFILE_SKILL_NOT_CONSULTED"
+
+
+def test_protocol_profile_binding_gate_passes_when_fully_consulted():
+    rc, out = _run_gate_script(
+        "verification_flow/protocol_profile_binding_gate.py", "--binding",
+        {"protocols": [{"protocol": "usb",
+                        "profile_skills_consulted": ["USB/usb-profile", "USB/usb-vip-lookup"]}]},
+    )
+    assert rc == 0 and out["status"] == "PASS"
+
+
 def test_pattern_registry_completeness_gate_passes_consistent_registry():
     rc, out = _run_gate_script(
         "verification_flow/pattern_registry_completeness_gate.py", "--registry",
