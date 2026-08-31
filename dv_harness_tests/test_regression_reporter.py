@@ -6,11 +6,17 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from dv_harness import regression_reporter, lsf_client
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _write_job(root, job_id, **kwargs):
@@ -246,12 +252,115 @@ class TestWatcherLifecycle:
     def test_pid_is_running_true_on_permission_error(self):
         # PermissionError means the process exists but is owned by a
         # different user/UID -- alive, just not signalable by us. Must not
-        # be conflated with ProcessLookupError ("no such process").
-        with patch("dv_harness.regression_reporter.os.kill",
-                   side_effect=PermissionError):
+        # be conflated with ProcessLookupError ("no such process"). This
+        # exercises the POSIX os.kill(pid, 0) branch specifically (forced
+        # via os.name, since _pid_is_running() now takes a Windows-only
+        # ctypes path on os.name == "nt" -- see TestPidIsRunningCrossProcess
+        # below for that branch's own real-process coverage).
+        with patch("dv_harness.regression_reporter.os.name", "posix"), \
+             patch("dv_harness.regression_reporter.os.kill", side_effect=PermissionError):
             assert regression_reporter._pid_is_running(12345) is True
 
     def test_pid_is_running_false_on_process_lookup_error(self):
-        with patch("dv_harness.regression_reporter.os.kill",
-                   side_effect=ProcessLookupError):
+        with patch("dv_harness.regression_reporter.os.name", "posix"), \
+             patch("dv_harness.regression_reporter.os.kill", side_effect=ProcessLookupError):
             assert regression_reporter._pid_is_running(12345) is False
+
+
+def _spawn_detached_child_from_separate_process():
+    """Spawns a real, long-lived child process from inside a SEPARATE
+    'starter' process (mirroring ensure_watcher_running()'s exact spawn
+    shape -- CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS on Windows,
+    start_new_session on POSIX) and lets that starter process exit
+    immediately after spawning.
+
+    This is deliberately NOT "spawn via subprocess.Popen in this test
+    process, then check the pid in this same test process" -- that
+    same-process shape was found to falsely appear to work on Windows
+    (a Popen()'d child, or even a Popen()'d grandchild, can still be
+    liveness-checked successfully by its own spawning process or that
+    process's live descendants). The real dv-harness usage pattern is
+    cross-process: `lsf-watch-start` spawns the watcher and exits, then a
+    LATER, unrelated `lsf-watch-status` process checks it -- only that
+    shape (checker process is not a descendant of, and the original
+    spawner has already exited) reproduces the real Windows
+    GenerateConsoleCtrlEvent-based os.kill(pid, 0) failure (WinError 87)
+    that _pid_is_running() must not be fooled by."""
+    starter_script = (
+        "import subprocess, sys, json, os\n"
+        "popen_kwargs = {}\n"
+        "if os.name == 'nt':\n"
+        "    popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008\n"
+        "else:\n"
+        "    popen_kwargs['start_new_session'] = True\n"
+        "proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], **popen_kwargs)\n"
+        "print(json.dumps({'pid': proc.pid}))\n"
+    )
+    r = subprocess.run([sys.executable, "-c", starter_script], cwd=str(ROOT),
+                        capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip())["pid"]
+
+
+def _pid_is_running_from_separate_process(pid):
+    checker_script = f"from dv_harness import regression_reporter as rr\nprint(rr._pid_is_running({pid}))\n"
+    r = subprocess.run([sys.executable, "-c", checker_script], cwd=str(ROOT),
+                        capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip() == "True"
+
+
+def _hard_kill(pid):
+    """Real, unconditional termination for test cleanup -- independent of
+    _pid_is_running()'s own correctness, so a leaked process is never left
+    behind even if an assertion above it fails."""
+    if pid is None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 9)
+    except Exception:
+        pass
+
+
+class TestPidIsRunningCrossProcess:
+    """Regression coverage for a real Windows-only bug found while wiring
+    up Task 7's `lsf-watch-start`/`lsf-watch-stop`/`lsf-watch-status` CLI
+    commands: _pid_is_running() used `os.kill(pid, 0)` for liveness, which
+    on Windows is implemented via GenerateConsoleCtrlEvent and only
+    succeeds when called by the process that originally spawned the
+    target's console/process group (or one of that process's still-live
+    descendants) -- a relationship that never holds for real dv-harness
+    usage, where every CLI invocation, including the one that spawned the
+    watcher, is a separate, short-lived process that exits right after
+    spawning/checking. Confirmed via `git stash`-style manual revert that
+    test_pid_is_running_true_for_a_real_process_checked_cross_process
+    below fails against the pre-fix os.kill(pid, 0)-only implementation
+    and passes against the ctypes-based Windows fix."""
+
+    def test_pid_is_running_true_for_a_real_process_checked_cross_process(self):
+        pid = _spawn_detached_child_from_separate_process()
+        try:
+            assert _pid_is_running_from_separate_process(pid) is True
+        finally:
+            _hard_kill(pid)
+
+    def test_pid_is_running_false_after_the_process_actually_exits(self):
+        pid = _spawn_detached_child_from_separate_process()
+        try:
+            _hard_kill(pid)
+            # Poll briefly for the OS to actually reap it -- taskkill/
+            # os.kill(9) is not synchronous.
+            deadline = time.time() + 10
+            while time.time() < deadline and _pid_is_running_from_separate_process(pid):
+                time.sleep(0.2)
+            assert _pid_is_running_from_separate_process(pid) is False
+        finally:
+            _hard_kill(pid)
+
+    def test_pid_is_running_false_for_a_definitely_nonexistent_pid(self):
+        # Far outside any real PID range on either Windows or POSIX,
+        # without being an invalid argument to the underlying syscall.
+        assert regression_reporter._pid_is_running(999_999_999) is False

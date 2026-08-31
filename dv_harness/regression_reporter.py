@@ -159,6 +159,37 @@ def _pid_file_path(root: Path) -> Path:
 
 
 def _pid_is_running(pid: int) -> bool:
+    if os.name == "nt":
+        # BUG FIX (2026-09-01, found while wiring up the `lsf-watch-*` CLI
+        # commands): os.kill(pid, 0) on Windows is implemented via
+        # GenerateConsoleCtrlEvent, which only succeeds when called by the
+        # process that originally spawned the target's console/process
+        # group (or one of that process's still-live descendants) -- a
+        # relationship real usage never has, since every dv-harness CLI
+        # invocation (including the one that spawned the watcher via
+        # ensure_watcher_running()) is a separate, short-lived process
+        # that exits right after spawning/checking. A LATER, unrelated
+        # process checking the pid (e.g. every real `lsf-watch-status`
+        # call) got OSError WinError 87 from the os.kill(pid, 0) call
+        # below, which the `except OSError: return False` branch then
+        # silently mistook for "not running" even while the watcher was
+        # genuinely alive. Query the OS directly via OpenProcess/
+        # GetExitCodeProcess instead, which has no such console-lineage
+        # restriction.
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
