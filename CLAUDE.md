@@ -78,16 +78,19 @@ not secrets by themselves.
 
 ## Remote Linux Execution (Persistent Relay)
 
+`remote_hop.py`, `remote_relay.py`, `remote_exec.py`, and `source_identity.py` live in
+`tools/remote/` within this `v50` project (not at the repo/project root).
+
 Once a Linux DV server session has been established this session per the SSH/Remote Transport
 Connection Intake gate above (user confirmed, relay started by the user in their own terminal), do
 not ask the user to manually run and paste back individual Linux commands. Use:
 
-  python remote_exec.py "<command>"
+  python tools/remote/remote_exec.py "<command>"
 
-Check readiness first with `python remote_exec.py --status`. If READY, issue commands directly. If
-DOWN, run `python remote_exec.py --reconnect`; if that reports the relay cannot self-reauthenticate,
-ask the user to restart it in their own terminal (never embed VCPW in any Claude-issued command) and
-stop until they confirm it is back up.
+Check readiness first with `python tools/remote/remote_exec.py --status`. If READY, issue commands
+directly. If DOWN, run `python tools/remote/remote_exec.py --reconnect`; if that reports the relay
+cannot self-reauthenticate, ask the user to restart it in their own terminal (never embed VCPW in
+any Claude-issued command) and stop until they confirm it is back up.
 
 This does not remove the SSH/Remote Transport Connection Intake gate itself — establishing or
 re-establishing a relay for the first time in a session still requires that confirmation. It only

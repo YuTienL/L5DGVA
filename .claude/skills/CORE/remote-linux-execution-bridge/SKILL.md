@@ -134,8 +134,9 @@ credential-consuming entry point itself.**
 
 Per `docs/superpowers/specs/2026-08-30-persistent-remote-relay-design.md`
 (2026-08-31, implemented): the two-hop telnet+ssh transport above now has
-a persistent-session variant, at the project root next to `remote_hop.py`
-(mirrored to `PACKAGE/`):
+a persistent-session variant, in `tools/remote/` within the `v50` project,
+next to `remote_hop.py` (mirrored to `industrial/tools/remote/` and
+`PACKAGE/tools/remote/`):
 
 - **`remote_relay.py`** (human-run only, same credential-boundary rule as
   `remote_hop.py` — never invoke from a Claude Code tool call): performs
@@ -165,6 +166,10 @@ still requires that confirmation and is still done by the human, in their
 own terminal. It only removes the per-command "ask the user to manually
 run this and paste back the output" fallback once a relay is confirmed
 READY (`remote_exec.py --status`).
+
+`remote_execution_provenance_gate.py` independently verifies a real
+`remote_exec.py` transcript (its `REMOTE_HOST=`/`EXIT_CODE=`/`STATUS=`
+output) rather than trusting self-attested BUILD/VERIFY evidence.
 
 ### Four-layer credential boundary (2026-08-31, hardened after the drift above)
 
