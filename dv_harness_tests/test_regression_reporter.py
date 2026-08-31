@@ -242,3 +242,16 @@ class TestWatcherLifecycle:
 
     def test_watcher_status_reports_not_running_when_no_pid_file(self, tmp_path):
         assert regression_reporter.watcher_status(tmp_path) == {"running": False, "pid": None}
+
+    def test_pid_is_running_true_on_permission_error(self):
+        # PermissionError means the process exists but is owned by a
+        # different user/UID -- alive, just not signalable by us. Must not
+        # be conflated with ProcessLookupError ("no such process").
+        with patch("dv_harness.regression_reporter.os.kill",
+                   side_effect=PermissionError):
+            assert regression_reporter._pid_is_running(12345) is True
+
+    def test_pid_is_running_false_on_process_lookup_error(self):
+        with patch("dv_harness.regression_reporter.os.kill",
+                   side_effect=ProcessLookupError):
+            assert regression_reporter._pid_is_running(12345) is False

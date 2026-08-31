@@ -161,6 +161,14 @@ def _pid_file_path(root: Path) -> Path:
 def _pid_is_running(pid: int) -> bool:
     try:
         os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but is owned by a different user/UID -- alive,
+        # just not signalable by us. Must not be conflated with "not
+        # running", or ensure_watcher_running()/stop_watcher() would treat
+        # a live watcher as dead.
+        return True
     except OSError:
         return False
     except AttributeError:
