@@ -1296,6 +1296,106 @@ def test_coverage_accepts_path_overrides_via_query_params():
         shutil.rmtree(tmp)
 
 
+# --- GET /api/fsdb-report (dv_harness/fsdb_report.py) ----------------------
+# fsdbreport is a real, proprietary Synopsys Verdi binary with no install on
+# this dev machine (see fsdb_report.py's module docstring) -- real subprocess
+# execution of it is out of scope here. These tests mock ONLY the one
+# external-process boundary, dv_harness.fsdb_report.run_fsdbreport(), never
+# the CSV-parsing logic (parse_fsdbreport_output()) itself, which runs for
+# real against the mocked stdout text through the exact same code path a
+# real fsdbreport run's stdout would take.
+
+def test_fsdb_report_requires_path_query_param():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _get(base, "/api/fsdb-report")
+        assert status == 400
+        assert data["error"] == "BAD_REQUEST"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_fsdb_report_returns_real_parsed_records_for_valid_csv_output():
+    from unittest.mock import patch
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        fake_csv = "signal,timestamp,value\ntop.dut.clk,0,0\ntop.dut.clk,5,1\n"
+        with patch("dv_harness.fsdb_report.run_fsdbreport",
+                   return_value={"ok": True, "report_text": fake_csv, "stderr": ""}) as m:
+            status, data = _get(
+                base,
+                "/api/fsdb-report?path=" + urllib.parse.quote("/tmp/dump.fsdb")
+                + "&period=" + urllib.parse.quote("100ns")
+                + "&hier=" + urllib.parse.quote("top.dut"),
+            )
+        assert status == 200
+        assert data["ok"] is True
+        assert data["parsed"] is True
+        assert data["fieldnames"] == ["signal", "timestamp", "value"]
+        assert data["records"] == [
+            {"signal": "top.dut.clk", "timestamp": "0", "value": "0"},
+            {"signal": "top.dut.clk", "timestamp": "5", "value": "1"},
+        ]
+        assert data["hier_requested"] == "top.dut"
+        # only the subprocess boundary was mocked -- confirm it was actually
+        # called with the confirmed-real -period/-level/-csv flags.
+        m.assert_called_once()
+        call_kwargs = m.call_args.kwargs
+        assert call_kwargs["extra_args"] == ["-period", "100ns", "-level", "1", "-csv"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_fsdb_report_surfaces_run_failure_honestly_without_500():
+    from unittest.mock import patch
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with patch("dv_harness.fsdb_report.run_fsdbreport",
+                   return_value={"ok": False, "error": "FSDB_FILE_NOT_FOUND"}):
+            status, data = _get(base, "/api/fsdb-report?path=" + urllib.parse.quote("/nope.fsdb"))
+        assert status == 200
+        assert data["ok"] is False
+        assert data["error"] == "FSDB_FILE_NOT_FOUND"
+        assert data["parsed"] is False
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_fsdb_report_degrades_honestly_on_unparseable_output_not_500():
+    from unittest.mock import patch
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with patch("dv_harness.fsdb_report.run_fsdbreport",
+                   return_value={"ok": True, "report_text": "not csv at all, garbage text", "stderr": ""}):
+            status, data = _get(base, "/api/fsdb-report?path=" + urllib.parse.quote("/dump.fsdb"))
+        assert status == 200
+        assert data["ok"] is True
+        assert data["parsed"] is False
+        assert "raw_text" in data
+    finally:
+        shutil.rmtree(tmp)
+
+
 # --- POST /api/waiver (dv_harness/waiver_store.py) -------------------------
 # Real HTTP requests against a real dashboard.serve() thread, same as every
 # other test in this file. waiver_store.append_waiver()/read_waivers()

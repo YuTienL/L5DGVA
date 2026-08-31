@@ -2,7 +2,7 @@ from __future__ import annotations
 import base64, binascii, json, os, re, tempfile, threading, time, traceback, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 from .config import load_config, save_config
 from .regression_reporter import load_jobs, get_job
 from .gates import extract_evidence_blocks, JUDGMENT_FIELDS, CCL_SKIPPABLE, REVIEWER_CONFIDENCE_LEVELS, _iter_judgment_targets
@@ -266,6 +266,25 @@ already collected -- not a separate measurement.</div>
 <thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
 <th style="padding:4px">Gate</th><th style="padding:4px">Status</th><th style="padding:4px">Mode</th><th style="padding:4px">Detail</th></tr></thead>
 <tbody id="selfAuditTableBody"></tbody></table></div>
+</div>
+
+<div class="card" id="fsdbReportCard"><h3>FSDB Structured Evidence</h3>
+<div class="note">Real signal-level evidence from an FSDB waveform dump via the confirmed-real
+<code>fsdbreport f.fsdb -period &lt;T&gt; -level 1 -csv</code> invocation (GET /api/fsdb-report,
+dv-workflow/SKILL.md's 2026-08-29 "Confirmed drift" entry) -- a structured evidence TABLE, not a
+waveform/timeline viewer (FSDB is a proprietary binary format with no public library, so a real
+signal-timeline renderer is out of scope). Column names below come verbatim from whatever real
+fsdbreport's -csv output actually declares -- never a hardcoded/guessed schema.</div>
+<div class="ctrlrow"><label>Path <input id="fsdbPath" size="34" placeholder="/path/to/dump.fsdb"></label>
+  <label>Period <input id="fsdbPeriod" size="10" placeholder="e.g. 100ns"></label>
+  <label>Hierarchy <input id="fsdbHier" size="18" placeholder="e.g. top.dut"></label>
+  <button onclick="loadFsdbReport()">Run fsdbreport</button></div>
+<div class="ctrlrow" style="margin-top:6px"><label>Filter by signal name
+  <input id="fsdbSignalFilter" size="24" oninput="renderFsdbReportTable()" placeholder="substring filter"></label></div>
+<div id="fsdbReportResult" class="note" style="margin-top:6px"></div>
+<div style="overflow-x:auto"><table id="fsdbReportTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead id="fsdbReportTableHead"><tr style="text-align:left;border-bottom:1px solid #d9e1ec"></tr></thead>
+<tbody id="fsdbReportTableBody"></tbody></table></div>
 </div>
 
 <div class="card"><h3>Shared Knowledge Center</h3>
@@ -580,6 +599,57 @@ async function loadUserInfo(){
   }).join('');
   document.getElementById('userInfoTableBody').innerHTML = rows || '<tr><td style="padding:4px" colspan="4">No recorded access yet.</td></tr>';
 }
+
+let _fsdbReportData = null;
+async function loadFsdbReport(){
+  let path = val('fsdbPath'), period = val('fsdbPeriod'), hier = val('fsdbHier');
+  let resultEl = document.getElementById('fsdbReportResult');
+  if(!path){ resultEl.textContent = 'path is required'; return; }
+  let qs = 'path='+encodeURIComponent(path)
+    +(period?'&period='+encodeURIComponent(period):'')
+    +(hier?'&hier='+encodeURIComponent(hier):'');
+  let r = await (await fetch('/api/fsdb-report?'+qs)).json();
+  _fsdbReportData = r;
+  if(!r.ok){
+    resultEl.textContent = 'fsdbreport failed: '+(r.error||'unknown error')+(r.detail?(' -- '+JSON.stringify(r.detail)):'');
+  } else if(!r.parsed){
+    resultEl.textContent = 'ran, but output not recognized as real CSV: '+(r.note||'');
+  } else {
+    resultEl.textContent = (r.records||[]).length+' record(s), columns: '+(r.fieldnames||[]).join(', ');
+  }
+  renderFsdbReportTable();
+}
+function renderFsdbReportTable(){
+  // Client-side signal-name filter over already-fetched records -- no
+  // re-fetch/re-run of the real fsdbreport binary just to filter.
+  let head = document.getElementById('fsdbReportTableHead');
+  let tbody = document.getElementById('fsdbReportTableBody');
+  let r = _fsdbReportData;
+  let fields = (r && r.parsed) ? (r.fieldnames||[]) : [];
+  if(!fields.length){
+    head.innerHTML = '<tr style="text-align:left;border-bottom:1px solid #d9e1ec"></tr>';
+    tbody.innerHTML = '<tr><td style="padding:4px">No parsed records yet -- run fsdbreport above.</td></tr>';
+    return;
+  }
+  head.innerHTML = '<tr style="text-align:left;border-bottom:1px solid #d9e1ec">'+
+    fields.map(f=>`<th style="padding:4px">${f}</th>`).join('')+'</tr>';
+  // Column names are whatever the real -csv output declared (see fsdb_report.py) --
+  // prefer a signal/hierarchy-shaped column for the filter, but fall back to
+  // matching any column so the filter still works against an unknown real schema.
+  let signalField = fields.find(f=>/signal|hier|name/i.test(f));
+  let filterVal = (val('fsdbSignalFilter')||'').toLowerCase();
+  let records = r.records||[];
+  if(filterVal){
+    records = records.filter(rec => signalField
+      ? String(rec[signalField]||'').toLowerCase().includes(filterVal)
+      : fields.some(f=>String(rec[f]||'').toLowerCase().includes(filterVal)));
+  }
+  let rows = records.map(rec=>
+    '<tr style="border-bottom:1px solid #edf1f5">'+fields.map(f=>`<td style="padding:4px">${rec[f]}</td>`).join('')+'</tr>'
+  ).join('');
+  tbody.innerHTML = rows || `<tr><td style="padding:4px" colspan="${fields.length}">No records match the current filter.</td></tr>`;
+}
+
 function _epochOrIso(v){
   if(v==null) return null;
   if(typeof v === 'number') return v;
@@ -1242,6 +1312,51 @@ def _read_coverage_state(root: Path, summary_path: Optional[Path] = None,
     }
 
 
+# --- FSDB structured evidence panel (fsdbreport -csv) ----------------------
+# Poster-compliance audit (2026-08-29): fsdb_report.py's run_fsdbreport()/
+# parse_fsdbreport_output() had zero dashboard/GUI callers -- GET
+# /api/fsdb-report below wires the confirmed-real invocation
+# (`fsdbreport f.fsdb -period <T> -level 1 -csv`, dv-workflow/SKILL.md's
+# 2026-08-29 "Confirmed drift" entry) up to a queryable, structured
+# text-evidence table. Deliberately NOT a waveform/timeline renderer --
+# FSDB is a proprietary binary format with no public library, so a real
+# signal-timeline viewer is out of scope (see this feature's design doc).
+def _run_and_parse_fsdb_report(fsdb_path: str, period: str = "", hier: str = "") -> Dict[str, Any]:
+    """Runs the real fsdbreport binary (via fsdb_report.run_fsdbreport(),
+    the one external-process boundary -- never mocked in production code)
+    against fsdb_path with the confirmed-real `-period <T> -level 1 -csv`
+    flags, then parses its stdout with fsdb_report.parse_fsdbreport_output().
+    `hier` is accepted and echoed back for visibility, but NOT translated
+    into a guessed CLI flag: the confirmed invocation above does not show a
+    hierarchy-scope flag for fsdbreport itself (only fsdb2vcd's sibling
+    invocation in the same SKILL.md entry uses `-s <hier_scope>`) -- per
+    the Tool Usage Verification Gate, an unconfirmed flag is never
+    silently guessed onto a real command line.
+    """
+    from . import fsdb_report
+
+    extra_args: List[str] = []
+    if period:
+        extra_args += ["-period", period]
+    extra_args += ["-level", "1", "-csv"]
+
+    run_result = fsdb_report.run_fsdbreport(fsdb_path, extra_args=extra_args)
+    if not run_result.get("ok"):
+        return {
+            "ok": False,
+            "error": run_result.get("error"),
+            "detail": run_result.get("detail"),
+            "returncode": run_result.get("returncode"),
+            "stderr": run_result.get("stderr"),
+            "hier_requested": hier,
+            "parsed": False,
+            "records": [],
+        }
+
+    parsed = fsdb_report.parse_fsdbreport_output(run_result["report_text"])
+    return {"ok": True, "hier_requested": hier, **parsed}
+
+
 def append_coverage_history_sample(root: Path, percent: float, timestamp: Any = None) -> list:
     """Thin wrapper over coverage_analysis.append_history_sample(), pointed
     at this project's default .dv-harness/coverage/history.json -- the real
@@ -1755,6 +1870,17 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
                 self._send_json(user_info.summarize_user_access(
                     project_root, int(params.get("limit", "200"))))
+            elif self.path == "/api/fsdb-report" or self.path.startswith("/api/fsdb-report?"):
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                fsdb_path = urllib.parse.unquote(params.get("path", ""))
+                period = urllib.parse.unquote(params.get("period", ""))
+                hier = urllib.parse.unquote(params.get("hier", ""))
+                if not fsdb_path:
+                    self._send_json({"error": "BAD_REQUEST", "message": "path query param is required"},
+                                     status=400)
+                    return
+                self._send_json(_run_and_parse_fsdb_report(fsdb_path, period, hier))
             elif self.path == "/api/stats":
                 from .stats_snapshot import compute_stats
                 self._send_json(compute_stats(project_root))

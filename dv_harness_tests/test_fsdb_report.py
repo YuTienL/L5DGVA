@@ -76,6 +76,18 @@ class TestRunFsdbreport:
             result = fsdb_report.run_fsdbreport(str(self.fsdb))
         assert result == {"ok": True, "report_text": "signal report here", "stderr": ""}
 
+    def test_extra_args_placed_after_file_matching_confirmed_invocation_order(self):
+        # Confirmed-real invocation (dv-workflow/SKILL.md's 2026-08-29
+        # "Confirmed drift" entry): `fsdbreport f.fsdb -period <T> -level 1
+        # -csv` -- file path BEFORE the flags. Asserts the actual argv
+        # built by run_fsdbreport() matches that real order, not the
+        # flags-before-file order this had prior to that confirmed usage.
+        with patch("dv_harness.fsdb_report.subprocess.run",
+                   return_value=_completed(stdout="", stderr="")) as m:
+            fsdb_report.run_fsdbreport(str(self.fsdb), extra_args=["-period", "100ns", "-level", "1", "-csv"])
+        argv = m.call_args[0][0]
+        assert argv == ["fsdbreport", str(self.fsdb), "-period", "100ns", "-level", "1", "-csv"]
+
 
 class TestParseFsdbreportOutput:
     def test_honest_pass_through(self):
@@ -83,6 +95,66 @@ class TestParseFsdbreportOutput:
         assert result["raw_text"] == "some report text"
         assert result["parsed"] is False
         assert "not verified" in result["note"]
+
+    def test_parse_fsdbreport_csv_output_produces_structured_records(self):
+        # Real-shaped CSV sample matching the confirmed `fsdbreport f.fsdb
+        # -period <T> -level 1 -csv` invocation from dv-workflow/SKILL.md's
+        # 2026-08-29 confirmed-drift entry -- that entry confirms the
+        # invocation and that -csv output is CSV-shaped, but does not
+        # record fsdbreport's real column header names, so this fixture's
+        # header (signal,timestamp,value) is this test's own illustrative
+        # choice, not a claim about the real tool's exact header text.
+        # parse_fsdbreport_output() must parse it structurally -- via
+        # whatever header the CSV actually declares -- not by hardcoding
+        # these particular names, so a real run with different real column
+        # names would still parse correctly.
+        csv_text = (
+            "signal,timestamp,value\n"
+            "top.dut.clk,0,0\n"
+            "top.dut.clk,5,1\n"
+            "top.dut.rst_n,0,0\n"
+            "top.dut.rst_n,12,1\n"
+        )
+        result = fsdb_report.parse_fsdbreport_output(csv_text)
+        assert result["parsed"] is True
+        assert result["fieldnames"] == ["signal", "timestamp", "value"]
+        assert len(result["records"]) == 4
+        assert result["records"][0] == {"signal": "top.dut.clk", "timestamp": "0", "value": "0"}
+        assert result["records"][3] == {"signal": "top.dut.rst_n", "timestamp": "12", "value": "1"}
+
+    def test_parse_fsdbreport_csv_output_is_header_agnostic(self):
+        # Proves the parser doesn't hardcode signal/timestamp/value --
+        # different real column names still parse into real records, since
+        # the exact real header text is unconfirmed (see module docstring).
+        csv_text = "hier_path,time_ns,val\nA.B,1,X\nA.C,2,Z\n"
+        result = fsdb_report.parse_fsdbreport_output(csv_text)
+        assert result["parsed"] is True
+        assert result["fieldnames"] == ["hier_path", "time_ns", "val"]
+        assert result["records"] == [
+            {"hier_path": "A.B", "time_ns": "1", "val": "X"},
+            {"hier_path": "A.C", "time_ns": "2", "val": "Z"},
+        ]
+
+    def test_parse_fsdbreport_output_still_handles_unparseable_input_honestly(self):
+        result = fsdb_report.parse_fsdbreport_output("not csv at all, garbage text")
+        assert result["parsed"] is False
+        assert "raw_text" in result
+
+    def test_parse_fsdbreport_output_header_only_is_honestly_unparsed(self):
+        # A header line with no data rows below it isn't real evidence yet.
+        result = fsdb_report.parse_fsdbreport_output("signal,timestamp,value\n")
+        assert result["parsed"] is False
+
+    def test_parse_fsdbreport_output_ragged_rows_are_honestly_unparsed(self):
+        # A row with a different column count than the header doesn't look
+        # like real, well-formed fsdbreport -csv output.
+        csv_text = "signal,timestamp,value\ntop.dut.clk,0,0\ntop.dut.clk,5\n"
+        result = fsdb_report.parse_fsdbreport_output(csv_text)
+        assert result["parsed"] is False
+
+    def test_parse_fsdbreport_output_empty_string_is_honestly_unparsed(self):
+        result = fsdb_report.parse_fsdbreport_output("")
+        assert result["parsed"] is False
 
 
 class TestCliFsdbReport:
