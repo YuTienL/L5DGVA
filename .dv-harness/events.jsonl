@@ -259,3 +259,5 @@
 {"ts": "2026-08-30T16:35:48.145439+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-08-30T16:40:55.314220+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-08-31T01:17:43.226004+00:00", "event": "CLI_ACCESS", "cmd": "signoff-export", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-08-31T01:44:28.366185+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-08-31T01:44:34.439273+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
