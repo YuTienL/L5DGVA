@@ -150,6 +150,21 @@ def main():
     plsf_reconcile.add_argument("--all", action="store_true",
                                  help="Reconcile every job id under .dv-harness/lsf/jobs/ instead of listing them.")
 
+    # Background job/log monitor (Part 2 of the 2026-09-01 sim-output-layout
+    # spec): regression_reporter.ensure_watcher_running()/stop_watcher()/
+    # watcher_status() are real and tested (dv_harness_tests/
+    # test_regression_reporter.py's TestWatcherLifecycle) but had no CLI
+    # entry point -- these three subcommands are the missing invocation path.
+    plsf_watch_start = sub.add_parser("lsf-watch-start",
+        help="Start the background job/log monitor (Part 2 of the "
+             "2026-09-01 sim-output-layout spec) if not already running.")
+    plsf_watch_start.add_argument("--vcuser", required=True)
+    plsf_watch_start.add_argument("--uvm-root-path", default=None)
+    plsf_watch_start.add_argument("--interval-minutes", type=int, default=5)
+
+    sub.add_parser("lsf-watch-stop", help="Stop the background job/log monitor.")
+    sub.add_parser("lsf-watch-status", help="Report whether the background job/log monitor is running.")
+
     # BUG FIX (poster-compliance audit, "異常自動 Kill Job"): evaluate_auto_kill()
     # in lsf_client.py existed with no caller anywhere -- this is the missing
     # explicit, human-invoked scan/kill path. It never runs on its own; it only
@@ -479,6 +494,20 @@ def main():
             raise SystemExit(1)
         print(json.dumps({"job_id": args.job_id, "killed": ok}, ensure_ascii=False))
         raise SystemExit(0 if ok else 1)
+    elif args.cmd == "lsf-watch-start":
+        from . import regression_reporter
+        uvm_root = args.uvm_root_path or str(h.root / "uvm")
+        result = regression_reporter.ensure_watcher_running(
+            h.root, args.vcuser, uvm_root, interval_minutes=args.interval_minutes)
+        print(json.dumps(result, ensure_ascii=False))
+    elif args.cmd == "lsf-watch-stop":
+        from . import regression_reporter
+        result = regression_reporter.stop_watcher(h.root)
+        print(json.dumps(result, ensure_ascii=False))
+    elif args.cmd == "lsf-watch-status":
+        from . import regression_reporter
+        result = regression_reporter.watcher_status(h.root)
+        print(json.dumps(result, ensure_ascii=False))
     elif args.cmd == "lsf-reconcile":
         from . import lsf_client
         job_ids = args.job_id
