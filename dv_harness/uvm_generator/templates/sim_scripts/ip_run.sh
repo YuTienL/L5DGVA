@@ -2,31 +2,53 @@
 # Build and run one pattern. Parameterised so the speed sweep does not need a
 # new script per combination.
 #
-# CANONICAL HOME: sim/scripts/usbrun.sh, on the PC, and mirrored to the server
-# at the same path. It lived in a scratch directory until 2026-08-11 and was
-# pushed to /tmp on each invocation -- which meant this project's only build
-# entry point was the one file in the tree that nothing version controlled.
-# Every fix made to it was one `rm` in a temp directory away from being lost,
-# and the two copies had no way to be compared.
+# GENERIC TEMPLATE: this file is a protocol-agnostic build+run entry point,
+# generalized from a real USB proving-ground project (where it was named
+# usbrun.sh). IP_PREFIX/TARGET_IP below follow the same vocabulary as the
+# Makefile; override them for a different protocol, or leave the defaults to
+# run this script standalone exactly as the original project did.
+IP_PREFIX="${IP_PREFIX:-usb_}"
+TARGET_IP="${TARGET_IP:-USB}"
+# IP_PREFIX with any trailing underscore stripped, for the bare-name cases
+# (job-name prefixes below).
+IP_PREFIX_STEM="${IP_PREFIX%_}"
+#
+# CANONICAL HOME: sim/scripts/ip_run.sh (this file was originally named
+# usbrun.sh in the source project this template was generalized from), on
+# the PC, and mirrored to the server at the same path. It lived in a scratch
+# directory until 2026-08-11 and was pushed to /tmp on each invocation --
+# which meant this project's only build entry point was the one file in the
+# tree that nothing version controlled. Every fix made to it was one `rm` in
+# a temp directory away from being lost, and the two copies had no way to be
+# compared.
+#
+# THE LESSON, GENERALIZED (keep this regardless of protocol): a build's own
+# entry-point script is exactly as load-bearing as the Makefile it drives,
+# and belongs under the same version control and the same PC/server deploy
+# discipline -- never edited or run from a scratch/tmp copy, on ANY project.
 #
 # So: edit the PC copy, deploy it like any other source file, and run the
 # SERVER copy. Never run a copy in /tmp -- that is how the two diverge, and
 # a divergent build script is indistinguishable from a divergent testbench in
 # the log it produces.
 #
-#   PAT=usb20_enumeration SPD=usb20 PHYSIM=fast  sh usbrun.sh
-#   PAT=usb3_enumeration  SPD=gen1  PHYSIM=fast  sh usbrun.sh
-#   PAT=usb3_enumeration  SPD=gen2  PHYSIM=fast  sh usbrun.sh
-#   PAT=usb2_enum SPEED0=usb20 SPEED1=usb20fs PHYSIM=fast  sh usbrun.sh
+#   PAT=usb20_enumeration SPD=usb20 PHYSIM=fast  sh ip_run.sh
+#   PAT=usb3_enumeration  SPD=gen1  PHYSIM=fast  sh ip_run.sh
+#   PAT=usb3_enumeration  SPD=gen2  PHYSIM=fast  sh ip_run.sh
+#   PAT=usb2_enum SPEED0=usb20 SPEED1=usb20fs PHYSIM=fast  sh ip_run.sh
+#
+# (PAT/SPD example values above are this template's original USB project's
+# own pattern/speed names -- see the Makefile's SPEED comment for why these
+# are protocol-specific and need re-deriving per TARGET_IP.)
 #
 # SPD sets SPEED, i.e. BOTH ports, and is the default for whichever of
 # SPEED0/SPEED1 is not given explicitly (mirrors the Makefile's own
 # `SPEED0 ?= $(SPEED)` / `SPEED1 ?= $(SPEED)`, sim/scripts/Makefile:292,294).
 # Using SPEED0 alone leaves port 1 at the ss_capable default, and its
 # SuperSpeed agent then sits in Polling.LFPS for the whole run. That does not
-# block port 0, but it fills the log with LTSSM lines from usb_host_agent_1
-# that read exactly like a port 0 failure. The first SPEED0=usb20 run had
-# that problem -- pass SPEED1 explicitly too when the ports must differ.
+# block port 0, but it fills the log with LTSSM lines from the port-1 host
+# agent that read exactly like a port 0 failure. The first SPEED0=usb20 run
+# had that problem -- pass SPEED1 explicitly too when the ports must differ.
 #
 # NO bkill LOOP. A blanket `for j in $(bjobs...); do bkill $j; done` at the
 # top of a script killed four of this project's own simulations, reported as
@@ -75,13 +97,13 @@ PARTCOMP=${PARTCOMP:-1}
 # this script silently produced the old broken artefact while the configured
 # one sat unused -- and the fsdb being analysed then came from a DIFFERENT run
 # than the sim.log beside it.
-# CONNECT is gone from this script and from the Makefile. It gated the USB
-# serial wiring -- the trans, the interfaces, the interconnect wrappers -- and
-# defaulted to 0, so every USB run had the analogue connection compiled out.
-# Two days of symptoms sat downstream of that, including a root cause written
-# up as "bind + tran does not conduct" when the trans simply were not there.
-# This script worked around it by defaulting to 1; the wiring is now
-# unconditional, so there is nothing left to forward.
+# CONNECT is gone from this script and from the Makefile. It gated the
+# target-IP serial wiring -- the trans, the interfaces, the interconnect
+# wrappers -- and defaulted to 0, so every run had the analogue connection
+# compiled out. Two days of symptoms sat downstream of that, including a
+# root cause written up as "bind + tran does not conduct" when the trans
+# simply were not there. This script worked around it by defaulting to 1;
+# the wiring is now unconditional, so there is nothing left to forward.
 WAVE=${WAVE:-0}
 FSDB_START=${FSDB_START:-}
 FSDB_STOP=${FSDB_STOP:-}
@@ -96,38 +118,39 @@ WOPT="WAVE=$WAVE"
 #
 # 0 is off, and off means the pattern decides when it is done. Anything else
 # bounds the run and the verdict comes back Failed on purpose -- see
-# usb_base_test.sv. That is stated here as well because a bound set in a shell
+# <ip>_base_test.sv. That is stated here as well because a bound set in a shell
 # variable and read back three hours later in a log is exactly the kind of
 # thing that gets mistaken for a DUT that stops early.
 TOTAL_RUNTIME=${TOTAL_RUNTIME:-0}
 ROPT=""
 [ "$TOTAL_RUNTIME" != "0" ] && ROPT="TOTAL_RUNTIME=$TOTAL_RUNTIME"
 
-# USB_SCALED_MODE. Passed explicitly rather than left to the environment,
+# IP_SCALED_MODE. Passed explicitly rather than left to the environment,
 # because `bsub` does not guarantee which variables reach the job and a mode
 # that silently reverts to the default is the failure this knob exists to
 # prevent. The Makefile defaults it to 1 and rejects anything but 0 or 1.
-USB_SCALED_MODE=${USB_SCALED_MODE:-1}
-ROPT="$ROPT USB_SCALED_MODE=$USB_SCALED_MODE"
+IP_SCALED_MODE=${IP_SCALED_MODE:-1}
+ROPT="$ROPT IP_SCALED_MODE=$IP_SCALED_MODE"
 
 # Extra run-time plusargs, forwarded explicitly for the same reason as the
 # above: the environment is not reliably carried into a bsub job.
 #
 # The one this exists for is verbosity on a single VIP component:
-#   PLUSARGS='+uvm_set_verbosity=uvm_test_top.env.usb_host_agent_0.link,_ALL_,UVM_FULL,run'
+#   PLUSARGS='+uvm_set_verbosity=uvm_test_top.env.${IP_PREFIX}host_agent_0.link,_ALL_,UVM_FULL,run'
 # which is how trap 96 got the link state machine to state its own timer
 # values, with no rebuild. The VIP's link SM body is encrypted, so making it
 # talk is the only way to see what it decided.
 #
 # NOT folded into ROPT: PLUSARGS can itself contain multiple space-separated
-# +...=... tokens (e.g. two +USB_DEMOTE_ID= values), and $ROPT is expanded
-# UNQUOTED on the bsub line below so `make`'s other KEY=value tokens split
-# into separate argv words as intended -- that same unquoted expansion would
-# also split PLUSARGS's own internal spaces, truncating it to its first token
-# and silently dropping the rest into dead, unreferenced make variables
-# (2026-08-25, found by a dedicated workflow, right after usb_top_env.sv's
-# load_demotions() was fixed to accept multiple +USB_DEMOTE_ID/+USB_DEMOTE_MSG
-# -- that SV-side fix alone never took effect end to end because of this).
+# +...=... tokens (e.g. two +<TARGET_IP>_DEMOTE_ID= values), and $ROPT is
+# expanded UNQUOTED on the bsub line below so `make`'s other KEY=value tokens
+# split into separate argv words as intended -- that same unquoted expansion
+# would also split PLUSARGS's own internal spaces, truncating it to its
+# first token and silently dropping the rest into dead, unreferenced make
+# variables (2026-08-25, found by a dedicated workflow, right after
+# <ip>_top_env.sv's load_demotions() was fixed to accept multiple
+# +<TARGET_IP>_DEMOTE_ID/+<TARGET_IP>_DEMOTE_MSG -- that SV-side fix alone
+# never took effect end to end because of this).
 # Kept as its own single quoted argv word via "$@" instead, built just before
 # the bsub call below.
 
@@ -138,7 +161,7 @@ ROPT="$ROPT USB_SCALED_MODE=$USB_SCALED_MODE"
 
 # HS_WINDOW_US -- forces the DUT's hs_handshake_time wider. COMPILE TIME, so it
 # goes on the `make compile` line, not on `make run`. It becomes a +define+ and
-# is read by both usb_stages.svh (the force) and usb_scaledown_timers.svh (the
+# is read by both <ip>_stages.svh (the force) and <ip>_scaledown_timers.svh (the
 # VIP's matching twtfs), so getting it onto only the run line would produce a
 # build with neither and a log that looks completely normal -- the same shape
 # as the SLED defect, where a define appended after a `:=` assignment never
@@ -154,7 +177,7 @@ COPT=""
 [ -n "$RUNTAG" ] && ROPT="$ROPT RUNTAG=$RUNTAG"
 cd $S || exit 1
 
-echo "=== $PAT  SPEED0=$SPEED0 SPEED1=$SPEED1  PHY_SIM=$PHYSIM   WAVE=$WAVE  PARTCOMP=$PARTCOMP  TOTAL_RUNTIME=$TOTAL_RUNTIME  USB_SCALED_MODE=$USB_SCALED_MODE  HS_WINDOW_US=$HS_WINDOW_US  $(date '+%H:%M:%S') ==="
+echo "=== $PAT  SPEED0=$SPEED0 SPEED1=$SPEED1  PHY_SIM=$PHYSIM   WAVE=$WAVE  PARTCOMP=$PARTCOMP  TOTAL_RUNTIME=$TOTAL_RUNTIME  IP_SCALED_MODE=$IP_SCALED_MODE  HS_WINDOW_US=$HS_WINDOW_US  $(date '+%H:%M:%S') ==="
 [ "$HS_WINDOW_US" != "0" ] && echo "*** hs_handshake_time IS FORCED to ${HS_WINDOW_US}us. This run does not measure the DUT as built. ***"
 bjobs 2>&1 | head -4
 
@@ -175,10 +198,11 @@ while [ $i -lt 150 ]; do
   # exhausted all 150 iterations -- 50 minutes of waiting for a build that was
   # already on disk, with no LSF job of its own left running.
   #
-  # The compile stages are named usbc.* by LSF_TOOL_OPT (usbc.analyze, usbc.1b,
-  # usbc.elab), so match that and nothing else. Same family as CLAUDE.md trap
-  # 84: an unanchored match reads somebody else's state as your own.
-  n=$(bjobs -noheader -J 'usbc.*' 2>/dev/null | grep -c 'RUN\|PEND')
+  # The compile stages are named ${IP_PREFIX_STEM}c.* by LSF_TOOL_OPT
+  # (${IP_PREFIX_STEM}c.analyze, ${IP_PREFIX_STEM}c.1b, ${IP_PREFIX_STEM}c.elab),
+  # so match that and nothing else. Same family as CLAUDE.md trap 84: an
+  # unanchored match reads somebody else's state as your own.
+  n=$(bjobs -noheader -J "${IP_PREFIX_STEM}c.*" 2>/dev/null | grep -c 'RUN\|PEND')
   [ "$n" = "0" ] && break
   [ $((i % 6)) -eq 0 ] && echo "  building $(date '+%H:%M:%S')"
   sleep 20; i=$((i + 1))
@@ -273,7 +297,7 @@ ls -la --time-style=+%H:%M output/simv
 
 # STOP HERE WHEN ASKED, SO THE FOUR-STEP FLOW CAN VERIFY BETWEEN BUILD AND RUN.
 #
-#   push  ->  STOP_AFTER_SIMV=1 usbrun.sh  ->  sync_check.sh  ->  usbrun.sh
+#   push  ->  STOP_AFTER_SIMV=1 ip_run.sh  ->  sync_check.sh  ->  ip_run.sh
 #
 # The second call finds .flags unchanged and every stamp newer than its sources,
 # so make declares simv up to date and goes straight to the bsub.
@@ -316,7 +340,7 @@ set --
 [ -n "$PLUSARGS" ] && set -- "PLUSARGS=$PLUSARGS"
 
 mkdir -p run/${PAT}_1
-bsub -q $QUEUE -J "usbrun.$PAT" -W 180 -o run/${PAT}_1/lsf.out \
+bsub -q $QUEUE -J "${IP_PREFIX_STEM}run.$PAT" -W 180 -o run/${PAT}_1/lsf.out \
      make run PATTERN=$PAT SPEED=$SPD SPEED0=$SPEED0 SPEED1=$SPEED1 PHY_SIM=$PHYSIM PARTCOMP_EN=$PARTCOMP \
               $WOPT $ROPT "$@" LSF_QUEUE=$QUEUE FLOW=fourstep LSF_SIM=0 2>&1 | tail -3
 echo "SUBMITTED DETACHED $(date '+%H:%M:%S') -- follow with bjobs, not this shell"

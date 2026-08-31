@@ -1,6 +1,22 @@
 """Audit every pattern's DUT/PHY register writes against the relationships
-DOC/rtl_vip_scaledown_mapping.xls defines, and against the DUT's measured
+a vendor scale-down mapping doc defines, and against the DUT's measured
 clocks.
+
+GENERIC TEMPLATE: this checker's FRAMEWORK (find CPUWRITE4B calls to a
+named register macro, decode named bit-fields, check them against expected
+values) is protocol-agnostic. The register macro NAMES it looks for use the
+TARGET_IP/IP_PREFIX environment variables (same vocabulary as the Makefile),
+defaulting to this template's original USB proving-ground project:
+
+    TARGET_IP=PCIE  python reg_audit.py <UVM_ROOT_PATH>
+
+The actual CHECKS content below (register names GCTL/GUCTL/GFLADJ/
+GUSB2PHYCFG/DCFG, bit-field names and expected values like PwrDnScale=3125,
+REFCLKPER=0x32) is this template's original USB project's own worked
+example, tied to its real DWC_usb31 register map and its DUT's measured
+clocks (50 MHz suspend_clk, 20 MHz ref_clk) -- replace CHECKS with the
+current DUT's own register map and measured values; do not assume these
+numbers apply to a different chip or protocol.
 
 WHY THIS EXISTS
 ---------------
@@ -9,11 +25,12 @@ writes a different GCTL than the rest silently gets a different VIP
 configuration -- and nothing else in the environment would notice. The same
 applies to the fields the mapping's arithmetic depends on.
 
-WHAT IS CHECKED, and where each requirement comes from
+WHAT IS CHECKED, and where each requirement comes from (this template's
+original USB worked example)
 
   GCTL[5:4]   SCALEDOWN    every pattern must agree. The value itself is a
                            choice; disagreement between patterns is not,
-                           because usb_top_cfg reads it back and matches the
+                           because <ip>_top_cfg reads it back and matches the
                            VIP to whatever it finds.
   GCTL[31:19] PwrDnScale   = f(suspend_clk)/16 kHz. suspend_clk measured
                            50.00 MHz (USB_CLK_SURVEY) -> 3125.
@@ -32,34 +49,48 @@ import re, sys, os, glob
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else 'uvm/tb'
 
+# Protocol-target parameterization, same vocabulary as the Makefile.
+TARGET_IP = os.environ.get('TARGET_IP', 'USB')
+
+def _reg(suffix):
+    """This template's original USB project's register-macro naming:
+    `<TARGET_IP>_<suffix>. Adjust here if the current DUT's register-access
+    macros follow a different convention."""
+    return '%s_%s' % (TARGET_IP, suffix)
+
+REG_GCTL, REG_GUCTL, REG_GFLADJ, REG_GUSB2PHYCFG, REG_DCFG = (
+    _reg('GCTL'), _reg('GUCTL'), _reg('GFLADJ'), _reg('GUSB2PHYCFG'), _reg('DCFG'))
+
 WRITE = re.compile(
-    r'`CPUWRITE4B\s*\(\s*`(USB_GCTL|USB_GUCTL|USB_GFLADJ|USB_GUSB2PHYCFG|USB_DCFG)'
+    r'`CPUWRITE4B\s*\(\s*`(' + '|'.join(
+        re.escape(r) for r in
+        (REG_GCTL, REG_GUCTL, REG_GFLADJ, REG_GUSB2PHYCFG, REG_DCFG)) + r')'
     r'\s*\([^)]*\)\s*,\s*32\'h([0-9a-fA-F_]+)')
 
 def bits(v, hi, lo):
     return (v >> lo) & ((1 << (hi - lo + 1)) - 1)
 
 CHECKS = {
-  'USB_GCTL': [
+  REG_GCTL: [
       ('PwrDnScale', lambda v: bits(v, 31, 19), 3125,
        'suspend_clk measured 50.00 MHz -> 50000/16'),
       ('SCALEDOWN',  lambda v: bits(v, 5, 4),   None,
-       'must agree across patterns; usb_top_cfg reads it back'),
+       'must agree across patterns; <ip>_top_cfg reads it back'),
   ],
-  'USB_GUCTL': [
+  REG_GUCTL: [
       ('REFCLKPER', lambda v: bits(v, 31, 22), 0x32,
        "'h32 = 50 ns = 20 MHz ref_clk"),
   ],
-  'USB_GFLADJ': [
+  REG_GFLADJ: [
       ('240MHZ_DECR', lambda v: bits(v, 30, 24), 12, '240/20 MHz'),
       ('LPM_SEL',     lambda v: bits(v, 23, 23),  1, 'required with the decr fields'),
   ],
-  'USB_GUSB2PHYCFG': [
+  REG_GUSB2PHYCFG: [
       ('XCVRDLY',     lambda v: bits(v, 9, 9),   1,
        'femtoPHY needs 1.6 us after XCVRSEL0 -> HS'),
       ('ULPIAutoRes', lambda v: bits(v, 15, 15), 0, 'must be 0 in device mode'),
   ],
-  'USB_DCFG': [
+  REG_DCFG: [
       ('DEVSPD', lambda v: bits(v, 2, 0), None, '100=Gen1 101=Gen2 000=HS 001=FS'),
   ],
 }

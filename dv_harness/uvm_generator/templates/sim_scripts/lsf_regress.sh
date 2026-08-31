@@ -57,7 +57,13 @@ set -u
 : "${LSF_IDLE:=10}"
 : "${LSF_HANG_KILL:=1}"         # kill a job the idle check calls hung
 : "${LSF_PREFLIGHT:=1}"         # verify the environment on a host first
-: "${LSF_GROUP:=/usbreg}"
+# IP_PREFIX/TARGET_IP follow the same vocabulary as the Makefile; override
+# for a different protocol, or leave the default (this template's original
+# USB proving-ground project) to run standalone unmodified.
+: "${IP_PREFIX:=usb_}"
+: "${TARGET_IP:=USB}"
+IP_PREFIX_STEM="${IP_PREFIX%_}"
+: "${LSF_GROUP:=/${IP_PREFIX_STEM}reg}"
 
 # Report on a regression that is already running or has already finished,
 # instead of submitting a new one.
@@ -73,7 +79,7 @@ if [ -z "$PATTERNS" ]; then echo "lsf_regress: no patterns"; exit 1; fi
 if [ -z "$SIM_ROOT" ]; then echo "lsf_regress: SIM_ROOT unset"; exit 1; fi
 
 GROUP="$LSF_GROUP/$SUITE"
-PREFIX="usbreg.$SUITE"
+PREFIX="${IP_PREFIX_STEM}reg.$SUITE"
 LSFLOG="$LOGDIR/lsf"
 mkdir -p "$LSFLOG"
 
@@ -480,7 +486,7 @@ secs() {
 #
 # So the check moved to cpu_used, and that missed the opposite case. When
 # apb_selftest really did wedge, the log showed why:
-#     @   12819 ns  [launcher] running 'usb_apb_wr_rd_seq' on 'apb'
+#     @   12819 ns  [launcher] running '<ip>_apb_wr_rd_seq' on 'apb'
 #     @  649527 ns  [manage_objections] Timed out due to bus inactivity
 #     @ 1289527 ns  ... the same, every 640000 ns
 # The pattern had made no progress since 12819 ns. Clocks were still running,

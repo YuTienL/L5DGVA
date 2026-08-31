@@ -1,5 +1,16 @@
 #=============================================================================
-# waves.tcl -- Verdi signal setup for the USB IP-level UVM environment
+# waves.tcl -- Verdi signal setup for a target-IP UVM environment
+#
+# GENERIC TEMPLATE NOTE: this file is a protocol-agnostic Verdi setup
+# grouped by the QUESTION each group answers (per IP_UVM_DV_Gen.md Step 9),
+# copied from this template's original USB proving-ground project. The
+# GROUPING STRUCTURE (bring-up, bridges, register bus, DMA bus, pads, VIP
+# interfaces, controller/link state, interrupts) generalizes to any
+# protocol; the literal hierarchical signal paths inside each group are a
+# real worked EXAMPLE from that USB project's own DUT and must be
+# re-derived from the CURRENT DUT's own RTL (Step 3 evidence rules apply
+# here too -- do not assume a path carries over from a different chip).
+# TARGET_IP/IP_PREFIX below follow the same vocabulary as the Makefile.
 #
 # Loaded by  make verdi PATTERN=<n>  /  make debug PATTERN=<n>
 # as         verdi ... -play waves.tcl
@@ -24,7 +35,7 @@
 #   Did the Verilog side even reach UVM?          -> group 2, the bridges
 #   Did the register write land on the bus?       -> group 3, APB
 #   Did the DUT come out of reset with a clock?   -> group 1, SoC
-#   Is there anything at all on the USB pads?     -> group 5, and see A2 below
+#   Is there anything at all on the target-IP pads? -> group 5, and see A2 below
 #   Did the link train?                           -> group 7, LTSSM
 #
 # Each group below answers one of those, in the order you would ask them.
@@ -45,9 +56,10 @@
 #-----------------------------------------------------------------------------
 # SCOPE DEPENDS ON THE DUMP, NOT ON THIS FILE
 #
-# wave.txt dumps only the USB blocks by default. Groups 6 and 7 reach inside
-# u_udc_usb31_top and are covered by that default. Groups 3, 4 and 8 are at
-# the lan063 level and need +fsdb_full:
+# wave.txt dumps only the target-IP blocks by default. Groups 6 and 7 reach
+# inside u_udc_usb31_top (this template's example DUT sub-block; re-derive
+# the equivalent for the current DUT) and are covered by that default.
+# Groups 3, 4 and 8 are at the lan063 level and need +fsdb_full:
 #
 #     make sim PATTERN=<n> WAVE=full
 #
@@ -55,6 +67,18 @@
 # found" entries. That is not an error in this file -- it means the scope was
 # too narrow for what you are asking.
 #=============================================================================
+
+#-----------------------------------------------------------------------------
+# Protocol-target parameterization, same vocabulary as the Makefile
+# (TARGET_IP/IP_PREFIX). Used below only for the bridge/bind instance names
+# that follow THIS harness's own generated naming convention
+# (<ip>_uvm_bind.sv etc, IP_UVM_DV_Gen.md Step 11) -- the DUT-side signal
+# paths further down are real RTL facts from this template's original USB
+# project and are NOT derived from these variables; re-derive them from the
+# current DUT's own RTL.
+#-----------------------------------------------------------------------------
+set TARGET_IP "USB"
+set IP_PREFIX "usb_"
 
 #-----------------------------------------------------------------------------
 # Paths. Change TB and DUT here rather than editing every line below.
@@ -65,16 +89,19 @@
 set TB      "sysn063"
 set DUT     "$TB.u_lan063"
 set SSVOUT  "$DUT.u_ss_vout"
-set BIND    "$TB.u_usb_uvm_bind"
-set APBARB  "$TB.u_usb_apb_arb"
-set LAUNCH  "$TB.u_usb_seq_launcher"
+set BIND    "$TB.u_${IP_PREFIX}uvm_bind"
+set APBARB  "$TB.u_${IP_PREFIX}apb_arb"
+set LAUNCH  "$TB.u_${IP_PREFIX}seq_launcher"
 
-# u_usbtop is an array unless HAPS is defined, and vcs.opt does not define it
-# (CLAUDE.md, DUT configuration). Set USBTOP_IDX to "" for a HAPS build.
-set USBTOP_IDX0 "\[0\]"
-set USBTOP_IDX1 "\[1\]"
-set USB0    "$SSVOUT.u_usbtop$USBTOP_IDX0.u_udc_usb31_top"
-set USB1    "$SSVOUT.u_usbtop$USBTOP_IDX1.u_udc_usb31_top"
+# u_<ip>top is an array unless HAPS is defined, and vcs.opt does not define it
+# (CLAUDE.md, DUT configuration). Set IPTOP_IDX to "" for a HAPS build.
+# u_udc_usb31_top below is this template's original USB project's real
+# per-instance sub-block name -- re-derive the equivalent for the current
+# DUT/TARGET_IP.
+set IPTOP_IDX0 "\[0\]"
+set IPTOP_IDX1 "\[1\]"
+set IP0     "$SSVOUT.u_${IP_PREFIX}top$IPTOP_IDX0.u_udc_usb31_top"
+set IP1     "$SSVOUT.u_${IP_PREFIX}top$IPTOP_IDX1.u_udc_usb31_top"
 
 #-----------------------------------------------------------------------------
 # addGroup <name> <signal> ...
@@ -331,20 +358,20 @@ addGroup "5c VIP interfaces" \
     "$BIND.usb20_clk_4x"
 
 #=============================================================================
-# 6. usbtop wrapper  --  reset and PHY readiness
+# 6. <ip>top wrapper  --  reset and PHY readiness
 #
 # phy0_sram_init_done is what every BFM pattern waits on before touching the
 # controller. If it never rises, the controller registers are being written
 # into a block that is still held in reset and every later step is
 # meaningless.
 #=============================================================================
-addGroup "6 usbtop wrapper" \
-    "$SSVOUT.u_usbtop$USBTOP_IDX0.phy0_sram_init_done" \
-    "$SSVOUT.u_usbtop$USBTOP_IDX0.usb_rst_n" \
-    "$SSVOUT.u_usbtop$USBTOP_IDX0.usb_ref_pad_clk_p" \
-    "$SSVOUT.u_usbtop$USBTOP_IDX0.usb_ref_pad_clk_m" \
-    "$SSVOUT.u_usbtop$USBTOP_IDX1.phy0_sram_init_done" \
-    "$SSVOUT.u_usbtop$USBTOP_IDX1.usb_rst_n"
+addGroup "6 ${IP_PREFIX}top wrapper" \
+    "$SSVOUT.u_${IP_PREFIX}top$IPTOP_IDX0.phy0_sram_init_done" \
+    "$SSVOUT.u_${IP_PREFIX}top$IPTOP_IDX0.usb_rst_n" \
+    "$SSVOUT.u_${IP_PREFIX}top$IPTOP_IDX0.usb_ref_pad_clk_p" \
+    "$SSVOUT.u_${IP_PREFIX}top$IPTOP_IDX0.usb_ref_pad_clk_m" \
+    "$SSVOUT.u_${IP_PREFIX}top$IPTOP_IDX1.phy0_sram_init_done" \
+    "$SSVOUT.u_${IP_PREFIX}top$IPTOP_IDX1.usb_rst_n"
 
 #=============================================================================
 # 7. DWC_usb31 controller and link state  --  "did the link train"
@@ -363,25 +390,25 @@ addGroup "6 usbtop wrapper" \
 # in the missing list at the end and can be adjusted here.
 #=============================================================================
 addGroup "7 USB0 controller / link" \
-    "$USB0.u_udc_DWC_usb31.ltssm_state" \
-    "$USB0.u_udc_DWC_usb31.link_state" \
-    "$USB0.u_udc_DWC_usb31.dev_speed" \
-    "$USB0.u_udc_DWC_usb31.run_stop" \
-    "$USB0.u_udc_DWC_usb31.dalepena" \
-    "$USB0.u_udc_DWC_usb31.dev_addr" \
-    "$USB0.u_udc_DWC_usb31.gevntcount" \
-    "$USB0.u_udc_usb2_phy.utmi_linestate" \
-    "$USB0.u_udc_usb2_phy.utmi_xcvrselect" \
-    "$USB0.u_udc_usb2_phy.utmi_termselect" \
-    "$USB0.u_udc_usb2_phy.utmi_opmode"
+    "$IP0.u_udc_DWC_usb31.ltssm_state" \
+    "$IP0.u_udc_DWC_usb31.link_state" \
+    "$IP0.u_udc_DWC_usb31.dev_speed" \
+    "$IP0.u_udc_DWC_usb31.run_stop" \
+    "$IP0.u_udc_DWC_usb31.dalepena" \
+    "$IP0.u_udc_DWC_usb31.dev_addr" \
+    "$IP0.u_udc_DWC_usb31.gevntcount" \
+    "$IP0.u_udc_usb2_phy.utmi_linestate" \
+    "$IP0.u_udc_usb2_phy.utmi_xcvrselect" \
+    "$IP0.u_udc_usb2_phy.utmi_termselect" \
+    "$IP0.u_udc_usb2_phy.utmi_opmode"
 
 addGroup "7b USB1 controller / link" \
-    "$USB1.u_udc_DWC_usb31.ltssm_state" \
-    "$USB1.u_udc_DWC_usb31.link_state" \
-    "$USB1.u_udc_DWC_usb31.dev_speed" \
-    "$USB1.u_udc_DWC_usb31.run_stop" \
-    "$USB1.u_udc_DWC_usb31.dalepena" \
-    "$USB1.u_udc_usb2_phy.utmi_linestate"
+    "$IP1.u_udc_DWC_usb31.ltssm_state" \
+    "$IP1.u_udc_DWC_usb31.link_state" \
+    "$IP1.u_udc_DWC_usb31.dev_speed" \
+    "$IP1.u_udc_DWC_usb31.run_stop" \
+    "$IP1.u_udc_DWC_usb31.dalepena" \
+    "$IP1.u_udc_usb2_phy.utmi_linestate"
 
 #=============================================================================
 # 8. Interrupts and error status

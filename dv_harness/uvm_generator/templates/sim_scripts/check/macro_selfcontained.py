@@ -10,7 +10,8 @@ vlogan invocations, and neither inherits the other's preprocessor state.
 
 Anything dv_uvm_all.sv used to get for free -- because MODEL_ALL.v had already
 included dv_uvm_hook.svh, which defines the hierarchy macros -- is now
-undefined:
+undefined (real example from this template's original USB project; the
+macro/file names below are illustrative, not IP_PREFIX-substituted):
 
     usb_seq_launcher.sv, 309: Undefined macro exists as: 'USB_SYS_TOP'
 
@@ -68,16 +69,19 @@ def main():
             return
         rel = os.path.relpath(path, tb).replace(os.sep, '/')
         defined.update(re.findall(r'`define\s+(\w+)', txt))
-        # Block comments too, not just //. usb_seq_launcher.sv documents
-        # `USB_BRINGUP(0) inside a /* */ block; counting that reported a macro
-        # the file does not actually use.
+        # Block comments too, not just //. This template's original USB
+        # project's <ip>_seq_launcher.sv documented `<TARGET_IP>_BRINGUP(0)
+        # inside a /* */ block; counting that reported a macro the file does
+        # not actually use.
         txt = re.sub(r'/\*.*?\*/', '', txt, flags=re.S)
         # A USE OF `X INSIDE `ifdef X IS NOT A MISSING MACRO -- that branch is
         # only compiled when X exists. Both false positives this check ever
-        # produced were this shape: usb_reg_map.sv:102-103 does
-        # `elsif USB_BASE_ADDR / usb0_apb_base = `USB_BASE_ADDR, and
-        # usb_event_bridge.sv:92-93 guards `FRONTMODEL with
-        # `ifdef USB_UVM_BRIDGE_FRONTMODEL. Track the positive guards in scope.
+        # produced (real examples, this template's original USB project) were
+        # this shape: <ip>_reg_map.sv:102-103 did
+        # `elsif <TARGET_IP>_BASE_ADDR / <ip>0_apb_base = `<TARGET_IP>_BASE_ADDR,
+        # and <ip>_event_bridge.sv:92-93 guarded `FRONTMODEL with
+        # `ifdef <TARGET_IP>_UVM_BRIDGE_FRONTMODEL. Track the positive guards
+        # in scope.
         guards = []
         for line in txt.split('\n'):
             code = line.split('//')[0]
@@ -116,7 +120,7 @@ def main():
         # Strip comments first. dv_uvm_all.sv:23 documents the hook with a
         # commented-out `include "dv_uvm_hook.svh"; following it pulled the
         # entire DUT-stage chain in and produced four confident false
-        # positives (SMEMMODEL, FRONTMODEL, SS_VOUT_MODEL, USB_BASE_ADDR).
+        # positives (SMEMMODEL, FRONTMODEL, SS_VOUT_MODEL, <TARGET_IP>_BASE_ADDR).
         code_only = '\n'.join(l.split('//')[0] for l in txt.split('\n'))
         for name in re.findall(r'`include\s+"([^"]+)"', code_only):
             p2 = find(name)

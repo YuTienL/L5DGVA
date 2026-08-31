@@ -1,8 +1,14 @@
 # -----------------------------------------------------------------------------
-# USB IP-level UVM verification environment -- main Makefile
+# Target-IP UVM verification environment -- main Makefile
+#
+# This Makefile is a protocol-agnostic template (originally proven out on a
+# USB project, now generalized -- see TARGET_IP/IP_PREFIX below). It is meant
+# to be the starting point for ANY VIP-based IP-level UVM environment this
+# harness generates: USB, PCIe, Ethernet, MIPI, CAN-FD, AMBA4, etc.
 #
 # Four user-set paths, all required:
-#   VIP_HOME       complete VIP tree, USB + APB + AXI in one delivery
+#   VIP_HOME       complete VIP tree, the target protocol + APB + AXI in one
+#                  delivery
 #   DUT_ROOT_PATH  RTL tree; MACRO MODEL ENV DUMMY_TOP RTLCAT vcs.opt
 #                  must be siblings, or vcs.opt's relative paths break
 #   UVM_ROOT_PATH  this environment: tb/ filelist/ docs/ vplan/
@@ -16,6 +22,27 @@
 # -----------------------------------------------------------------------------
 
 SHELL := /bin/bash
+
+# -----------------------------------------------------------------------------
+# Protocol-target parameterization.
+#
+# TARGET_IP   -- upper-case protocol name (USB, PCIE, ETH, MIPI_CSI, CAN_FD,
+#                AMBA4, ...). Matches the vocabulary of Step 1's "Settle the
+#                target" table in IP_UVM_DV_Gen.md.
+# IP_PREFIX   -- lower-case file/class-name prefix, WITH a trailing
+#                underscore (usb_, pcie_, eth_, ...), same as IP_PREFIX in
+#                that same table.
+# IP_PREFIX_STEM -- IP_PREFIX with the trailing underscore stripped, for the
+#                bare-name cases (a filelist named <ip>.f rather than
+#                <ip>_something).
+#
+# Override on the command line (make TARGET_IP=PCIE IP_PREFIX=pcie_ ...) or
+# in the environment; the defaults below reproduce this template's original
+# USB proving-ground project so the file still runs standalone unmodified.
+# -----------------------------------------------------------------------------
+TARGET_IP      ?= USB
+IP_PREFIX      ?= usb_
+IP_PREFIX_STEM := $(patsubst %_,%,$(IP_PREFIX))
 
 # -----------------------------------------------------------------------------
 # Required environment variables
@@ -90,9 +117,10 @@ export SYNOPSYS_SIM_SETUP
 # --- UVM environment tree, read only during a run ----------------------------
 TBDIR       := $(UVM_ROOT_PATH)/tb
 FILELISTDIR := $(UVM_ROOT_PATH)/filelist
-FILELIST    := $(FILELISTDIR)/usb.f
+FILELIST    := $(FILELISTDIR)/$(IP_PREFIX_STEM).f
 
-# Stimulus data delivered by the USB team: device TRBs and payload files.
+# Stimulus data delivered by the DUT/protocol team: device TRBs and payload
+# files.
 #
 # Deliberately NOT under SIM_ROOT_PATH. That tree is generated and
 # make distclean does rm -rf on it; these files cannot be regenerated.
@@ -180,7 +208,7 @@ export DUT_ROOT_PATH
 PATTERN   ?= smoke
 override PATTERN := $(strip $(PATTERN))
 # the only uvm_test; variation comes from PATTERN
-TEST      ?= usb_base_test
+TEST      ?= $(IP_PREFIX)base_test
 override TEST := $(strip $(TEST))
 SEED      ?= 1
 WAVE      ?= 0
@@ -194,12 +222,13 @@ override VERB := $(strip $(VERB))
 # VERB above is global, and UVM_HIGH globally on this environment produces a
 # log nobody reads. This is the targeted form:
 #
-#   make sim PATTERN=usb20_enumeration VERB_COMP=link
-#   make sim PATTERN=usb20_enumeration VERB_COMP=uvm_test_top.env.usb_host_agent_1.link
+#   make sim PATTERN=<pattern_name> VERB_COMP=link
+#   make sim PATTERN=<pattern_name> VERB_COMP=uvm_test_top.env.$(IP_PREFIX)host_agent_1.link
 #
-# WHY IT EARNS A KNOB. The VIP's link state machine is encrypted --
-# svt_usb_link_20_device_a_sm.svp carries only `extern task device_attached`
-# -- so reading what it decided is not an option. Raising its verbosity makes
+# WHY IT EARNS A KNOB. The VIP's link state machine is often encrypted --
+# e.g. this template's original USB VIP shipped only
+# `extern task device_attached` in its compiled state-machine class -- so
+# reading what it decided is not an option. Raising its verbosity makes
 # it print its own timer names, configured values and waits, and it is a
 # PLUSARG, so it costs one simulation and no rebuild. That is how the 100 ms
 # tattdb was found after three rounds of reasoning about it had failed.
@@ -214,13 +243,13 @@ override VERB_COMP := $(strip $(VERB_COMP))
 
 # Shorthands: link / link1 / phys / mon
 ifeq ($(VERB_COMP),link)
-  override VERB_COMP := uvm_test_top.env.usb_host_agent_0.link
+  override VERB_COMP := uvm_test_top.env.$(IP_PREFIX)host_agent_0.link
 else ifeq ($(VERB_COMP),link1)
-  override VERB_COMP := uvm_test_top.env.usb_host_agent_1.link
+  override VERB_COMP := uvm_test_top.env.$(IP_PREFIX)host_agent_1.link
 else ifeq ($(VERB_COMP),phys)
-  override VERB_COMP := uvm_test_top.env.usb_host_agent_0.phys_lane*
+  override VERB_COMP := uvm_test_top.env.$(IP_PREFIX)host_agent_0.phys_lane*
 else ifeq ($(VERB_COMP),mon)
-  override VERB_COMP := uvm_test_top.env.usb_mon_agent_0.link_mon
+  override VERB_COMP := uvm_test_top.env.$(IP_PREFIX)mon_agent_0.link_mon
 endif
 
 #
@@ -234,14 +263,16 @@ endif
 #
 # It is a RUN TIME plusarg. Changing it costs one simulation, not a rebuild.
 # Some useful landmarks for this DUT, so a bound can be chosen on purpose
-# rather than guessed:
+# rather than guessed (example landmarks below are from this template's
+# original USB proving-ground project -- replace with the current DUT's own
+# measured bring-up landmarks):
 #
-#     ~14 us   USB_STAGE_WRAPPER begins
+#     ~14 us   the stage-wrapper checker begins
 #    ~156 us   phy0_sram_init_done arrives (W7)
-#    ~203 us   PHYCLOCK0 running, USB_CLK_SURVEY runs (W8)
-#    ~313 us   the device chirp attempt
+#    ~203 us   PHYCLOCK0 running, the clock-survey checker runs (W8)
+#    ~313 us   the device's first link-training/attach attempt
 #
-# A truncated run reports Failed on purpose. See usb_base_test.sv, where the
+# A truncated run reports Failed on purpose. See <ip>_base_test.sv, where the
 # reasoning is written out: an environment in which ending early produces a
 # pass has already cost this project two investigations.
 #
@@ -251,8 +282,13 @@ override TOTAL_RUNTIME := $(strip $(TOTAL_RUNTIME))
 #
 # DUT specification variables (rebuild required)
 # ----------------------------------------------
-# SPEED selects what the USB VIP is configured for. It also determines the
-# minimum timescale precision, see the consistency checks below.
+# SPEED selects what the target-IP VIP is configured for. It also determines
+# the minimum timescale precision, see the consistency checks below.
+#
+# The enum values below are this template's original USB proving-ground
+# project's speed/mode set -- adapt them to whatever speed/mode axis
+# TARGET_IP's own VIP actually exposes (a protocol with no such axis, e.g. a
+# pure bus target, can drop this knob entirely):
 #
 #   usb20       USB 2.0 only, HS/FS/LS -- the device is asked for HS, so the
 #               chirp handshake runs
@@ -268,10 +304,14 @@ override SPEED := $(strip $(SPEED))
 
 # Per port speed.
 #
-# The DUT allows this: u_usbtop[1:0] is one array instantiation with one
-# parameter list (SS_VOUT_ALL.v:4992-5003), so the COMPILE TIME configuration
-# of the two ports is necessarily identical, but the speed is a RUN TIME
-# choice made by DCFG.DEVSPD, and each usbtop has its own register block.
+# Real example from this template's original project, kept as a worked
+# illustration of the pattern (re-derive the equivalent facts from the
+# current DUT's own RTL -- do not assume these hierarchical names or
+# addresses carry over): the DUT allowed a per-instance array such as
+# u_<ip>top[1:0], one array instantiation with one parameter list, so the
+# COMPILE TIME configuration of the two ports was necessarily identical, but
+# the speed was a RUN TIME choice made by a per-instance config register, and
+# each instance had its own register block.
 #
 # So SPEED0 and SPEED1 configure the two VIP host agents independently. They
 # default to SPEED, which keeps the common case a single knob.
@@ -280,127 +320,129 @@ override SPEED := $(strip $(SPEED))
 #
 # !! THE PATTERN STILL HAS TO COOPERATE !!
 # A sanity pattern configures ONE port. Driving the two at different speeds
-# needs a pattern that writes both register blocks, through `USB_DCFG(0) and
-# `USB_DCFG(1) rather than a literal.
+# needs a pattern that writes both register blocks, through the per-instance
+# config register macro for instance 0 and instance 1 rather than a literal.
 #
-# Both bases are now known (2026-08-07). ss_vout's apbsplit_rep decodes
-# paddr[23:20] with one nibble per slave, ADDR=64'h9875210, and usb0 is
-# slave 4 (nibble 7) while usb1 is slave 5 (nibble 8):
-#     USB0_BASE = 0x1270_0000     USB1_BASE = 0x1280_0000
-# See tb/env/usb_reg_defs.svh for the derivation and the corroborating
-# sources. Override with USB0_BASE= / USB1_BASE= if that turns out wrong.
+# Follow Step 3's "three independent sources" address-map method (the
+# decoder, the BFM access histogram, then the register doc as corroboration
+# only) to establish IP0_BASE / IP1_BASE for the current DUT -- do not copy
+# the addresses from a prior project. See tb/env/$(IP_PREFIX)reg_defs.svh for
+# the derivation and the corroborating sources once established. Override
+# with IP0_BASE= / IP1_BASE= if that turns out wrong.
 SPEED0    ?= $(SPEED)
 override SPEED0 := $(strip $(SPEED0))
 SPEED1    ?= $(SPEED)
 override SPEED1 := $(strip $(SPEED1))
 
-# Which USB ports to enable. The DUT has two identical usbtop instances.
+# Which target-IP ports to enable. The DUT has two identical instances.
 #   0 | 1 | both
 PORTS     ?= both
 override PORTS := $(strip $(PORTS))
 
-# How long the SuperSpeed PHY is allowed to take to come up.
+# How long the DUT's high-speed SerDes/PHY is allowed to take to come up.
+# (This whole knob only applies to a protocol whose PHY model has a
+# fast/normal simulation-time switch; a protocol without one can drop it.)
 #
-#   fast    +define+DWC_USBC31SSPPHY_SHORT_RESET
+#   fast    +define+<PHY_VENDOR_MACRO>_SHORT_RESET  (protocol/vendor specific)
 #   normal  silicon-accurate timing
 #
-# !! THIS AFFECTS THE USB3 SS PHY ONLY, AND THAT IS NOT A LIMITATION OF THE
-# !! SWITCH -- THERE IS NOTHING ON THE USB 2.0 SIDE TO SWITCH.
-# u_udc_usb31_top holds both PHYs, u_udc_usb31_phy (SS) and u_udc_usb2_phy
-# (2.0), and both are active: the "ERROR in PLL model" that cost an hour came
-# out of the 2.0 one. So the question is fair and the answer was measured
-# rather than assumed. The femtoPHY databook does list simulation-time
-# parameters -- RSVE, FAST_HSCLK, SLOW_HSCLK -- but they belong to that PHY's
-# own standalone test environment and are absent from the model delivered
-# into this SoC. Counted in MACRO/MACRO_ALL.v:
-#     DWC_USBC31SSPPHY_SHORT_RESET   8 ifdef sites
-#     RSVE FAST_HSCLK SLOW_HSCLK     0 ifdef sites each
-#     SIM_TIME_RED SHORT_TIME        0 ifdef sites each
-# A USB 2.0 run therefore takes the time it takes, and PHY_SIM does not
-# change it either way.
+# REAL TRAP, WORTH KEEPING AS A WORKED EXAMPLE (from this template's
+# original USB proving-ground project -- reconfirm every fact below against
+# the CURRENT project's own PHY vendor and databook before relying on it):
 #
-# THE DEFAULT IS fast AND normal IS NOT SIMULATABLE HERE. From the PHY
-# databook (DOC/dwc_usbc31sspphy_tsmc12ffcns/nopassword_ver/
-# dwc_usbc31sspphy_tsmc12ffcns_databook.pdf, section 5.2):
+# !! THAT PROJECT'S SWITCH AFFECTED ITS SUPERSPEED PHY ONLY, AND THAT WAS NOT
+# !! A LIMITATION OF THE SWITCH -- ITS LOWER-SPEED PATH HAD NOTHING TO SWITCH.
+# Its top-level PHY wrapper held two PHY sub-blocks, one per speed grade, and
+# both were active: a real "ERROR in PLL model" that cost an hour came out of
+# the one NOT under discussion. So always confirm which PHY sub-block(s) a
+# timing knob actually affects by measurement, never by assumption. Its PHY
+# vendor's own databook also listed simulation-time parameters intended for
+# that PHY's standalone test environment, which were absent from the model
+# actually delivered into the SoC -- check what is actually wired into your
+# SoC net, not what the databook lists as available in general.
+#
+# THAT PROJECT'S DEFAULT WAS fast BECAUSE normal WAS NOT SIMULATABLE THERE.
+# Its PHY databook stated:
 #
 #   "The maximum time from phy_reset de-assertion to de-assertion of
 #    txX_ack/rxX_ack can be as high as 5ms in fast simulation mode and as
 #    high as 18 ms in normal simulation mode."
 #
-# Runs here end around 300 us. 18 ms is sixty times that, so in normal mode
-# the SuperSpeed link cannot come up no matter what else is right -- which is
-# how it had been built until now, the macro being tested in eight places in
-# the delivered PHY RTL and defined nowhere. Section 7.5 names what is slow:
-# "power-state transitions, receiver-detect, and RX adaptation". Receiver
-# detect is the LTSSM step immediately before Polling.LFPS, which is where
-# the link sits.
+# Its runs ended around 300 us; 18 ms is sixty times that, so in normal mode
+# the link could not come up no matter what else was right. The databook
+# named what is slow: "power-state transitions, receiver-detect, and RX
+# adaptation" -- receiver detect being the link-training step immediately
+# before the polling state, which is where the link sat.
 #
-# 7.5 also says the macro is the RTL route -- "when running RTL simulations
-# using the GTECH model of the PMA", and vcs.opt:3 sets +define+RTL. For
-# gate level it has no meaning and Table 7-4's CR register fields have to be
-# written after EVERY phy_reset de-assertion instead.
-#
-# normal is kept because a timing claim measured in fast mode is not a timing
-# claim. Use it to check something specific, with the run length raised to
-# match, and expect it to be slow.
+# The general lesson: BEFORE trusting a PHY_SIM-style fast/normal knob,
+# measure the actual real-time cost of "normal" against your own run length,
+# using your current PHY vendor's own databook -- a fast-mode-only
+# measurement is not a timing claim, and a knob whose "accurate" setting
+# silently cannot complete inside your run length needs to be flagged, not
+# defaulted to.
 PHY_SIM   ?= fast
 override PHY_SIM := $(strip $(PHY_SIM))
 ifeq ($(filter $(PHY_SIM),fast normal),)
   $(error PHY_SIM=$(PHY_SIM) is not usable. Use fast or normal)
 endif
 
-# How long the VIP holds its SuperSpeed LTSSM in SS.Disabled, in microseconds,
-# before entering Rx.Detect. Sets the VIP's ss_disabled_to_rx_detect_delay.
+# How long the VIP holds its high-speed link-training state machine in its
+# initial "disabled/off" state, in microseconds, before entering its
+# receiver-detect step. (Only applicable to a protocol whose VIP models an
+# explicit link-training state machine with a configurable pre-detect delay;
+# a protocol without one can drop this knob.) Sets the VIP's own
+# disabled-to-receiver-detect delay parameter.
 #
-# WHY THIS IS A KNOB AND NOT A CONSTANT
-# The VIP defaults it to 0, so its LTSSM reaches Rx.Detect at 143 ns while the
-# DUT PHY is not a link partner until its SRAM has loaded -- measured at
-# 171814 ns in usb20_enumeration. The host therefore completes receiver
-# detection against nothing and parks in Polling.LFPS, where it stays, because
-# tPollingLFPSTimeout is 360 ms and no run here is that long.
+# WHY THIS IS A KNOB AND NOT A CONSTANT (real worked example, from this
+# template's original USB proving-ground project -- reconfirm every number
+# below against the current DUT and VIP before relying on it):
+# The VIP defaulted this to 0, so its link-training state machine reached
+# receiver-detect at 143 ns while the DUT PHY was not a link partner until
+# its SRAM had loaded -- measured at 171814 ns in that project's enumeration
+# pattern. The host therefore completed receiver detection against nothing
+# and parked in its polling state, where it stayed, because that state's
+# timeout was 360 ms and no run there was that long.
 #
-# But the right value DEPENDS ON THE PATTERN, which is why it cannot simply be
-# hard coded. The DUT PHY becomes ready at whatever point the pattern reaches
-# its WRAPPER stage, and every pattern has a different preamble:
-# usb20_enumeration runs soc_int.svh plus soc_run.svh first, usb3_enumeration
-# runs only soc_int.svh, and the 23 sanity patterns each carry their own. A value
-# calibrated on one of them is wrong for the others, and wrong in the silent
-# direction -- the VIP starts early, and the log looks exactly like a dead
-# link.
+# But the right value DEPENDS ON THE PATTERN, which is why it cannot simply
+# be hard coded. The DUT PHY becomes ready at whatever point the pattern
+# reaches its own bring-up/wrapper stage, and every pattern has a different
+# preamble. A value calibrated on one pattern is wrong for the others, and
+# wrong in the silent direction -- the VIP starts early, and the log looks
+# exactly like a dead link.
 #
-# So: settable here, and checked at run time. USB_STAGE_WRAPPER compares its
-# own completion time against this value and says so if the VIP has already
-# started. A miscalibration then announces itself instead of being mistaken
-# for the fault it was meant to cure.
+# So: settable here, and checked at run time. A stage-completion checker
+# should compare its own completion time against this value and say so if
+# the VIP has already started. A miscalibration then announces itself
+# instead of being mistaken for the fault it was meant to cure.
 #
-# 400 was calibrated against ONE measured case (171814 ns, above) and it was
-# too short: measured 2026-08-19/20 across several Gen1/Gen2 runs
-# (PHY_SIM=fast), the WRAPPER stage (SRAM init + USB_SS_PIPE_READY +
-# PHYCLOCK0 + PLL probe + clock survey -- the whole preamble, not just the
-# PIPE wait) did not finish until 517.9-518.4 us. USB_STAGE_WRAPPER's own
-# run-time check (usb_stages.svh, "the VIP entered Rx.Detect ... BEFORE this
-# PHY was ready") computed the minimum itself each time: 618. The VIP was
-# parked in Polling.LFPS the whole run, indistinguishable in the log from a
-# dead link, on every one of those runs.
+# In the original project, 400 was calibrated against ONE measured case
+# (171814 ns, above) and it was too short: measured across several
+# high-speed runs (PHY_SIM=fast) with a longer bring-up preamble (SRAM init +
+# PHY-ready handshake + PLL probe + clock survey -- the whole preamble, not
+# just the final wait step), completion did not finish until 517.9-518.4 us.
+# The stage checker's own run-time check ("the VIP entered receiver-detect
+# ... BEFORE this PHY was ready") computed the minimum itself each time: 618.
+# The VIP was parked in its polling state the whole run, indistinguishable in
+# the log from a dead link, on every one of those runs.
 #
-# The default clears that measured minimum with margin. It is STILL a
-# per-pattern value, not a constant -- see "WHY THIS IS A KNOB" above: this
-# session only exercised the Gen1/Gen2 enumeration-class preamble, and a
-# pattern with a longer one (a sanity pattern's own bring-up sequence,
-# `USB_EP_CFG_DEFERRED`, or two SS ports whose bring-up serialises behind one
-# APB bus per CLAUDE.md rule 19) can still need a higher value. Raise it for
-# that pattern; the only cost is simulated time before the link starts. The
-# run-time check names the exact number required when this default is not
-# enough, so a miscalibration announces itself instead of reading as a dead
-# link.
+# The default below clears that measured minimum with margin. It is STILL a
+# per-pattern value, not a constant -- see "WHY THIS IS A KNOB" above: the
+# calibration above only exercised one preamble shape, and a pattern with a
+# longer one (a deferred-config bring-up sequence, or multiple ports whose
+# bring-up serialises behind one shared register bus) can still need a
+# higher value. Raise it for that pattern; the only cost is simulated time
+# before the link starts. The run-time check names the exact number required
+# when this default is not enough, so a miscalibration announces itself
+# instead of reading as a dead link.
 
 # ---------------------------------------------------------------------------
 # RETIRED KNOBS. Setting one of these is now an error rather than a no-op.
 #
 # They passed per-field VIP timing in by +define+, which is a compile-time
 # mechanism and so could not follow a mode only knowable at run time.
-# usb_top_cfg reads GCTL[5:4] out of the DUT and applies the matching field
-# set from DOC/rtl_vip_scaledown_mapping.xls instead.
+# <ip>_top_cfg (the DUT-configuration-reading class, named per IP_PREFIX)
+# reads the DUT's own scale-down control field and applies the matching field
+# set from a vendor-mapping doc instead.
 #
 # The guard exists because silence is the expensive failure here: a script
 # still passing VIP_TUCH_US=2 would build and run and simply ignore it, and
@@ -408,17 +450,21 @@ endif
 # distinguishes a value the operator supplied from this file own default.
 # ---------------------------------------------------------------------------
 RETIRED_VIP_KNOBS := VIP_ATTDB_US VIP_TDRST_US VIP_TUCH_US VIP_TUCHEND_US VIP_TWTREV_US VIP_TWTRSTHS_US VIP_TUCHSUSP_US VIP_SS_ERDY_US VIP_SS_LACT_US VIP_SS_T2SUSP_US VIP_SS_TIMERS
-$(foreach v,$(RETIRED_VIP_KNOBS),  $(if $(filter command\ line environment,$(origin $(v))),    $(error $(v) was retired on 2026-08-11. VIP timing now follows the DUT: usb_top_cfg reads GCTL[5:4] and applies the matching set. The values it used are written to run/<job>/usb_cfg_port<N>.rpt.)))
+$(foreach v,$(RETIRED_VIP_KNOBS),  $(if $(filter command\ line environment,$(origin $(v))),    $(error $(v) was retired on 2026-08-11. VIP timing now follows the DUT: $(IP_PREFIX)top_cfg reads the DUT's scale-down control field and applies the matching set. The values it used are written to run/<job>/$(IP_PREFIX)cfg_port<N>.rpt.)))
 
 # ---------------------------------------------------------------------------
-# USB_SCALED_MODE -- 1 scaled (default), 0 full spec.
+# IP_SCALED_MODE -- 1 scaled (default), 0 full spec. (Named generically here,
+# not $(TARGET_IP)_SCALED_MODE, because a Make variable's own NAME must stay
+# a fixed literal token to remain overridable from the command line -- see
+# the genericization report for this template.)
 #
 # Drives BOTH sides of the scale-down agreement, and that is the whole point:
 #
-#   usb_top_cfg::want_scaled()      build_phase, selects the VIP timing set
-#                                   from rtl_vip_scaledown_mapping.xls
-#   USB_SCALED_MODE_APPLY(port)     soc_int.svh, after GLOBAL_INIT: writes
-#                                   GCTL[5:4] into the DUT and reads it back
+#   <ip>_top_cfg::want_scaled()     build_phase, selects the VIP timing set
+#                                   from the vendor scale-down mapping doc
+#   IP_SCALED_MODE_APPLY(port)      soc_int.svh, after GLOBAL_INIT: writes
+#                                   the scale-down control field into the DUT
+#                                   and reads it back
 #
 # EMITTED UNCONDITIONALLY, even at the default. Both readers fall back to 1 on
 # their own if the plusarg is absent, and two independent defaults is exactly
@@ -426,13 +472,15 @@ $(foreach v,$(RETIRED_VIP_KNOBS),  $(if $(filter command\ line environment,$(ori
 # disagree in silence. Putting it on the command line means neither ever falls
 # back, and the run line records which mode the run was.
 #
-# 1 is the default because every pattern writes SCALEDOWN=2'b11; the one
-# exception, usb2_intin.txt:488, turns it off deliberately partway through and
-# is the reason USB_SCALED_MODE_APPLY reads back rather than assuming.
-USB_SCALED_MODE ?= 1
-override USB_SCALED_MODE := $(strip $(USB_SCALED_MODE))
-ifeq ($(filter $(USB_SCALED_MODE),0 1),)
-  $(error USB_SCALED_MODE must be 0 or 1, got '$(USB_SCALED_MODE)')
+# 1 is the default because, in this template's original USB project, every
+# pattern wrote the scale-down field to its scaled encoding; one exception
+# turned it off deliberately partway through a pattern and is the reason
+# IP_SCALED_MODE_APPLY reads back rather than assuming. Re-verify this
+# default's rationale against the current DUT's own patterns.
+IP_SCALED_MODE ?= 1
+override IP_SCALED_MODE := $(strip $(IP_SCALED_MODE))
+ifeq ($(filter $(IP_SCALED_MODE),0 1),)
+  $(error IP_SCALED_MODE must be 0 or 1, got '$(IP_SCALED_MODE)')
 endif
 
 VIP_RXDET_DELAY_US ?= 700
@@ -445,28 +493,29 @@ override VIP_RXDET_DELAY_US := $(strip $(VIP_RXDET_DELAY_US))
 # single divisor was wrong anyway: the vendor mapping factors range from
 # about 1x to 100000x across the same protocol.
 #
-# usb_top_cfg now applies the SS field set as configuration assignments,
-# selected by GCTL[5:4] read out of the DUT. The distinction those
-# comments made is still true and is kept in usb_scaledown_timers.svh:
+# <ip>_top_cfg now applies the SS field set as configuration assignments,
+# selected by a DUT scale-down control field. The distinction those
+# comments made is still true and is kept in <ip>_scaledown_timers.svh:
 # these are FAILURE DEADLINES, not waits. Shortening them does not make a
 # link train; it makes a failing one report inside a short run.
 SS_TIMER_DEFINES :=
 
 
-# CONNECT is GONE. It gated whether the USB VIP was wired to the DUT at all,
-# and it defaulted to 0 -- a USB testbench whose USB connection was optional
-# and off. The stated reason was "blocked on item A2", whether the SS PHY
-# produces serial waveforms; that was answered on 2026-08-08 (CLAUDE.md trap
-# 1: Rx.Detect and Polling.LFPS observed), so the block had already lapsed.
-# The wiring in dv_uvm_hook.svh and usb_uvm_bind.sv is now unconditional.
+# CONNECT is GONE. It gated whether the target-IP VIP was wired to the DUT at
+# all, and it defaulted to 0 -- a testbench whose protocol connection was
+# optional and off. The stated reason was "blocked on item A2", whether the
+# SS PHY produces serial waveforms; that was answered on 2026-08-08
+# (CLAUDE.md trap 1: Rx.Detect and Polling.LFPS observed), so the block had
+# already lapsed. The wiring in dv_uvm_hook.svh and <ip>_uvm_bind.sv is now
+# unconditional.
 LANE_FLIP ?= 0
 override LANE_FLIP := $(strip $(LANE_FLIP))
 # Type-C plug orientation, per port (0=Normal, 1=Flipped; default 0
 # reproduces the pre-existing hardcoded behavior). Drives BOTH the DUT-side
-# TCA_TCPC write (USB_STAGE_TCA) and the testbench-side lane wiring
-# (usb_uvm_bind.sv's lane_swap_rt) from one value -- see usb_orientation_flip
+# TCA_TCPC write ($(TARGET_IP)_STAGE_TCA) and the testbench-side lane wiring
+# (<ip>_uvm_bind.sv's lane_swap_rt) from one value -- see <ip>_orientation_flip
 # in dv_uvm_hook.svh. Replaces the old global LANE_SWAP (removed 2026-08-20 --
-# usb_uvm_bind.sv no longer reads that plusarg name at all, so it was dead).
+# <ip>_uvm_bind.sv no longer reads that plusarg name at all, so it was dead).
 # LANE_SWAP0/LANE_SWAP1 below remain independent, optional overrides for the
 # testbench wiring ONLY, for a blind debug trial that deliberately desyncs
 # it from the DUT-side write.
@@ -477,13 +526,13 @@ override ORIENTATION1 := $(strip $(ORIENTATION1))
 # Empty by default -- forwarded only if the user actually sets one, so an
 # unset override cannot silently pin the wiring to 0 regardless of
 # ORIENTATION0/1. See lane_swap_rt's LANE_SWAP0/LANE_SWAP1 read in
-# usb_uvm_bind.sv.
+# <ip>_uvm_bind.sv.
 LANE_SWAP0 ?=
 override LANE_SWAP0 := $(strip $(LANE_SWAP0))
 LANE_SWAP1 ?=
 override LANE_SWAP1 := $(strip $(LANE_SWAP1))
 # LANE_FLIP0/LANE_FLIP1: per-port override of LANE_FLIP (found missing by
-# audit workflow w8pin83zg, 2026-08-23 -- lane_flip_rt in usb_uvm_bind.sv was
+# audit workflow w8pin83zg, 2026-08-23 -- lane_flip_rt in <ip>_uvm_bind.sv was
 # a single scalar applied to both ports, so LANE_FLIP=1 to trial-fix one
 # port's suspected mis-wiring silently flipped the other port too). Empty by
 # default, same reasoning as LANE_SWAP0/1 above.
@@ -543,9 +592,10 @@ ifneq ($(call lsf_on,$(LSF_COMPILE)),)
 endif
 
 # -----------------------------------------------------------------------------
-# Timescale. Unconditional, not SPEED-selected: USB0_SPEED/USB1_SPEED are
-# resolved at RUN TIME now (+USB0_SPEED=/+USB1_SPEED=, usb_dev_init.svh),
-# so at compile time there is no way to know whether a Gen2 port will be
+# Timescale. Unconditional, not SPEED-selected: the per-port speed plusargs
+# are resolved at RUN TIME now (+$(TARGET_IP)0_SPEED=/+$(TARGET_IP)1_SPEED=,
+# <ip>_dev_init.svh), so at compile time there is no way to know whether a
+# Gen2 port will be
 # selected. 1ps/100fs is what Gen2's 12.5ps quarter-UI needs and is the only
 # setting that supports every runtime speed choice; still user-overridable
 # via TIMESCALE= on the command line, and the checks below still refuse an
@@ -572,24 +622,31 @@ ifneq ($(CHECK_GOALS)$(if $(MAKECMDGOALS),,x),)
   # VIP_HOME is set by the user, and the obvious choice is wrong. This project
   # needs three protocols in one tree:
   #
-  #   USB   svt_usb_agent          host and monitor agents
-  #   APB   svt_apb_system_env     every register access goes through it
-  #   AXI   svt_axi_system_env     replaces the CPU on ss_cpu_m_*
+  #   <target>   svt_$(IP_PREFIX_STEM)_agent   host and monitor agents (verify
+  #                                            this actual class/file name
+  #                                            against TARGET_IP's real VIP --
+  #                                            it is not guaranteed to equal
+  #                                            IP_PREFIX_STEM for every VIP)
+  #   APB        svt_apb_system_env            every register access goes
+  #                                            through it
+  #   AXI        svt_axi_system_env            replaces the CPU on ss_cpu_m_*
   #
-  # A USB-only VIP delivery contains none of the AMBA sources, and the failure
-  # mode is a wall of unresolved class errors from svt_apb_system_env, several
-  # thousand lines into the vlogan log. Check for it here instead.
+  # A protocol-only VIP delivery contains none of the AMBA sources, and the
+  # failure mode is a wall of unresolved class errors from
+  # svt_apb_system_env, several thousand lines into the vlogan log. Check for
+  # it here instead.
   #
-  # Test with the APB system env, since USB-only trees are the common mistake.
+  # Test with the APB system env, since a protocol-only tree is the common
+  # mistake.
   ifeq ($(wildcard $(VIP_HOME)/src/sverilog/vcs/svt_apb_system_env.sv),)
     $(error VIP_HOME='$(VIP_HOME)' has no AMBA VIP. \
             src/sverilog/vcs/svt_apb_system_env.sv is missing, which means this \
-            is a USB-only delivery. This project needs USB, APB and AXI in one \
-            tree. Point VIP_HOME at the full VIP installation)
+            is a $(TARGET_IP)-only delivery. This project needs $(TARGET_IP), APB \
+            and AXI in one tree. Point VIP_HOME at the full VIP installation)
   endif
-  ifeq ($(wildcard $(VIP_HOME)/src/sverilog/vcs/svt_usb_agent.sv),)
-    $(error VIP_HOME='$(VIP_HOME)' has no USB VIP. \
-            src/sverilog/vcs/svt_usb_agent.sv is missing)
+  ifeq ($(wildcard $(VIP_HOME)/src/sverilog/vcs/svt_$(IP_PREFIX_STEM)_agent.sv),)
+    $(error VIP_HOME='$(VIP_HOME)' has no $(TARGET_IP) VIP. \
+            src/sverilog/vcs/svt_$(IP_PREFIX_STEM)_agent.sv is missing)
   endif
   ifeq ($(wildcard $(VIP_HOME)/src/sverilog/vcs/svt_axi_system_env.sv),)
     $(error VIP_HOME='$(VIP_HOME)' has no AXI VIP. \
@@ -597,6 +654,12 @@ ifneq ($(CHECK_GOALS)$(if $(MAKECMDGOALS),,x),)
   endif
 
   # --- enumerated values ------------------------------------------------------
+  #
+  # The SPEED/SPEED0/SPEED1 enum values below (usb20, usb20fs, gen1, gen2,
+  # ss_capable) are this template's original USB proving-ground project's own
+  # protocol-specific speed/mode set -- see the SPEED variable comment above.
+  # Replace them with TARGET_IP's own speed/mode axis, or drop this whole
+  # enumerated-values block for a protocol with none.
   ifeq ($(filter $(SPEED),usb20 usb20fs gen1 gen2 ss_capable),)
     $(error SPEED='$(SPEED)' is invalid. Use usb20, usb20fs, gen1, gen2 or ss_capable)
   endif
@@ -607,11 +670,15 @@ ifneq ($(CHECK_GOALS)$(if $(MAKECMDGOALS),,x),)
     $(error SPEED1='$(SPEED1)' is invalid. Use usb20, usb20fs, gen1, gen2 or ss_capable)
   endif
 
-  # There is no such thing as USB Gen3. DWC_usb31 tops out at Gen2x2, which is
-  # USB 3.2 dual lane. Gen3 is USB4 terminology and this IP does not implement
-  # it. Catching the word here saves a confusing search through the VIP.
+  # Real worked example, kept verbatim in spirit: this template's original
+  # project had no such thing as USB Gen3 -- its DUT topped out at Gen2x2
+  # (USB 3.2 dual lane), and Gen3 is USB4 terminology that IP did not
+  # implement. Catching the word here saved a confusing search through the
+  # VIP. The general lesson: guard against enum values that are adjacent-
+  # sounding but belong to a DIFFERENT, unimplemented protocol generation --
+  # re-derive the equivalent invalid-value list for TARGET_IP's own VIP.
   ifneq ($(filter gen3 gen4 usb4,$(SPEED) $(SPEED0) $(SPEED1)),)
-    $(error There is no USB Gen3. DWC_usb31 supports Gen1 and Gen2, and Gen2x2             for dual lane. Gen3 belongs to USB4, a different protocol that this             IP does not implement. udc_DWC_usb31_params.svh confirms             EN_USB30_ONLY=0 and SSPHY_INTERFACE_NUM_PIPE=2)
+    $(error There is no USB Gen3 in this template's original project. DWC_usb31             supports Gen1 and Gen2, and Gen2x2 for dual lane. Gen3 belongs to             USB4, a different protocol that IP did not implement. Re-check this             guard's validity for the current TARGET_IP/DUT)
   endif
 
   # The timescale has to satisfy the FASTER of the two ports, because it is a
@@ -664,7 +731,7 @@ ifneq ($(CHECK_GOALS)$(if $(MAKECMDGOALS),,x),)
   # --- pattern exists ---------------------------------------------------------
   # One suite per directory, and the directory comes from the REGISTRY
   # (tb/patterns/pattern_list.txt), not a hardcoded list. MEASURED
-  # 2026-08-22: after the directory taxonomy migration (basic/sanity/usb ->
+  # 2026-08-22: after the directory taxonomy migration (basic/sanity/<protocol> ->
   # infra/enumeration/speed/link/power/performance/transfer/uvc/rate_switch/
   # user_define), this exact wildcard search -- still only checking the
   # three old names -- rejected every single PATTERN= outright with no job
@@ -691,7 +758,7 @@ ifneq ($(CHECK_GOALS)$(if $(MAKECMDGOALS),,x),)
 
   # --- the four roots must be set and must look right -------------------------
   ifeq ($(strip $(UVM_ROOT_PATH)),)
-    $(error UVM_ROOT_PATH is not set. Point it at the UVM environment tree,             the directory that holds tb/ filelist/ docs/ and vplan/:             make compile UVM_ROOT_PATH=/proj/.../usb_uvm)
+    $(error UVM_ROOT_PATH is not set. Point it at the UVM environment tree,             the directory that holds tb/ filelist/ docs/ and vplan/:             make compile UVM_ROOT_PATH=/proj/.../$(IP_PREFIX_STEM)_uvm)
   endif
   ifeq ($(strip $(DUT_ROOT_PATH)),)
     $(error DUT_ROOT_PATH is not set. Point it at the RTL tree, the directory             that holds MACRO MODEL ENV DUMMY_TOP RTLCAT and vcs.opt side by             side: make compile DUT_ROOT_PATH=/proj/.../lan063)
@@ -741,7 +808,7 @@ ifneq ($(CHECK_GOALS)$(if $(MAKECMDGOALS),,x),)
       $(if $(wildcard $(TBDIR)/$(d)/*),,tb/$(d))))
 
   ifneq ($(TREE_MISSING),)
-    $(error Incomplete tree. Missing or empty: $(TREE_MISSING).             VIP_HOME=$(VIP_HOME)  UVM_ROOT_PATH=$(UVM_ROOT_PATH).             VIP_HOME must be the COMPLETE VIP tree with include/ src/ lib/;             a USB-only delivery leaves the APB and AXI classes undefined)
+    $(error Incomplete tree. Missing or empty: $(TREE_MISSING).             VIP_HOME=$(VIP_HOME)  UVM_ROOT_PATH=$(UVM_ROOT_PATH).             VIP_HOME must be the COMPLETE VIP tree with include/ src/ lib/;             a $(TARGET_IP)-only delivery leaves the APB and AXI classes undefined)
   endif
 
   # The helper scripts, checked only when a goal actually needs them -- their
@@ -766,15 +833,16 @@ ifneq ($(CHECK_GOALS)$(if $(MAKECMDGOALS),,x),)
   # forever -- and a warning that always fires is one nobody reads, which is
   # exactly how the silent-zero-TRB failure below gets missed when it is real.
   ifneq ($(strip $(HEX_DIR)),)
-  ifeq ($(wildcard $(HEX_DIR)/USB_TRB),)
+  ifeq ($(wildcard $(HEX_DIR)/$(TARGET_IP)_TRB),)
     $(warning ---------------------------------------------------------------)
     $(warning HEX_DIR = $(HEX_DIR))
-    $(warning USB_TRB not found below it.)
+    $(warning $(TARGET_IP)_TRB not found below it.)
     $(warning )
-    $(warning Patterns that arm a device transfer read their TRBs from there.)
-    $(warning Without it USB_TRB_ARM_IN and USB_TRB_LOAD load nothing and the)
-    $(warning device transfers with whatever was already in memory, which)
-    $(warning usually still passes. See docs/dut-request.md section D.)
+    $(warning Patterns that arm a device transfer read their transfer)
+    $(warning descriptors from there. Without it, the descriptor-arm/load)
+    $(warning tasks load nothing and the device transfers with whatever was)
+    $(warning already in memory, which usually still passes. See)
+    $(warning docs/dut-request.md section D.)
     $(warning )
     $(warning If the stimulus data is genuinely no longer needed, say so with)
     $(warning HEX_DIR= and this stops being reported.)
@@ -849,9 +917,12 @@ VIP_WIDTHS := +define+SVT_APB_PWDATA_WIDTH=32 \
 # $(VIP_WIDTHS) immediately, so a later definition silently yields nothing.
 # --- sim_build_options ---
 # The intersection of the three examples, plus this project's adjustments:
-#   usb basic_sys : +define+UVM_DISABLE_AUTO_ITEM_RECORDING
+#   <target> basic_sys : +define+UVM_DISABLE_AUTO_ITEM_RECORDING
 #                   +define+UVM_PACKER_MAX_BYTES=24000
-#                   +define+SVT_USB_INCLUDE_SSIC   <- not set here, this DUT has no SSIC
+#                   +define+SVT_USB_INCLUDE_SSIC   <- example VIP-specific
+#                   compile-time feature switch (not set here, this DUT has
+#                   no SSIC); TARGET_IP's own VIP will have its own such
+#                   switches, if any -- check the VIP's example Makefile
 #   axi/apb       : (their system envs arrive through modellist)
 SIM_BUILD_OPTS := +define+SVT \
                   +define+SVT_UVM_TECHNOLOGY \
@@ -875,21 +946,21 @@ DEFINES := +define+DV_UVM
 # dv_uvm_all.sv pins its own `timescale unconditionally to 1ps/100fs (it
 # DECLARES ITS OWN and so ignores -timescale=) -- no SPEED-keyed +define+
 # needed to select it any more. See the header comment there for why: with
-# USB0_SPEED/USB1_SPEED resolved at run time, compile time cannot know
+# the per-port speed plusargs resolved at run time, compile time cannot know
 # whether a Gen2 port will be selected, so the file always builds at the
 # precision Gen2 needs.
 
 # -----------------------------------------------------------------------------
 # Speed selection. Must agree with the timescale check above and with the
-# speed block in tb/top/usb_uvm_bind.sv.
+# speed block in tb/top/<ip>_uvm_bind.sv.
 # -----------------------------------------------------------------------------
 DMA_MON ?= 1
 override DMA_MON := $(strip $(DMA_MON))
 ifeq ($(DMA_MON),1)
-  DEFINES += +define+USB_UVM_DMA_MON
+  DEFINES += +define+$(TARGET_IP)_UVM_DMA_MON
 endif
 
-# P3 checker (usb_dma_evt_axi_checker.sv): evt_count_r advances with no
+# P3 checker (<ip>_dma_evt_axi_checker.sv): evt_count_r advances with no
 # corresponding AXI write ever appearing. DEFAULT OFF, unlike DMA_MON above:
 # its evt_count_r hierarchical path was re-derived from RTL source text and
 # has not yet been fsdbreport-confirmed against a live simv -- see that
@@ -897,27 +968,27 @@ endif
 EVT_AXI_CHECK ?= 0
 override EVT_AXI_CHECK := $(strip $(EVT_AXI_CHECK))
 ifeq ($(EVT_AXI_CHECK),1)
-  DEFINES += +define+USB_UVM_DMA_EVT_AXI_CHECK
+  DEFINES += +define+$(TARGET_IP)_UVM_DMA_EVT_AXI_CHECK
 endif
 
 # ORIENTATION0/ORIENTATION1/LANE_FLIP are RUN_FLAGS (run time plusargs, no
 # rebuild) -- see the block next to AXI_FORCE below and
-# lane_swap_rt/lane_flip_rt in usb_uvm_bind.sv.
+# lane_swap_rt/lane_flip_rt in <ip>_uvm_bind.sv.
 
-# DUT specification, consumed by usb_base_test to configure the VIP.
+# DUT specification, consumed by <ip>_base_test to configure the VIP.
 #
-# USB0_SPEED_*/USB1_SPEED_*/USB_PORT0_ONLY/USB_PORT1_ONLY/USB_SPEED_* are
-# GONE from here: SPEED0/SPEED1/PORTS are now forwarded as run time
-# plusargs (+USB0_SPEED=/+USB1_SPEED=/+USB_PORTS=, near USB0_BASE_RT below)
-# and resolved independently by each consumer (usb_ep_check.sv
-# build_speed(), usb_dev_init.svh's usb0_speed_rt/usb1_speed_rt,
-# usb_stages.svh's usb_ports_rt, usb_top_cfg.sv, usb_vip_seq_dispatch.svh's
-# usb_soak_apply(), usb_ep_suite.txt's isochronous family selection) via
-# $value$plusargs -- no rebuild to try a different per-port speed or port
-# combination. The last two were the final consumers of the bare
-# +define+USB_SPEED_$(SPEED); once they moved to the plusarg, nothing read
-# the define, so it is removed rather than left as dead flags on every
-# vlogan/vcs command line.
+# IP0_SPEED_*/IP1_SPEED_*/<TARGET_IP>_PORT0_ONLY/<TARGET_IP>_PORT1_ONLY/
+# <TARGET_IP>_SPEED_* are GONE from here: SPEED0/SPEED1/PORTS are now
+# forwarded as run time plusargs (+$(TARGET_IP)0_SPEED=/+$(TARGET_IP)1_SPEED=/
+# +$(TARGET_IP)_PORTS=, near IP0_BASE_RT below) and resolved independently
+# by each consumer (<ip>_ep_check.sv build_speed(), <ip>_dev_init.svh's
+# <ip>0_speed_rt/<ip>1_speed_rt, <ip>_stages.svh's <ip>_ports_rt,
+# <ip>_top_cfg.sv, <ip>_vip_seq_dispatch.svh's <ip>_soak_apply(),
+# <ip>_ep_suite.txt's isochronous family selection) via $value$plusargs --
+# no rebuild to try a different per-port speed or port combination. The
+# last two were the final consumers of the bare +define+<TARGET_IP>_SPEED_$(SPEED);
+# once they moved to the plusarg, nothing read the define, so it is removed
+# rather than left as dead flags on every vlogan/vcs command line.
 
 # HS_WINDOW_US -- force the DUT's hs_handshake_time to this many microseconds.
 #
@@ -929,12 +1000,12 @@ endif
 # and the VIP even starts a tdchbit_timer with it). Three K-J pairs is 24.7 us
 # and the scaled window is 10 us, so the handshake cannot complete and the
 # device falls back to Full Speed. There is no register that widens the window
-# -- see the block comment on USB_HS_WINDOW_FORCE in usb_stages.svh for the
-# two inputs and why neither helps.
+# -- see the block comment on $(TARGET_IP)_HS_WINDOW_FORCE in <ip>_stages.svh
+# for the two inputs and why neither helps.
 #
-# RUN TIME, NOT A +define+: usb_stages.svh resolves +HS_WINDOW_US once via
+# RUN TIME, NOT A +define+: <ip>_stages.svh resolves +HS_WINDOW_US once via
 # $value$plusargs (module-scope storage, because `force`'s right-hand side
-# must be static) and usb_scaledown_timers.svh reads the same plusarg
+# must be static) and <ip>_scaledown_timers.svh reads the same plusarg
 # independently for the VIP's twtfs -- its model of the same DUT timer -- so
 # no rebuild is needed to change or disable it. Setting one side without the
 # other puts the two back out of step, which is the class of defect this
@@ -943,21 +1014,34 @@ endif
 #
 # 40 us is the smallest round value that fits 3 pairs at 4.12 us plus the
 # measured 4.85 us twtdch, with margin. Forwarded to RUN_FLAGS below, near
-# USB0_BASE_RT -- RUN_FLAGS is `:=` and is not defined yet at this point in
+# IP0_BASE_RT -- RUN_FLAGS is `:=` and is not defined yet at this point in
 # the file.
 HS_WINDOW_US ?= 0
 override HS_WINDOW_US := $(strip $(HS_WINDOW_US))
 
 # PHY_SIM. Two defines, and they are not interchangeable.
 #
+# EVERYTHING INSIDE THIS ifeq/else BLOCK IS A REAL, VERBATIM WORKED EXAMPLE
+# FROM THIS TEMPLATE'S ORIGINAL USB PROVING-GROUND PROJECT, kept as a
+# reference for the CLASS of PHY-vendor-macro investigation it documents
+# (mismatched reference-clock defines, undefined macros silently reaching
+# vlogan as empty values, a submission-path shell-quoting trap). The
+# specific macro names (DWC_USBC31SSPPHY_*) are that project's own PHY
+# vendor's RTL macros and will NOT apply to a different TARGET_IP/PHY --
+# replace this whole block with the equivalent investigation for the
+# current DUT's own PHY vendor and databook; do not carry these exact
+# defines into a non-USB environment.
+#
 #   DWC_USBC31SSPPHY_SHORT_RESET  the PHY RTL's own macro. Goes to stage 1b,
 #                                 which is where the PHY is analysed.
-#   USB_UVM_PHY_SIM_FAST/_NORMAL  informational only now -- usb_top_cfg.sv and
-#                                 soc_int.svh `ifdef on them to print which
-#                                 mode the build was made for. usb_stages.svh
-#                                 no longer ifdefs on either name: its own
-#                                 poll bounds (USB_SRAM_INIT_TRIES,
-#                                 USB_TCA_ACK_TRIES, USB_SS_PIPE_READY_US) are
+#   $(TARGET_IP)_UVM_PHY_SIM_FAST/_NORMAL  informational only now --
+#                                 <ip>_top_cfg.sv and soc_int.svh `ifdef on
+#                                 them to print which mode the build was made
+#                                 for. <ip>_stages.svh no longer ifdefs on
+#                                 either name: its own poll bounds
+#                                 ($(TARGET_IP)_SRAM_INIT_TRIES,
+#                                 $(TARGET_IP)_TCA_ACK_TRIES,
+#                                 $(TARGET_IP)_SS_PIPE_READY_US) are
 #                                 +PHY_SIM_TRIES/+PHY_SIM_READY_US run time
 #                                 plusargs, default to the FAST figures, and
 #                                 do NOT follow this switch by themselves.
@@ -1013,8 +1097,9 @@ ifeq ($(PHY_SIM),fast)
   # path) vlogan invocation as an empty value (log/analyze_dut.log's own
   # echo showed "+define+DWC_USBC31SSPPHY_RANDOM= \" with nothing after the
   # "="). The apostrophe in 1'b0 is suspected (not confirmed) to be
-  # interpreted as an unmatched shell quote somewhere in usbrun.sh's actual
-  # submission path, which the dry-run does not reproduce. Using a BARE
+  # interpreted as an unmatched shell quote somewhere in the DUT's build
+  # entry point's actual submission path (this template's own equivalent is
+  # ip_run.sh), which the dry-run does not reproduce. Using a BARE
   # DECIMAL LITERAL instead avoids every special character tried so far
   # ($, \, '). This makes the synchronizer's metastability injection
   # deterministic (always 0) rather than genuinely random -- a real loss of
@@ -1028,31 +1113,31 @@ ifeq ($(PHY_SIM),fast)
   DEFINES += +define+DWC_USBC31SSPPHY_RANDOM_SEED=1
   DEFINES += +define+DWC_USBC31SSPPHY_REF_20M
   DEFINES += +define+DWC_FW_FAST_SIM
-  DEFINES += +define+USB_UVM_PHY_SIM_FAST
+  DEFINES += +define+$(TARGET_IP)_UVM_PHY_SIM_FAST
 else
-  DEFINES += +define+USB_UVM_PHY_SIM_NORMAL
-  $(info [cfg] PHY_SIM=normal: usb_stages.svh's poll bounds are run time \
+  DEFINES += +define+$(TARGET_IP)_UVM_PHY_SIM_NORMAL
+  $(info [cfg] PHY_SIM=normal: <ip>_stages.svh's poll bounds are run time \
 plusargs now and default to the FAST figures regardless of this switch -- add \
 PLUSARGS="+PHY_SIM_TRIES=25000 +PHY_SIM_READY_US=22000" or the testbench will \
 time out waiting on a PHY that was not sped up.)
 endif
 
 # One define, read by two files that are analysed in different stages:
-# usb_top_cfg.sv sets the VIP's ss_disabled_to_rx_detect_delay from it (stage
-# 1c) and usb_stages.svh checks the DUT against it (stage 1b, through the
+# <ip>_top_cfg.sv sets the VIP's ss_disabled_to_rx_detect_delay from it (stage
+# 1c) and <ip>_stages.svh checks the DUT against it (stage 1b, through the
 # dv_uvm_hook.svh chain). A +define+ is what reaches both -- a `define in
 # either file would not, because a vlogan invocation does not inherit another
 # one's preprocessor state.
-# The USB 2.0 attach/reset/chirp and SS LTSSM knobs were removed here on
-# 2026-08-11. They were per-field guesses passed in by +define+, which is
-# a COMPILE TIME mechanism and therefore could not follow a mode that is
-# only knowable at run time. usb_top_cfg now reads GCTL[5:4] out of the
-# DUT and applies the matching field set from rtl_vip_scaledown_mapping.
-# Measured cost of the guessing they replaced: VIP_TUCH_US was 100 us
-# against a mapping value of 300 ns.
-DEFINES += +define+USB_UVM_RXDET_DELAY_US=$(VIP_RXDET_DELAY_US)
+# This template's original USB 2.0 attach/reset/chirp and SS LTSSM knobs were
+# removed here on 2026-08-11. They were per-field guesses passed in by
+# +define+, which is a COMPILE TIME mechanism and therefore could not follow
+# a mode that is only knowable at run time. <ip>_top_cfg now reads the DUT's
+# scale-down control field and applies the matching field set from a vendor
+# scale-down mapping doc. Measured cost of the guessing they replaced:
+# VIP_TUCH_US was 100 us against a mapping value of 300 ns.
+DEFINES += +define+$(TARGET_IP)_UVM_RXDET_DELAY_US=$(VIP_RXDET_DELAY_US)
 
-# Read by usb_top_cfg.sv (stage 1c) and printed in the [cfg] banner by
+# Read by <ip>_top_cfg.sv (stage 1c) and printed in the [cfg] banner by
 # soc_int.svh (stage 1b), so it has to be a +define+ for the same reason.
 
 # The SuperSpeed set, overriding the VIP's own `SVT_REPLACEABLE_DEFINE values.
@@ -1090,12 +1175,18 @@ SOC_DEFINES := +define+RTL +define+GSIAPB +define+MISC_NOCHECK
 
 # -----------------------------------------------------------------------------
 # Register base addresses. Compile-time defines, overridable at run time.
-#   USB0 0x1270_0000   USB1 0x1280_0000   (apbsplit_rep nibble 7 and 8)
+#   IP0 0x1270_0000   IP1 0x1280_0000   (apbsplit_rep nibble 7 and 8, this
+#   template's original project's real example -- re-derive per Step 3's
+#   three-independent-source address-map method for the current DUT)
+#
+# (Named IP0_BASE/IP1_BASE, not $(TARGET_IP)0_BASE/..., because a Make
+# variable's own NAME must stay a fixed literal token to remain overridable
+# from the command line -- see the genericization report.)
 # -----------------------------------------------------------------------------
-USB0_BASE ?=
-override USB0_BASE := $(strip $(USB0_BASE))
-USB1_BASE ?=
-override USB1_BASE := $(strip $(USB1_BASE))
+IP0_BASE ?=
+override IP0_BASE := $(strip $(IP0_BASE))
+IP1_BASE ?=
+override IP1_BASE := $(strip $(IP1_BASE))
 GTOP_BASE ?=
 override GTOP_BASE := $(strip $(GTOP_BASE))
 
@@ -1103,11 +1194,11 @@ override GTOP_BASE := $(strip $(GTOP_BASE))
 # shell as a literal quote, which is what VCS needs to see.
 sv_hex = $(if $(filter 0x%,$(1)),32\'h$(patsubst 0x%,%,$(1)),$(1))
 
-ifneq ($(USB0_BASE),)
-  DEFINES += +define+USB0_BASE_ADDR=$(call sv_hex,$(USB0_BASE))
+ifneq ($(IP0_BASE),)
+  DEFINES += +define+$(TARGET_IP)0_BASE_ADDR=$(call sv_hex,$(IP0_BASE))
 endif
-ifneq ($(USB1_BASE),)
-  DEFINES += +define+USB1_BASE_ADDR=$(call sv_hex,$(USB1_BASE))
+ifneq ($(IP1_BASE),)
+  DEFINES += +define+$(TARGET_IP)1_BASE_ADDR=$(call sv_hex,$(IP1_BASE))
 endif
 ifneq ($(GTOP_BASE),)
   DEFINES += +define+GTOP_BASE_ADDR=$(call sv_hex,$(GTOP_BASE))
@@ -1117,12 +1208,12 @@ endif
 # Synopsys Protocol Analyzer, run-time gate. Needs VERDI_HOME (checked once,
 # unconditionally, below -- see "debug-access capability, always built in").
 #
-# PA=1 at `make run` time passes +usb_pa (PA_RUN_OPTS below); PA=0 (default)
-# omits it. usb_top_cfg.sv:835 returns early unless +usb_pa is present, so
-# this alone decides whether the USB VIP records -- APB/AXI record
-# unconditionally regardless (usb_apb_cfg.sv:67, usb_axi_cfg.sv:96,
-# enable_xml_gen=1 with no gate), which is a VIP-side asymmetry, not this
-# variable's doing.
+# PA=1 at `make run` time passes +$(IP_PREFIX)pa (PA_RUN_OPTS below); PA=0
+# (default) omits it. <ip>_top_cfg.sv:835 returns early unless +$(IP_PREFIX)pa
+# is present, so this alone decides whether the target-IP VIP records --
+# APB/AXI record unconditionally regardless (<ip>_apb_cfg.sv:67,
+# <ip>_axi_cfg.sv:96, enable_xml_gen=1 with no gate), which is a VIP-side
+# asymmetry, not this variable's doing.
 # -----------------------------------------------------------------------------
 PA ?= 0
 override PA := $(strip $(PA))
@@ -1133,11 +1224,13 @@ override PA := $(strip $(PA))
 #
 #   VIP_REPORT  text traffic reports from each VIP at end of test.
 #               AXI enable_reporting + display_perf_summary_report,
-#               USB enable_prot/link_reporting.
-#               USB's are int levels, not flags: 1 reports the top-level
-#               transaction, >1 adds the object's implementation contents,
-#               which floods a regression log.
-#               RUN TIME ONLY (usb_vip_report_rt(), usb_top_cfg.sv), default
+#               the target-IP VIP's enable_prot/link_reporting.
+#               The target-IP VIP's are int levels, not flags (this was true
+#               for this template's original USB VIP; verify for TARGET_IP's
+#               own VIP): 1 reports the top-level transaction, >1 adds the
+#               object's implementation contents, which floods a regression
+#               log.
+#               RUN TIME ONLY (<ip>_vip_report_rt(), <ip>_top_cfg.sv), default
 #               ON -- VIP_REPORT=0 adds +vip_report_off to RUN_FLAGS below and
 #               costs no rebuild.
 #   VIP_PA      PA / transaction record generation inside the VIPs. Independent
@@ -1145,7 +1238,7 @@ override PA := $(strip $(PA))
 #               whether the VIPs emit records at all.
 #   VIP_STATUS  end-of-test status and performance summaries read from the
 #               VIPs' own status objects.
-#               RUN TIME ONLY (usb_vip_status_rt(), usb_top_cfg.sv), default
+#               RUN TIME ONLY (<ip>_vip_status_rt(), <ip>_top_cfg.sv), default
 #               ON -- VIP_STATUS=0 adds +vip_status_off to RUN_FLAGS below and
 #               costs no rebuild.
 #
@@ -1158,30 +1251,32 @@ override VIP_REPORT := $(strip $(VIP_REPORT))
 override VIP_PA     := $(strip $(VIP_PA))
 override VIP_STATUS := $(strip $(VIP_STATUS))
 
-# PA detail per USB layer, see usb_top_cfg.sv::set_pa_gen.
+# PA detail per protocol layer, see <ip>_top_cfg.sv::set_pa_gen.
 #   prot 0 off, 1 transfers, 2 transfers and transactions
 #   link 0 off, 1 packets, 2 plus link commands, 3 plus symbol sets, 4 plus LTSSM
 #   phys 0 off, 1 LFPS signalling
 #   payload 0 off, 1 the transferred bytes
 #
-# PA_PAYLOAD is new. enable_payload_pa_gen (svt_usb_agent_configuration.sv:722)
-# was never set by this environment because it is not in the VIP example the
-# other three came from. For a DEVICE DUT it is the most informative of the
-# four: it is the stream that says whether a descriptor actually came back.
+# PA_PAYLOAD is new. enable_payload_pa_gen (svt_<protocol>_agent_configuration.sv:722,
+# real example: svt_usb_agent_configuration.sv in this template's original
+# project) was never set by this environment because it is not in the VIP
+# example the other three came from. For a DEVICE DUT it is the most
+# informative of the four: it is the stream that says whether a descriptor
+# actually came back.
 PA_PROT    ?= 2
 PA_LINK    ?= 1
 PA_PHYS    ?= 0
 PA_PAYLOAD ?= 1
 
 ifeq ($(VIP_PA),1)
-  DEFINES += +define+USB_UVM_PA_PROT=$(strip $(PA_PROT))
-  DEFINES += +define+USB_UVM_PA_LINK=$(strip $(PA_LINK))
-  DEFINES += +define+USB_UVM_PA_PHYS=$(strip $(PA_PHYS))
-  DEFINES += +define+USB_UVM_PA_PAYLOAD=$(strip $(PA_PAYLOAD))
+  DEFINES += +define+$(TARGET_IP)_UVM_PA_PROT=$(strip $(PA_PROT))
+  DEFINES += +define+$(TARGET_IP)_UVM_PA_LINK=$(strip $(PA_LINK))
+  DEFINES += +define+$(TARGET_IP)_UVM_PA_PHYS=$(strip $(PA_PHYS))
+  DEFINES += +define+$(TARGET_IP)_UVM_PA_PAYLOAD=$(strip $(PA_PAYLOAD))
 endif
 # VIP_REPORT and VIP_STATUS no longer add a DEFINES+= here -- both consumer
-# sites read a runtime plusarg instead (usb_top_cfg.sv), set from RUN_FLAGS
-# near USB0_BASE_RT below.
+# sites read a runtime plusarg instead (<ip>_top_cfg.sv), set from RUN_FLAGS
+# near IP0_BASE_RT below.
 
 # -----------------------------------------------------------------------------
 # Debug-access capability (FSDB + Protocol Analyzer PLI), always built in.
@@ -1190,8 +1285,8 @@ endif
 # set, so switching either forced a full rebuild (FLAGSIG mismatch -- measured
 # cost 15-25 min). Both are actually decided at RUN time already: wave.txt's
 # every choice (+fsdb_off/+fsdb_full/+fsdb_file/+fsdb_start/+fsdb_stop) is a
-# plusarg, never an `ifdef, and PA_RUN_OPTS below is +usb_pa, also a plusarg
-# (usb_top_cfg.sv:835 reads it at run time). The compile-time half was the
+# plusarg, never an `ifdef, and PA_RUN_OPTS below is +$(IP_PREFIX)pa, also a
+# plusarg (<ip>_top_cfg.sv:835 reads it at run time). The compile-time half was the
 # only part still keyed off WAVE/PA -- so build it in unconditionally, once,
 # and let every `make run` choose WAVE=/PA= freely against the same simv.
 #
@@ -1243,12 +1338,12 @@ else
   DEBUG_ACCESS :=
 endif
 
-# +usb_pa is the RUN time gate usb_top_cfg.sv:835 reads (PA=1 at `make run`,
-# independent of whether this build has the capability compiled in at all --
-# see the VERDI_HOME degrade case above, which leaves PA_OPTIONS empty and
-# makes this plusarg a no-op rather than a crash).
+# +$(IP_PREFIX)pa is the RUN time gate <ip>_top_cfg.sv:835 reads (PA=1 at
+# `make run`, independent of whether this build has the capability compiled
+# in at all -- see the VERDI_HOME degrade case above, which leaves PA_OPTIONS
+# empty and makes this plusarg a no-op rather than a crash).
 ifeq ($(PA),1)
-  PA_RUN_OPTS := +svt_enable_pa=fsdb +usb_pa
+  PA_RUN_OPTS := +svt_enable_pa=fsdb +$(IP_PREFIX)pa
 else
   PA_RUN_OPTS :=
 endif
@@ -1276,12 +1371,14 @@ CM_DIR   := $(COVDIR)/simv.vdb
 
 # -----------------------------------------------------------------------------
 # Coverage scope, written to cov_hier.cfg as +tree/-tree lines applied in
-# order. Default instruments the subsystem holding both usbtop instances
-# and carves out the two vendor PHYs.
+# order. Default instruments the subsystem holding both target-IP instances
+# and carves out the two vendor PHYs (real example hierarchy below is this
+# template's original USB project -- re-derive the equivalent instance paths
+# from the current DUT's own RTL).
 # -----------------------------------------------------------------------------
 COV_SCOPE   ?= $(TOPMOD).u_lan063.u_ss_vout
-COV_EXCLUDE ?= $(TOPMOD).u_lan063.u_ss_vout.u_usbtop*.u_udc_usb31_top.u_udc_usb31_phy \
-               $(TOPMOD).u_lan063.u_ss_vout.u_usbtop*.u_udc_usb31_top.u_udc_usb2_phy
+COV_EXCLUDE ?= $(TOPMOD).u_lan063.u_ss_vout.u_$(IP_PREFIX_STEM)top*.u_udc_usb31_top.u_udc_usb31_phy \
+               $(TOPMOD).u_lan063.u_ss_vout.u_$(IP_PREFIX_STEM)top*.u_udc_usb31_top.u_udc_usb2_phy
 
 ifeq ($(COV),1)
   COV_ELAB := -cm $(CM_OPTS) $(CM_EXTRA) -cm_dir $(CM_DIR) -cm_hier $(SIM_ROOT_PATH)/cov_hier.cfg
@@ -1309,30 +1406,31 @@ endif
 
 # !! Functional coverage is enabled BY DEFAULT in VCS !!
 #
-# The covergroups inside the USB, APB and AXI VIPs collect data whether or not
-# this project asks for them, and they are not free. So FCOV=0 has to switch
-# them off explicitly at run time, per "Recommended Coverage Settings for a New
-# Project" section 1.4:
+# The covergroups inside the target-IP, APB and AXI VIPs collect data whether
+# or not this project asks for them, and they are not free. So FCOV=0 has to
+# switch them off explicitly at run time, per "Recommended Coverage Settings
+# for a New Project" section 1.4:
 #
 #   simv -covg_disable_cg   disables covergroup coverage
 #   simv -assert nocovdb    disables cover property coverage
 #
-# FCOV=1 sets a define that tb/tests/usb_base_test.sv reads to call
-# usb_top_cfg::enable_check_coverage(), and asks for the faster immediate
+# FCOV=1 sets a define that tb/tests/<ip>_base_test.sv reads to call
+# <ip>_top_cfg::enable_check_coverage(), and asks for the faster immediate
 # assertion implementation.
 #
 # WHAT FCOV=1 ACTUALLY BUYS
-# The USB VIP ships 19 checker files. They run regardless and fail the test
-# regardless. What FCOV adds is the record of WHICH checks were exercised:
-# twelve configuration fields, all defaulting to 0 except the three
-# *_chk_fail_cov which default to 1. So by default a failing check is covered
-# and a passing one is not, which cannot answer "was this check ever reached".
+# This template's original USB VIP shipped 19 checker files as a real
+# example. They run regardless and fail the test regardless. What FCOV adds
+# is the record of WHICH checks were exercised: twelve configuration fields,
+# all defaulting to 0 except the three *_chk_fail_cov which default to 1. So
+# by default a failing check is covered and a passing one is not, which
+# cannot answer "was this check ever reached".
 #
 # It is a compile time define, not a plusarg, because the covergroups are
 # built during build_phase.
 # -----------------------------------------------------------------------------
-# USB_HEX_DIR is the one define whose value is a STRING, and it is therefore
-# the one that cannot go on the command line.
+# <TARGET_IP>_HEX_DIR is the one define whose value is a STRING, and it is
+# therefore the one that cannot go on the command line.
 #
 # It used to be     DEFINES += +define+USB_HEX_DIR=\"$(HEX_DIR)\"
 # which works locally and fails under LSF. The site's vcs wrapper re-submits
@@ -1359,7 +1457,7 @@ DEFINES  += -f $(HEXDEF_F)
 FLAG_EXTRA += HEX_DIR=$(HEX_DIR)
 
 ifeq ($(FCOV),1)
-  DEFINES   += +define+USB_UVM_FCOV
+  DEFINES   += +define+$(TARGET_IP)_UVM_FCOV
   FCOV_ELAB := -assert fast_immediate
   FCOV_RUN  :=
 else
@@ -1453,17 +1551,22 @@ else
   SLED_ENV       :=
 endif
 
-# DIAGNOSTIC ONLY (dut-request.md P3/P5 STALL-vs-ACCEPT comparison,
-# 2026-08-27): forces SET_SEL through guide 4.4.2 step 5b's default STALL
-# instead of the P11 ACCEPT override (usb_dev_init.svh, `ifdef
-# USB_DIAG_SET_SEL_FORCE_STALL`), to compare against the ACCEPT path's
-# GEVNTCOUNT-word-zero stall on the identical config. Default 0 -- normal
-# builds are unaffected. Strip this block and the `ifdef` it feeds once the
+# DIAGNOSTIC ONLY (real example from this template's original USB project,
+# dut-request.md P3/P5 STALL-vs-ACCEPT comparison, 2026-08-27): forced a
+# specific USB SET_SEL request through its programming guide's default STALL
+# behavior instead of an ACCEPT override (<ip>_dev_init.svh, `ifdef
+# $(TARGET_IP)_DIAG_SET_SEL_FORCE_STALL`), to compare against the ACCEPT
+# path's stall on the identical config. Default 0 -- normal builds are
+# unaffected. This exact knob is USB-specific (SET_SEL is a real USB3
+# descriptor request); keep the PATTERN -- an opt-in, default-off
+# diagnostic define for an A/B comparison against a real, disputed DUT
+# behavior -- and replace the specifics for TARGET_IP's own equivalent
+# investigation, if any. Strip this block and the `ifdef` it feeds once the
 # comparison is done.
 DIAG_SET_SEL_FORCE_STALL ?= 0
 override DIAG_SET_SEL_FORCE_STALL := $(strip $(DIAG_SET_SEL_FORCE_STALL))
 ifeq ($(DIAG_SET_SEL_FORCE_STALL),1)
-  SIM_BUILD_OPTS += +define+USB_DIAG_SET_SEL_FORCE_STALL
+  SIM_BUILD_OPTS += +define+$(TARGET_IP)_DIAG_SET_SEL_FORCE_STALL
 endif
 
 # -kdb belongs on THIS line too. VCS User Guide, "Generating Verdi KDB":
@@ -1492,8 +1595,9 @@ VLOGAN_FLAGS := $(VCS_BITMODE) -sverilog $(KDB) \
 
 # +error+10000 is carried over from DUT/runver_precomp.
 # -Xcheck_p1800_2009=char is NOT: it makes the VIP fail elaboration with 14
-# Error-[CNST-RONV] across APB, AXI and USB. Synopsys's own example for this
-# VIP does not pass it either. It belongs to the RTL flow, not to this one.
+# Error-[CNST-RONV] across APB, AXI and the target-IP VIP. Synopsys's own
+# example for this VIP does not pass it either. It belongs to the RTL flow,
+# not to this one.
 # -debug_access level, per "Recommended Debug Settings for a New Project":
 #   -debug_access+all   interactive debug. Expensive on a design this size.
 #   -debug_access       post-processing debug from an FSDB. What we do.
@@ -1542,6 +1646,10 @@ endif
 # The example passes vcs_sled_options to BOTH stages (:769 and :971), so the
 # define goes to elaboration as well. It is set further up, above VLOGAN_FLAGS
 # -- see the SLED block there for why the position matters.
+# SVT_USB_SLED_RECORD_ENABLE is the real Synopsys VIP macro name for this
+# template's original USB VIP; substitute the equivalent SLED-enable macro
+# name from TARGET_IP's own VIP (its naming is set by Synopsys per protocol,
+# not by IP_PREFIX).
 ifeq ($(SLED),1)
   VCS_FLAGS += +define+SVT_USB_SLED_RECORD_ENABLE
 endif
@@ -1580,8 +1688,8 @@ endif
 # A staleness guard in the check script is a mitigation. Not colliding in the
 # first place is the fix.
 #
-#   make run PATTERN=usb20_enumeration RUNTAG=hs      -> run/usb20_enumeration_1_hs/
-#   make run PATTERN=usb20_enumeration RUNTAG=fs      -> run/usb20_enumeration_1_fs/
+#   make run PATTERN=<pattern> RUNTAG=hs      -> run/<pattern>_1_hs/
+#   make run PATTERN=<pattern> RUNTAG=fs      -> run/<pattern>_1_fs/
 #
 # Unset keeps the historical name exactly, so nothing that assumes it breaks.
 # It is NOT auto-incremented on purpose: with WAVE=1 each run leaves a 300-500
@@ -1611,7 +1719,7 @@ PAT_FSDB   := $(FSDBDIR)/$(JOB).fsdb
 # But that measurement came from a broken configuration, not from NFS. The
 # server's wave.txt was the RTL owner's original, which dumps the whole SoC
 # and ignores +fsdb_off. Once the DV_UVM version was installed and the scope
-# became the USB blocks, the rate fell to about 20 MB/min and simv ran at
+# became the target-IP blocks, the rate fell to about 20 MB/min and simv ran at
 # 103-112 % CPU -- above 100 % means the process is computing, not waiting on
 # I/O, so there was nothing left for a faster disk to fix.
 #
@@ -1674,11 +1782,11 @@ RUN_FLAGS := +PATTERN=$(PATTERN) \
 # byte for byte what it was and a plusarg the test would ignore anyway does
 # not appear in every log.
 ifneq ($(TOTAL_RUNTIME),0)
-  RUN_FLAGS += +USB_TOTAL_RUNTIME_NS=$(TOTAL_RUNTIME)
+  RUN_FLAGS += +$(TARGET_IP)_TOTAL_RUNTIME_NS=$(TOTAL_RUNTIME)
 endif
 
-# Waveform scope. wave.txt dumps the USB blocks by default; these two select
-# the other scopes. WAVE=0 turns dumping off entirely, which is what a
+# Waveform scope. wave.txt dumps the target-IP blocks by default; these two
+# select the other scopes. WAVE=0 turns dumping off entirely, which is what a
 # regression wants.
 ifeq ($(WAVE),0)
   RUN_FLAGS += +fsdb_off
@@ -1691,7 +1799,7 @@ ifneq ($(filter $(WAVE),1 full),)
   RUN_FLAGS += +fsdb_file=$(PAT_FSDB)
 endif
 
-# usb_base_test writes every UVM and VIP report here as well as to sim.log.
+# <ip>_base_test writes every UVM and VIP report here as well as to sim.log.
 #
 # Left in the run directory on purpose, alongside everything else the
 # simulation produces. report/<job>/ is a view built from symlinks after the
@@ -1714,7 +1822,7 @@ endif
 # This is the useful control for link bring-up: LTSSM activity is between
 # roughly 14 us and 250 us of a run that goes on much longer, so
 #
-#   make sim PATTERN=usb20_enumeration WAVE=1 FSDB_START=10000 FSDB_STOP=300000
+#   make sim PATTERN=<pattern> WAVE=1 FSDB_START=10000 FSDB_STOP=300000
 #
 # records the part being debugged and skips the rest.
 #
@@ -1733,8 +1841,8 @@ ifneq ($(strip $(FSDB_STOP)),)
 endif
 
 # VIP_REPORT / VIP_STATUS (declared above with the other VIP_* switches).
-# Both default ON at run time (usb_top_cfg.sv: usb_vip_report_rt() /
-# usb_vip_status_rt()), so only the OFF case needs a plusarg -- same "default
+# Both default ON at run time (<ip>_top_cfg.sv: <ip>_vip_report_rt() /
+# <ip>_vip_status_rt()), so only the OFF case needs a plusarg -- same "default
 # on, one override flag" shape as +fsdb_off.
 ifeq ($(VIP_REPORT),0)
   RUN_FLAGS += +vip_report_off
@@ -1746,54 +1854,57 @@ endif
 # Run time register bases. These override the compile time defines and need
 # no rebuild, which is what makes them useful while hunting for the value.
 # Bare hex, no 0x prefix: $value$plusargs %h does not accept one.
-USB0_BASE_RT ?=
-USB1_BASE_RT ?=
+# (Named IP0_BASE_RT/IP1_BASE_RT, not $(TARGET_IP)0_BASE_RT/..., because a
+# Make variable's own NAME must stay a fixed literal token to remain
+# overridable from the command line -- see the genericization report.)
+IP0_BASE_RT ?=
+IP1_BASE_RT ?=
 GTOP_BASE_RT ?=
-ifneq ($(USB0_BASE_RT),)
-  RUN_FLAGS += +USB0_BASE_ADDR=$(USB0_BASE_RT)
+ifneq ($(IP0_BASE_RT),)
+  RUN_FLAGS += +$(TARGET_IP)0_BASE_ADDR=$(IP0_BASE_RT)
 endif
-ifneq ($(USB1_BASE_RT),)
-  RUN_FLAGS += +USB1_BASE_ADDR=$(USB1_BASE_RT)
+ifneq ($(IP1_BASE_RT),)
+  RUN_FLAGS += +$(TARGET_IP)1_BASE_ADDR=$(IP1_BASE_RT)
 endif
 ifneq ($(GTOP_BASE_RT),)
   RUN_FLAGS += +GTOP_BASE_ADDR=$(GTOP_BASE_RT)
 endif
 
 # SPEED0/SPEED1/PORTS (declared above at line 292/294/299). Run time only,
-# no rebuild -- replaces the old +define+USB0_SPEED_*/+define+USB1_SPEED_*/
-# +define+USB_PORT0_ONLY/+define+USB_PORT1_ONLY compile-time scheme.
+# no rebuild -- replaces an older +define+<ip>0_SPEED_*/+define+<ip>1_SPEED_*/
+# +define+<ip>_PORT0_ONLY/+define+<ip>_PORT1_ONLY compile-time scheme.
 # Resolved independently by each consumer via $value$plusargs on these exact
-# names (usb_ep_check.sv build_speed(), usb_dev_init.svh's
-# usb0_speed_rt/usb1_speed_rt, usb_stages.svh's usb_ports_rt, usb_top_cfg.sv,
-# usb_uvm_bind.sv's SS UI clock). Always present, like USB_SCALED_MODE below
-# -- every build has a speed and a port set, there is no "off" state to
-# gate on.
-RUN_FLAGS += +USB0_SPEED=$(SPEED0)
-RUN_FLAGS += +USB1_SPEED=$(SPEED1)
-RUN_FLAGS += +USB_PORTS=$(PORTS)
+# names (<ip>_ep_check.sv build_speed(), <ip>_dev_init.svh's
+# <ip>0_speed_rt/<ip>1_speed_rt, <ip>_stages.svh's <ip>_ports_rt,
+# <ip>_top_cfg.sv, <ip>_uvm_bind.sv's SS UI clock). Always present, like
+# IP_SCALED_MODE below -- every build has a speed and a port set, there is no
+# "off" state to gate on.
+RUN_FLAGS += +$(TARGET_IP)0_SPEED=$(SPEED0)
+RUN_FLAGS += +$(TARGET_IP)1_SPEED=$(SPEED1)
+RUN_FLAGS += +$(TARGET_IP)_PORTS=$(PORTS)
 
 # HS_WINDOW_US (declared above, with the other testbench-override switches).
-# Run time only, no rebuild -- see usb_stages.svh's USB_HS_WINDOW_FORCE.
+# Run time only, no rebuild -- see <ip>_stages.svh's <ip>_HS_WINDOW_FORCE.
 ifneq ($(HS_WINDOW_US),0)
   RUN_FLAGS += +HS_WINDOW_US=$(HS_WINDOW_US)
 endif
 
 # AXI_FORCE (declared above at line 450). Run time only, no rebuild -- see
-# usb_probe_if.sv's axi_force_rt, which resolves the identical plusarg name.
+# <ip>_probe_if.sv's axi_force_rt, which resolves the identical plusarg name.
 ifeq ($(AXI_FORCE),1)
   RUN_FLAGS += +AXI_FORCE=1
 endif
 
 # LANE_FLIP (declared above). Run time only, no rebuild -- see
-# lane_flip_rt in usb_uvm_bind.sv, which resolves this identical plusarg name.
+# lane_flip_rt in <ip>_uvm_bind.sv, which resolves this identical plusarg name.
 ifeq ($(LANE_FLIP),1)
   RUN_FLAGS += +LANE_FLIP=1
 endif
 
 # ORIENTATION0/ORIENTATION1 (declared above). Always present, like
-# USB0_SPEED/USB1_SPEED above -- 0 (Normal) is a real, valid value, not an
+# IP0_SPEED/IP1_SPEED above -- 0 (Normal) is a real, valid value, not an
 # "off" state to gate on. Read independently by dv_uvm_hook.svh (DUT-side
-# TCA_TCPC write) and usb_uvm_bind.sv (testbench-side lane wiring).
+# TCA_TCPC write) and <ip>_uvm_bind.sv (testbench-side lane wiring).
 RUN_FLAGS += +ORIENTATION0=$(ORIENTATION0)
 RUN_FLAGS += +ORIENTATION1=$(ORIENTATION1)
 # LANE_SWAP0/LANE_SWAP1 (declared above). Empty by default and forwarded
@@ -1819,7 +1930,7 @@ endif
 # Anything the user wants to hand the simulation, verbatim. Deliberately last
 # so it can override what the switches above set.
 #
-#   make sim PATTERN=smoke PLUSARGS="+UVM_VERBOSITY=UVM_HIGH +usb_pa"
+#   make sim PATTERN=smoke PLUSARGS="+UVM_VERBOSITY=UVM_HIGH +$(IP_PREFIX)pa"
 #
 # This exists because the first experiment switch in this environment was
 # written as a `+define+`, and a define changes the analysis flags,
@@ -1829,7 +1940,7 @@ endif
 # turned out to be correct -- but the lesson and the variable stay.)
 PLUSARGS ?=
 # Always present, never defaulted-to in the RTL. See the note at the knob.
-RUN_FLAGS += +USB_SCALED_MODE=$(USB_SCALED_MODE)
+RUN_FLAGS += +$(TARGET_IP)_SCALED_MODE=$(IP_SCALED_MODE)
 
 # Component-scoped verbosity. Emitted only when asked for, and ECHOED, because
 # a component path that matches nothing is accepted in silence -- the run looks
@@ -1850,7 +1961,7 @@ endif
 # restores it as UVM_ERROR, e.g. to re-verify the root cause itself.
 DEMOTE_SYNC_TS_RATIO ?= 1
 ifeq ($(DEMOTE_SYNC_TS_RATIO),1)
-  RUN_FLAGS += +USB_DEMOTE_ID=sync_ts_ratio_check_tx_passive
+  RUN_FLAGS += +$(TARGET_IP)_DEMOTE_ID=sync_ts_ratio_check_tx_passive
 endif
 
 # expected_recovery_check (CREDIT_HP_TIMER_1's checker, dut-request.md P12):
@@ -1867,7 +1978,7 @@ endif
 # credit-return tail this masks is still open, not closed.
 DEMOTE_CREDIT_HP_TIMER ?= 0
 ifeq ($(DEMOTE_CREDIT_HP_TIMER),1)
-  RUN_FLAGS += +USB_DEMOTE_ID=expected_recovery_check
+  RUN_FLAGS += +$(TARGET_IP)_DEMOTE_ID=expected_recovery_check
 endif
 
 # non_streamable_ep_received_unexpected_non_successive_erdy /
@@ -1886,8 +1997,8 @@ endif
 # as UVM_ERROR, e.g. to re-verify against a future VIP version.
 DEMOTE_P16_ERDY_DPS ?= 1
 ifeq ($(DEMOTE_P16_ERDY_DPS),1)
-  RUN_FLAGS += +USB_DEMOTE_ID=non_streamable_ep_received_unexpected_non_successive_erdy
-  RUN_FLAGS += +USB_DEMOTE_ID=received_erdy_while_dps_unacked
+  RUN_FLAGS += +$(TARGET_IP)_DEMOTE_ID=non_streamable_ep_received_unexpected_non_successive_erdy
+  RUN_FLAGS += +$(TARGET_IP)_DEMOTE_ID=received_erdy_while_dps_unacked
 endif
 
 RUN_FLAGS += $(PLUSARGS)
@@ -1995,7 +2106,7 @@ check:
 
 help:
 	@echo ""
-	@echo "USB IP-level UVM verification environment"
+	@echo "$(TARGET_IP) IP-level UVM verification environment"
 	@echo "========================="
 	@echo ""
 	@echo "Target:"
@@ -2038,29 +2149,30 @@ help:
 	@echo "                              compilation units"
 	@echo "  PATTERN=<name>   pattern to run     (now: $(PATTERN))"
 	@echo "  SEED=<n>         random seed       (now: $(SEED))"
-	@echo "  WAVE=0|1|full    FSDB: off | USB blocks | whole SoC  (now: $(WAVE))"
+	@echo "  WAVE=0|1|full    FSDB: off | target-IP blocks | whole SoC  (now: $(WAVE))"
 	@echo "                   run-time only, no rebuild -- unless this simv was"
 	@echo "                   built with VERDI_HOME unset, see the Makefile note"
 	@echo "                   at the debug-access block"
 	@echo "  FSDB_START=<ns>  record only a window, e.g. FSDB_START=10000"
-	@echo "  FSDB_STOP=<ns>   FSDB_STOP=300000 covers USB link bring-up"
+	@echo "  FSDB_STOP=<ns>   FSDB_STOP=300000 covers link bring-up"
 	@echo "  PA=0|1           Protocol Analyzer, needs VERDI_HOME (now: $(PA))"
 	@echo "                   run-time only, same caveat as WAVE above"
 	@echo "* COV=0|1          VCS code coverage                   (now: $(COV))"
 	@echo "* FCOV=0|1         VIP functional coverage, ON by default in VCS (now: $(FCOV))"
-	@echo "* DMA_MON=0|1      passive monitor on usb_m_*          (now: $(DMA_MON))"
+	@echo "* DMA_MON=0|1      passive monitor on $(IP_PREFIX)m_*      (now: $(DMA_MON))"
 	@echo "* EVT_AXI_CHECK=0|1 evt_count_r-vs-AXI-write P3 checker (now: $(EVT_AXI_CHECK)), default off, path unconfirmed"
 	@echo "* SLED=0|1         VIP SLED transaction recording      (now: $(SLED))"
 	@echo "  COV_SCOPE=<list> code coverage scope   (now: $(COV_SCOPE))"
 	@echo "  COV_EXCLUDE=<l>  carved back out"
 	@echo "  WAVES_SETUP=<f>  Verdi signal setup tcl (now: $(WAVES_SETUP))"
-	@echo "  USB0_BASE=0x..   USB0 APB base, rebuild (now: $(USB0_BASE))"
-	@echo "  USB1_BASE=0x..   USB1 APB base, rebuild (now: $(USB1_BASE))"
+	@echo "  IP0_BASE=0x..    instance0 APB base, rebuild (now: $(IP0_BASE))"
+	@echo "  IP1_BASE=0x..    instance1 APB base, rebuild (now: $(IP1_BASE))"
 	@echo "  GTOP_BASE=0x..   gtop greg base, rebuild(now: $(GTOP_BASE))"
-	@echo "  USB0_BASE_RT=<hex>  same, run time, no rebuild, bare hex"
+	@echo "  IP0_BASE_RT=<hex>  same, run time, no rebuild, bare hex"
 	@echo "  VERB=<level>     UVM verbosity     (now: $(VERB))"
-	@echo "  SPEED=<s>        usb20|gen1|gen2|ss_capable  (now: $(SPEED))"
-	@echo "  PORTS=0|1|both   which USB ports             (now: $(PORTS))"
+	@echo "  SPEED=<s>        usb20|gen1|gen2|ss_capable (this template's example"
+	@echo "                   enum -- replace with TARGET_IP's own) (now: $(SPEED))"
+	@echo "  PORTS=0|1|both   which target-IP ports       (now: $(PORTS))"
 	@echo "  AXI_FORCE=0|1    AXI master takeover, run time (now: $(AXI_FORCE))"
 	@echo "  SUITE=<name>     all, list, or one of: $(SUITE_NAMES)  (now: $(SUITE))"
 	@echo "                   list = the patterns in regression.list"
@@ -2113,7 +2225,7 @@ help:
 	@echo "  output/simv              ONE elaboration, shared by every job"
 	@echo ""
 	@echo "Paths (user supplied, all four required):"
-	@echo "  VIP_HOME        complete VIP tree, USB+APB+AXI in one delivery"
+	@echo "  VIP_HOME        complete VIP tree, $(TARGET_IP)+APB+AXI in one delivery"
 	@echo "                  (now: $(VIP_HOME))"
 	@echo "  DUT_ROOT_PATH   RTL tree; MACRO MODEL ENV DUMMY_TOP RTLCAT vcs.opt as siblings"
 	@echo "                  (now: $(DUT_ROOT_PATH))"
@@ -2145,7 +2257,8 @@ setup: dirs
 	@printf 'WORK > DEFAULT\nDEFAULT : $(WORKDIR)\n' > $(SIM_ROOT_PATH)/synopsys_sim.setup
 	@mkdir -p $(WORKDIR)
 	@# The one string-valued define, kept off the command line -- see the
-	@# USB_HEX_DIR block for why. Rewritten every time so it tracks HEX_DIR.
+	@# $(TARGET_IP)_HEX_DIR block for why. Rewritten every time so it tracks
+	@# HEX_DIR.
 	@#
 	@# The backslashes are required INSIDE the filelist too. Tested directly:
 	@#   +define+X="path"    ->  Error-[SE], macro expands to a bare path
@@ -2154,15 +2267,15 @@ setup: dirs
 	@# wrapper adds was eating it. printf '%s' rather than echo, because echo
 	@# is allowed to interpret backslashes and here they must survive verbatim.
 	@#
-	@# USB_HEX_DIR is defined either way. The testbench concatenates it into
-	@# file names unconditionally, so leaving it undefined turns a data
-	@# question into a compile error in usb_trb_defs.svh. With HEX_DIR empty
-	@# it becomes the empty string, and $readmemh then fails to find a
+	@# $(TARGET_IP)_HEX_DIR is defined either way. The testbench concatenates
+	@# it into file names unconditionally, so leaving it undefined turns a
+	@# data question into a compile error in <ip>_trb_defs.svh. With HEX_DIR
+	@# empty it becomes the empty string, and $readmemh then fails to find a
 	@# relative path -- which is the intended outcome when the answer is
 	@# "these patterns no longer load stimulus".
-	@printf '%s\n' '+define+USB_HEX_DIR=\"$(strip $(HEX_DIR))\"' > $(HEXDEF_F)
+	@printf '%s\n' '+define+$(TARGET_IP)_HEX_DIR=\"$(strip $(HEX_DIR))\"' > $(HEXDEF_F)
 	@if [ -z "$(strip $(HEX_DIR))" ]; then \
-	   echo "note: HEX_DIR is empty, so USB_HEX_DIR compiles to \"\" and no"; \
+	   echo "note: HEX_DIR is empty, so $(TARGET_IP)_HEX_DIR compiles to \"\" and no"; \
 	   echo "      stimulus files will be found. Set HEX_DIR to re-enable."; \
 	 fi
 
@@ -2218,9 +2331,12 @@ $(FLOWTAG): FORCE
 
 # Three things were missing here, all of them silent:
 #
-#   subdirectories   RTLCAT/USB_FPGA/include_ctrl/udc_DWC_usb31_params.svh is
+#   subdirectories   this template's original project's real example:
+#                    RTLCAT/USB_FPGA/include_ctrl/udc_DWC_usb31_params.svh is
 #                    the DUT's configuration. A new delivery that changes it
 #                    and nothing else was elaborated from the old analysis.
+#                    Re-check the current DUT's own RTLCAT layout for the
+#                    equivalent nested configuration subdirectory.
 #   .sv and .svh     outside RTLCAT only *.v was matched.
 #   command.txt      a DUT deliverable, `include-d by MODEL_ALL.v, sitting in
 #   wave.txt         DUT_ROOT_PATH itself and matched by nothing at all.
@@ -2297,9 +2413,9 @@ $(FLAGSIG): FORCE
 # -----------------------------------------------------------------------------
 $(SIMDIR)/.uvm.stamp: $(FLAGSIG) $(FLOWTAG) | setup
 	@echo "=== [1a] vlogan: UVM library ==="
-	cd $(SIMDIR) && vlogan $(call LSF_TOOL_OPT,$(LSF_COMPILE),usbc.1a) \
+	cd $(SIMDIR) && vlogan $(call LSF_TOOL_OPT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.1a) \
 	    $(VLOGAN_UVM_FLAGS) -l $(LOGDIR)/analyze_uvm.log
-	@$(call LSF_WAIT,$(LSF_COMPILE),usbc.1a,$(LOGDIR)/analyze_uvm.log)
+	@$(call LSF_WAIT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.1a,$(LOGDIR)/analyze_uvm.log)
 	@touch $@
 
 analyze_uvm: $(SIMDIR)/.uvm.stamp
@@ -2321,17 +2437,17 @@ TB_SOURCES := $(wildcard $(TBDIR)/*.sv $(TBDIR)/*.svh \
 # THE DUT STAGE COMPILES TESTBENCH SOURCE, AND THIS LIST HAS TO SAY SO.
 #
 # `MODEL_ALL.v:336` does `include "dv_uvm_hook.svh"`, and that header pulls in
-# usb_stages.svh, usb_dev_init.svh, usb_reg_defs.svh, usb_hier_defs.svh,
-# usb_trb_defs.svh, usb_mem_util.svh, the five *_tasks.svh files, soc_int.svh and
+# <ip>_stages.svh, <ip>_dev_init.svh, <ip>_reg_defs.svh, <ip>_hier_defs.svh,
+# <ip>_trb_defs.svh, <ip>_mem_util.svh, the five *_tasks.svh files, soc_int.svh and
 # dv_uvm_pattern_pool.svh -- which in turn includes the selected pattern .txt.
 # All of that is analysed HERE, in stage 1b, not in the testbench stage.
 #
 # This rule used to carry the comment "Deliberately independent of
 # TB_SOURCES", and that was wrong in a way nothing could see. Editing
-# usb_stages.svh changed no prerequisite of any stamp, so vlogan never re-ran
+# <ip>_stages.svh changed no prerequisite of any stamp, so vlogan never re-ran
 # and the build silently elaborated the previous version. Measured 2026-08-09:
-# two consecutive deploys of usb_stages.svh -- the CSftRst switch, then its
-# removal -- were both discarded, while usb_enumeration_seq.sv from the same
+# two consecutive deploys of <ip>_stages.svh -- the CSftRst switch, then its
+# removal -- were both discarded, while <ip>_enumeration_seq.sv from the same
 # deploy took effect because it belongs to the dv_uvm_all.sv chain in stage
 # 1c. The symptom was a run whose [body] line numbers were new and whose
 # [stage] behaviour was old, with stage timestamps identical to the nanosecond
@@ -2349,14 +2465,15 @@ TB_SOURCES := $(wildcard $(TBDIR)/*.sv $(TBDIR)/*.svh \
 # patterns/*/*.svh IS common/: soc_int.svh, soc_run.svh and the bodies. Leaving
 # it out is the silent staleness this comment describes, not a cosmetic gap.
 HOOK_SOURCES := $(wildcard $(TBDIR)/top/*.svh $(TBDIR)/top/*.sv \
-                           $(TBDIR)/env/usb_hier_defs.svh \
-                           $(TBDIR)/env/usb_reg_defs.svh \
+                           $(TBDIR)/env/$(IP_PREFIX)hier_defs.svh \
+                           $(TBDIR)/env/$(IP_PREFIX)reg_defs.svh \
                            $(TBDIR)/patterns/*.svh \
                            $(TBDIR)/patterns/*/*.svh \
                            $(TBDIR)/patterns/*/*.txt)
 
 # Stage 1b: the DUT. vcs.opt uses relative paths, so vlogan runs in
-# DUT_ROOT_PATH; usb.f comes first for the +incdir+/+define+ MODEL_ALL.v needs.
+# DUT_ROOT_PATH; $(IP_PREFIX_STEM).f comes first for the +incdir+/+define+
+# MODEL_ALL.v needs.
 # Sources that must exist at FILE SCOPE in stage 1b.
 #
 # dv_uvm_hook.svh is included by MODEL_ALL.v:336, which is INSIDE
@@ -2365,44 +2482,46 @@ HOOK_SOURCES := $(wildcard $(TBDIR)/top/*.svh $(TBDIR)/top/*.sv \
 # own files in this stage. There is no include point outside a module anywhere
 # in MODEL_ALL.v -- :311, :336, :338, :345, :349 and :352 are all within it.
 #
-# svt_usb_if.uvm.svi is ALSO analysed in stage 1c, from dv_uvm_all.sv:83.
-# Defining the same interface in two vlogan units of one library is accepted:
-# probed 2026-08-10 with a trivial interface, both units rc=0, no
-# "already defined" and no overwrite warning.
+# svt_$(IP_PREFIX_STEM)_if.uvm.svi (real Synopsys VIP file, verify the exact
+# name against TARGET_IP's own VIP) is ALSO analysed in stage 1c, from
+# dv_uvm_all.sv:83. Defining the same interface in two vlogan units of one
+# library is accepted: probed 2026-08-10 with a trivial interface, both
+# units rc=0, no "already defined" and no overwrite warning.
 #
-# NOT added to usb.f. That file carries +incdir+ and +define+ only, and
-# dv_uvm_files.f owns the testbench source list; a file named in both produces
-# duplicate module definitions. These belong to stage 1b alone, so they go on
-# the stage 1b command line alone.
-IC_SOURCES := $(TBDIR)/top/usb_20_serial_ic.sv
+# NOT added to $(IP_PREFIX_STEM).f. That file carries +incdir+ and +define+
+# only, and dv_uvm_files.f owns the testbench source list; a file named in
+# both produces duplicate module definitions. These belong to stage 1b
+# alone, so they go on the stage 1b command line alone.
+IC_SOURCES := $(TBDIR)/top/$(IP_PREFIX)20_serial_ic.sv
 
 $(SIMDIR)/.dut.stamp: $(FILELIST) $(DUT_ROOT_PATH)/$(DUT_OPT) $(DUT_SOURCES) \
                       $(HOOK_SOURCES) $(IC_SOURCES) \
                       $(FLAGSIG) $(FLOWTAG) $(SIMDIR)/.uvm.stamp
 	@echo "=== [1b] vlogan: DUT (NPROC=$(NPROC)) ==="
-	cd $(DUT_ROOT_PATH) && vlogan $(call LSF_TOOL_OPT,$(LSF_COMPILE),usbc.1b) \
+	cd $(DUT_ROOT_PATH) && vlogan $(call LSF_TOOL_OPT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.1b) \
 	    $(VLOGAN_FLAGS) \
 	    -f $(FILELIST) \
 	    $(IC_SOURCES) \
 	    -f $(DUT_ROOT_PATH)/$(DUT_OPT) \
 	    -l $(LOGDIR)/analyze_dut.log
-	@$(call LSF_WAIT,$(LSF_COMPILE),usbc.1b,$(LOGDIR)/analyze_dut.log)
+	@$(call LSF_WAIT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.1b,$(LOGDIR)/analyze_dut.log)
 	@touch $@
 
 analyze_dut: $(SIMDIR)/.dut.stamp
 
 # Stage 1c: the testbench. dv_uvm_files.f is named here rather than from a hook
 # inside vcs.opt, so the read-only DUT tree needs no edit. Runs from SIMDIR so
-# nothing is written into that tree. usb.f is passed again for its defines.
+# nothing is written into that tree. $(IP_PREFIX_STEM).f is passed again for
+# its defines.
 $(SIMDIR)/.analyze.stamp: $(FILELIST) $(FILELISTDIR)/dv_uvm_files.f \
                           $(TB_SOURCES) $(FLAGSIG) $(SIMDIR)/.dut.stamp
 	@echo "=== [1c] vlogan: testbench ==="
-	cd $(SIMDIR) && vlogan $(call LSF_TOOL_OPT,$(LSF_COMPILE),usbc.1c) \
+	cd $(SIMDIR) && vlogan $(call LSF_TOOL_OPT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.1c) \
 	    $(VLOGAN_FLAGS) \
 	    -f $(FILELIST) \
 	    -f $(FILELISTDIR)/dv_uvm_files.f \
 	    -l $(LOGDIR)/analyze_tb.log
-	@$(call LSF_WAIT,$(LSF_COMPILE),usbc.1c,$(LOGDIR)/analyze_tb.log)
+	@$(call LSF_WAIT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.1c,$(LOGDIR)/analyze_tb.log)
 	@touch $@
 
 analyze_tb: $(SIMDIR)/.analyze.stamp
@@ -2431,9 +2550,9 @@ ifeq ($(FLOW),fourstep)
 $(SIMV): $(SIMDIR)/.analyze.stamp $(ELABSIG)
 	@echo "=== [2] vcs elaborate (partition compile, NPROC=$(NPROC)) ==="
 	rm -rf $(OUTDIR)/csrc $(OUTDIR)/simv.daidir $(OUTDIR)/partitionlib $(SIMV)
-	cd $(SIMDIR) && vcs $(call LSF_TOOL_OPT,$(LSF_COMPILE),usbc.elab) \
+	cd $(SIMDIR) && vcs $(call LSF_TOOL_OPT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.elab) \
 	    $(VCS_FLAGS) $(TOPMOD) $(EXTRA_TOPS) -o $(SIMV) -l $(LOGDIR)/compile.log
-	@$(call LSF_WAIT,$(LSF_COMPILE),usbc.elab,$(SIMV))
+	@$(call LSF_WAIT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.elab,$(SIMV))
 	@# Match how the tools actually report, not the word "error" anywhere.
 	@# `grep -i error` counted +error+10000 from our own flags and 155 lines of
 	@# "This warning will be upgraded to error in future releases", and printed
@@ -2466,20 +2585,21 @@ ONESTEP_FLAGS := $(VCS_BITMODE) -sverilog $(KDB) -lca \
                  -j$(NPROC)
 
 # IC_SOURCES BELONGS HERE TOO, AND LEAVING IT OFF WAS SILENT.
-# usb_20_serial_ic.sv defines usb_20_serial_ic_wrapper, which dv_uvm_hook.svh
-# instantiates inside sysn063. The four-step flow lists it in stage 1b; this
-# rule did not, so a one-step build had the instantiation and not the module:
+# <ip>_20_serial_ic.sv defines <ip>_20_serial_ic_wrapper, which
+# dv_uvm_hook.svh instantiates inside sysn063. The four-step flow lists it
+# in stage 1b; this rule did not, so a one-step build had the instantiation
+# and not the module:
 #   Error-[CFCILFBI] Cell 'usb_20_serial_ic_wrapper' cannot be found in
 #   liblist for binding instance 'sysn063.u0_ic'
 # Hidden until now because the instantiation sat behind `ifdef
-# USB_UVM_CONNECT with CONNECT defaulting to 0 -- the module was never asked
-# for, so its absence could not be noticed.
+# $(TARGET_IP)_UVM_CONNECT with CONNECT defaulting to 0 -- the module was
+# never asked for, so its absence could not be noticed.
 $(SIMV): $(FILELIST) $(FILELISTDIR)/dv_uvm_files.f $(DUT_ROOT_PATH)/$(DUT_OPT) \
          $(DUT_SOURCES) $(TB_SOURCES) $(IC_SOURCES) \
          $(FLAGSIG) $(ELABSIG) $(FLOWTAG) | setup
 	@echo "=== one-step vcs (FLOW=onestep, NPROC=$(NPROC)) ==="
 	@# vcs.opt uses paths relative to DUT_ROOT_PATH, so vcs runs there.
-	cd $(DUT_ROOT_PATH) && vcs $(call LSF_TOOL_OPT,$(LSF_COMPILE),usbc.onestep) \
+	cd $(DUT_ROOT_PATH) && vcs $(call LSF_TOOL_OPT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.onestep) \
 	    $(ONESTEP_FLAGS) \
 	    -f $(FILELIST) \
 	    $(IC_SOURCES) \
@@ -2487,7 +2607,7 @@ $(SIMV): $(FILELIST) $(FILELISTDIR)/dv_uvm_files.f $(DUT_ROOT_PATH)/$(DUT_OPT) \
 	    -f $(FILELISTDIR)/dv_uvm_files.f \
 	    -top $(TOPMOD) $(addprefix -top ,$(EXTRA_TOPS)) \
 	    -o $(SIMV) -l $(LOGDIR)/compile.log
-	@$(call LSF_WAIT,$(LSF_COMPILE),usbc.onestep,$(SIMV))
+	@$(call LSF_WAIT,$(LSF_COMPILE),$(IP_PREFIX_STEM)c.onestep,$(SIMV))
 	@# Match how the tools actually report, not the word "error" anywhere.
 	@# `grep -i error` counted +error+10000 from our own flags and 155 lines of
 	@# "This warning will be upgraded to error in future releases", and printed
@@ -2585,7 +2705,7 @@ run: dirs
 	@ln -sfn $(PAT_LOG) $(PAT_LOG_LINK)          2>/dev/null || true
 	@ln -sfn $(PAT_LOG) $(PAT_REPORT)/sim.log    2>/dev/null || true
 	cd $(PAT_RUN) && $(SLED_ENV) \
-	    $(call LSFW,$(LSF_SIM),usbrun.$(PATTERN),$(LSF_TIMEOUT),$(PAT_RUN)/lsf.out) \
+	    $(call LSFW,$(LSF_SIM),$(IP_PREFIX_STEM)run.$(PATTERN),$(LSF_TIMEOUT),$(PAT_RUN)/lsf.out) \
 	    $(SIMV) $(RUN_FLAGS) -l $(PAT_LOG)
 	@$(MAKE) --no-print-directory collect_reports
 	@$(MAKE) --no-print-directory job_summary
@@ -2805,7 +2925,7 @@ verdi:
 	@#
 	@# -dbdir points at simv.daidir, so Verdi reads the KDB that -kdb produced
 	@# during elaboration rather than re-parsing the sources.
-	verdi $(call LSF_TOOL_OPT,$(LSF_VERDI),usbverdi.$(PATTERN),$(LSF_VERDI_QUEUE)) \
+	verdi $(call LSF_TOOL_OPT,$(LSF_VERDI),$(IP_PREFIX_STEM)verdi.$(PATTERN),$(LSF_VERDI_QUEUE)) \
 	      -dbdir $(SIMV).daidir -ssf $(PAT_FSDB) $(WAVES_TCL) -nologo
 
 # -----------------------------------------------------------------------------
@@ -2821,8 +2941,8 @@ override SUITE := $(strip $(SUITE))
 #
 # Pointing it one level too deep is easy and, without this check, silent:
 # TBDIR becomes <...>/tb/tb, every glob below returns nothing, and
-# `make list_patterns` reports basic(0) sanity(0) usb(0) as though the suites
-# were simply empty. Detect it by looking for patterns/ one level up.
+# `make list_patterns` reports basic(0) sanity(0) <protocol>(0) as though the
+# suites were simply empty. Detect it by looking for patterns/ one level up.
 # -----------------------------------------------------------------------------
 ifeq ($(wildcard $(TBDIR)/patterns),)
   ifneq ($(wildcard $(UVM_ROOT_PATH)/patterns),)
@@ -2871,7 +2991,7 @@ pattern_pool: $(PATTERN_POOL)
 #   make RM_PAT  PAT_NAME=yyy.txt PAT_DIR=../uvm/tb/patterns/xxx
 #
 # PAT_DIR is accepted either as a path (as above) or as a bare suite name
-# (PAT_DIR=usb). Only the last component matters, because the registry stores
+# (e.g. PAT_DIR=$(IP_PREFIX_STEM)). Only the last component matters, because the registry stores
 # the directory relative to tb/patterns/ -- accepting the full path just means
 # a user can paste what they see in their shell.
 #
@@ -2999,12 +3119,13 @@ pat_in_dir = $(shell awk '/^[[:space:]]*(\#|$$)/{next} $$2=="$(1)"{print $$1}' \
                      $(PATTERN_LIST) 2>/dev/null)
 
 # SUITE_NAMES IS COMPUTED FROM THE REGISTRY, NOT HARDCODED. MEASURED
-# 2026-08-22: the previous PATTERNS_BASIC/SANITY/USB trio (below, now
-# removed) had PATTERNS_BASIC filtering on dir=="." while every basic/
-# pattern's own registry line actually says "basic" -- so SUITE=basic ran
-# ZERO patterns, silently, and nobody had noticed. The same three-name
-# assumption would have broken outright the moment the directory taxonomy
-# migration (basic/sanity/usb -> infra/enumeration/speed/link/power/
+# 2026-08-22: this template's original project had a previous
+# PATTERNS_BASIC/SANITY/<PROTOCOL> trio (below, now removed) where
+# PATTERNS_BASIC filtered on dir=="." while every basic/ pattern's own
+# registry line actually says "basic" -- so SUITE=basic ran ZERO patterns,
+# silently, and nobody had noticed. The same three-name assumption would
+# have broken outright the moment that project's directory taxonomy
+# migration (basic/sanity/<protocol> -> infra/enumeration/speed/link/power/
 # performance/transfer/uvc/rate_switch/user_define) landed. Deriving the
 # valid suite names from whatever directories pattern_list.txt actually uses
 # fixes both: the stale "basic" filter and any future category rename, with
@@ -3295,14 +3416,14 @@ lsf_report:
 	 sh $(LSF_SCRIPT)
 
 lsf_kill:
-	@echo "killing usbreg.$(SUITE).* on queue $(LSF_QUEUE)"
-	@bkill -J 'usbreg.$(SUITE).*' 2>&1 | head -20 || true
-	@bjobs -J 'usbreg.$(SUITE).*' 2>&1 | head -5 || true
+	@echo "killing $(IP_PREFIX_STEM)reg.$(SUITE).* on queue $(LSF_QUEUE)"
+	@bkill -J '$(IP_PREFIX_STEM)reg.$(SUITE).*' 2>&1 | head -20 || true
+	@bjobs -J '$(IP_PREFIX_STEM)reg.$(SUITE).*' 2>&1 | head -5 || true
 
 # Detail for jobs still alive, without attaching to a running regression.
 lsf_status:
 	@bjobs -o "jobid stat queue exec_host job_name run_time" \
-	       -J 'usbreg.$(SUITE).*' 2>&1 | head -60 \
+	       -J '$(IP_PREFIX_STEM)reg.$(SUITE).*' 2>&1 | head -60 \
 	  || echo "no jobs for suite $(SUITE)"
 
 # bhosts has no -q on this LSF (10.1 rejects it), so take the host list out of
@@ -3381,7 +3502,7 @@ endif
 # -cm_hier file VCS instruments the entire SoC, which on this design is slow
 # and mostly measures blocks nobody is verifying.
 #
-# The default scope is u_ss_vout, the subsystem that contains both usbtop
+# The default scope is u_ss_vout, the subsystem that contains both target-IP
 # instances. Widen it with COV_HIER when the DUT boundary changes:
 #   make sim COV=1 COV_HIER=sysn063.u_lan063
 #

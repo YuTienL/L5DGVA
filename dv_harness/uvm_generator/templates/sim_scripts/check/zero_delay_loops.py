@@ -18,8 +18,9 @@ Three tiers, because "contains a #" is not the same as "always delays":
      this needs a human to say which.
   3  a #, @ or wait() exists but EVERY one of them is inside a conditional.
      The loop delays on some paths and not others -- which is the shape of
-     USB_FW_SERVICE_FOREVER, where `if (wake > $time) #(wake - $time);` does
-     nothing at all when a deadline has already passed.
+     this template's original USB project's own <TARGET_IP>_FW_SERVICE_FOREVER,
+     where `if (wake > $time) #(wake - $time);` does nothing at all when a
+     deadline has already passed.
 
 Tier 3 is reported only with -v because the guarded form is often correct;
 what it needs is a reader who can say the guard cannot be false for ever.

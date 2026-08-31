@@ -6,7 +6,10 @@ WHY THIS EXISTS
 
 Same reason as vip_guards.py: vlogan reports one Error-[MFNF] and stops. Four
 wrong member names cost four ~90-second rebuilds to find, and none of them was
-a typo -- each was a plausible name that simply is not what the VIP calls it:
+a typo -- each was a plausible name that simply is not what the VIP calls it
+(real examples below, from this template's original USB project's VIP --
+illustrative, not IP_PREFIX-substituted; the class is whatever
+svt_<protocol>_types the current VIP actually ships):
 
     svt_axi_port_configuration::IN_ORDER        -> ROUND_ROBIN
     svt_usb_types::endpoint_type_enum           -> ep_type_enum

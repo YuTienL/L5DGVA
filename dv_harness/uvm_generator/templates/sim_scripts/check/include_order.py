@@ -9,8 +9,10 @@ through `include. Get the order wrong and the compiler says
 
     token 'usb_reg_sequencer' should be a valid type
 
-one name at a time, ~90 seconds apart. Three such errors were found that way
-before this script found the rest in one pass.
+(real example from this template's original USB project; the class name is
+illustrative, not IP_PREFIX-substituted) one name at a time, ~90 seconds
+apart. Three such errors were found that way before this script found the
+rest in one pass.
 
 Two different defects look identical in the compiler output and need opposite
 fixes:
@@ -18,8 +20,9 @@ fixes:
   a plain ordering mistake  -> move the `include earlier
   a genuine cycle           -> `typedef class X;`  (moving it cannot help)
 
-usb_top_env <-> usb_seq_launcher_seq is a real cycle: the env builds the
-launcher, and the launcher $casts its parent back to the env.
+<ip>_top_env <-> <ip>_seq_launcher_seq is a real cycle (this template's
+original USB project's own example): the env builds the launcher, and the
+launcher $casts its parent back to the env.
 
 USAGE
 
