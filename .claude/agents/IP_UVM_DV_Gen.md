@@ -359,6 +359,26 @@ This method resolves base-address questions that documents alone contradict.
 > `.reason`/`.detail` convention -- see the module's own docstring and
 > `dv_harness_tests/test_address_map_verifier.py` for the exact schema.
 
+> **Standing rule (2026-09-01, distilled and genericized): the
+> address-map-verifier discipline above is one instance of a general,
+> reusable generation discipline -- apply it to any other name-translation
+> step, not only addresses.** Whenever a generator translates a name from
+> one naming domain (a spreadsheet column, a legacy macro name, an
+> external spec's own vocabulary) into another (a real class's declared
+> field/parameter names), check the target name against the REAL target
+> API source before emitting anything, and never emit an assignment for a
+> name that doesn't actually exist there. Sort anything that fails this
+> check into distinct, named buckets rather than one generic "error":
+> unparsed (the input's own format/units weren't understood -- needs a
+> human decision), unmatched (this target genuinely has no such field --
+> a real capability gap, not a typo), and legacy-duplicate (an old naming
+> convention already covered by a current name that's also present).
+> A real sibling project's generator for exactly this kind of translation
+> found the source spreadsheet's own naming differed from the target
+> class's declared name in at least one real case -- naming domains drift
+> independently, and only checking against the real target source catches
+> it.
+
 ---
 
 ## Step 4 -- Survey the VIP
@@ -376,6 +396,31 @@ This method resolves base-address questions that documents alone contradict.
 Then **filter the VIP's test list by the Step 3 configuration.** Typically
 half or more does not apply: disabled optional features, the opposite role,
 interface variants the DUT does not expose.
+
+> **Standing rule (2026-09-01, distilled and genericized): check `` `ifdef ``
+> guards around a VIP class BEFORE wiring its name, and check them against
+> the real VIP source, not a naming convention.** A compiler that stops at
+> the FIRST unrecognized VIP class/type and refuses to say why turns N
+> unavailable classes into N sequential rebuilds if you guess wrong one at
+> a time -- and guessing which classes a given build configuration
+> actually enables from their names alone is unreliable (a real check of
+> 16 related classes behind one guard scored well under half right).
+> Instead, scan the real VIP source, track the live `` `ifdef ``/`` `ifndef ``/
+> `` `elsif ``/`` `else `` guard stack around each class's own declaration, and
+> report exactly which guard(s) actually gate it. **Scan `VIP_HOME`'s real
+> source tree, not a separate site install** -- an encrypted/protected VIP
+> delivery can hide a declaration inside a protected block where a plain
+> text scan finds nothing and wrongly concludes "not found."
+>
+> A related, narrower trap on the same class: existence of a named enum
+> member is not the same as it belonging to the RIGHT enum family. A VIP
+> package can declare more than one enum typedef with overlapping member
+> names (e.g. a general direction enum and a narrower per-role direction
+> enum both containing a same-named value) -- confirming a member resolves
+> to *something* is not confirming it resolves to the specific typedef a
+> given configuration/transaction field expects. Confirm which typedef
+> block actually declares the member being used, not merely that it
+> exists somewhere in the class.
 
 ---
 
@@ -777,6 +822,45 @@ writes land in the IP's own register space with no error message at all.
 > turns out not to be needed) as a defect worth flagging too -- a stale
 > declared exception can silently hide the next real, undeclared
 > violation.
+>
+> **Generalize the mechanism (2026-09-01, distilled and genericized):**
+> this declare-with-a-reason-and-flag-if-stale pattern applies to ANY
+> structural architecture-conformance rule with legitimate, known
+> exceptions, not only the join-vs-join_any case above -- fold it into
+> whatever mechanism audits generated/modified environments against the
+> canonical naming/branch architecture (block/branch_a/branch_fw/branch_b
+> and similar), so a deliberate, reasoned deviation can be declared,
+> tracked, and re-validated as still-needed rather than either hard-FAILing
+> forever or being silently allow-listed with no record of why. As one
+> real sibling project's checker states the underlying design principle:
+> an undeclared deviation is the violation -- a permanent, unexplained
+> FAIL only teaches people to ignore the checker, and a silent, undeclared
+> exemption teaches them nothing at all. Both failure modes are worse than
+> a declared, reason-carrying, periodically-revalidated exception.
+>
+> **A second, distinct concurrency trap, worth its own bullet (2026-09-01,
+> distilled and genericized): a bounded background dispatch (e.g. "fork a
+> sequence and continue") needs a MATCHING bounded-wait call before the
+> pattern can safely claim that work is done** -- a dispatch with no
+> matching wait lets the pattern's own completion race ahead of a transfer
+> still in flight, reporting a clean pass while the transfer is silently
+> abandoned mid-way. Separately: **a bare `fork...join` of two or more
+> already-serialized (semaphore-wrapped) blocking tasks LOOKS concurrent
+> in the source but is NOT** -- restate the Concurrency section's own
+> capacity-1-semaphore fact here as its own explicit trap name, since it
+> is easy to miss when skimming a fork block that looks parallel. **A
+> static classifier that identifies "is this pattern touching a given
+> protocol/subsystem" by scanning for known macro/task names by literal
+> text can be defeated by string-keyed factory dispatch** (a sequence
+> looked up and launched by a STRING class name rather than a literal
+> macro call) -- a real sibling project's own checker was false-PASSed by
+> exactly this on patterns that in fact violated every rule the checker
+> was meant to enforce, until a secondary check was added that looks for
+> the factory-dispatch call shape itself, not just the literal names it's
+> usually paired with. The general principle, worth stating near Step 3's
+> own evidence rules: **a checker that can be silently defeated by an
+> indirection layer is worse than no checker**, since it creates false
+> confidence rather than an honest gap.
 
 ### Multi-instance pattern architecture -- `branch_a<n>` / `branch_fw` / `branch_b<n>`
 
@@ -1642,7 +1726,7 @@ empty.
 ## Step 10 -- Self-check when no compiler is available
 
 Authoring often happens where VCS cannot run. Run a whole-tree static check
-after every change. Eleven categories, in value order:
+after every change. Thirteen categories, in value order:
 
 1. **Call argument count against the declaration** -- *the highest-value check
    by a wide margin.* This error lives at the call site, each of which looks
@@ -1657,12 +1741,52 @@ after every change. Eleven categories, in value order:
 9. Duplicate labels within one `case`.
 10. `extern` declarations with no definition.
 11. Config-DB set/get key and type agreement.
+12. **Include-chain ordering: type-used-before-`` `include ``-reached vs. a
+    genuine two-way cycle** -- distinct defect classes needing opposite
+    fixes, and they look identical from the compiler's error alone.
+13. **Static zero-delay/hang-loop shape**: a `forever`/`while`/`do` loop
+    whose own exit condition depends only on something time can change,
+    with no time-consuming statement anywhere in its body, freezes the
+    simulator -- indistinguishable at the console from a hang, stall, or
+    slow run, and worth catching before ever running it.
 
 > **The checker will produce false positives. Fix the checker before drawing a
 > conclusion.** Known classes: mutually exclusive `ifdef`/`else` branches
 > counted as duplicates; commas inside string literals counted as argument
 > separators; macros and tasks compared across namespaces; keys built at run
 > time with a format function, which a static scan cannot see.
+
+> **Standing rule (2026-09-01, distilled and genericized): category 4's
+> two independent multi-stage analyze invocations (e.g. a `fourstep`
+> flow's DUT-chain stage and testbench-entry stage) do NOT share
+> preprocessor state.** A macro the testbench "got for free" via the
+> DUT's own include chain becomes genuinely undefined the moment it is
+> checked scoped only to its own compile unit's real include chain --
+> scope category 4's undefined-macro check to each stage's own real,
+> reachable include chain (following live `` `ifdef ``/`` `ifndef ``/
+> `` `elsif ``/`` `else ``/`` `endif `` guards, and never following an
+> already-commented-out `` `include `` line as if it were live), and
+> classify a macro gated only by ANOTHER undefined macro as unreachable
+> dead code rather than a real missing include.
+>
+> **Category 12 detail:** walk the whole include chain once, recording
+> each class's own definition sequence number and each use's sequence
+> number; treat any class already covered by a `typedef class` forward
+> declaration as correctly handled regardless of definition order -- a
+> genuine, deliberate two-way dependency cycle between two classes (each
+> needing to reference the other) is real and legitimate SystemVerilog,
+> resolved by forward declaration, not a defect to eliminate.
+>
+> **Category 13 detail, tiered by confidence:** (1) no delay statement
+> and no task/function call anywhere in the loop body -- guaranteed spin,
+> highest confidence; (2) no delay statement but a call exists -- the
+> call may itself consume time, needs a human to confirm; (3) a delay
+> statement exists somewhere but every instance sits inside a
+> conditional that may never be taken. **Exclude a loop that advances its
+> own exit condition purely through internal computation** (a countdown,
+> an internally-incremented index) -- that is normal, correctly-progressing
+> control flow, not a hang shape, and an earlier, simpler version of this
+> class of check got exactly this case wrong.
 
 Category 1 has caught a task declared with zero arguments and called with one
 from **every pattern in the pool** -- which would have failed the first

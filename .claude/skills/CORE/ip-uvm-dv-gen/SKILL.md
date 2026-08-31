@@ -118,7 +118,7 @@ nesting.
 | Need | Go to |
 |---|---|
 | IP configuration, role, enabled features | `DUT/RTLCAT/**/*_params.svh` |
-| Register base addresses | **The decoder in `DUT/RTLCAT/`.** `Doc/` corroborates, never decides. Cross-checked mechanically (three independent sources: decoder + BFM-access histogram + doc) by `dv_harness/uvm_generator/address_map_verifier.py:verify_address_map` -- see the agent file's Step 3 for the method, that module's docstring for the schema |
+| Register base addresses | **The decoder in `DUT/RTLCAT/`.** `Doc/` corroborates, never decides. Cross-checked mechanically (three independent sources: decoder + BFM-access histogram + doc) by `dv_harness/uvm_generator/address_map_verifier.py:verify_address_map` -- see the agent file's Step 3 for the method, that module's docstring for the schema. **Standing rule (2026-09-01, distilled/genericized):** this address-map discipline generalizes to ANY name-translation generation step (spreadsheet column -> target class field, legacy macro -> current name) -- check the target name against the REAL target API source before emitting, sort failures into unparsed/unmatched/legacy-duplicate buckets rather than one generic error |
 | Chip top ports, bus declarations, clock chain | `DUT/RTLCAT/` |
 | Where the register macros are defined | `DUT/MODEL/` -- the redirect must precede the model's task definitions |
 | Which `ifdef` branches are live | `DUT/vcs.opt` defines |
@@ -393,7 +393,29 @@ instances declare the deviation with an explicit project-chosen tag
 comment (a sibling project uses `//SIX-BRANCH-EXC: <reason>`); a static
 checker should hard-FAIL an undeclared deviation and flag a
 declared-but-unused exception too (it can silently hide the next real
-violation).
+violation). **Generalize this beyond join/join_any:** the same
+declare-with-a-reason/flag-if-stale mechanism applies to ANY structural
+architecture-conformance rule with legitimate exceptions -- fold it into
+whatever audits generated environments against the canonical branch
+architecture. Design principle, quoted from a real sibling project's
+checker: an undeclared deviation is the violation -- a permanent
+unexplained FAIL only teaches people to ignore the checker, and a silent
+exemption teaches them nothing at all.
+
+**Two more concurrency traps, 2026-09-01, distilled/genericized:** (1) a
+bounded background dispatch needs a MATCHING bounded-wait call before the
+pattern claims completion -- a dispatch with no matching wait lets
+completion race ahead of a transfer still in flight, reporting a clean
+pass while it's silently abandoned. (2) a bare `fork...join` of two or
+more already-serialized (semaphore-wrapped) tasks LOOKS concurrent but
+isn't -- restating the capacity-1-semaphore fact above as its own named
+trap since it's easy to miss when skimming what looks like a parallel
+fork. Separately: a name-based static classifier (scanning for known
+macro/task literals) can be defeated by string-keyed factory dispatch (a
+sequence launched by class-name STRING, not a literal macro call) -- a
+real checker was false-PASSed by exactly this. General principle: a
+checker silently defeated by an indirection layer is worse than no
+checker at all.
 
 **A reusable multi-instance pattern architecture** (observed in a real
 multi-port project, 2026-08-28 -- consider for any target with >=2
@@ -459,6 +481,24 @@ nothing yet programmed to answer host-side traffic.
 - **Compile-time width defines have narrow defaults** -- set data width,
   address-user width and similar explicitly or they silently truncate.
 - Vendors ship **misspelled class names**; copy them verbatim.
+
+**Standing rule (2026-09-01, distilled/genericized): check `` `ifdef ``
+guards around a VIP class BEFORE wiring its name, against the REAL VIP
+source, not a naming convention or a site install.** vlogan stops at the
+first unrecognized VIP class/type with no further explanation -- N wrong
+guesses cost N sequential rebuilds, and guessing which classes a build
+config enables from their names alone is unreliable (a real check scored
+well under half right on 16 related classes). Scan `VIP_HOME`'s real
+source, track the live `` `ifdef ``/`` `ifndef ``/`` `elsif ``/`` `else ``
+guard stack around each declaration. Scan the real source tree, not a
+separate site install -- an encrypted/protected delivery can hide a
+declaration where a plain text scan wrongly concludes "not found."
+
+**Standing rule (2026-09-01, distilled/genericized): existence of a named
+enum member is not the same as belonging to the RIGHT enum family.** A
+VIP package can declare more than one enum typedef with overlapping
+member names -- confirm which typedef block actually declares the member
+a given field expects, not merely that it exists somewhere in the class.
 
 ---
 
@@ -880,12 +920,37 @@ Run after every change to the testbench tree. In value order:
 9. Duplicate labels in one `case`
 10. `extern` with no definition
 11. Config-DB set/get key and type agreement
+12. Include-chain ordering: type-used-before-`` `include ``-reached vs. a
+    genuine two-way cycle -- opposite fixes, identical compiler symptom
+13. Static zero-delay/hang-loop shape -- indistinguishable at the console
+    from a real hang, worth catching before ever running it
 
 > **The checker produces false positives. Fix the checker before drawing a
 > conclusion.** Known classes: mutually exclusive `ifdef`/`else` branches read
 > as duplicates; commas inside string literals read as argument separators;
 > macros compared against tasks across namespaces; keys built at run time with
 > a format function, which no static scan can see.
+
+**Category 4, 2026-09-01, distilled/genericized:** two independent
+multi-stage analyze invocations (e.g. a DUT-chain stage and a
+testbench-entry stage) do NOT share preprocessor state -- scope the
+undefined-macro check to each stage's own real, reachable include chain
+(live guard-stack tracking, never following an already-commented-out
+`` `include ``), and classify a macro gated only by another undefined
+macro as unreachable dead code, not a real missing include.
+
+**Category 12, 2026-09-01, distilled/genericized:** walk the include
+chain once, record each class's definition/use sequence numbers; a class
+already covered by `typedef class` forward declaration is correctly
+handled regardless of order -- a genuine two-way dependency cycle is
+real, legitimate SystemVerilog, not a defect.
+
+**Category 13, 2026-09-01, distilled/genericized:** tiered confidence --
+(1) no delay, no call at all = guaranteed spin; (2) no delay, a call
+exists = may consume time, needs human judgment; (3) delay exists but
+every instance sits inside a conditional. Exclude a loop that advances
+its own exit condition internally (a countdown) -- normal control flow,
+not a hang shape.
 
 ---
 
