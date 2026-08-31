@@ -162,8 +162,30 @@ def discover_live_jobs(vcuser: str) -> list[dict]:
     any of them were ever submitted via this module's own bsub_submit() or
     registered via register_external_job(). Used by Part 2's reconciliation
     cycle for baseline visibility -- a job with no registered JobState still
-    shows up here with RUN/DONE/EXIT/PEND status."""
-    argv = ["bjobs", "-u", vcuser, "-json", "-o",
+    shows up here with RUN/DONE/EXIT/PEND status.
+
+    `-a` is REQUIRED, not optional (BUG FIX, 2026-09-01 whole-branch review):
+    plain `bjobs -u <user>` lists only PEND/RUN/SUSPENDED jobs, so a job that
+    finishes between two poll cycles vanishes from this output entirely
+    instead of ever being observed in a terminal DONE/EXIT state. Since Part
+    2's reconciliation cycle gates its whole log-analysis branch on
+    lsf_status in ("DONE", "EXIT"), omitting `-a` meant Part 3's
+    regression-list safety net structurally never fired in production. `-a`
+    keeps finished jobs in the listing so that terminal transition is
+    actually observable.
+
+    TRANSPORT (deliberate, confirmed architectural assumption -- NOT a
+    deviation from the spec's original `remote_exec.py` wording): this
+    function, like every other subprocess call in this module
+    (bsub_submit(), _run_bjobs(), bkill_job()), invokes the LSF client
+    binaries LOCALLY, because dv_harness itself runs server-side on the
+    Linux DV server where bsub/bjobs/bkill are natively on PATH.
+    tools/remote/remote_exec.py is a different transport entirely -- it lets
+    an interactive Claude Code session on a separate Windows PC reach that
+    server -- and has no bearing on dv_harness's own server-side Python
+    code.
+    """
+    argv = ["bjobs", "-u", vcuser, "-a", "-json", "-o",
             "jobid stat queue exec_host job_name submit_time"]
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)

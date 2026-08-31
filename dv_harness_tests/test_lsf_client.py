@@ -380,6 +380,11 @@ class TestDiscoverLiveJobs:
         argv = m.call_args.args[0]
         assert argv[0] == "bjobs"
         assert "-u" in argv and "vcuser1" in argv
+        # `-a` is load-bearing: without it bjobs lists only PEND/RUN/
+        # SUSPENDED jobs, so a job that finishes between two poll cycles is
+        # never observed in a terminal DONE/EXIT state and Part 3's
+        # regression-list safety net structurally never fires.
+        assert "-a" in argv
         assert jobs == [
             {"job_id": 111, "stat": "RUN", "queue": "normal",
              "exec_host": "host1", "job_name": "usb2_enum_1",
