@@ -4,6 +4,8 @@ spec)."""
 from __future__ import annotations
 
 import json
+import os
+import signal
 from unittest.mock import patch
 
 import pytest
@@ -183,3 +185,60 @@ class TestMainWatchLoop:
         regression_reporter.main(project_root=str(tmp_path), once=True)
         captured = capsys.readouterr()
         assert "Periodic Regression Snapshot" in captured.out
+
+
+class TestWatcherLifecycle:
+    def test_ensure_watcher_running_starts_when_no_pid_file(self, tmp_path):
+        with patch("dv_harness.regression_reporter.subprocess.Popen") as m:
+            m.return_value.pid = 54321
+            result = regression_reporter.ensure_watcher_running(
+                tmp_path, "vcuser1", tmp_path / "uvm", interval_minutes=5)
+        assert result == {"started": True, "pid": 54321}
+        pid_file = tmp_path / ".dv-harness" / "lsf" / "watcher.pid"
+        assert pid_file.read_text().strip() == "54321"
+
+    def test_ensure_watcher_running_noop_when_already_running(self, tmp_path):
+        pid_file = tmp_path / ".dv-harness" / "lsf" / "watcher.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text(str(os.getpid()))  # our own pid is definitely alive
+        with patch("dv_harness.regression_reporter.subprocess.Popen") as m:
+            result = regression_reporter.ensure_watcher_running(
+                tmp_path, "vcuser1", tmp_path / "uvm")
+        m.assert_not_called()
+        assert result == {"started": False, "pid": os.getpid()}
+
+    def test_ensure_watcher_running_restarts_on_stale_pid_file(self, tmp_path):
+        pid_file = tmp_path / ".dv-harness" / "lsf" / "watcher.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text("999999999")  # not a real running pid
+        with patch("dv_harness.regression_reporter._pid_is_running", return_value=False), \
+             patch("dv_harness.regression_reporter.subprocess.Popen") as m:
+            m.return_value.pid = 11111
+            result = regression_reporter.ensure_watcher_running(
+                tmp_path, "vcuser1", tmp_path / "uvm")
+        assert result == {"started": True, "pid": 11111}
+        assert pid_file.read_text().strip() == "11111"
+
+    def test_stop_watcher_terminates_and_removes_pid_file(self, tmp_path):
+        pid_file = tmp_path / ".dv-harness" / "lsf" / "watcher.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text("22222")
+        with patch("dv_harness.regression_reporter._pid_is_running", return_value=True), \
+             patch("dv_harness.regression_reporter.os.kill") as m:
+            result = regression_reporter.stop_watcher(tmp_path)
+        m.assert_called_once()
+        assert result == {"stopped": True}
+        assert not pid_file.exists()
+
+    def test_stop_watcher_no_pid_file_is_a_noop(self, tmp_path):
+        result = regression_reporter.stop_watcher(tmp_path)
+        assert result == {"stopped": False}
+
+    def test_watcher_status_reports_running(self, tmp_path):
+        pid_file = tmp_path / ".dv-harness" / "lsf" / "watcher.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text(str(os.getpid()))
+        assert regression_reporter.watcher_status(tmp_path) == {"running": True, "pid": os.getpid()}
+
+    def test_watcher_status_reports_not_running_when_no_pid_file(self, tmp_path):
+        assert regression_reporter.watcher_status(tmp_path) == {"running": False, "pid": None}

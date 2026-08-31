@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json, time
+import os, signal, subprocess, sys
 from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
@@ -148,6 +149,84 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
     snapshot_path.write_text(snapshot, encoding="utf-8")
     print(snapshot, flush=True)
     return snapshot
+
+
+WATCHER_PID_FILE = ('.dv-harness', 'lsf', 'watcher.pid')
+
+
+def _pid_file_path(root: Path) -> Path:
+    return root.joinpath(*WATCHER_PID_FILE)
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    except AttributeError:
+        # os.kill(pid, 0) is not universally available; treat as unknown
+        # rather than crash -- caller falls through to "start a new one".
+        return False
+    return True
+
+
+def ensure_watcher_running(root: Path, vcuser: str, uvm_root_path,
+                            interval_minutes: int = 5) -> dict:
+    """Start the --watch loop as a detached background process if one is
+    not already running for this project, tracked via a PID file. A stale
+    PID file (process no longer alive) is detected and cleaned up
+    automatically rather than blocking a fresh start."""
+    pid_path = _pid_file_path(root)
+    if pid_path.exists():
+        try:
+            existing_pid = int(pid_path.read_text().strip())
+        except ValueError:
+            existing_pid = None
+        if existing_pid is not None and _pid_is_running(existing_pid):
+            return {"started": False, "pid": existing_pid}
+        pid_path.unlink()
+
+    argv = [sys.executable, "-m", "dv_harness.regression_reporter",
+            "--project-root", str(root), "--watch",
+            "--interval-minutes", str(interval_minutes),
+            "--vcuser", vcuser, "--uvm-root-path", str(uvm_root_path)]
+    popen_kwargs = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008  # DETACHED_PROCESS
+    else:
+        popen_kwargs["start_new_session"] = True
+    proc = subprocess.Popen(argv, **popen_kwargs)
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(proc.pid))
+    return {"started": True, "pid": proc.pid}
+
+
+def stop_watcher(root: Path) -> dict:
+    """Terminate the running watcher (if any) and remove its PID file.
+    A missing PID file is a no-op, not an error -- nothing was running."""
+    pid_path = _pid_file_path(root)
+    if not pid_path.exists():
+        return {"stopped": False}
+    try:
+        pid = int(pid_path.read_text().strip())
+    except ValueError:
+        pid_path.unlink()
+        return {"stopped": False}
+    if _pid_is_running(pid):
+        os.kill(pid, signal.SIGTERM if os.name != "nt" else 15)
+    pid_path.unlink()
+    return {"stopped": True}
+
+
+def watcher_status(root: Path) -> dict:
+    pid_path = _pid_file_path(root)
+    if not pid_path.exists():
+        return {"running": False, "pid": None}
+    try:
+        pid = int(pid_path.read_text().strip())
+    except ValueError:
+        return {"running": False, "pid": None}
+    return {"running": _pid_is_running(pid), "pid": pid if _pid_is_running(pid) else None}
 
 
 def main(project_root='.', once=True, interval_minutes=30, vcuser=None, uvm_root_path=None):
