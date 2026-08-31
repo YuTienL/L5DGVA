@@ -475,6 +475,21 @@ None of these fail compilation. The symptom is always a far-side timeout.
 
 ## Build system
 
+> **Standing rule (2026-09-01, explicit Human Override, permanent -- not
+> session-scoped): `sim/scripts/Makefile` is based on
+> `D:\DV\Task\USB_UVM_Handoff\sim\scripts\Makefile` as the canonical
+> build/infrastructure template, for every future protocol, not only USB.**
+> Explicit, repeated user authorization to reference this one file from the
+> project's reference-environment tree -- normally forbidden as a
+> generation source. Scoped to build/infrastructure mechanics only
+> (Makefile targets/structure, VCS/Verdi flags, LSF `bsub`/`bjobs`
+> submission and polling, filelist wiring) -- does NOT extend to any other
+> file in that tree and does NOT authorize protocol-behavior content
+> (sequences, scoreboard/checker logic, coverage, vPlan, command.txt
+> content) from it. Read via local `Read`, not the remote relay; adapt
+> paths/queue names/resource requests per project -- only the template's
+> shape is canonical, not its literal strings.
+
 - Two stages, both given the debug-database flag if a viewer will be used.
 - Consolidate the VIP examples' flags; cross-check against the tool manuals.
 - **Compute the timescale constraint** from the configured line rates and

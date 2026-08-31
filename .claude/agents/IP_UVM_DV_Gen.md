@@ -943,6 +943,29 @@ empty.
 > straightforward to codify compared to the more judgment-heavy steps --
 > flagged as a good next target, not attempted in this pass.
 
+> **Standing rule (2026-09-01, explicit Human Override, permanent -- not
+> session-scoped): the generated environment's `sim/scripts/Makefile` is
+> based on `D:\DV\Task\USB_UVM_Handoff\sim\scripts\Makefile` as the
+> canonical build/infrastructure template, for every future protocol this
+> process generates, not only USB.** This is a deliberate, explicit,
+> repeated (three times) user authorization to reference this specific
+> file from the project's own reference-environment tree -- normally
+> forbidden as a generation source by CLAUDE.md's "No Golden-Reference
+> Content Mining" rule. The authorization is scoped to **build/
+> infrastructure mechanics only**: Makefile targets and structure, VCS/
+> Verdi flag conventions, LSF `bsub` submission and `bjobs` polling
+> pattern, filelist wiring. It does NOT extend to any other file in that
+> tree, and does NOT authorize using it as a source for any
+> protocol-behavior content (virtual sequences, scoreboard/checker logic,
+> coverage bins, vPlan entries, command.txt scenario content) -- that
+> boundary is unchanged and still fully in force for every protocol this
+> process generates. The path itself is a local Windows path on this
+> user's machine, not present on every future remote DV server -- read it
+> via a local `Read` tool call (not the remote relay) and adapt paths/
+> queue names/resource requests to whatever the current project's real LSF
+> environment actually uses; only the template's *shape* is canonical, not
+> its literal path strings.
+
 ---
 
 ## Step 10 -- Self-check when no compiler is available
