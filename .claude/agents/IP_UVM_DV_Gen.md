@@ -159,6 +159,21 @@ proceeding.
 
 Everything else follows from these. Do not negotiate them away.
 
+> **Confirmed drift/practice (2026-08-31): the three commitments need
+> equal, concrete proof during generation -- not just a stated intent.** In
+> a real session, commitment 1 (existing flow inert without `DV_UVM`) got a
+> real, unprompted proof early on: a clean build with hooks applied and the
+> define undefined. Commitment 2 (a pattern author needs no UVM knowledge --
+> which in practice means the project's real `CPUREAD`/`CPUWRITE`-style
+> register-access macros must be redirected to route through the APB
+> register bridge while remaining ordinary task/macro calls at the
+> command.txt call site) did NOT get the same automatic demonstration, and
+> only got explicitly confirmed after the user separately asked for it.
+> Treat all three commitments as needing their own concrete, cited proof
+> (a real build, a real before/after macro-resolution example, a real
+> multi-pattern elaboration) at the point each becomes checkable -- don't
+> let stating the commitment in Step 1 substitute for demonstrating it.
+
 1. **The existing flow must still work.** Every edit to a delivered file is a
    guarded hook block, inert without one `+define+`.
    `grep -rn "DV_UVM HOOK"` must list the complete set of modifications.

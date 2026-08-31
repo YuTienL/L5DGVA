@@ -160,6 +160,15 @@ whatever the disputed override does not gate.
 
 ## Non-negotiables
 
+**Confirmed drift/practice (2026-08-31): each non-negotiable needs its own
+concrete proof, not just a stated intent.** Rule 1 (existing flow inert)
+got an unprompted real-build proof early in a real session; rule 2 (no UVM
+knowledge needed -- the real `CPUREAD`/`CPUWRITE`-style macros must
+redirect through the register bridge while staying ordinary task calls at
+the command.txt site) did not get demonstrated until the user explicitly
+asked. Demonstrate each with a real, cited example as soon as it becomes
+checkable -- don't let stating it substitute for proving it.
+
 1. **The original flow still works.** Every DUT edit is a guarded hook block,
    inert without one `+define+`. `grep -rn "DV_UVM HOOK"` lists all of them.
 2. **No UVM in a pattern file.** Named tasks and plain SystemVerilog only.
