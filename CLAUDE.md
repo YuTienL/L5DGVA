@@ -112,6 +112,33 @@ Never request or print passwords, tokens, or credentials in any `remote_exec.py`
 output.
 
 
+## Background Job/Log Monitor Auto-Start
+
+There is no Python code path that fires automatically the moment
+REMOTE_EXECUTION_REQUIRED is declared -- that declaration is agent-supplied
+evidence (an `execution_mode_validator` block embedded in the agent's own
+message text), not an engine event with a hookable call site. "Automatic"
+here means the same thing it means for the SSH/Remote Transport Connection
+Intake gate above: a required action the agent takes as part of following
+this protocol, not something the engine does on its own.
+
+Once REMOTE_EXECUTION_REQUIRED has been declared and any needed SSH/Remote
+Transport Connection Intake has completed, run:
+
+    dv-harness lsf-watch-start --vcuser <account>
+
+before submitting or expecting visibility into any LSF job this session.
+This starts (or confirms already-running) a detached background process
+that discovers every live job under that account, reconciles/analyzes any
+job this harness has a registered `JobState` for, and maintains the
+`regression.list` safety net (see `apply_verdict_to_file()` in
+`dv_harness/uvm_generator/regression_list_manager.py`) for jobs that bypass
+the generated environment's own Makefile-native `RECORD=1` mechanism. It is
+a no-op if a watcher is already running for this project (tracked via a PID
+file). Stop it with `dv-harness lsf-watch-stop` on a clean session end, or
+when execution mode transitions back to `PURE_LOCAL_READ_ANALYSIS`.
+
+
 ## Waveform Dump User Gate
 
 Before any waveform-enabled simulation, ask the user to confirm dump scope and dump level/depth.
