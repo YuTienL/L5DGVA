@@ -184,6 +184,86 @@ def test_route_and_store_actually_uses_the_named_tier_classes_not_just_the_base_
         shutil.rmtree(tmp)
 
 
+def test_lsf_reconcile_writes_a_job_tier_memory_record():
+    # Task 9 (poster-gap-closing round 2): the real lsf-reconcile path
+    # (dv_harness.lsf_client.reconcile_batch, the same function cli.py's
+    # `lsf-reconcile` subcommand calls) previously only ever persisted the
+    # per-job JobState JSON file -- nothing wrote to the Job memory tier, so
+    # a submitted LSF job's outcome was never captured as reusable memory.
+    # reconcile_job's own CRITICAL "sim_status"->"ANALYSIS_OWED" discrepancy
+    # (fired the moment a job's live LSF status reaches DONE/EXIT while
+    # sim_status is still UNKNOWN/RUNNING) is the real, structurally-
+    # guaranteed signal used here -- not a fabricated trigger.
+    from dv_harness import lsf_client
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lsf_client.save_job_state(
+            tmp, lsf_client.JobState(job_id=501, lsf_status="RUN", sim_status="UNKNOWN",
+                                      pattern="usb2_hs_basic"))
+        payload = json.dumps({"RECORDS": [{"JOBID": "501", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(tmp, [501])
+
+        job_store = JobMemoryStore(tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job"]
+        assert rows, f"no Job Memory record written by lsf-reconcile: {job_store.store._index()}"
+        rec = job_store.get(rows[0]["memory_id"])
+        assert rec is not None
+        assert rec["job_id"] == 501
+        assert rec["lsf_status"] == "DONE"
+        assert rec["pattern"] == "usb2_hs_basic"
+        assert rec["kind"] == "job_result"  # no failure signal in this fixture (no uvm_fatal/EXIT)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_lsf_reconcile_writes_a_job_failure_tier_memory_record_on_real_failure_signal():
+    # Same trigger, but a genuine failure signal already present in the
+    # JobState (uvm_fatal_count>0) must route as job_failure, not job_result
+    # -- classification is derived from real evidence already on the state,
+    # never guessed.
+    from dv_harness import lsf_client
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lsf_client.save_job_state(
+            tmp, lsf_client.JobState(job_id=502, lsf_status="RUN", sim_status="UNKNOWN",
+                                      uvm_fatal_count=1))
+        payload = json.dumps({"RECORDS": [{"JOBID": "502", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(tmp, [502])
+
+        job_store = JobMemoryStore(tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job"]
+        assert rows
+        rec = job_store.get(rows[0]["memory_id"])
+        assert rec["kind"] == "job_failure"
+        assert rec["job_id"] == 502
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_lsf_reconcile_does_not_write_job_tier_memory_when_no_terminal_signal():
+    # A live RUN status (not DONE/EXIT) never fires reconcile_job's CRITICAL
+    # ANALYSIS_OWED discrepancy -- no job outcome exists yet, so no Job
+    # Memory record should be written.
+    from dv_harness import lsf_client
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lsf_client.save_job_state(tmp, lsf_client.JobState(job_id=503, lsf_status="PEND"))
+        payload = json.dumps({"RECORDS": [{"JOBID": "503", "STAT": "RUN"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(tmp, [503])
+
+        job_store = JobMemoryStore(tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job"]
+        assert rows == []
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_preexisting_engineering_memory_and_corner_case_behavior_is_unchanged():
     # Exercises the same pre-existing MemoryStore/MemoryConsolidator/MemoryGC/
     # CornerCaseLibrary paths as dv_harness_tests/test_engine_gates_and_routing.py

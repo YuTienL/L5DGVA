@@ -694,6 +694,178 @@ def test_run_stage_appends_real_coverage_history_sample_on_coverage_closure_pass
         shutil.rmtree(tmp)
 
 
+def test_run_stage_promotes_project_topology_to_project_memory_on_pass():
+    # Task 9 (poster-gap-closing round 2): PROJECT_MODEL's
+    # project_model_topology_completeness_gate already structurally verifies
+    # a complete verification-boundary/VIP-topology/block-classification
+    # model (real subprocess-verified evidence) on PASS, but nothing
+    # persisted it as reusable Project-tier memory -- mirrors
+    # _promote_experience_knowledge's exact "helper method, gated on
+    # STAGE_GATES, called from the PASS branch" pattern.
+    from dv_harness.engine import DVHarness
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import ProjectMemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        gate_dir = tmp / "tools" / "verification_flow"
+        gate_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools" / "verification_flow" / "project_model_topology_completeness_gate.py",
+                    gate_dir / "project_model_topology_completeness_gate.py")
+        h.set_stage("PROJECT_MODEL")
+
+        complete = {"verification_boundary": "top.usb_dev",
+                    "vip_topology": [{"vip_id": "usb_vip", "bound_interface": "usb_if0"}],
+                    "blocks": [{"block_id": "b1", "branch": "BLOCK"}],
+                    "model_confidence": "HIGH", "confidence_basis": "cross-checked with RTL arch discovery",
+                    "dv_readiness": "READY", "dv_readiness_basis": "all boundary items resolved",
+                    "architecture_evidence_db_ref": "arch-db-v3"}
+        text = f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(complete)}\n```\n"
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["PROJECT_MODEL"]["status"] == Status.PASS.value
+
+        proj_store = ProjectMemoryStore(tmp)
+        rows = [r for r in proj_store.store._index() if r.get("level") == "project"]
+        assert rows, f"no Project Memory record written: {proj_store.store._index()}"
+        rec = proj_store.get(rows[0]["memory_id"])
+        assert rec is not None
+        assert rec["verification_boundary"] == "top.usb_dev"
+        assert rec["dv_readiness"] == "READY"
+        assert rec["level"] == "project"
+
+        events = (tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        promo_events = [json.loads(e) for e in events if json.loads(e).get("event") == "PROJECT_TOPOLOGY_PROMOTED"]
+        assert promo_events and promo_events[0]["promotion"]["memory_id"] == rec["memory_id"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_does_not_promote_project_topology_when_gate_fails():
+    # No spurious Project Memory record when the gate rejects the evidence
+    # (a block missing its branch classification) -- PARTIAL, not PASS.
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import ProjectMemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        gate_dir = tmp / "tools" / "verification_flow"
+        gate_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools" / "verification_flow" / "project_model_topology_completeness_gate.py",
+                    gate_dir / "project_model_topology_completeness_gate.py")
+        h.set_stage("PROJECT_MODEL")
+
+        no_branch = {"verification_boundary": "top.usb_dev",
+                     "vip_topology": [{"vip_id": "usb_vip", "bound_interface": "usb_if0"}],
+                     "blocks": [{"block_id": "b1"}],
+                     "model_confidence": "HIGH", "confidence_basis": "x",
+                     "dv_readiness": "READY", "dv_readiness_basis": "x",
+                     "architecture_evidence_db_ref": "db1"}
+        text = f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(no_branch)}\n```\n"
+
+        class _PartialAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PartialAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["PROJECT_MODEL"]["status"] != Status.PASS.value
+
+        proj_store = ProjectMemoryStore(tmp)
+        assert proj_store.store._index() == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_retrieves_relevant_memory_into_the_prompt():
+    # Task 9: MemoryRetriever.search() had zero callers anywhere in the real
+    # engine flow before this -- a stage's prompt was never actually
+    # informed by prior memory, only by the Blackboard snapshot. Seed a
+    # Project-tier record relevant to the fixture goal and confirm its
+    # title actually reaches the prompt handed to the adapter.
+    from dv_harness.engine import DVHarness
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import MemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        marker = "MEMORY_MARKER_USB2_SCOREBOARD_PITFALL_ABCDE"
+        goal = "investigate scoreboard port ownership issues in the usb2 subsystem"
+        assert marker not in goal  # sanity: the marker must come from memory, not be echoed from the goal itself
+        MemoryStore(tmp).add("project", {
+            "title": marker,
+            "protocol": "USB2", "scope": "subsystem",
+            "root_cause": "usb2 scoreboard port ownership global expected queue shared across ports",
+        })
+
+        calls = []
+
+        class FakeAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                calls.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("DISCOVERY")
+        h.run_stage(goal)
+
+        assert calls, "adapter was never called"
+        assert marker not in goal
+        assert marker in calls[0]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_with_no_relevant_memory_is_a_pure_no_op():
+    # No seeded memory anywhere -- MemoryRetriever.search() must return no
+    # hits, and build_stage_prompt() must be called with a falsy
+    # relevant_memory (None or []), which prompts.build_stage_prompt's own
+    # additive-kwargs contract guarantees reproduces the exact same prompt
+    # as if relevant_memory had never been threaded in at all -- proven here
+    # by actually calling the real build_stage_prompt both ways and
+    # comparing, not merely asserting "no crash".
+    import dv_harness.engine as engine_mod
+    from dv_harness.adapters.base import AgentResult
+
+    tmp, h = _fresh_harness()
+    try:
+        calls = []
+        captured = {}
+        real_build_stage_prompt = engine_mod.build_stage_prompt
+
+        def _spy(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = dict(kwargs)
+            return real_build_stage_prompt(*args, **kwargs)
+
+        class FakeAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                calls.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("DISCOVERY")
+        with patch.object(engine_mod, "build_stage_prompt", side_effect=_spy):
+            h.run_stage("a goal with nothing seeded in memory")
+
+        assert calls, "adapter was never called"
+        assert "kwargs" in captured
+        assert not captured["kwargs"].get("relevant_memory")  # None or [] -- genuinely empty
+
+        with_kwarg = real_build_stage_prompt(*captured["args"], **captured["kwargs"])
+        without_memory_kwarg = real_build_stage_prompt(
+            *captured["args"],
+            **{k: v for k, v in captured["kwargs"].items() if k != "relevant_memory"})
+        assert with_kwarg == without_memory_kwarg
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_wave_analysis_requires_confirmed_dump_scope():
     # CLAUDE.md "Waveform Dump User Gate": found by the 2026-08-28 GUI/CLI
     # end-to-end confirmation audit to have a governance policy file

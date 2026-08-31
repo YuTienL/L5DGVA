@@ -362,6 +362,49 @@ def reconcile_job(state: JobState, live_bjobs_record: dict, *,
     return state, discrepancies
 
 
+def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: JobState,
+                                                  discrepancies: list) -> None:
+    """Job-tier memory wiring (Task 9, 2026-08-31 poster-gap-closing round 2):
+    reconcile_job()'s own CRITICAL "sim_status"->"ANALYSIS_OWED" discrepancy
+    is the real, structurally-guaranteed signal that a submitted LSF job has
+    just reached a terminal live LSF status (DONE/EXIT) with DV analysis not
+    yet recorded against it -- never a fabricated trigger. Per CLAUDE.md's
+    "LSF DONE is not equal to DV PASS", this persists the real LSF-level
+    completion fact (never a DV verdict this function has no evidence for);
+    the job_result/job_failure kind split below is itself derived only from
+    real evidence already present on `state` at reconcile time (a live EXIT
+    status, or an already-recorded uvm_fatal_count/assertion_failure/
+    simulator_crash signal), never guessed. Naturally stops recurring once
+    something downstream advances state.sim_status off UNKNOWN/RUNNING (the
+    same condition that stops the CRITICAL discrepancy itself from firing).
+    Best-effort, mirrors engine.py's _promote_experience_knowledge pattern:
+    a persistence failure here must never break an already-completed
+    reconciliation."""
+    if not any(d.field == "sim_status" and d.severity == "CRITICAL" for d in discrepancies):
+        return
+    kind = "job_failure" if (
+        state.lsf_status == "EXIT" or state.uvm_fatal_count > 0
+        or state.assertion_failure or state.simulator_crash
+    ) else "job_result"
+    record = {
+        "kind": kind,
+        "job_id": jid,
+        "pattern": state.pattern,
+        "scope": "regression",
+        "title": f"LSF job {jid} reached {state.lsf_status} (dv_analysis_status=ANALYSIS_OWED)",
+        "lsf_status": state.lsf_status,
+        "dv_analysis_status": "ANALYSIS_OWED",
+        "uvm_error_count": state.uvm_error_count,
+        "uvm_fatal_count": state.uvm_fatal_count,
+        "terminal_signature": state.terminal_signature,
+    }
+    try:
+        from .memory_router import route_and_store
+        route_and_store(root, record)
+    except Exception:
+        pass
+
+
 def reconcile_batch(root: Path, job_ids: list[int]) -> dict:
     states = {jid: load_job_state(root, jid) for jid in job_ids}
     live = bjobs_query_many(job_ids)
@@ -379,5 +422,6 @@ def reconcile_batch(root: Path, job_ids: list[int]) -> dict:
             result[jid] = (state, discrepancies)
             continue
         save_job_state(root, state)
+        _write_job_tier_memory_on_terminal_reconcile(root, jid, state, discrepancies)
         result[jid] = (state, discrepancies)
     return result

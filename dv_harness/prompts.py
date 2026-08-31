@@ -991,16 +991,29 @@ Stage.SIGNOFF.value: """
 def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
                         constraints: list | None = None,
                         correction_note: str | None = None,
-                        human_approval: dict | None = None) -> str:
+                        human_approval: dict | None = None,
+                        relevant_memory: list | None = None) -> str:
     """Purely additive over the pre-control-plane signature: called with
     only the original 3 positional args (constraints/correction_note/
-    human_approval all default None), the returned prompt is byte-identical
-    to before -- see test_de_explainer_is_additive_and_does_not_change_agent_prompt
+    human_approval/relevant_memory all default None), the returned prompt is
+    byte-identical to before -- see test_de_explainer_is_additive_and_does_not_change_agent_prompt
     and the control-plane tests that check the None-default path explicitly.
 
-    engine.DVHarness.run_stage() is the one caller that passes the extra
-    three, sourced from control_plane.ControlPlane.load() for the CURRENT
-    stage:
+    relevant_memory (Task 9, 2026-08-31 poster-gap-closing round 2): an
+    optional list of Memory-tier records (dv_harness.memory.MemoryRetriever.
+    search()'s own "memory" payloads, e.g. from engine.run_stage()) --
+    surfaced to the agent as prior knowledge to consider, never as current
+    evidence (CLAUDE.md's Evidence Truth Rule/"Memory is prior knowledge,
+    not current evidence" applies here exactly as it does to `human_approval`
+    above). A falsy value (None or []) leaves the prompt unchanged, same as
+    every other additive kwarg here.
+
+    engine.DVHarness.run_stage() is the one caller that passes all four
+    extra kwargs: constraints/correction_note/human_approval are sourced
+    from control_plane.ControlPlane.load() for the CURRENT stage;
+    relevant_memory is sourced from a fresh MemoryRetriever.search() call
+    against this project's own Memory tiers (see relevant_memory above) --
+    a separate subsystem, not control-plane state.
     - constraints: every active CONSTRAINT (`dv-harness constraint --add`),
       folded into every subsequent stage prompt until removed.
     - correction_note: an active CORRECT (`dv-harness correct <stage>
@@ -1047,6 +1060,17 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
             + "。若本 stage 的證據欄位需要 DV review co-sign wrapper "
               '({"value": ..., "reviewer_id": ..., "reviewer_confidence": ...})，'
               "請直接使用這組 reviewer_id/reviewer_confidence，不要自行編造。"
+        )
+    if relevant_memory:
+        prompt += (
+            "\n\nMemory Tier 檢索到的相關既有記錄（Prior Knowledge，僅供參考 -- "
+            "依 CLAUDE.md Evidence Truth Rule，current evidence 永遠優先於這裡任何一筆記錄，"
+            "任何 root cause 仍須以當前證據重新驗證）：\n"
+            + "\n".join(
+                f"- [{m.get('level', '?')}] {m.get('title', '')}"
+                + (f"：{m.get('root_cause')}" if m.get("root_cause") else "")
+                for m in relevant_memory
+            )
         )
     return prompt
 
