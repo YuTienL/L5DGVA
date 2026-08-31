@@ -10,8 +10,8 @@
     "pattern",
     "lsf_status",
     "dv_analysis_status",
-    "uvm_error",
-    "uvm_fatal",
+    "uvm_error_count",
+    "uvm_fatal_count",
     "agent_action",
     "note"
   ],

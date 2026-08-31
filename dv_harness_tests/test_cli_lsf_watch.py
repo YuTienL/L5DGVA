@@ -11,24 +11,22 @@ CLI entry point at all.
 Real subprocess CLI dispatch, mirroring test_cli_lsf_auto_kill_scan.py's/
 test_cli_remote_control.py's established real-subprocess testing style.
 
-NOTE on a real Windows platform gap found while writing these tests (not
-this task's file, called out here for visibility): regression_reporter.
-_pid_is_running() checks liveness via `os.kill(pid, 0)`. On Windows, `os.
-kill(pid, 0)` goes through GenerateConsoleCtrlEvent, which only succeeds
-when called by the SAME process that spawned the child (or a process
-sharing its console group) -- called from a separate/later process (i.e.
-every real `dv-harness lsf-watch-status` invocation, which is always a
-fresh process) it raises OSError WinError 87 and _pid_is_running() falls
-through to `return False`, so the real spawned watcher is reported as not
-running even while it is genuinely alive; stop_watcher() has the same
-issue, so it also never reaches its real `os.kill(pid, 15)` line, meaning
-the underlying process is not actually terminated on Windows even though
-it deletes the pid file and reports {"stopped": True}. This is a
-regression_reporter.py (Task 6) behavior, not a cli.py dispatch bug, so it
-is left as-is here -- these tests are written to (a) not assert on the
-currently-broken cross-process liveness result, and (b) always hard-kill
-the real spawned process via `taskkill`/os.kill in a `finally` block so no
-orphan watcher process survives a test run regardless of that bug.
+Cross-process liveness is asserted for real here. An earlier revision of
+these tests deliberately avoided that assertion because regression_reporter.
+_pid_is_running() checked liveness via `os.kill(pid, 0)`, which on Windows
+goes through GenerateConsoleCtrlEvent and only succeeds when called by the
+process that spawned the target's console/process group -- so every real
+`dv-harness lsf-watch-status` invocation (always a fresh, unrelated
+process) got OSError WinError 87 and reported a genuinely-alive watcher as
+not running. That was fixed in commit a12b091 (ctypes OpenProcess/
+GetExitCodeProcess, see _pid_is_running()'s Windows branch), so the
+start -> status -> stop round trip below now asserts the real outcome:
+lsf-watch-status must report running: True with the real spawned PID, and
+lsf-watch-stop must really terminate that process.
+
+Every test that spawns a real watcher still hard-kills it via
+`taskkill`/os.kill in a `finally` block, so no orphan process survives a
+run even if an assertion above fails.
 """
 from __future__ import annotations
 
@@ -58,8 +56,8 @@ def _run_cli(tmp, *args):
 
 def _hard_kill(pid):
     """Real, unconditional termination independent of stop_watcher()'s own
-    (currently Windows-broken, see module docstring) liveness check --
-    pure test-hygiene cleanup, not part of what is being tested."""
+    liveness check -- pure test-hygiene cleanup, not part of what is being
+    tested. Safe to call on an already-dead pid."""
     if pid is None:
         return
     try:
@@ -109,6 +107,37 @@ class TestLsfWatchCli:
             _hard_kill(pid)
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_watch_status_reports_the_real_spawned_watcher_as_running(self):
+        """The full CLI -> lifecycle -> OS integration check: a watcher
+        started by one short-lived `lsf-watch-start` process must be
+        correctly reported as running by a LATER, unrelated
+        `lsf-watch-status` process. This is exactly the cross-process shape
+        that failed on Windows before commit a12b091's ctypes-based
+        _pid_is_running() fix (see module docstring)."""
+        tmp = _fresh_project()
+        pid = None
+        try:
+            rc, out = _run_cli(
+                tmp, "lsf-watch-start", "--vcuser", "vcuser1",
+                "--uvm-root-path", str(tmp / "uvm"), "--interval-minutes", "30")
+            assert rc == 0 and out["started"] is True
+            pid = out["pid"]
+
+            rc, status = _run_cli(tmp, "lsf-watch-status")
+            assert rc == 0
+            assert status == {"running": True, "pid": pid}
+
+            # A second start is a real no-op: it finds the live watcher via
+            # the same cross-process liveness check and does not respawn.
+            rc, again = _run_cli(
+                tmp, "lsf-watch-start", "--vcuser", "vcuser1",
+                "--uvm-root-path", str(tmp / "uvm"), "--interval-minutes", "30")
+            assert rc == 0
+            assert again == {"started": False, "pid": pid}
+        finally:
+            _hard_kill(pid)
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_watch_stop_removes_pid_file_and_reports_stopped(self):
         tmp = _fresh_project()
         pid = None
@@ -121,14 +150,15 @@ class TestLsfWatchCli:
 
             rc, out = _run_cli(tmp, "lsf-watch-stop")
             assert rc == 0
+            # {"stopped": True} is now an honest claim: stop_watcher()
+            # returns True only when it found a LIVE process and actually
+            # signaled it (a stale-PID-file cleanup returns False), which
+            # requires the cross-process liveness check to work.
             assert out == {"stopped": True}
 
             pid_file = tmp / ".dv-harness" / "lsf" / "watcher.pid"
             assert not pid_file.exists()
 
-            # A fresh status call must reflect the removed pid file, i.e.
-            # not-running, regardless of whether the underlying OS process
-            # itself was actually reaped (see module docstring).
             rc, out = _run_cli(tmp, "lsf-watch-status")
             assert rc == 0
             assert out == {"running": False, "pid": None}

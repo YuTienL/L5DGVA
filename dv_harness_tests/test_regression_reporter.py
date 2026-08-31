@@ -67,6 +67,69 @@ class TestRunReconciliationCycle:
 
         assert not (uvm_root / "regression.list").exists()
 
+        # An indeterminate verdict must NOT advance sim_status to
+        # "ANALYZED": reconcile_job() only raises its CRITICAL
+        # sim_status -> ANALYSIS_OWED discrepancy (the sole trigger for the
+        # Job-tier memory write) while sim_status is UNKNOWN/RUNNING, so
+        # stamping "ANALYZED" on an unparseable/truncated log permanently
+        # silenced the "analysis owed" alarm for a job whose verdict was
+        # never actually determined.
+        updated = lsf_client.load_job_state(tmp_path, 222)
+        assert updated.sim_status not in ("ANALYZED", "PASS", "FAIL")
+        assert updated.sim_status == "UNKNOWN"
+        # ...and the alarm must still fire on a later reconciliation pass.
+        with patch("dv_harness.regression_reporter.lsf_client._run_bjobs",
+                   return_value={"RECORDS": [{"JOBID": "222", "STAT": "DONE"}]}):
+            again = lsf_client.reconcile_batch(tmp_path, [222])
+        _state, discrepancies = again[222]
+        assert any(d.field == "sim_status" and d.severity == "CRITICAL"
+                   for d in discrepancies)
+
+    def test_registered_job_absent_from_live_jobs_is_still_analyzed(self, tmp_path):
+        """Integration regression test for the CRITICAL seam bug found in the
+        2026-09-01 whole-branch review: run_reconciliation_cycle() built its
+        job set as an INTERSECTION of discover_live_jobs()' output with the
+        registered JobStates, instead of the UNION the spec's Part 2 step 3
+        ("Merge both sets") calls for. A registered job that has aged out of
+        the `bjobs -u` listing therefore stopped being reconciled/analyzed
+        entirely -- it could never be observed reaching DONE/EXIT, so Part
+        3's regression-list safety net structurally never fired for it.
+
+        Both per-task reviews (Task 1, which built discover_live_jobs(), and
+        Task 4, which consumes it) were individually correct against their
+        own narrow specs; the defect lived only in the seam between them,
+        which nothing below the integration level can see."""
+        uvm_root = tmp_path / "uvm"
+        run_dir = tmp_path / "sim" / "run" / "aged_out_1"
+        run_dir.mkdir(parents=True)
+        log_path = run_dir / "sim.log"
+        log_path.write_text(
+            "FINAL CHECK @ 2000 ns\n"
+            "UVM_FATAL = 0, UVM_ERROR = 0, UVM_WARNING = 0\nVERDICT: PASSED\n"
+        )
+        _write_job(tmp_path, 777, pattern="aged_out", sim_log=str(log_path),
+                   lsf_status="RUN")
+
+        # This poll's live_jobs OMITS job 777 entirely -- it finished and
+        # aged out of the listing between cycles. reconcile_batch() can
+        # still get its real status because it queries LSF by explicit job
+        # id, not by account.
+        with patch("dv_harness.regression_reporter.lsf_client.discover_live_jobs",
+                   return_value=[]), \
+             patch("dv_harness.regression_reporter.lsf_client._run_bjobs",
+                   return_value={"RECORDS": [{"JOBID": "777", "STAT": "DONE"}]}):
+            snapshot = regression_reporter.run_reconciliation_cycle(
+                tmp_path, "vcuser1", uvm_root)
+
+        # Its log got parsed and its verdict applied to the safety net.
+        assert (uvm_root / "regression.list").read_text().splitlines() == ["aged_out"]
+        updated = lsf_client.load_job_state(tmp_path, 777)
+        assert updated.lsf_status == "DONE"
+        assert updated.sim_status == "PASS"
+        # ...and it still appears in the rendered snapshot.
+        assert "777" in snapshot
+        assert any(line.startswith("777") for line in snapshot.splitlines())
+
     def test_unregistered_job_gets_unregistered_status_not_analyzed(self, tmp_path):
         uvm_root = tmp_path / "uvm"
         live_bjobs = [{"job_id": 333, "stat": "RUN", "queue": "normal",
@@ -184,6 +247,30 @@ class TestMainWatchLoop:
                                       vcuser="vcuser1", uvm_root_path=str(tmp_path / "uvm"))
         m.assert_called_once()
 
+    def test_watch_loop_survives_a_cycle_that_raises(self, tmp_path, capsys):
+        """A background watcher runs unattended for hours; one bad cycle --
+        a corrupt jobs/<id>.json (bare json.JSONDecodeError out of
+        load_job_state()), a PermissionError from reconcile_batch()'s
+        subprocess.run, an OSError writing the snapshot -- must log and fall
+        through to the next sleep, never kill the daemon."""
+        calls = []
+
+        def flaky_cycle(root, vcuser, uvm_root):
+            calls.append(1)
+            if len(calls) == 1:
+                raise json.JSONDecodeError("corrupt jobs/999.json", "", 0)
+            raise KeyboardInterrupt  # break out of the infinite loop
+
+        with patch("dv_harness.regression_reporter.run_reconciliation_cycle",
+                   side_effect=flaky_cycle), \
+             patch("dv_harness.regression_reporter.time.sleep"):
+            with pytest.raises(KeyboardInterrupt):
+                regression_reporter.main(project_root=str(tmp_path), once=False,
+                                          interval_minutes=1, vcuser="vcuser1",
+                                          uvm_root_path=str(tmp_path / "uvm"))
+        assert len(calls) == 2, "the loop must have continued past the failing cycle"
+        assert "[watch loop] cycle failed" in capsys.readouterr().out
+
     def test_missing_vcuser_falls_back_to_legacy_render(self, tmp_path, capsys):
         # No vcuser supplied -- cannot discover live jobs at all, so fall back
         # to the pre-existing load_jobs()/render_snapshot() behavior rather
@@ -236,9 +323,40 @@ class TestWatcherLifecycle:
         assert result == {"stopped": True}
         assert not pid_file.exists()
 
+    def test_stop_watcher_reports_not_stopped_when_pid_already_dead(self, tmp_path):
+        """A stale PID file cleanup is NOT the same thing as stopping a
+        running watcher: no kill signal was sent, so {"stopped": True}
+        would have hidden a watcher that had already crashed on its own."""
+        pid_file = tmp_path / ".dv-harness" / "lsf" / "watcher.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text("33333")
+        with patch("dv_harness.regression_reporter._pid_is_running", return_value=False), \
+             patch("dv_harness.regression_reporter.os.kill") as m:
+            result = regression_reporter.stop_watcher(tmp_path)
+        m.assert_not_called()
+        assert result == {"stopped": False}
+        assert not pid_file.exists()  # stale file still cleaned up
+
     def test_stop_watcher_no_pid_file_is_a_noop(self, tmp_path):
         result = regression_reporter.stop_watcher(tmp_path)
         assert result == {"stopped": False}
+
+    def test_watcher_child_stdio_is_redirected_to_a_log_file(self, tmp_path):
+        """The detached child must never inherit the launching agent's own
+        stdio: on POSIX it would hold the agent's stdout pipe open forever
+        (hanging the caller) and die on BrokenPipeError once the reader went
+        away; on Windows DETACHED_PROCESS leaves it with no console at all,
+        silently discarding every log line including failure logging."""
+        with patch("dv_harness.regression_reporter.subprocess.Popen") as m:
+            m.return_value.pid = 4242
+            regression_reporter.ensure_watcher_running(
+                tmp_path, "vcuser1", tmp_path / "uvm", interval_minutes=5)
+        kwargs = m.call_args.kwargs
+        assert kwargs["stdin"] is subprocess.DEVNULL
+        assert kwargs["stderr"] is subprocess.STDOUT
+        log_path = tmp_path / ".dv-harness" / "lsf" / "watcher.log"
+        assert log_path.exists()
+        assert getattr(kwargs["stdout"], "name", None) == str(log_path)
 
     def test_watcher_status_reports_running(self, tmp_path):
         pid_file = tmp_path / ".dv-harness" / "lsf" / "watcher.pid"

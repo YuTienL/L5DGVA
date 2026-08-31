@@ -63,12 +63,41 @@ def render_snapshot(jobs):
     lines += ['', 'NEXT ACTIONS','- Analyze DONE jobs whose DV result is still UNKNOWN/pending.','- Continue incremental monitoring of RUN jobs.','- Triage EXIT/FAIL jobs and rerun fixed patterns when ready.']
     return '\n'.join(lines)
 
+def _registered_job_ids_on_disk(root: Path) -> list:
+    """Every job id dv_harness has a persisted JobState for, read straight
+    from `<root>/.dv-harness/lsf/jobs/*.json` filenames (no JSON parsing --
+    a corrupt file must not hide the id of the job it belongs to). Returns
+    [] when the directory does not exist yet."""
+    d = root.joinpath(*lsf_client.JOBS_DIR_NAME)
+    if not d.exists():
+        return []
+    ids = []
+    for p in d.glob("*.json"):
+        try:
+            ids.append(int(p.stem))
+        except ValueError:
+            continue
+    return sorted(ids)
+
+
 def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> str:
     """One pass of Part 2's reconciliation cycle: discover every live job
-    under vcuser, reconcile+analyze the ones dv_harness has a registered
-    JobState for (via bsub_submit() or register_external_job()), apply
-    Part 3's regression-list safety net for any job with a real PASS/FAIL
-    verdict and a known pattern, then render and persist the snapshot.
+    under vcuser, MERGE that set with every job dv_harness already has a
+    registered JobState for on disk, reconcile+analyze the registered ones,
+    apply Part 3's regression-list safety net for any job with a real
+    PASS/FAIL verdict and a known pattern, then render and persist the
+    snapshot.
+
+    BUG FIX (2026-09-01 whole-branch review): the job set was previously an
+    INTERSECTION -- only jobs that appeared in discover_live_jobs()'s output
+    AND had a registered JobState were reconciled -- which silently violated
+    the spec's own "Merge both sets" wording (Part 2 step 3). A registered
+    job that has aged out of the `bjobs -u` listing then never got
+    reconciled or analyzed again, so it could never be observed reaching
+    DONE/EXIT and Part 3's safety net never fired for it. reconcile_batch()
+    queries LSF by explicit job id, not by account, so it still returns a
+    real, current status for a registered job that is absent from this
+    poll's live_jobs list for any reason.
 
     A single failed discover_live_jobs()/reconcile_batch() call is caught
     and logged rather than raised, per the spec's error-handling
@@ -79,12 +108,13 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         print(f"[reconciliation_cycle] discover_live_jobs failed: {e}", flush=True)
         live_jobs = []
 
-    registered_ids = []
+    registered_id_set = set(_registered_job_ids_on_disk(root))
     for j in live_jobs:
         jid = j["job_id"]
         state = lsf_client.load_job_state(root, jid)
         if state.pattern is not None or state.sim_log is not None:
-            registered_ids.append(jid)
+            registered_id_set.add(jid)
+    registered_ids = sorted(registered_id_set)
 
     if registered_ids:
         try:
@@ -111,6 +141,19 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
             state.uvm_fatal_count = epilogue.get("uvm_fatal") or 0
         verdict = (epilogue or {}).get("verdict")
         try:
+            # NOTE on which detect_underreporting() branches are live HERE:
+            # state.uvm_error_count/uvm_fatal_count were just overwritten
+            # FROM this same epilogue a few lines above, so at this specific
+            # call site the "declared" values can never disagree with the
+            # epilogue's -- the UNDER_REPORTED_EPILOGUE_UVM_FATAL/
+            # _UVM_ERROR/_VERDICT branches are structurally unable to fire.
+            # That is intentional, not broken: the branch that matters here
+            # is the one comparing the log BODY's raw marker/signature
+            # counts against what the epilogue declared, which catches a
+            # simulation whose final tally under-reports its own log
+            # content. detect_underreporting() keeps the epilogue branches
+            # for its other callers (e.g. an agent-populated JobState that
+            # was never derived from the epilogue at all).
             discrepancies = detect_underreporting(asdict(state), parsed)
             for d in discrepancies:
                 print(f"[reconciliation_cycle] job {jid} under-reporting: {d}", flush=True)
@@ -118,8 +161,17 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
                 state.sim_status = "PASS"
             elif verdict == "FAILED":
                 state.sim_status = "FAIL"
-            else:
-                state.sim_status = "ANALYZED"
+            # BUG FIX (2026-09-01 whole-branch review): an INDETERMINATE
+            # verdict (no epilogue, or an epilogue with no PASSED/FAILED)
+            # must NOT advance sim_status. Stamping "ANALYZED" here left the
+            # job looking analyzed while its verdict was never actually
+            # determined, and permanently silenced reconcile_job()'s
+            # CRITICAL sim_status -> ANALYSIS_OWED discrepancy (which only
+            # fires while sim_status is UNKNOWN/RUNNING, and is the sole
+            # trigger for the Job-tier memory write). Per CLAUDE.md's "LSF
+            # DONE is not equal to DV PASS", an unparseable/truncated log
+            # must keep raising the analysis-owed alarm on every later
+            # reconciliation pass, never be silently guessed at.
             lsf_client.save_job_state(root, state)
 
             if state.pattern and verdict in ("PASSED", "FAILED"):
@@ -130,18 +182,34 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
             continue
 
     jobs_for_snapshot = []
+    seen_ids = set()
     for j in live_jobs:
         jid = j["job_id"]
+        seen_ids.add(jid)
         if jid in reconciled:
             state, _ = reconciled[jid]
-            row = lsf_client.to_snapshot_row(state, agent_action="monitoring")
-            row["lsf_status"] = state.lsf_status
+            jobs_for_snapshot.append(lsf_client.to_snapshot_row(state, agent_action="monitoring"))
         else:
-            row = {"job_id": jid, "pattern": j.get("job_name"),
-                   "lsf_status": j.get("stat"), "dv_analysis_status": "UNREGISTERED",
-                   "uvm_error_count": None, "uvm_fatal_count": None,
-                   "agent_action": "monitoring", "note": None}
-        jobs_for_snapshot.append(row)
+            # An unregistered row's status goes through the SAME
+            # map_bjobs_stat_to_lsf_status() normalization a registered row
+            # gets via to_snapshot_row()/reconcile_job(); otherwise one
+            # column would mix raw LSF codes (PSUSP/USUSP/UNKWN/ZOMBI) with
+            # normalized ones (PEND/RUN/DONE/EXIT/UNKNOWN) row by row.
+            jobs_for_snapshot.append({
+                "job_id": jid, "pattern": j.get("job_name"),
+                "lsf_status": lsf_client.map_bjobs_stat_to_lsf_status(j.get("stat")),
+                "dv_analysis_status": "UNREGISTERED",
+                "uvm_error_count": None, "uvm_fatal_count": None,
+                "agent_action": "monitoring", "note": None})
+
+    # Registered jobs that this poll's live_jobs did not list (see the
+    # union in the docstring) still belong in the snapshot -- they were
+    # reconciled against LSF by explicit job id and carry a real status.
+    for jid in registered_ids:
+        if jid in seen_ids or jid not in reconciled:
+            continue
+        state, _ = reconciled[jid]
+        jobs_for_snapshot.append(lsf_client.to_snapshot_row(state, agent_action="monitoring"))
 
     snapshot = render_snapshot(jobs_for_snapshot)
     snapshot_path = root / ".dv-harness" / "lsf" / "latest_snapshot.txt"
@@ -180,6 +248,19 @@ def _pid_is_running(pid: int) -> bool:
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         STILL_ACTIVE = 259
         kernel32 = ctypes.windll.kernel32
+        # restype/argtypes are mandatory here, not cosmetic: ctypes defaults
+        # every unprototyped return value to C int, which TRUNCATES a 64-bit
+        # HANDLE to 32 bits on 64-bit Windows -- the truncated value can be
+        # a bogus handle (and is then passed to GetExitCodeProcess/
+        # CloseHandle) or can even come back as 0 and be misread as "process
+        # not running".
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p,
+                                                 ctypes.POINTER(ctypes.c_ulong)]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return False
@@ -214,7 +295,19 @@ def ensure_watcher_running(root: Path, vcuser: str, uvm_root_path,
     """Start the --watch loop as a detached background process if one is
     not already running for this project, tracked via a PID file. A stale
     PID file (process no longer alive) is detected and cleaned up
-    automatically rather than blocking a fresh start."""
+    automatically rather than blocking a fresh start.
+
+    The child's stdio is redirected to `.dv-harness/lsf/watcher.log`
+    (append) with stdin on DEVNULL. This is load-bearing on both platforms
+    (BUG FIX, 2026-09-01 whole-branch review): on POSIX the child would
+    otherwise inherit the launching agent's own stdout pipe and hold its
+    write end open forever -- hanging whatever ran `dv-harness
+    lsf-watch-start` -- and would die with an uncaught BrokenPipeError out
+    of its own print() calls once the reader went away; on Windows
+    DETACHED_PROCESS gives the child no console at all, so every log line,
+    including the reconciliation cycle's under-reporting findings and its
+    failure logging, was silently discarded. The log file also gives those
+    findings a durable, discoverable home."""
     pid_path = _pid_file_path(root)
     if pid_path.exists():
         try:
@@ -234,7 +327,13 @@ def ensure_watcher_running(root: Path, vcuser: str, uvm_root_path,
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008  # DETACHED_PROCESS
     else:
         popen_kwargs["start_new_session"] = True
-    proc = subprocess.Popen(argv, **popen_kwargs)
+
+    log_path = root / ".dv-harness" / "lsf" / "watcher.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as log_fh:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                 stdout=log_fh, stderr=subprocess.STDOUT,
+                                 **popen_kwargs)
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(str(proc.pid))
     return {"started": True, "pid": proc.pid}
@@ -242,7 +341,14 @@ def ensure_watcher_running(root: Path, vcuser: str, uvm_root_path,
 
 def stop_watcher(root: Path) -> dict:
     """Terminate the running watcher (if any) and remove its PID file.
-    A missing PID file is a no-op, not an error -- nothing was running."""
+    A missing PID file is a no-op, not an error -- nothing was running.
+
+    `stopped` is honest about what actually happened: True only when a live
+    process was found and signaled. A tracked PID that was already dead
+    yields {"stopped": False} with the stale PID file still cleaned up --
+    cleaning up a stale file is not the same as stopping a running
+    watcher, and reporting it as such (the pre-2026-09-01 behavior) hid
+    watchers that had crashed on their own."""
     pid_path = _pid_file_path(root)
     if not pid_path.exists():
         return {"stopped": False}
@@ -251,10 +357,11 @@ def stop_watcher(root: Path) -> dict:
     except ValueError:
         pid_path.unlink()
         return {"stopped": False}
-    if _pid_is_running(pid):
+    was_running = _pid_is_running(pid)
+    if was_running:
         os.kill(pid, signal.SIGTERM if os.name != "nt" else 15)
     pid_path.unlink()
-    return {"stopped": True}
+    return {"stopped": was_running}
 
 
 def watcher_status(root: Path) -> dict:
@@ -269,19 +376,41 @@ def watcher_status(root: Path) -> dict:
 
 
 def main(project_root='.', once=True, interval_minutes=30, vcuser=None, uvm_root_path=None):
+    """Last-resort exception guard around each cycle (2026-09-01
+    whole-branch review): run_reconciliation_cycle() isolates only
+    discover_live_jobs()'s LsfUnavailableError and the per-job analysis
+    block. Other real exceptions can still escape -- load_job_state()'s bare
+    json.JSONDecodeError on a corrupt jobs/<id>.json, PermissionError/other
+    OSError subtypes out of reconcile_batch()'s subprocess.run calls, an
+    OSError from the snapshot mkdir/write_text -- and any one of them would
+    permanently kill a background watcher meant to run unattended for hours.
+    The guard belongs HERE, at the loop level, not inside
+    run_reconciliation_cycle(): one bad cycle must log and fall through to
+    the next time.sleep(), while a single-shot (`once=True`) caller still
+    gets its exception surfaced by the re-raise below."""
     root = Path(project_root).resolve()
     while True:
-        if vcuser:
-            uvm_root = Path(uvm_root_path) if uvm_root_path else root / 'uvm'
-            run_reconciliation_cycle(root, vcuser, uvm_root)
-        else:
-            # No vcuser means discover_live_jobs() has nothing to query --
-            # fall back to the pre-existing behavior of re-rendering
-            # whatever is already registered locally, rather than crashing.
-            print(render_snapshot(load_jobs(root)), flush=True)
+        try:
+            _run_one_cycle(root, vcuser, uvm_root_path)
+        except Exception as e:
+            if once:
+                raise
+            print(f"[watch loop] cycle failed: {e}", flush=True)
         if once:
             break
         time.sleep(max(1, interval_minutes) * 60)
+
+
+def _run_one_cycle(root: Path, vcuser, uvm_root_path) -> None:
+    if vcuser:
+        uvm_root = Path(uvm_root_path) if uvm_root_path else root / 'uvm'
+        run_reconciliation_cycle(root, vcuser, uvm_root)
+    else:
+        # No vcuser means discover_live_jobs() has nothing to query --
+        # fall back to the pre-existing behavior of re-rendering
+        # whatever is already registered locally, rather than crashing.
+        print(render_snapshot(load_jobs(root)), flush=True)
+
 
 if __name__=='__main__':
     import argparse
