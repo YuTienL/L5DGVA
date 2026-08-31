@@ -80,8 +80,8 @@ the difference lives in the profile table, not in the process.
 
 | Role | Tool | Consequences that recur throughout |
 |---|---|---|
-| **Simulation** | **Synopsys VCS** | Two-stage `vlogan` then `vcs`. Filelists resolve against the **working directory**, not the filelist's location. Partition compile treats *any* command-line change as a global rebuild |
-| **Debug** | **Synopsys Verdi** | FSDB only -- never VCD or VPD. `-kdb` must be passed to **both** stages or Verdi gets an incomplete database. Post-processing uses `-debug_access`, not `-debug_access+all` |
+| **Simulation** | **Synopsys VCS** | `vlogan` analyze then `vcs` elaborate, in either `onestep` or the default `fourstep` incremental flow -- see Step 9. Filelists resolve against the **working directory**, not the filelist's location. Partition compile treats *any* command-line change as a global rebuild |
+| **Debug** | **Synopsys Verdi** | FSDB only -- never VCD or VPD. `-kdb` must be passed to **every** stage or Verdi gets an incomplete database. Post-processing uses `-debug_access`, not `-debug_access+all`. Protocol Analyzer available where the VIP supports it -- see Step 9 |
 | **VIP** | **Synopsys VC VIP (SVT)** | UVM flow includes the *unparameterised* interface variant. Needs `-ntb_opts uvm` plus the VIP's own `use_sigprop`. Width defines have narrow defaults and truncate silently if unset |
 
 Write scripts in Linux/bash + VCS form. If authoring on a host where VCS
@@ -1137,11 +1137,63 @@ empty.
 
 ## Step 9 -- Build system (VCS + Verdi)
 
-- **Two stages**: `vlogan` analyses the UVM library, then the design, VIP and
-  testbench; `vcs` elaborates. Keep the UVM library analysis separate so a
-  testbench edit does not re-analyse it.
-- **`-kdb` in BOTH stages.** Passing it only to `vcs` leaves Verdi with an
-  incomplete database. `-lca` is a prerequisite.
+- **`vlogan` analyze then `vcs` elaborate, in either `onestep` or the
+  default `fourstep` incremental flow** -- see "Build system -- VCS
+  compile flow" below for the real, already-generic, already-internalized
+  mechanism.
+- **`-kdb` in EVERY stage, not just some.** Passing it only to `vcs` (or
+  omitting it from even one `vlogan` stage in a 3-or-more-step flow)
+  leaves Verdi with an incomplete database. `-lca` is a prerequisite.
+
+### Build system -- VCS compile flow
+
+> **Standing rule (2026-09-01), describing the harness's own
+> already-internalized and already-generic template
+> (`dv_harness/uvm_generator/templates/sim_scripts/Makefile`) -- no
+> further genericization needed, this section just needed to exist.**
+
+- **`FLOW=onestep|fourstep`, `fourstep` is the default.** `onestep` is
+  one `vcs` call: simplest, no incremental analysis, every file shares
+  one compilation unit -- a missing `` `include `` can be silently
+  papered over by another file's copy of the same content landing in the
+  same unit. `fourstep` is the real default and should be trusted over
+  `onestep` for anything beyond a first sanity check: stage 1a
+  (`vlogan` analyzes the UVM library), stage 1b (`vlogan` analyzes the
+  DUT), stage 1c (`vlogan` analyzes the testbench -- a TB-only edit
+  re-runs 1c alone, not the DUT), stage 2 (`vcs` elaborates from the
+  analyzed libraries into the sim binary). Each file gets its own
+  compilation unit, and re-analysis is incremental. Stamp files plus a
+  flags-signature file drive re-analysis: **a new `+define+`/flag change
+  is what actually triggers re-analysis, not a source-file timestamp
+  change** -- a `+define+` that fails to reach the right stage's flags
+  variable makes a run look completely normal while silently doing
+  nothing different.
+- **Defines belong on the `vlogan` stage's flags, never on the `vcs`
+  elaboration stage's flags, in `fourstep`.** The elaboration-stage `vcs`
+  call gets no source files (it elaborates the already-analyzed
+  libraries) -- a `+define+` placed there is rejected outright as an
+  illegal parse-only option on an elaboration-only invocation. All
+  `+define+`/`+incdir+` content belongs in the vlogan-stage flags
+  variable, never the elaboration-stage one.
+- **Partition compile (`PARTCOMP_EN`) is the default partitioning mode**,
+  via autopartitioning (no manual partition-config file needed) -- it
+  partitions design and testbench itself and re-adjusts around
+  cross-partition limitations automatically, per the tool's own
+  documented behavior. **Caveat already partially present above still
+  applies in full: any command-line/flag change forces a global
+  rebuild** -- partition compile does not notice a source-only change
+  that alters what gets analyzed into a differently-shaped library the
+  old partition can't stitch onto; the real failure mode is an
+  assertion/internal-consistency error reported by whatever job
+  scheduler ran it as a bare nonzero exit with no explanatory message,
+  not a clear diagnostic. **Unreachability Analysis (UNR) is
+  INCOMPATIBLE with partition compile** and needs its own separate
+  elaboration path when enabled. **Three distinct parallelism knobs,
+  none substitutes for another:** `-j` (native code generation,
+  elaboration-stage only), `-fastpartcomp=jN` (parallel partition build,
+  inside partition compile), `-hsopt=j` (gate-level/GLS designs only,
+  not applicable to an RTL-only flow).
+
 - **`-debug_access`, not `-debug_access+all`**, for a post-processing flow --
   the latter is for interactive debug and costs simulation speed a
   post-process flow never recovers.

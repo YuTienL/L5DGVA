@@ -36,8 +36,8 @@ workspaces, status bar, gates, and a kickoff-brief export.
 
 | Role | Tool | What it forces |
 |---|---|---|
-| Simulation | **Synopsys VCS** | Two-stage `vlogan` then `vcs`. Filelist paths resolve against the **working directory**. Partition compile rebuilds globally on any command-line change |
-| Debug | **Synopsys Verdi** | **FSDB only** -- never VCD or VPD. `-kdb` in **both** stages. `-debug_access`, not `+all`, for post-processing |
+| Simulation | **Synopsys VCS** | `vlogan` analyze then `vcs` elaborate, in `onestep` or the default `fourstep` incremental flow -- see Build system below. Filelist paths resolve against the **working directory**. Partition compile rebuilds globally on any command-line change |
+| Debug | **Synopsys Verdi** | **FSDB only** -- never VCD or VPD. `-kdb` in **every** stage. `-debug_access`, not `+all`, for post-processing. Protocol Analyzer where the VIP supports it -- see Build system below |
 | VIP | **Synopsys VC VIP (SVT)** | UVM flow includes the *unparameterised* interface. Needs `-ntb_opts uvm` plus the VIP's `use_sigprop`. Width defines truncate silently if unset |
 
 ## Target settings
@@ -660,7 +660,37 @@ mode selection already used for the simulator binary). Carrying one
 shape's flag vocabulary to the other silently fails or breaks the
 invocation.
 
-- Two stages, both given the debug-database flag if a viewer will be used.
+- `vlogan` analyze then `vcs` elaborate, both given the debug-database
+  flag if a viewer will be used -- see "VCS compile flow" below for the
+  real mechanism.
+
+**VCS compile flow (2026-09-01), describing the harness's own
+already-internalized/generic template -- no further genericization
+needed:**
+- `FLOW=onestep|fourstep`, `fourstep` default. `onestep`: one `vcs` call,
+  no incremental analysis, one shared compilation unit. `fourstep`
+  (trust this over `onestep` beyond a first sanity check): stage 1a
+  (`vlogan` UVM library) / 1b (`vlogan` DUT) / 1c (`vlogan` testbench --
+  a TB-only edit re-runs 1c alone) / stage 2 (`vcs` elaborate). Stamp
+  files + a flags-signature file drive re-analysis: a `+define+`/flag
+  change triggers it, not a source timestamp change -- a define that
+  misses the right stage's flags variable makes a run look normal while
+  doing nothing different.
+- Defines belong on the `vlogan` stage's flags, never the `vcs`
+  elaboration stage's, in `fourstep` -- the elaboration call takes no
+  source files and rejects a `+define+` outright as illegal on a
+  parse-only invocation.
+- Partition compile (`PARTCOMP_EN`) is the default mode via
+  autopartitioning (no manual config file) -- it repartitions around
+  cross-partition limitations on its own, per the tool's documented
+  behavior. Any command-line/flag change still forces a global rebuild;
+  a source-only change that reshapes what's analyzed can produce a bare
+  nonzero-exit assertion failure with no explanatory message. UNR is
+  incompatible with partition compile and needs a separate elaboration
+  path. Three parallelism knobs, none substitutes for another: `-j`
+  (native codegen, elaboration-stage only), `-fastpartcomp=jN` (parallel
+  partition build), `-hsopt=j` (gate-level/GLS only).
+
 - Consolidate the VIP examples' flags; cross-check against the tool manuals.
 - **Compute the timescale constraint** from the configured line rates and
   `$(error)` on a mismatch:
