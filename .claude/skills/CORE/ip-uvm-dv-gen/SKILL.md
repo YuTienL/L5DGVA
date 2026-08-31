@@ -470,6 +470,25 @@ Delete        : everything that programs the far side the VIP replaces
 Add           : a few VIP task calls in its place
 ```
 
+**Standing rule (2026-09-01, distilled/genericized): preserve a deleted
+line as a tagged comment, never a silent deletion.** Keep a no-longer-run
+converted line as a comment tagged with one of three categories:
+already-dead-in-the-original (a record, not something this conversion
+skipped), superseded-by-a-live-line (state where), or
+host-side-original-now-performed-by-the-VIP (permanently uncompilable,
+never uncomment). A tag, once applied, is never removed. An untagged
+commented-out call to a known reference-API function is a defect a
+static checker should catch.
+
+**Standing rule (2026-09-01, distilled/genericized): pattern file
+sectioning convention.** Every pattern opens with a provenance banner
+(what it's ported from, pointer to the framework doc). A simply-ported
+pattern uses SETUP / TEST CONTENT / VERDICT section banners, with a
+"no counterpart in the original" marker on any newly-added section. A
+multi-branch pattern instead banners each fork branch by role and uses
+inline numbered sub-labels within a branch so each original scenario step
+has a traceable landing spot.
+
 Then **prove equivalence**: resolve address macros to literals, compare
 register writes one-for-one against the original, and classify every
 difference.
@@ -722,6 +741,17 @@ uvm/tb/patterns/  README.md, dv_uvm_pattern_pool.svh (the +PATTERN dispatcher),
                   migration in a comment rather than hiding it. Expect and allow
                   this category taxonomy to grow past the initial split; don't
                   treat a richer taxonomy as a deviation to correct back.
+
+                  Standing rule (2026-09-01, distilled/genericized): a pattern
+                  .txt may be authored as a BARE BODY (generator wraps it in a
+                  named task automatically) or SELF-CONTAINED (it already
+                  declares its own named task -- generator emits a bare
+                  include instead); detection is by literal presence of the
+                  task-declaration string. A helper must produce one shape
+                  consistently; the two must never disagree within one file.
+                  The dispatcher must report an unrecognized +PATTERN= name
+                  explicitly, never silently fall back to a default -- a typo
+                  must never be recorded as a pass for a pattern that never ran.
 uvm/filelist/     dv_uvm_files.f  SOLE owner of the source list
                   <ip>.f          +incdir+ / +define+ only
 uvm/hex/          stimulus and descriptor images

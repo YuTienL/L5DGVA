@@ -919,6 +919,40 @@ testbench, and often its macro definition or its instance **is not even in the
 delivery** -- meaning the originals cannot run as delivered either. That is
 the strongest argument for converting: the VIP removes the dependency.
 
+> **Standing rule (2026-09-01, distilled and genericized): preserve a
+> deleted line as a tagged comment, never a silent deletion.** When a
+> converted line no longer runs, keep it in the file as a comment rather
+> than removing it, prefixed with one of three tag categories: (1)
+> **already dead in the original** -- it never ran even in the BFM
+> version, kept as a record, not something this conversion skipped; (2)
+> **superseded by a live line** -- state where (above/below/task name)
+> the same effect now happens instead; (3) **host-side original now
+> performed by the VIP** -- permanently uncompilable in the converted
+> file (its own referenced tasks/instances are gone), and must never be
+> uncommented. **A tag, once applied, must never be removed.** An
+> untagged commented-out call to a known reference-API function (a
+> register-access task, a model-init call, and similar) is a defect a
+> static checker should catch -- a real sibling project's `check/`
+> family does exactly this. Do not delete a converted line outright when
+> a tagged comment preserves the same audit trail equivalence-proving
+> (below) depends on.
+
+> **Standing rule (2026-09-01, distilled and genericized): pattern file
+> sectioning convention.** Every pattern file opens with a short
+> provenance banner (what it was ported from, if anything, and a pointer
+> to the pattern-authoring framework doc). A simply-ported pattern's body
+> is divided by banner comments into SETUP / TEST CONTENT / VERDICT
+> sections, with an explicit "no counterpart in the original" marker on
+> any section that was newly added during conversion (most commonly
+> VERDICT, when the BFM original had no automated checking at all). A
+> multi-branch pattern (see the Multi-instance pattern architecture in
+> Step 6) instead banners each fork branch by role, and within a
+> host-script branch further breaks the body into inline numbered
+> sub-labels (setup/barrier/detection/linkup/transfer-phase-1/
+> transfer-phase-2, or whatever the pattern's own real phases are) so
+> each step of the original scenario has a traceable, comment-anchored
+> landing spot in the converted file.
+
 ### Prove equivalence, then audit the procedure
 
 > **Confirmed drift (2026-08-31): a proven task's real behavior is bigger
@@ -1397,6 +1431,23 @@ is a decision to record, not a default.
                          command.txt is an acceptable equivalent, not a
                          missing deliverable (same confirmed drift note)
 ```
+
+> **Standing rule (2026-09-01, distilled and genericized): two pattern
+> file authoring shapes, and the dispatcher's own detection rule.** A
+> pattern `.txt` under `patterns/` may be authored either as a **bare
+> body** (statements only, no task declaration of its own -- the pool
+> generator wraps it automatically in a named task) or as a
+> **self-contained file** (it already declares its own named task -- the
+> generator instead emits a bare include at file scope, no wrapper task).
+> Detection is by literal presence of a task-declaration string matching
+> the generator's own naming convention for that pattern; a
+> pattern-writing helper must commit to one shape consistently, and the
+> two must never disagree within one file (a self-contained file that the
+> generator also tries to wrap produces a nested/duplicate task
+> definition). Separately: `dv_uvm_pattern_pool.svh`'s own `+PATTERN=`
+> dispatcher must report an unrecognized pattern name explicitly, never
+> silently fall back to a default pattern -- a typo in `+PATTERN=` must
+> never be recorded as a pass for a pattern that never actually ran.
 
 ### The User Guide
 
