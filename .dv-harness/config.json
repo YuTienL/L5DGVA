@@ -15,10 +15,36 @@
     "stop_on_wait_user": true,
     "require_exact_server_sha": true,
     "require_second_pass_audit": true,
-    "require_all_actionable_findings_closed": true
+    "require_all_actionable_findings_closed": true,
+    "require_stage_gate_evidence": true,
+    "require_dv_review_cosign": false,
+    "enable_inner_react_loop": true,
+    "inner_react_max_iterations": 3,
+    "inner_react_max_adapter_calls": 2
   },
   "dashboard": {
     "host": "127.0.0.1",
     "port": 8765
+  },
+  "knowledge_center": {
+    "enabled": true,
+    "remote_root": "/home/svcacct/AI/DB",
+    "hop_script": "D:/DV/Task/DV_Agent_Harness_L5/remote_hop.py",
+    "categories": [
+      "usb",
+      "pcie",
+      "amba4",
+      "ethernet",
+      "mipi_csi2",
+      "mipi_dsi",
+      "can_fd",
+      "emmc",
+      "sd_sdio",
+      "_general"
+    ],
+    "sync_on_promote": true,
+    "max_age_days": 180,
+    "configured_by": "peter.lin",
+    "configured_at": 1788138882.7129824
   }
 }
