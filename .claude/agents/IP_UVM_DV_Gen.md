@@ -980,15 +980,19 @@ empty.
 > session-scoped, updated 2026-09-01 to record internalization): the
 > generated environment's `sim/scripts/` build infrastructure is based on
 > a template now internalized into this harness at
-> `dv_harness/uvm_generator/templates/sim_scripts/`** -- copied
+> `dv_harness/uvm_generator/templates/sim_scripts/`** -- originally copied
 > byte-identical from `D:\DV\Task\USB_UVM_Handoff\sim\scripts\` (the
 > project's reference-environment tree) after explicit, repeated (three
 > times) user authorization, and now a permanent DV Agent Harness L5 asset
 > in its own right. **The external `USB_UVM_Handoff` path no longer needs
 > to be read for this purpose** -- use the internal template location
 > directly; it travels with the harness onto any future project/server.
-> The internalized set (verified byte-identical against the source at
-> copy time): `Makefile` (179KB, the canonical build entry point),
+> **No longer byte-identical to the source as of a 2026-09-01 genericization
+> pass** (see below) that made the template actually protocol-agnostic;
+> the source path remains useful only as historical provenance, never as
+> something to re-diff against. The internalized set (originally verified
+> byte-identical against the source at copy time, before genericization):
+> `Makefile` (179KB, the canonical build entry point),
 > `waves.tcl` (Verdi signal setup), `lsf_regress.sh`/`lsf_run.sh`/
 > `lsf_wait.sh` (LSF submission/polling), `ip_run.sh` (renamed from the
 > source's `usbrun.sh` at internalization time -- confirmed not invoked by
@@ -1021,6 +1025,31 @@ empty.
 > legitimately die while the job itself is still healthy. Use plain
 > `bsub` (detached) and poll `bjobs` separately whenever the submission
 > channel itself might not outlive the job.
+
+> **Genericization pass (2026-09-01):** the internalized template set above
+> was made actually protocol-agnostic, not just relocated. Every file got
+> a real `TARGET_IP`/`IP_PREFIX` parameterization (Makefile variables,
+> shell env-var defaults, Python module-level vars overridable via env var)
+> feeding every functional reference that used to hardcode the source
+> project's protocol name -- filelist names, `+define+`/plusarg names, LSF
+> job-name prefixes, register-macro-name regexes in the `check/` static
+> tools, and so on. This was verified working, not just edited on faith:
+> `check/pattern_rules.py` was re-imported with `TARGET_IP=PCIE
+> IP_PREFIX=pcie_` and its compiled regexes were confirmed to reflect the
+> new protocol name correctly. Two categories of content were deliberately
+> left concrete rather than genericized, each with an explicit label in
+> the file itself: (a) a handful of Make/shell variable names whose own
+> *identifier* embedded the old protocol name (e.g. what was `USB0_BASE`)
+> were renamed to a generic literal (`IP0_BASE`) rather than made
+> `$(TARGET_IP)`-computed, since a Make variable name must stay a fixed,
+> command-line-overridable token; (b) `waves.tcl`'s DUT-internal signal
+> hierarchy and `reg_audit.py`'s register bit-field expectations are real
+> RTL/silicon fact from the original chip, not a naming-convention
+> artifact -- these remain as clearly-labelled worked examples a future
+> generation must re-derive from its own real Step 3 RTL survey, never
+> mechanically substituted. Full before/after detail:
+> `.work/genericize-sim-scripts-report.md` (session-local; the substance
+> that matters is captured here).
 
 ---
 

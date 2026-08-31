@@ -496,11 +496,17 @@ None of these fail compilation. The symptom is always a far-side timeout.
 > **Standing rule (2026-09-01, explicit Human Override, permanent, updated
 > 2026-09-01 to record internalization): `sim/scripts/` build
 > infrastructure is based on a template now internalized at
-> `dv_harness/uvm_generator/templates/sim_scripts/`** -- copied
+> `dv_harness/uvm_generator/templates/sim_scripts/`** -- originally copied
 > byte-identical from `D:\DV\Task\USB_UVM_Handoff\sim\scripts\` after
 > explicit, repeated user authorization, and now a permanent harness asset
 > in its own right. **The external path no longer needs to be read for
-> this purpose.** Internalized set: `Makefile` (canonical build entry
+> this purpose**, and note it is **no longer byte-identical** as of a
+> 2026-09-01 genericization pass (real `TARGET_IP`/`IP_PREFIX`
+> parameterization, verified working by re-importing `pattern_rules.py`
+> with `TARGET_IP=PCIE`; DUT-internal RTL/silicon facts in `waves.tcl`/
+> `reg_audit.py` kept as explicitly-labelled worked examples, not
+> mechanically substituted -- see `.work/genericize-sim-scripts-report.md`,
+> session-local). Internalized set: `Makefile` (canonical build entry
 > point), `waves.tcl`, `lsf_regress.sh`/`lsf_run.sh`/`lsf_wait.sh`,
 > `ip_run.sh` (renamed from the source's `usbrun.sh` -- not invoked by
 > literal filename in the Makefile, confirmed safe to rename, kept
