@@ -29,6 +29,37 @@ environment generation session (2026-08-31/09-01):
 This spec closes both, since the second depends on the first for
 predictable log discovery, and both were requested together.
 
+## Revision note (2026-09-01, post-distillation)
+
+Three multi-agent distillation passes over a real sibling project
+(`D:\DV\Task\USB`) ran after this spec was first written, and their
+findings are now fully documented in `IP_UVM_DV_Gen.md`/
+`CORE/ip-uvm-dv-gen/SKILL.md`. Two of those findings directly correct
+assumptions this spec made, and are applied below:
+
+1. **`regression.list` does not live under `sim/`.** It must survive
+   `make distclean` (which wipes build/run products), so it lives in
+   `UVM_ROOT_PATH` (`<project>/uvm/regression.list`), not
+   `SIM_ROOT_PATH`. Part 3 originally said `<project>/sim/regression.list`
+   -- that was wrong; `IP_UVM_DV_Gen.md` already documents the correct
+   location as of this distillation pass, so this spec is now the
+   stale side of that disagreement. Fixed below.
+2. **A real, already-proven, already-internalized Make-native mechanism
+   (`record_result`/`record_suite`, gated by `RECORD=1`/`IN_REGRESS`)
+   already maintains `regression.list` correctly for the common case**
+   -- any job run via the generated environment's own
+   `make sim RECORD=1` / `make regress RECORD=1`. This was not known
+   when Part 3 was first written; Part 3 treated
+   `regression_list_manager.py`'s Python-side wiring as "the fix" for
+   an unwired gap. It no longer is the fix for the common case -- it is
+   a secondary safety net for a narrower, still-real scenario. See the
+   rewritten Part 3 below for what changed and why.
+
+Part 1's directory layout and Part 2's background monitor are
+otherwise unaffected by this distillation work, with one small
+addition to Part 1 (the real `run/`-vs-`report/`-symlink-view design,
+also newly confirmed real) noted in place below.
+
 ## Part 1: Standardized sim output layout
 
 Every environment `IP_UVM_DV_Gen` generates gets these directories under
@@ -38,11 +69,15 @@ Every environment `IP_UVM_DV_Gen` generates gets these directories under
 ```
 sim/
 |-- scripts/    (existing) Makefile, waves.tcl, LSF scripts, static checks
-|-- log/        text logs, one per job/pattern invocation: <job_id_or_pattern>.log
+|-- run/        the REAL per-job/per-pattern working directory: simv's
+|               actual cwd and the one real sim.log per invocation
+|-- log/        <job_id_or_pattern>.log -- a SYMLINK into run/'s real
+|               sim.log, created before simv starts (see below)
 |-- fsdb/       waveform files (per CLAUDE.md's Simulation Observability
 |               Default: empty by default, populated only when the
 |               Waveform Dump User Gate has approved a scoped dump)
-|-- report/     human-readable analysis output: regression snapshots,
+|-- report/     a SYMLINK VIEW into run/ (not a second copy) plus other
+|               human-readable analysis output: regression snapshots,
 |               coverage summaries, DMA/register audit reports
 |-- output/     other simulation-produced artifacts that are not logs,
 |               waveforms, or reports: memory dumps, generated hex/bin
@@ -50,6 +85,9 @@ sim/
 |               produces
 `-- cov/        coverage database / merge artifacts (URG/IMC-style output,
                 whatever the project's real coverage tool produces)
+
+(regression.list is NOT under sim/ -- it lives at UVM_ROOT_PATH/
+regression.list so it survives make distclean; see Part 3.)
 ```
 
 **Naming convention inside `log/`**: `<job_id>.log` when the run went
@@ -61,6 +99,32 @@ per this session's earlier work) must be updated so its real LSF output
 redirection (currently `$(PAT_RUN)/lsf.out`-shaped, per this template's own
 documented `LSFW` macro) writes into `sim/log/` using this convention,
 not wherever the pattern's own working directory happens to be.
+
+**`run/` is real, `report/` and `log/` are symlink views into it (2026-09-01,
+distilled and confirmed real).** A real sibling project's own design,
+now also documented in `IP_UVM_DV_Gen.md`: `run/<job_or_pattern>/` holds
+the actual simv working directory and the one real `sim.log`; `report/`
+and `log/` entries for the same job are symlinks pointing back into
+`run/`, never a second copy of the file. Critically, both symlinks are
+created **before** `simv` starts, not collected afterward -- a
+hard-killed job (`bkill`, a crashed relay, a manual `kill -9`) still
+leaves a reachable transcript at its `log/<job_id>.log` path, because
+the symlink already existed before the process that might die ever
+started. Both `run/` and its two view directories are wiped and
+recreated per invocation; a stale symlink from a prior run is never
+left dangling. This is a real design detail the directory list above
+does not yet capture -- when implementing, `run/` should join the
+directory list as the seventh member (alongside `scripts/`, `log/`,
+`fsdb/`, `report/`, `output/`, `cov/`), and `log/`/`report/`'s own
+descriptions should say "symlink view into `run/`," not "a copy of the
+log."
+
+**`regression.list` is explicitly NOT one of these directories.** It
+lives in `UVM_ROOT_PATH` (`<project>/uvm/regression.list`), a sibling
+of `SIM_ROOT_PATH`, specifically because it must survive `make
+distclean` -- a build/run product wipe must never erase a durable,
+cross-run index of which patterns currently pass. See Part 3 for the
+corrected treatment; do not place it under any `sim/` subdirectory.
 
 This is a Step 11 file-manifest addition (`.claude/agents/IP_UVM_DV_Gen.md`
 and its companion `CORE/ip-uvm-dv-gen/SKILL.md`), not a `dv_harness/`
@@ -148,36 +212,77 @@ failure (one line, to the same log stream the snapshot goes to) and retry
 next cycle. A `reconcile_batch()` exception for one job must not prevent
 other jobs in the same cycle from being processed.
 
-## Part 3: Automatic regression-list maintenance
+## Part 3: Automatic regression-list maintenance (revised 2026-09-01)
 
-**A real, already-correct mechanism for exactly this exists and is
-unwired.** `dv_harness/uvm_generator/regression_list_manager.py`'s
-`record_verdict(existing_lines, pattern, verdict_passed)` already
-implements precisely the requested behavior: idempotently removes any
-prior entry for `pattern`, then re-adds it only if `verdict_passed` is
-true -- so a FAIL always evicts a stale PASS, and a repeated PASS is a
-no-op. `record_suite()` is the batch equivalent for multiple verdicts in
-one pass. A CLI shim (`tools/regression_list_cli.py`) and a Makefile
-fragment emitter (`emit_makefile_fragment()`) already exist too. Per this
-session's earlier full-harness wiring audit, the only real gap is that
-**nothing calls this from a real execution path** -- its only caller is an
-unreferenced Makefile template.
+**The common case is already solved, natively, by the generated
+environment's own Makefile -- this is no longer "the fix," it is
+background context that dv_harness's own mechanism must respect,
+not duplicate or fight.** The
+internalized, already-generic Makefile template
+(`dv_harness/uvm_generator/templates/sim_scripts/Makefile`, per the
+2026-09-01 distillation pass, now documented in `IP_UVM_DV_Gen.md`'s
+Build System section as "Tracked-passing-suite list (regression.list /
+RECORD=1)") implements a real, proven `record_result`/`record_suite`
+mechanism: `make sim RECORD=1 PATTERN=<name>` updates a single pattern's
+entry on its own real log; `make regress RECORD=1` walks every pattern
+in the suite once, after all jobs finish, and rewrites the whole list.
+Both use the same idempotent shape `regression_list_manager.py`
+independently implements in Python (strip any existing line for the
+pattern, re-append only on a confirmed PASS) -- and `record_result` is
+deliberately gated OFF under `IN_REGRESS=1` (i.e. inside a parallel
+regression batch) specifically to avoid N parallel hosts
+read-modify-writing the same file and losing entries, a real race this
+project's own design already had to solve. **For any job that runs
+through this Makefile with `RECORD=1` set, regression.list is already
+correctly maintained with zero dv_harness involvement.** Nothing in
+dv_harness needs to detect this case or avoid duplicating it -- see
+"Why redundant execution is safe" below.
 
-**The fix is wiring, not new logic.** Extend Part 2's reconciliation cycle
-(step 2 of "The reconciliation cycle" above, where a terminal job's real
-log gets analyzed for UVM_ERROR/FATAL counts): once a job's real pass/fail
-verdict is determined for a job carrying a known `pattern` name (from its
-registered `JobState`, either via `bsub_submit()` or
-`register_external_job()`), call `record_verdict()` against that project's
-real `regression.list` (path: `<project>/sim/regression.list`, written
-into Part 1's newly-standardized `sim/` layout at the top level, alongside
-`scripts/`/`log/`/etc. rather than inside any one of those subdirectories,
-since it is a cross-cutting index rather than one run's output) and persist
-the updated list back to disk. A job with no known `pattern` name (e.g. an
+**`regression_list_manager.py`'s Python-side mechanism is a safety net
+for a narrower, still-real case: jobs dv_harness tracks that do NOT go
+through a `RECORD=1`-enabled Make target at all.** This case is real,
+not hypothetical -- `dv_harness/cli.py` exposes a live `lsf submit`
+command that calls `lsf_client.py:bsub_submit()` directly with an
+arbitrary shell command string (confirmed by reading the current code,
+not assumed); nothing requires that command to be
+`make sim PATTERN=<x> RECORD=1`, and a human or agent using this path
+(or registering an externally-submitted job via
+`register_external_job()`) can easily submit something that never
+touches the Makefile's own RECORD mechanism at all. For exactly this
+narrower case, extend Part 2's reconciliation cycle (step 2 of "The
+reconciliation cycle" above, where a terminal job's real log gets
+analyzed for UVM_ERROR/FATAL counts): once a job's real pass/fail
+verdict is determined for a job carrying a known `pattern` name (from
+its registered `JobState`, either via `bsub_submit()` or
+`register_external_job()`), call `record_verdict()` against that
+project's real `regression.list` at **`UVM_ROOT_PATH/regression.list`**
+(`<project>/uvm/regression.list` -- corrected from this spec's original
+`<project>/sim/regression.list`, which was wrong; see the Revision note
+above and Part 1's corrected treatment) and persist the updated list
+back to disk. A job with no known `pattern` name (e.g. an
 auto-discovered-only job with no registration) cannot update the
-regression list -- this is a real, honest limitation of unregistered jobs,
-consistent with Part 2's own "UNREGISTERED" status handling, not a defect
-to silently work around.
+regression list -- this is a real, honest limitation of unregistered
+jobs, consistent with Part 2's own "UNREGISTERED" status handling, not
+a defect to silently work around.
+
+**Why redundant execution is safe, and why no detection logic is
+needed to avoid it.** A job that already went through
+`make regress RECORD=1` will have its pattern correctly present (or
+absent) in `regression.list` by the time dv_harness's reconciliation
+cycle gets to it. If that job also happens to be tracked by dv_harness
+(registered via `bsub_submit()`/`register_external_job()`) and its
+reconciliation cycle also calls `record_verdict()` for the same
+pattern and verdict, the result is a no-op -- `record_verdict()`'s own
+strip-then-conditional-append shape is idempotent, so calling it twice
+with the same `(pattern, verdict_passed)` produces the exact same list
+either way. **Do not add logic to detect "did the Make-native
+mechanism already handle this job" and skip the Python-side call when
+it did** -- that detection would require parsing an arbitrary command
+string for `RECORD=1`, is fragile (the flag could arrive via
+environment rather than argv), and buys nothing: the idempotent
+behavior already makes the redundant case free of any correctness or
+data-loss risk. Simplicity wins here (YAGNI) over a "smarter" call
+site that adds fragile detection for zero actual benefit.
 
 **Verdict source of truth**: reuse the exact same UVM_ERROR/FATAL-count
 based pass/fail determination Part 2's reconciliation step already
@@ -210,15 +315,22 @@ failure).
 - `render_snapshot()`'s existing behavior (already tested) must not
   regress -- new tests for the "UNREGISTERED" row shape, not a rewrite of
   existing assertions.
-- Part 3's wiring: a real test proving that a reconciliation cycle for a
-  registered job with a real PASS verdict calls `record_verdict()` and the
-  pattern appears in `sim/regression.list`; a second test for a FAIL
-  verdict evicting a previously-recorded PASS; a third test proving an
+- Part 3's wiring (revised 2026-09-01): a real test proving that a
+  reconciliation cycle for a registered job with a real PASS verdict
+  calls `record_verdict()` and the pattern appears in
+  `UVM_ROOT_PATH/regression.list` (corrected path -- not
+  `sim/regression.list`); a second test for a FAIL verdict evicting a
+  previously-recorded PASS; a third test proving an
   indeterminate/unanalyzable verdict calls `record_verdict()` NOT AT ALL
-  (list unchanged) rather than guessing either direction. Do not re-test
-  `record_verdict()`/`record_suite()` themselves -- they are already
-  correct and (per the audit) already have their own test coverage; only
-  the new call site needs new tests.
+  (list unchanged) rather than guessing either direction; a fourth test
+  proving that calling `record_verdict()` twice in a row with the same
+  `(pattern, verdict_passed)` (simulating the Make-native mechanism
+  having already recorded the same verdict) produces an identical list
+  both times -- the idempotency guarantee the "redundant execution is
+  safe" design relies on, exercised as a real test rather than only
+  asserted in prose. Do not re-test `record_verdict()`/`record_suite()`
+  themselves -- they are already correct and already have their own
+  test coverage; only the new call site needs new tests.
 
 ## Out of Scope
 
