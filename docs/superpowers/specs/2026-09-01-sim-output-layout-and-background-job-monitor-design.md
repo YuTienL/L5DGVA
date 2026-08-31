@@ -148,6 +148,49 @@ failure (one line, to the same log stream the snapshot goes to) and retry
 next cycle. A `reconcile_batch()` exception for one job must not prevent
 other jobs in the same cycle from being processed.
 
+## Part 3: Automatic regression-list maintenance
+
+**A real, already-correct mechanism for exactly this exists and is
+unwired.** `dv_harness/uvm_generator/regression_list_manager.py`'s
+`record_verdict(existing_lines, pattern, verdict_passed)` already
+implements precisely the requested behavior: idempotently removes any
+prior entry for `pattern`, then re-adds it only if `verdict_passed` is
+true -- so a FAIL always evicts a stale PASS, and a repeated PASS is a
+no-op. `record_suite()` is the batch equivalent for multiple verdicts in
+one pass. A CLI shim (`tools/regression_list_cli.py`) and a Makefile
+fragment emitter (`emit_makefile_fragment()`) already exist too. Per this
+session's earlier full-harness wiring audit, the only real gap is that
+**nothing calls this from a real execution path** -- its only caller is an
+unreferenced Makefile template.
+
+**The fix is wiring, not new logic.** Extend Part 2's reconciliation cycle
+(step 2 of "The reconciliation cycle" above, where a terminal job's real
+log gets analyzed for UVM_ERROR/FATAL counts): once a job's real pass/fail
+verdict is determined for a job carrying a known `pattern` name (from its
+registered `JobState`, either via `bsub_submit()` or
+`register_external_job()`), call `record_verdict()` against that project's
+real `regression.list` (path: `<project>/sim/regression.list`, written
+into Part 1's newly-standardized `sim/` layout at the top level, alongside
+`scripts/`/`log/`/etc. rather than inside any one of those subdirectories,
+since it is a cross-cutting index rather than one run's output) and persist
+the updated list back to disk. A job with no known `pattern` name (e.g. an
+auto-discovered-only job with no registration) cannot update the
+regression list -- this is a real, honest limitation of unregistered jobs,
+consistent with Part 2's own "UNREGISTERED" status handling, not a defect
+to silently work around.
+
+**Verdict source of truth**: reuse the exact same UVM_ERROR/FATAL-count
+based pass/fail determination Part 2's reconciliation step already
+produces (via `sim_log_analysis.py`) -- do not introduce a second,
+divergent definition of "passed" for this purpose. If Part 2's analysis
+cannot conclusively determine a verdict (e.g. the log is truncated, or a
+recognized-but-unclassified failure signature is present), do not call
+`record_verdict()` at all for that job rather than guessing -- an
+indeterminate result must never silently count as either a PASS (would
+wrongly keep failing patterns in the regression list) or a FAIL (would
+wrongly evict a genuinely-passing pattern over a transient analysis
+failure).
+
 ## Testing Strategy
 
 - `discover_live_jobs()`: real subprocess-call shape tested against a
@@ -167,6 +210,15 @@ other jobs in the same cycle from being processed.
 - `render_snapshot()`'s existing behavior (already tested) must not
   regress -- new tests for the "UNREGISTERED" row shape, not a rewrite of
   existing assertions.
+- Part 3's wiring: a real test proving that a reconciliation cycle for a
+  registered job with a real PASS verdict calls `record_verdict()` and the
+  pattern appears in `sim/regression.list`; a second test for a FAIL
+  verdict evicting a previously-recorded PASS; a third test proving an
+  indeterminate/unanalyzable verdict calls `record_verdict()` NOT AT ALL
+  (list unchanged) rather than guessing either direction. Do not re-test
+  `record_verdict()`/`record_suite()` themselves -- they are already
+  correct and (per the audit) already have their own test coverage; only
+  the new call site needs new tests.
 
 ## Out of Scope
 
