@@ -637,6 +637,27 @@ time zero. `TOTAL_RUNTIME` bounds simulated time so the rerun stops near
 the first failure. `RUNTAG` avoids overwriting the original WAVE=0
 failing run's artifacts.
 
+**The `wave.txt` FSDB scope-control file (2026-09-01,
+distilled/genericized):** the recipe above is Makefile-side plumbing
+that forwards the user's choice to a DUT-side hook file, conventionally
+`wave.txt`, purely via plusargs (`+fsdb_off`, `+fsdb_full`,
+`+fsdb_file=<path>`, `+fsdb_start=<ns>`, `+fsdb_stop=<ns>`) -- the
+Makefile does not decide dump scope itself. **A DUT delivery may already
+ship its own default `wave.txt` that dumps the whole chip and ignores
+these plusargs entirely** -- a real sibling project measured this: an
+FSDB dump that looked I/O-bound (94 MB/min, simulator CPU 20-53%) was
+actually a whole-chip-scoped `wave.txt`; a target-IP-scoped replacement
+dropped the rate to ~20 MB/min with the simulator over 100% CPU
+(compute-bound, the healthy state). Verifying/replacing `wave.txt`'s
+scope is therefore a real bring-up step no Makefile-side knob can
+substitute for. See `IP_UVM_DV_Gen.md`'s "The `wave.txt` FSDB
+scope-control file" for the full plusarg table and a generic
+`$fsdbDumpvars`/`$fsdbDumpon`/`$fsdbDumpoff` skeleton (standard FSDB API
+shape, not independently confirmed against a real `wave.txt` file for
+this project -- kept doc-embedded rather than templated, since its dump
+scope must be re-derived from each project's own real RTL hierarchy,
+same treatment as `waves.tcl`'s signal hierarchy above).
+
 **Tracked-passing-suite list (regression.list / RECORD=1), 2026-09-01,
 distilled/genericized:** already implemented by the internalized
 template. Two modes: per-pattern record (`RECORD=1` on a single `make

@@ -1219,6 +1219,91 @@ empty.
   > running to the pattern's natural end. `RUNTAG` renames the rerun's
   > output directories so it does not overwrite the original WAVE=0
   > failing run's artifacts, which are still needed for comparison.
+
+### The `wave.txt` FSDB scope-control file
+
+> **Standing rule (2026-09-01, distilled and genericized).** The recipe
+> above (`WAVE=`/`FSDB_START`/`FSDB_STOP`) is Makefile-side plumbing that
+> talks to a small DUT-side hook file, conventionally named `wave.txt`,
+> purely via plusargs -- the Makefile never decides dump scope itself,
+> it just forwards the user's choice. `wave.txt` is a real, necessary
+> deliverable to author or verify during environment bring-up, not an
+> optional nicety: **a DUT delivery may already ship its own default
+> `wave.txt` that dumps the WHOLE chip and ignores the off/scope
+> plusargs entirely.** A real sibling project measured this exact
+> failure mode -- an FSDB dump rate that looked I/O-bound/NFS-limited
+> (tracked in MB/min, with simulator CPU utilization well under 100%)
+> turned out to be caused entirely by dump SCOPE (the RTL owner's
+> original whole-chip `wave.txt`), not the filesystem: once a
+> target-IP-scoped replacement `wave.txt` was installed, the measured
+> dump rate fell to roughly a fifth of the original (from about
+> 94 MB/min down to about 20 MB/min), and the simulator's own CPU
+> utilization rose from the 20-53% range up to just over 100%
+> (compute-bound, the expected/healthy state for a scoped dump, versus
+> the earlier reading that looked I/O-bound but wasn't). **Verifying whether the DUT delivery's `wave.txt`
+> is already scoped to the target IP (not the whole chip), and replacing
+> it if not, is therefore a real bring-up step**, not something the
+> Makefile-side knobs alone can fix -- no amount of `WAVE=`/`FSDB_START`/
+> `FSDB_STOP` tuning helps if the underlying dump statement itself covers
+> the whole chip.
+>
+> The five plusargs `wave.txt` must read, all confirmed real via the
+> Makefile side that emits them (this file's own real internal
+> mechanism -- the exact `$fsdbDumpvars`/`$fsdbDumpon`/`$fsdbDumpoff`/
+> `$value$plusargs` API shape below is the standard, well-documented FSDB
+> dump API, **not independently confirmed against a real `wave.txt` file
+> for this specific project** -- no such file was found in the reference
+> tree searched, only Makefile comments describing its read side):
+>
+> | Plusarg | Meaning |
+> |---|---|
+> | `+fsdb_off` | disable dumping entirely (what a `WAVE=0` regression run passes) |
+> | `+fsdb_full` | dump whole-chip scope instead of the default target-IP-only scope |
+> | `+fsdb_file=<path>` | per-pattern FSDB output filename, so concurrent/successive runs don't clobber each other |
+> | `+fsdb_start=<ns>` | begin the dump window at this time (unset = record from time zero) |
+> | `+fsdb_stop=<ns>` | end the dump window at this time (unset = record to the end) |
+>
+> **Generic skeleton** (parameterize `<ip_block_hier>` with the target
+> IP's own real instance path[s] under the chip top, from Step 3's real
+> RTL survey -- never left as the literal placeholder, and never
+> mechanically copied from a different project's hierarchy):
+>
+> ```systemverilog
+> // wave.txt -- FSDB scope-control hook, lives at DUT_ROOT_PATH,
+> // `include`-d by the DUT delivery's own bench-bring-up flow.
+> initial begin
+>   string fsdb_file;
+>   longint unsigned fsdb_start_ns, fsdb_stop_ns;
+>   if ($test$plusargs("fsdb_off")) begin
+>     // Dumping disabled entirely -- do not call $fsdbDumpfile/$fsdbDumpvars.
+>   end else begin
+>     if (!$value$plusargs("fsdb_file=%s", fsdb_file))
+>       fsdb_file = "default.fsdb";
+>     $fsdbDumpfile(fsdb_file);
+>     if ($test$plusargs("fsdb_full"))
+>       $fsdbDumpvars(0, <chip_top>);              // whole-chip scope
+>     else
+>       $fsdbDumpvars(0, <chip_top>.<ip_block_hier>); // default: target-IP blocks only
+>     if ($value$plusargs("fsdb_start=%d", fsdb_start_ns))
+>       #(fsdb_start_ns) $fsdbDumpon;               // else dumps from time 0
+>     if ($value$plusargs("fsdb_stop=%d", fsdb_stop_ns))
+>       #(fsdb_stop_ns) $fsdbDumpoff;                // else dumps to the end
+>   end
+> end
+> ```
+>
+> This skeleton is documentation-embedded, not a static file under
+> `dv_harness/uvm_generator/templates/`, unlike `sim/scripts/`'s
+> Makefile/waves.tcl/LSF scripts above: `wave.txt` conceptually lives at
+> `DUT_ROOT_PATH` (a DUT-side location, tracked as a real `DUT_SOURCES`
+> build dependency by the internalized Makefile) rather than in this
+> harness's own `sim/scripts/` template area, and its scope statement
+> must be re-derived from each project's own real RTL hierarchy every
+> time -- exactly the same "worked example, not a mechanically-copied
+> template" treatment this process already gives `waves.tcl`'s signal
+> hierarchy and `reg_audit.py`'s register bit-fields (see the
+> Genericization pass note above).
+
 - **Consolidate the VIP examples' flags** rather than inventing your own, and
   cross-check against the VCS manuals.
 - **Compute the timescale constraint** from the configured line rates and
