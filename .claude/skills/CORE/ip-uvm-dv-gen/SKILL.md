@@ -573,6 +573,15 @@ None of these fail compilation. The symptom is always a far-side timeout.
   cheap, greppable alive/pass/fail/progress check needing no waveform
   tool at all -- the cheapest triage tier, before the fsdb-report tool,
   before a full waveform viewer.
+  **Standing rule (2026-09-01, distilled/genericized):** targeted
+  per-component UVM verbosity (`+uvm_set_verbosity=<component>,_ALL_,
+  <level>,run`) is a zero-rebuild, run-time-only technique distinct from
+  the above -- keep tested named shorthands for commonly-inspected
+  components. A mistyped full path is silently accepted and matches
+  nothing, indistinguishable from real silence -- verify it resolves
+  before trusting it. Specifically the technique for peering inside an
+  encrypted/opaque VIP state machine when only its external task/port
+  declarations are readable.
 - **Check the right response field** -- a scalar initialised to OK and
   meaningful only for writes will pass every read error silently.
 - **Footprint is not payload.** `beats * bytes_per_beat` overstates a partial
@@ -656,7 +665,15 @@ scope-control file" for the full plusarg table and a generic
 shape, not independently confirmed against a real `wave.txt` file for
 this project -- kept doc-embedded rather than templated, since its dump
 scope must be re-derived from each project's own real RTL hierarchy,
-same treatment as `waves.tcl`'s signal hierarchy above).
+same treatment as `waves.tcl`'s signal hierarchy above). Windowing
+(rather than a size cap) was chosen after two alternatives were rejected
+on a real project: a hard size-limit plusarg isn't in every installed
+Verdi, and file-rotation rotates rather than truncates and needs its own
+naming scheme -- check what the installed Verdi actually supports before
+assuming either alternative exists. Never infer the window from a
+heartbeat/status-print timestamp (a repeated, real source of wrong-window
+reruns) -- default the first targeted rerun to the full range, read real
+event timing off that run, narrow only if file size is an actual problem.
 
 **Tracked-passing-suite list (regression.list / RECORD=1), 2026-09-01,
 distilled/genericized:** already implemented by the internalized
@@ -668,7 +685,60 @@ pattern, re-append only on a real pass, then atomically replace the file
 -- a FAIL always evicts a stale PASS. Unregistering a pattern cascades
 into removing it from this list too. Authoring convention: record the
 honest current state (named FAIL reasons), not an aspirational
-always-growing list.
+always-growing list. Lives in `UVM_ROOT_PATH`, not `SIM_ROOT_PATH` --
+must survive `distclean`. As a real sibling project's header comment puts
+it: a list that only grows is worse than no list.
+
+**Registry-driven pattern registration and suite enumeration, 2026-09-01,
+distilled/genericized:** registering/un-registering a pattern is
+transactional -- back up the registry, edit, regenerate the dispatcher;
+on regeneration failure, restore the backup and regenerate again, so a
+rejected registration leaves the tree unchanged. Removing a pattern
+cross-removes it from the tracked-passing-suite list too. Separately: any
+script/checker/Makefile target enumerating suite/category names must
+derive them from the live registry file, never a hardcoded list (fallback
+only as documented last resort) -- this exact hardcoding defect has
+recurred independently in both a Makefile's own suite logic and an
+unrelated checker script on a real project, after the category taxonomy
+outgrew its initial split.
+
+**`sim/` directory contract beyond `log`/`fsdb`/`output`/`coverage`,
+2026-09-01, distilled/genericized:** also needs `report/` (a
+symlink-only VIEW into `run/`, never a lone real file mixed with links)
+and `run/` (the real simulator working directory and transcript, keyed by
+pattern+seed). A second symlink from `log/<job>.log` to the same
+transcript makes "which pattern failed" answerable with one grep over
+`log/*.log`. **Create both symlinks BEFORE the simulator starts**, not
+via a post-run collection step -- a real project measured seven
+hard-killed jobs in one day whose transcripts were unreachable
+specifically because the symlinks were only created on normal exit.
+
+**`EXTRA_TOPS` -- naming an uninstantiated-but-referenced module for
+elaboration, 2026-09-01, distilled/genericized:** a module referenced
+only by bare hierarchical name (never instantiated) needs to be named as
+an extra elaboration top in a multi-stage flow (a one-step flow
+auto-elaborates it for free). Three distinct error signatures per how
+badly the omission is guessed (missing entirely / one bare-module
+reference named / every similarly-named sibling guessed at once, which
+fails differently since only one is really expanded) -- add names one at
+a time against the real error, never as a guessed batch.
+
+**`SIM_ROOT_PATH` distinctness -- mechanical `$(error)` check, not just a
+documented assumption, 2026-09-01, distilled/genericized:** check
+distinctness from `DUT_ROOT_PATH`/`UVM_ROOT_PATH` before ANY build
+target runs; the destructive target additionally needs its OWN separate
+guard against the variable being empty or a bare `/` -- a distinct
+failure mode from a colliding-but-valid path.
+
+**Shared single elaboration, N parallel per-job run dirs, 2026-09-01,
+distilled/genericized:** build the simulator binary exactly once per
+regression (a prerequisite of running any pattern), then N parallel jobs
+open it read-only with only their own run/report/log/fsdb/coverage
+artifacts separate. Distinct axis from build-time parallelism -- name the
+variables distinctly. A target depending on both the binary and the run
+step must be two sequential Make invocations (recursive `$(MAKE)`), never
+two prerequisites of one target -- prerequisites have no defined order
+under parallel Make.
 
 **Two-tier LSF integration is site-specific -- verify before reusing,
 2026-09-01, distilled/genericized:** before wiring a site's
@@ -711,6 +781,25 @@ needed:**
   path. Three parallelism knobs, none substitutes for another: `-j`
   (native codegen, elaboration-stage only), `-fastpartcomp=jN` (parallel
   partition build), `-hsopt=j` (gate-level/GLS only).
+
+**Additional real build-system traps, 2026-09-01, distilled/genericized:**
+- GNU Make `:=` is immediate-expansion -- a reference to a variable
+  defined LATER silently resolves to empty, no warning; same hazard for a
+  rule's own prerequisite list (expanded when the rule is READ, not when
+  its recipe runs). Order definitions before use, or use `=` where
+  forward-reference is unavoidable.
+- Cleanup after force-killing an in-progress elaboration must remove more
+  than the obvious output -- a partially-written `simv.daidir`/partition
+  library is reused, not recreated, by the next build if left in place.
+- A full-build-only failure that resists minimal-repro isolation needs
+  bisection of the REAL build (toggle one coarse flag at a time), judged
+  by how far elaboration got, not error count -- fewer errors from an
+  earlier death isn't closer to correct.
+- Audit flags a build inherits from a pre-existing DUT-team launcher, not
+  just flags you add from a VIP example -- an inherited strictness switch
+  can be something the VIP vendor's own source (even its own working
+  example) isn't clean under. Symptom: many errors deep in encrypted VIP
+  source a known-working vendor example doesn't hit.
 
 - Consolidate the VIP examples' flags; cross-check against the tool manuals.
 - **Compute the timescale constraint** from the configured line rates and

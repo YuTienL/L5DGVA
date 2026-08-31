@@ -1088,6 +1088,23 @@ Check the agent's actual ports before designing the connection.
 > CLAUDE.md's FSDB-off-by-default posture and the general principle of
 > minimum sufficient evidence.
 
+> **Standing rule (2026-09-01, distilled and genericized): targeted
+> per-component UVM verbosity is a zero-rebuild, run-time-only
+> observability technique, distinct from the analysis-port/callback/
+> plain-text-trace techniques above.** A `+uvm_set_verbosity=<component>,
+> _ALL_,<level>,run`-style plusarg raises log verbosity on exactly one
+> named hierarchical component with no rebuild -- keep a small set of
+> tested named shorthands for commonly-inspected components (expanded to
+> their full hierarchical path) rather than typing the full path each
+> time. **A mistyped full path is silently accepted and matches
+> nothing** -- indistinguishable from "the component genuinely printed
+> nothing," so verify a shorthand/path actually resolves before trusting
+> its silence. This is specifically the technique for peering inside an
+> encrypted or otherwise opaque VIP-internal state machine when only its
+> externally-visible task/port declarations are readable -- a real
+> sibling project found a hidden fixed-duration internal timer this way,
+> after black-box reasoning about the same symptom failed.
+
 ### Scoreboard rules
 
 - **Check the right response field.** A scalar response field initialised to
@@ -1193,6 +1210,76 @@ empty.
   elaboration-stage only), `-fastpartcomp=jN` (parallel partition build,
   inside partition compile), `-hsopt=j` (gate-level/GLS designs only,
   not applicable to an RTL-only flow).
+- **`EXTRA_TOPS` -- a module that is never instantiated, only referenced
+  by bare hierarchical name inside a task, needs to be named as an extra
+  elaboration top.** A one-step `vcs -f` auto-elaborates it for free;
+  the `fourstep` flow's separate elaboration stage does not, and fails
+  with a distinct signature per how badly the omission was guessed:
+  missing entirely -> one signature naming "at least one is missing";
+  a bare-module reference inside the error -> a second signature naming
+  *which* module; naming every similarly-named sibling module at once
+  (guessing) -> a *third*, different signature, because only one of
+  several near-identical modules is actually expanded into the real
+  design. Add modules to `EXTRA_TOPS` one at a time against the real
+  error's own named module, never as a guessed batch.
+- **GNU Make `:=` is immediate-expansion, not deferred, and a reference to
+  a variable defined LATER in the file silently resolves to empty --
+  no warning, no error.** The same hazard applies to a rule's own
+  prerequisite list, since prerequisites are expanded when the rule is
+  READ (parse time), not when its recipe actually runs -- a stamp-file
+  rule prerequisite on a flags-signature variable defined further down
+  the file silently drops that dependency, and a flag change then never
+  triggers the re-analysis it should. Order every `:=` definition before
+  its first use, or use plain `=` (deferred) where forward-reference is
+  unavoidable; a static checker scanning for a `:=`-assigned name used
+  above its own definition line (as a plain reference or inside a
+  prerequisite list) can catch this mechanically.
+- **`SIM_ROOT_PATH` distinctness from `DUT_ROOT_PATH`/`UVM_ROOT_PATH`
+  needs an explicit, mechanical `$(error)` check before ANY build target
+  runs, not just a documented assumption** -- a colliding path lets one
+  project's build silently clean or overwrite another's product tree.
+  The destructive path (`distclean`/equivalent) additionally needs its
+  OWN, separate guard against the variable being empty or a bare `/` --
+  a distinct failure mode (garbage/unset value, not merely a
+  correct-but-colliding one) that the distinctness check alone does not
+  catch.
+- **Shared single elaboration, N parallel per-job run directories, for a
+  multi-job regression.** Building the simulator binary is a prerequisite
+  of running any pattern, done exactly once and then opened read-only by
+  every parallel job; only the per-job run/report/log/fsdb/coverage
+  artifacts (keyed by pattern+seed) are separate per job. This is a
+  distinct axis from build-time parallelism (`-j`/`-fastpartcomp=jN`
+  above) -- name them distinctly (e.g. a build-parallelism variable vs. a
+  regression-job-count variable) so a user setting one does not expect it
+  to also control the other. **A `sim` target that depends on both the
+  binary and the run step must invoke them as two separate, sequential
+  Make invocations (a recursive `$(MAKE)` call), never as two
+  prerequisites of one target** -- prerequisites of a single target have
+  no defined order under parallel Make, so a naive two-prerequisite form
+  can let the run step start before elaboration has actually finished.
+- **Cleanup after force-killing an in-progress elaboration must remove
+  more than the obvious output.** A partially-written `simv.daidir`/
+  partition-library directory (written incrementally DURING elaboration)
+  is opened and reused, not recreated, by the next build if left in
+  place -- corrupting it. Clean whatever the next build silently reuses,
+  not only what looks like an obvious build product.
+- **A full-build-only elaboration failure that resists minimal-repro
+  isolation needs bisection of the REAL build, not further shrinking.**
+  When an error appears only in the complete build and a minimal
+  reproduction fails to reproduce it, stop trying to shrink the repro
+  and instead toggle one coarse build-flag/mode at a time in the real
+  build, judging each step by **how far elaboration got**, not by error
+  count -- a build that dies earlier necessarily reports fewer errors
+  without being any closer to correct.
+- **Audit flags a build inherits from a pre-existing launcher/DUT-team
+  script, not just flags you're adding from a VIP example.** A strictness
+  switch inherited wholesale (e.g. a language-version lint flag meant for
+  the DUT's own RTL) can be something the VIP vendor's own source --
+  and even the vendor's own working example for the same VIP -- is not
+  written to be clean under. Symptom to watch for: many errors deep
+  inside encrypted/vendor VIP source that a known-working vendor example
+  does not hit; a switch that silences or redirects a later, more useful
+  diagnostic is worse than no switch at all.
 
 - **`-debug_access`, not `-debug_access+all`**, for a post-processing flow --
   the latter is for interactive debug and costs simulation speed a
@@ -1262,6 +1349,28 @@ empty.
 > | `+fsdb_file=<path>` | per-pattern FSDB output filename, so concurrent/successive runs don't clobber each other |
 > | `+fsdb_start=<ns>` | begin the dump window at this time (unset = record from time zero) |
 > | `+fsdb_stop=<ns>` | end the dump window at this time (unset = record to the end) |
+>
+> **Why windowing (`fsdb_start`/`fsdb_stop`), not a size cap:** two
+> alternatives were considered and rejected on a real project before
+> settling on a time window -- a hard dump-size-limit plusarg does not
+> exist in every installed Verdi version, and a file-rotation mechanism
+> (dump to a new file after N size/time, rather than stopping) rotates
+> rather than truncates and needs its own file-naming scheme to be useful
+> afterward. Check what the actually-installed Verdi version supports
+> before assuming either alternative is available; a time window is the
+> one mechanism guaranteed to work everywhere because it is just a
+> conditional `$fsdbDumpon`/`$fsdbDumpoff` call, not a vendor-specific
+> flag.
+>
+> **Determining the window's bounds is itself a real failure mode.**
+> Inferring `fsdb_start`/`fsdb_stop` from a timestamp read off a
+> heartbeat/status print is a repeated, real source of wrong-window
+> reruns -- the print's own timestamp is not necessarily when the event
+> actually of interest occurs. Default the FIRST targeted rerun to the
+> full time range with `WAVE=1` and no window at all; read the real event
+> timing off THAT run's own FSDB, and only narrow the window on a
+> subsequent rerun if file size is an actual, stated problem -- never
+> guess the window up front from an adjacent log message.
 >
 > **Generic skeleton** (parameterize `<ip_block_hier>` with the target
 > IP's own real instance path[s] under the chip top, from Step 3's real
@@ -1455,6 +1564,32 @@ empty.
 > suite as fully passing, with every other suite carrying an explicit,
 > named reason it wasn't (not run end-to-end yet, a specific known
 > failure), rather than omitting or silently overstating the rest.
+> **Lives in `UVM_ROOT_PATH`, not `SIM_ROOT_PATH`** -- it must survive a
+> `make distclean` of the build/run products, since it is a durable index
+> of project state, not a build artifact. As a real sibling project's own
+> header comment for this file puts it: a list that only grows is worse
+> than no list at all -- the removal-on-FAIL half of the mechanism is the
+> entire point, not an incidental detail.
+
+> **Directory contract beyond `log/`/`fsdb/`/`output/`/`coverage/`: `report/`
+> is a symlink-only VIEW, `run/` is the real thing (2026-09-01, distilled
+> and genericized).** A generated environment's `SIM_ROOT_PATH` also needs
+> `report/` and `run/` alongside the four directories above. `run/<job>/`
+> (job keyed by pattern+seed) holds the real simulator working directory
+> and the one real transcript file; `report/<job>/` is a **view assembled
+> entirely from symlinks** into `run/<job>/` -- never a lone real file
+> mixed in among the links, or "is this a link or the real file" becomes
+> a per-file question instead of a structural guarantee. A second symlink
+> from `log/<job>.log` to the same transcript makes "which pattern
+> failed" answerable with one grep over `log/*.log` rather than a walk
+> over every job's own directory. **Create both symlinks BEFORE the
+> simulator starts, not afterward via a report-collection step** -- a
+> real sibling project measured seven hard-killed jobs in one day whose
+> transcripts became unreachable specifically because the symlinks were
+> only created on normal exit; creating them first means even a
+> hard-killed run leaves a reachable transcript. Wipe and recreate both
+> directories per invocation, so `report/` always reflects only the
+> latest run of a given pattern+seed.
 
 > **Two-tier LSF integration is a site-specific architecture choice --
 > verify before reusing it, don't assume it transfers (2026-09-01,
@@ -1652,6 +1787,33 @@ is a decision to record, not a default.
 > dispatcher must report an unrecognized pattern name explicitly, never
 > silently fall back to a default pattern -- a typo in `+PATTERN=` must
 > never be recorded as a pass for a pattern that never actually ran.
+
+> **Standing rule (2026-09-01, distilled and genericized): registering or
+> un-registering a pattern is transactional, with automatic rollback on
+> failure.** Editing the pattern registry (whatever list/file names which
+> patterns exist) and regenerating the derived dispatcher is a
+> backup-edit-regenerate sequence: back up the registry file, edit it,
+> regenerate the dispatcher; if regeneration fails for any reason,
+> restore the backup and regenerate again -- so a rejected registration
+> leaves the tree exactly as it was, never half-updated. Removing a
+> pattern must additionally cross-remove it from the tracked-passing-suite
+> list (above) if present -- a pattern no longer built cannot be claimed
+> as passing, and leaving a stale entry breaks any suite run that expects
+> every listed pattern to actually exist.
+>
+> **Standing rule (2026-09-01, distilled and genericized): any script,
+> checker, or Makefile target that enumerates suite/category names must
+> derive them from the live pattern registry file, never a hardcoded
+> list, with a hardcoded fallback only as a documented last resort.** This
+> specific hardcoding defect has recurred independently more than once on
+> a real project -- once in the Makefile's own suite-selection logic,
+> once in an unrelated static-checker script -- after the pattern-directory
+> taxonomy grew past its initial split (see the taxonomy-growth note
+> above): a hardcoded tuple of category names silently matched zero
+> patterns for a category that had since been reorganized, with no error
+> at all. Treat "the taxonomy is expected to grow" as implying "so nothing
+> may hardcode today's category list," not just as a note about directory
+> layout.
 
 ### The User Guide
 
