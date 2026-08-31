@@ -1259,14 +1259,42 @@ empty.
   > `write_topic_report()` (built on the corrected, file-based
   > `run_fsdbreport()`) implements exactly this.
 - Offer the **Protocol Analyzer** where the VIP supports it. Seeing packets,
-  handshakes and link states as protocol events rather than waveforms is the
-  fastest route to *why* a transfer failed.
+  handshakes and link states as protocol events rather than waveforms is
+  generally the cheaper first debug step for a protocol-level failure,
+  before dropping into a full waveform view.
 
-> **No generator code for this step yet, in v50 or in the imported source.**
-> This is a large, mechanical piece (Makefile, `-kdb`/`-lca` flags, filelist
-> ownership enforcement, Verdi TCL grouped by question) that would be
-> straightforward to codify compared to the more judgment-heavy steps --
-> flagged as a good next target, not attempted in this pass.
+  > **Standing rule (2026-09-01), describing the harness's own
+  > already-internalized and already-generic template -- no further
+  > genericization needed.**
+  >
+  > - **Compile-time wiring: PA is bundled with FSDB dump capability as
+  >   one "debug-access capability, always built in."** Both stay
+  >   compiled in by default so toggling `WAVE`/`PA` at run time never
+  >   requires a rebuild. This was a deliberate consolidation: `WAVE` and
+  >   `PA` used to each gate their own compile-time define/
+  >   `-debug_access` inclusion separately, forcing a real rebuild
+  >   (tens of minutes) on every toggle between them; now both share one
+  >   compile-time inclusion, gated only by whether `VERDI_HOME` was set
+  >   at all when the build ran.
+  > - **Graceful degrade, not a hard failure, when `VERDI_HOME` is
+  >   unset at build time**: emit a build-time warning (never an error)
+  >   that both FSDB dumping and Protocol Analyzer recording are
+  >   disabled for this specific build, and that a later `WAVE=1/full`
+  >   or `PA=1` run-time request against that same binary silently
+  >   no-ops rather than crashing. A machine with no Verdi
+  >   license/install must still be able to build at all.
+  > - **The run-time gate is a plusarg, independent of the build.**
+  >   `PA=1` at run time maps to a runtime plusarg the generated
+  >   environment's own top-level config class reads as the actual
+  >   on/off switch -- and it does nothing (silently) if the build that
+  >   produced this binary didn't have `VERDI_HOME` set, so document
+  >   that dependency explicitly (`PA=1` requires a build that saw
+  >   `VERDI_HOME`).
+  > - **PA and FSDB waveform dumping are separate, complementary
+  >   run-time toggles sharing the same compile-time gate above** -- a
+  >   user might want `PA=1` alone, `WAVE=1` alone, or both together (the
+  >   waveform-rerun recipe above already sets `WAVE=1`; `PA=1` can be
+  >   added the same way to the same invocation).
 
 > **Standing rule (2026-09-01, explicit Human Override, permanent -- not
 > session-scoped, updated 2026-09-01 to record internalization): the

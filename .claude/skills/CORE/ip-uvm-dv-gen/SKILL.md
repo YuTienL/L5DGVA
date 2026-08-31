@@ -727,6 +727,29 @@ needed:**
   sparse async signal), writing one output file per topic with a
   non-empty sanity check. `dv_harness/fsdb_report.py`'s
   `write_topic_report()` implements this.
+- **Protocol Analyzer where the VIP supports it** -- packets/handshakes/
+  link-state as protocol events, generally the cheaper first debug step
+  for a protocol-level failure before a full waveform view.
+
+**Protocol Analyzer mechanism (2026-09-01), describing the harness's own
+already-internalized/generic template -- no further genericization
+needed:**
+- PA is bundled with FSDB dump capability as one "debug-access
+  capability, always built in" -- both stay compiled in by default so
+  toggling `WAVE`/`PA` at run time never forces a rebuild (they used to
+  each gate their own compile-time inclusion separately, forcing a real
+  rebuild on every toggle; now both are gated only by whether
+  `VERDI_HOME` was set at build time).
+- Graceful degrade, not a hard failure, when `VERDI_HOME` is unset at
+  build time: a build-time warning, not an error -- FSDB and PA are both
+  disabled for that build, and a later `WAVE=1/full` or `PA=1` run
+  against it silently no-ops.
+- The run-time gate is a plusarg, independent of the build -- `PA=1`
+  maps to a runtime plusarg the generated environment's own top-level
+  config reads; it does nothing if the build didn't have `VERDI_HOME`.
+- PA and FSDB waveform dumping are separate, complementary run-time
+  toggles sharing the same compile-time gate -- `PA=1` alone, `WAVE=1`
+  alone, or both together.
 
 ---
 
