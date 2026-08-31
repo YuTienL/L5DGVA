@@ -1103,6 +1103,22 @@ empty.
   Default**: FSDB off by default, escalated only through the **Waveform Dump
   User Gate** and the **First-Failure Waveform Rerun** rule (targeted rerun,
   minimum sufficient scope/depth, terminate at first failure).
+
+  > **The concrete recipe (2026-09-01), using the already-internalized and
+  > genericized template's own knob names** -- CLAUDE.md's First-Failure
+  > Waveform Rerun rule is a policy; this is its implementation:
+  > `make debug PATTERN=<failing_pattern> WAVE=1 FSDB_START=<t0>
+  > FSDB_STOP=<t1> TOTAL_RUNTIME=<bound> RUNTAG=<tag>`. `WAVE=0|1|full`
+  > selects dump scope (off / target-IP blocks / whole-chip -- confirm
+  > with the user per the Waveform Dump User Gate, and prefer `1` over
+  > `full` as the minimum-sufficient default). `FSDB_START`/`FSDB_STOP`
+  > bound the dump window instead of dumping from time zero (a full-run
+  > dump from time zero can cost tens of MB per simulated millisecond --
+  > bound it to the failure cone). `TOTAL_RUNTIME` bounds simulated time
+  > so the rerun terminates near the first relevant failure rather than
+  > running to the pattern's natural end. `RUNTAG` renames the rerun's
+  > output directories so it does not overwrite the original WAVE=0
+  > failing run's artifacts, which are still needed for comparison.
 - **Consolidate the VIP examples' flags** rather than inventing your own, and
   cross-check against the VCS manuals.
 - **Compute the timescale constraint** from the configured line rates and
@@ -1176,6 +1192,52 @@ empty.
 > legitimately die while the job itself is still healthy. Use plain
 > `bsub` (detached) and poll `bjobs` separately whenever the submission
 > channel itself might not outlive the job.
+
+> **Tracked-passing-suite list (regression.list / RECORD=1) (2026-09-01,
+> distilled and genericized).** The internalized template already
+> implements this; document the mechanism so it is used deliberately, not
+> rediscovered by reading Makefile source. A `<project>/regression.list`
+> (one pattern name per line) tracks which patterns are currently known
+> to pass. Two modes, kept deliberately separate to avoid a
+> multi-host read-modify-write race: (1) a per-pattern record, run only
+> for a single `make sim RECORD=1` and explicitly gated OFF when running
+> inside a parallel regression batch (many hosts writing the same file at
+> once would lose entries); (2) a whole-suite record, run exactly once
+> after every job in a batch has finished (`make regress RECORD=1`),
+> which walks every pattern once against its own real log. Both apply the
+> same idempotent shape: strip any existing line for that pattern first,
+> then re-append it only if the pattern's own log shows a real pass, then
+> atomically replace the file (temp file + move, never an in-place
+> partial write) -- so a FAIL always evicts a stale PASS, and a repeated
+> PASS is a no-op. Unregistering a pattern (removing it from the build)
+> must cascade into removing it from this list too -- a pattern that no
+> longer builds cannot be claimed as passing. **Authoring convention:**
+> this list records the honest current state, not an aspirational
+> always-growing one -- a real sibling project's list recorded only one
+> suite as fully passing, with every other suite carrying an explicit,
+> named reason it wasn't (not run end-to-end yet, a specific known
+> failure), rather than omitting or silently overstating the rest.
+
+> **Two-tier LSF integration is a site-specific architecture choice --
+> verify before reusing it, don't assume it transfers (2026-09-01,
+> distilled and genericized).** The internalized template's LSF wiring
+> has two genuinely different shapes for two genuinely different kinds of
+> tool, and which shape applies to a NEW site's tools must be checked, not
+> assumed: **if the site's own `vcs`/`vlogan`/`verdi`/`urg`-equivalent
+> binaries are themselves site-authored LSF-aware wrapper scripts** (with
+> their own submission flags for batch/interactive/queue-selection/
+> resource-request), **use that wrapper's own flag vocabulary directly on
+> the tool's own command line** -- never nest the project's own `bsub`
+> submission around a tool that already submits itself; that nests one
+> LSF submission inside another. **If the site's tools are plain,
+> unwrapped binaries with no submission logic of their own** (the more
+> common case), route them through the project's own `bsub` path instead
+> -- the same off/batch(`-K`... but see the `bsub -K` trap above,
+> prefer detached)/interactive/detached mode selection already used for
+> the simulator binary target. Carrying a wrapper-specific flag
+> vocabulary to a site whose tools don't implement it fails silently at
+> best (unrecognized flags ignored) or breaks the tool invocation outright
+> -- confirm which shape applies before reusing either path as-is.
 
 > **Genericization pass (2026-09-01):** the internalized template set above
 > was made actually protocol-agnostic, not just relocated. Every file got

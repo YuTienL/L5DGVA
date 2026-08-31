@@ -601,6 +601,39 @@ None of these fail compilation. The symptom is always a far-side timeout.
 > `bsub` (detached) and poll `bjobs` separately whenever the submission
 > channel might not outlive the job.
 
+**First-Failure Waveform Rerun -- concrete recipe (2026-09-01), using the
+already-internalized template's own knob names:** `make debug
+PATTERN=<p> WAVE=1 FSDB_START=<t0> FSDB_STOP=<t1> TOTAL_RUNTIME=<bound>
+RUNTAG=<tag>`. `WAVE=0|1|full` selects dump scope (confirm with the user
+per the Waveform Dump User Gate; prefer `1` over `full`).
+`FSDB_START`/`FSDB_STOP` bound the dump window instead of dumping from
+time zero. `TOTAL_RUNTIME` bounds simulated time so the rerun stops near
+the first failure. `RUNTAG` avoids overwriting the original WAVE=0
+failing run's artifacts.
+
+**Tracked-passing-suite list (regression.list / RECORD=1), 2026-09-01,
+distilled/genericized:** already implemented by the internalized
+template. Two modes: per-pattern record (`RECORD=1` on a single `make
+sim`, gated OFF inside a parallel regression batch to avoid a
+multi-host write race) and whole-suite record (`make regress RECORD=1`,
+run once after all jobs finish). Both strip any existing line for that
+pattern, re-append only on a real pass, then atomically replace the file
+-- a FAIL always evicts a stale PASS. Unregistering a pattern cascades
+into removing it from this list too. Authoring convention: record the
+honest current state (named FAIL reasons), not an aspirational
+always-growing list.
+
+**Two-tier LSF integration is site-specific -- verify before reusing,
+2026-09-01, distilled/genericized:** before wiring a site's
+`vcs`/`vlogan`/`verdi`/`urg`-equivalent tools through the template's
+wrapper-flag path, confirm whether those binaries are themselves
+site-authored LSF-aware wrappers (use their own flag vocabulary directly,
+never nest the project's own `bsub` around them) or plain unwrapped
+binaries (route them through the project's own `bsub` path instead, same
+mode selection already used for the simulator binary). Carrying one
+shape's flag vocabulary to the other silently fails or breaks the
+invocation.
+
 - Two stages, both given the debug-database flag if a viewer will be used.
 - Consolidate the VIP examples' flags; cross-check against the tool manuals.
 - **Compute the timescale constraint** from the configured line rates and
