@@ -9,6 +9,16 @@ collect_signoff_bundle copies each real candidate artifact under `root` into
 missing one (CLAUDE.md Evidence Truth Rule) -- and always runs a fresh
 dv_harness.self_audit.run_self_audit() into the bundle as
 self_audit_result.json, since that one is generated, not merely copied.
+
+BUG FIX (2026-08-31, poster-gap-closing-round2 Task 7): the bundle used to
+stop at blackboard state / vPlan / telemetry / pattern registry / self-audit,
+never packaging the real generated UVM testbench source or a regression/
+test-suite manifest even though the harness generates both elsewhere (see
+dv_harness/uvm_generator/protocol_env_generator.py and
+dv_harness/uvm_generator/regression_list_manager.py). Added `tb_source` and
+`regression_manifest` candidates below, following the exact same
+copy-if-real/report-absence-honestly pattern already used for every other
+candidate.
 """
 from __future__ import annotations
 
@@ -102,6 +112,39 @@ def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
         record("pattern_registry", True, rel)
     else:
         record("pattern_registry", False, None)
+
+    # 9: UVM testbench source (.dv-harness/generated_uvm_env/tb/ -- the real
+    # tb/agents,env,seq,tests,top subdirectory shape ProtocolEnvGenerator
+    # emits, see dv_harness/uvm_generator/protocol_env_generator.py; also the
+    # shape catalogued in examples/generated_*_uvm_env/'s naming). No
+    # generator-wired default out-path is pinned anywhere in this project
+    # (tools/generate_protocol_uvm_environment.py / every PROTOCOL_BUILDERS
+    # SKILL.md takes an arbitrary --out with no fixed default, unlike
+    # PATTERN_REGISTRY_OUT/REGRESSION_LIST below, which ARE pinned in
+    # .claude/templates/Makefile.patterns.mk) -- .dv-harness/generated_uvm_env
+    # is this harness's own single project-wide convention location for that
+    # output, checked honestly (same as pattern_registry above) rather than
+    # fabricated when absent.
+    src = root / ".dv-harness" / "generated_uvm_env" / "tb"
+    rel = Path("tb_source")
+    if src.is_dir():
+        _copy_dir(src, out_dir / rel)
+        record("tb_source", True, rel)
+    else:
+        record("tb_source", False, None)
+
+    # 10: regression/test-suite manifest (.dv-harness/regression.list -- the
+    # plain grep/comm-friendly PASS-list format dv_harness/uvm_generator/
+    # regression_list_manager.py's record_verdict/record_suite produce,
+    # written at the REGRESSION_LIST default pinned in
+    # .claude/templates/Makefile.patterns.mk and tools/regression_list_cli.py).
+    src = root / ".dv-harness" / "regression.list"
+    rel = Path("regression.list")
+    if src.is_file():
+        _copy_file(src, out_dir / rel)
+        record("regression_manifest", True, rel)
+    else:
+        record("regression_manifest", False, None)
 
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
