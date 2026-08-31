@@ -18,6 +18,7 @@ pattern regress" a plain `grep -xF <pattern> regression.list` check.
 from __future__ import annotations
 
 from collections import OrderedDict
+from pathlib import Path
 
 
 def record_verdict(existing_lines, pattern: str, verdict_passed: bool):
@@ -31,6 +32,18 @@ def record_verdict(existing_lines, pattern: str, verdict_passed: bool):
     if verdict_passed:
         filtered.append(pattern)
     return filtered
+
+
+def apply_verdict_to_file(regression_list_path, pattern: str, verdict_passed: bool) -> None:
+    """File-I/O wrapper around the pure record_verdict() -- reads the current
+    regression.list (missing file treated as empty, matching a project's
+    first-ever recorded pattern), applies record_verdict(), writes back.
+    record_verdict() itself is unchanged and untouched by this wrapper."""
+    path = Path(regression_list_path)
+    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    updated = record_verdict(existing, pattern, verdict_passed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(updated) + ("\n" if updated else ""), encoding="utf-8")
 
 
 def record_suite(existing_lines, verdicts):

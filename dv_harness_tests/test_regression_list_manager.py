@@ -7,8 +7,10 @@ import itertools
 
 import pytest
 
+from pathlib import Path
+
 from dv_harness.uvm_generator.regression_list_manager import (
-    record_verdict, record_suite, emit_makefile_fragment,
+    record_verdict, record_suite, emit_makefile_fragment, apply_verdict_to_file,
 )
 
 
@@ -93,3 +95,34 @@ def test_emit_makefile_fragment_references_real_path_and_targets():
     assert "REGRESSION_LIST_PATH := sim/scripts/regression.list" in frag
     assert "regression-list-show:" in frag
     assert "regression-list-clean:" in frag
+
+
+class TestApplyVerdictToFile:
+    def test_creates_file_on_first_pass(self, tmp_path):
+        path = tmp_path / "regression.list"
+        apply_verdict_to_file(path, "usb2_enum", True)
+        assert path.read_text().splitlines() == ["usb2_enum"]
+
+    def test_fail_does_not_create_file_with_pattern_present(self, tmp_path):
+        path = tmp_path / "regression.list"
+        apply_verdict_to_file(path, "usb2_enum", False)
+        assert path.read_text().splitlines() == []
+
+    def test_fail_evicts_existing_pass(self, tmp_path):
+        path = tmp_path / "regression.list"
+        path.write_text("usb2_enum\nusb3_gen1_enum\n")
+        apply_verdict_to_file(path, "usb2_enum", False)
+        assert path.read_text().splitlines() == ["usb3_gen1_enum"]
+
+    def test_calling_twice_with_same_verdict_is_idempotent(self, tmp_path):
+        path = tmp_path / "regression.list"
+        apply_verdict_to_file(path, "usb2_enum", True)
+        first = path.read_text()
+        apply_verdict_to_file(path, "usb2_enum", True)
+        second = path.read_text()
+        assert first == second == "usb2_enum\n"
+
+    def test_missing_file_treated_as_empty(self, tmp_path):
+        path = tmp_path / "nested" / "regression.list"
+        apply_verdict_to_file(path, "usb2_enum", True)
+        assert path.read_text().splitlines() == ["usb2_enum"]
