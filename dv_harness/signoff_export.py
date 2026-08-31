@@ -19,6 +19,20 @@ dv_harness/uvm_generator/regression_list_manager.py). Added `tb_source` and
 `regression_manifest` candidates below, following the exact same
 copy-if-real/report-absence-honestly pattern already used for every other
 candidate.
+
+BUG FIX (2026-08-31, Task 7 review round 2): `tb_source`'s first cut checked
+one hardcoded guessed path (`.dv-harness/generated_uvm_env/tb`) that no
+generator, skill doc, or template anywhere in this project ever writes to --
+ProtocolEnvGenerator's `--out` is always caller-supplied with no default
+(tools/generate_protocol_uvm_environment.py, every PROTOCOL_BUILDERS
+SKILL.md). That made the candidate real-but-unwired: it would report
+"absent" for essentially every real invocation, even right after a
+successful generation run. Replaced with `_find_tb_source_dir`, which
+DISCOVERS the real output location by locating the marker file
+ProtocolEnvGenerator itself writes (environment_manifest.json,
+qualification_status ENV_GENERATED -- protocol_env_generator.py's own
+`generate()`) alongside a real `tb/` subdirectory, wherever it was actually
+generated under `root`.
 """
 from __future__ import annotations
 
@@ -47,6 +61,48 @@ def _copy_file(src: Path, dst: Path) -> None:
 def _copy_dir(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(src, dst, dirs_exist_ok=True)
+
+
+def _find_tb_source_dir(root: Path) -> Optional[Path]:
+    """Discover ProtocolEnvGenerator's real output location instead of
+    guessing one -- its `--out` is always caller-supplied with no fixed
+    default anywhere in this project (tools/generate_protocol_uvm_environment.py,
+    every .claude/skills/PROTOCOL_BUILDERS/*/SKILL.md), so a single hardcoded
+    candidate path would report "absent" for essentially every real
+    invocation.
+
+    Searches `root` for the marker file ProtocolEnvGenerator itself writes --
+    environment_manifest.json with "qualification_status": "ENV_GENERATED"
+    (protocol_env_generator.py's generate(), line ~88) -- next to a real
+    `tb/` subdirectory. The `tb/` check matters: the older, deprecated flat
+    generator.py path stamps the SAME qualification_status onto its own
+    environment_manifest.json (confirmed on-disk at
+    examples/generated_pcie_uvm_env/environment_manifest.json) but never
+    creates a tb/ subdirectory at all -- only ProtocolEnvGenerator's real
+    tb/agents,env,seq,tests,top subdirectory-shaped output qualifies as real
+    TB source.
+
+    If more than one real match exists, the most recently modified manifest
+    wins (the freshest generation run is the one relevant to a current
+    signoff); returns None -- honest absence, never a guess -- if none do.
+    """
+    candidates = []
+    for manifest_path in root.rglob("environment_manifest.json"):
+        if ".git" in manifest_path.parts:
+            continue
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if data.get("qualification_status") != "ENV_GENERATED":
+            continue
+        tb_dir = manifest_path.parent / "tb"
+        if tb_dir.is_dir():
+            candidates.append((manifest_path.stat().st_mtime, tb_dir))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda pair: pair[0], reverse=True)
+    return candidates[0][1]
 
 
 def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
@@ -113,22 +169,15 @@ def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
     else:
         record("pattern_registry", False, None)
 
-    # 9: UVM testbench source (.dv-harness/generated_uvm_env/tb/ -- the real
-    # tb/agents,env,seq,tests,top subdirectory shape ProtocolEnvGenerator
-    # emits, see dv_harness/uvm_generator/protocol_env_generator.py; also the
-    # shape catalogued in examples/generated_*_uvm_env/'s naming). No
-    # generator-wired default out-path is pinned anywhere in this project
-    # (tools/generate_protocol_uvm_environment.py / every PROTOCOL_BUILDERS
-    # SKILL.md takes an arbitrary --out with no fixed default, unlike
-    # PATTERN_REGISTRY_OUT/REGRESSION_LIST below, which ARE pinned in
-    # .claude/templates/Makefile.patterns.mk) -- .dv-harness/generated_uvm_env
-    # is this harness's own single project-wide convention location for that
-    # output, checked honestly (same as pattern_registry above) rather than
-    # fabricated when absent.
-    src = root / ".dv-harness" / "generated_uvm_env" / "tb"
+    # 9: UVM testbench source -- discovered via _find_tb_source_dir (see its
+    # docstring): ProtocolEnvGenerator's real tb/agents,env,seq,tests,top
+    # subdirectory-shaped output, located by its own environment_manifest.json
+    # marker rather than a guessed fixed path, since no such fixed default
+    # exists anywhere in this project.
+    tb_src = _find_tb_source_dir(root)
     rel = Path("tb_source")
-    if src.is_dir():
-        _copy_dir(src, out_dir / rel)
+    if tb_src is not None:
+        _copy_dir(tb_src, out_dir / rel)
         record("tb_source", True, rel)
     else:
         record("tb_source", False, None)

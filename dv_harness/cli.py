@@ -224,10 +224,11 @@ def main():
 
     psignoff = sub.add_parser("signoff-export", help="One-click final signoff export: bundle vPlan/"
                                                        "blackboard signoff+regression+requirements+findings "
-                                                       "state/stage-execution telemetry/pattern registry into "
-                                                       "a single out dir, plus a fresh self-audit result, with "
-                                                       "a manifest.json recording what was actually present. "
-                                                       "See dv_harness/signoff_export.py.")
+                                                       "state/stage-execution telemetry/pattern registry/"
+                                                       "generated UVM testbench source/regression manifest "
+                                                       "into a single out dir, plus a fresh self-audit result, "
+                                                       "with a manifest.json recording what was actually "
+                                                       "present. See dv_harness/signoff_export.py.")
     psignoff.add_argument("--out", required=True, help="Directory to write the signoff bundle into.")
 
     pkc = sub.add_parser("knowledge", help="Shared, cross-user knowledge center on a fixed Linux-server "

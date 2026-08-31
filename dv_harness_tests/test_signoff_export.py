@@ -133,13 +133,16 @@ def test_no_exception_when_nothing_at_all_is_present():
 def test_signoff_bundle_includes_tb_source_when_present():
     """Generate a real tb/ tree via ProtocolEnvGenerator (the actual USB_
     UVM_Handoff-shaped subdirectory layout: tb/agents,env,seq,tests,top --
-    see protocol_env_generator.py) under the harness's own
-    .dv-harness/generated_uvm_env convention, and confirm collect_signoff_
-    bundle() copies the real generated files, not a placeholder."""
+    see protocol_env_generator.py) at an ARBITRARY location under the
+    project root (deliberately NOT any specific convention path -- proves
+    collect_signoff_bundle() discovers it via its real
+    environment_manifest.json marker, per _find_tb_source_dir, rather than
+    matching one hardcoded guessed path), and confirm the real generated
+    files get bundled, not a placeholder."""
     tmp = _fresh_project_with_tools()
     out_dir = tmp / "signoff_out"
     try:
-        generated_dir = tmp / ".dv-harness" / "generated_uvm_env"
+        generated_dir = tmp / "build" / "some_arbitrary_output_location" / "usb3_2_uvm_env"
         generated_files = ProtocolEnvGenerator(generated_dir).generate(USB_MANIFEST)
 
         result = signoff_export.collect_signoff_bundle(tmp, out_dir)
@@ -173,6 +176,67 @@ def test_signoff_bundle_honestly_reports_missing_tb_source():
         assert by_artifact["tb_source"]["present"] is False
         assert by_artifact["tb_source"]["bundled_path"] is None
         assert not (out_dir / "tb_source").exists()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_signoff_bundle_ignores_flat_layout_manifest_without_tb_dir():
+    """A real environment_manifest.json can carry qualification_status
+    ENV_GENERATED without ever having a tb/ subdirectory -- confirmed on
+    disk at examples/generated_pcie_uvm_env/environment_manifest.json,
+    written by the older deprecated flat generator.py path. Reproduce that
+    exact shape (manifest present, no tb/ sibling) and confirm it is
+    correctly NOT mistaken for real TB source."""
+    tmp = _fresh_project_with_tools()
+    out_dir = tmp / "signoff_out"
+    try:
+        flat_dir = tmp / "examples" / "generated_pcie_uvm_env"
+        flat_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(flat_dir / "environment_manifest.json",
+                    {"protocol": "PCIe", "generated_files": ["pcie_env_pkg.sv"],
+                     "qualification_status": "ENV_GENERATED"})
+        (flat_dir / "pcie_env_pkg.sv").write_text("// flat-layout file, no tb/\n", encoding="utf-8")
+
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        by_artifact = {m["artifact"]: m for m in result["manifest"]}
+        assert by_artifact["tb_source"]["present"] is False
+        assert by_artifact["tb_source"]["bundled_path"] is None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_signoff_bundle_tb_source_picks_most_recently_generated_when_multiple():
+    """Two real ProtocolEnvGenerator outputs exist under the project root --
+    the freshest (most recently modified environment_manifest.json) must be
+    the one bundled as tb_source."""
+    tmp = _fresh_project_with_tools()
+    out_dir = tmp / "signoff_out"
+    try:
+        older_dir = tmp / "old_run" / "usb_uvm_env"
+        newer_dir = tmp / "new_run" / "usb_uvm_env"
+        ProtocolEnvGenerator(older_dir).generate(USB_MANIFEST)
+        newer_files = ProtocolEnvGenerator(newer_dir).generate(USB_MANIFEST)
+
+        # Force a real, observable mtime gap between the two manifests so
+        # "most recent" has an unambiguous real answer.
+        import os
+        import time
+        older_manifest = older_dir / "environment_manifest.json"
+        newer_manifest = newer_dir / "environment_manifest.json"
+        now = time.time()
+        os.utime(older_manifest, (now - 3600, now - 3600))
+        os.utime(newer_manifest, (now, now))
+
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        by_artifact = {m["artifact"]: m for m in result["manifest"]}
+        assert by_artifact["tb_source"]["present"] is True
+        bundled_rel = by_artifact["tb_source"]["bundled_path"]
+
+        newer_tb_file = next(f for f in newer_files if f.startswith("tb/"))
+        dst = out_dir / bundled_rel / Path(newer_tb_file).relative_to("tb")
+        src = newer_dir / newer_tb_file
+        assert dst.exists()
+        assert dst.read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

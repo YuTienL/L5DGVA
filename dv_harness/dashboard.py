@@ -334,7 +334,8 @@ overwrites first, so it is never one-way.</div>
 
 <div class="card" id="signoffExportCard"><h3>Signoff Export</h3>
 <div class="note">One-click bundle of real signoff artifacts (blackboard state, vPlan, a freshly-generated
-self-audit result, stage-execution telemetry, pattern registry) into a single directory -- mirrors
+self-audit result, stage-execution telemetry, pattern registry, generated UVM testbench source,
+regression/test-suite manifest) into a single directory -- mirrors
 <code>signoff_export.collect_signoff_bundle()</code> directly (same-process, no subprocess). Each candidate
 artifact is copied only if it actually exists on disk; <code>manifest.json</code> in the output directory
 records present/absent honestly, never a fabricated placeholder. Leave out_dir blank for a default under
