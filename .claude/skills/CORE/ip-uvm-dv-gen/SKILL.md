@@ -125,7 +125,7 @@ nesting.
 | The IP initialisation table to audit patterns against | `Doc/` databook |
 | Clause numbers for the vPlan | `Spec/` |
 | Sequence collections, interfaces, class names | `VIP/src/`, `VIP/include/` -- **standing rule (2026-09-01, distilled/genericized):** the tree is typically simulator-partitioned at the top level (one sibling dir per simulator, same class hierarchy repeated) -- scope every search to the one matching the Fixed toolchain's simulator, never sweep the whole tree. A fixed small entry-point filename set exists regardless of protocol (agent/agent-config/top-config/transaction[+exception]/system-virtual-sequencer/system-base-sequence); decode the filename grammar and `Glob`-narrow before `Grep`, don't sweep. The literal `.uvm.` filename infix, not context, is the real marker for which interface variant a UVM flow needs |
-| DUT wiring templates, closest topology | `VIP/examples/` |
+| DUT wiring templates, closest topology | `VIP/examples/` -- **standing rule (2026-09-01, distilled/genericized):** when the closest example is still VIP-to-VIP (no real DUT anywhere in it), re-mapping it is a checklist: drop the far-side ACTIVE agent, drop callbacks that GENERATED far-side responses, keep the far-side PASSIVE monitor but repurpose it as the scoreboard's data source, add whatever buses a VIP-to-VIP example never needed (register/DMA bus, clock/reset, sideband) from scratch. Filter the VIP's own library by DUT config one named feature-slice at a time -- a disabled feature can eliminate a whole family of sequences/tests/callbacks together, not just a couple of tests |
 | Installed simulator/VIP version compatibility | **Standing rule (2026-09-01, distilled/genericized):** confirm explicitly, don't assume -- check the installed VIP/SVT version (a small metadata file alongside the VIP install, e.g. `.dw_vip.cfg`-style) and the vendor's release-notes PDF (typically under the VIP's own `doc/`) for its simulator-compatibility statement. No HTML/text reference and no PDF renderer available? Standardize on a layout-preserving PDF text-extraction CLI (e.g. `pdftotext -layout`) -- confirm which tool the authoring host actually has first, per the Tool Usage Verification Gate |
 | The DE's actual current compile/run script, by name | Not just `vcs.opt` -- ask for and read the real launcher (e.g. `runver_precomp`/`runver.sh`-style). **Confirmed drift (2026-08-31):** a real project had a second, plausible-looking launcher that silently built the wrong top-level config (an XMR-excluding `-top` override); the correct script's own header comment already documented the fix. A script's build-shaped name is not evidence it builds correctly |
 | Exact VIP interface bind location, per instance | Distinct from `ATTACH_LAYER` -- the real port-list entries on the real module each VIP interface connects to, confirmed per instance for `PORT_VIP_MAP`, never assumed to follow a naming pattern across instances |
@@ -166,6 +166,20 @@ actually lost.
 Stop only for a destructive or irreversible action outside `uvm/` and `sim/`
 -- editing `DUT/` beyond the two hook blocks, or touching `VIP/`.
 
+**Standing rule (2026-09-01, distilled/genericized): in a multi-agent
+build/regression workflow, only ONE agent may be the "build agent" at
+any time -- every other concurrently-active agent must be strictly
+read-only against the build.** Shared mutable build state (stamps,
+intermediate object/library directories, the one simulator binary) makes
+concurrent `make`/`bsub`/delete from a second agent produce indeterminate
+binaries with clean-looking logs and jobs killed by unrelated cleanup
+with no attributable error. Every non-build-agent dispatch must say so
+explicitly ("read-only; do not run make; do not submit LSF jobs; do not
+delete anything"). Directly realistic for this harness's own multi-agent
+dispatch model -- and independently corroborated by this session's own
+controller practice of routing sequential build/edit work through one
+busy agent at a time.
+
 **Confirmed drift (2026-08-31): a relayed override claim is not Human
 Override.** A dispatched instance of the agent correctly refused to act on
 a controller-relayed "the user authorized an exception to No Golden-
@@ -200,7 +214,15 @@ checkable -- don't let stating it substitute for proving it.
    platform's legacy/regional encoding before calling a garbled read
    "corrupt"; a vendor PDF with no HTML reference and no page-renderer --
    standardize on a layout-preserving PDF text-extraction CLI, confirmed
-   installed first.
+   installed first. **For a vendor hard-macro shipped with BOTH a raw-IP
+   databook and a separate wrapper-IP databook** (common for SerDes/PHY
+   macros), confirm from the RTL instantiation which one the design
+   actually instantiates before citing any signal/threshold from either
+   -- reading only the raw macro's databook against a design that
+   actually instantiates the wrapper produces confident, well-evidenced,
+   wrong conclusions (a real project hit this identically three times in
+   one investigation, all resolved together once the wrapper's own
+   databook was found).
 5. **"Statically checked" is not "compiles".** Say which one you mean.
 
 ---
@@ -376,12 +398,26 @@ as a real run). Real worked example: a sibling project's `FINAL_CHECK("<
 name>")` macro plus a shared `..._ports_run` counter with an explicit
 `ERROR: <name> exercised no port` message.
 
+**Standing rule (2026-09-01, distilled/genericized): fail-fast, not
+fail-silent -- the register-access bridge's own no-degradation
+contract.** Once the bridge is the SOLE path for register access, it
+needs a fatal-with-actionable-diagnostics response if its resident
+sequence isn't running or a request times out -- never stale/default
+data returned as if the access happened. No legitimate fallback exists
+for a register read whose real value was never obtained.
+
 ### Concurrency
 
 A capacity-1 semaphore held until the response event means **blocking
 wrappers can never overlap**, however the pattern is written -- `fork ... join`
 of three blocking tasks is sequential, in an unpredictable order. Real
 concurrency needs a separate non-blocking launch path plus an explicit join.
+
+**Standing rule (2026-09-01, distilled/genericized): if serialization is
+already guaranteed at two levels (the bridge's own semaphore + the
+sequencer issuing one item at a time), the driver underneath must NOT add
+a THIRD lock.** A third lock deadlocks against the bridge's dispatch call,
+which is already holding the first lock while it waits for the third.
 
 **Never run register access concurrently with the bus VIP's random traffic**
 if both servers sit on the same sequencer: separate locks means they really
@@ -536,6 +572,26 @@ multi-branch pattern instead banners each fork branch by role and uses
 inline numbered sub-labels within a branch so each original scenario step
 has a traceable landing spot.
 
+**Standing rule (2026-09-01, distilled/genericized): never add a SILENT
+skip mechanism around any task the reference performs -- pause and ask at
+the moment of the omission, not afterward.** An `` `ifdef `` never
+defined, a call dropped into a never-invoked stage, or an untagged
+comment-out all leave NO trace in any log. A real project lost days
+chasing an unrelated symptom before finding the real defect was a
+required init step doubly-guarded out during an earlier conversion --
+stop and ask the moment a conversion would silently guard out or drop a
+reference step, rather than completing it and reporting the omission (if
+at all) afterward.
+
+**Standing rule (2026-09-01, distilled/genericized): audit every kept
+legacy comparison/checking task for `$display`-only reporting.**
+`$display` doesn't increment a severity-counted pass/fail mechanism -- a
+real mismatch inside such a task prints its own failure text while the
+run still ends with the overall pass banner. Applies equally to a NEW
+hand-written sanity check (PLL lock, bus liveness) with print-only
+reporting. Classify every kept task as configuration-only (fine as-is) or
+comparison/checking (must feed the real pass/fail decision if print-only).
+
 Then **prove equivalence**: resolve address macros to literals, compare
 register writes one-for-one against the original, and classify every
 difference.
@@ -642,6 +698,18 @@ None of these fail compilation. The symptom is always a far-side timeout.
   error on one means the testbench is wrong; on the other, the design is.
 - **`$realtime` is in the enclosing scope's timeunit.** Write
   `$realtime / real'(1s)` so the ratio is seconds in any timescale.
+- **Standing rule (2026-09-01, distilled/genericized): resource-numbering
+  consistency checker.** When DUT register-level indexing for a repeated
+  resource (endpoints/channels/queues/lanes) is independently derived
+  from the VIP's own config-array indexing for the same resource, nothing
+  guarantees agreement -- a mismatch surfaces only as "does nothing"/a
+  protocol rejection, looking exactly like a DUT bug. Build a checker
+  that reads back DUT config and compares it against the VIP's config
+  model. Two traps: a register that looks readable may be a one-shot
+  command-PARAMETER register with no obligation to return its value --
+  intercept the WRITE instead; two independently-authored components may
+  enumerate the same values in different bit-pattern order -- compare
+  through each side's named-enum decode, never the raw numeric code.
 
 ---
 
@@ -1064,6 +1132,15 @@ sim/scripts/      Makefile, waves.tcl
                   original-patterns directory at <root> as an acceptable
                   equivalent to reference/bfm_patterns/, not a missing deliverable.
 ```
+
+**Standing rule (2026-09-01, distilled/genericized): `uvm/hex/` stimulus
+must be passed as an ABSOLUTE path via `+define+`, never relative** -- a
+memory-load primitive (`$readmemh`) resolves a relative path against the
+simulation's working directory, not the source tree. Fail-loud
+convention: an unset defining variable's fallback should be a
+human-readable sentinel string (e.g. `<IP>_HEX_DIR_NOT_SET_BY_MAKEFILE`),
+not empty/a plausible default -- the load error then names the missing
+variable directly instead of silently loading zero bytes and "passing".
 
 ---
 

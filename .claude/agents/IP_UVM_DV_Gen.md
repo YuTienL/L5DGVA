@@ -323,6 +323,26 @@ fact from a name.
 > authoring host actually has before assuming one is installed) rather
 > than assuming a renderer is available.
 
+> **Standing rule (2026-09-01, distilled and genericized): for a vendor
+> hard-macro delivered with BOTH a raw-IP databook and a separate
+> wrapper-IP databook (common for SerDes/PHY-class macros, where a
+> digital wrapper sits between the chip and the raw macro, renaming or
+> redefining the raw macro's own boundary signals), confirm from the RTL
+> INSTANTIATION which one the design actually instantiates before citing
+> any signal name or threshold from either.** Reading only the raw
+> macro's databook and grepping the RTL for its documented signal names
+> can produce a confidently-stated, well-evidenced, and still WRONG
+> conclusion, if the RTL in fact instantiates the wrapper rather than the
+> raw macro -- the wrapper renames/redefines exactly the kind of
+> boundary signal a reader would otherwise cite with full confidence. A
+> real sibling project had this happen three times in the same
+> investigation (a readiness signal, a reset-ownership question, a
+> hold-time requirement), each independently traced back to the same
+> root cause, and all three resolved together once the WRAPPER's own
+> databook was located and read. Check which databook actually documents
+> the module the RTL instantiates as a first step, before reading either
+> databook's contents as fact.
+
 These rules are the same discipline CLAUDE.md's **Evidence Truth Rule**
 states at the harness level ("current evidence wins", "any current root
 cause must be revalidated with current evidence") applied specifically to
@@ -407,6 +427,32 @@ This method resolves base-address questions that documents alone contradict.
 | The DUT wiring templates | `VIP/examples/**`, often an `hdl_interconnect/`-style directory with one template per interface. **Look here first when connecting a real DUT** |
 | Sequence collections | `VIP/src/**/*_sequence_collection.sv` -- the filenames state the test area directly, and this is your vPlan raw material |
 | Which classes are the env / configuration / transaction | Confirm from the package file; do not guess the name |
+
+### Re-mapping a VIP-to-VIP example onto a VIP-to-real-DUT target
+
+> **Standing rule (2026-09-01, distilled and genericized).** The closest
+> available VIP example is frequently host-VIP-to-device-VIP -- both
+> sides modeled by the VIP, no real DUT anywhere in it -- while the real
+> target is host-VIP-to-real-DUT-device (or the reverse). Re-mapping one
+> onto the other is a distinct, component-level checklist, not just
+> "prefer the DUT-facing example when one exists" (Step 4's main body
+> already says that; this is what to do when the closest one still isn't
+> DUT-facing): (1) drop the far-side ACTIVE agent entirely -- your real
+> DUT plays that role now; (2) drop every callback that existed to
+> GENERATE far-side responses, since the far side is no longer simulated
+> by the VIP; (3) keep the far side's PASSIVE monitor agent, but
+> repurpose it as the scoreboard's data source rather than deleting it;
+> (4) add, from scratch, whatever buses a pure VIP-to-VIP example never
+> needed at all -- a register bus, a DMA bus, clock/reset, sideband --
+> since a VIP-to-VIP example typically has none of them. **Separately,
+> filter the VIP's own sequence/test/callback library by DUT build-time
+> configuration, one named slice at a time**: a disabled optional
+> protocol feature does not just remove a couple of tests, it can
+> eliminate a named family of sequences/tests/callbacks together (a real
+> sibling project's own "OTG disabled" eliminated 3 sequences plus 2
+> tests; "no SSIC support" eliminated 9 sequences and a whole env/test
+> family) -- treat each DUT configuration parameter as its own filtering
+> pass over the VIP library, not one blanket relevance judgment.
 
 ### Navigating a large, undocumented VIP source tree
 
@@ -864,6 +910,23 @@ protocol whose physical layer has bidirectional or multiply-driven pins
 > join, with an explicit `ERROR: <name> exercised no port` message
 > otherwise.
 
+#### Fail-fast, not fail-silent: the register-access bridge's own no-degradation contract
+
+> **Standing rule (2026-09-01, distilled and genericized) -- distinct
+> from the two subsections above (this is about the bridge's own error
+> behavior, not instance-termination or pattern-completion).** Once the
+> register-access bridge is the SOLE path for register access (the whole
+> point of building it), it needs an explicit contract for what happens
+> when something upstream of it is broken: if its resident UVM-side
+> sequence isn't actually running, or a dispatched request times out, the
+> bridge must raise a fatal with actionable diagnostics (what was being
+> attempted, the plusarg/mechanism that should have enabled the resident
+> sequence, whether that sequence is alive) -- **never return stale or
+> default data and let the pattern silently continue as if the access
+> had actually happened.** There is no legitimate fallback path for a
+> register read whose real value was never obtained; a silent degradation
+> here converts a broken environment into wrong-but-plausible test data.
+
 ### Concurrency
 
 A capacity-1 semaphore held until the response event means **blocking
@@ -872,6 +935,18 @@ wrappers can never overlap**, however the pattern is written --
 sequentially, in an unpredictable order. Real concurrency needs a separate
 non-blocking launch path plus an explicit join that reports what did not
 return.
+
+> **A specific deadlock this shape enables, worth naming (2026-09-01,
+> distilled and genericized): if serialization is already guaranteed at
+> two independent levels (the bridge's own semaphore, plus the UVM
+> sequencer issuing one item at a time), the driver underneath must NOT
+> add a THIRD lock of its own.** A third lock deadlocks against the
+> bridge's dispatch call, which is already holding the first lock while
+> it waits -- the driver's own lock can never be released back to a
+> dispatch call that is blocked waiting to acquire it. When adding any
+> new serialization point below an already-serialized bridge, check
+> whether serialization is already guaranteed above it before assuming
+> another lock is needed.
 
 **Never run register access concurrently with the bus VIP's random traffic**
 when both servers sit on the same sequencer. Separate locks means they really
@@ -1083,6 +1158,25 @@ testbench, and often its macro definition or its instance **is not even in the
 delivery** -- meaning the originals cannot run as delivered either. That is
 the strongest argument for converting: the VIP removes the dependency.
 
+> **Standing rule (2026-09-01, distilled and genericized): never add a
+> SILENT skip mechanism around any task the reference performs during
+> conversion -- pause and ask at the moment of the omission, not
+> afterward.** An `` `ifdef `` that is never defined, a call dropped into a
+> stage that is never invoked, or a line simply commented out with no
+> tag (see the tagged-comment convention above) all have the identical
+> failure shape: the omission leaves NO trace in any log, so a missing
+> required step reads as ordinary silence rather than a flagged decision.
+> A real sibling project lost real investigation time (on the order of
+> days) chasing an apparently-unrelated symptom before finding that the
+> actual defect was a required multi-step SoC init sequence that had been
+> doubly-guarded out during an earlier conversion pass. **The stronger,
+> mandatory rule going forward: the moment converting a reference-BFM
+> line would mean silently guarding it out or dropping it into dead code,
+> STOP and ask, rather than completing the conversion and reporting the
+> omission (if at all) afterward** -- proactively surfacing a real
+> omission before it ships is categorically cheaper than a multi-day
+> investigation to rediscover it later.
+
 > **Standing rule (2026-09-01, distilled and genericized): preserve a
 > deleted line as a tagged comment, never a silent deletion.** When a
 > converted line no longer runs, keep it in the file as a comment rather
@@ -1177,6 +1271,34 @@ encode what someone got working once, not what the databook requires. Expect:
   is zeros and the transfer silently does nothing.
 
 None of these fail compilation. The symptom is always a far-side timeout.
+
+> **Standing rule (2026-09-01, distilled and genericized): a kept legacy
+> comparison/checking task must be individually audited for whether it
+> reports via `$display` instead of a severity-counted mechanism.**
+> `$display` does not increment a severity report server's pass/fail
+> counters -- a real mismatch inside such a task prints its own
+> human-readable "this failed" text, then the run still ends with the
+> overall pass banner anyway, because nothing about that print raised the
+> failure count. This applies equally to a NEW, hand-written stage/
+> pattern-layer sanity check (a PLL-lock check, a bus-liveness check) --
+> a print-only implementation has the identical failure mode. Classify
+> every kept legacy task as configuration-only (fine to keep as-is) or
+> comparison/checking (must be audited and, if print-only, converted to
+> feed the real pass/fail decision), and hold every new hand-written
+> check to the same standard from the start.
+>
+> **Real worked example (illustration only, citation deliberately
+> non-specific):** a sibling project found several of its own kept
+> legacy comparison tasks unsafe by this exact measure, and fixed the
+> worst one with a severity-counted UVM replacement. Exact source
+> file:line citations for this kind of finding age quickly as a codebase
+> grows (a real citation for this specific finding was independently
+> confirmed stale -- the file had grown ~150 lines since the citation was
+> recorded, moving the real code to a different line without changing its
+> logic) -- treat any specific line number attached to an audit finding
+> like this as approximate/point-in-time, not a durable fact, and
+> re-locate the real code by content (the task name, the `$display` call)
+> rather than trusting an old line number.
 
 ---
 
@@ -1304,6 +1426,34 @@ Check the agent's actual ports before designing the connection.
 > **Coverage remains a placeholder**: `coverage()` only emits `// COVER: <json>`
 > comment lines, no functional-coverage DSL -- the conspicuous next upgrade
 > target, not yet attempted in this pass.
+
+### Resource-numbering consistency checker
+
+> **Standing rule (2026-09-01, distilled and genericized).** When a
+> DUT's own register-level addressing/indexing for a repeated resource
+> (endpoints, channels, queues, lanes) is independently derived from the
+> VIP's own configuration-array indexing for the SAME logical resource,
+> nothing guarantees the two numbering schemes agree -- a mismatch
+> surfaces only as "the transfer does nothing"/a protocol-level
+> rejection, indistinguishable from a genuine DUT defect. Build an
+> explicit checker that reads back the DUT's own configuration and
+> compares it against the VIP's config model for the same resource,
+> rather than trusting that the two numbering schemes were derived
+> consistently. Two generalizable traps to design around:
+>
+> - **A register that looks readable by its name/address may actually be
+>   a one-shot command-PARAMETER register**, with no obligation to
+>   return its own previously-written value on a subsequent read.
+>   Intercept the WRITE instead, at whatever existing choke point already
+>   sees every write to that register, rather than assuming a readback
+>   will report the configured value.
+> - **Two independently-authored components (the DUT's RTL and the VIP)
+>   may enumerate the same logical set of values in different bit-pattern
+>   order.** Compare through each side's own named-enum decode, never
+>   through the raw numeric code -- a raw-number comparison can silently
+>   false-alarm on a value that is actually correct once each side's own
+>   naming is accounted for, or silently false-pass a value that is
+>   actually wrong.
 
 ### Performance measurement
 
@@ -2084,6 +2234,22 @@ is a decision to record, not a default.
 > may hardcode today's category list," not just as a note about directory
 > layout.
 
+> **Standing rule (2026-09-01, distilled and genericized): stimulus/
+> descriptor data under `uvm/hex/` must be passed as an ABSOLUTE path via
+> a `+define+`, never a relative one, because a memory-load primitive
+> (e.g. `$readmemh`) resolves a relative path against the SIMULATION's
+> working directory** -- which has no fixed relationship to the source
+> tree or the filelist's own location, so a relative path that happens to
+> work from one invocation directory silently breaks from another.
+> **Fail-loud convention when the defining Makefile variable is unset:
+> the fallback value should be a deliberately human-readable sentinel
+> string** (e.g. `<IP>_HEX_DIR_NOT_SET_BY_MAKEFILE`) **rather than an
+> empty string or a plausible-looking default path** -- the memory-load
+> primitive's own error then prints the sentinel directly, naming exactly
+> which variable was never set, instead of silently loading zero bytes
+> (a memory-load task that can't find its file often only *warns*) and
+> letting the test proceed and "pass" against empty stimulus.
+
 ### The User Guide
 
 One self-contained HTML file (no external assets), rendered to PDF.
@@ -2192,6 +2358,28 @@ header comment written at the moment the trap was found.
 ---
 
 ## How to work
+
+> **Standing rule (2026-09-01, distilled and genericized): in a
+> multi-agent build/regression workflow, only ONE agent may be the
+> "build agent" at any time; every other concurrently-active agent must
+> be strictly read-only against the build.** The build (compile,
+> elaborate, LSF submission) shares mutable state across whatever agents
+> are active at once -- build stamps, intermediate object/library
+> directories, the single simulator binary -- and a second agent running
+> `make`/`bsub`/a deleting command concurrently with the first produces
+> indeterminate binaries with clean-looking logs, corrupted intermediate
+> directories, and jobs killed by another agent's unrelated cleanup with
+> no attributable error message anywhere. Every dispatch to a
+> non-build-agent must say so explicitly ("read-only; do not run make; do
+> not submit LSF jobs; do not delete anything"), not leave it implicit.
+> **This is directly realistic for this harness given its own explicit
+> multi-agent dispatch model, not a hypothetical scenario** -- and this
+> session's own controller independently arrived at exactly this
+> discipline in practice (routing sequential build/edit work through one
+> busy agent at a time to avoid concurrent-build/edit collisions) before
+> this rule was ever distilled from a sibling project's own docs; the two
+> converging independently is real corroboration, not just a borrowed
+> rule.
 
 > **Confirmed drift (2026-08-31): this agent's Step 2 input-tree survey is not
 > a substitute for actually reproducing the DE's existing local compile/sim
