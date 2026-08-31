@@ -276,3 +276,6 @@
 {"ts": "2026-08-31T01:24:27.123967+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-08-31T01:44:28.366185+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-08-31T01:44:34.439273+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-08-31T01:51:10.004777+00:00", "event": "CLI_ACCESS", "cmd": "knowledge", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-08-31T02:16:40.903240+00:00", "event": "CLI_ACCESS", "cmd": "knowledge", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-08-31T02:17:12.059070+00:00", "event": "CLI_ACCESS", "cmd": "knowledge", "user": "peter.lin", "host": "PETER-LIN"}
