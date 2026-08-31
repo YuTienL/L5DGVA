@@ -2,7 +2,7 @@ from __future__ import annotations
 import base64, binascii, json, os, re, tempfile, threading, time, traceback, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 from .config import load_config, save_config
 from .regression_reporter import load_jobs, get_job
 from .gates import extract_evidence_blocks, JUDGMENT_FIELDS, CCL_SKIPPABLE, REVIEWER_CONFIDENCE_LEVELS, _iter_judgment_targets
@@ -65,6 +65,9 @@ main{padding:24px;max-width:1200px;margin:auto}
 .icon{font-weight:bold}
 .PASS,.CLOSED,.SCRIPT_SMOKE_PASS{color:#25845b}.FAIL,.BLOCKED,.SCRIPT_SMOKE_FAIL{color:#b84444}
 .RUNNING,.RETRY{color:#2457a6}.PARTIAL,.WAIT_USER,.NO_SOURCE_DATA,.GATE_TOOL_MISSING{color:#b36a00}.NOT_STARTED{color:#9aa6bd}
+.protoTile{cursor:pointer}.protoTile:hover{border-color:#2457a6}.protoTile.selected{border-color:#2457a6;background:#eaf1fb}
+.modeTile.mode-selected{border-color:#2457a6;background:#eaf1fb}
+.tier-reached{border-color:#25845b;background:#e3f7ea}.tier-unreached{opacity:.5}
 code{background:#eef2f7;padding:3px 5px}
 .note{color:#8a97b3;font-size:12px}
 .err{color:#b84444}
@@ -159,8 +162,10 @@ Plane) -- this card just puts it in one place for a quick glance.</div>
 <div class="card" id="ironRulesCard"><h3>Iron Rules / Qualification Tiers</h3>
 <div class="note">Iron Rules count is a live count of "## 鐵則 N" headers in
 <code>.claude/skills/CORE/iron-rules/SKILL.md</code>. Qualification tiers below are the static 8-tier
-vocabulary from <code>dv_harness/qualification.py</code>'s <code>QualificationTier</code> enum -- no
-per-run current tier is tracked yet, so this is a reference legend, not this run's data.</div>
+vocabulary from <code>dv_harness/qualification.py</code>'s <code>QualificationTier</code> enum, each
+tile classed against <code>qualification_tier_reached</code> -- the highest tier actually reached by
+any protocol in this run's real <code>protocol_capability_registry.json</code> (tiers at/below that
+level render <code>tier-reached</code>, tiers above it render <code>tier-unreached</code>).</div>
 <div id="ironrulestiles" class="tiles" style="margin-top:8px"></div>
 <div class="note" style="margin-top:8px">Tier ladder (lowest -&gt; highest): <span id="qualtierlegend"></span></div>
 </div>
@@ -179,14 +184,20 @@ per-run current tier is tracked yet, so this is a reference legend, not this run
 
 <div class="card" id="protocolCard"><h3>Protocols</h3>
 <div class="note">Real registered protocols and their qualification_status (read from
-<code>qualification/protocol_capability_registry.json</code>) -- a data-backed reference list, not a
-functional selector; the Goal field below stays free text.</div>
+<code>qualification/protocol_capability_registry.json</code>) -- click a tile to fill the Goal field
+below with a start-run goal scoped to that protocol (the exact <code>goal</code> field
+POST /api/start already reads).</div>
 <div id="protocoltiles" class="tiles" style="margin-top:8px"></div>
 </div>
 <div class="card" id="envModeCard"><h3>Environment Mode Router</h3>
 <div class="note">The two canonical modes CLAUDE.md's Environment Generation Mode gate defines
-(<code>environment-router/environment_mode_policy.json</code>). No field anywhere tracks which mode the
-CURRENT run used, so this is read-only policy reference, not a live "current mode" indicator.</div>
+(<code>environment-router/environment_mode_policy.json</code>), with the tile matching
+<code>environment_mode_selected</code> highlighted, IF any stage has ever recorded a
+<code>dv-harness-evidence:environment_mode_selection</code> block. No stage currently emits that
+block anywhere in this engine (no STAGE_GATES entry, prompt instruction, or writer produces it), so
+this highlight will only activate once one does -- see the pending-producer note on
+<code>_environment_mode_selected()</code> in dashboard.py. Until then this card is always the
+read-only legend below, with no tile highlighted.</div>
 <div id="envmodetiles" class="tiles" style="margin-top:8px"></div>
 </div>
 <div class="card" id="subsystemRegistryCard"><h3>Subsystem Registry</h3>
@@ -260,6 +271,25 @@ already collected -- not a separate measurement.</div>
 <tbody id="selfAuditTableBody"></tbody></table></div>
 </div>
 
+<div class="card" id="fsdbReportCard"><h3>FSDB Structured Evidence</h3>
+<div class="note">Real signal-level evidence from an FSDB waveform dump via the confirmed-real
+<code>fsdbreport f.fsdb -period &lt;T&gt; -level 1 -csv</code> invocation (GET /api/fsdb-report,
+dv-workflow/SKILL.md's 2026-08-29 "Confirmed drift" entry) -- a structured evidence TABLE, not a
+waveform/timeline viewer (FSDB is a proprietary binary format with no public library, so a real
+signal-timeline renderer is out of scope). Column names below come verbatim from whatever real
+fsdbreport's -csv output actually declares -- never a hardcoded/guessed schema.</div>
+<div class="ctrlrow"><label>Path <input id="fsdbPath" size="34" placeholder="/path/to/dump.fsdb"></label>
+  <label>Period <input id="fsdbPeriod" size="10" placeholder="e.g. 100ns"></label>
+  <label>Hierarchy <input id="fsdbHier" size="18" placeholder="e.g. top.dut"></label>
+  <button onclick="loadFsdbReport()">Run fsdbreport</button></div>
+<div class="ctrlrow" style="margin-top:6px"><label>Filter by signal name
+  <input id="fsdbSignalFilter" size="24" oninput="renderFsdbReportTable()" placeholder="substring filter"></label></div>
+<div id="fsdbReportResult" class="note" style="margin-top:6px"></div>
+<div style="overflow-x:auto"><table id="fsdbReportTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead id="fsdbReportTableHead"><tr style="text-align:left;border-bottom:1px solid #d9e1ec"></tr></thead>
+<tbody id="fsdbReportTableBody"></tbody></table></div>
+</div>
+
 <div class="card"><h3>Shared Knowledge Center</h3>
 <div class="note">Read-only status (GET /api/knowledge/status). Choosing/typing the shared
 Linux-server path is CLI-only by design: <code>dv-harness knowledge setup</code> always
@@ -307,7 +337,8 @@ overwrites first, so it is never one-way.</div>
 
 <div class="card" id="signoffExportCard"><h3>Signoff Export</h3>
 <div class="note">One-click bundle of real signoff artifacts (blackboard state, vPlan, a freshly-generated
-self-audit result, stage-execution telemetry, pattern registry) into a single directory -- mirrors
+self-audit result, stage-execution telemetry, pattern registry, generated UVM testbench source,
+regression/test-suite manifest) into a single directory -- mirrors
 <code>signoff_export.collect_signoff_bundle()</code> directly (same-process, no subprocess). Each candidate
 artifact is copied only if it actually exists on disk; <code>manifest.json</code> in the output directory
 records present/absent honestly, never a fabricated placeholder. Leave out_dir blank for a default under
@@ -315,6 +346,34 @@ records present/absent honestly, never a fabricated placeholder. Leave out_dir b
 <div class="ctrlrow"><input id="signoffExportOutDir" placeholder="out_dir (optional, absolute path)" size="40">
   <button onclick="doSignoffExport()">Export Signoff Bundle</button></div>
 <div id="signoffExportResult" style="font-size:12px;margin-top:4px"></div>
+</div>
+
+<div class="card" id="waiverCard"><h3>Waiver Authoring</h3>
+<div class="note">Human-authored waivers, persisted to <code>.dv-harness/waivers/waivers.json</code>
+(POST /api/waiver, <code>waiver_store.append_waiver()</code>) -- the real form counterpart to an AI
+agent's own fenced <code>dv-harness-evidence:&lt;gate_id&gt;</code> waiver block. This store is not
+wired into any gate script's own <code>--waivers</code>/<code>--holes</code>/<code>--coverage</code>
+input today (each gate's payload is assembled ad hoc from the agent's evidence block at stage-run
+time, per gate's own bespoke schema -- see <code>waiver_store.py</code>'s module docstring); use this
+as the durable record of what a human actually approved, and copy its fields into the relevant
+evidence block's waiver entry when authoring one. Both <code>approved</code> and non-empty
+<code>evidence</code> are required -- a submission missing either is rejected with a 400.</div>
+<div class="ctrlrow">
+  <label>Gate <select id="waiverGateId">
+    <option value="waiver_scope_consistency_gate">waiver_scope_consistency_gate</option>
+    <option value="waiver_revision_freshness_gate">waiver_revision_freshness_gate</option>
+    <option value="waiver_revalidation_gate">waiver_revalidation_gate</option>
+    <option value="coverage_hole_regeneration_gate">coverage_hole_regeneration_gate</option>
+    <option value="coverage_hole_to_test_generation_gate">coverage_hole_to_test_generation_gate</option>
+    <option value="sequence_coverage_closure_gate">sequence_coverage_closure_gate</option>
+  </select></label>
+  <label>Item ID <input id="waiverItemId" size="24" placeholder="e.g. cov-hole-42"></label>
+</div>
+<div class="ctrlrow"><label style="align-items:flex-start">Evidence
+  <textarea id="waiverEvidence" rows="3" cols="60" placeholder="why this item is genuinely waived (reviewer, spec section, rationale)"></textarea></label></div>
+<div class="ctrlrow"><label><input type="checkbox" id="waiverApproved" checked> Approved</label>
+  <button onclick="doWaiverSubmit()">Submit Waiver</button></div>
+<div id="waiverResult" style="font-size:12px;margin-top:4px"></div>
 </div>
 
 <div class="card"><h3>Graph</h3><div id="graph"></div>
@@ -334,6 +393,16 @@ function icon(status){
   return '<span class="icon NOT_STARTED">&#9675;</span>';
 }
 function val(id){ let el=document.getElementById(id); return el? el.value : ''; }
+
+// Protocol tiles (Protocols card): a real click target wiring straight into
+// the exact field POST /api/start already reads for scope -- doStart() below
+// posts {goal: val('goalInput'), ...}, so filling #goalInput here is not a
+// new, uncomsumed field, it is the one the backend already consumes.
+function selectProtocol(el, name){
+  document.getElementById('goalInput').value = 'verify ' + name;
+  document.querySelectorAll('#protocoltiles .protoTile').forEach(t=>t.classList.remove('selected'));
+  if(el) el.classList.add('selected');
+}
 
 async function postJSON(url, body){
   let resp, text, data;
@@ -412,6 +481,13 @@ async function doSignoffExport(){
   let r = await postJSON('/api/signoff-export', body);
   showIn('signoffExportResult', r.ok, r.data);
   await load();
+}
+async function doWaiverSubmit(){
+  let body = {gate_id: val('waiverGateId'), item_id: val('waiverItemId'),
+              approved: document.getElementById('waiverApproved').checked,
+              evidence: val('waiverEvidence')};
+  let r = await postJSON('/api/waiver', body);
+  showIn('waiverResult', r.ok, r.data);
 }
 async function doConfigToggle(){
   let checked = document.getElementById('cosignEnforceToggle').checked;
@@ -527,6 +603,57 @@ async function loadUserInfo(){
   }).join('');
   document.getElementById('userInfoTableBody').innerHTML = rows || '<tr><td style="padding:4px" colspan="4">No recorded access yet.</td></tr>';
 }
+
+let _fsdbReportData = null;
+async function loadFsdbReport(){
+  let path = val('fsdbPath'), period = val('fsdbPeriod'), hier = val('fsdbHier');
+  let resultEl = document.getElementById('fsdbReportResult');
+  if(!path){ resultEl.textContent = 'path is required'; return; }
+  let qs = 'path='+encodeURIComponent(path)
+    +(period?'&period='+encodeURIComponent(period):'')
+    +(hier?'&hier='+encodeURIComponent(hier):'');
+  let r = await (await fetch('/api/fsdb-report?'+qs)).json();
+  _fsdbReportData = r;
+  if(!r.ok){
+    resultEl.textContent = 'fsdbreport failed: '+(r.error||'unknown error')+(r.detail?(' -- '+JSON.stringify(r.detail)):'');
+  } else if(!r.parsed){
+    resultEl.textContent = 'ran, but output not recognized as real CSV: '+(r.note||'');
+  } else {
+    resultEl.textContent = (r.records||[]).length+' record(s), columns: '+(r.fieldnames||[]).join(', ');
+  }
+  renderFsdbReportTable();
+}
+function renderFsdbReportTable(){
+  // Client-side signal-name filter over already-fetched records -- no
+  // re-fetch/re-run of the real fsdbreport binary just to filter.
+  let head = document.getElementById('fsdbReportTableHead');
+  let tbody = document.getElementById('fsdbReportTableBody');
+  let r = _fsdbReportData;
+  let fields = (r && r.parsed) ? (r.fieldnames||[]) : [];
+  if(!fields.length){
+    head.innerHTML = '<tr style="text-align:left;border-bottom:1px solid #d9e1ec"></tr>';
+    tbody.innerHTML = '<tr><td style="padding:4px">No parsed records yet -- run fsdbreport above.</td></tr>';
+    return;
+  }
+  head.innerHTML = '<tr style="text-align:left;border-bottom:1px solid #d9e1ec">'+
+    fields.map(f=>`<th style="padding:4px">${f}</th>`).join('')+'</tr>';
+  // Column names are whatever the real -csv output declared (see fsdb_report.py) --
+  // prefer a signal/hierarchy-shaped column for the filter, but fall back to
+  // matching any column so the filter still works against an unknown real schema.
+  let signalField = fields.find(f=>/signal|hier|name/i.test(f));
+  let filterVal = (val('fsdbSignalFilter')||'').toLowerCase();
+  let records = r.records||[];
+  if(filterVal){
+    records = records.filter(rec => signalField
+      ? String(rec[signalField]||'').toLowerCase().includes(filterVal)
+      : fields.some(f=>String(rec[f]||'').toLowerCase().includes(filterVal)));
+  }
+  let rows = records.map(rec=>
+    '<tr style="border-bottom:1px solid #edf1f5">'+fields.map(f=>`<td style="padding:4px">${rec[f]}</td>`).join('')+'</tr>'
+  ).join('');
+  tbody.innerHTML = rows || `<tr><td style="padding:4px" colspan="${fields.length}">No records match the current filter.</td></tr>`;
+}
+
 function _epochOrIso(v){
   if(v==null) return null;
   if(typeof v === 'number') return v;
@@ -699,17 +826,31 @@ async function load(){
    tile(s.dv_review_pending_count||0,'Pending Review (Co-sign)')
  ].join('');
 
- // Protocols: real registered protocols + qualification_status.
+ // Protocols: real registered protocols + qualification_status, each tile a
+ // real click target (selectProtocol()) that fills the Goal field POST
+ // /api/start actually reads -- not a static reference-only div.
  document.getElementById('protocoltiles').innerHTML = (s.protocol_registry||[]).length
-   ? s.protocol_registry.map(p=>tile(p.name, p.qualification_status)).join('')
+   ? s.protocol_registry.map(p=>
+       `<div class="tile protoTile" onclick="selectProtocol(this,'${String(p.name).replace(/'/g,"\\'")}')"><div class="n">${p.name}</div><div class="l">${p.qualification_status}</div></div>`
+     ).join('')
    : tile('-','No protocols registered');
 
- // Environment Mode Router: static policy reference (no per-run "current
- // mode" field exists anywhere in state today).
+ // Environment Mode Router: highlights whichever mode key matches
+ // environment_mode_selected, from _environment_mode_selected() -- but no
+ // stage anywhere in this engine currently emits an
+ // environment_mode_selection evidence block (no STAGE_GATES entry, no
+ // prompts.py instruction, no writer), so s.environment_mode_selected is
+ // always null today and this always falls back to the flat legend display
+ // below with no tile highlighted. This is honest current behavior, not a
+ // bug: the highlight will start working the moment some stage's producer
+ // for that evidence block is implemented, with no dashboard change needed.
  let modes = s.environment_mode_policy||{};
  let modeKeys = Object.keys(modes);
+ let selectedMode = s.environment_mode_selected;
  document.getElementById('envmodetiles').innerHTML = modeKeys.length
-   ? modeKeys.map(m=>tile(m, modes[m].goal||'')).join('')
+   ? modeKeys.map(m=>
+       `<div class="tile modeTile ${m===selectedMode?'mode-selected':''}"><div class="n">${m===selectedMode?'&#9654; ':''}${m}</div><div class="l">${modes[m].goal||''}</div></div>`
+     ).join('')
    : tile('-','No environment_mode_policy.json found');
 
  // Subsystem Registry: real runtime registry, honest empty state.
@@ -720,9 +861,21 @@ async function load(){
  ).join('');
  document.getElementById('subsystemTableBody').innerHTML = subRows || '<tr><td style="padding:4px" colspan="3">No subsystems registered yet.</td></tr>';
 
- // Iron Rules / Qualification Tiers.
- document.getElementById('ironrulestiles').innerHTML = tile(s.iron_rules_count!=null? s.iron_rules_count : '-','Iron Rules Enforced');
- document.getElementById('qualtierlegend').textContent = (s.qualification_tiers||[]).join(' -> ');
+ // Iron Rules / Qualification Tiers: the tier ladder tiles are classed
+ // against qualification_tier_reached (real, from
+ // _qualification_tier_reached() -- the highest tier any protocol in this
+ // run's live protocol_capability_registry.json has actually reached), not
+ // a flat unstyled tile -- tier-reached for tiers at/below that level,
+ // tier-unreached above it (every tier renders tier-unreached when no
+ // protocol is registered yet).
+ let tierList = s.qualification_tiers||[];
+ let reachedIdx = s.qualification_tier_reached ? tierList.indexOf(s.qualification_tier_reached) : -1;
+ document.getElementById('ironrulestiles').innerHTML =
+   tile(s.iron_rules_count!=null? s.iron_rules_count : '-','Iron Rules Enforced') +
+   tierList.map((t,i)=>
+     `<div class="tile tier ${i<=reachedIdx?'tier-reached':'tier-unreached'}"><div class="n">${i===reachedIdx?'&#9733;':(i<reachedIdx?'&#10003;':'')}</div><div class="l">${t}</div></div>`
+   ).join('');
+ document.getElementById('qualtierlegend').textContent = tierList.join(' -> ');
 
  let g=await (await fetch('/api/graph')).json();
  fillStageSelects((g.nodes||[]).map(n=>n.id));
@@ -923,6 +1076,37 @@ def _execution_mode(root: Path):
     return payload.get("execution_mode") if payload else None
 
 
+def _environment_mode_selected(root: Path):
+    """Intended per-run counterpart to _environment_mode_policy()'s static
+    policy reference: scans every stage's own recorded last_message (same
+    scan-all-stages shape _dv_review_pending() already uses) for a
+    dv-harness-evidence environment_mode_selection block and returns its
+    declared environment_mode field (SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE,
+    CLAUDE.md's Environment Generation Mode gate) -- or None otherwise.
+
+    HONEST STATUS (2026-08-31, poster-gap-closing-round2 fix wave, finding
+    C2): no stage anywhere in this engine currently EMITS an
+    environment_mode_selection block -- there is no STAGE_GATES entry
+    requiring it, no prompts.py instruction telling any agent to produce it,
+    and no engine writer generates it. This function therefore always
+    returns None in real usage today; the dashboard highlight it feeds is
+    permanently inactive, not selectively inactive. Deciding which stage
+    should declare this (and whether it is mandatory or optional) is a real
+    design decision intentionally left for separate, dedicated work -- not
+    made here. Once a real producer exists, this scan needs no change to
+    start working."""
+    state_file = root / ".dv-harness" / "state.json"
+    state = _read_json_file(state_file)
+    if state is None:
+        return None
+    for stage_rec in (state.get("stages") or {}).values():
+        blocks = extract_evidence_blocks(stage_rec.get("last_message") or "")
+        payload = blocks.get("environment_mode_selection")
+        if payload:
+            return payload.get("environment_mode")
+    return None
+
+
 def _dv_review_pending(root: Path):
     """Mirrors _coverage_credit()/_execution_mode(): scans every stage's own
     recorded last_message for dv-harness-evidence blocks and reports, by
@@ -1005,11 +1189,12 @@ def _protocol_registry(root: Path):
 def _environment_mode_policy(root: Path):
     """Reads the real environment-router/environment_mode_policy.json --
     the two canonical modes (SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE) CLAUDE.md's
-    Environment Generation Mode gate defines. No stage evidence block or
-    state.json field anywhere tracks which mode the CURRENT run actually
-    used (checked: no engine/gates.py field for this) -- so this is
-    deliberately read-only policy reference, never a fabricated "current
-    mode" value."""
+    Environment Generation Mode gate defines. This is deliberately just the
+    static policy reference; see _environment_mode_selected() below for
+    which mode (if any) the CURRENT run actually declared via an
+    environment_mode_selection evidence block -- as of this writing that is
+    always None, since no stage emits that block yet (see that function's
+    HONEST STATUS note)."""
     path = root / ".dv-harness" / "environment-router" / "environment_mode_policy.json"
     data = _read_json_file(path, default=None)
     if not isinstance(data, dict):
@@ -1033,26 +1218,33 @@ def _subsystem_registry(root: Path):
 
 
 def _iron_rules_count(root: Path) -> int:
-    """Live count of '## 鐵則 N' headers in CORE/iron-rules/SKILL.md, counted
-    at read time (not a cached/hardcoded number) -- 0 if the file is
-    missing."""
-    path = root / ".claude" / "skills" / "CORE" / "iron-rules" / "SKILL.md"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return 0
-    return len(re.findall(r"(?m)^## 鐵則 \d+", text))
+    from .stats_snapshot import _iron_rule_count
+    return _iron_rule_count(root)
 
 
 def _qualification_tiers():
-    """Static reference legend: dv_harness.qualification.QualificationTier's
-    own 8-tier vocabulary, in enum declaration order. No per-run current
-    tier is tracked anywhere in state.json/blackboard today (the
-    subsystem registry -- see _subsystem_registry -- is where a real
-    per-subsystem qualification_state would eventually live), so this is
-    shown as a static legend rather than a fabricated "current tier"."""
+    """Static reference legend (the ladder itself): dv_harness.qualification.
+    QualificationTier's own 8-tier vocabulary, in enum declaration order.
+    See _qualification_tier_reached() below for which tier this run has
+    actually reached against that ladder."""
     from .qualification import QualificationTier
     return [t.value for t in QualificationTier]
+
+
+def _qualification_tier_reached(root: Path):
+    """Real per-run counterpart to _qualification_tiers()'s static ladder:
+    the highest CANONICAL_LADDER tier actually reached by any protocol in
+    this project's live protocol_capability_registry.json (_protocol_registry()
+    above) -- None if no protocol is registered yet, or none of the
+    registered qualification_status values is one of the 8 canonical tokens
+    (e.g. still a legacy/non-canonical vocabulary value)."""
+    from .qualification import CANONICAL_LADDER
+    protocols = _protocol_registry(root)
+    reached_ranks = [CANONICAL_LADDER.index(p["qualification_status"]) for p in protocols
+                     if p.get("qualification_status") in CANONICAL_LADDER]
+    if not reached_ranks:
+        return None
+    return CANONICAL_LADDER[max(reached_ranks)]
 
 
 # --- Coverage analysis (.dv-harness/coverage/summary.json + history.json) --
@@ -1138,15 +1330,61 @@ def _read_coverage_state(root: Path, summary_path: Optional[Path] = None,
     }
 
 
+# --- FSDB structured evidence panel (fsdbreport -csv) ----------------------
+# Poster-compliance audit (2026-08-29): fsdb_report.py's run_fsdbreport()/
+# parse_fsdbreport_output() had zero dashboard/GUI callers -- GET
+# /api/fsdb-report below wires the confirmed-real invocation
+# (`fsdbreport f.fsdb -period <T> -level 1 -csv`, dv-workflow/SKILL.md's
+# 2026-08-29 "Confirmed drift" entry) up to a queryable, structured
+# text-evidence table. Deliberately NOT a waveform/timeline renderer --
+# FSDB is a proprietary binary format with no public library, so a real
+# signal-timeline viewer is out of scope (see this feature's design doc).
+def _run_and_parse_fsdb_report(fsdb_path: str, period: str = "", hier: str = "") -> Dict[str, Any]:
+    """Runs the real fsdbreport binary (via fsdb_report.run_fsdbreport(),
+    the one external-process boundary -- never mocked in production code)
+    against fsdb_path with the confirmed-real `-period <T> -level 1 -csv`
+    flags, then parses its stdout with fsdb_report.parse_fsdbreport_output().
+    `hier` is accepted and echoed back for visibility, but NOT translated
+    into a guessed CLI flag: the confirmed invocation above does not show a
+    hierarchy-scope flag for fsdbreport itself (only fsdb2vcd's sibling
+    invocation in the same SKILL.md entry uses `-s <hier_scope>`) -- per
+    the Tool Usage Verification Gate, an unconfirmed flag is never
+    silently guessed onto a real command line.
+    """
+    from . import fsdb_report
+
+    extra_args: List[str] = []
+    if period:
+        extra_args += ["-period", period]
+    extra_args += ["-level", "1", "-csv"]
+
+    run_result = fsdb_report.run_fsdbreport(fsdb_path, extra_args=extra_args)
+    if not run_result.get("ok"):
+        return {
+            "ok": False,
+            "error": run_result.get("error"),
+            "detail": run_result.get("detail"),
+            "returncode": run_result.get("returncode"),
+            "stderr": run_result.get("stderr"),
+            "hier_requested": hier,
+            "parsed": False,
+            "records": [],
+        }
+
+    parsed = fsdb_report.parse_fsdbreport_output(run_result["report_text"])
+    return {"ok": True, "hier_requested": hier, **parsed}
+
+
 def append_coverage_history_sample(root: Path, percent: float, timestamp: Any = None) -> list:
     """Thin wrapper over coverage_analysis.append_history_sample(), pointed
     at this project's default .dv-harness/coverage/history.json -- the real
-    production call a coverage-producing step (e.g. a future
-    COVERAGE_CLOSURE-stage script) makes to grow the history GET
-    /api/coverage's trend/trend_svg fields read. Not currently called by any
-    engine stage yet (no stage in this repo reduces a real coverage database
-    to a percent number today) -- this is the wiring so the next one that
-    does has a real, tested append path rather than hand-edited JSON."""
+    production call a coverage-producing step makes to grow the history GET
+    /api/coverage's trend/trend_svg fields read. Called by engine.py's
+    DVHarness._append_coverage_history_sample() on every real
+    COVERAGE_CLOSURE PASS (Task 6, 2026-08-31 poster-gap-closing round 2),
+    with the percent taken from coverage_signoff_verdict_gate's own
+    gate-verified coverage_credit_percent evidence field -- never a
+    placeholder."""
     from . import coverage_analysis as ca
     return ca.append_history_sample(_default_coverage_history_path(root), percent, timestamp)
 
@@ -1518,9 +1756,11 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 # GUI surface -- see the matching cards below.
                 state["protocol_registry"] = _protocol_registry(project_root)
                 state["environment_mode_policy"] = _environment_mode_policy(project_root)
+                state["environment_mode_selected"] = _environment_mode_selected(project_root)
                 state["subsystem_registry"] = _subsystem_registry(project_root)
                 state["iron_rules_count"] = _iron_rules_count(project_root)
                 state["qualification_tiers"] = _qualification_tiers()
+                state["qualification_tier_reached"] = _qualification_tier_reached(project_root)
                 state["blackboard_topics"] = _blackboard_topics(project_root)
                 state["uploaded_files"] = _uploaded_files(project_root)
                 current_stage = state.get("current_stage")
@@ -1649,6 +1889,20 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
                 self._send_json(user_info.summarize_user_access(
                     project_root, int(params.get("limit", "200"))))
+            elif self.path == "/api/fsdb-report" or self.path.startswith("/api/fsdb-report?"):
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                fsdb_path = urllib.parse.unquote(params.get("path", ""))
+                period = urllib.parse.unquote(params.get("period", ""))
+                hier = urllib.parse.unquote(params.get("hier", ""))
+                if not fsdb_path:
+                    self._send_json({"error": "BAD_REQUEST", "message": "path query param is required"},
+                                     status=400)
+                    return
+                self._send_json(_run_and_parse_fsdb_report(fsdb_path, period, hier))
+            elif self.path == "/api/stats":
+                from .stats_snapshot import compute_stats
+                self._send_json(compute_stats(project_root))
             else:
                 self._send(b"not found", "text/plain", status=404)
 
@@ -1670,6 +1924,8 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 self._handle_upload()
             elif self.path == "/api/signoff-export":
                 self._handle_signoff_export()
+            elif self.path == "/api/waiver":
+                self._handle_waiver_submit()
             else:
                 self._send_json({"error": "NOT_FOUND", "message": f"no such POST endpoint: {self.path}"},
                                  status=404)
@@ -1821,6 +2077,30 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
             out_dir = Path(out_dir_raw) if out_dir_raw else _default_signoff_export_dir(project_root)
             result = signoff_export.collect_signoff_bundle(project_root, out_dir)
             self._send_json(result)
+
+        # POST /api/waiver: {"gate_id": ..., "item_id": ..., "approved": true,
+        # "evidence": "..."} -- the real human-facing counterpart to an AI
+        # agent's own fenced ```dv-harness-evidence:<gate_id>``` waiver block
+        # (see waiver_store.py's module docstring for why this store is a
+        # separate, durably-written source of truth rather than a forced
+        # integration into gates.run_gate()'s per-invocation tempfile
+        # assembly). Calls waiver_store.append_waiver() directly, in this
+        # same process -- no subprocess -- same pattern as
+        # _handle_signoff_export calling signoff_export.collect_signoff_bundle()
+        # directly above.
+        def _handle_waiver_submit(self):
+            from . import waiver_store
+            try:
+                body = self._read_json_body()
+            except ValueError as e:
+                self._send_json({"error": "BAD_REQUEST", "message": str(e)}, status=400)
+                return
+            try:
+                record = waiver_store.append_waiver(project_root, body)
+            except ValueError as e:
+                self._send_json({"error": "BAD_REQUEST", "message": str(e)}, status=400)
+                return
+            self._send_json({"status": "OK", "waiver": record})
 
         def _handle_setup(self):
             try:

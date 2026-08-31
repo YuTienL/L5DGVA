@@ -942,6 +942,99 @@ def test_state_endpoint_failure_attribution_none_before_stage_runs():
         shutil.rmtree(tmp)
 
 
+# --- Task 3: real interactivity for protocol/env-mode/iron-rules tiles -----
+# Mirrors test_state_endpoint_includes_failure_attribution_verdict/
+# test_state_endpoint_failure_attribution_none_before_stage_runs above exactly
+# -- environment_mode_selected() is the same scan-stage-evidence-block shape
+# as _failure_attribution()/_execution_mode(), just under a different gate id
+# (environment_mode_selection) and field name (environment_mode).
+
+def test_environment_mode_reflects_current_run_when_declared():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        state = {"stages": {"DISCOVERY": {"last_message": (
+            "```dv-harness-evidence:environment_mode_selection\n"
+            '{"environment_mode": "SYSTEM_LEVEL_MODE"}\n'
+            "```\n"
+        )}}}
+        (tmp / ".dv-harness" / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _get(base, "/api/state")
+        assert status == 200
+        assert data["environment_mode_selected"] == "SYSTEM_LEVEL_MODE"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_environment_mode_selected_none_before_declared():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _get(base, "/api/state")
+        assert status == 200
+        assert data["environment_mode_selected"] is None
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_protocol_tiles_are_clickable_elements():
+    # The rendered protocoltiles JS must attach a real click handler that
+    # wires each tile to the exact field POST /api/start already reads for
+    # scope (`goal`, submitted from #goalInput by doStart() -- see val('goalInput')
+    # a few lines above in dashboard.py) -- not a static, inert <div>.
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with urllib.request.urlopen(base + "/", timeout=10) as resp:
+            html = resp.read().decode("utf-8")
+
+        assert 'onclick="selectProtocol(' in html
+        import re
+        m = re.search(r"function selectProtocol\([^)]*\)\s*\{([^}]*)\}", html, re.S)
+        assert m, "selectProtocol() click handler function not found in served HTML"
+        body = m.group(1)
+        assert "goalInput" in body and ".value" in body
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_iron_rules_tile_uses_tier_driven_css_class():
+    # ironrulestiles must render CSS classes derived from real qualification
+    # tier data (qualification_tier_reached, from the live
+    # protocol_capability_registry.json), with real corresponding CSS rules
+    # in the page's <style> block -- not a flat unstyled tile.
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with urllib.request.urlopen(base + "/", timeout=10) as resp:
+            html = resp.read().decode("utf-8")
+
+        assert "tier-reached" in html
+        assert "tier-unreached" in html
+        style_block = html.split("<style>")[1].split("</style>")[0]
+        assert ".tier-reached" in style_block
+        assert ".tier-unreached" in style_block
+    finally:
+        shutil.rmtree(tmp)
+
+
 # --- POST /api/signoff-export (dv_harness/signoff_export.py) ---------------
 # Real HTTP requests against a real dashboard.serve() thread, same as every
 # other test in this file. collect_signoff_bundle() itself is exercised
@@ -1199,6 +1292,182 @@ def test_coverage_accepts_path_overrides_via_query_params():
         assert data["available"] is True
         assert data["categories"][0]["name"] == "line"
         assert data["summary_path"] == str(alt_summary)
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- GET /api/fsdb-report (dv_harness/fsdb_report.py) ----------------------
+# fsdbreport is a real, proprietary Synopsys Verdi binary with no install on
+# this dev machine (see fsdb_report.py's module docstring) -- real subprocess
+# execution of it is out of scope here. These tests mock ONLY the one
+# external-process boundary, dv_harness.fsdb_report.run_fsdbreport(), never
+# the CSV-parsing logic (parse_fsdbreport_output()) itself, which runs for
+# real against the mocked stdout text through the exact same code path a
+# real fsdbreport run's stdout would take.
+
+def test_fsdb_report_requires_path_query_param():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _get(base, "/api/fsdb-report")
+        assert status == 400
+        assert data["error"] == "BAD_REQUEST"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_fsdb_report_returns_real_parsed_records_for_valid_csv_output():
+    from unittest.mock import patch
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        fake_csv = "signal,timestamp,value\ntop.dut.clk,0,0\ntop.dut.clk,5,1\n"
+        with patch("dv_harness.fsdb_report.run_fsdbreport",
+                   return_value={"ok": True, "report_text": fake_csv, "stderr": ""}) as m:
+            status, data = _get(
+                base,
+                "/api/fsdb-report?path=" + urllib.parse.quote("/tmp/dump.fsdb")
+                + "&period=" + urllib.parse.quote("100ns")
+                + "&hier=" + urllib.parse.quote("top.dut"),
+            )
+        assert status == 200
+        assert data["ok"] is True
+        assert data["parsed"] is True
+        assert data["fieldnames"] == ["signal", "timestamp", "value"]
+        assert data["records"] == [
+            {"signal": "top.dut.clk", "timestamp": "0", "value": "0"},
+            {"signal": "top.dut.clk", "timestamp": "5", "value": "1"},
+        ]
+        assert data["hier_requested"] == "top.dut"
+        # only the subprocess boundary was mocked -- confirm it was actually
+        # called with the confirmed-real -period/-level/-csv flags.
+        m.assert_called_once()
+        call_kwargs = m.call_args.kwargs
+        assert call_kwargs["extra_args"] == ["-period", "100ns", "-level", "1", "-csv"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_fsdb_report_surfaces_run_failure_honestly_without_500():
+    from unittest.mock import patch
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with patch("dv_harness.fsdb_report.run_fsdbreport",
+                   return_value={"ok": False, "error": "FSDB_FILE_NOT_FOUND"}):
+            status, data = _get(base, "/api/fsdb-report?path=" + urllib.parse.quote("/nope.fsdb"))
+        assert status == 200
+        assert data["ok"] is False
+        assert data["error"] == "FSDB_FILE_NOT_FOUND"
+        assert data["parsed"] is False
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_fsdb_report_degrades_honestly_on_unparseable_output_not_500():
+    from unittest.mock import patch
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with patch("dv_harness.fsdb_report.run_fsdbreport",
+                   return_value={"ok": True, "report_text": "not csv at all, garbage text", "stderr": ""}):
+            status, data = _get(base, "/api/fsdb-report?path=" + urllib.parse.quote("/dump.fsdb"))
+        assert status == 200
+        assert data["ok"] is True
+        assert data["parsed"] is False
+        assert "raw_text" in data
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- POST /api/waiver (dv_harness/waiver_store.py) -------------------------
+# Real HTTP requests against a real dashboard.serve() thread, same as every
+# other test in this file. waiver_store.append_waiver()/read_waivers()
+# themselves are exercised directly (not through HTTP) in
+# dv_harness_tests/test_waiver_store.py -- these tests confirm the HTTP layer
+# (routing, body-parsing, error-response convention) is genuinely wired to
+# that same implementation, called in-process (no subprocess), matching
+# _handle_signoff_export's direct-call-to-signoff_export pattern.
+
+def test_waiver_submit_valid_body_persists_and_reads_back():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _post(base, "/api/waiver", {
+            "gate_id": "coverage_hole_regeneration_gate",
+            "item_id": "cov-hole-42",
+            "approved": True,
+            "evidence": "manually reviewed against spec section 4.2",
+        })
+        assert status == 200
+        assert data["status"] == "OK"
+        assert data["waiver"]["gate_id"] == "coverage_hole_regeneration_gate"
+        assert "recorded_at" in data["waiver"]
+
+        from dv_harness.waiver_store import read_waivers
+        waivers = read_waivers(tmp)
+        assert len(waivers) == 1
+        assert waivers[0]["item_id"] == "cov-hole-42"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_waiver_submit_missing_evidence_returns_400_and_does_not_persist():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        status, data = _post(base, "/api/waiver", {
+            "gate_id": "sequence_coverage_closure_gate",
+            "item_id": "seq-1",
+            "approved": True,
+            # evidence deliberately omitted
+        })
+        assert status == 400
+        assert data["error"] == "BAD_REQUEST"
+
+        from dv_harness.waiver_store import read_waivers
+        assert read_waivers(tmp) == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_waiver_form_present_in_dashboard_html():
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        with urllib.request.urlopen(base + "/", timeout=10) as resp:
+            html = resp.read().decode("utf-8")
+        assert 'doWaiverSubmit()' in html
+        assert "waiverGateId" in html and "waiverItemId" in html and "waiverEvidence" in html
+        assert "coverage_hole_regeneration_gate" in html
     finally:
         shutil.rmtree(tmp)
 

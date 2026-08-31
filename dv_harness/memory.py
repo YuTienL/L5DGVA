@@ -67,10 +67,27 @@ class MemoryStore:
         mem["reuse_count"]=int(mem.get("reuse_count",0))+1
         self.add(mem["level"],mem)
 
+# Common English function words excluded from _tok so a shared preposition/
+# article/pronoun (e.g. both an unrelated LSF record's title and an
+# unrelated coverage query happening to each contain the word "in") can
+# never by itself manufacture a text-overlap match -- see finding I2's
+# relevance-floor fix in MemoryRetriever.search(), which now depends on
+# text-overlap tokens actually meaning something.
+_STOPWORDS = {
+    "a","an","the","in","on","of","to","is","are","was","were","be","been",
+    "and","or","for","with","this","that","it","its","as","at","by","from",
+    "into","onto","over","under","up","down","not","no","so","if","then",
+    "than","too","also","do","does","did","has","have","had","can","will",
+    "due","during",
+}
+
 def _tok(v):
     if v is None: return set()
     if isinstance(v,list): v=" ".join(map(str,v))
-    return {x.lower() for x in str(v).replace("/"," ").replace("_"," ").replace("-"," ").split() if len(x)>1}
+    return {
+        x.lower() for x in str(v).replace("/"," ").replace("_"," ").replace("-"," ").split()
+        if len(x)>1 and x.lower() not in _STOPWORDS
+    }
 
 def _recency_score(row: Dict[str,Any], now: float) -> float:
     # Ranking factor named by the user's design ("Recency") but absent from
@@ -94,14 +111,30 @@ class MemoryRetriever:
         scored=[]
         for row in self.store._index():
             if row.get("status")!="ACTIVE": continue
-            score=0.0
-            if q_protocol and str(row.get("protocol","")).lower()==q_protocol: score+=3
-            if q_scope and str(row.get("scope","")).lower()==q_scope: score+=2
-            score += len(q_sym & _tok(row.get("symptoms",[]))) * 1.5
-            score += len(q_text & _tok([row.get("title",""),row.get("root_cause","")])) * 0.75
+            # Relevance floor (2026-08-31 fix wave, finding I2): _recency_score
+            # is ALWAYS positive for any record with a timestamp (up to 1.0,
+            # decaying), and confidence contributes independently of the
+            # query too -- so before this floor, a record with genuinely ZERO
+            # overlap with the query (no protocol/scope/symptom/text match at
+            # all) still scored >0 and was returned as "relevant" purely from
+            # age/confidence. Confirmed empirically: an unrelated
+            # ethernet/LSF record was returned for an unrelated USB coverage
+            # query at score 1.0 (pure recency). `relevance` below sums ONLY
+            # the query-overlap components; a record must clear a positive
+            # relevance floor to be considered at all, no matter how fresh or
+            # how confident it is -- recency/confidence still shape ranking
+            # AMONG genuinely relevant hits, they just can't manufacture
+            # relevance on their own.
+            relevance=0.0
+            if q_protocol and str(row.get("protocol","")).lower()==q_protocol: relevance+=3
+            if q_scope and str(row.get("scope","")).lower()==q_scope: relevance+=2
+            relevance += len(q_sym & _tok(row.get("symptoms",[]))) * 1.5
+            relevance += len(q_text & _tok([row.get("title",""),row.get("root_cause","")])) * 0.75
+            if relevance<=0: continue
+            score = relevance
             score += {"CONFIRMED":2,"HIGH":1.5,"MEDIUM":.75,"LOW":.25}.get(row.get("confidence",""),0)
             score += _recency_score(row, now)
-            if score>0: scored.append((score,row))
+            scored.append((score,row))
         scored.sort(key=lambda x:x[0],reverse=True)
         out=[]
         for score,row in scored[:limit]:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse, json, pathlib, sys
 
-ALLOWED = {"STATUS","WHY","EVIDENCE","REVIEW","PAUSE","RESUME","REDIRECT","APPROVE","REJECT","STOP","TAKEOVER"}
+ALLOWED = {"STATUS","WHY","EVIDENCE","REVIEW","HYPOTHESIS","PAUSE","RESUME","REDIRECT","APPROVE","REJECT","STOP","TAKEOVER"}
 
 def main():
     ap=argparse.ArgumentParser()

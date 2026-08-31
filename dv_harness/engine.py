@@ -562,6 +562,93 @@ class DVHarness:
             "gap": gap, "next_best_action": next_actions, "promotion": promotion,
         })
 
+    def _append_coverage_history_sample(self, stage: str, evidence_blocks: dict) -> None:
+        """Closed-loop wiring (Task 6, 2026-08-31 poster-gap-closing round 2):
+        dashboard.append_coverage_history_sample() was real, tested
+        rendering/storage logic whose own docstring admitted "not currently
+        called by any engine stage yet" -- nothing in a real stage run
+        produced the multi-timestamp history the coverage-trend chart
+        (compute_coverage_trend()/render_coverage_trend_svg()) needs. Same
+        pattern as _promote_experience_knowledge/_persist_subsystem_registry_entry/
+        _score_root_cause_confidence: reads the SAME evidence_blocks dict
+        run_stage() already computed, only fires on an actual gate-verified
+        PASS whose STAGE_GATES include the one COVERAGE_CLOSURE gate that
+        reports a real coverage percent -- coverage_signoff_verdict_gate.py's
+        own `coverage_credit_percent` field (see gates.py's STAGE_GATES
+        mapping and the gate script's own signoff_requested/coverage_credit_percent
+        check) -- never a placeholder, and a persistence failure never
+        downgrades an already-earned stage PASS.
+
+        Local import (not a module-level one) because dashboard.py itself
+        does lazy `from .engine import DVHarness` imports inside its own
+        functions (e.g. its background-run worker and control-plane
+        dispatcher) precisely to keep this engine<->dashboard boundary from
+        ever becoming a real circular import -- mirroring that existing
+        precedent here rather than adding a fresh module-level coupling."""
+        gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
+        if "coverage_signoff_verdict_gate" not in gate_ids:
+            return
+        block = evidence_blocks.get("coverage_signoff_verdict_gate")
+        if not isinstance(block, dict):
+            return
+        percent = block.get("coverage_credit_percent")
+        if not isinstance(percent, (int, float)) or isinstance(percent, bool):
+            return
+        from . import dashboard
+        try:
+            dashboard.append_coverage_history_sample(self.root, float(percent))
+        except Exception as exc:  # best-effort, must never break an already-earned PASS
+            self.store.event({"ts": now(), "stage": stage, "event": "COVERAGE_HISTORY_WRITE_FAILED",
+                               "percent": percent, "error": str(exc)})
+            return
+        self.store.event({"ts": now(), "stage": stage, "event": "COVERAGE_HISTORY_SAMPLE_APPENDED",
+                           "percent": percent})
+
+    def _promote_project_topology_knowledge(self, stage: str, evidence_blocks: dict) -> None:
+        """Closed-loop wiring (Task 9, 2026-08-31 poster-gap-closing round 2):
+        a PASS verdict on PROJECT_MODEL's project_model_topology_completeness_gate
+        means that gate script (tools/verification_flow/project_model_topology_
+        completeness_gate.py) already structurally verified a complete
+        verification-boundary/VIP-topology/block-classification model (real
+        subprocess-verified evidence, not a placeholder) -- persist that
+        model as a Project-tier memory record so a later run_stage() call
+        (see the MemoryRetriever.search() read wired into run_stage() below)
+        can retrieve this project's own topology facts instead of
+        re-discovering them from scratch every stage. Same pattern as
+        _promote_experience_knowledge: reads the SAME evidence_blocks dict
+        run_stage() already computed via extract_evidence_blocks(result.text),
+        does not re-parse the text a second time, only fires on an actual
+        gate-verified PASS, and a persistence failure never downgrades an
+        already-earned stage PASS."""
+        gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
+        if "project_model_topology_completeness_gate" not in gate_ids:
+            return
+        block = evidence_blocks.get("project_model_topology_completeness_gate")
+        if not isinstance(block, dict):
+            return
+        record = {
+            "kind": "project_topology",
+            "verified": True,  # gate already required topology completeness
+            "title": f"Project verification-boundary/topology model ({block.get('dv_readiness')})",
+            "scope": "project",
+            "verification_boundary": block.get("verification_boundary"),
+            "vip_topology": block.get("vip_topology"),
+            "blocks": block.get("blocks"),
+            "model_confidence": block.get("model_confidence"),
+            "confidence_basis": block.get("confidence_basis"),
+            "dv_readiness": block.get("dv_readiness"),
+            "dv_readiness_basis": block.get("dv_readiness_basis"),
+            "architecture_evidence_db_ref": block.get("architecture_evidence_db_ref"),
+        }
+        try:
+            promotion = route_and_store(self.root, record, cfg=self.cfg)
+        except Exception as exc:
+            promotion = {"destination": "PROMOTION_FAILED", "error": str(exc)}
+        self.store.event({
+            "ts": now(), "stage": stage, "event": "PROJECT_TOPOLOGY_PROMOTED",
+            "promotion": promotion,
+        })
+
     def _sync_findings_state(self) -> None:
         """The blackboard "findings" topic (Blackboard.findings_counts()) is
         the one real source of truth for finding counts -- this recomputes
@@ -693,6 +780,27 @@ class DVHarness:
             agent_profile = load_agent_profile(self.root, route_info["agent"])
             plan_section = _build_plan_section(route_info, resolved_skills, plan, bb_snapshot, task)
 
+        # ---- 1b. Memory-tier read (Task 9, 2026-08-31 poster-gap-closing
+        #          round 2): MemoryRetriever.search() had zero callers
+        #          anywhere in the real engine flow before this -- every
+        #          stage's prompt was informed by the Blackboard snapshot
+        #          above (this run's OWN current-run state) but never by
+        #          Memory (prior knowledge from past runs/stages, per
+        #          CLAUDE.md's "Memory is prior knowledge, not current
+        #          evidence"). Best-effort and a true no-op when nothing is
+        #          relevant: an empty/failed search yields relevant_memory=[]
+        #          (falsy), and build_stage_prompt's own additive-kwargs
+        #          contract guarantees a falsy relevant_memory reproduces the
+        #          exact prompt as if this kwarg were never threaded in at
+        #          all (see prompts.build_stage_prompt's docstring). -------
+        relevant_memory: List[Dict[str, Any]] = []
+        try:
+            from .memory import MemoryStore, MemoryRetriever
+            memory_hits = MemoryRetriever(MemoryStore(self.root)).search({"text": f"{stage} {user_goal}"})
+            relevant_memory = [hit["memory"] for hit in memory_hits]
+        except Exception:
+            relevant_memory = []
+
         profile = self.profiler.begin_stage(stage, stage, graph_node=stage, metadata={"git_sha": self.state.git_sha})
         # CONSTRAINT / CORRECT / APPROVE integration: fold the persisted
         # control-plane state into this stage's prompt (prompts.build_stage_prompt
@@ -705,7 +813,8 @@ class DVHarness:
         prompt = build_stage_prompt(stage, self.summary(), user_goal,
                                      constraints=constraints,
                                      correction_note=correction_note,
-                                     human_approval=approval)
+                                     human_approval=approval,
+                                     relevant_memory=relevant_memory or None)
         if plan_section:
             prompt = prompt + plan_section
         resume = ss.get("session_id") or None
@@ -805,6 +914,8 @@ class DVHarness:
                     self._promote_experience_knowledge(stage, evidence_blocks)
                     self._persist_subsystem_registry_entry(stage, evidence_blocks)
                     self._score_root_cause_confidence(stage, evidence_blocks)
+                    self._append_coverage_history_sample(stage, evidence_blocks)
+                    self._promote_project_topology_knowledge(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness
                 # design pass): previously this was indistinguishable from

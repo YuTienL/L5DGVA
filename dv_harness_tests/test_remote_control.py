@@ -191,3 +191,102 @@ def test_get_status_is_read_only(project):
     assert status["session"]["state"] == "RUNNING"
     assert status["last_action"]["command"] == "BOOTSTRAP"
     assert rc.read_audit_log(project) == before  # no side effect
+
+
+def test_hypothesis_is_now_an_allowed_command():
+    # Audit finding: HYPOTHESIS is documented in REMOTE_CONTROL_MODE.md but
+    # was never added to ALLOWED_COMMANDS, so it failed before even reaching
+    # a gate.
+    assert "HYPOTHESIS" in rc.ALLOWED_COMMANDS
+
+
+def test_hypothesis_scores_a_real_confidence_value(project):
+    """Crux test: HYPOTHESIS must call inference.score_confidence() against
+    the evidence it is handed, not return a hardcoded/self-reported number.
+    Two fixtures with genuinely different evidence strength must score
+    differently -- same shape as root_cause_evidence_gate's own evidence
+    block, mirroring engine.py's _score_root_cause_confidence citation
+    counting (list/dict length, else 1/0)."""
+    rc.bootstrap_session(project)
+
+    weak_evidence = {
+        "first_bad_event": None,
+        "causal_chain": None,
+        "supporting_evidence": [],
+        "counter_evidence": ["contradicting_trace"],
+    }
+    strong_evidence = {
+        "first_bad_event": "clk gating deasserted 2ns early",
+        "causal_chain": "reset deassert -> clk ungate -> FIFO underrun",
+        "supporting_evidence": ["waveform_ref_1", "waveform_ref_2", "waveform_ref_3"],
+        "counter_evidence": [],
+        "root_cause": "clk_gate_underrun",
+        "hypotheses": [
+            {"claim": "phy_link_training_fail", "counter_evidence": ["ref_a"]},
+            {"claim": "reset_sequencing_bug", "counter_evidence": ["ref_b"]},
+        ],
+    }
+
+    ok_weak, _, entry_weak, err_weak = rc.validate_and_transition(
+        "HYPOTHESIS", project_root=project, evidence_snapshot=weak_evidence,
+    )
+    ok_strong, _, entry_strong, err_strong = rc.validate_and_transition(
+        "HYPOTHESIS", project_root=project, evidence_snapshot=strong_evidence,
+    )
+
+    assert ok_weak and err_weak is None
+    assert ok_strong and err_strong is None
+
+    weak_confidence = entry_weak["hypothesis_result"]["confidence"]
+    strong_confidence = entry_strong["hypothesis_result"]["confidence"]
+
+    # Real inference.score_confidence() math, not a self-reported value:
+    # weak evidence (no sources, unresolved counter-evidence) scores LOW;
+    # strong evidence (3 independent sources, verified refs, 2 corroborating
+    # ruled-out alternative hypotheses) scores HIGH -- and the raw score
+    # itself must differ, not just the bucketed level.
+    assert weak_confidence["level"] == "LOW"
+    assert strong_confidence["level"] == "HIGH"
+    assert strong_confidence["score"] > weak_confidence["score"]
+
+    # gap/next_best_action are also real inference.py output, not stubs:
+    # identify_gap() is a pure category-presence check, so strong_evidence's
+    # empty counter_evidence list (a real, legitimate "no counter-evidence
+    # found" state, not a missing field) still reports as a gap category --
+    # exactly matching engine.py's own root-cause-confidence docstring note
+    # that a HIGH finding is expected to also carry non-empty counter_evidence.
+    assert "first_bad_event" in entry_weak["hypothesis_result"]["gap"]
+    assert entry_strong["hypothesis_result"]["gap"] == ["counter_evidence"]
+
+
+def test_review_is_no_longer_identical_to_status(project):
+    """REVIEW must surface the current stage's real StageState (gate
+    verdict/evidence/blocking reason) -- content STATUS's plain
+    session/last-action summary does not carry at all."""
+    rc.bootstrap_session(project)
+    from dv_harness.engine import DVHarness
+
+    h = DVHarness(project)
+    stage = h.state.current_stage
+    h.state.stages[stage]["status"] = "PARTIAL"
+    h.state.stages[stage]["evidence"] = ["env_check_gate"]
+    h.state.stages[stage]["blocking_reason"] = "missing DUT RTL path"
+    h.store.save(h.state)
+
+    ok_status, _, entry_status, err_status = rc.validate_and_transition(
+        "STATUS", project_root=project,
+    )
+    ok_review, _, entry_review, err_review = rc.validate_and_transition(
+        "REVIEW", project_root=project,
+    )
+
+    assert ok_status and err_status is None
+    assert ok_review and err_review is None
+
+    assert "review_detail" not in entry_status
+    assert "review_detail" in entry_review
+    assert entry_review["review_detail"]["stage"] == stage
+    assert entry_review["review_detail"]["gate_verdict"] == "PARTIAL"
+    assert entry_review["review_detail"]["evidence"] == ["env_check_gate"]
+    assert entry_review["review_detail"]["blocking_reason"] == "missing DUT RTL path"
+    assert entry_review != entry_status
