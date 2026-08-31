@@ -254,3 +254,4 @@
 {"ts": "2026-08-30T14:46:56.222654+00:00", "event": "CLI_ACCESS", "cmd": "mark", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-08-30T14:46:56.232615+00:00", "cmd": "mark", "stage": "ENV_CHECK", "ungated": true, "status": "PASS", "message": "ENV_CHECK: REMOTE_EXECUTION_REQUIRED preflight verified via manual remote_hop.py session (see correct note) -- telnet vchost-b + ssh host-b login OK, working_path /home/svcacct/DV/temp/USB confirmed accessible, toolchain (vcs/verdi/fsdbreport/bsub) present on PATH. No password recorded. Human Override attestation, no nested run-stage subprocess invoked."}
 {"ts": "2026-08-30T14:47:05.299836+00:00", "event": "CLI_ACCESS", "cmd": "status", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-08-31T01:17:43.226004+00:00", "event": "CLI_ACCESS", "cmd": "signoff-export", "user": "peter.lin", "host": "PETER-LIN"}
