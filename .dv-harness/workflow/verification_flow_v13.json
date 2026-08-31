@@ -164,6 +164,7 @@
   "environment_readiness_status_gate": "tools/verification_flow/environment_readiness_status_gate.py",
   "evidence_source_priority_gate": "tools/verification_flow/evidence_source_priority_gate.py",
   "manual_lookup_before_edit_gate": "tools/verification_flow/manual_lookup_before_edit_gate.py",
+  "protocol_isolation_gate": "tools/verification_flow/protocol_isolation_gate.py",
   "v30_rule": "Requirement quality, semantic naming, readiness tri-state, evidence priority and reference-before-edit discipline are executable gates.",
   "protocol_family_qualification_gate": "tools/verification_flow/protocol_family_qualification_gate.py",
   "test_collection_health_gate": "tools/verification_flow/test_collection_health_gate.py",

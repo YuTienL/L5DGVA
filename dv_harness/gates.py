@@ -116,6 +116,7 @@ STAGE_GATES = {
         ("verification_intent_gate", "verification_intent_gate.py", "--intent"),
         ("pattern_registry_completeness_gate", "pattern_registry_completeness_gate.py", "--registry"),
         ("manual_lookup_before_edit_gate", "manual_lookup_before_edit_gate.py", "--edit"),
+        ("protocol_isolation_gate", "protocol_isolation_gate.py", "--edit"),
     ],
     "VERIFY": [
         ("simulation_semantic_validation_gate", "simulation_semantic_validation_gate.py", "--input"),

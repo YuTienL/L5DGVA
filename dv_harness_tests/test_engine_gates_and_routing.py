@@ -4240,6 +4240,24 @@ def test_manual_lookup_gate_dut_side_passes_with_rtl_plus_one_source():
     assert rc == 0 and out["status"] == "PASS"
 
 
+def test_protocol_isolation_gate_blocks_forbidden_reference_citation():
+    rc, out = _run_gate_script(
+        "verification_flow/protocol_isolation_gate.py", "--edit",
+        {"branch": "branch_b0",
+         "vip_evidence_refs": [{"path": "USB_UVM_Handoff/some_file.sv", "quote": "x"}]},
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "REFERENCE_TREE_CITATION_FORBIDDEN"
+
+
+def test_protocol_isolation_gate_allows_real_source_citation():
+    rc, out = _run_gate_script(
+        "verification_flow/protocol_isolation_gate.py", "--edit",
+        {"branch": "branch_b1", "vip_evidence_refs": [_REAL_REF]},
+    )
+    assert rc == 0 and out["status"] == "PASS"
+
+
 def test_pattern_registry_completeness_gate_passes_consistent_registry():
     rc, out = _run_gate_script(
         "verification_flow/pattern_registry_completeness_gate.py", "--registry",

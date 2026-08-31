@@ -361,6 +361,10 @@
       "tool": "tools/verification_flow/protocol_generator_binding_gate.py"
     },
     {
+      "gate_id": "protocol_isolation_gate",
+      "tool": "tools/verification_flow/protocol_isolation_gate.py"
+    },
+    {
       "gate_id": "protocol_onboarding_gate",
       "tool": "tools/verification_flow/protocol_onboarding_gate.py"
     },
