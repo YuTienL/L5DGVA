@@ -9,6 +9,45 @@ def tok(v,available=True):
     if not available: return 'N/A'
     v=int(v or 0); return f'{v/1000:.1f}K' if v>=1000 else str(v)
 
+# 2026-09-01, cross-adapter-token-tracking pass: this table's Input/Output/
+# Total columns already rendered 'N/A' (via tok()'s `available` arg) for a
+# stage whose add_agent_run() usage came back all-None -- but a bare 'N/A'
+# with no context reads identically whether the cause is "this stage just
+# hasn't run an agent yet" or "the configured adapter genuinely never
+# surfaces token usage at all" (the SDK adapter, per stage_profile.
+# extract_provider_usage()'s own docstring and dv_harness/adapters/sdk.py --
+# ClaudeCodeSDKAdapter.run()'s raw response never carries a `response.usage`
+# block, so extract_provider_usage() always returns all-None for it, by
+# design, not as a bug). A viewer of this exact table (`dv-harness
+# stage-profile` and dashboard.py's "Stage Execution Profile" card both
+# render this string verbatim -- see stage_profile_report.render()'s own
+# docstring) could otherwise mistake silent SDK-adapter N/As for a broken
+# measurement. RULING: read the project's OWN currently-configured adapter
+# (".dv-harness/config.json"'s top-level "adapter" field, the same field
+# DVHarness._adapter() in engine.py switches on) and, only when it is
+# genuinely "sdk", append one explicit note naming the real reason -- never
+# inferred from the N/A values themselves (a CLI-adapter stage that simply
+# has not run any agent yet also shows N/A, and must NOT be mislabeled as an
+# SDK limitation). A config read failure (no project root, unreadable/absent
+# config.json) degrades to "cli" -- the documented default adapter -- so a
+# read error can only ever suppress this note, never fabricate one.
+def _configured_adapter_name(project_root) -> str:
+    try:
+        from .config import load_config
+        return str(load_config(Path(project_root)).get('adapter', 'cli'))
+    except Exception:
+        return 'cli'
+
+SDK_ADAPTER_TOKEN_NOTE = (
+    'NOTE: token counts show N/A for every stage above because this project is '
+    'configured to use the SDK adapter ("adapter": "sdk" in .dv-harness/config.json). '
+    'The SDK adapter does not currently surface token usage data upstream '
+    '(see dv_harness/adapters/sdk.py and stage_profile.extract_provider_usage()\'s '
+    'docstring) -- this is a documented, known limitation of that adapter, not a '
+    'zero-token run or a broken measurement. Switch to the CLI adapter '
+    '("adapter": "cli") for real per-stage token accounting.'
+)
+
 def render(project_root='.') -> str:
     # BUG FIX (2026-08-28, gui-cli-completeness-audit): the wall-clock/token/
     # tool-call/retry data this renders was already being collected live by
@@ -41,6 +80,9 @@ def render(project_root='.') -> str:
         lines.append('PARALLEL SAVING        : '+sec(w.get('total_parallel_saving_sec')))
         lines.append('PARALLEL EFFICIENCY    : '+f"{w.get('overall_parallelism_efficiency',0)*100:.1f}%")
         lines.append('TOOL CALLS / RETRIES   : '+f"{w.get('tool_calls',0)} / {w.get('retries',0)}")
+    if _configured_adapter_name(project_root) == 'sdk':
+        lines.append('')
+        lines.append(SDK_ADAPTER_TOKEN_NOTE)
     return '\n'.join(lines)
 
 def main():
