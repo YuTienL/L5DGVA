@@ -386,7 +386,14 @@ def test_newly_wired_orphan_gates_pass_with_valid_evidence():
             "INTAKE": ("intake_readiness",
                 '{"mode": "SUBSYSTEM", "target_name": "usb_dev", "protocols": ["USB"], '
                 '"required_artifacts": {"protocol_spec": true, "dut_design_spec": true, '
-                '"rtl_top_or_interface_files": true}}', _INTAKE_EXTRA_GATES),
+                '"rtl_top_or_interface_files": true, '
+                # command_txt/vip_reference (2026-09-01, commandtxt-vip-intake-
+                # gate-implementation): now-mandatory required_artifacts keys --
+                # gate checks these paths for real existence relative to cwd
+                # (evaluate_stage_evidence(ROOT, ...) below runs the gate with
+                # cwd=ROOT), so these must name files that really exist in ROOT.
+                '"command_txt": ["CLAUDE.md"], "vip_reference": ["dv_harness/gates.py"]}}',
+                _INTAKE_EXTRA_GATES),
             "VPLAN": ("spec_coverage_audit", '{"requirements": [{"req_id": "R1", "status": "VERIFIED"}]}',
                 _vplan_writer_validation_extra_gate_text(tmp)),
             "SOC_SCENARIO_PLANNER": ("corner_risk_rank",

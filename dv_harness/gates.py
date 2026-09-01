@@ -994,6 +994,13 @@ INTAKE_FIELD_QUESTIONS = {
     "valid_mode": "這次是要建立單一 subsystem 環境（SUBSYSTEM）還是 system-level 環境（SYSTEM_LEVEL）？",
     "fabric_topology_evidence": "有沒有 AMBA fabric/topology 的規格文件（例如 master/slave 拓撲、互連架構）可以參考？請提供路徑或說明來源。",
     "uhs_tuning_evidence": "有沒有 SD/SDIO UHS tuning 的規格文件（例如 tuning 流程、時序參數）可以參考？請提供路徑或說明來源。",
+    # BUG FIX (2026-09-01, commandtxt-vip-intake-gate-implementation): these
+    # two keys were never checked by tools/vplan/intake_readiness.py before
+    # this fix -- see that script's own header for the full rationale.
+    "command_txt": "有沒有既有的 command.txt pattern 檔案可以參考？請提供實際存在於磁碟上的檔案路徑（可多筆）。",
+    "command_txt_path_not_found": "提供的 command.txt 路徑目前在磁碟上找不到，請確認路徑是否正確、檔案是否真的存在。",
+    "vip_reference": "有沒有 VIP Reference 資料（VIP 文件/範例/Reference UVM）可以參考？請提供實際存在於磁碟上的檔案路徑（可多筆）。",
+    "vip_reference_path_not_found": "提供的 VIP Reference 路徑目前在磁碟上找不到，請確認路徑是否正確、檔案是否真的存在。",
 }
 
 # BUG FIX (2026-08-29, poster-compliance-audit "INTAKE 問得太籠統" finding):
@@ -1009,6 +1016,11 @@ INTAKE_FIELD_QUESTIONS = {
 _PROTOCOL_TECHNICAL_INTAKE_FIELDS = {
     "protocol_spec", "dut_design_spec", "rtl_top_or_interface_files",
     "clock_reset_spec", "phy_interface_spec", "interface_or_clock_reset_evidence",
+    # command_txt/vip_reference (2026-09-01, commandtxt-vip-intake-gate-
+    # implementation): same "what technical material do you actually have"
+    # shape as the fields above -- worth escalating into the same
+    # per-protocol checklist when one is available.
+    "command_txt", "vip_reference",
 }
 
 

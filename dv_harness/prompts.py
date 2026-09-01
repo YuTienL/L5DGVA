@@ -81,10 +81,16 @@ Step-by-Step Interactive Intake：套用 BASE 的 Interactive Evidence Intake �
 ```dv-harness-evidence:intake_readiness
 {"mode": "SUBSYSTEM", "target_name": "...", "protocols": ["..."],
  "required_artifacts": {"protocol_spec": true, "dut_design_spec": true,
-   "rtl_top_or_interface_files": true}}
+   "rtl_top_or_interface_files": true,
+   "command_txt": ["<實際存在的 command.txt 路徑>", "..."],
+   "vip_reference": ["<實際存在的 VIP 文件/範例/Reference UVM 路徑>", "..."]}}
 ```
 （mode 為 SYSTEM_LEVEL 時改用 selected_subsystems + required_artifacts.system_level_use_cases +
-required_artifacts.existing_uvm_env。缺任何必要 artifact 都不算 READY_FOR_VPLAN。）
+required_artifacts.existing_uvm_env。缺任何必要 artifact 都不算 READY_FOR_VPLAN。
+SUBSYSTEM 模式下 required_artifacts.command_txt 與 required_artifacts.vip_reference 皆為必要欄位
+——gate 會實際檢查磁碟上是否存在對應檔案，兩者都必須是「真的存在的檔案路徑」陣列，不能只填
+true 或隨便寫個不存在的路徑；找不到既有 command.txt/VIP reference 材料時，先擴大搜尋 repo/VIP
+安裝目錄，仍然沒有才用 Interactive Evidence Intake 模式向使用者確認。）
 """,
 Stage.DISCOVERY.value: """
 Five Source Discovery：並行盤點 Spec、RTL Source、command.txt、USB Standard/VIP/Reference UVM、
