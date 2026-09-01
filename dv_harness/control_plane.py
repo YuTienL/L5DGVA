@@ -334,13 +334,23 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
     contained, and the gate verdict/reasons evaluate_stage_evidence derives
     from that same text -- as opposed to prompts.STAGE_DE_EXPLAINER's static,
     generic per-stage description (which cli.py's `explain` still prints
-    first, unchanged, for backward compatibility)."""
-    from .gates import extract_evidence_blocks, evaluate_stage_evidence
+    first, unchanged, for backward compatibility).
+
+    Also surfaces a stage-SCOPED completion fraction (gates_total,
+    gates_passed, stage_completion_percent, stage_completion_note) derived
+    from the same per-gate signatures gate_verdict/gate_reasons come from
+    (gates.evaluate_stage_evidence_with_completion() -> gates.
+    _evaluate_stage_evidence_core()). This is distinct from dashboard.py's
+    GET /api/state overall_progress_percent, which is a whole-RUN percentage
+    (fraction of all Stage enum values at PASS/CLOSED) and was, before this,
+    the only numeric completion signal exposed anywhere -- never scoped to
+    the one stage actually in progress, and never exposed via the CLI."""
+    from .gates import extract_evidence_blocks, evaluate_stage_evidence_with_completion
 
     root = Path(root)
     ss = (state.stages or {}).get(stage, {}) if hasattr(state, "stages") else (state.get("stages", {}).get(stage, {}))
     last_message = ss.get("last_message", "") or ""
-    verdict, reasons = evaluate_stage_evidence(root, stage, last_message)
+    verdict, reasons, completion = evaluate_stage_evidence_with_completion(root, stage, last_message)
     cp = ControlPlane(root).load()
     return {
         "stage": stage,
@@ -349,6 +359,10 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
         "blocking_reason": ss.get("blocking_reason", ""),
         "gate_verdict": verdict,
         "gate_reasons": reasons,
+        "gates_total": completion["gates_total"],
+        "gates_passed": completion["gates_passed"],
+        "stage_completion_percent": completion["stage_completion_percent"],
+        "stage_completion_note": completion["stage_completion_note"],
         "evidence_blocks": extract_evidence_blocks(last_message),
         "human_correction": cp.get("corrections", {}).get(stage),
         "human_approval": cp.get("approvals", {}).get(stage),

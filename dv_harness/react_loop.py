@@ -99,8 +99,17 @@ def evaluate_stage_evidence_with_detail(root: Path, stage: str, agent_text: str)
     """Same verdict/reasons contract as gates.evaluate_stage_evidence(), plus
     the structured GateSignature list -- factored through gates.py's own
     _evaluate_stage_evidence_core() so both call sites see byte-identical
-    gate results (same run_gate() invocations, not a second parallel copy)."""
-    verdict, reasons, raw_signatures = _evaluate_stage_evidence_core(root, stage, agent_text)
+    gate results (same run_gate() invocations, not a second parallel copy).
+
+    _evaluate_stage_evidence_core() also returns a 4th element (a stage-
+    scoped completion dict -- see gates._stage_completion_from_signatures())
+    that this function deliberately does not add to its own return value:
+    this function's (verdict, reasons, signatures) 3-tuple is unpacked
+    positionally by real existing callers/tests (engine.py, this module's
+    own retry loop, dv_harness_tests/test_react_loop.py), so changing its
+    arity here would break them. gates.evaluate_stage_evidence_with_completion()
+    is the real call site for the completion dict instead."""
+    verdict, reasons, raw_signatures, _completion = _evaluate_stage_evidence_core(root, stage, agent_text)
     signatures = [GateSignature(gate_id=g, ok=ok, detail=detail) for g, ok, detail in raw_signatures]
     return verdict, reasons, signatures
 

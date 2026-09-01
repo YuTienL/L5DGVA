@@ -406,6 +406,11 @@ def main():
             # ACTUAL blocking_reason / evidence blocks / gate verdict for stage.
             print(get_de_explainer(stage))
             print("\n--- Current run state (WHY, not a generic description) ---")
+            # describe_stage()'s dict is printed verbatim (no field
+            # allowlist), so its gates_total/gates_passed/
+            # stage_completion_percent/stage_completion_note fields
+            # (stage-SCOPED completion, alongside gate_verdict/gate_reasons)
+            # surface here automatically.
             print(json.dumps(describe_stage(h.root, h.state, stage), ensure_ascii=False, indent=2))
     elif args.cmd == "pause":
         from . import commands
@@ -438,6 +443,9 @@ def main():
     elif args.cmd == "evidence":
         from .control_plane import describe_stage, describe_stages
         if args.stage:
+            # Same describe_stage() dict as `explain` above, printed whole --
+            # gates_total/gates_passed/stage_completion_percent/
+            # stage_completion_note surface here automatically too.
             print(json.dumps(describe_stage(h.root, h.state, args.stage), ensure_ascii=False, indent=2))
         else:
             # No --stage given: same fan-out consideration as `explain` above
