@@ -24,6 +24,16 @@ def _write_job(root, job_id, **kwargs):
     lsf_client.save_job_state(root, state)
 
 
+def test_killed_and_already_analyzed_job_does_not_still_owe_reconciliation():
+    state = lsf_client.JobState(job_id=1, lsf_status="KILLED", sim_status="PASS")
+    assert regression_reporter._job_still_owes_reconciliation(state) is False
+
+
+def test_killed_but_not_yet_analyzed_job_still_owes_reconciliation():
+    state = lsf_client.JobState(job_id=1, lsf_status="KILLED", sim_status="UNKNOWN")
+    assert regression_reporter._job_still_owes_reconciliation(state) is True
+
+
 class TestRunReconciliationCycle:
     def test_registered_job_gets_analyzed_and_regression_list_updated(self, tmp_path):
         uvm_root = tmp_path / "uvm"
@@ -202,6 +212,35 @@ class TestRunReconciliationCycle:
         assert owed_state.lsf_status == "DONE"
         assert owed_state.sim_status == "PASS"
         assert (uvm_root / "regression.list").read_text().splitlines() == ["still_owed"]
+
+    def test_settled_killed_job_is_dropped_from_the_reconcile_set_and_keeps_its_status(self, tmp_path):
+        """KILLED-flavored sibling of
+        test_settled_job_is_dropped_from_the_reconcile_set_and_keeps_its_status,
+        proving Part 3's KILLED-is-terminal fix actually reaches
+        _job_still_owes_reconciliation() at the integration level, not just
+        the unit-level assertions above."""
+        uvm_root = tmp_path / "uvm"
+
+        # Fully settled: this project's own lsf-auto-kill-scan already
+        # terminated this job, and analysis already produced a determinate
+        # PASS verdict on a previous cycle -- it must not be re-queried.
+        _write_job(tmp_path, 890, pattern="killed_settled", lsf_status="KILLED",
+                   sim_status="PASS")
+
+        with patch("dv_harness.regression_reporter.lsf_client.discover_live_jobs",
+                   return_value=[]), \
+             patch("dv_harness.regression_reporter.lsf_client._run_bjobs") as m:
+            snapshot = regression_reporter.run_reconciliation_cycle(
+                tmp_path, "vcuser1", uvm_root)
+
+        # Never queried against LSF at all.
+        m.assert_not_called()
+        settled_state = lsf_client.load_job_state(tmp_path, 890)
+        assert settled_state.lsf_status == "KILLED"
+        assert settled_state.sim_status == "PASS"
+        settled_row = next(line for line in snapshot.splitlines()
+                           if line.startswith("890"))
+        assert "KILLED" in settled_row and "PASS" in settled_row
 
     def test_unregistered_job_gets_unregistered_status_not_analyzed(self, tmp_path):
         uvm_root = tmp_path / "uvm"

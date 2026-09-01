@@ -91,7 +91,7 @@ def _job_still_owes_reconciliation(state) -> bool:
 
     True while EITHER analysis is still owed (sim_status still UNKNOWN or
     RUNNING -- no determinate PASS/FAIL verdict recorded yet) OR LSF itself
-    has not yet reported the job finished (lsf_status not DONE/EXIT).
+    has not yet reported the job finished (lsf_status not DONE/EXIT/KILLED).
     False only for a job that is BOTH lsf-terminal AND already analyzed.
 
     BUG FIX (2026-09-01 scoped re-review): the reconcile set used to
@@ -115,7 +115,7 @@ def _job_still_owes_reconciliation(state) -> bool:
     test_registered_job_absent_from_live_jobs_is_still_analyzed). Only the
     fully settled tail drops out."""
     return (state.sim_status in ("UNKNOWN", "RUNNING")
-            or state.lsf_status not in ("DONE", "EXIT"))
+            or state.lsf_status not in ("DONE", "EXIT", "KILLED"))
 
 
 def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> str:
@@ -197,7 +197,7 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         reconciled = {}
 
     for jid, (state, _discrepancies) in reconciled.items():
-        if state.lsf_status not in ("DONE", "EXIT"):
+        if state.lsf_status not in ("DONE", "EXIT", "KILLED"):
             continue
         if not state.sim_log:
             continue
