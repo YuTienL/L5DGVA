@@ -1083,6 +1083,60 @@ working path 四項，密碼不得寫入任何 evidence block）。
 """,
 Stage.BUILD.value: """
 依 project canonical flow 執行 build。Coverage 預設 OFF。保存 evidence。
+
+本 stage 有三個獨立的 hard gate，也必須各自附上 evidence block，缺一個都會讓整個 stage 卡在
+GATE_FAIL/MISSING_EVIDENCE：前兩個是 build 狀態機本身的正確性（有沒有多個 job 同時搶著寫同一份
+共用 elaboration 產出、build 完成後是否真的 stop 而不是滑落到 run），第三個是「這個 build 真的有
+在遠端伺服器上執行」的獨立證明（不能只靠 agent 自己宣稱 build 成功）：
+
+```dv-harness-evidence:shared_elaboration_collision_gate
+{"elaboration_jobs": [{"job_id": "elab_001", "state": "DONE", "write_paths": ["/proj/build/out/simv"]}],
+ "shared_output_paths": ["/proj/build/out/simv"],
+ "parallel_test_workers": 1, "each_worker_runs_full_compile": false,
+ "build_owner_count": 1,
+ "simv_valid": true, "worker_invokes_usbc_elab": false}
+```
+（elaboration_jobs 要如實列出本輪實際觀察到的 elaboration job，每個 job 的 state 只要是
+RUN/PEND/STARTING 就算「還在跑」，若有兩個以上這種 active job 的 write_paths 命中同一個列在
+shared_output_paths 裡的路徑，就會被判 FAIL（CONCURRENT_SHARED_ELABORATION_COLLISION）——代表有多個
+job 同時搶著寫同一份共用 elaboration 產出，這是不允許的；parallel_test_workers>1 又
+each_worker_runs_full_compile 為 true 會 FAIL（PARALLEL_WORKERS_MUST_NOT_RECOMPILE_SHARED_SIMV，
+平行的測試 worker 不該各自重新 compile 共用的 simv）；build_owner_count 一定要恰好是 1，不是 1
+就 FAIL（SINGLE_BUILD_OWNER_REQUIRED，build 必須有唯一 owner，不能沒人負責也不能多人搶著做）；
+simv_valid 為 true 又 worker_invokes_usbc_elab 為 true 會 FAIL
+（REDUNDANT_ELAB_WHEN_VALID_SIMV_EXISTS，已經有一份可用的 simv 時就不該再重新 elaborate 一次）。）
+
+```dv-harness-evidence:stop_after_simv_policy_gate
+{"compile_target_can_fall_through_to_run": true, "stop_after_simv": true,
+ "parallel_run_count": 1, "compile_completed_before_parallel_runs": true,
+ "build_fingerprint": "<實際 build 的 fingerprint/hash>",
+ "simv_completion_marker": "<實際 simv 完成標記內容>",
+ "simv_completion_marker_build_fingerprint": "<必須與 build_fingerprint 完全相同>"}
+```
+（如果這個專案的 compile target 本身「有可能」在沒有明確 stop 的情況下滑落直接跑下去
+（compile_target_can_fall_through_to_run 為 true），stop_after_simv 就一定要明確填 true，
+否則 FAIL（STOP_AFTER_SIMV_REQUIRED，build 完成後必須真的停在 simv，不能自動滑到 run）；
+parallel_run_count>1 時，compile_completed_before_parallel_runs 一定要是 true，否則 FAIL
+（PARALLEL_RUNS_STARTED_BEFORE_COMPILE_COMPLETE，平行跑多個 run 之前 compile 必須先真的完成）；
+build_fingerprint 與 simv_completion_marker 兩個欄位都不能留空，缺任一個就 FAIL
+（BUILD_COMPLETION_NOT_ATOMICALLY_PROVEN，build 完成這件事必須有原子性的證明，不能只憑口頭
+宣稱）；simv_completion_marker_build_fingerprint 必須和 build_fingerprint 逐字相同，不同就 FAIL
+（STALE_SIMV_COMPLETION_MARKER，代表這份 completion marker 其實是舊的、對不上這次的 build）。）
+
+```dv-harness-evidence:remote_execution_provenance_gate
+{"provenance_applicable": true,
+ "transcript_path": "<真實存在的 tools/remote/remote_exec.py 輸出 transcript 檔案路徑>",
+ "claimed_exit_code": 0}
+```
+（transcript_path 必須是磁碟上真實存在的檔案，內容是實際執行 tools/remote/remote_exec.py 產生的
+原始 stdout（必須真的含有它 format_result() 蓋的 REMOTE_HOST=/EXIT_CODE=/STATUS= 這三個 marker，
+少任一個或 REMOTE_HOST 是空的都會 FAIL，TRANSCRIPT_MISSING_MARKERS；檔案不存在則 FAIL，
+TRANSCRIPT_FILE_NOT_FOUND）——不能用一段自己編的 JSON 字串冒充真的 transcript；claimed_exit_code
+必須和 transcript 裡實際解析出來的 EXIT_CODE= 數字完全一致，兩者對不上就 FAIL
+（EXIT_CODE_MISMATCH），代表不能一邊 transcript 顯示遠端指令失敗、一邊卻宣稱 build 成功。這一輪
+如果根本沒有透過 remote_exec.py 做任何遠端操作（例如純本地整理既有 build 產出），才可以把
+provenance_applicable 填 false，但這時 provenance_not_applicable_reason 一定要附上非空的理由字串，
+否則同樣 FAIL（NOT_APPLICABLE_WITHOUT_JUSTIFICATION）——不接受沒有理由的裸 false。）
 """,
 Stage.BUILD_DEBUG.value: """
 Build 失敗的第一輪快速分流：讀 build log，判斷這是可以立即修的小問題
