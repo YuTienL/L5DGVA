@@ -407,7 +407,26 @@ def reconcile_job(state: JobState, live_bjobs_record: dict, *,
             )
 
     live_status = map_bjobs_stat_to_lsf_status(live_bjobs_record.get("STAT"))
-    if live_status != state.lsf_status:
+    # BUG FIX (2026-09-01, lsf-reconcile-terminal-status-hardening): a real,
+    # previously-confirmed terminal status must outlive LSF's own retention
+    # window. bjobs_query_many() returns {} (no "STAT" key at all) for a job
+    # id LSF has completely forgotten -- that is an ABSENCE of information,
+    # not new evidence that the job's outcome changed. Downgrading an
+    # already-recorded DONE/EXIT/KILLED to UNKNOWN here previously destroyed
+    # real evidence for no reason other than the tool's own bookkeeping
+    # lifetime expiring -- exactly the decay CLAUDE.md's "LSF DONE is not
+    # equal to DV PASS" rule exists to prevent. Scoped precisely to the
+    # absent-record case: a live call that explicitly reports an ambiguous
+    # real status (e.g. UNKWN/ZOMBI) for a job IS new evidence and is not
+    # protected here.
+    record_absent = live_bjobs_record.get("STAT") is None
+    already_terminal = state.lsf_status in ("DONE", "EXIT", "KILLED")
+    if record_absent and already_terminal:
+        discrepancies.append(Discrepancy(
+            job_id=state.job_id, field="lsf_status",
+            reported=state.lsf_status, live=live_status, severity="INFO",
+        ))
+    elif live_status != state.lsf_status:
         discrepancies.append(Discrepancy(
             job_id=state.job_id, field="lsf_status",
             reported=state.lsf_status, live=live_status, severity="WARN",

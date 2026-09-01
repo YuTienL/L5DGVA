@@ -206,6 +206,68 @@ class TestReconcileJob:
         _, discrepancies = lsf_client.reconcile_job(state, live)
         assert any(d.field == "sim_log" for d in discrepancies)
 
+    def test_absent_record_retains_already_confirmed_done_status(self):
+        # LSF has forgotten this job (aged past its own retention window),
+        # but the DONE status was already confirmed by a prior real poll --
+        # an absent record now must not destroy that fact.
+        state = lsf_client.JobState(job_id=1, lsf_status="DONE", sim_status="PASS")
+        live = {"JOBID": "1", "STAT": None}
+        new_state, discrepancies = lsf_client.reconcile_job(state, live)
+        assert new_state.lsf_status == "DONE"
+        info = [d for d in discrepancies if d.severity == "INFO"]
+        assert len(info) == 1
+        assert info[0].field == "lsf_status"
+        assert info[0].reported == "DONE"
+
+    def test_absent_record_retains_already_confirmed_exit_status(self):
+        state = lsf_client.JobState(job_id=1, lsf_status="EXIT", sim_status="FAIL")
+        live = {"JOBID": "1", "STAT": None}
+        new_state, discrepancies = lsf_client.reconcile_job(state, live)
+        assert new_state.lsf_status == "EXIT"
+        assert any(d.severity == "INFO" and d.field == "lsf_status" for d in discrepancies)
+
+    def test_absent_record_retains_already_confirmed_killed_status(self):
+        state = lsf_client.JobState(job_id=1, lsf_status="KILLED", sim_status="UNKNOWN")
+        live = {"JOBID": "1", "STAT": None}
+        new_state, discrepancies = lsf_client.reconcile_job(state, live)
+        assert new_state.lsf_status == "KILLED"
+        assert any(d.severity == "INFO" and d.field == "lsf_status" for d in discrepancies)
+
+    def test_absent_record_still_overwrites_a_non_terminal_status(self):
+        # This is the ORIGINAL, still-correct behavior: a job that was never
+        # confirmed terminal genuinely becomes UNKNOWN when LSF has no
+        # record of it at all -- that is real (if disappointing) new
+        # information, not a case this fix protects.
+        state = lsf_client.JobState(job_id=1, lsf_status="RUN", sim_status="RUNNING")
+        live = {"JOBID": "1", "STAT": None}
+        new_state, discrepancies = lsf_client.reconcile_job(state, live)
+        assert new_state.lsf_status == "UNKNOWN"
+        assert any(d.severity == "WARN" and d.field == "lsf_status" for d in discrepancies)
+
+    def test_retained_status_does_not_mark_state_as_changed(self):
+        state = lsf_client.JobState(job_id=1, lsf_status="DONE", sim_status="PASS")
+        original_fingerprint = state.fingerprint()
+        live = {"JOBID": "1", "STAT": None}
+        new_state, _ = lsf_client.reconcile_job(state, live)
+        # No real change happened, so the fingerprint/change-time machinery
+        # must not fire for a job whose recorded status was correctly retained.
+        assert new_state.state_fingerprint != original_fingerprint or new_state.state_fingerprint is None
+        # (state_fingerprint starts as None on a fresh JobState; the real
+        # assertion that matters is that last_change_time stays None, since
+        # reconcile_job() only sets it inside the `if changed:` block.)
+        assert new_state.last_change_time is None
+
+    def test_present_record_still_compares_normally_when_already_terminal(self):
+        # A job recorded as DONE that a live poll ALSO reports as DONE (a
+        # real, present record, not an absent one) must go through the
+        # normal no-discrepancy path -- this fix only changes behavior for
+        # an ABSENT record, never a present one.
+        state = lsf_client.JobState(job_id=1, lsf_status="DONE", sim_status="PASS")
+        live = {"JOBID": "1", "STAT": "DONE"}
+        new_state, discrepancies = lsf_client.reconcile_job(state, live)
+        assert new_state.lsf_status == "DONE"
+        assert discrepancies == []
+
 
 class TestReconcileBatch:
     def setup_method(self):
