@@ -183,6 +183,23 @@ Architecture（Scoreboard/Checker/Assertion 設計）、Build Flow（Regression/
 VIP Usage（Sequence/Config/API usage）——收斂成可重用的 Reusable Pattern。
 建立 command→branch-B VIP sequence→checker/coverage→pattern trace。
 確保 User-defined Pattern Make API 與 registry 可用。
+
+本 stage 的 PASS 由 harness 端 gate 腳本裁定。凡是被分類為 REUSE/EXTEND 而從舊路徑搬到新路徑（或
+新建成 command_inventory 條目）的 command.txt，都必須證明搬移過程中沒有偷偷改動內容——真的有改，
+一定要明確標記成「已核准的修改」，不能悄悄改了內容卻還宣稱是原封不動沿用。回覆結尾附上：
+
+```dv-harness-evidence:command_migration_integrity_gate
+{"commands": [
+  {"command_id": "usb_bulk_transfer_basic", "source_hash": "a1b2c3d4...", "destination_hash": "a1b2c3d4...", "approved_transform": false}
+]}
+```
+
+（`commands` 不能是空陣列——這個 gate 沒有「not-applicable 就填空」的預設值，只要這個 stage 有處理
+過任何 REUSE/EXTEND/GENERATE 的 command.txt，就至少要列一筆；每一筆都要有 `command_id`、
+`source_hash`、`destination_hash`，缺任一個 hash 都會被判 FAIL（MISSING_COMMAND_HASH）；當
+`source_hash` 與 `destination_hash` 不相同時，必須把 `approved_transform` 設為 true（代表這是有意、
+已核准的內容修改），否則會被判 FAIL（COMMAND_CONTENT_CHANGED）——沒有核准標記卻內容不同，等同
+「搬移途中內容被悄悄改掉」。）
 """,
 Stage.DE_BASELINE_REPRODUCTION.value: """
 DE Local Simulation → DE Baseline Reproduce：用既有 command.txt/build recipe/RTL 原樣重跑，
