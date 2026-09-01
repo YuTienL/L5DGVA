@@ -80,9 +80,25 @@ button:disabled{background:#b7c3d9;cursor:not-allowed}
 button.secondary{background:#5a6b8c}
 input,select{font-size:13px}
 #controlResult,#setupResult,#runResult{background:#f7f9fc;border:1px solid #e3e9f2;border-radius:6px;padding:8px;white-space:pre-wrap;font-size:12px;margin-top:8px;min-height:14px}
+/* "Just transitioned" banner (2026-09-01, runtime-progress-visibility pass):
+   a real, always-visible "Last transition: <stage> -> <status> at <time>"
+   line sourced from state.json's last_transition (set by engine.run_stage()
+   every time a stage reaches a terminal status) -- deliberately ALWAYS
+   rendered (never a time-limited flash that disappears on its own) so a
+   viewer who opens the dashboard minutes after the fact still sees it, not
+   just someone watching the exact moment it fired. See the RULING comment
+   in load()'s renderLastTransitionBanner() call site for why. */
+.transitionBanner{border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:13px;border:1px solid;display:flex;align-items:center;gap:10px}
+.transitionBanner .label{font-weight:bold;text-transform:uppercase;font-size:11px;letter-spacing:.03em}
+.transitionBanner.status-PASS,.transitionBanner.status-CLOSED{background:#e3f7ea;border-color:#25845b;color:#184a33}
+.transitionBanner.status-FAIL,.transitionBanner.status-BLOCKED{background:#fbe7e7;border-color:#b84444;color:#6e2323}
+.transitionBanner.status-PARTIAL,.transitionBanner.status-WAIT_USER{background:#fdf1e0;border-color:#b36a00;color:#6e4300}
+.transitionBanner.status-RUNNING,.transitionBanner.status-RETRY{background:#e8f0fb;border-color:#2457a6;color:#1b3c73}
+.transitionBanner.status-none{background:#f4f7fb;border-color:#d9e1ec;color:#5a6b8c}
 </style></head>
 <body><header><h2>DV Agent Harness L5</h2></header>
 <main>
+<div class="transitionBanner status-none" id="lastTransitionBanner"><span class="label">Last transition</span><span id="lastTransitionText">no stage has completed yet this run</span></div>
 <div class="card" id="setupCard" style="display:none">
 <h3>Setup</h3>
 <div class="note">Record this project's Linux DB/handoff path and its own working path (descriptive metadata -- the harness will not start from this dashboard until both are saved).</div>
@@ -396,6 +412,30 @@ function icon(status){
   return '<span class="icon NOT_STARTED">&#9675;</span>';
 }
 function val(id){ let el=document.getElementById(id); return el? el.value : ''; }
+
+// "Just transitioned" banner (2026-09-01, runtime-progress-visibility pass):
+// RULING -- always visible rather than a time-limited flash. A flash that
+// auto-hides after N seconds is invisible to a viewer who was not staring at
+// the tab the instant it fired (the exact "silent 3s poll, no distinct
+// signal" gap this feature exists to close) and reintroduces the very
+// failure mode it is meant to fix the moment the timer expires. An
+// always-visible "Last transition: <stage> -> <status> at <time>" line is
+// simpler to implement, impossible to miss on any page load/refresh, and
+// never silently reverts to looking like nothing happened -- documented per
+// the task's own "your call, document the ruling" allowance.
+function renderLastTransitionBanner(lastTransition){
+  let el = document.getElementById('lastTransitionBanner');
+  let textEl = document.getElementById('lastTransitionText');
+  if(!lastTransition || !lastTransition.stage){
+    el.className = 'transitionBanner status-none';
+    textEl.textContent = 'no stage has completed yet this run';
+    return;
+  }
+  let status = lastTransition.status || '-';
+  el.className = 'transitionBanner status-' + status;
+  let when = lastTransition.at ? new Date(lastTransition.at).toLocaleString() : '(unknown time)';
+  textEl.textContent = `${lastTransition.stage} → ${status} at ${when}`;
+}
 
 // Stage completion percent + entry/exit evidence checklist rendering
 // (2026-09-01, runtime-progress-visibility pass): control_plane.
@@ -771,6 +811,7 @@ async function load(){
    tile(s.coverage_credit_percent!=null? (s.coverage_credit_percent+'%') : '-','Coverage')
  ].join('');
  document.getElementById('progressbar').style.width=(s.overall_progress_percent||0)+'%';
+ renderLastTransitionBanner(s.last_transition);
 
  // Control-plane visibility: a paused/taken-over/constrained session must
  // not look identical to an idle one from the browser alone.

@@ -18,7 +18,7 @@ from .adapters.cli import ClaudeCLIAdapter
 from .adapters.sdk import ClaudeCodeSDKAdapter
 from .adapters.base import AgentResult
 from .stage_profile import StageExecutionProfiler, extract_provider_usage
-from .control_plane import ControlPlane, replan_stage, _find_latest_plan
+from .control_plane import ControlPlane, replan_stage, _find_latest_plan, describe_stage
 from .agent_profile import load_agent_profile
 
 # --- Plan-and-Execute / Multi-Agent / Blackboard / ReAct wiring -------------
@@ -47,6 +47,33 @@ from .skill_resolver import SkillResolver
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+# --- Stage transition markers (2026-09-01, runtime-progress-visibility pass)
+# ------------------------------------------------------------------------
+# RULING: no module anywhere in dv_harness/ uses Python's `logging` (grepped
+# for `logging.getLogger`/`logging.basicConfig` project-wide -- zero hits);
+# every existing CLI/engine output path is plain `print()`. Introducing
+# `logging` here alone would be a second, inconsistent output convention for
+# one feature -- these two markers use plain `print()` to stdout instead,
+# with a real, greppable, unique prefix (`STAGE_MARKER_PREFIX` below) so a
+# human or a log-scraping tool can isolate them from the surrounding agent
+# free-text output unambiguously (`grep '\[DV-HARNESS-STAGE\]' run.log`).
+# Emitted by run_stage() ITSELF (not cli.py) so both the CLI and any future
+# direct caller of DVHarness.run_stage() (the dashboard's background runner,
+# a future API server, a test harness) get the same visible "just happened"
+# signal, rather than each consumer having to notice a silent status change.
+STAGE_MARKER_PREFIX = "[DV-HARNESS-STAGE]"
+
+
+def _emit_stage_start_marker(stage: str) -> None:
+    print(f"{STAGE_MARKER_PREFIX} ===== STAGE START: {stage} =====", flush=True)
+
+
+def _emit_stage_done_marker(stage: str, gate_verdict: str, stage_completion_percent) -> None:
+    pct = f"{stage_completion_percent:.0f}" if isinstance(stage_completion_percent, (int, float)) else "-"
+    print(f"{STAGE_MARKER_PREFIX} ===== STAGE DONE: {stage} [{gate_verdict}] "
+          f"({pct}% gates satisfied) =====", flush=True)
 
 
 # --- Blackboard write mapping: evidence field -> blackboard topic ----------
@@ -890,6 +917,13 @@ class DVHarness:
                 session_id=None,
             )
 
+        # Distinctive stage-entry marker (see STAGE_MARKER_PREFIX's RULING
+        # comment above) -- emitted here, AFTER the TAKEOVER short-circuit
+        # above (a takeover'd call never actually starts the stage, so it
+        # must not print a START it never earns) and BEFORE any state
+        # mutation, so it always fires exactly once per real attempt.
+        _emit_stage_start_marker(stage)
+
         ss = self.state.stages[stage]
         ss["status"] = Status.RUNNING.value
         ss["attempts"] += 1
@@ -1221,6 +1255,26 @@ class DVHarness:
         self.profiler.end_stage(profile["profile_id"], status=ss["status"],
             finding_count=self.state.findings_total, closed_finding_count=self.state.findings_closed,
             exit_checklist=exit_checklist)
+
+        # ---- 6. "Just transitioned" persisted signal + distinctive stage-exit
+        #         marker (2026-09-01, runtime-progress-visibility pass): ss["status"]
+        #         is now the FINAL terminal status this attempt reached (PASS/FAIL/
+        #         PARTIAL/WAIT_USER -- run_stage() never returns while still
+        #         RUNNING). describe_stage() is called here rather than reusing the
+        #         local `verdict` variable because `verdict` is only ever assigned on
+        #         the `result.ok` branch above -- an ADAPTER_FAIL (the `else` branch)
+        #         never sets it at all. describe_stage() recomputes gate_verdict/
+        #         stage_completion_percent uniformly from ss["last_message"] for
+        #         EVERY exit path, so this marker (and last_transition below) is
+        #         byte-consistent with what `dv-harness explain`/`evidence` would
+        #         already report for this exact stage/attempt.
+        stage_detail = describe_stage(self.root, self.state, stage)
+        self.state.last_transition = {
+            "stage": stage, "status": ss["status"], "at": now(),
+        }
+        self.store.save(self.state)
+        _emit_stage_done_marker(stage, stage_detail.get("gate_verdict"),
+                                 stage_detail.get("stage_completion_percent"))
         return result
 
     def advance(self, user_goal: str = ""):

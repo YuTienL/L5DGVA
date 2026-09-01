@@ -138,6 +138,21 @@ class HarnessState:
     # /api/state active_stages_detail, graph-highlight, and showExplain(),
     # and session_snapshot.py's saved-session manifest.
     active_stages: List[str] = field(default_factory=list)
+    # "Just transitioned" signal (2026-09-01, runtime-progress-visibility
+    # pass): a real, persisted "this stage just reached a terminal status"
+    # record, written by engine.run_stage() every time it sets ss["status"]
+    # to a terminal value (PASS/FAIL/PARTIAL/WAIT_USER/BLOCKED -- i.e.
+    # whenever the stage stops RUNNING). Distinct from current_stage/
+    # overall_status (a snapshot of WHERE things are now, silently
+    # overwritten every stage) -- this is WHEN the last change actually
+    # happened and WHAT it changed to, so a dashboard viewer polling every
+    # 3s can render a "Last transition" banner instead of a status tile that
+    # updates with no visible signal. None until the first stage completes
+    # in a project's history. Shape: {"stage": str, "status": str,
+    # "at": iso8601 str}. Additive/optional: a state.json saved before this
+    # field existed simply has no key here, degrading to None (no banner),
+    # never a KeyError -- same convention as last_evidence_blocks above.
+    last_transition: Optional[Dict[str, Any]] = None
 
     def effective_active_stages(self) -> List[str]:
         return self.active_stages or [self.current_stage]
