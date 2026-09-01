@@ -199,11 +199,10 @@ POST /api/start already reads).</div>
 <div class="note">The two canonical modes CLAUDE.md's Environment Generation Mode gate defines
 (<code>environment-router/environment_mode_policy.json</code>), with the tile matching
 <code>environment_mode_selected</code> highlighted, IF any stage has ever recorded a
-<code>dv-harness-evidence:environment_mode_selection</code> block. No stage currently emits that
-block anywhere in this engine (no STAGE_GATES entry, prompt instruction, or writer produces it), so
-this highlight will only activate once one does -- see the pending-producer note on
-<code>_environment_mode_selected()</code> in dashboard.py. Until then this card is always the
-read-only legend below, with no tile highlighted.</div>
+<code>dv-harness-evidence:environment_mode_selection</code> block. PROJECT_MODEL now mandates this
+block (<code>environment_mode_selection_gate</code>), computed for real per-run from
+<code>dv_harness/environment_mode_router.py</code>'s <code>resolve_environment_mode()</code> -- see
+<code>_environment_mode_selected()</code> in dashboard.py.</div>
 <div id="envmodetiles" class="tiles" style="margin-top:8px"></div>
 </div>
 <div class="card" id="subsystemRegistryCard"><h3>Subsystem Registry</h3>
@@ -856,14 +855,11 @@ async function load(){
    : tile('-','No protocols registered');
 
  // Environment Mode Router: highlights whichever mode key matches
- // environment_mode_selected, from _environment_mode_selected() -- but no
- // stage anywhere in this engine currently emits an
- // environment_mode_selection evidence block (no STAGE_GATES entry, no
- // prompts.py instruction, no writer), so s.environment_mode_selected is
- // always null today and this always falls back to the flat legend display
- // below with no tile highlighted. This is honest current behavior, not a
- // bug: the highlight will start working the moment some stage's producer
- // for that evidence block is implemented, with no dashboard change needed.
+ // environment_mode_selected, from _environment_mode_selected() --
+ // PROJECT_MODEL now mandates an environment_mode_selection evidence block
+ // (gates.STAGE_GATES["PROJECT_MODEL"]'s environment_mode_selection_gate),
+ // so s.environment_mode_selected is real once that stage has run; falls
+ // back to the flat legend below (no tile highlighted) until it has.
  let modes = s.environment_mode_policy||{};
  let modeKeys = Object.keys(modes);
  let selectedMode = s.environment_mode_selected;
@@ -1120,17 +1116,20 @@ def _environment_mode_selected(root: Path):
     declared environment_mode field (SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE,
     CLAUDE.md's Environment Generation Mode gate) -- or None otherwise.
 
-    HONEST STATUS (2026-08-31, poster-gap-closing-round2 fix wave, finding
-    C2): no stage anywhere in this engine currently EMITS an
-    environment_mode_selection block -- there is no STAGE_GATES entry
-    requiring it, no prompts.py instruction telling any agent to produce it,
-    and no engine writer generates it. This function therefore always
-    returns None in real usage today; the dashboard highlight it feeds is
-    permanently inactive, not selectively inactive. Deciding which stage
-    should declare this (and whether it is mandatory or optional) is a real
-    design decision intentionally left for separate, dedicated work -- not
-    made here. Once a real producer exists, this scan needs no change to
-    start working."""
+    UPDATE (2026-09-01, route-skill-resolver-dynamic-implementation task):
+    the gap this docstring used to document ("no stage anywhere in this
+    engine currently EMITS an environment_mode_selection block") is closed.
+    PROJECT_MODEL now mandates it (gates.STAGE_GATES["PROJECT_MODEL"]'s
+    "environment_mode_selection" entry, tools/verification_flow/
+    environment_mode_selection_gate.py), prompts.py's PROJECT_MODEL
+    instructions tell the agent to produce it (echoing the real per-run
+    decision dv_harness/environment_mode_router.py's resolve_environment_
+    mode() already computed and folded into that stage's prompt via
+    engine.py's route_info), and engine.py's normal evidence-block
+    extraction is the writer -- no separate engine writer was needed since
+    this scan already reads stage last_message text directly. This function
+    itself required no code change to start working once a real producer
+    existed, exactly as anticipated below."""
     state_file = root / ".dv-harness" / "state.json"
     state = _read_json_file(state_file)
     if state is None:
@@ -1227,10 +1226,9 @@ def _environment_mode_policy(root: Path):
     the two canonical modes (SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE) CLAUDE.md's
     Environment Generation Mode gate defines. This is deliberately just the
     static policy reference; see _environment_mode_selected() below for
-    which mode (if any) the CURRENT run actually declared via an
-    environment_mode_selection evidence block -- as of this writing that is
-    always None, since no stage emits that block yet (see that function's
-    HONEST STATUS note)."""
+    which mode (if any) the CURRENT run actually declared via a real
+    environment_mode_selection evidence block (PROJECT_MODEL now mandates
+    one -- see that function's own docstring)."""
     path = root / ".dv-harness" / "environment-router" / "environment_mode_policy.json"
     data = _read_json_file(path, default=None)
     if not isinstance(data, dict):

@@ -789,6 +789,11 @@ def test_run_stage_promotes_project_topology_to_project_memory_on_pass():
         gate_dir.mkdir(parents=True)
         shutil.copy(ROOT / "tools" / "verification_flow" / "project_model_topology_completeness_gate.py",
                     gate_dir / "project_model_topology_completeness_gate.py")
+        # ADDED (2026-09-01, route-skill-resolver-dynamic-implementation
+        # task): PROJECT_MODEL now also mandates environment_mode_selection_
+        # gate -- see gates.STAGE_GATES["PROJECT_MODEL"].
+        shutil.copy(ROOT / "tools" / "verification_flow" / "environment_mode_selection_gate.py",
+                    gate_dir / "environment_mode_selection_gate.py")
         h.set_stage("PROJECT_MODEL")
 
         complete = {"verification_boundary": "top.usb_dev",
@@ -797,7 +802,11 @@ def test_run_stage_promotes_project_topology_to_project_memory_on_pass():
                     "model_confidence": "HIGH", "confidence_basis": "cross-checked with RTL arch discovery",
                     "dv_readiness": "READY", "dv_readiness_basis": "all boundary items resolved",
                     "architecture_evidence_db_ref": "arch-db-v3"}
-        text = f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(complete)}\n```\n"
+        env_mode = {"environment_mode": "SUBSYSTEM_MODE", "requested_subsystems": ["usb"]}
+        text = (
+            f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(complete)}\n```\n"
+            f"```dv-harness-evidence:environment_mode_selection\n{json.dumps(env_mode)}\n```\n"
+        )
 
         class _PassAdapter:
             def run(self, prompt, cwd, resume_session=None, agent_profile=None):
@@ -3890,7 +3899,19 @@ def test_project_model_requires_topology_completeness():
                 "model_confidence": "HIGH", "confidence_basis": "cross-checked with RTL arch discovery",
                 "dv_readiness": "READY", "dv_readiness_basis": "all boundary items resolved",
                 "architecture_evidence_db_ref": "arch-db-v3"}
-    text_pass = f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(complete)}\n```\n"
+    # ADDED (2026-09-01, route-skill-resolver-dynamic-implementation task):
+    # PROJECT_MODEL now also mandates environment_mode_selection -- see
+    # gates.STAGE_GATES["PROJECT_MODEL"]. A single subsystem stays
+    # SUBSYSTEM_MODE regardless of whether it's registered yet (this test
+    # runs against the real ROOT, whose real subsystem registry is empty).
+    env_mode_evidence = (
+        '```dv-harness-evidence:environment_mode_selection\n'
+        '{"environment_mode": "SUBSYSTEM_MODE", "requested_subsystems": ["usb"]}\n```\n'
+    )
+    text_pass = (
+        f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(complete)}\n```\n"
+        + env_mode_evidence
+    )
     verdict3, reasons3 = evaluate_stage_evidence(ROOT, "PROJECT_MODEL", text_pass)
     assert verdict3 == "PASS", reasons3
 
@@ -3900,7 +3921,10 @@ def test_project_model_requires_topology_completeness():
                             "model_confidence": "MEDIUM", "confidence_basis": "partial cross-check",
                             "dv_readiness": "PARTIAL", "dv_readiness_basis": "pending calibration",
                             "architecture_evidence_db_ref": "arch-db-v3"}
-    text_pass2 = f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(no_vip_escape_hatch)}\n```\n"
+    text_pass2 = (
+        f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(no_vip_escape_hatch)}\n```\n"
+        + env_mode_evidence
+    )
     verdict4, reasons4 = evaluate_stage_evidence(ROOT, "PROJECT_MODEL", text_pass2)
     assert verdict4 == "PASS", reasons4
 

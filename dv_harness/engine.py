@@ -45,6 +45,19 @@ from .planner import PlanStore, default_plan
 from .multi_agent import MultiAgentOrchestrator
 from .react import ReactRecorder
 from .skill_resolver import SkillResolver
+# --- Real, input-driven protocol/environment-mode resolution (2026-09-01,
+# route-skill-resolver-dynamic-implementation task): RouteResolver.resolve()/
+# SkillResolver.resolve() above are real callers but only ever do a STATIC
+# dict lookup on the graph node's own pre-declared route/agent/skills fields
+# (see router.py's own NOTICE) -- the same route/agent/skills come back
+# regardless of protocol/failure/evidence. These two resolvers apply the
+# genuinely input-driven rules documented in .claude/skills/CORE/
+# protocol-router/SKILL.md and CLAUDE.md's "Environment Generation Mode"
+# gate (previously prose-only -- see each module's own docstring for the
+# full gap/ruling this closes). Their real output is folded into route_info
+# in run_stage() below, alongside the two calls above.
+from .protocol_router import resolve_protocol
+from .environment_mode_router import resolve_environment_mode, read_registered_subsystem_names
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -166,6 +179,10 @@ def _build_plan_section(route_info: dict, resolved_skills: list, plan: dict,
         "executing, not decorative]\n"
         f"Resolved route: {route_info['route']} -> agent: {route_info['agent']}\n"
         f"Resolved skills: {json.dumps(resolved_skills, ensure_ascii=False)}\n"
+        f"Resolved protocol/profile (protocol_router.resolve_protocol): "
+        f"{json.dumps(route_info.get('protocol_decision'), ensure_ascii=False)}\n"
+        f"Resolved environment mode (environment_mode_router.resolve_environment_mode): "
+        f"{json.dumps(route_info.get('environment_mode_decision'), ensure_ascii=False)}\n"
         f"Plan {plan['plan_id']} (revision {plan['revision']}), steps:\n"
         f"{json.dumps(plan['steps'], ensure_ascii=False, indent=2)}\n"
         f"Delegated multi-agent task: {task['task_id']} "
@@ -239,6 +256,77 @@ class DVHarness:
             ).strip()
         except Exception:
             return None
+
+    def _git_modified_files(self) -> List[str]:
+        """Real, best-effort `git diff --name-only HEAD` against the current
+        worktree -- the "modified files" tie-break source protocol-router/
+        SKILL.md documents. Mirrors _git_sha()'s own defensive try/except
+        (no git repo, no HEAD yet, git not on PATH, etc. all degrade to an
+        empty list, never a fabricated guess)."""
+        try:
+            out = subprocess.check_output(
+                ["git", "diff", "--name-only", "HEAD"], cwd=self.root, text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            return [line.strip() for line in out.splitlines() if line.strip()]
+        except Exception:
+            return []
+
+    def _project_blackboard_value(self) -> Dict[str, Any]:
+        """Reads the real "project" Blackboard topic (written by INTAKE's
+        _bb_intake -- mode/target_name/protocols/selected_subsystems/
+        required_artifacts, see that function's own docstring) and returns
+        its value dict, or {} if the topic has never been written yet or was
+        written with an unexpected shape (e.g. a test/caller that writes a
+        partial stub directly). Shared by _protocol_router_evidence() and
+        _environment_mode_router_evidence() below so both draw from the
+        exact same real record."""
+        payload = self.blackboard.read("project")
+        value = payload.get("value") if isinstance(payload, dict) else None
+        return value if isinstance(value, dict) else {}
+
+    def _protocol_router_evidence(self, user_goal: str) -> Dict[str, Any]:
+        """Real per-run evidence for protocol_router.resolve_protocol(),
+        built only from genuinely available current-run sources -- see that
+        module's own docstring for the full scope ruling. `active_config`
+        has no real backing source anywhere in this engine today (no
+        config.json/state.json field records a per-run "active build
+        config") and is left explicitly None rather than invented -- a
+        future stage that introduces one should populate it here, not
+        fabricate a placeholder now."""
+        project = self._project_blackboard_value()
+        subsystem_terms = list(project.get("protocols") or []) + list(project.get("selected_subsystems") or [])
+        verify = self.blackboard.read("verify")
+        verify_value = verify.get("value") if isinstance(verify, dict) else None
+        verify_value = verify_value if isinstance(verify_value, dict) else {}
+        results = ((verify_value.get("verification_state") or {}).get("results")) or []
+        failing_test_name = next(
+            (r.get("testcase_id") for r in results
+             if isinstance(r, dict) and r.get("result") not in (None, "PASS")),
+            None,
+        )
+        return {
+            "protocol_hint": user_goal,
+            "failing_test_name": failing_test_name,
+            "active_config": None,
+            "modified_files": self._git_modified_files(),
+            "subsystem_boundary": " ".join(str(s) for s in subsystem_terms) or None,
+        }
+
+    def _environment_mode_router_evidence(self) -> Dict[str, Any]:
+        """Real per-run evidence for environment_mode_router.
+        resolve_environment_mode(): requested_subsystems from the same real
+        INTAKE-written "project" Blackboard topic _protocol_router_evidence()
+        reads (selected_subsystems for a SYSTEM_LEVEL intake, else
+        protocols), existing_registered_subsystems from the real subsystem
+        registry file on disk (never fabricated -- see
+        read_registered_subsystem_names()'s own docstring)."""
+        project = self._project_blackboard_value()
+        requested = project.get("selected_subsystems") or project.get("protocols") or []
+        return {
+            "requested_subsystems": list(requested),
+            "existing_registered_subsystems": read_registered_subsystem_names(self.root),
+        }
 
     def summary(self) -> str:
         # ADDITIVE fields (2026-08-28, multi-persona interaction review):
@@ -814,6 +902,20 @@ class DVHarness:
         if node is not None:
             route_info = self.router.resolve(node)
             resolved_skills = self.skills.resolve(node.skills)
+            # --- Real, input-driven protocol/environment-mode resolution --
+            # (2026-09-01, route-skill-resolver-dynamic-implementation task):
+            # unlike self.router.resolve(node) above (a static per-node dict
+            # lookup, see router.py's own NOTICE), these two calls genuinely
+            # depend on THIS run's own evidence (user_goal text, blackboard
+            # "project"/"verify" topics, real git diff, real subsystem
+            # registry) and can pick a different real decision run-to-run.
+            # Folded into route_info (and therefore into _build_plan_section's
+            # prompt text below) so this is load-bearing, not a disconnected
+            # module -- see protocol_router.py/environment_mode_router.py for
+            # the full ruling on evidence sourcing.
+            route_info["protocol_decision"] = resolve_protocol(self._protocol_router_evidence(user_goal))
+            route_info["environment_mode_decision"] = resolve_environment_mode(
+                self._environment_mode_router_evidence())
             plan = _find_latest_plan(self.plans.dir, stage)
             if plan is None:
                 plan = self.plans.create(stage, f"{user_goal} :: stage={stage}", default_plan(node))

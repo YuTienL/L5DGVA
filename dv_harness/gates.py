@@ -383,6 +383,34 @@ STAGE_GATES = {
     ],
     "PROJECT_MODEL": [
         ("project_model_topology_completeness_gate", "project_model_topology_completeness_gate.py", "--model"),
+        # ADDED (2026-09-01, route-skill-resolver-dynamic-implementation
+        # task): closes dashboard.py's own documented
+        # "no stage, no gate, no writer" gap for the environment_mode_
+        # selection evidence block -- see environment_mode_selection_gate.py's
+        # own header for the RULING on placing it here (PROJECT_MODEL
+        # already establishes verification_boundary/topology, one stage
+        # before PROTOCOL_CAPABILITY's per-protocol discovery) and why the
+        # gate re-derives its check independently rather than importing
+        # dv_harness.environment_mode_router. Deliberately single-flag (like
+        # execution_mode_validator.py), not a ContextFlag-carrying multi-flag
+        # gate: dashboard.py's _environment_mode_selected() reads
+        # payload.get("environment_mode") directly off this SAME evidence
+        # block with no sub-key nesting, so the agent-supplied JSON must stay
+        # flat -- the gate instead reads the real subsystem registry itself,
+        # relative to its own cwd (run_gate() always subprocess.run()s with
+        # cwd=str(root), harness-controlled, never agent-attested, the exact
+        # same trust boundary a ContextFlag would give it).
+        #
+        # gate_id is "environment_mode_selection" (NOT "..._gate", unlike
+        # every other entry in this table where gate_id == script filename
+        # stem) deliberately: this is the ONE evidence-block fence label
+        # dashboard.py's pre-existing _environment_mode_selected() already
+        # scans for (payload.get("environment_mode") on a block keyed
+        # exactly "environment_mode_selection") -- gate_id doubles as the
+        # evidence-block lookup key in _evaluate_stage_evidence_core() below,
+        # so it must match that consumer's contract exactly, independent of
+        # this script's own filename.
+        ("environment_mode_selection", "environment_mode_selection_gate.py", "--state"),
     ],
     "REGRESSION_SELECT": [
         ("regression_selection_completeness_gate", "regression_selection_completeness_gate.py", "--selection"),

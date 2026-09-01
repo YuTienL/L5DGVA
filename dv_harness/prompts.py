@@ -213,6 +213,25 @@ confidence 與 DV readiness（承接 Architecture Evidence DB）。
  "architecture_evidence_db_ref": "..."}
 ```
 （沒有 VIP 時附 "vip_topology_not_applicable_reason" 取代 vip_topology。）
+
+CLAUDE.md「Environment Generation Mode」：CREATE ENVIRONMENT 之前必須明確選
+SUBSYSTEM_MODE（單一 subsystem/協定環境）或 SYSTEM_LEVEL_MODE（組合多個已完成
+subsystem 環境成 Full-SoC）。harness 已經在這次呼叫前用
+`dv_harness/environment_mode_router.py` 的 `resolve_environment_mode()`
+算過一次真實結果（依真實的 requested_subsystems + 真實 subsystem registry），
+結果會顯示在上面 Harness Plan 區塊的 "Resolved environment mode" 欄位——
+回覆結尾照那個結果附上（`environment_mode_selection_gate` 會拿同一份
+requested_subsystems 跟真正的 registry 檔案重新推導一次，兩者不一致會直接
+FAIL）：
+
+```dv-harness-evidence:environment_mode_selection
+{"environment_mode": "SUBSYSTEM_MODE|SYSTEM_LEVEL_MODE",
+ "requested_subsystems": ["usb"], "needs_subsystem_mode_first": false}
+```
+（`requested_subsystems` 為 2 個以上時必須是 SYSTEM_LEVEL_MODE；若其中有尚未
+登記在真實 subsystem registry 裡的項目，`needs_subsystem_mode_first` 必須是
+true，且依 CLAUDE.md 規則先透過 SUBSYSTEM_MODE 把它建好、註冊後再回來組
+SYSTEM_LEVEL_MODE。）
 """,
 Stage.PROTOCOL_CAPABILITY.value: """
 Protocol Capability Discovery：綜合 Spec + RTL + Register map + command.txt + Reference UVM + VIP
