@@ -148,6 +148,33 @@ Canonical Flow Step 2「vPlan FIRST」：在深入 RTL/Architecture 之前，先
 generated/03_vplan/。後續 Architecture Discovery/Calibration、command.txt Analysis、
 Reference UVM Analysis、DE Baseline Reproduction 每個都會回頭精煉這份草稿
 （v0.2 → v0.3 → v0.4 → v1.0），最終在 VPLAN stage 定稿/LOCK。不得跳過這一步直接做 RTL 分析。
+
+本 stage 有兩個獨立的 hard gate，也必須各自附上 evidence block，缺一個都會讓整個 stage 卡在
+MISSING_EVIDENCE（找到真實案例：DISCOVERY 內容做得很完整，但沒附這兩個 gate 的 evidence，
+導致 gate completion 卡在 0%）：
+
+```dv-harness-evidence:evidence_source_priority_gate
+{"attempted_sources": ["EXISTING_PROJECT_FILES", "RTL_PARAMETERS_DEFINES", "EXISTING_UVM_VIP_CONFIG",
+  "EXISTING_TESTS_SEQUENCES", "DESIGN_DOCS", "VPLAN_TEST_TABLE", "BUILD_REGRESSION_SCRIPTS"],
+ "higher_priority_sources_exhausted": true}
+```
+（attempted_sources 只填本輪實際查過的來源，且必須依這個固定優先順序遞增排列：
+EXISTING_PROJECT_FILES → RTL_PARAMETERS_DEFINES → EXISTING_UVM_VIP_CONFIG →
+EXISTING_TESTS_SEQUENCES → DESIGN_DOCS → VPLAN_TEST_TABLE → BUILD_REGRESSION_SCRIPTS →
+GIT_HISTORY_COMMENTS → ASK_USER，不可跳序、不可倒序；只有真的把前面所有來源都查過還是不確定，
+才可以把 ASK_USER 加進來，且 higher_priority_sources_exhausted 一定要填 true。）
+
+```dv-harness-evidence:input_source_contract_gate
+{"provided_source_classes": ["SPEC", "COMMAND_TXT", "PRIMARY_PROTOCOL_REFERENCE", "RTL_SOURCE", "DE_LOCAL_SIM"],
+ "protocol_input_kind": "PUBLIC_STANDARD_SPEC", "forbidden_user_prerequisites": []}
+```
+（provided_source_classes 必須是這 5 類的完整集合：SPEC（protocol/DUT 規格）、COMMAND_TXT（既有
+command.txt/pattern）、PRIMARY_PROTOCOL_REFERENCE（VIP 文件/範例/Reference UVM）、RTL_SOURCE
+（RTL 原始碼）、DE_LOCAL_SIM（既有 DE local simulation 環境）——缺任何一類都會 FAIL；
+protocol_input_kind 必須是 PUBLIC_STANDARD_SPEC 或 OFFICIAL_STANDARD_SPEC 其中之一（代表協定輸入
+真的是公開/官方標準規格，不是憑空杜撰）；forbidden_user_prerequisites 列出「本來該由 harness 自己
+產生、卻被誤要求使用者先準備好」的產出物類別（BUILD/REGRESSION/VPLAN/CHECKER/WAVEFORM/LOGS/
+SYSTEM_LEVEL/HISTORY）——正常情況下這裡應該是空陣列 `[]`。）
 """,
 Stage.COMMAND_PATTERN.value: """
 將 command.txt 分為 REUSE/EXTEND/GENERATE，確認 USB Standard/VIP/Reference UVM 綁定。
