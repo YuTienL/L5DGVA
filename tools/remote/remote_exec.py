@@ -52,6 +52,17 @@ def format_result(remote_host, response):
     exit_code = response.get('exit_code')
     status = 'PASS' if response.get('ok') and exit_code == 0 else 'FAIL'
     lines = ['REMOTE_HOST=%s' % remote_host, 'EXIT_CODE=%s' % exit_code, 'STATUS=%s' % status]
+    # REAL BUG FIX (2026-09-01, found live): remote_relay.py's handle_request()
+    # returns a real 'error' string on put/get/status failures (e.g.
+    # 'MD5_MISMATCH', 'BAD_TOKEN') -- this function used to silently drop it,
+    # so a failed --put/--get printed only "STATUS=FAIL" with no indication
+    # of why, forcing a separate manual send_request() call just to see the
+    # real reason. 'run' ops don't set this field (their failure detail is
+    # already in stdout via the remote command's own output), so this is a
+    # pure addition, never duplicate/conflicting output for the common case.
+    error = response.get('error')
+    if error:
+        lines.append('ERROR=%s' % error)
     body = response.get('stdout', '')
     if body:
         lines.append(body)

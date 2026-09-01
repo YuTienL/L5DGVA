@@ -49,6 +49,19 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "remote_root": "",
         "hop_script": "",
+        # vchost/vchop: which persistent relay (tools/remote/remote_relay.py)
+        # to route Knowledge Center traffic through -- see
+        # dv_harness/knowledge_center.py's _invoke() docstring for the real
+        # incident (2026-09-01) this replaced: the client used to spawn its
+        # own tools/remote/remote_hop.py subprocess directly, which reads
+        # VCPW from ITS OWN process environment -- exactly the credential
+        # exposure pattern CLAUDE.md's "Remote Linux Execution" section
+        # already forbids for remote_relay.py. Empty by default (falls back
+        # to the VCHOST/VCHOP env vars already used to start the relay, same
+        # convention tools/remote/remote_exec.py's own client uses) so no
+        # server identity is ever guessed or hardcoded.
+        "vchost": "",
+        "vchop": "",
         "categories": [
             "usb", "pcie", "amba4", "ethernet", "mipi_csi2", "mipi_dsi",
             "can_fd", "emmc", "sd_sdio", "_general"

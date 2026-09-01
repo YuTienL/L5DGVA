@@ -39,6 +39,23 @@ def test_format_result_omits_body_when_empty():
     assert len(lines) == 3
 
 
+def test_format_result_surfaces_error_field_on_put_get_failure():
+    # Real bug found live 2026-09-01: remote_relay.py's handle_request()
+    # returns a real 'error' string (e.g. 'MD5_MISMATCH', 'BAD_TOKEN') on
+    # put/get/status failures, but format_result() silently dropped it --
+    # a failed --put/--get printed only STATUS=FAIL with no reason.
+    resp = {"ok": False, "exit_code": 1, "stdout": "", "error": "MD5_MISMATCH"}
+    out = format_result("host-b", resp)
+    assert "STATUS=FAIL" in out
+    assert "ERROR=MD5_MISMATCH" in out
+
+
+def test_format_result_omits_error_line_when_error_is_empty():
+    resp = {"ok": True, "exit_code": 0, "stdout": "hello", "error": ""}
+    out = format_result("host-b", resp)
+    assert "ERROR=" not in out
+
+
 def test_read_relay_info_missing_file_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert read_relay_info("vchost-b", "host-b") is None

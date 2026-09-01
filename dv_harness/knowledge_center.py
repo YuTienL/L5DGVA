@@ -1,15 +1,16 @@
 from __future__ import annotations
-import json, os, subprocess, sys, tempfile, time, uuid
+import json, os, socket, sys, tempfile, time, uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Marker line the server-side broker (tools/knowledge_center/broker.py) must
 # print as its LAST stdout line, exactly once, so this client can find its
-# JSON result inside remote_hop.py's own "=== cmd ===" banner/echo noise
-# (remote_hop.py's main() prints a banner + the command's raw output + an
-# "[exit N]" line for every trailing command it runs -- see
-# PACKAGE/remote_hop.py). A distinctive prefix is more robust than assuming
-# the broker's JSON is the only thing on stdout.
+# JSON result inside whatever else the remote command's real stdout happens
+# to contain (the persistent relay's 'run' op returns raw remote stdout
+# verbatim -- no banner/echo framing of its own, unlike the older
+# remote_hop.py-subprocess transport this replaced on 2026-09-01, but a
+# distinctive prefix is still more robust than assuming the broker's JSON
+# is the only thing on stdout, e.g. if the shell prints its own noise).
 RESULT_MARKER = "DVHKC_RESULT:"
 
 
@@ -25,13 +26,29 @@ def _default_host() -> str:
     return os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "unknown-host"
 
 
+def _remote_exec_module():
+    """Import tools/remote/remote_exec.py's read_relay_info()/send_request()
+    -- the same credential-free persistent-relay client every other
+    real remote-execution call site in this project already uses. Not a
+    package import: tools/remote/ has no __init__.py, so this sys.path-inserts
+    its directory once (same convention dv_harness_tests/test_source_identity.py
+    already establishes for this exact directory)."""
+    remote_dir = str(Path(__file__).resolve().parents[1] / "tools" / "remote")
+    if remote_dir not in sys.path:
+        sys.path.insert(0, remote_dir)
+    import remote_exec  # type: ignore
+    return remote_exec
+
+
 class KnowledgeCenterClient:
     """Local-side client for the shared, cross-user knowledge center that
     lives at a fixed path on a Linux server (dv_harness/config.py's
     `knowledge_center` block). Talks to it exclusively through
     tools/knowledge_center/broker.py running ON the server, invoked over the
-    same short-lived telnet+ssh transport (remote_hop.py) already built for
-    this project -- never a mounted network filesystem (see
+    same credential-free persistent relay (tools/remote/remote_exec.py,
+    talking to a remote_relay.py process a human already started) every
+    other real remote command in this project uses -- never a mounted
+    network filesystem (see
     PACKAGE/REMOTE_LOGIN_GUIDE.md and the design discussion this module came
     out of: no file-locking exists anywhere in this codebase, and NFS-style
     cross-client locking is not something this project can rely on, so every
@@ -52,85 +69,107 @@ class KnowledgeCenterClient:
     def configured(self) -> bool:
         return bool(self.cfg.get("enabled")) and bool(self.cfg.get("remote_root"))
 
-    def _resolve_hop_script(self) -> Optional[Path]:
-        explicit = self.cfg.get("hop_script")
-        if explicit:
-            p = Path(explicit)
-            if not p.is_absolute() and self.project_root:
-                p = self.project_root / p
-            if p.is_file():
-                return p
-            # BUG FIX (2026-08-31 final-review, I2): previously returned None
-            # HERE unconditionally on a truthy-but-nonexistent explicit path
-            # -- e.g. config.json's hop_script left pointing at the
-            # pre-relocation, repo-external remote_hop.py path after Task 4
-            # moved the real script into tools/remote/. That silently broke
-            # Knowledge Center sync with no recovery, even though the real
-            # script still existed right where the fallback search below
-            # would have found it. Now falls through to the same candidate
-            # search used when no explicit hop_script is configured at all,
-            # instead of giving up immediately.
-        # Fall back to the real in-repo relocated path first (tools/remote/
-        # remote_hop.py, the authoritative location since the 2026-08-31
-        # persistent-relay-scripts relocation), then legacy locations
-        # (alongside PACKAGE/, or copied into a project root/one level up)
-        # for backward compatibility. The in-repo path MUST be checked
-        # before the legacy ones: a stale, not-yet-deleted copy at the
-        # legacy repo-external location (Task 4's Step 7 deletion is
-        # deferred pending human confirmation) would otherwise silently
-        # win over the harness's own bundled, authoritative copy -- exactly
-        # the bug this ordering fixes (2026-08-31, post-merge discovery).
-        candidates = []
-        if self.project_root:
-            candidates += [self.project_root / "tools" / "remote" / "remote_hop.py",
-                           self.project_root / "remote_hop.py",
-                           self.project_root.parent / "remote_hop.py"]
-        candidates.append(Path.cwd() / "remote_hop.py")
-        for c in candidates:
-            if c.is_file():
-                return c
-        return None
+    def _vc_host_hop(self) -> tuple:
+        vchost = self.cfg.get("vchost") or os.environ.get("VCHOST", "")
+        vchop = self.cfg.get("vchop") or os.environ.get("VCHOP", "")
+        return vchost, vchop
 
     def _invoke(self, verb: str, payload: Dict[str, Any], timeout: int = 90) -> Dict[str, Any]:
+        """REAL INCIDENT FIX (2026-09-01): this method used to spawn its own
+        tools/remote/remote_hop.py subprocess directly
+        (`[sys.executable, str(hop), "--put", ...]`), reading credentials
+        from ITS OWN process environment (remote_hop.py's own module-level
+        `PW = os.environ.get(<the password's env var name>, '')`). That is exactly the exposure
+        pattern CLAUDE.md's "Remote Linux Execution" section already forbids
+        for remote_relay.py -- "a persistent OS-level environment variable
+        can supply required credentials silently, defeating a 'missing env
+        vars' safety check" -- confirmed as a real, live incident risk this
+        session found while actually using this code path (see
+        docs/superpowers/... session notes / Engineering Memory record
+        MEM-78AD6C32EB for the full account, including the settings.local.json
+        angle of the same underlying anti-pattern). remote_hop.py is the
+        SAME risk category as remote_relay.py (it performs a real login with
+        a real password from env), so it must never be invoked directly from
+        a Claude-issued call either, even indirectly through this client.
+
+        Fixed by routing exclusively through the already-sanctioned,
+        credential-free persistent relay (tools/remote/remote_exec.py's
+        read_relay_info()/send_request(), the exact mechanism CLAUDE.md's
+        "Remote Linux Execution (Persistent Relay)" section already
+        mandates for every other real remote command in this project) --
+        this client now performs the identical two-step sequence
+        (put the payload JSON, then run the broker command) as a real relay
+        client, never spawning its own authenticated subprocess. If no
+        relay is up for the configured vchost/vchop, this fails cleanly
+        with RELAY_NOT_READY (mirroring remote_exec.py's own DOWN-state
+        message) instead of silently trying to authenticate on its own.
+        """
         if not self.configured():
             return {"ok": False, "error": "NOT_CONFIGURED"}
-        hop = self._resolve_hop_script()
-        if not hop:
-            return {"ok": False, "error": "REMOTE_HOP_NOT_FOUND",
-                     "detail": "set knowledge_center.hop_script or place remote_hop.py "
-                               "next to the project root"}
+
+        vchost, vchop = self._vc_host_hop()
+        if not vchost or not vchop:
+            return {"ok": False, "error": "VC_HOST_HOP_NOT_CONFIGURED",
+                     "detail": "set knowledge_center.vchost/vchop in config.json, or the "
+                               "VCHOST/VCHOP env vars (the same values used to start "
+                               "remote_relay.py)"}
+
+        remote_exec = _remote_exec_module()
+        info = remote_exec.read_relay_info(vchost, vchop)
+        if info is None:
+            return {"ok": False, "error": "RELAY_NOT_READY",
+                     "detail": f"no persistent relay found for {vchost}-{vchop}. Ask the "
+                               f"user to run, in their OWN terminal: VCUSER=... VCPW=... "
+                               f"VCHOST={vchost} VCHOP={vchop} VCWORKDIR=... python "
+                               f"tools/remote/remote_relay.py --start"}
+
         remote_root = str(self.cfg["remote_root"]).rstrip("/")
+        remote_tmp = f"/tmp/.dvhkc.{uuid.uuid4().hex[:12]}.json"
+        remote_cmd = (
+            f"python3 {remote_root}/broker.py {verb} --root {remote_root} "
+            f"--payload-file {remote_tmp}; rm -f {remote_tmp}"
+        )
+
         fd, local_tmp = tempfile.mkstemp(suffix=".json")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
-            remote_tmp = f"/tmp/.dvhkc.{uuid.uuid4().hex[:12]}.json"
-            remote_cmd = (
-                f"python3 {remote_root}/broker.py {verb} --root {remote_root} "
-                f"--payload-file {remote_tmp}; rm -f {remote_tmp}"
-            )
-            cmd = [sys.executable, str(hop), "--put", local_tmp, remote_tmp, remote_cmd]
             try:
-                proc = subprocess.run(cmd, capture_output=True, text=True,
-                                       timeout=timeout, encoding="utf-8", errors="replace")
-            except subprocess.TimeoutExpired:
-                return {"ok": False, "error": "TIMEOUT"}
-            except OSError as e:
-                return {"ok": False, "error": "TRANSPORT_EXEC_FAILED", "detail": str(e)}
+                put_resp = remote_exec.send_request(
+                    info["host"], info["port"],
+                    {"token": info["token"], "op": "put", "local": local_tmp, "remote": remote_tmp},
+                    timeout=timeout,
+                )
+            except (ConnectionRefusedError, OSError, socket.timeout) as e:
+                return {"ok": False, "error": "RELAY_UNREACHABLE", "detail": str(e)}
         finally:
             try:
                 os.unlink(local_tmp)
             except OSError:
                 pass
 
-        stdout = proc.stdout or ""
+        if not put_resp.get("ok"):
+            return {"ok": False, "error": "TRANSPORT_PUT_FAILED", "detail": put_resp.get("error", "")}
+
+        try:
+            run_resp = remote_exec.send_request(
+                info["host"], info["port"],
+                {"token": info["token"], "op": "run", "cmd": remote_cmd, "timeout": timeout},
+                timeout=timeout,
+            )
+        except (ConnectionRefusedError, OSError, socket.timeout) as e:
+            return {"ok": False, "error": "RELAY_UNREACHABLE", "detail": str(e)}
+
+        if not run_resp.get("ok"):
+            return {"ok": False, "error": "TRANSPORT_RUN_FAILED", "detail": run_resp.get("error", "")}
+
+        stdout = run_resp.get("stdout") or ""
         result_line = None
         for line in stdout.splitlines():
             if line.startswith(RESULT_MARKER):
                 result_line = line[len(RESULT_MARKER):]
         if result_line is None:
-            return {"ok": False, "error": "NO_RESULT_MARKER",
-                     "detail": (stdout + (proc.stderr or ""))[-2000:]}
+            return {"ok": False, "error": "NO_RESULT_MARKER", "detail": stdout[-2000:]}
         try:
             result = json.loads(result_line)
         except json.JSONDecodeError as e:
