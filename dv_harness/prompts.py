@@ -989,6 +989,26 @@ Stage.CHANGE_IMPACT.value: """
 ```
 （`changed_items` 為空時直接 PASS，不需要走完整流程；`spec_changed`/`rtl_interface_or_arch_changed` 為 true 時
 對應的 `vplan_reanalyzed`/`architecture_rediscovered`/`mechanism_plan_revalidated` 必須是 true，不能留 null。）
+
+本 stage 另外還有一個獨立的 hard gate，也必須附上 evidence block，缺了會讓整個 stage 卡在
+GATE_FAIL/MISSING_EVIDENCE（同一種真實案例：agent 只附了 spec_rtl_change_impact_gate，
+artifact_dependency_closure_gate 沒附，導致 stage 反覆卡在同樣的 GATE_FAIL）：
+
+```dv-harness-evidence:artifact_dependency_closure_gate
+{"artifacts": [
+  {"artifact_id": "...", "hash": "...", "depends_on": ["..."], "stale": false}
+]}
+```
+
+（盤點本次 Change Impact 分析中實際涉及的產出物（例如受影響的 vPlan/regression selection/
+architecture model 等 artifact）及它們彼此的依賴關係——這個階段本來就沒有處理到任何 artifact
+時，`{"artifacts": []}` 是誠實、合法的預設值，gate 對空清單直接 PASS，不需要硬湊內容。一旦列出
+任何一筆，`artifact_id` 與 `hash` 都是必填：漏了 `hash`（或給空字串/null）會被判 FAIL
+（UNHASHED_ARTIFACT）；`depends_on` 裡列的每個 parent artifact_id 都必須也出現在同一份
+`artifacts` 清單裡，指向一個清單裡查不到的 artifact 會被判 FAIL（MISSING_ARTIFACT_DEPENDENCY）
+——不能只列出自己這筆卻漏了它依賴的 parent；某個 parent 的 `stale` 為 true 時，依賴它的這筆也會被
+判 FAIL（STALE_ARTIFACT_DEPENDENCY），代表不能在依賴鏈裡還有過期產出物的情況下宣稱這次的
+change impact 分析已經完整、可信。）
 """,
 Stage.GIT_SYNC.value: """
 安全執行 Git status/fetch/sync strategy discovery；保護 unrelated user changes。
