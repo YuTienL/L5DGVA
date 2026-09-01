@@ -183,18 +183,24 @@ New files:
   parent-dir creation and overwrite-of-stale-file), and one end-to-end
   `main()` happy path.
 
-Full existing suite (`python -m pytest dv_harness_tests -q`, run twice --
-once immediately after the `generator.py` refactor/extension and once more
-after adding both new test files) both completed with **zero failures**:
-1331 passed (pre-existing suite, confirming the `_decode_and_translate`
-refactor and `coverage()` rewrite caused no regressions) and the full run
-including the two new files (result recorded in this report's companion
-`tests_summary` field). `test_coverage_points_dsl.py` and
+Full existing suite (`python -m pytest dv_harness_tests -q`) was run twice:
+once immediately after the `generator.py` refactor/extension (1331 passed,
+0 failed -- before the two new test files existed, confirming the
+`_decode_and_translate` refactor and `coverage()` rewrite caused zero
+regressions against the pre-existing suite), and once more after adding
+both new test files (1364 passed, 1 failed). The one failure,
+`test_graph_parallel_dispatch.py::test_engine_dispatches_all_three_branches_concurrently_and_joins`,
+is a pre-existing, timing-based concurrency assertion (`span < SLEEP*1.8`)
+in a file this task never touched (`git log` shows it unmodified since the
+initial commit) and unrelated to generator.py/coverage in any way;
+re-running it in isolation three times reproduced both a pass and a fail
+under real system load, confirming it is flaky/load-sensitive rather than
+a regression introduced by this task. `test_coverage_points_dsl.py` and
 `test_urg_summary_reduce.py` were additionally run standalone and pass
 (34 and 13, respectively), as did the pre-existing
 `test_scoreboard_check_dsl.py`/`test_transaction_scoreboard_dsl.py`/
 `test_coverage_analysis.py` files together with the two new ones (135
-passed).
+passed, 0 failed).
 
 ## Residual gaps / concerns
 
