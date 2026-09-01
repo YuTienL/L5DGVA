@@ -26,9 +26,25 @@ from typing import Any,Dict,List,Optional
 @dataclass
 class Edge:
  source:str; target:str; condition:str='PASS'; priority:int=100
+# expected_evidence/expected_outputs (2026-09-01, expected-evidence-checklist
+# design pass): purely additive, OPTIONAL node fields -- absence (the default,
+# empty list) means "no checklist for this stage", never an error. Each entry
+# is {"item_id": str, "description": str, "kind": "file_path"|"blackboard_key"
+# |"evidence_field"}. expected_evidence describes what the stage needs
+# PRESENT AT ENTRY (checked by engine.build_stage_entry_checklist before the
+# LLM call); expected_outputs describes what the stage should have PRODUCED
+# AT EXIT (checked by engine.build_stage_exit_checklist after the gate
+# verdict is known). Both are informational-only -- see those two functions'
+# docstrings in engine.py for exactly how each `kind` is resolved to a
+# present/absent bool. Only main_graph.json's INTAKE/BUILD/VERIFY/REGRESSION/
+# COVERAGE_CLOSURE/SIGNOFF nodes populate these so far (transcribed from the
+# real requirements prompts.STAGE_INSTRUCTIONS/gates.STAGE_GATES already
+# state for those stages, not invented) -- every other node simply omits the
+# fields, which GraphDefinition.load()'s Node(**n) already tolerates via
+# these defaults.
 @dataclass
 class Node:
- id:str; route:str; agent:str; skills:List[str]=field(default_factory=list); planner:str='plan-and-execute'; react:bool=True; blackboard_read:List[str]=field(default_factory=list); blackboard_write:List[str]=field(default_factory=list); parallel_group:Optional[str]=None; join_group:Optional[str]=None; completion_gate:Dict[str,Any]=field(default_factory=dict)
+ id:str; route:str; agent:str; skills:List[str]=field(default_factory=list); planner:str='plan-and-execute'; react:bool=True; blackboard_read:List[str]=field(default_factory=list); blackboard_write:List[str]=field(default_factory=list); parallel_group:Optional[str]=None; join_group:Optional[str]=None; completion_gate:Dict[str,Any]=field(default_factory=dict); expected_evidence:List[Dict[str,Any]]=field(default_factory=list); expected_outputs:List[Dict[str,Any]]=field(default_factory=list)
 class GraphDefinition:
  def __init__(self,nodes,edges): self.nodes={n.id:n for n in nodes}; self.edges=edges
  @classmethod

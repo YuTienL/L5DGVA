@@ -81,6 +81,18 @@ class StageState:
     # runs the inner loop (react:false nodes, or verdict never reached
     # GATE_FAIL/DV_REVIEW_PENDING in the first place).
     react_reroute_target: Optional[str] = None
+    # This stage's own most recent submitted evidence blocks (2026-09-01,
+    # expected-evidence-checklist design pass) -- engine.run_stage() sets
+    # this from gates.extract_evidence_blocks()'s output on any attempt that
+    # produced at least one block (never cleared to {} by an attempt that
+    # produced none, e.g. ADAPTER_FAIL). Consumed by
+    # engine.build_stage_entry_checklist()'s "evidence_field" item
+    # resolution on a LATER attempt/stage -- see that function's docstring.
+    # Additive/optional: a stage state loaded from a state.json saved before
+    # this field existed simply has no key here, and every reader uses
+    # dict.get(..., {}) so that degrades to "nothing submitted yet", never a
+    # KeyError.
+    last_evidence_blocks: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class HarnessState:

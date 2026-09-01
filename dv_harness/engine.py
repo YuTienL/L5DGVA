@@ -152,6 +152,152 @@ STAGE_BLACKBOARD_WRITERS = {
 }
 
 
+# --- Stage entry/exit evidence checklists (2026-09-01, expected-evidence-
+# checklist design pass) ------------------------------------------------
+# main_graph.json's node schema previously had no field declaring what
+# evidence/files a stage requires at entry or should produce at exit --
+# prompts.py's STAGE_INSTRUCTIONS described "required_artifacts"-style
+# requirements only as prose the AGENT self-reports at turn-end, never a
+# harness-computed, presence-checked list. Node.expected_evidence/
+# expected_outputs (graph.py, additive/optional) now carry that as structured
+# {item_id, description, kind} entries; the two functions below turn a
+# node's list into a real presence-checked report. Both are INFORMATIONAL
+# ONLY -- they never raise, never change ss["status"], and a node with no
+# expected_evidence/expected_outputs list (the default) produces a trivial
+# zero-item report, never an error, so every existing graph node stays
+# byte-for-byte unaffected.
+#
+# `kind` resolution (identical between entry/exit; the only difference is
+# which stage's evidence an "evidence_field" item can see, per each
+# function's own docstring):
+#   - "blackboard_key": item_id is a Blackboard topic name; present iff
+#     Blackboard.read(item_id) is not None (the topic has been written at
+#     least once -- content is not otherwise inspected).
+#   - "file_path": item_id is a path (absolute, or relative to `root`);
+#     present iff Path(...).exists().
+#   - "evidence_field": item_id is a dotted field path into an evidence
+#     block dict, optionally prefixed "STAGE_ID:" to name which stage's
+#     evidence to dig into (see each function's docstring for the default
+#     when no prefix is given). A bare item_id with no dot (e.g.
+#     "intake_readiness") checks the whole block's presence; a dotted one
+#     (e.g. "intake_readiness.mode") navigates into it. Present iff every
+#     path segment resolves to a dict key AND the final value is truthy
+#     (mirrors the gate scripts' own "field must be non-empty" convention --
+#     a required_artifacts.<x>: false is correctly reported ABSENT, not
+#     "present but false").
+#   - any other/unknown kind: always reported absent, never raises -- a
+#     future kind can be added to main_graph.json ahead of engine support
+#     without crashing run_stage().
+def _dig_evidence_field(source: Dict[str, Any], dotted_path: str) -> bool:
+    cur: Any = source
+    for part in dotted_path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False
+        cur = cur[part]
+    return bool(cur)
+
+
+def _checklist_item_present(item: Dict[str, Any], root: Path, blackboard: Blackboard,
+                             evidence_for) -> bool:
+    kind = item.get("kind")
+    item_id = str(item.get("item_id", ""))
+    if kind == "blackboard_key":
+        return blackboard.read(item_id) is not None
+    if kind == "file_path":
+        p = Path(item_id)
+        if not p.is_absolute():
+            p = root / item_id
+        return p.exists()
+    if kind == "evidence_field":
+        stage_ref, sep, field_path = item_id.partition(":")
+        if not sep:
+            stage_ref, field_path = None, item_id
+        return _dig_evidence_field(evidence_for(stage_ref), field_path)
+    return False  # unknown kind -- informational report, never raises
+
+
+def _run_checklist(items_decl: List[Dict[str, Any]], root: Path, blackboard: Blackboard,
+                    evidence_for) -> Dict[str, Any]:
+    items = [
+        {"item_id": item.get("item_id"), "description": item.get("description", ""),
+         "present": _checklist_item_present(item, root, blackboard, evidence_for)}
+        for item in items_decl
+    ]
+    total = len(items)
+    present_count = sum(1 for it in items if it["present"])
+    return {
+        "items": items,
+        "present_count": present_count,
+        "total_count": total,
+        # RULING: zero items declared for a stage means no checklist applies
+        # to it -- reported as 100% complete (nothing outstanding), not 0%
+        # (which would misleadingly read as "totally missing evidence").
+        "completeness_percent": (100.0 * present_count / total) if total else 100.0,
+        "missing_item_ids": [it["item_id"] for it in items if not it["present"]],
+    }
+
+
+def build_stage_entry_checklist(node, blackboard: Blackboard, root: Path,
+                                 stage_history: Optional[Dict[str, Dict[str, Any]]] = None
+                                 ) -> Dict[str, Any]:
+    """Reads `node.expected_evidence` (absent/empty -> zero-item report, never
+    an error) and checks each item's REAL presence -- called at the very top
+    of run_stage(), before build_stage_prompt()/adapter.run(), so this never
+    reflects anything from the attempt about to run.
+
+    "evidence_field" items resolve against `stage_history` (self.state.stages
+    from the CURRENT HarnessState, i.e. run_stage()'s own self.state.stages)
+    -- specifically each stage's `last_evidence_blocks` (the evidence blocks
+    that stage's most recent PRIOR attempt, if any, actually submitted; see
+    where run_stage() persists it below). A bare item_id (no "STAGE_ID:"
+    prefix) defaults to node.id's own last_evidence_blocks -- e.g. on a
+    retry, "did this stage already submit this field last attempt". A
+    prefixed item_id (e.g. "REGRESSION_SELECT:...") looks at a DIFFERENT
+    upstream stage's last submission -- the real mechanism for a stage like
+    REGRESSION whose actual input (REGRESSION_SELECT's test selection) is
+    never written to the Blackboard by that node (its blackboard_write is
+    genuinely empty per main_graph.json), so a blackboard_key check cannot
+    see it. Never raises: an unknown/never-run stage_ref, or one whose
+    last_evidence_blocks is empty, simply resolves to {} (every item under it
+    reports absent)."""
+    items_decl = list(getattr(node, "expected_evidence", None) or [])
+    history = stage_history or {}
+
+    def evidence_for(stage_ref: Optional[str]) -> Dict[str, Any]:
+        sid = stage_ref or (node.id if node is not None else None)
+        entry = history.get(sid) if sid else None
+        blocks = (entry or {}).get("last_evidence_blocks")
+        return blocks if isinstance(blocks, dict) else {}
+
+    return _run_checklist(items_decl, root, blackboard, evidence_for)
+
+
+def build_stage_exit_checklist(node, blackboard: Blackboard, root: Path,
+                                evidence_blocks: Optional[Dict[str, Any]] = None
+                                ) -> Dict[str, Any]:
+    """Reads `node.expected_outputs` (absent/empty -> zero-item report, never
+    an error) and checks each item's REAL presence -- called near the end of
+    run_stage(), after the gate verdict is known, alongside the existing
+    profiler.end_stage() call.
+
+    "evidence_field" items resolve against `evidence_blocks` -- THIS
+    attempt's own freshly-extracted evidence (the same dict run_stage()
+    already computed via gates.extract_evidence_blocks(), passed straight
+    through with no re-parsing). Unlike the entry checklist, an exit
+    checklist only ever has this one attempt's own output to inspect -- a
+    "STAGE_ID:" prefix on an expected_outputs item_id is intentionally
+    ignored (ONLY the dotted field-path part is used) rather than resolved
+    against some other stage's data, since "what did THIS stage attempt just
+    produce" is exactly what an exit check means."""
+    items_decl = list(getattr(node, "expected_outputs", None) or [])
+    blocks = evidence_blocks if isinstance(evidence_blocks, dict) else {}
+
+    def evidence_for(_stage_ref: Optional[str]) -> Dict[str, Any]:
+        return blocks
+
+    return _run_checklist(items_decl, root, blackboard, evidence_for)
+
+
 def _build_plan_section(route_info: dict, resolved_skills: list, plan: dict,
                          bb_snapshot: dict, task: dict) -> str:
     """Folds the resolved route/agent/skills/plan/blackboard-snapshot into the
@@ -801,7 +947,22 @@ class DVHarness:
         except Exception:
             relevant_memory = []
 
-        profile = self.profiler.begin_stage(stage, stage, graph_node=stage, metadata={"git_sha": self.state.git_sha})
+        # ---- 1c. Stage entry evidence checklist (expected-evidence-checklist
+        #          design pass, 2026-09-01): informational-only presence
+        #          report over node.expected_evidence, computed BEFORE
+        #          build_stage_prompt/adapter.run so it can never reflect the
+        #          attempt about to run -- see build_stage_entry_checklist's
+        #          own docstring. A node with no expected_evidence (the
+        #          overwhelming majority, unaffected by this pass) yields the
+        #          trivial {"items":[],...,"completeness_percent":100.0}
+        #          report and never blocks or alters ss["status"]. Persisted
+        #          into the SAME per-attempt telemetry record
+        #          profiler.begin_stage() already writes, not a separate file.
+        entry_checklist = build_stage_entry_checklist(node, self.blackboard, self.root,
+                                                        stage_history=self.state.stages)
+
+        profile = self.profiler.begin_stage(stage, stage, graph_node=stage,
+            metadata={"git_sha": self.state.git_sha}, entry_checklist=entry_checklist)
         # CONSTRAINT / CORRECT / APPROVE integration: fold the persisted
         # control-plane state into this stage's prompt (prompts.build_stage_prompt
         # is purely additive on these kwargs -- omitting them reproduces the
@@ -1032,13 +1193,34 @@ class DVHarness:
                 next_action=("advance" if ss["status"] == Status.PASS.value else "retry_or_reroute"),
             )
 
+        # This attempt's own extracted evidence blocks, persisted onto the
+        # stage's own state so a LATER attempt's build_stage_entry_checklist
+        # (see its docstring) can see what was last actually submitted here
+        # -- never cleared to {} on an attempt that produced none (e.g. an
+        # ADAPTER_FAIL), so a checklist still reflects the last real
+        # submission rather than "nothing was ever submitted".
+        if evidence_blocks:
+            ss["last_evidence_blocks"] = evidence_blocks
+
         self.store.event({
             "ts": now(), "stage": stage, "ok": result.ok,
             "session_id": result.session_id, "summary": ss["last_message"][-1000:]
         })
         self.store.save(self.state)
+        # ---- 5. Stage exit evidence checklist: the symmetric counterpart to
+        #         entry_checklist above, over node.expected_outputs, computed
+        #         now that the gate verdict is known -- see
+        #         build_stage_exit_checklist's own docstring for why it reads
+        #         `evidence_blocks` (THIS attempt's own output) rather than
+        #         the just-persisted last_evidence_blocks. Informational
+        #         only: never alters ss["status"], persisted into the SAME
+        #         per-attempt telemetry record profiler.end_stage() already
+        #         writes. ------------------------------------------------
+        exit_checklist = build_stage_exit_checklist(node, self.blackboard, self.root,
+                                                      evidence_blocks=evidence_blocks)
         self.profiler.end_stage(profile["profile_id"], status=ss["status"],
-            finding_count=self.state.findings_total, closed_finding_count=self.state.findings_closed)
+            finding_count=self.state.findings_total, closed_finding_count=self.state.findings_closed,
+            exit_checklist=exit_checklist)
         return result
 
     def advance(self, user_goal: str = ""):

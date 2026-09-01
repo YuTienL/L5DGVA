@@ -25,7 +25,18 @@ class StageExecutionProfiler:
         self.stage_dir.mkdir(parents=True, exist_ok=True)
         self.workflow_file=self.dir/"workflow_profile.json"
 
-    def begin_stage(self, stage_id, stage_name, graph_node="", metadata=None):
+    def begin_stage(self, stage_id, stage_name, graph_node="", metadata=None, entry_checklist=None):
+        # entry_checklist/exit_checklist (2026-09-01, expected-evidence-
+        # checklist design pass): the SAME real per-attempt telemetry record
+        # this class already writes now also carries
+        # engine.build_stage_entry_checklist()'s/build_stage_exit_checklist()'s
+        # {items, present_count, total_count, completeness_percent,
+        # missing_item_ids} report -- no separate report file. Both default
+        # None (not {}) so a caller that never passes one (every pre-existing
+        # caller, e.g. this file's own tests) round-trips byte-identical
+        # JSON, and a consumer can tell "no checklist declared for this
+        # node/stage" (None) apart from "checklist declared, zero items"
+        # ({"items": [], ...}).
         pid=f"STAGE-{uuid.uuid4().hex[:8].upper()}"
         rec={
             "profile_id":pid,"stage_id":stage_id,"stage_name":stage_name,
@@ -36,7 +47,8 @@ class StageExecutionProfiler:
             "input_tokens":None,"output_tokens":None,
             "cache_read_tokens":None,"cache_write_tokens":None,"total_tokens":None,
             "tool_calls":0,"retries":0,"finding_count":0,"closed_finding_count":0,
-            "status":"RUNNING","agents":[],"metadata":metadata or {}
+            "status":"RUNNING","agents":[],"metadata":metadata or {},
+            "entry_checklist":entry_checklist,"exit_checklist":None,
         }
         self._save(rec)
         return rec
@@ -72,13 +84,21 @@ class StageExecutionProfiler:
         self._save(rec)
         return rec
 
-    def end_stage(self, profile_id, status="PASS", finding_count=0, closed_finding_count=0):
+    def end_stage(self, profile_id, status="PASS", finding_count=0, closed_finding_count=0,
+                  exit_checklist=None):
         rec=self._load(profile_id)
         rec["end_time_epoch"]=time.time()
         rec["stage_wall_clock_sec"]=max(0.0,rec["end_time_epoch"]-rec["start_time_epoch"])
         rec["status"]=status
         rec["finding_count"]=int(finding_count)
         rec["closed_finding_count"]=int(closed_finding_count)
+        # See begin_stage()'s entry_checklist note: only overwrite when a
+        # caller actually passes one, so a pre-existing caller (or a record
+        # begun before this field existed, via `.get` below) round-trips
+        # unchanged.
+        if exit_checklist is not None:
+            rec["exit_checklist"]=exit_checklist
+        rec.setdefault("entry_checklist", None)
         rec["parallel_saving_sec"]=max(0.0,rec["aggregate_agent_runtime_sec"]-rec["stage_wall_clock_sec"])
         rec["parallelism_efficiency"]=(rec["parallel_saving_sec"]/rec["aggregate_agent_runtime_sec"]
                                       if rec["aggregate_agent_runtime_sec"] else 0.0)
