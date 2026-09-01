@@ -110,6 +110,48 @@ def cmd_correct(h, stage: str, note: str, reset_attempts: bool = False) -> Dict[
     return {"corrected": stage}
 
 
+# ---- BLACKBOARD -----------------------------------------------------------
+def cmd_blackboard_write(h, topic: str, value: Any, source: str = "", confidence: str = "HIGH") -> Dict[str, Any]:
+    """Real, CLI-reachable wrapper around Blackboard.write() (dv_harness/
+    blackboard.py). Exists specifically so a Workflow-tool script -- plain JS
+    with no filesystem/Python access of its own (see workflow-authoring) --
+    can have one of its subagents perform a genuine Blackboard write via a
+    real PowerShell/Bash tool call (`dv-harness blackboard write <topic>
+    --file <json>`), rather than only returning fused evidence as workflow
+    return-value text that never actually reaches
+    `.dv-harness/blackboard/<topic>.json`. First real caller:
+    `.claude/workflows/rca-multi-agent-fusion.js`'s Evidence Fusion stage,
+    writing the `rca_evidence_fusion` topic.
+
+    RULING (2026-09-01, multi-agent-rca-orchestrator-implementation task): a
+    non-empty topic string is required -- Blackboard._path() would otherwise
+    happily write to a nonsensically-named file; every other validation
+    (value shape) is left to the caller/agent, matching this module's
+    existing lightweight `_check_stage`-style validation rather than
+    borrowing the heavier typed-ValueError+evidence-dict convention from
+    dv_harness/uvm_generator/generator.py, which is specific to that
+    module's manifest-driven content-generation provenance rules, not to
+    every state-mutating CLI command in this file (cmd_correct/cmd_approve
+    above raise the same plain ValueError shape)."""
+    if not topic or not topic.strip():
+        raise ValueError("blackboard topic must be a non-empty string")
+    payload = h.blackboard.write(topic, value, source=source, confidence=confidence)
+    h.store.event({"ts": cp_now(), "cmd": "blackboard-write", "topic": topic,
+                    "source": source, "confidence": confidence})
+    return payload
+
+
+def cmd_blackboard_read(h, topic: str) -> Any:
+    """Real, CLI-reachable wrapper around Blackboard.read() -- lets a
+    Workflow-tool subagent (e.g. the RCA Review stage in
+    rca-multi-agent-fusion.js) independently re-read what the Evidence
+    Fusion stage actually persisted, instead of trusting its own in-memory
+    return value blindly (CLAUDE.md: current evidence wins)."""
+    if not topic or not topic.strip():
+        raise ValueError("blackboard topic must be a non-empty string")
+    return h.blackboard.read(topic)
+
+
 # ---- CONSTRAINT -----------------------------------------------------------
 def cmd_constraint_add(h, text: str) -> Dict[str, Any]:
     entry = ControlPlane(h.root).add_constraint(text)

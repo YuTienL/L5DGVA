@@ -105,6 +105,23 @@ def main():
     pcosign.add_argument("--reviewer-id", required=True)
     pcosign.add_argument("--reviewer-confidence", default="HIGH", choices=["HIGH", "MEDIUM", "LOW"])
 
+    pblackboard = sub.add_parser("blackboard", help="Real Blackboard.write()/read() access for one topic. Exists so a "
+                                                      "Workflow-tool script (JS, no filesystem/Python access of its "
+                                                      "own) can have one of its subagents perform a genuine "
+                                                      "Blackboard write/read via a real tool call -- see "
+                                                      ".claude/workflows/rca-multi-agent-fusion.js's Evidence Fusion "
+                                                      "and RCA Review stages.")
+    pblackboard_sub = pblackboard.add_subparsers(dest="bb_cmd", required=True)
+    pbb_write = pblackboard_sub.add_parser("write", help="Write one Blackboard topic entry.")
+    pbb_write.add_argument("topic")
+    pbb_write_value = pbb_write.add_mutually_exclusive_group(required=True)
+    pbb_write_value.add_argument("--value", help="The value to write, as a JSON string.")
+    pbb_write_value.add_argument("--file", help="Path to a JSON file whose parsed content is the value to write.")
+    pbb_write.add_argument("--source", default="", help="Who/what produced this value (free text).")
+    pbb_write.add_argument("--confidence", default="HIGH", choices=["HIGH", "MEDIUM", "LOW", "UNKNOWN"])
+    pbb_read = pblackboard_sub.add_parser("read", help="Read one Blackboard topic entry (null if never written).")
+    pbb_read.add_argument("topic")
+
     plsf = sub.add_parser("lsf", help="Per-job LSF drill-down (GET /api/lsf/jobs[/<job_id>] equivalent).")
     plsf.add_argument("job_id", nargs="?", default=None,
                        help="Show a single job's detail (an error + exit 1 if no such job exists). "
@@ -470,6 +487,17 @@ def main():
             value = args.value
         entry = commands.cmd_cosign(h, args.stage, args.field_path, value, args.reviewer_id, args.reviewer_confidence)
         print(json.dumps(entry, ensure_ascii=False, indent=2))
+    elif args.cmd == "blackboard":
+        from . import commands
+        if args.bb_cmd == "write":
+            if args.file:
+                value = json.loads(Path(args.file).read_text(encoding="utf-8"))
+            else:
+                value = json.loads(args.value)
+            entry = commands.cmd_blackboard_write(h, args.topic, value, args.source, args.confidence)
+            print(json.dumps(entry, ensure_ascii=False, indent=2))
+        else:
+            print(json.dumps(commands.cmd_blackboard_read(h, args.topic), ensure_ascii=False, indent=2))
     elif args.cmd == "lsf":
         from .regression_reporter import load_jobs, get_job
         if args.job_id:
