@@ -151,6 +151,16 @@ def main():
     plsf_submit.add_argument("--options", default=None, help="Sim options string (WAVE/PA/etc) for the job snapshot.")
     plsf_submit.add_argument("--regression-id", default=None)
     plsf_submit.add_argument("--sim-log", default=None)
+    # --seed/--fsdb-path (session-snapshot-extension, 2026-09-01): structural
+    # JobState fields (see lsf_client.JobState's own docstring comment) --
+    # explicit here because job-submission time is exactly the point a
+    # caller naturally already knows the seed it is about to run with (and,
+    # if waveform is enabled per CLAUDE.md's Waveform Dump User Gate, the
+    # FSDB path it will write). Left unset (None) falls back to
+    # lsf_client.extract_seed_from_options()/extract_fsdb_path_from_options()
+    # at reconcile time if --options happens to carry one of those markers.
+    plsf_submit.add_argument("--seed", default=None, help="Simulation seed for the job snapshot.")
+    plsf_submit.add_argument("--fsdb-path", default=None, help="FSDB waveform path for the job snapshot, if known at submit time.")
 
     plsf_kill = sub.add_parser("lsf-kill", help="Real `bkill` on one job id, verifying it actually left RUN/PEND.")
     plsf_kill.add_argument("job_id", type=int)
@@ -518,9 +528,12 @@ def main():
         except lsf_client.LsfUnavailableError as e:
             print(json.dumps({"error": "LSF_UNAVAILABLE", "message": str(e)}, ensure_ascii=False))
             raise SystemExit(1)
+        seed = args.seed if args.seed is not None else lsf_client.extract_seed_from_options(args.options)
+        fsdb_path = args.fsdb_path if args.fsdb_path is not None else lsf_client.extract_fsdb_path_from_options(args.options)
         state = lsf_client.JobState(
             job_id=job_id, regression_id=args.regression_id, pattern=args.pattern,
             options=args.options, run_dir=args.run_dir, sim_log=args.sim_log,
+            seed=seed, fsdb_path=fsdb_path,
             lsf_status="PEND",
         )
         lsf_client.save_job_state(h.root, state)

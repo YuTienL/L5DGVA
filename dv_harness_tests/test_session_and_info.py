@@ -21,6 +21,7 @@ from unittest.mock import patch, MagicMock
 from dv_harness.session_snapshot import (
     save_session, restore_session, list_sessions, delete_session, RESTORE_FILES,
     SourceIdentityMismatchError, _current_git_sha,
+    SESSION_EXTRA_DIRS, SESSION_ARTIFACT_REFERENCE_DIRS,
 )
 from dv_harness.storage import StateStore
 from dv_harness.user_info import summarize_user_access, ACCESS_EVENT_TYPES
@@ -245,6 +246,147 @@ def test_save_session_excludes_memory_and_static_config():
         assert not (snap_dir / "graph").exists()
         assert "memory" not in manifest["dirs"]
         assert "graph" not in manifest["dirs"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- session_snapshot.py: SESSION_EXTRA_DIRS / SESSION_ARTIFACT_REFERENCE_DIRS
+# (session-snapshot-extension, 2026-09-01) --------------------------------
+
+def test_save_and_restore_session_round_trips_command_catalog_extra_dir():
+    assert SESSION_EXTRA_DIRS == ["generated/06_tests/command_catalog"]
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        catalog = tmp / "generated" / "06_tests" / "command_catalog"
+        catalog.mkdir(parents=True)
+        (catalog / "usb2_hs_basic.command.txt").write_text("RUN usb2_hs_basic\n", encoding="utf-8")
+
+        manifest = save_session(tmp, name="c1")
+        assert manifest["extra_dirs"] == ["generated/06_tests/command_catalog"]
+        snap_file = (tmp / ".dv-harness" / "sessions" / "c1" / "extra"
+                     / "generated" / "06_tests" / "command_catalog" / "usb2_hs_basic.command.txt")
+        assert snap_file.read_text(encoding="utf-8") == "RUN usb2_hs_basic\n"
+
+        # Mutate the live copy, then restore -- the snapshot's content comes back.
+        (catalog / "usb2_hs_basic.command.txt").write_text("RUN something_else\n", encoding="utf-8")
+        restore_session(tmp, "c1")
+        assert (catalog / "usb2_hs_basic.command.txt").read_text(encoding="utf-8") == "RUN usb2_hs_basic\n"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_excludes_project_input_command_raw():
+    # RULING 1 (session_snapshot.py): project_input/08_command is durable
+    # project SOURCE material, not current-run state -- deliberately never
+    # copied, unlike generated/06_tests/command_catalog above.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        raw_dir = tmp / "project_input" / "08_command" / "raw"
+        raw_dir.mkdir(parents=True)
+        (raw_dir / "command.txt").write_text("RUN foo\n", encoding="utf-8")
+
+        manifest = save_session(tmp, name="c1")
+        assert "project_input/08_command" not in manifest["extra_dirs"]
+        assert not (tmp / ".dv-harness" / "sessions" / "c1" / "extra" / "project_input").exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_missing_extra_dir_is_silently_skipped():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert manifest["extra_dirs"] == []
+        assert manifest["artifact_references"] == {}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_records_fsdb_and_coverage_as_hash_references_not_copies():
+    assert SESSION_ARTIFACT_REFERENCE_DIRS == {
+        "fsdb": "generated/10_runtime/waveform",
+        "coverage": "generated/11_coverage",
+    }
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        wave_dir = tmp / "generated" / "10_runtime" / "waveform"
+        wave_dir.mkdir(parents=True)
+        fsdb_bytes = b"FAKE-FSDB-BINARY-CONTENT-0123456789"
+        (wave_dir / "run1.fsdb").write_bytes(fsdb_bytes)
+
+        cov_dir = tmp / "generated" / "11_coverage"
+        cov_dir.mkdir(parents=True)
+        cov_bytes = b"FAKE-UCDB-COVERAGE-CONTENT-abcdef"
+        (cov_dir / "merged.ucdb").write_bytes(cov_bytes)
+
+        manifest = save_session(tmp, name="c1")
+        refs = manifest["artifact_references"]
+
+        import hashlib
+        fsdb_ref = refs["fsdb"][0]
+        assert fsdb_ref["path"] == "generated/10_runtime/waveform/run1.fsdb"
+        assert fsdb_ref["size"] == len(fsdb_bytes)
+        assert fsdb_ref["sha256"] == hashlib.sha256(fsdb_bytes).hexdigest()
+
+        cov_ref = refs["coverage"][0]
+        assert cov_ref["path"] == "generated/11_coverage/merged.ucdb"
+        assert cov_ref["sha256"] == hashlib.sha256(cov_bytes).hexdigest()
+
+        # REFERENCE only -- the binary content itself is never duplicated
+        # into the snapshot directory.
+        snap_dir = tmp / ".dv-harness" / "sessions" / "c1"
+        assert not (snap_dir / "extra" / "generated" / "10_runtime").exists()
+        assert not (snap_dir / "extra" / "generated" / "11_coverage").exists()
+        assert not any(snap_dir.rglob("*.fsdb"))
+        assert not any(snap_dir.rglob("*.ucdb"))
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_artifact_reference_skips_hash_for_oversized_file():
+    from dv_harness import session_snapshot as _snap
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cov_dir = tmp / "generated" / "11_coverage"
+        cov_dir.mkdir(parents=True)
+        big = b"x" * 4096
+        (cov_dir / "huge.ucdb").write_bytes(big)
+
+        with patch.object(_snap, "ARTIFACT_REFERENCE_HASH_SIZE_LIMIT_BYTES", 1024):
+            manifest = save_session(tmp, name="c1")
+
+        ref = manifest["artifact_references"]["coverage"][0]
+        assert ref["size"] == 4096
+        assert ref["sha256"] is None
+        assert "hash_skipped_reason" in ref
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_session_never_touches_artifact_reference_directories():
+    # There is nothing to restore for a reference-only entry -- restoring an
+    # older session must not delete/replace whatever FSDB/coverage the LIVE
+    # tree currently has under generated/10_runtime/waveform or
+    # generated/11_coverage.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        wave_dir = tmp / "generated" / "10_runtime" / "waveform"
+        wave_dir.mkdir(parents=True)
+        (wave_dir / "old.fsdb").write_bytes(b"old-run-bytes")
+        save_session(tmp, name="c1")
+
+        (wave_dir / "old.fsdb").unlink()
+        (wave_dir / "new.fsdb").write_bytes(b"new-run-bytes")
+
+        restore_session(tmp, "c1")
+        assert not (wave_dir / "old.fsdb").exists()
+        assert (wave_dir / "new.fsdb").exists()
     finally:
         shutil.rmtree(tmp)
 

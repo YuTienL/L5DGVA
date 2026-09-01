@@ -98,6 +98,24 @@ class HarnessState:
     overall_status: str = Status.NOT_STARTED.value
     git_sha: Optional[str] = None
     server_sha: Optional[str] = None
+    # dut_version / tb_version (session-snapshot-extension, 2026-09-01):
+    # project-wide DUT RTL / testbench build identity, alongside git_sha/
+    # server_sha above -- same CLAUDE.md "same regression batch must use the
+    # same source/build/config identity" rule, but naming the DUT/TB
+    # revision specifically rather than this harness repo's own git SHA
+    # (a DUT/TB revision is generally a separate identity from the harness
+    # engine's source tree). Real writer:
+    # DVHarness._sync_dut_tb_version_from_blackboard() (engine.py) -- a
+    # read-only derived mirror of the blackboard "verification_state"
+    # topic's results[], populated only from VERIFY stage's real,
+    # gate-enforced test_result_provenance_gate evidence (rtl_revision/
+    # tb_revision are REQUIRED non-empty per result by that gate script --
+    # see tools/verification_flow/test_result_provenance_gate.py -- so any
+    # real VERIFY PASS already carries real identity strings here, never
+    # fabricated). None until a real VERIFY result has reported one -- the
+    # honest bootstrap default, not a placeholder value.
+    dut_version: Optional[str] = None
+    tb_version: Optional[str] = None
     closure_iteration: int = 0
     findings_total: int = 0
     findings_closed: int = 0

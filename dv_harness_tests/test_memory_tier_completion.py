@@ -389,14 +389,14 @@ def test_lsf_reconcile_omits_seed_and_fsdb_path_when_not_available_at_call_site(
 
 
 def test_extract_seed_and_fsdb_helpers_directly():
-    from dv_harness.lsf_client import _extract_seed_from_options, _extract_fsdb_path_from_options
-    assert _extract_seed_from_options(None) is None
-    assert _extract_seed_from_options("+UVM_TESTNAME=foo") is None
-    assert _extract_seed_from_options("+ntb_random_seed=123") == "123"
-    assert _extract_seed_from_options("SEED: 999") == "999"
-    assert _extract_fsdb_path_from_options(None) is None
-    assert _extract_fsdb_path_from_options("+ntb_random_seed=1") is None
-    assert _extract_fsdb_path_from_options("+fsdb_file=/a/b/c.fsdb") == "/a/b/c.fsdb"
+    from dv_harness.lsf_client import extract_seed_from_options, extract_fsdb_path_from_options
+    assert extract_seed_from_options(None) is None
+    assert extract_seed_from_options("+UVM_TESTNAME=foo") is None
+    assert extract_seed_from_options("+ntb_random_seed=123") == "123"
+    assert extract_seed_from_options("SEED: 999") == "999"
+    assert extract_fsdb_path_from_options(None) is None
+    assert extract_fsdb_path_from_options("+ntb_random_seed=1") is None
+    assert extract_fsdb_path_from_options("+fsdb_file=/a/b/c.fsdb") == "/a/b/c.fsdb"
 
 
 def test_preexisting_engineering_memory_and_corner_case_behavior_is_unchanged():

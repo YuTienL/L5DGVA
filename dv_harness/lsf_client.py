@@ -65,6 +65,24 @@ class JobState:
     options: Optional[str] = None
     run_dir: Optional[str] = None
     sim_log: Optional[str] = None
+    # seed / fsdb_path (session-snapshot-extension, 2026-09-01): promoted to
+    # first-class fields closing the RESIDUAL GAP the memory-engine-schema-
+    # completion audit (2026-09-01, see this module's own
+    # extract_seed_from_options/extract_fsdb_path_from_options and
+    # _write_job_tier_memory_on_terminal_reconcile below) explicitly left
+    # open -- "JobState has no dedicated seed/fsdb_path field". Real writers:
+    # cli.py's `lsf-submit` (--seed/--fsdb-path, explicit at the point a
+    # caller submits a job -- the moment a seed is naturally known -- or
+    # auto-extracted from --options text when omitted) and
+    # register_external_job() below (for a job submitted outside this
+    # module's own bsub_submit(), e.g. a generated environment's own
+    # Makefile-native `bsub`/lsf_regress.sh, where a caller wrapping that
+    # path already knows the seed it assigned). Optional and additive: a
+    # JobState loaded from an older on-disk record with neither key simply
+    # gets None here (load_job_state()'s _JOB_STATE_FIELDS filter already
+    # handles an absent key exactly like every other optional field).
+    seed: Optional[str] = None
+    fsdb_path: Optional[str] = None
     lsf_status: str = "UNKNOWN"
     sim_status: str = "UNKNOWN"
     last_log_offset: int = 0
@@ -321,15 +339,24 @@ def bkill_job(job_id: int, *, verify: bool = True, poll_timeout_s: int = 30) -> 
 
 
 def register_external_job(root: Path, job_id: int, *, log_path: str,
-                           pattern: Optional[str] = None) -> None:
+                           pattern: Optional[str] = None,
+                           seed: Optional[str] = None,
+                           fsdb_path: Optional[str] = None) -> None:
     """Register a job that was submitted OUTSIDE this module's own
     bsub_submit() -- e.g. a generated environment's own Makefile-native
     `bsub` -- so reconcile_batch()/save_job_state() treat it identically to
     a bsub_submit()-originated job. Writes a fresh JobState with
     lsf_status="UNKNOWN" (the next reconcile_batch() call fills in the real
-    status from a live bjobs poll)."""
+    status from a live bjobs poll).
+
+    `seed`/`fsdb_path` (session-snapshot-extension, 2026-09-01): optional,
+    structural pass-throughs onto the new JobState fields -- populated only
+    when the caller wrapping the external submission genuinely knows them
+    (e.g. the same value it assigned to the generated environment's own
+    lsf_regress.sh $SEED before invoking it), never guessed here."""
     jid = _validate_job_id(job_id)
-    state = JobState(job_id=jid, pattern=pattern, sim_log=log_path)
+    state = JobState(job_id=jid, pattern=pattern, sim_log=log_path,
+                      seed=seed, fsdb_path=fsdb_path)
     save_job_state(root, state)
 
 
@@ -529,34 +556,34 @@ def reconcile_job(state: JobState, live_bjobs_record: dict, *,
     return state, discrepancies
 
 
-# seed/fsdb_path extraction (memory-engine-schema-completion audit,
-# 2026-09-01): JobState/.dv-harness/lsf/job_state_schema.json have NO
-# dedicated seed or fsdb_path field, and neither bsub_submit() nor the
-# `dv-harness lsf-submit` CLI accept them as structured arguments -- the
-# only real, already-populated field that can ever carry this information
-# is JobState.options, the free-text string a caller passes straight
-# through to the underlying `bsub`/simulator invocation (e.g.
-# "+ntb_random_seed=1234 +fsdb_file=/path/run.fsdb"). These two regexes
-# extract a value ONLY when the caller's own options text genuinely
+# seed/fsdb_path FALLBACK extraction (memory-engine-schema-completion audit,
+# 2026-09-01; JobState/job_state_schema.json gained first-class seed/
+# fsdb_path fields in the session-snapshot-extension follow-up the same
+# day -- see JobState's own docstring comment). These two regexes remain as
+# a fallback for a JobState whose structural field was never populated
+# (an older on-disk record, or a caller that never passed --seed/
+# --fsdb-path/register_external_job(seed=...)) but whose free-text
+# `options` -- the string a caller passes straight through to the
+# underlying `bsub`/simulator invocation, e.g.
+# "+ntb_random_seed=1234 +fsdb_file=/path/run.fsdb" -- still happens to
+# carry one of these markers. Extracts a value ONLY when the text genuinely
 # contains one of these real, already-documented markers (the seed pattern
 # mirrors gates.py's own log-scrubbing regex for the same marker vocabulary;
 # the fsdb pattern mirrors the uvm_generator Makefile template's own
 # `+fsdb_file=$(PAT_FSDB)` RUN_FLAGS convention) -- never guessed, never a
-# fabricated default. See _write_job_tier_memory_on_terminal_reconcile's
-# docstring for the honest residual gap this leaves for jobs whose options
-# text carries neither marker.
+# fabricated default.
 _SEED_IN_OPTIONS_RE = re.compile(r"\b(?:ntb_random_)?seed\s*[:=]\s*(\d+)\b", re.IGNORECASE)
 _FSDB_FILE_IN_OPTIONS_RE = re.compile(r"\+fsdb_file[:=](\S+)", re.IGNORECASE)
 
 
-def _extract_seed_from_options(options: Optional[str]) -> Optional[str]:
+def extract_seed_from_options(options: Optional[str]) -> Optional[str]:
     if not options:
         return None
     m = _SEED_IN_OPTIONS_RE.search(options)
     return m.group(1) if m else None
 
 
-def _extract_fsdb_path_from_options(options: Optional[str]) -> Optional[str]:
+def extract_fsdb_path_from_options(options: Optional[str]) -> Optional[str]:
     if not options:
         return None
     m = _FSDB_FILE_IN_OPTIONS_RE.search(options)
@@ -599,26 +626,24 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
     index.json) instead of minting a new one -- no store-API change needed,
     this only supplies the id the existing upsert behavior already keys on.
 
-    SEED/FSDB_PATH (memory-engine-schema-completion audit, 2026-09-01): the
-    claimed Job Memory contract also names "seed" and "FSDB" fields that
-    this record never carried. `_extract_seed_from_options`/
-    `_extract_fsdb_path_from_options` above pull them out of
-    state.options -- the one real field on JobState that CAN carry this
-    text -- when a caller's own options string genuinely contains one of
-    the documented markers. RESIDUAL GAP, stated honestly rather than
-    papered over: JobState has no first-class seed/fsdb_path field, and
-    most real call sites (register_external_job(), or `lsf-submit` invoked
-    without an explicit +ntb_random_seed=/+fsdb_file= in --options) never
-    populate options with either marker at all -- for those jobs neither
-    key is genuinely available at this call site. Rather than writing
-    `"seed": None` / `"fsdb_path": None` (a null placeholder that LOOKS
-    like the schema captured this data when it did not), the keys are
-    simply omitted from the record when extraction finds nothing, so a
-    reader can tell "not captured" apart from "captured as null". Fully
-    closing this gap would mean adding real seed/fsdb_path fields to
-    JobState/job_state_schema.json and threading them through
-    bsub_submit()/the `lsf-submit` CLI as first-class structured
-    arguments -- out of scope for this change.
+    SEED/FSDB_PATH (memory-engine-schema-completion audit, 2026-09-01;
+    CLOSED by session-snapshot-extension, 2026-09-01): JobState now has
+    first-class `seed`/`fsdb_path` fields (see JobState's own docstring
+    comment), populated at submission time by cli.py's `lsf-submit`
+    (explicit --seed/--fsdb-path, or auto-extracted from --options) and by
+    register_external_job()'s optional kwargs. Those first-class fields are
+    used here when present; `extract_seed_from_options`/
+    `extract_fsdb_path_from_options` remain as a fallback ONLY for a
+    JobState that never got the structural field populated (an older
+    on-disk record predating this change, or a caller of
+    register_external_job()/`lsf-submit` that genuinely never supplied
+    either) but whose free-text `options` still happens to carry one of the
+    documented markers. Rather than writing `"seed": None` /
+    `"fsdb_path": None` (a null placeholder that LOOKS like the schema
+    captured this data when it did not), the keys are simply omitted from
+    the record when neither the field nor the fallback extraction finds
+    anything, so a reader can tell "not captured" apart from "captured as
+    null".
     """
     if not any(d.field == "sim_status" and d.severity == "CRITICAL" for d in discrepancies):
         return
@@ -639,10 +664,10 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
         "uvm_fatal_count": state.uvm_fatal_count,
         "terminal_signature": state.terminal_signature,
     }
-    seed = _extract_seed_from_options(state.options)
+    seed = state.seed or extract_seed_from_options(state.options)
     if seed is not None:
         record["seed"] = seed
-    fsdb_path = _extract_fsdb_path_from_options(state.options)
+    fsdb_path = state.fsdb_path or extract_fsdb_path_from_options(state.options)
     if fsdb_path is not None:
         record["fsdb_path"] = fsdb_path
     try:

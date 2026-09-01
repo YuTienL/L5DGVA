@@ -5,6 +5,8 @@
   "options": null,
   "run_dir": null,
   "sim_log": null,
+  "seed": null,
+  "fsdb_path": null,
   "lsf_status": "UNKNOWN",
   "sim_status": "UNKNOWN",
   "last_log_offset": 0,

@@ -442,10 +442,24 @@ class DVHarness:
         fabricate a placeholder now."""
         project = self._project_blackboard_value()
         subsystem_terms = list(project.get("protocols") or []) + list(project.get("selected_subsystems") or [])
-        verify = self.blackboard.read("verify")
+        # BUG FIX (session-snapshot-extension, 2026-09-01): this used to read
+        # blackboard topic "verify", which nothing in this engine ever writes
+        # -- VERIFY's own node.blackboard_write names "verification_state"
+        # (see _bb_verify()/STAGE_BLACKBOARD_WRITERS above, and
+        # .dv-harness/graph/main_graph.json's VERIFY node), and that write
+        # already puts {simulation_passed, results, ...} directly at the
+        # topic's value (not nested one level deeper under a
+        # "verification_state" key). Reading the never-written "verify"
+        # topic made failing_test_name below silently always None regardless
+        # of real VERIFY results -- no test exercised this path end-to-end
+        # (test_protocol_router.py only calls resolve_protocol() directly
+        # with a synthetic evidence dict), so it went uncaught until this
+        # audit. Fixed to read the topic that is actually written, with the
+        # correct (non-nested) shape.
+        verify = self.blackboard.read("verification_state")
         verify_value = verify.get("value") if isinstance(verify, dict) else None
         verify_value = verify_value if isinstance(verify_value, dict) else {}
-        results = ((verify_value.get("verification_state") or {}).get("results")) or []
+        results = verify_value.get("results") or []
         failing_test_name = next(
             (r.get("testcase_id") for r in results
              if isinstance(r, dict) and r.get("result") not in (None, "PASS")),
@@ -1033,6 +1047,39 @@ class DVHarness:
             self.state.project = target_name
             self.store.save(self.state)
 
+    def _sync_dut_tb_version_from_blackboard(self) -> None:
+        """state.dut_version/state.tb_version (models.py) are read-only
+        derived views of the blackboard "verification_state" topic's
+        results[] -- see models.py's HarnessState.dut_version docstring for
+        the full ruling. VERIFY's test_result_provenance_gate REQUIRES
+        rtl_revision/tb_revision to be non-empty on every result it accepts
+        (tools/verification_flow/test_result_provenance_gate.py's REQ list),
+        so any results[] this reads is already gate-validated, real evidence
+        -- this function never invents a value itself. Takes the LAST
+        (most recently reported) result and only overwrites a field when
+        that result actually carries a non-empty value for it, mirroring
+        _sync_project_from_blackboard()'s own "never blank out a known
+        value with an unknown one" behavior above."""
+        payload = self.blackboard.read("verification_state")
+        value = payload.get("value") if isinstance(payload, dict) else None
+        results = value.get("results") if isinstance(value, dict) else None
+        if not isinstance(results, list) or not results:
+            return
+        last = results[-1]
+        if not isinstance(last, dict):
+            return
+        changed = False
+        rtl_revision = last.get("rtl_revision")
+        if rtl_revision:
+            self.state.dut_version = rtl_revision
+            changed = True
+        tb_revision = last.get("tb_revision")
+        if tb_revision:
+            self.state.tb_version = tb_revision
+            changed = True
+        if changed:
+            self.store.save(self.state)
+
     def _write_blackboard_from_evidence(self, node, stage: str, evidence: dict, result) -> None:
         writer = STAGE_BLACKBOARD_WRITERS.get(stage)
         values = writer(evidence, stage, result) if writer else _bb_generic_fallback(node, evidence, stage, result)
@@ -1051,6 +1098,8 @@ class DVHarness:
                 self.blackboard.write(topic, value, source=stage)
         if "project" in node.blackboard_write:
             self._sync_project_from_blackboard()
+        if "verification_state" in node.blackboard_write:
+            self._sync_dut_tb_version_from_blackboard()
 
     def run_stage(self, user_goal: str, stage: Optional[str] = None):
         stage = stage or self.state.current_stage
@@ -1120,7 +1169,7 @@ class DVHarness:
             # unlike self.router.resolve(node) above (a static per-node dict
             # lookup, see router.py's own NOTICE), these two calls genuinely
             # depend on THIS run's own evidence (user_goal text, blackboard
-            # "project"/"verify" topics, real git diff, real subsystem
+            # "project"/"verification_state" topics, real git diff, real subsystem
             # registry) and can pick a different real decision run-to-run.
             # Folded into route_info (and therefore into _build_plan_section's
             # prompt text below) so this is load-bearing, not a disconnected

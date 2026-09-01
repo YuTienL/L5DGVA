@@ -4778,6 +4778,105 @@ def test_project_model_topic_is_a_different_shape_and_does_not_feed_state_projec
         shutil.rmtree(tmp)
 
 
+# dut_version/tb_version (session-snapshot-extension, 2026-09-01): a
+# read-only derived view of blackboard "verification_state".results[],
+# mirroring state.project's own _sync_project_from_blackboard() pattern
+# above. Real source: VERIFY's test_result_provenance_gate evidence, which
+# REQUIRES non-empty rtl_revision/tb_revision per result
+# (tools/verification_flow/test_result_provenance_gate.py) -- so this is
+# always gate-validated evidence, never fabricated by the sync itself.
+
+def test_verify_blackboard_write_syncs_dut_and_tb_version_as_derived_view():
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        assert h.state.dut_version is None
+        assert h.state.tb_version is None
+
+        node = h.graph.nodes["VERIFY"]
+        assert node.blackboard_write == ["verification_state"]
+        evidence = {
+            "simulation_semantic_validation_gate": {"simulation_passed": True},
+            "test_result_provenance_gate": {"results": [
+                {"testcase_id": "t1", "run_id": "r1", "rtl_revision": "rtl-v7",
+                 "tb_revision": "tb-v3", "result": "PASS"},
+            ]},
+            "false_pass_resistance_gate": {"oracle_independent": True},
+        }
+        fake_result = AgentResult(ok=True, text="verify complete", raw={}, session_id=None)
+        h._write_blackboard_from_evidence(node, "VERIFY", evidence, fake_result)
+
+        # Blackboard "verification_state" holds VERIFY's own results record.
+        bb_verify = h.blackboard.read("verification_state")["value"]
+        assert bb_verify["results"][0]["rtl_revision"] == "rtl-v7"
+
+        # state.dut_version/tb_version are derived FROM it.
+        assert h.state.dut_version == "rtl-v7"
+        assert h.state.tb_version == "tb-v3"
+
+        # Reload proves it is a synced, persisted view, not a one-off
+        # in-memory assignment.
+        h2 = h.__class__(tmp)
+        assert h2.state.dut_version == "rtl-v7"
+        assert h2.state.tb_version == "tb-v3"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_dut_tb_version_takes_last_result_and_never_blanks_a_known_value():
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        node = h.graph.nodes["VERIFY"]
+        fake_result = AgentResult(ok=True, text="", raw={}, session_id=None)
+
+        h._write_blackboard_from_evidence(node, "VERIFY", {
+            "test_result_provenance_gate": {"results": [
+                {"testcase_id": "t1", "run_id": "r1", "rtl_revision": "rtl-v1", "tb_revision": "tb-v1"},
+                {"testcase_id": "t2", "run_id": "r2", "rtl_revision": "rtl-v2", "tb_revision": "tb-v2"},
+            ]},
+        }, fake_result)
+        assert h.state.dut_version == "rtl-v2"
+        assert h.state.tb_version == "tb-v2"
+
+        # A later write whose latest result carries an empty rtl_revision
+        # must never blank out the already-known value -- same "never
+        # regress a known value with an unknown one" rule
+        # _sync_project_from_blackboard() already follows.
+        h._write_blackboard_from_evidence(node, "VERIFY", {
+            "test_result_provenance_gate": {"results": [
+                {"testcase_id": "t3", "run_id": "r3", "rtl_revision": "", "tb_revision": None},
+            ]},
+        }, fake_result)
+        assert h.state.dut_version == "rtl-v2"
+        assert h.state.tb_version == "tb-v2"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_protocol_router_evidence_reads_the_topic_verify_actually_writes():
+    # BUG FIX (session-snapshot-extension, 2026-09-01): _protocol_router_
+    # evidence() used to read blackboard topic "verify", which nothing ever
+    # writes (VERIFY's real topic is "verification_state") -- failing_test_
+    # name was silently always None. Confirms the fix: a real VERIFY write
+    # with a non-PASS result is now actually visible to protocol_router.
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        node = h.graph.nodes["VERIFY"]
+        h._write_blackboard_from_evidence(node, "VERIFY", {
+            "test_result_provenance_gate": {"results": [
+                {"testcase_id": "test_pcie_ltssm_gen4_link_train", "run_id": "r1",
+                 "rtl_revision": "a", "tb_revision": "b", "result": "FAIL"},
+            ]},
+        }, AgentResult(ok=True, text="", raw={}, session_id=None))
+
+        ev = h._protocol_router_evidence("investigate the failure")
+        assert ev["failing_test_name"] == "test_pcie_ltssm_gen4_link_train"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_remote_execution_provenance_gate_blocks_exit_code_mismatch_at_build(tmp_path):
     transcript = tmp_path / "build_transcript.txt"
     transcript.write_text("REMOTE_HOST=host-b\nEXIT_CODE=2\nSTATUS=FAIL\ncompile error\n", encoding="utf-8")

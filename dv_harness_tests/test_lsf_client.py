@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -584,3 +585,140 @@ class TestRegisterExternalJob:
         state, discrepancies = result[2000]
         assert state.lsf_status == "DONE"
         assert any(d.field == "sim_status" and d.severity == "CRITICAL" for d in discrepancies)
+
+    def test_seed_and_fsdb_path_optional_and_pass_through(self):
+        # session-snapshot-extension (2026-09-01): register_external_job()
+        # gained optional seed/fsdb_path kwargs alongside JobState's new
+        # first-class fields -- verify the round trip end to end.
+        lsf_client.register_external_job(self.tmp, 3000, log_path="/proj/sim/run/qux/sim.log",
+                                          pattern="qux", seed="4242", fsdb_path="/proj/run/fsdb/3000.fsdb")
+        loaded = lsf_client.load_job_state(self.tmp, 3000)
+        assert loaded.seed == "4242"
+        assert loaded.fsdb_path == "/proj/run/fsdb/3000.fsdb"
+
+    def test_seed_and_fsdb_path_default_none_when_omitted(self):
+        lsf_client.register_external_job(self.tmp, 3001, log_path="/proj/sim/run/quux/sim.log")
+        loaded = lsf_client.load_job_state(self.tmp, 3001)
+        assert loaded.seed is None
+        assert loaded.fsdb_path is None
+
+
+class TestJobStateSeedFsdbPathFields:
+    """JobState.seed/JobState.fsdb_path (session-snapshot-extension,
+    2026-09-01): first-class fields closing the residual gap the
+    memory-engine-schema-completion audit left open (previously only
+    extractable, best-effort, from JobState.options free text)."""
+
+    def setup_method(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_save_and_load_round_trips_seed_and_fsdb_path(self):
+        state = lsf_client.JobState(job_id=4100, pattern="usb2_hs_basic",
+                                     seed="99887766", fsdb_path="/proj/run/fsdb/4100.fsdb")
+        lsf_client.save_job_state(self.tmp, state)
+        loaded = lsf_client.load_job_state(self.tmp, 4100)
+        assert loaded.seed == "99887766"
+        assert loaded.fsdb_path == "/proj/run/fsdb/4100.fsdb"
+
+    def test_default_is_none_and_schema_file_documents_both_keys(self):
+        state = lsf_client.JobState(job_id=4101)
+        assert state.seed is None
+        assert state.fsdb_path is None
+        # The module's own docstring promises field names follow
+        # .dv-harness/lsf/job_state_schema.json exactly -- keep the live repo's
+        # copy of that schema in sync with the dataclass, not just this
+        # session's dogfood repo instance.
+        root = Path(__file__).resolve().parents[1]
+        schema = json.loads((root / ".dv-harness" / "lsf" / "job_state_schema.json").read_text(encoding="utf-8"))
+        assert "seed" in schema
+        assert "fsdb_path" in schema
+
+    def test_first_class_field_preferred_over_options_extraction_in_memory_write(self):
+        # A JobState with BOTH a structural seed/fsdb_path AND an options
+        # string that would extract to a DIFFERENT value: the first-class
+        # field must win (it is the more specific, explicitly-supplied
+        # value), the options-text fallback must never override it.
+        from dv_harness.memory import JobMemoryStore
+        state = lsf_client.JobState(
+            job_id=4102, lsf_status="RUN", sim_status="UNKNOWN", pattern="usb2_hs_basic",
+            seed="111", fsdb_path="/real/4102.fsdb",
+            options="+ntb_random_seed=999999 +fsdb_file=/from_options/4102.fsdb")
+        lsf_client.save_job_state(self.tmp, state)
+        payload = json.dumps({"RECORDS": [{"JOBID": "4102", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(self.tmp, [4102])
+        job_store = JobMemoryStore(self.tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job"]
+        rec = job_store.get(rows[0]["memory_id"])
+        assert rec["seed"] == "111"
+        assert rec["fsdb_path"] == "/real/4102.fsdb"
+
+    def test_options_extraction_fallback_still_works_when_first_class_field_absent(self):
+        # Legacy-shaped record (options-only, exactly like a JobState saved
+        # before this change): the fallback extraction must still fire.
+        from dv_harness.memory import JobMemoryStore
+        state = lsf_client.JobState(
+            job_id=4103, lsf_status="RUN", sim_status="UNKNOWN", pattern="usb2_hs_basic",
+            options="+ntb_random_seed=555 +fsdb_file=/legacy/4103.fsdb")
+        lsf_client.save_job_state(self.tmp, state)
+        payload = json.dumps({"RECORDS": [{"JOBID": "4103", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(self.tmp, [4103])
+        job_store = JobMemoryStore(self.tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job"]
+        rec = job_store.get(rows[0]["memory_id"])
+        assert rec["seed"] == "555"
+        assert rec["fsdb_path"] == "/legacy/4103.fsdb"
+
+
+class TestCliLsfSubmitSeedFsdbPath:
+    """`dv-harness lsf-submit --seed/--fsdb-path` (session-snapshot-extension,
+    2026-09-01): the real writer for JobState.seed/JobState.fsdb_path at the
+    point a caller submits a job -- exercised in-process (bsub_submit
+    patched out) rather than via subprocess, matching
+    test_active_stages_read_sites.py's own `_run_cli` pattern."""
+
+    def setup_method(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run_cli(self, monkeypatch, argv):
+        from dv_harness import cli
+        monkeypatch.setattr(sys, "argv", ["dv-harness"] + argv)
+        cli.main()
+
+    def test_explicit_seed_and_fsdb_path_flags_populate_job_state(self, monkeypatch):
+        monkeypatch.setattr(lsf_client, "bsub_submit", lambda *a, **k: 5001)
+        self._run_cli(monkeypatch, [
+            "--project-root", str(self.tmp), "lsf-submit", "echo hi",
+            "--queue", "normal", "--seed", "31337", "--fsdb-path", "/proj/run/fsdb/5001.fsdb",
+        ])
+        loaded = lsf_client.load_job_state(self.tmp, 5001)
+        assert loaded.seed == "31337"
+        assert loaded.fsdb_path == "/proj/run/fsdb/5001.fsdb"
+
+    def test_omitted_seed_and_fsdb_path_fall_back_to_options_extraction(self, monkeypatch):
+        monkeypatch.setattr(lsf_client, "bsub_submit", lambda *a, **k: 5002)
+        self._run_cli(monkeypatch, [
+            "--project-root", str(self.tmp), "lsf-submit", "echo hi",
+            "--queue", "normal", "--options", "+ntb_random_seed=2468 +fsdb_file=/proj/run/fsdb/5002.fsdb",
+        ])
+        loaded = lsf_client.load_job_state(self.tmp, 5002)
+        assert loaded.seed == "2468"
+        assert loaded.fsdb_path == "/proj/run/fsdb/5002.fsdb"
+
+    def test_no_seed_no_options_marker_leaves_fields_none(self, monkeypatch):
+        monkeypatch.setattr(lsf_client, "bsub_submit", lambda *a, **k: 5003)
+        self._run_cli(monkeypatch, [
+            "--project-root", str(self.tmp), "lsf-submit", "echo hi", "--queue", "normal",
+        ])
+        loaded = lsf_client.load_job_state(self.tmp, 5003)
+        assert loaded.seed is None
+        assert loaded.fsdb_path is None
