@@ -1026,6 +1026,29 @@ FETCH_ONLY/MERGE/REBASE/FAST_FORWARD，不得使用 reset --hard/clean -f 等破
 """,
 Stage.GIT_PUSH.value: """
 完成 diff review、secret/artifact gate、commit 與 push，記錄 exact commit SHA。禁止 force push。
+
+本 stage 還有一個獨立的 hard gate，確保「第一輪 workflow 發現的問題全部修完」之後，
+還要完整跑過一次第二輪詳細 workflow 分析、確認真的乾淨，才准許往下推進到
+push→build→verify 這條 pipeline（不是修完第一輪就直接 push）。回覆結尾附上：
+
+```dv-harness-evidence:workflow_second_pass_clean_gate
+{"first_workflow_complete": true, "all_first_pass_issues_fixed": true,
+ "second_detailed_workflow_run": true, "remaining_issue_count": 0,
+ "push_build_verify_run_requested": false, "clean_second_pass": true}
+```
+
+（first_workflow_complete 必須是 true，代表第一輪 workflow 分析真的跑完，不是還在進行中
+（否則 FAIL：FIRST_WORKFLOW_NOT_COMPLETE）；all_first_pass_issues_fixed 必須是 true，代表
+第一輪發現的所有 issue 都已經修完，不能只修一部分就宣稱完成（否則 FAIL：
+NOT_ALL_FIRST_PASS_ISSUES_FIXED）；second_detailed_workflow_run 必須是 true，代表真的完整
+再跑過一次詳細的第二輪 workflow 分析，不能省略這一步直接宣稱乾淨（否則 FAIL：
+SECOND_WORKFLOW_ANALYSIS_REQUIRED）；remaining_issue_count 必須是 0（省略時預設也是 0），
+代表第二輪分析後已經沒有殘留 issue，如實填入第二輪實際發現的殘留數量，大於 0 會直接 FAIL
+（SECOND_PASS_STILL_HAS_ISSUES，並回報這個殘留數量）；push_build_verify_run_requested 用來
+表示這次是否要緊接著請求進到 push→build→verify pipeline，本階段若還不打算立刻推進，可以
+省略或填 false；一旦填 true，就必須同時把 clean_second_pass 明確填成 true，代表第二輪確實
+乾淨、可以放行進到下一段 pipeline，否則會被判定「在還沒確認第二輪乾淨之前就要推進」
+（FAIL：PROMOTION_BEFORE_CLEAN_SECOND_PASS）。）
 """,
 Stage.SERVER_SYNC.value: """
 在 Linux Server 同步並確認 HEAD SHA = expected pushed SHA；submodule SHA 也需一致。
