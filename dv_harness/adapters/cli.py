@@ -105,9 +105,27 @@ class ClaudeCLIAdapter(ClaudeAdapter):
         for tool in disallowed:
             cmd += ["--disallowedTools", tool]
 
-        p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
-        stdout = p.stdout.strip()
-        stderr = p.stderr.strip()
+        # HONEST BUG THIS FIXES (found via the same real `dv-harness run-stage`
+        # run this session that found the shutil.which() bug above, once that
+        # fix let the subprocess actually launch): text=True without an
+        # explicit `encoding` makes Python decode the child's stdout/stderr
+        # using locale.getpreferredencoding() -- on this Windows dev machine
+        # (config.json's policy.language is "zh-TW") that resolves to cp950
+        # (Traditional Chinese), not UTF-8. The real `claude` CLI's own
+        # --output-format json output is UTF-8 and contains real multi-byte
+        # sequences cp950 cannot decode, crashing subprocess.run()'s internal
+        # stderr-reader thread with UnicodeDecodeError -- which leaves
+        # p.stderr as None, so the very next line's unconditional
+        # `.strip()` call then raised AttributeError on top of that. Forcing
+        # encoding="utf-8" with errors="replace" (never silently drop bytes,
+        # but never crash the whole stage on one bad byte either) fixes the
+        # decode; `p.stdout or ""` / `p.stderr or ""` guards the (now
+        # unlikely, but still theoretically possible on other platforms)
+        # None case defensively rather than trusting text mode never fails.
+        p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True,
+                            encoding="utf-8", errors="replace")
+        stdout = (p.stdout or "").strip()
+        stderr = (p.stderr or "").strip()
         raw: Dict[str, Any] = {"returncode": p.returncode, "stderr": stderr}
 
         session_id = None
