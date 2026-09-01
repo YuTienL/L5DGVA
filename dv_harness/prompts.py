@@ -513,6 +513,38 @@ risk/observability，不得只是分類、不排優先序。
 ```
 （risk_factors 只填實際適用的項目；分數越高風險越高，harness 只驗證證據格式，
 不會自動判定分數是否合理——corner 選擇的合理性仍需你自己判斷。）
+
+本 stage 另外還有一個獨立的 hard gate 專門檢查 Reset/Power/CDC 這三類 corner 是否真的規劃到位——
+這三類在 12 分類裡最容易被「只列出來但沒有真的收斂成可執行測試」，所以另外用
+`reset_power_cdc_corner_gate` 逐條檢查每個 corner 有沒有掛上 requirement/mechanism/test，
+以及 CDC/Reset 各自的專屬完整性欄位，缺一個都會 FAIL（找到真實案例：agent 只附了
+corner_risk_rank 一個，這個沒附，導致 SOC_SCENARIO_PLANNER 重試多輪都停在同樣的
+GATE_FAIL/MISSING_EVIDENCE）。回覆結尾另外附上：
+
+```dv-harness-evidence:reset_power_cdc_corner_gate
+{"corner_items": [
+  {"corner_id": "...", "domain": "RESET", "requirement_ids": ["..."],
+   "mechanism_ids": ["..."], "testcase_ids": ["..."],
+   "async_or_partial_reset_covered": true},
+  {"corner_id": "...", "domain": "CLOCK", "requirement_ids": ["..."],
+   "mechanism_ids": ["..."], "testcase_ids": ["..."]},
+  {"corner_id": "...", "domain": "CDC", "requirement_ids": ["..."],
+   "mechanism_ids": ["..."], "testcase_ids": ["..."],
+   "cdc_observation_or_assertion": "..."}
+], "power_aware_design": false}
+```
+（corner_items 裡的 domain 至少要涵蓋 RESET、CLOCK、CDC 三種（大小寫需完全相符），
+缺任何一種會被判 MISSING_MANDATORY_CORNER_DOMAINS；每一筆 corner_items 都要非空的
+requirement_ids/mechanism_ids/testcase_ids 三個陣列，分別代表這個 corner 回扣到哪個
+vPlan requirement、靠哪個驗證機制觀察、由哪個 testcase 實際覆蓋，缺任一項會依序被判
+CORNER_WITHOUT_REQUIREMENT/CORNER_WITHOUT_MECHANISM/CORNER_WITHOUT_TEST；domain 是
+"CDC" 的項目還要額外填非空的 cdc_observation_or_assertion（說明用什麼 observation 或
+assertion 抓 CDC 違規），沒填會被判 CDC_WITHOUT_OBSERVATION_OR_ASSERTION；domain 是
+"RESET" 的項目要額外填 truthy 的 async_or_partial_reset_covered（確認 async reset 或
+partial reset 情境有被涵蓋），沒填會被判 RESET_CORNER_INCOMPLETE；power_aware_design
+如實填這個 DUT 是不是 power-aware 設計——是 true 的話，corner_items 裡至少要有一筆
+domain 是 "POWER" 的項目，否則會被判 POWER_AWARE_WITHOUT_POWER_CORNERS，不是
+power-aware 設計時填 false 即可，不需要硬湊 POWER corner。）
 """,
 Stage.INFRASTRUCTURE_AUDIT.value: """
 詳細 audit scoreboard、DMA scoreboard、performance calculator、coverage collector 的
