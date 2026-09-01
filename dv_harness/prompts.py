@@ -2341,6 +2341,88 @@ Feature Continuity（跨 package revision 的既有能力/檔案不能在這次 
 repo root）；真正的 repo root 由 harness 自己帶入 --root，不接受你在 block 裡另外
 指定，避免路徑被導向別處而繞過檢查。任何一個路徑在目前的 repo 裡找不到，就會
 FAIL FEATURE_CONTINUITY_REGRESSION，列出缺的路徑。）
+
+本 stage 另外還有五個獨立的 hard gate，也必須各自附上 evidence block，缺任何一個都會讓整個
+stage 卡在 GATE_FAIL/MISSING_EVIDENCE（跟上面 INTAKE/DISCOVERY 同一種真實案例：agent 的
+分析內容本身完整正確，卻只因為沒附這幾個 gate 的 evidence 卡住重試）。前兩個
+（closed_loop_promotion_gate/promotion_rollback_gate）確認「整條 promotion chain 真的閉環、
+而且一旦已經 PROMOTED 之後又出現該 rollback 的觸發條件，真的有做 rollback」；接下來兩個
+（qualification_matrix_consistency_gate/rollback_consistency_gate）分別確認 qualification
+matrix 本身數字沒有自相矛盾、rollback 這個動作本身也是自洽的（不會一邊說已經 rollback、
+一邊又還停在 PROMOTED）；最後一個（release_reproducibility_gate）確認這次要 promote 出去
+的 release 真的可以被重建，不是只有一個結論、沒有任何可回溯的組成資訊：
+
+```dv-harness-evidence:closed_loop_promotion_gate
+{"passed_stages": ["INTAKE_READY", "VPLAN_READY", "ARCHITECTURE_READY", "MECHANISM_READY",
+  "TESTS_READY", "EXECUTION_EVIDENCE_READY", "COVERAGE_QUALITY_READY"],
+ "failure_detected": false,
+ "expert_feedback_reviewed": true, "experience_capture_status": "CAPTURED"}
+```
+（"passed_stages" 必須完整涵蓋這七個前置 stage
+（INTAKE_READY/VPLAN_READY/ARCHITECTURE_READY/MECHANISM_READY/TESTS_READY/
+EXECUTION_EVIDENCE_READY/COVERAGE_QUALITY_READY），少任何一個會被列進 "missing" 並判
+MISSING_STAGES；若 "failure_detected" 是 true，還要額外附上 "root_cause"（必須同時填
+classification/first_bad_event/causal_chain/supporting_evidence/counter_evidence/confidence
+六個欄位，缺任何一個判 FAILURE_WITHOUT_VALID_RCA）、"calibration_or_fix_applied": true
+（否則判 FAILURE_WITHOUT_FIX_OR_CALIBRATION）、以及 "rerun_evidence"（非空，否則判
+FIX_WITHOUT_RERUN_EVIDENCE）；沒有 active failure 時（如上例 "failure_detected": false）
+這三個欄位可以省略。"expert_feedback_reviewed" 必須是 true（否則判
+NO_EXPERT_FEEDBACK_REVIEW）；"experience_capture_status" 必須是 "CAPTURED" 或
+"NOT_APPLICABLE" 其中之一（其他值或留空判 EXPERIENCE_LOOP_NOT_CLOSED）。）
+
+```dv-harness-evidence:promotion_rollback_gate
+{"promotion_state": "PROMOTED", "detected_triggers": [], "rollback_applied": false}
+```
+（"promotion_state" 若不是 "PROMOTED"，gate 直接 PASS（NOT_PROMOTED），不檢查其餘欄位；
+是 "PROMOTED" 時，才看 "detected_triggers" 這個清單有沒有命中
+STALE_EVIDENCE/NEW_CRITICAL_FAILURE/COVERAGE_REGRESSION/INVALID_WAIVER/
+SUBSYSTEM_RELEASE_CHANGED 這五種 rollback 觸發條件——如實反映實際偵測到的觸發條件，不要
+為了省事都填空陣列；一旦命中其中任何一個，"rollback_applied" 就必須是 true，否則判
+ROLLBACK_REQUIRED 並列出命中的觸發條件；沒有命中任何觸發條件時 gate 直接 PASS。）
+
+```dv-harness-evidence:qualification_matrix_consistency_gate
+{"protocols": [{"protocol": "USB", "qualification_state": "REGRESSION_QUALIFIED",
+  "passing_test_count": 42, "coverage_percent": 87.5, "evidence_count": 12}]}
+```
+（"protocols" 裡每一筆都用當下這個 protocol 真實的 "qualification_state" 搭配對應的數字
+證據，三種狀態各自的門檻不同：PRODUCTION_QUALIFIED 要求 passing_test_count > 0 且
+coverage_percent >= 100 且 evidence_count > 0（少一項判
+PRODUCTION_QUALIFICATION_INCONSISTENT）；REGRESSION_QUALIFIED 要求 passing_test_count > 0
+且 coverage_percent > 0 且 evidence_count > 0（判 REGRESSION_QUALIFICATION_INCONSISTENT）；
+SMOKE_QUALIFIED 只要求 passing_test_count > 0（判
+SMOKE_QUALIFICATION_WITHOUT_PASSING_TEST）。額外可選填 "canonical_qualification_status"
+（dv_harness/qualification.py 的 8 級 canonical ladder 之一：BUILDER_AVAILABLE/
+EVIDENCE_READY/ENV_GENERATED/COMPILE_QUALIFIED/SMOKE_QUALIFIED/PROTOCOL_QUALIFIED/
+REGRESSION_QUALIFIED/PRODUCTION_QUALIFIED）——填了就必須是這 8 個字串之一（否則判
+INVALID_CANONICAL_QUALIFICATION_STATUS）、且必須落在 SMOKE_QUALIFIED 以上（低於
+SMOKE_QUALIFIED 的四級沒有對應的 system-level 狀態，判
+CANONICAL_STATUS_BELOW_SYSTEM_LEVEL_FLOOR）、映射後的 system-level 狀態
+（PROTOCOL_QUALIFIED 會 floor 到 SMOKE_QUALIFIED，其餘 SMOKE/REGRESSION/PRODUCTION
+原樣對應）必須跟同一筆的 "qualification_state" 完全一致，不一致判
+QUALIFICATION_STATUS_STATE_MISMATCH；完全不填這個選填欄位時行為跟以前一樣，不受影響。）
+
+```dv-harness-evidence:release_reproducibility_gate
+{"release_id": "...", "rtl_revision": "...", "tb_revision": "...", "vip_version": "...",
+ "tool_versions": "...", "config_hash": "...", "testlist_hash": "...", "seed_policy": "...",
+ "evidence_bundle_hash": "...", "qualification_state": "REGRESSION_QUALIFIED"}
+```
+（rtl_revision/tb_revision/vip_version/tool_versions/config_hash/testlist_hash/
+seed_policy/evidence_bundle_hash 這八個欄位缺一不可、都不能是空字串（列進 "missing" 判
+NON_REPRODUCIBLE_RELEASE）——這些是重建這次 release 所需的最小可回溯組成資訊。若這次
+"qualification_state" 是 "PRODUCTION_QUALIFIED"，還必須額外附上非空的
+"promotion_chain_hash"（否則判 PRODUCTION_RELEASE_WITHOUT_PROMOTION_CHAIN_HASH）；
+"qualification_state" 不是 PRODUCTION_QUALIFIED 時可以省略 "promotion_chain_hash"。）
+
+```dv-harness-evidence:rollback_consistency_gate
+{"rollback_applied": false}
+```
+（"rollback_applied" 是 false（或沒有發生過 rollback）時，gate 直接 PASS，其餘欄位可以
+省略，如上例；一旦 "rollback_applied": true，就必須同時滿足三個條件：
+"promotion_state" 不可以還是 "PROMOTED"（否則判 ROLLBACK_BUT_STILL_PROMOTED——rollback
+了卻沒有真的把 promotion 狀態撤掉，自相矛盾）、"rollback_reason" 必須是非空字串（否則判
+ROLLBACK_WITHOUT_REASON）、"revalidation_required" 必須是 truthy（否則判
+ROLLBACK_WITHOUT_REVALIDATION——rollback 之後必須明確承認需要重新驗證，不能當作什麼都
+沒發生）。）
 """,
 Stage.SIGNOFF.value: """
 執行 final review/signoff gate。只有 CLOSED/BLOCKED/ACCEPTED_RISK 可結束。
