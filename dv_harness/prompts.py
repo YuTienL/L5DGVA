@@ -1184,6 +1184,211 @@ harness 會將本 stage 標為 PARTIAL 並附上原因，而不是預設 PASS）
  "checker_detects_injected_fault": true, "semantic_log_match": true,
  "oracle_independent": true, "proof_bundle_hash": "..."}
 ```
+
+本 stage 另外還有一大批獨立的 hard gate，同樣各自必須附上 evidence block，缺任何一個都會讓
+VERIFY 卡在 GATE_FAIL/MISSING_EVIDENCE（找到真實案例：agent 只附了上面三個 gate，其餘全部
+沒附，導致同一個 stage 重跑多輪都停在一模一樣的 GATE_FAIL，即使實際分析工作本身沒有問題）。
+
+第一組：sim PASS 是否有真正的語意證據撐得住（不是抓到 sim.log 印 PASS 字樣就算數）：
+
+```dv-harness-evidence:checker_semantic_trace_consistency_gate
+{"items": [{"expectation_id": "...", "checker_expectation_id": "...", "testcase_id": "...",
+  "vplan_ids": ["..."], "semantic_status": "MATCH", "checker_status": "PASS"}]}
+```
+（每一筆 item 的 `semantic_status` 必須是 "MATCH"，否則 FAIL CHECKER_CREDIT_WITHOUT_SEMANTIC_MATCH；
+`checker_status` 必須是 "PASS"，否則 FAIL SEMANTIC_MATCH_WITHOUT_CHECKER_PASS；`testcase_id` 與
+`vplan_ids` 兩者都不能留空，否則 FAIL CHECKER_SEMANTIC_TRACE_INCOMPLETE；`checker_expectation_id`
+必須與 `expectation_id` 完全相同，否則 FAIL CHECKER_EXPECTATION_ID_MISMATCH——代表 checker 真的是在
+盯同一個 expectation，不是張冠李戴。）
+
+```dv-harness-evidence:command_intent_semantic_closure_gate
+{"command_id": "...", "command_hash": "...", "simulation_result": "PASSED",
+ "expected_semantics": "...", "observed_semantics": "...", "sim_log_hash": "..."}
+```
+（`command_id`/`command_hash`/`expected_semantics`/`observed_semantics`/`sim_log_hash` 五個欄位缺
+任一個都會 FAIL INCOMPLETE_COMMAND_INTENT_EVIDENCE 並回報缺的欄位名；`simulation_result` 必須逐字
+等於 "PASSED"，否則 FAIL SIMULATION_NOT_PASSED；`expected_semantics` 與 `observed_semantics` 必須
+完全相同，否則 FAIL SIM_PASS_BUT_COMMAND_INTENT_MISMATCH——代表 sim 印 PASS，但 command.txt 原本
+要驗的意圖跟實際觀察到的語意對不上，不能算真的過。）
+
+```dv-harness-evidence:simulation_semantic_trace_gate
+{"final_state": "TRUE_PASS", "signoff_credit_allowed": true,
+ "results": [{"expectation_id": "...", "status": "MATCH", "source_line": 12,
+   "evidence_source": "sim.log:1234"}]}
+```
+（`final_state` 必須是 "TRUE_PASS" 且 `signoff_credit_allowed` 必須為 true，否則 FAIL
+SEMANTIC_RESULT_NOT_TRUE_PASS；`results` 陣列中每一筆的 `status` 必須是 "MATCH"，否則 FAIL
+NON_MATCH_EXPECTATION；`source_line`（對應 command.txt 的來源行號）不得缺省，否則 FAIL
+MISSING_COMMAND_SOURCE_PROVENANCE；`evidence_source`（實際證據出處，如 sim.log 行號）不得留空，
+否則 FAIL MISSING_EVIDENCE_PROVENANCE。）
+
+```dv-harness-evidence:wave0_post_sim_semantic_gate
+{"wave_mode": 0, "command_hash": "...", "sim_log_hash": "...",
+ "command_intent": "...", "observed_semantics": "...", "simulation_ended": true,
+ "unexpected_error": false, "uvm_error_count": 0, "uvm_fatal_count": 0,
+ "first_error_time_us": null}
+```
+（`wave_mode` 必須是 0（本 stage 預設 FSDB OFF），否則 FAIL DEFAULT_POSTCHECK_REQUIRES_WAVE0；
+`command_hash`/`sim_log_hash`/`command_intent`/`observed_semantics` 四個欄位缺任一個都 FAIL
+INCOMPLETE_WAVE0_SEMANTIC_EVIDENCE；`simulation_ended` 必須為 true，否則 FAIL
+SIMULATION_NOT_ENDED；若 `command_intent` 與 `observed_semantics` 不相同，`first_error_time_us`
+必須填實際數字（否則 FAIL SEMANTIC_MISMATCH_WITHOUT_ERROR_TIMESTAMP），gate 會回報
+semantic_result=NEEDS_DEEP_DEBUG；若語意相符但 `unexpected_error`/`uvm_error_count`/
+`uvm_fatal_count` 顯示有錯誤，同樣必須填 `first_error_time_us`（否則 FAIL
+ERROR_WITHOUT_TIMESTAMP），gate 會回報 semantic_result=TRUE_FAIL；三者都乾淨才回報
+semantic_result=TRUE_PASS。）
+
+```dv-harness-evidence:semantic_evidence_strength_gate
+{"minimum_rank": 2, "expectations": [{"expectation_id": "...",
+  "evidence": [{"type": "SCOREBOARD", "contradicted": false, "detail": "..."}]}]}
+```
+（`minimum_rank` 未填時預設 2；`evidence` 的每個 `type` 依強度排序為 GENERIC_LOG(1) <
+PROTOCOL_TRANSACTION(2) < ASSERTION(3) < CHECKER(4) < SCOREBOARD(5)，每個 expectation 至少要有一筆
+evidence 且其中最高強度必須 ≥ minimum_rank，否則分別 FAIL NO_EVIDENCE 或 WEAK_SEMANTIC_EVIDENCE；
+任一筆 evidence 的 `contradicted` 為 true 都會 FAIL CONTRADICTED_EVIDENCE——代表這筆證據本身已知
+與其他觀察矛盾，不能拿來當作 PASS 的依據。）
+
+第二組：FALSE PASS/FALSE FAIL 防禦，對應 CLAUDE.md「LSF DONE 不等於 DV PASS」同一精神在單一
+simulation 層級的落地：
+
+```dv-harness-evidence:false_pass_false_fail_arbitration_gate
+{"simulation_status": "PASS", "semantic_status": "TRUE_PASS", "checker_status": "PASS",
+ "fatal_or_uvm_error": false, "infrastructure_failure_evidence": null,
+ "design_failure_evidence": null}
+```
+（gate 會交叉比對 `simulation_status`（sim 本身 PASS/FAIL）與 `semantic_status`/`checker_status`/
+`fatal_or_uvm_error`：sim PASS 但語意證據對不上（semantic_status 非 TRUE_PASS、或 checker FAIL、
+或有 fatal/UVM_ERROR）會直接 FAIL，classification=FALSE_PASS；sim FAIL 但語意/checker 其實都乾淨
+時，必須附上非空的 `infrastructure_failure_evidence` 才會判為 INFRASTRUCTURE_FAIL_NOT_DUT_FAIL，
+否則 FAIL，classification=UNRESOLVED_FALSE_FAIL；sim FAIL 且 checker FAIL/有 fatal/有
+`design_failure_evidence` 才會判為真正的 TRUE_FAIL；四種組合都不符合時 FAIL
+INSUFFICIENT_EVIDENCE，代表證據還不夠支撐任何一種裁定。）
+
+```dv-harness-evidence:negative_test_effectiveness_gate
+{"checks": [{"id": "...", "positive_passed": true, "negative_mutation_applied": true,
+  "negative_control_result": "FAIL"}]}
+```
+（每一筆 check 的 `positive_passed` 必須為 true，否則 FAIL POSITIVE_CONTROL_FAILED；
+`negative_mutation_applied` 必須為 true（代表真的注入過故意錯誤/mutation），否則 FAIL
+NO_NEGATIVE_MUTATION；`negative_control_result` 必須逐字等於 "FAIL"（代表 checker/test 真的抓得到
+這個故意注入的錯誤），否則 FAIL VACUOUS_TEST_OR_CHECKER——checker 連故意的錯誤都抓不到，PASS 就
+沒有意義。）
+
+```dv-harness-evidence:test_oracle_independence_gate
+{"oracles": [{"oracle_id": "...", "shares_prediction_source_with_dut": false,
+  "shares_bug_prone_algorithm_with_stimulus": false,
+  "reference_basis": "...", "oracle_hash": "..."}]}
+```
+（`shares_prediction_source_with_dut` 與 `shares_bug_prone_algorithm_with_stimulus` 任一個為
+true，都會 FAIL NON_INDEPENDENT_TEST_ORACLE——代表這個 oracle 跟 DUT 或 stimulus 共用了同一份可能
+有錯的邏輯，不是獨立的參考標準；`reference_basis`（oracle 的依據，如 spec 章節/reference model）與
+`oracle_hash` 兩者缺一都會 FAIL UNPROVEN_TEST_ORACLE。）
+
+第三組：scoreboard expected-data 的來源與 transaction liveness：
+
+```dv-harness-evidence:expected_data_provenance_gate
+{"scoreboards": [{"scoreboard_id": "...", "expected_source": "REFERENCE_MODEL",
+  "expected_source_hash": "...", "prediction_method": "..."}]}
+```
+（`expected_source` 不得留空，否則 FAIL NO_EXPECTED_SOURCE；`expected_source` 絕對不能是
+"DUT_OUTPUT"，否則 FAIL EXPECTED_DATA_DERIVED_FROM_DUT_OUTPUT——expected value 若取自 DUT 自己的
+輸出，等同拿 DUT 驗證 DUT，checker 永遠不會抓到錯；`expected_source_hash`（把 expected source 釘死
+的 hash）與 `prediction_method`（怎麼從 expected_source 推出預期值）兩者缺一分別 FAIL
+UNPINNED_EXPECTED_SOURCE / NO_PREDICTION_METHOD。）
+
+```dv-harness-evidence:scoreboard_transaction_liveness_gate
+{"missing_expected_transactions": 0, "missing_actual_transactions": 0,
+ "duplicate_transactions": 0, "max_transaction_latency": 500,
+ "observed_max_transaction_latency": 120}
+```
+（`missing_expected_transactions`/`missing_actual_transactions`/`duplicate_transactions` 三者只要
+有任何一個大於 0，就分別 FAIL MISSING_EXPECTED_TRANSACTIONS / MISSING_ACTUAL_TRANSACTIONS /
+DUPLICATE_TRANSACTIONS；`max_transaction_latency` 不得缺省，否則 FAIL
+NO_TRANSACTION_LATENCY_BOUND；`observed_max_transaction_latency` 超過 `max_transaction_latency`
+會 FAIL LATE_TRANSACTION。）
+
+第四組：多 port 場景下的 interrupt/fairness/starvation（單 port 或本輪未涉及多 port 行為時，
+對應清單可以誠實地留空陣列，gate 對空清單會直接通過，不需要硬湊資料）：
+
+```dv-harness-evidence:interrupt_storm_latency_gate
+{"sources": [{"source_id": "...", "max_ack_latency_cycles": 64,
+  "observed_max_ack_latency_cycles": 20, "storm_rate": null,
+  "storm_test_evidence": null, "lost_interrupts": 0}]}
+```
+（每個 interrupt source 的 `max_ack_latency_cycles` 不得缺省，否則 FAIL NO_ACK_LATENCY_BOUND；
+`observed_max_ack_latency_cycles` 超過該上限會 FAIL ACK_LATENCY_VIOLATION；填了 `storm_rate` 卻
+沒有 `storm_test_evidence` 會 FAIL INTERRUPT_STORM_WITHOUT_EVIDENCE；`lost_interrupts` 大於 0 會
+FAIL LOST_INTERRUPTS。本輪測項未涉及任何 interrupt source 時，`{"sources": []}` 是誠實、合法的
+預設值。）
+
+```dv-harness-evidence:multi_port_fairness_qos_gate
+{"ports": [{"port_id": "...", "min_service_share_percent": 20,
+  "observed_service_share_percent": 25, "qos_enabled": false,
+  "qos_policy_verified": false}]}
+```
+（每個 port 的 `min_service_share_percent` 不得缺省，否則 FAIL NO_MIN_SERVICE_SHARE；
+`observed_service_share_percent` 低於該下限會 FAIL FAIRNESS_VIOLATION；`qos_enabled` 為 true 卻
+`qos_policy_verified` 不是 true 會 FAIL QOS_NOT_VERIFIED。非多 port 測項可同樣附 `{"ports": []}`。）
+
+```dv-harness-evidence:per_port_queue_starvation_gate
+{"ports": [{"port_id": "...", "independent_queue": true, "max_wait_cycles": 256,
+  "observed_wait_cycles": 40, "forward_progress_evidence": "..."}]}
+```
+（`independent_queue` 必須為 true，否則 FAIL PORT_NOT_INDEPENDENT_QUEUE；`max_wait_cycles` 不得
+缺省，否則 FAIL NO_STARVATION_BOUND；`observed_wait_cycles` 超過該上限會 FAIL
+PORT_STARVATION_DETECTED；`forward_progress_evidence` 不得留空，否則 FAIL
+NO_FORWARD_PROGRESS_EVIDENCE。非多 port 測項可同樣附 `{"ports": []}`。）
+
+第五組：remote 執行的真實性與 rerun/環境層級的可重現性——對應 CLAUDE.md 的 Source identity
+與 Same regression batch 精神，落到單一 VERIFY run 的層級：
+
+```dv-harness-evidence:remote_execution_provenance_gate
+{"transcript_path": "<真實存在、由 tools/remote/remote_exec.py 產生的 stdout transcript 檔案路徑>",
+ "claimed_exit_code": 0}
+```
+（`transcript_path` 必須是磁碟上真的存在的檔案，且內容必須包含 `remote_exec.py` 真正輸出的
+`REMOTE_HOST=`/`EXIT_CODE=`/`STATUS=` 標記（找不到檔案 FAIL TRANSCRIPT_FILE_NOT_FOUND，檔案存在
+但缺標記 FAIL TRANSCRIPT_MISSING_MARKERS）；`claimed_exit_code` 必須與 transcript 裡真正的
+`EXIT_CODE=` 完全相同，否則 FAIL EXIT_CODE_MISMATCH——不能自稱 BUILD/VERIFY 成功卻讓真實
+transcript 顯示非零 exit code。若本次 VERIFY 完全沒有透過 `remote_exec.py` 執行過任何指令，改附
+`{"provenance_applicable": false, "provenance_not_applicable_reason": "..."}`，reason 為必填，
+不接受單純的 false 空白帶過。）
+
+```dv-harness-evidence:rerun_determinism_gate
+{"runs": [{"input_fingerprint": "...", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "..."},
+  {"input_fingerprint": "...", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "..."}]}
+```
+（`runs` 至少要有 2 筆，否則 FAIL INSUFFICIENT_EQUIVALENT_RERUNS——代表真的執行過至少一次
+equivalent rerun，不是只跑一次就宣稱 deterministic；除第一筆外，其餘每一筆的 `input_fingerprint`
+必須與第一筆完全相同，否則 FAIL NON_EQUIVALENT_RERUN_INPUT（代表根本不是同一組輸入的 rerun）；
+`semantic_verdict` 與 `critical_checker_hash` 也必須與第一筆一致，否則 FAIL
+NON_DETERMINISTIC_VERIFICATION_RESULT。）
+
+```dv-harness-evidence:run_environment_reproducibility_gate
+{"rtl_hash": "...", "testbench_hash": "...", "simulator_version": "...",
+ "vip_version": "...", "compile_options_hash": "...", "runtime_options_hash": "...",
+ "env_hash": "...", "final_verdict": "PASS", "replay_command": "..."}
+```
+（`rtl_hash`/`testbench_hash`/`simulator_version`/`vip_version`/`compile_options_hash`/
+`runtime_options_hash`/`env_hash` 七個 fingerprint 欄位缺任一個都會 FAIL
+MISSING_REPRODUCIBILITY_FINGERPRINT 並回報缺的欄位名；`final_verdict` 為 "PASS" 時
+`replay_command`（可以逐字重跑出同一結果的指令）必須填，否則 FAIL
+PASS_WITHOUT_REPLAY_COMMAND。）
+
+第六組：長時間背景模擬的完成狀態必須定期主動 recheck，不能放著不管直到使用者自己回來問：
+
+```dv-harness-evidence:simulation_completion_recheck_gate
+{"simulation_ended": false, "background_completion_notification": false,
+ "minutes_since_last_check": 1.5, "recheck_performed": false,
+ "recheck_scheduled_for_minute": 4, "semantic_workflow_started": false}
+```
+（`simulation_ended` 為 true 時，`semantic_workflow_started` 必須為 true（否則 FAIL
+SIM_ENDED_BUT_SEMANTIC_WORKFLOW_NOT_STARTED），代表模擬一結束就真的接著做語意分析，不是放著；
+`simulation_ended` 為 false 時分三種情況：收到 `background_completion_notification` 卻沒有
+`recheck_performed` 會 FAIL BACKGROUND_NOTIFICATION_NOT_RECHECKED；`minutes_since_last_check` ≥ 4
+卻沒有 `recheck_performed` 會 FAIL FOUR_MINUTE_RECHECK_MISSED；以上皆非時，
+`recheck_scheduled_for_minute` 必須等於 4（代表已排程下一次主動檢查），否則 FAIL
+RECHECK_NOT_SCHEDULED_AT_FOUR_MINUTES。）
 """,
 Stage.WAVE_ANALYSIS.value: """
 對代表性 testcase 以 WAVE=1、FSDB_START=0、FSDB_STOP=simulation_end 執行，
