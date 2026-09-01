@@ -94,9 +94,13 @@ def test_bundles_only_present_artifacts_and_manifest_marks_rest_absent():
         assert result["bundled_count"] == len(present_expected)
         assert result["missing_count"] == len(absent_expected)
 
-        # manifest.json itself is written into out_dir and matches the return value.
+        # manifest.json itself is written into out_dir and matches the return
+        # value, including the real recomputable bundle_hash (see
+        # signoff_export.compute_bundle_hash / test_signoff_bundle_hash.py).
         manifest_on_disk = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest_on_disk == result["manifest"]
+        assert manifest_on_disk["manifest"] == result["manifest"]
+        assert manifest_on_disk["bundle_hash"] == result["bundle_hash"]
+        assert result["bundle_hash"] == signoff_export.compute_bundle_hash(result["manifest"])
 
         # self-audit result is always included, and is real self_audit output
         # (has the same summary/gates shape run_self_audit produces), not a

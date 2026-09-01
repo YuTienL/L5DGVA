@@ -46,9 +46,22 @@ of this whole project), `.claude/skills/_deprecated/`, and the signoff
 export's own `out_dir` (so a previous export's bundled copy is never
 rediscovered as if it were a fresh generation on a later run) from the
 search scope.
+
+HARDENING (2026-09-01, trust-boundary-hardening design pass): the exported
+`manifest.json`'s "bundle_hash" field previously had ZERO real producer
+anywhere in this codebase -- tools/verification_flow/
+signoff_bundle_completeness_gate.py required an agent-self-reported
+"bundle_hash" string with nothing to recompute it against. `compute_bundle_hash`
+is the real producer, modeled on tools/remote/source_identity.py's
+`aggregate_source_id` (sort deterministic per-artifact lines, newline-join,
+sha256 hex digest); `collect_signoff_bundle` now calls it for real and
+writes the result into both its return dict and `manifest.json`'s own
+content, so the gate can read the real manifest.json back and recompute the
+same hash independently rather than trusting a bare self-reported value.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -161,6 +174,25 @@ def _find_tb_source_dir(root: Path, out_dir: Optional[Path] = None) -> Optional[
     return candidates[0][1]
 
 
+def compute_bundle_hash(manifest: List[Dict[str, Any]]) -> str:
+    """The real, independently-recomputable `bundle_hash` producer -- closes
+    the fact that no code anywhere in this project ever produced this value
+    before (signoff_bundle_completeness_gate.py required a self-reported
+    "bundle_hash" string with nothing real to check it against).
+
+    Modeled on tools/remote/source_identity.py's aggregate_source_id: sort
+    "{artifact}:{present}:{bundled_path}" lines (deterministic regardless of
+    the manifest list's own order), newline-join, sha256 hex digest. Any
+    caller with the real manifest content (e.g. a gate reading manifest.json
+    back off disk) can recompute the identical value independently.
+    """
+    lines = sorted(
+        f"{m.get('artifact')}:{m.get('present')}:{m.get('bundled_path')}"
+        for m in manifest
+    )
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
 def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
     root = Path(root).resolve()
     out_dir = Path(out_dir).resolve()
@@ -251,8 +283,17 @@ def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
     else:
         record("regression_manifest", False, None)
 
+    bundle_hash = compute_bundle_hash(manifest)
+
+    # manifest.json's content is {"manifest": [...], "bundle_hash": "..."}
+    # (RULING, trust-boundary-hardening: promoted from a bare list to a
+    # dict so bundle_hash has a real, on-disk, independently-re-readable
+    # location -- signoff_bundle_completeness_gate.py reads this file back
+    # and recomputes compute_bundle_hash(manifest_list) itself, never
+    # trusting this written bundle_hash value on its own).
     (out_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        json.dumps({"manifest": manifest, "bundle_hash": bundle_hash}, ensure_ascii=False, indent=2),
+        encoding="utf-8")
 
     bundled_count = sum(1 for m in manifest if m["present"])
     missing_count = sum(1 for m in manifest if not m["present"])
@@ -261,6 +302,7 @@ def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
         "status": "OK",
         "out_dir": str(out_dir),
         "manifest": manifest,
+        "bundle_hash": bundle_hash,
         "bundled_count": bundled_count,
         "missing_count": missing_count,
     }

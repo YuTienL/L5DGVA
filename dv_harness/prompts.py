@@ -499,13 +499,29 @@ Stage.GIT_PUSH.value: """
 Stage.SERVER_SYNC.value: """
 在 Linux Server 同步並確認 HEAD SHA = expected pushed SHA；submodule SHA 也需一致。
 
-本 stage 的 PASS 由 harness 端 gate 腳本裁定。回覆結尾附上：
+本 stage 的 PASS 由 harness 端 gate 腳本裁定。若這個專案在 PC 與 Linux 之間有 git
+remote，回覆結尾附上（identity_method 可省略，預設等同 "git_sha"）：
 
 ```dv-harness-evidence:server_sync_identity_gate
-{"expected_sha": "...", "server_head_sha": "...",
+{"identity_method": "git_sha", "expected_sha": "...", "server_head_sha": "...",
  "submodules": [{"name": "...", "expected_sha": "...", "server_sha": "..."}]}
 ```
 （沒有 submodule 時 "submodules": [] 即可。）
+
+若這個專案沒有 git remote（CLAUDE.md「Remote Linux Execution」規定的 SOURCE_ID
+git-free 備援路徑，"never skipped outright"），改附 identity_method="source_id"，
+並附上兩個「真實檔案路徑」（不是把內容直接寫進 JSON）：
+
+```dv-harness-evidence:server_sync_identity_gate
+{"identity_method": "source_id",
+ "local_md5sum_transcript_path": "<PC 端執行 md5sum 的真實輸出檔路徑>",
+ "remote_md5sum_transcript_path": "<真實 tools/remote/remote_exec.py \\"md5sum <files>\\" 呼叫的真實 stdout 轉錄檔路徑>"}
+```
+（gate 會實際讀這兩個檔案、用 tools/remote/source_identity.py 重新算一次
+three-way diff + aggregate id，PASS/FAIL 完全看這個真實重算的結果，不是看你
+宣稱的值；remote 端那份必須真的帶有 remote_exec.py 自己蓋的
+REMOTE_HOST=/EXIT_CODE=/STATUS= 標記且 EXIT_CODE=0，local 端只檢查檔案真實存在
+——PC 端目前沒有對應的轉錄真實性標記慣例，這是已知、記錄在案的殘留限制。）
 
 注意：本 stage 屬 REMOTE_EXECUTION，需先完成 CLAUDE.md 的 SSH/Remote Transport
 Connection Intake（詢問使用者是否建立連線、蒐集 account/vc machine/ssh machine/
@@ -990,8 +1006,15 @@ Stage.SIGNOFF.value: """
   {"class": "SCOREBOARD", "hash": "..."}, {"class": "COVERAGE", "hash": "..."},
   {"class": "REGRESSION", "hash": "..."}, {"class": "RCA_FIX", "hash": "..."},
   {"class": "ENV_FINGERPRINT", "hash": "..."}],
+ "bundle_dir": "<真實 `dv-harness signoff-export --out <dir>` 寫出的 out_dir>",
  "bundle_hash": "...", "final_verdict": "PASS"}
 ```
+（"bundle_dir" 必須是真的執行過 signoff-export 之後、real manifest.json 所在的
+那個目錄——gate 會實際讀那份 manifest.json、用
+dv_harness/signoff_export.py 的 compute_bundle_hash() 重新算一次，"bundle_hash"
+必須跟這個真實重算出來的值完全一致，不是自己隨便填一個字串；同時
+manifest.json 裡也必須看得到 self_audit_result 這筆 present:true，證明
+bundle_dir 真的是 signoff-export 的輸出，不是隨手放一個假的 manifest.json 進去。）
 
 若這次 SIGNOFF 是一個獨立 subsystem 驗證環境完成（可被之後 SYSTEM_LEVEL 組裝重複使用），
 必須附上這個環境的登記資訊；若這次 SIGNOFF 是一次 full-SoC/system-level 驗證、

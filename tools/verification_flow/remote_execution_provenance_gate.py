@@ -8,12 +8,19 @@ contains that script's REMOTE_HOST=/EXIT_CODE=/STATUS= structured output
 (see tools/remote/remote_exec.py's format_result()), and that the claimed
 exit code matches what the transcript really shows -- an agent cannot
 claim BUILD/VERIFY success while the real transcript shows a nonzero exit.
-"""
-import argparse, json, pathlib, re, sys
 
-_HOST_RE = re.compile(r"^REMOTE_HOST=(.*)$", re.MULTILINE)
-_EXIT_RE = re.compile(r"^EXIT_CODE=(-?\d+)$", re.MULTILINE)
-_STATUS_RE = re.compile(r"^STATUS=(.*)$", re.MULTILINE)
+REFACTOR (2026-09-01, trust-boundary-hardening design pass): the
+REMOTE_HOST=/EXIT_CODE=/STATUS= regex parsing this gate always did now
+lives in the shared tools/verification_flow/_remote_transcript.py helper
+(server_sync_identity_gate.py's new SOURCE_ID mode needs the exact same
+parsing against real md5sum transcripts) -- this gate's own FAIL/PASS JSON
+shapes and exit codes are unchanged, only the parsing is no longer
+duplicated. See dv_harness_tests/test_remote_execution_provenance_gate.py.
+"""
+import argparse, json, pathlib, sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _remote_transcript import TranscriptError, read_transcript, parse_markers  # noqa: E402
 
 
 def main():
@@ -36,28 +43,23 @@ def main():
         print(json.dumps({"status": "SKIPPED_NOT_APPLICABLE", "reason": reason}))
         return 0
 
-    transcript_path = pathlib.Path(d.get("transcript_path", ""))
-    if not transcript_path.is_file():
-        print(json.dumps({"status": "FAIL", "reason": "TRANSCRIPT_FILE_NOT_FOUND",
-                           "path": str(transcript_path)}))
-        return 2
+    try:
+        content = read_transcript(d.get("transcript_path", ""))
+        markers = parse_markers(content)
+    except TranscriptError as exc:
+        payload = {"status": "FAIL", "reason": exc.reason}
+        payload.update(exc.detail)
+        print(json.dumps(payload))
+        return 2 if exc.reason == "TRANSCRIPT_FILE_NOT_FOUND" else 3
 
-    content = transcript_path.read_text(encoding="utf-8", errors="ignore")
-    host_m = _HOST_RE.search(content)
-    exit_m = _EXIT_RE.search(content)
-    status_m = _STATUS_RE.search(content)
-    if not (host_m and host_m.group(1).strip() and exit_m and status_m):
-        print(json.dumps({"status": "FAIL", "reason": "TRANSCRIPT_MISSING_MARKERS"}))
-        return 3
-
-    real_exit_code = int(exit_m.group(1))
+    real_exit_code = markers["exit_code"]
     claimed_exit_code = d.get("claimed_exit_code")
     if real_exit_code != claimed_exit_code:
         print(json.dumps({"status": "FAIL", "reason": "EXIT_CODE_MISMATCH",
                            "claimed": claimed_exit_code, "real": real_exit_code}))
         return 4
 
-    print(json.dumps({"status": "PASS", "remote_host": host_m.group(1).strip(),
+    print(json.dumps({"status": "PASS", "remote_host": markers["host"],
                        "exit_code": real_exit_code}))
     return 0
 
