@@ -1455,6 +1455,66 @@ Rule）：整批 regression 的每筆 evidence 都必須回到同一個 canonica
 {"canonical_run_id": "...", "canonical_build_hash": "...",
  "evidence": [{"evidence_id": "...", "run_id": "...", "build_hash": "..."}]}
 ```
+
+除了以上兩個既有 gate，本 stage 還有四個獨立的 hard gate，分別針對「多筆 run 之間的證據一致性」、
+「flaky test 是否被誠實分類與 owner 化，而不是靠重跑蒙混過去」、「random regression 宣稱的
+corner case 覆蓋是否真的靠夠多樣的 seed/config 支撐」、以及「每一筆 random run 的失敗是否都能
+重現」，也都必須各自附上 evidence block：
+
+```dv-harness-evidence:cross_run_evidence_consistency_gate
+{"runs": [
+  {"run_id": "...", "rtl_revision": "...", "tb_revision": "...", "vip_version": "...",
+   "config_hash": "...", "testlist_hash": "...", "evidence_bundle_hash": "..."},
+  {"run_id": "...", "rtl_revision": "...", "tb_revision": "...", "vip_version": "...",
+   "config_hash": "...", "testlist_hash": "...", "evidence_bundle_hash": "..."}
+]}
+```
+
+（`runs` 至少要有兩筆，只有一筆會直接 FAIL `NEED_AT_LEAST_TWO_RUNS`；gate 會以第一筆為 baseline，
+逐筆比對 `rtl_revision`/`tb_revision`/`vip_version`/`config_hash`/`testlist_hash` 這五個欄位是否
+與 baseline 完全相同，任何一筆有落差就 FAIL `RUN_CONTEXT_DRIFT`（回傳不一致的欄位名、baseline 值、
+實際值與 run_id）——這正是 CLAUDE.md「同一批 regression 必須用同一個 source/build/config identity」
+的直接檢查；每一筆 run 的 `evidence_bundle_hash` 都不能缺，缺了任何一筆就整批 FAIL
+`RUN_WITHOUT_EVIDENCE_BUNDLE_HASH`。）
+
+```dv-harness-evidence:flaky_test_policy_gate
+{"tests": [{"testcase_id": "...", "failure_rate_percent": 0, "classified": true,
+  "owner": "...", "quarantined": false, "quarantine_reason": "",
+  "retry_count": 0, "max_allowed_retry": 1, "credit_allowed": false}]}
+```
+
+（`failure_rate_percent` 為 0 的測試不受任何限制；一旦 > 0（代表這個 testcase 真的觀察到 flaky
+行為），就必須 `classified` 為 true（否則 FAIL `UNCLASSIFIED_FLAKY_TEST`）且 `owner` 非空
+（否則 FAIL `FLAKY_TEST_WITHOUT_OWNER`）；若 `quarantined` 為 true，`quarantine_reason` 不能是
+空字串（否則 FAIL `QUARANTINE_WITHOUT_REASON`）；`retry_count` 超過 `max_allowed_retry`（未填時
+gate 內部視為 1）就 FAIL `EXCESSIVE_RETRY_MASKING_FAILURE`，代表不能靠瘋狂重跑把真正的失敗洗掉；
+`credit_allowed` 與 `quarantined` 不能同時為 true（否則 FAIL `QUARANTINED_TEST_HAS_SIGNOFF_CREDIT`）
+——已經被隔離的測試不能同時又拿到 signoff credit。本輪沒有任何 flaky test 時，附上
+`{"tests": []}` 即為誠實、合法的預設值。）
+
+```dv-harness-evidence:seed_diversity_and_corner_case_gate
+{"random_corner_case_claim": false, "seeds": [], "config_hashes": [],
+ "minimum_unique_seeds": 2, "minimum_unique_configs": 1, "corner_case_bins_exercised": []}
+```
+
+（只有 `random_corner_case_claim` 為 true（代表這批 regression 有主張靠 random seed 涵蓋了某些
+corner case）才會觸發檢查：`seeds` 陣列去重後的數量必須 ≥ `minimum_unique_seeds`（未填時 gate
+內部視為 2），否則 FAIL `INSUFFICIENT_SEED_DIVERSITY`；`config_hashes` 去重後的數量必須 ≥
+`minimum_unique_configs`（未填時視為 1），否則 FAIL `INSUFFICIENT_CONFIG_DIVERSITY`；
+`corner_case_bins_exercised` 不能是空/缺省，否則 FAIL `NO_CORNER_CASE_EVIDENCE`——代表宣稱涵蓋
+corner case 卻拿不出真正被打中的 bin 清單。沒有主張 random corner case 覆蓋時，
+`random_corner_case_claim: false` 即可直接 PASS，不需要湊 seeds/configs。）
+
+```dv-harness-evidence:seed_reproducibility_gate
+{"runs": [{"run_id": "...", "randomized": true, "seed": "12345",
+  "failure": false, "reproducer_command": ""}]}
+```
+
+（跟 `cross_run_evidence_consistency_gate` 用的是同一個 `runs` 陣列概念，但欄位不同、獨立檢查：
+`randomized` 為 true 的 run，`seed` 不能是 `null` 或空字串，否則 FAIL `RANDOM_RUN_WITHOUT_SEED`
+——代表隨機跑但沒記下 seed，之後無法重現；`failure` 為 true 的 run，必須附上非空的
+`reproducer_command`，否則 FAIL `FAILURE_WITHOUT_REPRODUCER`——每一筆失敗都要留下可以直接重跑
+的指令，不能只留一句「失敗了」就結案。沒有任何 run 時 `{"runs": []}` 直接 PASS。）
 """,
 Stage.INFRA_RECOVERY.value: """
 Regression 失敗的第一輪快速分流：判斷是 Infrastructure failure（LSF/license/compute/
