@@ -691,6 +691,160 @@ stack；USB 的 transfer-type×speed matrix）。這 10 個協定以外的環境
 `tools/verification_flow/protocol_structural_completeness_gate.py` 內對應
 `check_<protocol>` 函式的說明；非以上 10 協定的環境改附
 `{"protocol_completeness_applicable": false, "protocol_completeness_not_applicable_reason": "..."}`。）
+
+本 stage 另外還有十一個獨立的 hard gate，涵蓋「branch topology 與 branch_fw 中斷契約」「per-port
+驗證矩陣與 protocol scheduler 模式」「reset/clock/power 事件排序」「error injection／observability／
+assertion placeholder 這條可觀察性鏈」與「Reference UVM 相容性、改編、scoreboard/reference model
+獨立性」五個面向，也都必須各自附上 evidence block，缺一個都會讓整個 stage 卡在
+GATE_FAIL/MISSING_EVIDENCE：
+
+先是 branch topology 與 branch_fw 中斷契約這兩個（呼應 CLAUDE.md「Event/control register 階層」與
+「真實 FW pattern 是 interrupt-driven」規則，在這個 stage 就先鎖死，不要等到 IMPLEMENT 才發現
+branch_fw 被寫成 polling）：
+
+```dv-harness-evidence:branch_topology_gate
+{"protocol": "USB", "dut_port_count": 1, "vip_port_count": 1,
+ "branches": ["block", "branch_fw", "branch_a0", "branch_b0"],
+ "branch_fw_interrupt_driven": true}
+```
+（`branches` 必須完整涵蓋 `block`、`branch_fw`，以及依 `dut_port_count`/`vip_port_count` 展開的
+0-indexed `branch_a0..branch_a{dut_port_count-1}`／`branch_b0..branch_b{vip_port_count-1}`——少一個
+FAIL MISSING_REQUIRED_BRANCHES，多出不在這個範圍內的 `branch_a*`/`branch_b*` FAIL
+PORT_COUNT_BRANCH_MISMATCH；`branch_fw_interrupt_driven` 一定要是 true，否則 FAIL
+BRANCH_FW_NOT_INTERRUPT_DRIVEN。`protocol` 含有 "amba"（大小寫不拘）且 `dut_port_count` > 1 時，
+還要附上 `cross_branch_bus_model`：`{"shared_resources": [...], "arbitration_policy": "..."}` 兩個
+子欄位缺一都會 FAIL MULTI_BRANCH_BUS_ARBITRATION_UNMODELED——這就是 CLAUDE.md「Concurrent 匯流排
+仲裁」規則落地的地方。）
+
+```dv-harness-evidence:branch_fw_interrupt_contract_gate
+{"interrupt_driven": true,
+ "interrupt_map": [{"irq_id": "...", "source_register": "..."}],
+ "acknowledge_path": "...", "polling_primary": false}
+```
+（`interrupt_driven` 必須是 true（FAIL FW_BRANCH_NOT_INTERRUPT_DRIVEN）；`interrupt_map` 不能是空的
+（FAIL NO_INTERRUPT_MAP）；`acknowledge_path` 必須非空（FAIL NO_INTERRUPT_ACK_PATH）；
+`polling_primary` 不能是 true（FAIL POLLING_CANNOT_BE_PRIMARY_FW_TRIGGER）——四項合起來就是
+「branch_fw 只能是 interrupt-driven dispatcher，不能把 CPU 週期性 READ 輪詢當主要偵測手段」這條
+規則的證據化。）
+
+再來是 per-port 驗證矩陣與 protocol scheduler 模式這兩個（確保多 port 環境每個 port 都有獨立機制、
+排程模式跟協定本身的並行/序列特性一致）：
+
+```dv-harness-evidence:per_port_verification_matrix_gate
+{"required_feature_combinations": ["BULK_HS", "BULK_FS"],
+ "ports": [{"port_id": "P0",
+   "scoreboard": "...", "checker": "...", "performance_calculator": "...", "coverage_collector": "...",
+   "covered_feature_combinations": ["BULK_HS", "BULK_FS"]}]}
+```
+（`ports` 裡每一個 port 都要同時附上 `scoreboard`／`checker`／`performance_calculator`／
+`coverage_collector` 四個機制，缺任一個 FAIL MISSING_PER_PORT_MECHANISM；每個 port 的
+`covered_feature_combinations` 必須涵蓋 `required_feature_combinations` 全集，缺任何一項 FAIL
+PORT_FEATURE_MATRIX_GAP。只有單一 port 時，`ports` 陣列填一筆即可；`ports: []` 時這兩項檢查都不會
+觸發，只適合真的沒有 per-port 拆分意義的環境，不要為了省事而把有意義的 port 拆分省略掉。）
+
+```dv-harness-evidence:protocol_scheduler_gate
+{"protocol": "USB", "mode": "N_TO_M_PARALLEL",
+ "cross_port_global_lock": false, "independent_port_queues": true}
+```
+（`protocol` 是 APB/APB2/APB3 時，`mode` 必須是 `"N_TO_1_SERIAL"`，否則 FAIL APB_MUST_SERIALIZE；
+`protocol` 是 USB/USB2/USB3/PCIe/AXI/AXI3/AXI4/AXIS/AXI-Stream 這類天生可並行的協定時，`mode`
+必須是 `N_TO_M_PARALLEL`/`M_TO_N_PARALLEL`/`M_TO_N_PARALLEL_INDEPENDENT_PORTS` 三選一，否則 FAIL
+PARALLEL_PROTOCOL_NOT_PARALLEL，且 `independent_port_queues` 必須是 true，否則 FAIL
+PARALLEL_PROTOCOL_NEEDS_INDEPENDENT_PORT_QUEUES；不論協定為何，`cross_port_global_lock` 都不能是
+true，否則直接 FAIL CROSS_PORT_GLOBAL_LOCK_FORBIDDEN——這是把「branch_fw 僅為 dispatcher、不是
+protocol traffic scheduler」與「各 port 各自獨立、不共用全域鎖」這兩條原則一起釘進 gate。）
+
+接著是 reset/clock/power 事件排序：
+
+```dv-harness-evidence:reset_clock_power_sequence_gate
+{"events": [{"event": "POR_RELEASE"}, {"event": "CLOCK_STABLE"}, {"event": "FW_BOOT_DONE"}],
+ "ordering_rules": [{"before": "POR_RELEASE", "after": "CLOCK_STABLE"},
+                     {"before": "CLOCK_STABLE", "after": "FW_BOOT_DONE"}],
+ "power_aware_design": false}
+```
+（`events` 不能是空陣列（FAIL NO_SEQUENCE_EVENTS）；`ordering_rules` 裡每一筆 `before`/`after` 都
+必須是 `events` 裡真的存在的 `event` 名稱（缺一個 FAIL ORDERING_RULE_EVENT_MISSING），且 `before`
+在 `events` 陣列裡的排列順序必須真的排在 `after` 前面，否則 FAIL SEQUENCE_ORDER_VIOLATION——不是
+自己宣告順序對就算數，是照 `events` 陣列實際排列去驗證。`power_aware_design` 是 true（有 power
+domain/isolation cell）時，`isolation_or_retention_checked` 也要是 true，否則 FAIL
+POWER_SEQUENCE_WITHOUT_ISOLATION_RETENTION_CHECK；非 power-aware 設計時 `power_aware_design` 填
+false 即可跳過這項。）
+
+然後是 error injection／observability／assertion placeholder 這條可觀察性鏈（assertion_placeholder_
+closure_gate 是刻意接在 observability_sufficiency_gate 之後同一批查的，兩者都在同一個
+observability 主題下，設計上要相鄰處理）：
+
+```dv-harness-evidence:observability_sufficiency_gate
+{"requirements": [{"requirement_id": "REQ-001", "status": "OPEN",
+   "observability": [{"type": "SCOREBOARD", "evidence_point": "sb_top.compare()"}]}]}
+```
+（`requirements` 裡每一筆 `status` 不是 `"WAIVED"` 的要求，都必須附非空的 `observability` 陣列
+（FAIL REQUIREMENT_WITHOUT_OBSERVABILITY），且陣列裡至少一筆的 `type` 要落在
+SCOREBOARD/CHECKER/ASSERTION/MONITOR/LOG_SEMANTIC 之一並附上非空的 `evidence_point`，否則 FAIL
+INSUFFICIENT_OBSERVABILITY——只是「掛個名字」不夠，要有實際指向的觀察點。）
+
+```dv-harness-evidence:assertion_placeholder_closure_gate
+{"assertion_entries": []}
+```
+（`assertion_entries` 對應 `generate_observability_plan.py` 產出的 `implementation_manifest.json`
+裡同名欄位；此 stage 尚未真的跑過那支 generator 時，附空陣列 `[]` 就是誠實的預設值，gate 不會為此
+FAIL。一旦有條目，其中任何一筆 `classification` 是 `"PROTOCOL_STATE_MACHINE_LEGALITY"`（planner
+自己判定「可從有限合法值/狀態加合法性關係機械決定」的需求）卻 `generation_method` 還是
+`"placeholder"`，就會 FAIL STATE_MACHINE_LEGALITY_ASSERTION_STILL_PLACEHOLDER——這條規則只堵「明明
+可以自動生成卻還停在 TODO 佔位」這一種情況，不是要求所有 assertion 都必須 DSL 生成
+（Q2/INTERRUPT_RESPONSE_SEMANTIC、Q3/CROSS_CYCLE_TEMPORAL_INVARIANT 類仍允許手寫）。）
+
+```dv-harness-evidence:error_injection_coverage_gate
+{"required_error_classes": ["CRC_ERROR", "TIMEOUT", "PROTOCOL_VIOLATION"],
+ "tests": [{"testcase_id": "tc_crc_error_injection", "error_classes": ["CRC_ERROR"],
+            "checker_ids": ["crc_checker"], "assertion_ids": []}]}
+```
+（`tests` 裡每一筆都必須至少附上非空的 `checker_ids` 或 `assertion_ids` 其中之一，否則 FAIL
+ERROR_TEST_WITHOUT_CHECK——代表這是「有注入錯誤但沒人在看結果」的無效測試；所有 `tests` 的
+`error_classes` 聯集起來，必須涵蓋 `required_error_classes` 全部，缺任何一類 FAIL
+MISSING_ERROR_INJECTION_CLASSES。本次 scope 若真的沒有需要錯誤注入的需求，`required_error_classes`
+與 `tests` 都填空陣列即可誠實通過。）
+
+最後是 Reference UVM 相容性、改編、與 scoreboard/reference model 獨立性這三個（呼應 CLAUDE.md
+「No Golden-Reference Content Mining」——可以參考既有 Reference UVM，但不能整段照抄，也不能讓
+scoreboard 的判斷依據跟 DUT 本身的實作邏輯共用同一個來源）：
+
+```dv-harness-evidence:reference_uvm_compatibility_gate
+{"reference_name": "USB_UVM_Handoff", "reference_revision": "...", "reference_hash": "...",
+ "compatibility_analysis": {"protocol_role": "...", "interface_mapping": "...",
+   "config_mapping": "...", "sequence_reuse": "...", "scoreboard_checker_reuse": "..."},
+ "reuse_decision": "REUSE", "adaptation_plan": "..."}
+```
+（`reference_name` 不能空（FAIL NO_REFERENCE_NAME）；`reference_revision`／`reference_hash` 都要
+非空，代表釘住了確切版本（缺一 FAIL UNPINNED_REFERENCE_ENV）；`compatibility_analysis` 必須是個
+物件且同時包含 `protocol_role`／`interface_mapping`／`config_mapping`／`sequence_reuse`／
+`scoreboard_checker_reuse` 五個 key，缺任一個 FAIL INCOMPLETE_REFERENCE_COMPATIBILITY；
+`reuse_decision` 是 `"REUSE"` 時，一定要附 `adaptation_plan`，否則 FAIL
+REUSE_WITHOUT_ADAPTATION_PLAN——不能宣告要重用卻沒說怎麼改。）
+
+```dv-harness-evidence:reference_uvm_adaptation_gate
+{"reference_uvm_hash": "...", "new_dut_architecture_hash": "...",
+ "gap_analysis_hash": "...", "adaptation_plan_hash": "...",
+ "blind_copy": false, "dut_specific_changes": ["..."]}
+```
+（`reference_uvm_hash`／`new_dut_architecture_hash`／`gap_analysis_hash`／`adaptation_plan_hash`
+四個欄位都必須非空，缺任一個 FAIL INCOMPLETE_REFERENCE_UVM_ADAPTATION；`blind_copy` 不能是 true，
+否則 FAIL REFERENCE_UVM_BLIND_COPY_FORBIDDEN；`dut_specific_changes` 必須非空，證明真的針對這顆
+DUT 做過調整，否則 FAIL NO_DUT_SPECIFIC_ADAPTATION_PROVEN。）
+
+```dv-harness-evidence:scoreboard_reference_model_independence_gate
+{"shares_dut_implementation_code": false,
+ "shared_algorithm_source_hash": "", "dut_algorithm_source_hash": "...",
+ "independent_oracle_basis": "protocol spec + register map (not DUT RTL)",
+ "negative_control_detected": true}
+```
+（`shares_dut_implementation_code` 不能是 true，否則 FAIL REFERENCE_MODEL_MIRRORS_DUT——reference
+model 不能直接搬 DUT 的實作程式碼當 oracle；若 `shared_algorithm_source_hash` 有填，且跟
+`dut_algorithm_source_hash` 完全相同，會 FAIL COMMON_MODE_DEFECT_RISK（兩邊共用同一份演算法來源，
+DUT 錯了 scoreboard 也會跟著錯，抓不出問題）；`independent_oracle_basis` 必須非空，說明這個
+scoreboard 的判斷依據是什麼獨立來源（例如協定規格，而非 DUT RTL 本身）；`negative_control_detected`
+必須是 true，代表真的證明過這個 scoreboard/reference model 對「刻意注入的錯誤」有反應、不是形同
+虛設，否則 FAIL SCOREBOARD_EFFECTIVENESS_UNPROVEN。）
 """,
 Stage.IMPLEMENT.value: """
 Test Generation + Negative Tests + Monitor/Scoreboard/Checker/Assertion/Reference Model 實作：
