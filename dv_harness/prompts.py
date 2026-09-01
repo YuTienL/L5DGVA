@@ -110,6 +110,33 @@ not-applicable 直接通過，不會強迫每個專案都要有 DE-local 環境�
 其餘三個也都要真實存在且各自附上 evidence，不可以只填一部分就當作已完成。每個 path 都必須是
 磁碟上真的存在、且非空的檔案，不能是猜的路徑或空檔案；evidence 欄位必須是非空字串，說明這個
 檔案「怎麼被確認存在/可用」，不能留白。）
+
+本 stage 另外還有兩個獨立的 hard gate，也必須各自附上 evidence block，缺一個都會讓整個
+stage 卡在 GATE_FAIL（找到真實案例：agent 只附了 intake_readiness/de_local_sim_env_intake_gate
+兩個，另外兩個沒附，導致 INTAKE 重試多輪都停在同樣的 GATE_FAIL）：
+
+```dv-harness-evidence:generated_artifact_boundary_gate
+{"artifacts": [{"class": "BUILD|REGRESSION|VPLAN|CHECKER|SCOREBOARD|ASSERTION|WAVEFORM|LOGS|SYSTEM_LEVEL|HISTORY", "owner": "HARNESS", "required_from_user": false}]}
+```
+（盤點本階段實際碰到、屬於「本來就該由 harness 自己產生」的產出物類別（BUILD/REGRESSION/
+VPLAN/CHECKER/SCOREBOARD/ASSERTION/WAVEFORM/LOGS/SYSTEM_LEVEL/HISTORY 這幾種）——owner 一定要
+是 "HARNESS"、required_from_user 一定要是 false，代表沒有把 harness 該自己產生的東西誤要求
+使用者先準備好。這個階段通常還沒有真的產生任何這類產出物，`{"artifacts": []}` 是誠實、合法
+的預設值，不需要硬湊內容。）
+
+```dv-harness-evidence:interactive_evidence_intake_gate
+{"questions_asked_in_batch": 0, "user_requested_batch_mode": false,
+ "evidence_answer_available": true, "asked_user_anyway": false,
+ "confidence": "HIGH", "asked_user_for_same_fact": false,
+ "ask_user": false, "continue_evidence_search": false,
+ "status": "READY"}
+```
+（如實反映本階段真正發生的互動方式：questions_asked_in_batch 是這輪一次問了幾個問題（一次只
+問一個才符合 Step-by-Step 規定，> 1 且沒有 user_requested_batch_mode 會被判 FAIL）；如果證據
+其實找得到卻還是先問使用者，asked_user_anyway 要填 true（會被判 FAIL）；confidence 是 HIGH 卻
+又去問使用者同一件事，asked_user_for_same_fact 要填 true（會被判 FAIL）；confidence 是
+LOW/UNKNOWN 時，ask_user 或 continue_evidence_search 至少要有一個是 true（否則視為晾著不處理，
+判 FAIL）；status 必須是 READY/PARTIAL/BLOCKED 三選一，不能留空或填其他值。）
 """,
 Stage.DISCOVERY.value: """
 Five Source Discovery：並行盤點 Spec、RTL Source、command.txt、USB Standard/VIP/Reference UVM、
