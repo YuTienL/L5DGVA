@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, subprocess
+import json, shutil, subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, TYPE_CHECKING
 from .base import ClaudeAdapter, AgentResult
@@ -11,9 +11,33 @@ class ClaudeCLIAdapter(ClaudeAdapter):
     def __init__(self, config: Dict[str, Any]):
         self.cfg = config["claude"]
 
+    @staticmethod
+    def _resolve_command(configured: str) -> str:
+        """Resolve the configured claude command to a real, directly-executable
+        path before handing it to subprocess.run(..., shell=False).
+
+        HONEST BUG THIS FIXES (found via a real `dv-harness run-stage` run on
+        2026-09-01, not a hypothetical): on Windows, `npm install -g` puts
+        TWO files on PATH for one package -- a bare POSIX shell script named
+        exactly `claude` (only runnable by bash/sh, e.g. Git Bash) and a real
+        Windows launcher `claude.cmd`. subprocess.run() with shell=False (the
+        default, and what this adapter already uses -- see run() below) calls
+        Win32 CreateProcess directly, which does NOT do PATHEXT-based
+        resolution the way `where`/cmd.exe do -- it can only ever find
+        `claude`, the non-executable-on-Windows shell script, and fails with
+        FileNotFoundError (WinError 2). shutil.which() DOES perform PATHEXT
+        resolution on Windows (checking .COM/.EXE/.BAT/.CMD in order) and
+        correctly returns the real `claude.cmd` launcher. On POSIX, shutil.which()
+        is a no-op-equivalent PATH lookup that returns the same real script
+        subprocess.run() would have found anyway, so this is a pure
+        Windows-only fix with no POSIX behavior change.
+        """
+        resolved = shutil.which(configured)
+        return resolved or configured
+
     def run(self, prompt: str, cwd: str, resume_session: Optional[str] = None,
             agent_profile: "Optional[AgentProfile]" = None) -> AgentResult:
-        cmd = [self.cfg.get("command","claude"), "-p", prompt,
+        cmd = [self._resolve_command(self.cfg.get("command","claude")), "-p", prompt,
                "--output-format", self.cfg.get("output_format","json"),
                "--max-turns", str(self.cfg.get("max_turns",40))]
 
