@@ -19,9 +19,7 @@
       "Bash(stat:*)"
     ],
     "deny": [
-      "Write(//d/DV/Task/USB/DUT/**)",
       "Edit(//d/DV/Task/USB/DUT/**)",
-      "Write(//d/DV/Task/USB/VIP/**)",
       "Edit(//d/DV/Task/USB/VIP/**)"
     ]
   },
