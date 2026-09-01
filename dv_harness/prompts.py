@@ -347,6 +347,85 @@ capability 要記錄為 gap，交給後續 vPlan 走 waiver。
 都會直接 FAIL——這是唯一能證明「真的有讀 registry」而不是憑印象隨便填的方式。
 本次協定不在 registry 裡（新協定/自訂協定）時改附
 `{"profile": {"registry_applicable": false, "registry_not_applicable_reason": "..."}}`。
+
+本 stage 另外還有五個獨立的 hard gate，涵蓋「generator 綁定」「profile skill 是否真的被查閱」
+「protocol onboarding 內容完整度」「profile 版本治理」「qualification 狀態與 evidence」五個面向，
+也都必須各自附上 evidence block，缺一個都會讓整個 stage 卡在 GATE_FAIL/MISSING_EVIDENCE：
+
+先是 generator 綁定與 profile-skill 綁定這兩個（都用同樣的 `--binding` 檔案格式，外層都是
+`{"protocols": [...]}`，但檢查的欄位完全不同，必須分別附兩個 block）：
+
+```dv-harness-evidence:protocol_generator_binding_gate
+{"protocols": [{"protocol": "usb", "profile_version": "...", "profile_hash": "...",
+  "spec_revision": "...", "generator_version": "...", "generator_hash": "...",
+  "qualification_evidence_hash": "..."}]}
+```
+（每個 protocol 項目都必須同時附上 profile_version/profile_hash/spec_revision/generator_version/
+generator_hash/qualification_evidence_hash 六個欄位，缺任何一個都會 FAIL
+INCOMPLETE_PROTOCOL_GENERATOR_BINDING；如果同時填了 qualified_generator_version 且它跟
+generator_version 不同（代表 generator 版本已經漂移），一定要附上 requalification_evidence_hash，
+否則 FAIL GENERATOR_VERSION_DRIFT_WITHOUT_REQUALIFICATION——沒有漂移的話不需要填
+qualified_generator_version。）
+
+```dv-harness-evidence:protocol_profile_binding_gate
+{"protocols": [{"protocol": "usb", "profile_skills_consulted": ["usb-protocol-profile"]}]}
+```
+（`protocol` 必須是 `.dv-harness/builder/protocol_builder_registry.json` 的 `protocols` 裡真實
+存在的 key，查無此協定會 FAIL UNKNOWN_PROTOCOL；gate 會去讀該協定 registry 條目的
+`profile_skill`／`vip_lookup_skill` 兩個欄位，只要其中有值（非 null）就必須出現在
+`profile_skills_consulted` 清單裡，代表這個 skill 真的被查閱過，漏掉任何一個都會 FAIL
+PROFILE_SKILL_NOT_CONSULTED 並列出 missing 清單；registry 裡這兩個欄位都是 null 的協定，
+`profile_skills_consulted` 可以留空陣列。）
+
+接著是 protocol onboarding 內容完整度（`--profile`，注意跟下面 profile 版本治理的 gate雖然都吃
+`--profile` 檔案，但欄位完全不同、彼此獨立）：
+
+```dv-harness-evidence:protocol_onboarding_gate
+{"protocol_name": "usb", "spec_sources": ["..."], "dut_mapping": "...",
+ "vip_strategy": "...", "state_model": "...", "transaction_model": "...",
+ "error_recovery_model": "...", "verification_mechanism_plan": "...",
+ "vplan_mapping": "...", "test_generation_strategy": "...",
+ "coverage_model": "...", "qualification_plan": "...",
+ "evidence_refs": ["..."]}
+```
+（protocol_name/spec_sources/dut_mapping/vip_strategy/state_model/transaction_model/
+error_recovery_model/verification_mechanism_plan/vplan_mapping/test_generation_strategy/
+coverage_model/qualification_plan 這 12 個欄位都必須有值，缺任何一個都會 FAIL
+INCOMPLETE_PROTOCOL_ONBOARDING 並列出 missing 清單；就算 12 個都填了，若沒有另外附上非空的
+evidence_refs，仍會 FAIL NO_PROTOCOL_EVIDENCE——代表每一項內容主張都要有可回溯的證據來源，不能
+只是文字敘述。）
+
+再來是 profile 版本治理（`--profile`）：
+
+```dv-harness-evidence:protocol_profile_version_gate
+{"protocol_name": "usb", "profile_version": "1.2.0", "spec_revision": "...",
+ "profile_hash": "...", "qualification_state": "QUALIFIED",
+ "qualification_evidence_hash": "..."}
+```
+（protocol_name/profile_version/spec_revision/profile_hash/qualification_state 五個欄位都必須
+有值，缺任何一個都會 FAIL UNVERSIONED_PROTOCOL_PROFILE 並指出缺的是哪個 key；
+qualification_state 若填 `"QUALIFIED"`，一定要另外附上 qualification_evidence_hash，否則 FAIL
+QUALIFIED_PROFILE_WITHOUT_EVIDENCE_HASH；這份 profile 若是取代舊版本（填了 supersedes），一定要
+同時附上 change_summary 說明版本差異，否則 FAIL PROFILE_SUPERSESSION_WITHOUT_CHANGE_SUMMARY——
+沒有取代舊版本時，supersedes/change_summary 兩者都可以省略。）
+
+最後是本 stage 匯總每個協定目前 qualification 狀態的整體 evidence（`--status`，注意這裡每個協定
+項目的 key 是 `"name"`，跟上面 generator/profile-skill 綁定 block 用的 `"protocol"` 不同，不要
+混用）：
+
+```dv-harness-evidence:protocol_qualification_status_gate
+{"protocols": [{"name": "usb", "qualification_state": "SMOKE_QUALIFIED",
+  "profile_version": "...", "spec_revision": "...",
+  "environment_manifest_hash": "...", "qualification_evidence_hash": "...",
+  "generation_supported": true, "profile_available": true}]}
+```
+（`qualification_state` 只要落在 SMOKE_QUALIFIED／REGRESSION_QUALIFIED／PRODUCTION_QUALIFIED
+任一個「已 qualified」等級，就必須同時附上 profile_version/spec_revision/
+environment_manifest_hash/qualification_evidence_hash 四個欄位，缺任何一個都會 FAIL
+QUALIFIED_PROTOCOL_WITHOUT_EVIDENCE；未達 qualified 等級（例如仍在 UNQUALIFIED/IN_PROGRESS）則
+不受這四個欄位限制。另外，只要 generation_supported 填 true（代表這個協定目前支援自動生成
+環境），就必須同時 profile_available 也是 true，否則 FAIL GENERATION_SUPPORT_WITHOUT_PROFILE——
+不能宣稱支援生成、卻沒有真的有可用的 profile。）
 """,
 Stage.REQUIREMENTS_TRACEABILITY.value: """
 Requirement Extraction + Applicability/Waiver：建立 Requirement → vPlan → scenario → command/pattern →
