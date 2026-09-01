@@ -215,6 +215,11 @@ Full procedural detail: `CREATE_ENVIRONMENT.md`.
   (`/home/svcacct/AI/DB`): setup, commands, and why it is safe for
   concurrent multi-user writes (`fcntl.flock` + atomic writes in
   `tools/knowledge_center/broker.py`).
+- **`DEBUG_WORKFLOW_GUIDE.md`** — the end-to-end loop for debugging a
+  `UVM_ERROR` in a DE's own generated VIP environment from PC-side Claude
+  Code: evidence gathering, the Waveform Dump Gate, DE approval points,
+  running simulation in the DE's own `DVWORKDIR`, and redeploying a
+  regenerated environment.
 - **`USAGE_MULTI_USER_SAFETY.md`** — the single place that answers "is it
   safe for multiple people to use the shared `/home/svcacct/AI/Agent`
   deployment at the same time," layer by layer (Knowledge Center: yes;
