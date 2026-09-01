@@ -900,6 +900,74 @@ branch_b{N}（VIP pattern）修改前必須先查 VIP examples、VIP 使用手�
 {"branch": "branch_a0", "dut_rtl_checked": true, "programming_guide_checked": true,
  "dut_rtl_evidence_refs": [{"path": "<真實 RTL 檔案路徑>", "quote": "<從該檔案逐字擷取的一小段，例如暫存器/訊號名稱>"}]}
 ```
+
+測試/Checker 品質三個獨立 hard gate（checker_independence_gate / testcase_name_semantics_gate /
+verification_intent_gate）也必須各自附上 evidence block，缺任一個都會讓 stage 卡在
+MISSING_EVIDENCE（找到真實案例：IMPLEMENT 內容做得很完整，但這三個 gate 的 evidence 一個都沒附，
+導致同一組 GATE_FAIL 連續重試多輪）：
+
+Checker Independence Hard Gate：確保每個 checker 都有真正獨立於 DUT 的實作來源與期望值模型，
+不是拿 DUT 自己的邏輯來檢查自己。回覆結尾附上：
+
+```dv-harness-evidence:checker_independence_gate
+{"checkers": [{"checker_id": "...", "implementation_source": "<checker 實作檔案路徑>",
+  "dut_source": "<被檢查的 DUT RTL 檔案路徑>", "expected_data_source": "REFERENCE_MODEL",
+  "independent_predictor": true, "checker_disabled": false, "signoff_credit": true}]}
+```
+（`implementation_source` 為必填，缺了會判 FAIL（CHECKER_WITHOUT_IMPLEMENTATION_SOURCE）；
+`implementation_source` 不可以跟 `dut_source` 是同一個檔案，等於照抄 DUT 自己的邏輯來檢查自己，
+會判 FAIL（CHECKER_COPIES_DUT_LOGIC）；`expected_data_source` 若為 `"DUT_OUTPUT_ONLY"` 卻沒有
+`independent_predictor: true`，代表期望值本身就是從 DUT 輸出反推出來的，等同沒有獨立期望值模型，
+會判 FAIL（NO_INDEPENDENT_EXPECTED_MODEL）；`checker_disabled: true` 又同時 `signoff_credit: true`
+（checker 已停用卻仍計入 signoff）會判 FAIL（DISABLED_CHECKER_HAS_CREDIT）。本輪若還沒有任何
+新增/修改的 checker，`{"checkers": []}` 是誠實、合法的預設值。）
+
+Testcase Name Semantics Hard Gate：testcase 名稱必須真的表達驗證意圖，不能是 `test1`、`basic`、
+`tmp` 這種佔位式命名。回覆結尾附上：
+
+```dv-harness-evidence:testcase_name_semantics_gate
+{"tests": [{"testcase_id": "...", "name": "usb_bulk_transfer_error_recovery"}]}
+```
+（每筆都要有非空的 `testcase_id` 與 `name`，缺一會判 FAIL（TEST_WITHOUT_ID_OR_NAME）；`name` 不可
+等於 `test1`/`test2`/`basic`/`misc`/`case1`/`tmp`/`new_test`/`scenario1` 這幾個保留字（不分大小寫），
+長度也不可小於 8 字元，否則判 FAIL（ABSTRACT_TEST_NAME）；`name`（不分大小寫）裡至少要包含
+`reset`/`error`/`recovery`/`bulk`/`iso`/`dma`/`ltssm`/`traffic`/`interrupt`/`timeout`/`read`/`write`/
+`link`/`enumeration`/`concurrency`/`performance`/`power`/`clock`/`cdc`/`protocol` 其中一個關鍵字，
+否則判 FAIL（TEST_NAME_LACKS_VERIFICATION_SEMANTICS）。本輪若還沒有任何新增 testcase，
+`{"tests": []}` 是誠實、合法的預設值。）
+
+Verification Intent Hard Gate：requirement/mechanism/coverage/test 四者必須真的互相對得起來，
+每個 requirement 都要有至少一個 test 宣稱涵蓋到。回覆結尾附上：
+
+```dv-harness-evidence:verification_intent_gate
+{"requirements": [{"req_id": "..."}], "mechanisms": [{"mechanism_id": "..."}],
+ "coverage": [{"coverage_id": "..."}],
+ "tests": [{"testcase_id": "...", "requirement_ids": ["..."], "mechanism_ids": ["..."],
+   "coverage_ids": ["..."]}]}
+```
+（`requirements`/`mechanisms`/`coverage`/`tests` 四個陣列都不能是空的，缺任一個分別判 FAIL
+（NO_REQUIREMENTS/NO_MECHANISMS/NO_TESTS/NO_COVERAGE）；每筆 test 的 `requirement_ids`/
+`mechanism_ids`/`coverage_ids` 都不可以是空陣列，否則判 FAIL（INCOMPLETE_TEST_INTENT）；這三組
+id 也都必須是前面 `requirements`/`mechanisms`/`coverage` 陣列裡真的存在的 id 的子集合，引用到
+不存在的 id 會分別判 FAIL（TEST_UNKNOWN_REQUIREMENT/TEST_UNKNOWN_MECHANISM/TEST_UNKNOWN_COVERAGE）；
+最後所有 `requirements` 裡的 req_id 必須至少被一個 test 的 `requirement_ids` 引用到，有漏網的
+requirement 會判 FAIL（REQUIREMENT_WITHOUT_TEST_INTENT，並列出 `missing` 清單）。）
+
+Protocol Isolation Hard Gate（與上面 Manual Lookup Before Edit Hard Gate 共用同一組
+`vip_evidence_refs`／`dut_rtl_evidence_refs` 欄位，但檢查角度不同）：manual_lookup_before_edit_gate
+只管「有沒有查證」，這個 gate 另外管「查證的來源本身有沒有誤引用到禁止當作 primary source 的
+reference 環境樹（目前是 `USB_UVM_Handoff`，對應 CLAUDE.md 的 No Golden-Reference Content Mining
+規則）」。回覆結尾附上：
+
+```dv-harness-evidence:protocol_isolation_gate
+{"vip_evidence_refs": [], "dut_rtl_evidence_refs": []}
+```
+（沿用同一輪 manual_lookup_before_edit_gate 實際附上的 `vip_evidence_refs`／`dut_rtl_evidence_refs`
+內容即可；只要其中任何一筆 `path` resolve 之後的路徑片段包含 `USB_UVM_Handoff`，就代表把 reference
+環境當成 primary VIP/DUT 來源引用，會判 FAIL（REFERENCE_TREE_CITATION_FORBIDDEN）。這個 gate 本身
+允許兩個欄位都缺席或為空陣列直接 PASS——它不像 manual_lookup_before_edit_gate 會因為「沒查證」而
+FAIL，它只在「查證來源真的指向禁止的 reference 樹」時才 FAIL，所以誠實的空陣列或省略欄位都是合法
+的預設值。）
 """,
 Stage.CHANGE_IMPACT.value: """
 對 Git/RTL/UVM/spec/config 變更做 Verification Change Impact。
