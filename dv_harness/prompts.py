@@ -2466,6 +2466,98 @@ bundle_dir 真的是 signoff-export 的輸出，不是隨手放一個假的 mani
 `.dv-harness/soc-composer/subsystem_environment_registry.json`，之後 SYSTEM_LEVEL 階段的
 `system_level_validator` 會拿真正登記過的內容跟 SYSTEM_LEVEL 組裝時的宣稱互相比對，
 不接受 SYSTEM_LEVEL 階段憑空宣稱某個 subsystem「已經 ready」。）
+
+本 stage 另外還有六個獨立的 hard gate，同樣各自要附上 evidence block，缺一個都會讓整個
+stage 卡在 GATE_FAIL/MISSING_EVIDENCE（跟 INTAKE/DISCOVERY 曾經發生過的情況一樣：agent 的
+分析內容本身完全正確，卻因為漏附某個 gate 的 evidence，重試多輪還是卡在同樣的 GATE_FAIL）。
+這六個 gate 專門針對「signoff bundle 內部一致性」與「release attestation 是否完整、
+是否被事後竄改」把關，跟前面 false_pass_resistance_gate/signoff_bundle_completeness_gate/
+subsystem_environment_registration_gate 分別檢查不同面向：evidence_bundle_run_consistency_gate
+與 evidence_freshness_gate 確認證據本身沒有跑錯 run、沒有過期；release_attestation_gate 與
+signoff_snapshot_immutability_gate 確認 release 有被正確簽署、signoff snapshot 沒有被事後竄改；
+signoff_trace_crosscheck_gate 確認 snapshot 內部引用的各條 trace 彼此一致、沒有還沒收斂的
+active failure；verification_verdict_consistency_gate 確認最終 verdict 跟底層各層驗證結果
+邏輯一致，不是憑空宣稱 PASS：
+
+```dv-harness-evidence:evidence_bundle_run_consistency_gate
+{"run_id": "...", "bundle_hash": "...",
+ "evidence": [{"evidence_id": "...", "run_id": "...", "hash": "..."}]}
+```
+（頂層 "run_id" 與 "bundle_hash" 都必須非空，否則直接判 MISSING_BUNDLE_IDENTITY FAIL；
+"evidence" 陣列中每一筆的 "evidence_id" 不可缺漏、也不可跟同一份 bundle 裡其他筆重複
+（否則 DUPLICATE_OR_MISSING_EVIDENCE_ID FAIL）；每一筆的 "run_id" 必須跟頂層 "run_id"
+完全一致，代表這份 bundle 裡的每一筆證據都真的是同一次 run 產生的，不是從別次 run
+混進來的（否則 EVIDENCE_RUN_ID_MISMATCH FAIL）；每一筆都必須附上非空的 "hash"，代表這筆
+證據本身已經被雜湊固定，不能是還沒算過雜湊的暫存內容（否則 UNHASHED_EVIDENCE FAIL）。）
+
+```dv-harness-evidence:evidence_freshness_gate
+{"current": {"rtl_hash": "...", "build_hash": "...", "spec_revision": "..."},
+ "items": [{"evidence_id": "...", "rtl_hash": "...", "build_hash": "...",
+   "spec_revision": "...", "evidence_hash": "..."}]}
+```
+（"current" 代表這次 SIGNOFF 當下真正的 rtl_hash/build_hash/spec_revision 三個身分欄位；
+"items" 陣列中每一筆證據的 rtl_hash/build_hash/spec_revision 都必須跟 "current" 裡對應的值
+逐欄位完全相同，代表這筆證據是針對「這一版」RTL/build/spec 產生的，不是沿用舊版本留下來的
+過期證據（任何一個欄位不符都會判 STALE_SIGNOFF_EVIDENCE FAIL，並標出是哪個 field）；每一筆
+還必須附上非空的 "evidence_hash"（否則 UNHASHED_SIGNOFF_EVIDENCE FAIL）。此 gate 也相容舊版
+`{"evidence_items":[{"evidence_id":...,"revision":...,"content_hash":...}]}` schema，但那個
+schema 需要額外的 --current-revision 參數配合，新產生的 evidence 一律用上面 "current"/"items"
+這組新版欄位。）
+
+```dv-harness-evidence:release_attestation_gate
+{"release_id": "...", "release_hash": "...", "promotion_chain_hash": "...",
+ "evidence_bundle_hash": "...", "attested_by": "...", "attested_at": "...",
+ "attestation_signature": "..."}
+```
+（"release_id"/"release_hash"/"promotion_chain_hash"/"evidence_bundle_hash"/"attested_by"/
+"attested_at" 這六個欄位都必須非空，缺任何一個都會被列進 "missing" 陣列一起判
+INCOMPLETE_RELEASE_ATTESTATION FAIL；"attestation_signature" 必須另外非空，代表這份
+release attestation 真的有被簽署過，不是只填完欄位卻沒有實際簽署（否則
+UNSIGNED_RELEASE_ATTESTATION FAIL）。）
+
+```dv-harness-evidence:signoff_snapshot_immutability_gate
+{"release_hash": "...", "promotion_chain_hash": "...", "evidence_bundle_hash": "...",
+ "manifest_hash": "...", "attestation_signature": "...", "snapshot_hash": "...",
+ "post_signoff_mutation_detected": false}
+```
+（前五個欄位（release_hash/promotion_chain_hash/evidence_bundle_hash/manifest_hash/
+attestation_signature）都必須非空（否則 INCOMPLETE_SIGNOFF_SNAPSHOT FAIL）；"snapshot_hash"
+必須是拿這五個欄位組成的 JSON（key 排序、無多餘空白）重新算出的 sha256，不能自己隨便填一個
+字串——gate 會實際重算一次比對，算出來的值跟填的 "snapshot_hash" 不一致就判
+SIGNOFF_SNAPSHOT_HASH_MISMATCH FAIL；"post_signoff_mutation_detected" 必須誠實反映
+signoff snapshot 定案後是否被偵測到動過，正常情況下是 false，真的有事後被動過的證據時才填
+true（填 true 會直接判 POST_SIGNOFF_MUTATION_DETECTED FAIL，不是拿來隨便填的欄位）。）
+
+```dv-harness-evidence:signoff_trace_crosscheck_gate
+{"snapshot_hash": "...", "trace_chain_hash": "...", "coverage_state_hash": "...",
+ "result_bundle_hash": "...", "rca_bundle_hash": "...", "evidence_bundle_hash": "...",
+ "snapshot_references": {"trace_chain_hash": "...", "coverage_state_hash": "...",
+   "result_bundle_hash": "...", "rca_bundle_hash": "...", "evidence_bundle_hash": "..."},
+ "active_failure_count": 0}
+```
+（頂層六個欄位（snapshot_hash/trace_chain_hash/coverage_state_hash/result_bundle_hash/
+rca_bundle_hash/evidence_bundle_hash）都必須非空（否則 INCOMPLETE_SIGNOFF_CROSSCHECK FAIL）；
+"snapshot_references" 裡對應的五個 hash（trace_chain_hash/coverage_state_hash/
+result_bundle_hash/rca_bundle_hash/evidence_bundle_hash）都必須跟頂層同名欄位逐一完全一致，
+代表 snapshot 內部引用的各條 trace 真的互相對得上、不是各自獨立填的假資料（任何一個不符都會判
+SIGNOFF_REFERENCE_MISMATCH FAIL，並標出是哪個 field）；"active_failure_count" 必須是 0，代表
+這次 signoff 當下已經沒有還沒收斂的 active failure（大於 0 會直接判 SIGNOFF_WITH_ACTIVE_FAILURES
+FAIL，不能在還有未結案 failure 的狀態下 signoff）。）
+
+```dv-harness-evidence:verification_verdict_consistency_gate
+{"final_verdict": "PASS", "simulation_status": "PASS", "semantic_status": "TRUE_PASS",
+ "checker_status": "PASS", "active_failure_ids": [], "signoff_credit_allowed": true,
+ "failure_attribution": "N/A", "promotion_requested": true}
+```
+（"final_verdict" 必須是 "PASS"/"FAIL"/"BLOCKED" 三選一，其他值一律判 INVALID_FINAL_VERDICT
+FAIL；"final_verdict" 為 "PASS" 時，"simulation_status" 必須是 "PASS"、"semantic_status" 必須是
+"TRUE_PASS"、"checker_status" 必須是 "PASS"、"active_failure_ids" 必須是空陣列、
+"signoff_credit_allowed" 必須是布林值 true，這五個條件只要有一個不成立就會判
+INCONSISTENT_FINAL_PASS FAIL（代表不能在模擬層/語意層/checker 層任何一層還沒真正收斂、或還有
+active failure 的狀況下宣稱 final_verdict 是 PASS）；"final_verdict" 為 "FAIL" 且
+"failure_attribution" 是 "UNKNOWN"、同時 "promotion_requested" 為 true 時，會判
+UNKNOWN_FAILURE_ATTRIBUTION_CANNOT_PROMOTE FAIL（代表 root cause 歸因都還沒釐清，就不能同時
+要求把這次結果拿去 promote）。）
 """
 }
 
