@@ -19,7 +19,7 @@ the workflow-wide final test verdict.
 | 4 | Stage start/complete visual markers | `5976a53f9ea64b5f193ecd22839ebf61f47219f0` | `.work/stage-start-complete-visual-markers-implementation-report.md` |
 | 5 | Per-agent attribution + inner-loop token/runtime accounting | `1103d1245031e50776176ea81862988720c3071d` | `.work/per-agent-attribution-and-inner-loop-accounting-implementation-report.md` |
 | 6 | Multi-agent timing reconciliation (AgentTaskStore -> stage_profile) | `216f5d99c6be37461261fd0906e35f639c213b2d` | `.work/multi-agent-timing-reconciliation-implementation-report.md` |
-| 7 | Cross-adapter token-tracking tests + final verification (this task) | *committed alongside this report -- see `git log -1` on this branch* | `.work/cross-adapter-token-tracking-tests-and-final-verification-implementation-report.md` |
+| 7 | Cross-adapter token-tracking tests + final verification (this task) | `352780f6ab00a7707620887519177506064f971e` | `.work/cross-adapter-token-tracking-tests-and-final-verification-implementation-report.md` |
 
 ## What each task built (one paragraph each)
 
