@@ -99,3 +99,101 @@ SHARED_RESOURCE,ARBITRATION_REF(對應 branch-mapper MAP_ID),SOURCE,CONFIDENCE
 這組對應是本 session 真實跑過 evidence-consensus 驗證得到的，不是憑空假設；但套用到其他協定/其他
 DUT 時，四層各自對應到哪個真實元件仍要重新查證（不同 VIP/不同 DUT 的實際物件命名一定不同），
 此處只提供「如何辨認哪個真實元件扮演哪一層角色」的參考範例，不是可以跨專案直接複製的具體值。
+
+
+## AMBA-as-Primary-DUT Master/Slave Redefinition (2026-09-01, generic placeholder guidance -- UNTESTED, awaiting a real AMBA-fabric pilot project to validate)
+
+**Status: UNTESTED.** The "AMBA M×N Mapping" section above, and the
+"Initialization Task Hierarchy" section above it, both treat AMBA/APB/AXI
+arbitration purely as a **shared-resource overlay layered on top of
+pre-existing per-port `branch_a*` branches** -- they assume the DUT
+already has some other primary topology (e.g. USB per-port), and AMBA is
+just how those existing branch_a* ports happen to share an internal bus.
+That assumption does not hold when the AMBA/AHB/AXI/ACE-Lite fabric itself
+IS the primary DUT under test -- e.g. an SoC interconnect/NoC verification
+environment where there is no "USB port"-shaped topology to arbitrate on
+top of; the master and slave agents on the fabric ARE the ports.
+
+This section defines a generic alternate redefinition of
+`branch_a*`/`branch_b*` for that case. It has **not** been validated
+against any real interconnect RTL, fabric configuration, or fabric
+verification IP -- there is no real AMBA-fabric-as-primary-DUT pilot
+project anywhere in this repo to derive or confirm it from, and per
+CLAUDE.md's Evidence Truth Rule / No Golden-Reference Content Mining, no
+such evidence (or a fabricated pilot's "results") may be invented to make
+this look proven. Treat this as placeholder-style GENERIC guidance meant
+to give a future real AMBA-fabric pilot a starting shape to confirm,
+correct, or replace with real evidence -- not as a proven pattern, and not
+as a claim that AMBA4-as-fabric genericity_status has changed from
+structurally-incompatible to working.
+
+### Redefinition
+
+When AMBA (or any bus fabric) is the primary DUT topology, the four-layer
+architecture from "Initialization Task Hierarchy" above generalizes as
+follows -- the SAME `block = SoC global init` / `branch_fw = shared
+service loop` framing, reapplied to a fabric context instead of a per-port
+context:
+
+1. **`block`** -- unchanged in role: SoC-global init that is a
+   precondition for the whole fabric (global clock/reset de-assertion,
+   fabric-wide default register state, interconnect PLL lock, etc.),
+   still a single non-per-agent task, not split per master/slave.
+2. **`branch_a0/branch_a1/branch_a2/...`** -- redefined as **AMBA MASTER
+   agents** (one branch per bus-master/initiator on the fabric, e.g. each
+   CPU core, DMA engine, or other bus-mastering IP block that issues
+   transactions onto the fabric) instead of per-port DUT+PHY init. Each
+   master agent's init task is that master's own reset/config/enable
+   sequence, per real RTL evidence rather than assumption -- and, per the
+   existing per-port-parallelism rule above, unrelated masters' init
+   tasks default to parallel.
+3. **`branch_b0/branch_b1/branch_b2/...`** -- redefined as **AMBA
+   SLAVE/memory agents** (one branch per addressable slave/target on the
+   fabric -- memory controller, peripheral register block, bridge to
+   another fabric, etc.) instead of per-port VIP testing scenarios. Each
+   slave agent is where a VIP-driven transaction actually lands (e.g. a
+   memory-model VIP or register-block VIP behind that slave port).
+4. **`branch_fw`** -- generalizes from "per-port FW service loop
+   dispatching DUT interrupts to VIP scenarios" to a **shared
+   arbitration/routing service loop for the fabric**: the layer that owns
+   address-decode/routing-condition knowledge (which slave a given
+   address range maps to), and, where the fabric itself raises
+   interrupts/events (e.g. an interconnect error/security-violation IRQ,
+   an outstanding-transaction-timeout IRQ), the event-driven
+   ARM/WAIT/WAKE/DECODE/CLEAR loop defined in `interrupt-event-dispatch`
+   still applies unchanged. The only difference from the per-port case is
+   WHICH agents it dispatches between (master/slave pairs on a fabric,
+   not DUT-port <-> VIP-scenario pairs).
+
+### Mapping record implications
+
+The existing `MAP_ID,A_BRANCH,B_BRANCH,DIRECTION,PROTOCOL,CONFIG,STATUS,
+SOURCE,CONFIDENCE` record shape and the existing "AMBA M×N Mapping"
+arbitration-policy rules above (round-robin/priority/QoS from real RTL
+evidence, shared-arbitration-domain tracking, no serializing unrelated
+resources) apply unchanged. What changes under this redefinition is only
+that `A_BRANCH` now names a master agent (not a DUT port) and `B_BRANCH`
+now names a slave/memory agent (not a per-port VIP scenario). A single
+master can still legitimately map N:M to multiple slaves (address-range
+routing), and a single slave can still be shared M:N by multiple masters
+(arbitration domain) -- this is the same N:M semantics already allowed
+above, just with the agent identities redefined.
+
+### What still needs real-pilot confirmation
+
+- Whether a real fabric verification environment's VIP topology naturally
+  maps 1 VIP instance per slave agent, or something coarser/finer (e.g.
+  one system-level fabric VIP covering multiple slaves) -- cannot be
+  determined without a real fabric VIP's user manual/examples, per the
+  "No Golden-Reference Content Mining" rule and the existing VIP-sourcing
+  rule in `vip-scenario-branch`.
+- Whether `block`'s SoC-global-init boundary and each master's
+  `branch_a*` init boundary are actually as cleanly separable in a real
+  interconnect RTL as they are in the per-port USB case (e.g. some
+  interconnects fold master-enable into the same global config space as
+  SoC init) -- must be confirmed from real RTL, not assumed here.
+
+**This entire section remains UNTESTED until a real
+AMBA-fabric-as-primary-DUT pilot project exists in this repo and is used
+to confirm, correct, or replace the redefinition above with real
+evidence.**

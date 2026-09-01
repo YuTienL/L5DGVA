@@ -297,3 +297,16 @@ mechanics already codified in `.claude/skills/CORE/*`:
   block/branch_a/branch_fw/branch_b usage pattern is organized structurally — subject to the
   same "No Golden-Reference Content Mining" rule above: use it to check structural/organizational
   conformance, never as a source to mine protocol-behavior content from for a different project.
+- **Non-USB topology variants (2026-09-01, UNTESTED placeholder guidance)**: the canonical
+  `block/branch_a*/branch_fw/branch_b*` naming above was reverse-distilled from, and has only
+  ever been validated against, USB. Two topology-shape variants have since been added as
+  clearly-labeled, explicitly UNTESTED generic guidance for a future non-USB pilot to start
+  from — neither has been validated end-to-end and neither changes any protocol's
+  genericity_status from untested/structurally-incompatible to working: (1) a **simplex
+  streaming `branch_fw` variant** (RX-only/TX-only DUT, e.g. MIPI CSI-2/DSI-shaped) in
+  `interrupt-event-dispatch/SKILL.md` — "Simplex Streaming branch_fw Variant" section; (2) an
+  **AMBA-as-primary-DUT master/slave redefinition** of `branch_a*`/`branch_b*` (fabric IS the
+  DUT, not an overlay on top of pre-existing ports) in `branch-mapper/SKILL.md` — "AMBA-as-
+  Primary-DUT Master/Slave Redefinition" section. A future agent building a non-USB environment
+  (CSI-2/DSI, or an AMBA-fabric-as-DUT/`SYSTEM_LEVEL_MODE` environment) should read these
+  sections first rather than starting from zero.

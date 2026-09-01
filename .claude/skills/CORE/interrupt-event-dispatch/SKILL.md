@@ -122,3 +122,115 @@ rule itself):
    produced no new edge and permanently starved that instance's
    interrupt path until the next unrelated event happened to arrive on a
    different source.
+
+## Simplex Streaming branch_fw Variant (2026-09-01, generic placeholder guidance -- UNTESTED, awaiting a real simplex-streaming pilot project to validate)
+
+**Status: UNTESTED.** Everything above this section (the ARM/WAIT/WAKE/
+DECODE/CLEAR loop, the two generic decode/clear rules, and the USB
+DWC_usb31 worked example) describes and was validated only against a
+**bidirectional host-command/device-response** framing: branch_fw arms a
+command-trigger, the device processes it, branch_fw waits for the
+resulting response/completion interrupt, decodes it, and dispatches to a
+branch-B VIP scenario that checks the expected response. That framing does
+not fit a **simplex streaming** DUT that has no command/response pair at
+all -- e.g. a MIPI CSI-2 RX-only receiver or a MIPI DSI TX-only
+transmitter, where the recurring "event" is a hardware DMA/frame-buffer
+engine finishing (or needing) one buffer, not firmware finishing a
+request.
+
+This section defines a generic alternate framing for that case. It has
+**not** been validated against any real RTL, register map, or programming
+guide -- there is no real simplex-streaming (CSI-2/DSI or equivalent)
+pilot project anywhere in this repo to derive or confirm it from, and per
+CLAUDE.md's Evidence Truth Rule / No Golden-Reference Content Mining, no
+such evidence may be fabricated to make this look proven. Treat this as
+placeholder-style GENERIC guidance meant to give a future real
+simplex-streaming project a starting shape to confirm, correct, or
+replace with real evidence -- not as a proven pattern, and not as a claim
+that CSI-2/DSI genericity_status has changed from untested to working.
+
+### Simplex streaming branch_fw loop shape
+
+Instead of "arm command -> wait response -> decode -> clear" (bidirectional
+above), the simplex loop is "arm a buffer -> wait completion -> service ->
+advance to the next buffer" (unidirectional, DMA/frame-buffer-completion
+driven). Register names below are deliberately generic PLACEHOLDERS
+(`STATUS_REG`, `BUFFER_DONE_IRQ`, `FRAME_ID`, etc.) -- a real project must
+replace every one of them with the actual evidence-sourced register/field
+name from that DUT's RTL/programming guide, exactly as the existing rule
+above already requires for `SOURCE_HIER`:
+
+1. **ARM** -- an ordinary CPU-write task programs the DMA/buffer engine's
+   next free buffer descriptor/address (placeholder: `BUFFER_DESC_REG`)
+   and enables the buffer/frame-completion interrupt source (placeholder:
+   `BUFFER_DONE_IRQ_EN`).
+   - RX-only (CSI-2-shaped): the armed buffer is a receive target -- the
+     DUT fills it from the incoming stream.
+   - TX-only (DSI-shaped): the armed buffer is a transmit source -- the
+     DUT drains it out to the stream.
+   - Which direction applies, and the real register names, must be
+     confirmed from that DUT's actual RTL/programming guide -- never
+     assumed from the protocol name alone.
+2. **WAIT** -- a per-instance task does a true event-driven `wait` on the
+   buffer/frame-completion interrupt (placeholder: `BUFFER_DONE_IRQ`),
+   under the same event-driven-wait discipline as "CPU Task 層級實作模式"
+   above (no polling as the primary detection mechanism; a bounded
+   watchdog-as-checker fallback is allowed under the same rule already
+   stated there).
+3. **WAKE/DECODE** -- on wake, read the completion status register
+   (placeholder: `STATUS_REG`) and the identifying tag of the buffer/frame
+   that completed (placeholder: `FRAME_ID`/`BUFFER_ID` -- whichever field
+   the real register map actually exposes for correlating which buffer
+   finished). There is no "response" to correlate against a prior
+   command here: the completion itself IS the event, not a reply to one.
+4. **CLEAR** -- clear only the completion bit(s) actually serviced this
+   round via write-1-to-clear, same aggregated-W1C rule as above, in case
+   one status register aggregates multiple buffer-completion sources
+   (e.g. multiple DMA channels/streams).
+5. **ADVANCE** -- program the next buffer descriptor/address and re-arm
+   (return to step 1). This step has no analogue in the bidirectional
+   loop above: there is no "next command" to wait for, only the next
+   buffer slot needed to keep the stream flowing without overflow (RX) or
+   underflow (TX). Whether "next buffer" means a fixed ring-buffer slot, a
+   driver-managed free list, or something else again depends on the real
+   DUT's DMA architecture and must be confirmed from evidence, not
+   assumed here.
+
+### What is genuinely different from the bidirectional framing
+
+- No command register is the thing being "armed" -- what's armed is a
+  buffer/descriptor, and the completion interrupt fires because hardware
+  moved data, not because firmware finished processing a request.
+- The top-of-file flow's `map 到 vPlan scenario/command -> dispatch 到
+  branch-B -> 等待/檢查預期 response` step does not translate literally:
+  for a streaming DUT, branch-B (e.g. a CSI-2 camera-model VIP driving
+  pixel data, or a DSI display-model VIP consuming it) is typically
+  driving or absorbing the stream *continuously*, not acting as a
+  request/response peer dispatched to per-event. The `IRQ_ID...`/
+  `SERVICE_LOOP_ID...` record fields below still apply, but
+  `PATTERN_ID`/`COMMAND_ID` may legitimately be recorded as not-applicable
+  for a pure streaming completion event -- this must be confirmed against
+  the real VIP's sequence model on a real pilot, not assumed here.
+- The per-port parallelism already defined in "FW Service Loop" above is a
+  reasonable, low-risk generalization to a multi-lane/multi-stream simplex
+  DUT (e.g. multiple CSI-2 virtual channels each getting one independent
+  service loop, same "no cross-stream global lock" rule as above) -- this
+  extension of already-validated per-port logic is not itself claimed
+  unvalidated, only the buffer-completion loop shape above is.
+
+### Recording
+
+Reuses the existing `IRQ_ID,IRQ_NAME,SOURCE_HIER,STATUS_REG,MASK_REG,
+CLEAR_REG,TRIGGER,BRANCH_B,PATTERN_ID,COMMAND_ID,RESOURCE_SCOPE,TIMEOUT,
+SOURCE,CONFIDENCE` and `SERVICE_LOOP_ID,PORT_ID,WAIT_EVENT_SET(...),
+DISPATCH_TARGETS(...),SHARED_RESOURCE,ARBITRATION_REF,SOURCE,CONFIDENCE`
+record shapes unchanged. For a simplex streaming source: `TRIGGER` records
+the buffer/frame-completion condition (e.g. "buffer N complete"), not a
+command name; `PATTERN_ID`/`COMMAND_ID` may be recorded N/A with a
+`SOURCE`/`CONFIDENCE` note explaining why, when there is no discrete
+VIP-side command being dispatched.
+
+**This entire section remains UNTESTED until a real simplex-streaming
+(CSI-2, DSI, or equivalent) pilot project exists in this repo and is used
+to confirm, correct, or replace the placeholder register/field names above
+with real evidence-sourced ones.**
