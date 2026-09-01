@@ -135,7 +135,21 @@ class Session:
         for i in range(0, len(b64), chunk):
             self.send('echo %s >> %s' % (b64[i:i + chunk], tmp))
             time.sleep(0.015)
-        self.read_until(r'[>$]\s*$', 60, 'chunks flushed')
+        # REAL BUG FIX (2026-09-02, found live -- 7/7 puts failed with
+        # MD5_MISMATCH on a relay that had been up a while): the old
+        # generic prompt pattern ([>$]\s*$) can match as soon as the FIRST
+        # of many rapid-fire echo commands redraws a prompt, long before
+        # the LAST of them has actually been processed -- read_until()'s
+        # `got` buffer is local to each call and any bytes read past its
+        # match point are silently dropped, so residual tail output from
+        # this loop could bleed into the very next read_until() call and
+        # corrupt ITS marker-based extraction (the compound base64-d/
+        # md5sum/rm command below). Use the same unique-marker technique
+        # run() already uses instead of a pattern that can spuriously
+        # match mid-stream.
+        flush_marker = 'PUTFLUSH%dZ' % (int(time.time() * 1000) % 1000000)
+        self.send('echo %s' % flush_marker)
+        self.read_until(flush_marker, 60, 'chunks flushed')
 
         out, rc = self.run('base64 -d %s > %s && md5sum %s && rm -f %s'
                            % (tmp, remote, remote, tmp), 300)
