@@ -74,6 +74,19 @@ python tools/remote/remote_exec.py "make WAVE=1"   # runs in DVWORKDIR automatic
 python tools/remote/remote_exec.py --cwd /tmp "ls" # an explicit --cwd still wins over DVWORKDIR
 ```
 
+**Setting `VCWORKDIR` and `DVWORKDIR` to the same path is supported and is
+the recommended pattern for a relay dedicated to one environment** — they
+are read by two different scripts with no cross-check between them, so
+there is nothing to reconcile. Pointing both at
+`/home/tmpacct/devuser/UVM/USB`, for example, means the relay already
+starts there (`VCWORKDIR`) *and* every `remote_exec.py` call redundantly
+re-confirms that cwd per request (`DVWORKDIR`) — `cd` into the directory
+you're already in is a normal no-op in both bash and tcsh, so this only
+adds safety (protection against cwd drift from an earlier command) with no
+downside. Proven by
+`test_run_op_cwd_equal_to_relays_own_startup_workdir_is_a_safe_noop` in
+`dv_harness_tests/test_remote_relay.py`.
+
 ### Per-request state leakage — use `--cwd`, not a standing `cd`
 
 The relay is **one continuous shell**, not a fresh one per `remote_exec.py`

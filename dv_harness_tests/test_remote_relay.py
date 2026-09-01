@@ -268,6 +268,22 @@ def test_run_op_cwd_quoting_escapes_embedded_single_quotes():
     assert cmd == "(cd '/tmp/o'\\''brien' && pwd)"
 
 
+def test_run_op_cwd_equal_to_relays_own_startup_workdir_is_a_safe_noop():
+    # VCWORKDIR (the relay's own cd-at-startup target) and DVWORKDIR (a
+    # caller's per-request --cwd default) are independent env vars with no
+    # cross-check between them -- a user pointing both at the same real
+    # deployment path (the common case for a relay dedicated to one
+    # environment) must not trigger any special-cased rejection or
+    # behavior change. `cd` into the directory you are already in is a
+    # normal no-op in both bash and tcsh.
+    server = make_server()
+    same_path = "/home/svcacct/AI/Agent"  # stands in for VCWORKDIR's value
+    server.handle_request({
+        "token": TOKEN, "op": "run", "cmd": "pwd", "cwd": same_path,
+    })
+    assert server.session.run_calls == [("(cd '/home/svcacct/AI/Agent' && pwd)", 1800)]
+
+
 def test_run_op_without_cwd_key_is_unchanged_from_before():
     server = make_server()
     server.handle_request({"token": TOKEN, "op": "run", "cmd": "pwd"})
