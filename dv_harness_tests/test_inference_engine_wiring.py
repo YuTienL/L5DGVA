@@ -134,13 +134,15 @@ def _re_audit_pass_text() -> str:
         "attribution_confidence": "HIGH",
     }
     deep_rca = {
-        "evidence_sources": [
-            {"source": s, "checked": True, "evidence_hash": f"h_{s}"}
-            for s in _DEEP_RCA_REQUIRED_SOURCES
-        ],
-        "first_bad_event": {"time_ns": 1000},
-        "causal_chain": [{"e": "a"}, {"e": "b"}],
-        "confidence": "HIGH",
+        "rca": {
+            "evidence_sources": [
+                {"source": s, "checked": True, "evidence_hash": f"h_{s}"}
+                for s in _DEEP_RCA_REQUIRED_SOURCES
+            ],
+            "first_bad_event": {"time_ns": 1000},
+            "causal_chain": [{"e": "a"}, {"e": "b"}],
+            "confidence": "HIGH",
+        }
     }
     dut_request = {
         "dut_request_path": "docs/dut-request.md", "issue_id": "ISSUE-1",

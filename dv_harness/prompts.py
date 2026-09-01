@@ -1882,12 +1882,12 @@ confidence 的升級路徑站得住腳、跟其他 gate 一致的 attribution �
 （non-deterministic）failure 有獨立的歸屬判斷。四個 gate 分別從不同角度檢查同一份 RCA：
 
 ```dv-harness-evidence:deep_rca_evidence_gate
-{"first_bad_event": "...", "causal_chain": ["...", "..."],
+{"rca": {"first_bad_event": "...", "causal_chain": ["...", "..."],
  "confidence": "HIGH",
  "evidence_sources": [
-   {"source": "SIM_LOG", "checked": true, "evidence_hash": "..."},
-   {"source": "TRACE", "checked": true, "evidence_hash": "..."},
-   {"source": "RTL", "checked": true, "evidence_hash": "..."},
+   {"source": "SIM_LOG", "checked": true, "evidence_hash": "...", "evidence_path": "run/.../sim.log"},
+   {"source": "TRACE", "checked": true, "evidence_hash": "...", "evidence_path": "run/.../trace.vcd"},
+   {"source": "RTL", "checked": true, "evidence_hash": "...", "evidence_path": "rtl/.../module.sv"},
    {"source": "TESTBENCH", "checked": true, "evidence_hash": "..."},
    {"source": "COMMAND", "checked": true, "evidence_hash": "..."},
    {"source": "SCOREBOARD", "checked": true, "evidence_hash": "..."},
@@ -1896,13 +1896,21 @@ confidence 的升級路徑站得住腳、跟其他 gate 一致的 attribution �
    {"source": "VIP_EXAMPLE", "checked": true, "evidence_hash": "..."},
    {"source": "VIP_SOURCE", "checked": true, "evidence_hash": "..."},
    {"source": "VIP_DOCUMENT", "checked": true, "evidence_hash": "..."}
- ]}
+ ]}}
 ```
-（`evidence_sources` 裡必須湊齊固定 11 種來源——SIM_LOG/TRACE/RTL/TESTBENCH/COMMAND/
+（`rca` 這層包裝是必要的：這個 gate 現在會額外把 `evidence_path` 對應的真實檔案內容拿去跟你填的
+`evidence_hash` 比對，真正的 repo root 由 harness 自己帶入 --root，不接受你在 block 裡另外指定。
+`evidence_sources` 裡必須湊齊固定 11 種來源——SIM_LOG/TRACE/RTL/TESTBENCH/COMMAND/
 SCOREBOARD/PHY_MODEL/STANDARD_SPEC/VIP_EXAMPLE/VIP_SOURCE/VIP_DOCUMENT——每一種都要
 `checked:true` 且 `evidence_hash` 非空，缺一種就 FAIL DEEP_RCA_EVIDENCE_INCOMPLETE 並列出缺的
-來源；`first_bad_event` 不得空白；`causal_chain` 至少要 2 個節點，代表真的有推導出因果鏈而
-不是只給結論；`confidence` 只接受 HIGH/VERIFIED/BLOCKED 三種——LOW/MEDIUM 在這個 gate 視為
+來源。**SIM_LOG/RTL/TRACE 這三種一律要另外附上 `evidence_path`**（相對這個專案 repo root 的路徑，
+指向真正在磁碟上的當前 sim.log/RTL/waveform 檔案）：附上後，gate 會獨立重新計算該檔案目前內容的
+sha256，與你填的 `evidence_hash` 比對，兩者不符就直接 FAIL EVIDENCE_HASH_STALE_OR_FABRICATED（代表
+你引用的 hash 是憑記憶回想、或憑空捏造，不是這次真的重新讀取當前檔案算出來的）；路徑在磁碟上找
+不到則 FAIL EVIDENCE_PATH_NOT_FOUND。COMMAND/SCOREBOARD/TESTBENCH 等其餘來源、以及舊版尚未提供
+`evidence_path` 的呼叫者，仍可只靠 `evidence_hash` 非空通過（較弱的舊版檢查，之後應逐步補齊
+`evidence_path`）；`first_bad_event` 不得空白；`causal_chain` 至少要 2 個節點，代表真的有推導出
+因果鏈而不是只給結論；`confidence` 只接受 HIGH/VERIFIED/BLOCKED 三種——LOW/MEDIUM 在這個 gate 視為
 「還沒查完」而直接 FAIL；填 BLOCKED 時必須同時附 `missing_evidence` 與 `next_action`，說明卡在
 哪、下一步要做什麼，不能只寫 BLOCKED 就不了了之。）
 

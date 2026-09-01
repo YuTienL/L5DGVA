@@ -235,7 +235,15 @@ STAGE_GATES = {
     "RE_AUDIT": [
         ("root_cause_evidence_gate", "root_cause_evidence_gate.py", "--root-cause"),
         ("rca_replay_fix_closure_gate", "rca_replay_fix_closure_gate.py", "--closure"),
-        ("deep_rca_evidence_gate", "deep_rca_evidence_gate.py", "--rca"),
+        ("deep_rca_evidence_gate", "deep_rca_evidence_gate.py", (
+            EvidenceFlag("--rca", "rca"),
+            # Harness-supplied real project root (2026-09-02, RE_AUDIT
+            # evidence-gate audit follow-up) -- never agent-attested, so an
+            # agent's evidence_sources[].evidence_path can't be pointed at a
+            # fabricated tree. Same ContextFlag("--root", ...) convention as
+            # feature_continuity_gate/protocol_builder_registry_conformance_gate.
+            ContextFlag("--root", lambda root: str(root)),
+        )),
         ("dut_request_record_gate", "dut_request_record_gate.py", "--record"),
         ("fix_effectiveness_gate", "fix_effectiveness_gate.py", "--fix"),
         ("fix_regression_non_regression_gate", "fix_regression_non_regression_gate.py", "--closure"),
