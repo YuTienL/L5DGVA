@@ -1205,6 +1205,21 @@ random or directed | speed | instance | checkers active | notes
 - **Keep the NOT COVERED rows**, and mark which are blocked on information
   rather than effort. A plan listing only what already runs is a report.
 
+**BUG FIX (2026-09-01, vplan-doc-and-wiring-fix):** the agent file used to
+say no generator existed for this ("confirmed absent... doc-only") -- FALSE.
+Real generator: `dv_harness/vplan_writer/writer.py`, CLI: `dv-harness
+vplan-export` (15-column layout + the 3 REQUIRED validation rules above,
+typed refuse-on-mismatch, tests in `dv_harness_tests/test_vplan_writer.py`).
+**Run it, don't hand-author the `.xlsx`:** `dv-harness vplan-export
+<items.json> --out <path>.xlsx --protocol <TARGET_IP> --pattern-dir <dir>
+--dispatcher-file <dv_uvm_pattern_pool.svh> --task-declaration-source
+'<tb/tests/*.sv>'` (`--help` for `--known-check-name`, `--sheet`, and the
+regex-override flags). Also now wired into the automatic `STAGE_GATES
+['VPLAN']` gate pipeline (`tools/vplan/vplan_writer_validation_gate.py`,
+alongside the pre-existing `spec_coverage_audit.py`), so LOCK re-checks the
+same 3 rules against real pattern-dir/dispatcher-file/task-declaration
+evidence, not just an agent-attested `requirements[]` summary.
+
 ---
 
 ## Packaging

@@ -2290,9 +2290,35 @@ environment:
   the contents page height, which shifts every page after it, so a single pass
   is always wrong.
 
-> **No generator code for this in v50 or the imported source** -- confirmed
-> absent (no `openpyxl`/equivalent anywhere in `dv_harness/` for the vPlan
-> below either). Both remain doc-only.
+> **No generator code for the User Guide (HTML/PDF rendering) in v50 or the
+> imported source** -- confirmed absent. The User Guide remains doc-only:
+> author it by hand from the fourteen-section table above.
+>
+> **Confirmed drift (2026-09-01): the vPlan half of the claim above ("no
+> `openpyxl`/equivalent anywhere in `dv_harness/` for the vPlan below
+> either... both remain doc-only") was FALSE as of this date and has been
+> removed.** A real, substantial (778-line), openpyxl-based vPlan generator
+> exists at `dv_harness/vplan_writer/writer.py`, exposed as a real CLI
+> subcommand, `dv-harness vplan-export` (wired in `dv_harness/cli.py`). It
+> implements the exact 15-column layout and the 3 REQUIRED validation rules
+> the vPlan section below describes (typed errors:
+> `UnresolvedPatternFileError`, `UnknownTaskDeclarationError`,
+> `PatternNotInDispatcherError`), and has a full, passing test suite
+> (`dv_harness_tests/test_vplan_writer.py`). This agent file's own prior
+> text calling it "confirmed absent" was itself the drift the Evidence Truth
+> Rule warns about -- the module was added in a later round and this section
+> was never reconciled back to match. Do not author the vPlan free-form: at
+> Step 11, actually run `dv-harness vplan-export` for the real deliverable
+> -- see the concrete invocation in "The vPlan" section below. Separately, a
+> follow-up audit found `dv_harness/gates.py`'s automatic
+> `STAGE_GATES['VPLAN']` gate pipeline did not call this real validator
+> either (it only wired `tools/vplan/spec_coverage_audit.py`, which checks a
+> structurally different `requirements[]` schema and never touches
+> `vplan_writer`) -- this has now also been wired, same date
+> (`tools/vplan/vplan_writer_validation_gate.py`, `dv_harness_tests/
+> test_vplan_writer_validation_gate.py`), so the automatic LOCK gate for
+> this stage now also exercises the real pattern/task/dispatcher evidence
+> checks, not only a human-run CLI call.
 
 ### The vPlan
 
@@ -2328,6 +2354,37 @@ random or directed | mode/speed | instance | checkers active | notes
 - **Keep the `NOT COVERED` rows**, and mark which are blocked on information
   rather than effort. A plan listing only what already runs is a report, not a
   plan.
+
+> **Generate it by actually running `dv-harness vplan-export`** (2026-09-01,
+> vplan-doc-and-wiring-fix -- see the corrected note above the previous
+> section) -- never hand-author the `.xlsx` or a free-form substitute:
+>
+> ```
+> dv-harness vplan-export <items.json> \
+>   --out uvm/vplan/<IP>_Verification_Plan.xlsx \
+>   --protocol <TARGET_IP> \
+>   --pattern-dir uvm/tb/patterns \
+>   --dispatcher-file uvm/tb/patterns/dv_uvm_pattern_pool.svh \
+>   --task-declaration-source 'uvm/tb/tests/*.sv' \
+>   [--known-check-name <check_name> ...] [--sheet verification_plan --sheet coverage_summary]
+> ```
+>
+> `<items.json>` is a JSON list of VPlanItem dicts, one per row, using
+> exactly the field names this section's column table names (`req_id`,
+> `feature_area`, `verification_item`, `pattern_name`, `task_name`, `suite`,
+> `covered_by`, `description`, `spec_section`, `constraint_items`,
+> `random_or_directed`, `mode_speed`, `instance`, `checkers_active`,
+> `notes`, `blocked_on`, `blocked_reason`). `--pattern-dir`/
+> `--dispatcher-file`/`--task-declaration-source` are real paths into the
+> environment just built -- this is what lets the command run the 3
+> REQUIRED validation rules above against real evidence, not agent
+> say-so, and refuse (typed error, no partial file written) on any
+> mismatch. Run `dv-harness vplan-export --help` for the full flag list,
+> including `--dispatcher-pattern-regex`/`--task-declaration-regex`
+> (override the default extraction regex for a non-USB dispatcher/test
+> naming convention) and `--known-check-name` (cross-checks `checkers
+> active` against a real scoreboard `check_name` set; omit entirely to skip
+> that one optional check).
 
 ### The package
 
