@@ -2047,6 +2047,141 @@ subsystem_waivers 附上
 `{"subsystem": "...", "status": "WAIVED"|"NOT_APPLICABLE", "waiver_approved": true, "waiver_evidence": "..."}`；
 非 multi-subsystem system-level 組裝改附
 `{"system_level_applicable": false, "system_level_not_applicable_reason": "..."}`。）
+
+除了以上四個 gate，SYSTEM_LEVEL 這個 stage 實際上還註冊了另外十個 hard gate，涵蓋
+cross-protocol/cross-domain 情境證據、release 版本釘選與一致性、change impact 重跑範圍、
+subsystem 相依圖、deadlock/livelock、以及共享資源競爭六大類，缺任何一個都會讓 stage 卡在
+GATE_FAIL/MISSING_EVIDENCE（即使前面四個 gate 的 evidence 都已經附齊）：
+
+Cross-protocol / cross-domain 情境證據（三個 gate 概念相近但各自要求不同欄位，須各自附上）：
+
+```dv-harness-evidence:cross_protocol_scenario_gate
+{"scenarios": [{"scenario_id": "SC1", "protocols": ["USB", "PCIE"],
+  "requirement_ids": ["..."], "mechanism_ids": ["..."], "coverage_ids": ["..."],
+  "evidence": ["..."], "interaction_point": "..."}]}
+```
+（每個 scenario 的 protocols 至少要有 2 個不同協定，否則判 NOT_CROSS_PROTOCOL；requirement_ids/
+mechanism_ids/coverage_ids/evidence 四個欄位都不能是空值，缺任一個都會 FAIL
+INCOMPLETE_CROSS_PROTOCOL_TRACE 並標出缺哪個欄位；interaction_point 必須說明這個情境實際的
+協定交互點，沒填會 FAIL NO_PROTOCOL_INTERACTION_POINT。）
+
+```dv-harness-evidence:cross_domain_evidence_bundle_gate
+{"scenarios": [{"scenario_id": "SC1", "domains": ["SHARED_RESOURCE", "INTERRUPT"],
+  "contention_evidence": "...", "interrupt_evidence": "...",
+  "evidence_bundle_hash": "...", "subsystem_release_snapshot_hash": "..."}]}
+```
+（domains 至少要有 2 個不同值才算 cross-domain，否則 FAIL NOT_CROSS_DOMAIN；domains 出現
+SHARED_RESOURCE/INTERRUPT/RESET/POWER 時，分別要求對應欄位 contention_evidence/
+interrupt_evidence/recovery_evidence/power_transition_evidence 非空，缺了就 FAIL
+MISSING_DOMAIN_EVIDENCE 並標出是哪個 domain 缺哪個欄位；evidence_bundle_hash 與
+subsystem_release_snapshot_hash 兩者都必須存在，缺一個分別 FAIL NO_EVIDENCE_BUNDLE_HASH /
+NO_RELEASE_SNAPSHOT_HASH。）
+
+```dv-harness-evidence:system_level_cross_domain_gate
+{"scenarios": [{"scenario_id": "SC1", "domains": ["SHARED_RESOURCE", "RESET"],
+  "contention_policy": "...", "recovery_or_reinit_check": "...", "evidence": "..."}]}
+```
+（domains 同樣至少要 2 個不同值，否則 FAIL NOT_CROSS_DOMAIN；domains 含 SHARED_RESOURCE 時要有
+contention_policy（缺了 FAIL SHARED_RESOURCE_WITHOUT_POLICY）；含 INTERRUPT 時要有
+interrupt_latency_or_loss_check（缺了 FAIL INTERRUPT_DOMAIN_WITHOUT_CHECK）；含 RESET 或 POWER
+任一個時要有 recovery_or_reinit_check（缺了 FAIL RESET_POWER_DOMAIN_WITHOUT_RECOVERY_CHECK）；
+evidence 欄位一律必填，缺了 FAIL CROSS_DOMAIN_WITHOUT_EVIDENCE——這個 gate 跟上面
+cross_domain_evidence_bundle_gate 概念類似但欄位名稱不同，兩者要各自附上，不能共用同一組欄位。）
+
+Release 版本釘選與一致性（延續 system_level_validator 的 registry 精神，但各自檢查不同層面，
+須各自附上）：
+
+```dv-harness-evidence:system_level_composition_gate
+{"selected_subsystems": [{"name": "USB", "environment_manifest": "...", "release_sha": "...",
+  "qualification_state": "REGRESSION_QUALIFIED", "interface_compatibility": "PASS",
+  "clock_reset_compatibility": "PASS"}],
+ "system_level_scenarios": [{"scenario_id": "SC1", "participating_subsystems": ["USB", "PCIE"]}]}
+```
+（selected_subsystems 至少要有 2 個、name 不得重複，每個都要有 name/environment_manifest/
+release_sha/qualification_state/interface_compatibility/clock_reset_compatibility 六個欄位，
+缺任一個 FAIL INCOMPLETE_SUBSYSTEM_IDENTITY；qualification_state 只能是
+SMOKE_QUALIFIED/REGRESSION_QUALIFIED/PRODUCTION_QUALIFIED 三選一，否則 FAIL
+INVALID_QUALIFICATION_STATE；interface_compatibility 與 clock_reset_compatibility 都必須是字串
+"PASS"，否則 FAIL SUBSYSTEM_COMPATIBILITY_FAIL；system_level_scenarios 不能是空陣列（FAIL
+NO_SYSTEM_LEVEL_SCENARIOS），每個 scenario 的 participating_subsystems 必須引用上面
+selected_subsystems 裡真實存在的 name、且至少 2 個，否則分別 FAIL SCENARIO_UNKNOWN_SUBSYSTEM /
+NOT_CROSS_SUBSYSTEM_SCENARIO。）
+
+```dv-harness-evidence:system_level_release_pinning_gate
+{"selected_subsystems": [{"name": "USB", "release_sha": "...",
+  "environment_manifest_hash": "...", "qualification_evidence_hash": "..."}],
+ "composition_hash": "..."}
+```
+（selected_subsystems 至少要 2 筆，每筆都要有 name/release_sha/environment_manifest_hash/
+qualification_evidence_hash 四個欄位，缺任一個 FAIL UNPINNED_SUBSYSTEM_RELEASE 並標出缺哪個
+欄位——注意這裡要的是 environment_manifest_hash（雜湊值），不是上面 composition gate 的
+environment_manifest（路徑），兩者欄位名稱不同不能混用；composition_hash 一定要有，缺了 FAIL
+NO_COMPOSITION_HASH。）
+
+```dv-harness-evidence:system_level_release_evidence_consistency_gate
+{"subsystems": [{"subsystem": "USB", "release_sha": "...", "manifest_hash": "...",
+  "qualification_evidence_hash": "..."}],
+ "scenarios": [{"scenario_id": "SC1", "participating_subsystems": ["USB", "PCIE"],
+   "release_snapshot": {"USB": "...", "PCIE": "..."}, "evidence_bundle_hash": "..."}]}
+```
+（subsystems 至少要 2 筆（這裡的 key 是 "subsystem" 不是 "name"），每筆都要有 release_sha/
+manifest_hash/qualification_evidence_hash 三個欄位，缺任一個 FAIL
+INCOMPLETE_SUBSYSTEM_RELEASE_EVIDENCE；scenarios 每筆的 participating_subsystems 至少 2 個且都
+必須是上面 subsystems 已列出的 subsystem，否則分別 FAIL SYSTEM_SCENARIO_NOT_MULTI_SUBSYSTEM /
+SCENARIO_REFERENCES_UNKNOWN_RELEASE；release_snapshot 是 {subsystem 名稱: release_sha} 的對照
+表，裡面每個 participating subsystem 的值都必須跟上面 subsystems 該筆的 release_sha 完全一致，
+不一致就 FAIL SCENARIO_RELEASE_SNAPSHOT_MISMATCH；evidence_bundle_hash 缺了 FAIL
+SYSTEM_SCENARIO_WITHOUT_EVIDENCE_HASH。）
+
+Change Impact 重跑範圍：
+
+```dv-harness-evidence:system_level_change_impact_gate
+{"changed_subsystems": ["USB"], "selected_subsystems": ["USB", "PCIE"],
+ "system_scenarios": [{"scenario_id": "SC1", "participating_subsystems": ["USB", "PCIE"]}],
+ "rerun_scenarios": ["SC1"]}
+```
+（changed_subsystems 為空時直接 PASS（NO_SUBSYSTEM_CHANGE，代表這輪沒有 subsystem 內容變動）；
+非空時每個都必須是 selected_subsystems 的子集，否則 FAIL UNKNOWN_CHANGED_SUBSYSTEM；gate 會自己
+從 system_scenarios 算出「participating_subsystems 與 changed_subsystems 有交集」的情境集合，
+這些情境的 scenario_id 全部都要出現在 rerun_scenarios 裡，漏了任何一個都會 FAIL
+MISSING_IMPACTED_RERUN_SCENARIOS 並列出漏掉的 scenario_id——不可以自己判斷「這個改動應該不影響」
+就省略重跑清單，一定要讓 gate 用真實的 participating_subsystems 交集自己算出來。）
+
+Subsystem 相依圖（無環）：
+
+```dv-harness-evidence:system_level_dependency_graph_gate
+{"subsystems": ["USB", "PCIE", "ETHERNET"],
+ "dependencies": [{"from": "USB", "to": "PCIE"}]}
+```
+（subsystems 是節點集合；dependencies 每筆 from/to 都必須是 subsystems 裡存在的名稱，否則 FAIL
+DEPENDENCY_UNKNOWN_SUBSYSTEM；整張圖不能有環（例如 A→B→A），有環就 FAIL DEPENDENCY_CYCLE——這是
+在檢查 subsystem 之間的初始化/資源相依關係本身有沒有邏輯矛盾，不是檢查 scenario 內容。）
+
+Deadlock / Livelock 分析：
+
+```dv-harness-evidence:system_level_deadlock_livelock_gate
+{"deadlock_detected": false, "livelock_detected": false,
+ "forward_progress_assertions": ["..."], "stress_scenario_evidence": ["..."]}
+```
+（deadlock_detected 或 livelock_detected 為 true 會直接 FAIL（分別是
+SYSTEM_DEADLOCK_DETECTED，會附上 deadlock_cycle；SYSTEM_LIVELOCK_DETECTED）——這兩個欄位必須
+反映真實分析結果，不是預設隨便填 false；forward_progress_assertions 與 stress_scenario_evidence
+兩者都不能是空值，缺任一個分別 FAIL NO_FORWARD_PROGRESS_ASSERTIONS /
+NO_STRESS_SCENARIO_EVIDENCE，代表沒有真的用 forward-progress assertion 搭配 stress scenario
+去驗證過 deadlock/livelock，不能只憑印象宣稱兩者都是 false。）
+
+共享資源競爭：
+
+```dv-harness-evidence:system_level_resource_contention_gate
+{"shared_resources": ["DDR", "APB_BUS"],
+ "scenarios": [{"scenario_id": "SC1", "resources": ["DDR"],
+   "arbitration_or_contention_policy": "...", "contention_testcase_ids": ["..."]}]}
+```
+（shared_resources 是本次 system-level 組裝實際共用的資源清單；每個 scenario 的 resources 若與
+shared_resources 有交集（代表這個情境真的碰到共享資源），就必須同時附上
+arbitration_or_contention_policy（缺了 FAIL SHARED_RESOURCE_WITHOUT_CONTENTION_POLICY）與非空的
+contention_testcase_ids（缺了 FAIL NO_CONTENTION_TESTS）；沒有碰到共享資源的 scenario 不受此
+限制。）
 """,
 Stage.EXPERT_FEEDBACK_LOOP.value: """
 DV Expert Feedback Closed Loop：把本輪 AI Analyze/Generate/Verify 的產出交給人類 DV 專家
