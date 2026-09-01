@@ -81,6 +81,18 @@ class StageState:
     # runs the inner loop (react:false nodes, or verdict never reached
     # GATE_FAIL/DV_REVIEW_PENDING in the first place).
     react_reroute_target: Optional[str] = None
+    # This stage's own most recent submitted evidence blocks (2026-09-01,
+    # expected-evidence-checklist design pass) -- engine.run_stage() sets
+    # this from gates.extract_evidence_blocks()'s output on any attempt that
+    # produced at least one block (never cleared to {} by an attempt that
+    # produced none, e.g. ADAPTER_FAIL). Consumed by
+    # engine.build_stage_entry_checklist()'s "evidence_field" item
+    # resolution on a LATER attempt/stage -- see that function's docstring.
+    # Additive/optional: a stage state loaded from a state.json saved before
+    # this field existed simply has no key here, and every reader uses
+    # dict.get(..., {}) so that degrades to "nothing submitted yet", never a
+    # KeyError.
+    last_evidence_blocks: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class HarnessState:
@@ -144,6 +156,21 @@ class HarnessState:
     # /api/state active_stages_detail, graph-highlight, and showExplain(),
     # and session_snapshot.py's saved-session manifest.
     active_stages: List[str] = field(default_factory=list)
+    # "Just transitioned" signal (2026-09-01, runtime-progress-visibility
+    # pass): a real, persisted "this stage just reached a terminal status"
+    # record, written by engine.run_stage() every time it sets ss["status"]
+    # to a terminal value (PASS/FAIL/PARTIAL/WAIT_USER/BLOCKED -- i.e.
+    # whenever the stage stops RUNNING). Distinct from current_stage/
+    # overall_status (a snapshot of WHERE things are now, silently
+    # overwritten every stage) -- this is WHEN the last change actually
+    # happened and WHAT it changed to, so a dashboard viewer polling every
+    # 3s can render a "Last transition" banner instead of a status tile that
+    # updates with no visible signal. None until the first stage completes
+    # in a project's history. Shape: {"stage": str, "status": str,
+    # "at": iso8601 str}. Additive/optional: a state.json saved before this
+    # field existed simply has no key here, degrading to None (no banner),
+    # never a KeyError -- same convention as last_evidence_blocks above.
+    last_transition: Optional[Dict[str, Any]] = None
 
     def effective_active_stages(self) -> List[str]:
         return self.active_stages or [self.current_stage]

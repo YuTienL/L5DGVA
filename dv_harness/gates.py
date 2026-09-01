@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json, re, subprocess, sys, tempfile, time
 from pathlib import Path
+from typing import Any, Dict
 from .config import load_config
 from .memory import CornerCaseLibrary
 from .control_plane import ControlPlane
@@ -1090,6 +1091,42 @@ def _protocol_discover_checklist(root: Path, protocols):
     return "\n".join(lines) if lines else None
 
 
+def _stage_completion_from_signatures(gates, signatures) -> Dict[str, Any]:
+    """Stage-scoped completion fraction derived from the exact per-gate
+    signatures list _evaluate_stage_evidence_core() already builds (one
+    entry per gate registered for the stage in STAGE_GATES, including a
+    synthetic FAIL entry for a gate the agent supplied no evidence for --
+    see that function's docstring). This is deliberately narrower than
+    dashboard.py's `_overall_progress()` (percent of ALL Stage enum values
+    at PASS/CLOSED across the whole run) -- this one is scoped to the
+    gates configured for a SINGLE stage, so it stays meaningful mid-stage,
+    before that stage itself has reached a terminal PASS/CLOSED verdict.
+
+    RULING (2026-09-01): a stage with zero registered gates in
+    STAGE_GATES (i.e. `gates` is falsy) has nothing to be "incomplete"
+    about -- there is no per-gate signature list to divide by, and
+    NO_GATE_REQUIRED already means the stage's own gate-evidence
+    requirement is fully satisfied trivially. Reporting 0% here would
+    read as "nothing done" for a stage that in fact has no gate blocking
+    it at all, so this reports 100% complete with an explanatory note
+    instead of a ZeroDivisionError or an arbitrary 0%."""
+    gates_total = len(gates) if gates else 0
+    if gates_total == 0:
+        return {
+            "gates_total": 0,
+            "gates_passed": 0,
+            "stage_completion_percent": 100,
+            "stage_completion_note": "stage has no registered gates; treated as fully complete",
+        }
+    gates_passed = sum(1 for _gate_id, ok, _detail in signatures if ok)
+    return {
+        "gates_total": gates_total,
+        "gates_passed": gates_passed,
+        "stage_completion_percent": round(100 * gates_passed / gates_total),
+        "stage_completion_note": None,
+    }
+
+
 def evaluate_stage_evidence(root: Path, stage: str, agent_text: str):
     """Returns (verdict, reasons). verdict is one of:
     NO_GATE_REQUIRED  -> stage has no mapped gate, behaves as before.
@@ -1126,29 +1163,48 @@ def evaluate_stage_evidence(root: Path, stage: str, agent_text: str):
     .dv-harness/config.json's policy.require_dv_review_cosign is explicitly
     true, this function's behavior is otherwise byte-for-byte identical to
     before Tier 5 existed."""
-    verdict, reasons, _signatures = _evaluate_stage_evidence_core(root, stage, agent_text)
+    verdict, reasons, _signatures, _completion = _evaluate_stage_evidence_core(root, stage, agent_text)
     return verdict, reasons
 
 
+def evaluate_stage_evidence_with_completion(root: Path, stage: str, agent_text: str):
+    """Same verdict/reasons contract as evaluate_stage_evidence() above, plus
+    the stage-scoped completion dict (see _stage_completion_from_signatures())
+    -- gates_total, gates_passed, stage_completion_percent,
+    stage_completion_note. Added for control_plane.describe_stage() (WHY +
+    "how close is this stage to done", not just why it's blocked) without
+    touching evaluate_stage_evidence()'s or react_loop.evaluate_stage_evidence_
+    with_detail()'s existing fixed-arity tuple contracts, both of which have
+    real callers/tests that unpack them at their current arity."""
+    verdict, reasons, _signatures, completion = _evaluate_stage_evidence_core(root, stage, agent_text)
+    return verdict, reasons, completion
+
+
 def _evaluate_stage_evidence_core(root: Path, stage: str, agent_text: str):
-    """Shared implementation behind BOTH evaluate_stage_evidence() (verdict,
-    reasons -- the pre-existing 2-tuple contract, untouched) and
-    dv_harness/react_loop.py's evaluate_stage_evidence_with_detail() (which
-    additionally wraps the third element into GateSignature objects). Single
-    source of truth so the two call sites can never see divergent gate
+    """Shared implementation behind evaluate_stage_evidence() (verdict,
+    reasons -- the pre-existing 2-tuple contract, untouched),
+    evaluate_stage_evidence_with_completion() (verdict, reasons, completion),
+    and dv_harness/react_loop.py's evaluate_stage_evidence_with_detail()
+    (which wraps the third element into GateSignature objects). Single
+    source of truth so all call sites can never see divergent gate
     results -- the exact per-gate run_gate() loop runs ONCE per call, not
     once per caller.
 
-    Returns (verdict, reasons, signatures) where signatures is a list of
-    (gate_id, ok, detail) plain tuples, one per gate NAMED in
-    STAGE_GATES[stage] (not only the ones that actually ran) -- a gate the
-    agent supplied no evidence block for still gets a synthetic
-    ('NO_EVIDENCE_BLOCK_SUPPLIED', False, {...}) entry so react_loop.py's
-    build_menu() always has one real signature per configured gate to reason
-    over, never a silent gap."""
+    Returns (verdict, reasons, signatures, completion):
+      - signatures is a list of (gate_id, ok, detail) plain tuples, one per
+        gate NAMED in STAGE_GATES[stage] (not only the ones that actually
+        ran) -- a gate the agent supplied no evidence block for still gets a
+        synthetic ('NO_EVIDENCE_BLOCK_SUPPLIED', False, {...}) entry so
+        react_loop.py's build_menu() always has one real signature per
+        configured gate to reason over, never a silent gap.
+      - completion is the dict _stage_completion_from_signatures() derives
+        from that same signatures list (gates_total, gates_passed,
+        stage_completion_percent, stage_completion_note) -- a stage-SCOPED
+        completion fraction, distinct from dashboard.py's whole-run
+        overall_progress_percent."""
     gates = STAGE_GATES.get(stage)
     if not gates:
-        return "NO_GATE_REQUIRED", [], []
+        return "NO_GATE_REQUIRED", [], [], _stage_completion_from_signatures(gates, [])
     enforce_dv_review = bool(load_config(root).get("policy", {}).get("require_dv_review_cosign", False))
     blocks = extract_evidence_blocks(agent_text)
     reasons = []
@@ -1198,12 +1254,13 @@ def _evaluate_stage_evidence_core(root: Path, stage: str, agent_text: str):
                         needs_user_input_questions.append(base_q)
             else:
                 all_failures_are_missing_input = False
+    completion = _stage_completion_from_signatures(gates, signatures)
     if not ran_any:
-        return "MISSING_EVIDENCE", reasons, signatures
+        return "MISSING_EVIDENCE", reasons, signatures, completion
     if gate_fail:
         if needs_user_input_questions and all_failures_are_missing_input:
-            return "NEEDS_USER_INPUT", needs_user_input_questions, signatures
-        return "GATE_FAIL", reasons, signatures
+            return "NEEDS_USER_INPUT", needs_user_input_questions, signatures, completion
+        return "GATE_FAIL", reasons, signatures, completion
     if review_pending:
-        return "DV_REVIEW_PENDING", reasons, signatures
-    return "PASS", reasons, signatures
+        return "DV_REVIEW_PENDING", reasons, signatures, completion
+    return "PASS", reasons, signatures, completion

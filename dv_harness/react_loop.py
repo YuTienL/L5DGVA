@@ -29,16 +29,35 @@
 # real graph data, not guessed. graph=None degrades safely: REROUTE options
 # are simply never offered (same "hallucinated target dropped" discipline
 # the spec itself specifies for an unknown node.id).
+#
+# SECOND DEVIATION, same reasoning (2026-09-01, per-agent-attribution audit
+# fix): InnerReactLoop.__init__ additionally takes additive `profiler=None,
+# profile_id=None, agent_name=""` parameters, absent from the design spec's
+# illustrative signature. Before this fix, every real self.adapter.run() call
+# this module makes -- the reflect_and_decide() reflection call (and its
+# hallucination re-ask) plus each RETRY_TARGETED/REQUEST_EVIDENCE targeted
+# retry -- was completely invisible to StageExecutionProfiler: real runtime
+# and real token usage for these calls existed but was never recorded,
+# silently under-reporting a stage's total_tokens/aggregate runtime whenever
+# the inner loop actually iterated. profiler/profile_id are the SAME
+# StageExecutionProfiler instance and profile_id engine.py's run_stage()
+# already created via self.profiler.begin_stage() -- not a second profiler.
+# All three parameters degrade safely to a no-op (see _record_agent_run()
+# below) when omitted, so every pre-existing unit test in
+# dv_harness_tests/test_react_loop.py that constructs InnerReactLoop directly
+# (never passing these) is unaffected.
 from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .gates import GATE_FAILURE_REROUTE, _evaluate_stage_evidence_core, extract_evidence_blocks
 from .inference import identify_gap, next_best_action
+from .stage_profile import extract_provider_usage
 
 
 # --- structured facts -------------------------------------------------------
@@ -99,8 +118,17 @@ def evaluate_stage_evidence_with_detail(root: Path, stage: str, agent_text: str)
     """Same verdict/reasons contract as gates.evaluate_stage_evidence(), plus
     the structured GateSignature list -- factored through gates.py's own
     _evaluate_stage_evidence_core() so both call sites see byte-identical
-    gate results (same run_gate() invocations, not a second parallel copy)."""
-    verdict, reasons, raw_signatures = _evaluate_stage_evidence_core(root, stage, agent_text)
+    gate results (same run_gate() invocations, not a second parallel copy).
+
+    _evaluate_stage_evidence_core() also returns a 4th element (a stage-
+    scoped completion dict -- see gates._stage_completion_from_signatures())
+    that this function deliberately does not add to its own return value:
+    this function's (verdict, reasons, signatures) 3-tuple is unpacked
+    positionally by real existing callers/tests (engine.py, this module's
+    own retry loop, dv_harness_tests/test_react_loop.py), so changing its
+    arity here would break them. gates.evaluate_stage_evidence_with_completion()
+    is the real call site for the completion dict instead."""
+    verdict, reasons, raw_signatures, _completion = _evaluate_stage_evidence_core(root, stage, agent_text)
     signatures = [GateSignature(gate_id=g, ok=ok, detail=detail) for g, ok, detail in raw_signatures]
     return verdict, reasons, signatures
 
@@ -218,6 +246,32 @@ def build_menu(root: Path, stage: str, node, signatures: List[GateSignature],
     return options
 
 
+def _record_agent_run(profiler, profile_id, agent_name, t0, result, status_override=None):
+    """Best-effort StageExecutionProfiler.add_agent_run() call for ONE real
+    adapter.run() invocation this module made (a reflection call, its
+    hallucination re-ask, or a RETRY_TARGETED/REQUEST_EVIDENCE targeted
+    retry) -- see the module docstring's "SECOND DEVIATION" note for why this
+    exists. profiler/profile_id are additive: every existing unit test in
+    dv_harness_tests/test_react_loop.py constructs InnerReactLoop /
+    reflect_and_decide without them, so `None, None` (the default) must stay
+    a genuine no-op, exactly like this module's pre-existing graph=None
+    degrade-safely precedent. Wrapped in try/except for the same reason
+    react_recorder.record_reflection() above already is: observability must
+    never break an already-computed decision/result."""
+    if profiler is None or profile_id is None:
+        return
+    runtime_sec = time.perf_counter() - t0
+    raw = (getattr(result, "raw", None) or {}) if result is not None else {}
+    usage = extract_provider_usage(raw)
+    model = (raw.get("response") or {}).get("model", "")
+    status = status_override or ("PASS" if result is not None and getattr(result, "ok", False) else "FAIL")
+    try:
+        profiler.add_agent_run(profile_id, agent_name, runtime_sec, usage=usage,
+                                model=str(model), status=status)
+    except Exception:
+        pass
+
+
 # --- reflection call ---------------------------------------------------------
 
 _DECISION_RE = re.compile(r"```dv-harness-react-decision\s*\n(?P<body>.*?)```", re.DOTALL)
@@ -258,16 +312,25 @@ def _build_reflection_prompt(stage: str, prompt_context: dict, menu: List[MenuOp
 
 
 def reflect_and_decide(adapter, root: Path, stage: str, prompt_context: dict,
-                        menu: List[MenuOption]) -> ReactDecision:
+                        menu: List[MenuOption], profiler=None, profile_id=None,
+                        agent_name: str = "") -> ReactDecision:
     """The genuine reasoning step: one additional adapter.run() call (two if
     the first reply names an option_id outside the real menu -- re-asked
     once, then forced to CONVERGE_TERMINATE, never actioned). This is what
-    keeps the LLM from inventing an action outside real registry/gate data."""
+    keeps the LLM from inventing an action outside real registry/gate data.
+
+    profiler/profile_id/agent_name (additive, default None/None/"" -- see
+    react_loop.py's module docstring "SECOND DEVIATION" note): when supplied,
+    EVERY real adapter.run() call _ask() below makes is recorded via
+    _record_agent_run(), so this reflection step's real runtime/token usage
+    is no longer invisible to the stage's profile."""
     valid_ids = {m.option_id for m in menu}
     prompt = _build_reflection_prompt(stage, prompt_context, menu)
 
     def _ask(p):
+        _t0 = time.perf_counter()
         result = adapter.run(prompt=p, cwd=str(root))
+        _record_agent_run(profiler, profile_id, agent_name, _t0, result)
         if result is None or not getattr(result, "ok", False):
             return None
         return _parse_decision_text(getattr(result, "text", "") or "")
@@ -317,12 +380,20 @@ def _build_action_prompt(base_prompt: str, chosen: MenuOption, decision: ReactDe
 # --- the inner loop itself ---------------------------------------------------
 
 class InnerReactLoop:
-    def __init__(self, root, adapter, react_recorder, cfg, graph=None):
+    def __init__(self, root, adapter, react_recorder, cfg, graph=None,
+                 profiler=None, profile_id=None, agent_name=""):
         self.root = Path(root)
         self.adapter = adapter
         self.react_recorder = react_recorder
         self.cfg = cfg or {}
         self.graph = graph  # additive vs. the design spec's signature -- see module docstring
+        # profiler/profile_id/agent_name: SECOND DEVIATION, same module
+        # docstring -- the same StageExecutionProfiler + profile_id
+        # engine.py's run_stage() already holds, threaded through so this
+        # loop's own real adapter.run() calls stop being invisible to it.
+        self.profiler = profiler
+        self.profile_id = profile_id
+        self.agent_name = agent_name
 
     def run(self, stage: str, node, attempt: int, first_result, first_verdict: str,
             first_reasons: List[str], first_signatures: List[GateSignature],
@@ -359,7 +430,9 @@ class InnerReactLoop:
                 "verdict": verdict, "reasons": reasons,
                 "signatures": [asdict(s) for s in signatures],
             }
-            decision = reflect_and_decide(self.adapter, self.root, stage, prompt_context, menu)
+            decision = reflect_and_decide(self.adapter, self.root, stage, prompt_context, menu,
+                                           profiler=self.profiler, profile_id=self.profile_id,
+                                           agent_name=self.agent_name)
 
             if self.react_recorder is not None and node is not None:
                 try:
@@ -393,10 +466,12 @@ class InnerReactLoop:
                 adapter_calls_used += 1
                 prior_signatures = signatures  # snapshot BEFORE this action overwrites it
                 next_prompt = _build_action_prompt(base_prompt, chosen, decision)
+                _t0 = time.perf_counter()
                 new_result = self.adapter.run(
                     prompt=next_prompt, cwd=str(self.root),
                     resume_session=getattr(result, "session_id", None),
                 )
+                _record_agent_run(self.profiler, self.profile_id, self.agent_name, _t0, new_result)
                 result = new_result
                 if getattr(result, "ok", False):
                     verdict, reasons, signatures = evaluate_stage_evidence_with_detail(

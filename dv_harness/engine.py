@@ -19,7 +19,7 @@ from .adapters.cli import ClaudeCLIAdapter
 from .adapters.sdk import ClaudeCodeSDKAdapter
 from .adapters.base import AgentResult
 from .stage_profile import StageExecutionProfiler, extract_provider_usage
-from .control_plane import ControlPlane, replan_stage, _find_latest_plan
+from .control_plane import ControlPlane, replan_stage, _find_latest_plan, describe_stage
 from .agent_profile import load_agent_profile
 
 # --- Plan-and-Execute / Multi-Agent / Blackboard / ReAct wiring -------------
@@ -124,6 +124,32 @@ REMOTE_LSF_ROUTES = {"build-route", "regression-route"}
 # directory that may not have dv_harness importable from it at all.
 _ENGINE_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
+# --- Stage transition markers (2026-09-01, runtime-progress-visibility pass)
+# ------------------------------------------------------------------------
+# RULING: no module anywhere in dv_harness/ uses Python's `logging` (grepped
+# for `logging.getLogger`/`logging.basicConfig` project-wide -- zero hits);
+# every existing CLI/engine output path is plain `print()`. Introducing
+# `logging` here alone would be a second, inconsistent output convention for
+# one feature -- these two markers use plain `print()` to stdout instead,
+# with a real, greppable, unique prefix (`STAGE_MARKER_PREFIX` below) so a
+# human or a log-scraping tool can isolate them from the surrounding agent
+# free-text output unambiguously (`grep '\[DV-HARNESS-STAGE\]' run.log`).
+# Emitted by run_stage() ITSELF (not cli.py) so both the CLI and any future
+# direct caller of DVHarness.run_stage() (the dashboard's background runner,
+# a future API server, a test harness) get the same visible "just happened"
+# signal, rather than each consumer having to notice a silent status change.
+STAGE_MARKER_PREFIX = "[DV-HARNESS-STAGE]"
+
+
+def _emit_stage_start_marker(stage: str) -> None:
+    print(f"{STAGE_MARKER_PREFIX} ===== STAGE START: {stage} =====", flush=True)
+
+
+def _emit_stage_done_marker(stage: str, gate_verdict: str, stage_completion_percent) -> None:
+    pct = f"{stage_completion_percent:.0f}" if isinstance(stage_completion_percent, (int, float)) else "-"
+    print(f"{STAGE_MARKER_PREFIX} ===== STAGE DONE: {stage} [{gate_verdict}] "
+          f"({pct}% gates satisfied) =====", flush=True)
+
 
 # --- Blackboard write mapping: evidence field -> blackboard topic ----------
 # Per node.blackboard_write in main_graph.json, run_stage() writes one
@@ -226,6 +252,152 @@ STAGE_BLACKBOARD_WRITERS = {
     "VERIFY": _bb_verify,
     "REGRESSION_MONITOR": _bb_regression_monitor,
 }
+
+
+# --- Stage entry/exit evidence checklists (2026-09-01, expected-evidence-
+# checklist design pass) ------------------------------------------------
+# main_graph.json's node schema previously had no field declaring what
+# evidence/files a stage requires at entry or should produce at exit --
+# prompts.py's STAGE_INSTRUCTIONS described "required_artifacts"-style
+# requirements only as prose the AGENT self-reports at turn-end, never a
+# harness-computed, presence-checked list. Node.expected_evidence/
+# expected_outputs (graph.py, additive/optional) now carry that as structured
+# {item_id, description, kind} entries; the two functions below turn a
+# node's list into a real presence-checked report. Both are INFORMATIONAL
+# ONLY -- they never raise, never change ss["status"], and a node with no
+# expected_evidence/expected_outputs list (the default) produces a trivial
+# zero-item report, never an error, so every existing graph node stays
+# byte-for-byte unaffected.
+#
+# `kind` resolution (identical between entry/exit; the only difference is
+# which stage's evidence an "evidence_field" item can see, per each
+# function's own docstring):
+#   - "blackboard_key": item_id is a Blackboard topic name; present iff
+#     Blackboard.read(item_id) is not None (the topic has been written at
+#     least once -- content is not otherwise inspected).
+#   - "file_path": item_id is a path (absolute, or relative to `root`);
+#     present iff Path(...).exists().
+#   - "evidence_field": item_id is a dotted field path into an evidence
+#     block dict, optionally prefixed "STAGE_ID:" to name which stage's
+#     evidence to dig into (see each function's docstring for the default
+#     when no prefix is given). A bare item_id with no dot (e.g.
+#     "intake_readiness") checks the whole block's presence; a dotted one
+#     (e.g. "intake_readiness.mode") navigates into it. Present iff every
+#     path segment resolves to a dict key AND the final value is truthy
+#     (mirrors the gate scripts' own "field must be non-empty" convention --
+#     a required_artifacts.<x>: false is correctly reported ABSENT, not
+#     "present but false").
+#   - any other/unknown kind: always reported absent, never raises -- a
+#     future kind can be added to main_graph.json ahead of engine support
+#     without crashing run_stage().
+def _dig_evidence_field(source: Dict[str, Any], dotted_path: str) -> bool:
+    cur: Any = source
+    for part in dotted_path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False
+        cur = cur[part]
+    return bool(cur)
+
+
+def _checklist_item_present(item: Dict[str, Any], root: Path, blackboard: Blackboard,
+                             evidence_for) -> bool:
+    kind = item.get("kind")
+    item_id = str(item.get("item_id", ""))
+    if kind == "blackboard_key":
+        return blackboard.read(item_id) is not None
+    if kind == "file_path":
+        p = Path(item_id)
+        if not p.is_absolute():
+            p = root / item_id
+        return p.exists()
+    if kind == "evidence_field":
+        stage_ref, sep, field_path = item_id.partition(":")
+        if not sep:
+            stage_ref, field_path = None, item_id
+        return _dig_evidence_field(evidence_for(stage_ref), field_path)
+    return False  # unknown kind -- informational report, never raises
+
+
+def _run_checklist(items_decl: List[Dict[str, Any]], root: Path, blackboard: Blackboard,
+                    evidence_for) -> Dict[str, Any]:
+    items = [
+        {"item_id": item.get("item_id"), "description": item.get("description", ""),
+         "present": _checklist_item_present(item, root, blackboard, evidence_for)}
+        for item in items_decl
+    ]
+    total = len(items)
+    present_count = sum(1 for it in items if it["present"])
+    return {
+        "items": items,
+        "present_count": present_count,
+        "total_count": total,
+        # RULING: zero items declared for a stage means no checklist applies
+        # to it -- reported as 100% complete (nothing outstanding), not 0%
+        # (which would misleadingly read as "totally missing evidence").
+        "completeness_percent": (100.0 * present_count / total) if total else 100.0,
+        "missing_item_ids": [it["item_id"] for it in items if not it["present"]],
+    }
+
+
+def build_stage_entry_checklist(node, blackboard: Blackboard, root: Path,
+                                 stage_history: Optional[Dict[str, Dict[str, Any]]] = None
+                                 ) -> Dict[str, Any]:
+    """Reads `node.expected_evidence` (absent/empty -> zero-item report, never
+    an error) and checks each item's REAL presence -- called at the very top
+    of run_stage(), before build_stage_prompt()/adapter.run(), so this never
+    reflects anything from the attempt about to run.
+
+    "evidence_field" items resolve against `stage_history` (self.state.stages
+    from the CURRENT HarnessState, i.e. run_stage()'s own self.state.stages)
+    -- specifically each stage's `last_evidence_blocks` (the evidence blocks
+    that stage's most recent PRIOR attempt, if any, actually submitted; see
+    where run_stage() persists it below). A bare item_id (no "STAGE_ID:"
+    prefix) defaults to node.id's own last_evidence_blocks -- e.g. on a
+    retry, "did this stage already submit this field last attempt". A
+    prefixed item_id (e.g. "REGRESSION_SELECT:...") looks at a DIFFERENT
+    upstream stage's last submission -- the real mechanism for a stage like
+    REGRESSION whose actual input (REGRESSION_SELECT's test selection) is
+    never written to the Blackboard by that node (its blackboard_write is
+    genuinely empty per main_graph.json), so a blackboard_key check cannot
+    see it. Never raises: an unknown/never-run stage_ref, or one whose
+    last_evidence_blocks is empty, simply resolves to {} (every item under it
+    reports absent)."""
+    items_decl = list(getattr(node, "expected_evidence", None) or [])
+    history = stage_history or {}
+
+    def evidence_for(stage_ref: Optional[str]) -> Dict[str, Any]:
+        sid = stage_ref or (node.id if node is not None else None)
+        entry = history.get(sid) if sid else None
+        blocks = (entry or {}).get("last_evidence_blocks")
+        return blocks if isinstance(blocks, dict) else {}
+
+    return _run_checklist(items_decl, root, blackboard, evidence_for)
+
+
+def build_stage_exit_checklist(node, blackboard: Blackboard, root: Path,
+                                evidence_blocks: Optional[Dict[str, Any]] = None
+                                ) -> Dict[str, Any]:
+    """Reads `node.expected_outputs` (absent/empty -> zero-item report, never
+    an error) and checks each item's REAL presence -- called near the end of
+    run_stage(), after the gate verdict is known, alongside the existing
+    profiler.end_stage() call.
+
+    "evidence_field" items resolve against `evidence_blocks` -- THIS
+    attempt's own freshly-extracted evidence (the same dict run_stage()
+    already computed via gates.extract_evidence_blocks(), passed straight
+    through with no re-parsing). Unlike the entry checklist, an exit
+    checklist only ever has this one attempt's own output to inspect -- a
+    "STAGE_ID:" prefix on an expected_outputs item_id is intentionally
+    ignored (ONLY the dotted field-path part is used) rather than resolved
+    against some other stage's data, since "what did THIS stage attempt just
+    produce" is exactly what an exit check means."""
+    items_decl = list(getattr(node, "expected_outputs", None) or [])
+    blocks = evidence_blocks if isinstance(evidence_blocks, dict) else {}
+
+    def evidence_for(_stage_ref: Optional[str]) -> Dict[str, Any]:
+        return blocks
+
+    return _run_checklist(items_decl, root, blackboard, evidence_for)
 
 
 def _build_plan_section(route_info: dict, resolved_skills: list, plan: dict,
@@ -1220,6 +1392,13 @@ class DVHarness:
                 session_id=None,
             )
 
+        # Distinctive stage-entry marker (see STAGE_MARKER_PREFIX's RULING
+        # comment above) -- emitted here, AFTER the TAKEOVER short-circuit
+        # above (a takeover'd call never actually starts the stage, so it
+        # must not print a START it never earns) and BEFORE any state
+        # mutation, so it always fires exactly once per real attempt.
+        _emit_stage_start_marker(stage)
+
         ss = self.state.stages[stage]
         ss["status"] = Status.RUNNING.value
         ss["attempts"] += 1
@@ -1245,6 +1424,7 @@ class DVHarness:
         bb_snapshot: Dict[str, Any] = {}
         agent_profile = None
         plan_section = ""
+        task: Optional[dict] = None
         if node is not None:
             route_info = self.router.resolve(node)
             resolved_skills = self.skills.resolve(node.skills)
@@ -1291,7 +1471,22 @@ class DVHarness:
         except Exception:
             relevant_memory = []
 
-        profile = self.profiler.begin_stage(stage, stage, graph_node=stage, metadata={"git_sha": self.state.git_sha})
+        # ---- 1c. Stage entry evidence checklist (expected-evidence-checklist
+        #          design pass, 2026-09-01): informational-only presence
+        #          report over node.expected_evidence, computed BEFORE
+        #          build_stage_prompt/adapter.run so it can never reflect the
+        #          attempt about to run -- see build_stage_entry_checklist's
+        #          own docstring. A node with no expected_evidence (the
+        #          overwhelming majority, unaffected by this pass) yields the
+        #          trivial {"items":[],...,"completeness_percent":100.0}
+        #          report and never blocks or alters ss["status"]. Persisted
+        #          into the SAME per-attempt telemetry record
+        #          profiler.begin_stage() already writes, not a separate file.
+        entry_checklist = build_stage_entry_checklist(node, self.blackboard, self.root,
+                                                        stage_history=self.state.stages)
+
+        profile = self.profiler.begin_stage(stage, stage, graph_node=stage,
+            metadata={"git_sha": self.state.git_sha}, entry_checklist=entry_checklist)
         # CONSTRAINT / CORRECT / APPROVE integration: fold the persisted
         # control-plane state into this stage's prompt (prompts.build_stage_prompt
         # is purely additive on these kwargs -- omitting them reproduces the
@@ -1308,6 +1503,21 @@ class DVHarness:
         if plan_section:
             prompt = prompt + plan_section
         resume = ss.get("session_id") or None
+
+        # ---- Multi-agent task lifecycle start (2026-09-01,
+        #      multi-agent-timing-reconciliation pass): AgentTaskStore.
+        #      create_task() (step 1's `self.agents.delegate(node, plan)`
+        #      above) previously produced a task dict with zero timing
+        #      fields and nothing ever called a completion method -- the
+        #      delegation/locking layer was completely disconnected from
+        #      this same method's own perf_counter-based agent-runtime
+        #      measurement below. start_task() is called here, immediately
+        #      before the adapter.run() call this task was delegated for --
+        #      the real point where the delegated unit of work actually
+        #      begins executing. `task` is None for a node-less stage (no
+        #      delegation happened in step 1), so there is nothing to start.
+        if task is not None:
+            self.agents.store.start_task(task["task_id"])
         _t0 = time.perf_counter()
 
         # ---- 2. Multi-Agent dispatch: the resolved agent is threaded all
@@ -1318,9 +1528,44 @@ class DVHarness:
         result = self.adapter.run(prompt=prompt, cwd=str(self.root), resume_session=resume,
                                    agent_profile=agent_profile)
         _agent_runtime = time.perf_counter() - _t0
+        # ---- Multi-agent task lifecycle end + stage_profile reconciliation
+        #      (2026-09-01, multi-agent-timing-reconciliation pass): complete
+        #      the SAME task started immediately above, right after this
+        #      exact adapter.run() call returns -- the task's status here
+        #      tracks whether the delegated agent CALL completed
+        #      (COMPLETED/FAILED), which is deliberately narrower than the
+        #      stage's own gate-verified business status (ss["status"],
+        #      resolved further below and possibly refined by an inner
+        #      ReAct loop this task's scope does not cover).
+        #
+        #      RULING: reconciliation is done by having engine.py read
+        #      AgentTaskStore's own real duration_sec and feed it into
+        #      profiler.add_agent_run() below, in place of a second,
+        #      independently-computed number for the exact same span --
+        #      this reuses the existing profiler sink instead of adding a
+        #      parallel aggregation path or duplicating timing data across
+        #      the two stores. The local perf_counter _agent_runtime above
+        #      is kept only as the fallback for a node-less stage (no task
+        #      was ever created, so there is no AgentTaskStore duration to
+        #      read) -- every real graph-node stage now reports the
+        #      MultiAgentOrchestrator/AgentTaskStore's own measured
+        #      duration_sec through this same call, not a shadow timer.
+        if task is not None:
+            _completed_task = self.agents.store.complete_task(
+                task["task_id"], status=("COMPLETED" if result.ok else "FAILED"))
+            _agent_runtime = _completed_task["duration_sec"]
         _usage = extract_provider_usage(result.raw or {})
         _model = ((result.raw or {}).get("response") or {}).get("model", "")
-        self.profiler.add_agent_run(profile["profile_id"], "stage-agent", _agent_runtime,
+        # Per-agent-attribution fix (2026-09-01 audit): this used to hardcode
+        # the literal "stage-agent" regardless of which real agent actually
+        # ran -- route_info["agent"] (from self.router.resolve(node) above,
+        # step 1) is the real resolved agent name for this stage and is
+        # already in scope by the time this call runs. A node-less stage
+        # (route_info is None -- no graph node at all, e.g. a legacy/no-graph
+        # stage) has no resolved agent to name, so "stage-agent" remains the
+        # honest fallback for exactly that case, not the default.
+        _resolved_agent_name = route_info["agent"] if route_info else "stage-agent"
+        self.profiler.add_agent_run(profile["profile_id"], _resolved_agent_name, _agent_runtime,
             usage=_usage, model=str(_model),
             status=("PASS" if result.ok else "FAIL"))
 
@@ -1445,8 +1690,21 @@ class DVHarness:
                 #      signatures (an additive `graph=self.graph` -- REROUTE
                 #      validation needs real graph.nodes data that the
                 #      spec's own snippets never actually threaded through).
+                # profiler/profile_id/agent_name (2026-09-01 per-agent-
+                # attribution fix): route_info is guaranteed non-None here
+                # (this whole elif is nested under `node is not None`, and
+                # route_info is only ever unset when node is None), so
+                # route_info["agent"] is always the real resolved agent name
+                # for every InnerReactLoop the real engine flow creates --
+                # never the "" default this constructor otherwise falls back
+                # to for the module's own unit tests. This is what lets
+                # InnerReactLoop attribute its own real adapter.run() calls
+                # (reflection + RETRY_TARGETED/REQUEST_EVIDENCE retries) to
+                # this same stage profile instead of leaving them invisible.
                 outcome = InnerReactLoop(
-                    self.root, self.adapter, self.react, self.cfg, graph=self.graph
+                    self.root, self.adapter, self.react, self.cfg, graph=self.graph,
+                    profiler=self.profiler, profile_id=profile["profile_id"],
+                    agent_name=route_info["agent"],
                 ).run(
                     stage, node, ss["attempts"], result, verdict, reasons,
                     structured_signatures, base_prompt=prompt,
@@ -1524,13 +1782,54 @@ class DVHarness:
                 next_action=("advance" if ss["status"] == Status.PASS.value else "retry_or_reroute"),
             )
 
+        # This attempt's own extracted evidence blocks, persisted onto the
+        # stage's own state so a LATER attempt's build_stage_entry_checklist
+        # (see its docstring) can see what was last actually submitted here
+        # -- never cleared to {} on an attempt that produced none (e.g. an
+        # ADAPTER_FAIL), so a checklist still reflects the last real
+        # submission rather than "nothing was ever submitted".
+        if evidence_blocks:
+            ss["last_evidence_blocks"] = evidence_blocks
+
         self.store.event({
             "ts": now(), "stage": stage, "ok": result.ok,
             "session_id": result.session_id, "summary": ss["last_message"][-1000:]
         })
         self.store.save(self.state)
+        # ---- 5. Stage exit evidence checklist: the symmetric counterpart to
+        #         entry_checklist above, over node.expected_outputs, computed
+        #         now that the gate verdict is known -- see
+        #         build_stage_exit_checklist's own docstring for why it reads
+        #         `evidence_blocks` (THIS attempt's own output) rather than
+        #         the just-persisted last_evidence_blocks. Informational
+        #         only: never alters ss["status"], persisted into the SAME
+        #         per-attempt telemetry record profiler.end_stage() already
+        #         writes. ------------------------------------------------
+        exit_checklist = build_stage_exit_checklist(node, self.blackboard, self.root,
+                                                      evidence_blocks=evidence_blocks)
         self.profiler.end_stage(profile["profile_id"], status=ss["status"],
-            finding_count=self.state.findings_total, closed_finding_count=self.state.findings_closed)
+            finding_count=self.state.findings_total, closed_finding_count=self.state.findings_closed,
+            exit_checklist=exit_checklist)
+
+        # ---- 6. "Just transitioned" persisted signal + distinctive stage-exit
+        #         marker (2026-09-01, runtime-progress-visibility pass): ss["status"]
+        #         is now the FINAL terminal status this attempt reached (PASS/FAIL/
+        #         PARTIAL/WAIT_USER -- run_stage() never returns while still
+        #         RUNNING). describe_stage() is called here rather than reusing the
+        #         local `verdict` variable because `verdict` is only ever assigned on
+        #         the `result.ok` branch above -- an ADAPTER_FAIL (the `else` branch)
+        #         never sets it at all. describe_stage() recomputes gate_verdict/
+        #         stage_completion_percent uniformly from ss["last_message"] for
+        #         EVERY exit path, so this marker (and last_transition below) is
+        #         byte-consistent with what `dv-harness explain`/`evidence` would
+        #         already report for this exact stage/attempt.
+        stage_detail = describe_stage(self.root, self.state, stage)
+        self.state.last_transition = {
+            "stage": stage, "status": ss["status"], "at": now(),
+        }
+        self.store.save(self.state)
+        _emit_stage_done_marker(stage, stage_detail.get("gate_verdict"),
+                                 stage_detail.get("stage_completion_percent"))
         return result
 
     def advance(self, user_goal: str = ""):

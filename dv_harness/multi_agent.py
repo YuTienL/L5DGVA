@@ -6,7 +6,18 @@
 # Original NOTICE text, now superseded: "this module is NOT invoked by any
 # executing code path in dv_harness/ or .claude/agents/*.md as of this audit
 # -- it is standalone/orphaned code."
-import json,os,tempfile,threading,uuid
+#
+# NOTICE (2026-09-01, multi-agent-timing-reconciliation pass): create_task()
+# previously produced a task dict with ZERO timing fields and there was no
+# complete_task()-style method at all -- this store was completely
+# disconnected from stage_profile.py's real timing/token machinery, even
+# though engine.py's run_stage() delegates a real task here before every LLM
+# call. start_task()/complete_task() below now give every delegated task a
+# real started_at/completed_at/duration_sec, and run_stage() wires real calls
+# into both around its adapter.run() call (see engine.py's own comment at
+# that call site for the exact lifecycle boundary and the reconciliation
+# ruling into stage_profile.py).
+import json,os,tempfile,threading,time,uuid
 from pathlib import Path
 from .storage import _atomic_replace
 class AgentTaskStore:
@@ -39,7 +50,44 @@ class AgentTaskStore:
    if os.path.exists(tmp):os.unlink(tmp)
  def create_task(self,agent,route,skills,parent_plan,parallel_group=None,depends_on=None):
   with self._lock:
-   ts=json.loads(self.tasks.read_text(encoding='utf-8'));t={'task_id':'TASK-'+uuid.uuid4().hex[:8].upper(),'agent':agent,'route':route,'skills':skills,'parent_plan':parent_plan,'parallel_group':parallel_group,'depends_on':depends_on or [],'status':'NOT_STARTED'};ts.append(t);self._write_json_atomic(self.tasks,ts);return t
+   ts=json.loads(self.tasks.read_text(encoding='utf-8'))
+   # started_at/completed_at/duration_sec (2026-09-01, multi-agent-timing-
+   # reconciliation pass): null/not-yet-started by construction -- a task is
+   # only ever timed by a real start_task()/complete_task() call below, never
+   # backfilled with a guessed value here.
+   t={'task_id':'TASK-'+uuid.uuid4().hex[:8].upper(),'agent':agent,'route':route,'skills':skills,'parent_plan':parent_plan,'parallel_group':parallel_group,'depends_on':depends_on or [],'status':'NOT_STARTED','started_at':None,'completed_at':None,'duration_sec':None}
+   ts.append(t);self._write_json_atomic(self.tasks,ts);return t
+ def _find_task(self,ts,task_id):
+  for t in ts:
+   if t['task_id']==task_id:return t
+  raise KeyError(f"AgentTaskStore: unknown task_id {task_id!r}")
+ def start_task(self,task_id):
+  """Marks a delegated task RUNNING with a real wall-clock started_at
+  (time.time(), same epoch-float convention stage_profile.py's
+  start_time_epoch already uses) -- called by engine.py's run_stage()
+  immediately before the adapter.run() call this task was delegated for."""
+  with self._lock:
+   ts=json.loads(self.tasks.read_text(encoding='utf-8'))
+   t=self._find_task(ts,task_id)
+   t['status']='RUNNING';t['started_at']=time.time()
+   self._write_json_atomic(self.tasks,ts);return t
+ def complete_task(self,task_id,status,duration_sec=None):
+  """Marks a delegated task finished with a real completed_at and a real
+  duration_sec. duration_sec is computed from this task's own
+  started_at/completed_at (time.time() diff) unless the caller passes one
+  explicitly (e.g. a caller with its own higher-resolution perf_counter
+  span for the exact same work). A task completed without ever going
+  through start_task() (defensive case, not the real engine.py call path)
+  backfills started_at=completed_at so duration_sec is still a real
+  measurement (0.0) rather than None/negative/fabricated."""
+  with self._lock:
+   ts=json.loads(self.tasks.read_text(encoding='utf-8'))
+   t=self._find_task(ts,task_id)
+   t['completed_at']=time.time()
+   if t.get('started_at') is None:t['started_at']=t['completed_at']
+   t['duration_sec']=float(duration_sec) if duration_sec is not None else max(0.0,t['completed_at']-t['started_at'])
+   t['status']=status
+   self._write_json_atomic(self.tasks,ts);return t
  def acquire(self,res,task_id,agent):
   with self._lock:
    o=json.loads(self.own.read_text(encoding='utf-8'))

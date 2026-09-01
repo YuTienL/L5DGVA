@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse, json, os, sys
 from pathlib import Path
+from typing import Any, Dict, Optional
 from .engine import DVHarness
 from .models import Stage, Status
 
@@ -14,6 +15,63 @@ def _access_user() -> str:
 
 def _access_host() -> str:
     return os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "unknown-host"
+
+
+# --- Human-readable stage completion / checklist rendering (2026-09-01,
+# runtime-progress-visibility pass) ------------------------------------------
+# control_plane.describe_stage() carries stage_completion_percent/
+# gates_passed/gates_total and entry_checklist/exit_checklist as real data,
+# but `explain`/`evidence` only ever printed it as raw JSON -- a human had to
+# read a dict to find out which specific item is still missing. This renders
+# the same dict as checkmarks/x-marks per item plus an explicit "still needs
+# to be supplied" line, shared by `explain --stage` (appended after its
+# existing JSON block, kept for backward compatibility) and the new
+# `checklist --stage` subcommand (see main()'s RULING comment at its call
+# site for why `evidence --stage` itself is left JSON-only).
+def _render_checklist_section(title: str, checklist: Optional[Dict[str, Any]]) -> str:
+    lines = [f"{title}:"]
+    if checklist is None:
+        lines.append("  (no telemetry recorded yet -- this stage has not run this attempt)")
+        return "\n".join(lines)
+    total = checklist.get("total_count", 0) or 0
+    present = checklist.get("present_count", 0) or 0
+    pct = checklist.get("completeness_percent", 100.0)
+    lines.append(f"  {present}/{total} present ({pct:.0f}%)")
+    items = checklist.get("items") or []
+    if not items:
+        lines.append("  (no items declared for this stage)")
+    for it in items:
+        mark = "[x]" if it.get("present") else "[ ]"
+        desc = f" - {it['description']}" if it.get("description") else ""
+        lines.append(f"  {mark} {it.get('item_id')}{desc}")
+    missing = checklist.get("missing_item_ids") or []
+    if missing:
+        lines.append(f"  >>> STILL NEEDS TO BE SUPPLIED: {', '.join(str(m) for m in missing)}")
+    return "\n".join(lines)
+
+
+def render_stage_checklist_report(detail: Dict[str, Any]) -> str:
+    """Human-readable rendering of describe_stage()'s numeric completion
+    percent and entry/exit evidence checklists -- a percent line plus a
+    checkmark/x-mark per declared item and an explicit "still needs to be
+    supplied" note for any missing one, so a gap prompts the reader for the
+    exact item rather than requiring them to diff raw JSON by eye."""
+    pct = detail.get("stage_completion_percent")
+    gp, gt = detail.get("gates_passed"), detail.get("gates_total")
+    note = detail.get("stage_completion_note")
+    lines = [
+        f"Stage: {detail.get('stage')}",
+        f"Gate completion: {pct if pct is not None else '-'}% "
+        f"({gp if gp is not None else '-'}/{gt if gt is not None else '-'} gates passed)"
+        + (f" -- {note}" if note else ""),
+        "",
+        _render_checklist_section("Entry checklist (evidence required before this stage runs)",
+                                   detail.get("entry_checklist")),
+        "",
+        _render_checklist_section("Exit checklist (evidence this stage should have produced)",
+                                   detail.get("exit_checklist")),
+    ]
+    return "\n".join(lines)
 
 
 def main():
@@ -81,6 +139,13 @@ def main():
 
     pevidence = sub.add_parser("evidence", help="Show the real evidence blocks/gate verdict a stage's last response produced.")
     pevidence.add_argument("--stage", choices=[s.value for s in Stage], default=None)
+
+    pchecklist = sub.add_parser("checklist", help="Human-readable stage completion percent plus entry/exit evidence "
+                                                     "checklist (checkmarks/x-marks per item, and an explicit "
+                                                     "'still needs to be supplied' list for anything missing) -- "
+                                                     "the same describe_stage() data `explain`/`evidence` carry as "
+                                                     "raw JSON, rendered for a human instead.")
+    pchecklist.add_argument("--stage", choices=[s.value for s in Stage], default=None)
 
     pcorrect = sub.add_parser("correct", help="Provide a human correction to a stage without re-running the agent.")
     pcorrect.add_argument("stage", choices=[s.value for s in Stage])
@@ -433,7 +498,27 @@ def main():
             # ACTUAL blocking_reason / evidence blocks / gate verdict for stage.
             print(get_de_explainer(stage))
             print("\n--- Current run state (WHY, not a generic description) ---")
-            print(json.dumps(describe_stage(h.root, h.state, stage), ensure_ascii=False, indent=2))
+            # describe_stage()'s dict is printed verbatim (no field
+            # allowlist), so its gates_total/gates_passed/
+            # stage_completion_percent/stage_completion_note/entry_checklist/
+            # exit_checklist fields (stage-SCOPED completion, alongside
+            # gate_verdict/gate_reasons) surface here automatically.
+            detail = describe_stage(h.root, h.state, stage)
+            print(json.dumps(detail, ensure_ascii=False, indent=2))
+            # RULING: `explain` already mixes prose (get_de_explainer above)
+            # with a JSON block, so appending a human-readable rendering of
+            # the same completion/checklist data here is purely additive --
+            # existing callers that only look for the JSON block are
+            # unaffected. `evidence` below is intentionally left emitting
+            # ONLY the raw describe_stage() JSON (unchanged shape, still
+            # carries these same fields for a machine reader) because at
+            # least one existing test (test_cli_evidence_stage_prints_
+            # completion_fields) does a bare json.loads() over `evidence`'s
+            # entire stdout -- appending trailing text there would break that
+            # contract. The new `checklist` subcommand below is the
+            # dedicated human-readable entry point for evidence's data.
+            print("\n--- Stage completion checklist (human-readable) ---")
+            print(render_stage_checklist_report(detail))
     elif args.cmd == "pause":
         from . import commands
         commands.cmd_pause(h, args.reason)
@@ -465,6 +550,9 @@ def main():
     elif args.cmd == "evidence":
         from .control_plane import describe_stage, describe_stages
         if args.stage:
+            # Same describe_stage() dict as `explain` above, printed whole --
+            # gates_total/gates_passed/stage_completion_percent/
+            # stage_completion_note surface here automatically too.
             print(json.dumps(describe_stage(h.root, h.state, args.stage), ensure_ascii=False, indent=2))
         else:
             # No --stage given: same fan-out consideration as `explain` above
@@ -475,6 +563,22 @@ def main():
                 print(json.dumps(describe_stage(h.root, h.state, stages[0]), ensure_ascii=False, indent=2))
             else:
                 print(json.dumps(describe_stages(h.root, h.state, stages), ensure_ascii=False, indent=2))
+    elif args.cmd == "checklist":
+        # Dedicated human-readable entry point for the same
+        # stage_completion_percent/gates_passed/gates_total/entry_checklist/
+        # exit_checklist data `evidence --stage` carries as raw JSON -- see
+        # the RULING comment at `explain`'s call site above for why this
+        # exists as its own subcommand rather than also being appended to
+        # `evidence` directly.
+        from .control_plane import describe_stage
+        if args.stage:
+            stages = [args.stage]
+        else:
+            stages = h.state.effective_active_stages()
+        for stage in stages:
+            if len(stages) > 1:
+                print(f"\n=== {stage} ===")
+            print(render_stage_checklist_report(describe_stage(h.root, h.state, stage)))
     elif args.cmd == "correct":
         from . import commands
         commands.cmd_correct(h, args.stage, args.note, args.reset_attempts)
