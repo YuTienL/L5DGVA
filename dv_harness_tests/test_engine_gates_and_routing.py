@@ -77,6 +77,14 @@ _FAILURE_RECOVERY_EXTRA_GATES = (
     '```dv-harness-evidence:failure_signature_recurrence_gate\n{"failures": [{"failure_id": "F1", "signature": "SIG_A"}, {"failure_id": "F2", "signature": "SIG_A", "linked_to_existing_failure": "F1"}]}\n```\n'
     '```dv-harness-evidence:issue_triage_classification_gate\n{"classification": "KNOWN", "classification_reason": "matches prior waiver", "evidence_hash": "abc123", "known_issue_id": "K-1"}\n```\n'
     '```dv-harness-evidence:unknown_failure_escalation_gate\n{"classification": "ENV_ISSUE"}\n```\n'
+    # ADDED (targeted-wave-debug-window-recovery-wiring, 2026-09-02):
+    # focused_wave_debug_window_gate is now also mandatory for
+    # FAILURE_RECOVERY (see gates.py STAGE_GATES) -- the "not needed this
+    # round" escape hatch (deep_debug_required:false +
+    # deep_debug_not_required_reason) is the realistic default for this
+    # fixture since none of the other FAILURE_RECOVERY tests below claim a
+    # real waveform rerun happened.
+    '```dv-harness-evidence:focused_wave_debug_window_gate\n{"deep_debug_required": false, "deep_debug_not_required_reason": "sim.log UVM_ERROR text alone identified the mismatch"}\n```\n'
 )
 _REGRESSION_MONITOR_EXTRA_GATES = (
     '```dv-harness-evidence:cross_run_evidence_consistency_gate\n{"runs": [{"run_id": "r1", "rtl_revision": "rev1", "tb_revision": "tb1", "vip_version": "v1", "config_hash": "c1", "testlist_hash": "t1", "evidence_bundle_hash": "e1"}, {"run_id": "r2", "rtl_revision": "rev1", "tb_revision": "tb1", "vip_version": "v1", "config_hash": "c1", "testlist_hash": "t1", "evidence_bundle_hash": "e2"}]}\n```\n'
@@ -2105,6 +2113,65 @@ def test_failure_recovery_stage_now_fails_on_unknown_attribution():
 ```''' + "\n" + _FAILURE_RECOVERY_EXTRA_GATES)
     verdict2, reasons2 = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", resolved)
     assert verdict2 == "PASS", reasons2
+
+
+def test_failure_recovery_requires_focused_wave_debug_window_gate():
+    # BUG FIX regression test (targeted-wave-debug-window-recovery-wiring,
+    # 2026-09-02): focused_wave_debug_window_gate.py is the one gate that
+    # precisely enforces CLAUDE.md's "First-Failure Waveform Rerun"
+    # (targeted, minimal window, cut near first failure) but was wired ONLY
+    # to WAVE_ANALYSIS -- reachable only from VERIFY's PASS edge in
+    # main_graph.json, never from the real post-batch-failure debug path
+    # (FAILURE_RECOVERY). Now mandatory there too, same script, plus a real
+    # escape hatch (deep_debug_required:false + a non-empty
+    # deep_debug_not_required_reason) so the many FAILURE_RECOVERY responses
+    # that never need a waveform at all (CLAUDE.md's own "low-cost evidence
+    # first" rule) can still legitimately pass without faking a rerun.
+    attribution = ('```dv-harness-evidence:failure_attribution\n'
+                   '{"boundary_trace": [{"stage": "SEQUENCE", "expected": 1, "observed": 1}, '
+                   '{"stage": "DUT_INTERNAL", "expected": 1, "observed": 0}]}\n```\n')
+    other_three = (
+        '```dv-harness-evidence:failure_signature_recurrence_gate\n{"failures": [{"failure_id": "F1", "signature": "SIG_A"}]}\n```\n'
+        '```dv-harness-evidence:issue_triage_classification_gate\n{"classification": "KNOWN", "classification_reason": "matches prior waiver", "evidence_hash": "abc123", "known_issue_id": "K-1"}\n```\n'
+        '```dv-harness-evidence:unknown_failure_escalation_gate\n{"classification": "ENV_ISSUE"}\n```\n'
+    )
+
+    # No focused_wave_debug_window_gate block at all -> the stage can no
+    # longer silently PASS without ever declaring whether a targeted
+    # waveform rerun happened.
+    verdict, reasons = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three)
+    assert verdict == "GATE_FAIL", reasons
+    assert any("focused_wave_debug_window_gate" in str(r) for r in reasons)
+
+    # deep_debug_required:false with no justification -> FAIL, not a silent
+    # skip.
+    no_reason = ('```dv-harness-evidence:focused_wave_debug_window_gate\n'
+                 '{"deep_debug_required": false}\n```\n')
+    verdict2, reasons2 = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three + no_reason)
+    assert verdict2 == "GATE_FAIL", reasons2
+    assert any("DEEP_DEBUG_NOT_REQUIRED_WITHOUT_REASON" in str(r) for r in reasons2)
+
+    # deep_debug_required:false WITH a real justification -> PASS, low-cost
+    # evidence was genuinely enough this round.
+    with_reason = ('```dv-harness-evidence:focused_wave_debug_window_gate\n'
+                   '{"deep_debug_required": false, '
+                   '"deep_debug_not_required_reason": "UVM_ERROR text alone was conclusive"}\n```\n')
+    verdict3, reasons3 = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three + with_reason)
+    assert verdict3 == "PASS", reasons3
+
+    # A real targeted rerun still gets the exact same precise window/scope
+    # check WAVE_ANALYSIS already enforced -- an out-of-window stop still
+    # FAILs here too, proving this is the same gate, not a weaker copy.
+    bad_window = ('```dv-harness-evidence:focused_wave_debug_window_gate\n'
+                  '{"deep_debug_required": true, "dump_scope_confirmed": '
+                  '{"scope": "top.usb_dev.ctrl", "level_or_depth": "signal-level", "confirmed_by": "user"}, '
+                  '"wave_mode": 1, "fsdb_start_us": 0, "first_error_time_us": 100, '
+                  '"fsdb_stop_us": 5000, "simulation_stopped_at_fsdb_stop": true, '
+                  '"job_killed_or_terminated": true, "identity_preserved": true, '
+                  '"waveform_or_fsdbreport_evidence_hash": "h1"}\n```\n')
+    verdict4, reasons4 = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three + bad_window)
+    assert verdict4 == "GATE_FAIL", reasons4
+    assert any("INVALID_FOCUSED_FSDB_STOP_WINDOW" in str(r) for r in reasons4)
 
 
 def test_rca_replay_fix_closure_gate_cross_checks_boundary_trace():
@@ -4213,11 +4280,104 @@ def test_regression_submission_enforces_agent_isolation_and_wave_pa_coverage_def
     verdict4, reasons4 = evaluate_stage_evidence(ROOT, "REGRESSION", text_pass)
     assert verdict4 == "PASS", reasons4
 
-    override_ok = {"jobs": [{"job_id": "j1", "agent_id": "a1", "wave": 1, "pa": 0, "coverage": False,
-                              "override_reason": "representative testcase needs signal evidence"}]}
-    text_pass2 = f"```dv-harness-evidence:regression_submission_policy_gate\n{json.dumps(override_ok)}\n```\n"
-    verdict5, reasons5 = evaluate_stage_evidence(ROOT, "REGRESSION", text_pass2)
-    assert verdict5 == "PASS", reasons5
+
+def _run_regression_submission_gate_with_cwd(cwd, payload):
+    # Like _run_gate_script above, but with an explicit cwd -- exercises the
+    # exact same trust boundary run_gate() gives every gate script
+    # (subprocess.run(..., cwd=str(root))) so a fabricated .dv-harness
+    # fixture under a throwaway tmp dir can stand in for the real project's
+    # blackboard/lsf-jobs state without ever touching it. The gate script
+    # itself still lives under the real ROOT/tools/verification_flow/, only
+    # its reads of .dv-harness/... are relative to `cwd`.
+    import subprocess, sys
+    infile_dir = Path(tempfile.mkdtemp())
+    try:
+        infile = infile_dir / "in.json"
+        infile.write_text(json.dumps(payload), encoding="utf-8")
+        script = ROOT / "tools" / "verification_flow" / "regression_submission_policy_gate.py"
+        r = subprocess.run(
+            [sys.executable, str(script), "--jobs", str(infile)],
+            cwd=str(cwd), capture_output=True, text=True, timeout=30,
+        )
+        out = json.loads((r.stdout or "").strip() or "{}")
+        return r.returncode, out
+    finally:
+        shutil.rmtree(infile_dir, ignore_errors=True)
+
+
+def test_regression_submission_wave_override_requires_real_prior_failure_link():
+    # BUG FIX regression test (regression-submission-override-linkage-gap,
+    # 2026-09-02): override_reason alone used to be enough to bypass the
+    # WAVE/PA/Coverage default -- ANY non-empty free-text string, with zero
+    # correlation to a real prior failure. Now a non-empty override_reason
+    # also requires "prior_failure_ref" (testcase_id + a finding_id/job_id
+    # that this gate resolves against real on-disk evidence).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        # override_reason present but no prior_failure_ref at all -> FAIL.
+        override_no_ref = {"jobs": [{"job_id": "j1", "agent_id": "a1", "wave": 1, "pa": 0,
+                                      "coverage": False,
+                                      "override_reason": "representative testcase needs signal evidence"}]}
+        rc, out = _run_regression_submission_gate_with_cwd(tmp, override_no_ref)
+        assert rc != 0 and out["reason"] == "WAVE_OVERRIDE_NOT_LINKED_TO_FAILURE"
+
+        # prior_failure_ref present but pointing at nothing real (no
+        # blackboard finding, no job-state record on disk) -> still FAIL.
+        override_fake_ref = {"jobs": [{"job_id": "j1", "agent_id": "a1", "wave": 1, "pa": 0,
+                                        "coverage": False,
+                                        "override_reason": "representative testcase needs signal evidence",
+                                        "prior_failure_ref": {"testcase_id": "usb_bulkin_test",
+                                                               "finding_id": "does-not-exist"}}]}
+        rc2, out2 = _run_regression_submission_gate_with_cwd(tmp, override_fake_ref)
+        assert rc2 != 0 and out2["reason"] == "WAVE_OVERRIDE_NOT_LINKED_TO_FAILURE"
+
+        # A real blackboard finding (REGRESSION_MONITOR's own findings
+        # registry -- dv_harness/blackboard.py's Blackboard.upsert_finding)
+        # makes finding_id resolve -> PASS.
+        bb_dir = tmp / ".dv-harness" / "blackboard"
+        bb_dir.mkdir(parents=True)
+        (bb_dir / "findings.json").write_text(json.dumps({
+            "topic": "findings",
+            "value": {"items": {"F-usb-bulkin-mismatch": {"status": "open"}}},
+        }), encoding="utf-8")
+        override_real_finding = {"jobs": [{"job_id": "j1", "agent_id": "a1", "wave": 1, "pa": 0,
+                                            "coverage": False,
+                                            "override_reason": "representative testcase needs signal evidence",
+                                            "prior_failure_ref": {"testcase_id": "usb_bulkin_test",
+                                                                   "finding_id": "F-usb-bulkin-mismatch"}}]}
+        rc3, out3 = _run_regression_submission_gate_with_cwd(tmp, override_real_finding)
+        assert rc3 == 0 and out3["status"] == "PASS"
+
+        # A real prior JobState record showing an actual failure
+        # (dv_harness/lsf_client.py, one file per submitted LSF job) makes
+        # job_id resolve -> also PASS.
+        jobs_dir = tmp / ".dv-harness" / "lsf" / "jobs"
+        jobs_dir.mkdir(parents=True)
+        (jobs_dir / "998877.json").write_text(json.dumps({
+            "job_id": 998877, "sim_status": "FAIL", "uvm_error_count": 1,
+        }), encoding="utf-8")
+        override_real_job = {"jobs": [{"job_id": "j2", "agent_id": "a2", "wave": 0, "pa": 1,
+                                        "coverage": False,
+                                        "override_reason": "prior LSF failure needs PA rerun",
+                                        "prior_failure_ref": {"testcase_id": "usb_bulkin_test",
+                                                               "job_id": "998877"}}]}
+        rc4, out4 = _run_regression_submission_gate_with_cwd(tmp, override_real_job)
+        assert rc4 == 0 and out4["status"] == "PASS"
+
+        # A job-state record that exists but never actually failed must not
+        # count as a real prior failure -- still FAIL.
+        (jobs_dir / "111222.json").write_text(json.dumps({
+            "job_id": 111222, "sim_status": "PASS", "uvm_error_count": 0,
+        }), encoding="utf-8")
+        override_passing_job = {"jobs": [{"job_id": "j3", "agent_id": "a3", "wave": 1, "pa": 0,
+                                           "coverage": False,
+                                           "override_reason": "unrelated claim",
+                                           "prior_failure_ref": {"testcase_id": "usb_bulkin_test",
+                                                                  "job_id": "111222"}}]}
+        rc5, out5 = _run_regression_submission_gate_with_cwd(tmp, override_passing_job)
+        assert rc5 != 0 and out5["reason"] == "WAVE_OVERRIDE_NOT_LINKED_TO_FAILURE"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_server_sync_requires_head_and_submodule_sha_identity():

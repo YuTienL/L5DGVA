@@ -2,6 +2,24 @@
 import argparse,json,pathlib,sys,math
 ap=argparse.ArgumentParser(); ap.add_argument("--rerun",required=True); a=ap.parse_args()
 d=json.loads(pathlib.Path(a.rerun).read_text())
+# ESCAPE HATCH (targeted-wave-debug-window-recovery-wiring, 2026-09-02): this
+# gate is now also mandatory (see dv_harness/gates.py STAGE_GATES) for
+# FAILURE_RECOVERY, which -- unlike WAVE_ANALYSIS's always-do-a-representative-
+# wave-rerun flow -- must legitimately skip waveform entirely when cheaper
+# evidence already located the failure (CLAUDE.md "Evidence cost order,
+# low to high ... do not open FSDB first", restated in this stage's own
+# STAGE_INSTRUCTIONS text). Same "<x>_applicable:false + reason" escape-hatch
+# shape already used by fabric_topology_completeness_gate/protocol_structural_
+# completeness_gate/system_level_subsystem_set_completeness_gate for a
+# mandatory-but-not-always-relevant evidence block, applied here to
+# deep_debug_required's existing field rather than inventing a new one: an
+# explicit False must carry a real justification, or this still FAILs --
+# a bare absent/falsy value (the pre-existing behavior) is not enough to
+# silently skip the check.
+if d.get("deep_debug_required") is False:
+    if not str(d.get("deep_debug_not_required_reason") or "").strip():
+        print(json.dumps({"status":"FAIL","reason":"DEEP_DEBUG_NOT_REQUIRED_WITHOUT_REASON"})); sys.exit(11)
+    print(json.dumps({"status":"PASS","deep_debug_required":False})); sys.exit(0)
 if d.get("deep_debug_required") is not True:
     print(json.dumps({"status":"FAIL","reason":"FOCUSED_WAVE_RERUN_WITHOUT_NEED"})); sys.exit(2)
 # CLAUDE.md "Waveform Dump User Gate": before ANY waveform-enabled simulation,

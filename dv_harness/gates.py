@@ -193,6 +193,27 @@ STAGE_GATES = {
         ("failure_signature_recurrence_gate", "failure_signature_recurrence_gate.py", "--failures"),
         ("issue_triage_classification_gate", "issue_triage_classification_gate.py", "--issue"),
         ("unknown_failure_escalation_gate", "unknown_failure_escalation_gate.py", "--failure"),
+        # ADDED (targeted-wave-debug-window-recovery-wiring, 2026-09-02):
+        # focused_wave_debug_window_gate was the one gate that precisely
+        # enforces CLAUDE.md's "First-Failure Waveform Rerun" (targeted,
+        # minimal-window waveform cut near the first failure, user-confirmed
+        # dump scope) but was wired ONLY to WAVE_ANALYSIS -- reachable only
+        # from VERIFY's PASS edge in main_graph.json, a pre-batch
+        # representative-testcase flow. FAILURE_RECOVERY is the real
+        # post-batch-failure debug path (VERIFY/BUILD_DEBUG/INFRA_RECOVERY's
+        # FAIL edges all land here) and had NO gate at all checking a
+        # targeted waveform rerun performed during failure debugging --
+        # added here so that path is validated by the same precise
+        # window/scope check regardless of which graph edge led into it.
+        # Made this genuinely usable as an always-mandatory FAILURE_RECOVERY
+        # gate (unlike WAVE_ANALYSIS, not every failure here needs a
+        # waveform -- CLAUDE.md's own "escalate evidence cost gradually,
+        # don't jump to FSDB" rule) by adding a real escape hatch to the
+        # script itself: an explicit deep_debug_required=false PASSes when
+        # paired with a non-empty deep_debug_not_required_reason, same
+        # "<x>_applicable:false + reason" shape already used by
+        # fabric_topology_completeness_gate and friends.
+        ("focused_wave_debug_window_gate", "focused_wave_debug_window_gate.py", "--rerun"),
     ],
     "COVERAGE_CLOSURE": [
         ("coverage_signoff_verdict_gate", "coverage_signoff_verdict_gate.py", "--state"),

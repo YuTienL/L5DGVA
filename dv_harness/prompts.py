@@ -1787,6 +1787,39 @@ classification 是 UNKNOWN，missing_evidence、next_evidence_actions、owner、
 （UNKNOWN_FAILURE_CANNOT_PROMOTE）——未分類的 failure 絕對不能被放行往下一階段推進；四者都
 滿足且 promotion_allowed 不是 true 時，gate 回報狀態是 BLOCKED_PENDING_EVIDENCE，代表這個
 failure 被合法卡住等新證據，不是 stage 本身失敗。）
+
+本 stage 另外必須附上第四個 evidence block，不論這次 RCA 有沒有真的開波形——這是唯一精確檢查
+「targeted、最小窗口、cut near first failure」波形 rerun 的 gate，之前只掛在 WAVE_ANALYSIS
+（僅 VERIFY PASS 後代表性 testcase 那條 pre-batch 分支才會走到），FAILURE_RECOVERY 這個真正的
+batch 失敗後除錯路徑完全沒有這一層檢查：
+
+若這次 RCA 需要用波形定位（First-Failure Waveform Rerun，CLAUDE.md）：只對這個 failure 做
+targeted、最小窗口的波形 rerun（WAVE=1、FSDB_START=0，在 first-failure 附近截止），不得整批重跑
+或預設 full-depth dump：
+
+```dv-harness-evidence:focused_wave_debug_window_gate
+{"deep_debug_required": true, "dump_scope_confirmed": {"scope": "...",
+  "level_or_depth": "...", "confirmed_by": "..."},
+ "wave_mode": 1, "fsdb_start_us": 0, "first_error_time_us": 0, "fsdb_stop_us": 200,
+ "simulation_stopped_at_fsdb_stop": true, "job_killed_or_terminated": true,
+ "identity_preserved": true, "waveform_or_fsdbreport_evidence_hash": "..."}
+```
+（跟 WAVE_ANALYSIS stage 用的是同一個 gate：`dump_scope_confirmed` 缺
+scope/level_or_depth/confirmed_by 任一欄位都 FAIL（WAVEFORM_DUMP_SCOPE_NOT_CONFIRMED /
+_CONFIRMATION_INCOMPLETE）；`wave_mode` 必須是 1 且 `fsdb_start_us` 必須是 0，否則 FAIL
+（FOCUSED_RERUN_MUST_USE_WAVE1_FROM_TIME0）；`fsdb_stop_us` 必須精確等於
+`first_error_time_us`+200，否則 FAIL（INVALID_FOCUSED_FSDB_STOP_WINDOW）——不得截到比 first
+failure 之後 200us 更長的窗口；`simulation_stopped_at_fsdb_stop`/`job_killed_or_terminated`/
+`identity_preserved` 三者缺一即 FAIL。）
+
+若這次 RCA 依 Evidence 成本順序、低成本證據已經足夠定位問題，完全不需要開波形，附上：
+
+```dv-harness-evidence:focused_wave_debug_window_gate
+{"deep_debug_required": false, "deep_debug_not_required_reason": "..."}
+```
+（`deep_debug_required` 為 false 時，`deep_debug_not_required_reason` 必須非空說明為什麼低成本
+證據已足夠，否則 FAIL（DEEP_DEBUG_NOT_REQUIRED_WITHOUT_REASON）——不能什麼都不填就跳過波形
+window 檢查；理由夠了就直接 PASS，不必假裝做了一次不存在的 rerun。）
 """,
 Stage.RE_AUDIT.value: """
 重新執行 original workflow audit，確認原 findings closed 且沒有新增 actionable issue。
