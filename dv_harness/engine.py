@@ -1284,6 +1284,133 @@ class DVHarness:
             "promotion": promotion,
         })
 
+    def _promote_verified_fix_knowledge(self, stage: str, evidence_blocks: dict) -> None:
+        """Closed-loop wiring (verified-fix-auto-promotion gap-closing pass,
+        2026-09-02): DEBUG_WORKFLOW_GUIDE.md's Knowledge Center push
+        previously only ever happened two ways -- _promote_experience_knowledge
+        above (a bare "root_cause"/"debug_lesson" record, pushed on
+        EXPERT_FEEDBACK_LOOP's experience_knowledge_gate PASS, BEFORE any fix
+        is proven to work) and a separate manual .work/persist_*.py script a
+        human/agent has to remember to run by hand. Neither path automatically
+        records the actual VERIFIED FIX once RE_AUDIT itself proves it: a PASS
+        verdict on RE_AUDIT whose STAGE_GATES include both fix_effectiveness_gate
+        (tools/verification_flow/fix_effectiveness_gate.py -- structurally
+        requires failure_signature_after != failure_signature_before,
+        targeted_reproducer_passed, broader_regression_passed, and NOT
+        new_failures_introduced) and fix_regression_non_regression_gate
+        (tools/verification_flow/fix_regression_non_regression_gate.py --
+        structurally requires target_pre_fix_result==FAIL,
+        target_post_fix_result==PASS, replay_equivalent==True, no
+        pre_fix_result==PASS test regressing post-fix, and cross-checks any
+        supplied job_id against the real on-disk JobState record) both means
+        those two gate scripts ALREADY independently verified the fix
+        actually works AND did not regress anything -- exactly the
+        "fix_effectiveness_gate/fix_regression_non_regression_gate (RE_AUDIT
+        gates) have PASSed" precondition this project's own gap audit called
+        for. This method closes that gap: it auto-builds and
+        route_and_store()s a real kind="verified_fix" record here, in-process,
+        the moment RE_AUDIT reaches that verdict -- no separate manual script
+        required for this common case.
+
+        Same guard idiom as every other _promote_*/_persist_* method in this
+        class: `stage` reaching here already means run_stage()'s caller
+        computed verdict=="PASS" for the WHOLE stage (see the one real call
+        site below), and evaluate_stage_evidence_with_detail() only returns
+        "PASS" when EVERY gate_id in STAGE_GATES[stage] passed -- so checking
+        both gate ids are present in this stage's STAGE_GATES mapping is
+        sufficient to know both individually PASSed; there is no separate
+        per-gate detail this method needs to re-derive (run_stage() already
+        has that in `structured_signatures`, but the coarse "did this stage
+        reach PASS" signal already implies it for these two specific
+        gate ids). A stage lacking either gate id (i.e. anything other than
+        RE_AUDIT today) is a genuine no-op, same as every sibling method here.
+
+        Reads the SAME evidence_blocks dict run_stage() already computed via
+        extract_evidence_blocks(result.text) -- does not re-parse agent text
+        a second time. Neither fix_effectiveness_gate nor
+        fix_regression_non_regression_gate appears in JUDGMENT_FIELDS (gates.py)
+        so, unlike _promote_experience_knowledge's experience_knowledge_gate
+        handling, there is no Tier-5 DV-review co-sign {"value":...} wrapper
+        to unwrap here regardless of policy.require_dv_review_cosign.
+        root_cause_evidence_gate's block IS read for enrichment
+        (root_cause/symptom text), unwrapped exactly the same way
+        _score_root_cause_confidence above already reads that same gate's
+        block -- following that existing precedent rather than inventing a
+        third convention.
+
+        This is ADDITIVE, not a replacement for EXPERT_FEEDBACK_LOOP's own
+        experience_knowledge_gate path: that stage remains the higher-
+        scrutiny, human-expert-approved route to a "debug_lesson"/pattern-
+        level record (and, when EXPERT_FEEDBACK_LOOP's own
+        experience_applicability_gate/route_memory() judge it a
+        "cross_project_lesson", the cross-project ORGANIZATIONAL_MEMORY
+        promotion route_and_store() already gives it). This new record is
+        the project-local Engineering-Memory-tier record for THIS ONE fix,
+        auto-pushed the moment its own regression-verified evidence exists --
+        route_and_store() already shares any ENGINEERING_MEMORY record to the
+        configured shared Knowledge Center via its own _maybe_share()/
+        maybe_push_to_shared() logic (see memory_router.py's
+        _SHAREABLE_DESTINATIONS), so this method never duplicates that call
+        itself, exactly like every other route_and_store() call site in this
+        class."""
+        gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
+        if not {"fix_effectiveness_gate", "fix_regression_non_regression_gate"} <= gate_ids:
+            return
+        fix_block = evidence_blocks.get("fix_effectiveness_gate")
+        closure_block = evidence_blocks.get("fix_regression_non_regression_gate")
+        if not isinstance(fix_block, dict) or not isinstance(closure_block, dict):
+            return  # both gates are required members of gate_ids above, so a
+                     # PASS verdict guarantees both blocks exist and validated
+                     # -- this is only a defensive belt-and-braces check.
+        rc_block = evidence_blocks.get("root_cause_evidence_gate")
+        rc_block = rc_block if isinstance(rc_block, dict) else {}
+
+        root_cause_id = fix_block.get("root_cause_id")
+        root_cause_text = rc_block.get("root_cause") or root_cause_id
+        symptoms = [s for s in (
+            rc_block.get("symptom"), fix_block.get("failure_signature_before"),
+        ) if s]
+
+        record = {
+            "kind": "verified_fix",
+            "verified": True,  # fix_effectiveness_gate + fix_regression_non_regression_gate
+                                # already independently required this (targeted
+                                # reproducer PASS, broader regression PASS, no new
+                                # failures, target FAIL->PASS, replay-equivalent,
+                                # no critical-test regression)
+            "title": f"Verified fix: {root_cause_text}" if root_cause_text else "RE_AUDIT verified fix",
+            "scope": "engineering",
+            "symptoms": symptoms,
+            "root_cause": root_cause_text,
+            "fix": fix_block.get("fix_revision"),
+            "verification": {
+                "targeted_reproducer_passed": fix_block.get("targeted_reproducer_passed"),
+                "broader_regression_passed": fix_block.get("broader_regression_passed"),
+                "new_failures_introduced": fix_block.get("new_failures_introduced"),
+                "rerun_evidence": fix_block.get("rerun_evidence"),
+                "target_pre_fix_result": closure_block.get("target_pre_fix_result"),
+                "target_post_fix_result": closure_block.get("target_post_fix_result"),
+                "replay_equivalent": closure_block.get("replay_equivalent"),
+                "critical_non_regression_tests": closure_block.get("critical_non_regression_tests"),
+                "fix_commit_hash": closure_block.get("fix_commit_hash"),
+                "rerun_bundle_hash": closure_block.get("rerun_bundle_hash"),
+            },
+            "confidence": "HIGH",  # independently gate-verified fix effectiveness AND
+                                    # non-regression, not merely agent-self-reported
+            "note": f"Auto-promoted from RE_AUDIT stage evidence (fix_effectiveness_gate + "
+                    f"fix_regression_non_regression_gate both PASSed).",
+            "provenance": f"RE_AUDIT auto-promotion, root_cause_id={root_cause_id}",
+            "protocol": rc_block.get("protocol"),
+        }
+        try:
+            promotion = route_and_store(self.root, record, cfg=self.cfg)
+        except Exception as exc:
+            promotion = {"destination": "PROMOTION_FAILED", "error": str(exc)}
+        self.store.event({
+            "ts": now(), "stage": stage, "event": "VERIFIED_FIX_PROMOTED",
+            "promotion": promotion,
+        })
+
     def _sync_findings_state(self) -> None:
         """The blackboard "findings" topic (Blackboard.findings_counts()) is
         the one real source of truth for finding counts -- this recomputes
@@ -1681,6 +1808,7 @@ class DVHarness:
                     self._append_coverage_history_sample(stage, evidence_blocks)
                     self._promote_project_topology_knowledge(stage, evidence_blocks)
                     self._promote_vplan_summary_knowledge(stage, evidence_blocks)
+                    self._promote_verified_fix_knowledge(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness
                 # design pass): previously this was indistinguishable from

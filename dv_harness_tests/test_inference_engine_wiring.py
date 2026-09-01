@@ -30,6 +30,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from dv_harness.engine import DVHarness
 from dv_harness.models import Status
@@ -358,5 +359,146 @@ def test_re_audit_without_root_cause_evidence_block_is_also_a_no_op():
     try:
         h._score_root_cause_confidence("RE_AUDIT", {})
         assert h.blackboard.read("root_cause_confidence") is None
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- verified-fix-auto-promotion gap-closing pass (2026-09-02) -------------
+# DEBUG_WORKFLOW_GUIDE.md's Knowledge Center push was previously only ever
+# real via _promote_experience_knowledge (a bare "root_cause"/"debug_lesson"
+# record pushed on EXPERT_FEEDBACK_LOOP's experience_knowledge_gate PASS --
+# BEFORE any fix is proven to work) or a separate manual .work/persist_*.py
+# script. DVHarness._promote_verified_fix_knowledge (engine.py), wired into
+# run_stage()'s PASS branch alongside every other _promote_*/_persist_*
+# side effect, closes that: a genuine RE_AUDIT PASS whose
+# fix_effectiveness_gate + fix_regression_non_regression_gate blocks both
+# independently passed (real subprocess-executed gate scripts, same
+# `_re_audit_pass_text()`/`_install_re_audit_gates()` fixtures as
+# test_re_audit_pass_wires_real_inference_confidence_gap_and_next_action
+# above) must now automatically route_and_store() a kind="verified_fix"
+# Engineering Memory record, with no separate manual script required.
+def test_re_audit_pass_auto_promotes_verified_fix_via_route_and_store():
+    tmp, h = _fresh_harness()
+    try:
+        _install_re_audit_gates(tmp)
+        h.set_stage("RE_AUDIT")
+        text = _re_audit_pass_text()
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        with patch("dv_harness.engine.route_and_store") as mock_route:
+            mock_route.return_value = {
+                "destination": "ENGINEERING_MEMORY", "level": "engineering", "memory_id": "MEM-TEST-VF",
+            }
+            h.run_stage("goal")
+
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.PASS.value
+        assert mock_route.called, (
+            "a RE_AUDIT PASS with both fix_effectiveness_gate/"
+            "fix_regression_non_regression_gate satisfied must auto-push a "
+            "verified_fix record via route_and_store()"
+        )
+        # Only this new method calls route_and_store() for a RE_AUDIT PASS --
+        # every other _promote_*/_persist_* side effect on this stage is
+        # either a no-op (its own required gate id is not in RE_AUDIT's
+        # STAGE_GATES mapping) or uses a different real KnowledgeCenterClient
+        # path (_score_root_cause_confidence's promote_if_high_confidence).
+        assert mock_route.call_count == 1
+        call_args, call_kwargs = mock_route.call_args
+        assert call_args[0] == tmp
+        record = call_args[1]
+        assert call_kwargs.get("cfg") == h.cfg
+
+        assert record["kind"] == "verified_fix"
+        assert record["verified"] is True
+        assert record["root_cause"] == (
+            "ep0 FIFO underrun due to missing prefetch on GET_DESCRIPTOR"
+        )
+        assert record["fix"] == "rev2"
+        assert record["verification"]["targeted_reproducer_passed"] is True
+        assert record["verification"]["broader_regression_passed"] is True
+        assert record["verification"]["new_failures_introduced"] is False
+        assert record["verification"]["target_pre_fix_result"] == "FAIL"
+        assert record["verification"]["target_post_fix_result"] == "PASS"
+        assert record["verification"]["replay_equivalent"] is True
+
+        events = (tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        promo_events = [json.loads(e) for e in events if json.loads(e).get("event") == "VERIFIED_FIX_PROMOTED"]
+        assert promo_events and promo_events[0]["promotion"]["memory_id"] == "MEM-TEST-VF"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_re_audit_pass_actually_persists_verified_fix_to_engineering_memory():
+    # Same real end-to-end PASS as above, but with route_and_store()
+    # UNMOCKED -- proves the record genuinely lands in the real Engineering
+    # Memory tier on disk (same style of proof as
+    # test_run_stage_promotes_experience_knowledge_to_engineering_memory_on_pass
+    # in test_engine_gates_and_routing.py), not merely that some mock was
+    # called with the right-looking arguments.
+    from dv_harness.memory import MemoryStore
+    tmp, h = _fresh_harness()
+    try:
+        _install_re_audit_gates(tmp)
+        h.set_stage("RE_AUDIT")
+        text = _re_audit_pass_text()
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.PASS.value
+
+        mem = MemoryStore(tmp)
+        index_row = next(
+            (m for m in mem._index() if m.get("level") == "engineering"
+             and m.get("root_cause") == "ep0 FIFO underrun due to missing prefetch on GET_DESCRIPTOR"),
+            None,
+        )
+        assert index_row, f"no Engineering Memory index row for the auto-promoted verified_fix record: {mem._index()}"
+        rec = mem.get(index_row["memory_id"])
+        assert rec["kind"] == "verified_fix"
+        assert rec["verified"] is True
+        assert rec["level"] == "engineering"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_re_audit_does_not_auto_promote_verified_fix_when_fix_gates_absent_from_evidence():
+    # Direct-call defensiveness proof (same idiom as
+    # test_re_audit_without_root_cause_evidence_block_is_also_a_no_op above):
+    # RE_AUDIT's STAGE_GATES mapping does include both fix_effectiveness_gate
+    # and fix_regression_non_regression_gate, but this evidence_blocks dict
+    # never actually carried either block -- must be a genuine no-op, never
+    # a fabricated promotion from missing data.
+    tmp, h = _fresh_harness()
+    try:
+        with patch("dv_harness.engine.route_and_store") as mock_route:
+            h._promote_verified_fix_knowledge("RE_AUDIT", {})
+        assert not mock_route.called
+        events_path = tmp / ".dv-harness" / "events.jsonl"
+        assert not events_path.exists() or "VERIFIED_FIX_PROMOTED" not in events_path.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stage_without_fix_gates_is_untouched_backward_compatible_for_verified_fix_promotion():
+    # A stage whose STAGE_GATES mapping does not include BOTH
+    # fix_effectiveness_gate and fix_regression_non_regression_gate (i.e.
+    # every stage except RE_AUDIT) must be a complete no-op, matching every
+    # other _promote_*/_persist_* helper's own backward-compatibility
+    # guarantee.
+    tmp, h = _fresh_harness()
+    try:
+        with patch("dv_harness.engine.route_and_store") as mock_route:
+            h._promote_verified_fix_knowledge("VERIFY", {
+                "fix_effectiveness_gate": {"root_cause_id": "x"},
+            })
+        assert not mock_route.called
     finally:
         shutil.rmtree(tmp)
