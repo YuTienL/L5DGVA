@@ -832,6 +832,101 @@ def test_run_stage_promotes_project_topology_to_project_memory_on_pass():
         shutil.rmtree(tmp)
 
 
+def test_run_stage_promotes_vplan_summary_to_project_memory_on_pass():
+    # memory-engine-schema-completion audit (2026-09-01): Project Memory was
+    # populated by exactly ONE gate (project_model_topology_completeness_gate,
+    # tested above) -- vPlan content had no separate write path at all. This
+    # proves the second real gate-triggered writer: a PASS on VPLAN's
+    # vplan_writer_validation_gate (gates.py, vplan-doc-and-wiring-fix) now
+    # also persists a vPlan summary as Project-tier memory.
+    import os
+    from dv_harness.engine import DVHarness
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import ProjectMemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        gate_dir = tmp / "tools" / "vplan"
+        gate_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools" / "vplan" / "spec_coverage_audit.py",
+                    gate_dir / "spec_coverage_audit.py")
+        shutil.copy(ROOT / "tools" / "vplan" / "vplan_writer_validation_gate.py",
+                    gate_dir / "vplan_writer_validation_gate.py")
+        h.set_stage("VPLAN")
+
+        # Real on-disk evidence vplan_writer_validation_gate's real
+        # dv_harness.vplan_writer.validate_items() actually checks against --
+        # same fixture shape as
+        # dv_harness_tests/test_vplan_writer_validation_gate.py's _make_fake_env.
+        pattern_dir = tmp / "patterns"
+        pattern_dir.mkdir()
+        (pattern_dir / "USB2_bulkin.txt").write_text("bulkin pattern", encoding="utf-8")
+        dispatcher_file = tmp / "dv_uvm_pattern_pool.svh"
+        dispatcher_file.write_text(
+            'case (pattern_name)\n  "USB2_bulkin": run_bulkin();\nendcase\n', encoding="utf-8",
+        )
+        tests_dir = tmp / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "usb_bulkin_test.sv").write_text(
+            "task automatic usb_bulkin_test();\nendtask\n", encoding="utf-8",
+        )
+        items = [
+            {"req_id": "USB2-BULK-001", "feature_area": "Bulk Transfers",
+             "verification_item": "Bulk IN transfer completes",
+             "pattern_name": "USB2_bulkin", "task_name": "usb_bulkin_test",
+             "suite": "USB2_sanity", "covered_by": "covered",
+             "description": "Directed bulk-in transfer test", "spec_section": "TBD-spec",
+             "constraint_items": [], "random_or_directed": "directed", "mode_speed": "HS",
+             "instance": "N/A", "checkers_active": ["sb_bulk_data_match"], "notes": "",
+             "blocked_on": None, "blocked_reason": None},
+        ]
+        vplan_validation_payload = {
+            "items": items,
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+        }
+        spec_coverage_payload = {"requirements": [{"req_id": "USB2-BULK-001", "status": "VERIFIED"}]}
+        text = (
+            f"```dv-harness-evidence:spec_coverage_audit\n{json.dumps(spec_coverage_payload)}\n```\n"
+            f"```dv-harness-evidence:vplan_writer_validation_gate\n{json.dumps(vplan_validation_payload)}\n```\n"
+        )
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        # vplan_writer_validation_gate.py imports dv_harness.vplan_writer --
+        # its own sys.path.insert(0, ...) resolves to the copied script's
+        # location (tmp), not the real package, so the subprocess needs the
+        # real project root on PYTHONPATH to find dv_harness at all (see
+        # this file's own confirmed-empirically note in the implementation
+        # report for memory-engine-schema-completion).
+        env_patch = dict(os.environ)
+        env_patch["PYTHONPATH"] = str(ROOT) + os.pathsep + env_patch.get("PYTHONPATH", "")
+        with patch.dict(os.environ, env_patch):
+            h.run_stage("goal")
+        assert h.state.stages["VPLAN"]["status"] == Status.PASS.value
+
+        proj_store = ProjectMemoryStore(tmp)
+        rows = [r for r in proj_store.store._index() if r.get("level") == "project"]
+        assert rows, f"no Project Memory record written for VPLAN: {proj_store.store._index()}"
+        rec = proj_store.get(rows[0]["memory_id"])
+        assert rec is not None
+        assert rec["level"] == "project"
+        assert rec["vplan_item_count"] == 1
+        assert rec["vplan_feature_areas"] == ["Bulk Transfers"]
+        assert rec["vplan_req_ids"] == ["USB2-BULK-001"]
+        assert rec["vplan_suites"] == ["USB2_sanity"]
+
+        events = (tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        promo_events = [json.loads(e) for e in events if json.loads(e).get("event") == "VPLAN_SUMMARY_PROMOTED"]
+        assert promo_events and promo_events[0]["promotion"]["memory_id"] == rec["memory_id"]
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_run_stage_does_not_promote_project_topology_when_gate_fails():
     # No spurious Project Memory record when the gate rejects the evidence
     # (a block missing its branch classification) -- PARTIAL, not PASS.
@@ -862,8 +957,14 @@ def test_run_stage_does_not_promote_project_topology_when_gate_fails():
         h.run_stage("goal")
         assert h.state.stages["PROJECT_MODEL"]["status"] != Status.PASS.value
 
+        # No spurious PROJECT-tier record -- but a WORKING-tier record from
+        # ReactRecorder.record() (memory-engine-schema-completion, 2026-09-01)
+        # is now expected on EVERY stage attempt regardless of verdict, since
+        # that tier is exactly the provisional hypothesis/evidence/next-action
+        # bookkeeping this stage attempt genuinely produced -- see
+        # dv_harness/react.py's ReactRecorder module-header RULING comment.
         proj_store = ProjectMemoryStore(tmp)
-        assert proj_store.store._index() == []
+        assert [r for r in proj_store.store._index() if r.get("level") == "project"] == []
     finally:
         shutil.rmtree(tmp)
 
@@ -1604,9 +1705,14 @@ def test_run_stage_does_not_promote_experience_knowledge_when_gate_fails():
         h.run_stage("goal")
         assert h.state.stages["EXPERT_FEEDBACK_LOOP"]["status"] == Status.PARTIAL.value
 
+        # No spurious ENGINEERING-tier promotion -- but a WORKING-tier record
+        # from ReactRecorder.record() (memory-engine-schema-completion,
+        # 2026-09-01) is now expected on EVERY stage attempt regardless of
+        # verdict; see dv_harness/react.py's ReactRecorder module-header
+        # RULING comment.
         from dv_harness.memory import MemoryStore
         mem = MemoryStore(tmp)
-        assert mem._index() == []
+        assert [r for r in mem._index() if r.get("level") == "engineering"] == []
     finally:
         shutil.rmtree(tmp)
 

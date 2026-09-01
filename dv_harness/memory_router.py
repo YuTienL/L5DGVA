@@ -138,6 +138,19 @@ def route_memory(record: Dict[str, Any]) -> str:
     if kind in ("job_result","job_failure","job_rerun"):
         return "JOB_MEMORY"
 
+    # react.py's ReactRecorder pushes one of these per outer stage attempt
+    # (memory-engine-schema-completion audit, 2026-09-01) -- see
+    # react.py's ReactRecorder._write_working_memory_tier_record docstring.
+    # An explicit branch (rather than relying on the generic WORKING_MEMORY
+    # fallthrough at the bottom of this function) so the real hypothesis/
+    # evidence/next-action working-memory contract has a named, documented
+    # routing rule instead of an implicit default. Deliberately distinct
+    # from "active_hypothesis" above (BLACKBOARD, current-run truth) --
+    # a react-loop reasoning step is a durable per-attempt working-memory
+    # record, not the graph's current live state.
+    if kind == "react_reasoning_step":
+        return "WORKING_MEMORY"
+
     if kind in ("project_fact","project_topology","tool_flow","known_issue") and verified:
         return "PROJECT_MEMORY"
 

@@ -529,6 +529,40 @@ def reconcile_job(state: JobState, live_bjobs_record: dict, *,
     return state, discrepancies
 
 
+# seed/fsdb_path extraction (memory-engine-schema-completion audit,
+# 2026-09-01): JobState/.dv-harness/lsf/job_state_schema.json have NO
+# dedicated seed or fsdb_path field, and neither bsub_submit() nor the
+# `dv-harness lsf-submit` CLI accept them as structured arguments -- the
+# only real, already-populated field that can ever carry this information
+# is JobState.options, the free-text string a caller passes straight
+# through to the underlying `bsub`/simulator invocation (e.g.
+# "+ntb_random_seed=1234 +fsdb_file=/path/run.fsdb"). These two regexes
+# extract a value ONLY when the caller's own options text genuinely
+# contains one of these real, already-documented markers (the seed pattern
+# mirrors gates.py's own log-scrubbing regex for the same marker vocabulary;
+# the fsdb pattern mirrors the uvm_generator Makefile template's own
+# `+fsdb_file=$(PAT_FSDB)` RUN_FLAGS convention) -- never guessed, never a
+# fabricated default. See _write_job_tier_memory_on_terminal_reconcile's
+# docstring for the honest residual gap this leaves for jobs whose options
+# text carries neither marker.
+_SEED_IN_OPTIONS_RE = re.compile(r"\b(?:ntb_random_)?seed\s*[:=]\s*(\d+)\b", re.IGNORECASE)
+_FSDB_FILE_IN_OPTIONS_RE = re.compile(r"\+fsdb_file[:=](\S+)", re.IGNORECASE)
+
+
+def _extract_seed_from_options(options: Optional[str]) -> Optional[str]:
+    if not options:
+        return None
+    m = _SEED_IN_OPTIONS_RE.search(options)
+    return m.group(1) if m else None
+
+
+def _extract_fsdb_path_from_options(options: Optional[str]) -> Optional[str]:
+    if not options:
+        return None
+    m = _FSDB_FILE_IN_OPTIONS_RE.search(options)
+    return m.group(1) if m else None
+
+
 def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: JobState,
                                                   discrepancies: list) -> None:
     """Job-tier memory wiring (Task 9, 2026-08-31 poster-gap-closing round 2):
@@ -564,6 +598,27 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
     `<level>/<memory_id>.json` and replaces, not appends, that id's row in
     index.json) instead of minting a new one -- no store-API change needed,
     this only supplies the id the existing upsert behavior already keys on.
+
+    SEED/FSDB_PATH (memory-engine-schema-completion audit, 2026-09-01): the
+    claimed Job Memory contract also names "seed" and "FSDB" fields that
+    this record never carried. `_extract_seed_from_options`/
+    `_extract_fsdb_path_from_options` above pull them out of
+    state.options -- the one real field on JobState that CAN carry this
+    text -- when a caller's own options string genuinely contains one of
+    the documented markers. RESIDUAL GAP, stated honestly rather than
+    papered over: JobState has no first-class seed/fsdb_path field, and
+    most real call sites (register_external_job(), or `lsf-submit` invoked
+    without an explicit +ntb_random_seed=/+fsdb_file= in --options) never
+    populate options with either marker at all -- for those jobs neither
+    key is genuinely available at this call site. Rather than writing
+    `"seed": None` / `"fsdb_path": None` (a null placeholder that LOOKS
+    like the schema captured this data when it did not), the keys are
+    simply omitted from the record when extraction finds nothing, so a
+    reader can tell "not captured" apart from "captured as null". Fully
+    closing this gap would mean adding real seed/fsdb_path fields to
+    JobState/job_state_schema.json and threading them through
+    bsub_submit()/the `lsf-submit` CLI as first-class structured
+    arguments -- out of scope for this change.
     """
     if not any(d.field == "sim_status" and d.severity == "CRITICAL" for d in discrepancies):
         return
@@ -584,6 +639,12 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
         "uvm_fatal_count": state.uvm_fatal_count,
         "terminal_signature": state.terminal_signature,
     }
+    seed = _extract_seed_from_options(state.options)
+    if seed is not None:
+        record["seed"] = seed
+    fsdb_path = _extract_fsdb_path_from_options(state.options)
+    if fsdb_path is not None:
+        record["fsdb_path"] = fsdb_path
     try:
         from .memory_router import route_and_store
         route_and_store(root, record)

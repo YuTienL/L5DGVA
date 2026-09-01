@@ -314,6 +314,91 @@ def test_lsf_reconcile_does_not_write_job_tier_memory_when_no_terminal_signal():
         shutil.rmtree(tmp)
 
 
+def test_lsf_reconcile_extracts_seed_and_fsdb_path_from_options_when_present():
+    # memory-engine-schema-completion audit (2026-09-01): "seed"/"fsdb_path"
+    # are extracted from JobState.options -- the one real field that can
+    # carry them -- only when the caller's own options text genuinely
+    # contains one of the documented markers (never guessed).
+    from dv_harness import lsf_client
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lsf_client.save_job_state(
+            tmp, lsf_client.JobState(
+                job_id=505, lsf_status="RUN", sim_status="UNKNOWN", pattern="usb2_hs_basic",
+                options="+ntb_random_seed=778812 +fsdb_file=/proj/run/fsdb/505.fsdb"))
+        payload = json.dumps({"RECORDS": [{"JOBID": "505", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(tmp, [505])
+
+        job_store = JobMemoryStore(tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job"]
+        assert rows
+        rec = job_store.get(rows[0]["memory_id"])
+        assert rec["seed"] == "778812"
+        assert rec["fsdb_path"] == "/proj/run/fsdb/505.fsdb"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_lsf_reconcile_extracts_seed_only_with_bare_seed_marker():
+    from dv_harness import lsf_client
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lsf_client.save_job_state(
+            tmp, lsf_client.JobState(
+                job_id=507, lsf_status="RUN", sim_status="UNKNOWN", options="seed=42 +UVM_VERBOSITY=UVM_LOW"))
+        payload = json.dumps({"RECORDS": [{"JOBID": "507", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(tmp, [507])
+
+        job_store = JobMemoryStore(tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job"]
+        rec = job_store.get(rows[0]["memory_id"])
+        assert rec["seed"] == "42"
+        assert "fsdb_path" not in rec
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_lsf_reconcile_omits_seed_and_fsdb_path_when_not_available_at_call_site():
+    # Honest residual-gap behavior: when options carries neither marker (the
+    # common case -- e.g. register_external_job()-style registration, or a
+    # plain --options string with no seed/fsdb markers), the keys must be
+    # OMITTED entirely, never written as a None placeholder that would look
+    # like the schema captured this data when it did not.
+    from dv_harness import lsf_client
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lsf_client.save_job_state(
+            tmp, lsf_client.JobState(job_id=506, lsf_status="RUN", sim_status="UNKNOWN",
+                                      pattern="usb2_hs_basic"))
+        payload = json.dumps({"RECORDS": [{"JOBID": "506", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=MagicMock(stdout=payload, stderr="", returncode=0)):
+            lsf_client.reconcile_batch(tmp, [506])
+
+        job_store = JobMemoryStore(tmp)
+        rows = [r for r in job_store.store._index() if r.get("level") == "job"]
+        rec = job_store.get(rows[0]["memory_id"])
+        assert "seed" not in rec
+        assert "fsdb_path" not in rec
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_extract_seed_and_fsdb_helpers_directly():
+    from dv_harness.lsf_client import _extract_seed_from_options, _extract_fsdb_path_from_options
+    assert _extract_seed_from_options(None) is None
+    assert _extract_seed_from_options("+UVM_TESTNAME=foo") is None
+    assert _extract_seed_from_options("+ntb_random_seed=123") == "123"
+    assert _extract_seed_from_options("SEED: 999") == "999"
+    assert _extract_fsdb_path_from_options(None) is None
+    assert _extract_fsdb_path_from_options("+ntb_random_seed=1") is None
+    assert _extract_fsdb_path_from_options("+fsdb_file=/a/b/c.fsdb") == "/a/b/c.fsdb"
+
+
 def test_preexisting_engineering_memory_and_corner_case_behavior_is_unchanged():
     # Exercises the same pre-existing MemoryStore/MemoryConsolidator/MemoryGC/
     # CornerCaseLibrary paths as dv_harness_tests/test_engine_gates_and_routing.py

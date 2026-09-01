@@ -416,6 +416,16 @@ class _TierMemoryStore:
         return self.store.mark_used(memory_id)
 
 class WorkingMemoryStore(_TierMemoryStore):
+    # CROSS-REFERENCE (memory-engine-schema-completion audit, 2026-09-01):
+    # this tier's real hypothesis/evidence/next-action content is produced by
+    # dv_harness.react.ReactRecorder.record() (once per outer stage attempt)
+    # and pushed HERE at write time via memory_router.route_and_store()
+    # (kind="react_reasoning_step" -> WORKING_MEMORY) -- see ReactRecorder's
+    # module-header RULING comment for why this is a write-time push rather
+    # than MemoryRetriever.search() reaching into react.py's own
+    # `.dv-harness/react/` file layout at read time. Every reader of this
+    # class (MemoryRetriever.search(), CLI/dashboard listings) therefore sees
+    # real live reasoning state with no read-side changes needed.
     level = "working"
 
 class JobMemoryStore(_TierMemoryStore):

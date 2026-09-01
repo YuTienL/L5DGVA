@@ -925,6 +925,73 @@ class DVHarness:
             "promotion": promotion,
         })
 
+    def _promote_vplan_summary_knowledge(self, stage: str, evidence_blocks: dict) -> None:
+        """Closed-loop wiring (memory-engine-schema-completion audit,
+        2026-09-01): the audit found Project Memory populated by exactly ONE
+        gate (_promote_project_topology_knowledge above, keyed on
+        project_model_topology_completeness_gate) -- vPlan content itself
+        (feature areas, req_ids, item count) was never separately captured
+        as project-tier memory, even though STAGE_GATES["VPLAN"]'s
+        vplan_writer_validation_gate (gates.py, added in the
+        vplan-doc-and-wiring-fix session) already requires and validates a
+        real vPlan item list (req_id/feature_area/pattern_name/task_name/
+        suite/... per dv_harness.vplan_writer.VPlanItem) against real
+        on-disk pattern-dir/dispatcher-file/task-declaration evidence before
+        it can PASS -- see tools/vplan/vplan_writer_validation_gate.py.
+
+        A PASS verdict on the VPLAN stage therefore means
+        evidence_blocks["vplan_writer_validation_gate"] (the SAME
+        agent-supplied payload run_gate() already fed to that gate script --
+        read here without re-parsing agent text a second time, same pattern
+        as every other _promote_* method in this class) genuinely holds a
+        gate-validated vPlan item list. This summarizes and persists it as
+        Project-tier memory (kind="project_fact", the same kind
+        _promote_project_topology_knowledge could have used but didn't need
+        to, since "project_topology" already existed for its case) so a
+        later stage's MemoryRetriever.search() read (see run_stage() below)
+        can retrieve this project's own vPlan facts instead of never having
+        them available at all. Same best-effort/never-downgrade-an-earned-
+        PASS discipline as every sibling method here."""
+        gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
+        if "vplan_writer_validation_gate" not in gate_ids:
+            return
+        block = evidence_blocks.get("vplan_writer_validation_gate")
+        if not isinstance(block, dict):
+            return
+        items = block.get("items")
+        if not isinstance(items, list) or not items:
+            return
+        feature_areas = sorted({
+            i.get("feature_area") for i in items if isinstance(i, dict) and i.get("feature_area")
+        })
+        req_ids = sorted({
+            i.get("req_id") for i in items if isinstance(i, dict) and i.get("req_id")
+        })
+        suites = sorted({
+            i.get("suite") for i in items if isinstance(i, dict) and i.get("suite")
+        })
+        record = {
+            "kind": "project_fact",
+            "verified": True,  # vplan_writer_validation_gate already validated every item
+                                # against real pattern-dir/dispatcher-file/task-declaration evidence
+            "title": f"vPlan finalized: {len(items)} item(s) across {len(feature_areas)} feature area(s)",
+            "scope": "project",
+            "vplan_item_count": len(items),
+            "vplan_feature_areas": feature_areas,
+            "vplan_req_ids": req_ids,
+            "vplan_suites": suites,
+            "vplan_pattern_dir": block.get("pattern_dir"),
+            "vplan_dispatcher_file": block.get("dispatcher_file"),
+        }
+        try:
+            promotion = route_and_store(self.root, record, cfg=self.cfg)
+        except Exception as exc:
+            promotion = {"destination": "PROMOTION_FAILED", "error": str(exc)}
+        self.store.event({
+            "ts": now(), "stage": stage, "event": "VPLAN_SUMMARY_PROMOTED",
+            "promotion": promotion,
+        })
+
     def _sync_findings_state(self) -> None:
         """The blackboard "findings" topic (Blackboard.findings_counts()) is
         the one real source of truth for finding counts -- this recomputes
@@ -1206,6 +1273,7 @@ class DVHarness:
                     self._score_root_cause_confidence(stage, evidence_blocks, verdict)
                     self._append_coverage_history_sample(stage, evidence_blocks)
                     self._promote_project_topology_knowledge(stage, evidence_blocks)
+                    self._promote_vplan_summary_knowledge(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness
                 # design pass): previously this was indistinguishable from
