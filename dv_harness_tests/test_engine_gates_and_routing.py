@@ -4348,6 +4348,49 @@ def test_regression_select_requires_four_categories_or_reason():
     assert verdict4 == "PASS", reasons4
 
 
+def test_regression_select_requires_single_test_reverify_when_following_fix_cycle():
+    # tools/verification_flow/regression_selection_completeness_gate.py
+    # RE_AUDIT-precondition audit follow-up (2026-09-02): the real single-test
+    # FAIL-before/PASS-after proof (same shape fix_regression_non_regression_gate
+    # checks) previously only ran POST-HOC at RE_AUDIT, after a full regression
+    # had already been submitted and counted. fix_cycle_id now makes it a real
+    # precondition at REGRESSION_SELECT, the stage immediately before REGRESSION
+    # submits jobs -- additive, does not replace the RE_AUDIT gate.
+    base = {"targeted_tests": ["t1"], "dependency_tests": ["t2"], "safety_tests": ["t3"],
+            "mandatory_signoff_tests": ["t4"], "selection_source": {"change_impact_evidence_id": "ci1"}}
+
+    # No fix_cycle_id at all -> unaffected, still PASS (ordinary regression
+    # selection with no preceding fix cycle never needs this evidence).
+    text_no_cycle = f"```dv-harness-evidence:regression_selection_completeness_gate\n{json.dumps(base)}\n```\n"
+    verdict0, reasons0 = evaluate_stage_evidence(ROOT, "REGRESSION_SELECT", text_no_cycle)
+    assert verdict0 == "PASS", reasons0
+
+    # fix_cycle_id set but no single_test_reverify_evidence at all -> FAIL.
+    with_cycle_no_evidence = {**base, "fix_cycle_id": "FC-1"}
+    text_missing = f"```dv-harness-evidence:regression_selection_completeness_gate\n{json.dumps(with_cycle_no_evidence)}\n```\n"
+    verdict1, reasons1 = evaluate_stage_evidence(ROOT, "REGRESSION_SELECT", text_missing)
+    assert verdict1 == "GATE_FAIL", reasons1
+    assert any("SINGLE_TEST_REVERIFY_MISSING_BEFORE_FULL_REGRESSION" in str(r) for r in reasons1)
+
+    # fix_cycle_id set, evidence present but wrong shape (target didn't
+    # actually FAIL before / PASS after) -> still FAIL, same reason.
+    with_cycle_wrong_shape = {**base, "fix_cycle_id": "FC-1",
+                               "single_test_reverify_evidence": {
+                                   "target_pre_fix_result": "PASS", "target_post_fix_result": "PASS"}}
+    text_wrong = f"```dv-harness-evidence:regression_selection_completeness_gate\n{json.dumps(with_cycle_wrong_shape)}\n```\n"
+    verdict2, reasons2 = evaluate_stage_evidence(ROOT, "REGRESSION_SELECT", text_wrong)
+    assert verdict2 == "GATE_FAIL", reasons2
+    assert any("SINGLE_TEST_REVERIFY_MISSING_BEFORE_FULL_REGRESSION" in str(r) for r in reasons2)
+
+    # fix_cycle_id set with a real FAIL-before/PASS-after reverify block -> PASS.
+    with_cycle_ok = {**base, "fix_cycle_id": "FC-1",
+                      "single_test_reverify_evidence": {
+                          "target_pre_fix_result": "FAIL", "target_post_fix_result": "PASS"}}
+    text_ok = f"```dv-harness-evidence:regression_selection_completeness_gate\n{json.dumps(with_cycle_ok)}\n```\n"
+    verdict3, reasons3 = evaluate_stage_evidence(ROOT, "REGRESSION_SELECT", text_ok)
+    assert verdict3 == "PASS", reasons3
+
+
 def test_regression_submission_enforces_agent_isolation_and_wave_pa_coverage_defaults():
     # tools/verification_flow/regression_submission_policy_gate.py
     # CLAUDE.md Core Operating Rules "One submitted LSF job = one isolated Job
@@ -4473,6 +4516,89 @@ def test_regression_submission_wave_override_requires_real_prior_failure_link():
                                                                   "job_id": "111222"}}]}
         rc5, out5 = _run_regression_submission_gate_with_cwd(tmp, override_passing_job)
         assert rc5 != 0 and out5["reason"] == "WAVE_OVERRIDE_NOT_LINKED_TO_FAILURE"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _run_fix_regression_non_regression_gate_with_cwd(cwd, payload):
+    # Same cwd-relative pattern as _run_regression_submission_gate_with_cwd
+    # above -- exercises fix_regression_non_regression_gate.py's real read of
+    # .dv-harness/lsf/jobs/<job_id>.json against a throwaway tmp fixture.
+    import subprocess, sys
+    infile_dir = Path(tempfile.mkdtemp())
+    try:
+        infile = infile_dir / "in.json"
+        infile.write_text(json.dumps(payload), encoding="utf-8")
+        script = ROOT / "tools" / "verification_flow" / "fix_regression_non_regression_gate.py"
+        r = subprocess.run(
+            [sys.executable, str(script), "--closure", str(infile)],
+            cwd=str(cwd), capture_output=True, text=True, timeout=30,
+        )
+        out = json.loads((r.stdout or "").strip() or "{}")
+        return r.returncode, out
+    finally:
+        shutil.rmtree(infile_dir)
+
+
+def test_fix_regression_non_regression_gate_cross_checks_job_registry():
+    # tools/verification_flow/fix_regression_non_regression_gate.py
+    # RE_AUDIT-precondition audit follow-up (2026-09-02): target_pre_fix_result/
+    # target_post_fix_result used to be pure self-attested strings, never
+    # cross-checked against REGRESSION_MONITOR's real per-job record
+    # (.dv-harness/lsf/jobs/<job_id>.json, dv_harness/lsf_client.py JobState,
+    # sim_status advanced by dv_harness/regression_reporter.py's real analysis
+    # cycle). target_pre_fix_job_id/target_post_fix_job_id are optional: when
+    # absent, behavior is unchanged (self-attestation only, still PASS).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        base = {"target_pre_fix_result": "FAIL", "target_post_fix_result": "PASS",
+                "replay_equivalent": True, "critical_non_regression_tests": [],
+                "fix_commit_hash": "c1", "rerun_bundle_hash": "b1"}
+
+        # No job_id refs at all -> unchanged self-attestation-only behavior, PASS.
+        rc0, out0 = _run_fix_regression_non_regression_gate_with_cwd(tmp, base)
+        assert rc0 == 0 and out0["status"] == "PASS", out0
+
+        # job_id refs supplied but no such JobState record exists on disk -> FAIL.
+        no_record = {**base, "target_pre_fix_job_id": "555001", "target_post_fix_job_id": "555002"}
+        rc1, out1 = _run_fix_regression_non_regression_gate_with_cwd(tmp, no_record)
+        assert rc1 != 0 and out1["reason"] == "TARGET_RESULT_JOB_REF_UNRESOLVED", out1
+
+        jobs_dir = tmp / ".dv-harness" / "lsf" / "jobs"
+        jobs_dir.mkdir(parents=True)
+        # Real prior job really did FAIL, real post-fix job really did PASS,
+        # both referencing the same testcase pattern -> claims match, PASS.
+        (jobs_dir / "555001.json").write_text(json.dumps({
+            "job_id": 555001, "sim_status": "FAIL", "pattern": "usb_bulkin_test",
+        }), encoding="utf-8")
+        (jobs_dir / "555002.json").write_text(json.dumps({
+            "job_id": 555002, "sim_status": "PASS", "pattern": "usb_bulkin_test",
+        }), encoding="utf-8")
+        matching = {**base, "target_pre_fix_job_id": "555001", "target_post_fix_job_id": "555002",
+                    "target_testcase_id": "usb_bulkin_test"}
+        rc2, out2 = _run_fix_regression_non_regression_gate_with_cwd(tmp, matching)
+        assert rc2 == 0 and out2["status"] == "PASS", out2
+
+        # Claimed PASS but the real recorded post-fix job actually still shows
+        # FAIL -- the agent's self-attestation disagrees with real ground
+        # truth -> FAIL TARGET_RESULT_CLAIM_MISMATCH.
+        (jobs_dir / "555003.json").write_text(json.dumps({
+            "job_id": 555003, "sim_status": "FAIL", "pattern": "usb_bulkin_test",
+        }), encoding="utf-8")
+        mismatched = {**base, "target_pre_fix_job_id": "555001", "target_post_fix_job_id": "555003"}
+        rc3, out3 = _run_fix_regression_non_regression_gate_with_cwd(tmp, mismatched)
+        assert rc3 != 0 and out3["reason"] == "TARGET_RESULT_CLAIM_MISMATCH", out3
+
+        # Real job resolves and its sim_status matches, but it was actually a
+        # run of a DIFFERENT testcase -- claimed target_testcase_id disagrees
+        # with the real job's recorded pattern -> still FAIL, same reason.
+        (jobs_dir / "555004.json").write_text(json.dumps({
+            "job_id": 555004, "sim_status": "PASS", "pattern": "usb_bulkout_test",
+        }), encoding="utf-8")
+        wrong_testcase = {**base, "target_pre_fix_job_id": "555001", "target_post_fix_job_id": "555004",
+                           "target_testcase_id": "usb_bulkin_test"}
+        rc4, out4 = _run_fix_regression_non_regression_gate_with_cwd(tmp, wrong_testcase)
+        assert rc4 != 0 and out4["reason"] == "TARGET_RESULT_CLAIM_MISMATCH", out4
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

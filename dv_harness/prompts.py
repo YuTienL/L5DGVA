@@ -1430,7 +1430,20 @@ Stage.REGRESSION_SELECT.value: """
  "selection_source": {"change_impact_evidence_id": "..."}}
 ```
 （任一類別真的沒有適用測試時，改附對應的 "<category>_empty_reason" 說明原因，
-不得直接留空交差。）
+不得直接留空交差。若這次選測是跟在一輪 FAILURE_RECOVERY/RE_AUDIT 修復循環後面
+——也就是這批 regression 是為了「修完某個 target test 之後」送出的——必須額外附上
+`"fix_cycle_id": "..."`，並且同時附上：
+
+```dv-harness-evidence:regression_selection_completeness_gate
+{..., "fix_cycle_id": "...",
+ "single_test_reverify_evidence": {"target_pre_fix_result": "FAIL",
+                                    "target_post_fix_result": "PASS"}}
+```
+
+證明修復目標那個 test 真的先 FAIL、修完後真的 PASS，否則 FAIL
+SINGLE_TEST_REVERIFY_MISSING_BEFORE_FULL_REGRESSION——這是送出完整 regression
+「之前」的硬性前置條件，不是等 RE_AUDIT 事後才補的 fix_regression_non_regression_gate
+自我證明；兩邊各自獨立把關，RE_AUDIT 那個檢查依然存在，不因為這裡新增就取消。）
 """,
 Stage.REGRESSION.value: """
 提交 LSF regression（一個 LSF job = 一個獨立 Job Agent context），Regression 預設 WAVE=0、PA=0、Coverage=OFF。
@@ -2037,7 +2050,15 @@ target 真的是修完才過（否則 FAIL TARGET_FIX_NOT_PROVEN）；`replay_eq
 `pre_fix_result` 是 PASS，`post_fix_result` 就必須也是 PASS，否則 FAIL FIX_CAUSED_REGRESSION
 並附上是哪個 testcase_id；這種「修前就過」的 testcase 還必須附 `evidence_hash`，否則 FAIL
 NON_REGRESSION_WITHOUT_EVIDENCE；最後 `fix_commit_hash` 與 `rerun_bundle_hash` 都是必填，
-缺一即 FAIL FIX_CLOSURE_WITHOUT_ARTIFACT_HASH。）
+缺一即 FAIL FIX_CLOSURE_WITHOUT_ARTIFACT_HASH。`target_pre_fix_result`/`target_post_fix_result`
+本身只是自陳述的字串，可選擇額外附上 `target_pre_fix_job_id`/`target_post_fix_job_id`
+——指向真正送出過的 LSF job id，gate 會拿它去讀 REGRESSION_MONITOR 真正維護的
+`.dv-harness/lsf/jobs/<job_id>.json`（JobState 的 `sim_status`），跟你剛剛自陳的
+FAIL/PASS 逐一核對，兜不起來就 FAIL TARGET_RESULT_CLAIM_MISMATCH，job id 根本查無此
+record 就 FAIL TARGET_RESULT_JOB_REF_UNRESOLVED——不再是純自我證明。附了
+`target_testcase_id` 的話也會核對該 job 記錄的 `pattern` 是否一致。這兩個 job_id
+欄位目前是可選（沒附就維持原本純自陳述行為），但只要附了就是真的拿硬證據核對，不是
+「填一個查不到的假 id 也能過」。）
 
 ```dv-harness-evidence:regression_replay_equivalence_gate
 {"original": {"testcase_id": "...", "seed": "...", "config_hash": "...",
