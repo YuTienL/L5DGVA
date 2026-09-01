@@ -1208,7 +1208,7 @@ random or directed | speed | instance | checkers active | notes
 **BUG FIX (2026-09-01, vplan-doc-and-wiring-fix):** the agent file used to
 say no generator existed for this ("confirmed absent... doc-only") -- FALSE.
 Real generator: `dv_harness/vplan_writer/writer.py`, CLI: `dv-harness
-vplan-export` (15-column layout + the 3 REQUIRED validation rules above,
+vplan-export` (15-column layout + the 3 mandatory validation rules above,
 typed refuse-on-mismatch, tests in `dv_harness_tests/test_vplan_writer.py`).
 **Run it, don't hand-author the `.xlsx`:** `dv-harness vplan-export
 <items.json> --out <path>.xlsx --protocol <TARGET_IP> --pattern-dir <dir>
@@ -1219,6 +1219,19 @@ regex-override flags). Also now wired into the automatic `STAGE_GATES
 alongside the pre-existing `spec_coverage_audit.py`), so LOCK re-checks the
 same 3 rules against real pattern-dir/dispatcher-file/task-declaration
 evidence, not just an agent-attested `requirements[]` summary.
+
+**BUG FIX (2026-09-01, vplan-4th-rule-implementation):** the 4th rule above
+("constraint items exist in SV source") was itself only documented, not
+implemented, until this pass. Now real: `ConstraintNotInSVSourceError` in
+`dv_harness/vplan_writer/writer.py`, exercised via `--constraint-declaration-
+source`/`--constraint-declaration-regex`/`--known-constraint-name` on
+`dv-harness vplan-export` and the matching optional
+`constraint_declaration_sources`/`known_constraint_names` fields on the
+`vplan_writer_validation_gate` evidence JSON. RULING: implemented as an
+OPTIONAL evidence-gated check (same precedent as `--known-check-name` /
+`UnknownCheckerNameError`) rather than unconditionally mandatory, so every
+existing caller without SV constraint-declaration evidence keeps producing
+byte-identical output; supplying the evidence makes the check fully strict.
 
 ---
 

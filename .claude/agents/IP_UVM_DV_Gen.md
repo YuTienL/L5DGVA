@@ -2319,6 +2319,28 @@ environment:
 > test_vplan_writer_validation_gate.py`), so the automatic LOCK gate for
 > this stage now also exercises the real pattern/task/dispatcher evidence
 > checks, not only a human-run CLI call.
+>
+> **BUG FIX (2026-09-01, vplan-4th-rule-implementation): the 4th validation
+> rule below ("constraint items exist in SV source") is now also
+> implemented** in `dv_harness/vplan_writer/writer.py` as
+> `ConstraintNotInSVSourceError`, closing the gap the prior pass in this same
+> session flagged but left unimplemented. RULING: implemented as an OPTIONAL,
+> evidence-gated check (`build_evidence_context`'s new
+> `constraint_declaration_sources`/`constraint_declaration_regex`/
+> `known_constraint_names` kwargs, `dv-harness vplan-export`'s new
+> `--constraint-declaration-source`/`--constraint-declaration-regex`/
+> `--known-constraint-name` flags) rather than an unconditionally mandatory
+> one -- mirroring the existing `known_check_names`/`UnknownCheckerNameError`
+> precedent exactly, so every existing caller that does not yet supply SV
+> constraint-declaration evidence keeps producing byte-identical output
+> (additive/backward-compatible, per this project's engineering discipline
+> rules) rather than newly failing closed on evidence it was never asked to
+> provide. When the evidence IS supplied, the check is fully strict
+> (fail-closed on any mismatch), same discipline as the 3 mandatory rules.
+> `tools/vplan/vplan_writer_validation_gate.py` was updated to pass these
+> same three optional kwargs through and to catch
+> `ConstraintNotInSVSourceError`, so the automatic gate exposes this rule's
+> result whenever a caller's JSON payload supplies the constraint evidence.
 
 ### The vPlan
 
@@ -2366,7 +2388,9 @@ random or directed | mode/speed | instance | checkers active | notes
 >   --pattern-dir uvm/tb/patterns \
 >   --dispatcher-file uvm/tb/patterns/dv_uvm_pattern_pool.svh \
 >   --task-declaration-source 'uvm/tb/tests/*.sv' \
->   [--known-check-name <check_name> ...] [--sheet verification_plan --sheet coverage_summary]
+>   [--known-check-name <check_name> ...] \
+>   [--constraint-declaration-source 'uvm/tb/tests/*.sv' ...] \
+>   [--sheet verification_plan --sheet coverage_summary]
 > ```
 >
 > `<items.json>` is a JSON list of VPlanItem dicts, one per row, using
@@ -2377,14 +2401,18 @@ random or directed | mode/speed | instance | checkers active | notes
 > `notes`, `blocked_on`, `blocked_reason`). `--pattern-dir`/
 > `--dispatcher-file`/`--task-declaration-source` are real paths into the
 > environment just built -- this is what lets the command run the 3
-> REQUIRED validation rules above against real evidence, not agent
+> mandatory validation rules above against real evidence, not agent
 > say-so, and refuse (typed error, no partial file written) on any
 > mismatch. Run `dv-harness vplan-export --help` for the full flag list,
 > including `--dispatcher-pattern-regex`/`--task-declaration-regex`
 > (override the default extraction regex for a non-USB dispatcher/test
-> naming convention) and `--known-check-name` (cross-checks `checkers
+> naming convention), `--known-check-name` (cross-checks `checkers
 > active` against a real scoreboard `check_name` set; omit entirely to skip
-> that one optional check).
+> that one optional check), and `--constraint-declaration-source`/
+> `--constraint-declaration-regex`/`--known-constraint-name` (2026-09-01,
+> vplan-4th-rule-implementation -- the 4th rule's own evidence source;
+> omit both `--constraint-declaration-source` and `--known-constraint-name`
+> entirely to skip it, same optional-check shape as `--known-check-name`).
 
 ### The package
 

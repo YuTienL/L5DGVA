@@ -26,6 +26,22 @@
 # established dv_harness.vplan_writer.build_evidence_context() signature and
 # dv_harness/cli.py's `vplan-export` argparse flags exactly, so this gate adds
 # no new schema/data-contract beyond what those two already define.
+#
+# UPDATED (2026-09-01, vplan-4th-rule-implementation): the 4th vPlan
+# validation rule described in .claude/agents/IP_UVM_DV_Gen.md's "The vPlan"
+# section ("every `constraint items` entry names a constraint that actually
+# exists in the written SV source") is now implemented in vplan_writer.py as
+# ConstraintNotInSVSourceError. This gate exposes it the same way as the
+# other 3: by forwarding an optional payload's constraint_declaration_sources/
+# constraint_declaration_regex/known_constraint_names straight through to
+# build_evidence_context() (again, not an invented schema -- these are that
+# function's own kwarg names, now also dv-harness vplan-export's own
+# --constraint-declaration-source/--constraint-declaration-regex/
+# --known-constraint-name flags). Same optional-check precedent as
+# known_check_names: a payload that supplies none of the three constraint
+# kwargs simply does not exercise this rule (evidence.sv_constraint_names
+# stays None inside vplan_writer, which skips the check entirely) rather
+# than failing closed on evidence nobody asked for.
 import argparse
 import json
 import pathlib
@@ -42,11 +58,13 @@ from dv_harness.vplan_writer import (  # noqa: E402
     UnknownTaskDeclarationError,
     PatternNotInDispatcherError,
     UnknownCheckerNameError,
+    ConstraintNotInSVSourceError,
 )
 
 _TYPED_ERRORS = (
     EvidenceSourceEmptyError, VPlanSchemaError, UnresolvedPatternFileError,
     UnknownTaskDeclarationError, PatternNotInDispatcherError, UnknownCheckerNameError,
+    ConstraintNotInSVSourceError,
 )
 
 # Only these two are required with no default in build_evidence_context()'s
@@ -58,6 +76,7 @@ _REQUIRED_TOP_LEVEL = ("items", "pattern_dir", "dispatcher_file")
 
 _OPTIONAL_EVIDENCE_KWARGS = (
     "pattern_glob", "dispatcher_pattern_regex", "task_declaration_regex",
+    "constraint_declaration_regex",
 )
 
 
@@ -89,6 +108,10 @@ def main() -> int:
         "pattern_dir": payload["pattern_dir"],
         "dispatcher_file": payload["dispatcher_file"],
         "task_declaration_sources": payload.get("task_declaration_sources"),
+        "constraint_declaration_sources": payload.get("constraint_declaration_sources"),
+        "known_constraint_names": (
+            frozenset(payload["known_constraint_names"]) if payload.get("known_constraint_names") else None
+        ),
     }
     for key in _OPTIONAL_EVIDENCE_KWARGS:
         if key in payload:

@@ -345,6 +345,18 @@ def main():
     pvplan.add_argument("--known-check-name", action="append", default=None, dest="known_check_names",
                          help="A known scoreboard check_name (repeatable). Omit entirely to skip the "
                               "checkers_active cross-check.")
+    pvplan.add_argument("--constraint-declaration-source", action="append", default=None,
+                         dest="constraint_declaration_sources",
+                         help="Glob (e.g. 'tb/tests/*.sv') scanned for real 'constraint <name> { ... }' "
+                              "declarations (4th vPlan validation rule, 2026-09-01). Repeatable. Omit "
+                              "both this and --known-constraint-name to skip the constraint_items-"
+                              "exist-in-SV-source cross-check entirely.")
+    pvplan.add_argument("--constraint-declaration-regex",
+                         default=r'\bconstraint\s+(?P<constraint>[A-Za-z0-9_]+)\b')
+    pvplan.add_argument("--known-constraint-name", action="append", default=None, dest="known_constraint_names",
+                         help="A known SV constraint name (repeatable), bypassing source scanning "
+                              "(same relationship to --constraint-declaration-source as "
+                              "--known-check-name has to scoreboard checks).")
     pvplan.add_argument("--sheet", action="append", default=None, dest="sheets",
                          help="Sheet registry key (repeatable). Default: verification_plan, coverage_summary.")
     pvplan.add_argument("--workbook-title", default=None)
@@ -711,12 +723,18 @@ def main():
         from . import vplan_writer
         items = json.loads(Path(args.items_json).read_text(encoding="utf-8"))
         try:
+            known_constraint_names = (
+                frozenset(args.known_constraint_names) if args.known_constraint_names else None
+            )
             evidence = vplan_writer.build_evidence_context(
                 pattern_dir=args.pattern_dir, pattern_glob=args.pattern_glob,
                 dispatcher_file=args.dispatcher_file,
                 dispatcher_pattern_regex=args.dispatcher_pattern_regex,
                 task_declaration_sources=args.task_declaration_sources,
                 task_declaration_regex=args.task_declaration_regex,
+                constraint_declaration_sources=args.constraint_declaration_sources,
+                constraint_declaration_regex=args.constraint_declaration_regex,
+                known_constraint_names=known_constraint_names,
             )
             known_check_names = frozenset(args.known_check_names) if args.known_check_names else None
             sheets = tuple(args.sheets) if args.sheets else ("verification_plan", "coverage_summary")
@@ -726,7 +744,8 @@ def main():
             )
         except (vplan_writer.EvidenceSourceEmptyError, vplan_writer.VPlanSchemaError,
                 vplan_writer.UnresolvedPatternFileError, vplan_writer.UnknownTaskDeclarationError,
-                vplan_writer.PatternNotInDispatcherError, vplan_writer.UnknownCheckerNameError) as e:
+                vplan_writer.PatternNotInDispatcherError, vplan_writer.UnknownCheckerNameError,
+                vplan_writer.ConstraintNotInSVSourceError) as e:
             print(json.dumps({"error": type(e).__name__, "reason": e.reason, "detail": e.detail},
                               ensure_ascii=False, indent=2))
             raise SystemExit(1)

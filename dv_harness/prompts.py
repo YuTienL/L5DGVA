@@ -313,13 +313,16 @@ runtime evidence 檢查是兩個不同層級，不要混淆。）
 
 ```dv-harness-evidence:vplan_writer_validation_gate
 {"items": [...VPlanItem dicts, same schema `dv-harness vplan-export` consumes...],
- "pattern_dir": "...", "dispatcher_file": "...", "task_declaration_sources": ["..."]}
+ "pattern_dir": "...", "dispatcher_file": "...", "task_declaration_sources": ["..."],
+ "constraint_declaration_sources": ["..."]}
 ```
 （這個 gate 直接呼叫真正的 dv_harness.vplan_writer.validate_items()，對磁碟上真實的
-pattern-dir/dispatcher-file/task-declaration-source 證據重跑上述 3 條 REQUIRED
+pattern-dir/dispatcher-file/task-declaration-source 證據重跑上述 3 條 mandatory
 validation rules——不是只檢查這個 JSON 本身格式對不對，2026-09-01,
 vplan-doc-and-wiring-fix：這是 STAGE_GATES["VPLAN"] 第二個 gate，補上
-spec_coverage_audit 一直沒做到的部分。）
+spec_coverage_audit 一直沒做到的部分。`constraint_declaration_sources`
+是第 4 條 rule 的證據來源，2026-09-01 vplan-4th-rule-implementation 新增，
+選填——省略時第 4 條 rule 直接 skip，不會 fail closed。）
 """,
 Stage.VERIFICATION_ARCHITECTURE.value: """
 Verification Architecture + Observability Planning：定義本次 scope 需要哪些

@@ -181,6 +181,104 @@ def test_empty_items_fails_closed():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _add_constraint_declarations(tests_dir: Path):
+    """Adds a real SV file declaring `constraint c_bulk_len` under tests_dir,
+    evidence for the 4th (constraint-items-exist-in-SV-source, 2026-09-01)
+    validation rule."""
+    (tests_dir / "constraints.sv").write_text(
+        "class usb_bulkin_test extends uvm_test;\n"
+        "  constraint c_bulk_len { len inside {[1:512]}; }\n"
+        "endclass\n",
+        encoding="utf-8",
+    )
+
+
+def test_constraint_items_exist_in_sv_source_passes_when_evidence_supplied():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        _add_constraint_declarations(tests_dir)
+        rc, out = _run({
+            "items": [_base_item(
+                random_or_directed="random", constraint_items=["c_bulk_len"],
+            )],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+            "constraint_declaration_sources": [str(tests_dir / "*.sv")],
+        })
+        assert rc == 0, out
+        assert out["status"] == "PASS"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_constraint_not_in_sv_source_fails_when_evidence_supplied():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        _add_constraint_declarations(tests_dir)
+        rc, out = _run({
+            "items": [_base_item(
+                random_or_directed="random", constraint_items=["c_totally_made_up"],
+            )],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+            "constraint_declaration_sources": [str(tests_dir / "*.sv")],
+        })
+        assert rc == 3
+        assert out["status"] == "FAIL"
+        assert out["reason"] == "CONSTRAINT_NOT_IN_SV_SOURCE"
+        assert out["detail"]["constraint_name"] == "c_totally_made_up"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_constraint_rule_skipped_when_no_constraint_evidence_in_payload():
+    # No constraint_declaration_sources/known_constraint_names in the
+    # payload at all -- an unresolvable-looking constraint name must still
+    # PASS, since the 4th rule was never requested (optional, additive).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        rc, out = _run({
+            "items": [_base_item(
+                random_or_directed="random", constraint_items=["c_anything_goes"],
+            )],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+        })
+        assert rc == 0, out
+        assert out["status"] == "PASS"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_known_constraint_names_bypasses_scanning_in_payload():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        rc, out = _run({
+            "items": [_base_item(
+                random_or_directed="random", constraint_items=["c_custom_only"],
+            )],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+            "known_constraint_names": ["c_custom_only"],
+        })
+        assert rc == 0, out
+        assert out["status"] == "PASS"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_wired_into_vplan_stage_gates():
     from dv_harness.gates import STAGE_GATES
     gate_ids = [g[0] for g in STAGE_GATES["VPLAN"]]
