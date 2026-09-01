@@ -91,6 +91,25 @@ SUBSYSTEM 模式下 required_artifacts.command_txt 與 required_artifacts.vip_re
 ——gate 會實際檢查磁碟上是否存在對應檔案，兩者都必須是「真的存在的檔案路徑」陣列，不能只填
 true 或隨便寫個不存在的路徑；找不到既有 command.txt/VIP reference 材料時，先擴大搜尋 repo/VIP
 安裝目錄，仍然沒有才用 Interactive Evidence Intake 模式向使用者確認。）
+
+DE-local Simulation Environment Intake（選填、不強制）：先確認這個專案在 harness 介入之前，
+是否已經有一套 DE 自己在跑的 local simulation environment（compile script、run script、
+filelist、environment-setup script）。有的話，逐項記錄「真實存在的檔案路徑」加上「這個檔案是
+怎麼被確認存在/可用的」（例如：實際 Read 過內容、實際執行過並看到成功輸出、DE 口頭/文件確認）；
+完全沒有這套既有環境（例如全新專案、DE 尚未提供）時，直接附上空物件 `{}`，gate 會視為
+not-applicable 直接通過，不會強迫每個專案都要有 DE-local 環境。回覆結尾附上：
+
+```dv-harness-evidence:de_local_sim_env_intake_gate
+{"compile_script_path": {"path": "<真實存在的 compile script 路徑>", "evidence": "..."},
+ "run_script_path": {"path": "<真實存在的 run script 路徑>", "evidence": "..."},
+ "filelist_path": {"path": "<真實存在的 filelist 路徑>", "evidence": "..."},
+ "env_setup_script_path": {"path": "<真實存在的 environment-setup script 路徑>", "evidence": "..."}}
+```
+
+（沒有既有 DE-local 環境時改附 `{}`——四個欄位必須「全有或全無」：一旦填了任何一個欄位，
+其餘三個也都要真實存在且各自附上 evidence，不可以只填一部分就當作已完成。每個 path 都必須是
+磁碟上真的存在、且非空的檔案，不能是猜的路徑或空檔案；evidence 欄位必須是非空字串，說明這個
+檔案「怎麼被確認存在/可用」，不能留白。）
 """,
 Stage.DISCOVERY.value: """
 Five Source Discovery：並行盤點 Spec、RTL Source、command.txt、USB Standard/VIP/Reference UVM、
@@ -1227,7 +1246,10 @@ task 前，要先搞清楚「這次驗證對象是誰、涉及哪些協定、手
 真的缺、而且是往下走必要的資訊，才會一次問你最少的必要問題（不會丟一長串
 表單轟炸你）。這裡也會確認「產出物」（例如 build、regression report、
 checker 這些本來就該由 harness 自己產生的東西）不會被要求由你先準備好，
-分不清楚 harness 該產生的東西跟你該提供的輸入會被判定失敗。
+分不清楚 harness 該產生的東西跟你該提供的輸入會被判定失敗。另外會順便
+問一句「你手上原本有沒有自己在跑的一套本地模擬環境（compile/run script、
+filelist、環境設定 script）」——有就記錄下來、附上怎麼確認過這些檔案真的
+存在/可用；完全沒有也沒關係，不會因為沒有就卡關。
 """,
 Stage.DISCOVERY.value: """
 【白話說明】這是正式動手前的「五路盤點」：Spec、RTL 原始碼、既有的

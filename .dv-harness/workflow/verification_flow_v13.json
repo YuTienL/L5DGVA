@@ -265,6 +265,7 @@
   "input_source_contract_gate": "tools/verification_flow/input_source_contract_gate.py",
   "interactive_evidence_intake_gate": "tools/verification_flow/interactive_evidence_intake_gate.py",
   "de_baseline_reproduction_gate": "tools/verification_flow/de_baseline_reproduction_gate.py",
+  "de_local_sim_env_intake_gate": "tools/verification_flow/de_local_sim_env_intake_gate.py",
   "reference_uvm_adaptation_gate": "tools/verification_flow/reference_uvm_adaptation_gate.py",
   "generated_artifact_boundary_gate": "tools/verification_flow/generated_artifact_boundary_gate.py",
   "platform_capability_completeness_gate": "tools/verification_flow/platform_capability_completeness_gate.py",

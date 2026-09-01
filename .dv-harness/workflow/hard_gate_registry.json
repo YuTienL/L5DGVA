@@ -129,6 +129,10 @@
       "tool": "tools/verification_flow/de_baseline_reproduction_gate.py"
     },
     {
+      "gate_id": "de_local_sim_env_intake_gate",
+      "tool": "tools/verification_flow/de_local_sim_env_intake_gate.py"
+    },
+    {
       "gate_id": "deep_rca_evidence_gate",
       "tool": "tools/verification_flow/deep_rca_evidence_gate.py"
     },

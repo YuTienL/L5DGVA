@@ -64,6 +64,15 @@ STAGE_GATES = {
         ("intake_readiness", "../vplan/intake_readiness.py", "--intake"),
         ("generated_artifact_boundary_gate", "generated_artifact_boundary_gate.py", "--inventory"),
         ("interactive_evidence_intake_gate", "interactive_evidence_intake_gate.py", "--state"),
+        # NEW (2026-09-01, de-local-sim-env-intake design pass): additive --
+        # closes the previously-zero schema/code gap for DE-local-simulation-
+        # environment intake (compile/run/filelist/env-setup scripts a
+        # project may already have). OPTIONAL/non-blocking -- see the
+        # script's own module docstring RULING for why the agent must always
+        # emit this evidence block (using "{}" when not applicable) and how
+        # that stays a genuine no-op PASS for projects with no pre-existing
+        # DE-local environment.
+        ("de_local_sim_env_intake_gate", "de_local_sim_env_intake_gate.py", "--intake"),
     ],
     "DE_BASELINE_REPRODUCTION": [
         ("de_baseline_reproduction_gate", "de_baseline_reproduction_gate.py", "--baseline"),

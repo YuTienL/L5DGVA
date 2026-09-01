@@ -64,6 +64,7 @@ ALL_GATE_TOOL_FILES = [
     "tools/verification_flow/cross_protocol_scenario_gate.py",
     "tools/verification_flow/cross_run_evidence_consistency_gate.py",
     "tools/verification_flow/de_baseline_reproduction_gate.py",
+    "tools/verification_flow/de_local_sim_env_intake_gate.py",
     "tools/verification_flow/deep_rca_evidence_gate.py",
     "tools/verification_flow/dut_request_record_gate.py",
     "tools/verification_flow/end_to_end_trace_chain_gate.py",

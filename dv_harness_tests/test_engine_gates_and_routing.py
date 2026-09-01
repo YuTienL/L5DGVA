@@ -90,6 +90,10 @@ _SOC_SCENARIO_PLANNER_EXTRA_GATES = (
 _INTAKE_EXTRA_GATES = (
     '```dv-harness-evidence:generated_artifact_boundary_gate\n{"artifacts": [{"class": "BUILD", "required_from_user": false, "owner": "HARNESS"}]}\n```\n'
     '```dv-harness-evidence:interactive_evidence_intake_gate\n{"questions_asked_in_batch": 1, "evidence_answer_available": false, "asked_user_anyway": false, "confidence": "HIGH", "asked_user_for_same_fact": false, "status": "READY"}\n```\n'
+    # NEW (2026-09-01, de-local-sim-env-intake design pass): additive 4th
+    # INTAKE gate -- "{}" is its own documented no-op PASS for a project
+    # with no pre-existing DE-local simulation environment to intake.
+    '```dv-harness-evidence:de_local_sim_env_intake_gate\n{}\n```\n'
 )
 _DISCOVERY_EXTRA_GATES = (
     '```dv-harness-evidence:evidence_source_priority_gate\n{"attempted_sources": ["EXISTING_PROJECT_FILES", "RTL_PARAMETERS_DEFINES", "DESIGN_DOCS"], "higher_priority_sources_exhausted": true}\n```\n'
@@ -1408,6 +1412,9 @@ def test_evaluate_stage_evidence_returns_needs_user_input_for_intake_gate_miss()
         '{"artifacts": []}\n```\n'
         '```dv-harness-evidence:interactive_evidence_intake_gate\n'
         '{"status": "PARTIAL", "confidence": "LOW", "ask_user": true}\n```\n'
+        # "{}" is de_local_sim_env_intake_gate's own no-op PASS -- see
+        # _INTAKE_EXTRA_GATES above.
+        '```dv-harness-evidence:de_local_sim_env_intake_gate\n{}\n```\n'
     )
     verdict, reasons = evaluate_stage_evidence(ROOT, "INTAKE", text)
     assert verdict == "NEEDS_USER_INPUT"
@@ -1446,6 +1453,9 @@ def _intake_needs_input_text(protocols=None, mode="SUBSYSTEM"):
         '```dv-harness-evidence:generated_artifact_boundary_gate\n{"artifacts": []}\n```\n'
         '```dv-harness-evidence:interactive_evidence_intake_gate\n'
         '{"status": "PARTIAL", "confidence": "LOW", "ask_user": true}\n```\n'
+        # "{}" is de_local_sim_env_intake_gate's own no-op PASS -- see
+        # _INTAKE_EXTRA_GATES above.
+        '```dv-harness-evidence:de_local_sim_env_intake_gate\n{}\n```\n'
     )
 
 
@@ -1524,7 +1534,8 @@ def test_run_stage_maps_needs_user_input_to_wait_user_status():
         shutil.copy(ROOT / "tools" / "vplan" / "intake_readiness.py", vplan_dir / "intake_readiness.py")
         vf_dir = tmp / "tools" / "verification_flow"
         vf_dir.mkdir(parents=True)
-        for name in ("generated_artifact_boundary_gate.py", "interactive_evidence_intake_gate.py"):
+        for name in ("generated_artifact_boundary_gate.py", "interactive_evidence_intake_gate.py",
+                     "de_local_sim_env_intake_gate.py"):
             shutil.copy(ROOT / "tools" / "verification_flow" / name, vf_dir / name)
         h.set_stage("INTAKE")
 
@@ -1535,6 +1546,9 @@ def test_run_stage_maps_needs_user_input_to_wait_user_status():
             '{"artifacts": []}\n```\n'
             '```dv-harness-evidence:interactive_evidence_intake_gate\n'
             '{"status": "PARTIAL", "confidence": "LOW", "ask_user": true}\n```\n'
+            # "{}" is de_local_sim_env_intake_gate's own no-op PASS -- see
+            # _INTAKE_EXTRA_GATES above.
+            '```dv-harness-evidence:de_local_sim_env_intake_gate\n{}\n```\n'
         )
 
         class _NeedsInputAdapter:
