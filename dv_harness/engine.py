@@ -949,6 +949,7 @@ class DVHarness:
         bb_snapshot: Dict[str, Any] = {}
         agent_profile = None
         plan_section = ""
+        task: Optional[dict] = None
         if node is not None:
             route_info = self.router.resolve(node)
             resolved_skills = self.skills.resolve(node.skills)
@@ -1013,6 +1014,21 @@ class DVHarness:
         if plan_section:
             prompt = prompt + plan_section
         resume = ss.get("session_id") or None
+
+        # ---- Multi-agent task lifecycle start (2026-09-01,
+        #      multi-agent-timing-reconciliation pass): AgentTaskStore.
+        #      create_task() (step 1's `self.agents.delegate(node, plan)`
+        #      above) previously produced a task dict with zero timing
+        #      fields and nothing ever called a completion method -- the
+        #      delegation/locking layer was completely disconnected from
+        #      this same method's own perf_counter-based agent-runtime
+        #      measurement below. start_task() is called here, immediately
+        #      before the adapter.run() call this task was delegated for --
+        #      the real point where the delegated unit of work actually
+        #      begins executing. `task` is None for a node-less stage (no
+        #      delegation happened in step 1), so there is nothing to start.
+        if task is not None:
+            self.agents.store.start_task(task["task_id"])
         _t0 = time.perf_counter()
 
         # ---- 2. Multi-Agent dispatch: the resolved agent is threaded all
@@ -1023,6 +1039,32 @@ class DVHarness:
         result = self.adapter.run(prompt=prompt, cwd=str(self.root), resume_session=resume,
                                    agent_profile=agent_profile)
         _agent_runtime = time.perf_counter() - _t0
+        # ---- Multi-agent task lifecycle end + stage_profile reconciliation
+        #      (2026-09-01, multi-agent-timing-reconciliation pass): complete
+        #      the SAME task started immediately above, right after this
+        #      exact adapter.run() call returns -- the task's status here
+        #      tracks whether the delegated agent CALL completed
+        #      (COMPLETED/FAILED), which is deliberately narrower than the
+        #      stage's own gate-verified business status (ss["status"],
+        #      resolved further below and possibly refined by an inner
+        #      ReAct loop this task's scope does not cover).
+        #
+        #      RULING: reconciliation is done by having engine.py read
+        #      AgentTaskStore's own real duration_sec and feed it into
+        #      profiler.add_agent_run() below, in place of a second,
+        #      independently-computed number for the exact same span --
+        #      this reuses the existing profiler sink instead of adding a
+        #      parallel aggregation path or duplicating timing data across
+        #      the two stores. The local perf_counter _agent_runtime above
+        #      is kept only as the fallback for a node-less stage (no task
+        #      was ever created, so there is no AgentTaskStore duration to
+        #      read) -- every real graph-node stage now reports the
+        #      MultiAgentOrchestrator/AgentTaskStore's own measured
+        #      duration_sec through this same call, not a shadow timer.
+        if task is not None:
+            _completed_task = self.agents.store.complete_task(
+                task["task_id"], status=("COMPLETED" if result.ok else "FAILED"))
+            _agent_runtime = _completed_task["duration_sec"]
         _usage = extract_provider_usage(result.raw or {})
         _model = ((result.raw or {}).get("response") or {}).get("model", "")
         # Per-agent-attribution fix (2026-09-01 audit): this used to hardcode
