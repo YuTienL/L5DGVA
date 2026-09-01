@@ -157,6 +157,32 @@ class TestRunBjobsFallback:
         assert m.call_count == 1
         assert result[1]["STAT"] == "DONE"
 
+    def test_bjobs_not_on_path_propagates_immediately_without_per_id_fallback(self):
+        # REGRESSION (2026-09-01, found by this plan's own Task 4 full-suite
+        # run): a completely unavailable LSF toolchain (bjobs not on PATH)
+        # must never be masked into an all-empty, apparently-successful
+        # result by the per-id fallback -- every per-id retry would fail
+        # identically (the binary still would not exist), and dv_harness.cli
+        # depends on this LsfUnavailableError propagating all the way out to
+        # report LSF_UNAVAILABLE to its caller (see
+        # test_cli_lsf_reconcile_picks_up_existing_job_state_files in
+        # test_engine_gates_and_routing.py, the real end-to-end test this
+        # unit test mirrors). Only exactly one call is made -- no per-id
+        # retries -- since retrying cannot possibly change a FileNotFoundError.
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   side_effect=FileNotFoundError()) as m:
+            with pytest.raises(lsf_client.LsfUnavailableError):
+                lsf_client.bjobs_query_many([1, 2])
+        assert m.call_count == 1
+
+    def test_bjobs_timeout_propagates_immediately_without_per_id_fallback(self):
+        import subprocess as _subprocess
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   side_effect=_subprocess.TimeoutExpired(cmd="bjobs", timeout=60)) as m:
+            with pytest.raises(lsf_client.LsfUnavailableError):
+                lsf_client.bjobs_query_many([1, 2])
+        assert m.call_count == 1
+
 
 class TestBkillJob:
     def test_returncode_nonzero_returns_false_without_polling(self):

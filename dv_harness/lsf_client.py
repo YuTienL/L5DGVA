@@ -36,6 +36,27 @@ class LsfUnavailableError(RuntimeError):
     pass
 
 
+class _BjobsBatchUnparseable(LsfUnavailableError):
+    """Raised only when a bjobs -json invocation actually ran (the binary
+    was found, the call did not time out) but its stdout could not be
+    parsed as JSON -- e.g. one id in the batch LSF has completely forgotten
+    can corrupt the whole batch's -json output. This is a strict subclass
+    of LsfUnavailableError (BUG FIX, 2026-09-01
+    lsf-reconcile-terminal-status-hardening full-suite regression check):
+    _run_bjobs_with_fallback() must retry per-id ONLY for this specific,
+    genuinely-salvageable failure, never for the plain LsfUnavailableError
+    FileNotFoundError/TimeoutExpired raise when bjobs is not on PATH at all
+    or hangs. Catching every LsfUnavailableError at the fallback's outer
+    try/except silently swallowed a completely-unavailable LSF toolchain --
+    every per-id retry would fail identically (the binary still would not
+    exist), and bjobs_query_many() would return an all-empty result instead
+    of propagating the real LSF_UNAVAILABLE that dv_harness.cli surfaces to
+    callers, exactly the case
+    test_cli_lsf_reconcile_picks_up_existing_job_state_files
+    (test_engine_gates_and_routing.py) already covers and caught this."""
+    pass
+
+
 @dataclass
 class JobState:
     job_id: Optional[int] = None
@@ -128,7 +149,7 @@ def _run_bjobs(job_ids: list[int]) -> dict:
     try:
         parsed = json.loads(proc.stdout)
     except (json.JSONDecodeError, TypeError) as e:
-        raise LsfUnavailableError(
+        raise _BjobsBatchUnparseable(
             f"failed to parse bjobs -json output: {e}; stdout={proc.stdout!r} stderr={proc.stderr!r}"
         ) from e
     return parsed
@@ -148,27 +169,35 @@ def _run_bjobs_with_fallback(job_ids: list[int]) -> dict:
     default-to-{} handling for a missing id already covers that case
     correctly, unchanged).
 
-    Design boundary: _run_bjobs() only ever raises LsfUnavailableError for a
-    batch that could not be parsed at all (FileNotFoundError, a timeout, or
-    a JSONDecodeError on stdout) -- it does not itself inspect
-    proc.returncode. A real LSF invocation that returns a nonzero exit code
-    but still emits valid, parseable JSON (e.g. some requested ids known,
-    others long forgotten) therefore never raises here in the first place;
-    it already flows through the normal happy path, and a genuinely-missing
-    id in that JSON is already handled correctly by bjobs_query_many()'s
-    existing per-id default-to-{} logic, with no fallback call needed. This
-    codebase has no access to a real LSF instance to confirm the exact
-    real-world nonzero-but-parseable behavior beyond that (per this
-    project's evidence-before-conclusion discipline, not assumed either
-    way) -- but no additional handling is required here regardless of which
-    way it goes, since that case never reaches this except block at all.
+    Design boundary: only a _BjobsBatchUnparseable batch failure (stdout ran
+    but did not parse as JSON) triggers the per-id retry -- NOT the plain
+    LsfUnavailableError _run_bjobs() raises for FileNotFoundError (bjobs not
+    on PATH at all) or a timeout (BUG FIX, 2026-09-01 full-suite regression
+    check: an earlier version of this function caught every
+    LsfUnavailableError here, which silently downgraded a completely
+    unavailable LSF toolchain into an all-empty result instead of
+    propagating LSF_UNAVAILABLE -- see _BjobsBatchUnparseable's own
+    docstring and test_cli_lsf_reconcile_picks_up_existing_job_state_files).
+    A real LSF invocation that returns a nonzero exit code but still emits
+    valid, parseable JSON (e.g. some requested ids known, others long
+    forgotten) never raises at all in the first place -- it already flows
+    through the normal happy path, and a genuinely-missing id in that JSON
+    is already handled correctly by bjobs_query_many()'s existing per-id
+    default-to-{} logic, with no fallback call needed. This codebase has no
+    access to a real LSF instance to confirm the exact real-world
+    nonzero-but-parseable behavior beyond that (per this project's
+    evidence-before-conclusion discipline, not assumed either way) -- but
+    no additional handling is required here regardless of which way it
+    goes, since that case never reaches this except block at all.
 
-    Cost, stated plainly: only on batch failure does this become up to
-    len(job_ids) additional real bjobs calls. The healthy-batch path (the
-    common case) is exactly as fast as before -- one call, no change."""
+    Cost, stated plainly: only on a genuine batch parse failure does this
+    become up to len(job_ids) additional real bjobs calls. The healthy-batch
+    path (the common case) is exactly as fast as before -- one call, no
+    change; and a completely-unavailable LSF toolchain still fails fast
+    with a single call, exactly as it did before this function existed."""
     try:
         return _run_bjobs(job_ids)
-    except LsfUnavailableError:
+    except _BjobsBatchUnparseable:
         pass
     records = []
     for jid in job_ids:
