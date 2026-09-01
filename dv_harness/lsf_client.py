@@ -134,6 +134,52 @@ def _run_bjobs(job_ids: list[int]) -> dict:
     return parsed
 
 
+def _run_bjobs_with_fallback(job_ids: list[int]) -> dict:
+    """Wraps _run_bjobs() with a per-id retry when the batch call itself
+    fails. A single job id LSF has completely forgotten can make the whole
+    batch's -json output unparseable (BUG, 2026-09-01
+    lsf-reconcile-terminal-status-hardening) -- without this, every OTHER,
+    perfectly healthy job in that batch loses one full analysis cycle. This
+    function never changes bjobs_query_many()'s return contract: on success
+    it returns exactly what _run_bjobs() would have returned; on batch
+    failure it merges the per-id fallback results into the same
+    {"RECORDS": [...]} shape, and an id that still fails its own individual
+    call contributes no entry to RECORDS (bjobs_query_many()'s own
+    default-to-{} handling for a missing id already covers that case
+    correctly, unchanged).
+
+    Design boundary: _run_bjobs() only ever raises LsfUnavailableError for a
+    batch that could not be parsed at all (FileNotFoundError, a timeout, or
+    a JSONDecodeError on stdout) -- it does not itself inspect
+    proc.returncode. A real LSF invocation that returns a nonzero exit code
+    but still emits valid, parseable JSON (e.g. some requested ids known,
+    others long forgotten) therefore never raises here in the first place;
+    it already flows through the normal happy path, and a genuinely-missing
+    id in that JSON is already handled correctly by bjobs_query_many()'s
+    existing per-id default-to-{} logic, with no fallback call needed. This
+    codebase has no access to a real LSF instance to confirm the exact
+    real-world nonzero-but-parseable behavior beyond that (per this
+    project's evidence-before-conclusion discipline, not assumed either
+    way) -- but no additional handling is required here regardless of which
+    way it goes, since that case never reaches this except block at all.
+
+    Cost, stated plainly: only on batch failure does this become up to
+    len(job_ids) additional real bjobs calls. The healthy-batch path (the
+    common case) is exactly as fast as before -- one call, no change."""
+    try:
+        return _run_bjobs(job_ids)
+    except LsfUnavailableError:
+        pass
+    records = []
+    for jid in job_ids:
+        try:
+            single = _run_bjobs([jid])
+        except LsfUnavailableError:
+            continue
+        records.extend(single.get("RECORDS") or [])
+    return {"RECORDS": records}
+
+
 def bjobs_query(job_id: int) -> dict:
     parsed = _run_bjobs([job_id])
     records = parsed.get("RECORDS") or []
@@ -145,7 +191,7 @@ def bjobs_query(job_id: int) -> dict:
 def bjobs_query_many(job_ids: list[int]) -> dict:
     if not job_ids:
         return {}
-    parsed = _run_bjobs(job_ids)
+    parsed = _run_bjobs_with_fallback(job_ids)
     records = parsed.get("RECORDS") or []
     result = {jid: {} for jid in job_ids}
     for rec in records:

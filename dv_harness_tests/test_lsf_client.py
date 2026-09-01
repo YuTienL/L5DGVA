@@ -101,6 +101,63 @@ class TestBjobsQuery:
         assert lsf_client.map_bjobs_stat_to_lsf_status(raw) == expected
 
 
+class TestRunBjobsFallback:
+    def test_healthy_batch_makes_exactly_one_call(self):
+        payload = json.dumps({"RECORDS": [
+            {"JOBID": "1", "STAT": "RUN"}, {"JOBID": "2", "STAT": "DONE"},
+        ]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=_completed(stdout=payload)) as m:
+            result = lsf_client.bjobs_query_many([1, 2])
+        assert m.call_count == 1
+        assert result[1]["STAT"] == "RUN"
+        assert result[2]["STAT"] == "DONE"
+
+    def test_batch_json_failure_falls_back_to_per_id_calls(self):
+        # First call (the batch) returns unparseable stdout; each of the
+        # two per-id fallback calls succeeds individually.
+        bad_batch = _completed(stdout="not json")
+        good_1 = _completed(stdout=json.dumps({"RECORDS": [{"JOBID": "1", "STAT": "DONE"}]}))
+        good_2 = _completed(stdout=json.dumps({"RECORDS": [{"JOBID": "2", "STAT": "RUN"}]}))
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   side_effect=[bad_batch, good_1, good_2]) as m:
+            result = lsf_client.bjobs_query_many([1, 2])
+        assert m.call_count == 3
+        assert result[1]["STAT"] == "DONE"
+        assert result[2]["STAT"] == "RUN"
+
+    def test_batch_failure_with_one_genuinely_missing_id_isolates_only_that_id(self):
+        # The batch fails; per-id fallback finds job 1 but job 2 is
+        # genuinely gone (LSF has forgotten it) -- only job 2 comes back
+        # empty, job 1 must not be penalized for job 2's absence.
+        bad_batch = _completed(stdout="not json")
+        good_1 = _completed(stdout=json.dumps({"RECORDS": [{"JOBID": "1", "STAT": "DONE"}]}))
+        empty_2 = _completed(stdout=json.dumps({"RECORDS": []}))
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   side_effect=[bad_batch, good_1, empty_2]):
+            result = lsf_client.bjobs_query_many([1, 2])
+        assert result[1]["STAT"] == "DONE"
+        assert result[2] == {}
+
+    def test_batch_failure_and_all_per_id_fallbacks_also_fail_returns_all_empty(self):
+        bad_batch = _completed(stdout="not json")
+        bad_1 = _completed(stdout="also not json")
+        bad_2 = _completed(stdout="also not json")
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   side_effect=[bad_batch, bad_1, bad_2]):
+            result = lsf_client.bjobs_query_many([1, 2])
+        assert result[1] == {}
+        assert result[2] == {}
+
+    def test_single_job_id_batch_does_not_need_fallback_shape_but_still_works(self):
+        payload = json.dumps({"RECORDS": [{"JOBID": "1", "STAT": "DONE"}]})
+        with patch("dv_harness.lsf_client.subprocess.run",
+                   return_value=_completed(stdout=payload)) as m:
+            result = lsf_client.bjobs_query_many([1])
+        assert m.call_count == 1
+        assert result[1]["STAT"] == "DONE"
+
+
 class TestBkillJob:
     def test_returncode_nonzero_returns_false_without_polling(self):
         with patch("dv_harness.lsf_client.subprocess.run", return_value=_completed(returncode=1)) as m:
