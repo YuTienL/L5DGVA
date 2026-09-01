@@ -112,8 +112,11 @@ category gets a numeric suffix -- never a silent overwrite.</div>
 <div class="card"><h3>Control Plane</h3><div id="cptiles" class="tiles"></div>
 <div class="note" id="constraintList" style="margin-top:8px"></div></div>
 <div class="card"><h3>Why (current stage)</h3>
-<div class="note">Real per-run blocking_reason/gate_verdict for the current stage -- not the static explainer below.</div>
-<pre id="stageWhy" style="white-space:pre-wrap;font-size:12px;background:#f7f9fc;border:1px solid #e3e9f2;border-radius:6px;padding:8px;margin-top:8px"></pre></div>
+<div class="note">Real per-run blocking_reason/gate_verdict for the current stage -- not the static explainer below.
+Stage completion percent and the entry/exit evidence checklist below come from the same
+<code>control_plane.describe_stage()</code> data the CLI's <code>explain</code>/<code>evidence</code>/<code>checklist</code>
+subcommands print.</div>
+<div id="stageWhy" style="margin-top:8px"></div></div>
 <div class="card"><h3>LSF</h3><div id="lsftiles" class="tiles"></div>
 <div class="note" style="margin-top:8px">Per-job drill-down (GET /api/lsf/jobs[/&lt;job_id&gt;], CLI <code>dv-harness lsf [job_id]</code>). Click a row to expand its full detail. Read-only here: real job submission/kill/reconciliation against LSF (<code>dv-harness lsf-submit</code>/<code>lsf-kill</code>/<code>lsf-reconcile</code>, wrapping real <code>bsub</code>/<code>bkill</code>/<code>bjobs</code>) is CLI-only today.</div>
 <div style="overflow-x:auto"><table id="jobsTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
@@ -393,6 +396,53 @@ function icon(status){
   return '<span class="icon NOT_STARTED">&#9675;</span>';
 }
 function val(id){ let el=document.getElementById(id); return el? el.value : ''; }
+
+// Stage completion percent + entry/exit evidence checklist rendering
+// (2026-09-01, runtime-progress-visibility pass): control_plane.
+// describe_stage() (current_stage_detail/active_stages_detail below) always
+// carried stage_completion_percent/gates_passed/gates_total/entry_checklist/
+// exit_checklist as real data, but this card only ever dumped the whole
+// dict as a JSON blob -- a human had to read raw JSON to notice a gate was
+// missing or which single checklist item still needs to be supplied.
+// checklistBlock() renders ONE checklist (entry or exit) as a real progress
+// bar (reusing the existing .bar/.bar>div classes) plus one line per item,
+// a missing item rendered bold+red (existing .err class) via the same
+// icon() checkmark/x-mark convention the Graph card already uses for node
+// status, with an explicit "still needs to be supplied" line naming exactly
+// which item_id(s) are missing.
+function checklistBlock(title, cl){
+  if(!cl){
+    return `<div style="margin-top:6px"><b>${title}:</b> <span class="note">not run yet this attempt -- no telemetry recorded</span></div>`;
+  }
+  let total = cl.total_count||0, present = cl.present_count||0;
+  let pct = cl.completeness_percent!=null ? cl.completeness_percent : 100;
+  let items = cl.items||[];
+  let rows = items.length ? items.map(it=>{
+    let desc = it.description ? ' - '+it.description : '';
+    return it.present
+      ? `<div>${icon('PASS')} ${it.item_id}${desc}</div>`
+      : `<div class="err">${icon('FAIL')} <b>${it.item_id}</b>${desc}</div>`;
+  }).join('') : '<div class="note">(no items declared for this stage)</div>';
+  let missing = cl.missing_item_ids||[];
+  let missingNote = missing.length
+    ? `<div class="err" style="margin-top:4px">Still needs to be supplied: <b>${missing.join(', ')}</b></div>`
+    : '';
+  return `<div style="margin-top:6px"><b>${title}</b> -- ${present}/${total} present (${pct}%)
+    <div class="bar" style="margin-top:4px"><div style="width:${pct}%"></div></div>
+    ${rows}${missingNote}</div>`;
+}
+function stageWhyHTML(d){
+  if(!d) return '(no current stage)';
+  let raw = `stage: ${d.stage}\nstatus: ${d.status}\nattempts: ${d.attempts}\nblocking_reason: ${d.blocking_reason||'(none)'}\ngate_verdict: ${d.gate_verdict}\ngate_reasons: ${JSON.stringify(d.gate_reasons)}\nhuman_correction: ${JSON.stringify(d.human_correction)}\nhuman_approval: ${JSON.stringify(d.human_approval)}\ntakeover: ${JSON.stringify(d.takeover)}`;
+  let pct = d.stage_completion_percent!=null ? d.stage_completion_percent : 0;
+  let gp = d.gates_passed!=null ? d.gates_passed : '-', gt = d.gates_total!=null ? d.gates_total : '-';
+  return `<pre style="white-space:pre-wrap;font-size:12px;background:#f7f9fc;border:1px solid #e3e9f2;border-radius:6px;padding:8px;margin:0">${raw}</pre>`
+    + `<div style="margin-top:8px"><b>Stage completion:</b> ${pct}% (${gp}/${gt} gates passed)
+       <div class="bar" style="margin-top:4px"><div style="width:${pct}%"></div></div>
+       ${d.stage_completion_note ? `<div class="note" style="margin-top:2px">${d.stage_completion_note}</div>` : ''}</div>`
+    + checklistBlock('Entry checklist (evidence required before this stage runs)', d.entry_checklist)
+    + checklistBlock('Exit checklist (evidence this stage should have produced)', d.exit_checklist);
+}
 
 // Protocol tiles (Protocols card): a real click target wiring straight into
 // the exact field POST /api/start already reads for scope -- doStart() below
@@ -737,11 +787,12 @@ async function load(){
    : 'No active constraints.';
 
  // Why: real per-run blocking_reason/gate_verdict/evidence for the current
- // stage, not the static generic explainer.
+ // stage, not the static generic explainer -- plus the stage completion
+ // percent and entry/exit evidence checklist (checklistBlock()/
+ // stageWhyHTML() above), so a gap here names the exact missing item
+ // instead of requiring a raw-JSON read.
  let d = s.current_stage_detail;
- document.getElementById('stageWhy').textContent = d
-   ? `stage: ${d.stage}\nstatus: ${d.status}\nattempts: ${d.attempts}\nblocking_reason: ${d.blocking_reason||'(none)'}\ngate_verdict: ${d.gate_verdict}\ngate_reasons: ${JSON.stringify(d.gate_reasons)}\nhuman_correction: ${JSON.stringify(d.human_correction)}\nhuman_approval: ${JSON.stringify(d.human_approval)}\ntakeover: ${JSON.stringify(d.takeover)}`
-   : '(no current stage)';
+ document.getElementById('stageWhy').innerHTML = stageWhyHTML(d);
 
  // Setup gate: show the setup form until the project has been configured
  // from this dashboard (POST /api/setup); hide it once configured.

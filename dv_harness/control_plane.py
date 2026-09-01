@@ -328,6 +328,28 @@ class ControlPlane:
 
 
 # ---- WHY / EVIDENCE shared read path ---------------------------------------
+def _latest_stage_checklists(root: Path, stage: str) -> Dict[str, Optional[Dict[str, Any]]]:
+    """The most recent .dv-harness/telemetry/stages/STAGE-*.json record's
+    entry_checklist/exit_checklist for `stage` -- the same real,
+    presence-checked reports engine.build_stage_entry_checklist()/
+    build_stage_exit_checklist() computed and StageExecutionProfiler
+    persisted (stage_profile.py), read back here rather than recomputed.
+
+    Both keys are None when `stage` has no telemetry record at all (never
+    run yet this project) -- distinct from a real record whose checklist is
+    a zero-item dict (node declared no expected_evidence/expected_outputs;
+    see _run_checklist()'s "zero items -> 100%, not an error" convention),
+    which is forwarded as-is. StageExecutionProfiler.all_stages() already
+    sorts oldest -> newest by start_time_epoch, so the last element is the
+    most recent attempt."""
+    from .stage_profile import StageExecutionProfiler
+    records = [r for r in StageExecutionProfiler(root).all_stages() if r.get("stage_id") == stage]
+    if not records:
+        return {"entry_checklist": None, "exit_checklist": None}
+    latest = records[-1]
+    return {"entry_checklist": latest.get("entry_checklist"), "exit_checklist": latest.get("exit_checklist")}
+
+
 def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
     """The real, current-run answer to both WHY and EVIDENCE: this stage's
     actual blocking_reason, the evidence blocks its last response actually
@@ -344,7 +366,18 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
     GET /api/state overall_progress_percent, which is a whole-RUN percentage
     (fraction of all Stage enum values at PASS/CLOSED) and was, before this,
     the only numeric completion signal exposed anywhere -- never scoped to
-    the one stage actually in progress, and never exposed via the CLI."""
+    the one stage actually in progress, and never exposed via the CLI.
+
+    Also surfaces entry_checklist/exit_checklist (2026-09-01, runtime-
+    progress-visibility pass): the same per-item presence report
+    engine.build_stage_entry_checklist()/build_stage_exit_checklist()
+    computed for this stage's most recent attempt and StageExecutionProfiler
+    persisted into telemetry -- previously readable only by opening the raw
+    .dv-harness/telemetry/stages/STAGE-*.json file by hand, now surfaced
+    through this SAME shared read path dashboard.py's GET /api/state
+    (current_stage_detail/active_stages_detail) and cli.py's explain/
+    evidence/checklist all already go through, so both UIs render it
+    identically and neither has to re-read telemetry itself."""
     from .gates import extract_evidence_blocks, evaluate_stage_evidence_with_completion
 
     root = Path(root)
@@ -352,6 +385,7 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
     last_message = ss.get("last_message", "") or ""
     verdict, reasons, completion = evaluate_stage_evidence_with_completion(root, stage, last_message)
     cp = ControlPlane(root).load()
+    checklists = _latest_stage_checklists(root, stage)
     return {
         "stage": stage,
         "status": ss.get("status"),
@@ -363,6 +397,8 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
         "gates_passed": completion["gates_passed"],
         "stage_completion_percent": completion["stage_completion_percent"],
         "stage_completion_note": completion["stage_completion_note"],
+        "entry_checklist": checklists["entry_checklist"],
+        "exit_checklist": checklists["exit_checklist"],
         "evidence_blocks": extract_evidence_blocks(last_message),
         "human_correction": cp.get("corrections", {}).get(stage),
         "human_approval": cp.get("approvals", {}).get(stage),
