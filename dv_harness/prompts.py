@@ -1575,6 +1575,126 @@ testcase 與 rerun 證據，不能只記錄分類就結案）：
 {"items": [{"id": "...", "covered": false, "generated_test_ids": ["..."],
   "closure_owner": "...", "trace_to_vplan": "..."}]}
 ```
+
+除了以上四個之外，COVERAGE_CLOSURE 還另外掛了 10 個獨立的 hard gate，把「這個 coverage credit
+給得正不正當」拆得更細——assertion 本身是不是真的有被驅動過又真的會失敗（不是恆真的死 assertion）、
+checker/scoreboard/assertion 是不是真的還活著在盯、有沒有該被收回的 credit 沒收回、credit 的來源
+能不能追溯、跟上一輪比有沒有異常掉點、protocol corner case/sequence 有沒有真的覆蓋到、以及最終
+verdict 跟底層的 semantic/checker/negative-test/assertion/scoreboard 證據是否一致——同樣缺一個都會
+卡在 GATE_FAIL/MISSING_EVIDENCE，逐一附上（找到真實案例：這 10 個 gate 在 STAGE_GATES 裡已經真的
+被 harness 呼叫，但先前 stage 指示完全沒提過，導致 agent 完全不知道要附這些 evidence）：
+
+Assertion vacuity/reachability（兩個 gate 都掃 assertions 陣列，但欄位名稱不同，必須各自照各自的
+schema 填，不能共用同一份 payload）：
+
+```dv-harness-evidence:assertion_vacuity_and_reachability_gate
+{"assertions": [{"id": "...", "signoff_credit": true, "antecedent_reached": true,
+  "attempt_count": 3, "negative_control_failed": true}]}
+```
+（只檢查 signoff_credit 為 true 的項目，其餘略過，沒有要拿來 signoff 的 assertion 時
+`{"assertions": []}` 是合法預設值；signoff_credit 為 true 時：antecedent_reached 必須是
+true，否則 FAIL（ASSERTION_UNREACHABLE，代表這個 assertion 的前提條件從沒被真的觸發過）；
+attempt_count 必須 >0，否則 FAIL（ASSERTION_VACUOUS，代表 antecedent 從沒被嘗試過，assertion
+是空跑的）；negative_control_failed 必須是 true（代表你曾經刻意讓這個 assertion 在錯誤情境下
+真的失敗過一次，證明它不是恆真、真的有在檢查東西），否則 FAIL
+（ASSERTION_EFFECTIVENESS_UNPROVEN）。）
+
+```dv-harness-evidence:assertion_vacuity_gate
+{"assertions": [{"assertion_id": "...", "enabled": true, "antecedent_attempts": 3,
+  "unknown_xz_masked_without_justification": false}]}
+```
+（enabled 為 false 的項目直接略過不檢查；enabled 為 true 時：antecedent_attempts 必須 >0，
+否則 FAIL（VACUOUS_ASSERTION）；unknown_xz_masked_without_justification 必須是 false，代表
+沒有在沒說明理由的情況下把 X/Z unknown 值遮蔽掉，否則 FAIL
+（ASSERTION_XZ_MASKING_UNJUSTIFIED，需要在 evidence 裡交代遮蔽 X/Z 的正當理由）。）
+
+Coverage credit 的正當性/存活性/來源可追溯性/與上一輪的變化，五個 gate 都掃同一種
+`items`/coverage-per-entry 的形狀，但檢查的面向各自獨立：
+
+```dv-harness-evidence:coverage_checker_linkage_gate
+{"items": [{"coverage_id": "...", "credit": true, "active_checker_ids": ["..."],
+  "waived": false, "waiver_approved": false, "waiver_evidence": ""}]}
+```
+（credit 為 true 時，active_checker_ids/active_scoreboard_ids/active_assertion_ids 三選一
+至少要有內容（代表真的有活著的 checker/scoreboard/assertion 在盯這個 coverage point），
+否則要有合法 waiver（waived 且 waiver_approved 且 waiver_evidence 三者皆真）——兩者都沒有
+就 FAIL（COVERAGE_CREDIT_WITHOUT_ACTIVE_CHECK_OR_VALID_WAIVER）；waived 為 true 卻缺
+waiver_approved 或 waiver_evidence 任一項，FAIL（INVALID_COVERAGE_WAIVER）。）
+
+```dv-harness-evidence:coverage_credit_revocation_gate
+{"items": [{"coverage_id": "...", "credit": true, "revocation_triggers": []}]}
+```
+（revocation_triggers 若包含 CHECKER_DISABLED/ASSERTION_DISABLED/STALE_EVIDENCE/
+FAILED_RERUN/INVALID_WAIVER/TEST_QUARANTINED 其中任一項，同時 credit 又是 true，就是
+「早該收回的 credit 卻沒收回」，FAIL（COVERAGE_CREDIT_MUST_BE_REVOKED）；沒有任何觸發原因時
+留空陣列 `[]` 即可。）
+
+```dv-harness-evidence:coverage_credit_source_integrity_gate
+{"items": [{"coverage_id": "...", "credit": true,
+  "source": {"type": "CHECKER", "source_id": "...", "evidence_hash": "..."}}]}
+```
+（credit 為 false 的項目直接略過；credit 為 true 時 source.type 必須是
+TEST/CHECKER/ASSERTION/SCOREBOARD/WAIVER 其中之一，否則 FAIL
+（INVALID_COVERAGE_CREDIT_SOURCE）；source.source_id 與 source.evidence_hash 兩者都必須非空，
+缺任一個 FAIL（COVERAGE_CREDIT_WITHOUT_PROVENANCE，代表這筆 credit 的來源無法追溯）；
+source.type 為 WAIVER 時，source.approved 與 source.waiver_scope_hash 兩者都必須真，
+否則 FAIL（UNAPPROVED_OR_UNSCOPED_WAIVER_CREDIT）。）
+
+```dv-harness-evidence:coverage_failure_state_linkage_gate
+{"active_failure_ids": [], "coverage_items": [{"coverage_id": "...", "credit": true,
+  "linked_failure_ids": []}]}
+```
+（頂層 active_failure_ids 是目前還在燒的 failure id 清單；coverage_items 裡任何一筆
+credit 為 true、且它的 linked_failure_ids 跟 active_failure_ids 有交集，就是「對還在燒的
+功能發了 coverage credit」，FAIL（COVERAGE_CREDIT_WITH_ACTIVE_FAILURE）——這條呼應
+coverage_credit_consistency_gate 已經在檢查的同一件事，但用 stage 層級的 active failure
+狀態再交叉驗證一次。）
+
+```dv-harness-evidence:coverage_regression_drift_gate
+{"allowed_drop_percent": 0, "items": [{"coverage_id": "...", "previous_credit": 100,
+  "current_credit": 100, "approved_drop": false}]}
+```
+（allowed_drop_percent 是本輪容許的最大掉點百分比門檻；每一筆 previous_credit<=0 的項目
+直接跳過不檢查（代表上一輪本來就沒有額度可掉）；掉點百分比
+`(previous_credit-current_credit)/previous_credit*100` 超過 allowed_drop_percent、且
+approved_drop 不是 true，FAIL（COVERAGE_REGRESSION_DRIFT，代表這筆 coverage 比上一輪明顯
+退步卻沒人核准這個退步）；真的有正當理由（例如上一輪的統計方式有誤、這次改了合法的排除範圍）
+才把 approved_drop 設 true。）
+
+Protocol corner case 與 sequence 這兩類「有沒有真的覆蓋到」的完整性檢查：
+
+```dv-harness-evidence:protocol_corner_case_matrix_gate
+{"required_corner_cases": [], "cases": []}
+```
+（required_corner_cases 是這個協定本來就該覆蓋的 corner case id 清單，沒有訂出必要 corner
+case 清單時留空陣列合法；cases 裡任何一筆 covered 為 true 卻沒有 evidence 欄位，FAIL
+（CORNER_COVERED_WITHOUT_EVIDENCE，代表宣稱覆蓋了卻拿不出證據）；required_corner_cases 減去
+cases 裡標記 covered 的 corner_id，剩下的就是還沒覆蓋到的，非空時 FAIL
+（MISSING_PROTOCOL_CORNER_CASES，並在 missing 欄位列出缺的 corner_id）。）
+
+```dv-harness-evidence:sequence_coverage_closure_gate
+{"required_sequences": [], "hit_sequences": [], "waivers": []}
+```
+（required_sequences 減去 hit_sequences，再減去 waivers 裡 approved 且 evidence 皆非空的
+sequence，剩下的就是真正的缺口，非空時 FAIL（SEQUENCE_COVERAGE_GAP，並在 missing 欄位列出
+缺的 sequence）；沒有必要 sequence 清單或全部命中時，三個欄位都留空陣列合法。）
+
+最後，coverage credit 最終能不能真的算數，還要跟底層驗證有效性的證據一致，不能只看 verdict
+本身：
+
+```dv-harness-evidence:verification_effectiveness_consistency_gate
+{"final_verdict": "PASS", "semantic_status": "TRUE_PASS", "checker_status": "PASS",
+ "negative_test_effective": true, "assertion_effective": true,
+ "scoreboard_independent": true, "coverage_credit_allowed": true}
+```
+（final_verdict 為 "PASS" 時，semantic_status 必須是 "TRUE_PASS"、checker_status 必須是
+"PASS"、negative_test_effective/assertion_effective/scoreboard_independent 三者都必須是
+true（不能是 false 或缺漏），只要有一項不符，FAIL
+（PASS_WITH_UNPROVEN_VERIFICATION_EFFECTIVENESS，代表宣稱 PASS 卻拿不出完整的有效性證據）；
+另外不論 final_verdict 為何，只要 negative_test_effective 是 false（negative test 被證明是
+vacuous、沒有真的失敗過）卻同時 coverage_credit_allowed 為 true，FAIL
+（COVERAGE_CREDIT_WITH_VACUOUS_NEGATIVE_TEST，代表不能拿一個空跑的 negative test 去換
+coverage 額度）。）
 """,
 Stage.FAILURE_RECOVERY.value: """
 RCA 方法：Failure Signature Extraction → First Bad Event → Expected vs Observed →
