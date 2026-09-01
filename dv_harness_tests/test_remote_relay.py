@@ -1,4 +1,5 @@
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -6,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "remote"))
 
 from remote_relay import (
+    DEFAULT_LISTEN_BACKLOG,
     RelayServer,
     bind_loopback,
     should_idle_exit,
@@ -227,3 +229,91 @@ def test_run_op_denies_credential_inspection_before_touching_session():
     assert resp["ok"] is False
     assert resp["error"] == "CREDENTIAL_INSPECTION_DENIED"
     assert server.session.run_calls == []
+
+
+# --- Multi-user concurrency safety (2026-09-02) --------------------------
+# Real concern raised live: "一組 relay = 一個真實的 telnet+ssh session,
+# 多人共用同一組帳號/主機會讓指令互相插隊" (one relay is one real shell;
+# multiple people sharing it could make commands cut in line / interleave).
+
+def test_default_listen_backlog_queues_rather_than_refuses_concurrent_users():
+    # A relay meant to be shared needs more than the original backlog=1 --
+    # that queued only one pending connection beyond the one being served
+    # and refused the rest outright when several callers connected at once.
+    assert DEFAULT_LISTEN_BACKLOG >= 16
+
+
+def test_bind_loopback_accepts_explicit_backlog_override():
+    sock = bind_loopback(0, backlog=4)
+    try:
+        assert sock.getsockname()[0] == "127.0.0.1"
+    finally:
+        sock.close()
+
+
+def test_run_op_with_cwd_composes_a_non_leaking_subshell_cd():
+    server = make_server()
+    server.handle_request({
+        "token": TOKEN, "op": "run", "cmd": "pwd", "cwd": "/home/svcacct/AI/Agent",
+    })
+    assert server.session.run_calls == [("(cd '/home/svcacct/AI/Agent' && pwd)", 1800)]
+
+
+def test_run_op_cwd_quoting_escapes_embedded_single_quotes():
+    server = make_server()
+    server.handle_request({
+        "token": TOKEN, "op": "run", "cmd": "pwd", "cwd": "/tmp/o'brien",
+    })
+    cmd, _timeout = server.session.run_calls[0]
+    assert cmd == "(cd '/tmp/o'\\''brien' && pwd)"
+
+
+def test_run_op_without_cwd_key_is_unchanged_from_before():
+    server = make_server()
+    server.handle_request({"token": TOKEN, "op": "run", "cmd": "pwd"})
+    assert server.session.run_calls == [("pwd", 1800)]
+
+
+def test_run_op_denies_credential_inspection_hidden_in_cwd():
+    server = make_server()
+    resp = server.handle_request({
+        "token": TOKEN, "op": "run", "cmd": "pwd", "cwd": "$VCPW",
+    })
+    assert resp["ok"] is False
+    assert resp["error"] == "CREDENTIAL_INSPECTION_DENIED"
+    assert server.session.run_calls == []
+
+
+def test_handle_request_serializes_concurrent_callers_no_interleaving():
+    server = make_server()
+    events = []
+    events_lock = threading.Lock()
+
+    class SlowSession(FakeSession):
+        def run(self, cmd, timeout):
+            with events_lock:
+                events.append(("start", cmd))
+            time.sleep(0.03)
+            with events_lock:
+                events.append(("end", cmd))
+            return ("out", 0)
+
+    server.session = SlowSession()
+
+    def worker(n):
+        server.handle_request({"token": TOKEN, "op": "run", "cmd": "cmd-%d" % n})
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert len(events) == 12
+    # Every "start" must be immediately followed by that same command's
+    # "end" before any other command's "start" appears -- i.e. no two run()
+    # calls ever overlap in time, regardless of how many threads call
+    # handle_request() at once.
+    for i in range(0, 12, 2):
+        assert events[i][0] == "start"
+        assert events[i + 1] == ("end", events[i][1])

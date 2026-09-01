@@ -20,17 +20,32 @@ Optional: VCPORT, VCWORKDIR, VCEDAENV (same meaning as remote_hop.py).
 
 Usage:
   VCUSER=... VCPW=... VCHOST=vchost-b VCHOP=host-b VCWORKDIR=... VCEDAENV=... \\
-    python remote_relay.py --start [--idle-timeout 7200] [--bind-port 0]
+    python remote_relay.py --start [--idle-timeout 86400] [--bind-port 0]
 
 See docs/superpowers/specs/2026-08-30-persistent-remote-relay-design.md
 (in the v50 project) for the full design this implements.
 """
-import argparse, json, os, re, secrets, socket, sys, time
+import argparse, json, os, re, secrets, socket, sys, threading, time
 from pathlib import Path
 
 from remote_hop import Session, _setup_reminder
 
-DEFAULT_IDLE_TIMEOUT = 7200
+DEFAULT_IDLE_TIMEOUT = 86400  # 24h -- was 7200 (2h); a shared, multi-user relay dying from idle mid-session forces a full re-login/re-auth for everyone using it, not just the caller who happened to trigger the idle check.
+
+# One relay = one real telnet+ssh session against one shared shell. Real
+# incident (2026-09-02): multiple logical callers hitting the same relay
+# concurrently raised a "commands cut in line" (指令互相插隊) concern.
+# serve()'s accept loop is single-threaded and already processes one
+# connection fully before the next, so byte-level interleaving of a single
+# command's send/read cycle was never actually possible -- but that
+# correctness property was true only by accident of serve()'s current shape,
+# not enforced by RelayServer itself. DEFAULT_LISTEN_BACKLOG (was
+# unconditionally 1) queues concurrent connection attempts at the OS level
+# instead of refusing them outright when several callers arrive at once, and
+# the lock added to RelayServer below makes "exactly one command executes
+# against the shared session at a time" an invariant of the class, not of
+# whatever loop happens to drive it.
+DEFAULT_LISTEN_BACKLOG = 32
 
 # Layer 2 (secondary defense only -- see module docstring's "Defense in
 # depth" note): environment markers Claude Code is confirmed to set in
@@ -87,16 +102,25 @@ def info_path(vchost, vchop):
     return info_dir() / ('%s-%s.json' % (vchost, vchop))
 
 
-def bind_loopback(port):
+def bind_loopback(port, backlog=DEFAULT_LISTEN_BACKLOG):
     """Binds a TCP socket to 127.0.0.1 only. A non-loopback bind is a bug,
-    not a configuration option -- enforced here, not just documented."""
+    not a configuration option -- enforced here, not just documented.
+    backlog queues concurrent connection attempts (multiple users/processes
+    hitting this relay around the same moment) instead of refusing them."""
     host = '127.0.0.1'
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
     assert sock.getsockname()[0] == host, 'relay must never bind non-loopback'
-    sock.listen(1)
+    sock.listen(backlog)
     return sock
+
+
+def _shell_quote_for_cd(path):
+    """Single-quote a path for both bash and tcsh (the remote shell varies
+    by server -- see CLAUDE.md's tcsh-vs-bash notes). Plain literal-string
+    single-quote escaping works identically in both."""
+    return "'" + path.replace("'", "'\\''") + "'"
 
 
 class RelayServer:
@@ -109,39 +133,63 @@ class RelayServer:
         self.token = token
         self.hop_cmd = hop_cmd
         self.last_activity = time.time()
+        # One relay drives one real shell -- two commands executed against
+        # it at the same instant would interleave their sends/reads on the
+        # same telnet stream. This lock makes "exactly one command runs
+        # against self.session at a time" an invariant of RelayServer
+        # itself, independent of whether serve() (or any future caller)
+        # happens to be single-threaded.
+        self._lock = threading.Lock()
 
     def handle_request(self, req):
         if not isinstance(req, dict) or req.get('token') != self.token:
             return {'ok': False, 'exit_code': None, 'stdout': '', 'error': 'BAD_TOKEN'}
-        self.last_activity = time.time()
-        op = req.get('op')
-        try:
-            if op == 'status':
-                out, rc = self.session.run('echo alive', 30)
-                return {'ok': True, 'exit_code': rc, 'stdout': out, 'error': ''}
-            if op == 'run':
-                cmd = req.get('cmd', '')
-                if is_credential_inspection_command(cmd):
-                    return {'ok': False, 'exit_code': None, 'stdout': '',
-                             'error': 'CREDENTIAL_INSPECTION_DENIED'}
-                timeout = req.get('timeout', 1800)
-                out, rc = self.session.run(cmd, timeout)
-                return {'ok': True, 'exit_code': rc, 'stdout': out, 'error': ''}
-            if op == 'put':
-                ok = self.session.put(req['local'], req['remote'])
-                return {'ok': ok, 'exit_code': 0 if ok else 1, 'stdout': '',
-                         'error': '' if ok else 'MD5_MISMATCH'}
-            if op == 'get':
-                ok = self.session.get(req['remote'], req['local'])
-                return {'ok': ok, 'exit_code': 0 if ok else 1, 'stdout': '',
-                         'error': '' if ok else 'MD5_MISMATCH'}
-            if op == 'reconnect_hop':
-                self.session.send(self.hop_cmd)
-                self.session.read_until(r'[>$]\s*$', 45, 'reconnect_hop')
-                return {'ok': True, 'exit_code': 0, 'stdout': '', 'error': ''}
-            return {'ok': False, 'exit_code': None, 'stdout': '', 'error': 'UNKNOWN_OP'}
-        except Exception as e:
-            return {'ok': False, 'exit_code': None, 'stdout': '', 'error': str(e)}
+        with self._lock:
+            self.last_activity = time.time()
+            op = req.get('op')
+            try:
+                if op == 'status':
+                    out, rc = self.session.run('echo alive', 30)
+                    return {'ok': True, 'exit_code': rc, 'stdout': out, 'error': ''}
+                if op == 'run':
+                    cmd = req.get('cmd', '')
+                    if is_credential_inspection_command(cmd):
+                        return {'ok': False, 'exit_code': None, 'stdout': '',
+                                 'error': 'CREDENTIAL_INSPECTION_DENIED'}
+                    # Optional cwd: composed as a subshell (parens) so a cd
+                    # done for THIS request never leaks into the shared
+                    # shell's persistent cwd for the NEXT caller's command --
+                    # closes the exact state-leakage bug already hit live
+                    # this session (a `module load` and a `cd` both
+                    # persisted across unrelated later commands because the
+                    # relay is one continuous shell, not a fresh one per
+                    # call). Callers that need every command self-contained
+                    # should pass cwd on every request rather than relying
+                    # on a prior request's cd.
+                    cwd = req.get('cwd')
+                    if cwd:
+                        if is_credential_inspection_command(cwd):
+                            return {'ok': False, 'exit_code': None, 'stdout': '',
+                                     'error': 'CREDENTIAL_INSPECTION_DENIED'}
+                        cmd = '(cd %s && %s)' % (_shell_quote_for_cd(cwd), cmd)
+                    timeout = req.get('timeout', 1800)
+                    out, rc = self.session.run(cmd, timeout)
+                    return {'ok': True, 'exit_code': rc, 'stdout': out, 'error': ''}
+                if op == 'put':
+                    ok = self.session.put(req['local'], req['remote'])
+                    return {'ok': ok, 'exit_code': 0 if ok else 1, 'stdout': '',
+                             'error': '' if ok else 'MD5_MISMATCH'}
+                if op == 'get':
+                    ok = self.session.get(req['remote'], req['local'])
+                    return {'ok': ok, 'exit_code': 0 if ok else 1, 'stdout': '',
+                             'error': '' if ok else 'MD5_MISMATCH'}
+                if op == 'reconnect_hop':
+                    self.session.send(self.hop_cmd)
+                    self.session.read_until(r'[>$]\s*$', 45, 'reconnect_hop')
+                    return {'ok': True, 'exit_code': 0, 'stdout': '', 'error': ''}
+                return {'ok': False, 'exit_code': None, 'stdout': '', 'error': 'UNKNOWN_OP'}
+            except Exception as e:
+                return {'ok': False, 'exit_code': None, 'stdout': '', 'error': str(e)}
 
     def idle_seconds(self):
         return time.time() - self.last_activity

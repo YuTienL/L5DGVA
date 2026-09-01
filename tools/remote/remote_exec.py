@@ -10,9 +10,19 @@ Usage:
   python tools/remote/remote_exec.py --status
   python tools/remote/remote_exec.py "pwd"
   python tools/remote/remote_exec.py --timeout 1800 "make WAVE=1"
+  python tools/remote/remote_exec.py --cwd /home/svcacct/AI/Agent "pwd"
   python tools/remote/remote_exec.py --reconnect
   python tools/remote/remote_exec.py --put local_file remote_file
   python tools/remote/remote_exec.py --get remote_file local_file
+
+--cwd runs the command in a subshell cd'd to that directory (see
+remote_relay.py's RelayServer.handle_request 'run' op) instead of relying on
+this relay's persistent shell cwd -- the relay is ONE continuous shell
+shared by every caller of this (vchost, vchop) pair, so a bare `cd` or
+`module load` issued by one command silently persists into the next
+caller's command, even a caller working on something unrelated. Pass --cwd
+(and prefer full binary paths over relying on a prior `module load`) on
+every call when this relay may be shared with other concurrent work.
 
 Requires VCHOST/VCHOP env vars (to locate the same relay info file
 remote_relay.py wrote) -- but never VCPW.
@@ -88,6 +98,9 @@ def main():
     ap.add_argument('--put', nargs=2, metavar=('LOCAL', 'REMOTE'))
     ap.add_argument('--get', nargs=2, metavar=('REMOTE', 'LOCAL'))
     ap.add_argument('--timeout', type=int, default=1800)
+    ap.add_argument('--cwd', default=None,
+        help='Run cmd in a subshell cd\'d to this dir; does not affect the '
+             'relay\'s persistent shell cwd for later/other callers.')
     a = ap.parse_args()
 
     vchost = os.environ.get('VCHOST', '')
@@ -114,6 +127,8 @@ def main():
         req = {'token': token, 'op': 'get', 'remote': a.get[0], 'local': a.get[1]}
     elif a.cmd:
         req = {'token': token, 'op': 'run', 'cmd': a.cmd, 'timeout': a.timeout}
+        if a.cwd:
+            req['cwd'] = a.cwd
     else:
         print(__doc__)
         return 2

@@ -208,6 +208,19 @@ Full procedural detail: `CREATE_ENVIRONMENT.md`.
   `LSF_STRICT_PER_JOB_IRON_RULES_v19_1.md` — standalone one-page mechanism
   references, each still accurate for the narrow topic it covers; not
   duplicated at length here to avoid yet another copy drifting out of sync.
+- **`REMOTE_LOGIN_GUIDE.md`** — connecting to the Linux DV server via the
+  persistent relay (`tools/remote/`): starting/reconnecting a relay,
+  `remote_exec.py` usage, the `VCWORKDIR` vs. `--project-root` distinction.
+- **`KNOWLEDGE_CENTER_GUIDE.md`** — the shared cross-user Knowledge Center
+  (`/home/svcacct/AI/DB`): setup, commands, and why it is safe for
+  concurrent multi-user writes (`fcntl.flock` + atomic writes in
+  `tools/knowledge_center/broker.py`).
+- **`USAGE_MULTI_USER_SAFETY.md`** — the single place that answers "is it
+  safe for multiple people to use the shared `/home/svcacct/AI/Agent`
+  deployment at the same time," layer by layer (Knowledge Center: yes;
+  relay command execution: yes as of 2026-09-02; relay shared shell state:
+  only with `--cwd`; per-project `.dv-harness/` runtime state: never share
+  a `--project-root`).
 
 Every other root `.md` not listed above is either superseded (banner at the
 top says so and names the current doc) or a quick-start variant that now
