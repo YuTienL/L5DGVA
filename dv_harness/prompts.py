@@ -1739,6 +1739,54 @@ low-cost 證據足夠定位問題就不要往下一級升級。
 → Verdi if needed → root cause →
 Replay 重現 → Fix all related findings → Non-Regression 確認沒有引入新問題 →
 Git push → exact SHA → build/verify/rerun。直到 failure closure。
+
+本 stage 另外還有三個獨立的 hard gate，也必須各自附上 evidence block，缺一個都會讓整個 stage
+卡在 GATE_FAIL/MISSING_EVIDENCE（同一類 bug 在 INTAKE 與 DISCOVERY 都已經真實復現過：gate
+腳本有註冊，但 stage instructions 沒提到 gate id，agent 完全不知道要附證據，導致重跑多輪都停在
+同樣的 GATE_FAIL/MISSING_EVIDENCE，即使實際分析內容本身已經做得很紮實）：
+
+```dv-harness-evidence:failure_signature_recurrence_gate
+{"failures": [
+  {"failure_id": "...", "signature": "...", "linked_to_existing_failure": false,
+   "previously_fixed": false, "recurrence_escalated": false}
+]}
+```
+（failures 陣列中每一筆都要有 signature 這個唯一識別特徵字串——缺 signature 就 FAIL
+（FAILURE_WITHOUT_SIGNATURE）；同一個 signature 在陣列中出現超過一次，代表是重複的 failure，
+第二筆以後必須把 linked_to_existing_failure 設為 true，否則 FAIL
+（DUPLICATE_FAILURE_NOT_LINKED）；若這個重複的 signature 屬於「先前已經修過
+（previously_fixed=true）」卻又復現，必須把 recurrence_escalated 設為 true 明確升級處理，
+否則 FAIL（RECURRENT_FIXED_BUG_NOT_ESCALATED）——不能讓一個號稱已修好的 bug 悄悄復發卻沒人管。
+這個 stage 目前沒有處理任何 failure 時，`{"failures": []}` 是誠實、合法的預設值。）
+
+```dv-harness-evidence:issue_triage_classification_gate
+{"classification": "REAL_ISSUE", "classification_reason": "...", "evidence_hash": "...",
+ "known_issue_id": null, "waiver_id": null, "prior_rca_id": null,
+ "deep_rca_triggered": true, "contradictory_new_evidence": null}
+```
+（classification 必須是 MISCLASSIFIED/KNOWN/REAL_ISSUE/BLOCKED 四選一，其他值 FAIL
+（INVALID_ISSUE_CLASSIFICATION）；classification_reason 與 evidence_hash 兩者都必須非空，
+否則 FAIL（CLASSIFICATION_WITHOUT_EVIDENCE）——分類結論一定要附理由與可追溯的證據雜湊，不能
+空口分類；classification 為 KNOWN 時，known_issue_id / waiver_id / prior_rca_id 三者至少填一個，
+否則 FAIL（KNOWN_WITHOUT_REFERENCE）；classification 為 REAL_ISSUE 時 deep_rca_triggered 必須是
+true，否則 FAIL（REAL_ISSUE_WITHOUT_DEEP_RCA）——真正的新問題一定要觸發完整 RCA；反過來，
+classification 為 MISCLASSIFIED 或 KNOWN 卻同時 deep_rca_triggered 為 true，就必須附上非空的
+contradictory_new_evidence 說明為什麼已知/誤判還要重跑一次深入 RCA，否則 FAIL
+（UNNECESSARY_DEEP_RCA）——不能對已有結論的 issue 做多餘的重複分析。）
+
+```dv-harness-evidence:unknown_failure_escalation_gate
+{"classification": "UNKNOWN", "missing_evidence": "...", "next_evidence_actions": "...",
+ "owner": "...", "blocking_scope": "...", "promotion_allowed": false}
+```
+（這個 gate 只在 classification 是 "UNKNOWN" 時才會真的檢查——非 UNKNOWN 時直接 PASS
+（CLASSIFIED），代表這個 evidence block 只有在真的分不出 root cause 時才需要認真填；一旦
+classification 是 UNKNOWN，missing_evidence、next_evidence_actions、owner、blocking_scope
+四個欄位都必須非空，缺任一個都會 FAIL（UNKNOWN_WITHOUT_ESCALATION_PLAN，並列出缺了哪些欄位）
+——「不知道」不能就這樣放著，一定要說清楚缺什麼證據、下一步要做什麼、誰負責、影響範圍多大；
+即使四個欄位都填了，只要 promotion_allowed 是 true 也會 FAIL
+（UNKNOWN_FAILURE_CANNOT_PROMOTE）——未分類的 failure 絕對不能被放行往下一階段推進；四者都
+滿足且 promotion_allowed 不是 true 時，gate 回報狀態是 BLOCKED_PENDING_EVIDENCE，代表這個
+failure 被合法卡住等新證據，不是 stage 本身失敗。）
 """,
 Stage.RE_AUDIT.value: """
 重新執行 original workflow audit，確認原 findings closed 且沒有新增 actionable issue。
