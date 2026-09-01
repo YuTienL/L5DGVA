@@ -37,7 +37,35 @@ class ClaudeCLIAdapter(ClaudeAdapter):
 
     def run(self, prompt: str, cwd: str, resume_session: Optional[str] = None,
             agent_profile: "Optional[AgentProfile]" = None) -> AgentResult:
-        cmd = [self._resolve_command(self.cfg.get("command","claude")), "-p", prompt,
+        # THIRD real bug found via the same live `dv-harness run-stage` run
+        # this session, once the two fixes above let the subprocess actually
+        # launch and its config validate cleanly: `claude`'s own --help
+        # confirms `-p`/`--print` is a bare flag and `prompt` is a separate
+        # POSITIONAL argument ("Usage: claude [options] [command] [prompt]"),
+        # which this adapter used to pass as `["-p", prompt, ...]`. That
+        # structurally looks fine as a Python argv list -- but the resolved
+        # command here is `claude.cmd`, a Windows batch-file shim (npm's
+        # global-install layout, see _resolve_command()'s own docstring
+        # above), and cmd.exe's batch-file argument-forwarding (`%*`-style)
+        # is fundamentally line-oriented: a real stage prompt built by
+        # prompts.build_stage_prompt() is multi-line (confirmed via a real
+        # failing run: a 6227-char prompt containing embedded `\n`), and
+        # passing it as a single positional argv element through a .cmd
+        # wrapper truncates/breaks at the embedded newline, so the real
+        # underlying `claude` process ended up receiving an effectively
+        # empty prompt and failed with "Error: Input must be provided
+        # either through stdin or as a prompt argument when using
+        # --print" -- confirmed reproducible via a direct positional-arg
+        # invocation of the real multi-line prompt, and confirmed FIXED via
+        # a direct stdin-piped invocation of the same content (`claude.cmd
+        # -p ... < multiline-file` succeeds). `-p`'s own --help text
+        # documents stdin as the alternative input path for exactly this
+        # reason. Fixed by never putting `prompt` on the command line at
+        # all -- `-p` stays a bare flag, and `prompt` is piped via
+        # subprocess.run()'s `input=` parameter below instead, which has no
+        # batch-file/cmd.exe line-oriented parsing involved at all (it's a
+        # real OS pipe, not a copied argv string).
+        cmd = [self._resolve_command(self.cfg.get("command","claude")), "-p",
                "--output-format", self.cfg.get("output_format","json"),
                "--max-turns", str(self.cfg.get("max_turns",40))]
 
@@ -123,7 +151,7 @@ class ClaudeCLIAdapter(ClaudeAdapter):
         # unlikely, but still theoretically possible on other platforms)
         # None case defensively rather than trusting text mode never fails.
         p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True,
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace", input=prompt)
         stdout = (p.stdout or "").strip()
         stderr = (p.stderr or "").strip()
         raw: Dict[str, Any] = {"returncode": p.returncode, "stderr": stderr}

@@ -2964,7 +2964,7 @@ def test_cli_adapter_threads_agent_profile_into_real_command():
     ap = load_agent_profile(ROOT, "build-agent")
     captured = {}
 
-    def fake_run(cmd, cwd, text, capture_output):
+    def fake_run(cmd, cwd, text, capture_output, encoding=None, errors=None, input=None):
         captured["cmd"] = cmd
         return MagicMock(stdout='{"result":"ok","session_id":"s1"}', stderr="", returncode=0)
 
@@ -2990,7 +2990,7 @@ def test_cli_adapter_without_agent_profile_matches_prior_behavior():
                                             "output_format": "json", "allowed_tools": []}})
     captured = {}
 
-    def fake_run(cmd, cwd, text, capture_output):
+    def fake_run(cmd, cwd, text, capture_output, encoding=None, errors=None, input=None):
         captured["cmd"] = cmd
         return MagicMock(stdout='{"result":"ok"}', stderr="", returncode=0)
 
