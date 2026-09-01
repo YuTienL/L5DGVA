@@ -58,6 +58,10 @@ from .skill_resolver import SkillResolver
 # in run_stage() below, alongside the two calls above.
 from .protocol_router import resolve_protocol
 from .environment_mode_router import resolve_environment_mode, read_registered_subsystem_names
+from .uvm_generator.generator import sv_id
+from .uvm_generator.soc_environment_composer import (
+    compose_soc_environment, EmptySubsystemRegistryError, MissingSubsystemNameEvidenceError,
+)
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -678,6 +682,86 @@ class DVHarness:
         self.blackboard.write("subsystem_registry", {"entry": entry}, source=stage)
         self.store.event({"ts": now(), "stage": stage, "event": "SUBSYSTEM_ENVIRONMENT_REGISTERED",
                            "name": entry.get("name"), "qualification_state": entry.get("qualification_state")})
+
+    def _compose_soc_environment_files(self, stage: str, evidence_blocks: dict) -> None:
+        """Real call site for
+        dv_harness/uvm_generator/soc_environment_composer.compose_soc_environment()
+        (2026-09-01, SYSTEM_LEVEL_MODE composer-implementation task -- closes
+        the "zero generator code behind SYSTEM_LEVEL_MODE" gap the
+        protocol-genericity audit found: WORKFLOW_MANIFEST.json's
+        system_level_scoreboard_composer/coverage_composer claims were
+        unbacked string literals, and generator.py had zero occurrences of
+        system_level/soc_tb_top/cross_subsystem before this).
+
+        SYSTEM_LEVEL stage's own `system_level_validator` gate
+        (tools/real_env/system_level_validator.py, wired in gates.py's
+        STAGE_GATES["SYSTEM_LEVEL"]) is a MULTI-flag gate
+        (EvidenceFlag("--registry","registry") + a harness-supplied
+        ContextFlag("--registered", ...)) -- the agent's raw evidence block
+        for it is therefore {"registry": {"subsystems": [...]}} (see
+        gates.py's _materialize_flag: an EvidenceFlag's CLI value is
+        `payload[spec.key]`, so the ONE ```dv-harness-evidence:
+        system_level_validator``` fence body is a dict-of-sub-payloads keyed
+        "registry"). That "registry" sub-payload's "subsystems" list is
+        exactly this module's `subsystem_registry_entries` shape (same
+        name/environment_manifest/release_sha/qualification_state/
+        interface_compatibility/clock_reset_compatibility fields
+        subsystem_environment_registration_gate.py itself validates
+        per-entry). system_level_validator.py only ever reads
+        d.get("subsystems")/d.get("system_level_applicable") and silently
+        ignores any other key, so an agent may additionally carry
+        soc_composition_manifest_template.json's own richer top-level keys
+        (soc_name/shared_clocks/shared_resets/cross_subsystem_scenarios/...)
+        in that SAME "registry" dict without the gate script rejecting it --
+        this method therefore reuses the "registry" dict itself as BOTH
+        subsystem_registry_entries's source AND compose_soc_environment's
+        `manifest` argument, rather than inventing a second fence/schema.
+
+        Same defensive pattern as _persist_subsystem_registry_entry
+        immediately above: reads the SAME evidence_blocks dict run_stage()
+        already computed, never re-parses agent text; a composition failure
+        (including the deliberately-unimplemented
+        cross_subsystem_scenarios/end_to_end_scoreboard/system_coverage
+        stubs -- see soc_environment_composer.py's module docstring) is
+        logged and skipped, never downgrades an already-earned SYSTEM_LEVEL
+        stage PASS."""
+        gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
+        if "system_level_validator" not in gate_ids:
+            return
+        block = evidence_blocks.get("system_level_validator")
+        if not isinstance(block, dict):
+            return
+        registry = block.get("registry")
+        if not isinstance(registry, dict) or registry.get("system_level_applicable") is False:
+            return  # escape hatch, or no registry sub-payload at all -- nothing to compose
+        subsystems = registry.get("subsystems") or []
+        if not subsystems:
+            return
+        try:
+            files = compose_soc_environment(subsystems, registry)
+        except NotImplementedError as exc:
+            self.store.event({"ts": now(), "stage": stage, "event": "SOC_COMPOSITION_NOT_IMPLEMENTED",
+                               "error": str(exc)})
+            return
+        except (EmptySubsystemRegistryError, MissingSubsystemNameEvidenceError) as exc:
+            self.store.event({"ts": now(), "stage": stage, "event": "SOC_COMPOSITION_INPUT_INVALID",
+                               "reason": getattr(exc, "reason", str(exc)),
+                               "detail": getattr(exc, "detail", {})})
+            return
+        soc_name = sv_id(registry.get("soc_name") or "soc")
+        out_dir = self.root / "generated" / "soc_composition" / soc_name
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for name, content in files.items():
+                (out_dir / name).write_text(content, encoding="utf-8")
+        except OSError as exc:
+            self.store.event({"ts": now(), "stage": stage, "event": "SOC_COMPOSITION_WRITE_FAILED",
+                               "error": str(exc)})
+            return
+        self.blackboard.write("soc_composition",
+                               {"soc_name": soc_name, "generated_files": sorted(files.keys())}, source=stage)
+        self.store.event({"ts": now(), "stage": stage, "event": "SOC_ENVIRONMENT_COMPOSED",
+                           "soc_name": soc_name, "files": sorted(files.keys())})
 
     # Real evidence categories root_cause_evidence_gate.py itself structurally
     # requires (see tools/verification_flow/root_cause_evidence_gate.py's own
@@ -1319,6 +1403,7 @@ class DVHarness:
                 if verdict == "PASS":
                     self._promote_experience_knowledge(stage, evidence_blocks)
                     self._persist_subsystem_registry_entry(stage, evidence_blocks)
+                    self._compose_soc_environment_files(stage, evidence_blocks)
                     self._score_root_cause_confidence(stage, evidence_blocks, verdict)
                     self._append_coverage_history_sample(stage, evidence_blocks)
                     self._promote_project_topology_knowledge(stage, evidence_blocks)

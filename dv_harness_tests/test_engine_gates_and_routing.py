@@ -2769,6 +2769,86 @@ def test_engine_persists_subsystem_registry_entry_on_signoff_pass():
         shutil.rmtree(tmp)
 
 
+def test_engine_composes_soc_environment_on_system_level_pass():
+    # Unit-tests _compose_soc_environment_files directly (same rationale as
+    # test_engine_persists_subsystem_registry_entry_on_signoff_pass
+    # immediately above: driving a full run_stage() SYSTEM_LEVEL PASS would
+    # require constructing valid payloads for every real SYSTEM_LEVEL gate
+    # unrelated to this feature). Verifies the real wiring: system_level_
+    # validator's multi-flag evidence shape ({"registry": {"subsystems": [...]}})
+    # is what _compose_soc_environment_files actually reads, and that a real
+    # SYSTEM_LEVEL PASS writes real soc_tb_top.sv/soc_virtual_sequencer.sv
+    # files under generated/soc_composition/<soc_name>/.
+    tmp, h = _fresh_harness()
+    try:
+        usb = {"name": "USB", "environment_manifest": "generated/usb/environment_manifest.json",
+               "release_sha": "sha-usb-1", "qualification_state": "PRODUCTION_QUALIFIED",
+               "interface_compatibility": "PASS", "clock_reset_compatibility": "PASS"}
+        pcie = {"name": "PCIE", "environment_manifest": "generated/pcie/environment_manifest.json",
+                "release_sha": "sha-pcie-1", "qualification_state": "REGRESSION_QUALIFIED",
+                "interface_compatibility": "PASS", "clock_reset_compatibility": "PASS"}
+        evidence_blocks = {
+            "system_level_validator": {"registry": {
+                "soc_name": "demo_soc", "subsystems": [usb, pcie],
+                "cross_subsystem_scenarios": [], "end_to_end_scoreboards": [], "system_coverage": [],
+            }},
+        }
+        h._compose_soc_environment_files("SYSTEM_LEVEL", evidence_blocks)
+
+        out_dir = tmp / "generated" / "soc_composition" / "demo_soc"
+        assert (out_dir / "soc_tb_top.sv").exists()
+        assert (out_dir / "soc_virtual_sequencer.sv").exists()
+        assert (out_dir / "soc_composition_manifest.json").exists()
+        tb = (out_dir / "soc_tb_top.sv").read_text(encoding="utf-8")
+        assert "usb_env usb_env_inst;" in tb and "pcie_env pcie_env_inst;" in tb
+
+        bb = h.blackboard.read("soc_composition")
+        assert bb["value"]["soc_name"] == "demo_soc"
+        assert set(bb["value"]["generated_files"]) == {
+            "soc_tb_top.sv", "soc_virtual_sequencer.sv", "soc_composition_manifest.json",
+        }
+
+        events = (tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        composed_events = [json.loads(e) for e in events if json.loads(e).get("event") == "SOC_ENVIRONMENT_COMPOSED"]
+        assert composed_events and composed_events[0]["soc_name"] == "demo_soc"
+
+        # A stage without system_level_validator in STAGE_GATES is a no-op.
+        h2_tmp, h2 = _fresh_harness()
+        try:
+            h2._compose_soc_environment_files("SIGNOFF", evidence_blocks)
+            assert not (h2_tmp / "generated" / "soc_composition").exists()
+        finally:
+            shutil.rmtree(h2_tmp)
+
+        # The escape hatch (system_level_applicable: false) composes nothing.
+        h3_tmp, h3 = _fresh_harness()
+        try:
+            h3._compose_soc_environment_files("SYSTEM_LEVEL", {"system_level_validator": {"registry": {
+                "system_level_applicable": False, "system_level_not_applicable_reason": "pure IP-level flow",
+            }}})
+            assert not (h3_tmp / "generated" / "soc_composition").exists()
+        finally:
+            shutil.rmtree(h3_tmp)
+
+        # manifest requesting genuinely-unimplemented cross_subsystem_scenarios
+        # content logs SOC_COMPOSITION_NOT_IMPLEMENTED and writes nothing --
+        # never a fabricated placeholder, never a downgraded stage PASS.
+        h4_tmp, h4 = _fresh_harness()
+        try:
+            h4._compose_soc_environment_files("SYSTEM_LEVEL", {"system_level_validator": {"registry": {
+                "soc_name": "demo_soc2", "subsystems": [usb, pcie],
+                "cross_subsystem_scenarios": [{"scenario_id": "s1"}],
+            }}})
+            assert not (h4_tmp / "generated" / "soc_composition").exists()
+            events4 = (h4_tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            ni_events = [json.loads(e) for e in events4 if json.loads(e).get("event") == "SOC_COMPOSITION_NOT_IMPLEMENTED"]
+            assert ni_events
+        finally:
+            shutil.rmtree(h4_tmp)
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_verify_stage_with_mismatched_log_fails_not_passes():
     text = (
         "```dv-harness-evidence:simulation_semantic_validation_gate\n"
