@@ -66,6 +66,7 @@ then `--put package.tgz <remote>/package.tgz`, then run
 commands.
 """
 import base64, hashlib, io, os, re, socket, sys, time
+from pathlib import Path
 
 ANSI = re.compile('\x1b' + r'\[[0-9;?]*[ -/]*[@-~]')
 USER = os.environ.get('VCUSER', '')
@@ -158,7 +159,29 @@ class Session:
 
         out, rc = self.run('base64 -d %s > %s && md5sum %s && rm -f %s'
                            % (tmp, remote, remote, tmp), 300)
-        got = re.search(r'([0-9a-f]{32})', out)
+        # TEMPORARY DIAGNOSTIC (2026-09-02): rounds 1 and 2 of the flush-
+        # timing fix above did not resolve a live, 100%-reproducible
+        # MD5_MISMATCH -- including for a single isolated --put with
+        # nothing preceding it -- even though manually re-decoding the
+        # leftover staging file always produces the correct md5. That
+        # means the bug is in how `out` is parsed here, not in the
+        # transfer or the flush timing. Log the raw filtered output so the
+        # next fix is evidence-based instead of another blind guess.
+        try:
+            _dbg = Path(__file__).resolve().parents[2] / '.work' / 'put_debug.log'
+            _dbg.parent.mkdir(parents=True, exist_ok=True)
+            with io.open(_dbg, 'a', encoding='utf-8') as _f:
+                _f.write('=== put %s -> %s want=%s rc=%s ===\n' % (local, remote, want, rc))
+                _f.write('out repr: %r\n\n' % out)
+        except Exception as _e:
+            pass
+        # Targeted extraction: require the hash to be immediately followed
+        # by the exact remote path (md5sum's own output format), instead
+        # of grabbing the first 32-hex-char run anywhere in `out` -- immune
+        # to any unrelated hex-looking noise elsewhere in the buffer.
+        got = re.search(r'([0-9a-f]{32})\s+\S*' + re.escape(os.path.basename(remote)), out)
+        if not got:
+            got = re.search(r'([0-9a-f]{32})', out)
         ok = bool(got) and got.group(1) == want
         print('[put] %s -> %s  %d bytes  md5 %s'
               % (local, remote, len(data), 'MATCH' if ok else 'MISMATCH'))
