@@ -38,6 +38,7 @@ LAYOUT = {
     "base_vseq": "tb/seq",
     "scoreboard": "tb/env",
     "coverage": "tb/env",
+    "assertions": "tb/env",
     "env": "tb/env",
     "base_test": "tb/tests",
     "smoke_test": "tb/tests",
@@ -70,6 +71,16 @@ class ProtocolEnvGenerator:
         placed[f"{LAYOUT['base_vseq']}/{p}_base_vseq.sv"] = e.base_vseq(m, p)
         placed[f"{LAYOUT['scoreboard']}/{p}_scoreboard.sv"] = e.scoreboard(m, p)
         placed[f"{LAYOUT['coverage']}/{p}_coverage.sv"] = e.coverage(m, p)
+        # STATE_MACHINE_CHECKS DSL EXTENSION (checker-sva-generator task):
+        # reuses e.assertions() unchanged, same "content is a no-op absent
+        # the new manifest key" shape as scoreboard/coverage above -- see
+        # generator.py's UVMEnvironmentGenerator.assertions() docstring.
+        # Not part of the design report's literal file list (that report
+        # only names generator.py's own generate()/pkg()), but wired here
+        # too since THIS is the real, non-deprecated generation entry point
+        # (see generator.py's own header NOTICE) -- omitting it would leave
+        # the new DSL unreachable from actual environment generation.
+        placed[f"{LAYOUT['assertions']}/{p}_assertions.sv"] = e.assertions(m, p)
         placed[f"{LAYOUT['env']}/{p}_env.sv"] = e.env(m, p)
         placed[f"{LAYOUT['base_test']}/{p}_base_test.sv"] = e.base_test(m, p)
         for t in smoke:

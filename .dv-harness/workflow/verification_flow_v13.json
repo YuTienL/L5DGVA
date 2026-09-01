@@ -155,6 +155,7 @@
   "pipeline_hash_continuity_gate": "tools/verification_flow/pipeline_hash_continuity_gate.py",
   "v28_rule": "Signoff liveness, fairness, failure-linked coverage and pipeline hash continuity are executable gates.",
   "assertion_vacuity_gate": "tools/verification_flow/assertion_vacuity_gate.py",
+  "assertion_placeholder_closure_gate": "tools/verification_flow/assertion_placeholder_closure_gate.py",
   "error_injection_coverage_gate": "tools/verification_flow/error_injection_coverage_gate.py",
   "seed_reproducibility_gate": "tools/verification_flow/seed_reproducibility_gate.py",
   "protocol_corner_case_matrix_gate": "tools/verification_flow/protocol_corner_case_matrix_gate.py",

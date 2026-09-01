@@ -19,6 +19,16 @@ def sv_id(s):
         s='p_'+s
     return s.lower()
 
+# Imported AFTER sv_id() is defined, deliberately: state_machine_checks.py
+# itself does `from .generator import sv_id` (same import shape
+# pcie_ltssm_generator.py already uses), which would otherwise be a circular
+# import (generator.py -> state_machine_checks.py -> generator.py) if this
+# import sat above sv_id's own definition -- Python's partial-module
+# semantics make this safe as long as sv_id is already bound on this
+# module's namespace by the time state_machine_checks.py's own top-level
+# import statement runs.
+from . import state_machine_checks
+
 
 class CircularDependencyError(ValueError):
     """Raised by topological_build_order when vip_components' depends_on
@@ -323,6 +333,7 @@ class UVMEnvironmentGenerator:
         files[p+'_base_vseq.sv']=self.base_vseq(m,p)
         files[p+'_scoreboard.sv']=self.scoreboard(m,p)
         files[p+'_coverage.sv']=self.coverage(m,p)
+        files[p+'_assertions.sv']=self.assertions(m,p)
         files[p+'_env.sv']=self.env(m,p)
         files[p+'_base_test.sv']=self.base_test(m,p)
         for t in smoke:
@@ -341,7 +352,7 @@ class UVMEnvironmentGenerator:
     def pkg(self,m,p,pkg,smoke):
         imports='\n'.join('  import '+x+'::*;' for x in m.get('vip',{}).get('package_imports',[]))
         incs=[p+'_config.sv',p+'_virtual_sequencer.sv',p+'_base_vseq.sv',
-              p+'_scoreboard.sv',p+'_coverage.sv',p+'_env.sv',p+'_base_test.sv']
+              p+'_scoreboard.sv',p+'_coverage.sv',p+'_assertions.sv',p+'_env.sv',p+'_base_test.sv']
         incs += [p+'_'+sv_id(t.get('name','smoke'))+'_test.sv' for t in smoke]
         inc='\n'.join('  `include "'+x+'"' for x in incs)
         return 'package '+pkg+';\n  import uvm_pkg::*;\n  `include "uvm_macros.svh"\n'+imports+'\n'+inc+'\nendpackage\n'
@@ -1424,6 +1435,64 @@ endclass
   endfunction
 endclass
 ''' % (p,p,cps,p)
+
+    def assertions(self,m,p):
+        """STATE_MACHINE_CHECKS DSL EXTENSION (additive -- see
+        dv_harness/uvm_generator/state_machine_checks.py's module docstring
+        for the full design rationale: this generalizes
+        pcie_ltssm_generator.py's hardcoded-to-PCIe LTSSM-legality pattern
+        into a manifest-driven DSL covering 3 idioms --
+        "valid_transition_table" (state-machine legality),
+        "mutual_exclusion" ($onehot/$onehot0), and "legal_value_set" -- for
+        `generate_observability_plan.py`'s ASSERTION branch, closing the
+        gap where every ASSERTION-classified requirement emitted a literal
+        unconditional `1'b1; // TODO` placeholder with zero generation
+        mechanics.
+
+        A manifest with no top-level "state_machine_checks" key, or an
+        empty list, gets exactly the one-line placeholder comment
+        SCOREBOARD_CHECKS's own comment-dump path already uses as its
+        "nothing to say yet" convention (see scoreboard()'s `rules`
+        fallback text) -- this new '<p>_assertions.sv' file is itself new
+        (this generator did not emit a dedicated assertions file before
+        this task), but its CONTENT is a complete no-op for every manifest
+        that does not use the new key, mirroring scoreboard()/coverage()'s
+        own always-emitted-file-with-placeholder-body shape exactly.
+
+        Clock/reset reuse this generator's EXISTING "clocks"/"resets"
+        manifest fields -- the same fields tb_top() already reads -- no new
+        per-check clock/reset field is introduced.
+
+        Every entry's "assertion_name" must be unique after sv_id()
+        normalization (StateMachineCheckError "DUPLICATE_ASSERTION_NAME"
+        otherwise -- two assert labels sharing one name is not valid
+        SystemVerilog; same defect-prevention posture
+        MalformedTransactionScoreboardError's own DUPLICATE_SCOREBOARD_NAME
+        check already applies to "transaction_scoreboards"). All other
+        per-entry validation (kind, evidence, and the per-idiom required
+        fields) is state_machine_checks.emit_check()'s own responsibility
+        -- never re-validated/guessed here."""
+        entries = m.get('state_machine_checks') or []
+        header = '// Protocol-specific SVA properties come from the semantic model.'
+        if not entries:
+            return header + '\n'
+
+        clk=(m.get('clocks') or [{'name':'clk'}])[0].get('name','clk')
+        rst=(m.get('resets') or [{'name':'rst_n'}])[0].get('name','rst_n')
+
+        seen = {}
+        parts = [header]
+        for entry in entries:
+            raw_name = entry.get('assertion_name') if isinstance(entry, dict) else None
+            key = sv_id(raw_name) if raw_name else None
+            if key:
+                if key in seen:
+                    raise state_machine_checks.StateMachineCheckError("DUPLICATE_ASSERTION_NAME", {
+                        "assertion_name": raw_name, "conflicts_with": seen[key],
+                    })
+                seen[key] = raw_name
+            parts.append(state_machine_checks.emit_check(entry, clk, rst))
+        return '\n'.join(parts)
 
     def env(self,m,p):
         # ADDITIVE schema extension (multi-component vip_components list):

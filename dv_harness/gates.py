@@ -113,6 +113,24 @@ STAGE_GATES = {
         ("branch_topology_gate", "branch_topology_gate.py", "--topology"),
         ("error_injection_coverage_gate", "error_injection_coverage_gate.py", "--plan"),
         ("observability_sufficiency_gate", "observability_sufficiency_gate.py", "--plan"),
+        # NEW (2026-09-01, checker-sva-generator task): observability_sufficiency_gate
+        # above only requires a requirement to NAME an ASSERTION/CHECKER
+        # evidence_point -- it cannot tell a real, DSL-generated assertion
+        # apart from one still carrying the ASSERTION branch's own
+        # `1'b1; // TODO` placeholder (tools/observability/
+        # generate_observability_plan.py, before this task's
+        # state_machine_checks DSL wiring). This gate closes that one
+        # specific remaining gap -- see
+        # tools/verification_flow/assertion_placeholder_closure_gate.py's
+        # own header for the full rationale and its deliberately narrow
+        # scope (only requirements the planner itself classified
+        # PROTOCOL_STATE_MACHINE_LEGALITY are checked; hand-authored
+        # INTERRUPT_RESPONSE_SEMANTIC/CROSS_CYCLE_TEMPORAL_INVARIANT
+        # assertions are untouched, per .work/checker-sva-generator-design-
+        # report.md's own scope boundary). Placed in this same
+        # VERIFICATION_ARCHITECTURE stage as observability_sufficiency_gate
+        # per that design report's own ruling (keep the two adjacent).
+        ("assertion_placeholder_closure_gate", "assertion_placeholder_closure_gate.py", "--implementation"),
         ("per_port_verification_matrix_gate", "per_port_verification_matrix_gate.py", "--matrix"),
         ("protocol_scheduler_gate", "protocol_scheduler_gate.py", "--scheduler"),
         ("reference_uvm_adaptation_gate", "reference_uvm_adaptation_gate.py", "--adaptation"),

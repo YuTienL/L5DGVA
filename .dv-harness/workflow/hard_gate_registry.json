@@ -17,6 +17,10 @@
       "tool": "tools/verification_flow/artifact_dependency_closure_gate.py"
     },
     {
+      "gate_id": "assertion_placeholder_closure_gate",
+      "tool": "tools/verification_flow/assertion_placeholder_closure_gate.py"
+    },
+    {
       "gate_id": "assertion_vacuity_and_reachability_gate",
       "tool": "tools/verification_flow/assertion_vacuity_and_reachability_gate.py"
     },

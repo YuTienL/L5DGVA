@@ -36,6 +36,7 @@ ALL_GATE_TOOL_FILES = [
     "tools/verification_flow/architecture_calibration_conflict_gate.py",
     "tools/verification_flow/architecture_calibration_gate.py",
     "tools/verification_flow/artifact_dependency_closure_gate.py",
+    "tools/verification_flow/assertion_placeholder_closure_gate.py",
     "tools/verification_flow/assertion_vacuity_and_reachability_gate.py",
     "tools/verification_flow/assertion_vacuity_gate.py",
     "tools/verification_flow/branch_fw_interrupt_contract_gate.py",
