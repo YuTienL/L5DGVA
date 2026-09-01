@@ -4,3 +4,4 @@ __pycache__/
 .superpowers/
 
 .worktrees/
+.work/put_debug.log
