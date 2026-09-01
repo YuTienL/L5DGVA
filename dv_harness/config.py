@@ -70,6 +70,17 @@ DEFAULT_CONFIG = {
         "max_age_days": 180,
         "configured_by": "",
         "configured_at": None
+    },
+    # rtl_write_scope_guard_gate's real enforcement boundary (2026-09-02,
+    # RTL-write-scope-guard gap-closure pass): a project declares the real,
+    # absolute DUT/VIP RTL roots it must never let the harness write into
+    # here -- never guessed or hardcoded inside the gate script itself, same
+    # convention as knowledge_center.remote_root above. Empty by default: a
+    # project that has not populated this list gets an honest no-op PASS
+    # from that gate (see its own module docstring), not a silently-false
+    # sense of protection.
+    "rtl_protection": {
+        "protected_paths": []
     }
 }
 

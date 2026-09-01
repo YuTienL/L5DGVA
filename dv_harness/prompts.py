@@ -968,6 +968,20 @@ reference 環境樹（目前是 `USB_UVM_Handoff`，對應 CLAUDE.md 的 No Gold
 允許兩個欄位都缺席或為空陣列直接 PASS——它不像 manual_lookup_before_edit_gate 會因為「沒查證」而
 FAIL，它只在「查證來源真的指向禁止的 reference 樹」時才 FAIL，所以誠實的空陣列或省略欄位都是合法
 的預設值。）
+
+RTL Write Scope Guard Hard Gate（rtl_write_scope_guard_gate，防止真的把 DUT/VIP RTL 寫壞的最後一道
+code-level 防線——過去唯一真正擋下這件事的只有 `.claude/settings.json` 手動加的 Edit-tool deny
+規則，既不管 Write，也不管 Bash/PowerShell 層級的寫入，dv_harness 自己完全沒有檢查）：本輪
+IMPLEMENT 實際新增/修改的每一個檔案路徑都要誠實列出，一個都不能漏。回覆結尾附上：
+
+```dv-harness-evidence:rtl_write_scope_guard_gate
+{"edit": {"touched_paths": ["<這輪真的新增/修改過的檔案路徑，例如 uvm/tb/scoreboard.sv>"]}}
+```
+（`touched_paths` 缺席或不是陣列會判 FAIL（TOUCHED_PATHS_MISSING_OR_INVALID）；只要其中任何一筆
+resolve 之後落在專案設定（`.dv-harness/config.json` 的 `rtl_protection.protected_paths`）宣告的
+DUT/VIP RTL 保護目錄之下，就會判 FAIL（RTL_WRITE_SCOPE_VIOLATION）——UVM/testbench 側的正常修改
+不受影響，只有真的觸碰到受保護的 DUT/VIP RTL 樹才會擋下來。專案若還沒設定 `protected_paths`，
+空陣列是誠實、合法的預設值，這個 gate 會 PASS 但不代表真的有保護生效。）
 """,
 Stage.CHANGE_IMPACT.value: """
 對 Git/RTL/UVM/spec/config 變更做 Verification Change Impact。

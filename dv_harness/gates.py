@@ -156,6 +156,23 @@ STAGE_GATES = {
         ("pattern_registry_completeness_gate", "pattern_registry_completeness_gate.py", "--registry"),
         ("manual_lookup_before_edit_gate", "manual_lookup_before_edit_gate.py", "--edit"),
         ("protocol_isolation_gate", "protocol_isolation_gate.py", "--edit"),
+        # ADDED (2026-09-02, RTL-write-scope-guard gap-closure pass): the
+        # only real enforcement that ever stopped the harness from writing
+        # DUT/VIP RTL was a hand-added .claude/settings.json Edit-tool deny
+        # rule for one project's hardcoded paths -- nothing in dv_harness
+        # itself checked what an IMPLEMENT edit actually touched. This gate
+        # reads the agent-attested `touched_paths` list (every file path the
+        # edit touched) against the real project's rtl_protection.
+        # protected_paths (dv_harness/config.py) and FAILs
+        # RTL_WRITE_SCOPE_VIOLATION if any of them lands under a protected
+        # DUT/VIP root. --root is a ContextFlag (harness-supplied real
+        # project root), same convention as feature_continuity_gate/
+        # deep_rca_evidence_gate above -- an agent cannot point the check at
+        # a fabricated root to dodge it.
+        ("rtl_write_scope_guard_gate", "rtl_write_scope_guard_gate.py", (
+            EvidenceFlag("--edit", "edit"),
+            ContextFlag("--root", lambda root: str(root)),
+        )),
     ],
     "VERIFY": [
         ("simulation_semantic_validation_gate", "simulation_semantic_validation_gate.py", "--input"),

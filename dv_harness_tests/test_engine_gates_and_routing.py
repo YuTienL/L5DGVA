@@ -4883,6 +4883,64 @@ def test_protocol_isolation_gate_allows_real_source_citation():
     assert rc == 0 and out["status"] == "PASS"
 
 
+def _write_rtl_protection_config(project_root, protected_paths):
+    dv_dir = project_root / ".dv-harness"
+    dv_dir.mkdir(parents=True, exist_ok=True)
+    (dv_dir / "config.json").write_text(
+        json.dumps({"rtl_protection": {"protected_paths": [str(p) for p in protected_paths]}}),
+        encoding="utf-8",
+    )
+
+
+def test_rtl_write_scope_guard_gate_blocks_dut_root_touch(tmp_path):
+    # The one confirmed real gap this gate closes (2026-09-02): the only
+    # thing that ever stopped the harness writing DUT/VIP RTL was a
+    # hand-added .claude/settings.json Edit-tool deny rule -- nothing in
+    # dv_harness itself checked what an IMPLEMENT edit actually touched.
+    dut_root = tmp_path / "DUT"
+    _write_rtl_protection_config(tmp_path, [dut_root, tmp_path / "VIP"])
+    rc, out = _run_gate_script_2flag(
+        "verification_flow/rtl_write_scope_guard_gate.py", "--edit",
+        {"touched_paths": [str(dut_root / "RTLCAT" / "top.v")]},
+        "--root", str(tmp_path),
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "RTL_WRITE_SCOPE_VIOLATION"
+    assert out["violations"][0]["path"] == str(dut_root / "RTLCAT" / "top.v")
+
+
+def test_rtl_write_scope_guard_gate_allows_uvm_touch_outside_protected_roots(tmp_path):
+    _write_rtl_protection_config(tmp_path, [tmp_path / "DUT", tmp_path / "VIP"])
+    rc, out = _run_gate_script_2flag(
+        "verification_flow/rtl_write_scope_guard_gate.py", "--edit",
+        {"touched_paths": [str(tmp_path / "uvm" / "tb" / "scoreboard.sv")]},
+        "--root", str(tmp_path),
+    )
+    assert rc == 0 and out["status"] == "PASS"
+
+
+def test_rtl_write_scope_guard_gate_honest_pass_when_unconfigured(tmp_path):
+    # No rtl_protection.protected_paths declared for this project yet -- an
+    # honest no-op PASS (never a fabricated block), matching the gate's own
+    # module docstring on what still requires real config to bite.
+    _write_rtl_protection_config(tmp_path, [])
+    rc, out = _run_gate_script_2flag(
+        "verification_flow/rtl_write_scope_guard_gate.py", "--edit",
+        {"touched_paths": [str(tmp_path / "DUT" / "RTLCAT" / "top.v")]},
+        "--root", str(tmp_path),
+    )
+    assert rc == 0 and out["status"] == "PASS" and out["reason"] == "NO_PROTECTED_PATHS_CONFIGURED"
+
+
+def test_rtl_write_scope_guard_gate_requires_touched_paths_list(tmp_path):
+    _write_rtl_protection_config(tmp_path, [tmp_path / "DUT"])
+    rc, out = _run_gate_script_2flag(
+        "verification_flow/rtl_write_scope_guard_gate.py", "--edit",
+        {}, "--root", str(tmp_path),
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "TOUCHED_PATHS_MISSING_OR_INVALID"
+
+
 def test_protocol_profile_binding_gate_requires_usb_profile_and_vip_lookup():
     rc, out = _run_gate_script(
         "verification_flow/protocol_profile_binding_gate.py", "--binding",
@@ -5334,6 +5392,52 @@ def test_protocol_isolation_gate_blocks_implement_stage_via_evaluate_stage_evide
     verdict, reasons = evaluate_stage_evidence(ROOT, "IMPLEMENT", text)
     assert verdict == "GATE_FAIL"
     assert any("protocol_isolation_gate" in r and "REFERENCE_TREE_CITATION_FORBIDDEN" in r for r in reasons)
+
+
+_IMPLEMENT_BASE_GATES_PASS_TEXT = (
+    '```dv-harness-evidence:traceability_consistency_gate\n'
+    '{"vplan_requirement_ids": ["R1"], "architecture_nodes": ["A1"], '
+    '"verification_mechanisms": [{"mechanism_id": "M1", "vplan_requirement_ids": ["R1"]}], '
+    '"planned_testcases": [{"testcase_id": "T1", "vplan_requirement_ids": ["R1"], '
+    '"mechanism_ids": ["M1"], "coverage_ids": ["C1"]}], "coverage_ids": ["C1"]}\n```\n'
+    '```dv-harness-evidence:checker_independence_gate\n{"checkers": []}\n```\n'
+    '```dv-harness-evidence:testcase_name_semantics_gate\n'
+    '{"tests": [{"testcase_id": "T1", "name": "usb_reset_recovery_test"}]}\n```\n'
+    '```dv-harness-evidence:verification_intent_gate\n'
+    '{"requirements": [{"req_id": "R1"}], "mechanisms": [{"mechanism_id": "M1"}], '
+    '"coverage": [{"coverage_id": "C1"}], "tests": [{"testcase_id": "T1", '
+    '"requirement_ids": ["R1"], "mechanism_ids": ["M1"], "coverage_ids": ["C1"]}]}\n```\n'
+    '```dv-harness-evidence:pattern_registry_completeness_gate\n'
+    '{"patterns": [{"name": "usb2_enum", "suite": "enumeration", "dir": "tb/patterns/enumeration"}], '
+    '"suite_names": ["enumeration"]}\n```\n'
+    '```dv-harness-evidence:manual_lookup_before_edit_gate\n{"branch": "block"}\n```\n'
+    '```dv-harness-evidence:protocol_isolation_gate\n'
+    '{"vip_evidence_refs": [], "dut_rtl_evidence_refs": []}\n```\n'
+)
+
+
+def test_rtl_write_scope_guard_gate_blocks_implement_stage_via_evaluate_stage_evidence():
+    # Wiring proof: this repo's OWN real .dv-harness/config.json now declares
+    # rtl_protection.protected_paths for the real project this harness
+    # deployment governs (see .claude/settings.json's matching Edit/Write
+    # deny rules for the same two paths) -- so this exercises the real,
+    # currently-configured enforcement boundary, not a synthetic one.
+    text = _IMPLEMENT_BASE_GATES_PASS_TEXT + (
+        '```dv-harness-evidence:rtl_write_scope_guard_gate\n'
+        '{"edit": {"touched_paths": ["D:/DV/Task/USB/DUT/RTLCAT/top.v"]}}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "IMPLEMENT", text)
+    assert verdict == "GATE_FAIL"
+    assert any("rtl_write_scope_guard_gate" in r and "RTL_WRITE_SCOPE_VIOLATION" in r for r in reasons), reasons
+
+
+def test_rtl_write_scope_guard_gate_passes_implement_stage_for_uvm_only_touch():
+    text = _IMPLEMENT_BASE_GATES_PASS_TEXT + (
+        '```dv-harness-evidence:rtl_write_scope_guard_gate\n'
+        '{"edit": {"touched_paths": ["uvm/tb/scoreboard.sv"]}}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "IMPLEMENT", text)
+    assert verdict == "PASS", reasons
 
 
 def test_protocol_profile_binding_gate_blocks_protocol_capability_stage_via_evaluate_stage_evidence():
