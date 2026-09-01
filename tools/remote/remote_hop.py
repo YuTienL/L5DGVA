@@ -136,20 +136,25 @@ class Session:
             self.send('echo %s >> %s' % (b64[i:i + chunk], tmp))
             time.sleep(0.015)
         # REAL BUG FIX (2026-09-02, found live -- 7/7 puts failed with
-        # MD5_MISMATCH on a relay that had been up a while): the old
-        # generic prompt pattern ([>$]\s*$) can match as soon as the FIRST
-        # of many rapid-fire echo commands redraws a prompt, long before
-        # the LAST of them has actually been processed -- read_until()'s
-        # `got` buffer is local to each call and any bytes read past its
-        # match point are silently dropped, so residual tail output from
-        # this loop could bleed into the very next read_until() call and
-        # corrupt ITS marker-based extraction (the compound base64-d/
-        # md5sum/rm command below). Use the same unique-marker technique
-        # run() already uses instead of a pattern that can spuriously
-        # match mid-stream.
+        # MD5_MISMATCH on a relay that had been up a while), ROUND 2: the
+        # first fix here (a bare `echo <marker>` + read_until(marker,...))
+        # was ITSELF still broken the same way as the [>$]\s*$ pattern it
+        # replaced -- a telnet session in cooked mode echoes back the
+        # literal characters of a SENT line as soon as they're typed,
+        # independent of whether the shell has actually finished executing
+        # anything queued before it. Since the sent command
+        # ("echo <marker>") contains the marker text verbatim, read_until()
+        # could match on that raw echo of the INPUT itself, before the
+        # shell had even executed it -- let alone drained the 47+ preceding
+        # chunk-writes. run()'s own marker trick avoids exactly this: it
+        # sends 'echo <m>$status', whose raw echo does NOT satisfy the
+        # search pattern (m + a DIGIT) because '$status' is not yet a
+        # digit in the un-executed command text -- only the shell's real
+        # output (after variable expansion) is. Reuse run() itself for the
+        # flush step instead of hand-rolling a weaker version of the same
+        # trick.
         flush_marker = 'PUTFLUSH%dZ' % (int(time.time() * 1000) % 1000000)
-        self.send('echo %s' % flush_marker)
-        self.read_until(flush_marker, 60, 'chunks flushed')
+        self.run('echo %s' % flush_marker, 60)
 
         out, rc = self.run('base64 -d %s > %s && md5sum %s && rm -f %s'
                            % (tmp, remote, remote, tmp), 300)
