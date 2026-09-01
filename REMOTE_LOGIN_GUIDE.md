@@ -15,6 +15,66 @@ ever see the password) on every command. The three scripts involved live in
 | `remote_exec.py` | Invoked by Claude via tool calls | **Never** |
 | `remote_hop.py` | Library used by `remote_relay.py`'s login handshake; not run standalone | Yes (imported, not invoked directly) |
 
+## Architecture: Claude Code always runs on your PC, never on the Linux server
+
+Claude Code (the `claude` CLI) is a **PC-side (Windows client) process** —
+this whole harness's design assumption is that it is never installed or
+run on the Linux DV server itself. "Using Claude Code to operate the
+shared `/home/svcacct/AI/Agent` deployment" does not mean SSH-ing in and
+running `claude` there; it means Claude Code runs locally on your machine,
+and reaches the Linux server *only* through the persistent-relay bridge
+described in this page, for the two things Linux is actually needed for:
+real execution (VCS/Verdi/LSF/`git`) and the shared Knowledge Center. This
+is exactly why `tools/remote/` exists at all — if the intended usage were
+"run Claude Code directly on the Linux box," none of this relay machinery
+would be necessary.
+
+## Onboarding a new PC user onto the shared `/home/svcacct/AI/Agent` deployment
+
+1. **Get the harness code locally.** `git clone`/checkout this same
+   repository onto your own PC (or pull the same `v50` tree the shared
+   deployment was built from). Run `dv-harness`/Claude Code from *this
+   local copy* — never by SSH-ing into the server and trying to drive it
+   from there.
+2. **Pick your own `--project-root`.** Never point it at
+   `/home/svcacct/AI/Agent` (that's a Linux-side path unrelated to where
+   your local `dv-harness` process runs, and even if reachable it is
+   shared code, not a place for your own `.dv-harness/` runtime state —
+   see `USAGE_MULTI_USER_SAFETY.md`). Use your own local directory, e.g.
+   `dv-harness --project-root D:\DV\<your-project> status`.
+3. **Start your own relay**, from your own terminal, with your own
+   account:
+   ```
+   VCUSER=<your-account> VCPW=<your-password> VCHOST=vchost-b VCHOP=host-c \
+     VCWORKDIR=/home/svcacct/AI/Agent \
+     python tools/remote/remote_relay.py --start
+   ```
+   Every real SSH login is independent even under a shared `vchost`/`vchop`
+   pair — starting your own relay does not contend with anyone else's (see
+   `USAGE_MULTI_USER_SAFETY.md`'s "prefer one relay per user" guidance).
+   Pointing `VCWORKDIR` at the shared `/home/svcacct/AI/Agent` code tree is
+   fine (everyone reading the same code is safe).
+4. **Point the Knowledge Center at the shared store** (one-time, per your
+   local `.dv-harness/config.json`):
+   ```
+   dv-harness knowledge setup --remote-root /home/svcacct/AI/DB
+   ```
+5. **Set your own `DVWORKDIR`** to *your own* generated verification
+   environment's deployment path — never the shared code tree:
+   ```
+   export DVWORKDIR=/home/tmpacct/<you>/UVM/<your-project>
+   ```
+6. **Drive the harness normally from your PC** — `dv-harness --project-root
+   <yours> start --goal "..."` or the chat-layer `CREATE ENVIRONMENT` /
+   `dv-harness` commands from `START_HERE.md`. Whenever a stage needs real
+   Linux-side work, Claude Code calls `remote_exec.py` against *your own*
+   relay, using your `DVWORKDIR` automatically.
+
+**Common mistakes to avoid**: sharing a `--project-root` with anyone else;
+sharing one relay across multiple people's concurrent work instead of each
+starting their own; deploying your generated environment's output files
+into `/home/svcacct/AI/Agent` instead of your own `DVWORKDIR` path.
+
 ## Starting a relay
 
 In your own terminal (never paste this into a Claude Code tool call):
