@@ -130,6 +130,79 @@ class TestRunReconciliationCycle:
         assert "777" in snapshot
         assert any(line.startswith("777") for line in snapshot.splitlines())
 
+    def test_settled_job_is_dropped_from_the_reconcile_set_and_keeps_its_status(self, tmp_path):
+        """Regression test for the unbounded-union bug found in the
+        2026-09-01 scoped re-review of the final fix wave.
+
+        The fix for the CRITICAL intersection-vs-union bug made the
+        reconcile set the union of (live jobs) and (EVERY job id ever
+        registered on disk). Nothing pruned that second half, so every job
+        ever registered was re-queried against LSF forever. On the real
+        server LSF keeps a finished job only for CLEAN_PERIOD; past that,
+        `bjobs <id>` returns no record, reconcile_job() maps the empty
+        record to lsf_status="UNKNOWN", and reconcile_batch() PERSISTS it
+        -- silently overwriting a real, already-recorded terminal DONE with
+        UNKNOWN, i.e. destroying recorded evidence (CLAUDE.md: "LSF DONE is
+        not equal to DV PASS").
+
+        A job that is BOTH lsf-terminal AND already analyzed must therefore
+        drop out of the reconcile set, while a sibling that is lsf-terminal
+        but still owes analysis must stay in it (that case is exactly what
+        the union was built for -- see
+        test_registered_job_absent_from_live_jobs_is_still_analyzed)."""
+        uvm_root = tmp_path / "uvm"
+
+        settled_dir = tmp_path / "sim" / "run" / "settled_1"
+        settled_dir.mkdir(parents=True)
+        settled_log = settled_dir / "sim.log"
+        settled_log.write_text(
+            "FINAL CHECK @ 3000 ns\n"
+            "UVM_FATAL = 0, UVM_ERROR = 0, UVM_WARNING = 0\nVERDICT: PASSED\n"
+        )
+        # Fully settled: LSF reported DONE and analysis already produced a
+        # determinate PASS verdict on a previous cycle.
+        _write_job(tmp_path, 888, pattern="settled", sim_log=str(settled_log),
+                   lsf_status="DONE", sim_status="PASS")
+
+        owed_dir = tmp_path / "sim" / "run" / "still_owed_1"
+        owed_dir.mkdir(parents=True)
+        owed_log = owed_dir / "sim.log"
+        owed_log.write_text(
+            "FINAL CHECK @ 4000 ns\n"
+            "UVM_FATAL = 0, UVM_ERROR = 0, UVM_WARNING = 0\nVERDICT: PASSED\n"
+        )
+        # Terminal per LSF, but analysis has never run -- must stay in.
+        _write_job(tmp_path, 889, pattern="still_owed", sim_log=str(owed_log),
+                   lsf_status="DONE", sim_status="UNKNOWN")
+
+        # Neither job appears in this poll's account-wide listing: both have
+        # aged out of `bjobs -u`.
+        with patch("dv_harness.regression_reporter.lsf_client.discover_live_jobs",
+                   return_value=[]), \
+             patch("dv_harness.regression_reporter.lsf_client._run_bjobs",
+                   return_value={"RECORDS": [{"JOBID": "889", "STAT": "DONE"}]}) as m:
+            snapshot = regression_reporter.run_reconciliation_cycle(
+                tmp_path, "vcuser1", uvm_root)
+
+        # The settled job was never queried against LSF at all...
+        assert m.call_count == 1
+        assert m.call_args.args[0] == [889]
+        # ...so its real recorded terminal status survived untouched.
+        settled_state = lsf_client.load_job_state(tmp_path, 888)
+        assert settled_state.lsf_status == "DONE"
+        assert settled_state.sim_status == "PASS"
+        # ...and it is still visible in the snapshot, rendered from its
+        # persisted state rather than mislabeled UNREGISTERED or dropped.
+        settled_row = next(line for line in snapshot.splitlines()
+                           if line.startswith("888"))
+        assert "DONE" in settled_row and "PASS" in settled_row
+
+        # The still-owed sibling was reconciled and analyzed as before.
+        owed_state = lsf_client.load_job_state(tmp_path, 889)
+        assert owed_state.lsf_status == "DONE"
+        assert owed_state.sim_status == "PASS"
+        assert (uvm_root / "regression.list").read_text().splitlines() == ["still_owed"]
+
     def test_unregistered_job_gets_unregistered_status_not_analyzed(self, tmp_path):
         uvm_root = tmp_path / "uvm"
         live_bjobs = [{"job_id": 333, "stat": "RUN", "queue": "normal",
@@ -149,11 +222,13 @@ class TestRunReconciliationCycle:
         assert isinstance(snapshot, str)
 
     def test_failed_verdict_with_uvm_errors_appears_in_attention_section(self, tmp_path):
-        """Regression test for the reviewer-found to_snapshot_row()/render_snapshot() key
-        mismatch (uvm_error/uvm_fatal vs. uvm_error_count/uvm_fatal_count) plus the
-        hardcoded sim_status="ANALYZED" bug: a job with a real FAILED verdict and
-        non-zero UVM_ERROR/UVM_FATAL counts must actually show up in the ATTENTION
-        section, not render as "pending" and disappear."""
+        """Regression test for two bugs fixed in the 2026-09-01 final fix wave:
+        the to_snapshot_row()/render_snapshot() key mismatch (uvm_error/uvm_fatal
+        vs. uvm_error_count/uvm_fatal_count), and sim_status being hardcoded to
+        "ANALYZED" regardless of verdict. A job with a real FAILED verdict and
+        non-zero UVM_ERROR/UVM_FATAL counts must show up in the ATTENTION
+        section with a real FAIL sim_status, not render as "pending" and
+        disappear."""
         uvm_root = tmp_path / "uvm"
         run_dir = tmp_path / "sim" / "run" / "baz_1"
         run_dir.mkdir(parents=True)
@@ -233,8 +308,9 @@ class TestRunReconciliationCycle:
 
         assert isinstance(snapshot, str)
         assert (uvm_root / "regression.list").read_text().splitlines() == ["job_b"]
-        # job 501's failure must not have corrupted its persisted state's sim_status
-        # into something bogus -- it simply never got past ANALYZED-or-later here.
+        # job 501's failure must not have corrupted its persisted state's
+        # sim_status into a bogus verdict: the exception fired before any
+        # verdict was recorded, so it must still read as analysis-not-done.
         job_501 = lsf_client.load_job_state(tmp_path, 501)
         assert job_501.sim_status != "PASS"
 

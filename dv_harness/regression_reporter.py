@@ -63,11 +63,16 @@ def render_snapshot(jobs):
     lines += ['', 'NEXT ACTIONS','- Analyze DONE jobs whose DV result is still UNKNOWN/pending.','- Continue incremental monitoring of RUN jobs.','- Triage EXIT/FAIL jobs and rerun fixed patterns when ready.']
     return '\n'.join(lines)
 
-def _registered_job_ids_on_disk(root: Path) -> list:
+def registered_job_ids_on_disk(root: Path) -> list:
     """Every job id dv_harness has a persisted JobState for, read straight
     from `<root>/.dv-harness/lsf/jobs/*.json` filenames (no JSON parsing --
     a corrupt file must not hide the id of the job it belongs to). Returns
-    [] when the directory does not exist yet."""
+    [] when the directory does not exist yet.
+
+    Public (not underscore-prefixed) because it is the ONE shared
+    implementation of this glob: dv_harness/cli.py's `lsf-reconcile --all`
+    and `lsf-auto-kill-scan` handlers both call it too, instead of each
+    re-inlining the same `jobs_dir.glob("*.json")` expression."""
     d = root.joinpath(*lsf_client.JOBS_DIR_NAME)
     if not d.exists():
         return []
@@ -78,6 +83,39 @@ def _registered_job_ids_on_disk(root: Path) -> list:
         except ValueError:
             continue
     return sorted(ids)
+
+
+def _job_still_owes_reconciliation(state) -> bool:
+    """Is there anything a further live LSF query of this registered job
+    could still tell us?
+
+    True while EITHER analysis is still owed (sim_status still UNKNOWN or
+    RUNNING -- no determinate PASS/FAIL verdict recorded yet) OR LSF itself
+    has not yet reported the job finished (lsf_status not DONE/EXIT).
+    False only for a job that is BOTH lsf-terminal AND already analyzed.
+
+    BUG FIX (2026-09-01 scoped re-review): the reconcile set used to
+    include EVERY job id ever registered on disk, unbounded, with nothing
+    ever pruning it -- so every job ever registered was re-queried against
+    LSF forever. On the real server LSF keeps a finished job only for
+    CLEAN_PERIOD (a fact this repo's own generated
+    `uvm_generator/templates/sim_scripts/lsf_regress.sh` documents); once a
+    job ages past that window `bjobs <id>` returns no record at all,
+    reconcile_job() maps that empty record to lsf_status="UNKNOWN", and
+    reconcile_batch() PERSISTS it -- silently overwriting the job's real,
+    previously recorded terminal DONE/EXIT status with UNKNOWN. That is
+    exactly the decay of recorded evidence CLAUDE.md's "LSF DONE is not
+    equal to DV PASS" rule exists to prevent, and it also re-armed the
+    CRITICAL sim_status -> ANALYSIS_OWED discrepancy against a status the
+    harness itself had just falsified.
+
+    The condition is deliberately OR, not AND: a job that is lsf-terminal
+    but NOT yet analyzed must STAY in the set -- that aged-out-but-still-
+    owed case is the whole reason the live+disk union exists (see
+    test_registered_job_absent_from_live_jobs_is_still_analyzed). Only the
+    fully settled tail drops out."""
+    return (state.sim_status in ("UNKNOWN", "RUNNING")
+            or state.lsf_status not in ("DONE", "EXIT"))
 
 
 def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> str:
@@ -99,6 +137,14 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
     real, current status for a registered job that is absent from this
     poll's live_jobs list for any reason.
 
+    The disk-sourced half of that union is BOUNDED by
+    _job_still_owes_reconciliation() (BUG FIX, 2026-09-01 scoped
+    re-review): a job that is both lsf-terminal and already analyzed drops
+    out permanently instead of being re-queried forever and eventually
+    having its real DONE/EXIT status overwritten with UNKNOWN once LSF's
+    CLEAN_PERIOD forgets it. Such a job still appears in the snapshot,
+    rendered from its persisted JobState rather than from a fresh poll.
+
     A single failed discover_live_jobs()/reconcile_batch() call is caught
     and logged rather than raised, per the spec's error-handling
     requirement -- one bad LSF poll must not kill the whole cycle."""
@@ -108,13 +154,38 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         print(f"[reconciliation_cycle] discover_live_jobs failed: {e}", flush=True)
         live_jobs = []
 
-    registered_id_set = set(_registered_job_ids_on_disk(root))
+    # Disk half of the union, minus the settled tail.
+    pending_ids = set()
+    settled_states = {}
+    for jid in registered_job_ids_on_disk(root):
+        try:
+            state = lsf_client.load_job_state(root, jid)
+        except Exception as e:
+            # An unreadable/corrupt state file (OSError, or the bare
+            # json.JSONDecodeError load_job_state() lets through) cannot
+            # PROVE the job is settled, so keep reconciling it rather than
+            # silently dropping it -- the same conservative stance
+            # registered_job_ids_on_disk() takes by reading filenames
+            # instead of parsing JSON. Broad by design: this filter must
+            # never be the thing that kills a cycle.
+            print(f"[reconciliation_cycle] could not load state for job {jid}: {e}", flush=True)
+            pending_ids.add(jid)
+            continue
+        if _job_still_owes_reconciliation(state):
+            pending_ids.add(jid)
+        else:
+            settled_states[jid] = state
+
+    # Live half of the union: a discovered job dv_harness has a registered
+    # JobState for. Held to the same settled filter as the disk half.
     for j in live_jobs:
         jid = j["job_id"]
+        if jid in pending_ids or jid in settled_states:
+            continue
         state = lsf_client.load_job_state(root, jid)
         if state.pattern is not None or state.sim_log is not None:
-            registered_id_set.add(jid)
-    registered_ids = sorted(registered_id_set)
+            pending_ids.add(jid)
+    registered_ids = sorted(pending_ids)
 
     if registered_ids:
         try:
@@ -144,16 +215,21 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
             # NOTE on which detect_underreporting() branches are live HERE:
             # state.uvm_error_count/uvm_fatal_count were just overwritten
             # FROM this same epilogue a few lines above, so at this specific
-            # call site the "declared" values can never disagree with the
-            # epilogue's -- the UNDER_REPORTED_EPILOGUE_UVM_FATAL/
-            # _UVM_ERROR/_VERDICT branches are structurally unable to fire.
-            # That is intentional, not broken: the branch that matters here
-            # is the one comparing the log BODY's raw marker/signature
-            # counts against what the epilogue declared, which catches a
-            # simulation whose final tally under-reports its own log
-            # content. detect_underreporting() keeps the epilogue branches
-            # for its other callers (e.g. an agent-populated JobState that
-            # was never derived from the epilogue at all).
+            # call site the declared COUNTS can never disagree with the
+            # epilogue's -- UNDER_REPORTED_EPILOGUE_UVM_FATAL and
+            # _UVM_ERROR (and only those two) are structurally unable to
+            # fire. That is intentional, not broken; detect_underreporting()
+            # keeps them for its other callers (e.g. an agent-populated
+            # JobState never derived from the epilogue at all).
+            # UNDER_REPORTED_EPILOGUE_VERDICT is NOT dead here: it fires on
+            # epilogue verdict == "FAILED" with both declared counts zero,
+            # a real parser-permitted combination (a timeout, or an
+            # objection/phase-declared failure that raised no UVM_ERROR or
+            # UVM_FATAL) and a meaningful "LSF DONE is not equal to DV PASS"
+            # signal worth logging. Also live: the branches comparing the
+            # log BODY's raw marker/signature counts against what the
+            # epilogue declared, which catch a simulation whose final tally
+            # under-reports its own log content.
             discrepancies = detect_underreporting(asdict(state), parsed)
             for d in discrepancies:
                 print(f"[reconciliation_cycle] job {jid} under-reporting: {d}", flush=True)
@@ -189,6 +265,15 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         if jid in reconciled:
             state, _ = reconciled[jid]
             jobs_for_snapshot.append(lsf_client.to_snapshot_row(state, agent_action="monitoring"))
+        elif jid in settled_states:
+            # Registered, lsf-terminal AND already analyzed: deliberately
+            # not re-queried this cycle (see
+            # _job_still_owes_reconciliation()), but it is still a real job
+            # of this regression, so render it from its persisted state.
+            # Falling through to the else-branch below would mislabel it
+            # UNREGISTERED.
+            jobs_for_snapshot.append(
+                lsf_client.to_snapshot_row(settled_states[jid], agent_action="monitoring"))
         else:
             # An unregistered row's status goes through the SAME
             # map_bjobs_stat_to_lsf_status() normalization a registered row
@@ -209,6 +294,15 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         if jid in seen_ids or jid not in reconciled:
             continue
         state, _ = reconciled[jid]
+        jobs_for_snapshot.append(lsf_client.to_snapshot_row(state, agent_action="monitoring"))
+
+    # Settled registered jobs (terminal + already analyzed) that this poll
+    # did not list either: rendered from their persisted JobState, never
+    # re-queried. Dropping them from the reconcile set must not also drop
+    # them out of the regression's own snapshot.
+    for jid, state in sorted(settled_states.items()):
+        if jid in seen_ids:
+            continue
         jobs_for_snapshot.append(lsf_client.to_snapshot_row(state, agent_action="monitoring"))
 
     snapshot = render_snapshot(jobs_for_snapshot)

@@ -510,10 +510,10 @@ def main():
         print(json.dumps(result, ensure_ascii=False))
     elif args.cmd == "lsf-reconcile":
         from . import lsf_client
+        from . import regression_reporter
         job_ids = args.job_id
         if args.all or not job_ids:
-            jobs_dir = h.root.joinpath(*lsf_client.JOBS_DIR_NAME)
-            job_ids = sorted(int(p.stem) for p in jobs_dir.glob("*.json") if p.stem.isdigit()) if jobs_dir.exists() else []
+            job_ids = regression_reporter.registered_job_ids_on_disk(h.root)
         if not job_ids:
             print(json.dumps({"reconciled": [], "message": "no known job ids to reconcile"}, ensure_ascii=False))
             raise SystemExit(0)
@@ -531,9 +531,8 @@ def main():
         print(json.dumps(out, ensure_ascii=False, indent=2))
         raise SystemExit(1 if any_critical else 0)
     elif args.cmd == "lsf-auto-kill-scan":
-        from . import lsf_client
-        jobs_dir = h.root.joinpath(*lsf_client.JOBS_DIR_NAME)
-        job_ids = sorted(int(p.stem) for p in jobs_dir.glob("*.json") if p.stem.isdigit()) if jobs_dir.exists() else []
+        from . import lsf_client, regression_reporter
+        job_ids = regression_reporter.registered_job_ids_on_disk(h.root)
         policy = lsf_client.load_early_fail_policy(h.root)
         out = []
         any_kill_failed = False
