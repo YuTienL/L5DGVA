@@ -446,6 +446,22 @@ DUT 不支援的 requirement 要走 waiver（需 design_evidence 佐證），不
 ```
 （沒有任何 waiver 時，"waivers": [] 即可視為通過 —— 只在真的引用 waiver 卻缺欄位時才會 FAIL。）
 
+Waiver Revision Freshness（waiver 核准當下所依據的 spec_revision/rtl_hash，跟現在的版本不一樣時，
+要先確認這個 waiver 有沒有跟著重新驗證過，不能「核准過一次就永久沿用」）：
+
+```dv-harness-evidence:waiver_revision_freshness_gate
+{"current": {"spec_revision": "...", "rtl_hash": "..."},
+ "waivers": [{"waiver_id": "...", "spec_revision": "...", "rtl_hash": "...",
+   "revalidated": true, "revalidation_evidence_hash": "...", "expired": false}]}
+```
+
+（這個 gate 讀的是 --state 檔案本身的完整內容——不像 waiver_revalidation_gate 那樣要包一層
+sub-key，這裡整個 block 就是檔案內容本身。"current" 是目前真正的 spec_revision/rtl_hash；
+"waivers" 陣列裡每一筆的 spec_revision 或 rtl_hash，只要有一個跟 "current" 對不上，就代表這個
+waiver 是在舊版本核准的，此時必須同時填 revalidated=true 且 revalidation_evidence_hash 非空，
+否則會 FAIL STALE_WAIVER_AFTER_REVISION_CHANGE；expired 為 true 的 waiver，不論版本是否吻合都
+會直接 FAIL EXPIRED_WAIVER。沒有任何 waiver 時 "waivers": [] 一樣視為通過。）
+
 Waiver Revalidation（每次改版都要重新確認 waiver 還適不適用，不是寫一次永久有效）：
 
 ```dv-harness-evidence:waiver_revalidation_gate
