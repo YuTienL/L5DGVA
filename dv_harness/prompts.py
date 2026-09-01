@@ -168,8 +168,16 @@ architecture evidence database 至少要涵蓋 TOP/HIERARCHY/INTERFACE/CLOCK_RES
  "auto_discovered_fields": ["TOP","HIERARCHY","INTERFACE","CLOCK_RESET","PARAM_DEFINE","PORT_CHANNEL"],
  "asked_user_before_rtl_analysis": false,
  "unknown_items": [], "architecture_evidence_db_generated": true,
+ "architectural_claims": [
+   {"kind": "MODULE", "name": "usb_top", "rtl_citation": "rtl/usb_top.v:12"},
+   {"kind": "PORT", "name": "phy_clk", "rtl_citation": "rtl/usb_top.v:18-20"}
+ ],
  "lock_requested": false, "calibration_complete": false}
 ```
+（`architectural_claims` 為必填、不得為空：每一個 module/port/interface/register_block 主張都要有
+`rtl_citation`（"path/to/file:start[-end]"，相對於 project root），gate 會實際比對該檔案該行附近
+是否真的出現這個名稱 -- 只是輕量 grep spot-check，不是完整 RTL parse，但杜絕「編出一個看似合理但
+RTL 裡查無此名」的假造。）
 """,
 Stage.ARCH_CALIBRATION.value: """
 Architecture Calibration → DUT Architecture LOCK：把 Architecture Model v0.x 與後續發現的新證據
