@@ -245,6 +245,79 @@ def test_route_and_store_actually_uses_the_named_tier_classes_not_just_the_base_
         shutil.rmtree(tmp)
 
 
+# --- route_and_store() auto-loads cfg when omitted (2026-09-02) ----------
+# Real bug found live: cfg used to default to None, and a None cfg made
+# _maybe_share() silently return None (no push attempted, no error) --
+# indistinguishable from "nothing to share". Two one-off Engineering
+# Memory persistence scripts this session called route_and_store(root,
+# record) without cfg, wrote locally, and silently never reached the
+# shared Knowledge Center -- caught only by manually diffing the remote
+# store's file listing against local memory IDs.
+
+def test_route_and_store_auto_loads_cfg_and_shares_when_caller_omits_it():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        cfg_dir = tmp / ".dv-harness"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "config.json").write_text(json.dumps({
+            "knowledge_center": {
+                "enabled": True, "sync_on_promote": True,
+                "remote_root": "/fake/kc", "vchost": "vchost-b", "vchop": "host-b",
+            }
+        }), encoding="utf-8")
+
+        with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as add_mock:
+            add_mock.return_value = {"ok": True, "memory_id": "MEM-SHARED-1"}
+            result = route_and_store(tmp, {
+                "kind": "verified_fix", "verified": True, "title": "t",
+                "root_cause": "x", "fix": "y",
+            })
+        assert result["destination"] == "ENGINEERING_MEMORY"
+        add_mock.assert_called_once()
+        assert result.get("shared_push") == {"ok": True, "memory_id": "MEM-SHARED-1"}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_route_and_store_stays_local_only_when_knowledge_center_not_configured():
+    # A project with no .dv-harness/config.json at all (load_config's
+    # default-create path) must still behave exactly as before this fix --
+    # local-only, no sharing attempted, since DEFAULT_CONFIG's
+    # knowledge_center.enabled is False.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as add_mock:
+            result = route_and_store(tmp, {
+                "kind": "verified_fix", "verified": True, "title": "t",
+                "root_cause": "x", "fix": "y",
+            })
+        assert result["destination"] == "ENGINEERING_MEMORY"
+        add_mock.assert_not_called()
+        assert "shared_push" not in result
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_route_and_store_explicit_empty_cfg_still_opts_out_of_sharing():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        cfg_dir = tmp / ".dv-harness"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "config.json").write_text(json.dumps({
+            "knowledge_center": {"enabled": True, "sync_on_promote": True},
+        }), encoding="utf-8")
+
+        with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as add_mock:
+            result = route_and_store(tmp, {
+                "kind": "verified_fix", "verified": True, "title": "t",
+                "root_cause": "x", "fix": "y",
+            }, cfg={})
+        assert result["destination"] == "ENGINEERING_MEMORY"
+        add_mock.assert_not_called()
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_lsf_reconcile_writes_a_job_tier_memory_record():
     # Task 9 (poster-gap-closing round 2): the real lsf-reconcile path
     # (dv_harness.lsf_client.reconcile_batch, the same function cli.py's

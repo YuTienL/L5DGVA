@@ -59,9 +59,29 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
     `cfg` (optional, the harness's loaded .dv-harness/config.json) enables an
     ADDITIONAL best-effort push to the shared knowledge center when the
     local write lands on a shareable destination -- see
-    _SHAREABLE_DESTINATIONS. Omitting `cfg` (or leaving knowledge_center
-    disabled in it) makes this function behave exactly as before this
-    feature: local-only, no network activity, no behavior change."""
+    _SHAREABLE_DESTINATIONS. Leaving knowledge_center disabled in it makes
+    this function behave exactly as before this feature: local-only, no
+    network activity, no behavior change.
+
+    REAL BUG FIX (2026-09-02, found live): `cfg` used to default to None,
+    and a None cfg made `_maybe_share()` silently return None (no push
+    attempted) with no error, no warning, nothing -- indistinguishable
+    from "shared push attempted and vacuously nothing to share". Two
+    one-off Engineering Memory persistence scripts this session called
+    `route_and_store(root, record)` without cfg, wrote successfully to the
+    LOCAL store, and silently never reached the shared Knowledge Center --
+    caught only by manually diffing the remote store's file listing
+    against local memory IDs. Every real engine.py call site already
+    passed `cfg=self.cfg` explicitly and was unaffected, but nothing
+    stopped a future one-off script (or a future engine call site) from
+    making the exact same mistake with the exact same silent-no-op result.
+    Auto-load the project's real config when the caller omits `cfg`, so
+    "did I remember to pass cfg" is no longer a silent failure mode --
+    a caller that explicitly wants local-only behavior can still pass
+    `cfg={}`."""
+    if cfg is None:
+        from .config import load_config
+        cfg = load_config(root)
     destination = route_memory(record)
     if destination == "REJECT":
         raise ValueError("route_memory: record rejected (credential/secret-like kind), not persisted")
