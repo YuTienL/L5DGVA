@@ -27,3 +27,34 @@ class Blackboard:
  def findings_counts(self):
   items=self.read_findings().get('items',{});total=len(items);closed=sum(1 for v in items.values() if v.get('status')=='closed')
   return {'total':total,'open':total-closed,'closed':closed}
+
+ # --- Debug-loop round history (2026-09-01, ai-debug-closed-loop-counter-
+ # implementation task): the "debug_loop_history" topic's value is the ONE
+ # real, persisted, cross-cycle record of every full Fix->Push->Build->
+ # Verify pass a failure has gone through -- distinct from
+ # state.stages[stage]['attempts'] (models.py/engine.py), which is
+ # node-scoped RETRY bookkeeping for ONE graph node, capped by
+ # policy.max_stage_retries, and reset the moment current_stage moves on.
+ # It cannot answer "how many full passes has this failure gone through
+ # across the whole run" because a single logical debug-loop round can span
+ # several different graph nodes (e.g. BUILD -> FAILURE_RECOVERY ->
+ # CHANGE_IMPACT -> ... -> BUILD again). engine.py's DVHarness.
+ # _record_debug_loop_round() appends one entry here every time loop()/
+ # _advance_with_fanout() actually call policy.graph_next(stage,
+ # Status.FAIL.value, ...) to route a stage whose retries are exhausted
+ # onto its graph FAIL edge -- each entry records
+ # {round_number, timestamp, failing_stage, target_fail_edge,
+ # attempt_number, node_route, health_monitor_check}; health_monitor_check
+ # is the real subprocess-checked `dv-harness lsf-watch-status` result for a
+ # remote/LSF-route stage (engine.py's REMOTE_LSF_ROUTES), or None when the
+ # failing stage's route never submits a build/regression job.
+ def read_debug_loop_history(self):
+  payload=self.read('debug_loop_history');val=payload.get('value') if isinstance(payload,dict) else None
+  if not isinstance(val,dict) or not isinstance(val.get('entries'),list):val={'entries':[]}
+  return val
+ def append_debug_loop_round(self,entry,source=''):
+  registry=self.read_debug_loop_history();entry=dict(entry);entry['round_number']=len(registry['entries'])+1
+  registry['entries'].append(entry);self.write('debug_loop_history',registry,source=source);return registry
+ def debug_loop_round_count(self,failing_stage=None):
+  entries=self.read_debug_loop_history().get('entries',[])
+  return len(entries) if failing_stage is None else sum(1 for e in entries if e.get('failing_stage')==failing_stage)

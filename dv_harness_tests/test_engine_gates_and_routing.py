@@ -4818,3 +4818,215 @@ def test_remote_execution_provenance_gate_blocks_verify_stage_via_evaluate_stage
     verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
     assert verdict == "GATE_FAIL"
     assert any("remote_execution_provenance_gate" in r and "TRANSCRIPT_FILE_NOT_FOUND" in r for r in reasons)
+
+
+# --- Cross-cycle debug-loop counter + Health Monitor dispatch (2026-09-01,
+# ai-debug-closed-loop-counter-implementation task) --------------------------
+# Blackboard.append_debug_loop_round()/read_debug_loop_history()/
+# debug_loop_round_count() are the real, persisted, cross-cycle record this
+# task adds (see blackboard.py's own docstring); DVHarness.
+# _record_debug_loop_round()/_health_monitor_check() are engine.py's real,
+# wired call sites into it -- exercised end to end below via loop() itself,
+# not just as standalone units.
+
+def test_blackboard_debug_loop_history_round_trip_and_cross_cycle_query():
+    from dv_harness.blackboard import Blackboard
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        bb = Blackboard(tmp)
+        assert bb.read_debug_loop_history() == {"entries": []}
+        assert bb.debug_loop_round_count() == 0
+
+        for i in range(2):
+            bb.append_debug_loop_round({
+                "timestamp": f"t{i}", "failing_stage": "VERIFY",
+                "target_fail_edge": "FAILURE_RECOVERY", "attempt_number": 1,
+                "node_route": "build-route", "health_monitor_check": None,
+            }, source="VERIFY")
+        bb.append_debug_loop_round({
+            "timestamp": "t3", "failing_stage": "REGRESSION_MONITOR",
+            "target_fail_edge": "INFRA_RECOVERY", "attempt_number": 1,
+            "node_route": "regression-route", "health_monitor_check": None,
+        }, source="REGRESSION_MONITOR")
+
+        history = bb.read_debug_loop_history()
+        assert [e["round_number"] for e in history["entries"]] == [1, 2, 3]
+        # This is the real query an "how many full fix/push/rebuild passes
+        # has this failure gone through" question is answered from --
+        # uncapped and whole-run, unlike a per-node ss['attempts'] counter.
+        assert bb.debug_loop_round_count() == 3
+        assert bb.debug_loop_round_count("VERIFY") == 2
+        assert bb.debug_loop_round_count("REGRESSION_MONITOR") == 1
+        assert bb.debug_loop_round_count("NEVER_FAILED_STAGE") == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_remote_lsf_routes_ruling_matches_documented_build_and_regression_nodes():
+    # Regression-locks the RULING made in engine.py's module-level comment
+    # above REMOTE_LSF_ROUTES: real graph node.route values (main_graph.json)
+    # for every node that actually submits/monitors a VCS build or LSF
+    # regression job, no more and no less.
+    import dv_harness.engine as engine_mod
+    tmp, h = _fresh_harness()
+    try:
+        remote_ids = {n.id for n in h.graph.nodes.values() if n.route in engine_mod.REMOTE_LSF_ROUTES}
+        assert remote_ids == {
+            "DE_BASELINE_REPRODUCTION", "SERVER_SYNC", "BUILD", "BUILD_DEBUG", "VERIFY",
+            "REGRESSION_SELECT", "REGRESSION", "REGRESSION_MONITOR", "COVERAGE_CLOSURE", "INFRA_RECOVERY",
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_record_debug_loop_round_only_health_checks_remote_lsf_route_stages():
+    # FAILURE_RECOVERY (debug-route) never submits a build/regression job
+    # itself -- health_monitor_check must stay None, never a fabricated
+    # check. VERIFY (build-route) really does -- a real subprocess call to
+    # `dv-harness lsf-watch-status` (equivalent to the documented protocol
+    # command) must run and its real result must land in the entry.
+    tmp, h = _fresh_harness()
+    try:
+        registry = h._record_debug_loop_round("FAILURE_RECOVERY", None)
+        entry = registry["entries"][-1]
+        assert entry["round_number"] == 1
+        assert entry["failing_stage"] == "FAILURE_RECOVERY"
+        assert entry["target_fail_edge"] is None
+        assert entry["node_route"] == "debug-route"
+        assert entry["health_monitor_check"] is None
+
+        registry2 = h._record_debug_loop_round("VERIFY", "FAILURE_RECOVERY")
+        entry2 = registry2["entries"][-1]
+        assert entry2["round_number"] == 2
+        assert entry2["node_route"] == "build-route"
+        assert entry2["target_fail_edge"] == "FAILURE_RECOVERY"
+        hc = entry2["health_monitor_check"]
+        assert hc is not None, "VERIFY is a build-route stage -- a real Health Monitor check must have run"
+        assert hc["ok"] is True, hc
+        assert hc["result"] == {"running": False, "pid": None}
+        assert "lsf-watch-status" in hc["command"]
+        # The Telnet/SSH remote hop and watcher START are a deliberate,
+        # policy-mandated human/agent step per CLAUDE.md -- this must never
+        # be what the engine's own FAIL-edge health check invokes.
+        assert "lsf-watch-start" not in hc["command"]
+
+        assert h.blackboard.debug_loop_round_count() == 2
+        assert h.blackboard.debug_loop_round_count("VERIFY") == 1
+        assert h.blackboard.debug_loop_round_count("FAILURE_RECOVERY") == 1
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_loop_records_debug_loop_history_across_a_full_fail_edge_pass():
+    # Full end-to-end wiring test: VERIFY (build-route) fails via
+    # ADAPTER_FAIL, retries exhausted immediately (max_stage_retries=0),
+    # loop() routes via the graph's real FAIL edge (VERIFY ->
+    # FAILURE_RECOVERY per main_graph.json) -- which itself then also fails
+    # and exhausts (FAILURE_RECOVERY has no FAIL edge in main_graph.json,
+    # only PASS/BLOCKED, so loop() stops there). Two real, persisted
+    # debug_loop_history rounds must result, only the first (a build-route
+    # stage) carrying a real Health Monitor check.
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["policy"]["max_stage_retries"] = 0
+        h.set_stage("VERIFY")
+
+        class _AlwaysAdapterFail:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=False, text="", raw={"stderr": "boom"}, session_id=None)
+
+        h.adapter = _AlwaysAdapterFail()
+        h.loop("goal")
+
+        entries = h.blackboard.read_debug_loop_history()["entries"]
+        assert [e["failing_stage"] for e in entries] == ["VERIFY", "FAILURE_RECOVERY"]
+
+        assert entries[0]["target_fail_edge"] == "FAILURE_RECOVERY"
+        assert entries[0]["node_route"] == "build-route"
+        assert entries[0]["health_monitor_check"]["ok"] is True
+        assert entries[0]["health_monitor_check"]["result"] == {"running": False, "pid": None}
+
+        assert entries[1]["target_fail_edge"] is None
+        assert entries[1]["node_route"] == "debug-route"
+        assert entries[1]["health_monitor_check"] is None
+
+        assert h.blackboard.debug_loop_round_count() == 2
+        assert h.state.current_stage == "FAILURE_RECOVERY"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stage_profiler_read_retries_transient_windows_permission_error():
+    # PRE-EXISTING BUG fixed while testing this task (found via a real full
+    # `dv_harness_tests/` suite run, not manufactured): StageExecutionProfiler.
+    # all_stages()/_load() had no equivalent of storage.py's _atomic_replace()
+    # retry-on-PermissionError -- a real ThreadPoolExecutor fan-out run hit a
+    # bare PermissionError racing a concurrent writer's atomic os.replace().
+    # stage_profile._read_json_retrying() now retries transient PermissionErrors
+    # briefly before giving up.
+    from dv_harness.stage_profile import StageExecutionProfiler
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        profiler = StageExecutionProfiler(tmp)
+        rec = profiler.begin_stage("S1", "S1")
+
+        real_read_text = Path.read_text
+        calls = {"n": 0}
+
+        def flaky_read_text(self, *a, **k):
+            if self.name.startswith("STAGE-") and calls["n"] < 2:
+                calls["n"] += 1
+                raise PermissionError(13, "simulated concurrent-replace race")
+            return real_read_text(self, *a, **k)
+
+        with patch("pathlib.Path.read_text", flaky_read_text):
+            stages = profiler.all_stages()
+        assert len(stages) == 1
+        assert stages[0]["profile_id"] == rec["profile_id"]
+        assert calls["n"] == 2  # actually retried past 2 real failures, not a lucky first try
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stage_profiler_read_eventually_raises_on_persistent_permission_error():
+    # A genuinely, persistently locked file (not a transient race) must
+    # still surface as a real PermissionError after retries are exhausted --
+    # never silently swallowed or fabricated as an empty result.
+    from dv_harness.stage_profile import StageExecutionProfiler
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        profiler = StageExecutionProfiler(tmp)
+        profiler.begin_stage("S1", "S1")
+
+        def always_denied(self, *a, **k):
+            if self.name.startswith("STAGE-"):
+                raise PermissionError(13, "persistently locked")
+            return Path.read_text(self, *a, **k)
+
+        with patch("pathlib.Path.read_text", always_denied):
+            try:
+                profiler.all_stages()
+                assert False, "persistent PermissionError must still be raised, not swallowed"
+            except PermissionError:
+                pass
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_health_monitor_check_records_real_failure_when_subprocess_errors():
+    # A subprocess failure (bad python executable) must be recorded as real
+    # negative evidence, never fabricated as a pass, and must never raise
+    # out of _health_monitor_check() itself (it is a best-effort side
+    # effect that must never block FAIL-edge routing).
+    tmp, h = _fresh_harness()
+    try:
+        node = h.graph.nodes["VERIFY"]
+        with patch("dv_harness.engine.sys") as fake_sys:
+            fake_sys.executable = str(tmp / "no_such_python_binary_xyz.exe")
+            result = h._health_monitor_check(node)
+        assert result is not None
+        assert result["ok"] is False
+        assert "error" in result
+    finally:
+        shutil.rmtree(tmp)

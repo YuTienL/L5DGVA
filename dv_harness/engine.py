@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, subprocess, time
+import json, os, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +61,64 @@ from .environment_mode_router import resolve_environment_mode, read_registered_s
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+# --- Cross-cycle debug-loop counter / Health Monitor dispatch (2026-09-01,
+# ai-debug-closed-loop-counter-implementation task) -------------------------
+# Architecture audit finding this closes: state.stages[stage]['attempts']
+# (ss['attempts'] in run_stage()/loop() below, capped by
+# policy.max_stage_retries) is real, but it is node-scoped RETRY bookkeeping
+# for ONE graph node's own attempts, not a purpose-built counter for "how
+# many full Fix->Push->Build->Verify passes has this failure gone through" --
+# a single logical debug-loop round can span several different graph nodes
+# (e.g. BUILD fails -> FAILURE_RECOVERY -> CHANGE_IMPACT -> ... -> BUILD
+# again), and ss['attempts'] resets to 0 the moment current_stage moves on,
+# so it cannot answer a whole-run question. DVHarness._record_debug_loop_round()
+# below appends one real, persisted entry to the Blackboard "debug_loop_history"
+# topic (see blackboard.py's own docstring for the entry shape and the two
+# real call sites) every time loop()/_advance_with_fanout() actually calls
+# policy.graph_next(stage, Status.FAIL.value, ...) to route a stage whose
+# retries are exhausted onto its graph FAIL edge -- a real query
+# (Blackboard.debug_loop_round_count()) can then answer that whole-run
+# question directly from persisted history, not by re-deriving it from a
+# per-node counter that was never designed to answer it.
+#
+# Second finding this closes: CLAUDE.md's own "Background Job/Log Monitor
+# Auto-Start" section is explicit that "there is no Python code path that
+# fires automatically" for Health Monitor dispatch -- starting the watcher
+# is a protocol instruction the agent must remember to follow, not an
+# engine event. DVHarness._health_monitor_check() below makes the STATUS
+# CHECK half of that real and engine-triggered: on a FAIL-edge route for a
+# stage whose graph node.route implies remote/LSF execution was involved,
+# the engine itself invokes `dv-harness lsf-watch-status` (a real
+# subprocess call, same convention as gates.py's run_gate()) and records
+# the real result into that same debug_loop_history entry. It deliberately
+# never starts a watcher and never touches the SSH/Telnet remote hop or
+# tools/remote/remote_relay.py's invocation restrictions -- both remain the
+# deliberate, policy-mandated human/agent steps CLAUDE.md documents; see
+# _health_monitor_check()'s own docstring for the full ruling.
+#
+# RULING: node.route (graph.py's Node dataclass -- the only real categorical
+# field main_graph.json's nodes carry) is the evidence used to decide
+# "remote/LSF execution was involved", not a guess: "build-route" nodes
+# (DE_BASELINE_REPRODUCTION, SERVER_SYNC, BUILD, BUILD_DEBUG, VERIFY) and
+# "regression-route" nodes (REGRESSION_SELECT, REGRESSION,
+# REGRESSION_MONITOR, COVERAGE_CLOSURE, INFRA_RECOVERY) are the ones whose
+# real `skills` (vcs-build/devops-pipeline/verification-signoff) and
+# templates (dv_harness/uvm_generator/templates/sim_scripts/lsf_*.sh)
+# actually submit/poll a VCS build or LSF regression job -- confirmed by
+# reading main_graph.json itself. analysis-route/implementation-route/
+# review-route/debug-route/lead-route nodes never submit one themselves
+# (e.g. WAVE_ANALYSIS/FAILURE_RECOVERY read evidence a remote run already
+# produced; they do not submit one).
+REMOTE_LSF_ROUTES = {"build-route", "regression-route"}
+
+# The directory containing the dv_harness package itself (parent of this
+# file's own parent), used only to extend PYTHONPATH for the
+# `-m dv_harness.cli` subprocess call in _health_monitor_check() below --
+# self.root (the DV project being verified) is an arbitrary, unrelated
+# directory that may not have dv_harness importable from it at all.
+_ENGINE_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
 
 # --- Blackboard write mapping: evidence field -> blackboard topic ----------
@@ -271,6 +329,94 @@ class DVHarness:
             return [line.strip() for line in out.splitlines() if line.strip()]
         except Exception:
             return []
+
+    def _health_monitor_check(self, node) -> Optional[Dict[str, Any]]:
+        """Real, engine-triggered Health Monitor status check (see the
+        module-level ruling comment above REMOTE_LSF_ROUTES for the full
+        gap this closes). Called only for a stage whose node.route is in
+        REMOTE_LSF_ROUTES -- returns None otherwise (never fabricates a
+        check that didn't apply).
+
+        RULING: this only CHECKS status (`dv-harness lsf-watch-status`,
+        i.e. regression_reporter.watcher_status() under the hood) -- it
+        never starts a watcher (`lsf-watch-start`) and never touches the
+        SSH/Telnet remote hop or tools/remote/remote_relay.py's invocation
+        restrictions. Both remain the deliberate, policy-mandated human/
+        agent steps CLAUDE.md's SSH/Remote Transport Connection Intake gate
+        and Background Job/Log Monitor Auto-Start section document;
+        automating either from inside FAIL-edge routing would silently
+        bypass that gate. A missing/unreachable watcher, or any subprocess
+        failure, is recorded here as real (negative) evidence -- never
+        fabricated as a pass -- and never blocks the FAIL-edge routing
+        decision itself (best-effort, same as every other side effect in
+        this file, e.g. _promote_experience_knowledge).
+
+        Real subprocess invocation, the same convention gates.py's
+        run_gate() already uses ([sys.executable, ...], capture_output=True,
+        text=True, a bounded timeout). Uses `-m dv_harness.cli` (matching
+        the existing `-m dv_harness.regression_reporter` convention
+        regression_reporter.ensure_watcher_running() already uses, and the
+        same invocation shape this project's own CLI subprocess tests use)
+        rather than the `dv-harness` console-script name, so it works
+        whether or not this package is pip-installed with its entry_points
+        wired up. cwd is the real project root (self.root, matching
+        run_gate()'s own cwd=str(root)); PYTHONPATH is EXTENDED (not
+        replaced) with _ENGINE_PACKAGE_ROOT so `-m dv_harness.cli` resolves
+        regardless of self.root's location or install state.
+        """
+        argv = [sys.executable, "-m", "dv_harness.cli",
+                "--project-root", str(self.root), "lsf-watch-status"]
+        env = dict(os.environ)
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(_ENGINE_PACKAGE_ROOT) + (os.pathsep + existing if existing else "")
+        try:
+            proc = subprocess.run(
+                argv, cwd=str(self.root), capture_output=True, text=True,
+                timeout=30, env=env,
+            )
+        except Exception as exc:  # never let a health-check failure block FAIL routing
+            return {"command": argv, "ok": False, "error": str(exc)}
+        try:
+            parsed = json.loads((proc.stdout or "").strip() or "{}")
+        except Exception:
+            parsed = {"raw_stdout": (proc.stdout or "")[-500:]}
+        return {
+            "command": argv,
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "result": parsed,
+            "stderr": (proc.stderr or "")[-500:] if proc.returncode != 0 else "",
+        }
+
+    def _record_debug_loop_round(self, failing_stage: str, target: Optional[str]) -> Dict[str, Any]:
+        """Appends one real "debug_loop_history" entry (Blackboard.
+        append_debug_loop_round()) every time this engine actually calls
+        policy.graph_next(failing_stage, Status.FAIL.value, ...) to route a
+        stage whose retries are exhausted onto its graph FAIL edge -- see
+        the module-level ruling comment above REMOTE_LSF_ROUTES and
+        blackboard.py's own docstring for why this is a genuinely
+        different, additional signal from state.stages[stage]['attempts'].
+
+        Called from exactly the two real call sites in this file that
+        compute graph_next(..., Status.FAIL.value, ...): loop()'s
+        retry-exhaustion branch, and _advance_with_fanout()'s
+        parallel-branch-failure branch. Folds in the real Health Monitor
+        check (_health_monitor_check() above) for a remote/LSF-route stage
+        -- None for a stage whose route never submits a build/regression
+        job, never a fabricated placeholder."""
+        node = self.graph.nodes.get(failing_stage) if self.graph is not None else None
+        health_check = (self._health_monitor_check(node)
+                         if node is not None and node.route in REMOTE_LSF_ROUTES else None)
+        ss = self.state.stages.get(failing_stage, {})
+        entry = {
+            "timestamp": now(),
+            "failing_stage": failing_stage,
+            "target_fail_edge": target,
+            "attempt_number": ss.get("attempts", 0),
+            "node_route": node.route if node is not None else None,
+            "health_monitor_check": health_check,
+        }
+        return self.blackboard.append_debug_loop_round(entry, source=failing_stage)
 
     def _project_blackboard_value(self) -> Dict[str, Any]:
         """Reads the real "project" Blackboard topic (written by INTAKE's
@@ -1316,6 +1462,7 @@ class DVHarness:
                 self.store.save(self.state)
                 return b
             n = graph_next(b, Status.FAIL.value, self.root)
+            self._record_debug_loop_round(b, n)
             if n and n != b:
                 self.state.current_stage = n
             else:
@@ -1459,6 +1606,16 @@ class DVHarness:
                               "status": ss["status"], "blocking_reason": ss.get("blocking_reason", "")},
                 )
                 n = graph_next(stage, Status.FAIL.value, self.root)
+
+                # Cross-cycle debug-loop-round counter + Health Monitor
+                # dispatch (2026-09-01, ai-debug-closed-loop-counter-
+                # implementation task): recorded here, BEFORE the react
+                # reroute hint below can override `n` -- target_fail_edge
+                # reflects the graph's own actual FAIL edge target (Graph
+                # remains the workflow authority), not a content-driven
+                # override. See _record_debug_loop_round()'s own docstring.
+                self._record_debug_loop_round(stage, n)
+
                 # Content-driven reroute hint (2026-08-29, inner ReAct loop):
                 # ss["react_reroute_target"] is set only by run_stage()'s
                 # InnerReactLoop wiring above, and only when its chosen

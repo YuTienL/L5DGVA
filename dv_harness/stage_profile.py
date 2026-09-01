@@ -4,6 +4,37 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from .storage import _atomic_replace
 
+
+def _read_json_retrying(path: Path):
+    """json.loads(path.read_text()), retried briefly on PermissionError --
+    the READ-side counterpart of storage.py's _atomic_replace() retry (same
+    Windows os.replace()/MoveFileEx race documented in that function's own
+    docstring: a concurrent writer's atomic rename can transiently deny a
+    reader that opens the destination file at the exact instant of
+    replacement -- _atomic_replace() already retries this on the WRITE
+    side, but nothing retried it on the READ side).
+
+    PRE-EXISTING BUG found for real (2026-09-01, ai-debug-closed-loop-
+    counter-implementation task, full-suite regression run): a
+    ThreadPoolExecutor-driven parallel_group fan-out (engine.py's
+    _advance_with_fanout()) intermittently hit a bare PermissionError here
+    -- all_stages()'s glob-read racing a concurrent branch's own
+    end_stage()/_update_workflow() write -- once in 1553 real tests, never
+    reproduced across 5 immediate isolated re-runs of the same test,
+    consistent with a narrow OS-level timing window rather than a logic
+    bug. Same retry shape as _atomic_replace() (10 attempts, 0.02*(attempt+1)
+    backoff): POSIX has no such window (a no-op there); a genuinely-locked
+    file (e.g. a stale antivirus scan) still eventually raises after the
+    last attempt."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(10):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError as e:
+            last_exc = e
+            time.sleep(0.02 * (attempt + 1))
+    raise last_exc
+
 def extract_provider_usage(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Pulls token usage out of an adapter's raw response. The CLI adapter
     nests it at raw['response']['usage'] (from `claude -p --output-format
@@ -115,9 +146,9 @@ class StageExecutionProfiler:
                 os.unlink(tmp)
 
     def _save(self,rec): self._write_json_atomic(self._path(rec["profile_id"]), rec)
-    def _load(self,pid): return json.loads(self._path(pid).read_text(encoding="utf-8"))
+    def _load(self,pid): return _read_json_retrying(self._path(pid))
     def all_stages(self):
-        recs = [json.loads(p.read_text(encoding="utf-8")) for p in self.stage_dir.glob("STAGE-*.json")]
+        recs = [_read_json_retrying(p) for p in self.stage_dir.glob("STAGE-*.json")]
         return sorted(recs, key=lambda r: r.get("start_time_epoch") or 0)
 
     def _update_workflow(self):
