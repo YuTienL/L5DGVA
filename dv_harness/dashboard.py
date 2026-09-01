@@ -148,6 +148,12 @@ computed below -- see <a href="#attributionCard">Attribution</a> for the recompu
 <code>failure_attribution</code> verdict (HYPOTHESIS) and <a href="#dvReviewCard">DV Review</a> for
 pending co-sign fields (REVIEW). No new logic here, just a labeled pointer to both.</div>
 <div id="hyprevtiles" class="tiles" style="margin-top:8px"></div>
+<div class="note" style="margin-top:10px">Qualified Conclusion (RE_AUDIT's real
+<code>qualified_conclusion</code> Blackboard topic -- composes the stage's gate verdict with an
+independently-recomputed confidence level, never the agent's own self-reported confidence field):
+an unqualified result is labeled <b>AI Opinion</b> -- a bare, not-yet-qualified conclusion to
+investigate further, not a verified finding.</div>
+<div id="qualtiles" class="tiles" style="margin-top:8px"></div>
 </div>
 <div class="card" id="attributionCard"><h3>Attribution</h3>
 <div class="note">Recomputed the same way the FAILURE_RECOVERY <code>failure_attribution</code> gate itself decides
@@ -826,6 +832,20 @@ async function load(){
    tile(s.dv_review_pending_count||0,'Pending Review (Co-sign)')
  ].join('');
 
+ // Qualified Conclusion: composes gates.py's per-stage gate verdict with
+ // inference.py's independently-recomputed confidence (see
+ // dv_harness/qualified_conclusion.py) -- is_qualified is already computed
+ // server-side, this only labels it. False is deliberately labeled "AI
+ // Opinion", never "FAIL"/"LOW" -- it's a legitimate, ordinary result, not
+ // an error.
+ let qc = s.qualified_conclusion;
+ document.getElementById('qualtiles').innerHTML = qc ? [
+   tile(qc.is_qualified ? 'Qualified Conclusion' : 'AI Opinion (not yet qualified)', 'Verdict'),
+   tile(qc.gate_verdict || '-', 'Gate Verdict'),
+   tile((qc.inference_confidence && qc.inference_confidence.level) || '-', 'Confidence'),
+   tile(qc.hypothesis || '-', 'Hypothesis'),
+ ].join('') : tile('-', 'No qualified conclusion yet (RE_AUDIT has not produced one)');
+
  // Protocols: real registered protocols + qualification_status, each tile a
  // real click target (selectProtocol()) that fills the Goal field POST
  // /api/start actually reads -- not a static reference-only div.
@@ -1058,6 +1078,22 @@ def _failure_attribution(root: Path):
         elif st in ("DUT_INTERNAL", "INTERFACE_OUT"):
             verdict = "DUT_BUG"
     return {"verdict": verdict, "first_bad_event": first}
+
+
+def _qualified_conclusion(root: Path):
+    """Reads the real "qualified_conclusion" Blackboard topic
+    (dv_harness/qualified_conclusion.py's QualifiedConclusion, written by
+    engine.py's _score_root_cause_confidence -- see that module's own
+    docstring) directly off disk, the same way _blackboard_topics() above
+    lists topic files, rather than re-deriving anything: the composition
+    (gate verdict + independently-recomputed confidence -> is_qualified)
+    already happened in the engine, this just surfaces the persisted
+    record. Returns None until RE_AUDIT has actually produced one (honest
+    "not yet available" rather than a fabricated placeholder)."""
+    payload = _read_json_file(root / ".dv-harness" / "blackboard" / "qualified_conclusion.json")
+    if not isinstance(payload, dict):
+        return None
+    return payload.get("value")
 
 
 def _execution_mode(root: Path):
@@ -1722,6 +1758,7 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 state["overall_progress_percent"] = _overall_progress(state)
                 state["coverage_credit_percent"] = _coverage_credit(project_root)
                 state["failure_attribution"] = _failure_attribution(project_root)
+                state["qualified_conclusion"] = _qualified_conclusion(project_root)
                 review = _dv_review_pending(project_root)
                 state["dv_review_pending_count"] = review["count"]
                 state["dv_review_pending_fields"] = review["fields"]

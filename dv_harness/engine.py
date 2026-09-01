@@ -13,6 +13,7 @@ from .gates import evaluate_stage_evidence, extract_evidence_blocks, STAGE_GATES
 from .react_loop import InnerReactLoop, evaluate_stage_evidence_with_detail
 from .memory_router import route_and_store
 from .inference import score_confidence, identify_gap, next_best_action, promote_if_high_confidence
+from .qualified_conclusion import build_qualified_conclusion
 from .knowledge_center import KnowledgeCenterClient
 from .adapters.cli import ClaudeCLIAdapter
 from .adapters.sdk import ClaudeCodeSDKAdapter
@@ -440,7 +441,8 @@ class DVHarness:
         "first_bad_event", "causal_chain", "supporting_evidence", "counter_evidence",
     ]
 
-    def _score_root_cause_confidence(self, stage: str, evidence_blocks: dict) -> None:
+    def _score_root_cause_confidence(self, stage: str, evidence_blocks: dict,
+                                      verdict: str = "PASS") -> None:
         """Wires dv_harness/inference.py's score_confidence/identify_gap/
         next_best_action/promote_if_high_confidence into the ONE real stage
         that produces a root-cause hypothesis with cited supporting/counter
@@ -450,6 +452,18 @@ class DVHarness:
         _promote_experience_knowledge/_persist_subsystem_registry_entry
         exactly) -- best-effort side effect, never downgrades an already-
         earned stage PASS.
+
+        `verdict` (qualified-conclusion-implementation task, 2026-09-01):
+        the SAME per-stage gate verdict string run_stage() already computed
+        via evaluate_stage_evidence_with_detail() before calling this method
+        -- defaults to "PASS" because that is the only verdict value the one
+        real call site below ever calls this with today (see the
+        `if verdict == "PASS":` guard around that call site), but is taken
+        as an explicit parameter rather than hardcoded so this method stays
+        correct if a future caller ever invokes it from a different verdict
+        context. Passed straight through to build_qualified_conclusion() --
+        see that function's own docstring for why GATE_FAIL must disqualify
+        a conclusion regardless of confidence.
 
         Per CLAUDE.md's 'Any current root cause must be revalidated with
         current evidence': the agent's own self-reported `confidence` field
@@ -561,6 +575,34 @@ class DVHarness:
             "agent_reported_confidence": block.get("confidence"),
             "gap": gap, "next_best_action": next_actions, "promotion": promotion,
         })
+
+        # Qualified Conclusion (qualified-conclusion-implementation task,
+        # 2026-09-01): composes the gate verdict this method was called with
+        # and the confidence_result just computed above -- both already-real
+        # facts -- into the one first-class QualifiedConclusion object this
+        # harness previously had no type for at all (see
+        # dv_harness/qualified_conclusion.py's module docstring). Persisted
+        # to its own "qualified_conclusion" Blackboard topic so
+        # dv_harness/dashboard.py can render it distinctly from the
+        # "root_cause_confidence" topic above (that topic is the raw
+        # confidence-scoring record; this one is the composed is_qualified
+        # verdict a consumer should actually gate trust on). Best-effort,
+        # same as every other side effect in this method -- a persistence
+        # failure must never downgrade an already-earned stage PASS.
+        try:
+            qc = build_qualified_conclusion(verdict, confidence_result, block)
+            self.blackboard.write("qualified_conclusion", qc.as_dict(), source=stage)
+            self.store.event({
+                "ts": now(), "stage": stage, "event": "QUALIFIED_CONCLUSION_BUILT",
+                "gate_verdict": qc.gate_verdict,
+                "inference_confidence": qc.inference_confidence,
+                "is_qualified": qc.is_qualified,
+            })
+        except (ValueError, TypeError) as exc:  # best-effort, mirrors the
+            # promotion try/except above -- a malformed input here must
+            # never break an already-earned stage PASS.
+            self.store.event({"ts": now(), "stage": stage, "event": "QUALIFIED_CONCLUSION_BUILD_FAILED",
+                               "error": str(exc)})
 
     def _append_coverage_history_sample(self, stage: str, evidence_blocks: dict) -> None:
         """Closed-loop wiring (Task 6, 2026-08-31 poster-gap-closing round 2):
@@ -913,7 +955,7 @@ class DVHarness:
                 if verdict == "PASS":
                     self._promote_experience_knowledge(stage, evidence_blocks)
                     self._persist_subsystem_registry_entry(stage, evidence_blocks)
-                    self._score_root_cause_confidence(stage, evidence_blocks)
+                    self._score_root_cause_confidence(stage, evidence_blocks, verdict)
                     self._append_coverage_history_sample(stage, evidence_blocks)
                     self._promote_project_topology_knowledge(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
