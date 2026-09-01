@@ -2275,6 +2275,36 @@ WAIVED（要有 support_status=UNSUPPORTED_BY_DUT + waiver.approved + waiver.evi
 且不能是空陣列——沒有任何 requirement id 或引用了 vPlan 裡不存在的 requirement，
 都會被列進 orphan_testcases 而 FAIL，這是 requirement→testcase 反向追溯的完整性
 檢查，跟上面 requirement_runtime_evidence_gate 的正向追溯是同一條追溯鏈的兩端。）
+
+本 stage 另外還有一個獨立的 hard gate，也必須附上 evidence block，缺了會讓整個 stage
+卡在 GATE_FAIL（找到真實案例：REQUIREMENT_CLOSURE 的分析內容本身完整正確，但沒附這個
+gate 的 evidence，導致同樣的 GATE_FAIL/MISSING_EVIDENCE 卡了多輪重試）。這個 gate 會把
+requirement → mechanism → testcase → coverage → result（→ RCA，僅在該 result FAIL 時）
+整條鏈串起來重新驗一次，確認每個 requirement 真的有完整、前後一致的追溯鏈，而不是只在
+上面幾個 gate 各自的片段裡看起來對得上：
+
+```dv-harness-evidence:end_to_end_trace_chain_gate
+{"requirements": [{"req_id": "..."}],
+ "mechanisms": [{"mechanism_id": "..."}],
+ "tests": [{"testcase_id": "..."}],
+ "coverage": [{"coverage_id": "..."}],
+ "results": [{"result_id": "...", "result": "PASS"}],
+ "rcas": [{"rca_id": "..."}],
+ "links": [{"req_id": "...", "mechanism_id": "...", "testcase_id": "...",
+   "coverage_id": "...", "result_id": "...", "rca_id": "..."}]}
+```
+
+（"requirements"/"mechanisms"/"tests"/"coverage"/"results" 這五個清單都不能是空的
+（缺任何一個會直接 FAIL TRACE_CHAIN_DOMAIN_EMPTY，"rcas" 例外，只有真的有 FAIL 結果時
+才需要非空）；"links" 裡每一筆都要用 req_id/mechanism_id/testcase_id/coverage_id/
+result_id 把上面五個清單裡「真實存在」的 id 串成一條完整鏈——任何一個 id 對不到清單裡的
+項目都會被判 BROKEN_TRACE_LINK 而 FAIL；當某一筆 link 對應的 result 的 "result" 是
+"FAIL" 時，這筆 link 的 "rca_id" 一定要填、而且要對到 "rcas" 清單裡真實存在的
+rca_id，沒有 RCA 會被判 FAILED_RESULT_WITHOUT_RCA；最後，"requirements" 裡每一個
+req_id 都必須至少被一筆 link 覆蓋到，任何一個 requirement 完全沒有出現在 links 裡都會
+被列進 REQUIREMENTS_WITHOUT_FULL_TRACE_CHAIN 而 FAIL——這跟上面 traceability_audit
+只檢查 testcase→requirement 這一段不同，這個 gate 檢查的是 requirement 到 result（甚至
+到 RCA）的整條鏈都要串得起來、沒有斷點。）
 """,
 Stage.PROMOTION_READINESS.value: """
 Promotion Readiness：確認所有 critical dimension 沒有 BLOCKED/UNKNOWN/FAIL/INCOMPLETE，
