@@ -43,17 +43,22 @@ would be necessary.
    see `USAGE_MULTI_USER_SAFETY.md`). Use your own local directory, e.g.
    `dv-harness --project-root D:\DV\<your-project> status`.
 3. **Start your own relay**, from your own terminal, with your own
-   account:
+   account — `VCUSER` must be **your own** real Linux login, never the
+   shared `svcacct` service account (see "The permission model" below for
+   why: `VCUSER` is a real login, and `svcacct` has no reason to have
+   access to your own home-directory tree):
    ```
    VCUSER=<your-account> VCPW=<your-password> VCHOST=vchost-b VCHOP=host-c \
-     VCWORKDIR=/home/svcacct/AI/Agent \
+     VCWORKDIR=/home/tmpacct/<your-account>/UVM/<your-project> \
      python tools/remote/remote_relay.py --start
    ```
    Every real SSH login is independent even under a shared `vchost`/`vchop`
    pair — starting your own relay does not contend with anyone else's (see
    `USAGE_MULTI_USER_SAFETY.md`'s "prefer one relay per user" guidance).
-   Pointing `VCWORKDIR` at the shared `/home/svcacct/AI/Agent` code tree is
-   fine (everyone reading the same code is safe).
+   `VCWORKDIR` may point at the shared `/home/svcacct/AI/Agent` code tree
+   instead if this relay is dedicated to reading/syncing the shared engine
+   (everyone reading that shared code is safe) — but for your own debug
+   work, point it at your own deployment path as shown above.
 4. **Point the Knowledge Center at the shared store** (one-time, per your
    local `.dv-harness/config.json`):
    ```
@@ -74,6 +79,53 @@ would be necessary.
 sharing one relay across multiple people's concurrent work instead of each
 starting their own; deploying your generated environment's output files
 into `/home/svcacct/AI/Agent` instead of your own `DVWORKDIR` path.
+
+## The permission model: `VCUSER` is a real Linux login, not a label
+
+`remote_relay.py` performs a **real** `telnet`+`ssh` login as `VCUSER`.
+Every command `remote_exec.py` sends afterward — including anything
+touching `DVWORKDIR` — executes on the real Linux server **as that same
+Unix account**, subject to normal Unix file permissions. There is no
+separate access-control layer the harness adds or can bypass; whatever
+`VCUSER` cannot read/write directly at a shell prompt, the relay cannot
+read/write either.
+
+This matters concretely: `/home/svcacct/AI/Agent` and `/home/svcacct/AI/DB`
+are reachable using the shared `svcacct` service account because they are
+*that account's own* directories (or made group/world-readable for the
+shared deployment). A DE's own generated environment
+(`DVWORKDIR=/home/tmpacct/<de-account>/UVM/<project>`) is a **different**
+account's home-directory tree — normal Unix defaults do **not** grant
+`svcacct` (or any other account) access to it. Concretely:
+
+- **Debugging your own environment**: start your relay with `VCUSER=` your
+  own account (not `svcacct`) — then `DVWORKDIR` pointing at your own
+  `/home/.../<you>/...` path just works, no permission issue, because
+  you're accessing your own files as yourself.
+- **Debugging *someone else's* environment** (e.g. a DE asks for help on a
+  failure in their own deployment): the relay must log in as an account
+  that actually has access to that path. Real options, in order of
+  preference:
+  1. The other DE grants read/write access to your account on their
+     environment's directory (POSIX group permissions or `setfacl`) — a
+     real sysadmin action on the Linux server, not something this harness
+     configures or should try to route around.
+  2. You obtain and use that DE's own credentials for this session's relay
+     (only if you are actually authorized to act as them — this still
+     goes through the same SSH/Remote Transport Connection Intake gate,
+     asking for that account's own credentials).
+  3. The DE copies/hands off the specific files you need into a location
+     your account can already reach (e.g. a shared scratch directory both
+     accounts can access).
+- **Never** try to work around a `Permission denied` by switching the
+  relay to a more-privileged shared account "just to make it work" — that
+  defeats the whole point of per-user accountability this harness's
+  multi-user model depends on (see `USAGE_MULTI_USER_SAFETY.md`).
+
+A `Permission denied` from any `remote_exec.py` command surfaces as
+ordinary command output (real shell stderr text, same as any other command
+failure) — there is no separate/hidden failure mode to worry about, just
+apply the model above to diagnose which account needs which access.
 
 ## Starting a relay
 

@@ -10,9 +10,16 @@
 
 Prerequisite: the DE has completed onboarding
 (`REMOTE_LOGIN_GUIDE.md`'s "Onboarding a new PC user" section) — their own
-`--project-root`, their own relay, `DVWORKDIR` pointing at their own
-generated environment's Linux-server deployment path (e.g.
-`/home/tmpacct/devuser/UVM/USB`).
+`--project-root`, their own relay started with **their own `VCUSER`**
+(never the shared `svcacct` service account — see REMOTE_LOGIN_GUIDE.md's
+"The permission model" section: the relay executes every command as a
+real Unix login, and `svcacct` has no standing access to a DE's own
+home-directory tree), `DVWORKDIR` pointing at their own generated
+environment's Linux-server deployment path (e.g.
+`/home/tmpacct/devuser/UVM/USB`). Debugging *someone else's* environment
+requires that other account's real permission grant or credentials — see
+REMOTE_LOGIN_GUIDE.md for the options; there is no way around real Unix
+file permissions.
 
 ## The loop, stage by stage
 
