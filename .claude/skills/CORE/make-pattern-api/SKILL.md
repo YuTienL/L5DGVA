@@ -20,11 +20,21 @@ UVM sim environment 的真實 Makefile
 `.claude/templates/Makefile.patterns.mk`（供專案自己的頂層 Makefile 手動
 `include`，操作對象是 `.dv-harness/` 底下的 pattern registry / regression
 bookkeeping，不是某一個 generator 產生出來的 IP-level sim environment）。這兩
-層系統目前是分開的、都是真的，但**互不相通**：`Makefile.patterns.mk` 裡對應
-實際模擬執行的幾個 target（`run-pattern` / `verify-pattern` / `regression` /
-`regression-monitor` / `regression-report`）目前只是 stub echo，尚未 wiring 到
-下面第一節的真實 sim Makefile 或 `dv_harness/lsf_client.py`。使用本 skill 前，
-先確認你當下操作的是哪一層，不要把兩層的 target 混用。
+層系統是分開的、都是真的；使用本 skill 前，先確認你當下操作的是哪一層，不要
+把兩層的 target 混用。
+
+BUG FIX (2026-09-01，make-pattern-api-stub-targets-implementation)：
+`Makefile.patterns.mk` 裡對應實際模擬執行的五個 target
+（`run-pattern` / `verify-pattern` / `regression` / `regression-monitor` /
+`regression-report`）原本是只 `@echo` 的 silent no-op stub——執行時不報錯、也
+不做任何真的事，比直接 "no rule to make target" 更危險。現在已修好：
+`regression-monitor` / `regression-report` 兩個不需要專案特定資訊，已接上真的
+`dv_harness` CLI（見下方第二層表格）；`run-pattern` / `verify-pattern` /
+`regression` 需要知道「這個專案產生出來的第一層 sim Makefile 放在哪裡」這一件
+專案特定的事，本檔案不能替使用它的專案臆造這個路徑，所以改成：專案在自己的
+頂層 Makefile 設定 `SIM_DIR := <那個目錄>` 之後才會真的委派過去
+（`$(MAKE) -C $(SIM_DIR) <第一層真實 target>`）；`SIM_DIR` 沒設時會用
+`$(error ...)` 直接失敗並說明缺什麼，不會再安靜地印一行字然後 exit 0。
 
 ---
 
@@ -136,18 +146,17 @@ Makefile `include` 用的片段，不是某個 generator 產生出來的 sim env
 | `make show-pattern PATTERN=<name>` | 真實 | 在 `pattern_list.txt` 裡 grep 該 pattern |
 | `make regression-add PATTERN=<name>` | 真實 | 呼叫 `tools/regression_list_cli.py record-verdict --passed` |
 | `make regression-remove PATTERN=<name>` | 真實 | 呼叫 `tools/regression_list_cli.py record-verdict --failed` |
-| `make run-pattern` | **Stub** | 只 `echo`，尚未接上真的 VCS/simulator 呼叫 |
-| `make verify-pattern` | **Stub** | 只 `echo`，"project-specific: not modeled generically" |
-| `make regression` | **Stub** | 只 `echo`，尚未接上 `dv_harness/lsf_client.py` 的 `bsub_submit` |
-| `make regression-monitor` | **Stub** | 只 `echo`，尚未接上 `bjobs_query` |
-| `make regression-report` | **Stub** | 只 `echo`，尚未接上 `dv_harness/regression_reporter.py` |
+| `make run-pattern PATTERN=<name>` | 真實（需 `SIM_DIR`） | `SIM_DIR` 未設 → `$(error)` 直接失敗；已設 → `$(MAKE) -C $(SIM_DIR) run PATTERN=... SEED=... WAVE=... PA=... FSDB_START=... FSDB_STOP=...`（第一層真的 `run` target） |
+| `make verify-pattern PATTERN=<name>` | 真實（需 `SIM_DIR`） | 第一層沒有單一對應 target，改成鏈式執行第一層真的 `check`（靜態）再 `sim PATTERN=... RECORD=1`（動態、記錄結果）；`SIM_DIR` 未設一樣 `$(error)` |
+| `make regression` | 真實（需 `SIM_DIR`） | `$(MAKE) -C $(SIM_DIR) regress SUITE=... JOBS=... LSF=...`（第一層真的 `regress` target） |
+| `make regression-monitor` | 真實 | 不需要 `SIM_DIR`：印 `dv-harness lsf-watch-status`（背景 watcher 是否在跑）+ `dv-harness lsf`（`.dv-harness/lsf/jobs/*.json` 目前每個 job 的真實狀態） |
+| `make regression-report` | 真實 | 不需要 `SIM_DIR`：呼叫 `python3 -m dv_harness.regression_reporter --project-root .`，印出同一份 job 狀態的一次性人類可讀 snapshot |
 
-這五個 stub target 執行時**不會報錯**（不是 "no rule to make target"），但也
-**不會真的跑模擬、不會真的送 LSF、不會真的產報告**——只會印出一行提示。對
-agent 而言這比直接失敗更危險：容易誤判成「已經跑過了」。目前若要真的
-build/run/regress，必須直接對 generator 產生的 sim environment 下第一層的
-真實指令（`make compile` / `make sim PATTERN=` / `make regress`），不要依賴這
-五個 stub target。
+`run-pattern` / `verify-pattern` / `regression` 這三個唯一缺的是「這個專案產生
+出來的第一層 sim Makefile 放在哪裡」——這是專案特定事實，本檔案不能替它臆
+造，所以用專案自己的頂層 Makefile 設定 `SIM_DIR := <那個目錄>` 來補；沒設時
+直接 `$(error)` 失敗並說明缺什麼，不會再像修好前那樣安靜印一行字就 exit 0，
+讓人誤判成「已經跑過了」。
 
 ---
 
@@ -159,8 +168,10 @@ build/run/regress，必須直接對 generator 產生的 sim environment 下第�
    且該專案的頂層 Makefile 確實有 `include .claude/templates/Makefile.patterns.mk`」，
    才用第二層。
 2. 不要把兩層的 target 名稱套用到另一層（例如不要對 sim environment 下
-   `make add-pattern`，也不要期待 harness 層的 `make regression` 真的會送
-   模擬——目前它是 stub）。
+   `make add-pattern`；harness 層的 `make regression` / `run-pattern` /
+   `verify-pattern` 現在會真的委派到第一層——但前提是專案的頂層 Makefile 有
+   設定 `SIM_DIR` 指到那個第一層 sim environment，沒設會直接 `$(error)`，
+   不要假設它永遠能用）。
 3. 若不確定某個 target 是否存在，先用
    `grep -n "^[a-zA-Z_][a-zA-Z0-9_.-]*:" <該層的 Makefile>` 或該 Makefile 自己
    的 `make help` 目標確認，不要憑記憶或憑本文件的舊版本臆造名稱。
