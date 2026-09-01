@@ -27,6 +27,7 @@ from dv_harness.react_loop import (
 )
 from dv_harness.graph import GraphDefinition, Node, Edge
 from dv_harness.adapters.base import AgentResult
+from dv_harness.stage_profile import StageExecutionProfiler
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -461,6 +462,179 @@ def test_retry_targeted_action_genuinely_re_invokes_adapter_with_targeted_prompt
         assert adapter.calls == 2  # one reflection call + one targeted retry call
     finally:
         shutil.rmtree(tmp)
+
+
+# --- InnerReactLoop <-> StageExecutionProfiler wiring (per-agent-attribution
+# audit fix, 2026-09-01): before this fix, profiler/profile_id/agent_name
+# were never threaded into InnerReactLoop at all -- every real adapter.run()
+# call the inner loop made (reflection + RETRY_TARGETED retries) was
+# completely invisible to the stage profile's total_tokens/aggregate
+# runtime. -----------------------------------------------------------------
+
+class _TwoStepRetryAdapter:
+    """Drives InnerReactLoop through exactly 2 inner iterations against the
+    real reset_power_cdc_corner_gate script (tools/verification_flow/
+    reset_power_cdc_corner_gate.py, read before writing this): retry #1
+    supplies RESET+CLOCK domains only (still missing CDC -- genuinely NEW
+    information vs. the original all-3-domains-missing failure, so
+    RETRY_TARGETED is offered again rather than suppressed by the
+    no-new-information rule), retry #2 supplies all 3 domains -> PASS. Each
+    real adapter.run() call also carries real token usage so the profiler's
+    total_tokens genuinely grows call-to-call, not just its agents count."""
+
+    def __init__(self):
+        self.calls = 0
+        self.retry_n = 0
+
+    def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+        self.calls += 1
+        if "option_id=" in prompt:
+            m = re.search(r"option_id=(RETRY_TARGETED:\S+)", prompt)
+            chosen = m.group(1) if m else "CONVERGE_TERMINATE"
+            return AgentResult(ok=True, text=(
+                '```dv-harness-react-decision\n'
+                + json.dumps({"chosen_option_id": chosen, "conclusion": "retry targeted",
+                              "params": {}}) + '\n```'
+            ), raw={"response": {"usage": {"input_tokens": 5, "output_tokens": 2}}})
+        assert "reset_power_cdc_corner_gate" in prompt
+        self.retry_n += 1
+        corner_items = (
+            '{"corner_id": "c1", "domain": "RESET", "requirement_ids": ["R1"], '
+            '"mechanism_ids": ["M1"], "testcase_ids": ["T1"], '
+            '"async_or_partial_reset_covered": true}, '
+            '{"corner_id": "c2", "domain": "CLOCK", "requirement_ids": ["R2"], '
+            '"mechanism_ids": ["M2"], "testcase_ids": ["T2"]}'
+        )
+        if self.retry_n >= 2:
+            corner_items += (
+                ', {"corner_id": "c3", "domain": "CDC", "requirement_ids": ["R3"], '
+                '"mechanism_ids": ["M3"], "testcase_ids": ["T3"], '
+                '"cdc_observation_or_assertion": true}'
+            )
+        text = (
+            '```dv-harness-evidence:corner_risk_rank\n'
+            '{"cases": [{"corner_id": "c1", "risk_factors": ["x"]}]}\n```\n'
+            '```dv-harness-evidence:reset_power_cdc_corner_gate\n'
+            f'{{"corner_items": [{corner_items}]}}\n```\n'
+        )
+        return AgentResult(ok=True, text=text, session_id="s-retry",
+                            raw={"response": {"usage": {"input_tokens": 20, "output_tokens": 10}}})
+
+
+class _SingleConvergeAdapter:
+    """One reflection call, immediately CONVERGE_TERMINATE -- the ONE of
+    ARCH_CALIBRATION's 3 gates with no GATE_FAILURE_REROUTE mapping, no
+    matching graph edge, and no 'missing'/'protocol' structured field (see
+    _ARCH_CALIBRATION_GATE_FAILS_NO_REROUTE above), so the menu offers
+    nothing but CONVERGE_TERMINATE and this always fires in exactly 1 inner
+    iteration / 1 adapter call."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+        self.calls += 1
+        assert "option_id=" in prompt
+        return AgentResult(ok=True, text=(
+            '```dv-harness-react-decision\n'
+            '{"chosen_option_id": "CONVERGE_TERMINATE", '
+            '"conclusion": "no actionable option in the real menu.", "params": {}}\n```'
+        ), raw={"response": {"usage": {"input_tokens": 5, "output_tokens": 2}}})
+
+
+def test_inner_react_loop_with_2plus_iterations_records_more_agent_runs_than_single_iteration():
+    """The crux test for the profiler-wiring fix: a run that genuinely takes
+    2 inner ReAct iterations (2 reflections + 2 targeted retries = 4 real
+    adapter.run() calls) must leave 4 agent-run entries (and a correspondingly
+    larger total_tokens) on its stage profile, strictly more than a run that
+    converges in a single iteration (1 reflection = 1 real adapter.run() call
+    -> 1 agent-run entry) against the SAME profiler/agent_name plumbing."""
+    tmp = _mk_smoke_project()
+    try:
+        graph = _load_real_graph()
+        node = graph.nodes["ARCH_CALIBRATION"]
+        profiler = StageExecutionProfiler(tmp)
+
+        # --- multi-iteration run (2 inner iterations, 4 real adapter calls) --
+        stage_multi = "SOC_SCENARIO_PLANNER"
+        first_text_multi = (
+            '```dv-harness-evidence:corner_risk_rank\n'
+            '{"cases": [{"corner_id": "c1", "risk_factors": ["x"]}]}\n```\n'
+            '```dv-harness-evidence:reset_power_cdc_corner_gate\n'
+            '{"corner_items": []}\n```\n'
+        )
+        v1, r1, s1 = evaluate_stage_evidence_with_detail(tmp, stage_multi, first_text_multi)
+        assert v1 == "GATE_FAIL"
+        first_result_multi = AgentResult(ok=True, text=first_text_multi, raw={}, session_id="s0")
+        profile_multi = profiler.begin_stage(stage_multi, stage_multi)
+        adapter_multi = _TwoStepRetryAdapter()
+        outcome_multi = InnerReactLoop(
+            tmp, adapter_multi, react_recorder=None,
+            cfg={"policy": {"inner_react_max_iterations": 5, "inner_react_max_adapter_calls": 5}},
+            graph=None, profiler=profiler, profile_id=profile_multi["profile_id"],
+            agent_name="soc-scenario-agent",
+        ).run(
+            stage_multi, node=None, attempt=1, first_result=first_result_multi,
+            first_verdict=v1, first_reasons=r1, first_signatures=s1,
+            base_prompt="original stage prompt",
+        )
+        assert outcome_multi.verdict == "PASS"
+        assert outcome_multi.iterations >= 2
+        assert adapter_multi.calls == 4  # 2 reflections + 2 targeted retries
+
+        # --- single-iteration run (1 inner iteration, 1 real adapter call) --
+        stage_single = "ARCH_CALIBRATION"
+        v2, r2, s2 = evaluate_stage_evidence_with_detail(
+            tmp, stage_single, _ARCH_CALIBRATION_GATE_FAILS_NO_REROUTE)
+        assert v2 == "GATE_FAIL"
+        first_result_single = AgentResult(ok=True, text=_ARCH_CALIBRATION_GATE_FAILS_NO_REROUTE,
+                                           raw={}, session_id="s0")
+        profile_single = profiler.begin_stage(stage_single, stage_single)
+        adapter_single = _SingleConvergeAdapter()
+        outcome_single = InnerReactLoop(
+            tmp, adapter_single, react_recorder=None,
+            cfg={"policy": {"inner_react_max_iterations": 5, "inner_react_max_adapter_calls": 5}},
+            graph=graph, profiler=profiler, profile_id=profile_single["profile_id"],
+            agent_name="soc-scenario-agent",
+        ).run(
+            stage_single, node, attempt=1, first_result=first_result_single,
+            first_verdict=v2, first_reasons=r2, first_signatures=s2,
+            base_prompt="original stage prompt",
+        )
+        assert outcome_single.iterations == 1
+        assert adapter_single.calls == 1
+
+        # --- the actual profiler-wiring assertion ---------------------------
+        rec_multi = profiler._load(profile_multi["profile_id"])
+        rec_single = profiler._load(profile_single["profile_id"])
+        assert len(rec_multi["agents"]) == 4
+        assert len(rec_single["agents"]) == 1
+        assert len(rec_multi["agents"]) > len(rec_single["agents"])
+        assert all(a["agent"] == "soc-scenario-agent" for a in rec_multi["agents"])
+        assert all(a["agent"] == "soc-scenario-agent" for a in rec_single["agents"])
+        assert rec_multi["total_tokens"] > rec_single["total_tokens"]
+        assert rec_multi["aggregate_agent_runtime_sec"] > 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_inner_react_loop_omits_profiler_calls_as_a_genuine_no_op_by_default():
+    """profiler/profile_id default to None, None -- every pre-existing caller
+    of InnerReactLoop that never threads them through (every other test in
+    this module) must be completely unaffected; this asserts that explicitly
+    rather than only implicitly via the rest of the suite still passing."""
+    menu = [MenuOption("CONVERGE_TERMINATE", "CONVERGE_TERMINATE", None, "r", "control")]
+
+    class FakeAdapter:
+        def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+            return AgentResult(ok=True, text=(
+                '```dv-harness-react-decision\n'
+                '{"chosen_option_id": "CONVERGE_TERMINATE", "conclusion": "x", "params": {}}\n```'
+            ), raw={"response": {"usage": {"input_tokens": 1, "output_tokens": 1}}})
+
+    # No exception, no profiler/profile_id required -- a pure no-op.
+    decision = reflect_and_decide(FakeAdapter(), ROOT, "ARCH_CALIBRATION", {}, menu)
+    assert decision.chosen_option_id == "CONVERGE_TERMINATE"
 
 
 # --- Engine integration: run_stage() wiring ---------------------------------

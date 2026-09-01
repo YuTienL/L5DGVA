@@ -144,6 +144,48 @@ def test_extract_provider_usage_and_profiler_round_trip():
         shutil.rmtree(tmp)
 
 
+def test_run_stage_records_add_agent_run_with_real_resolved_agent_name_not_stage_agent():
+    # Per-agent-attribution audit fix regression test: run_stage()'s real
+    # add_agent_run() call site previously hardcoded the literal string
+    # "stage-agent" no matter which real agent the router actually resolved.
+    # DISCOVERY's real main_graph.json node declares agent=analysis-agent
+    # (see test_run_stage_wires_plan_blackboard_react_and_agent_dispatch_on_pass
+    # above, which already asserts this same resolved name reaches the
+    # adapter_profile/prompt/task -- this test asserts the SAME real resolved
+    # name also reaches the stage profiler, not a hardcoded placeholder).
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+        from dv_harness.adapters.base import AgentResult
+
+        class FakeAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(
+                    ok=True, text="analysis done.\n" + _DISCOVERY_EXTRA_GATES,
+                    raw={"response": {"model": "claude-x",
+                                      "usage": {"input_tokens": 10, "output_tokens": 5}}},
+                    session_id="sess-1")
+
+        h = DVHarness(tmp)
+        h.adapter = FakeAdapter()
+        h.blackboard.write("project", {"target_name": "usb_dev"}, source="INTAKE")
+        h.set_stage("DISCOVERY")
+        h.run_stage("verify the USB device controller")
+
+        assert h.state.stages["DISCOVERY"]["status"] == "PASS"
+
+        recs = h.profiler.all_stages()
+        assert len(recs) == 1
+        agents = recs[0]["agents"]
+        assert len(agents) == 1
+        assert agents[0]["agent"] == "analysis-agent"
+        assert agents[0]["agent"] != "stage-agent"
+        assert agents[0]["input_tokens"] == 10
+        assert agents[0]["output_tokens"] == 5
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_graph_next_passes_through_synthetic_join():
     assert graph_next("INFRASTRUCTURE_AUDIT", "PASS", ROOT) == "VPLAN"
 

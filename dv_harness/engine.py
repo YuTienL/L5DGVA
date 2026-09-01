@@ -1025,7 +1025,16 @@ class DVHarness:
         _agent_runtime = time.perf_counter() - _t0
         _usage = extract_provider_usage(result.raw or {})
         _model = ((result.raw or {}).get("response") or {}).get("model", "")
-        self.profiler.add_agent_run(profile["profile_id"], "stage-agent", _agent_runtime,
+        # Per-agent-attribution fix (2026-09-01 audit): this used to hardcode
+        # the literal "stage-agent" regardless of which real agent actually
+        # ran -- route_info["agent"] (from self.router.resolve(node) above,
+        # step 1) is the real resolved agent name for this stage and is
+        # already in scope by the time this call runs. A node-less stage
+        # (route_info is None -- no graph node at all, e.g. a legacy/no-graph
+        # stage) has no resolved agent to name, so "stage-agent" remains the
+        # honest fallback for exactly that case, not the default.
+        _resolved_agent_name = route_info["agent"] if route_info else "stage-agent"
+        self.profiler.add_agent_run(profile["profile_id"], _resolved_agent_name, _agent_runtime,
             usage=_usage, model=str(_model),
             status=("PASS" if result.ok else "FAIL"))
 
@@ -1148,8 +1157,21 @@ class DVHarness:
                 #      signatures (an additive `graph=self.graph` -- REROUTE
                 #      validation needs real graph.nodes data that the
                 #      spec's own snippets never actually threaded through).
+                # profiler/profile_id/agent_name (2026-09-01 per-agent-
+                # attribution fix): route_info is guaranteed non-None here
+                # (this whole elif is nested under `node is not None`, and
+                # route_info is only ever unset when node is None), so
+                # route_info["agent"] is always the real resolved agent name
+                # for every InnerReactLoop the real engine flow creates --
+                # never the "" default this constructor otherwise falls back
+                # to for the module's own unit tests. This is what lets
+                # InnerReactLoop attribute its own real adapter.run() calls
+                # (reflection + RETRY_TARGETED/REQUEST_EVIDENCE retries) to
+                # this same stage profile instead of leaving them invisible.
                 outcome = InnerReactLoop(
-                    self.root, self.adapter, self.react, self.cfg, graph=self.graph
+                    self.root, self.adapter, self.react, self.cfg, graph=self.graph,
+                    profiler=self.profiler, profile_id=profile["profile_id"],
+                    agent_name=route_info["agent"],
                 ).run(
                     stage, node, ss["attempts"], result, verdict, reasons,
                     structured_signatures, base_prompt=prompt,
