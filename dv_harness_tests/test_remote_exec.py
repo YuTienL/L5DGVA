@@ -4,6 +4,8 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "remote"))
 
@@ -183,6 +185,62 @@ def test_main_no_cwd_key_when_neither_flag_nor_dvworkdir_set(tmp_path, monkeypat
         t.join(timeout=5)
         server_sock.close()
     assert "cwd" not in captured[0]
+
+
+# --- MSYS path-mangling guard (2026-09-02) --------------------------------
+# Real incident: every --put MD5_MISMATCH this session was actually Git
+# Bash/MSYS silently rewriting /home/... into "D:/Program Files/Git/home/..."
+# before Python ever saw it -- nothing to do with the relay's transfer logic.
+
+def test_put_rejects_msys_mangled_remote_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VCHOST", "vchost-b")
+    monkeypatch.setenv("VCHOP", "host-b")
+    monkeypatch.setattr(sys, "argv", [
+        "remote_exec.py", "--put", "local.txt", "D:/Program Files/Git/home/x/y.txt",
+    ])
+    with pytest.raises(SystemExit) as exc:
+        remote_exec.main()
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert "MSYS_NO_PATHCONV" in out
+
+
+def test_cwd_rejects_msys_mangled_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VCHOST", "vchost-b")
+    monkeypatch.setenv("VCHOP", "host-b")
+    monkeypatch.setattr(sys, "argv", [
+        "remote_exec.py", "--cwd", "C:/Users/x/home/svcacct/AI/Agent", "pwd",
+    ])
+    with pytest.raises(SystemExit) as exc:
+        remote_exec.main()
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert "MSYS_NO_PATHCONV" in out
+
+
+def test_dvworkdir_env_rejects_msys_mangled_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VCHOST", "vchost-b")
+    monkeypatch.setenv("VCHOP", "host-b")
+    monkeypatch.setenv("DVWORKDIR", "D:/Program Files/Git/home/tmpacct/devuser/UVM/USB")
+    monkeypatch.setattr(sys, "argv", ["remote_exec.py", "pwd"])
+    with pytest.raises(SystemExit) as exc:
+        remote_exec.main()
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert "MSYS_NO_PATHCONV" in out
+
+
+def test_ordinary_unix_paths_are_not_flagged_as_mangled(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("VCHOST", "vchost-b")
+    monkeypatch.setenv("VCHOP", "host-b")
+    monkeypatch.setattr(sys, "argv", [
+        "remote_exec.py", "--cwd", "/home/svcacct/AI/Agent", "pwd",
+    ])
+    rc = remote_exec.main()
+    out = capsys.readouterr().out
+    assert "MSYS_NO_PATHCONV" not in out
+    assert rc == 1  # DOWN (no relay info) -- got past the guard, which is what this proves
 
 
 def test_main_prints_down_block_when_no_relay_info(tmp_path, monkeypatch, capsys):

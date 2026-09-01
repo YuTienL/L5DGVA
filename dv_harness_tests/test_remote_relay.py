@@ -13,6 +13,7 @@ from remote_relay import (
     should_idle_exit,
     running_inside_ai_agent,
     is_credential_inspection_command,
+    is_msys_mangled_path,
 )
 
 
@@ -298,6 +299,23 @@ def test_run_op_denies_credential_inspection_hidden_in_cwd():
     assert resp["ok"] is False
     assert resp["error"] == "CREDENTIAL_INSPECTION_DENIED"
     assert server.session.run_calls == []
+
+
+# --- MSYS path-mangling detection (2026-09-02) ---------------------------
+
+def test_is_msys_mangled_path_detects_windows_drive_paths():
+    assert is_msys_mangled_path("D:/Program Files/Git/home/x/y.txt") is True
+    assert is_msys_mangled_path(r"C:\Users\x\home\y") is True
+
+
+def test_is_msys_mangled_path_accepts_ordinary_unix_paths():
+    assert is_msys_mangled_path("/home/svcacct/AI/Agent") is False
+    assert is_msys_mangled_path("/tmp/x") is False
+
+
+def test_is_msys_mangled_path_false_for_empty_or_none():
+    assert is_msys_mangled_path("") is False
+    assert is_msys_mangled_path(None) is False
 
 
 def test_handle_request_serializes_concurrent_callers_no_interleaving():

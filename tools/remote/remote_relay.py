@@ -116,6 +116,16 @@ def bind_loopback(port, backlog=DEFAULT_LISTEN_BACKLOG):
     return sock
 
 
+def is_msys_mangled_path(value):
+    """True if `value` looks like a Windows drive path (C:/..., D:\\...)
+    where a Unix path on the Linux server was expected -- the unambiguous
+    signature of Git Bash/MSYS silently rewriting a bare /home/... argument
+    before Python ever sees it in sys.argv or os.environ (real incident,
+    2026-09-02: an entire string of --put MD5_MISMATCH failures turned out
+    to be exactly this, nothing to do with the relay's transfer logic)."""
+    return bool(value) and bool(re.match(r'^[A-Za-z]:[/\\]', value))
+
+
 def _shell_quote_for_cd(path):
     """Single-quote a path for both bash and tcsh (the remote shell varies
     by server -- see CLAUDE.md's tcsh-vs-bash notes). Plain literal-string
@@ -264,6 +274,12 @@ def main():
     missing = [k for k, v in (('VCUSER', user), ('VCPW', pw), ('VCHOST', host), ('VCHOP', hop)) if not v]
     if missing:
         print(_setup_reminder(missing))
+        return 2
+
+    if is_msys_mangled_path(workdir):
+        print('[relay] VCWORKDIR looks like a Windows path (%r) where a Unix path on '
+              'the Linux server was expected -- if you are in Git Bash, re-run with '
+              'MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL=\'*\' prefixed.' % workdir)
         return 2
 
     t = Session(host, port)

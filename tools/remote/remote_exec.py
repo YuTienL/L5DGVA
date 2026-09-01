@@ -42,7 +42,33 @@ See docs/superpowers/specs/2026-08-30-persistent-remote-relay-design.md
 """
 import argparse, json, os, socket, sys
 
-from remote_relay import info_path
+from remote_relay import info_path, is_msys_mangled_path
+
+# REAL BUG FOUND LIVE (2026-09-02): every one of a long string of --put
+# MD5_MISMATCH failures against the real /home/svcacct/AI/Agent deployment
+# turned out to have nothing to do with the relay's transfer logic at all
+# -- this tool was invoked through Git Bash on Windows, whose MSYS layer
+# auto-rewrites a bare /home/... argument into a Windows path like
+# "D:/Program Files/Git/home/..." BEFORE Python ever sees it in sys.argv
+# (remote_hop.py's own module docstring already documented this exact
+# gotcha and its MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' workaround --
+# it was simply not applied when invoking this tool). Two rounds of
+# unrelated (if still real) hardening in remote_hop.py's put() were
+# chased before this was found. Detect the unambiguous case -- a
+# Unix-style remote/cwd path argument that arrived looking like a Windows
+# drive path -- and fail loudly with the actual fix, instead of silently
+# sending a corrupted path to the relay and getting a confusing
+# MD5_MISMATCH or remote shell error with no clue why.
+
+
+def _reject_if_msys_mangled(label, value):
+    if is_msys_mangled_path(value):
+        print('[remote_exec] %s looks like a Windows path (%r) where a Unix '
+              'path on the Linux server was expected.' % (label, value))
+        print('[remote_exec] This is almost always Git Bash/MSYS silently rewriting a')
+        print('[remote_exec] /home/... argument before Python ever saw it. Re-run with:')
+        print('[remote_exec]   MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL=\'*\' python tools/remote/remote_exec.py ...')
+        sys.exit(2)
 
 
 def read_relay_info(vchost, vchop):
@@ -113,6 +139,13 @@ def main():
              'relay\'s persistent shell cwd for later/other callers. '
              'Defaults to the DVWORKDIR env var if set and --cwd is omitted.')
     a = ap.parse_args()
+
+    if a.put:
+        _reject_if_msys_mangled('--put REMOTE', a.put[1])
+    if a.get:
+        _reject_if_msys_mangled('--get REMOTE', a.get[0])
+    _reject_if_msys_mangled('--cwd', a.cwd)
+    _reject_if_msys_mangled('DVWORKDIR', os.environ.get('DVWORKDIR', ''))
 
     vchost = os.environ.get('VCHOST', '')
     vchop = os.environ.get('VCHOP', '')
