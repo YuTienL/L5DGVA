@@ -299,6 +299,28 @@ def _dig_evidence_field(source: Dict[str, Any], dotted_path: str) -> bool:
     return bool(cur)
 
 
+# GAP FIX (2026-09-02, RE_AUDIT/FAILURE_RECOVERY approval-gate audit): the
+# PROMOTION_READINESS/SIGNOFF hard-stop below (dv-harness approve) had no
+# counterpart at RE_AUDIT -- a fix's own "approved_for_modify" boolean was
+# just JSON the SAME agent proposing the fix wrote in its own reply
+# (tools/verification_flow/fix_risk_approval_gate.py only checked that the
+# agent's self-declared boolean was True). This reads the SAME
+# fix_risk_approval_gate evidence block that gate already validates and
+# reuses its EXISTING "risk_level" field (HIGH/MEDIUM/LOW) plus
+# tools/senior_dv/failure_attribution.py's EXISTING "classification"
+# vocabulary (TB_BUG/DUT_BUG/UNKNOWN) -- no new field name invented.
+# Deliberately narrow: a TB_BUG/low-or-medium-risk fix (the overwhelming
+# majority of RE_AUDIT closures) is NOT gated here, so routine testbench
+# fixes never require a human `dv-harness approve` call; only a HIGH risk_level
+# or a DUT_BUG classification -- the DUT-RTL-risk case the audit flagged --
+# does.
+def _re_audit_requires_human_approval(evidence_blocks: Dict[str, Any]) -> bool:
+    plan = evidence_blocks.get("fix_risk_approval_gate")
+    if not isinstance(plan, dict):
+        return False
+    return plan.get("risk_level") == "HIGH" or plan.get("classification") == "DUT_BUG"
+
+
 def _checklist_item_present(item: Dict[str, Any], root: Path, blackboard: Blackboard,
                              evidence_for) -> bool:
     kind = item.get("kind")
@@ -1613,8 +1635,14 @@ class DVHarness:
                 # (same "LSF DONE != DV PASS" principle, one level up) -- a
                 # human must have run `dv-harness approve <stage>` for this
                 # stage before it is allowed to actually close, regardless of
-                # gate verdict.
-                if stage in (Stage.PROMOTION_READINESS.value, Stage.SIGNOFF.value):
+                # gate verdict. RE_AUDIT joins this hard-stop, but ONLY when
+                # this attempt's own fix_risk_approval_gate evidence is
+                # HIGH-risk_level or DUT_BUG-classification (see
+                # _re_audit_requires_human_approval's docstring above) -- a
+                # routine TB_BUG/low-risk RE_AUDIT closure is unaffected.
+                _re_audit_gated = (stage == Stage.RE_AUDIT.value
+                                    and _re_audit_requires_human_approval(evidence_blocks))
+                if stage in (Stage.PROMOTION_READINESS.value, Stage.SIGNOFF.value) or _re_audit_gated:
                     if not approval:
                         ss["status"] = Status.WAIT_USER.value
                         self.state.overall_status = Status.WAIT_USER.value

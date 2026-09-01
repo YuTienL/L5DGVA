@@ -1976,7 +1976,7 @@ record，否則 FAIL ONLY_REAL_ISSUE_CAN_CREATE_FIX_RECORD——代表這個 gat
 ```dv-harness-evidence:fix_risk_approval_gate
 {"root_cause_id": "...", "fix_plan": "...", "risk_assessment": "...",
  "affected_scope": "...", "regression_plan": "...", "rollback_plan": "...",
- "root_cause_confidence": "HIGH", "risk_level": "MEDIUM",
+ "root_cause_confidence": "HIGH", "risk_level": "MEDIUM", "classification": "TB_BUG",
  "high_risk_reviewed": false, "approved_for_modify": true}
 ```
 （`root_cause_id`/`fix_plan`/`risk_assessment`/`affected_scope`/`regression_plan`/
@@ -1984,7 +1984,15 @@ record，否則 FAIL ONLY_REAL_ISSUE_CAN_CREATE_FIX_RECORD——代表這個 gat
 `root_cause_confidence` 必須是 HIGH 或 VERIFIED，否則 FAIL FIX_WITHOUT_HIGH_CONFIDENCE_RCA
 （confidence 不夠高不准送修）；`risk_level` 為 `HIGH` 時 `high_risk_reviewed` 必須是
 true，否則 FAIL HIGH_RISK_FIX_NOT_REVIEWED；最後 `approved_for_modify` 必須明確為
-true 才代表這個修改計畫真的被核准可以動手，否則 FAIL FIX_NOT_APPROVED_FOR_MODIFICATION。）
+true 才代表這個修改計畫真的被核准可以動手，否則 FAIL FIX_NOT_APPROVED_FOR_MODIFICATION。
+`classification` 欄位沿用 FAILURE_RECOVERY 階段 failure_attribution 的既有分類詞彙
+（TB_BUG/DUT_BUG/UNKNOWN，見該 gate）；`risk_level` 為 `HIGH` 或 `classification` 為
+`DUT_BUG` 時，這個「approved_for_modify」不能只是這一輪 agent 自己填的 boolean ——
+gate 會另外讀取真正的 .dv-harness/control.json Human Control Plane 狀態，要求 RE_AUDIT
+已經有一筆真實的 `dv-harness approve RE_AUDIT` 記錄，否則 FAIL
+HIGH_RISK_FIX_WITHOUT_CONTROL_PLANE_APPROVAL——同一個 PROMOTION_READINESS/SIGNOFF
+用的真人核准機制，此時對高風險/DUT 端修改一樣適用；TB_BUG/非 HIGH 風險的一般 testbench
+修正不受影響，不需要額外呼叫 `dv-harness approve`。）
 
 ```dv-harness-evidence:fix_effectiveness_gate
 {"failure_signature_before": "...", "failure_signature_after": "...",

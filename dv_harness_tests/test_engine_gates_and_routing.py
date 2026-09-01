@@ -3668,6 +3668,103 @@ def test_approve_gates_promotion_readiness_and_signoff_but_not_other_stages():
         shutil.rmtree(tmp)
 
 
+def _re_audit_evidence_text(**fix_risk_overrides):
+    plan = {
+        "root_cause_id": "RCA-1", "fix_plan": "add prefetch guard in ep0 fifo ctrl",
+        "risk_assessment": "contained to ep0 datapath", "affected_scope": "usb_dev.ep0",
+        "regression_plan": "rerun ep0 test suite", "rollback_plan": "revert commit c1",
+        "root_cause_confidence": "HIGH", "risk_level": "LOW", "approved_for_modify": True,
+    }
+    plan.update(fix_risk_overrides)
+    return "```dv-harness-evidence:fix_risk_approval_gate\n" + json.dumps(plan) + "\n```\n"
+
+
+def test_re_audit_dut_bug_fix_requires_real_control_plane_approval():
+    # Confirmed gap (2026-09-02, RE_AUDIT/FAILURE_RECOVERY approval-gate
+    # audit): unlike PROMOTION_READINESS/SIGNOFF above, RE_AUDIT previously
+    # had NO engine-level human-approval hard-stop at all -- a DUT_BUG/
+    # high-risk fix could close purely off the agent's own self-declared
+    # "approved_for_modify" boolean, in the same reply that proposed the
+    # fix. This must now behave exactly like PROMOTION_READINESS/SIGNOFF:
+    # gate evidence passing is not enough, a real `dv-harness approve
+    # RE_AUDIT` is required.
+    from dv_harness.control_plane import ControlPlane
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["policy"]["require_stage_gate_evidence"] = False
+        h.set_stage("RE_AUDIT")
+
+        text = _re_audit_evidence_text(classification="DUT_BUG", risk_level="LOW")
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.WAIT_USER.value
+        assert "HUMAN_APPROVAL_REQUIRED" in h.state.stages["RE_AUDIT"]["blocking_reason"]
+
+        # A real approve() call (the SAME ControlPlane mechanism
+        # PROMOTION_READINESS/SIGNOFF already use) unblocks it.
+        ControlPlane(tmp).approve("RE_AUDIT", note="reviewed", reviewer_id="alice")
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.PASS.value
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_re_audit_high_risk_fix_requires_real_control_plane_approval():
+    from dv_harness.control_plane import ControlPlane
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["policy"]["require_stage_gate_evidence"] = False
+        h.set_stage("RE_AUDIT")
+
+        text = _re_audit_evidence_text(classification="TB_BUG", risk_level="HIGH")
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.WAIT_USER.value
+        assert "HUMAN_APPROVAL_REQUIRED" in h.state.stages["RE_AUDIT"]["blocking_reason"]
+
+        ControlPlane(tmp).approve("RE_AUDIT", note="reviewed", reviewer_id="alice")
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.PASS.value
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_re_audit_tb_bug_low_risk_fix_needs_no_human_approval():
+    # Scoped narrowly on purpose: a routine TB_BUG/low-risk RE_AUDIT closure
+    # must NOT require a human `dv-harness approve` call -- that would make
+    # every routine testbench fix require a human, which is disproportionate
+    # and not what this hardening pass targets.
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["policy"]["require_stage_gate_evidence"] = False
+        h.set_stage("RE_AUDIT")
+
+        text = _re_audit_evidence_text(classification="TB_BUG", risk_level="LOW")
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.PASS.value
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_evidence_and_why_report_real_current_run_state_not_generic_text():
     from dv_harness.control_plane import describe_stage
     tmp, h = _fresh_harness()
