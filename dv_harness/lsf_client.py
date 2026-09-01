@@ -12,13 +12,32 @@ import subprocess, json, hashlib, re, time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional
+try:
+    from typing import Literal
+except ImportError:  # pragma: no cover - exercised for real on this
+    # project's real Python 3.7 remote deployment (typing.Literal was only
+    # added in Python 3.8). `from __future__ import annotations` above
+    # makes ANNOTATIONS lazy (never actually executed), but this file's own
+    # `LsfStatus = Literal[...]` below is a plain module-level ASSIGNMENT,
+    # not an annotation -- it genuinely runs at import time regardless of
+    # that future import, and genuinely needs typing.Literal to exist.
+    # No new dependency (e.g. typing_extensions) is assumed to be
+    # installed on that remote environment either, so this degrades to a
+    # plain `str` alias on old Python -- LsfStatus was never enforced at
+    # runtime anyway (grep-confirmed: no isinstance/runtime check against
+    # it anywhere in this codebase), only used for static type-checker
+    # precision on modern Python.
+    Literal = None  # type: ignore[assignment]
 
 JOBS_DIR_NAME = (".dv-harness", "lsf", "jobs")
 EARLY_FAIL_POLICY_PATH = (".dv-harness", "lsf", "early_fail_policy.json")
 
-LsfStatus = Literal["PEND", "RUN", "DONE", "EXIT", "KILLED",
-                     "MEMLIMIT", "TIMEOUT", "LICENSE_WAIT", "UNKNOWN"]
+if Literal is not None:
+    LsfStatus = Literal["PEND", "RUN", "DONE", "EXIT", "KILLED",
+                         "MEMLIMIT", "TIMEOUT", "LICENSE_WAIT", "UNKNOWN"]
+else:  # pragma: no cover - real fallback path, only reachable on Python < 3.8
+    LsfStatus = str
 
 _BJOBS_STAT_MAP = {
     "PEND": "PEND", "PROV": "PEND", "WAIT": "PEND",
