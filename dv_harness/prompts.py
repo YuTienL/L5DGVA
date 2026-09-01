@@ -269,6 +269,26 @@ lock 之後不得再有 unresolved unknown。
 {"conflicts": [], "architecture_locked": true, "unresolved_unknown_count": 0}
 ```
 （沒有 delta/conflict 時，"detected_deltas": [] 與 "conflicts": [] 即可通過。）
+
+VIP API Drift 確認（lock 之前必須確認目前實際用的 VIP 版本跟當初 qualify 過的版本是否一致，
+版本漂移不代表可以直接用——沒做過 API diff 分析、有 breaking change 卻沒更新 adapter、或漂移
+了卻沒有重新 requalify，都必須在 lock 前處理掉，不能留到後面才發現 sequence/adapter 對不上）：
+
+```dv-harness-evidence:vip_api_drift_gate
+{"current_vip_version": "2024.09", "qualified_vip_version": "2024.09",
+ "api_diff_analyzed": true, "breaking_api_changes": false, "adapter_updated": true,
+ "requalification_evidence": "...", "current_vip_source_or_manual_hash": "..."}
+```
+（"current_vip_version" 與 "qualified_vip_version" 不同才視為有漂移；兩者相同（如範例）時，
+後面 "api_diff_analyzed"／"breaking_api_changes"／"adapter_updated"／"requalification_evidence"
+四個欄位不會被檢查，可以照範例值填。有漂移時：先看 "api_diff_analyzed" 是否為 true——沒做過
+API diff 分析就標記漂移會直接 FAIL VIP_VERSION_DRIFT_WITHOUT_API_DIFF；"breaking_api_changes"
+為 true 卻 "adapter_updated" 不是 true 會 FAIL BREAKING_VIP_CHANGE_WITHOUT_ADAPTER_UPDATE（有
+breaking change 就必須先把 adapter/sequence library 更新完才能回報）；"requalification_evidence"
+沒填會 FAIL VIP_DRIFT_WITHOUT_REQUALIFICATION（漂移後要有重新 qualify 過的證據，不是只做完
+diff 分析就算數）。"current_vip_source_or_manual_hash" 不論有沒有漂移都一定要填——沒有把目前
+實際用的 VIP source/manual 釘住一個 hash 或版本識別，會直接 FAIL UNPINNED_CURRENT_VIP_REFERENCE，
+避免後面環境用的 VIP 跟這裡回報的版本其實對不上。）
 """,
 Stage.PROJECT_MODEL.value: """
 建立 Generic Project Model、verification boundary、VIP topology/bind、BLOCK/branch-A/branch_fw/branch-B topology、
