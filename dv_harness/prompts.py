@@ -291,7 +291,17 @@ v1.0（比對 DE Baseline Reproduction 的可行性結果做 Executable feasibil
 本 stage 的工作：整合以上所有版本產出 vPlan v1.0，明確列出 SoC scenarios 與 audit gaps，
 向使用者確認 Verification Scope 後才能 LOCK；LOCK 之前不得進入 Verification Architecture/Implement。
 
-本 stage 的 PASS 由 harness 端 gate 腳本裁定。回覆結尾附上：
+實際產出 vPlan .xlsx 時，執行真正的 `dv-harness vplan-export`（見
+dv_harness/vplan_writer/writer.py、dv_harness/cli.py 的 `vplan-export`
+subcommand）——這是真的、可開啟的 openpyxl workbook 產生器，不是自由格式文件；
+它會先對真實的 pattern-dir / dispatcher-file / task-declaration-source 證據跑
+3 條 REQUIRED validation rules（每個 pattern name 都有對應檔案、每個 task name
+都是真的宣告、每個 pattern 都在 run-time dispatcher 裡），任何一條沒過就整份
+refuse 寫檔（2026-09-01，vplan-doc-and-wiring-fix；.claude/agents/
+IP_UVM_DV_Gen.md 曾經誤寫「無此 generator，仍為 doc-only」，該說法已過時並已
+更正）。
+
+本 stage 的 PASS 由 harness 端 gate 腳本裁定。回覆結尾附上兩個 evidence block：
 
 ```dv-harness-evidence:spec_coverage_audit
 {"requirements": [{"req_id": "...", "status": "VERIFIED"}]}
@@ -300,6 +310,16 @@ v1.0（比對 DE Baseline Reproduction 的可行性結果做 Executable feasibil
 （WAIVED 需另外滿足 support_status=UNSUPPORTED_BY_DUT + waiver.approved + waiver.evidence），
 不得留白——這是 vPlan 定案時的「100% 已歸類」檢查，跟後面 REQUIREMENT_CLOSURE 的
 runtime evidence 檢查是兩個不同層級，不要混淆。）
+
+```dv-harness-evidence:vplan_writer_validation_gate
+{"items": [...VPlanItem dicts, same schema `dv-harness vplan-export` consumes...],
+ "pattern_dir": "...", "dispatcher_file": "...", "task_declaration_sources": ["..."]}
+```
+（這個 gate 直接呼叫真正的 dv_harness.vplan_writer.validate_items()，對磁碟上真實的
+pattern-dir/dispatcher-file/task-declaration-source 證據重跑上述 3 條 REQUIRED
+validation rules——不是只檢查這個 JSON 本身格式對不對，2026-09-01,
+vplan-doc-and-wiring-fix：這是 STAGE_GATES["VPLAN"] 第二個 gate，補上
+spec_coverage_audit 一直沒做到的部分。）
 """,
 Stage.VERIFICATION_ARCHITECTURE.value: """
 Verification Architecture + Observability Planning：定義本次 scope 需要哪些

@@ -334,28 +334,74 @@ def test_env_check_execution_mode_validator_wired():
     assert reasons
 
 
+def _vplan_writer_validation_extra_gate_text(tmp: Path) -> str:
+    # NEW (2026-09-01, vplan-doc-and-wiring-fix): vplan_writer_validation_gate
+    # (STAGE_GATES["VPLAN"]'s second gate) calls the real dv_harness.
+    # vplan_writer.build_evidence_context()/validate_items() against REAL
+    # files on disk -- unlike every other _EXTRA_GATES constant above, its
+    # evidence cannot be a static JSON string; it needs a real pattern file,
+    # dispatcher file, and task-declaration source to exist at test time.
+    pattern_dir = tmp / "patterns"
+    pattern_dir.mkdir()
+    (pattern_dir / "USB2_bulkin.txt").write_text("bulkin pattern", encoding="utf-8")
+    dispatcher_file = tmp / "dv_uvm_pattern_pool.svh"
+    dispatcher_file.write_text(
+        'case (pattern_name)\n  "USB2_bulkin": run_bulkin();\nendcase\n', encoding="utf-8",
+    )
+    tests_dir = tmp / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "usb_bulkin_test.sv").write_text(
+        "task automatic usb_bulkin_test();\nendtask\n", encoding="utf-8",
+    )
+    payload = {
+        "items": [{
+            "req_id": "R1", "feature_area": "Bulk Transfers",
+            "verification_item": "Bulk IN transfer completes",
+            "pattern_name": "USB2_bulkin", "task_name": "usb_bulkin_test",
+            "suite": "USB2_sanity", "covered_by": "covered",
+            "description": "Directed bulk-in transfer test", "spec_section": "TBD-spec",
+            "constraint_items": [], "random_or_directed": "directed", "mode_speed": "HS",
+            "instance": "N/A", "checkers_active": ["sb_bulk_data_match"], "notes": "",
+            "blocked_on": None, "blocked_reason": None,
+        }],
+        "pattern_dir": str(pattern_dir),
+        "dispatcher_file": str(dispatcher_file),
+        "task_declaration_sources": [str(tests_dir / "*.sv")],
+    }
+    return "```dv-harness-evidence:vplan_writer_validation_gate\n" + json.dumps(payload) + "\n```\n"
+
+
 def test_newly_wired_orphan_gates_pass_with_valid_evidence():
     # SOC_SCENARIO_PLANNER and FAILURE_RECOVERY each gained more mandatory
     # gates in the 2026-08-28 mass-wiring pass -- their _EXTRA_GATES const
-    # supplies verified-PASS evidence for those too, INTAKE/VPLAN unaffected.
-    cases = {
-        "INTAKE": ("intake_readiness",
-            '{"mode": "SUBSYSTEM", "target_name": "usb_dev", "protocols": ["USB"], '
-            '"required_artifacts": {"protocol_spec": true, "dut_design_spec": true, '
-            '"rtl_top_or_interface_files": true}}', _INTAKE_EXTRA_GATES),
-        "VPLAN": ("spec_coverage_audit", '{"requirements": [{"req_id": "R1", "status": "VERIFIED"}]}', ""),
-        "SOC_SCENARIO_PLANNER": ("corner_risk_rank",
-            '{"cases": [{"corner_id": "c1", "risk_factors": ["reset", "cdc"]}]}',
-            _SOC_SCENARIO_PLANNER_EXTRA_GATES),
-        "FAILURE_RECOVERY": ("failure_attribution",
-            '{"boundary_trace": [{"stage": "SEQUENCE", "expected": 1, "observed": 1}, '
-            '{"stage": "DUT_INTERNAL", "expected": 1, "observed": 0}]}',
-            _FAILURE_RECOVERY_EXTRA_GATES),
-    }
-    for stage, (gate_id, body, extra) in cases.items():
-        text = f"```dv-harness-evidence:{gate_id}\n{body}\n```\n" + extra
-        verdict, reasons = evaluate_stage_evidence(ROOT, stage, text)
-        assert verdict == "PASS", f"{stage}/{gate_id}: {reasons}"
+    # supplies verified-PASS evidence for those too, INTAKE unaffected. VPLAN
+    # gained a second mandatory gate (vplan_writer_validation_gate) in the
+    # 2026-09-01 vplan-doc-and-wiring-fix pass -- see
+    # _vplan_writer_validation_extra_gate_text above for why its evidence
+    # needs a real tmp fixture rather than a static JSON string.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        cases = {
+            "INTAKE": ("intake_readiness",
+                '{"mode": "SUBSYSTEM", "target_name": "usb_dev", "protocols": ["USB"], '
+                '"required_artifacts": {"protocol_spec": true, "dut_design_spec": true, '
+                '"rtl_top_or_interface_files": true}}', _INTAKE_EXTRA_GATES),
+            "VPLAN": ("spec_coverage_audit", '{"requirements": [{"req_id": "R1", "status": "VERIFIED"}]}',
+                _vplan_writer_validation_extra_gate_text(tmp)),
+            "SOC_SCENARIO_PLANNER": ("corner_risk_rank",
+                '{"cases": [{"corner_id": "c1", "risk_factors": ["reset", "cdc"]}]}',
+                _SOC_SCENARIO_PLANNER_EXTRA_GATES),
+            "FAILURE_RECOVERY": ("failure_attribution",
+                '{"boundary_trace": [{"stage": "SEQUENCE", "expected": 1, "observed": 1}, '
+                '{"stage": "DUT_INTERNAL", "expected": 1, "observed": 0}]}',
+                _FAILURE_RECOVERY_EXTRA_GATES),
+        }
+        for stage, (gate_id, body, extra) in cases.items():
+            text = f"```dv-harness-evidence:{gate_id}\n{body}\n```\n" + extra
+            verdict, reasons = evaluate_stage_evidence(ROOT, stage, text)
+            assert verdict == "PASS", f"{stage}/{gate_id}: {reasons}"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_dashboard_overall_progress_uses_full_stage_enum_as_denominator():

@@ -93,6 +93,17 @@ STAGE_GATES = {
     ],
     "VPLAN": [
         ("spec_coverage_audit", "../vplan/spec_coverage_audit.py", "--vplan"),
+        # NEW (2026-09-01, vplan-doc-and-wiring-fix): spec_coverage_audit above
+        # checks a structurally different, incompatible JSON schema
+        # (requirements[] with VERIFIED/WAIVED/NOT_APPLICABLE status) and never
+        # calls the real dv_harness.vplan_writer.validate_items(). This second
+        # gate closes that gap by calling validate_items()/build_evidence_
+        # context() directly against real pattern-dir/dispatcher-file/task-
+        # declaration-source evidence on disk -- the same real evidence
+        # discipline `dv-harness vplan-export` itself uses. See
+        # tools/vplan/vplan_writer_validation_gate.py's header for the full
+        # rationale and why its JSON payload shape is not an invented schema.
+        ("vplan_writer_validation_gate", "../vplan/vplan_writer_validation_gate.py", "--vplan-validation"),
     ],
     "VERIFICATION_ARCHITECTURE": [
         ("mechanism_readiness_gate", "mechanism_readiness_gate.py", "--plan"),
