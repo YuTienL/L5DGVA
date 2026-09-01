@@ -549,6 +549,25 @@ power-aware 設計時填 false 即可，不需要硬湊 POWER corner。）
 Stage.INFRASTRUCTURE_AUDIT.value: """
 詳細 audit scoreboard、DMA scoreboard、performance calculator、coverage collector 的
 by-instance/by-port/by-interface/concurrency/heterogeneous legal combination 能力。
+
+本 stage 的 PASS 由 harness 端 gate 腳本裁定（`environment_readiness_status_gate.py`，會實際讀取
+回報的 readiness JSON、自己重新算一次 expected status 再跟回報值比對，不是自由心證填寫）。回覆
+結尾附上：
+
+```dv-harness-evidence:environment_readiness_status_gate
+{"scores": {"DUT": 95, "ProtocolConfig": 92, "VIP": 90, "BuildFlow": 95,
+ "Testbench": 88, "Specification": 90, "vPlan": 85, "Regression": 80, "Coverage": 75},
+ "status": "READY"}
+```
+
+（`scores` 必須完整包含這 9 個維度：DUT、ProtocolConfig、VIP、BuildFlow、Testbench、Specification、
+vPlan、Regression、Coverage——缺任何一個都會被判 FAIL（MISSING_READINESS_DIMENSIONS）；每個維度的
+分數必須是 0–100 之間的數字，型別不對或超出範圍會被判 FAIL（INVALID_READINESS_SCORE）；`status`
+不是自由填寫，gate 會依固定公式自己算出 expected 值再跟回報的 status 比對，兩者不同就判 FAIL
+（READINESS_STATUS_MISMATCH）——公式是：DUT/ProtocolConfig/VIP/BuildFlow 這四個核心維度全部 ≥90，
+且九個維度的平均分（overall）≥85，才能填 READY；這四個核心維度只要有任一項 <50，就必須填 BLOCKED；
+其餘情況一律填 PARTIAL。回報前務必自己先照這個公式核算 overall 與四個核心維度，不能憑印象或樂觀猜測
+直接填 READY/PARTIAL/BLOCKED。）
 """,
 Stage.VPLAN.value: """
 vPlan 是逐步累積出來的草稿，不是一次寫完：
