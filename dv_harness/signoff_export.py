@@ -86,7 +86,20 @@ def _copy_file(src: Path, dst: Path) -> None:
 
 def _copy_dir(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, dst, dirs_exist_ok=True)
+    # REAL COMPAT BUG (found deploying to the real remote server, Python
+    # 3.7): shutil.copytree()'s dirs_exist_ok kwarg was only added in
+    # Python 3.8. Manual recursive merge-copy below works identically on
+    # every Python 3.x version without relying on any version-gated stdlib
+    # kwarg (no distutils.dir_util.copy_tree either -- that module was
+    # removed entirely in Python 3.12, which would just trade one
+    # incompatibility for the opposite one).
+    dst.mkdir(parents=True, exist_ok=True)
+    for item in src.iterdir():
+        target = dst / item.name
+        if item.is_dir():
+            _copy_dir(item, target)
+        else:
+            shutil.copy2(item, target)
 
 
 # Directory-name markers that, if present anywhere in a manifest's path

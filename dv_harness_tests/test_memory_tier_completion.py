@@ -1,5 +1,6 @@
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -93,44 +94,104 @@ def test_organizational_memory_store_degrades_gracefully_when_kc_not_configured(
         shutil.rmtree(tmp)
 
 
-def test_organizational_memory_store_add_and_search_round_trip_through_real_kc_transport():
-    # Exercises the real KnowledgeCenterClient transport/result-marker parsing
-    # plumbing end-to-end (same fake-hop-script mocking convention as
-    # dv_harness_tests/test_knowledge_center.py's
-    # test_client_parses_result_marker_out_of_noisy_stdout), proving
-    # OrganizationalMemoryStore.add()/search() correctly delegate to it and
-    # forward the record's protocol.
+def test_organizational_memory_store_add_and_search_round_trip_through_real_kc_transport(monkeypatch):
+    # Exercises the real KnowledgeCenterClient transport/result-marker
+    # parsing plumbing end-to-end, proving OrganizationalMemoryStore.add()/
+    # search() correctly delegate to it and forward the record's protocol.
+    #
+    # REAL BUG FIX (2026-09-01, dv_harness/knowledge_center.py's _invoke()
+    # rewrite, commit 7ae3a28): rewritten to exercise the new
+    # credential-free persistent-relay transport against a real local fake
+    # relay server (mirroring dv_harness_tests/test_knowledge_center.py's
+    # own _FakeRelayServer pattern) instead of mocking subprocess.run()
+    # against the old hop_script-direct-invocation transport (which read
+    # VCPW from its own process env -- the real risk this rewrite closed).
+    import socket as _socket
+    import threading as _threading
+
     tmp = Path(tempfile.mkdtemp())
+    localappdata_tmp = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata_tmp))
+    remote_dir = str(Path(__file__).resolve().parents[1] / "tools" / "remote")
+    if remote_dir not in sys.path:
+        sys.path.insert(0, remote_dir)
+    from remote_relay import info_path
+
+    def _run_against_fake_relay(responses):
+        server_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        server_sock.bind(("127.0.0.1", 0))
+        server_sock.listen(len(responses))
+        port = server_sock.getsockname()[1]
+        received = []
+
+        def _serve():
+            for resp in responses:
+                conn, _ = server_sock.accept()
+                buf = b""
+                while b"\n" not in buf:
+                    buf += conn.recv(65536)
+                req = json.loads(buf.decode("utf-8"))
+                if req.get("op") == "put":
+                    try:
+                        req["_local_content"] = Path(req["local"]).read_text(encoding="utf-8")
+                    except OSError:
+                        req["_local_content"] = None
+                received.append(req)
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                conn.close()
+
+        t = _threading.Thread(target=_serve)
+        t.start()
+
+        p = info_path("vchost-b", "host-c")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"host": "127.0.0.1", "port": port, "token": "tok",
+                                  "pid": 1, "started": "2026-09-01T00:00:00"}), encoding="utf-8")
+        return t, server_sock, received
+
     try:
-        cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc", "hop_script": __file__}}
+        cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                     "vchost": "vchost-b", "vchop": "host-c"}}
         store = OrganizationalMemoryStore(tmp, cfg=cfg)
         assert store.configured() is True
 
-        captured = {}
-
-        def fake_run(cmd, **kwargs):
-            local_tmp = cmd[3]  # [sys.executable, hop, "--put", local_tmp, remote_tmp, remote_cmd]
-            captured["payload"] = json.loads(Path(local_tmp).read_text(encoding="utf-8"))
-            return MagicMock(returncode=0, stdout=f'{RESULT_MARKER}{{"memory_id": "KC-1"}}\n', stderr="")
-
-        with patch("subprocess.run", side_effect=fake_run):
+        t, server_sock, received = _run_against_fake_relay([
+            {"ok": True, "exit_code": 0, "stdout": "", "error": ""},  # put
+            {"ok": True, "exit_code": 0, "stdout": f'{RESULT_MARKER}{{"memory_id": "KC-1"}}\n', "error": ""},  # run
+        ])
+        try:
             add_result = store.add({
                 "title": "One submitted LSF job = one isolated Job Agent context",
                 "protocol": "USB2", "scope": "organizational",
             })
+        finally:
+            t.join(timeout=5)
+            server_sock.close()
+
         assert add_result["ok"] is True
         assert add_result["memory_id"] == "KC-1"
-        assert captured["payload"]["category"] == "_general"
-        assert captured["payload"]["protocol"] == "USB2"
-        assert captured["payload"]["record"]["title"] == "One submitted LSF job = one isolated Job Agent context"
+        payload = json.loads(received[0]["_local_content"])
+        assert payload["category"] == "_general"
+        assert payload["protocol"] == "USB2"
+        assert payload["record"]["title"] == "One submitted LSF job = one isolated Job Agent context"
 
-        noisy_stdout = f'{RESULT_MARKER}{{"count": 1, "records": [{{"memory_id": "KC-1"}}]}}\n'
-        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=noisy_stdout, stderr="")):
+        t2, server_sock2, _received2 = _run_against_fake_relay([
+            {"ok": True, "exit_code": 0, "stdout": "", "error": ""},  # put
+            {"ok": True, "exit_code": 0,
+             "stdout": f'{RESULT_MARKER}{{"count": 1, "records": [{{"memory_id": "KC-1"}}]}}\n',
+             "error": ""},  # run
+        ])
+        try:
             search_result = store.search({"text": "job agent"})
+        finally:
+            t2.join(timeout=5)
+            server_sock2.close()
+
         assert search_result["ok"] is True
         assert search_result["records"][0]["memory_id"] == "KC-1"
     finally:
         shutil.rmtree(tmp)
+        shutil.rmtree(localappdata_tmp)
 
 
 def test_all_five_memory_levels_get_a_real_directory_on_first_use():

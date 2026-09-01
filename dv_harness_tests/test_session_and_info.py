@@ -90,15 +90,26 @@ def _git(root, *args):
 def _rmtree_git_safe(path):
     # git on Windows marks packed objects read-only; shutil.rmtree's default
     # error handler doesn't clear that bit before retrying, so a real git
-    # repo's temp dir needs an onexc that chmods-then-retries. onexc (not the
-    # older onerror) is the non-deprecated hook as of Python 3.12+.
+    # repo's temp dir needs an error handler that chmods-then-retries.
+    #
+    # REAL COMPAT BUG (found deploying to the real remote server, Python
+    # 3.7): this used to pass `onexc=` (the non-deprecated hook, but only
+    # added in Python 3.12) -- crashed with TypeError on the real 3.7
+    # interpreter. `onerror` (the older callback signature,
+    # `onerror(function, path, exc_info)` taking a 3-tuple rather than
+    # onexc's bare exception instance) is supported on every Python 3.x
+    # version from 3.3 through at least 3.14 -- deprecated as of 3.12 but
+    # not removed, so it's the one signature that actually works across
+    # this project's real version range (3.7 through this dev machine's
+    # 3.14), at the cost of one deprecation warning on the newest
+    # interpreters.
     import os as _os, stat as _stat
 
-    def _onexc(func, p, exc):
+    def _onerror(func, p, exc_info):
         _os.chmod(p, _stat.S_IWRITE)
         func(p)
 
-    shutil.rmtree(path, onexc=_onexc)
+    shutil.rmtree(path, onerror=_onerror)
 
 
 def _seed_git_sha(root: Path) -> str:
@@ -596,17 +607,67 @@ def test_broker_db_info_empty_db_reports_zero_not_error():
 
 
 # --- dv_harness/knowledge_center.py client: db_info() ------------------------
+#
+# REAL BUG FIX (2026-09-01, dv_harness/knowledge_center.py's _invoke()
+# rewrite, commit 7ae3a28): this test used to mock subprocess.run() against
+# the old hop_script-direct-invocation transport, which _invoke() no longer
+# uses at all (that transport read VCPW from its own process env -- a real
+# credential-exposure risk, replaced with the credential-free persistent
+# relay). Rewritten to exercise the new transport against a real local fake
+# relay server, mirroring dv_harness_tests/test_knowledge_center.py's own
+# _FakeRelayServer pattern (kept private to that file; duplicated minimally
+# here rather than cross-importing test internals between files).
 
-def test_client_db_info_parses_result():
-    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc", "hop_script": __file__}}
-    from dv_harness.knowledge_center import KnowledgeCenterClient
-    client = KnowledgeCenterClient(cfg)
-    noisy = f'{RESULT_MARKER}{{"count": 2, "by_action": {{"CREATED": 2}}, "activity": []}}\n[exit 0]\n'
-    fake = MagicMock(returncode=0, stdout=noisy, stderr="")
-    with patch("subprocess.run", return_value=fake):
+def test_client_db_info_parses_result(tmp_path, monkeypatch):
+    import json as _json
+    import socket as _socket
+    import threading as _threading
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    remote_dir = str(ROOT / "tools" / "remote")
+    if remote_dir not in sys.path:
+        sys.path.insert(0, remote_dir)
+    from remote_relay import info_path
+
+    server_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    server_sock.bind(("127.0.0.1", 0))
+    server_sock.listen(2)
+    port = server_sock.getsockname()[1]
+    responses = [
+        {"ok": True, "exit_code": 0, "stdout": "", "error": ""},  # put
+        {"ok": True, "exit_code": 0,
+         "stdout": f'{RESULT_MARKER}{{"count": 2, "by_action": {{"CREATED": 2}}, "activity": []}}\n',
+         "error": ""},  # run
+    ]
+
+    def _serve():
+        for resp in responses:
+            conn, _ = server_sock.accept()
+            buf = b""
+            while b"\n" not in buf:
+                buf += conn.recv(65536)
+            conn.sendall((_json.dumps(resp) + "\n").encode("utf-8"))
+            conn.close()
+
+    t = _threading.Thread(target=_serve)
+    t.start()
+    try:
+        p = info_path("vchost-b", "host-c")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_json.dumps({"host": "127.0.0.1", "port": port, "token": "tok",
+                                   "pid": 1, "started": "2026-09-01T00:00:00"}), encoding="utf-8")
+
+        cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                     "vchost": "vchost-b", "vchop": "host-c"}}
+        from dv_harness.knowledge_center import KnowledgeCenterClient
+        client = KnowledgeCenterClient(cfg)
         result = client.db_info(limit=10)
-        assert result["ok"] is True
-        assert result["count"] == 2
+    finally:
+        t.join(timeout=5)
+        server_sock.close()
+
+    assert result["ok"] is True
+    assert result["count"] == 2
 
 
 # --- dashboard endpoints ------------------------------------------------------

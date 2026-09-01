@@ -208,13 +208,11 @@ def test_engine_persists_qualified_conclusion_on_real_pass_high_confidence():
     tmp, h = _fresh_harness()
     try:
         h.set_stage("RE_AUDIT")
-        evidence_blocks = {"root_cause_evidence_gate": _EXECUTION_EVIDENCE | {
-            "hypotheses": [
+        evidence_blocks = {"root_cause_evidence_gate": {**_EXECUTION_EVIDENCE, "hypotheses": [
                 {"claim": _EXECUTION_EVIDENCE["root_cause"], "counter_evidence": []},
                 {"claim": "alt 1", "counter_evidence": ["ruled out via command.txt"]},
                 {"claim": "alt 2", "counter_evidence": ["ruled out via VIP trace"]},
-            ],
-        }}
+            ]}}
         h._score_root_cause_confidence("RE_AUDIT", evidence_blocks)
 
         bb = h.blackboard.read("qualified_conclusion")
@@ -282,13 +280,11 @@ def test_engine_would_mark_gate_fail_verdict_as_not_qualified_via_explicit_verdi
     tmp, h = _fresh_harness()
     try:
         h.set_stage("RE_AUDIT")
-        evidence_blocks = {"root_cause_evidence_gate": _EXECUTION_EVIDENCE | {
-            "hypotheses": [
+        evidence_blocks = {"root_cause_evidence_gate": {**_EXECUTION_EVIDENCE, "hypotheses": [
                 {"claim": _EXECUTION_EVIDENCE["root_cause"], "counter_evidence": []},
                 {"claim": "alt 1", "counter_evidence": ["ruled out via command.txt"]},
                 {"claim": "alt 2", "counter_evidence": ["ruled out via VIP trace"]},
-            ],
-        }}
+            ]}}
         h._score_root_cause_confidence("RE_AUDIT", evidence_blocks, verdict="GATE_FAIL")
 
         bb = h.blackboard.read("qualified_conclusion")

@@ -880,7 +880,16 @@ def test_knowledge_status_endpoint_reports_disabled_by_default():
         shutil.rmtree(tmp)
 
 
-def test_knowledge_status_endpoint_pings_when_enabled():
+def test_knowledge_status_endpoint_pings_when_enabled(monkeypatch):
+    # REAL BUG FIX (2026-09-01, dv_harness/knowledge_center.py's _invoke()
+    # rewrite, commit 7ae3a28): "hop_script" is no longer read by _invoke()
+    # at all (that transport read VCPW from its own process env -- a real
+    # credential-exposure risk, replaced with the credential-free persistent
+    # relay). With no vchost/vchop configured and no VCHOST/VCHOP env vars
+    # set, the real error is now VC_HOST_HOP_NOT_CONFIGURED, not
+    # REMOTE_HOP_NOT_FOUND (a code path that no longer exists).
+    monkeypatch.delenv("VCHOST", raising=False)
+    monkeypatch.delenv("VCHOP", raising=False)
     port = _free_port()
     tmp = _mk_dashboard_project(port)
     try:
@@ -888,7 +897,6 @@ def test_knowledge_status_endpoint_pings_when_enabled():
         cfg = load_config(tmp)
         cfg["knowledge_center"]["enabled"] = True
         cfg["knowledge_center"]["remote_root"] = "/srv/kc"
-        cfg["knowledge_center"]["hop_script"] = "/nonexistent/remote_hop.py"
         save_config(tmp, cfg)
 
         base = f"http://127.0.0.1:{port}"
@@ -899,8 +907,8 @@ def test_knowledge_status_endpoint_pings_when_enabled():
         assert status == 200
         assert data["config"]["enabled"] is True
         assert "ping" in data
-        assert data["ping"]["ok"] is False  # no real server reachable in this test
-        assert data["ping"]["error"] == "REMOTE_HOP_NOT_FOUND"
+        assert data["ping"]["ok"] is False  # no vchost/vchop configured in this test
+        assert data["ping"]["error"] == "VC_HOST_HOP_NOT_CONFIGURED"
     finally:
         shutil.rmtree(tmp)
 
