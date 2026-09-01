@@ -50,6 +50,21 @@ the actual source (`tools/knowledge_center/broker.py`,
   inside the same shared `/home/svcacct/AI/Agent` checkout **will** corrupt
   each other's `state.json`/`blackboard/`/`events.jsonl` — there is no lock
   protecting that path, unlike the Knowledge Center.
+- **Never deploy your generated VIP verification environment into the
+  shared code tree.** The engine (`/home/svcacct/AI/Agent`) and the
+  Knowledge Center (`/home/svcacct/AI/DB`) are the only two things meant to
+  be shared. The actual generated deliverable (e.g. a USB VIP-based UVM
+  environment) is a per-project artifact and belongs at its own dedicated
+  path (e.g. `/home/tmpacct/devuser/UVM/USB`) — set your own `DVWORKDIR`
+  env var to that path so every `remote_exec.py` call defaults into it
+  automatically without needing `--cwd` on every invocation:
+  ```
+  export DVWORKDIR=/home/tmpacct/devuser/UVM/USB
+  python tools/remote/remote_exec.py "make WAVE=1"
+  ```
+  This is a third, separate concept from `VCWORKDIR` (the relay's own
+  shared shell cwd) and `--project-root` (the harness's own runtime-state
+  location) — see `REMOTE_LOGIN_GUIDE.md`'s three-way comparison table.
 - **Prefer one relay per user.** A relay started from your own machine
   (`%LOCALAPPDATA%` is already per-Windows-account) gives you your own real
   SSH login on the server with zero contention. If a relay genuinely must
@@ -82,9 +97,27 @@ multiple people sharing it could make commands cut in line).
 4. `DEFAULT_IDLE_TIMEOUT` raised from 2h to 24h — a shared relay dying from
    idle forces a full re-login for every current user of it, not just
    whoever triggered the check.
+5. `remote_exec.py` reads a `DVWORKDIR` env var as a default `--cwd` so a
+   user doesn't have to repeat `--cwd` on every call — set once per
+   terminal session to that user's own generated environment's deployment
+   path (e.g. `/home/tmpacct/devuser/UVM/USB`). An explicit `--cwd` still
+   overrides it.
+6. A separate, pre-existing bug surfaced live while verifying this fix
+   against the real deployment: `Session.put()`
+   (`tools/remote/remote_hop.py`) used a generic prompt regex to detect
+   when its rapid-fire base64 chunk-upload had finished — a real tcsh
+   redraws its prompt after every single command, so that pattern could
+   match after just the first of many chunks, corrupting the next
+   command's own output capture. Fixed by switching to the same
+   unique-marker completion-detection technique `run()` already used.
+   Proven with a real socket-backed fake-tcsh-server test
+   (`dv_harness_tests/test_remote_hop.py`) that deliberately redraws a
+   prompt after every chunk.
 
 Regression tests: `dv_harness_tests/test_remote_relay.py` (new tests under
-the "Multi-user concurrency safety (2026-09-02)" section).
+the "Multi-user concurrency safety (2026-09-02)" section),
+`dv_harness_tests/test_remote_exec.py` (DVWORKDIR tests),
+`dv_harness_tests/test_remote_hop.py` (new file, put() flush-marker fix).
 
 ## What is still an open, unavoidable limitation
 

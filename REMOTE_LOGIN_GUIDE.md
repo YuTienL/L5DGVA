@@ -54,17 +54,25 @@ cannot self-reauthenticate — it has no password in this process), ask the
 user to restart it in their own terminal per "Starting a relay" above.
 Never attempt to start/restart `remote_relay.py` from a tool call yourself.
 
-## `VCWORKDIR` vs. `--project-root` — these are two different things
+## `VCWORKDIR` vs. `--project-root` vs. `DVWORKDIR` — three different things
 
-| | `VCWORKDIR` | `--project-root` |
-|---|---|---|
-| Which machine | The **Linux server**, inside the relay's one persistent shell | Wherever `dv-harness` (the Python engine) is actually invoked from — typically your local Windows client |
-| What it controls | The default cwd for shell commands sent via `remote_exec.py` (`make`, `git`, `bsub`, ...) | Which project's `.dv-harness/` **runtime state** (`state.json`, `blackboard/`, `react/`, `memory/`, `events.jsonl`, ...) `DVHarness` reads and writes (`dv_harness/cli.py:92`, `DVHarness.__init__`) |
-| Shared safely across users? | The code tree it points at (e.g. `/home/svcacct/AI/Agent`) can be read by everyone — but the *cwd itself* is one shared mutable value for the whole relay, see the state-leakage note below | **No** — see `USAGE_MULTI_USER_SAFETY.md`; each user needs their own |
+| | `VCWORKDIR` | `--project-root` | `DVWORKDIR` |
+|---|---|---|---|
+| Which machine | The **Linux server**, inside the relay's one persistent shell | Wherever `dv-harness` (the Python engine) is actually invoked from — typically your local Windows client | Read locally by `remote_exec.py` (the client) |
+| What it controls | The relay's own default cwd, set **once at relay startup** | Which project's `.dv-harness/` **runtime state** (`state.json`, `blackboard/`, `react/`, `memory/`, `events.jsonl`, ...) `DVHarness` reads and writes (`dv_harness/cli.py:92`, `DVHarness.__init__`) | A **per-terminal/per-session default `--cwd`** — e.g. the Linux-server-side deployment path of the specific VIP-based verification environment you're working on (`/home/tmpacct/devuser/UVM/USB`) |
+| Set how often | Once, when the relay is started | Once per `dv-harness` invocation (or exported once per shell) | Once per terminal session (env var), applied to every `remote_exec.py` call automatically |
+| Shared safely across users? | The code tree it points at (e.g. `/home/svcacct/AI/Agent`) can be read by everyone — but the *cwd itself* is one shared mutable value for the whole relay, see the state-leakage note below | **No** — see `USAGE_MULTI_USER_SAFETY.md`; each user needs their own | Yes — it's per-caller/per-terminal, never persisted into the shared relay's own state (composed into the same non-leaking `(cd '<dir>' && <cmd>)` subshell as an explicit `--cwd` would be) |
 
 They are unrelated to each other by design — you can point `VCWORKDIR` at
 the shared deployment while every user still runs `dv-harness` with their
-own separate `--project-root`.
+own separate `--project-root`, and sets their own `DVWORKDIR` to their own
+generated environment's deployment path:
+
+```
+export DVWORKDIR=/home/tmpacct/devuser/UVM/USB
+python tools/remote/remote_exec.py "make WAVE=1"   # runs in DVWORKDIR automatically
+python tools/remote/remote_exec.py --cwd /tmp "ls" # an explicit --cwd still wins over DVWORKDIR
+```
 
 ### Per-request state leakage — use `--cwd`, not a standing `cd`
 

@@ -109,6 +109,82 @@ def test_remote_exec_source_never_reads_vcpw_env_var():
     assert 'environ["VCPW"]' not in source
 
 
+def _fake_relay_capturing_requests(captured):
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.bind(("127.0.0.1", 0))
+    server_sock.listen(1)
+    port = server_sock.getsockname()[1]
+
+    def fake_server():
+        conn, _ = server_sock.accept()
+        buf = b""
+        while b"\n" not in buf:
+            buf += conn.recv(65536)
+        captured.append(json.loads(buf.decode("utf-8")))
+        conn.sendall((json.dumps({"ok": True, "exit_code": 0, "stdout": ""}) + "\n").encode("utf-8"))
+        conn.close()
+
+    t = threading.Thread(target=fake_server)
+    t.start()
+    return server_sock, t, port
+
+
+def _write_relay_info(tmp_path, monkeypatch, vchost, vchop, port):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    relay_dir = tmp_path / "dv_agent_harness" / "relay"
+    relay_dir.mkdir(parents=True)
+    payload = {"host": "127.0.0.1", "port": port, "token": "tok", "pid": 1, "started": "now"}
+    (relay_dir / ("%s-%s.json" % (vchost, vchop))).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_main_uses_dvworkdir_env_as_default_cwd_when_flag_omitted(tmp_path, monkeypatch):
+    captured = []
+    server_sock, t, port = _fake_relay_capturing_requests(captured)
+    try:
+        _write_relay_info(tmp_path, monkeypatch, "vchost-b", "host-b", port)
+        monkeypatch.setenv("VCHOST", "vchost-b")
+        monkeypatch.setenv("VCHOP", "host-b")
+        monkeypatch.setenv("DVWORKDIR", "/home/tmpacct/devuser/UVM/USB")
+        monkeypatch.setattr(sys, "argv", ["remote_exec.py", "pwd"])
+        remote_exec.main()
+    finally:
+        t.join(timeout=5)
+        server_sock.close()
+    assert captured[0]["cwd"] == "/home/tmpacct/devuser/UVM/USB"
+
+
+def test_main_explicit_cwd_flag_overrides_dvworkdir_env(tmp_path, monkeypatch):
+    captured = []
+    server_sock, t, port = _fake_relay_capturing_requests(captured)
+    try:
+        _write_relay_info(tmp_path, monkeypatch, "vchost-b", "host-b", port)
+        monkeypatch.setenv("VCHOST", "vchost-b")
+        monkeypatch.setenv("VCHOP", "host-b")
+        monkeypatch.setenv("DVWORKDIR", "/home/tmpacct/devuser/UVM/USB")
+        monkeypatch.setattr(sys, "argv", ["remote_exec.py", "--cwd", "/home/svcacct/AI/Agent", "pwd"])
+        remote_exec.main()
+    finally:
+        t.join(timeout=5)
+        server_sock.close()
+    assert captured[0]["cwd"] == "/home/svcacct/AI/Agent"
+
+
+def test_main_no_cwd_key_when_neither_flag_nor_dvworkdir_set(tmp_path, monkeypatch):
+    captured = []
+    server_sock, t, port = _fake_relay_capturing_requests(captured)
+    try:
+        _write_relay_info(tmp_path, monkeypatch, "vchost-b", "host-b", port)
+        monkeypatch.setenv("VCHOST", "vchost-b")
+        monkeypatch.setenv("VCHOP", "host-b")
+        monkeypatch.delenv("DVWORKDIR", raising=False)
+        monkeypatch.setattr(sys, "argv", ["remote_exec.py", "pwd"])
+        remote_exec.main()
+    finally:
+        t.join(timeout=5)
+        server_sock.close()
+    assert "cwd" not in captured[0]
+
+
 def test_main_prints_down_block_when_no_relay_info(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setenv("VCHOST", "vchost-b")

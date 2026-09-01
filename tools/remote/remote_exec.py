@@ -24,6 +24,16 @@ caller's command, even a caller working on something unrelated. Pass --cwd
 (and prefer full binary paths over relying on a prior `module load`) on
 every call when this relay may be shared with other concurrent work.
 
+DVWORKDIR (env var) sets a default --cwd so you don't have to repeat it on
+every call -- set once per terminal/session, e.g. to the Linux-server-side
+deployment path of the VIP-based verification environment you are working
+on this session (distinct from VCWORKDIR, which is the relay's own shared
+shell cwd set once at relay start -- see REMOTE_LOGIN_GUIDE.md's "VCWORKDIR
+vs. --project-root" section, and note DVWORKDIR is a third, different
+concept from both):
+  DVWORKDIR=/home/tmpacct/devuser/UVM/USB python tools/remote/remote_exec.py "make WAVE=1"
+An explicit --cwd on the command line always overrides DVWORKDIR.
+
 Requires VCHOST/VCHOP env vars (to locate the same relay info file
 remote_relay.py wrote) -- but never VCPW.
 
@@ -100,7 +110,8 @@ def main():
     ap.add_argument('--timeout', type=int, default=1800)
     ap.add_argument('--cwd', default=None,
         help='Run cmd in a subshell cd\'d to this dir; does not affect the '
-             'relay\'s persistent shell cwd for later/other callers.')
+             'relay\'s persistent shell cwd for later/other callers. '
+             'Defaults to the DVWORKDIR env var if set and --cwd is omitted.')
     a = ap.parse_args()
 
     vchost = os.environ.get('VCHOST', '')
@@ -127,8 +138,9 @@ def main():
         req = {'token': token, 'op': 'get', 'remote': a.get[0], 'local': a.get[1]}
     elif a.cmd:
         req = {'token': token, 'op': 'run', 'cmd': a.cmd, 'timeout': a.timeout}
-        if a.cwd:
-            req['cwd'] = a.cwd
+        cwd = a.cwd or os.environ.get('DVWORKDIR', '')
+        if cwd:
+            req['cwd'] = cwd
     else:
         print(__doc__)
         return 2
