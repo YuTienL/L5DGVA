@@ -20,7 +20,8 @@ legitimate evolution. Where a step has real generator code backing it in
 restating its schema independently -- currently: `bind_mechanism_generator.py`
 (two-hook skeleton + evidence-gated `bind`), `address_map_verifier.py`
 (Step 3's three-independent-source address method), and `generator.py`'s
-`virtual_sequences`/`SCOREBOARD_CHECKS` DSLs (Steps 7/8). If this skill and
+`virtual_sequences`/`SCOREBOARD_CHECKS`/`transaction_scoreboards` DSLs
+(Steps 7/8). If this skill and
 the agent file ever read as contradictory on the same point, that is a bug in
 one of them, not an acceptable state -- fix the stale one rather than
 picking whichever you read first.
@@ -710,6 +711,27 @@ None of these fail compilation. The symptom is always a far-side timeout.
   intercept the WRITE instead; two independently-authored components may
   enumerate the same values in different bit-pattern order -- compare
   through each side's named-enum decode, never the raw numeric code.
+- **A single lhs/rhs field-equality check (`scoreboard_rules` +
+  `check_name`, `generator.py`'s SCOREBOARD_CHECKS DSL) is a CHECKER, not a
+  SCOREBOARD.** For a real data-integrity requirement -- predicted vs.
+  observed transaction streams that must be matched by key, not just one
+  register readback compared once -- use the separate top-level manifest
+  key `transaction_scoreboards` (2026-09-01) instead: two TLM analysis
+  ports (`predicted`/`observed`), a `match_key`-based queue search
+  (`IN_ORDER` head-only or `OUT_OF_ORDER` full-queue), `compare_fields`
+  once matched, and explicit `on_orphan_predicted` (dropped) /
+  `on_orphan_observed` (fabricated/unexpected) / optional `on_duplicate`
+  disposition. See `generator.py`'s `scoreboard()` docstring for the full
+  schema and `dv_harness_tests/test_transaction_scoreboard_dsl.py` for a
+  worked DMA-scoreboard example. v1 scope, deliberately deferred (not
+  silently dropped): no `register_decode`/`enum_translation` on
+  `compare_fields` yet; orphan-predicted detection is report_phase-drain-
+  only (end of test), not a live per-transaction timeout; exactly 2 fixed
+  named ports, both carrying the same `item_class`. Instantiating and
+  wiring the generated class needs **no other generator change** -- it is
+  an ordinary `vip_components` entry, wired via the existing `connections`
+  `kind="call"` shape (real evidence: USB_UVM_Handoff `usb_top_env.sv:531`,
+  `dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export);`).
 
 ---
 

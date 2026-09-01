@@ -137,6 +137,76 @@ class MalformedScoreboardCheckError(ValueError):
         self.detail = detail
 
 
+class MalformedTransactionScoreboardError(ValueError):
+    """Raised by UVMEnvironmentGenerator._validate_transaction_scoreboard /
+    _emit_transaction_scoreboard when a top-level "transaction_scoreboards"
+    manifest entry (see scoreboard()'s own docstring for the full schema) is
+    missing/malformed. This is the TRANSACTION_SCOREBOARDS DSL's sibling to
+    MalformedScoreboardCheckError above -- same typed-error convention (a
+    short SCREAMING_SNAKE_CASE `reason` code plus a concrete `detail` dict)
+    -- but for a genuinely different mechanism: a two-TLM-stream (predicted/
+    observed) queue-based transaction scoreboard (match/mismatch/orphan/
+    duplicate disposition), not SCOREBOARD_CHECKS's single-pair field
+    comparison. Never silently skipped, guessed, or partially compiled --
+    every entry in the manifest's "transaction_scoreboards" list is
+    validated before ANY of them is emitted (all-or-nothing, same posture as
+    _emit_scoreboard_check's per-entry raise).
+
+    Validation branches (one raise per branch, never combined/guessed):
+      - MISSING_SCOREBOARD_NAME (entry not a dict, or "scoreboard_name"
+        missing/empty)
+      - DUPLICATE_SCOREBOARD_NAME (two entries in one manifest whose
+        sv_id()-normalized "scoreboard_name" collide -- an ambiguous
+        generated-class-name collision, same spirit as
+        ConstructionCollisionError)
+      - MISSING_SCOREBOARD_EVIDENCE ("evidence" missing/empty -- this DSL
+        holds itself to the stronger "virtual_sequences"/"connections"-style
+        mandatory top-level evidence bar, not SCOREBOARD_CHECKS's narrower
+        enum_translation-only evidence requirement, per this task's own
+        evidence-required convention)
+      - MISSING_ITEM_CLASS ("item_class" missing/empty)
+      - MALFORMED_PORT_SPEC ("predicted_port"/"observed_port" missing, not a
+        dict, or missing/empty "port_name")
+      - DUPLICATE_PORT_NAME (predicted_port and observed_port resolve to the
+        identical "port_name" -- would emit two same-named class members;
+        not enumerated in the original design pass's reason-code list, added
+        here because a manifest that did this would otherwise silently
+        compile to broken, non-recompiling SystemVerilog, which this
+        generator's typed-refusal convention never permits)
+      - INVALID_ORDERING_POLICY (not one of "IN_ORDER"/"OUT_OF_ORDER")
+      - EMPTY_MATCH_KEY ("match_key" missing/empty/not a list)
+      - MALFORMED_MATCH_KEY_ENTRY (a "match_key" entry not a
+        {"field": <non-empty str>} dict)
+      - EMPTY_COMPARE_FIELDS ("compare_fields" missing/empty/not a list)
+      - MALFORMED_COMPARE_FIELD (a "compare_fields" entry not a dict, or
+        missing/empty "field")
+      - INVALID_COMPARE_OP (not one of SCOREBOARD_CHECKS's existing
+        eq|neq|lt|lte|gt|gte|mask_eq plus this DSL's one new "array_eq")
+      - MISSING_MASK_EQ_MASK (compare_op=="mask_eq" with no top-level "mask"
+        string on that compare_fields entry)
+      - MISSING_ON_MISMATCH / INVALID_ON_MISMATCH_SEVERITY /
+        MISSING_ON_MISMATCH_MESSAGE_TEMPLATE (a compare_fields entry's
+        "on_mismatch" missing/malformed -- same severity-set/message
+        validation _emit_scoreboard_check already performs, reused verbatim)
+      - MISSING_ON_ORPHAN_PREDICTED / INVALID_ON_ORPHAN_PREDICTED_SEVERITY /
+        MISSING_ON_ORPHAN_PREDICTED_MESSAGE_TEMPLATE (required top-level
+        disposition, same shape)
+      - MISSING_ON_ORPHAN_OBSERVED / INVALID_ON_ORPHAN_OBSERVED_SEVERITY /
+        MISSING_ON_ORPHAN_OBSERVED_MESSAGE_TEMPLATE (required top-level
+        disposition, same shape)
+      - INVALID_ON_DUPLICATE_SEVERITY / MISSING_ON_DUPLICATE_MESSAGE_TEMPLATE
+        (only checked when the OPTIONAL top-level "on_duplicate" key is
+        present at all -- its own severity/message_template shape is
+        identical to the other three dispositions but the design pass did
+        not enumerate its error codes explicitly since the key itself is
+        optional; this generator still never accepts a present-but-malformed
+        "on_duplicate" silently)."""
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
 class ConstructionCollisionError(ValueError):
     """Raised by UVMEnvironmentGenerator._env_multi_component when a top-level
     "connections" entry with kind="construct" targets the same real object
@@ -706,7 +776,159 @@ endclass
         verbatim; a manifest author's message_template must therefore use
         exactly 3 format specifiers, in check_name/lhs/rhs order.
 
-        See _emit_scoreboard_check for the exact per-check compiled shape."""
+        See _emit_scoreboard_check for the exact per-check compiled shape.
+
+        TRANSACTION_SCOREBOARDS DSL EXTENSION (additive, backward compatible
+        -- a manifest with no top-level "transaction_scoreboards" key, or an
+        empty list, is a complete no-op here: output above is returned
+        unchanged, byte-identical to before this extension existed).
+
+        SCOREBOARD_CHECKS (above) and this project's own vocabulary
+        (.claude/skills/CORE/dv-workflow/SKILL.md's "Scoreboard"/"DMA
+        Scoreboard" as infrastructure distinct from a plain checker) agree:
+        a single lhs/rhs field-equality check is a CHECKER, not a
+        transaction/data-integrity SCOREBOARD. A real scoreboard is two
+        independent TLM analysis-port streams (a "predicted" stream, from a
+        reference model, and an "observed" stream, from a real bus monitor),
+        an internal queue of not-yet-matched predicted transactions, a
+        match_key-based lookup finding the corresponding observed
+        transaction for each predicted one, a payload/field compare once
+        matched, and explicit disposition of the three failure classes a
+        single-pair checker cannot produce: an orphaned predicted
+        transaction (DUT dropped it), an orphaned observed transaction (DUT
+        fabricated/duplicated one), and (optionally) a duplicate match.
+        Confirmed absent anywhere in dv_harness/uvm_generator/ before this
+        extension: no uvm_tlm_analysis_fifo/uvm_analysis_imp-based
+        comparator, no transaction queue, no match/orphan state machine
+        exists anywhere in this package.
+
+        An optional top-level manifest key "transaction_scoreboards" -- a
+        list of dicts, each:
+
+          {"scoreboard_name": str (required, non-empty; becomes
+             "<p>_<scoreboard_name>_scoreboard" via sv_id()),
+           "evidence": str (required, non-empty -- citation of why THESE
+             match_key/compare_fields are the correct data-integrity check
+             for this protocol; this DSL holds itself to the STRONGER
+             mandatory-evidence bar "virtual_sequences"/"connections" use,
+             not SCOREBOARD_CHECKS's narrower enum_translation-only
+             requirement -- see MalformedTransactionScoreboardError),
+           "item_class": str (required, non-empty; the SV transaction item
+             type flowing on BOTH ports -- v1 requires the same item_class
+             on both sides, see scope-boundary notes below),
+           "predicted_port": {"port_name": str},
+           "observed_port": {"port_name": str},
+           "ordering_policy": "IN_ORDER" | "OUT_OF_ORDER" (required;
+             IN_ORDER inspects only predicted_q[0] -- strict FIFO;
+             OUT_OF_ORDER searches the whole queue for a match_key match),
+           "match_key": [{"field": str}, ...] (non-empty; ordered list of
+             item fields identifying "the same transaction" across the two
+             streams, e.g. tag/seq_id/addr -- compared with `===`),
+           "compare_fields": [
+             {"field": str,
+              "compare_op": "eq"|"neq"|"lt"|"lte"|"gt"|"gte"|"mask_eq"|
+                "array_eq" (this DSL's one new op beyond SCOREBOARD_CHECKS's
+                existing 6, for a dynamic-array/queue payload field),
+              "mask": str (required iff compare_op=="mask_eq"),
+              "on_mismatch": {"severity": "UVM_ERROR"|"UVM_WARNING"|
+                "UVM_INFO", "message_template": str (required, non-empty;
+                exactly 3 format specifiers, filled with
+                (field_name, expected_value, observed_value) -- the same
+                (identifying-name, lhs, rhs) convention
+                _emit_scoreboard_check's message_template already uses, with
+                "field_name" playing check_name's role since one
+                write_observed() call can run more than one compare_fields
+                check)}}, ...
+           ] (non-empty),
+           "on_orphan_predicted": {"severity": ..., "message_template": str
+             (exactly 2 format specifiers: (scoreboard_name,
+             predicted_q.size()) -- fired once, in report_phase, for the
+             WHOLE remaining queue, not once per leftover item, per this
+             DSL's deliberate v1 scope: end-of-test drain check only, no
+             live per-transaction timeout)},
+           "on_orphan_observed": {"severity": ..., "message_template": str
+             (exactly len(match_key) format specifiers, filled with the
+             observed transaction's match_key field values in match_key
+             order -- fired immediately in write_observed() when no
+             predicted_q entry, and no prior-match history entry when
+             "on_duplicate" is set, matches)},
+           "on_duplicate": {"severity": ..., "message_template": str (same
+             len(match_key) shape as on_orphan_observed)} (OPTIONAL -- only
+             when present does this generator emit the matched-transaction
+             history queue and duplicate-vs-orphan distinction at all; when
+             absent, a second observed transaction reusing an
+             already-matched key is indistinguishable from, and reported
+             as, an ordinary orphan_observed -- a deliberate simplicity/cost
+             tradeoff, not an oversight, so scoreboards that do not care
+             about duplicates do not pay for an unboundedly-growing history
+             queue they never asked for)}
+
+        "array_eq" compiles to `exp.<field> != obs.<field>` -- NOTE:
+        plain `!=`, not the `!==` this DSL's other compare_ops use.
+        RULING (deviation from this task's own design-report prose, which
+        was internally inconsistent -- its narrative text correctly states
+        real IEEE 1800 SystemVerilog gives `==`/`!=` element-wise semantics
+        on same-element-type dynamic arrays/queues, but its own compiled-code
+        sketch then showed `!==`): `===`/`!==` (4-state case (in)equality)
+        are defined only for packed/integral types, NOT for unpacked array
+        types (dynamic arrays, queues) -- using `!==` on a queue field is a
+        real VCS compile error, not merely non-idiomatic. This generator
+        never knowingly emits SystemVerilog that cannot compile, so
+        "array_eq" uses `!=` while every other compare_op keeps `!==`/`===`
+        verbatim per SCOREBOARD_CHECKS precedent.
+
+        Every entry is validated in full (_validate_transaction_scoreboard)
+        BEFORE any entry is emitted -- a malformed 3rd entry never leaves
+        the first two partially emitted, same all-or-nothing posture
+        _emit_scoreboard_check's per-entry raise already has. See
+        MalformedTransactionScoreboardError for the exact validation-branch
+        list.
+
+        Emission (_emit_transaction_scoreboard) appends one whole NEW
+        uvm_scoreboard-extending class per entry, using base_vseq()'s
+        class-append-splice technique (parts.append(...)) -- NOT
+        _emit_scoreboard_check's own function-append-into-one-class
+        technique -- because a TLM-port-bearing scoreboard needs its own
+        uvm_analysis_imp handles/build_phase/report_phase, so it cannot be a
+        function bolted onto the existing single-purpose "<p>_scoreboard"
+        class body. The `uvm_analysis_imp_decl(_predicted)`/
+        `uvm_analysis_imp_decl(_observed)` macro declarations (generic UVM
+        base-class-library scaffolding, same "no per-project evidence
+        needed for standard library mechanics" posture as
+        `::type_id::create()`/`uvm_config_db#()::get()` elsewhere in this
+        generator) are emitted exactly ONCE per file regardless of how many
+        "transaction_scoreboards" entries share them (the macro-generated
+        `uvm_analysis_imp_predicted#(TYPE,IMP)` template is generic over
+        TYPE/IMP, so one declaration serves every entry even when entries
+        use different item_class values).
+
+        Instantiating a generated "<p>_<scoreboard_name>_scoreboard" class
+        and wiring its two analysis-port handles to a real predictor's and
+        monitor's analysis ports needs ZERO changes anywhere else in this
+        generator -- it is an ordinary uvm_component, expressible via an
+        ordinary "vip_components" entry (default class_handle kind), and its
+        `.connect()` wiring is already exactly expressible via the existing
+        "connections" kind="call" shape (real evidence,
+        USB_UVM_Handoff usb_top_env.sv:531:
+        `dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export);`
+        is literally the same `<receiver>.<method>(<args>)` shape a
+        `.connect()` call needs). This design's scope is deliberately
+        narrow: only the scoreboard class body itself is new engine
+        capability.
+
+        Scope boundary (v1, deliberately deferred, not silently dropped --
+        see .work/scoreboard-generator-design-report.md's own "Scope
+        Boundary" section for the full reasoning): no register_decode/
+        enum_translation on compare_fields yet; predicted_q (and the
+        optional duplicate-history queue) can grow unboundedly against a
+        stuck/misbehaving DUT -- flagged, not solved; orphan-predicted
+        detection is report_phase-drain-only, not live per-transaction
+        timeout (no per-protocol clock/timescale evidence this generator
+        models generically); exactly 2 fixed named ports (predicted/
+        observed), no N-way match; both ports carry the same item_class,
+        no per-side item-class mapping; this DSL never synthesizes
+        reference-model prediction logic itself, only consumes an existing
+        predicted-side analysis port."""
         entries = m.get('scoreboard_rules') or []
         comment_entries = [x for x in entries
                             if not (isinstance(x, dict) and 'check_name' in x)]
@@ -730,6 +952,25 @@ endclass
             check_text = '\n'.join(self._emit_scoreboard_check(x) for x in check_entries)
             assert out.endswith('endclass\n')
             out = out[:-len('endclass\n')] + check_text + '\nendclass\n'
+
+        tx_entries = m.get('transaction_scoreboards') or []
+        if tx_entries:
+            for tx in tx_entries:
+                self._validate_transaction_scoreboard(tx)
+            seen_names = {}
+            for tx in tx_entries:
+                key = sv_id(tx['scoreboard_name'])
+                if key in seen_names:
+                    raise MalformedTransactionScoreboardError("DUPLICATE_SCOREBOARD_NAME", {
+                        "scoreboard_name": tx['scoreboard_name'],
+                        "conflicts_with": seen_names[key],
+                    })
+                seen_names[key] = tx['scoreboard_name']
+
+            parts = [out, self._emit_transaction_scoreboard_macros()]
+            for tx in tx_entries:
+                parts.append(self._emit_transaction_scoreboard(p, tx))
+            out = '\n'.join(parts)
         return out
 
     def _emit_scoreboard_check(self, check):
@@ -869,6 +1110,308 @@ endclass
   endfunction''' % (
             sv_id(check_name), ', '.join(params), '\n'.join(decl_lines),
             mismatch_expr, severity_macro, check_id, json.dumps(message_template), check_name)
+
+    _TX_VALID_SEVERITIES = {'UVM_ERROR', 'UVM_WARNING', 'UVM_INFO'}
+    _TX_VALID_COMPARE_OPS = {'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'mask_eq', 'array_eq'}
+
+    def _validate_tx_disposition(self, base_detail, disposition, prefix):
+        """Shared severity/message_template validator reused by every
+        transaction-scoreboard disposition block (on_mismatch per
+        compare_fields entry, on_orphan_predicted, on_orphan_observed, the
+        optional on_duplicate) -- one validated shape, four use sites, same
+        reuse posture point 7 of the design report calls for (mirrors
+        _emit_scoreboard_check's own on_mismatch severity/message_template
+        validation at generator.py's SCOREBOARD_CHECKS section verbatim).
+        `prefix` (e.g. "ON_MISMATCH") names the MalformedTransactionScoreboardError
+        reason-code family this call raises into: MISSING_<prefix> (not a
+        dict at all), INVALID_<prefix>_SEVERITY, MISSING_<prefix>_MESSAGE_TEMPLATE."""
+        if not isinstance(disposition, dict):
+            raise MalformedTransactionScoreboardError("MISSING_" + prefix, dict(base_detail))
+        severity = disposition.get('severity')
+        if severity not in self._TX_VALID_SEVERITIES:
+            raise MalformedTransactionScoreboardError("INVALID_" + prefix + "_SEVERITY", dict(
+                base_detail, severity=severity, valid_severities=sorted(self._TX_VALID_SEVERITIES)))
+        message_template = disposition.get('message_template')
+        if not message_template or not str(message_template).strip():
+            raise MalformedTransactionScoreboardError("MISSING_" + prefix + "_MESSAGE_TEMPLATE", dict(base_detail))
+
+    def _validate_transaction_scoreboard(self, entry):
+        """Validates one "transaction_scoreboards" manifest entry in full
+        (see scoreboard()'s own docstring for the complete field-by-field
+        schema), raising MalformedTransactionScoreboardError -- never
+        silently skipping or guessing -- on the first malformed piece found.
+        See that error class's own docstring for the exact reason-code list.
+        Called once per entry, for every entry, before any entry is emitted
+        (scoreboard()'s all-or-nothing posture)."""
+        if not isinstance(entry, dict):
+            raise MalformedTransactionScoreboardError("MISSING_SCOREBOARD_NAME", {"entry": entry})
+        name = entry.get('scoreboard_name')
+        if not name or not str(name).strip():
+            raise MalformedTransactionScoreboardError("MISSING_SCOREBOARD_NAME", {"entry": entry})
+
+        base_detail = {"scoreboard_name": name}
+
+        evidence = entry.get('evidence')
+        if not evidence or not str(evidence).strip():
+            raise MalformedTransactionScoreboardError("MISSING_SCOREBOARD_EVIDENCE", base_detail)
+
+        item_class = entry.get('item_class')
+        if not item_class or not str(item_class).strip():
+            raise MalformedTransactionScoreboardError("MISSING_ITEM_CLASS", base_detail)
+
+        predicted_port = entry.get('predicted_port')
+        observed_port = entry.get('observed_port')
+        for side, port in (('predicted_port', predicted_port), ('observed_port', observed_port)):
+            if not isinstance(port, dict) or not port.get('port_name') or not str(port['port_name']).strip():
+                raise MalformedTransactionScoreboardError("MALFORMED_PORT_SPEC", dict(
+                    base_detail, side=side, value=port))
+        if predicted_port['port_name'] == observed_port['port_name']:
+            raise MalformedTransactionScoreboardError("DUPLICATE_PORT_NAME", dict(
+                base_detail, port_name=predicted_port['port_name']))
+
+        ordering_policy = entry.get('ordering_policy')
+        if ordering_policy not in ('IN_ORDER', 'OUT_OF_ORDER'):
+            raise MalformedTransactionScoreboardError("INVALID_ORDERING_POLICY", dict(
+                base_detail, ordering_policy=ordering_policy))
+
+        match_key = entry.get('match_key')
+        if not match_key or not isinstance(match_key, list):
+            raise MalformedTransactionScoreboardError("EMPTY_MATCH_KEY", base_detail)
+        for mk in match_key:
+            if not isinstance(mk, dict) or not mk.get('field') or not str(mk['field']).strip():
+                raise MalformedTransactionScoreboardError("MALFORMED_MATCH_KEY_ENTRY", dict(
+                    base_detail, entry=mk))
+
+        compare_fields = entry.get('compare_fields')
+        if not compare_fields or not isinstance(compare_fields, list):
+            raise MalformedTransactionScoreboardError("EMPTY_COMPARE_FIELDS", base_detail)
+        for cf in compare_fields:
+            if not isinstance(cf, dict) or not cf.get('field') or not str(cf['field']).strip():
+                raise MalformedTransactionScoreboardError("MALFORMED_COMPARE_FIELD", dict(
+                    base_detail, entry=cf))
+            compare_op = cf.get('compare_op')
+            if compare_op not in self._TX_VALID_COMPARE_OPS:
+                raise MalformedTransactionScoreboardError("INVALID_COMPARE_OP", dict(
+                    base_detail, field=cf['field'], compare_op=compare_op,
+                    valid_ops=sorted(self._TX_VALID_COMPARE_OPS)))
+            if compare_op == 'mask_eq':
+                mask = cf.get('mask')
+                if not mask or not str(mask).strip():
+                    raise MalformedTransactionScoreboardError("MISSING_MASK_EQ_MASK", dict(
+                        base_detail, field=cf['field']))
+            self._validate_tx_disposition(dict(base_detail, field=cf['field']),
+                                           cf.get('on_mismatch'), "ON_MISMATCH")
+
+        self._validate_tx_disposition(base_detail, entry.get('on_orphan_predicted'), "ON_ORPHAN_PREDICTED")
+        self._validate_tx_disposition(base_detail, entry.get('on_orphan_observed'), "ON_ORPHAN_OBSERVED")
+
+        on_duplicate = entry.get('on_duplicate')
+        if on_duplicate is not None:
+            self._validate_tx_disposition(base_detail, on_duplicate, "ON_DUPLICATE")
+
+    @staticmethod
+    def _tx_field_mismatch_expr(field, compare_op, mask):
+        """Compiles one compare_fields entry's mismatch condition, comparing
+        the matched predicted item ("exp", the expected/reference value)
+        against the just-arrived observed item ("obs") -- reusing
+        SCOREBOARD_CHECKS's existing eq|neq|lt|lte|gt|gte|mask_eq mismatch-
+        condition shapes verbatim (generator.py's _emit_scoreboard_check),
+        plus this DSL's one new "array_eq".
+
+        RULING: "array_eq" uses plain `!=`, NOT `!==` -- see scoreboard()'s
+        own docstring for the full reasoning (IEEE 1800 `===`/`!==` case
+        (in)equality is undefined for unpacked array types such as dynamic
+        arrays/queues; only `==`/`!=` element-wise equality is legal there).
+        Every other compare_op keeps the exact `!==`/`===` case-(in)equality
+        SCOREBOARD_CHECKS already uses, unchanged."""
+        lhs = 'exp.%s' % field
+        rhs = 'obs.%s' % field
+        if compare_op == 'mask_eq':
+            return '(%s & (%s)) !== (%s & (%s))' % (lhs, mask, rhs, mask)
+        if compare_op == 'array_eq':
+            return '%s != %s' % (lhs, rhs)
+        return {
+            'eq': '%s !== %s' % (lhs, rhs),
+            'neq': '%s === %s' % (lhs, rhs),
+            'lt': '!(%s < %s)' % (lhs, rhs),
+            'lte': '!(%s <= %s)' % (lhs, rhs),
+            'gt': '!(%s > %s)' % (lhs, rhs),
+            'gte': '!(%s >= %s)' % (lhs, rhs),
+        }[compare_op]
+
+    def _emit_transaction_scoreboard_macros(self):
+        """Emits the `uvm_analysis_imp_decl(_predicted)`/
+        `uvm_analysis_imp_decl(_observed)` macro declarations exactly once
+        per file (see scoreboard()'s own docstring for why one declaration
+        safely serves every "transaction_scoreboards" entry regardless of
+        how many entries, or which item_class each uses)."""
+        return '`uvm_analysis_imp_decl(_predicted)\n`uvm_analysis_imp_decl(_observed)\n'
+
+    def _emit_transaction_scoreboard(self, p, entry):
+        """Compiles one already-validated "transaction_scoreboards" entry
+        (see scoreboard()'s own docstring for the full schema and the exact
+        message_template/$sformatf argument conventions this method
+        implements) into one complete uvm_scoreboard-extending class:
+        predicted/observed uvm_analysis_imp handles, a predicted_q queue,
+        a match_key equality helper (key_eq -- one shared private function,
+        reused by IN_ORDER's queue-head-only check, OUT_OF_ORDER's full-queue
+        search, and (when "on_duplicate" is set) the matched-transaction
+        history search -- this shared-helper shape is an implementation
+        detail filling in the design report's own "... match_key equality
+        search ..." ellipsis, not a schema change), compare_fields
+        disposition, and a report_phase drain check for anything left in
+        predicted_q at end of test.
+
+        Assumes `entry` already passed _validate_transaction_scoreboard --
+        this method does not re-validate."""
+        name = entry['scoreboard_name']
+        cls = '%s_%s_scoreboard' % (p, sv_id(name))
+        item_class = entry['item_class']
+        predicted_port = entry['predicted_port']['port_name']
+        observed_port = entry['observed_port']['port_name']
+        ordering_policy = entry['ordering_policy']
+        match_key = [mk['field'] for mk in entry['match_key']]
+        compare_fields = entry['compare_fields']
+        on_orphan_predicted = entry['on_orphan_predicted']
+        on_orphan_observed = entry['on_orphan_observed']
+        on_duplicate = entry.get('on_duplicate')
+
+        sb_id = ('SB_' + sv_id(name)).upper()
+        match_key_args = ', '.join('t.%s' % f for f in match_key)
+
+        key_eq_terms = ' && '.join('(a.%s === b.%s)' % (f, f) for f in match_key)
+        key_eq_fn = ('  local function bit key_eq(%s a, %s b);\n'
+                     '    return %s;\n'
+                     '  endfunction') % (item_class, item_class, key_eq_terms)
+
+        if ordering_policy == 'IN_ORDER':
+            search = '    if (predicted_q.size() > 0 && key_eq(predicted_q[0], t)) idx = 0;'
+        else:
+            search = ('    for (int i = 0; i < predicted_q.size(); i++) begin\n'
+                       '      if (key_eq(predicted_q[i], t)) begin\n'
+                       '        idx = i;\n'
+                       '        break;\n'
+                       '      end\n'
+                       '    end')
+
+        def sev_macro(disposition):
+            return '`uvm_%s' % disposition['severity'][len('UVM_'):].lower()
+
+        def sformatf_call(message_template, args_csv):
+            if args_csv:
+                return '$sformatf(%s, %s)' % (json.dumps(message_template), args_csv)
+            return '$sformatf(%s)' % json.dumps(message_template)
+
+        wo_lines = ['    int idx = -1;', search]
+        if on_duplicate:
+            wo_lines.append('    if (idx == -1) begin')
+            wo_lines.append('      int dup_idx = -1;')
+            wo_lines.append('      for (int k = 0; k < matched_history_q.size(); k++) begin')
+            wo_lines.append('        if (key_eq(matched_history_q[k], t)) begin dup_idx = k; break; end')
+            wo_lines.append('      end')
+            wo_lines.append('      if (dup_idx != -1) begin')
+            wo_lines.append('        num_duplicate++;')
+            wo_lines.append('        %s("%s_DUPLICATE", %s)' % (
+                sev_macro(on_duplicate), sb_id,
+                sformatf_call(on_duplicate['message_template'], match_key_args)))
+            wo_lines.append('      end else begin')
+            wo_lines.append('        num_orphan_observed++;')
+            wo_lines.append('        %s("%s_ORPHAN_OBSERVED", %s)' % (
+                sev_macro(on_orphan_observed), sb_id,
+                sformatf_call(on_orphan_observed['message_template'], match_key_args)))
+            wo_lines.append('      end')
+            wo_lines.append('      return;')
+            wo_lines.append('    end')
+        else:
+            wo_lines.append('    if (idx == -1) begin')
+            wo_lines.append('      num_orphan_observed++;')
+            wo_lines.append('      %s("%s_ORPHAN_OBSERVED", %s)' % (
+                sev_macro(on_orphan_observed), sb_id,
+                sformatf_call(on_orphan_observed['message_template'], match_key_args)))
+            wo_lines.append('      return;')
+            wo_lines.append('    end')
+
+        wo_lines.append('    begin')
+        wo_lines.append('      %s exp = predicted_q[idx];' % item_class)
+        wo_lines.append('      %s obs = t;' % item_class)
+        for cf in compare_fields:
+            field = cf['field']
+            mismatch_expr = self._tx_field_mismatch_expr(field, cf['compare_op'], cf.get('mask'))
+            mismatch_id = '%s_MISMATCH_%s' % (sb_id, sv_id(field).upper())
+            args_csv = '"%s", exp.%s, obs.%s' % (field, field, field)
+            wo_lines.append('      if (%s) begin' % mismatch_expr)
+            wo_lines.append('        num_mismatch++;')
+            wo_lines.append('        %s("%s", %s)' % (
+                sev_macro(cf['on_mismatch']), mismatch_id,
+                sformatf_call(cf['on_mismatch']['message_template'], args_csv)))
+            wo_lines.append('      end')
+        if on_duplicate:
+            wo_lines.append('      matched_history_q.push_back(exp);')
+        wo_lines.append('      predicted_q.delete(idx);')
+        wo_lines.append('      num_match++;')
+        wo_lines.append('    end')
+        write_observed_body = '\n'.join(wo_lines)
+
+        counters = 'int num_match, num_mismatch, num_orphan_predicted, num_orphan_observed'
+        if on_duplicate:
+            counters += ', num_duplicate'
+        counters += ';'
+
+        history_decl = ''
+        if on_duplicate:
+            history_decl = '\n  %s matched_history_q[$];' % item_class
+
+        orphan_predicted_args = '"%s", predicted_q.size()' % name
+
+        return '''class %s extends uvm_scoreboard;
+  `uvm_component_utils(%s)
+  uvm_analysis_imp_predicted #(%s, %s) %s;
+  uvm_analysis_imp_observed  #(%s, %s) %s;
+  %s predicted_q[$];
+  %s%s
+
+  function new(string name="%s", uvm_component parent=null);
+    super.new(name,parent);
+  endfunction
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    %s = new("%s", this);
+    %s = new("%s", this);
+  endfunction
+
+%s
+
+  function void write_predicted(%s t);
+    predicted_q.push_back(t);
+  endfunction
+
+  function void write_observed(%s t);
+%s
+  endfunction
+
+  function void report_phase(uvm_phase phase);
+    super.report_phase(phase);
+    if (predicted_q.size() > 0) begin
+      num_orphan_predicted = predicted_q.size();
+      %s("%s_ORPHAN_PREDICTED", %s)
+    end
+  endfunction
+endclass
+''' % (
+            cls, cls,
+            item_class, cls, predicted_port,
+            item_class, cls, observed_port,
+            item_class,
+            counters, history_decl,
+            cls,
+            predicted_port, predicted_port, observed_port, observed_port,
+            key_eq_fn,
+            item_class,
+            item_class, write_observed_body,
+            sev_macro(on_orphan_predicted), sb_id,
+            sformatf_call(on_orphan_predicted['message_template'], orphan_predicted_args),
+        )
 
     def coverage(self,m,p):
         cps='\n'.join('  // COVER: '+json.dumps(x) for x in m.get('coverage_points',[]))
