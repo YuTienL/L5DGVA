@@ -1841,6 +1841,153 @@ finding 明確判斷不需要多假設（例如單一、無歧義的低風險 ty
 與 stated_attribution 供比對）；若推導結果是 UNKNOWN，attribution 不受此限制（VIP_ISSUE/
 TEST_ISSUE/SPEC_AMBIGUITY/INFRA_ISSUE 這類單靠 boundary trace 無法排除的分類仍可使用）。
 不附 boundary_trace 時行為與舊版完全相同。）
+
+Deep RCA / Attribution 強化（deep_rca_evidence_gate、rca_confidence_escalation_gate、
+root_cause_attribution_consistency_gate、nondeterminism_attribution_gate）：RE_AUDIT 的根因
+分析不能只靠上面 root_cause_evidence_gate 那組 hypotheses，還要能證明「查過哪些真實證據來源」、
+confidence 的升級路徑站得住腳、跟其他 gate 一致的 attribution 分類，以及對不穩定
+（non-deterministic）failure 有獨立的歸屬判斷。四個 gate 分別從不同角度檢查同一份 RCA：
+
+```dv-harness-evidence:deep_rca_evidence_gate
+{"first_bad_event": "...", "causal_chain": ["...", "..."],
+ "confidence": "HIGH",
+ "evidence_sources": [
+   {"source": "SIM_LOG", "checked": true, "evidence_hash": "..."},
+   {"source": "TRACE", "checked": true, "evidence_hash": "..."},
+   {"source": "RTL", "checked": true, "evidence_hash": "..."},
+   {"source": "TESTBENCH", "checked": true, "evidence_hash": "..."},
+   {"source": "COMMAND", "checked": true, "evidence_hash": "..."},
+   {"source": "SCOREBOARD", "checked": true, "evidence_hash": "..."},
+   {"source": "PHY_MODEL", "checked": true, "evidence_hash": "..."},
+   {"source": "STANDARD_SPEC", "checked": true, "evidence_hash": "..."},
+   {"source": "VIP_EXAMPLE", "checked": true, "evidence_hash": "..."},
+   {"source": "VIP_SOURCE", "checked": true, "evidence_hash": "..."},
+   {"source": "VIP_DOCUMENT", "checked": true, "evidence_hash": "..."}
+ ]}
+```
+（`evidence_sources` 裡必須湊齊固定 11 種來源——SIM_LOG/TRACE/RTL/TESTBENCH/COMMAND/
+SCOREBOARD/PHY_MODEL/STANDARD_SPEC/VIP_EXAMPLE/VIP_SOURCE/VIP_DOCUMENT——每一種都要
+`checked:true` 且 `evidence_hash` 非空，缺一種就 FAIL DEEP_RCA_EVIDENCE_INCOMPLETE 並列出缺的
+來源；`first_bad_event` 不得空白；`causal_chain` 至少要 2 個節點，代表真的有推導出因果鏈而
+不是只給結論；`confidence` 只接受 HIGH/VERIFIED/BLOCKED 三種——LOW/MEDIUM 在這個 gate 視為
+「還沒查完」而直接 FAIL；填 BLOCKED 時必須同時附 `missing_evidence` 與 `next_action`，說明卡在
+哪、下一步要做什麼，不能只寫 BLOCKED 就不了了之。）
+
+```dv-harness-evidence:rca_confidence_escalation_gate
+{"confidence": "HIGH", "first_bad_event": "...", "causal_chain": ["...", "..."],
+ "supporting_evidence": "...", "counter_evidence": "...",
+ "fix_effectiveness_evidence": "...", "promotion_requested": false}
+```
+（`confidence` 必須是 LOW/MEDIUM/HIGH/VERIFIED 之一；不論等級為何，`first_bad_event`/
+`causal_chain`/`supporting_evidence` 都是必填，缺任一項直接 FAIL RCA_EVIDENCE_INCOMPLETE。
+`confidence` 為 HIGH 或 VERIFIED 時 `counter_evidence` 必填（代表你真的主動找過反證，不是單方面
+只講支持證據）；`confidence` 為 VERIFIED 時還要再附 `fix_effectiveness_evidence`（代表這個 RCA
+已經用「修了之後 fix 真的有效」的證據回頭驗證過，不是只憑分析推論）。若這筆 RCA 打算被
+`promotion_requested:true` 拿去沉澱進 Verification Memory，`confidence` 至少要到 HIGH，MEDIUM/LOW
+一律 FAIL RCA_CONFIDENCE_TOO_LOW_FOR_PROMOTION。）
+
+```dv-harness-evidence:root_cause_attribution_consistency_gate
+{"attribution": "DUT", "attribution_confidence": "HIGH",
+ "first_bad_event": "...", "causal_chain": ["...", "..."],
+ "supporting_evidence": "...", "counter_evidence": "...",
+ "promotion_requested": false}
+```
+（`attribution` 只接受 DUT/TB/VIP/TOOL/INFRA/SPEC/UNKNOWN。填 UNKNOWN 時，若
+`promotion_requested:true` 會直接 FAIL UNKNOWN_RCA_CANNOT_PROMOTE（歸屬未定的 RCA 不得拿去
+promote）；不 promotion 的話 UNKNOWN 本身可以 PASS（視為 UNKNOWN_BLOCKED，代表誠實承認暫時無法
+歸屬，比亂猜一個分類更安全），此時不再要求其餘欄位。非 UNKNOWN 的分類則必須補齊
+`first_bad_event`/`causal_chain`/`supporting_evidence`/`counter_evidence` 四項因果證據（缺任一項
+FAIL RCA_ATTRIBUTION_WITHOUT_CAUSAL_EVIDENCE），且 `attribution_confidence` 必須是
+HIGH 或 VERIFIED，否則 FAIL ATTRIBUTION_CONFIDENCE_TOO_LOW。）
+
+```dv-harness-evidence:nondeterminism_attribution_gate
+{"deterministic": false, "attribution": "DUT",
+ "first_divergence": "...", "supporting_evidence": "...", "counter_evidence": "...",
+ "reproduction_matrix_hash": "..."}
+```
+（若這次 failure 其實是可重現、非 flaky 的，直接填 `deterministic:true` 即可 PASS，其餘欄位不看
+——只在真的確認是 non-deterministic/flaky 的 failure 時才需要走完整套歸屬流程。
+`deterministic` 非 true 時，`attribution` 只接受 DUT/TB/VIP/TOOL/ENVIRONMENT/UNKNOWN；填
+UNKNOWN 一律直接 FAIL UNRESOLVED_NONDETERMINISM（跟上面 attribution 系列 gate 不同，
+non-determinism 的歸屬不允許用 UNKNOWN 卡住不動）。非 UNKNOWN 時必須補齊
+`first_divergence`（第一個出現分歧的點）、`supporting_evidence`、`counter_evidence`、
+`reproduction_matrix_hash`（多次重跑/多 seed 的重現矩陣證據）四項，缺任一項 FAIL
+NONDETERMINISM_ATTRIBUTION_WITHOUT_EVIDENCE。）
+
+Fix 生命週期閉環（dut_request_record_gate、fix_risk_approval_gate、fix_effectiveness_gate、
+fix_regression_non_regression_gate、regression_replay_equivalence_gate）：如果這輪 RE_AUDIT
+判定是 DUT 端的 REAL_ISSUE 並且真的要送出修改，從「建立 DUT request 記錄」、「風險核准」、
+「修完之後證明真的有效」、「沒有引入新的 regression」到「重跑結果跟原始 run 逐項等價可比對」，
+每一段都要各自附證據，不能只靠前面的 root_cause_evidence_gate 蓋過去：
+
+```dv-harness-evidence:dut_request_record_gate
+{"dut_request_path": "generated/.../dut-request.md", "issue_id": "...",
+ "classification": "REAL_ISSUE", "root_cause": "...", "fix_summary": "...",
+ "risk_summary": "...", "verification_result": "...", "change_hash": "..."}
+```
+（`dut_request_path`/`issue_id`/`classification`/`root_cause`/`fix_summary`/`risk_summary`/
+`verification_result`/`change_hash` 八個欄位缺一都會 FAIL INCOMPLETE_DUT_REQUEST_RECORD 並回報
+是哪個欄位；`dut_request_path` 的檔名（basename）必須逐字是 `dut-request.md`，否則 FAIL
+DUT_REQUEST_WRONG_FILENAME；`classification` 必須逐字等於 `REAL_ISSUE` 才能建立這筆 fix
+record，否則 FAIL ONLY_REAL_ISSUE_CAN_CREATE_FIX_RECORD——代表這個 gate 只給「確認是真的 DUT
+問題」的情況用，誤報/非真實 issue 不該走到這裡。）
+
+```dv-harness-evidence:fix_risk_approval_gate
+{"root_cause_id": "...", "fix_plan": "...", "risk_assessment": "...",
+ "affected_scope": "...", "regression_plan": "...", "rollback_plan": "...",
+ "root_cause_confidence": "HIGH", "risk_level": "MEDIUM",
+ "high_risk_reviewed": false, "approved_for_modify": true}
+```
+（`root_cause_id`/`fix_plan`/`risk_assessment`/`affected_scope`/`regression_plan`/
+`rollback_plan` 六個欄位缺一都會 FAIL INCOMPLETE_FIX_RISK_PLAN 並回報欄位名；
+`root_cause_confidence` 必須是 HIGH 或 VERIFIED，否則 FAIL FIX_WITHOUT_HIGH_CONFIDENCE_RCA
+（confidence 不夠高不准送修）；`risk_level` 為 `HIGH` 時 `high_risk_reviewed` 必須是
+true，否則 FAIL HIGH_RISK_FIX_NOT_REVIEWED；最後 `approved_for_modify` 必須明確為
+true 才代表這個修改計畫真的被核准可以動手，否則 FAIL FIX_NOT_APPROVED_FOR_MODIFICATION。）
+
+```dv-harness-evidence:fix_effectiveness_gate
+{"failure_signature_before": "...", "failure_signature_after": "...",
+ "root_cause_id": "...", "fix_revision": "...", "rerun_evidence": "...",
+ "targeted_reproducer_passed": true, "broader_regression_passed": true,
+ "new_failures_introduced": false}
+```
+（`failure_signature_before`/`root_cause_id`/`fix_revision`/`rerun_evidence` 四項缺一即 FAIL
+MISSING_FIELDS；`failure_signature_after` 必須跟 `failure_signature_before` 不同，代表 failure
+signature 真的變了而不是同一個 failure 換句話說（否則 FAIL FAILURE_SIGNATURE_PERSISTS）；
+`targeted_reproducer_passed` 與 `broader_regression_passed` 都必須是 true，分別代表原本會炸的
+reproducer 現在過了、以及更廣的 regression 也沒被這個 fix 拖垮（缺一即 FAIL
+TARGETED_REPRODUCER_NOT_PASS / BROADER_REGRESSION_NOT_PASS）；`new_failures_introduced` 必須是
+false/未填，一旦為 true 直接 FAIL FIX_INTRODUCED_NEW_FAILURES。）
+
+```dv-harness-evidence:fix_regression_non_regression_gate
+{"target_pre_fix_result": "FAIL", "target_post_fix_result": "PASS",
+ "replay_equivalent": true,
+ "critical_non_regression_tests": [
+   {"testcase_id": "...", "pre_fix_result": "PASS", "post_fix_result": "PASS",
+    "evidence_hash": "..."}
+ ],
+ "fix_commit_hash": "...", "rerun_bundle_hash": "..."}
+```
+（`target_pre_fix_result` 必須是 `FAIL` 且 `target_post_fix_result` 必須是 `PASS`，證明這個
+target 真的是修完才過（否則 FAIL TARGET_FIX_NOT_PROVEN）；`replay_equivalent` 必須是 true
+（否則 FAIL TARGET_RERUN_NOT_EQUIVALENT）；`critical_non_regression_tests` 清單中每一筆若
+`pre_fix_result` 是 PASS，`post_fix_result` 就必須也是 PASS，否則 FAIL FIX_CAUSED_REGRESSION
+並附上是哪個 testcase_id；這種「修前就過」的 testcase 還必須附 `evidence_hash`，否則 FAIL
+NON_REGRESSION_WITHOUT_EVIDENCE；最後 `fix_commit_hash` 與 `rerun_bundle_hash` 都是必填，
+缺一即 FAIL FIX_CLOSURE_WITHOUT_ARTIFACT_HASH。）
+
+```dv-harness-evidence:regression_replay_equivalence_gate
+{"original": {"testcase_id": "...", "seed": "...", "config_hash": "...",
+   "build_hash": "...", "artifact_hash": "...", "command_hash": "...", "result": "FAIL"},
+ "replay": {"testcase_id": "...", "seed": "...", "config_hash": "...",
+   "build_hash": "...", "artifact_hash": "...", "command_hash": "...", "result": "FAIL"}}
+```
+（`original` 與 `replay` 兩邊必須在 `testcase_id`/`seed`/`config_hash`/`build_hash`/
+`artifact_hash`/`command_hash` 六個識別欄位上逐一相同，任何一項不一致就 FAIL
+REPLAY_NOT_EQUIVALENT 並列出不一致的欄位與兩邊的值——代表 replay 用的是同一顆 build、同一組
+config、同一個 command，不是拿另一個環境的結果魚目混珠；六項都一致之後，還要求兩邊的
+`result` 也相同，否則 FAIL NON_REPRODUCIBLE_RESULT，代表同樣的身份重跑卻得到不同結果，
+本身就是需要交給上面 nondeterminism_attribution_gate 處理的訊號。）
 """,
 Stage.SYSTEM_LEVEL.value: """
 System-Level：確認 system-level verdict 不會用整體 PASS 蓋掉個別 subsystem 的 FAIL
