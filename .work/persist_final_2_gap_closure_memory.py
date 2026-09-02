@@ -1,0 +1,77 @@
+"""Persists the final 2 of 8 DEBUG_WORKFLOW_GUIDE.md gap closures into
+Engineering Memory (all 8 originally-audited gaps are now closed).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from dv_harness.config import load_config
+from dv_harness.memory_router import route_and_store
+
+ROOT = Path(r"D:\DV\Task\DV_Agent_Harness_L5\v50")
+
+RECORD = {
+    "kind": "verified_fix",
+    "verified": True,
+    "title": "DEBUG_WORKFLOW_GUIDE.md audit: final 2 of 8 gaps closed (KC auto-lookup, root_cause_evidence_gate freshness)",
+    "scope": "engine",
+    "symptoms": [
+        "KnowledgeCenterClient.search() had exactly two callers (manual CLI, dashboard) -- never invoked automatically by FAILURE_RECOVERY/RE_AUDIT before concluding a fresh root cause",
+        "root_cause_evidence_gate's supporting_evidence/counter_evidence fields were free-text citation strings with no freshness check -- unlike deep_rca_evidence_gate (fixed earlier), which has a structured hash+path shape",
+    ],
+    "root_cause": (
+        "Completes the 8-gap DEBUG_WORKFLOW_GUIDE.md audit (see MEM-EA3FCC5DA5 for the first 6). "
+        "Both remaining gaps were real but had real precedent mechanisms already in the codebase that "
+        "just weren't reused: engine.py already had a local-memory pre-stage read pattern "
+        "(MemoryRetriever) to mirror for the shared KC; manual_lookup_before_edit_gate.py already had "
+        "a real file-existence + exact-substring citation verifier to reuse for evidence freshness, "
+        "rather than building a parallel hash-based mechanism that wouldn't fit root_cause_evidence_gate's "
+        "free-text citation shape."
+    ),
+    "fix": (
+        "(1) dv_harness/engine.py's run_stage() now calls KnowledgeCenterClient.search() automatically "
+        "for FAILURE_RECOVERY/RE_AUDIT when configured -- query built from the run's own goal plus the "
+        "most recent real failure symptom already on the Blackboard's findings topic, best-effort "
+        "(try/except, same defensive discipline as memory_router._maybe_share), results folded into the "
+        "stage prompt via a new build_stage_prompt(kc_search_results=...) kwarg, explicitly framed as "
+        "prior knowledge per the Evidence Truth Rule (current evidence still wins). "
+        "(2) tools/verification_flow/root_cause_evidence_gate.py gained an optional evidence_refs field "
+        "(array of {path, quote}, top-level or per-hypothesis) verified by importing and reusing "
+        "manual_lookup_before_edit_gate.py's existing _verify_evidence_refs() -- real file-existence + "
+        "exact-substring match, same forbidden-reference-tree barrier -- instead of inventing a parallel "
+        "mechanism. Legacy free-text-only citations remain valid (backward compatible, no freshness "
+        "guarantee). Deliberately did NOT convert STAGE_GATES['RE_AUDIT']'s entry to a multi-flag "
+        "ContextFlag tuple (run_gate() already invokes every gate with cwd=<real project root>, so a "
+        "relative Path already resolves correctly -- converting would have broken two existing flat-dict "
+        "readers of this gate's evidence block elsewhere in engine.py for no functional gain)."
+    ),
+    "verification": {
+        "single_sim": "N/A (engine/gate-logic fix, not a simulation fix)",
+        "regression": "2 new test functions in test_engine_gates_and_routing.py (KC lookup) + test_root_cause_evidence_gate.py new file, 11 tests (evidence_refs) -- all passing; test_engine_gates_and_routing.py full file 216/216, test_inference_engine_wiring.py 8/8, test_hard_gate_script_smoke.py 177/177, test_qualified_conclusion.py 34/34",
+        "reaudit": "CONFIRMED: changes synced to and import-smoke-tested against the real /home/svcacct/AI/Agent deployment (DVHarness.run_stage's source confirmed to reference KnowledgeCenterClient remotely)",
+    },
+    "confidence": "CONFIRMED",
+    "note": (
+        "All 8 of the original DEBUG_WORKFLOW_GUIDE.md audit's confirmed gaps are now closed -- see "
+        "MEM-EA3FCC5DA5 for the first 6 and this record for the final 2. This does not mean the debug "
+        "workflow is now infallible: every gate here is still bounded by what a subprocess-invoked "
+        "script can check (mostly agent-attested evidence, cross-checked against real files/registries "
+        "where the codebase had a real registry to check against) -- the specific gap class this audit "
+        "targeted (documented behavior with literally nothing in code enforcing it) is what's closed."
+    ),
+    "provenance": "dv-agent-harness-l5 session, 2026-09-02, DEBUG_WORKFLOW_GUIDE.md audit + gap closure (final pass)",
+}
+
+
+def main() -> int:
+    cfg = load_config(ROOT)
+    result = route_and_store(ROOT, RECORD, cfg=cfg)
+    print(f"[{RECORD['title'][:60]}...] -> {result}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
