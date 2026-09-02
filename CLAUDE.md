@@ -304,14 +304,17 @@ mechanics already codified in `.claude/skills/CORE/*`:
   `dv_harness/uvm_generator/*.py` (20+ line-cited references) and
   `dv_harness/uvm_generator/templates/sim_scripts/` (a real, now chip-configured copy of
   `USB_UVM_Handoff/sim/scripts/`), enforced against direct golden-reference citation by the real
-  `protocol_isolation_gate`. Two confirmed gaps remain open: (1) the command.txt/pattern
+  `protocol_isolation_gate`. One confirmed gap remains open: the command.txt/pattern
   content architecture (`block`/`branch_a`/`branch_fw`/`branch_b` task composition, fork/join
   semantics, named arbitration/ordering traps) has never been distilled beyond a thin, generic
   `command-generator` skill — any agent authoring a new pattern must still read
-  `USB_UVM_Handoff`'s real pattern files directly; (2) the Makefile/sim-scripts migration is
-  incomplete (5 files never carried over: `analyze_sim.sh`, `apb_timing_report.sh`,
-  `dpdm_report.sh`, `irq_report.sh`, `check/gen_scaledown.py`) and even the consolidated part
-  goes unused unless an agent is explicitly told to survey
+  `USB_UVM_Handoff`'s real pattern files directly. The Makefile/sim-scripts migration gap
+  (2026-09-02 audit: 5 files never carried over) was closed 2026-09-03: `analyze_sim.sh`,
+  `apb_timing_report.sh`, `dpdm_report.sh`, `irq_report.sh` (the latter three sharing one
+  `fsdb_signal_report.sh` engine, per-question wrappers only) and `check/gen_scaledown.py` are
+  now genericized templates in `dv_harness/uvm_generator/templates/sim_scripts/` (see
+  `.work/gap-close-makefile-report.md`). The consolidated part of this directory still goes
+  unused unless an agent is explicitly told to survey
   `dv_harness/uvm_generator/templates/sim_scripts/` before hand-authoring build infrastructure —
   citing one sibling file in this directory (as this document previously did for
   `regression_list_manager.py`) is not sufficient for a dispatched agent to discover the rest.
