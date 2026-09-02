@@ -108,3 +108,74 @@ def test_gate_history_append_and_read_since():
         assert entries[0]["gate_id"] == "gate_b"
     finally:
         shutil.rmtree(root)
+
+
+from dv_harness.gates import effective_stage_gates, STAGE_GATES
+from dv_harness.self_tuning import propose_add_override, propose_remove_override
+
+
+def test_effective_stage_gates_matches_baseline_when_no_overrides():
+    root = _tmp_root()
+    try:
+        assert effective_stage_gates("COMMAND_PATTERN", root) == STAGE_GATES["COMMAND_PATTERN"]
+    finally:
+        shutil.rmtree(root)
+
+
+def test_effective_stage_gates_applies_add_override():
+    root = _tmp_root()
+    try:
+        propose_add_override(root, "COMMAND_PATTERN", "fake_extra_gate")
+        result = effective_stage_gates("COMMAND_PATTERN", root)
+        ids = [g[0] for g in result]
+        assert "fake_extra_gate" in ids
+    finally:
+        shutil.rmtree(root)
+
+
+def test_effective_stage_gates_ignores_protected_removal():
+    root = _tmp_root()
+    try:
+        # fix_risk_approval_gate/RE_AUDIT is protected -- direct JSON write
+        # (bypassing propose_remove_override's own check) to prove
+        # effective_stage_gates() enforces this independently, not only
+        # the proposer function.
+        from dv_harness.self_tuning import _overrides_path, _write_json_atomic
+        _write_json_atomic(_overrides_path(root), {
+            "RE_AUDIT": {"add": [], "remove": ["fix_risk_approval_gate"]}
+        })
+        result = effective_stage_gates("RE_AUDIT", root)
+        ids = [g[0] for g in result]
+        assert "fix_risk_approval_gate" in ids
+    finally:
+        shutil.rmtree(root)
+
+
+def test_effective_stage_gates_applies_unprotected_removal():
+    root = _tmp_root()
+    try:
+        propose_remove_override(root, "COMMAND_PATTERN", "command_migration_integrity_gate")
+        result = effective_stage_gates("COMMAND_PATTERN", root)
+        ids = [g[0] for g in result]
+        assert "command_migration_integrity_gate" not in ids
+    finally:
+        shutil.rmtree(root)
+
+
+def test_real_stage_evaluation_actually_uses_effective_stage_gates_overlay():
+    # The load-bearing wiring check: effective_stage_gates() must not be
+    # dead code -- a real _evaluate_stage_evidence_core() call for a stage
+    # with an unprotected gate removed via the overlay must NOT fail for
+    # missing that gate's evidence block (it's no longer in the effective
+    # set for this project root).
+    from dv_harness.gates import _evaluate_stage_evidence_core
+    root = _tmp_root()
+    try:
+        propose_remove_override(root, "COMMAND_PATTERN", "command_migration_integrity_gate")
+        verdict, reasons, signatures, completion = _evaluate_stage_evidence_core(root, "COMMAND_PATTERN", "")
+        # With the only real STAGE_GATES["COMMAND_PATTERN"] entry removed via
+        # the overlay, this stage now has zero effective gates.
+        assert verdict == "NO_GATE_REQUIRED"
+        assert signatures == []
+    finally:
+        shutil.rmtree(root)

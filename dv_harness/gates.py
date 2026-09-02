@@ -470,6 +470,50 @@ STAGE_GATES = {
     ],
 }
 
+
+def effective_stage_gates(stage: str, root: "Path") -> list:
+    """STAGE_GATES[stage] with the self-tuning overlay (.dv-harness/
+    self_tuning/stage_gate_overrides.json) applied. Protected (stage,
+    gate_id) pairs (dv_harness.self_tuning.PROTECTED_REMOVALS) can never be
+    removed here regardless of what the overlay file says -- enforced in
+    this function itself, not merely by the proposer that writes the
+    overlay, so a hand-edited or otherwise-produced overrides file can
+    never bypass the safety invariant.
+
+    An "add" override's gate_id is looked up against every other stage's
+    real STAGE_GATES entries first, so re-enabling a gate on a stage it
+    isn't normally attached to reuses that gate's own real script/flag
+    spec rather than inventing one. If no existing entry anywhere names
+    that gate_id, the override is still honored as a placeholder
+    (gate_id, "<gate_id>.py", "--evidence") entry -- membership proposed
+    through the overlay must stay visible here (this is the ONE real
+    evaluator every stage evaluation goes through, so silently dropping an
+    unrecognized add would make the overlay look like it worked while
+    doing nothing); a project with no such script on disk will correctly
+    surface that at run_gate() time as a GATE_TOOL_MISSING failure rather
+    than a silently-ignored override."""
+    from . import self_tuning
+    baseline = list(STAGE_GATES.get(stage, []))
+    overrides = self_tuning.read_overrides(root)
+    stage_overlay = overrides.get(stage, {})
+    remove_ids = set(stage_overlay.get("remove", [])) - {
+        gid for (s, gid) in self_tuning.PROTECTED_REMOVALS if s == stage
+    }
+    result = [entry for entry in baseline if entry[0] not in remove_ids]
+    existing_ids = {entry[0] for entry in result}
+    for gate_id in stage_overlay.get("add", []):
+        if gate_id in existing_ids:
+            continue
+        match = None
+        for other_entries in STAGE_GATES.values():
+            match = next((e for e in other_entries if e[0] == gate_id), None)
+            if match:
+                break
+        result.append(match if match else (gate_id, f"{gate_id}.py", "--evidence"))
+        existing_ids.add(gate_id)
+    return result
+
+
 # --- Content-driven inner ReAct loop support (2026-08-29, evidence-grounded-
 # react design pass): GATE_FAILURE_REROUTE is the ONE new, deliberately small,
 # human-curated table this feature adds to gates.py. It is consulted by
@@ -992,6 +1036,23 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
     if not script.exists():
         return GateResult(gate_id, False, {"status": "FAIL", "reason": "GATE_TOOL_MISSING", "tool": str(script)})
 
+    def _log_gate_history(ok: bool, detail: dict) -> None:
+        # Self-tuning gate-history feed (dv_harness/self_tuning.py,
+        # append_gate_history()) -- best-effort/never allowed to change
+        # run_gate()'s own return value or raise, so every call site is
+        # wrapped. Not logged for the GATE_TOOL_MISSING early return above:
+        # that's a project setup/config issue, not a real gate evaluation
+        # outcome the self-tuning engine should learn from.
+        from . import self_tuning as _self_tuning
+        try:
+            _self_tuning.append_gate_history(
+                root, gate_id, stage or "", bool(ok),
+                str(detail.get("reason", detail.get("status", ""))),
+                time.time(),
+            )
+        except Exception:
+            pass
+
     tmp_paths = []
     unresolved = []
     try:
@@ -1009,9 +1070,11 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
                     args += [flag, value]
                     unresolved += u
             except _MissingSubpayload as e:
-                return GateResult(gate_id, False, {
+                missing_detail = {
                     "status": "FAIL", "reason": "MISSING_EVIDENCE_SUBPAYLOAD", "missing": e.key,
-                })
+                }
+                _log_gate_history(False, missing_detail)
+                return GateResult(gate_id, False, missing_detail)
             proc = subprocess.run(
                 args, cwd=str(root), capture_output=True, text=True, timeout=30,
             )
@@ -1067,8 +1130,10 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
         detail["dv_review_unresolved_fields"] = unresolved
         if script_ok:
             detail["reason"] = "DV_REVIEW_REQUIRED"
+        _log_gate_history(False, detail)
         return GateResult(gate_id, False, detail)
 
+    _log_gate_history(script_ok, detail)
     return GateResult(gate_id, script_ok, detail)
 
 
@@ -1262,7 +1327,7 @@ def _evaluate_stage_evidence_core(root: Path, stage: str, agent_text: str):
         stage_completion_percent, stage_completion_note) -- a stage-SCOPED
         completion fraction, distinct from dashboard.py's whole-run
         overall_progress_percent."""
-    gates = STAGE_GATES.get(stage)
+    gates = effective_stage_gates(stage, root)
     if not gates:
         return "NO_GATE_REQUIRED", [], [], _stage_completion_from_signatures(gates, [])
     enforce_dv_review = bool(load_config(root).get("policy", {}).get("require_dv_review_cosign", False))
