@@ -6495,3 +6495,190 @@ def test_run_gate_with_real_stage_does_append_to_gate_history():
         assert entries[0]["gate_id"] == "self_tuning_proposal_gate"
     finally:
         shutil.rmtree(tmp)
+
+
+# --- Follow-up I9 (2026-09-02 final whole-branch code review): the design
+# spec's own "Testing strategy" section (docs/superpowers/specs/2026-09-02-
+# autonomous-gate-self-tuning-design.md, "End-to-end") explicitly asks for
+# "a test driving run_stage() N times with a mocked adapter whose final call
+# returns a canned proposal, asserting the JSON files are written (auto-
+# apply case) or a PENDING record exists with no JSON writes (defer case)".
+# Every self-tuning test above this point calls _maybe_run_self_tuning_
+# review() DIRECTLY -- none drive the real, production run_stage() entry
+# point (engine.py's single terminal exit point, "Step 7" right before
+# `return result`) end to end. These two tests close that gap.
+#
+# Fixture reuse: _mk_smoke_project() (not _mk_self_tuning_project(), which
+# only copies tools/) is used here because it ALSO copies main_graph.json
+# and .claude/agents -- the minimum a real run_stage() call needs to
+# genuinely execute a graph node, not just the review's own gate subprocess.
+# VERIFY + the "I verified it, trust me." no-evidence text is the exact
+# fixture test_self_tuning_review_run_stage_increments_counter_on_every_
+# terminal_verdict above already established as a fast, real, terminal
+# (PARTIAL) run_stage() outcome via VERIFY's real gate rejecting missing
+# evidence -- reused verbatim here for the N-1 "normal" calls rather than
+# inventing a new stage/goal fixture.
+#
+# Distinguishing "this is the self-tuning review's own adapter call" from an
+# ordinary stage-evaluation call: _maybe_run_self_tuning_review()'s prompt
+# (engine.py) is built entirely in that one method and always instructs the
+# model to respond with a fenced "```dv-harness-evidence:self_tuning_
+# proposal```" block (see its literal prompt-construction text). No ordinary
+# stage prompt (prompts.build_stage_prompt(), grepped -- no match) ever
+# contains that substring, so checking for it in the fake adapter's run()
+# is a reliable, content-based signal -- not a call-count guess, which would
+# silently break the moment InnerReactLoop's inner reflection turns (up to
+# inner_react_max_iterations=3 extra adapter.run() calls per single
+# run_stage() attempt, react_loop.py) changed the number of normal calls per
+# terminal verdict.
+
+class _RunStageDrivingSelfTuningAdapter:
+    """Fake adapter for driving run_stage() itself (not just
+    _maybe_run_self_tuning_review()) through a real self-tuning review
+    cycle. See the module comment directly above for the content-based
+    review-vs-normal-call detection rationale."""
+
+    _REVIEW_MARKER = "dv-harness-evidence:self_tuning_proposal"
+
+    def __init__(self, proposal_text):
+        self.proposal_text = proposal_text
+        self.review_prompts = []
+        self.normal_calls = 0
+
+    def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+        if self._REVIEW_MARKER in prompt:
+            self.review_prompts.append(prompt)
+            return _SelfTuningAgentResult(ok=True, text=self.proposal_text, raw={}, session_id="s")
+        self.normal_calls += 1
+        return _SelfTuningAgentResult(ok=True, text="I verified it, trust me.", raw={}, session_id="s")
+
+
+def test_self_tuning_review_run_stage_end_to_end_auto_applies():
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 2}
+        h.set_stage("VERIFY")
+        fake = _RunStageDrivingSelfTuningAdapter(
+            _self_tuning_proposal_block(confidence="HIGH", risk_level="LOW"))
+        h.adapter = fake
+
+        params_path = tmp / ".dv-harness" / "self_tuning" / "parameters.json"
+        overrides_path = tmp / ".dv-harness" / "self_tuning" / "stage_gate_overrides.json"
+
+        events = []
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+                # Call 1 of 2 (N=2): a real run_stage() terminal verdict
+                # (PARTIAL, via the real VERIFY gate genuinely rejecting the
+                # evidence-less text) -- the counter increments through the
+                # SAME production code path every real stage evaluation goes
+                # through (engine.py Step 7), not a test-only shortcut.
+                result1 = h.run_stage("goal")
+                assert h.state.stages["VERIFY"]["status"] == "PARTIAL"
+                assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 1
+                assert fake.review_prompts == []
+                assert not params_path.exists()
+                assert not any(e.get("event") == "SELF_TUNING_REVIEW_COMPLETED" for e in events)
+
+                # Call 2 of 2: crosses N=2 -- the review fires inline at this
+                # call's own single terminal exit point, still via run_stage().
+                result2 = h.run_stage("goal")
+                assert h.state.stages["VERIFY"]["status"] == "PARTIAL"
+
+        # The review's own adapter dispatch genuinely happened exactly once,
+        # driven purely by run_stage()'s internal counter crossing N.
+        assert len(fake.review_prompts) == 1
+
+        # Counter reset to 0 (not stuck, not merely decremented) and a real
+        # last_review_at timestamp stamped, both via reset_execution_counter
+        # -- the same production primitive a successful review cycle calls.
+        state = _self_tuning_module.read_execution_state(h.root)
+        assert state["executions_since_last_review"] == 0
+        assert _self_tuning_module.read_last_review_at(h.root) is not None
+
+        # SELF_TUNING_REVIEW_COMPLETED (I8 observability) actually fired,
+        # reachable only via the real success path inside
+        # _maybe_run_self_tuning_review() -- not asserted via a direct call.
+        completed = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_COMPLETED"]
+        assert len(completed) == 1
+        assert completed[0]["proposals_found"] == 1
+        assert completed[0]["applied"] == 1
+        assert completed[0]["deferred"] == 0
+
+        # Auto-apply case (per the spec's own testing-strategy wording): the
+        # JSON file was genuinely written by the real self_tuning_proposal_
+        # gate.py subprocess + apply_proposal() path -- read directly off
+        # disk (the actual file self-tuning is constrained to ever write to,
+        # per the design spec's "Global Constraints"), not only through the
+        # get_param() accessor.
+        assert params_path.exists()
+        on_disk = json.loads(params_path.read_text(encoding="utf-8"))
+        assert on_disk.get("unprotected_gate", {}).get("threshold") == 2
+        assert _self_tuning_module.get_param(h.root, "unprotected_gate", "threshold", None) == 2
+
+        # The membership-overlay file is untouched by a pure parameter
+        # change (only "add"/"remove" proposals ever write to it).
+        assert not overrides_path.exists() or json.loads(overrides_path.read_text(encoding="utf-8")) == {}
+
+        assert result1 is not None and result2 is not None
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_run_stage_end_to_end_defers_low_confidence():
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 2}
+        h.set_stage("VERIFY")
+        fake = _RunStageDrivingSelfTuningAdapter(
+            _self_tuning_proposal_block(confidence="LOW", risk_level="LOW"))
+        h.adapter = fake
+
+        params_path = tmp / ".dv-harness" / "self_tuning" / "parameters.json"
+
+        events = []
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+                h.run_stage("goal")
+                assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 1
+                assert fake.review_prompts == []
+
+                h.run_stage("goal")  # crosses N=2 -- review fires, LOW confidence defers
+
+        assert len(fake.review_prompts) == 1
+
+        # Counter still resets to 0 with a real last_review_at stamp even
+        # though this cycle's own proposal was deferred, not applied -- a
+        # deferred (not just an applied) outcome is still a real, completed
+        # review cycle.
+        state = _self_tuning_module.read_execution_state(h.root)
+        assert state["executions_since_last_review"] == 0
+        assert _self_tuning_module.read_last_review_at(h.root) is not None
+
+        completed = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_COMPLETED"]
+        assert len(completed) == 1
+        assert completed[0]["proposals_found"] == 1
+        assert completed[0]["applied"] == 0
+        assert completed[0]["deferred"] == 1
+
+        # Defer case (per the spec's own testing-strategy wording): NO JSON
+        # write at all -- parameters.json must not exist (nothing else in
+        # this test touches self-tuning's write surface), and the accessor
+        # confirms the same absence.
+        assert not params_path.exists()
+        assert _self_tuning_module.get_param(h.root, "unprotected_gate", "threshold", None) is None
+
+        # A PENDING self_tuning_adjustment record exists instead, carrying
+        # the real gate_id/confidence/risk_level the proposal gate let
+        # through.
+        pending = [r for r in _self_tuning_module.read_recent_adjustment_records(h.root, limit=10)
+                   if r.get("status") == "PENDING"]
+        assert len(pending) == 1
+        assert pending[0]["gate_id"] == "unprotected_gate"
+        assert pending[0]["confidence"] == "LOW"
+    finally:
+        shutil.rmtree(tmp)
