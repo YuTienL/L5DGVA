@@ -6262,3 +6262,54 @@ def test_self_tuning_review_scopes_gate_history_to_last_reviewed_index():
         assert _self_tuning_module.read_last_reviewed_index(h.root) == 3
     finally:
         shutil.rmtree(tmp)
+
+
+# --- Finding I6 fix (2026-09-02 final-review fix wave): run_gate()'s
+# gate-history logging is also reached by non-stage-evaluation callers
+# (dv_harness/self_audit.py's smoke-testing, dv_harness/remote_control.py's
+# supervisory/audit gates) with no real `stage` -- these must never pollute
+# gate_history.jsonl with fabricated entries the self-tuning LLM would
+# otherwise treat as real accumulated execution history.
+
+def test_run_gate_with_no_stage_does_not_append_to_gate_history():
+    from dv_harness import gates as gates_mod
+    tmp = _mk_self_tuning_project()
+    try:
+        history_path = tmp / ".dv-harness" / "self_tuning" / "gate_history.jsonl"
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            gr = gates_mod.run_gate(tmp, "self_tuning_proposal_gate.py", "--proposal", {"proposals": []})
+        assert gr.ok is True
+        assert not history_path.exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_gate_with_empty_string_stage_does_not_append_to_gate_history():
+    from dv_harness import gates as gates_mod
+    tmp = _mk_self_tuning_project()
+    try:
+        history_path = tmp / ".dv-harness" / "self_tuning" / "gate_history.jsonl"
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            gr = gates_mod.run_gate(tmp, "self_tuning_proposal_gate.py", "--proposal", {"proposals": []}, stage="")
+        assert gr.ok is True
+        assert not history_path.exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_gate_with_real_stage_does_append_to_gate_history():
+    from dv_harness import gates as gates_mod
+    tmp = _mk_self_tuning_project()
+    try:
+        history_path = tmp / ".dv-harness" / "self_tuning" / "gate_history.jsonl"
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            gr = gates_mod.run_gate(tmp, "self_tuning_proposal_gate.py", "--proposal", {"proposals": []},
+                                     stage="IMPLEMENT")
+        assert gr.ok is True
+        assert history_path.exists()
+        entries = _self_tuning_module.read_gate_history_since(tmp, 0)
+        assert len(entries) == 1
+        assert entries[0]["stage"] == "IMPLEMENT"
+        assert entries[0]["gate_id"] == "self_tuning_proposal_gate"
+    finally:
+        shutil.rmtree(tmp)

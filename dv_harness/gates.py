@@ -1043,10 +1043,24 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
         # wrapped. Not logged for the GATE_TOOL_MISSING early return above:
         # that's a project setup/config issue, not a real gate evaluation
         # outcome the self-tuning engine should learn from.
+        #
+        # Finding I6 fix (2026-09-02 final-review fix wave): run_gate() is
+        # also called by dv_harness/self_audit.py (smoke-testing gate
+        # scripts against synthetic payloads -- explicitly documented there
+        # as "NOT a verdict on current harness state") and other
+        # non-stage-evaluation callers, always with no `stage` argument
+        # (defaults to None). Those calls used to still log here with
+        # stage="", polluting gate_history.jsonl with fabricated entries the
+        # self-tuning LLM would otherwise treat as real accumulated
+        # execution history. Only _evaluate_stage_evidence_core()'s real
+        # per-stage evaluation loop ever passes a real, truthy stage name --
+        # skip logging entirely for anything else.
+        if not stage:
+            return
         from . import self_tuning as _self_tuning
         try:
             _self_tuning.append_gate_history(
-                root, gate_id, stage or "", bool(ok),
+                root, gate_id, stage, bool(ok),
                 str(detail.get("reason", detail.get("status", ""))),
                 time.time(),
             )
