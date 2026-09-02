@@ -167,7 +167,22 @@ def test_engine_dispatches_all_three_branches_concurrently_and_joins():
 
         lock = threading.Lock()
         state = {"current": 0, "peak": 0, "seen": [], "windows": {}}
-        SLEEP = 0.25
+        # SLEEP=0.25 (with a 1.8x margin, i.e. a 0.45s threshold below) was
+        # observed to fail under real `pytest -n8` contention: a captured
+        # failure showed COMMAND_PATTERN's window (enter=..7657, exit=..0163)
+        # entirely disjoint from DISCOVERY/INTAKE's window (enter=..2570),
+        # a ~0.24s gap -- not a dispatch bug (the fan-out code correctly uses
+        # ThreadPoolExecutor(max_workers=len(targets)), submitting all branches
+        # in one tight loop), but real OS thread-scheduling latency: under
+        # heavy multi-process CPU contention (8 competing pytest-xdist worker
+        # processes, several themselves spawning gate-script subprocesses),
+        # the OS can delay actually scheduling 2 of the 3 freshly-created
+        # worker threads onto a core for a while even though Python submitted
+        # all 3 essentially simultaneously. That absolute OS-jitter magnitude
+        # doesn't shrink just because SLEEP is larger, so a longer SLEEP
+        # dilutes it to a much smaller fraction of the window instead --
+        # same calibration principle as the d289589 dashboard-test fix.
+        SLEEP = 1.0
 
         class _SlowAdapter:
             def run(self, prompt, cwd, resume_session=None, agent_profile=None):
