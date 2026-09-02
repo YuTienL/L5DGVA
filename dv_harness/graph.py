@@ -1,8 +1,9 @@
-# NOTICE (superseded 2026-08-28, 12-claim re-audit): the original industrial-
-# grade-audit NOTICE below claimed this module was "NOT invoked by any
-# executing code path" -- that is now FALSE, per CLAUDE.md's own Evidence
-# Truth Rule ("current evidence wins and this file must be updated"). Two
-# real callers as of this audit:
+# NOTICE (superseded 2026-08-28, 12-claim re-audit; further updated
+# 2026-09-03, gap-close-engine cleanup): the original industrial-grade-audit
+# NOTICE below claimed this module was "NOT invoked by any executing code
+# path" -- that is now FALSE, per CLAUDE.md's own Evidence Truth Rule
+# ("current evidence wins and this file must be updated"). Two real callers
+# as of this audit:
 #   - dv_harness/engine.py's DVHarness._load_graph()/run_stage(): loads
 #     GraphDefinition and reads node.route/agent/skills/blackboard_read/
 #     blackboard_write per stage, feeding RouteResolver/PlanStore/
@@ -10,14 +11,18 @@
 #   - dv_harness/policy.py's graph_next(): the actual PASS/FAIL stage-
 #     transition edge lookup now calls GraphDefinition.next_for() directly
 #     (previously a separate, duplicate raw-JSON edge parser).
-# GraphState (below) remains genuinely unused outside dv_harness/
-# graph_runtime.py, which is itself still not invoked by any executing path
-# (see graph_runtime.py's own NOTICE) -- .dv-harness/graph/graph_state.json
-# on disk is a stray artifact of a standalone GraphRuntime invocation,
-# disconnected from the real .dv-harness/state.json HarnessState that
-# engine.py actually drives. Original NOTICE text, now superseded:
-# "this module is NOT invoked by any executing code path in dv_harness/ or
-# .claude/agents/*.md as of this audit -- it is standalone/orphaned code."
+# GraphState previously lived below, backing the now-deleted
+# dv_harness/graph_runtime.py's GraphRuntime -- reachable only via the
+# documented DV_GRAPH_STATUS.ps1 script, which read/wrote a permanently-
+# stale .dv-harness/graph/graph_state.json disconnected from the real
+# .dv-harness/state.json HarnessState engine.py actually drives. Per the
+# 2026-09-03 gap-close-engine audit, DV_GRAPH_STATUS.ps1 was retargeted to
+# read the real live HarnessState (same as `dv-harness status`), and
+# graph_runtime.py/GraphState/the stray graph_state.json were removed as
+# nothing real referenced them any more. Original NOTICE text, now
+# superseded: "this module is NOT invoked by any executing code path in
+# dv_harness/ or .claude/agents/*.md as of this audit -- it is
+# standalone/orphaned code."
 from __future__ import annotations
 import json
 from dataclasses import dataclass,field
@@ -64,13 +69,3 @@ class GraphDefinition:
   # left untouched so its existing callers (policy.graph_next(), etc.) are
   # unaffected.
   return [e.target for e in self.outgoing(n) if e.condition in (result,'ANY')]
-class GraphState:
- def __init__(self,path):
-  self.path=Path(path);self.data=json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'active_nodes':[],'completed_nodes':[],'blocked_nodes':[],'node_results':{},'iteration':0};self.save()
- def save(self):self.path.parent.mkdir(parents=True,exist_ok=True);self.path.write_text(json.dumps(self.data,ensure_ascii=False,indent=2),encoding='utf-8')
- def set_active(self,n):self.data['active_nodes']=[n];self.save()
- def result(self,n,status,evidence=None):
-  self.data['node_results'][n]={'status':status,'evidence':evidence or []}
-  if status in ('PASS','CLOSED') and n not in self.data['completed_nodes']:self.data['completed_nodes'].append(n)
-  if status in ('BLOCKED','WAIT_USER') and n not in self.data['blocked_nodes']:self.data['blocked_nodes'].append(n)
-  self.save()

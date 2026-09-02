@@ -26,18 +26,21 @@ from . import self_tuning
 # --- Plan-and-Execute / Multi-Agent / Blackboard / ReAct wiring -------------
 # planner.py, react.py, router.py, multi_agent.py, skill_resolver.py were all
 # confirmed (2026-08-28 architecture audit) to be correct but never imported
-# by any executing code path -- graph_runtime.py already wired all of them
-# together (prepare_node/complete_node) but graph_runtime.py itself was never
-# imported by engine.py or cli.py either. Rather than importing
-# graph_runtime.GraphRuntime wholesale (its prepare_node/complete_node shape
-# doesn't line up 1:1 with run_stage()'s single-call-per-attempt model, e.g.
-# it would create a brand new plan/task on every retry with no reuse
-# concept), this reuses the same underlying modules directly inside
-# run_stage(), and reuses control_plane.py's already-real REPLAN call site
-# (replan_stage/_find_latest_plan, wired in by a parallel pass on this same
-# file) for plan lookup/replanning instead of re-deriving that logic here.
-# graph.py's GraphDefinition (node-by-id lookup) is reused as-is -- it
-# already does this correctly; see _load_graph() below.
+# by any executing code path -- the now-deleted dv_harness/graph_runtime.py
+# (removed 2026-09-03, gap-close-engine cleanup: it was reachable only via
+# DV_GRAPH_STATUS.ps1, which drove a permanently-stale standalone GraphState
+# disconnected from the real HarnessState below, and has since been
+# retargeted to read live state directly) had once wired all of them together
+# (prepare_node/complete_node) but was itself never imported by engine.py or
+# cli.py either. Rather than importing that GraphRuntime wholesale (its
+# prepare_node/complete_node shape doesn't line up 1:1 with run_stage()'s
+# single-call-per-attempt model, e.g. it would create a brand new plan/task
+# on every retry with no reuse concept), this reuses the same underlying
+# modules directly inside run_stage(), and reuses control_plane.py's already-
+# real REPLAN call site (replan_stage/_find_latest_plan, wired in by a
+# parallel pass on this same file) for plan lookup/replanning instead of
+# re-deriving that logic here. graph.py's GraphDefinition (node-by-id lookup)
+# is reused as-is -- it already does this correctly; see _load_graph() below.
 from .graph import GraphDefinition
 from .parallel_frontier import ParallelFrontierStore
 from .blackboard import Blackboard
@@ -2260,12 +2263,27 @@ class DVHarness:
         #         multi-iteration loop above are two different, both-real
         #         things, not a contradiction. --------------------------
         if node is not None:
+            # action carries route/protocol_decision/environment_mode_decision
+            # (2026-09-03, gap-close-engine cleanup): these three resolver
+            # decisions were previously folded ONLY into the ephemeral
+            # _build_plan_section() prompt string sent to the adapter (step 1
+            # above) and a transient local read for the KC search query --
+            # never persisted anywhere, so none of them were inspectable
+            # after the fact. This reuses this SAME already-real per-attempt
+            # audit record (iteration_NNN.json under .dv-harness/react/<node>/,
+            # plus its Working Memory tier projection) rather than inventing a
+            # new persistence mechanism -- the established pattern this
+            # codebase already uses to make a resolver decision auditable,
+            # exactly like route_info["agent"] immediately below.
             self.react.record(
                 node=stage,
                 iteration=ss["attempts"],
                 reason_summary=_reason_summary(route_info, plan, bb_snapshot),
                 action={"adapter": type(self.adapter).__name__,
                         "agent": route_info["agent"] if route_info else None,
+                        "route": route_info["route"] if route_info else None,
+                        "protocol_decision": (route_info or {}).get("protocol_decision"),
+                        "environment_mode_decision": (route_info or {}).get("environment_mode_decision"),
                         "resume_session": resume},
                 tool="ClaudeAdapter.run",
                 observation={"ok": result.ok, "status": ss["status"], "session_id": result.session_id},

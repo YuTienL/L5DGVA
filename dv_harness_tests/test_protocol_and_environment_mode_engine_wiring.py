@@ -114,6 +114,55 @@ def test_two_different_intake_subsystem_counts_pick_two_different_real_environme
     assert seen["SUBSYSTEM_MODE"] != seen["SYSTEM_LEVEL_MODE"]
 
 
+def test_protocol_and_environment_mode_decisions_are_persisted_to_the_real_react_record():
+    # Gap-close-engine cleanup (2026-09-03, .work/gap-close-engine-
+    # investigation.md item 2): before this fix, route_info["protocol_decision"]/
+    # ["environment_mode_decision"] existed ONLY as local Python variables
+    # folded into the ephemeral adapter prompt string -- zero hits in any
+    # on-disk .json/state file. This proves both decisions now land in the
+    # SAME real, already-existing on-disk audit record every other resolver
+    # decision (route_info["agent"]) already uses:
+    # .dv-harness/react/<node>/iteration_NNN.json -- via ReactRecorder.record()'s
+    # `action` dict, at the SAME call site, no new persistence mechanism.
+    from dv_harness.engine import DVHarness
+
+    tmp = _mk_project_with_graph_and_agents()
+    try:
+        h = DVHarness(tmp)
+        # Same real INTAKE-shaped "project" Blackboard record the sibling
+        # environment-mode test above writes -- without it,
+        # resolve_environment_mode() has no requested_subsystems and
+        # legitimately returns environment_mode=None (a different, already
+        # separately-tested real decision), which would make this
+        # persistence assertion ambiguous.
+        h.blackboard.write("project", {"protocols": ["usb"], "selected_subsystems": ["usb"]},
+                            source="INTAKE")
+        adapter = _CapturingAdapter()
+        h.adapter = adapter
+        h.set_stage("DISCOVERY")
+        h.run_stage("investigate a USB3 link training failure")
+
+        react_file = tmp / ".dv-harness" / "react" / "DISCOVERY" / "iteration_001.json"
+        assert react_file.exists(), "run_stage() must persist a ReactRecorder record for this attempt"
+        record = json.loads(react_file.read_text(encoding="utf-8"))
+        action = record["action"]
+
+        # The pre-existing, already-real field this fix sits alongside.
+        assert action["agent"], action
+        # NEWLY persisted: route (the comparable half-persisted decision the
+        # investigation found) and both fully-unpersisted resolver decisions.
+        assert action["route"] == "analysis-route"  # DISCOVERY node's real route, main_graph.json
+        assert action["protocol_decision"]["protocol"] == "usb"
+        assert action["environment_mode_decision"]["environment_mode"] == "SUBSYSTEM_MODE"
+
+        # And it is genuinely auditable after the fact -- not just present at
+        # write time -- by re-reading the file independently of `h`.
+        reread = json.loads(react_file.read_text(encoding="utf-8"))
+        assert reread["action"]["protocol_decision"]["protocol"] == "usb"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_project_model_stage_passes_and_dashboard_now_reads_a_real_environment_mode_selection():
     from dv_harness.engine import DVHarness
     from dv_harness.dashboard import _environment_mode_selected

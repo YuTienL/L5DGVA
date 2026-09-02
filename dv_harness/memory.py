@@ -5,6 +5,25 @@ from typing import Any, Dict, List, Optional
 
 MEMORY_LEVELS=["working","job","project","engineering","organizational"]
 
+# REMOVED (2026-09-03, gap-close-engine cleanup): a `current_evidence_required`
+# field used to be set to `True` on every MemoryStore record (all 5 tiers)
+# via `add()`'s setdefault below, and again explicitly `True` in
+# MemoryConsolidator.from_closed_finding()'s "engineering"-tier write. Full-
+# repo audit found zero read sites anywhere -- no gate, engine code, CLI, or
+# dashboard ever consulted it -- and no write path ever set it to anything
+# but `True`, so it could never have discriminated one record from another
+# even if something had read it. The real, actually-wired "revalidate before
+# trusting" mechanism for reused knowledge in this codebase is
+# gates._ccl_reuse_verified() (status=="ACTIVE" + unexpired revalidate_by +
+# real evidence.runtime_evidence_hash/semantic_verdict) -- built independently
+# using different fields, for CornerCaseLibrary records specifically (see
+# CornerCaseLibrary.add()/CornerCaseLibraryConsolidator below, which keep
+# their OWN current_evidence_required field, now with real read-side
+# enforcement in gates.py). Plain MemoryStore records (this class) have no
+# citation/skip-gate consumer at all -- they only ever reach a stage prompt
+# as informational relevant_memory context, already uniformly disclaimed by
+# prompts.py regardless of any per-record flag -- so this field was dead
+# weight here specifically, not a smaller version of the CCL mechanism.
 class MemoryStore:
     def __init__(self, project_root: Path):
         self.root=project_root.resolve()
@@ -34,7 +53,6 @@ class MemoryStore:
         mem.setdefault("reuse_count",0)
         mem.setdefault("confidence","UNKNOWN")
         mem.setdefault("status","ACTIVE")
-        mem.setdefault("current_evidence_required",True)
         mem.setdefault("provenance",None)
         mem.setdefault("confirmation_count",0)
         mem.setdefault("last_confirmed_at",None)
@@ -164,7 +182,6 @@ class MemoryConsolidator:
             "verification":verification,
             "confidence":"CONFIRMED",
             "reusable":True,
-            "current_evidence_required":True,
             "source_finding_id":finding.get("finding_id")
         })
 
@@ -283,6 +300,14 @@ class CornerCaseLibrary:
         rec.setdefault("reuse_count", 0)
         rec.setdefault("confidence", "VALIDATED")
         rec.setdefault("status", "ACTIVE")
+        # current_evidence_required (2026-09-03, gap-close-engine cleanup:
+        # gave this field a real False-setter and a real read site, see
+        # CornerCaseLibraryConsolidator.from_resolved_corner_case() below and
+        # gates._ccl_reuse_verified()): defaults True on this bare add() path
+        # -- a record hand-added here (not through the validated
+        # from_resolved_corner_case() write path below) is NOT reuse-eligible
+        # via REUSED_CCL:<id> even though status defaults to ACTIVE; only a
+        # record actually created FROM genuine current evidence gets False.
         rec.setdefault("current_evidence_required", True)
         rec.setdefault("applicability_conditions", [])
         rec.setdefault("resolution", {})
@@ -495,4 +520,12 @@ class CornerCaseLibraryConsolidator:
             "runtime_evidence_hash": resolution["runtime_evidence_hash"],
         }
         record["confidence"] = "VALIDATED"
+        # (2026-09-03, gap-close-engine cleanup) this is the one write path
+        # that already requires real test_mapping/semantic_verdict/
+        # runtime_evidence_hash before creating the record -- i.e. the record
+        # is created FROM genuine current evidence at write time -- so it is
+        # reuse-eligible without further revalidation, unlike a bare
+        # CornerCaseLibrary.add() record (whose current_evidence_required
+        # setdefault above stays True). Enforced by gates._ccl_reuse_verified().
+        record["current_evidence_required"] = False
         return self.library.add(record)

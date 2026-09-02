@@ -889,9 +889,22 @@ def _ccl_reuse_verified(root: Path, ccl_id: str) -> bool:
     "high confidence" bar dv_harness/prompts.py's SOC_SCENARIO_PLANNER/
     COVERAGE_CLOSURE stage text already documents for agents: status must be
     ACTIVE, and the record must carry a real runtime_evidence_hash plus a
-    semantic_verdict of TRUE_PASS/TRUE_FAIL -- not merely exist."""
+    semantic_verdict of TRUE_PASS/TRUE_FAIL -- not merely exist.
+
+    current_evidence_required gate (2026-09-03, gap-close-engine cleanup):
+    a record whose current_evidence_required is still True (the default for
+    a bare CornerCaseLibrary.add() -- see that method's own comment) has
+    never been shown to come FROM genuine current evidence, so it is
+    rejected here even if status happens to be ACTIVE. Only a record created
+    via CornerCaseLibraryConsolidator.from_resolved_corner_case() (which
+    explicitly sets it False after requiring real test_mapping/
+    semantic_verdict/runtime_evidence_hash) passes this check -- CLAUDE.md's
+    "any current root cause must be revalidated with current evidence" rule,
+    made real here instead of the field sitting unread."""
     rec = CornerCaseLibrary(root).get(ccl_id)
     if not rec or rec.get("status") != "ACTIVE":
+        return False
+    if rec.get("current_evidence_required", True):
         return False
     # Shared-knowledge-center staleness gate (2026-08-28): a record that has
     # aged past its `revalidate_by` timestamp without being re-confirmed is

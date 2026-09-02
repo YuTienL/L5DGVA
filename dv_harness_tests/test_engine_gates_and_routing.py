@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dv_harness.policy import graph_next
-from dv_harness.gates import evaluate_stage_evidence
+from dv_harness.gates import evaluate_stage_evidence, _ccl_reuse_verified
 from dv_harness.stage_profile import StageExecutionProfiler, extract_provider_usage
 from dv_harness.memory_router import route_and_store, route_memory
 from dv_harness.memory import MemoryStore, MemoryRetriever, CornerCaseLibrary, CornerCaseLibraryConsolidator
@@ -1937,6 +1937,103 @@ def test_corner_case_library_consolidator_requires_real_resolution_evidence():
         })
         assert rec["confidence"] == "VALIDATED"
         assert rec["evidence"]["semantic_verdict"] == "TRUE_PASS"
+        # Gap-close-engine cleanup (2026-09-03, item 3): the ONE write path
+        # that already requires real test_mapping/semantic_verdict/
+        # runtime_evidence_hash now explicitly stamps the record as no
+        # longer needing revalidation before reuse.
+        assert rec["current_evidence_required"] is False
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_ccl_reuse_rejects_a_record_that_still_requires_current_evidence():
+    # Gap-close-engine cleanup (2026-09-03, .work/gap-close-engine-
+    # investigation.md item 3): current_evidence_required previously had
+    # zero read sites anywhere -- a record could carry real
+    # runtime_evidence_hash/semantic_verdict AND status=="ACTIVE" and still
+    # be reuse-cited even though it never went through the validated
+    # from_resolved_corner_case() write path. This proves _ccl_reuse_verified
+    # now actually enforces the flag: a bare CornerCaseLibrary.add() record
+    # -- current_evidence_required defaults True there -- is rejected even
+    # when its evidence/status would otherwise satisfy every other check.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lib = CornerCaseLibrary(tmp)
+        rec = lib.add({
+            "corner_id": "cc-hand-added", "protocol": "USB", "category": "reset_power",
+            "risk_tier": "P1", "status": "ACTIVE",
+            "evidence": {"runtime_evidence_hash": "handcrafted123", "semantic_verdict": "TRUE_PASS"},
+        })
+        assert rec["current_evidence_required"] is True  # the real default this fix reads
+        assert _ccl_reuse_verified(tmp, rec["ccl_id"]) is False
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_ccl_reuse_accepts_a_record_created_from_genuine_current_evidence():
+    # Symmetric positive case: a record that DID go through the validated
+    # from_resolved_corner_case() path (current_evidence_required == False)
+    # passes _ccl_reuse_verified() exactly as before this fix -- the new
+    # check is additive, not a regression on the already-real
+    # status/revalidate_by/evidence checks.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        consolidator = CornerCaseLibraryConsolidator(CornerCaseLibrary(tmp))
+        rec = consolidator.from_resolved_corner_case(
+            {"corner_id": "cc-validated", "protocol": "USB", "category": "reset_power", "risk_tier": "P1"},
+            {"test_mapping": "usb_reset_seq", "semantic_verdict": "TRUE_PASS", "runtime_evidence_hash": "abc123"},
+        )
+        assert _ccl_reuse_verified(tmp, rec["ccl_id"]) is True
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_ccl_reuse_gate_end_to_end_now_rejects_unverified_hand_added_record():
+    # End-to-end proof through the real co-sign-skip gate path (mirrors
+    # test_dv_review_cosign_enabled_ccl_reuse_bypasses_wrapping above): a
+    # hand-added CCL record cited via REUSED_CCL:<id> can no longer bypass
+    # co-sign just because it happens to carry evidence fields -- it must
+    # fall through to the normal wrapping requirement.
+    lib = CornerCaseLibrary(ROOT)
+    rec = lib.add({
+        "corner_id": "c-hand", "protocol": "USB", "category": "reset_power", "risk_tier": "P1",
+        "status": "ACTIVE", "evidence": {"runtime_evidence_hash": "x1", "semantic_verdict": "TRUE_PASS"},
+    })
+    ccl_id = rec["ccl_id"]
+    try:
+        text = f'''```dv-harness-evidence:corner_risk_rank
+{{"cases": [{{"corner_id": "c1", "risk_factors": ["reset", "cdc"],
+  "classification_basis": "REUSED_CCL:{ccl_id}"}}]}}
+```''' + "\n" + _SOC_SCENARIO_PLANNER_EXTRA_GATES
+        with _cosign_enabled():
+            verdict, reasons = evaluate_stage_evidence(ROOT, "SOC_SCENARIO_PLANNER", text)
+        assert verdict == "DV_REVIEW_PENDING", reasons
+        assert any(ccl_id in str(r) for r in reasons)
+    finally:
+        (lib.dir / f"{ccl_id}.json").unlink(missing_ok=True)
+        rows = [r for r in lib._index() if r.get("ccl_id") != ccl_id]
+        lib._save_index(rows)
+
+
+def test_memory_store_records_no_longer_carry_the_dead_current_evidence_required_field():
+    # Gap-close-engine cleanup (2026-09-03, item 3): plain MemoryStore
+    # records (all 5 tiers) never had any consumer for this flag -- every
+    # write site only ever set it True, so it carried no information. It has
+    # been removed from MemoryStore.add() and MemoryConsolidator.
+    # from_closed_finding() rather than left half-decorative.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        mem = MemoryStore(tmp)
+        rec = mem.add("project", {"title": "some finding"})
+        assert "current_evidence_required" not in rec
+
+        from dv_harness.memory import MemoryConsolidator
+        consolidator = MemoryConsolidator(mem)
+        closed_rec = consolidator.from_closed_finding(
+            {"status": "CLOSED", "title": "t", "finding_id": "F1"},
+            {"single_sim": "PASS", "regression": "NOT_REQUIRED", "reaudit": "CLEAN"},
+        )
+        assert "current_evidence_required" not in closed_rec
     finally:
         shutil.rmtree(tmp)
 
