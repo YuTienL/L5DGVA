@@ -11,11 +11,17 @@
 ## Enforcement status (verified by code audit, 2026-09-02)
 
 Every step below was audited against the actual wired pipeline (not just
-read as prose) and 6 of 8 confirmed gaps between "documented" and
+read as prose) and all 8 confirmed gaps between "documented" and
 "code-enforced" have since been closed — see
-`.work/persist_debug_workflow_gap_closure_memory.py` for the full
-before/after evidence. Two gaps remain honestly open, noted inline below
-(steps 4 and 5) rather than silently glossed over.
+`.work/persist_debug_workflow_gap_closure_memory.py` for the first 6, and
+commits `53a9912` (Knowledge Center auto-lookup) and `cdca8ae`
+(`root_cause_evidence_gate` freshness via `evidence_refs`) for the final
+2. This does not mean the workflow is now infallible — every enforcement
+below is still bounded by what a gate script can check (mostly
+agent-attested evidence, cross-checked against real files/registries
+where feasible) — but the specific gap class this audit went looking for
+(documented behavior with nothing in code actually enforcing it) is
+closed for all 8 originally-audited claims.
 
 Prerequisite: the DE has completed onboarding
 (`REMOTE_LOGIN_GUIDE.md`'s "Onboarding a new PC user" section) — their own
@@ -66,11 +72,16 @@ file permissions.
    evidence, not just cite a hit and stop looking.
 5. **Every root-cause claim must cite current evidence**, not a prior
    session's memory or a similar-looking past bug — see `CLAUDE.md`'s
-   Evidence Truth Rule. Code-enforced for `deep_rca_evidence_gate` sources
-   with an `evidence_path` (real hash recompute, see step 4). **Still
-   open**: `root_cause_evidence_gate`'s `supporting_evidence`/
-   `counter_evidence` fields remain free-text citations with no equivalent
-   freshness check yet.
+   Evidence Truth Rule. Code-enforced two ways now: `deep_rca_evidence_gate`
+   sources with an `evidence_path` get a real hash recompute against the
+   current file (see step 4); `root_cause_evidence_gate`'s
+   `supporting_evidence`/`counter_evidence` fields accept an optional
+   `evidence_refs` array of `{path, quote}` pairs (top-level or per
+   hypothesis), verified by reusing `manual_lookup_before_edit_gate.py`'s
+   existing real file-existence + exact-substring check — proving the
+   cited text is actually present in the real current file, not
+   remembered. Legacy free-text-only citations still work (backward
+   compatible) but get no freshness guarantee.
 6. **DE reviews and rules — Human Override is authoritative.** Especially
    when the evidence is ambiguous or the question is "is this really a bug
    or is this the spec's intended behavior" — that call belongs to the DE,
