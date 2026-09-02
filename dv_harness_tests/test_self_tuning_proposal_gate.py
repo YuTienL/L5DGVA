@@ -66,3 +66,23 @@ def test_proposal_missing_required_field_is_stripped_not_crashed():
     assert rc == 0
     assert out["surviving_proposals"] == []
     assert out["stripped"][0]["strip_reason"] == "MISSING_REQUIRED_FIELD"
+
+
+def test_top_level_payload_is_list_returns_clean_json_not_crash():
+    """Regression test: payload is a list, not a dict. Should return clean JSON with exit code 2."""
+    rc, out = _run([1, 2, 3])
+    assert rc == 2
+    assert out["status"] == "FAIL"
+    assert out["reason"] == "MISSING_PROPOSALS_LIST"
+
+
+def test_change_field_is_non_dict_returns_clean_reason_not_crash():
+    """Regression test: change is a string, not a dict. Should be stripped with clear reason."""
+    rc, out = _run({"proposals": [
+        {"gate_id": "some_gate", "change": "not a dict",
+         "rationale": "test", "confidence": "HIGH", "risk_level": "LOW"},
+    ]})
+    assert rc == 0
+    assert out["surviving_proposals"] == []
+    assert len(out["stripped"]) == 1
+    assert out["stripped"][0]["strip_reason"] == "INVALID_CHANGE_SHAPE"

@@ -27,6 +27,8 @@ def _strip_reason(proposal):
     if not REQUIRED_FIELDS.issubset(proposal.keys()):
         return "MISSING_REQUIRED_FIELD"
     change = proposal.get("change") or {}
+    if not isinstance(change, dict):
+        return "INVALID_CHANGE_SHAPE"
     if change.get("action") == "remove":
         stage = proposal.get("stage", "")
         target_gate = change.get("gate_id", proposal.get("gate_id"))
@@ -48,6 +50,10 @@ def main():
         payload = json.loads(Path(a.proposal).read_text(encoding="utf-8"))
     except Exception as e:
         print(json.dumps({"status": "FAIL", "reason": "PAYLOAD_UNREADABLE", "detail": str(e)}))
+        return 2
+
+    if not isinstance(payload, dict):
+        print(json.dumps({"status": "FAIL", "reason": "MISSING_PROPOSALS_LIST"}))
         return 2
 
     proposals = payload.get("proposals")
