@@ -970,8 +970,38 @@ def main():
             proposal = {"gate_id": record.get("gate_id"), "stage": record.get("stage"),
                         "change": record.get("change"), "rationale": record.get("rationale"),
                         "confidence": record.get("confidence"), "risk_level": record.get("risk_level")}
-            self_tuning.apply_proposal(root, proposal)
+            # Finding I3 fix (2026-09-02 final-review fix wave): capture the
+            # REAL prior parameter state right before applying -- this is the
+            # defer-then-approve counterpart to engine.py's AUTO_APPLY-path
+            # capture. Only meaningful for a param-change proposal (add/remove
+            # proposals have no single scalar "prior value").
+            change = proposal.get("change") or {}
+            param = change.get("param") if change.get("action") not in ("add", "remove") else None
+            prior_state = (
+                self_tuning.capture_prior_param_state(root, proposal.get("gate_id"), param)
+                if param is not None else {"prior_value": None, "prior_was_absent": None}
+            )
+            try:
+                self_tuning.apply_proposal(root, proposal)
+            except ValueError as e:
+                # Findings I1/I2 (2026-09-02 final-review fix wave):
+                # apply_proposal() now raises ValueError for a proposal
+                # targeting a PROTECTED_PARAMETERS entry (I1) or a blocked
+                # PROTECTED_REMOVALS removal (I2) instead of either silently
+                # overwriting a safety-critical threshold or succeeding as a
+                # no-op that still got recorded as APPLIED. Record
+                # BLOCKED_PROTECTED (never APPLIED) so the audit trail never
+                # misrepresents a blocked change as having succeeded, and
+                # return a clean JSON error response instead of a raw
+                # traceback -- same {"ok": False, "error": ...} shape every
+                # other failure case in this command already uses.
+                record["status"] = "BLOCKED_PROTECTED"
+                store.add("project", record)
+                print(json.dumps({"ok": False, "error": "BLOCKED_PROTECTED", "detail": str(e)}, ensure_ascii=False))
+                return 1
             record["status"] = "APPLIED"
+            record["prior_value"] = prior_state["prior_value"]
+            record["prior_was_absent"] = prior_state["prior_was_absent"]
             store.add("project", record)  # same memory_id already in record -> overwrites in place
             print(json.dumps({"ok": True, "memory_id": args.memory_id}))
             return 0
@@ -1004,7 +1034,26 @@ def main():
                     stage_entry["remove"].remove(change["gate_id"])
                 self_tuning._write_json_atomic(self_tuning._overrides_path(root), overrides)
             else:
-                self_tuning.set_param(root, record.get("gate_id"), change.get("param"), change.get("from"))
+                # Finding I3 fix (2026-09-02 final-review fix wave): use the
+                # REAL prior state captured at approve/auto-apply time
+                # (record["prior_value"]/["prior_was_absent"], written by
+                # this same approve handler above and by engine.py's
+                # AUTO_APPLY path), never the proposal's own self-reported
+                # change["from"] -- an LLM-hallucinated "from", or a
+                # parameter that was never actually set before (using the
+                # gate's own hardcoded default), must not be trusted.
+                prior_was_absent = record.get("prior_was_absent")
+                if prior_was_absent is None:
+                    # Legacy/pre-fix record with no captured prior state
+                    # (e.g. written directly via record_adjustment() outside
+                    # the approve handler) -- fall back to the old
+                    # change["from"] behavior rather than erroring, since
+                    # there is genuinely nothing better to use.
+                    self_tuning.set_param(root, record.get("gate_id"), change.get("param"), change.get("from"))
+                elif prior_was_absent:
+                    self_tuning.delete_param(root, record.get("gate_id"), change.get("param"))
+                else:
+                    self_tuning.set_param(root, record.get("gate_id"), change.get("param"), record.get("prior_value"))
             record["status"] = "REVERTED"
             store.add("project", record)
             print(json.dumps({"ok": True, "memory_id": args.memory_id}))
