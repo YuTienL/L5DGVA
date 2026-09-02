@@ -1460,10 +1460,91 @@ class DVHarness:
 
             history = self_tuning.read_gate_history_since(
                 self.root, self_tuning.read_last_reviewed_index(self.root))
+
+            # Finding I5 fix (2026-09-02 follow-up): the design spec's
+            # "Evidence assembled for the review" section requires FOUR
+            # sources, not just gate_history.jsonl (source 1, above) --
+            # source 2 (human CORRECT records), source 3 (current tuned
+            # state), and source 4 (adjustment history) were all missing
+            # from the actual prompt text sent to the adapter. Each is
+            # labeled separately below so the LLM can distinguish "raw
+            # execution history" from "human corrections" from "already-
+            # tuned state" from "past tuning decisions", per the finding's
+            # own instruction.
+            #
+            # Source 2: active `dv-harness correct <stage> --note` records
+            # (ControlPlane) -- ControlPlane has no "all corrections across
+            # all stages" method (only get_active_correction(stage), a
+            # per-stage lookup, and only for the CURRENT unconsumed
+            # correction -- consumed/past corrections are not retrievable
+            # through any existing ControlPlane API). Building that
+            # cross-stage/history infrastructure is out of scope for this
+            # fix (see the finding's own instruction to use "whatever
+            # granular per-stage method exists" rather than build new
+            # ControlPlane infrastructure) -- so this queries the one real
+            # existing method, scoped to the distinct stages actually seen
+            # in this cycle's gate_history slice (the stages this review is
+            # actually about), in first-seen order.
+            cp = ControlPlane(self.root)
+            seen_stages: List[str] = []
+            for entry in history:
+                s = entry.get("stage")
+                if s and s not in seen_stages:
+                    seen_stages.append(s)
+            corrections = []
+            for s in seen_stages:
+                active = cp.get_active_correction(s)
+                if active:
+                    corrections.append({"stage": s, "note": active.get("note"),
+                                         "corrected_by": active.get("corrected_by"),
+                                         "at": active.get("at")})
+
+            # Source 3: current tuned state -- the full, current contents of
+            # both JSON files self-tuning is ever allowed to write, so the
+            # analysis knows what's already been tuned (avoiding redundant
+            # re-proposals / detecting thrashing), per the spec.
+            current_parameters = self_tuning.read_parameters(self.root)
+            current_overrides = self_tuning.read_overrides(self.root)
+
+            # Source 4: adjustment history -- ALL kind="self_tuning_adjustment"
+            # records regardless of status (APPLIED/PENDING/BLOCKED_PROTECTED/
+            # REJECTED/REVERTED), not just the REVERTED-only subset
+            # recent_reverts already narrows to for classify_proposal()'s
+            # pure classification rule further below. Capped at the 10 most
+            # recent records (read_recent_adjustment_records' own default)
+            # -- a project can accumulate an unbounded number of these over
+            # its lifetime, and the review only needs recent decisions to
+            # avoid re-proposing something just reverted/rejected, not the
+            # complete lifetime ledger (which `self-tune list` already
+            # exposes in full for a human). Only the fields relevant to
+            # "what was decided and why" are kept per record, not the full
+            # stored dict (prior_value/applied_by/etc. add prompt size
+            # without helping this specific judgment).
+            recent_adjustments = [
+                {"gate_id": r.get("gate_id"), "stage": r.get("stage"), "change": r.get("change"),
+                 "status": r.get("status"), "confidence": r.get("confidence"),
+                 "risk_level": r.get("risk_level"), "rationale": r.get("rationale")}
+                for r in self_tuning.read_recent_adjustment_records(self.root, limit=10)
+            ]
+
             prompt = (
                 "You are reviewing accumulated real gate-execution history to "
-                "propose self-tuning adjustments. Evidence (most recent "
-                f"{len(history)} gate invocations):\n" + json.dumps(history) +
+                "propose self-tuning adjustments. Four evidence sources follow, "
+                "clearly labeled.\n\n"
+                "SOURCE 1 -- raw gate-execution history (most recent "
+                f"{len(history)} gate invocations since the last review):\n"
+                + json.dumps(history) +
+                "\n\nSOURCE 2 -- human corrections (active `dv-harness correct` "
+                "records for stages seen in SOURCE 1; a human said a gate's "
+                "verdict there was wrong):\n" + json.dumps(corrections) +
+                "\n\nSOURCE 3 -- current tuned state (what's already been "
+                "applied via parameters.json/stage_gate_overrides.json -- avoid "
+                "redundant re-proposals of what's already in effect):\n"
+                "parameters.json: " + json.dumps(current_parameters) +
+                "\nstage_gate_overrides.json: " + json.dumps(current_overrides) +
+                "\n\nSOURCE 4 -- adjustment history (up to 10 most recent past "
+                "tuning decisions, any status -- do not identically re-propose "
+                "one already REJECTED or REVERTED):\n" + json.dumps(recent_adjustments) +
                 "\n\nRespond with a single fenced "
                 "```dv-harness-evidence:self_tuning_proposal``` block containing "
                 '{"proposals": [{"gate_id":..., "stage":... (only for add/remove '
@@ -1476,15 +1557,35 @@ class DVHarness:
 
             try:
                 result = self.adapter.run(prompt=prompt, cwd=str(self.root))
-            except Exception:
+            except Exception as exc:
+                # Finding I8 fix (2026-09-02 follow-up): an operator watching
+                # only the event stream previously had no way to tell "a
+                # review cycle silently never fired" apart from "a review
+                # cycle ran and failed for a specific, nameable reason" --
+                # this breadcrumb (and its sibling below) closes that gap.
+                # Counter is still NOT reset here (see this method's own
+                # docstring on the two failure-recovery policies) -- only
+                # the observability is new, not the retry semantics.
+                self.store.event({
+                    "ts": now(), "stage": "SELF_TUNING", "event": "SELF_TUNING_REVIEW_SKIPPED",
+                    "reason": "ADAPTER_EXCEPTION", "detail": str(exc),
+                })
                 return  # adapter failure -- counter NOT reset, retried next real run_stage()
             if not result or not getattr(result, "ok", False):
+                self.store.event({
+                    "ts": now(), "stage": "SELF_TUNING", "event": "SELF_TUNING_REVIEW_SKIPPED",
+                    "reason": "ADAPTER_NOT_OK",
+                })
                 return  # same adapter-failure non-reset policy as above
 
             blocks = extract_evidence_blocks(result.text or "")
             evidence = blocks.get("self_tuning_proposal")
             if not evidence:
                 self_tuning.reset_execution_counter(self.root)
+                self.store.event({
+                    "ts": now(), "stage": "SELF_TUNING", "event": "SELF_TUNING_REVIEW_SKIPPED",
+                    "reason": "NO_EVIDENCE_BLOCK",
+                })
                 return
 
             try:
@@ -1501,9 +1602,17 @@ class DVHarness:
                 # re-derives a fresh proposal rather than retrying against
                 # unusable evidence.
                 self_tuning.reset_execution_counter(self.root)
+                self.store.event({
+                    "ts": now(), "stage": "SELF_TUNING", "event": "SELF_TUNING_REVIEW_SKIPPED",
+                    "reason": "PROPOSAL_GATE_EXCEPTION",
+                })
                 return
             if not gate_result.ok:
                 self_tuning.reset_execution_counter(self.root)
+                self.store.event({
+                    "ts": now(), "stage": "SELF_TUNING", "event": "SELF_TUNING_REVIEW_SKIPPED",
+                    "reason": "PROPOSAL_GATE_FAILED", "detail": gate_result.detail,
+                })
                 return
 
             surviving = gate_result.detail.get("surviving_proposals", [])
@@ -1515,6 +1624,9 @@ class DVHarness:
             # the "recent" scoping judgment call (any REVERTED record
             # currently in project memory, no time window).
             recent_reverts = self_tuning.gate_ids_with_recent_reverts(self.root)
+            applied_count = 0
+            deferred_count = 0
+            skipped_count = 0
             for proposal in surviving:
                 try:
                     verdict = self_tuning.classify_proposal(proposal, surviving, recent_reverts=recent_reverts)
@@ -1541,8 +1653,10 @@ class DVHarness:
                             prior_value=prior_state["prior_value"],
                             prior_was_absent=prior_state["prior_was_absent"],
                         )
+                        applied_count += 1
                     else:
                         self_tuning.record_adjustment(self.root, proposal, status="PENDING")
+                        deferred_count += 1
                 except ValueError:
                     # One malformed proposal in the batch must not abort
                     # processing the rest -- skip it and move on. Also
@@ -1552,6 +1666,7 @@ class DVHarness:
                     # already have stripped these before they reach
                     # `surviving`, but if one somehow survives, no record is
                     # written for it rather than falsely claiming APPLIED.
+                    skipped_count += 1
                     continue
 
             # Successful completion of a real review cycle -- unlike the
@@ -1565,6 +1680,19 @@ class DVHarness:
             # own docstring).
             self_tuning.reset_execution_counter(
                 self.root, last_reviewed_index=self_tuning.gate_history_length(self.root))
+            # Finding I8 fix (2026-09-02 follow-up): the one real "a review
+            # cycle actually ran and completed" breadcrumb -- distinct from
+            # the SELF_TUNING_REVIEW_SKIPPED events above, which all cover
+            # early-return paths where a cycle did NOT reach this point.
+            # Emitted even when `surviving` is empty (zero proposals is a
+            # valid, complete outcome, not a skip) so an operator can tell
+            # "the review ran and genuinely found nothing" apart from any
+            # of the SKIPPED reasons above.
+            self.store.event({
+                "ts": now(), "stage": "SELF_TUNING", "event": "SELF_TUNING_REVIEW_COMPLETED",
+                "proposals_found": len(surviving), "applied": applied_count,
+                "deferred": deferred_count, "skipped_malformed": skipped_count,
+            })
         except Exception:
             pass
 

@@ -952,7 +952,21 @@ def main():
             return out
 
         if args.self_tune_cmd == "status":
-            print(json.dumps(self_tuning.read_execution_state(root)))
+            # Finding I8 fix (2026-09-02 follow-up): the design spec's own
+            # CLI usage comment says `self-tune status` reports "counter,
+            # pending count, and last review time" -- this used to print
+            # ONLY read_execution_state()'s raw dict (just the counter).
+            # pending_count reuses the existing _project_self_tuning_records()
+            # helper (same enumeration every other self-tune subcommand
+            # already goes through); last_review_at reuses self_tuning's new
+            # read_last_review_at() accessor (self_tuning.reset_execution_
+            # counter() now stamps it on every review-cycle completion, see
+            # that function's own docstring).
+            status = dict(self_tuning.read_execution_state(root))
+            status["pending_count"] = sum(
+                1 for r in _project_self_tuning_records() if r.get("status") == "PENDING")
+            status["last_review_at"] = self_tuning.read_last_review_at(root)
+            print(json.dumps(status))
             return 0
         if args.self_tune_cmd == "list":
             records = _project_self_tuning_records()

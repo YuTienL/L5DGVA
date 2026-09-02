@@ -24,6 +24,39 @@ def test_self_tune_status_shows_execution_count(monkeypatch, tmp_path, capsys):
     assert "executions_since_last_review" in data
 
 
+def test_self_tune_status_reports_pending_count_and_last_review_at(monkeypatch, tmp_path, capsys):
+    # I8 regression: the design spec's own CLI usage comment says `self-tune
+    # status` reports "counter, pending count, and last review time" -- this
+    # used to print ONLY the raw execution_state dict (just the counter).
+    from dv_harness import self_tuning
+
+    # No review has ever completed yet -- last_review_at must be None/absent,
+    # and pending_count must be 0 with nothing seeded.
+    rc, out = _run_cli(monkeypatch, tmp_path, ["self-tune", "status"], capsys)
+    assert rc == 0
+    data = json.loads(out)
+    assert data["pending_count"] == 0
+    assert data.get("last_review_at") is None
+
+    # Seed 2 PENDING records and 1 APPLIED record -- pending_count must
+    # reflect only the PENDING ones (reusing the same counting logic as
+    # `self-tune list --pending`).
+    pending_proposal = {"gate_id": "g", "change": {"param": "x", "from": 1, "to": 2},
+                         "rationale": "r", "confidence": "LOW", "risk_level": "LOW"}
+    record_adjustment(tmp_path, pending_proposal, status="PENDING")
+    record_adjustment(tmp_path, pending_proposal, status="PENDING")
+    record_adjustment(tmp_path, pending_proposal, status="APPLIED")
+
+    # A review cycle completing (any outcome) stamps last_review_at.
+    self_tuning.reset_execution_counter(tmp_path)
+
+    rc, out = _run_cli(monkeypatch, tmp_path, ["self-tune", "status"], capsys)
+    assert rc == 0
+    data = json.loads(out)
+    assert data["pending_count"] == 2
+    assert isinstance(data["last_review_at"], float)
+
+
 def test_self_tune_list_shows_pending_adjustment(monkeypatch, tmp_path, capsys):
     proposal = {"gate_id": "g", "change": {"param": "x", "from": 1, "to": 2},
                 "rationale": "r", "confidence": "LOW", "risk_level": "LOW"}

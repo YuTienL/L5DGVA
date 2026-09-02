@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -116,6 +117,18 @@ def read_overrides(root: Path) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def read_parameters(root: Path) -> Dict[str, Any]:
+    """Finding I5 fix (2026-09-02 follow-up): the whole-file counterpart to
+    get_param()'s single (gate_id, name) lookup -- read_overrides() above
+    already returns the full stage_gate_overrides.json dict for the review
+    prompt's "already-tuned state" evidence source, but parameters.json had
+    no equivalent "read it all" accessor before this. Same _read_json-based
+    pattern, same empty-dict-on-absent-or-malformed contract as
+    read_overrides()."""
+    data = _read_json(_params_path(root), {})
+    return data if isinstance(data, dict) else {}
+
+
 def _compute_protected_removals() -> set:
     from . import gates as _gates
     protected = {
@@ -208,12 +221,38 @@ def reset_execution_counter(root: Path, last_reviewed_index: Optional[int] = Non
     docstring. Reads the existing state first and updates it in place
     (rather than overwriting the whole file with a fresh dict) specifically
     so an internal-failure reset (last_reviewed_index omitted) never
-    clobbers an index a prior successful cycle already advanced."""
+    clobbers an index a prior successful cycle already advanced.
+
+    Finding I8 fix (2026-09-02 follow-up): also stamps last_review_at with
+    the current wall-clock time on EVERY call, not only successful ones --
+    this is the single real chokepoint every review-cycle completion
+    (success with a full history advance, OR an internal-failure reset that
+    deliberately omits last_reviewed_index -- malformed evidence, proposal-
+    gate failure/exception) already goes through, per the design spec's own
+    "set it whenever a review cycle actually completes" wording. A genuine
+    ADAPTER failure deliberately never calls this function at all (see
+    engine.py's _maybe_run_self_tuning_review docstring on the two
+    different failure-recovery policies), so it correctly never advances
+    last_review_at either -- only a cycle that actually ran to some
+    conclusion (however unproductive) counts as "reviewed"."""
     state = read_execution_state(root)
     state["executions_since_last_review"] = 0
+    state["last_review_at"] = time.time()
     if last_reviewed_index is not None:
         state["last_reviewed_gate_history_index"] = last_reviewed_index
     _write_json_atomic(_state_path(root), state)
+
+
+def read_last_review_at(root: Path) -> Optional[float]:
+    """Unix timestamp of the most recent review cycle's completion (any
+    outcome that actually reached a reset_execution_counter() call -- see
+    that function's own docstring), or None if no review has ever completed
+    for this project. Folded into the same state.json read_execution_state()
+    already returns (consistent with read_last_reviewed_index()'s own
+    precedent of layering a second accessor over that one dict) rather than
+    a separate file -- there is exactly one piece of review-cycle state this
+    project persists, and it already lives in state.json."""
+    return read_execution_state(root).get("last_review_at")
 
 
 def append_gate_history(root: Path, gate_id: str, stage: str, ok: bool, reason: str, timestamp: float) -> None:
@@ -432,3 +471,36 @@ def gate_ids_with_recent_reverts(root: Path) -> set:
             if gate_id:
                 reverted_gate_ids.add(gate_id)
     return reverted_gate_ids
+
+
+def read_recent_adjustment_records(root: Path, limit: int = 10) -> List[Dict[str, Any]]:
+    """Finding I5 fix (2026-09-02 follow-up): the 4th evidence source the
+    design spec's "Evidence assembled for the review" section requires --
+    "Adjustment history (so a gate reverted last cycle is flagged, not
+    re-proposed identically)" -- ALL kind="self_tuning_adjustment" records
+    regardless of status (APPLIED/PENDING/BLOCKED_PROTECTED/REJECTED/
+    REVERTED), unlike gate_ids_with_recent_reverts() just above which
+    narrows to only REVERTED ones for classify_proposal()'s pure anti-
+    thrashing check. Same _index()-then-get() enumeration pattern as that
+    function and cli.py's _project_self_tuning_records() helper.
+
+    Ordered most-recent-first by `created_at` (MemoryStore.add() always
+    sets this via time.time()), then capped at `limit` -- see
+    _maybe_run_self_tuning_review()'s own comment for why 10 was chosen as
+    the prompt-size cap. Sorting by created_at rather than trusting
+    store._index() row order because add() re-appends an existing
+    memory_id's row to the end of index.json on every update (e.g. approve/
+    reject/revert re-saving the same record) -- an old record that was
+    merely status-updated recently would otherwise misleadingly outrank a
+    genuinely newer one."""
+    from .memory import MemoryStore
+    store = MemoryStore(root)
+    records = []
+    for entry in store._index():
+        if entry.get("level") != "project":
+            continue
+        rec = store.get(entry["memory_id"])
+        if rec and rec.get("kind") == "self_tuning_adjustment":
+            records.append(rec)
+    records.sort(key=lambda r: r.get("created_at") or 0, reverse=True)
+    return records[:limit]

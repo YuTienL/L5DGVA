@@ -11,6 +11,7 @@ from dv_harness.self_tuning import (
     classify_proposal, ELEVATED_SCRUTINY_GATES, record_adjustment, apply_proposal,
     read_last_reviewed_index, PROTECTED_PARAMETERS, delete_param,
     capture_prior_param_state, gate_ids_with_recent_reverts,
+    read_parameters, read_recent_adjustment_records, read_last_review_at,
 )
 
 
@@ -585,6 +586,91 @@ def test_gate_ids_with_recent_reverts_finds_reverted_gate():
         rec["status"] = "REVERTED"
         store.add("project", rec)
         assert gate_ids_with_recent_reverts(root) == {"thrashy_gate"}
+    finally:
+        shutil.rmtree(root)
+
+
+def test_read_parameters_empty_when_absent():
+    root = _tmp_root()
+    try:
+        assert read_parameters(root) == {}
+    finally:
+        shutil.rmtree(root)
+
+
+def test_read_parameters_returns_full_dict():
+    root = _tmp_root()
+    try:
+        set_param(root, "gate_a", "threshold", 5)
+        set_param(root, "gate_b", "window", 10)
+        params = read_parameters(root)
+        assert params == {"gate_a": {"threshold": 5}, "gate_b": {"window": 10}}
+    finally:
+        shutil.rmtree(root)
+
+
+def test_read_parameters_returns_empty_on_malformed_json():
+    root = _tmp_root()
+    try:
+        p = root / ".dv-harness" / "self_tuning"
+        p.mkdir(parents=True)
+        (p / "parameters.json").write_text("{not json", encoding="utf-8")
+        assert read_parameters(root) == {}
+    finally:
+        shutil.rmtree(root)
+
+
+def test_read_recent_adjustment_records_returns_all_statuses_most_recent_first():
+    root = _tmp_root()
+    try:
+        assert read_recent_adjustment_records(root) == []
+        p1 = _param_proposal(gate_id="gate_1")
+        p2 = _param_proposal(gate_id="gate_2")
+        record_adjustment(root, p1, status="APPLIED")
+        record_adjustment(root, p2, status="PENDING")
+        records = read_recent_adjustment_records(root)
+        assert {r["gate_id"] for r in records} == {"gate_1", "gate_2"}
+        assert {r["status"] for r in records} == {"APPLIED", "PENDING"}
+        # Most recent (gate_2, added second) first.
+        assert records[0]["gate_id"] == "gate_2"
+    finally:
+        shutil.rmtree(root)
+
+
+def test_read_recent_adjustment_records_caps_at_limit():
+    root = _tmp_root()
+    try:
+        for i in range(15):
+            record_adjustment(root, _param_proposal(gate_id=f"gate_{i}"), status="PENDING")
+        records = read_recent_adjustment_records(root, limit=10)
+        assert len(records) == 10
+        # The 10 most recently added (gate_5..gate_14), most recent first.
+        assert records[0]["gate_id"] == "gate_14"
+        assert records[-1]["gate_id"] == "gate_5"
+    finally:
+        shutil.rmtree(root)
+
+
+def test_read_last_review_at_defaults_to_none_when_absent():
+    root = _tmp_root()
+    try:
+        assert read_last_review_at(root) is None
+    finally:
+        shutil.rmtree(root)
+
+
+def test_reset_execution_counter_stamps_last_review_at_on_every_call():
+    root = _tmp_root()
+    try:
+        reset_execution_counter(root)
+        first = read_last_review_at(root)
+        assert first is not None
+        # A subsequent internal-failure-style reset (no index) still stamps
+        # a fresh value -- last_review_at tracks "did a cycle complete",
+        # regardless of which of the reset call sites reached it.
+        reset_execution_counter(root, last_reviewed_index=3)
+        second = read_last_review_at(root)
+        assert second is not None and second >= first
     finally:
         shutil.rmtree(root)
 

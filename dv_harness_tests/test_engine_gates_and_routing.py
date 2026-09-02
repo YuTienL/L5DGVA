@@ -6264,6 +6264,188 @@ def test_self_tuning_review_scopes_gate_history_to_last_reviewed_index():
         shutil.rmtree(tmp)
 
 
+# --- Findings I5/I8 fix (2026-09-02 follow-up fix wave): I5 -- the review
+# prompt only ever included gate_history.jsonl (source 1 of the spec's 4
+# required evidence sources); I8 -- the review cycle emitted zero
+# self.store.event() breadcrumbs, and `self-tune status` reported only the
+# raw execution counter, not pending_count/last_review_at.
+
+def test_self_tuning_review_prompt_includes_all_four_evidence_sources():
+    # I5 regression: mock the adapter and confirm the captured prompt text
+    # actually contains content from all 4 spec-required sources -- a
+    # correction record, a tuned parameter, an overlay entry, and a past
+    # adjustment record -- not just gate_history.jsonl (source 1).
+    from dv_harness.gates import GateResult
+    from dv_harness.control_plane import ControlPlane
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+
+        # Source 1 seed: gate history for stage IMPLEMENT (drives which
+        # stage's corrections get pulled in for source 2).
+        _self_tuning_module.append_gate_history(h.root, "gate_a", "IMPLEMENT", True, "PASS", 1.0)
+
+        # Source 2 seed: an active human CORRECT record for IMPLEMENT.
+        ControlPlane(h.root).set_correction("IMPLEMENT", note="UNIQUE_CORRECTION_NOTE_MARKER")
+
+        # Source 3 seed: a tuned parameter and an overlay entry.
+        _self_tuning_module.set_param(h.root, "some_gate", "UNIQUE_PARAM_NAME", "UNIQUE_PARAM_VALUE")
+        _self_tuning_module.propose_add_override(h.root, "VERIFY", "UNIQUE_OVERLAY_GATE_ID")
+
+        # Source 4 seed: a past adjustment record.
+        _self_tuning_module.record_adjustment(
+            h.root,
+            {"gate_id": "UNIQUE_PAST_GATE_ID", "change": {"param": "x", "from": 1, "to": 2},
+             "rationale": "UNIQUE_PAST_RATIONALE_MARKER", "confidence": "LOW", "risk_level": "LOW"},
+            status="REJECTED",
+        )
+
+        prompts = []
+
+        class _RecordingAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                prompts.append(prompt)
+                return _SelfTuningAgentResult(ok=True, text=_self_tuning_proposal_block(), raw={}, session_id="s")
+
+        h.adapter = _RecordingAdapter()
+        ok_empty_gate_result = GateResult(
+            "self_tuning_proposal_gate", True, {"surviving_proposals": [], "stripped": []})
+
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", return_value=ok_empty_gate_result):
+            h._maybe_run_self_tuning_review()
+
+        assert len(prompts) == 1
+        prompt = prompts[0]
+        assert "UNIQUE_CORRECTION_NOTE_MARKER" in prompt  # source 2: human corrections
+        assert "UNIQUE_PARAM_NAME" in prompt and "UNIQUE_PARAM_VALUE" in prompt  # source 3: parameters.json
+        assert "UNIQUE_OVERLAY_GATE_ID" in prompt  # source 3: stage_gate_overrides.json
+        assert "UNIQUE_PAST_GATE_ID" in prompt and "UNIQUE_PAST_RATIONALE_MARKER" in prompt  # source 4
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_evidence_sources_empty_when_nothing_seeded():
+    # I5 regression, negative case: with none of the 4 sources seeded beyond
+    # gate_history, the prompt must still build (empty corrections/
+    # parameters/overrides/adjustment-history sections are valid, not an
+    # error) and the adapter must still be reached.
+    from dv_harness.gates import GateResult
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        fake = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+        h.adapter = fake
+        ok_empty_gate_result = GateResult(
+            "self_tuning_proposal_gate", True, {"surviving_proposals": [], "stripped": []})
+
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", return_value=ok_empty_gate_result):
+            h._maybe_run_self_tuning_review()
+
+        assert fake.calls == 1
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_emits_completed_event_on_success_path():
+    # I8 regression: self.store.event(...) must actually be called on a
+    # successful review-cycle completion, with a summary of how many
+    # proposals were found/applied/deferred -- previously this method
+    # emitted zero events anywhere.
+    tmp = _mk_self_tuning_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+
+        events = []
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+                _self_tuning_module.increment_execution_counter(h.root)
+                h._maybe_run_self_tuning_review()
+
+        completed = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_COMPLETED"]
+        assert len(completed) == 1
+        assert completed[0]["proposals_found"] == 1
+        assert completed[0]["applied"] == 1
+        assert completed[0]["deferred"] == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_emits_skipped_event_on_internal_failure_path():
+    # I8 regression: an internal-failure early-return (here, run_gate()
+    # itself raising) must also emit a breadcrumb explaining WHY the cycle
+    # produced nothing, not just silently reset the counter.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+
+        events = []
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            with patch("dv_harness.gates.run_gate", side_effect=RuntimeError("simulated gate subprocess timeout")):
+                h._maybe_run_self_tuning_review()
+
+        skipped = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_SKIPPED"]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "PROPOSAL_GATE_EXCEPTION"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_emits_skipped_event_on_adapter_exception():
+    # I8 regression: the adapter-exception early-return path (which does
+    # NOT reset the counter, unlike the internal-failure paths above) must
+    # still emit an observability breadcrumb.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(raises=RuntimeError("boom"))
+
+        events = []
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            h._maybe_run_self_tuning_review()
+
+        skipped = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_SKIPPED"]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "ADAPTER_EXCEPTION"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_reset_execution_counter_stamps_last_review_at():
+    # I8 regression: last_review_at must be a real, fresh timestamp after
+    # any review-cycle completion (success or internal-failure reset) --
+    # engine.py never calls reset_execution_counter() directly in the
+    # adapter-failure paths, so this checks the shared self_tuning.py
+    # primitive itself.
+    import time
+    root = Path(tempfile.mkdtemp())
+    try:
+        assert _self_tuning_module.read_last_review_at(root) is None
+        before = time.time()
+        _self_tuning_module.reset_execution_counter(root)
+        after = time.time()
+        stamped = _self_tuning_module.read_last_review_at(root)
+        assert stamped is not None
+        assert before <= stamped <= after
+    finally:
+        shutil.rmtree(root)
+
+
 # --- Finding I6 fix (2026-09-02 final-review fix wave): run_gate()'s
 # gate-history logging is also reached by non-stage-evaluation callers
 # (dv_harness/self_audit.py's smoke-testing, dv_harness/remote_control.py's
