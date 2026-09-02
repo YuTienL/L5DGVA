@@ -228,6 +228,28 @@ def test_start_single_stage_runs_in_background_via_injected_adapter():
         shutil.rmtree(tmp)
 
 
+def _wait_until_not_running(base: str, timeout: float) -> None:
+    """Best-effort grace wait used only in test cleanup: gives a
+    still-running background loop()/run_stage() worker (dashboard.py's
+    _worker thread, daemon=True and never joined by this test suite) a
+    further chance to reach its own completion before the caller deletes
+    the project directory out from under it. Without this, a leaked worker
+    thread's next disk write races shutil.rmtree() and throws a confusing,
+    unrelated-looking FileNotFoundError from storage.py's save() -- printed
+    asynchronously well after the real timeout assertion already failed and
+    reported the true root cause, masking it. Swallows /api/state errors:
+    if the server itself is going away, there is nothing left to wait on."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            _, state = _get(base, "/api/state")
+        except Exception:
+            return
+        if not state.get("running"):
+            return
+        time.sleep(0.2)
+
+
 def test_start_loop_true_advances_through_multiple_stages_in_background():
     port = _free_port()
     tmp = _mk_dashboard_project(port)
@@ -242,8 +264,21 @@ def test_start_loop_true_advances_through_multiple_stages_in_background():
         assert data["started"] is True
         assert data["loop"] is True
 
+        # Deadline calibration: a direct, uncontended DVHarness(tmp).loop()
+        # call through all 33 pre-PROMOTION_READINESS stages (145 real
+        # tools/verification_flow/*.py gate-script subprocess spawns --
+        # require_stage_gate_evidence=False makes a gate failure
+        # non-blocking, it does not skip gate *evaluation*) measured 9.22s
+        # wall-clock on this machine with nothing else running. This test
+        # adds real GIL contention on top of that baseline (the dashboard's
+        # own HTTP server thread handles an /api/state poll every 0.1s in
+        # the SAME process while the worker thread runs loop()), plus
+        # whatever the rest of a real (possibly parallel, e.g. `pytest -n8`)
+        # test-suite run is doing concurrently -- 20s previously left under
+        # 2x headroom over the unloaded baseline, which this test hit
+        # reliably under real conditions. 90s gives roughly 10x headroom.
         state = None
-        deadline = time.time() + 20
+        deadline = time.time() + 90
         while time.time() < deadline:
             _, state = _get(base, "/api/state")
             if not state.get("running"):
@@ -257,7 +292,8 @@ def test_start_loop_true_advances_through_multiple_stages_in_background():
         assert state["current_stage"] == "PROMOTION_READINESS"
         assert state["overall_status"] == "WAIT_USER"
     finally:
-        shutil.rmtree(tmp)
+        _wait_until_not_running(base, timeout=30)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_start_refuses_concurrent_run_with_409():
