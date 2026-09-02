@@ -195,12 +195,37 @@ def classify_proposal(proposal: Dict[str, Any], cycle_proposals: List[Dict[str, 
 def apply_proposal(root: Path, proposal: Dict[str, Any]) -> None:
     change = proposal.get("change") or {}
     action = change.get("action")
+    gate_id = proposal.get("gate_id")
+
     if action == "add":
-        propose_add_override(root, proposal["stage"], change["gate_id"])
+        stage = proposal.get("stage")
+        if stage is None or change.get("gate_id") is None:
+            raise ValueError(
+                f"add/remove proposal for gate {gate_id!r} missing required keys: "
+                f"stage={stage!r}, change.gate_id={change.get('gate_id')!r}"
+            )
+        propose_add_override(root, stage, change["gate_id"])
     elif action == "remove":
-        propose_remove_override(root, proposal["stage"], change["gate_id"])
+        stage = proposal.get("stage")
+        if stage is None or change.get("gate_id") is None:
+            raise ValueError(
+                f"add/remove proposal for gate {gate_id!r} missing required keys: "
+                f"stage={stage!r}, change.gate_id={change.get('gate_id')!r}"
+            )
+        propose_remove_override(root, stage, change["gate_id"])
     else:
-        set_param(root, proposal["gate_id"], change["param"], change["to"])
+        # Param-change path: requires "param" and "to" keys
+        if change.get("param") is None:
+            raise ValueError(
+                f"param-change proposal for gate {gate_id!r} missing required key: "
+                f"change.param={change.get('param')!r}"
+            )
+        if "to" not in change:
+            raise ValueError(
+                f"param-change proposal for gate {gate_id!r} missing required key: "
+                f"'to' not in change (change keys: {list(change.keys())})"
+            )
+        set_param(root, gate_id, change["param"], change["to"])
 
 
 def record_adjustment(root: Path, proposal: Dict[str, Any], status: str,

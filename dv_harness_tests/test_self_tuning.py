@@ -259,3 +259,121 @@ def test_record_adjustment_stores_locally_not_shared():
         assert stored["status"] == "APPLIED"
     finally:
         shutil.rmtree(root)
+
+
+def test_apply_proposal_raises_on_empty_change_dict():
+    """Regression test: proposal with change = {} (neither action nor param)
+    should raise ValueError with informative message, not KeyError."""
+    import pytest
+    root = _tmp_root()
+    try:
+        p = {"gate_id": "bad_gate", "change": {}, "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"}
+        with pytest.raises(ValueError) as exc_info:
+            apply_proposal(root, p)
+        assert "bad_gate" in str(exc_info.value)
+        assert "change" in str(exc_info.value).lower()
+    finally:
+        shutil.rmtree(root)
+
+
+def test_apply_proposal_raises_on_add_missing_stage():
+    """Regression test: add/remove proposal missing stage should raise ValueError,
+    not KeyError."""
+    import pytest
+    root = _tmp_root()
+    try:
+        p = {
+            "gate_id": "bad_gate",
+            "change": {"action": "add", "gate_id": "bad_gate"},
+            "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"
+        }
+        with pytest.raises(ValueError) as exc_info:
+            apply_proposal(root, p)
+        assert "bad_gate" in str(exc_info.value)
+        assert "stage" in str(exc_info.value).lower()
+    finally:
+        shutil.rmtree(root)
+
+
+def test_apply_proposal_raises_on_remove_missing_stage():
+    """Regression test: remove proposal missing stage should raise ValueError."""
+    import pytest
+    root = _tmp_root()
+    try:
+        p = {
+            "gate_id": "bad_gate",
+            "change": {"action": "remove", "gate_id": "bad_gate"},
+            "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"
+        }
+        with pytest.raises(ValueError) as exc_info:
+            apply_proposal(root, p)
+        assert "bad_gate" in str(exc_info.value)
+        assert "stage" in str(exc_info.value).lower()
+    finally:
+        shutil.rmtree(root)
+
+
+def test_apply_proposal_raises_on_param_change_missing_param():
+    """Regression test: param-change proposal missing 'param' key should raise ValueError."""
+    import pytest
+    root = _tmp_root()
+    try:
+        p = {
+            "gate_id": "bad_gate",
+            "change": {"to": 42},
+            "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"
+        }
+        with pytest.raises(ValueError) as exc_info:
+            apply_proposal(root, p)
+        assert "bad_gate" in str(exc_info.value)
+        assert "param" in str(exc_info.value).lower()
+    finally:
+        shutil.rmtree(root)
+
+
+def test_apply_proposal_raises_on_param_change_missing_to():
+    """Regression test: param-change proposal missing 'to' key should raise ValueError.
+    This is critical because a valid target value could be 0/False/None."""
+    import pytest
+    root = _tmp_root()
+    try:
+        p = {
+            "gate_id": "bad_gate",
+            "change": {"param": "threshold"},
+            "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"
+        }
+        with pytest.raises(ValueError) as exc_info:
+            apply_proposal(root, p)
+        assert "bad_gate" in str(exc_info.value)
+        assert "to" in str(exc_info.value).lower()
+    finally:
+        shutil.rmtree(root)
+
+
+def test_apply_proposal_param_change_with_falsy_to_value_works():
+    """Regression test: param-change proposal with falsy 'to' values (0, False, None)
+    should work correctly."""
+    root = _tmp_root()
+    try:
+        # Test with 0
+        apply_proposal(root, {
+            "gate_id": "g", "change": {"param": "threshold", "to": 0},
+            "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"
+        })
+        assert get_param(root, "g", "threshold", None) == 0
+
+        # Test with False
+        apply_proposal(root, {
+            "gate_id": "g2", "change": {"param": "flag", "to": False},
+            "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"
+        })
+        assert get_param(root, "g2", "flag", None) is False
+
+        # Test with None
+        apply_proposal(root, {
+            "gate_id": "g3", "change": {"param": "value", "to": None},
+            "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"
+        })
+        assert get_param(root, "g3", "value", "default") is None
+    finally:
+        shutil.rmtree(root)
