@@ -4,6 +4,8 @@ Session date: 2026-09-03. Implements the 3 fixes recommended by
 `.work/gap-close-engine-investigation.md`, against freshly re-read current
 file content (not the investigation's own cached line numbers).
 
+Commit: `1c32c8648f6e646f196ab1ebb402b28caf618807`.
+
 ---
 
 ## 1. `dv_harness/graph_runtime.py` — deleted, its one real caller retargeted
