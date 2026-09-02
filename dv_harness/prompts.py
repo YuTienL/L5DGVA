@@ -2649,7 +2649,8 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
                         constraints: list | None = None,
                         correction_note: str | None = None,
                         human_approval: dict | None = None,
-                        relevant_memory: list | None = None) -> str:
+                        relevant_memory: list | None = None,
+                        kc_search_results: list | None = None) -> str:
     """Purely additive over the pre-control-plane signature: called with
     only the original 3 positional args (constraints/correction_note/
     human_approval/relevant_memory all default None), the returned prompt is
@@ -2665,12 +2666,26 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
     above). A falsy value (None or []) leaves the prompt unchanged, same as
     every other additive kwarg here.
 
-    engine.DVHarness.run_stage() is the one caller that passes all four
+    kc_search_results (2026-09-02, knowledge-center-pre-stage-read
+    gap-closing task): an optional list of shared, cross-user Knowledge
+    Center records (KnowledgeCenterClient.search()'s own "records" payload,
+    e.g. from engine.run_stage() for FAILURE_RECOVERY/RE_AUDIT only) --
+    surfaced to the agent as prior knowledge exactly like relevant_memory
+    above, never as current evidence. Distinct from relevant_memory: that
+    list comes from the purely LOCAL per-project MemoryStore, this one from
+    the shared, cross-user Knowledge Center (dv_harness/knowledge_center.py).
+    A falsy value (None or []) leaves the prompt unchanged, same as every
+    other additive kwarg here.
+
+    engine.DVHarness.run_stage() is the one caller that passes all five
     extra kwargs: constraints/correction_note/human_approval are sourced
     from control_plane.ControlPlane.load() for the CURRENT stage;
     relevant_memory is sourced from a fresh MemoryRetriever.search() call
     against this project's own Memory tiers (see relevant_memory above) --
-    a separate subsystem, not control-plane state.
+    a separate subsystem, not control-plane state; kc_search_results is
+    sourced from a fresh KnowledgeCenterClient.search() call, gated on
+    stage and on the client's own configured() check (see kc_search_results
+    above).
     - constraints: every active CONSTRAINT (`dv-harness constraint --add`),
       folded into every subsequent stage prompt until removed.
     - correction_note: an active CORRECT (`dv-harness correct <stage>
@@ -2727,6 +2742,18 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
                 f"- [{m.get('level', '?')}] {m.get('title', '')}"
                 + (f"：{m.get('root_cause')}" if m.get("root_cause") else "")
                 for m in relevant_memory
+            )
+        )
+    if kc_search_results:
+        prompt += (
+            "\n\nKnowledge Center（跨用戶共享知識庫）搜尋到的既有記錄（Prior Knowledge，"
+            "僅供參考 -- 依 CLAUDE.md Evidence Truth Rule，current evidence 永遠優先於這裡任何一筆記錄，"
+            "任何 root cause 仍須以當前證據重新驗證。開始一輪新的 root cause 分析前，"
+            "請先確認是否已有相符的既有記錄；若有，請在分類/證據欄位中引用其 memory_id）：\n"
+            + "\n".join(
+                f"- [{r.get('memory_id', '?')}] {r.get('symptom') or ''}"
+                + (f"：{r.get('root_cause')}" if r.get("root_cause") else "")
+                for r in kc_search_results
             )
         )
     return prompt

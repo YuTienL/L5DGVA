@@ -1189,6 +1189,108 @@ def test_memory_retriever_search_excludes_pure_recency_match():
         shutil.rmtree(tmp)
 
 
+def test_run_stage_failure_recovery_queries_knowledge_center_when_configured():
+    # Real gap (knowledge-center-pre-stage-read audit follow-up, 2026-09-02):
+    # KnowledgeCenterClient.search() (dv_harness/knowledge_center.py) had
+    # exactly two real callers -- the manual 'dv-harness knowledge search'
+    # CLI subcommand and the dashboard GUI -- never the real engine flow.
+    # The ONE automatic pre-stage memory read that DID exist (the
+    # relevant_memory tests directly above) queries the purely LOCAL
+    # per-project MemoryStore, a different store than the shared, cross-user
+    # Knowledge Center this proves is now actually consulted (and surfaced
+    # into the built prompt) before FAILURE_RECOVERY. A fake client is
+    # patched in so no real relay/network call is ever attempted.
+    import dv_harness.engine as engine_mod
+    from dv_harness.adapters.base import AgentResult
+
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["knowledge_center"] = {
+            "enabled": True, "remote_root": "/srv/dvhkc", "vchost": "vchost-a", "vchop": "host-a",
+        }
+        marker = "KC_MARKER_STUCK_FIFO_UNDERFLOW_ROOT_CAUSE_XYZ"
+        calls = []
+
+        class FakeKCClient:
+            def __init__(self, cfg, root):
+                calls.append(("init", cfg, root))
+
+            def configured(self):
+                return True
+
+            def search(self, category="", protocol="", text="", limit=8):
+                calls.append(("search", category, protocol, text, limit))
+                return {"ok": True, "count": 1, "records": [
+                    {"memory_id": "KC-DEADBEEF0001", "symptom": marker,
+                     "root_cause": "fifo pointer wraps one cycle early under back-to-back writes"},
+                ]}
+
+        class FakeAdapter:
+            def __init__(self):
+                self.prompts = []
+
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                self.prompts.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("FAILURE_RECOVERY")
+        with patch.object(engine_mod, "KnowledgeCenterClient", FakeKCClient):
+            h.run_stage("debug the recurring fifo underflow failure")
+
+        assert any(c[0] == "search" for c in calls), "KnowledgeCenterClient.search() was never called"
+        assert h.adapter.prompts, "adapter was never called"
+        assert marker in h.adapter.prompts[0], "KC search result never reached the built prompt"
+        assert "KC-DEADBEEF0001" in h.adapter.prompts[0]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_failure_recovery_skips_knowledge_center_when_not_configured():
+    # Companion no-op proof: when the shared Knowledge Center is not
+    # configured (the real default -- see config.py's knowledge_center
+    # block, "Deliberately OFF and EMPTY by default"), search() must never
+    # even be attempted, and the stage must run exactly as before this gap
+    # was closed -- no exception, no dead-client instantiation surprise.
+    import dv_harness.engine as engine_mod
+    from dv_harness.adapters.base import AgentResult
+
+    tmp, h = _fresh_harness()
+    try:
+        assert h.cfg.get("knowledge_center", {}).get("enabled") is not True
+
+        calls = []
+
+        class ExplodingKCClient:
+            def __init__(self, cfg, root):
+                pass
+
+            def configured(self):
+                return False
+
+            def search(self, *a, **k):
+                calls.append("search")
+                raise AssertionError("search() must not be called when the KC is not configured")
+
+        class FakeAdapter:
+            def __init__(self):
+                self.prompts = []
+
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                self.prompts.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("FAILURE_RECOVERY")
+        with patch.object(engine_mod, "KnowledgeCenterClient", ExplodingKCClient):
+            h.run_stage("debug a one-off failure with no prior shared record")
+
+        assert not calls, "search() was called despite the shared Knowledge Center being unconfigured"
+        assert h.adapter.prompts, "adapter was never called"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_wave_analysis_requires_confirmed_dump_scope():
     # CLAUDE.md "Waveform Dump User Gate": found by the 2026-08-28 GUI/CLI
     # end-to-end confirmation audit to have a governance policy file

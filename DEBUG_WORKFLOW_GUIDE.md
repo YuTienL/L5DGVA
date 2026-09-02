@@ -53,11 +53,17 @@ file permissions.
    — when relevant — current RTL source and register/programming state
    (`deep_rca_evidence_gate` independently recomputes a real file's sha256
    when a source's `evidence_path` is supplied, catching a stale/fabricated
-   citation). **Still open**: an automatic Knowledge Center
-   (`/home/svcacct/AI/DB`) lookup before concluding a fresh root cause is
-   NOT yet wired in — `KnowledgeCenterClient.search()` is currently only
-   reachable via the manual `dv-harness knowledge search` command; check it
-   yourself before trusting the harness already did.
+   citation). An automatic Knowledge Center (`/home/svcacct/AI/DB`) lookup
+   before concluding a fresh root cause is now wired into `engine.py`'s
+   `run_stage()`: for `FAILURE_RECOVERY`/`RE_AUDIT` only, when
+   `knowledge_center.enabled` is configured, `KnowledgeCenterClient.search()`
+   is called automatically (query derived from this run's own goal plus the
+   most recent real failure symptom already recorded on the Blackboard's
+   `findings` topic) and any hits are folded into the stage prompt as prior
+   knowledge — best-effort, same as the local Memory-tier read, so a KC
+   outage never blocks the stage. Per CLAUDE.md's Evidence Truth Rule this
+   is prior knowledge only; the agent still must revalidate with current
+   evidence, not just cite a hit and stop looking.
 5. **Every root-cause claim must cite current evidence**, not a prior
    session's memory or a similar-looking past bug — see `CLAUDE.md`'s
    Evidence Truth Rule. Code-enforced for `deep_rca_evidence_gate` sources

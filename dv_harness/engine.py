@@ -1620,6 +1620,57 @@ class DVHarness:
         except Exception:
             relevant_memory = []
 
+        # ---- 1b-2. Shared Knowledge Center pre-stage read (2026-09-02,
+        #          knowledge-center-pre-stage-read gap-closing task):
+        #          KnowledgeCenterClient.search() (dv_harness/knowledge_center.py)
+        #          previously had exactly two callers -- the manual
+        #          `dv-harness knowledge search` CLI subcommand and the
+        #          dashboard GUI -- never the real engine flow. The
+        #          relevant_memory read directly above (1b) queries the
+        #          purely LOCAL per-project MemoryStore under
+        #          .dv-harness/memory/ -- a different store than the shared,
+        #          cross-user Knowledge Center this reads (see
+        #          knowledge_center.py's own module docstring: OrganizationalMemoryStore
+        #          is yet a third, different destination).
+        #
+        #          Scoped to FAILURE_RECOVERY/RE_AUDIT only -- the two stages
+        #          that conclude a fresh root cause (unlike the generic,
+        #          every-stage relevant_memory read above). Best-effort and a
+        #          true no-op when the shared KC is unconfigured/unreachable:
+        #          same try/except-swallow discipline as memory_router.py's
+        #          _maybe_share and this same module's maybe_push_to_shared()
+        #          call site above -- a KC outage must never break a stage.
+        #          Query text is derived from real, already-available
+        #          context only -- this run's own user_goal plus the most
+        #          recent real failure symptom/root cause already recorded on
+        #          the "findings" Blackboard topic's last_report (read into
+        #          bb_snapshot in step 1a above), never invented. Protocol is
+        #          the SAME real route_info["protocol_decision"] this stage's
+        #          prompt already carries (step 1 above), not a separate
+        #          guess. Folded into the prompt the same additive-kwarg way
+        #          relevant_memory is (see build_stage_prompt's docstring). -
+        kc_search_results: List[Dict[str, Any]] = []
+        if stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value):
+            try:
+                kc_client = KnowledgeCenterClient(self.cfg, self.root)
+                if kc_client.configured():
+                    findings_payload = bb_snapshot.get("findings")
+                    findings_value = findings_payload.get("value") if isinstance(findings_payload, dict) else None
+                    last_report = findings_value.get("last_report") if isinstance(findings_value, dict) else None
+                    query_bits = [user_goal]
+                    if isinstance(last_report, dict):
+                        for key in ("symptom", "failure_signature_before", "root_cause"):
+                            v = last_report.get(key)
+                            if v:
+                                query_bits.append(str(v))
+                    query_text = " ".join(query_bits)[:500]
+                    kc_protocol = ((route_info or {}).get("protocol_decision") or {}).get("protocol") or ""
+                    kc_result = kc_client.search(category="root_cause", protocol=kc_protocol, text=query_text)
+                    if kc_result.get("ok"):
+                        kc_search_results = kc_result.get("records") or []
+            except Exception:
+                kc_search_results = []
+
         # ---- 1c. Stage entry evidence checklist (expected-evidence-checklist
         #          design pass, 2026-09-01): informational-only presence
         #          report over node.expected_evidence, computed BEFORE
@@ -1648,7 +1699,8 @@ class DVHarness:
                                      constraints=constraints,
                                      correction_note=correction_note,
                                      human_approval=approval,
-                                     relevant_memory=relevant_memory or None)
+                                     relevant_memory=relevant_memory or None,
+                                     kc_search_results=kc_search_results or None)
         if plan_section:
             prompt = prompt + plan_section
         resume = ss.get("session_id") or None
