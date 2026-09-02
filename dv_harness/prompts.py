@@ -1886,6 +1886,17 @@ finding 明確判斷不需要多假設（例如單一、無歧義的低風險 ty
 {"trivial_finding": true, "trivial_finding_justification": "..."} 取代 hypotheses 陣列，
 說明為何不存在需要排除的替代解釋；trivial_finding 為 false 或缺省時仍套用上述 hypotheses 規則。）
 
+（選填、更強的證據驗證 -- `evidence_refs`：上面 supporting_evidence/counter_evidence 預設仍是純文字
+引註，agent 可以貼一段憑記憶回想、早就過時的字串，gate 目前無法分辨。若想證明「這是我剛剛真的重新
+讀過的」，可以在最外層 root_cause 物件、或任一 hypotheses[] 元素上，額外附上
+`"evidence_refs": [{"path": "相對 repo root 的檔案路徑", "quote": "檔案裡真的存在的一段文字"}, ...]`
+（與 manual_lookup_before_edit_gate 的 vip_evidence_refs/dut_rtl_evidence_refs 同一種
+{path, quote} 格式）。附上後，gate 會獨立打開該路徑指向的真實檔案目前內容，確認 `quote` 真的逐字
+出現在裡面；path 在磁碟上找不到就 FAIL EVIDENCE_FILE_NOT_FOUND，quote 對不上就 FAIL
+EVIDENCE_QUOTE_NOT_FOUND_IN_FILE，引用到禁止的參考環境樹（例如 USB_UVM_Handoff）則 FAIL
+REFERENCE_TREE_CITATION_FORBIDDEN。完全不附 `evidence_refs` 時行為與舊版完全相同（純文字引註仍然
+有效，這是較弱的舊版/相容路徑）。）
+
 若本次有走過 Failure Recovery 的 RCA/Fix/Replay 迴圈，額外附上：
 
 ```dv-harness-evidence:rca_replay_fix_closure_gate

@@ -54,6 +54,15 @@ _RE_AUDIT_GATE_SCRIPTS = [
     "rca_confidence_escalation_gate.py",
     "regression_replay_equivalence_gate.py",
     "root_cause_attribution_consistency_gate.py",
+    # NOT a STAGE_GATES["RE_AUDIT"] member itself -- root_cause_evidence_gate.py
+    # imports manual_lookup_before_edit_gate._verify_evidence_refs (2026-09-02
+    # evidence_refs freshness-check gap closure) to reuse its real path+quote
+    # verification instead of re-implementing it; that module in turn imports
+    # protocol_isolation_gate for its forbidden-reference-tree check. Both must
+    # be physically present alongside the copied root_cause_evidence_gate.py
+    # for its subprocess import to resolve.
+    "manual_lookup_before_edit_gate.py",
+    "protocol_isolation_gate.py",
 ]
 
 _DEEP_RCA_REQUIRED_SOURCES = [
