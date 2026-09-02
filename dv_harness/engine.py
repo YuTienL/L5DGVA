@@ -1507,17 +1507,51 @@ class DVHarness:
                 return
 
             surviving = gate_result.detail.get("surviving_proposals", [])
+            # Bundled fix alongside I3 (2026-09-02 final-review fix wave):
+            # this used to hardcode recent_reverts=set(), so classify_
+            # proposal()'s anti-thrashing "this gate/param was reverted
+            # recently" defer rule could never actually fire. See
+            # self_tuning.gate_ids_with_recent_reverts()'s own docstring for
+            # the "recent" scoping judgment call (any REVERTED record
+            # currently in project memory, no time window).
+            recent_reverts = self_tuning.gate_ids_with_recent_reverts(self.root)
             for proposal in surviving:
                 try:
-                    verdict = self_tuning.classify_proposal(proposal, surviving, recent_reverts=set())
+                    verdict = self_tuning.classify_proposal(proposal, surviving, recent_reverts=recent_reverts)
                     if verdict == "AUTO_APPLY":
+                        # Finding I3 fix (2026-09-02 final-review fix wave):
+                        # capture the REAL prior parameter state (what
+                        # get_param() actually returns right now, including
+                        # "no entry existed at all") BEFORE applying --
+                        # never trust the proposal's own self-reported
+                        # change["from"]. Every AUTO_APPLY proposal is
+                        # guaranteed to be a param-change (classify_proposal
+                        # now always DEFERs both "add" and "remove"
+                        # membership changes -- Finding C1), so change["param"]
+                        # is always present here once apply_proposal succeeds.
+                        change = proposal.get("change") or {}
+                        param = change.get("param")
+                        prior_state = (
+                            self_tuning.capture_prior_param_state(self.root, proposal.get("gate_id"), param)
+                            if param is not None else {"prior_value": None, "prior_was_absent": None}
+                        )
                         self_tuning.apply_proposal(self.root, proposal)
-                        self_tuning.record_adjustment(self.root, proposal, status="APPLIED")
+                        self_tuning.record_adjustment(
+                            self.root, proposal, status="APPLIED",
+                            prior_value=prior_state["prior_value"],
+                            prior_was_absent=prior_state["prior_was_absent"],
+                        )
                     else:
                         self_tuning.record_adjustment(self.root, proposal, status="PENDING")
                 except ValueError:
                     # One malformed proposal in the batch must not abort
-                    # processing the rest -- skip it and move on.
+                    # processing the rest -- skip it and move on. Also
+                    # covers apply_proposal()'s defense-in-depth
+                    # PROTECTED_PARAMETERS/PROTECTED_REMOVALS ValueErrors
+                    # (Findings I1/I2): the proposal gate above should
+                    # already have stripped these before they reach
+                    # `surviving`, but if one somehow survives, no record is
+                    # written for it rather than falsely claiming APPLIED.
                     continue
 
             # Successful completion of a real review cycle -- unlike the
