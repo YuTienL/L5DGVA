@@ -304,11 +304,16 @@ mechanics already codified in `.claude/skills/CORE/*`:
   `dv_harness/uvm_generator/*.py` (20+ line-cited references) and
   `dv_harness/uvm_generator/templates/sim_scripts/` (a real, now chip-configured copy of
   `USB_UVM_Handoff/sim/scripts/`), enforced against direct golden-reference citation by the real
-  `protocol_isolation_gate`. One confirmed gap remains open: the command.txt/pattern
-  content architecture (`block`/`branch_a`/`branch_fw`/`branch_b` task composition, fork/join
-  semantics, named arbitration/ordering traps) has never been distilled beyond a thin, generic
-  `command-generator` skill — any agent authoring a new pattern must still read
-  `USB_UVM_Handoff`'s real pattern files directly. The Makefile/sim-scripts migration gap
+  `protocol_isolation_gate`. The command.txt/pattern content architecture gap (`block`/
+  `branch_a`/`branch_fw`/`branch_b` task composition, fork/join semantics, named
+  arbitration/ordering traps) was closed 2026-09-03: distilled, generalized (USB kept only
+  as clearly-labeled illustration, never as vocabulary) into a new
+  `.claude/skills/CORE/pattern-architecture/SKILL.md` — the five-layer shape, the
+  join-vs-join_any rule and why the "every branch guaranteed to run forever" justification
+  expires, six recurring trap classes, and what varies vs. stays fixed by test intent
+  (see `.work/gap-close-command-txt-report.md`). `command-generator/SKILL.md` now
+  cross-references it (which command IDs must exist vs. how a pattern's internal task
+  composition must be built) rather than duplicating it. The Makefile/sim-scripts migration gap
   (2026-09-02 audit: 5 files never carried over) was closed 2026-09-03: `analyze_sim.sh`,
   `apb_timing_report.sh`, `dpdm_report.sh`, `irq_report.sh` (the latter three sharing one
   `fsdb_signal_report.sh` engine, per-question wrappers only) and `check/gen_scaledown.py` are
