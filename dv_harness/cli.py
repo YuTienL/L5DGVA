@@ -460,6 +460,21 @@ def main():
     pconfig_set.add_argument("value", choices=["true", "false"])
     pconfig_sub.add_parser("get", help="Print the current policy block.")
 
+    pst = sub.add_parser("self-tune", help="Autonomous gate self-tuning: status/list/approve/reject/revert. "
+                                           "See dv_harness/self_tuning.py and docs/superpowers/specs/"
+                                           "2026-09-02-autonomous-gate-self-tuning-design.md.")
+    pst_sub = pst.add_subparsers(dest="self_tune_cmd", required=True)
+    pst_status = pst_sub.add_parser("status")
+    pst_list = pst_sub.add_parser("list")
+    pst_list.add_argument("--pending", action="store_true")
+    pst_list.add_argument("--applied", action="store_true")
+    pst_approve = pst_sub.add_parser("approve")
+    pst_approve.add_argument("memory_id")
+    pst_reject = pst_sub.add_parser("reject")
+    pst_reject.add_argument("memory_id")
+    pst_revert = pst_sub.add_parser("revert")
+    pst_revert.add_argument("memory_id")
+
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
     # Usage record for `user-info` (dv_harness/user_info.py): logged for
@@ -921,6 +936,79 @@ def main():
             print(json.dumps({args.key: cfg["policy"][args.key]}, ensure_ascii=False))
         else:  # get
             print(json.dumps(cfg["policy"], ensure_ascii=False, indent=2))
+    elif args.cmd == "self-tune":
+        from . import self_tuning
+        from .memory import MemoryStore
+        root = Path(args.project_root)
+        store = MemoryStore(root)
+
+        def _project_self_tuning_records():
+            ids = [r["memory_id"] for r in store._index() if r.get("level") == "project"]
+            out = []
+            for mid in ids:
+                rec = store.get(mid)
+                if rec and rec.get("kind") == "self_tuning_adjustment":
+                    out.append(rec)
+            return out
+
+        if args.self_tune_cmd == "status":
+            print(json.dumps(self_tuning.read_execution_state(root)))
+            return 0
+        if args.self_tune_cmd == "list":
+            records = _project_self_tuning_records()
+            if args.pending:
+                records = [r for r in records if r.get("status") == "PENDING"]
+            if args.applied:
+                records = [r for r in records if r.get("status") == "APPLIED"]
+            print(json.dumps({"records": records}))
+            return 0
+        if args.self_tune_cmd == "approve":
+            record = store.get(args.memory_id)
+            if not record or record.get("status") != "PENDING":
+                print(json.dumps({"ok": False, "error": "NOT_FOUND_OR_NOT_PENDING"}))
+                return 1
+            proposal = {"gate_id": record.get("gate_id"), "stage": record.get("stage"),
+                        "change": record.get("change"), "rationale": record.get("rationale"),
+                        "confidence": record.get("confidence"), "risk_level": record.get("risk_level")}
+            self_tuning.apply_proposal(root, proposal)
+            record["status"] = "APPLIED"
+            store.add("project", record)  # same memory_id already in record -> overwrites in place
+            print(json.dumps({"ok": True, "memory_id": args.memory_id}))
+            return 0
+        if args.self_tune_cmd == "reject":
+            record = store.get(args.memory_id)
+            if not record:
+                print(json.dumps({"ok": False, "error": "NOT_FOUND"}))
+                return 1
+            record["status"] = "REJECTED"
+            store.add("project", record)
+            print(json.dumps({"ok": True, "memory_id": args.memory_id}))
+            return 0
+        if args.self_tune_cmd == "revert":
+            record = store.get(args.memory_id)
+            if not record or record.get("status") != "APPLIED":
+                print(json.dumps({"ok": False, "error": "NOT_FOUND_OR_NOT_APPLIED"}))
+                return 1
+            change = record.get("change") or {}
+            if change.get("action") == "add":
+                # Revert an add: remove it from the overlay's add list.
+                overrides = self_tuning.read_overrides(root)
+                stage_entry = overrides.get(record.get("stage"), {})
+                if change.get("gate_id") in stage_entry.get("add", []):
+                    stage_entry["add"].remove(change["gate_id"])
+                self_tuning._write_json_atomic(self_tuning._overrides_path(root), overrides)
+            elif change.get("action") == "remove":
+                overrides = self_tuning.read_overrides(root)
+                stage_entry = overrides.get(record.get("stage"), {})
+                if change.get("gate_id") in stage_entry.get("remove", []):
+                    stage_entry["remove"].remove(change["gate_id"])
+                self_tuning._write_json_atomic(self_tuning._overrides_path(root), overrides)
+            else:
+                self_tuning.set_param(root, record.get("gate_id"), change.get("param"), change.get("from"))
+            record["status"] = "REVERTED"
+            store.add("project", record)
+            print(json.dumps({"ok": True, "memory_id": args.memory_id}))
+            return 0
     elif args.cmd == "advance":
         # BUG FIX (2026-08-28, multi-persona interaction review -- DV
         # Engineer: "silently bypass all gates AND the event log ... a live,
