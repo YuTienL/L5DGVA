@@ -17,11 +17,18 @@ gate that sounds related, only compares two agent-self-reported strings to
 each other). So per the task's own decision procedure this is option (a):
 simulation_semantic_validation_gate.py now imports and invokes the real
 parser directly, in-process, as part of computing its own semantic verdict,
-via a new OPTIONAL 'command_file_path' evidence field (same "read a real
-file from disk when a path is supplied" pattern already used for
-'sim_log_path'). Omitting the field is byte-for-byte identical to the
-pre-fix gate -- these tests cover both the new behavior and that backward
-compatibility guarantee.
+via a 'command_file_path' evidence field (same "read a real file from disk
+when a path is supplied" pattern already used for 'sim_log_path').
+
+MANDATORY-FIELD FOLLOW-UP (2026-09-02): 'command_file_path' and
+'sim_log_path' were originally OPTIONAL/additive for backward compatibility
+-- but an audit found the real VERIFY-stage prompt (dv_harness/prompts.py)
+never asked the agent for either field, so this wiring had never once fired
+in production; optionality with no prompt asking for the field is
+indistinguishable from not existing. Both fields are now REQUIRED (their
+absence is INSUFFICIENT_EVIDENCE). The old
+test_gate_main_backward_compatible_when_command_file_path_absent below was
+replaced with tests proving the new fail-closed-on-absence behavior.
 """
 from __future__ import annotations
 
@@ -217,9 +224,11 @@ def test_gate_main_passes_when_command_file_path_supplied_and_covered():
     tmp = Path(tempfile.mkdtemp())
     try:
         cf = _write_command_file(tmp, COMMAND_LINE + "\n")
+        log_path = tmp / "sim.log"
+        log_path.write_text(SIM_LOG_MATCHING_ALL, encoding="utf-8")
         payload = {
             "simulation_passed": True,
-            "sim_log": SIM_LOG_MATCHING_ALL,
+            "sim_log_path": str(log_path),
             "command_file_path": str(cf),
             "command_expectations": [_full_agent_expectation()],
         }
@@ -267,11 +276,12 @@ def test_gate_main_fails_closed_on_bad_command_file_path():
     assert "COMMAND_FILE_PATH_NOT_FOUND" in out["reason"]
 
 
-def test_gate_main_backward_compatible_when_command_file_path_absent():
-    # Byte-identical behavior guarantee: the pre-existing contract (no new
-    # field) must still PASS exactly as it did before this wiring fix, even
-    # though the agent's command_expectations here would NOT satisfy the
-    # deterministic cross-check (there is no real command.txt at all).
+def test_gate_main_fails_closed_when_command_file_path_absent():
+    # 2026-09-02 mandatory-field fix: omitting command_file_path used to
+    # silently skip the independent cross-check and PASS on self-reported
+    # command_expectations alone -- that is exactly the "AI self-report
+    # trusted as fact" gap this gate exists to close. It must now fail
+    # closed instead.
     payload = {
         "simulation_passed": True,
         "sim_log": "UVM_INFO enum PASS",
@@ -281,9 +291,31 @@ def test_gate_main_backward_compatible_when_command_file_path_absent():
         }],
     }
     rc, out = _run_gate_script(payload)
-    assert rc == 0
-    assert out["status"] == "PASS"
-    assert out["final_state"] == "TRUE_PASS"
+    assert rc == 10
+    assert out["status"] == "FAIL"
+    assert out["final_state"] == "INSUFFICIENT_EVIDENCE"
+    assert out["reason"] == "MISSING_COMMAND_FILE_PATH"
+
+
+def test_gate_main_fails_closed_when_sim_log_path_absent():
+    # Same fix, the sim.log half: an inline pasted "sim_log" excerpt is no
+    # longer sufficient on its own -- the gate must read the real file.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        cf = _write_command_file(tmp, COMMAND_LINE + "\n")
+        payload = {
+            "simulation_passed": True,
+            "sim_log": SIM_LOG_MATCHING_ALL,
+            "command_file_path": str(cf),
+            "command_expectations": [_full_agent_expectation()],
+        }
+        rc, out = _run_gate_script(payload)
+        assert rc == 11
+        assert out["status"] == "FAIL"
+        assert out["final_state"] == "INSUFFICIENT_EVIDENCE"
+        assert out["reason"] == "MISSING_SIM_LOG_PATH"
+    finally:
+        shutil.rmtree(tmp)
 
 
 # --- Live STAGE_GATES chain: prove the wiring actually reaches

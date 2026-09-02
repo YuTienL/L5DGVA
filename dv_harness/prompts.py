@@ -1180,11 +1180,17 @@ PASS → 完成。FAIL → 停在第一個 failure/error/fatal/missing/mismatch�
 harness 會將本 stage 標為 PARTIAL 並附上原因，而不是預設 PASS）：
 
 ```dv-harness-evidence:simulation_semantic_validation_gate
-{"simulation_passed": true, "sim_log": "<真實 sim.log 內容或關鍵片段>",
+{"simulation_passed": true,
+ "command_file_path": "<這次真的驅動本次 simulation 的 command.txt 在磁碟上的真實路徑，必填>",
+ "sim_log_path": "<這次真實 sim.log 在磁碟上的真實路徑，必填，harness 會直接讀取此檔案內容，不接受純文字貼上>",
  "command_expectations": [{"expectation_id": "...", "source_file": "command.txt",
    "testcase_id": "...", "required": true,
    "evidence_requirements": [{"pattern": "...", "match_mode": "SUBSTRING"}]}]}
 ```
+（`command_file_path`/`sim_log_path` 缺一都會讓本 gate 判 INSUFFICIENT_EVIDENCE：harness
+會用 command_file_path 指向的真實 command.txt 獨立重新推導每一行的最低必要證據需求，
+比對你填的 command_expectations 是否有低報；harness 也會直接讀 sim_log_path 指向的真實
+檔案內容做語意比對，不是信任你貼上來的文字片段。）
 
 ```dv-harness-evidence:test_result_provenance_gate
 {"results": [{"testcase_id": "...", "run_id": "...", "rtl_revision": "...",

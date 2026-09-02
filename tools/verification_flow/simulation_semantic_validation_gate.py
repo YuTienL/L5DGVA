@@ -12,15 +12,26 @@ import argparse, importlib.util, json, pathlib, re, sys
 # registry .dv-harness/workflow/verification_flow_v13.json's
 # "simulation_pass_semantics.order" list, never imported by any live gate).
 # load_command_semantic_expectation_parser() below wires it in directly:
-# when the agent supplies a real 'command_file_path' (same "read the real
-# file on disk" pattern as load_sim_log()'s 'sim_log_path' just below),
-# _cross_check_against_command_file() re-derives each line's minimum
+# 'command_file_path' (same "read the real file on disk" pattern as
+# load_sim_log()'s 'sim_log_path' just below) drives
+# cross_check_against_command_file(), which re-derives each line's minimum
 # required evidence/contradiction patterns from the actual file and fails
-# closed if the agent's own command_expectations under-report them. The
-# field is OPTIONAL and additive: omitting it reproduces byte-identical
-# behavior to before this fix (see CLAUDE.md's additive/backward-compatible
-# convention) -- existing callers that never supply a command.txt path are
-# unaffected.
+# closed if the agent's own command_expectations under-report them.
+#
+# MANDATORY-FIELD FIX (2026-09-02, TRUE_PASS prompt-gap closure): the field
+# was originally OPTIONAL/additive so existing callers that never supplied a
+# command.txt path stayed unaffected -- but the real VERIFY-stage prompt
+# (dv_harness/prompts.py) never asked the agent for 'command_file_path' or
+# 'sim_log_path' either, so in production no real evidence block has ever
+# actually supplied them: the independent cross-check this wiring exists for
+# has never once fired outside of tests that deliberately construct the
+# field by hand. Optionality without a prompt that asks for the field is
+# indistinguishable from the field not existing at all. Both
+# 'command_file_path' and 'sim_log_path' are now REQUIRED: their absence is
+# INSUFFICIENT_EVIDENCE, same failure-closed treatment as a bad path. This
+# is a real, intentional behavior change, not backward compatible with the
+# prior optional design -- see MEM-<pending> / the prompt template update in
+# the same commit for the other half of this fix.
 _PARSER_SCRIPT = pathlib.Path(__file__).resolve().parent / "command_semantic_expectation_parser.py"
 
 
@@ -174,18 +185,27 @@ def main():
         return 6
 
     command_file_path = d.get("command_file_path")
-    if command_file_path:
-        cc_error, under_reported = cross_check_against_command_file(command_file_path, exps)
-        if cc_error:
-            reason, detail = cc_error
-            print(json.dumps({"status":"FAIL","final_state":"INSUFFICIENT_EVIDENCE",
-                              "reason":detail,"signoff_credit_allowed":False}))
-            return 8
-        if under_reported:
-            print(json.dumps({"status":"FAIL","final_state":"COMMAND_TXT_INTENT_UNDER_REPORTED",
-                              "reason":"COMMAND_EXPECTATIONS_UNDER_REPORT_COMMAND_TXT",
-                              "signoff_credit_allowed":False,"under_reported":under_reported}))
-            return 9
+    if not command_file_path:
+        print(json.dumps({"status":"FAIL","final_state":"INSUFFICIENT_EVIDENCE",
+                          "reason":"MISSING_COMMAND_FILE_PATH","signoff_credit_allowed":False}))
+        return 10
+
+    cc_error, under_reported = cross_check_against_command_file(command_file_path, exps)
+    if cc_error:
+        reason, detail = cc_error
+        print(json.dumps({"status":"FAIL","final_state":"INSUFFICIENT_EVIDENCE",
+                          "reason":detail,"signoff_credit_allowed":False}))
+        return 8
+    if under_reported:
+        print(json.dumps({"status":"FAIL","final_state":"COMMAND_TXT_INTENT_UNDER_REPORTED",
+                          "reason":"COMMAND_EXPECTATIONS_UNDER_REPORT_COMMAND_TXT",
+                          "signoff_credit_allowed":False,"under_reported":under_reported}))
+        return 9
+
+    if not d.get("sim_log_path"):
+        print(json.dumps({"status":"FAIL","final_state":"INSUFFICIENT_EVIDENCE",
+                          "reason":"MISSING_SIM_LOG_PATH","signoff_credit_allowed":False}))
+        return 11
 
     log_raw, log_err = load_sim_log(d)
     if log_err:

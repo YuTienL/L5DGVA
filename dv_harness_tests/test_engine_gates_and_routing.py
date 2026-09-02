@@ -299,6 +299,14 @@ def test_verify_stage_with_matching_evidence_passes():
     try:
         transcript_path = tmp / "verify.txt"
         transcript_path.write_text("REMOTE_HOST=host-b\nEXIT_CODE=0\nSTATUS=PASS\nVerification passed\n")
+        # command_file_path/sim_log_path are mandatory (2026-09-02 TRUE_PASS
+        # prompt-gap fix) -- a trivial comment-only command.txt derives zero
+        # requirements from command_semantic_expectation_parser.parse_line(),
+        # so it doesn't affect this test's own PASS-shape assertion.
+        cf = tmp / "command.txt"
+        cf.write_text("# no command.txt content needed for this test\n", encoding="utf-8")
+        log_path = tmp / "sim.log"
+        log_path.write_text("UVM_INFO enum PASS", encoding="utf-8")
         # Build VERIFY_EXTRA_GATES with real transcript path
         verify_extra_with_transcript = _VERIFY_EXTRA_GATES.replace(
             '```dv-harness-evidence:remote_execution_provenance_gate\n{"transcript_path": "/tmp/verify.txt", "claimed_exit_code": 0}\n```\n',
@@ -306,10 +314,13 @@ def test_verify_stage_with_matching_evidence_passes():
         )
         text = (
             "```dv-harness-evidence:simulation_semantic_validation_gate\n"
-            '{"simulation_passed": true, "sim_log": "UVM_INFO enum PASS", '
-            '"command_expectations": [{"expectation_id": "e1", "required": true, '
-            '"evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}]}\n'
-            "```\n"
+            + json.dumps({
+                "simulation_passed": True,
+                "command_file_path": str(cf),
+                "sim_log_path": str(log_path),
+                "command_expectations": [{"expectation_id": "e1", "required": True,
+                    "evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}],
+            }) + "\n```\n"
             "```dv-harness-evidence:test_result_provenance_gate\n"
             '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
             '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
@@ -652,6 +663,8 @@ def test_simulation_gate_reads_sim_log_from_real_file_path():
     try:
         log_path = tmp / "sim.log"
         log_path.write_text("UVM_INFO enum PASS at time 100")
+        cf = tmp / "command.txt"
+        cf.write_text("# no command.txt content needed for this test\n", encoding="utf-8")
         transcript_path = tmp / "verify.txt"
         transcript_path.write_text("REMOTE_HOST=host-b\nEXIT_CODE=0\nSTATUS=PASS\nVerification passed\n")
         # Build VERIFY_EXTRA_GATES with real transcript path
@@ -663,6 +676,7 @@ def test_simulation_gate_reads_sim_log_from_real_file_path():
             "```dv-harness-evidence:simulation_semantic_validation_gate\n"
             + json.dumps({
                 "simulation_passed": True,
+                "command_file_path": str(cf),
                 "sim_log_path": str(log_path),
                 "command_expectations": [{
                     "expectation_id": "e1", "required": True,
@@ -693,10 +707,13 @@ def test_simulation_gate_fails_closed_on_missing_sim_log_path():
     # (INSUFFICIENT_EVIDENCE), not silently fall back to an empty log.
     tmp = Path(tempfile.mkdtemp())
     try:
+        cf = tmp / "command.txt"
+        cf.write_text("# no command.txt content needed for this test\n", encoding="utf-8")
         text = (
             "```dv-harness-evidence:simulation_semantic_validation_gate\n"
             + json.dumps({
                 "simulation_passed": True,
+                "command_file_path": str(cf),
                 "sim_log_path": str(tmp / "does_not_exist.log"),
                 "command_expectations": [{
                     "expectation_id": "e1", "required": True,
@@ -5714,27 +5731,38 @@ def test_remote_execution_provenance_gate_blocks_verify_stage_via_evaluate_stage
     # test_verify_stage_with_matching_evidence_passes above) -- every other
     # VERIFY gate gets real, valid evidence, so the resulting GATE_FAIL is
     # unambiguously this one gate's TRANSCRIPT_FILE_NOT_FOUND.
-    text = (
-        "```dv-harness-evidence:simulation_semantic_validation_gate\n"
-        '{"simulation_passed": true, "sim_log": "UVM_INFO enum PASS", '
-        '"command_expectations": [{"expectation_id": "e1", "required": true, '
-        '"evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}]}\n'
-        "```\n"
-        "```dv-harness-evidence:test_result_provenance_gate\n"
-        '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
-        '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
-        '"config_hash": "h", "result": "PASS", "log_hash": "lh", "evidence_bundle_hash": "eh"}]}\n'
-        "```\n"
-        "```dv-harness-evidence:false_pass_resistance_gate\n"
-        '{"positive_test_pass": true, "negative_test_detects_fault": true, '
-        '"checker_detects_injected_fault": true, "semantic_log_match": true, '
-        '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
-        "```\n"
-        + _VERIFY_EXTRA_GATES
-    )
-    verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
-    assert verdict == "GATE_FAIL"
-    assert any("remote_execution_provenance_gate" in r and "TRANSCRIPT_FILE_NOT_FOUND" in r for r in reasons)
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        cf = tmp / "command.txt"
+        cf.write_text("# no command.txt content needed for this test\n", encoding="utf-8")
+        log_path = tmp / "sim.log"
+        log_path.write_text("UVM_INFO enum PASS", encoding="utf-8")
+        text = (
+            "```dv-harness-evidence:simulation_semantic_validation_gate\n"
+            + json.dumps({
+                "simulation_passed": True,
+                "command_file_path": str(cf),
+                "sim_log_path": str(log_path),
+                "command_expectations": [{"expectation_id": "e1", "required": True,
+                    "evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}],
+            }) + "\n```\n"
+            "```dv-harness-evidence:test_result_provenance_gate\n"
+            '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
+            '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
+            '"config_hash": "h", "result": "PASS", "log_hash": "lh", "evidence_bundle_hash": "eh"}]}\n'
+            "```\n"
+            "```dv-harness-evidence:false_pass_resistance_gate\n"
+            '{"positive_test_pass": true, "negative_test_detects_fault": true, '
+            '"checker_detects_injected_fault": true, "semantic_log_match": true, '
+            '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
+            "```\n"
+            + _VERIFY_EXTRA_GATES
+        )
+        verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
+        assert verdict == "GATE_FAIL"
+        assert any("remote_execution_provenance_gate" in r and "TRANSCRIPT_FILE_NOT_FOUND" in r for r in reasons)
+    finally:
+        shutil.rmtree(tmp)
 
 
 # --- Cross-cycle debug-loop counter + Health Monitor dispatch (2026-09-01,
