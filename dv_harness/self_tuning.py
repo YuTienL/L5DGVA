@@ -157,3 +157,65 @@ def read_gate_history_since(root: Path, since_index: int) -> List[Dict[str, Any]
             except Exception:
                 continue
     return out
+
+
+ELEVATED_SCRUTINY_GATES = {
+    "deep_rca_evidence_gate", "root_cause_evidence_gate",
+    "focused_wave_debug_window_gate", "fix_regression_non_regression_gate",
+    "issue_triage_classification_gate", "unknown_failure_escalation_gate",
+    "failure_signature_recurrence_gate", "failure_attribution",
+    "nondeterminism_attribution_gate", "rca_confidence_escalation_gate",
+    "regression_replay_equivalence_gate", "root_cause_attribution_consistency_gate",
+    "dut_request_record_gate", "rca_replay_fix_closure_gate",
+}
+
+
+def classify_proposal(proposal: Dict[str, Any], cycle_proposals: List[Dict[str, Any]],
+                       recent_reverts: set) -> str:
+    """Pure classification -- see the design spec's "Apply / defer-to-human"
+    section for the exact rule list. No I/O; callers pass in whatever
+    context (this cycle's full proposal batch, the set of gate_ids
+    reverted in recent cycles) they've already assembled."""
+    change = proposal.get("change") or {}
+    if proposal.get("confidence") != "HIGH":
+        return "DEFER"
+    if proposal.get("risk_level") == "HIGH":
+        return "DEFER"
+    if change.get("action") in ("remove",):
+        return "DEFER"
+    if proposal.get("gate_id") in ELEVATED_SCRUTINY_GATES:
+        return "DEFER"
+    if len(cycle_proposals) > 1:
+        return "DEFER"
+    if proposal.get("gate_id") in recent_reverts:
+        return "DEFER"
+    return "AUTO_APPLY"
+
+
+def apply_proposal(root: Path, proposal: Dict[str, Any]) -> None:
+    change = proposal.get("change") or {}
+    action = change.get("action")
+    if action == "add":
+        propose_add_override(root, proposal["stage"], change["gate_id"])
+    elif action == "remove":
+        propose_remove_override(root, proposal["stage"], change["gate_id"])
+    else:
+        set_param(root, proposal["gate_id"], change["param"], change["to"])
+
+
+def record_adjustment(root: Path, proposal: Dict[str, Any], status: str,
+                       applied_by: str = "system") -> str:
+    from .memory import MemoryStore
+    record = {
+        "kind": "self_tuning_adjustment",
+        "status": status,
+        "applied_by": applied_by,
+        "gate_id": proposal.get("gate_id"),
+        "stage": proposal.get("stage"),
+        "change": proposal.get("change"),
+        "rationale": proposal.get("rationale"),
+        "confidence": proposal.get("confidence"),
+        "risk_level": proposal.get("risk_level"),
+    }
+    stored = MemoryStore(root).add("project", record)
+    return stored["memory_id"]

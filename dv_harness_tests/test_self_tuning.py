@@ -8,6 +8,7 @@ from dv_harness.self_tuning import (
     propose_remove_override, PROTECTED_REMOVALS, read_execution_state,
     increment_execution_counter, reset_execution_counter,
     append_gate_history, read_gate_history_since, gate_history_length,
+    classify_proposal, ELEVATED_SCRUTINY_GATES, record_adjustment, apply_proposal,
 )
 
 
@@ -177,5 +178,84 @@ def test_real_stage_evaluation_actually_uses_effective_stage_gates_overlay():
         # the overlay, this stage now has zero effective gates.
         assert verdict == "NO_GATE_REQUIRED"
         assert signatures == []
+    finally:
+        shutil.rmtree(root)
+
+
+def _param_proposal(gate_id="unprotected_gate", confidence="HIGH", risk_level="LOW"):
+    return {
+        "gate_id": gate_id, "change": {"param": "threshold", "from": 5, "to": 6},
+        "rationale": "r", "confidence": confidence, "risk_level": risk_level,
+    }
+
+
+def test_classify_auto_applies_high_confidence_low_risk_single_change():
+    p = _param_proposal()
+    assert classify_proposal(p, cycle_proposals=[p], recent_reverts=set()) == "AUTO_APPLY"
+
+
+def test_classify_defers_on_low_confidence():
+    p = _param_proposal(confidence="LOW")
+    assert classify_proposal(p, cycle_proposals=[p], recent_reverts=set()) == "DEFER"
+
+
+def test_classify_defers_on_high_risk():
+    p = _param_proposal(risk_level="HIGH")
+    assert classify_proposal(p, cycle_proposals=[p], recent_reverts=set()) == "DEFER"
+
+
+def test_classify_defers_removal_action():
+    p = {"gate_id": "g", "stage": "COMMAND_PATTERN",
+         "change": {"action": "remove", "gate_id": "g"},
+         "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"}
+    assert classify_proposal(p, cycle_proposals=[p], recent_reverts=set()) == "DEFER"
+
+
+def test_classify_defers_elevated_scrutiny_gate():
+    gate_id = next(iter(ELEVATED_SCRUTINY_GATES))
+    p = _param_proposal(gate_id=gate_id)
+    assert classify_proposal(p, cycle_proposals=[p], recent_reverts=set()) == "DEFER"
+
+
+def test_classify_defers_multi_gate_cycle():
+    p1 = _param_proposal(gate_id="gate_a")
+    p2 = _param_proposal(gate_id="gate_b")
+    assert classify_proposal(p1, cycle_proposals=[p1, p2], recent_reverts=set()) == "DEFER"
+
+
+def test_classify_defers_recently_reverted_gate():
+    p = _param_proposal(gate_id="gate_a")
+    assert classify_proposal(p, cycle_proposals=[p], recent_reverts={"gate_a"}) == "DEFER"
+
+
+def test_apply_proposal_sets_param():
+    root = _tmp_root()
+    try:
+        apply_proposal(root, _param_proposal())
+        assert get_param(root, "unprotected_gate", "threshold", None) == 6
+    finally:
+        shutil.rmtree(root)
+
+
+def test_apply_proposal_adds_override():
+    root = _tmp_root()
+    try:
+        p = {"gate_id": "g", "stage": "COMMAND_PATTERN",
+             "change": {"action": "add", "gate_id": "g"},
+             "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"}
+        apply_proposal(root, p)
+        assert "g" in read_overrides(root)["COMMAND_PATTERN"]["add"]
+    finally:
+        shutil.rmtree(root)
+
+
+def test_record_adjustment_stores_locally_not_shared():
+    root = _tmp_root()
+    try:
+        mem_id = record_adjustment(root, _param_proposal(), status="APPLIED")
+        assert mem_id.startswith("MEM-")
+        stored = json.loads((root / ".dv-harness" / "memory" / "project" / f"{mem_id}.json").read_text(encoding="utf-8"))
+        assert stored["kind"] == "self_tuning_adjustment"
+        assert stored["status"] == "APPLIED"
     finally:
         shutil.rmtree(root)
