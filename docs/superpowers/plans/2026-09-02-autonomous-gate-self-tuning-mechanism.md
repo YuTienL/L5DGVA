@@ -351,7 +351,7 @@ git commit -m "feat: add self_tuning.py data layer (parameters, overrides, execu
 
 **Interfaces:**
 - Consumes: `dv_harness.self_tuning.read_overrides`, `PROTECTED_REMOVALS`, `append_gate_history` (Task 1).
-- Produces: `dv_harness.gates.effective_stage_gates(stage: str, root: Path) -> list` (same element shape as `STAGE_GATES[stage]` — list of `(gate_id, script_name, cli_flag)` tuples).
+- Produces: `dv_harness.gates.effective_stage_gates(stage: str, root: Path) -> list` (same element shape as `STAGE_GATES[stage]` — list of `(gate_id, script_name, cli_flag)` tuples), AND wires it into the one real evaluator every stage actually goes through (`_evaluate_stage_evidence_core`, confirmed at `dv_harness/gates.py:1265`, currently `gates = STAGE_GATES.get(stage)`) — without this second half, the membership overlay is inert data nothing reads during a real stage evaluation. This was caught during the pre-flight plan review (see ledger); the wiring is now part of this task's required Step 3, not a separate task.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -408,6 +408,25 @@ def test_effective_stage_gates_applies_unprotected_removal():
         assert "command_migration_integrity_gate" not in ids
     finally:
         shutil.rmtree(root)
+
+
+def test_real_stage_evaluation_actually_uses_effective_stage_gates_overlay():
+    # The load-bearing wiring check: effective_stage_gates() must not be
+    # dead code -- a real _evaluate_stage_evidence_core() call for a stage
+    # with an unprotected gate removed via the overlay must NOT fail for
+    # missing that gate's evidence block (it's no longer in the effective
+    # set for this project root).
+    from dv_harness.gates import _evaluate_stage_evidence_core
+    root = _tmp_root()
+    try:
+        propose_remove_override(root, "COMMAND_PATTERN", "command_migration_integrity_gate")
+        verdict, reasons, signatures, completion = _evaluate_stage_evidence_core(root, "COMMAND_PATTERN", "")
+        # With the only real STAGE_GATES["COMMAND_PATTERN"] entry removed via
+        # the overlay, this stage now has zero effective gates.
+        assert verdict == "NO_GATE_REQUIRED"
+        assert signatures == []
+    finally:
+        shutil.rmtree(root)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -454,6 +473,14 @@ def effective_stage_gates(stage: str, root: "Path") -> list:
     return result
 ```
 
+Then wire it into the real evaluator. In `dv_harness/gates.py`'s `_evaluate_stage_evidence_core()` (confirmed at line 1265: `gates = STAGE_GATES.get(stage)`), change that one line to:
+
+```python
+    gates = effective_stage_gates(stage, root)
+```
+
+(`effective_stage_gates()` already returns `[]`/falsy-equivalent for a stage with no entries and no overlay, matching the prior `STAGE_GATES.get(stage)` returning `None` closely enough for the immediately-following `if not gates:` check — verify this by running the existing full `dv_harness_tests/test_engine_gates_and_routing.py` suite in Step 4 below, since this line is shared by every real stage evaluation in the codebase, not only self-tuning-related tests.)
+
 Also add gate-history logging: read `run_gate()`'s full current body first, then wrap its return with a history-append call. At the end of `run_gate()`, immediately before `return GateResult(gate_id, script_ok, detail)` (there may be more than one such return statement on different branches — check by reading the function fully; add the logging call before EVERY return that produces a real (not tool-missing) result):
 
 ```python
@@ -492,7 +519,7 @@ git commit -m "feat: add effective_stage_gates() overlay + gate_history logging 
 - Test: `dv_harness_tests/test_self_tuning_proposal_gate.py`
 
 **Interfaces:**
-- Consumes: none from earlier tasks at the Python-import level (this is a standalone subprocess-invoked script, per this codebase's existing gate-script convention — read `tools/verification_flow/manual_lookup_before_edit_gate.py` first for the standard shape: argparse a single positional flag holding a path to a JSON payload file, print a JSON result to stdout, `sys.exit(0)` on success / nonzero on failure).
+- Consumes: `dv_harness.self_tuning.PROTECTED_REMOVALS` (Task 1) via a `sys.path` import, since this is a standalone subprocess-invoked script (per this codebase's existing gate-script convention — read `tools/verification_flow/manual_lookup_before_edit_gate.py` first for the standard shape: argparse a single positional flag holding a path to a JSON payload file, print a JSON result to stdout, `sys.exit(0)` on success / nonzero on failure) that still needs the real, single-source-of-truth protected list rather than a second copy of it.
 - Produces: invoked via `run_gate(root, "self_tuning_proposal_gate.py", "--proposal", payload)` where `payload = {"proposals": [...]}`. On success (exit 0), stdout JSON has `{"status": "PASS", "surviving_proposals": [...], "stripped": [...]}`. `surviving_proposals` and `stripped` are both lists of the same proposal-dict shape as the input, annotated with a `"strip_reason"` key added to each stripped entry.
 
 **Parameter-exposure-protected gate_ids** (from the spec — a proposal whose `change.param` targets one of these specific `(gate_id, param)` pairs is always stripped, in addition to the removal-protection check):
