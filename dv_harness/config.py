@@ -81,6 +81,13 @@ DEFAULT_CONFIG = {
     # sense of protection.
     "rtl_protection": {
         "protected_paths": []
+    },
+    "self_tuning": {
+        # Autonomous gate self-tuning (2026-09-02 design). Disabled by
+        # default -- a project must explicitly opt in. See
+        # docs/superpowers/specs/2026-09-02-autonomous-gate-self-tuning-design.md.
+        "enabled": False,
+        "review_every_n_executions": 20,
     }
 }
 

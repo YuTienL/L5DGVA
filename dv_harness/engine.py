@@ -21,6 +21,7 @@ from .adapters.base import AgentResult
 from .stage_profile import StageExecutionProfiler, extract_provider_usage
 from .control_plane import ControlPlane, replan_stage, _find_latest_plan, describe_stage
 from .agent_profile import load_agent_profile
+from . import self_tuning
 
 # --- Plan-and-Execute / Multi-Agent / Blackboard / ReAct wiring -------------
 # planner.py, react.py, router.py, multi_agent.py, skill_resolver.py were all
@@ -1411,6 +1412,93 @@ class DVHarness:
             "promotion": promotion,
         })
 
+    def _maybe_run_self_tuning_review(self) -> None:
+        """Best-effort autonomous gate self-tuning review -- see
+        docs/superpowers/specs/2026-09-02-autonomous-gate-self-tuning-design.md.
+        Called once per real terminal run_stage() result (the single
+        `return result` at the bottom of that method), regardless of
+        stage/verdict -- self-tuning reviews accumulated cross-stage gate
+        history, not any one stage's own evidence, so it is deliberately NOT
+        gated on verdict == PASS the way the _promote_* methods above are.
+
+        Any failure anywhere in this method must never propagate out and
+        must never affect the real stage result run_stage() is about to
+        return -- the entire body is one top-level try/except. Two different
+        failure-recovery policies apply depending on WHERE the failure is,
+        both implemented below rather than via a single blanket "reset on
+        any exception" rule:
+          - an adapter failure (result missing/not ok, or adapter.run()
+            itself raising) does NOT reset the execution counter, so the
+            same accumulated history is retried at the next real
+            run_stage() call rather than being silently discarded;
+          - any OTHER internal failure (malformed/missing evidence block,
+            the proposal gate itself failing) DOES reset the counter --
+            there is no point re-analyzing the exact same evidence again on
+            the very next call when the evidence itself was the problem.
+        """
+        try:
+            from . import self_tuning
+            from .gates import extract_evidence_blocks, run_gate
+
+            st_cfg = (self.cfg or {}).get("self_tuning", {}) or {}
+            if not st_cfg.get("enabled"):
+                return
+            n = int(st_cfg.get("review_every_n_executions", 20))
+            state = self_tuning.read_execution_state(self.root)
+            if state.get("executions_since_last_review", 0) < n:
+                return
+
+            history = self_tuning.read_gate_history_since(self.root, 0)
+            prompt = (
+                "You are reviewing accumulated real gate-execution history to "
+                "propose self-tuning adjustments. Evidence (most recent "
+                f"{len(history)} gate invocations):\n" + json.dumps(history) +
+                "\n\nRespond with a single fenced "
+                "```dv-harness-evidence:self_tuning_proposal``` block containing "
+                '{"proposals": [{"gate_id":..., "stage":... (only for add/remove '
+                'changes), "change": {"param":...,"from":...,"to":...} OR '
+                '{"action":"add"|"remove","gate_id":...}, "rationale":..., '
+                '"confidence":"HIGH"|"MEDIUM"|"LOW", "risk_level":"LOW"|"HIGH"}]}. '
+                "Propose zero or more adjustments; an empty list is a valid, "
+                "honest answer when the evidence doesn't support any change."
+            )
+
+            try:
+                result = self.adapter.run(prompt=prompt, cwd=str(self.root))
+            except Exception:
+                return  # adapter failure -- counter NOT reset, retried next real run_stage()
+            if not result or not getattr(result, "ok", False):
+                return  # same adapter-failure non-reset policy as above
+
+            blocks = extract_evidence_blocks(result.text or "")
+            evidence = blocks.get("self_tuning_proposal")
+            if not evidence:
+                self_tuning.reset_execution_counter(self.root)
+                return
+
+            gate_result = run_gate(self.root, "self_tuning_proposal_gate.py", "--proposal", evidence)
+            if not gate_result.ok:
+                self_tuning.reset_execution_counter(self.root)
+                return
+
+            surviving = gate_result.detail.get("surviving_proposals", [])
+            for proposal in surviving:
+                try:
+                    verdict = self_tuning.classify_proposal(proposal, surviving, recent_reverts=set())
+                    if verdict == "AUTO_APPLY":
+                        self_tuning.apply_proposal(self.root, proposal)
+                        self_tuning.record_adjustment(self.root, proposal, status="APPLIED")
+                    else:
+                        self_tuning.record_adjustment(self.root, proposal, status="PENDING")
+                except ValueError:
+                    # One malformed proposal in the batch must not abort
+                    # processing the rest -- skip it and move on.
+                    continue
+
+            self_tuning.reset_execution_counter(self.root)
+        except Exception:
+            pass
+
     def _sync_findings_state(self) -> None:
         """The blackboard "findings" topic (Blackboard.findings_counts()) is
         the one real source of truth for finding counts -- this recomputes
@@ -2038,6 +2126,23 @@ class DVHarness:
         self.store.save(self.state)
         _emit_stage_done_marker(stage, stage_detail.get("gate_verdict"),
                                  stage_detail.get("stage_completion_percent"))
+
+        # ---- 7. Autonomous gate self-tuning review (2026-09-02 design):
+        #         this is the ONE real terminal exit point of run_stage() --
+        #         every verdict branch above (PASS, WAIT_USER/approval-
+        #         required, NEEDS_USER_INPUT, PARTIAL/GATE_FAIL,
+        #         FAIL/ADAPTER_FAIL) falls through to here rather than
+        #         returning early; the only earlier `return` in this method
+        #         is the TAKEOVER short-circuit at the very top, which exits
+        #         before any adapter call/state mutation happens at all and
+        #         so is not a real completed execution attempt. The counter
+        #         increments here unconditionally (once per real terminal
+        #         verdict, regardless of which one), and the review itself
+        #         is entirely best-effort (see _maybe_run_self_tuning_review's
+        #         own docstring) -- neither call is allowed to affect
+        #         `result`, already computed above. ----------------------
+        self_tuning.increment_execution_counter(self.root)
+        self._maybe_run_self_tuning_review()
         return result
 
     def advance(self, user_goal: str = ""):

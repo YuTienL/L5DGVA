@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -5944,5 +5945,191 @@ def test_health_monitor_check_records_real_failure_when_subprocess_errors():
         assert result is not None
         assert result["ok"] is False
         assert "error" in result
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- Task 5 (2026-09-02 autonomous-gate-self-tuning-mechanism design):
+# DVHarness._maybe_run_self_tuning_review() -- the review-cycle orchestration
+# wired into run_stage()'s single real terminal exit point (see engine.py's
+# "Step 7" comment right before `return result`). These tests call
+# _maybe_run_self_tuning_review() directly (no main_graph.json/stage setup
+# needed) against a bare `DVHarness(tmp)` with `h.adapter` replaced by a fake
+# implementing the same run(prompt, cwd, resume_session=None,
+# agent_profile=None) -> AgentResult contract as the real adapter (same
+# pattern used throughout this file, e.g. FakeAdapter above).
+from dv_harness import self_tuning as _self_tuning_module
+from dv_harness.adapters.base import AgentResult as _SelfTuningAgentResult
+
+
+class _FakeSelfTuningAdapter:
+    def __init__(self, text=None, ok=True, raises=None):
+        self.text = text
+        self.ok = ok
+        self.raises = raises
+        self.calls = 0
+
+    def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+        self.calls += 1
+        if self.raises:
+            raise self.raises
+        return _SelfTuningAgentResult(ok=self.ok, text=self.text or "", raw={}, session_id="s")
+
+
+def _self_tuning_proposal_block(gate_id="unprotected_gate", confidence="HIGH", risk_level="LOW", to=2):
+    return (
+        "```dv-harness-evidence:self_tuning_proposal\n"
+        + json.dumps({"proposals": [{
+            "gate_id": gate_id, "change": {"param": "threshold", "from": 1, "to": to},
+            "rationale": "observed pattern", "confidence": confidence, "risk_level": risk_level,
+        }]})
+        + "\n```"
+    )
+
+
+def _mk_self_tuning_project():
+    # run_gate() (dv_harness/gates.py) resolves gate scripts as
+    # root/tools/verification_flow/<script>.py -- a plain tempfile.mkdtemp()
+    # has no such tree, so self_tuning_proposal_gate.py would resolve to
+    # GATE_TOOL_MISSING and gate_result.ok would be False regardless of the
+    # proposal content, making these tests pass for the wrong reason. Copy
+    # the real tools/ tree in, same as _mk_smoke_project() above, so the
+    # proposal gate genuinely executes.
+    tmp = Path(tempfile.mkdtemp())
+    shutil.copytree(ROOT / "tools", tmp / "tools")
+    return tmp
+
+
+def _self_tuning_proposal_gate_env():
+    # self_tuning_proposal_gate.py (tools/verification_flow/) does `from
+    # dv_harness.self_tuning import PROTECTED_REMOVALS`, resolving its own
+    # import root as Path(__file__).resolve().parents[2] -- correct when the
+    # script lives at the REAL dv_harness repo's tools/verification_flow/
+    # (parents[2] == the repo root, which contains the dv_harness package),
+    # but wrong for a copy under an isolated tempfile.mkdtemp() project (its
+    # parents[2] is just the empty tmp dir, no dv_harness package there).
+    # dv_harness itself is not pip-installed in this dev environment (no
+    # sdist/egg-info), so it is only importable via this repo's own root
+    # being on sys.path. run_gate()'s subprocess.run() inherits the calling
+    # process's environment unmodified, so putting the real ROOT on
+    # PYTHONPATH here lets the copied script's `from dv_harness...` import
+    # succeed the same way it would for a real pip-installed deployment,
+    # without changing any engine.py/gates.py production code.
+    existing = os.environ.get("PYTHONPATH", "")
+    return {"PYTHONPATH": (str(ROOT) + os.pathsep + existing) if existing else str(ROOT)}
+
+
+def test_self_tuning_review_triggers_after_n_executions_and_auto_applies():
+    tmp = _mk_self_tuning_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 2}
+        fake = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+        h.adapter = fake
+
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            _self_tuning_module.increment_execution_counter(h.root)  # 1st of 2
+            h._maybe_run_self_tuning_review()
+            assert fake.calls == 0
+
+            _self_tuning_module.increment_execution_counter(h.root)  # 2nd of 2 -- triggers
+            h._maybe_run_self_tuning_review()
+        assert fake.calls == 1
+
+        assert _self_tuning_module.get_param(h.root, "unprotected_gate", "threshold", None) == 2
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_defers_low_confidence_proposal():
+    tmp = _mk_self_tuning_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block(confidence="LOW"))
+
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            _self_tuning_module.increment_execution_counter(h.root)
+            h._maybe_run_self_tuning_review()
+
+        assert _self_tuning_module.get_param(h.root, "unprotected_gate", "threshold", None) is None
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_disabled_by_default_config():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        # no h.cfg["self_tuning"] override -- DEFAULT_CONFIG's own default applies
+        fake = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+        h.adapter = fake
+        for _ in range(100):
+            _self_tuning_module.increment_execution_counter(h.root)
+        h._maybe_run_self_tuning_review()
+        assert fake.calls == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_adapter_failure_does_not_reset_counter_or_raise():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(raises=RuntimeError("boom"))
+
+        _self_tuning_module.increment_execution_counter(h.root)
+        h._maybe_run_self_tuning_review()  # must not raise
+
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 1
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_run_stage_increments_counter_on_every_terminal_verdict():
+    # run_stage() must increment the execution counter on EVERY terminal
+    # verdict, not only PASS -- exercised here via an ADAPTER_FAIL (result.ok
+    # is False) and a GATE_FAIL/PARTIAL (result.ok True, no evidence block),
+    # both of which are real terminal run_stage() results that fall through
+    # to the single `return result` this task wired the counter/review call
+    # onto. self_tuning stays disabled (DEFAULT_CONFIG default) so this test
+    # is purely about the counter increment, not the review firing.
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+
+        class _AdapterFailAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return _SelfTuningAgentResult(ok=False, text="", raw={"stderr": "boom"}, session_id=None)
+
+        h = DVHarness(tmp)
+        h.adapter = _AdapterFailAdapter()
+        h.set_stage("VERIFY")
+
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 0
+        h.run_stage("goal")
+        ss = h.state.stages["VERIFY"]
+        assert ss["status"] == "FAIL"
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 1
+
+        class _PartialAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                # Same ok=True/no-evidence text as
+                # test_run_stage_replans_and_reuses_same_plan_across_retries_on_partial
+                # above (a known-good MISSING_EVIDENCE -> PARTIAL fixture for
+                # VERIFY), reused here rather than inventing a new string.
+                return _SelfTuningAgentResult(ok=True, text="I verified it, trust me.", raw={}, session_id="s")
+
+        h.adapter = _PartialAdapter()
+        h.run_stage("goal")
+        ss = h.state.stages["VERIFY"]
+        assert ss["status"] == "PARTIAL"
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 2
     finally:
         shutil.rmtree(tmp)
