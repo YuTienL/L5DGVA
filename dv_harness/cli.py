@@ -977,8 +977,8 @@ def main():
             return 0
         if args.self_tune_cmd == "reject":
             record = store.get(args.memory_id)
-            if not record:
-                print(json.dumps({"ok": False, "error": "NOT_FOUND"}))
+            if not record or record.get("kind") != "self_tuning_adjustment" or record.get("status") != "PENDING":
+                print(json.dumps({"ok": False, "error": "NOT_FOUND_OR_NOT_PENDING"}))
                 return 1
             record["status"] = "REJECTED"
             store.add("project", record)
