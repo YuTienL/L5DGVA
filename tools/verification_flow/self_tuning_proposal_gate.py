@@ -10,15 +10,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from dv_harness.self_tuning import PROTECTED_REMOVALS  # noqa: E402
-
-PROTECTED_PARAMETERS = {
-    ("fix_risk_approval_gate", "risk_classification_threshold"),
-    ("deep_rca_evidence_gate", "min_hypothesis_count"),
-    ("root_cause_evidence_gate", "min_hypothesis_count"),
-    ("regression_submission_policy_gate", "wave_default_off"),
-    ("regression_submission_policy_gate", "require_prior_failure_ref"),
-}
+# PROTECTED_PARAMETERS (Finding I1 fix, 2026-09-02 final-review fix wave):
+# now the SAME real constant dv_harness/self_tuning.py's apply_proposal()
+# itself enforces (previously this script kept its own separate copy, which
+# meant the CLI approve path -- which calls apply_proposal() directly and
+# never re-runs this gate script -- had no protection at all). Imported,
+# same pattern as PROTECTED_REMOVALS already used.
+from dv_harness.self_tuning import PROTECTED_REMOVALS, PROTECTED_PARAMETERS  # noqa: E402
 
 REQUIRED_FIELDS = {"gate_id", "change", "rationale", "confidence", "risk_level"}
 

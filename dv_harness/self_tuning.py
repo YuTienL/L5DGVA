@@ -67,6 +67,50 @@ def set_param(root: Path, gate_id: str, name: str, value: Any) -> None:
     _write_json_atomic(_params_path(root), data)
 
 
+_ABSENT = object()
+
+
+def delete_param(root: Path, gate_id: str, name: str) -> None:
+    """Removes a single (gate_id, name) entry from parameters.json entirely,
+    so a subsequent get_param() call falls back to the gate's own hardcoded
+    default again -- the real "restore to unset" counterpart to set_param()
+    (Finding I3: a revert of a param that was never actually set before the
+    self-tuning apply must delete the key, not write back some fabricated
+    value). If gate_id's own sub-dict becomes empty as a result, the whole
+    gate_id key is dropped too (kept minimal/tidy) rather than leaving an
+    empty {} behind -- either choice is behaviorally identical to
+    get_param() (an absent gate_id and an empty dict under it both fall
+    through to `default`), this just keeps the on-disk file smaller.
+    No-op (does not raise) if the file, gate_id, or name doesn't exist."""
+    data = _read_json(_params_path(root), {})
+    if not isinstance(data, dict):
+        return
+    gate_params = data.get(gate_id)
+    if not isinstance(gate_params, dict) or name not in gate_params:
+        return
+    del gate_params[name]
+    if not gate_params:
+        del data[gate_id]
+    _write_json_atomic(_params_path(root), data)
+
+
+def capture_prior_param_state(root: Path, gate_id: str, name: str) -> Dict[str, Any]:
+    """Real backing for Finding I3: captures whatever get_param() would
+    currently return for (gate_id, name) -- BEFORE a caller is about to
+    apply_proposal() a param-change -- as a JSON-serializable
+    {"prior_was_absent": bool, "prior_value": <value or None>} pair meant
+    to be threaded through to record_adjustment() and later consulted by a
+    revert. A private, non-serializable sentinel (never written to disk)
+    distinguishes "no entry existed at all" from a real prior value of
+    None/0/False/"" -- get_param()'s own `default` parameter already
+    supports exactly this distinction, it's just never been used for
+    anything other than a gate script's own hardcoded fallback before."""
+    value = get_param(root, gate_id, name, _ABSENT)
+    if value is _ABSENT:
+        return {"prior_was_absent": True, "prior_value": None}
+    return {"prior_was_absent": False, "prior_value": value}
+
+
 def read_overrides(root: Path) -> Dict[str, Any]:
     data = _read_json(_overrides_path(root), {})
     return data if isinstance(data, dict) else {}
@@ -88,6 +132,27 @@ def _compute_protected_removals() -> set:
 
 
 PROTECTED_REMOVALS = _compute_protected_removals()
+
+
+# Finding I1 fix (2026-09-02 final-review fix wave): this list previously
+# lived ONLY inside tools/verification_flow/self_tuning_proposal_gate.py,
+# which the CLI `self-tune approve` path (dv_harness/cli.py) never invokes
+# -- approving a stored PENDING record for one of these parameters went
+# straight to apply_proposal() -> set_param() with no protection at all.
+# Moved here (the real engine module, same home as PROTECTED_REMOVALS) and
+# enforced directly inside apply_proposal() below, so every caller --
+# engine.py's AUTO_APPLY path, the CLI approve path, anything else that
+# ever calls apply_proposal() -- gets real protection for free. The
+# proposal gate script now imports this constant from here (see that
+# script's own header) instead of maintaining its own separate copy, the
+# same pattern it already used for PROTECTED_REMOVALS.
+PROTECTED_PARAMETERS = {
+    ("fix_risk_approval_gate", "risk_classification_threshold"),
+    ("deep_rca_evidence_gate", "min_hypothesis_count"),
+    ("root_cause_evidence_gate", "min_hypothesis_count"),
+    ("regression_submission_policy_gate", "wave_default_off"),
+    ("regression_submission_policy_gate", "require_prior_failure_ref"),
+}
 
 
 def propose_add_override(root: Path, stage: str, gate_id: str) -> None:
@@ -184,15 +249,29 @@ def read_gate_history_since(root: Path, since_index: int) -> List[Dict[str, Any]
     return out
 
 
-ELEVATED_SCRUTINY_GATES = {
-    "deep_rca_evidence_gate", "root_cause_evidence_gate",
-    "focused_wave_debug_window_gate", "fix_regression_non_regression_gate",
-    "issue_triage_classification_gate", "unknown_failure_escalation_gate",
-    "failure_signature_recurrence_gate", "failure_attribution",
-    "nondeterminism_attribution_gate", "rca_confidence_escalation_gate",
-    "regression_replay_equivalence_gate", "root_cause_attribution_consistency_gate",
-    "dut_request_record_gate", "rca_replay_fix_closure_gate",
-}
+def _compute_elevated_scrutiny_gates() -> set:
+    """Finding I4 fix (2026-09-02 final-review fix wave): this was a
+    hardcoded 14-entry literal that had already drifted from the real
+    STAGE_GATES table (missing fix_effectiveness_gate, a real live RE_AUDIT
+    gate added after the literal was written). Computed the same way
+    PROTECTED_REMOVALS is computed just above -- union of RE_AUDIT's and
+    FAILURE_RECOVERY's real gate_ids (the spec's own rule: "anything in
+    RE_AUDIT's or FAILURE_RECOVERY's gate list not already fully
+    protected"), minus whatever gate_id already appears in PROTECTED_REMOVALS
+    (a gate that can never even be REMOVED needs no extra elevated-scrutiny
+    defer-on-param-change treatment layered on top). Same lazy
+    `from . import gates` pattern as _compute_protected_removals() to avoid
+    the import cycle (gates.py itself imports this module)."""
+    from . import gates as _gates
+    ids = set()
+    for stage in ("RE_AUDIT", "FAILURE_RECOVERY"):
+        for entry in _gates.STAGE_GATES.get(stage, []):
+            ids.add(entry[0])
+    protected_gate_ids = {gate_id for (_stage, gate_id) in PROTECTED_REMOVALS}
+    return ids - protected_gate_ids
+
+
+ELEVATED_SCRUTINY_GATES = _compute_elevated_scrutiny_gates()
 
 
 def classify_proposal(proposal: Dict[str, Any], cycle_proposals: List[Dict[str, Any]],
@@ -206,7 +285,16 @@ def classify_proposal(proposal: Dict[str, Any], cycle_proposals: List[Dict[str, 
         return "DEFER"
     if proposal.get("risk_level") == "HIGH":
         return "DEFER"
-    if change.get("action") in ("remove",):
+    # Finding C1 fix (2026-09-02 final-review fix wave): an "add" proposal
+    # is a membership change exactly like "remove" -- effective_stage_gates()
+    # (dv_harness/gates.py) materializes an unrecognized add gate_id as a
+    # placeholder (gate_id, "<gate_id>.py", "--evidence") entry that can
+    # never produce a passing evidence block (no such script exists on
+    # disk), permanently breaking that stage with no auto-rollback if it is
+    # ever auto-applied. The spec's own auto-apply rule is "the change is a
+    # parameter adjustment (not a membership change)" -- both "add" and
+    # "remove" are membership changes and must always defer to a human.
+    if change.get("action") in ("add", "remove"):
         return "DEFER"
     if proposal.get("gate_id") in ELEVATED_SCRUTINY_GATES:
         return "DEFER"
@@ -237,7 +325,21 @@ def apply_proposal(root: Path, proposal: Dict[str, Any]) -> None:
                 f"add/remove proposal for gate {gate_id!r} missing required keys: "
                 f"stage={stage!r}, change.gate_id={change.get('gate_id')!r}"
             )
-        propose_remove_override(root, stage, change["gate_id"])
+        # Finding I2 fix (2026-09-02 final-review fix wave): propose_remove_
+        # override() returns False (writing nothing) when (stage, gate_id) is
+        # in PROTECTED_REMOVALS -- this used to be silently discarded here,
+        # so an "approve" of a protected removal would still get recorded as
+        # if it had genuinely succeeded. Raise the same way every other
+        # apply_proposal() failure mode already does, so callers (engine.py,
+        # cli.py's approve handler) can catch it and record the real outcome
+        # instead of a misleading APPLIED.
+        applied = propose_remove_override(root, stage, change["gate_id"])
+        if not applied:
+            raise ValueError(
+                f"remove proposal for gate {change['gate_id']!r} on stage {stage!r} "
+                f"blocked: this (stage, gate_id) pair is in PROTECTED_REMOVALS "
+                f"and can never be removed"
+            )
     else:
         # Param-change path: requires "param" and "to" keys
         if change.get("param") is None:
@@ -250,11 +352,37 @@ def apply_proposal(root: Path, proposal: Dict[str, Any]) -> None:
                 f"param-change proposal for gate {gate_id!r} missing required key: "
                 f"'to' not in change (change keys: {list(change.keys())})"
             )
+        # Finding I1 fix (2026-09-02 final-review fix wave): PROTECTED_
+        # PARAMETERS was previously enforced ONLY inside the LLM-analysis
+        # proposal gate (tools/verification_flow/self_tuning_proposal_gate.py)
+        # -- the CLI `self-tune approve` path calls apply_proposal() directly
+        # and never re-runs that gate, so approving a stored PENDING record
+        # targeting a protected parameter silently overwrote a
+        # safety-critical threshold. Enforced here, the one real
+        # apply-time chokepoint every caller goes through.
+        if (gate_id, change["param"]) in PROTECTED_PARAMETERS:
+            raise ValueError(
+                f"param-change proposal for gate {gate_id!r} targets protected "
+                f"parameter {change['param']!r}: (gate_id, param) is in "
+                f"PROTECTED_PARAMETERS and can never be auto-applied or approved"
+            )
         set_param(root, gate_id, change["param"], change["to"])
 
 
 def record_adjustment(root: Path, proposal: Dict[str, Any], status: str,
-                       applied_by: str = "system") -> str:
+                       applied_by: str = "system",
+                       prior_value: Any = None, prior_was_absent: Optional[bool] = None) -> str:
+    """prior_value/prior_was_absent (Finding I3, 2026-09-02 final-review fix
+    wave) are only meaningful for a param-change proposal that has actually
+    been applied -- the REAL previously-in-effect state, as captured by
+    capture_prior_param_state() immediately before apply_proposal() ran, NOT
+    the proposal's own self-reported change["from"] (which may be a
+    hallucinated or stale value, or simply absent if the parameter had never
+    been set before). Left at their None/None defaults for add/remove
+    proposals and for a proposal recorded as PENDING (nothing has been
+    applied yet, so there is no real prior state to capture). cli.py's
+    `self-tune revert` handler consults these fields instead of
+    change["from"] for a param-change record."""
     from .memory import MemoryStore
     record = {
         "kind": "self_tuning_adjustment",
@@ -266,6 +394,41 @@ def record_adjustment(root: Path, proposal: Dict[str, Any], status: str,
         "rationale": proposal.get("rationale"),
         "confidence": proposal.get("confidence"),
         "risk_level": proposal.get("risk_level"),
+        "prior_value": prior_value,
+        "prior_was_absent": prior_was_absent,
     }
     stored = MemoryStore(root).add("project", record)
     return stored["memory_id"]
+
+
+def gate_ids_with_recent_reverts(root: Path) -> set:
+    """Real backing for classify_proposal()'s recent_reverts anti-thrashing
+    parameter (bundled fix alongside I3, 2026-09-02 final-review fix wave):
+    engine.py's _maybe_run_self_tuning_review() previously hardcoded
+    recent_reverts=set(), so that defer rule could never actually fire even
+    though the data (REVERTED self_tuning_adjustment records, written by
+    cli.py's `self-tune revert` via record_adjustment/store.add) already
+    exists. Same _index()-then-get() enumeration pattern cli.py's
+    _project_self_tuning_records() helper already uses.
+
+    DESIGN JUDGMENT CALL: "recent" is scoped here to "any REVERTED record
+    for this gate_id currently exists in project memory" -- no time window
+    or review-cycle count. The finding explicitly says this coarser rule is
+    acceptable for this fix wave ("no time-window logic needed... that's a
+    refinement for later"); a gate_id that was ever reverted defers forever
+    under this rule until a human explicitly re-approves a fresh proposal
+    for it, which is a conservative (safe) default, not a correctness bug --
+    but a real future refinement (e.g. only the last N cycles, or a
+    timestamp-based window) may want to narrow this."""
+    from .memory import MemoryStore
+    store = MemoryStore(root)
+    reverted_gate_ids = set()
+    for entry in store._index():
+        if entry.get("level") != "project":
+            continue
+        rec = store.get(entry["memory_id"])
+        if rec and rec.get("kind") == "self_tuning_adjustment" and rec.get("status") == "REVERTED":
+            gate_id = rec.get("gate_id")
+            if gate_id:
+                reverted_gate_ids.add(gate_id)
+    return reverted_gate_ids

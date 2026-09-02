@@ -9,7 +9,8 @@ from dv_harness.self_tuning import (
     increment_execution_counter, reset_execution_counter,
     append_gate_history, read_gate_history_since, gate_history_length,
     classify_proposal, ELEVATED_SCRUTINY_GATES, record_adjustment, apply_proposal,
-    read_last_reviewed_index,
+    read_last_reviewed_index, PROTECTED_PARAMETERS, delete_param,
+    capture_prior_param_state, gate_ids_with_recent_reverts,
 )
 
 
@@ -448,5 +449,163 @@ def test_reset_execution_counter_index_zero_is_not_treated_as_omitted():
         reset_execution_counter(root, last_reviewed_index=5)
         reset_execution_counter(root, last_reviewed_index=0)
         assert read_last_reviewed_index(root) == 0
+    finally:
+        shutil.rmtree(root)
+
+
+# --- Final-review fix wave (2026-09-02): C1/I1/I2/I3/I4 + bundled
+# recent_reverts wiring -- see docs/superpowers/sdd/2026-09-02-autonomous-
+# gate-self-tuning-mechanism/final-review-fix-report.md for the full findings.
+
+def test_classify_defers_add_action():
+    # Finding C1 regression: an "add" membership proposal must defer to a
+    # human exactly like "remove" already did -- effective_stage_gates()
+    # materializes an unrecognized add gate_id as a placeholder that can
+    # never PASS, permanently breaking the stage if auto-applied.
+    p = {"gate_id": "g", "stage": "COMMAND_PATTERN",
+         "change": {"action": "add", "gate_id": "brand_new_gate"},
+         "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"}
+    assert classify_proposal(p, cycle_proposals=[p], recent_reverts=set()) == "DEFER"
+
+
+def test_apply_proposal_raises_on_protected_parameter():
+    # Finding I1 regression: apply_proposal() itself (not just the LLM-
+    # analysis proposal gate script) must refuse a PROTECTED_PARAMETERS
+    # target -- this is the real chokepoint the CLI approve path goes
+    # through with no proposal-gate re-run in between.
+    import pytest
+    root = _tmp_root()
+    try:
+        gate_id, param = next(iter(PROTECTED_PARAMETERS))
+        p = {"gate_id": gate_id, "change": {"param": param, "from": 1, "to": 2},
+             "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"}
+        with pytest.raises(ValueError) as exc_info:
+            apply_proposal(root, p)
+        assert param in str(exc_info.value)
+        # The parameter must genuinely be untouched.
+        assert get_param(root, gate_id, param, "UNSET") == "UNSET"
+    finally:
+        shutil.rmtree(root)
+
+
+def test_apply_proposal_raises_on_blocked_protected_removal():
+    # Finding I2 regression: apply_proposal() must propagate
+    # propose_remove_override()'s False-on-protected return as a real
+    # ValueError, instead of silently no-opping while the caller still
+    # thinks the removal succeeded.
+    import pytest
+    root = _tmp_root()
+    try:
+        protected_stage, protected_gate = next(iter(PROTECTED_REMOVALS))
+        p = {"gate_id": protected_gate, "stage": protected_stage,
+             "change": {"action": "remove", "gate_id": protected_gate},
+             "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"}
+        with pytest.raises(ValueError):
+            apply_proposal(root, p)
+        overrides = read_overrides(root)
+        assert protected_gate not in overrides.get(protected_stage, {}).get("remove", [])
+    finally:
+        shutil.rmtree(root)
+
+
+def test_delete_param_removes_previously_set_value():
+    root = _tmp_root()
+    try:
+        set_param(root, "g", "threshold", 42)
+        assert get_param(root, "g", "threshold", None) == 42
+        delete_param(root, "g", "threshold")
+        assert get_param(root, "g", "threshold", "GATE_DEFAULT") == "GATE_DEFAULT"
+        # Truly absent from the on-disk file, not merely defaulting.
+        data = json.loads((root / ".dv-harness" / "self_tuning" / "parameters.json").read_text(encoding="utf-8"))
+        assert "g" not in data or "threshold" not in data.get("g", {})
+    finally:
+        shutil.rmtree(root)
+
+
+def test_delete_param_is_noop_when_absent():
+    root = _tmp_root()
+    try:
+        delete_param(root, "never_set_gate", "threshold")  # must not raise
+        assert get_param(root, "never_set_gate", "threshold", "d") == "d"
+    finally:
+        shutil.rmtree(root)
+
+
+def test_capture_prior_param_state_distinguishes_absent_from_real_value():
+    root = _tmp_root()
+    try:
+        absent = capture_prior_param_state(root, "g", "threshold")
+        assert absent == {"prior_was_absent": True, "prior_value": None}
+
+        set_param(root, "g", "threshold", 0)  # a real, falsy prior value
+        present = capture_prior_param_state(root, "g", "threshold")
+        assert present == {"prior_was_absent": False, "prior_value": 0}
+    finally:
+        shutil.rmtree(root)
+
+
+def test_elevated_scrutiny_gates_includes_fix_effectiveness_gate():
+    # Finding I4 regression: the old hardcoded 14-entry literal was missing
+    # fix_effectiveness_gate, a real live RE_AUDIT gate not in
+    # PROTECTED_REMOVALS. Computed dynamically now, so this is included
+    # automatically.
+    assert "fix_effectiveness_gate" in ELEVATED_SCRUTINY_GATES
+
+
+def test_elevated_scrutiny_gates_is_computed_not_hardcoded():
+    # Proves ELEVATED_SCRUTINY_GATES tracks STAGE_GATES rather than being a
+    # frozen literal: patch STAGE_GATES to add a brand-new RE_AUDIT gate and
+    # confirm a freshly-recomputed set picks it up.
+    from unittest.mock import patch
+    from dv_harness import gates as gates_mod
+    from dv_harness.self_tuning import _compute_elevated_scrutiny_gates
+    patched = dict(gates_mod.STAGE_GATES)
+    patched["RE_AUDIT"] = list(patched["RE_AUDIT"]) + [("brand_new_re_audit_gate", "brand_new_re_audit_gate.py", "--x")]
+    with patch.object(gates_mod, "STAGE_GATES", patched):
+        recomputed = _compute_elevated_scrutiny_gates()
+    assert "brand_new_re_audit_gate" in recomputed
+    # A gate id that's also in PROTECTED_REMOVALS (e.g. fix_risk_approval_gate)
+    # must stay excluded regardless of the patch.
+    protected_gate_ids = {gid for (_s, gid) in PROTECTED_REMOVALS}
+    assert not (recomputed & protected_gate_ids)
+
+
+def test_gate_ids_with_recent_reverts_finds_reverted_gate():
+    # Bundled fix alongside I3: recent_reverts must be real data (a
+    # REVERTED self_tuning_adjustment record in project memory), not always
+    # an empty set.
+    root = _tmp_root()
+    try:
+        assert gate_ids_with_recent_reverts(root) == set()
+        p = _param_proposal(gate_id="thrashy_gate")
+        mem_id = record_adjustment(root, p, status="APPLIED")
+        from dv_harness.memory import MemoryStore
+        store = MemoryStore(root)
+        rec = store.get(mem_id)
+        rec["status"] = "REVERTED"
+        store.add("project", rec)
+        assert gate_ids_with_recent_reverts(root) == {"thrashy_gate"}
+    finally:
+        shutil.rmtree(root)
+
+
+def test_gate_ids_with_recent_reverts_causes_defer_for_same_gate():
+    # End-to-end of the bundled fix: a gate_id with a REVERTED record must
+    # cause classify_proposal() to DEFER a subsequent same-gate proposal
+    # that would otherwise AUTO_APPLY.
+    root = _tmp_root()
+    try:
+        p = _param_proposal(gate_id="thrashy_gate")
+        mem_id = record_adjustment(root, p, status="APPLIED")
+        from dv_harness.memory import MemoryStore
+        store = MemoryStore(root)
+        rec = store.get(mem_id)
+        rec["status"] = "REVERTED"
+        store.add("project", rec)
+
+        recent_reverts = gate_ids_with_recent_reverts(root)
+        new_proposal = _param_proposal(gate_id="thrashy_gate")
+        assert classify_proposal(new_proposal, cycle_proposals=[new_proposal],
+                                  recent_reverts=recent_reverts) == "DEFER"
     finally:
         shutil.rmtree(root)
