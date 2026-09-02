@@ -9,6 +9,7 @@ from dv_harness.self_tuning import (
     increment_execution_counter, reset_execution_counter,
     append_gate_history, read_gate_history_since, gate_history_length,
     classify_proposal, ELEVATED_SCRUTINY_GATES, record_adjustment, apply_proposal,
+    read_last_reviewed_index,
 )
 
 
@@ -375,5 +376,77 @@ def test_apply_proposal_param_change_with_falsy_to_value_works():
             "rationale": "r", "confidence": "HIGH", "risk_level": "LOW"
         })
         assert get_param(root, "g3", "value", "default") is None
+    finally:
+        shutil.rmtree(root)
+
+
+# --- Task 5 code-review Finding 3 fix (2026-09-02): read_last_reviewed_index()
+# + reset_execution_counter()'s optional last_reviewed_index parameter --
+# these let engine.py's _maybe_run_self_tuning_review() scope its
+# read_gate_history_since() call to "history since the last successful
+# review cycle" instead of always resending the entire cumulative log.
+
+def test_read_last_reviewed_index_defaults_to_zero_when_absent():
+    root = _tmp_root()
+    try:
+        assert read_last_reviewed_index(root) == 0
+    finally:
+        shutil.rmtree(root)
+
+
+def test_reset_execution_counter_without_index_preserves_backward_compat_behavior():
+    # No last_reviewed_index passed -- must still zero the counter (today's
+    # existing, already-tested behavior) and must NOT introduce a
+    # last_reviewed_gate_history_index key that wasn't there before.
+    root = _tmp_root()
+    try:
+        increment_execution_counter(root)
+        increment_execution_counter(root)
+        reset_execution_counter(root)
+        state = read_execution_state(root)
+        assert state["executions_since_last_review"] == 0
+        assert "last_reviewed_gate_history_index" not in state
+        assert read_last_reviewed_index(root) == 0
+    finally:
+        shutil.rmtree(root)
+
+
+def test_reset_execution_counter_with_index_advances_and_round_trips():
+    root = _tmp_root()
+    try:
+        increment_execution_counter(root)
+        reset_execution_counter(root, last_reviewed_index=7)
+        assert read_execution_state(root)["executions_since_last_review"] == 0
+        assert read_last_reviewed_index(root) == 7
+    finally:
+        shutil.rmtree(root)
+
+
+def test_reset_execution_counter_without_index_does_not_clobber_prior_advance():
+    # An internal-failure reset (no last_reviewed_index kwarg, e.g.
+    # engine.py's malformed-evidence / proposal-gate-failure early-return
+    # paths) must not lose an index a PRIOR successful cycle already
+    # advanced -- reset_execution_counter reads the existing state first and
+    # updates it in place rather than overwriting the whole file.
+    root = _tmp_root()
+    try:
+        reset_execution_counter(root, last_reviewed_index=12)
+        increment_execution_counter(root)
+        reset_execution_counter(root)  # simulates an internal-failure reset
+        assert read_execution_state(root)["executions_since_last_review"] == 0
+        assert read_last_reviewed_index(root) == 12
+    finally:
+        shutil.rmtree(root)
+
+
+def test_reset_execution_counter_index_zero_is_not_treated_as_omitted():
+    # 0 is a legitimate real index (e.g. a project's very first review
+    # cycle reviewing history entries 0..N) -- must be written, not treated
+    # as falsy-equivalent to "omitted" (the sentinel is None, not falsy).
+    root = _tmp_root()
+    try:
+        reset_execution_counter(root, last_reviewed_index=5)
+        reset_execution_counter(root, last_reviewed_index=0)
+        assert read_last_reviewed_index(root) == 0
     finally:
         shutil.rmtree(root)

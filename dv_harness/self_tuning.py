@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .storage import _atomic_replace
 
@@ -122,8 +122,33 @@ def increment_execution_counter(root: Path) -> int:
     return state["executions_since_last_review"]
 
 
-def reset_execution_counter(root: Path) -> None:
-    _write_json_atomic(_state_path(root), {"executions_since_last_review": 0})
+def read_last_reviewed_index(root: Path) -> int:
+    """The gate_history.jsonl line index (per gate_history_length()'s own
+    line-count convention) up through which the last SUCCESSFUL self-tuning
+    review cycle already consumed history -- read_gate_history_since()
+    callers use this instead of always re-reading the full cumulative log
+    since project inception. Defaults to 0 (read from the very start) for a
+    project that has never completed a review cycle, or whose state.json
+    predates this field."""
+    return read_execution_state(root).get("last_reviewed_gate_history_index", 0)
+
+
+def reset_execution_counter(root: Path, last_reviewed_index: Optional[int] = None) -> None:
+    """Always zeroes executions_since_last_review. When last_reviewed_index
+    is given (engine.py's _maybe_run_self_tuning_review passes it only on a
+    SUCCESSFUL review cycle's normal completion path, never on an internal-
+    failure early-reset), also advances last_reviewed_gate_history_index so
+    the NEXT cycle's read_gate_history_since() call only sees history
+    entries appended after this one -- see read_last_reviewed_index()'s
+    docstring. Reads the existing state first and updates it in place
+    (rather than overwriting the whole file with a fresh dict) specifically
+    so an internal-failure reset (last_reviewed_index omitted) never
+    clobbers an index a prior successful cycle already advanced."""
+    state = read_execution_state(root)
+    state["executions_since_last_review"] = 0
+    if last_reviewed_index is not None:
+        state["last_reviewed_gate_history_index"] = last_reviewed_index
+    _write_json_atomic(_state_path(root), state)
 
 
 def append_gate_history(root: Path, gate_id: str, stage: str, ok: bool, reason: str, timestamp: float) -> None:

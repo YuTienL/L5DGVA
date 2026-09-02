@@ -1432,9 +1432,19 @@ class DVHarness:
             same accumulated history is retried at the next real
             run_stage() call rather than being silently discarded;
           - any OTHER internal failure (malformed/missing evidence block,
-            the proposal gate itself failing) DOES reset the counter --
-            there is no point re-analyzing the exact same evidence again on
-            the very next call when the evidence itself was the problem.
+            the proposal gate itself failing OR raising an exception, e.g.
+            run_gate()'s own subprocess.TimeoutExpired) DOES reset the
+            counter -- there is no point re-analyzing the exact same
+            evidence again on the very next call when the evidence itself
+            was the problem.
+
+        Gate history read here is scoped to self_tuning.read_last_reviewed_index()
+        (never the full cumulative gate_history.jsonl since project
+        inception) -- a SUCCESSFUL cycle's completion advances that index to
+        gate_history_length() via reset_execution_counter's optional
+        last_reviewed_index kwarg; an internal-failure early reset
+        deliberately omits it, so a failed cycle's un-consumed slice of
+        history is still there for the next cycle to see.
         """
         try:
             from . import self_tuning
@@ -1448,7 +1458,8 @@ class DVHarness:
             if state.get("executions_since_last_review", 0) < n:
                 return
 
-            history = self_tuning.read_gate_history_since(self.root, 0)
+            history = self_tuning.read_gate_history_since(
+                self.root, self_tuning.read_last_reviewed_index(self.root))
             prompt = (
                 "You are reviewing accumulated real gate-execution history to "
                 "propose self-tuning adjustments. Evidence (most recent "
@@ -1476,7 +1487,21 @@ class DVHarness:
                 self_tuning.reset_execution_counter(self.root)
                 return
 
-            gate_result = run_gate(self.root, "self_tuning_proposal_gate.py", "--proposal", evidence)
+            try:
+                gate_result = run_gate(self.root, "self_tuning_proposal_gate.py", "--proposal", evidence)
+            except Exception:
+                # The proposal gate script itself failing (e.g. a real
+                # subprocess.TimeoutExpired from run_gate()'s own 30s
+                # timeout, which run_gate() does not itself catch) is an
+                # internal failure of the SAME kind as gate_result.ok being
+                # False below -- it means this cycle's evidence could not be
+                # mechanically validated, not that the LLM/adapter call
+                # failed. Gets the same treatment: reset (not the
+                # adapter-failure non-reset policy above), so the next cycle
+                # re-derives a fresh proposal rather than retrying against
+                # unusable evidence.
+                self_tuning.reset_execution_counter(self.root)
+                return
             if not gate_result.ok:
                 self_tuning.reset_execution_counter(self.root)
                 return
@@ -1495,7 +1520,17 @@ class DVHarness:
                     # processing the rest -- skip it and move on.
                     continue
 
-            self_tuning.reset_execution_counter(self.root)
+            # Successful completion of a real review cycle -- unlike the
+            # internal-failure resets above (which deliberately do NOT
+            # advance last_reviewed_gate_history_index, since the evidence
+            # they bailed on was never actually consumed), this cycle's
+            # gate_history.jsonl slice genuinely was reviewed end to end, so
+            # the next cycle's read_gate_history_since() call should only
+            # see entries appended after this point, not the same
+            # cumulative log again (see self_tuning.reset_execution_counter's
+            # own docstring).
+            self_tuning.reset_execution_counter(
+                self.root, last_reviewed_index=self_tuning.gate_history_length(self.root))
         except Exception:
             pass
 
@@ -2140,8 +2175,21 @@ class DVHarness:
         #         verdict, regardless of which one), and the review itself
         #         is entirely best-effort (see _maybe_run_self_tuning_review's
         #         own docstring) -- neither call is allowed to affect
-        #         `result`, already computed above. ----------------------
-        self_tuning.increment_execution_counter(self.root)
+        #         `result`, already computed above. The increment itself is
+        #         real file I/O (self_tuning._write_json_atomic) and must be
+        #         wrapped the same way gates.py's run_gate()/_log_gate_history
+        #         already wraps its own self_tuning.append_gate_history()
+        #         call ("never allowed to change run_gate()'s own return
+        #         value or raise") -- a disk-full/permission/transient
+        #         Windows file-lock race here (documented real phenomena
+        #         elsewhere in this codebase, e.g. config.py's save_config
+        #         docstring and dashboard.py's PermissionError retry logic)
+        #         must never destroy the already-computed real stage result
+        #         about to be returned below. ----------------------------
+        try:
+            self_tuning.increment_execution_counter(self.root)
+        except Exception:
+            pass
         self._maybe_run_self_tuning_review()
         return result
 

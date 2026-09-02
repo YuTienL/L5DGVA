@@ -6133,3 +6133,132 @@ def test_self_tuning_review_run_stage_increments_counter_on_every_terminal_verdi
         assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 2
     finally:
         shutil.rmtree(tmp)
+
+
+# --- Task 5 code-review fixes (2026-09-02): 3 findings against the
+# self-tuning review-cycle wiring above --
+#   Finding 1 (Critical): the increment_execution_counter() call at
+#     run_stage()'s single terminal return point had no try/except -- a real
+#     I/O failure there (disk full/permission/transient Windows file-lock
+#     race) would propagate out of run_stage() and destroy the
+#     already-computed real stage result.
+#   Finding 2 (Important): run_gate() raising (e.g. its own
+#     subprocess.TimeoutExpired, uncaught inside gates.py) fell through to
+#     _maybe_run_self_tuning_review()'s OUTER blanket except -- which does
+#     NOT reset the counter, wrongly giving an internal gate failure the
+#     same non-reset treatment as a genuine adapter failure.
+#   Finding 3 (Important): read_gate_history_since(root, 0) always re-sent
+#     the ENTIRE cumulative gate_history.jsonl log every review cycle,
+#     never scoped to "since the last successful review".
+
+def test_run_stage_survives_increment_execution_counter_raising():
+    # Finding 1 regression: simulate the real I/O call raising and confirm
+    # run_stage() still returns its real, already-computed result rather
+    # than propagating the exception.
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+
+        class _AdapterFailAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return _SelfTuningAgentResult(ok=False, text="", raw={"stderr": "boom"}, session_id=None)
+
+        h = DVHarness(tmp)
+        h.adapter = _AdapterFailAdapter()
+        h.set_stage("VERIFY")
+
+        with patch("dv_harness.self_tuning.increment_execution_counter",
+                   side_effect=RuntimeError("simulated disk-full/permission failure")):
+            result = h.run_stage("goal")
+
+        # The real stage result must still come back, unaltered by the
+        # simulated counter-write failure.
+        assert result is not None
+        assert result.ok is False
+        ss = h.state.stages["VERIFY"]
+        assert ss["status"] == "FAIL"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_run_gate_exception_resets_counter_unlike_adapter_failure():
+    # Finding 2 regression: run_gate() raising (not just returning
+    # ok=False) must get the SAME internal-failure "reset the counter"
+    # treatment as gate_result.ok is False already gets -- distinct from a
+    # genuine adapter failure, which must NOT reset (see
+    # test_self_tuning_review_adapter_failure_does_not_reset_counter_or_raise
+    # above). Also confirms the reset here does NOT advance
+    # last_reviewed_gate_history_index (only a successful cycle's
+    # completion should).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", side_effect=RuntimeError("simulated gate subprocess timeout")):
+            h._maybe_run_self_tuning_review()  # must not raise
+
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 0
+        assert _self_tuning_module.read_last_reviewed_index(h.root) == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_scopes_gate_history_to_last_reviewed_index():
+    # Finding 3 regression: two consecutive SUCCESSFUL review cycles must
+    # each see only the history entries appended since the previous cycle,
+    # not the full cumulative gate_history.jsonl log both times.
+    from dv_harness.gates import GateResult
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+
+        prompts = []
+
+        class _RecordingAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                prompts.append(prompt)
+                return _SelfTuningAgentResult(
+                    ok=True, text=_self_tuning_proposal_block(), raw={}, session_id="s")
+
+        h.adapter = _RecordingAdapter()
+
+        # run_gate() is mocked here (rather than exercising the real
+        # self_tuning_proposal_gate.py subprocess, as the earlier
+        # auto-apply/defer tests do via _mk_self_tuning_project()) so this
+        # test stays focused purely on the history-scoping behavior, with
+        # no extra gate_history.jsonl entries appended as a side effect of
+        # the mechanical proposal-gate call itself.
+        ok_empty_gate_result = GateResult(
+            "self_tuning_proposal_gate", True, {"surviving_proposals": [], "stripped": []})
+
+        # Cycle 1: 2 pre-existing history entries, nothing reviewed yet
+        # (last_reviewed_index defaults to 0) -- both must be visible.
+        _self_tuning_module.append_gate_history(h.root, "gate_a", "IMPLEMENT", True, "PASS", 1.0)
+        _self_tuning_module.append_gate_history(h.root, "gate_b", "IMPLEMENT", False, "GATE_FAIL", 2.0)
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", return_value=ok_empty_gate_result):
+            h._maybe_run_self_tuning_review()
+
+        assert len(prompts) == 1
+        assert "most recent 2 gate invocations" in prompts[0]
+        assert _self_tuning_module.read_last_reviewed_index(h.root) == 2
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 0
+
+        # Cycle 2: one NEW entry appended after cycle 1 completed -- only
+        # this one entry should appear, not the 2 from cycle 1 again.
+        _self_tuning_module.append_gate_history(h.root, "gate_c", "VERIFY", True, "PASS", 3.0)
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", return_value=ok_empty_gate_result):
+            h._maybe_run_self_tuning_review()
+
+        assert len(prompts) == 2
+        assert "most recent 1 gate invocations" in prompts[1]
+        assert _self_tuning_module.read_last_reviewed_index(h.root) == 3
+    finally:
+        shutil.rmtree(tmp)
