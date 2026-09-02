@@ -94,10 +94,11 @@ def test_self_tune_reject_nonself_tuning_record_with_error(monkeypatch, tmp_path
     assert result["ok"] is False
     assert result["error"] == "NOT_FOUND_OR_NOT_PENDING"
 
-    # Verify the record was NOT modified
+    # Verify the record was NOT modified - check all original fields are unchanged
     record_after = store.get(mem_id)
-    assert record_after["kind"] == "engineering_finding"
-    assert record_after["status"] == "OPEN"
+    assert record_after["kind"] == other_record["kind"]
+    assert record_after["status"] == other_record["status"]
+    assert record_after["title"] == other_record["title"]
 
 
 def test_self_tune_revert_param_change_restores_original_value(monkeypatch, tmp_path, capsys):
@@ -192,3 +193,88 @@ def test_self_tune_revert_remove_restores_gate_to_overlay(monkeypatch, tmp_path,
     # Verify gate is removed from overlay remove list
     overrides = read_overrides(tmp_path)
     assert "remove_gate" not in overrides.get("VERIFY", {}).get("remove", [])
+
+
+def test_self_tune_revert_remove_preserves_other_gates_in_overlay(monkeypatch, tmp_path, capsys):
+    # Add two gates to overlay remove list
+    proposal1 = {"gate_id": "gate1", "stage": "VERIFY", "change": {"action": "remove", "gate_id": "gate1"},
+                 "rationale": "r", "confidence": "LOW", "risk_level": "LOW"}
+    mem_id1 = record_adjustment(tmp_path, proposal1, status="PENDING")
+
+    proposal2 = {"gate_id": "gate2", "stage": "VERIFY", "change": {"action": "remove", "gate_id": "gate2"},
+                 "rationale": "r", "confidence": "LOW", "risk_level": "LOW"}
+    mem_id2 = record_adjustment(tmp_path, proposal2, status="PENDING")
+
+    # Approve both
+    rc, _ = _run_cli(monkeypatch, tmp_path, ["self-tune", "approve", mem_id1], capsys)
+    assert rc == 0
+    rc, _ = _run_cli(monkeypatch, tmp_path, ["self-tune", "approve", mem_id2], capsys)
+    assert rc == 0
+
+    # Verify both gates are in overlay remove list
+    overrides = read_overrides(tmp_path)
+    assert "gate1" in overrides.get("VERIFY", {}).get("remove", [])
+    assert "gate2" in overrides.get("VERIFY", {}).get("remove", [])
+
+    # Revert only gate1
+    rc, _ = _run_cli(monkeypatch, tmp_path, ["self-tune", "revert", mem_id1], capsys)
+    assert rc == 0
+
+    # Verify gate1 is removed but gate2 remains
+    overrides = read_overrides(tmp_path)
+    assert "gate1" not in overrides.get("VERIFY", {}).get("remove", [])
+    assert "gate2" in overrides.get("VERIFY", {}).get("remove", [])
+
+
+def test_self_tune_approve_rejects_nonself_tuning_record_with_error(monkeypatch, tmp_path, capsys):
+    # Create a non-self-tuning record with PENDING status (vulnerable to the bug)
+    store = MemoryStore(tmp_path)
+    other_record = {
+        "kind": "engineering_finding",
+        "status": "PENDING",
+        "title": "Some finding",
+        "custom_field": "custom_value"
+    }
+    added = store.add("project", other_record)
+    mem_id = added["memory_id"]
+
+    # Try to approve it (should fail because it's not a self_tuning_adjustment)
+    rc, out = _run_cli(monkeypatch, tmp_path, ["self-tune", "approve", mem_id], capsys)
+    assert rc == 1
+    result = json.loads(out)
+    assert result["ok"] is False
+    assert result["error"] == "NOT_FOUND_OR_NOT_PENDING"
+
+    # Verify the record was NOT modified - check all original fields are unchanged
+    record_after = store.get(mem_id)
+    assert record_after["kind"] == other_record["kind"]
+    assert record_after["status"] == other_record["status"]
+    assert record_after["title"] == other_record["title"]
+    assert record_after["custom_field"] == other_record["custom_field"]
+
+
+def test_self_tune_revert_rejects_nonself_tuning_record_with_error(monkeypatch, tmp_path, capsys):
+    # Create a non-self-tuning record with APPLIED status (vulnerable to the bug)
+    store = MemoryStore(tmp_path)
+    other_record = {
+        "kind": "corner_case",
+        "status": "APPLIED",
+        "title": "Some corner case",
+        "data": {"nested": "value"}
+    }
+    added = store.add("project", other_record)
+    mem_id = added["memory_id"]
+
+    # Try to revert it (should fail because it's not a self_tuning_adjustment)
+    rc, out = _run_cli(monkeypatch, tmp_path, ["self-tune", "revert", mem_id], capsys)
+    assert rc == 1
+    result = json.loads(out)
+    assert result["ok"] is False
+    assert result["error"] == "NOT_FOUND_OR_NOT_APPLIED"
+
+    # Verify the record was NOT modified - check all original fields are unchanged
+    record_after = store.get(mem_id)
+    assert record_after["kind"] == other_record["kind"]
+    assert record_after["status"] == other_record["status"]
+    assert record_after["title"] == other_record["title"]
+    assert record_after["data"] == other_record["data"]

@@ -964,7 +964,7 @@ def main():
             return 0
         if args.self_tune_cmd == "approve":
             record = store.get(args.memory_id)
-            if not record or record.get("status") != "PENDING":
+            if not record or record.get("kind") != "self_tuning_adjustment" or record.get("status") != "PENDING":
                 print(json.dumps({"ok": False, "error": "NOT_FOUND_OR_NOT_PENDING"}))
                 return 1
             proposal = {"gate_id": record.get("gate_id"), "stage": record.get("stage"),
@@ -986,7 +986,7 @@ def main():
             return 0
         if args.self_tune_cmd == "revert":
             record = store.get(args.memory_id)
-            if not record or record.get("status") != "APPLIED":
+            if not record or record.get("kind") != "self_tuning_adjustment" or record.get("status") != "APPLIED":
                 print(json.dumps({"ok": False, "error": "NOT_FOUND_OR_NOT_APPLIED"}))
                 return 1
             change = record.get("change") or {}
