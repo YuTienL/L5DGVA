@@ -293,10 +293,28 @@ mechanics already codified in `.claude/skills/CORE/*`:
   a given DUT's ports start at 0 or at 1) must be verified against that DUT's actual RTL port
   numbering for the current project, never assumed from this doc's own `Port1/2/3` example
   text or copied from a prior project.
-  `D:\DV\Task\DV_Agent_Harness_L5\USB_UVM_Handoff` is the reference for how this
-  block/branch_a/branch_fw/branch_b usage pattern is organized structurally — subject to the
-  same "No Golden-Reference Content Mining" rule above: use it to check structural/organizational
-  conformance, never as a source to mine protocol-behavior content from for a different project.
+  `D:\DV\Task\DV_Agent_Harness_L5\USB_UVM_Handoff` is the canonical structural template for
+  DV Agent Harness L5's VIP-based verification environment generation, at both SUBSYSTEM_MODE
+  and SYSTEM_LEVEL_MODE — subject to the same "No Golden-Reference Content Mining" rule above:
+  use it to check structural/organizational conformance, never as a source to mine
+  protocol-behavior content from for a different project.
+  **Consolidation status (audited 2026-09-02, see MEM-7F2DCD9E83/MEM-53FCE2C191/MEM-1669464837
+  for full evidence):** file structure, verification-environment composition (env/agent/scoreboard
+  wiring), and VIP-examples grounding are real, code-consolidated assets in
+  `dv_harness/uvm_generator/*.py` (20+ line-cited references) and
+  `dv_harness/uvm_generator/templates/sim_scripts/` (a real, now chip-configured copy of
+  `USB_UVM_Handoff/sim/scripts/`), enforced against direct golden-reference citation by the real
+  `protocol_isolation_gate`. Two confirmed gaps remain open: (1) the command.txt/pattern
+  content architecture (`block`/`branch_a`/`branch_fw`/`branch_b` task composition, fork/join
+  semantics, named arbitration/ordering traps) has never been distilled beyond a thin, generic
+  `command-generator` skill — any agent authoring a new pattern must still read
+  `USB_UVM_Handoff`'s real pattern files directly; (2) the Makefile/sim-scripts migration is
+  incomplete (5 files never carried over: `analyze_sim.sh`, `apb_timing_report.sh`,
+  `dpdm_report.sh`, `irq_report.sh`, `check/gen_scaledown.py`) and even the consolidated part
+  goes unused unless an agent is explicitly told to survey
+  `dv_harness/uvm_generator/templates/sim_scripts/` before hand-authoring build infrastructure —
+  citing one sibling file in this directory (as this document previously did for
+  `regression_list_manager.py`) is not sufficient for a dispatched agent to discover the rest.
 - **Non-USB topology variants (2026-09-01, UNTESTED placeholder guidance)**: the canonical
   `block/branch_a*/branch_fw/branch_b*` naming above was reverse-distilled from, and has only
   ever been validated against, USB. Two topology-shape variants have since been added as
