@@ -31,9 +31,16 @@ honest, legal default (no protection configured yet) and PASSes -- it is
 the project's responsibility to populate it, exactly like every other
 project-specific config key in DEFAULT_CONFIG.
 """
-import argparse, json, pathlib, sys
+import argparse, json, os, pathlib, sys
 
-_ROOT = pathlib.Path(__file__).resolve().parents[2]
+# Finding I7 fix (2026-09-02 final-review follow-up): prefer the real
+# dv_harness package location run_gate() (dv_harness/gates.py) already knows
+# and passes via env -- the parents[2] guess only holds in this repo's own
+# dogfooding layout, not in a real deployed project running its own copy of
+# tools/verification_flow/. Fall back to the guess only for direct/manual
+# invocation outside run_gate().
+_env_root = os.environ.get("DV_HARNESS_PACKAGE_ROOT")
+_ROOT = pathlib.Path(_env_root) if _env_root else pathlib.Path(__file__).resolve().parents[2]  # dogfooding/legacy fallback
 sys.path.insert(0, str(_ROOT))
 from dv_harness.config import load_config  # noqa: E402
 

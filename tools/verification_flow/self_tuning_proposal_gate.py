@@ -6,10 +6,22 @@ is enforced HERE in code, not merely described in the analysis prompt the
 LLM saw."""
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Finding I7 fix (2026-09-02 final-review follow-up): this script runs as a
+# standalone subprocess of a real deployed project's OWN copy of
+# tools/verification_flow/ -- the real dv_harness engine package need not
+# live 2 directories above THIS file in that layout (only true in this
+# repo's own dogfooding layout). Prefer the real location run_gate()
+# (dv_harness/gates.py) already knows and passes via env; fall back to the
+# parents[2] guess only for direct/manual invocation outside run_gate().
+_env_root = os.environ.get("DV_HARNESS_PACKAGE_ROOT")
+if _env_root:
+    sys.path.insert(0, _env_root)
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # dogfooding/legacy fallback
 # PROTECTED_PARAMETERS (Finding I1 fix, 2026-09-02 final-review fix wave):
 # now the SAME real constant dv_harness/self_tuning.py's apply_proposal()
 # itself enforces (previously this script kept its own separate copy, which

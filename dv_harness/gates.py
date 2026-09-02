@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, re, subprocess, sys, tempfile, time
+import json, os, re, subprocess, sys, tempfile, time
 from pathlib import Path
 from typing import Any, Dict
 from .config import load_config
@@ -7,6 +7,28 @@ from .memory import CornerCaseLibrary
 from .control_plane import ControlPlane
 
 TOOLS_DIR = "tools/verification_flow"
+
+# Finding I7 fix (2026-09-02 final-review follow-up): every STAGE_GATES script
+# runs as a standalone subprocess (not inside this already-running dv_harness
+# process) and therefore has no way to `import dv_harness` on its own without
+# guessing where the real package lives. 5 of those scripts guessed by
+# assuming the package sits exactly 2 directory levels above the script's own
+# file (`Path(__file__).resolve().parents[2]`) -- true only in this repo's own
+# dogfooding layout where tools/verification_flow/ and dv_harness/ are
+# siblings under the same root. A real deployed project copies just the
+# tools/verification_flow/*.py scripts under its OWN root (see run_gate()'s
+# `root / TOOLS_DIR / script_name` resolution below); the real dv_harness
+# ENGINE package the copied scripts need to import is wherever it was
+# installed (pip install, shared PYTHONPATH, ...) -- not necessarily 2
+# directories above the project's copy of the gate script. This process has
+# ALREADY successfully imported dv_harness (we're running inside it right
+# now), so it knows that real location with certainty regardless of how it
+# got there. Computed once here, not per run_gate() call, and handed to every
+# gate subprocess via the DV_HARNESS_PACKAGE_ROOT env var (see run_gate()
+# below) so the 5 scripts can prepend it to their own sys.path instead of
+# guessing.
+import dv_harness as _dv_harness_pkg
+DV_HARNESS_PACKAGE_ROOT = str(Path(_dv_harness_pkg.__file__).resolve().parent.parent)
 
 
 # --- multi-flag gate support -------------------------------------------------
@@ -1091,6 +1113,7 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
                 return GateResult(gate_id, False, missing_detail)
             proc = subprocess.run(
                 args, cwd=str(root), capture_output=True, text=True, timeout=30,
+                env={**os.environ, "DV_HARNESS_PACKAGE_ROOT": DV_HARNESS_PACKAGE_ROOT},
             )
         else:
             # --- unchanged one-flag path: byte-identical behavior/temp-file
@@ -1105,6 +1128,7 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
             proc = subprocess.run(
                 [sys.executable, str(script), cli_flag, tmp.name],
                 cwd=str(root), capture_output=True, text=True, timeout=30,
+                env={**os.environ, "DV_HARNESS_PACKAGE_ROOT": DV_HARNESS_PACKAGE_ROOT},
             )
     finally:
         for p in tmp_paths:
