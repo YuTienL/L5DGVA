@@ -294,8 +294,18 @@ def run_root_gate(root: Path, gate_id: str) -> SelfAuditResult:
     if not script.exists():
         return SelfAuditResult(gate_id, "GATE_TOOL_MISSING", {"tool": str(script)}, "ROOT_SCAN")
     try:
+        # TIMEOUT WIDENED 30->100 (2026-09-03, harness-self-test-ci pass): this wrapper's own
+        # timeout must exceed test_collection_health_gate.py's internal pytest --collect-only
+        # timeout (tools/verification_flow/test_collection_health_gate.py, widened 25->90 in the
+        # same pass) or this OUTER timeout always fires first, hard-killing the gate subprocess
+        # before its own inner timeout ever gets a chance to report a clean PYTEST_COLLECTION_TIMEOUT
+        # JSON result -- confirmed this session: under real concurrent multi-session CPU load on
+        # this dev machine, self-audit's test_collection_health_gate FAILed via this exact path
+        # even after the inner script's own timeout was already widened. The other 5 ROOT_GATES
+        # scripts (registry/schema/skill/workflow scans, no pytest invocation) finish in well under
+        # a second even under load, so widening this shared wrapper timeout costs them nothing.
         proc = subprocess.run([sys.executable, str(script), "--root", str(root)],
-                               cwd=str(root), capture_output=True, text=True, timeout=30)
+                               cwd=str(root), capture_output=True, text=True, timeout=100)
     except subprocess.TimeoutExpired:
         return SelfAuditResult(gate_id, "FAIL", {"status": "FAIL", "reason": "GATE_TIMEOUT"}, "ROOT_SCAN")
     try:

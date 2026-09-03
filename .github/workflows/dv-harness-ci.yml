@@ -1,0 +1,80 @@
+# DV Agent Harness L5 -- CI for the HARNESS'S OWN scripts (not for a DUT/UVM
+# environment the harness generates -- that is a separate, project-specific
+# concern this workflow does not touch). Per the user's own framing: "agent
+# 的基礎設施壞掉比 agent 判斷錯更難察覺" -- infrastructure breaking silently is a
+# harder-to-notice failure mode than a wrong judgment call, so it gets its
+# own always-on regression net.
+#
+# HONEST DISCLOSURE (2026-09-03, confirmed this session -- `git remote -v`
+# is empty): this repo has no GitHub remote configured yet, so this
+# workflow file does not actually execute anywhere today. It is written as
+# real, correct, ready-to-activate infrastructure -- the moment a GitHub
+# remote exists and this file is pushed to it, `push`/`pull_request`
+# triggers below start firing for real, with no further edits needed. Do
+# not read this file's presence as "CI is running" -- it presently is not,
+# for the same reason .github/... itself did not exist before this change
+# (see tools/git-hooks/README.md for the exact same disclosure pattern
+# already established for this repo's gh-CLI/PR-only governance hooks, and
+# .work/harness-self-test-ci-report.md for this workflow's own report).
+#
+# What this runs is a strict SUBSET of tools/testing/self_test.py (see that
+# script's own docstring) -- the two checks that make sense on a hosted
+# runner with no real EDA/LSF/Linux-DV-server infrastructure behind it:
+# the real pytest suite, and the harness's own pre-existing self-audit gate
+# suite (dv_harness/self_audit.py). import-sanity and cli-help-sanity are
+# ALSO covered indirectly (a broken import or CLI wiring bug fails pytest
+# collection/tests too), but the fast, standalone, three-check pass is what
+# `tools/self_test.sh` / `python tools/testing/self_test.py --skip-pytest`
+# is for -- run that locally or from a scheduled task, no GitHub Actions
+# runner required. This workflow is the two slower/more-authoritative
+# checks, wired to run on every push/PR once a remote exists.
+name: DV Harness CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+jobs:
+  self-test:
+    name: pytest + self-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install harness dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+
+      # The real regression suite. testpaths is already scoped to
+      # dv_harness_tests/ by pyproject.toml's own [tool.pytest.ini_options]
+      # (see that file's comment: tools/verification_flow/test_*.py are
+      # standalone gate scripts that happen to match the test_*.py glob,
+      # not real pytest tests -- bare `pytest` at repo root would otherwise
+      # crash on them). Includes real subprocess-driven integration tests
+      # (a real `claude` CLI round trip, a real `pueued` daemon), so this
+      # step is minutes, not seconds -- the 60-minute job timeout above and
+      # this step's own generous per-step budget are sized for that, not
+      # for a pure-unit-test suite.
+      - name: Run pytest suite
+        run: python -m pytest dv_harness_tests/ -q
+        timeout-minutes: 45
+
+      # The harness's OWN pre-existing meta/registry-consistency self-audit
+      # (dv_harness/self_audit.py, `dv-harness self-audit`) -- reused as-is,
+      # never duplicated; see that module's own docstring for the full
+      # 23-gate design and its Evidence Truth Rule discussion of why
+      # NO_SOURCE_DATA is not treated as failure. Exits nonzero iff a real
+      # gate FAILs (dv_harness/cli.py's own self-audit exit-code logic).
+      - name: Run harness self-audit
+        run: python -m dv_harness.cli --project-root . self-audit
+        timeout-minutes: 10
