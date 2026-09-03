@@ -204,14 +204,67 @@ pieces.
 
 ---
 
+### Test-run evidence (actual numbers)
+
+| Run | Result |
+|---|---|
+| `test_execution_preflight_wiring.py` | **17 passed** |
+| `test_execution_preflight_wiring.py` with the new `run_stage()` call site mutated to `blocked = None` | **8 failed**, 9 passed — the tests measure the connection |
+| `test_harness_reliability.py` + `test_execution_preflight_wiring.py` + `test_cli_preflight.py` | **48 passed** |
+| `test_preflight.py` (+ `test_execution_preflight_wiring.py`) | **59 passed** |
+| `test_lsf_client.py` | **76 passed** |
+| `test_skill_resolver.py` + `test_state_machine_checks.py` + `test_stage_transition_visual_markers.py` | **41 passed** |
+| `test_graph_parallel_dispatch.py` | **6 passed** |
+| `test_engine_gates_and_routing.py` | 237 passed, **2 failed — not mine** (see below) |
+| Broad 16-suite run (529 passed) | 11 failed, **all traced to concurrent in-flight work or environment** (see below) |
+
+**Every failure observed was traced to a cause outside this change**, and each
+was re-confirmed in isolation:
+
+- `test_preflight_lsf_wiring::test_pass_calls_bsub_and_returns_job_id_and_result`
+  — a concurrent workflow added a `runlimit_minutes` kwarg to
+  `lsf_client.bsub_submit()` without updating this test's `assert_called_with`.
+  Proof: `runlimit_minutes` occurs **0** times in `git show
+  HEAD:dv_harness/lsf_client.py` and **15** times in the working tree, while
+  `test_preflight_lsf_wiring.py` is unmodified. This change touches neither
+  file.
+- `test_engine_gates_and_routing::test_graph_next_walks_full_mechanism_first_pipeline`
+  and `::test_all_35_stages_have_real_de_explainer_entries` — a concurrent
+  workflow added four new stages (`RCA_RTL_EVIDENCE`, `RCA_LOG_EVIDENCE`,
+  `RCA_VIP_SPEC_EVIDENCE`, `RCA_JOIN`) to `models.py` / `main_graph.json`
+  without matching `policy.ORDER` walk expectations or `STAGE_DE_EXPLAINER`
+  entries. The assertion error names those four stages verbatim. This change
+  adds no stage, no graph node, and no explainer (`git diff` on my hunks
+  contains zero `Stage.` references).
+- `test_engine_gates_and_routing::test_self_audit_against_real_repo_reports_real_current_findings`
+  — transient only. Re-run in isolation it **passes**, and a direct
+  `self_audit.run_self_audit(ROOT)` confirms `total == 23`, `unknown_gate_ids
+  == []`, and every ROOT_SCAN gate the test asserts (`agent_skill_binding_gate`,
+  `hard_gate_registry_audit`, `schema_reference_integrity_gate`,
+  `test_collection_health_gate`, `workflow_registry_orphan_gate`) at PASS. It
+  failed only inside a 37-minute run while other workflows were writing repo
+  files mid-scan.
+- `test_graph_parallel_dispatch::test_engine_fanout_join_does_not_proceed_when_one_branch_fails`
+  — passes 6/6 in isolation; failed only under concurrent-run interference.
+- `test_cli_pueue` (6 tests) — these drive a real `pueued` daemon shared with
+  the other active workflows on this machine. Environment contention, and the
+  change touches neither `cli.py` nor `pueue_client.py`.
+
+---
+
 ## 5. Deliberately not touched (concurrent-workflow hygiene)
 
 Other agents were editing this tree during this pass (a 14-AI-mechanism
 audit+close workflow and a live remote USB build). `dv_harness/engine.py`
-carried foreign in-flight hunks, so it was committed with a hand-scoped patch
-(`git diff` → trim to my hunks → `git apply --cached --check` → `--cached`)
-rather than a broad `git add`. `config.py`, `docs/ENGINE_STAGE_LIFECYCLE.md`
-and the skill file contained only my hunks and were staged directly.
+carried foreign in-flight hunks, and the **shared git index already held
+another agent's staged (uncommitted) work across 12 files**. So the commit was
+built with a hand-scoped patch (`git diff HEAD` → trim to the 3 hunks
+containing `_execution_preflight` → `git apply --cached --check` → `--cached`)
+inside a **temporary index** (`GIT_INDEX_FILE`, seeded from `.git/index` with
+their 12 files reset to HEAD), then `write-tree` / `commit-tree` /
+`update-ref`. The other agent's staging survived untouched — verified after the
+commit: all 12 of their paths are still staged, and `git show --stat HEAD`
+lists only the 6 files of this change. Committed as `6e8002a`.
 
 **Left for someone else:** `CLAUDE.md`'s governance section still says the git
 hooks are "NOT YET INSTALLED as of 2026-09-03", but `git config --get
