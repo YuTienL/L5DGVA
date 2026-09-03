@@ -104,6 +104,27 @@ command itself (confirmed real incident, 2026-08-31 — see
 `remote-linux-execution-bridge/SKILL.md`'s corresponding drift note). Test `remote_relay.py`'s logic
 via unit tests against its pure `RelayServer.handle_request()` function, never via a live `--start`.
 
+**2026-09-03 amendment (explicit user decision, single-user machine)**: on this specific machine,
+confirmed single-user by the project owner, the user has explicitly decided to relax the prohibition
+above: when `remote_exec.py --status`/`--reconnect` reports the relay is down mid-session, Claude
+Code MAY automatically source a local, never-committed credential script (e.g. `replay.csh`, kept
+outside version control and outside any path Claude reads or echoes) and invoke
+`remote_relay.py --start` to reconnect, without asking the user each time. This is a deliberate
+override of the 2026-08-31 incident's original blanket prohibition — the user judged that a
+single-user machine reduces credential-exposure risk enough to accept fully autonomous reconnect in
+exchange for not being interrupted. This amendment covers only mid-session RECONNECTION; the
+SSH/Remote Transport Connection Intake gate above (asking before the FIRST connection of a session)
+is unchanged and still applies.
+
+Even under this amendment:
+1. The password itself must still never be printed, echoed, quoted, or written into any evidence
+   block, log, gate payload, or memory record.
+2. Claude may source and invoke the credential script, but must never read or print the script's
+   own contents.
+3. This amendment is scoped to this machine/project only. If this harness is ever deployed to a
+   shared or multi-user environment, this decision must be explicitly re-confirmed before it still
+   applies there.
+
 Source identity (PC vs. Linux) is verified per-project: git SHA comparison where a git remote exists
 between PC and Linux, or the md5sum-based `SOURCE_ID` token (`source_identity.py`, see
 `remote-linux-execution-bridge`) where it does not — never skipped outright.
