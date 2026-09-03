@@ -1298,3 +1298,243 @@ def test_write_connectivity_manifest_records_the_self_check_it_ran(tmp_path):
     loaded = json.loads(out_path.read_text(encoding="utf-8"))
     assert loaded["self_check"]["identity_holds"] is True
     assert loaded["self_check"]["verified_interface_count"] == 1
+
+
+# ===========================================================================
+# Scoreboard planning table: all 9 fields sentinel-gated, and every unfilled
+# one auto-becoming a REAL question-queue entry (2026-09-04).
+#
+# Before this, the REQUIRED_HUMAN_INPUT sentinel was a string nobody read:
+# `transformation_rules` silently defaulted to `[]` (which READS AS "no
+# transform on this path" -- a claim no generator can make), empty
+# endpoint_pairs/matching_key passed silently, "tolerance window depth" had no
+# column of its own, nothing turned a sentinel into a persisted question, and
+# `confirm_row()` would lock a row that still held the sentinel.
+# ===========================================================================
+
+def _sb(**kw):
+    """A scoreboard entry with only the two structural facts supplied."""
+    kw.setdefault("endpoint_pairs", [("chip.core.usb0.axi_if", "chip.core.axi0.s_if")])
+    kw.setdefault("matching_key", "transaction_id")
+    return conn.generate_scoreboard_entry("sb_usb0_axi0", **kw)
+
+
+def test_every_scoreboard_plan_field_defaults_to_required_human_input():
+    """No field of the planning table may carry a computed default. With only
+    the two structural facts supplied, all seven remaining columns must be
+    exactly the sentinel."""
+    entry = _sb()
+    for field_name in conn.SCOREBOARD_PLAN_FIELDS:
+        if field_name in ("endpoint_pairs", "matching_key"):
+            continue
+        assert entry[field_name] == conn.REQUIRED_HUMAN_INPUT, field_name
+
+
+def test_transformation_rules_no_longer_silently_defaults_to_empty_list():
+    """The specific regression: omitting transform rules used to yield `[]`,
+    asserting "no width conversion, no packetization, no byte-enable
+    remapping" on the generator's own authority."""
+    assert _sb()["transformation_rules"] == conn.REQUIRED_HUMAN_INPUT
+
+
+def test_explicit_empty_transformation_rules_is_a_real_human_confirmation():
+    """`None` (nobody said) and `[]` (a human looked and confirmed no
+    transform) are different claims and must not be conflated."""
+    entry = _sb(transformation_rules=[])
+    assert entry["transformation_rules"] == []
+    assert "transformation_rules" not in conn.unfilled_plan_fields(entry)
+
+
+def test_ordering_tolerance_depth_is_its_own_column():
+    """Reorder-window depth must not depend on a human happening to write it
+    into the free-text `ordering` string."""
+    assert "ordering_tolerance_depth" in conn.SCOREBOARD_PLAN_FIELDS
+    entry = _sb(ordering="out_of_order permitted")
+    assert entry["ordering"] == "out_of_order permitted"
+    assert entry["ordering_tolerance_depth"] == conn.REQUIRED_HUMAN_INPUT
+    assert conn.unfilled_plan_fields(entry)[0] == "ordering_tolerance_depth"
+
+
+def test_empty_endpoints_and_matching_key_resolve_to_the_sentinel():
+    """They stay required arguments, but an empty value is no longer accepted
+    silently -- it routes to the queue like every other unfilled field."""
+    entry = conn.generate_scoreboard_entry("sb0", endpoint_pairs=[], matching_key="   ")
+    assert entry["endpoint_pairs"] == conn.REQUIRED_HUMAN_INPUT
+    assert entry["matching_key"] == conn.REQUIRED_HUMAN_INPUT
+    assert conn.unfilled_plan_fields(entry) == list(conn.SCOREBOARD_PLAN_FIELDS)
+
+
+def test_endpoint_must_be_a_hierarchy_path_not_a_bare_port_name():
+    with pytest.raises(conn.ConnectivityError) as exc:
+        conn.generate_scoreboard_entry("sb0", endpoint_pairs=[("wdata", "rdata")],
+                                       matching_key="tid")
+    assert exc.value.reason == "ENDPOINT_NOT_A_HIERARCHY_PATH"
+
+
+def test_endpoint_pairs_accept_the_dict_form():
+    entry = conn.generate_scoreboard_entry(
+        "sb0", endpoint_pairs=[{"source": "chip.core.usb0.if", "sink": "chip.core.axi0.if"}],
+        matching_key="tid")
+    assert entry["endpoint_pairs"][0]["sink"] == "chip.core.axi0.if"
+
+
+def test_malformed_endpoint_pair_is_a_hard_error():
+    with pytest.raises(conn.ConnectivityError) as exc:
+        conn.generate_scoreboard_entry("sb0", endpoint_pairs=["chip.core.usb0"], matching_key="tid")
+    assert exc.value.reason == "ENDPOINT_PAIR_MALFORMED"
+
+
+def test_every_plan_field_has_a_pre_researched_question_defined():
+    """The routing table must cover every field, or an unfilled field would
+    silently never become a question."""
+    assert set(conn.SCOREBOARD_FIELD_QUESTIONS) == set(conn.SCOREBOARD_PLAN_FIELDS)
+    for name, spec in conn.SCOREBOARD_FIELD_QUESTIONS.items():
+        assert 2 <= len(spec["options"]) <= 3, name
+        assert spec["recommendation"] in [o["label"] for o in spec["options"]], name
+        assert spec["domain"] in ("vip", "dut", "env"), name
+        assert spec["assumption_if_unanswered"].strip(), name
+
+
+def test_unfilled_fields_become_real_blocking_question_queue_entries(tmp_path):
+    """The core closure: a sentinel is no longer just a string in a dict --
+    it becomes a persisted, schema-valid, Tier-3 blocking question routed to
+    a real owner."""
+    from dv_harness import question_queue as qq
+    store = qq.QuestionQueueStore(tmp_path)
+    entry = _sb()
+
+    asked = conn.route_unfilled_fields_to_question_queue(store, entry)
+
+    assert len(asked) == 7
+    for q in asked:
+        assert q["tier"] == qq.TIER3_CANNOT_ASSUME
+        assert q["blocking"] is True
+        assert q["status"] == "OPEN"
+        qq.validate_question(q)
+    # Persisted, not just returned.
+    assert len(store.list_questions(status="OPEN")) == 7
+    # Routed to whoever actually knows: DUT behavior -> designer,
+    # scoreboard policy -> DV-owner.
+    owners = {q["context_path"].rsplit("/", 1)[1]: q["owner"] for q in asked}
+    assert owners["ordering"] == "designer"
+    assert owners["transformation_rules"] == "designer"
+    assert owners["orphan_unmatched_timeout"] == "DV-owner"
+
+
+def test_build_checker_scoreboard_plan_routes_unfilled_fields_when_given_a_store(tmp_path):
+    from dv_harness import question_queue as qq
+    store = qq.QuestionQueueStore(tmp_path)
+    plan = conn.build_checker_scoreboard_plan(
+        protocol_entries=[], scoreboard_entries=[_sb()], system_entries=[],
+        question_store=store)
+    assert plan["unfilled_fields"]["sb_usb0_axi0"][0] == "ordering"
+    assert len(plan["open_questions"]) == 7
+    assert all(q["blocking"] for q in plan["open_questions"])
+    assert len(store.list_questions(status="OPEN")) == 7
+
+
+def test_plan_reports_unfilled_fields_even_without_a_question_store():
+    plan = conn.build_checker_scoreboard_plan([], [_sb()], [])
+    assert "open_questions" not in plan
+    assert len(plan["unfilled_fields"]["sb_usb0_axi0"]) == 7
+
+
+def test_a_fully_filled_plan_has_no_unfilled_fields(tmp_path):
+    from dv_harness import question_queue as qq
+    store = qq.QuestionQueueStore(tmp_path)
+    entry = _sb(ordering="in_order", ordering_tolerance_depth=0, transformation_rules=[],
+                legal_drop_conditions="none permitted", reset_flush_behavior="both sides flush",
+                orphan_threshold=0, orphan_timeout="end-of-test sweep")
+    plan = conn.build_checker_scoreboard_plan([], [entry], [], question_store=store)
+    assert plan["unfilled_fields"] == {}
+    assert plan["open_questions"] == []
+    assert store.list_questions() == []
+
+
+def test_a_human_answer_flows_back_into_the_planning_table(tmp_path):
+    """End-to-end: unfilled -> question -> human answers -> field filled."""
+    from dv_harness import question_queue as qq
+    store = qq.QuestionQueueStore(tmp_path)
+    entry = _sb()
+    asked = conn.route_unfilled_fields_to_question_queue(store, entry)
+    ordering_q = next(q for q in asked if q["context_path"].endswith("/ordering"))
+
+    store.answer_question(ordering_q["id"], answer="Strictly in-order",
+                          basis="RTL evidence: single non-reordering datapath, usb_axi_bridge.v:88",
+                          decided_by="designer")
+
+    filled = conn.apply_answered_questions(store, entry)
+    assert filled["ordering"] == "Strictly in-order"
+    # Only the answered field moves; the rest stay unfilled.
+    assert filled["legal_drop_conditions"] == conn.REQUIRED_HUMAN_INPUT
+    assert "ordering" not in conn.unfilled_plan_fields(filled)
+
+
+def test_a_human_answer_stops_the_question_being_re_asked(tmp_path):
+    """Regenerating the plan must not re-escalate an already-answered field:
+    same question_key -> same Q-ID -> Tier-1 self-resolve."""
+    from dv_harness import question_queue as qq
+    store = qq.QuestionQueueStore(tmp_path)
+    entry = _sb()
+    first = conn.route_unfilled_fields_to_question_queue(store, entry)
+    ordering_q = next(q for q in first if q["context_path"].endswith("/ordering"))
+    store.answer_question(ordering_q["id"], answer="Strictly in-order",
+                          basis="RTL evidence", decided_by="designer")
+
+    second = conn.route_unfilled_fields_to_question_queue(store, entry)
+    reasked = next(q for q in second if q["context_path"].endswith("/ordering"))
+    assert reasked["id"] == ordering_q["id"]
+    assert reasked["tier"] == qq.TIER1_SELF_RESOLVE
+    assert reasked["status"] == "SELF_RESOLVED"
+    assert reasked["blocking"] is False
+
+
+def test_the_harness_own_tier2_guess_never_fills_a_mandatory_review_field(tmp_path):
+    """`apply_answered_questions()` reuses classify_tier()'s human-decision
+    gate: only a real human answer fills a field, never a machine-authored
+    tier-2 auto-assumption sitting in the same decisions store."""
+    from dv_harness import question_queue as qq
+    store = qq.QuestionQueueStore(tmp_path)
+    entry = _sb()
+    spec = conn.SCOREBOARD_FIELD_QUESTIONS["ordering"]
+    key = qq.make_question_key(spec["domain"], spec["question"],
+                               conn.scoreboard_field_context_path("sb_usb0_axi0", "ordering"))
+    store._persist_decision(
+        question_key=key, domain="dut", owner="designer", question=spec["question"],
+        answer="Strictly in-order", basis="machine guess", decided_by="dv_harness(auto)",
+        source="tier2_auto_assumption", question_id_of_answer="Q-DUT-DEADBEEF")
+
+    assert store.find_decision(key) is not None      # the guess really is on file
+    filled = conn.apply_answered_questions(store, entry)
+    assert filled["ordering"] == conn.REQUIRED_HUMAN_INPUT
+
+
+def test_confirm_row_refuses_a_row_that_still_holds_the_sentinel(tmp_path):
+    """The lock gate: confirming an unfilled row would mark it reviewed and
+    stop `diff_rows_needing_reconfirmation()` ever surfacing it again."""
+    lock_store = conn.RowLockStore(tmp_path / "locks.json")
+    entry = _sb()
+    with pytest.raises(conn.ConnectivityError) as exc:
+        lock_store.confirm_row(conn.scoreboard_entry_row_id(entry), entry)
+    assert exc.value.reason == "CANNOT_CONFIRM_ROW_WITH_UNFILLED_REQUIRED_HUMAN_INPUT"
+    assert "ordering" in exc.value.detail["unfilled_paths"]
+    assert not lock_store.is_locked(conn.scoreboard_entry_row_id(entry))
+
+
+def test_confirm_row_accepts_a_fully_filled_scoreboard_row(tmp_path):
+    lock_store = conn.RowLockStore(tmp_path / "locks.json")
+    entry = _sb(ordering="in_order", ordering_tolerance_depth=0, transformation_rules=[],
+                legal_drop_conditions="none permitted", reset_flush_behavior="both sides flush",
+                orphan_threshold=0, orphan_timeout="end-of-test sweep")
+    row_id = conn.scoreboard_entry_row_id(entry)
+    lock_store.confirm_row(row_id, entry)
+    assert lock_store.is_locked(row_id)
+    assert conn.RowLockStore(tmp_path / "locks.json").is_locked(row_id)
+
+
+def test_confirm_row_finds_a_sentinel_nested_inside_a_list(tmp_path):
+    """The gate scans nested content, not just top-level values."""
+    lock_store = conn.RowLockStore(tmp_path / "locks.json")
+    with pytest.raises(conn.ConnectivityError) as exc:
+        lock_store.confirm_row("row1", {"a": [{"b": conn.REQUIRED_HUMAN_INPUT}]})
+    assert exc.value.detail["unfilled_paths"] == ["a.0.b"]

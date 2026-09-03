@@ -60,11 +60,22 @@ from . import verible_parser
 # ---------------------------------------------------------------------------
 
 #: Sentinel value for a checker/scoreboard planning field that Part C
-#: explicitly forbids the agent from ever guessing a default for (ORDERING,
-#: LEGAL_DROP). A generator function may only replace this with a
-#: human-supplied value passed in by the caller -- it must never compute one
-#: itself. Kept as a plain, greppable string (not `None`) so a planning-table
-#: JSON dump makes an unfilled field visually obvious to a human reviewer.
+#: explicitly forbids the agent from ever guessing a default for. A generator
+#: function may only replace this with a human-supplied value passed in by
+#: the caller -- it must never compute one itself. Kept as a plain, greppable
+#: string (not `None`) so a planning-table JSON dump makes an unfilled field
+#: visually obvious to a human reviewer.
+#:
+#: As of 2026-09-04 this covers ALL of the scoreboard planning table's
+#: required fields, not only ORDERING/LEGAL_DROP: an omitted
+#: `transformation_rules` used to resolve to `[]`, which READS AS the
+#: positive assertion "this path performs no width conversion, no
+#: packetization and no byte-enable remapping" -- a claim no generator can
+#: derive and the single most common source of a scoreboard that compares
+#: two differently-shaped payloads and passes anyway. Empty
+#: `endpoint_pairs`/`matching_key` were likewise accepted silently. Both now
+#: resolve to this sentinel. See `SCOREBOARD_PLAN_FIELDS` and
+#: `unfilled_plan_fields()`.
 REQUIRED_HUMAN_INPUT = "REQUIRED_HUMAN_INPUT"
 
 
@@ -1675,6 +1686,24 @@ class RowLockStore:
         self.path.write_text(json.dumps(self._locks, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 
     def confirm_row(self, row_id: str, row_content: dict) -> None:
+        """Lock one row as human-confirmed.
+
+        Refuses (hard `ConnectivityError`, never a warning) to confirm a row
+        that still contains the literal `REQUIRED_HUMAN_INPUT` sentinel
+        anywhere in its content. Confirming such a row is the precise failure
+        this whole mechanism exists to prevent: it would mark a scoreboard
+        plan row with an unfilled ordering/legal-drop as reviewed-and-locked,
+        after which `diff_rows_needing_reconfirmation()` would stop
+        re-surfacing it and the unanswered field would never be seen again.
+        Fill the field -- directly, or via `apply_answered_questions()` once a
+        human has answered the queue entry `route_unfilled_fields_to_question_queue()`
+        raised -- and confirm then."""
+        unfilled = find_required_human_input_paths(row_content)
+        if unfilled:
+            raise ConnectivityError(
+                "CANNOT_CONFIRM_ROW_WITH_UNFILLED_REQUIRED_HUMAN_INPUT",
+                {"row_id": row_id, "unfilled_paths": unfilled},
+            )
         self._locks[row_id] = {
             "content_hash": _content_hash(row_content),
             "content": row_content,
@@ -1738,6 +1767,68 @@ def generate_protocol_check_entry(
     }
 
 
+#: The scoreboard planning table's required fields, in table-column order.
+#: Every one of these resolves to `REQUIRED_HUMAN_INPUT` when the caller
+#: supplies nothing real -- there is no field left with a computed default.
+#: `ordering` and `ordering_tolerance_depth` are deliberately two SEPARATE
+#: columns: "out-of-order" without a stated reorder-window depth does not
+#: tell a scoreboard implementer how deep to buffer before declaring a
+#: mismatch, and folding the depth into the same free-text string means it
+#: is only captured when a human happens to write it there.
+SCOREBOARD_PLAN_FIELDS = (
+    "endpoint_pairs",
+    "matching_key",
+    "ordering",
+    "ordering_tolerance_depth",
+    "transformation_rules",
+    "legal_drop_conditions",
+    "reset_flush_behavior",
+    "orphan_unmatched_threshold",
+    "orphan_unmatched_timeout",
+)
+
+
+def _validated_endpoint_pairs(scoreboard_id: str, endpoint_pairs: Optional[list]):
+    """Normalize/validate the comparison endpoints. Part C asks for a
+    source/sink PORT plus its HIERARCHY PATH, so a bare port name with no
+    path ("wdata") is rejected here rather than accepted and later compared
+    against the wrong instance in a multi-instance SoC -- exactly the
+    `Bind-Location Rules` rule-1 failure mode, one level up.
+
+    Accepts either a 2-sequence `(source, sink)` or a
+    `{"source": ..., "sink": ...}` dict per pair. An empty/omitted list is
+    NOT an error: it resolves to `REQUIRED_HUMAN_INPUT` like every other
+    unfilled field, so it routes to the question queue instead of silently
+    describing a scoreboard with nothing to compare."""
+    if not endpoint_pairs:
+        return REQUIRED_HUMAN_INPUT
+    for pair in endpoint_pairs:
+        if isinstance(pair, dict):
+            endpoints = [pair.get("source"), pair.get("sink")]
+        elif isinstance(pair, (list, tuple)) and len(pair) == 2:
+            endpoints = list(pair)
+        else:
+            raise ConnectivityError(
+                "ENDPOINT_PAIR_MALFORMED",
+                {"scoreboard_id": scoreboard_id, "pair": pair,
+                 "expected": "a (source, sink) 2-sequence or a {'source':..., 'sink':...} dict"},
+            )
+        for endpoint in endpoints:
+            if not isinstance(endpoint, str) or not endpoint.strip():
+                raise ConnectivityError(
+                    "ENDPOINT_PAIR_MALFORMED",
+                    {"scoreboard_id": scoreboard_id, "pair": pair, "endpoint": endpoint},
+                )
+            if "." not in endpoint:
+                raise ConnectivityError(
+                    "ENDPOINT_NOT_A_HIERARCHY_PATH",
+                    {"scoreboard_id": scoreboard_id, "endpoint": endpoint,
+                     "expected": "a full instance hierarchy path (e.g. chip.core.usb0.axi_if), "
+                                 "not a bare port or module name"},
+                )
+    return endpoint_pairs
+
+
 def generate_scoreboard_entry(
     scoreboard_id: str, endpoint_pairs: list, matching_key: str,
     transformation_rules: Optional[list] = None,
@@ -1745,25 +1836,38 @@ def generate_scoreboard_entry(
     orphan_threshold: Optional[int] = None,
     orphan_timeout: Optional[str] = None,
     ordering: Optional[str] = None,
+    ordering_tolerance_depth: Optional[Any] = None,
     legal_drop_conditions: Optional[str] = None,
 ) -> dict:
-    """Data-integrity (scoreboard) plan entry. `endpoint_pairs` and
-    `matching_key` are structural facts a generator CAN derive from
-    evidence (which two interfaces this scoreboard sits between, what field
-    ties a request to its response) -- supplied here as required
-    parameters. `ordering` and `legal_drop_conditions` are the two fields
-    Part C explicitly flags as where real scoreboard false-passes happen in
-    practice: this function NEVER computes a default for either. Omitted,
-    they resolve to `REQUIRED_HUMAN_INPUT`; the only way either field
-    becomes a real value is a caller (ultimately a human, via whatever UI
-    layer collects the confirmation) passing one in explicitly."""
+    """Data-integrity (scoreboard) plan entry, one row of the planning
+    table. `endpoint_pairs` and `matching_key` stay REQUIRED positional
+    parameters -- a caller must consciously address them, never omit them by
+    accident -- but supplying an empty value for either is no longer
+    silently accepted: like every other field here it resolves to
+    `REQUIRED_HUMAN_INPUT`, so `unfilled_plan_fields()` sees it and
+    `route_unfilled_fields_to_question_queue()` turns it into a real,
+    persisted, blocking question.
+
+    This function NEVER computes a default for ANY of the nine
+    `SCOREBOARD_PLAN_FIELDS`. The only way a field becomes a real value is a
+    caller passing one in explicitly -- ultimately a human, either directly
+    or via `apply_answered_questions()` reading back a persisted
+    `question_queue` human answer.
+
+    One deliberate distinction, on `transformation_rules` only:
+    `None`/omitted means "nobody has said" -> `REQUIRED_HUMAN_INPUT`, while
+    an explicitly-passed `[]` means "a human looked and confirmed this path
+    performs no transformation" -> kept as `[]`. Those are different claims
+    and the table must not conflate them."""
     return {
         "kind": "data_integrity_scoreboard",
         "scoreboard_id": scoreboard_id,
-        "endpoint_pairs": endpoint_pairs,
-        "matching_key": matching_key,
+        "endpoint_pairs": _validated_endpoint_pairs(scoreboard_id, endpoint_pairs),
+        "matching_key": matching_key if (matching_key or "").strip() else REQUIRED_HUMAN_INPUT,
         "ordering": ordering if ordering is not None else REQUIRED_HUMAN_INPUT,
-        "transformation_rules": transformation_rules or [],
+        "ordering_tolerance_depth": (ordering_tolerance_depth if ordering_tolerance_depth is not None
+                                     else REQUIRED_HUMAN_INPUT),
+        "transformation_rules": transformation_rules if transformation_rules is not None else REQUIRED_HUMAN_INPUT,
         "legal_drop_conditions": legal_drop_conditions if legal_drop_conditions is not None else REQUIRED_HUMAN_INPUT,
         "reset_flush_behavior": reset_flush_behavior or REQUIRED_HUMAN_INPUT,
         "orphan_unmatched_threshold": orphan_threshold if orphan_threshold is not None else REQUIRED_HUMAN_INPUT,
@@ -1788,17 +1892,332 @@ def generate_system_level_entry(
     }
 
 
-def build_checker_scoreboard_plan(protocol_entries: list, scoreboard_entries: list, system_entries: list) -> dict:
-    return {
+def build_checker_scoreboard_plan(
+    protocol_entries: list, scoreboard_entries: list, system_entries: list,
+    *, question_store=None, now=None,
+) -> dict:
+    """Assemble the 3-category planning table (protocol checks / data-integrity
+    scoreboards / system-level checks).
+
+    `unfilled_fields` is ALWAYS computed, with or without a store, so the plan
+    artifact itself carries the list of scoreboard fields still holding
+    `REQUIRED_HUMAN_INPUT` -- a reader of the JSON never has to grep for the
+    sentinel to find out whether the table is actually complete.
+
+    Pass `question_store` (a `question_queue.QuestionQueueStore` or a project
+    root path) to make Part C's "an empty field automatically becomes a
+    question-queue entry" literally true: every unfilled field on every
+    scoreboard entry is routed through `route_unfilled_fields_to_question_queue()`
+    into real, persisted, schema-validated questions, and their Q-IDs are
+    recorded on the plan as `open_questions`."""
+    plan = {
         "generated_at": _utcnow_iso(),
         "protocol_checks": protocol_entries,
         "data_integrity_scoreboards": scoreboard_entries,
         "system_level_checks": system_entries,
+        "unfilled_fields": {e["scoreboard_id"]: unfilled_plan_fields(e)
+                            for e in scoreboard_entries
+                            if unfilled_plan_fields(e)},
     }
+    if question_store is not None:
+        asked = []
+        for entry in scoreboard_entries:
+            asked.extend(route_unfilled_fields_to_question_queue(question_store, entry, now=now))
+        plan["open_questions"] = [{"id": q["id"], "question_key": q["question_key"],
+                                   "tier": q["tier"], "blocking": q["blocking"],
+                                   "owner": q["owner"], "context_path": q["context_path"],
+                                   "status": q["status"]}
+                                  for q in asked]
+    return plan
 
 
 def scoreboard_entry_row_id(entry: dict) -> str:
     return f"scoreboard::{entry['scoreboard_id']}"
+
+
+# ===========================================================================
+# "An empty field automatically becomes a question-queue entry" (Part C)
+#
+# Before 2026-09-04 the REQUIRED_HUMAN_INPUT sentinel was only ever a string
+# sitting in a returned dict: nothing scanned a plan entry for it, nothing
+# turned it into a persisted question, and `RowLockStore.confirm_row()` would
+# happily lock a scoreboard row whose ordering/legal-drop was still literally
+# the word REQUIRED_HUMAN_INPUT. The three functions below close that, reusing
+# the SAME `question_queue.QuestionQueueStore` the T4 bind path already routes
+# through (`build_t4_question_queue_entry()`), never a parallel mechanism.
+# ===========================================================================
+
+def unfilled_plan_fields(entry: dict) -> list:
+    """The `SCOREBOARD_PLAN_FIELDS` of one scoreboard entry still holding the
+    `REQUIRED_HUMAN_INPUT` sentinel, in table-column order."""
+    return [f for f in SCOREBOARD_PLAN_FIELDS if entry.get(f) == REQUIRED_HUMAN_INPUT]
+
+
+def find_required_human_input_paths(obj: Any, _prefix: str = "") -> list:
+    """Every location inside an arbitrary nested dict/list that still holds
+    the sentinel, as dotted paths. Used by `RowLockStore.confirm_row()` to
+    block confirming a row that was never actually filled in -- deliberately
+    generic (not scoreboard-specific) so it also catches, say, a connectivity
+    row whose `vip_type` is still unresolved."""
+    found = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            found.extend(find_required_human_input_paths(v, f"{_prefix}{k}."))
+    elif isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            found.extend(find_required_human_input_paths(v, f"{_prefix}{i}."))
+    elif obj == REQUIRED_HUMAN_INPUT:
+        found.append(_prefix.rstrip("."))
+    return found
+
+
+#: One pre-researched question per scoreboard planning field. `domain` drives
+#: `question_queue.route_owner()`, so routing here is a real claim about WHO
+#: actually knows the answer, not a single catch-all bucket: the DUT's own
+#: reordering/drop/flush/transform behavior is a `designer` question, the
+#: transaction field that ties a request to its response is a VIP/protocol
+#: question, and where the scoreboard sits plus how long it waits before
+#: declaring an orphan are DV-env policy.
+#:
+#: Every entry sets `affects_pass_fail_verdict`, which is why all nine
+#: classify as Tier 3 / blocking rather than being auto-assumed. That is not
+#: a hardcoded tier -- it is DERIVED, and it is honest: each of these fields
+#: decides whether the scoreboard reports a mismatch at all. Guess `ordering`
+#: as in-order on an out-of-order DUT and it reports mismatches that are not
+#: real; guess `legal_drop_conditions` too permissively and it stays silent on
+#: dropped payloads. Both are verdict-changing, i.e. exactly the silent
+#: false-PASS class `question_queue.is_cannot_assume()` exists to stop.
+SCOREBOARD_FIELD_QUESTIONS: dict = {
+    "endpoint_pairs": {
+        "domain": "env",
+        "question": ("Which two hierarchy paths does this scoreboard compare -- what is the "
+                     "source endpoint and what is the sink endpoint?"),
+        "options": [
+            {"label": "DUT ingress interface -> DUT egress interface (data passes through the DUT)",
+             "rationale": "The common data-integrity shape: payload in one port, out another, DUT in between."},
+            {"label": "VIP-driven stimulus port -> DUT internal observation point (bind/probe)",
+             "rationale": "Used when the egress is not an external port and must be observed via a bind."},
+            {"label": "Two DUT egress interfaces (a fan-out/replication path)",
+             "rationale": "Applies when one ingress is replicated to several sinks and each copy must match."},
+        ],
+        "recommendation": "DUT ingress interface -> DUT egress interface (data passes through the DUT)",
+        "assumption_if_unanswered": ("None -- a scoreboard with no stated endpoints has nothing to compare "
+                                     "and would pass vacuously on every test."),
+    },
+    "matching_key": {
+        "domain": "vip",
+        "question": ("Which transaction field ties a source-side item to its sink-side counterpart "
+                     "for this scoreboard?"),
+        "options": [
+            {"label": "A protocol transaction/tag ID carried end to end",
+             "rationale": "Preferred when the protocol guarantees the tag survives the DUT unchanged."},
+            {"label": "Address (plus a per-address sequence counter for repeats)",
+             "rationale": "Used when no tag survives but the address is preserved; needs the counter to disambiguate rewrites."},
+            {"label": "Payload content hash",
+             "rationale": "Last resort when neither tag nor address survives; cannot disambiguate legitimately identical payloads."},
+        ],
+        "recommendation": "A protocol transaction/tag ID carried end to end",
+        "assumption_if_unanswered": ("None -- without a matching key the scoreboard cannot pair items "
+                                     "and would either match everything or nothing."),
+    },
+    "ordering": {
+        "domain": "dut",
+        "question": "Does this path deliver items to the sink strictly in order, or may the DUT reorder them?",
+        "options": [
+            {"label": "Strictly in-order",
+             "rationale": "A single non-reordering datapath; any out-of-order arrival is a real bug the scoreboard must flag."},
+            {"label": "Out-of-order permitted within a bounded reorder window",
+             "rationale": "Multi-channel/pipelined DUTs reorder legally up to a depth; needs ordering_tolerance_depth."},
+            {"label": "Out-of-order permitted with no bound (fully unordered set comparison)",
+             "rationale": "Only correct when the protocol genuinely places no ordering guarantee on this path."},
+        ],
+        "recommendation": "Strictly in-order",
+        "assumption_if_unanswered": ("None -- guessing in-order on a reordering DUT produces false FAILs, "
+                                     "and guessing unordered on an in-order DUT hides real ordering bugs."),
+    },
+    "ordering_tolerance_depth": {
+        "domain": "dut",
+        "question": ("If reordering is legal on this path, how deep is the reorder window the scoreboard "
+                     "must tolerate before declaring a mismatch?"),
+        "options": [
+            {"label": "0 -- no tolerance, ordering is strict",
+             "rationale": "The consistent answer when `ordering` is strictly in-order."},
+            {"label": "A finite depth set by a real DUT structure (outstanding-transaction limit, "
+                      "queue/FIFO depth, number of parallel channels)",
+             "rationale": "The reorder window is bounded by whatever DUT structure creates it; cite that structure."},
+            {"label": "Unbounded -- compare as an unordered set, no window",
+             "rationale": "Only when ordering is genuinely unconstrained; the scoreboard then cannot detect ordering bugs at all."},
+        ],
+        "recommendation": ("A finite depth set by a real DUT structure (outstanding-transaction limit, "
+                           "queue/FIFO depth, number of parallel channels)"),
+        "assumption_if_unanswered": ("None -- an unstated window makes 'out-of-order' unimplementable: the "
+                                     "scoreboard cannot know how long to hold an unmatched item."),
+    },
+    "transformation_rules": {
+        "domain": "dut",
+        "question": ("What transformation does the payload undergo between source and sink -- width "
+                     "conversion, packetization/segmentation, or byte-enable/strobe remapping?"),
+        "options": [
+            {"label": "None -- payload is bit-identical end to end",
+             "rationale": "Valid only if the two endpoints have identical data width and framing; confirm, do not assume."},
+            {"label": "Width conversion (upsize/downsize) with a stated byte order",
+             "rationale": "Any width mismatch between the two interfaces forces this; the byte order is the part that gets it wrong."},
+            {"label": "Packetization/segmentation (one source item becomes N sink items, or vice versa)",
+             "rationale": "Applies wherever a burst/stream is re-framed; the scoreboard must reassemble before comparing."},
+        ],
+        "recommendation": "None -- payload is bit-identical end to end",
+        "assumption_if_unanswered": ("None -- defaulting to 'no transform' is the specific silent false-PASS "
+                                     "this field exists to prevent: the scoreboard would compare two "
+                                     "differently-shaped payloads and report whatever the comparison happened to do."),
+    },
+    "legal_drop_conditions": {
+        "domain": "dut",
+        "question": "Under what conditions may this path legally drop or refuse an item without it being a bug?",
+        "options": [
+            {"label": "Never -- every source item must appear at the sink",
+             "rationale": "Lossless paths; any missing item is a real failure the scoreboard must flag."},
+            {"label": "Backpressure only defers, never drops (items are held, not lost)",
+             "rationale": "Credit/ready-valid flow control; the scoreboard must widen its timeout, not permit loss."},
+            {"label": "Drops are legal under a stated condition (error-response, overflow, filtered address range)",
+             "rationale": "Requires naming the exact condition, so the scoreboard permits only that drop and no other."},
+        ],
+        "recommendation": "Never -- every source item must appear at the sink",
+        "assumption_if_unanswered": ("None -- a too-permissive drop rule makes the scoreboard silently "
+                                     "tolerate lost payloads, which is a false PASS."),
+    },
+    "reset_flush_behavior": {
+        "domain": "dut",
+        "question": "What happens to in-flight items, on both sides of this scoreboard, when reset asserts?",
+        "options": [
+            {"label": "Both sides flush -- the scoreboard clears all pending items on reset",
+             "rationale": "Standard for a synchronous reset that clears the whole datapath."},
+            {"label": "In-flight items survive reset and must still be matched afterwards",
+             "rationale": "Applies where a buffer/queue is not reset, or reset is scoped to only part of the path."},
+            {"label": "Asymmetric -- one side flushes and the other does not (state the sides)",
+             "rationale": "Common across a reset-domain boundary; the asymmetry is what produces orphans after every reset."},
+        ],
+        "recommendation": "Both sides flush -- the scoreboard clears all pending items on reset",
+        "assumption_if_unanswered": ("None -- getting this wrong produces either a phantom orphan storm after "
+                                     "every reset, or a scoreboard that silently discards real mismatches."),
+    },
+    "orphan_unmatched_threshold": {
+        "domain": "env",
+        "question": "How many unmatched (orphan) items may be outstanding before this scoreboard reports an error?",
+        "options": [
+            {"label": "0 -- any item unmatched at end-of-test is an error",
+             "rationale": "The strictest and usually correct end-of-test check for a lossless path."},
+            {"label": "A finite non-zero allowance tied to real pipeline depth",
+             "rationale": "Only for genuinely in-flight items at end-of-test; the number must cite the structure that justifies it."},
+            {"label": "Report as a warning only, never fail the test",
+             "rationale": "Appropriate only for a deliberately lossy/best-effort path; otherwise it disables the check."},
+        ],
+        "recommendation": "0 -- any item unmatched at end-of-test is an error",
+        "assumption_if_unanswered": ("None -- a guessed non-zero threshold silently absorbs real lost "
+                                     "transactions up to that count."),
+    },
+    "orphan_unmatched_timeout": {
+        "domain": "env",
+        "question": ("How long does the scoreboard wait for an item's counterpart before declaring it an "
+                     "orphan, and when is that detection performed?"),
+        "options": [
+            {"label": "End-of-test sweep only -- no per-item timeout during the run",
+             "rationale": "Simplest; catches everything eventually but reports the failure far from its cause."},
+            {"label": "A per-item timeout in clock cycles, checked continuously during the run",
+             "rationale": "Reports near the cause and catches hangs; the cycle count must come from real DUT latency, not a round number."},
+            {"label": "Both -- a per-item timeout during the run plus an end-of-test sweep",
+             "rationale": "Catches both slow-path hangs and quietly-lost items; the usual choice when latency is known."},
+        ],
+        "recommendation": "Both -- a per-item timeout during the run plus an end-of-test sweep",
+        "assumption_if_unanswered": ("None -- with no detection timing stated, an item that never arrives may "
+                                     "never be reported at all, which is a silent false PASS."),
+    },
+}
+
+#: The risk context every scoreboard-planning question carries, mirroring
+#: `T4_QUESTION_CONTEXT`'s role for T4 bind questions. See
+#: `SCOREBOARD_FIELD_QUESTIONS` for why `affects_pass_fail_verdict` is a real
+#: derived fact here rather than a hardcoded escalation.
+SCOREBOARD_QUESTION_CONTEXT: dict = {"affects_pass_fail_verdict": True}
+
+
+def scoreboard_field_context_path(scoreboard_id: str, field_name: str) -> str:
+    """The stable evidence path one scoreboard field's question is anchored
+    to. It is also what `question_queue.make_question_key()` hashes, so the
+    SAME unfilled field on the SAME scoreboard always mints the SAME Q-ID
+    however many times the plan is regenerated -- that is what keeps the
+    queue's repeat-question-rate metric at zero across regenerations."""
+    return f"checker_scoreboard_plan/data_integrity_scoreboards/{scoreboard_id}/{field_name}"
+
+
+def _resolve_question_store(store):
+    from . import question_queue
+    if isinstance(store, (str, Path)):
+        return question_queue.QuestionQueueStore(Path(store))
+    return store
+
+
+def route_unfilled_fields_to_question_queue(store, entry: dict, *, now=None) -> list:
+    """Turn every `REQUIRED_HUMAN_INPUT` field of one scoreboard entry into a
+    real, persisted question in the SAME queue the T4 bind path uses.
+
+    This is Part C's "an empty field automatically becomes a question-queue
+    entry", as executable code rather than a sentinel nobody reads. Each
+    question carries the field's own pre-researched 2-3 options, its
+    recommendation, and a domain that routes it to whoever actually knows the
+    answer (`question_queue.route_owner()`).
+
+    Returns the persisted question records, in table-column order. A record
+    normally comes back Tier 3 / OPEN / blocking; it comes back Tier 1 /
+    SELF_RESOLVED when a HUMAN has already answered that exact question_key
+    before -- the queue's own "once a human answers, never ask again"
+    guarantee, which is why regenerating a plan does not re-ask anything."""
+    store = _resolve_question_store(store)
+    scoreboard_id = entry["scoreboard_id"]
+    asked = []
+    for field_name in unfilled_plan_fields(entry):
+        spec = SCOREBOARD_FIELD_QUESTIONS[field_name]
+        asked.append(store.add_question(
+            domain=spec["domain"],
+            question=spec["question"],
+            context_path=scoreboard_field_context_path(scoreboard_id, field_name),
+            options=spec["options"],
+            recommendation=spec["recommendation"],
+            assumption_if_unanswered=spec["assumption_if_unanswered"],
+            context=dict(SCOREBOARD_QUESTION_CONTEXT),
+            now=now,
+        ))
+    return asked
+
+
+def apply_answered_questions(store, entry: dict) -> dict:
+    """Fill a scoreboard entry's unfilled fields from HUMAN answers already
+    persisted in the question queue's decisions store, returning a new entry.
+
+    This is the read-back half of the loop: `route_unfilled_fields_to_question_queue()`
+    asks, a human answers via `QuestionQueueStore.answer_question()` (which
+    persists to `decisions.json`/`decisions.md`), and this reads that answer
+    back into the planning table so the row can finally be confirmed.
+
+    Only a decision whose current source is `question_queue.HUMAN_DECISION_SOURCE`
+    fills a field. A Tier-2 auto-assumption the harness minted for itself
+    NEVER does -- that is the same gate `classify_tier()` applies, deliberately
+    reused so the harness cannot fill its own mandatory-human-review field with
+    its own earlier guess. Answers are stored as the human's literal answer
+    string; this function does not coerce them into numbers or re-interpret
+    them."""
+    from . import question_queue
+    store = _resolve_question_store(store)
+    filled = dict(entry)
+    for field_name in unfilled_plan_fields(entry):
+        spec = SCOREBOARD_FIELD_QUESTIONS[field_name]
+        key = question_queue.make_question_key(
+            spec["domain"], spec["question"],
+            scoreboard_field_context_path(entry["scoreboard_id"], field_name))
+        decision = store.find_decision(key)
+        current = (decision or {}).get("current") or {}
+        if current.get("source") == question_queue.HUMAN_DECISION_SOURCE and current.get("answer"):
+            filled[field_name] = current["answer"]
+    return filled
 
 
 # ===========================================================================
