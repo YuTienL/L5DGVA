@@ -774,6 +774,77 @@ def main():
                                         "large/forbidden-artifact files, secret leakage -> READY/PARTIAL/BLOCKED. "
                                         "See dv_harness/memory_doctor.run_doctor().")
 
+    # --- 3-tier ask-a-human question queue (2026-09-03, question-queue task,
+    # spec Part B): add/list/answer/digest/status over
+    # dv_harness/question_queue.py's QuestionQueueStore. Deliberately its own
+    # command group (not folded into `memory`/`knowledge`) -- a question here
+    # is a live, pending decision awaiting a human, not settled Engineering/
+    # Organizational knowledge.
+    pqq = sub.add_parser("question-queue", help="3-tier ask-a-human protocol: self-resolve / safe-to-assume / "
+                                                  "cannot-assume, standardized Q-ID questions, decisions.md "
+                                                  "persistence (a repeat ask self-resolves, never re-escalates), "
+                                                  "daily/end-of-run digest batching, and the 4 tracking metrics. "
+                                                  "See dv_harness/question_queue.py.")
+    pqq_sub = pqq.add_subparsers(dest="qq_cmd", required=True)
+
+    pqq_add = pqq_sub.add_parser("add", help="Ask one question. Never pings -- only persists; classify_tier() "
+                                               "runs immediately (a Tier-1 hit self-resolves, a Tier-2 hit logs "
+                                               "its assumption and continues, only a genuine Tier-3 stays OPEN/"
+                                               "blocking, awaiting a `digest`+`answer`).")
+    pqq_add.add_argument("--domain", required=True, choices=["vip", "dut", "env"])
+    pqq_add.add_argument("--question", required=True)
+    pqq_add.add_argument("--context-path", required=True, dest="context_path")
+    pqq_add.add_argument("--option", action="append", required=True, dest="options",
+                          help="Repeatable, 2-3 required (pre-researched options, never open-ended). "
+                               "Each becomes {'label': <this value>}.")
+    pqq_add.add_argument("--recommendation", required=True, help="Must equal one of the --option values given.")
+    pqq_add.add_argument("--assumption-if-unanswered", required=True, dest="assumption_if_unanswered")
+    pqq_add.add_argument("--question-key", default=None, dest="question_key",
+                          help="Stable dedup key. Omit to derive one from domain+context-path+question.")
+    pqq_add.add_argument("--affects-pass-fail-verdict", action="store_true", dest="affects_pass_fail_verdict")
+    pqq_add.add_argument("--affects-spec-intent", action="store_true", dest="affects_spec_intent")
+    pqq_add.add_argument("--affects-read-only-file-change", action="store_true", dest="affects_read_only_file_change")
+    pqq_add.add_argument("--blast-radius", default="single_regression", dest="blast_radius",
+                          choices=["single_regression", "multi_regression", "unbounded"])
+    pqq_add.add_argument("--resolvable-from-manifest", action="store_true", dest="resolvable_from_manifest")
+    pqq_add.add_argument("--manifest-value", default=None, dest="manifest_value")
+
+    pqq_list = pqq_sub.add_parser("list", help="List questions, optionally filtered.")
+    pqq_list.add_argument("--status", default=None, choices=["OPEN", "SELF_RESOLVED", "ASSUMED", "ANSWERED"])
+    pqq_list.add_argument("--tier", type=int, default=None, choices=[1, 2, 3])
+    pqq_list.add_argument("--blocking", action="store_true", default=None, dest="blocking_only")
+    pqq_list.add_argument("--domain", default=None, choices=["vip", "dut", "env"])
+
+    pqq_answer = pqq_sub.add_parser("answer", help="Record a human's real answer to one question by Q-ID -- "
+                                                     "persists to decisions.json/decisions.md so this exact "
+                                                     "question_key never re-escalates.")
+    pqq_answer.add_argument("question_id")
+    pqq_answer.add_argument("--answer", required=True)
+    pqq_answer.add_argument("--basis", required=True)
+    pqq_answer.add_argument("--decided-by", default=None, dest="decided_by")
+
+    pqq_revoke = pqq_sub.add_parser("revoke", help="Withdraw the persisted decision for one question_key so the "
+                                                      "next ask re-classifies from scratch. The sanctioned undo for "
+                                                      "a wrong Tier-2 auto-assumption -- decisions.md tells its "
+                                                      "reader not to hand-edit the store, and this is the only "
+                                                      "other way out. The entry is moved to the store's `revoked` "
+                                                      "list with who/when/why, never deleted.")
+    pqq_revoke.add_argument("question_key")
+    pqq_revoke.add_argument("--reason", required=True,
+                             help="Why this decision is being withdrawn -- recorded in decisions.json/decisions.md.")
+    pqq_revoke.add_argument("--revoked-by", default=None, dest="revoked_by")
+
+    pqq_digest = pqq_sub.add_parser("digest", help="Batch never-yet-digested OPEN/ASSUMED questions into one "
+                                                      "digest, grouped by owner. Never real-time -- run this "
+                                                      "once daily (e.g. from cron) or at end-of-run.")
+    pqq_digest.add_argument("--trigger", default="manual", choices=["manual", "stage_boundary", "scheduled"])
+    pqq_digest.add_argument("--stage", default=None, help="Required for --trigger stage_boundary -- the stage "
+                                                             "that just completed (dv_harness.models.Stage value).")
+    pqq_digest.add_argument("--min-hours-since-last", type=float, default=24.0, dest="min_hours_since_last")
+
+    pqq_sub.add_parser("status", help="Print the 4 tracking metrics: self-resolve rate, blocking-questions/week, "
+                                        "repeat-question-rate, assumption-overturned-rate.")
+
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
     # Usage record for `user-info` (dv_harness/user_info.py): logged for
@@ -1712,6 +1783,67 @@ def main():
             result = memory_doctor.run_doctor(h.root, h.cfg)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(0 if result["overall"] != "BLOCKED" else 1)
+    elif args.cmd == "question-queue":
+        from .question_queue import QuestionQueueStore
+        qq = QuestionQueueStore(h.root)
+        if args.qq_cmd == "add":
+            if len(args.options) < 2:
+                print(json.dumps({"ok": False, "error": "AT_LEAST_TWO_OPTIONS_REQUIRED"}, ensure_ascii=False))
+                raise SystemExit(1)
+            context = {
+                "affects_pass_fail_verdict": args.affects_pass_fail_verdict,
+                "affects_spec_intent": args.affects_spec_intent,
+                "affects_read_only_file_change": args.affects_read_only_file_change,
+                "blast_radius": args.blast_radius,
+                "resolvable_from_manifest": args.resolvable_from_manifest,
+                "manifest_value": args.manifest_value,
+            }
+            try:
+                record = qq.add_question(
+                    domain=args.domain, question=args.question, context_path=args.context_path,
+                    options=[{"label": o} for o in args.options], recommendation=args.recommendation,
+                    assumption_if_unanswered=args.assumption_if_unanswered,
+                    question_key=args.question_key, context=context,
+                )
+            except ValueError as e:  # QuestionValidationError is a ValueError subclass
+                print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+                raise SystemExit(1)
+            h.store.event({"ts": cp_now(), "cmd": "question-queue-add", "id": record["id"],
+                            "tier": record["tier"], "status": record["status"]})
+            print(json.dumps(record, ensure_ascii=False, indent=2))
+        elif args.qq_cmd == "list":
+            results = qq.list_questions(status=args.status, tier=args.tier,
+                                          blocking=(True if args.blocking_only else None), domain=args.domain)
+            print(json.dumps(results, ensure_ascii=False, indent=2))
+        elif args.qq_cmd == "answer":
+            try:
+                record = qq.answer_question(args.question_id, answer=args.answer, basis=args.basis,
+                                              decided_by=args.decided_by or _access_user())
+            except KeyError as e:
+                print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+                raise SystemExit(1)
+            h.store.event({"ts": cp_now(), "cmd": "question-queue-answer", "id": record["id"],
+                            "overturned": record["overturned"]})
+            print(json.dumps(record, ensure_ascii=False, indent=2))
+        elif args.qq_cmd == "revoke":
+            try:
+                revocation = qq.revoke_decision(args.question_key, reason=args.reason,
+                                                  revoked_by=args.revoked_by or _access_user())
+            except KeyError as e:
+                print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+                raise SystemExit(1)
+            h.store.event({"ts": cp_now(), "cmd": "question-queue-revoke",
+                            "question_key": args.question_key, "reason": args.reason,
+                            "revoked_by": revocation["revoked_by"]})
+            print(json.dumps(revocation, ensure_ascii=False, indent=2))
+        elif args.qq_cmd == "digest":
+            digest = qq.build_digest(trigger=args.trigger, stage=args.stage,
+                                       min_hours_since_last=args.min_hours_since_last)
+            h.store.event({"ts": cp_now(), "cmd": "question-queue-digest", "trigger": args.trigger,
+                            "emitted": digest["emitted"], "batch_id": digest["batch_id"]})
+            print(json.dumps(digest, ensure_ascii=False, indent=2))
+        elif args.qq_cmd == "status":
+            print(json.dumps(qq.compute_metrics(), ensure_ascii=False, indent=2))
     elif args.cmd == "advance":
         # BUG FIX (2026-08-28, multi-persona interaction review -- DV
         # Engineer: "silently bypass all gates AND the event log ... a live,
