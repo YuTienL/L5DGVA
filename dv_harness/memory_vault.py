@@ -44,6 +44,38 @@ What lives here, matching the 4 phases this workstream owns:
     `status()` is READY, falls back to the filesystem adapter whenever that
     call itself is not actually available).
 
+Workstream-2 addendum (2026-09-03, CLI/health-check/dedup/security pass):
+`FileSystemMarkdownAdapter.create()`/`update()` now redact secret-shaped
+content via `dv_harness/memory_security.py` before writing (Phase 19), and
+`dv_harness/memory_dedup.py` (Phase 18) and `dv_harness/memory_doctor.py`
+(Phase 21) read real notes out of this module's vault layout to classify
+new-knowledge candidates and run the `memory doctor` health check,
+respectively -- both additive, neither changes this module's own schema or
+provider contract.
+
+Workstream-3 addendum (2026-09-03, debug-flow/regression-memory/git-policy/
+session pass): three additive extensions, none changing the Phase 2/3/7/8
+contract above --
+  (a) `create()`/`update()`/`delete()` gained an optional `commit_message`
+      parameter (Phase 13): a policy-aware caller (`memory_router.py`'s
+      `_maybe_write_vault_note()`) supplies the real
+      `memory(<protocol>): <short description>` commit-message format;
+      omitting it (every pre-existing caller) reproduces the prior generic
+      message unchanged. `_commit_vault_change()` now returns the real
+      resulting commit SHA (`git rev-parse HEAD`), surfaced as
+      `knowledge_commit_sha` in the result dict, for `memory_router.py` to
+      write back onto the underlying JSON MemoryStore record for
+      traceability alongside `rtl_sha`/`tb_sha` (see `MEMORY_NOTE_OPTIONAL_
+      FIELDS`' own comment, and `memory_router._write_back_knowledge_commit_
+      sha()`).
+  (b) `build_failure_signature()`/`search_related_memory_for_debug()` (Phase
+      10/11, bottom of this file): the shared "search prior knowledge for a
+      failure" interface engine.py's debug flow and lsf_client.py's
+      regression-job memory extraction both call -- see their own
+      docstrings.
+  (c) `MEMORY_NOTE_OPTIONAL_FIELDS` gained `knowledge_commit_sha` (item (a)
+      above needed a schema field to carry it).
+
 No embedding/vector database is used or added anywhere in this module --
 `FileSystemMarkdownAdapter.search()` is real keyword/tag/YAML-property/
 wiki-link/exact filtering over the real files, optionally accelerated by
@@ -93,9 +125,21 @@ MEMORY_NOTE_REQUIRED_FIELDS = ["id", "memory_level", "protocol", "status", "conf
 # required for a note to be written, but always emitted (as null) so a
 # reader/Obsidian's own Properties view sees the full schema shape even on a
 # sparse note.
+#
+# `knowledge_commit_sha` (Phase 13 -- Git Integration, 2026-09-03): the
+# DV-Knowledge Vault's OWN git commit SHA that captured this record, for
+# cross-referencing alongside rtl_sha/tb_sha (CLAUDE.md's "same regression
+# batch must use the same source/build/config identity", extended here to
+# "and the same knowledge-vault commit that recorded it"). Populated by
+# memory_router.py's write-back AFTER a real vault commit happens (see
+# _write_back_knowledge_commit_sha() there) -- never guessed here, and never
+# by re-committing the note itself a second time to embed its own just-made
+# SHA (that would be circular); this field lives on the note's frontmatter
+# only when a later re-render (e.g. an update() call) happens to carry it
+# through from the underlying record.
 MEMORY_NOTE_OPTIONAL_FIELDS = [
     "subsystem", "category", "failure", "project", "rtl_sha", "tb_sha",
-    "vip_vendor", "vip_version", "simulator", "tags",
+    "vip_vendor", "vip_version", "simulator", "tags", "knowledge_commit_sha",
 ]
 
 MEMORY_NOTE_ALL_FIELDS = MEMORY_NOTE_REQUIRED_FIELDS + MEMORY_NOTE_OPTIONAL_FIELDS
@@ -400,10 +444,22 @@ def _ensure_git_repo(vault_path: Path) -> bool:
     return True
 
 
-def _commit_vault_change(vault_path: Path, message: str) -> bool:
+def _commit_vault_change(vault_path: Path, message: str) -> Optional[str]:
+    """Real commit (Phase 13 -- Git Integration, 2026-09-03): stages and
+    commits, then returns the resulting commit's real SHA (via `git
+    rev-parse HEAD`) so a caller can cross-reference it -- see
+    memory_router.py's `_write_back_knowledge_commit_sha()`. Returns None,
+    never a fabricated SHA, whenever there was nothing to commit (e.g. an
+    update() that changed nothing -- `git commit` itself exits non-zero) or
+    git is unavailable/erroring (see `_run_git`'s own try/except)."""
     _run_git(vault_path, ["add", "-A"])
     r = _run_git(vault_path, ["commit", "-m", message])
-    return r is not None and r.returncode == 0
+    if r is None or r.returncode != 0:
+        return None
+    sha = _run_git(vault_path, ["rev-parse", "HEAD"])
+    if sha is None or sha.returncode != 0:
+        return None
+    return (sha.stdout or "").strip() or None
 
 
 # ---------------------------------------------------------------------------
@@ -540,14 +596,15 @@ class MemoryProvider(ABC):
 
     @abstractmethod
     def create(self, frontmatter: Dict[str, Any], sections: Optional[Dict[str, str]] = None,
-               body: Optional[str] = None) -> Dict[str, Any]: ...
+               body: Optional[str] = None, commit_message: Optional[str] = None) -> Dict[str, Any]: ...
 
     @abstractmethod
     def update(self, note_id: str, frontmatter_patch: Optional[Dict[str, Any]] = None,
-               sections_patch: Optional[Dict[str, str]] = None) -> Dict[str, Any]: ...
+               sections_patch: Optional[Dict[str, str]] = None,
+               commit_message: Optional[str] = None) -> Dict[str, Any]: ...
 
     @abstractmethod
-    def delete(self, note_id: str) -> Dict[str, Any]: ...
+    def delete(self, note_id: str, commit_message: Optional[str] = None) -> Dict[str, Any]: ...
 
     @abstractmethod
     def list_tags(self) -> Dict[str, Any]: ...
@@ -612,10 +669,14 @@ class ObsidianAdapter(MemoryProvider):
     def search(self, query: Dict[str, Any], limit: int = 8) -> Dict[str, Any]: return self._not_available()
     def read(self, note_id: str) -> Dict[str, Any]: return self._not_available()
     def create(self, frontmatter: Dict[str, Any], sections: Optional[Dict[str, str]] = None,
-               body: Optional[str] = None) -> Dict[str, Any]: return self._not_available()
+               body: Optional[str] = None, commit_message: Optional[str] = None) -> Dict[str, Any]:
+        return self._not_available()
     def update(self, note_id: str, frontmatter_patch: Optional[Dict[str, Any]] = None,
-               sections_patch: Optional[Dict[str, str]] = None) -> Dict[str, Any]: return self._not_available()
-    def delete(self, note_id: str) -> Dict[str, Any]: return self._not_available()
+               sections_patch: Optional[Dict[str, str]] = None,
+               commit_message: Optional[str] = None) -> Dict[str, Any]:
+        return self._not_available()
+    def delete(self, note_id: str, commit_message: Optional[str] = None) -> Dict[str, Any]:
+        return self._not_available()
     def list_tags(self) -> Dict[str, Any]: return self._not_available()
     def list_links(self, note_id: str) -> Dict[str, Any]: return self._not_available()
     def get_properties(self, note_id: str) -> Dict[str, Any]: return self._not_available()
@@ -730,7 +791,8 @@ class FileSystemMarkdownAdapter(MemoryProvider):
                 "frontmatter": fm, "body": body}
 
     def create(self, frontmatter: Dict[str, Any], sections: Optional[Dict[str, str]] = None,
-               body: Optional[str] = None, folder: Optional[str] = None) -> Dict[str, Any]:
+               body: Optional[str] = None, folder: Optional[str] = None,
+               commit_message: Optional[str] = None) -> Dict[str, Any]:
         fm = dict(frontmatter)
         note_id = fm.get("id") or _gen_note_id()
         fm["id"] = note_id
@@ -740,6 +802,21 @@ class FileSystemMarkdownAdapter(MemoryProvider):
                     "path": str(existing.relative_to(self.vault_path))}
         fm.setdefault("created", _now_iso())
         fm.setdefault("updated", fm["created"])
+
+        sections_out = sections if sections is not None else (_body_to_sections(body) if body else None)
+        # Phase 19 security redaction (Workstream 2, dv_harness/memory_security.py):
+        # run BEFORE any content is written to the note -- never as an
+        # after-the-fact scrub. Additive: a note with no secret-shaped
+        # content in any frontmatter value or section is completely
+        # unaffected (only fields where a real pattern actually matched are
+        # ever touched), so this never changes output for the pre-existing
+        # 41-test Workstream-1 suite.
+        from . import memory_security as _msec
+        fm, sections_out, secret_findings = _msec.redact_note_content(fm, sections_out)
+        if secret_findings:
+            fm["secrets_redacted"] = True
+            fm["secrets_redacted_types"] = sorted({f["type"] for f in secret_findings})
+
         validation = validate_note_frontmatter(fm)
         fm["schema_status"] = validation["schema_status"]
 
@@ -747,14 +824,26 @@ class FileSystemMarkdownAdapter(MemoryProvider):
         target_dir = self.vault_path / folder_rel
         target_dir.mkdir(parents=True, exist_ok=True)
         path = target_dir / f"{_sanitize_note_id(note_id)}.md"
-        sections_out = sections if sections is not None else (_body_to_sections(body) if body else None)
         path.write_text(render_note_markdown(fm, sections_out), encoding="utf-8")
-        self._maybe_git_commit(f"memory-vault: create {note_id}")
-        return {"ok": True, "note_id": note_id, "path": str(path.relative_to(self.vault_path)),
-                "validation": validation}
+        # Phase 13 -- Git Integration: `commit_message` (additive, default
+        # None) lets a policy-aware caller (memory_router.py's
+        # `_maybe_write_vault_note()`) supply the real
+        # `memory(<protocol>): <short description>` commit-message format
+        # the user's spec requires; omitting it (every pre-existing direct
+        # caller, e.g. this class's own Workstream-1 tests) reproduces the
+        # exact prior generic message unchanged.
+        commit_sha = self._maybe_git_commit(commit_message or f"memory-vault: create {note_id}")
+        result = {"ok": True, "note_id": note_id, "path": str(path.relative_to(self.vault_path)),
+                  "validation": validation}
+        if commit_sha:
+            result["knowledge_commit_sha"] = commit_sha
+        if secret_findings:
+            result["secrets_redacted"] = [{"type": f["type"], "field": f["field"]} for f in secret_findings]
+        return result
 
     def update(self, note_id: str, frontmatter_patch: Optional[Dict[str, Any]] = None,
-               sections_patch: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+               sections_patch: Optional[Dict[str, str]] = None,
+               commit_message: Optional[str] = None) -> Dict[str, Any]:
         p = self._find_note_path(note_id)
         if p is None:
             return {"ok": False, "error": "NOT_FOUND"}
@@ -766,19 +855,38 @@ class FileSystemMarkdownAdapter(MemoryProvider):
         fm["updated"] = _now_iso()
         if sections_patch:
             sections.update(sections_patch)
+
+        # Phase 19 security redaction -- see create()'s matching comment
+        # above. Re-run over the FULL merged frontmatter/sections (not just
+        # the incoming patch) on every update, so a secret introduced via
+        # any single patch can never survive on disk past that write.
+        from . import memory_security as _msec
+        fm, sections, secret_findings = _msec.redact_note_content(fm, sections)
+        if secret_findings:
+            fm["secrets_redacted"] = True
+            fm["secrets_redacted_types"] = sorted({f["type"] for f in secret_findings})
+
         validation = validate_note_frontmatter(fm)
         fm["schema_status"] = validation["schema_status"]
         p.write_text(render_note_markdown(fm, sections), encoding="utf-8")
-        self._maybe_git_commit(f"memory-vault: update {note_id}")
-        return {"ok": True, "note_id": note_id, "path": str(p.relative_to(self.vault_path)), "validation": validation}
+        commit_sha = self._maybe_git_commit(commit_message or f"memory-vault: update {note_id}")
+        result = {"ok": True, "note_id": note_id, "path": str(p.relative_to(self.vault_path)), "validation": validation}
+        if commit_sha:
+            result["knowledge_commit_sha"] = commit_sha
+        if secret_findings:
+            result["secrets_redacted"] = [{"type": f["type"], "field": f["field"]} for f in secret_findings]
+        return result
 
-    def delete(self, note_id: str) -> Dict[str, Any]:
+    def delete(self, note_id: str, commit_message: Optional[str] = None) -> Dict[str, Any]:
         p = self._find_note_path(note_id)
         if p is None:
             return {"ok": False, "error": "NOT_FOUND"}
         p.unlink()
-        self._maybe_git_commit(f"memory-vault: delete {note_id}")
-        return {"ok": True, "note_id": note_id}
+        commit_sha = self._maybe_git_commit(commit_message or f"memory-vault: delete {note_id}")
+        result = {"ok": True, "note_id": note_id}
+        if commit_sha:
+            result["knowledge_commit_sha"] = commit_sha
+        return result
 
     def list_tags(self) -> Dict[str, Any]:
         counts: Dict[str, int] = {}
@@ -859,9 +967,10 @@ class FileSystemMarkdownAdapter(MemoryProvider):
         except Exception:  # pragma: no cover - rg must never be a hard dependency for correctness
             return self._iter_notes()
 
-    def _maybe_git_commit(self, message: str) -> None:
+    def _maybe_git_commit(self, message: str) -> Optional[str]:
         if self.git_enabled:
-            _commit_vault_change(self.vault_path, message)
+            return _commit_vault_change(self.vault_path, message)
+        return None
 
 
 def _sanitize_note_id(note_id: str) -> str:
@@ -908,15 +1017,16 @@ class HybridMemoryProvider(MemoryProvider):
         return self._dispatch("read", note_id)
 
     def create(self, frontmatter: Dict[str, Any], sections: Optional[Dict[str, str]] = None,
-               body: Optional[str] = None) -> Dict[str, Any]:
-        return self._dispatch("create", frontmatter, sections, body)
+               body: Optional[str] = None, commit_message: Optional[str] = None) -> Dict[str, Any]:
+        return self._dispatch("create", frontmatter, sections, body, commit_message=commit_message)
 
     def update(self, note_id: str, frontmatter_patch: Optional[Dict[str, Any]] = None,
-               sections_patch: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-        return self._dispatch("update", note_id, frontmatter_patch, sections_patch)
+               sections_patch: Optional[Dict[str, str]] = None,
+               commit_message: Optional[str] = None) -> Dict[str, Any]:
+        return self._dispatch("update", note_id, frontmatter_patch, sections_patch, commit_message=commit_message)
 
-    def delete(self, note_id: str) -> Dict[str, Any]:
-        return self._dispatch("delete", note_id)
+    def delete(self, note_id: str, commit_message: Optional[str] = None) -> Dict[str, Any]:
+        return self._dispatch("delete", note_id, commit_message=commit_message)
 
     def list_tags(self) -> Dict[str, Any]:
         return self._dispatch("list_tags")
@@ -960,13 +1070,30 @@ def get_active_provider(project_root: Path, cfg: Optional[Dict[str, Any]] = None
 # Record -> Note mapping (used by memory_router.py's promotion write-through)
 # ---------------------------------------------------------------------------
 
+# Destination -> Phase-7 memory_level (Phase 13 -- Git Integration,
+# 2026-09-03 extension): originally this function only ever distinguished
+# ENGINEERING_MEMORY from "everything else is organizational", correct back
+# when the router's vault write-through only ever called it for those two
+# destinations. Now that JOB_MEMORY/PROJECT_MEMORY also write through (see
+# memory_router._VAULT_WRITE_THROUGH_DESTINATIONS), each destination needs
+# its own real memory_level so the note lands in the right VAULT_STRUCTURE
+# folder (_MEMORY_LEVEL_FOLDER) instead of every job/project note being
+# mislabeled "organizational".
+_DESTINATION_TO_MEMORY_LEVEL = {
+    "JOB_MEMORY": "job",
+    "PROJECT_MEMORY": "project",
+    "ENGINEERING_MEMORY": "engineering",
+    "ORGANIZATIONAL_MEMORY": "organizational",
+}
+
+
 def build_frontmatter_from_memory_record(destination: str, mem: Dict[str, Any],
                                           project_name: Optional[str] = None) -> Dict[str, Any]:
     """Maps a MemoryStore/OrganizationalMemoryStore record onto the Phase 7
     note schema. Fields the record simply doesn't carry (rtl_sha, tb_sha,
     vip_vendor, ...) are emitted as null rather than omitted, so the note's
     own frontmatter always shows the full schema shape."""
-    level = "engineering" if destination == "ENGINEERING_MEMORY" else "organizational"
+    level = _DESTINATION_TO_MEMORY_LEVEL.get(destination, "organizational")
     created = mem.get("created_at")
     created_iso = _epoch_to_iso(created) if isinstance(created, (int, float)) else (created or _now_iso())
     tags = sorted({str(v).lower().replace(" ", "-") for v in
@@ -992,6 +1119,12 @@ def build_frontmatter_from_memory_record(destination: str, mem: Dict[str, Any],
         "tags": tags,
         "confirmation_count": mem.get("confirmation_count", 0),
         "last_confirmed_at": _epoch_to_iso(last_confirmed) if isinstance(last_confirmed, (int, float)) else None,
+        # Phase 13 traceability: carried through when the underlying record
+        # already has one (e.g. a re-render of a record memory_router.py
+        # previously wrote back a knowledge_commit_sha onto) -- see
+        # MEMORY_NOTE_OPTIONAL_FIELDS' own comment above for why this is
+        # never set by re-committing the note itself.
+        "knowledge_commit_sha": mem.get("knowledge_commit_sha"),
     }
 
 
@@ -1028,3 +1161,116 @@ def build_sections_from_memory_record(mem: Dict[str, Any]) -> Dict[str, str]:
         "Known Limitations": str(mem.get("known_limitations") or "_None documented._"),
         "Related Knowledge": "\n".join(f"- {r}" for r in related) if related else "_None linked yet._",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 10/11 (Workstream 3, 2026-09-03): shared failure-signature capture +
+# prior-knowledge search interface. This is the ONE minimal, real entry point
+# that BOTH the debug flow (engine.py's DVHarness.run_stage(), FAILURE_RECOVERY
+# stage -- "before a debug attempt") and the regression-job memory extraction
+# (lsf_client.py's `_write_job_tier_memory_on_terminal_reconcile`, on a real
+# UVM_ERROR/UVM_FATAL/abnormal-termination signal) call, and the exact minimal
+# signature the future Memory Agent (`.claude/agents/memory-agent.md`, Phase
+# 17, a separate workstream not built here) should call rather than
+# reimplementing a third search path of its own.
+#
+# Per CLAUDE.md's Evidence Truth Rule / Core Operating Rule "Memory is prior
+# knowledge, not current evidence" / "不得直接假設 previous root cause == current
+# root cause": every caller of `search_related_memory_for_debug()` below must
+# treat its `related_cases` as CANDIDATES to independently re-verify against
+# CURRENT RTL/VIP/log/waveform evidence -- this module never claims a match
+# IS the answer, and neither function here ever writes anything; they are
+# read-only prior-knowledge lookups.
+# ---------------------------------------------------------------------------
+
+def build_failure_signature(*, protocol: Optional[str] = None, pattern: Optional[str] = None,
+                             symptom: Optional[str] = None, root_cause_hint: Optional[str] = None,
+                             uvm_error_count: int = 0, uvm_fatal_count: int = 0,
+                             assertion_failure: bool = False, simulator_crash: bool = False,
+                             terminal_signature: Optional[str] = None, lsf_status: Optional[str] = None,
+                             extra_text: Optional[str] = None) -> Dict[str, Any]:
+    """Canonical "what does this failure look like" fact (Phase 10/11): the
+    ONE structured shape every real caller builds identically, so
+    `search_related_memory_for_debug()` below has one stable input rather
+    than each caller inventing its own query dict. Every field is optional
+    and never guessed -- a caller supplies exactly the real evidence it has:
+    engine.py sources protocol/symptom/root_cause_hint from the Blackboard
+    "findings" topic's last_report and route_info["protocol_decision"];
+    lsf_client.py sources uvm_error_count/uvm_fatal_count/assertion_failure/
+    simulator_crash/terminal_signature/lsf_status directly from the real
+    JobState fields `evaluate_auto_kill()` already reads for the exact same
+    UVM_ERROR/UVM_FATAL/abnormal-termination signal.
+
+    `abnormal_termination` is derived here (never asked of the caller) from
+    exactly the same real-evidence fields `evaluate_auto_kill()`'s
+    kill_on_uvm_fatal/kill_on_fatal_assertion/kill_on_simulator_crash
+    triggers already treat as terminal, plus a live EXIT status or any
+    terminal_signature marker -- one true/false fact, not a second
+    definition of "abnormal" for this module to drift from that one."""
+    abnormal_termination = bool(
+        uvm_fatal_count > 0 or assertion_failure or simulator_crash
+        or lsf_status == "EXIT" or bool(terminal_signature)
+    )
+    return {
+        "protocol": protocol, "pattern": pattern, "symptom": symptom,
+        "root_cause_hint": root_cause_hint, "uvm_error_count": uvm_error_count,
+        "uvm_fatal_count": uvm_fatal_count, "assertion_failure": assertion_failure,
+        "simulator_crash": simulator_crash, "terminal_signature": terminal_signature,
+        "lsf_status": lsf_status, "abnormal_termination": abnormal_termination,
+        "extra_text": extra_text,
+    }
+
+
+def search_related_memory_for_debug(root: Path, cfg: Optional[Dict[str, Any]],
+                                     failure_signature: Dict[str, Any], limit: int = 5) -> Dict[str, Any]:
+    """THE shared Memory Agent interface (Phase 10 debug-flow prior-evidence
+    surfacing / Phase 11 regression-job memory extraction): given a
+    `failure_signature` (see `build_failure_signature()` above), searches the
+    Workstream-1 DV-Knowledge Vault (`HybridMemoryProvider`, via
+    `get_active_provider()`) for related prior cases and returns them RANKED
+    by the provider's own real `search()` scoring (`FileSystemMarkdownAdapter
+    .search()` -- protocol/property match + text-token overlap, see its own
+    docstring) -- never an assumed root cause; `related_cases` is prior
+    evidence ONLY.
+
+    Real callers today: `engine.py`'s `DVHarness.run_stage()` (FAILURE_RECOVERY,
+    the actual debug-attempt entry point -- folded into the stage prompt as
+    prior evidence, disclaimed exactly like `relevant_memory`/
+    `kc_search_results`, see `prompts.build_stage_prompt`'s `vault_related_cases`
+    kwarg) and `lsf_client.py`'s `_write_job_tier_memory_on_terminal_reconcile()`
+    (attaches `related_cases` onto the job_failure record it already writes on
+    a real UVM_ERROR/UVM_FATAL/abnormal-termination signal, so the Debug Agent
+    that later picks the job up has it without a second search). The future
+    `.claude/agents/memory-agent.md` (Phase 17) should call this SAME function.
+
+    An empty query (no symptom/root_cause_hint/terminal_signature/protocol at
+    all -- a caller with genuinely no real signal yet) deliberately returns no
+    results rather than the vault's own "empty query lists everything" search
+    convention: an unscoped "list everything" is not useful prior evidence for
+    a specific failure, it would just be noise.
+
+    Best-effort: any provider failure (missing vault, unreadable note, etc.)
+    returns `{"ok": False, ...}` rather than raising -- a memory-search
+    problem must never block a real debug attempt or a real job-memory
+    write."""
+    try:
+        query_text = " ".join(str(v) for v in (
+            failure_signature.get("symptom"), failure_signature.get("root_cause_hint"),
+            failure_signature.get("terminal_signature"), failure_signature.get("extra_text"),
+        ) if v).strip()[:500]
+        protocol = failure_signature.get("protocol")
+        if not query_text and not protocol:
+            return {"ok": True, "failure_signature": failure_signature, "related_cases": [], "count": 0}
+        provider = get_active_provider(root, cfg)
+        query: Dict[str, Any] = {}
+        if query_text:
+            query["text"] = query_text
+        if protocol:
+            query["protocol"] = protocol
+        result = provider.search(query, limit=limit)
+        related = (result.get("results") or []) if result.get("ok") else []
+        return {"ok": bool(result.get("ok")), "failure_signature": failure_signature,
+                "related_cases": related, "count": len(related)}
+    except Exception as exc:  # pragma: no cover - a memory search failure must never break a debug attempt
+        return {"ok": False, "error": "MEMORY_SEARCH_FAILED", "detail": str(exc),
+                "failure_signature": failure_signature, "related_cases": [], "count": 0}

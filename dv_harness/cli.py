@@ -475,6 +475,82 @@ def main():
     pst_revert = pst_sub.add_parser("revert")
     pst_revert.add_argument("memory_id")
 
+    # --- DV-Knowledge Vault CLI surface (2026-09-03, obsidian-memory-cli,
+    # Workstream 2 of 4): status/search/show/add/promote/graph/validate/
+    # sync/doctor over dv_harness/memory_vault.py's MemoryProvider (never a
+    # bare adapter -- always get_active_provider()'s Hybrid), plus
+    # dv_harness/memory_dedup.py (Phase 18) and dv_harness/memory_doctor.py
+    # (Phase 21). Deliberately a SEPARATE command group from the pre-existing
+    # `dv_harness/memory_cli.py` standalone script (memory.py's JSON
+    # MemoryStore/CornerCaseLibrary) -- this one is specifically the
+    # Markdown/YAML Vault's own surface, matching this module's own scope.
+    pmem = sub.add_parser("memory", help="DV-Knowledge Vault (Obsidian+Git/Markdown Hybrid Engineering "
+                                          "Memory) status/search/show/add/promote/graph/validate/sync/doctor. "
+                                          "See dv_harness/memory_vault.py, memory_dedup.py, memory_doctor.py.")
+    pmem_sub = pmem.add_subparsers(dest="memory_cmd", required=True)
+
+    pmem_sub.add_parser("status", help="Provider status (Obsidian detection + filesystem-adapter readiness) "
+                                        "plus real note counts per memory tier.")
+
+    pmem_search = pmem_sub.add_parser("search", help="Real keyword/tag/property/wiki-link search over vault notes "
+                                                       "(FileSystemMarkdownAdapter.search() -- no embedding/vector DB).")
+    pmem_search.add_argument("query", nargs="?", default="", help="Free-text query. Omit for tag/protocol/level-only filtering.")
+    pmem_search.add_argument("--protocol", default=None)
+    pmem_search.add_argument("--tag", default=None)
+    pmem_search.add_argument("--level", default=None, choices=["working", "job", "project", "engineering", "organizational"],
+                              dest="memory_level")
+    pmem_search.add_argument("--limit", type=int, default=10)
+
+    pmem_show = pmem_sub.add_parser("show", help="Print one note's full frontmatter + body.")
+    pmem_show.add_argument("note_id")
+
+    pmem_add = pmem_sub.add_parser("add", help="Write a new Engineering/Organizational vault note directly "
+                                                "(Phase 18 dedup classification runs FIRST -- a DUPLICATE match "
+                                                "refuses the write unless --force).")
+    pmem_add.add_argument("--level", default="engineering", choices=["engineering", "organizational"], dest="memory_level")
+    pmem_add.add_argument("--protocol", required=True)
+    pmem_add.add_argument("--failure", default=None, help="Failure/symptom summary (the note's `failure` field).")
+    pmem_add.add_argument("--root-cause", default=None, dest="root_cause")
+    pmem_add.add_argument("--configuration", default=None, help="Config/context this occurred under (-> Context section).")
+    pmem_add.add_argument("--error-pattern", default=None, dest="error_pattern",
+                           help="Distinguishing error/log signature (-> Symptom section).")
+    pmem_add.add_argument("--fix", default=None)
+    pmem_add.add_argument("--confidence", default="MEDIUM", choices=["HIGH", "MEDIUM", "LOW", "UNKNOWN"])
+    pmem_add.add_argument("--status", default="ACTIVE")
+    pmem_add.add_argument("--tag", action="append", default=[], dest="tags")
+    pmem_add.add_argument("--force", action="store_true",
+                           help="Write anyway even if dedup classifies this as DUPLICATE of an existing note.")
+
+    pmem_promote = pmem_sub.add_parser("promote", help="Engineering -> Organizational promotion gate "
+                                                         "(memory_router.promote_to_organizational()) -- "
+                                                         "operates on a JSON MemoryStore engineering-tier "
+                                                         "memory_id (MEM-...), not a vault note id.")
+    pmem_promote.add_argument("memory_id")
+    pmem_promote.add_argument("--independent-sources", type=int, default=0, dest="independent_sources_count")
+    pmem_promote.add_argument("--evidence-refs-verified", action="store_true", dest="evidence_refs_verified")
+    pmem_promote.add_argument("--counter-evidence", type=int, default=0, dest="counter_evidence_count")
+    pmem_promote.add_argument("--multi-agent-consensus", type=int, default=0, dest="multi_agent_consensus_count")
+    pmem_promote.add_argument("--kind", default="methodology",
+                               choices=["methodology", "best_practice", "cross_project_lesson"])
+
+    pmem_graph = pmem_sub.add_parser("graph", help="Forward-link/backlink graph around one note "
+                                                     "(BFS over real [[WikiLink]] entries, no external graph lib).")
+    pmem_graph.add_argument("note_id")
+    pmem_graph.add_argument("--depth", type=int, default=2)
+
+    pmem_sub.add_parser("validate", help="Note-correctness subset of `doctor` (schema/duplicate-ID/"
+                                          "invalid-YAML/broken-link/secret checks) over real "
+                                          "06_Agent_Memory/** notes. See dv_harness/memory_doctor.run_validate().")
+
+    pmem_sync = pmem_sub.add_parser("sync", help="Bootstrap the vault, then (if memory.git_enabled) commit any "
+                                                  "pending vault changes and report recent commit history.")
+    pmem_sync.add_argument("--message", default=None)
+
+    pmem_sub.add_parser("doctor", help="Phase 21 full health check: vault writable, git status, Obsidian CLI, "
+                                        "filesystem fallback, schema, broken links, duplicate IDs, invalid YAML, "
+                                        "large/forbidden-artifact files, secret leakage -> READY/PARTIAL/BLOCKED. "
+                                        "See dv_harness/memory_doctor.run_doctor().")
+
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
     # Usage record for `user-info` (dv_harness/user_info.py): logged for
@@ -1072,6 +1148,159 @@ def main():
             store.add("project", record)
             print(json.dumps({"ok": True, "memory_id": args.memory_id}))
             return 0
+    elif args.cmd == "memory":
+        from . import memory_vault as mv
+        from . import memory_dedup
+        from . import memory_doctor
+        from . import memory_router
+
+        if args.memory_cmd == "status":
+            provider = mv.get_active_provider(h.root, h.cfg)
+            vault_path = mv.resolve_vault_path(h.root, h.cfg)
+            all_notes = provider.search({}, limit=1000000)
+            counts: Dict[str, int] = {}
+            for r in all_notes.get("results", []):
+                lvl = str((r.get("frontmatter") or {}).get("memory_level") or "unknown")
+                counts[lvl] = counts.get(lvl, 0) + 1
+            counts["total"] = sum(counts.values())
+            memory_cfg = h.cfg.get("memory") or {}
+            print(json.dumps({
+                "vault_path": str(vault_path),
+                "config": {"provider": memory_cfg.get("provider"), "obsidian_cli": memory_cfg.get("obsidian_cli"),
+                           "git_enabled": memory_cfg.get("git_enabled")},
+                "provider_status": provider.status(),
+                "note_counts": counts,
+            }, ensure_ascii=False, indent=2))
+        elif args.memory_cmd == "search":
+            provider = mv.get_active_provider(h.root, h.cfg)
+            query: Dict[str, Any] = {"text": args.query}
+            if args.protocol:
+                query["protocol"] = args.protocol
+            if args.tag:
+                query["tag"] = args.tag
+            if args.memory_level:
+                query["memory_level"] = args.memory_level
+            result = provider.search(query, limit=args.limit)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        elif args.memory_cmd == "show":
+            provider = mv.get_active_provider(h.root, h.cfg)
+            result = provider.read(args.note_id)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if result.get("ok") else 1)
+        elif args.memory_cmd == "add":
+            candidate = {
+                "protocol": args.protocol, "failure_signature": args.failure,
+                "root_cause": args.root_cause, "configuration": args.configuration,
+                "error_pattern": args.error_pattern,
+            }
+            classification = memory_dedup.classify_note_candidate(h.root, candidate, cfg=h.cfg)
+            if classification["classification"] == "DUPLICATE" and not args.force:
+                print(json.dumps({"ok": False, "error": "DUPLICATE_KNOWLEDGE",
+                                   "classification": classification["classification"],
+                                   "best_match": classification.get("best_match")},
+                                  ensure_ascii=False, indent=2))
+                raise SystemExit(1)
+            provider = mv.get_active_provider(h.root, h.cfg)
+            frontmatter = {
+                "memory_level": args.memory_level, "protocol": args.protocol,
+                "status": args.status, "confidence": args.confidence,
+                "failure": args.failure, "tags": args.tags,
+            }
+            sections = {
+                "Root Cause": args.root_cause or "", "Context": args.configuration or "",
+                "Symptom": args.error_pattern or "", "Fix": args.fix or "",
+            }
+            result = provider.create(frontmatter, sections=sections)
+            result["dedup_classification"] = classification["classification"]
+            if classification.get("matches"):
+                result["related_notes"] = [m["note_id"] for m in classification["matches"][:5]]
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if result.get("ok") else 1)
+        elif args.memory_cmd == "promote":
+            confidence_inputs = {
+                "independent_sources_count": args.independent_sources_count,
+                "evidence_refs_verified": args.evidence_refs_verified,
+                "counter_evidence_count": args.counter_evidence_count,
+                "multi_agent_consensus_count": args.multi_agent_consensus_count,
+            }
+            try:
+                result = memory_router.promote_to_organizational(
+                    h.root, args.memory_id, confidence_inputs, cfg=h.cfg, kind=args.kind)
+            except ValueError as e:
+                print(json.dumps({"promoted": False, "error": "NOT_FOUND", "detail": str(e)}, ensure_ascii=False))
+                raise SystemExit(1)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            # promote_to_organizational() signals a GATE rejection via
+            # "promoted": False + "reason" (see its own docstring/tests --
+            # dv_harness_tests/test_memory_vault.py's
+            # test_promote_to_organizational_succeeds_once_every_gate_is_satisfied
+            # is explicit that a genuine 3-gate PASS is signaled by
+            # "destination" being present, NOT by any "promoted": True key,
+            # which this function never sets -- the separate "ok"/"error"
+            # keys on a gate-passed result instead reflect whether the
+            # downstream shared-Knowledge-Center push itself succeeded, an
+            # unrelated concern this exit code deliberately does not fold in).
+            raise SystemExit(0 if "destination" in result else 1)
+        elif args.memory_cmd == "graph":
+            provider = mv.get_active_provider(h.root, h.cfg)
+            visited = set()
+            edges = []
+            frontier = [args.note_id]
+            for _ in range(max(1, args.depth)):
+                next_frontier = []
+                for nid in frontier:
+                    if nid in visited:
+                        continue
+                    visited.add(nid)
+                    links = provider.list_links(nid)
+                    if not links.get("ok"):
+                        continue
+                    for fwd in links.get("forward_links", []):
+                        edges.append({"from": nid, "to": fwd, "type": "forward"})
+                        if fwd not in visited:
+                            next_frontier.append(fwd)
+                    for back in links.get("backlinks", []):
+                        edges.append({"from": back, "to": nid, "type": "backlink"})
+                        if back not in visited:
+                            next_frontier.append(back)
+                frontier = next_frontier
+                if not frontier:
+                    break
+            print(json.dumps({"root": args.note_id, "nodes": sorted(visited), "edges": edges},
+                              ensure_ascii=False, indent=2))
+        elif args.memory_cmd == "validate":
+            result = memory_doctor.run_validate(h.root, h.cfg)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if result["overall"] != "BLOCKED" else 1)
+        elif args.memory_cmd == "sync":
+            import shutil as _shutil
+            vault_path = mv.resolve_vault_path(h.root, h.cfg)
+            mv.bootstrap_vault(vault_path)
+            memory_cfg = h.cfg.get("memory") or {}
+            git_enabled = bool(memory_cfg.get("git_enabled", False))
+            result: Dict[str, Any] = {"vault_path": str(vault_path), "git_enabled": git_enabled}
+            if not git_enabled:
+                result["message"] = "git integration disabled (memory.git_enabled=false); nothing to sync"
+            elif _shutil.which("git") is None:
+                result["message"] = "git not found on PATH"
+            else:
+                mv._ensure_git_repo(vault_path)
+                status = mv._run_git(vault_path, ["status", "--porcelain"])
+                pending = [l for l in (status.stdout or "").splitlines() if l.strip()] if status else []
+                if pending:
+                    result["committed"] = mv._commit_vault_change(
+                        vault_path, args.message or "manual sync via `dv-harness memory sync`")
+                    result["files_changed"] = len(pending)
+                else:
+                    result["committed"] = False
+                    result["files_changed"] = 0
+                log = mv._run_git(vault_path, ["log", "--oneline", "-5"])
+                result["recent_commits"] = [l for l in (log.stdout or "").splitlines() if l.strip()] if log else []
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        elif args.memory_cmd == "doctor":
+            result = memory_doctor.run_doctor(h.root, h.cfg)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if result["overall"] != "BLOCKED" else 1)
     elif args.cmd == "advance":
         # BUG FIX (2026-08-28, multi-persona interaction review -- DV
         # Engineer: "silently bypass all gates AND the event log ... a live,
