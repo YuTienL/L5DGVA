@@ -752,7 +752,12 @@ real CLI/runner entry points rather than by a graph node:
   verbatim (so a NOT_AVAILABLE stays NOT_AVAILABLE, never a bare empty list), plus VIP instance
   paths/types, parsed RTL file paths + module names, and counts. The full verible parse trees stay
   in `env.manifest.json`, which the topic points at — inlining them would drown every reading
-  stage's prompt. Read by `ARCH_DISCOVERY`, `PROJECT_MODEL`, `IMPLEMENT`.
+  stage's prompt. Since schema 1.1 (2026-09-04) it additionally carries the installed VIP
+  package name+version list, distilled user-guide titles + section counts, the names of any
+  address regions whose base **disagrees** with the register map, and the ids of vPlan items whose
+  test/coverage claims resolve to nothing — the conflicts specifically, not just their counts,
+  because a reading stage must not have to open a file to discover them. Read by
+  `ARCH_DISCOVERY`, `PROJECT_MODEL`, `IMPLEMENT`.
 - **`open_questions_decisions`** (`source: question_queue`) — refreshed from
   `QuestionQueueStore._save_decisions()`, the one choke point both `_persist_decision()` and
   `revoke_decision()` already pass through, so it cannot drift from `decisions.json`. Carries every
@@ -772,6 +777,44 @@ an already-recorded decision, or an already-completed gate run into a failed com
 (both halves — the write, and a real node declaring the `blackboard_read`) are proven end-to-end
 against the real shipped graph by `dv_harness_tests/test_blackboard_subsystem_wiring.py`.
 
+## env.manifest.json Fact Sources: schema 1.1 (2026-09-04)
+
+`env.manifest.json` keeps exactly three top-level layers (`vip_config` / `dut_facts` /
+`env_topology`) and `dv_harness/env_manifest.py` remains its sole writer. A 2026-09-04 re-audit
+confirmed four of the spec's fact sources were genuinely BLOCKED — absent, not stubbed — and each
+is now real, wired and tested (`dv_harness_tests/test_env_manifest_fact_sources.py`):
+
+- **`vip_config.vip_release`** — a real filesystem scan of `$DESIGNWARE_HOME`
+  (`scan_designware_home()`), walking both `vip/svt/<pkg>/<ver>` and `vip/<pkg>/<ver>` layouts and
+  locating each package's real release-notes / feature-matrix files. "Which VIP release is this
+  environment built against" is answered from the install tree, not from a version someone typed
+  into a document. Unset `$DESIGNWARE_HOME` and a set-but-stale one stay **distinct** NOT_AVAILABLE
+  reasons — collapsing them would hide a fixable operator error.
+- **`vip_config.user_guide_refs`** — POINTERS to guides distilled OFFLINE by
+  `dv_harness/vip_user_guide_distill.py` (`dv-harness vip-user-guide distill`, real `pypdf`
+  extraction). It is a separate command on purpose: "never loaded into runtime context" is enforced
+  structurally by keeping the only code path that opens a document off the generation path. The
+  manifest records path/sha256/bytes/page-count/section-COUNT and not one word of prose;
+  `assert_no_user_guide_body_in_manifest()` runs on every generate and makes that checkable, since
+  the schema can police shape but cannot notice prose parked in a legitimately-string field.
+- **`dut_facts.address_map` / `dut_facts.clock_reset`** — from the project's own SoC spec pipeline
+  via the `soc_arch_map.schema.json` input contract (a documented contract, not an extractor, for
+  the same reason `register_map.schema.json` is one: this repo owns no SoC to extract from). Every
+  address entry carries a real `register_map_agreement` cross-check against `dut_facts.registers`,
+  compared as integers. A DISAGREES is **surfaced, never auto-resolved** — per Source Authority
+  Order. Reset `active_level` is required by the contract and never defaulted.
+- **`env_topology.testplan_correspondence`** — the computed three-way join of the project's real
+  testlist, vPlan items and coverage model (`testplan_sources.schema.json`). Each list read alone
+  always looks healthy; only the join exposes a vPlan item claiming a test nobody runs, one measured
+  by a covergroup nobody wrote, or a test burning sim time against no stated intent. Matching is a
+  literal name join, never fuzzy. An item whose claims could not be checked because its axis was not
+  supplied reports **NOT_CHECKED**, never LINKED.
+
+**Schema 1.1 is a breaking bump and deliberately so**: these are REQUIRED keys, so a stale 1.0
+manifest fails `load_env_manifest()` loudly rather than silently presenting an environment as having
+no address map and no testplan correspondence — a claim about the environment it cannot support.
+env_manifest.py is the sole writer, so the fix is to regenerate, never to migrate.
+
 ## Context Budget: 3 Tiers + MCP-First Routing (2026-09-03)
 
 An agent's context window is a finite verification resource and is budgeted like one. The tiers
@@ -787,7 +830,9 @@ VIP source full text, raw PDF originals (user guides/protocol specs/programming 
 whole-chip design·waveform·evidence databases (`.fsdb`/`.vpd`/`.vcd`/`simv.daidir`/the evidence
 SQLite store), and complete simulation/regression logs. Every denial names its route forward — a
 fixed MCP verb and/or the distiller that turns that content class into a bounded artifact
-(`doc_extraction.py` for PDFs, `fsdb_report.py` for waveforms, `sim_log_analysis.py` for logs).
+(`vip_user_guide_distill.py` for PDFs — corrected 2026-09-04 from `doc_extraction.py`, which only
+LISTS `.pdf` in a suffix set and contains no PDF text extraction at all, so that route named a
+script that could not perform it; `fsdb_report.py` for waveforms, `sim_log_analysis.py` for logs).
 There is deliberately **no** distiller cited for VIP source: none exists — `vip_distill.py` is named
 suggestively but normalises sim-log/job/fsdb evidence envelopes and never reads VIP source, so that
 rule routes to `get_vip_config` and says so rather than sending you after a script nobody wrote.

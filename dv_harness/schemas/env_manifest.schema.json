@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "generator", "vip_config", "dut_facts", "env_topology"],
   "properties": {
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "const": "1.1" },
     "generator": {
       "type": "object",
       "additionalProperties": false,
@@ -20,8 +20,79 @@
     "vip_config": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "source", "vip_instances"],
+      "required": ["status", "source", "vip_instances", "vip_release", "user_guide_refs"],
       "properties": {
+        "vip_release": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "designware_home", "packages"],
+          "description": "The INSTALLED VIP's own version/release-notes/feature-matrix facts, discovered by a real filesystem scan of $DESIGNWARE_HOME (dv_harness/env_manifest.py's scan_designware_home()). This answers 'which VIP release is this environment actually built against' from the install tree itself rather than from a version number someone typed into a document -- the same reasoning that makes the zero-time config dump above more trustworthy than a user guide. Nothing here is read INTO the manifest as content: release notes and feature matrices are recorded as path + sha256 + byte size only (see release_notes/feature_matrix below), never inlined.",
+          "properties": {
+            "status": {
+              "enum": ["SCANNED", "NOT_AVAILABLE"],
+              "description": "SCANNED: a real DESIGNWARE_HOME directory was walked and `packages` reflects what was genuinely found there (which may legitimately be an empty array if the tree contains no recognisable VIP package). NOT_AVAILABLE: DESIGNWARE_HOME was unset, or was set to a path that does not exist -- distinguished by `reason`."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "designware_home": { "type": ["string", "null"], "description": "The real DESIGNWARE_HOME value this scan used, echoed back so a manifest generated against the wrong install is diagnosable. Null when unset." },
+            "packages": {
+              "type": "array",
+              "description": "One entry per installed VIP package/version directory actually found on disk, sorted by (name, version) for a stable diff.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "version", "install_path", "release_notes", "feature_matrix"],
+                "properties": {
+                  "name": { "type": "string", "description": "VIP package directory name as it really appears in the install tree, e.g. 'usb_svt'." },
+                  "version": { "type": ["string", "null"], "description": "Version directory name exactly as installed, e.g. 'R-2020.12'. Null when the package directory has no version level -- never a guessed version." },
+                  "install_path": { "type": "string", "description": "Real absolute path of the version directory that was scanned." },
+                  "release_notes": { "$ref": "#/$defs/doc_file_ref" },
+                  "feature_matrix": { "$ref": "#/$defs/doc_file_ref" }
+                }
+              }
+            }
+          }
+        },
+        "user_guide_refs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason", "documents"],
+          "description": "POINTERS to VIP user guides that were distilled OFFLINE by dv_harness/vip_user_guide_distill.py (`dv-harness vip-user-guide distill`), never the guides themselves. This layer records paths, sha256s, byte sizes, page count, section COUNT and which extractor ran -- and deliberately not section headings and not one word of document prose. That restraint is the requirement, not an optimisation: CLAUDE.md's Context Budget makes env.manifest.json a TIER-2 ALWAYS-RESIDENT artifact, so anything inlined here is pushed into every session's context window forever, which is exactly what 'distilled offline, never loaded into runtime context' forbids. env_manifest.assert_no_user_guide_body_in_manifest() enforces it as a checkable property.",
+          "properties": {
+            "status": {
+              "enum": ["INDEXED", "NOT_AVAILABLE"],
+              "description": "INDEXED: at least one real distilled reference record was supplied and read. NOT_AVAILABLE: none was -- `documents` is empty, and no user guide has been distilled for this environment yet."
+            },
+            "reason": { "type": ["string", "null"] },
+            "documents": {
+              "type": "array",
+              "description": "One entry per distilled document, sorted by title for a stable diff.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["title", "doc_kind", "source_document", "distilled_reference", "full_text_extract", "extraction", "section_count"],
+                "properties": {
+                  "title": { "type": "string" },
+                  "doc_kind": { "type": "string", "description": "What the document actually is: 'vip_user_guide', 'protocol_spec', 'programming_guide', ... so a reader never has to guess which document a pointer refers to." },
+                  "source_document": { "$ref": "#/$defs/doc_file_ref" },
+                  "distilled_reference": { "$ref": "#/$defs/doc_file_ref", "description": "The bounded tier-3 navigation index (.reference.md) -- read on demand, never preloaded." },
+                  "full_text_extract": { "$ref": "#/$defs/doc_file_ref", "description": "The complete extracted plain text: the TARGETED-READ target, never a context load." },
+                  "extraction": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["tool", "tool_version", "method"],
+                    "properties": {
+                      "tool": { "type": "string" },
+                      "tool_version": { "type": ["string", "null"] },
+                      "method": { "enum": ["pdf_text_extraction", "pre_extracted_text"], "description": "Which extraction really ran. 'pre_extracted_text' means someone handed us a .txt -- page numbers are honestly absent for that path rather than invented." }
+                    }
+                  },
+                  "section_count": { "type": "integer", "minimum": 0, "description": "How many numbered headings the distiller detected. A COUNT, not the headings -- the headings live in the .reference.md this entry points at." }
+                }
+              }
+            }
+          }
+        },
         "status": {
           "enum": ["CAPTURED", "NOT_AVAILABLE"],
           "description": "CAPTURED: vip_instances below was parsed from a real dump file a live UVM simv actually produced. NOT_AVAILABLE: no such dump exists yet for this environment -- vip_instances is an empty array, never fabricated example content."
@@ -51,8 +122,91 @@
     "dut_facts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["rtl", "registers"],
+      "required": ["rtl", "registers", "address_map", "clock_reset"],
       "properties": {
+        "address_map": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "entries", "disagreement_count"],
+          "description": "Decoded address regions, read from a soc_arch_map.schema.json input file produced by the project's own SoC spec pipeline. Each entry additionally carries a register_map_agreement cross-check computed against dut_facts.registers -- the two fact sources describe overlapping reality, and silently trusting whichever was loaded last is exactly the failure CLAUDE.md's Source Authority Order exists to prevent.",
+          "properties": {
+            "status": { "enum": ["LOADED", "NOT_AVAILABLE"] },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "entries": {
+              "type": "array",
+              "description": "Passthrough of the input's own `address_map` entries, sorted by base_address then name for a stable diff, each with register_map_agreement added.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "base_address", "size_bytes", "register_map_agreement"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "base_address": { "type": "string", "pattern": "^0x[0-9A-Fa-f]+$" },
+                  "size_bytes": { "type": "integer", "minimum": 1 },
+                  "target": { "type": ["string", "null"] },
+                  "bus": { "type": ["string", "null"] },
+                  "evidence": { "type": ["string", "null"] },
+                  "description": { "type": ["string", "null"] },
+                  "register_map_agreement": {
+                    "enum": ["AGREES", "DISAGREES", "NOT_IN_REGISTER_MAP", "NOT_AVAILABLE"],
+                    "description": "AGREES: a register-map block of the same name declares the same base address (compared as integers, so 0x1000 and 0x01000 agree). DISAGREES: same name, different base -- a real conflict for a human to resolve, never auto-resolved here. NOT_IN_REGISTER_MAP: the register map was loaded and has no block of this name, which is normal for a region with no software-visible registers. NOT_AVAILABLE: no register map was loaded at all, so no cross-check was possible -- deliberately distinct from NOT_IN_REGISTER_MAP, since 'nothing to compare against' is not the same finding as 'compared, and absent'."
+                  }
+                }
+              }
+            },
+            "disagreement_count": { "type": "integer", "minimum": 0, "description": "How many entries came back DISAGREES. Present so a consumer can act on the conflict without walking the array." }
+          }
+        },
+        "clock_reset": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "clocks", "resets"],
+          "description": "Clock-domain and reset topology from the same soc_arch_map.schema.json input. Reset `active_level` is required by that input contract and carried verbatim here: an assumed reset polarity is one of the cheapest ways to hold a DUT in reset for a whole run while every machine gate still reports PASS.",
+          "properties": {
+            "status": { "enum": ["LOADED", "NOT_AVAILABLE"] },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "clocks": {
+              "type": "array",
+              "description": "Sorted by name for a stable diff.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "frequency_mhz": { "type": ["number", "null"] },
+                  "source": { "type": ["string", "null"] },
+                  "domain": { "type": ["string", "null"] },
+                  "evidence": { "type": ["string", "null"] },
+                  "description": { "type": ["string", "null"] }
+                }
+              }
+            },
+            "resets": {
+              "type": "array",
+              "description": "Sorted by name for a stable diff.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "active_level", "clock_resolved"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "active_level": { "enum": ["high", "low"] },
+                  "synchronous": { "type": ["boolean", "null"] },
+                  "clock": { "type": ["string", "null"] },
+                  "clock_resolved": {
+                    "enum": ["RESOLVED", "UNKNOWN_CLOCK", "NOT_SPECIFIED"],
+                    "description": "RESOLVED: this reset's `clock` names a clock that really appears in `clocks`. UNKNOWN_CLOCK: it names one that does not -- a real inconsistency in the input, surfaced rather than carried silently. NOT_SPECIFIED: the input gave no clock for this reset."
+                  },
+                  "evidence": { "type": ["string", "null"] },
+                  "description": { "type": ["string", "null"] }
+                }
+              }
+            }
+          }
+        },
         "rtl": {
           "type": "object",
           "additionalProperties": false,
@@ -146,8 +300,80 @@
     "env_topology": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["component_hierarchy", "config_db_trace"],
+      "required": ["component_hierarchy", "config_db_trace", "testplan_correspondence"],
       "properties": {
+        "testplan_correspondence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "axes_available", "items", "orphans", "summary"],
+          "description": "The computed three-way correspondence between the TESTLIST (what regression runs), the VPLAN ITEMS (what verification claims to verify, and which tests/coverage each claims), and the COVERAGE MODEL (what covergroups/coverpoints/assertions actually exist in written SV). Input contract: dv_harness/schemas/testplan_sources.schema.json. env_manifest.py never invents any of the three lists -- it JOINS them, which is the point: each list read alone always looks healthy, and only the join exposes a vPlan item claiming a test nobody runs, a covergroup no vPlan item references, or a regression test that maps to no stated verification intent. Matching is a literal name join, never fuzzy -- a fuzzy match would manufacture correspondence that does not exist.",
+          "properties": {
+            "status": {
+              "enum": ["COMPUTED", "PARTIAL", "NOT_AVAILABLE"],
+              "description": "COMPUTED: all three axes were supplied and fully joined. PARTIAL: at least one axis was supplied but not all three -- the checks that need a missing axis are honestly skipped (their per-item verdicts read NOT_CHECKED) rather than being scored as passing against nothing. NOT_AVAILABLE: no testplan-sources input was supplied at all."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "axes_available": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["testlist", "vplan_items", "coverage_model"],
+              "description": "Which of the three axes the input actually carried. This is what makes PARTIAL actionable -- 'incomplete' is useless without naming the missing side.",
+              "properties": {
+                "testlist": { "type": "boolean" },
+                "vplan_items": { "type": "boolean" },
+                "coverage_model": { "type": "boolean" }
+              }
+            },
+            "items": {
+              "type": "array",
+              "description": "One entry per vPlan item, sorted by id for a stable diff. Empty when no vplan_items axis was supplied.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "tests_claimed", "tests_present", "tests_missing", "coverage_claimed", "coverage_present", "coverage_missing", "verdict"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "tests_claimed": { "type": "integer", "minimum": 0 },
+                  "tests_present": { "type": "array", "items": { "type": "string" }, "description": "Claimed test names that really exist in the testlist." },
+                  "tests_missing": { "type": "array", "items": { "type": "string" }, "description": "Claimed test names that exist in NO testlist entry -- a vPlan item claiming coverage from a test nobody runs." },
+                  "coverage_claimed": { "type": "integer", "minimum": 0 },
+                  "coverage_present": { "type": "array", "items": { "type": "string" } },
+                  "coverage_missing": { "type": "array", "items": { "type": "string" }, "description": "Claimed coverage names that exist in NO coverage-model entry -- a vPlan item measured by a covergroup nobody wrote." },
+                  "verdict": {
+                    "enum": ["LINKED", "BROKEN_TEST_REF", "BROKEN_COVERAGE_REF", "BROKEN_TEST_AND_COVERAGE_REF", "UNCLAIMED", "NOT_CHECKED"],
+                    "description": "LINKED: every claim this item makes resolves against a real test/coverage entry. BROKEN_*_REF: at least one claim resolves against nothing. UNCLAIMED: the item claims no tests and no coverage at all -- verification intent with nothing attached to it, which a per-axis check alone can never surface. NOT_CHECKED: neither the testlist nor the coverage-model axis was supplied, so this item's claims could not be checked against anything and are deliberately NOT reported as LINKED."
+                  }
+                }
+              }
+            },
+            "orphans": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tests_not_in_any_vplan_item", "coverage_not_referenced_by_any_vplan_item"],
+              "description": "The reverse direction, which the per-item join above cannot see.",
+              "properties": {
+                "tests_not_in_any_vplan_item": { "type": "array", "items": { "type": "string" }, "description": "Tests the regression really runs that no vPlan item claims -- simulation time spent against no stated verification intent. Empty (not omitted) when both axes were supplied and there are none." },
+                "coverage_not_referenced_by_any_vplan_item": { "type": "array", "items": { "type": "string" }, "description": "Coverage constructs that really exist in SV but that no vPlan item references -- coverage being collected against no stated intent." }
+              }
+            },
+            "summary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["testlist_count", "vplan_item_count", "coverage_model_count", "linked_count", "broken_count", "unclaimed_count", "orphan_test_count", "orphan_coverage_count"],
+              "properties": {
+                "testlist_count": { "type": "integer", "minimum": 0 },
+                "vplan_item_count": { "type": "integer", "minimum": 0 },
+                "coverage_model_count": { "type": "integer", "minimum": 0 },
+                "linked_count": { "type": "integer", "minimum": 0 },
+                "broken_count": { "type": "integer", "minimum": 0 },
+                "unclaimed_count": { "type": "integer", "minimum": 0 },
+                "orphan_test_count": { "type": "integer", "minimum": 0 },
+                "orphan_coverage_count": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        },
         "component_hierarchy": {
           "type": "object",
           "additionalProperties": false,
@@ -214,6 +440,18 @@
     }
   },
   "$defs": {
+    "doc_file_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "description": "A POINTER to a real file on disk, never its content. Identity (sha256) and size are recorded so a consumer can tell whether the file it finds is the one this manifest described, and so a stale reference is detectable -- but the bytes themselves stay out of this always-resident manifest by construction.",
+      "properties": {
+        "path": { "type": ["string", "null"], "description": "Real path to the file; null when this particular reference genuinely does not exist (e.g. a VIP package that ships no feature matrix)." },
+        "sha256": { "type": ["string", "null"], "description": "Content hash of the real file; null when path is null." },
+        "bytes": { "type": ["integer", "null"], "minimum": 0, "description": "Real byte size; null when path is null." },
+        "page_count": { "type": ["integer", "null"], "minimum": 0, "description": "Pages, for a paginated source document. Null for any non-paginated source -- never a fabricated count." }
+      }
+    },
     "source_ref": {
       "type": "object",
       "additionalProperties": false,

@@ -574,6 +574,43 @@ def main():
                             help="Path to a real sim log from a run with +UVM_CONFIG_DB_TRACE set. Omit to "
                                  "report env_topology.config_db_trace as NOT_AVAILABLE.")
     penvm_gen.add_argument("--verible-bin", default=None, help="Override the verible-verilog-syntax binary name.")
+    penvm_gen.add_argument("--designware-home", default=None, dest="designware_home",
+                            help="VIP install tree to scan for package versions / release notes / feature "
+                                 "matrices. Omit to use the real $DESIGNWARE_HOME environment variable; "
+                                 "vip_config.vip_release reports NOT_AVAILABLE when neither is set.")
+    penvm_gen.add_argument("--user-guide-ref", action="append", default=None,
+                            dest="user_guide_reference_paths",
+                            help="Path to a .reference.json produced by `dv-harness vip-user-guide distill` "
+                                 "(repeatable). Only the POINTER is recorded -- the guide's own text is "
+                                 "never read into env.manifest.json. Omit to report "
+                                 "vip_config.user_guide_refs as NOT_AVAILABLE.")
+    penvm_gen.add_argument("--soc-arch-map", default=None, dest="soc_arch_map_path",
+                            help="Path to a SoC architecture-map JSON conforming to "
+                                 "dv_harness/schemas/soc_arch_map.schema.json (address map + clock/reset "
+                                 "topology from the project's own SoC spec pipeline). Omit to report "
+                                 "dut_facts.address_map and dut_facts.clock_reset as NOT_AVAILABLE.")
+    penvm_gen.add_argument("--testplan-sources", default=None, dest="testplan_sources_path",
+                            help="Path to a testplan-sources JSON conforming to "
+                                 "dv_harness/schemas/testplan_sources.schema.json (the project's real "
+                                 "testlist + vPlan items + coverage model). Omit to report "
+                                 "env_topology.testplan_correspondence as NOT_AVAILABLE.")
+
+    pvug = sub.add_parser("vip-user-guide", help="OFFLINE distillation of a VIP user guide (or any protocol "
+                                                    "spec / programming guide) into a bounded reference index "
+                                                    "plus a full-text extract, so the guide itself is never "
+                                                    "loaded into runtime context. See "
+                                                    "dv_harness/vip_user_guide_distill.py.")
+    pvug_sub = pvug.add_subparsers(dest="vug_cmd", required=True)
+    pvug_d = pvug_sub.add_parser("distill", help="Distil ONE real document. Writes <stem>.fulltext.txt "
+                                                    "(targeted-read target), <stem>.reference.md (bounded "
+                                                    "section index) and <stem>.reference.json (the record "
+                                                    "`env-manifest generate --user-guide-ref` consumes).")
+    pvug_d.add_argument("--source", required=True, help="Real .pdf / .txt / .md document to distil.")
+    pvug_d.add_argument("--out-dir", required=True, help="Directory to write the three artifacts into.")
+    pvug_d.add_argument("--title", default=None, help="Document title; defaults to the source file's stem.")
+    pvug_d.add_argument("--doc-kind", default="vip_user_guide",
+                         help="What the document actually is: vip_user_guide (default), protocol_spec, "
+                              "programming_guide, ...")
 
     pfsdb = sub.add_parser("fsdb-report", help="Run the real `fsdbreport` CLI tool against an FSDB file and "
                                                  "parse/emit its text report. See dv_harness/fsdb_report.py.")
@@ -1518,8 +1555,10 @@ def main():
             raise SystemExit(1)
     elif args.cmd == "env-manifest":
         from . import env_manifest
-        from .env_manifest import EnvManifestValidationError, RegisterMapValidationError
+        from .env_manifest import (EnvManifestValidationError, RegisterMapValidationError,
+                                    SocArchMapValidationError, TestplanSourcesValidationError)
         from .verible_parser import DEFAULT_VERIBLE_BIN, VeribleParseError, VeribleUnavailableError
+        from .vip_user_guide_distill import UserGuideDistillError
         if args.envm_cmd == "generate":
             try:
                 manifest = env_manifest.generate_and_write(
@@ -1530,8 +1569,14 @@ def main():
                     topology_dump_path=args.topology_dump_path,
                     config_db_trace_log_path=args.config_db_trace_log_path,
                     verible_bin=args.verible_bin or DEFAULT_VERIBLE_BIN,
+                    designware_home=args.designware_home,
+                    user_guide_reference_paths=args.user_guide_reference_paths,
+                    soc_arch_map_path=args.soc_arch_map_path,
+                    testplan_sources_path=args.testplan_sources_path,
                 )
             except (EnvManifestValidationError, RegisterMapValidationError,
+                    SocArchMapValidationError, TestplanSourcesValidationError,
+                    UserGuideDistillError,
                     VeribleParseError, VeribleUnavailableError) as exc:
                 print(f"env-manifest generate FAILED: {exc}", file=sys.stderr)
                 raise SystemExit(1)
@@ -1553,6 +1598,22 @@ def main():
             # verible parse trees); see env_manifest.sync_to_blackboard.
             env_manifest.sync_to_blackboard(h.blackboard, manifest, manifest_path=args.out)
             print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    elif args.cmd == "vip-user-guide":
+        # Deliberately its own command, not a step inside `env-manifest
+        # generate`: "distilled OFFLINE, never loaded into runtime context"
+        # is enforced structurally by keeping the only code path that opens
+        # a source document off the manifest-generation path entirely.
+        from . import vip_user_guide_distill
+        from .vip_user_guide_distill import UserGuideDistillError
+        if args.vug_cmd == "distill":
+            try:
+                record = vip_user_guide_distill.distill_user_guide(
+                    args.source, args.out_dir, title=args.title, doc_kind=args.doc_kind,
+                )
+            except UserGuideDistillError as exc:
+                print(f"vip-user-guide distill FAILED: {exc}", file=sys.stderr)
+                raise SystemExit(1)
+            print(json.dumps(record, ensure_ascii=False, indent=2))
     elif args.cmd == "fsdb-report":
         from . import fsdb_report
         result = fsdb_report.run_fsdbreport(args.fsdb, fsdbreport_bin=args.fsdbreport_bin, timeout=args.timeout)

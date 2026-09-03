@@ -42,8 +42,8 @@
         "(?i)\\bpdftoppm\\b"
       ],
       "mcp_redirect": null,
-      "distiller": "dv_harness/doc_extraction.py",
-      "distiller_note": "doc_extraction.py really does handle .pdf (see its SUPPORTED set), but its own 2026-08-28 audit notice says it is standalone and invoked by no executing code path in dv_harness/ or .claude/agents/. So it is a real script you must call yourself, not a stage that runs on its own."
+      "distiller": "dv_harness/vip_user_guide_distill.py",
+      "distiller_note": "Run it as `dv-harness vip-user-guide distill --source <doc.pdf> --out-dir <dir>`. It extracts the text with the real pypdf library OFFLINE and writes three artifacts: <stem>.fulltext.txt (the targeted-read target), <stem>.reference.md (a bounded section index -- headings, pages, character offsets, no prose) and <stem>.reference.json (the record `env-manifest generate --user-guide-ref` records as a POINTER, never as content). CORRECTION (2026-09-04): this field previously named dv_harness/doc_extraction.py and claimed it 'really does handle .pdf (see its SUPPORTED set)'. That was false -- doc_extraction.py merely LISTS '.pdf' in a suffix set; all 71 of its lines are sha256/index/record-normalisation and it contains no PDF text extraction whatsoever. So this rule's route forward pointed at a script that could not perform it. vip_user_guide_distill.py is the real one."
     },
     {
       "rule_id": "NEVER-WHOLE-CHIP-DB",

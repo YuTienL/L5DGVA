@@ -23,8 +23,8 @@ from __future__ import annotations
 import copy
 
 _FIXTURE_MANIFEST = {
-    "schema_version": "1.0",
-    "generator": {"tool": "dv_harness.env_manifest", "version": "1.0"},
+    "schema_version": "1.1",
+    "generator": {"tool": "dv_harness.env_manifest", "version": "1.1"},
 
     "vip_config": {
         "status": "CAPTURED",
@@ -42,6 +42,23 @@ _FIXTURE_MANIFEST = {
                 "config_fields": {"is_active": "UVM_PASSIVE"},
             },
         ],
+        # Schema 1.1's two added VIP fact sources (2026-09-04). Kept as
+        # NOT_AVAILABLE/empty here on purpose: this fixture exists to
+        # exercise the MCP verbs, none of which read these sub-layers, and a
+        # fabricated DesignWare install path would be fixture content
+        # pretending to describe a real tree.
+        "vip_release": {
+            "status": "NOT_AVAILABLE",
+            "source": {"kind": "designware_home_scan", "path": None},
+            "reason": "$DESIGNWARE_HOME is not set for this fixture",
+            "designware_home": None,
+            "packages": [],
+        },
+        "user_guide_refs": {
+            "status": "NOT_AVAILABLE",
+            "reason": "no VIP user guide has been distilled for this fixture",
+            "documents": [],
+        },
     },
 
     "dut_facts": {
@@ -123,6 +140,43 @@ _FIXTURE_MANIFEST = {
                 },
             ],
         },
+        # Schema 1.1's SoC-spec-pipeline DUT fact source (2026-09-04). The
+        # address_map entry deliberately AGREES with USB3_CTRL_BLOCK's
+        # 0x1000 above, so this fixture models a consistent environment;
+        # the disagreement path is exercised by test_env_manifest_fact_
+        # sources.py against the real builder rather than hand-authored here.
+        "address_map": {
+            "status": "LOADED",
+            "source": {"kind": "soc_arch_map_json", "path": "arch/usb3_soc_arch_map.json"},
+            "reason": None,
+            "entries": [
+                {
+                    "name": "USB3_CTRL_BLOCK",
+                    "base_address": "0x1000",
+                    "size_bytes": 4096,
+                    "target": "chip.core.usb0",
+                    "bus": "APB",
+                    "evidence": "rtl/soc_decoder.sv:212",
+                    "description": "USB3 control/status region.",
+                    "register_map_agreement": "AGREES",
+                },
+            ],
+            "disagreement_count": 0,
+        },
+        "clock_reset": {
+            "status": "LOADED",
+            "source": {"kind": "soc_arch_map_json", "path": "arch/usb3_soc_arch_map.json"},
+            "reason": None,
+            "clocks": [
+                {"name": "pclk", "frequency_mhz": 100.0, "source": "pll0_out_div4",
+                 "domain": "apb", "evidence": "arch/clocks.md#apb", "description": "APB register clock."},
+            ],
+            "resets": [
+                {"name": "presetn", "active_level": "low", "synchronous": True, "clock": "pclk",
+                 "clock_resolved": "RESOLVED", "evidence": "arch/resets.md#apb",
+                 "description": "APB reset."},
+            ],
+        },
     },
 
     "env_topology": {
@@ -164,6 +218,40 @@ _FIXTURE_MANIFEST = {
                 # evidence-backed yet).
             ],
         },
+        # Schema 1.1's testlist/vPlan/coverage three-way join (2026-09-04).
+        # VP-002 deliberately claims `usb3_link_recovery_test`, which is NOT
+        # in the testlist -- a real broken link, so this fixture exercises
+        # the finding this layer exists to surface rather than an all-clean
+        # environment no correspondence check would ever have been built for.
+        "testplan_correspondence": {
+            "status": "COMPUTED",
+            "source": {"kind": "testplan_sources_json", "path": "vplan/usb3_testplan_sources.json"},
+            "reason": None,
+            "axes_available": {"testlist": True, "vplan_items": True, "coverage_model": True},
+            "items": [
+                {
+                    "id": "VP-001",
+                    "tests_claimed": 1, "tests_present": ["usb3_smoke_test"], "tests_missing": [],
+                    "coverage_claimed": 1, "coverage_present": ["cg_usb3_link_state"], "coverage_missing": [],
+                    "verdict": "LINKED",
+                },
+                {
+                    "id": "VP-002",
+                    "tests_claimed": 1, "tests_present": [], "tests_missing": ["usb3_link_recovery_test"],
+                    "coverage_claimed": 0, "coverage_present": [], "coverage_missing": [],
+                    "verdict": "BROKEN_TEST_REF",
+                },
+            ],
+            "orphans": {
+                "tests_not_in_any_vplan_item": ["usb3_reset_test"],
+                "coverage_not_referenced_by_any_vplan_item": [],
+            },
+            "summary": {
+                "testlist_count": 2, "vplan_item_count": 2, "coverage_model_count": 1,
+                "linked_count": 1, "broken_count": 1, "unclaimed_count": 0,
+                "orphan_test_count": 1, "orphan_coverage_count": 0,
+            },
+        },
     },
 }
 
@@ -182,12 +270,27 @@ def build_not_available_manifest() -> dict:
     honest-NOT_AVAILABLE path, matching the real generator's own
     NOT_AVAILABLE-by-honest-design contract."""
     m = build_fixture_manifest()
-    m["vip_config"] = {"status": "NOT_AVAILABLE", "source": {"kind": "vip_config_dump_json", "path": None},
-                        "reason": "no end_of_elaboration_phase dump found for this run", "vip_instances": []}
+    m["vip_config"] = {
+        "status": "NOT_AVAILABLE", "source": {"kind": "vip_config_dump_json", "path": None},
+        "reason": "no end_of_elaboration_phase dump found for this run", "vip_instances": [],
+        "vip_release": {"status": "NOT_AVAILABLE",
+                         "source": {"kind": "designware_home_scan", "path": None},
+                         "reason": "$DESIGNWARE_HOME is not set", "designware_home": None, "packages": []},
+        "user_guide_refs": {"status": "NOT_AVAILABLE",
+                             "reason": "no VIP user guide has been distilled yet", "documents": []},
+    }
     m["dut_facts"]["rtl"] = {"status": "NOT_AVAILABLE", "reason": "no rtl_files supplied", "files": []}
     m["dut_facts"]["registers"] = {"status": "NOT_AVAILABLE",
                                     "source": {"kind": "register_map_json", "path": None},
                                     "reason": "no register-map input was supplied", "blocks": []}
+    m["dut_facts"]["address_map"] = {"status": "NOT_AVAILABLE",
+                                      "source": {"kind": "soc_arch_map_json", "path": None},
+                                      "reason": "no SoC architecture-map input was supplied",
+                                      "entries": [], "disagreement_count": 0}
+    m["dut_facts"]["clock_reset"] = {"status": "NOT_AVAILABLE",
+                                      "source": {"kind": "soc_arch_map_json", "path": None},
+                                      "reason": "no SoC architecture-map input was supplied",
+                                      "clocks": [], "resets": []}
     m["env_topology"] = {
         "component_hierarchy": {"status": "NOT_AVAILABLE",
                                  "source": {"kind": "topology_dump_json", "path": None},
@@ -196,5 +299,17 @@ def build_not_available_manifest() -> dict:
                              "source": {"kind": "sim_log_uvm_config_db_trace", "path": None},
                              "reason": "no +UVM_CONFIG_DB_TRACE log supplied",
                              "parse_confidence": None, "entries": []},
+        "testplan_correspondence": {
+            "status": "NOT_AVAILABLE",
+            "source": {"kind": "testplan_sources_json", "path": None},
+            "reason": "no testplan-sources input was supplied",
+            "axes_available": {"testlist": False, "vplan_items": False, "coverage_model": False},
+            "items": [],
+            "orphans": {"tests_not_in_any_vplan_item": [],
+                         "coverage_not_referenced_by_any_vplan_item": []},
+            "summary": {"testlist_count": 0, "vplan_item_count": 0, "coverage_model_count": 0,
+                         "linked_count": 0, "broken_count": 0, "unclaimed_count": 0,
+                         "orphan_test_count": 0, "orphan_coverage_count": 0},
+        },
     }
     return m

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/testplan_sources.schema.json",
+  "title": "testplan_sources",
+  "description": "INPUT CONTRACT for env.manifest.json's env_topology.testplan_correspondence sub-layer -- the 'testlist / vPlan / coverage-model correspondence' fact source. It holds the three real lists a project already owns, exported to one shape: the TESTLIST (what the regression actually runs), the VPLAN ITEMS (what verification claims to be verifying, and which tests/coverage each item claims cover it), and the COVERAGE MODEL (which covergroups/coverpoints/assertions actually exist in the written SV source). env_manifest.py never invents any of the three; it COMPUTES the three-way correspondence between them and reports every broken link and every orphan. That computation is the whole point: each list on its own always looks healthy, and it is only the join that exposes a vPlan item claiming a test nobody runs, a covergroup nobody's vPlan item references, or a test in the nightly regression that maps to no verification intent at all. Each of the three arrays is independently optional, so a project can supply the two it has and get an honest PARTIAL correspondence naming the missing axis, rather than nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "description": "Where this file's content came from, e.g. 'regression_list_plus_vplan_export', 'vplan_xlsx_conversion'." },
+        "description": { "type": "string" }
+      }
+    },
+    "testlist": {
+      "type": "array",
+      "description": "One entry per test the regression can actually run -- exported from the project's real testlist/regression list, not hand-listed from memory.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "description": "The UVM test name exactly as the runner invokes it (+UVM_TESTNAME). This exact string is what vplan_items[].tests must match -- the correspondence is a literal name join, never a fuzzy one, because a fuzzy match would manufacture links that do not exist." },
+          "tier": { "type": ["string", "null"], "description": "Regression cadence this test belongs to, e.g. SMOKE/NIGHTLY/WEEKLY (see dv_harness/regression_tiers.py). Null when untiered." },
+          "file": { "type": ["string", "null"], "description": "Path of the file declaring the test, so a broken link is traceable to a real location." },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "vplan_items": {
+      "type": "array",
+      "description": "One entry per vPlan verification item -- exported from the project's real vPlan (see dv_harness/vplan_writer/writer.py for the workbook this is typically exported from).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "description": "The vPlan item's own stable identifier." },
+          "description": { "type": "string" },
+          "tests": {
+            "type": "array",
+            "description": "Test names this item CLAIMS cover it. A claim, not a fact -- which is exactly why env_manifest.py checks each one against `testlist` and reports the ones that resolve to nothing.",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "coverage": {
+            "type": "array",
+            "description": "Coverage-model item names this vPlan item CLAIMS measure it. Checked against `coverage_model` the same way.",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "status": { "type": ["string", "null"], "description": "The vPlan's own status text for this item, carried through verbatim and never reinterpreted." }
+        }
+      }
+    },
+    "coverage_model": {
+      "type": "array",
+      "description": "One entry per coverage construct that actually EXISTS in the written SV source. This list must describe real declarations, not planned ones -- a planned covergroup listed here would make a vPlan item's coverage claim resolve against something nobody wrote.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "kind"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["covergroup", "coverpoint", "cross", "assertion"] },
+          "file": { "type": ["string", "null"], "description": "Declaring file, ideally with the same file:line discipline the rest of this repo uses." },
+          "line": { "type": ["integer", "null"], "minimum": 1 },
+          "description": { "type": "string" }
+        }
+      }
+    }
+  }
+}
