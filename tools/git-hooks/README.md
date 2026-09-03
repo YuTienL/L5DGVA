@@ -8,21 +8,32 @@ Human review via PR is the only path onto those branches. A human running
 the identical `git push`/`git merge` from their own interactive terminal is
 never blocked by this gate.
 
-## Real current state of this repo (checked 2026-09-03, be honest about it)
+## Real current state of this repo (re-checked 2026-09-04, be honest about it)
 
 ```
+$ git config --get core.hooksPath
+tools/git-hooks                     # <- these hooks ARE installed and live
 $ git remote -v
-(empty -- no remote configured)
+origin  https://github.com/YuTienL/DV_Agent_Harness.git (fetch/push)
+$ git ls-remote origin
+(no output, exit 0)                 # <- remote exists and is reachable, but is EMPTY
 $ git branch -a
 * master
 ```
 
-This repo has **no GitHub remote configured today**, and its entire history
-has been direct commits to a local-only `master` -- there is no live PR
-workflow to point at right now. The policy below is written and enforced
-in tooling regardless, so it is already active the moment a real remote
-(and, ideally, GitHub branch-protection rules) is added -- nothing about
-this gate assumes a remote exists.
+These hooks are **installed** (`core.hooksPath` was pointed here on
+2026-09-03, after this file was first written -- the earlier "NOT YET
+INSTALLED" wording here and in CLAUDE.md was stale and has been corrected).
+A GitHub `origin` **now exists** but is still empty, so there are no remote
+branches and therefore no server-side branch protection yet: layer 2 below
+is currently the only gate actually standing between an agent and a direct
+`git push origin master`. History to date is still direct commits to a
+local `master`; there is no live PR workflow to point at yet.
+
+The gate is proven end-to-end (real `git push` / real `git merge --no-ff`,
+driven by git's own hook runner against these exact scripts) by
+`dv_harness_tests/test_git_hooks_e2e.py`, which also asserts this repo's
+`core.hooksPath` is still set so the claim above cannot go stale silently.
 
 ## Layered enforcement
 

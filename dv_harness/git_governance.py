@@ -71,11 +71,14 @@ def _remote_relay_module():
 
 AI_AGENT_ENV_MARKERS = _remote_relay_module().AI_AGENT_ENV_MARKERS
 
-# This project's real git-safety baseline: no GitHub remote is configured
-# yet (confirmed 2026-09-03: `git remote -v` is empty, history is direct
-# commits to a local-only `master`) -- so "master" is included alongside
+# This project's real git-safety baseline: "master" is included alongside
 # "main" precisely because that is this repo's own real current branch
-# name, not a guess at a future convention.
+# name, not a guess at a future convention. (State note, re-checked
+# 2026-09-04: an `origin` GitHub remote now exists but is still empty, so
+# no server-side branch protection can exist on it yet -- this local gate
+# is currently the only thing standing between an agent and a direct
+# `git push origin master`. See CLAUDE.md's gh CLI + PR-Only Governance
+# Policy section for the dated, authoritative state.)
 PROTECTED_BRANCHES = ("main", "master")
 
 _REF_HEADS_RE = re.compile(r"^refs/heads/(.+)$")

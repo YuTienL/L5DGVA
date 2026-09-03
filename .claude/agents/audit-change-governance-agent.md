@@ -71,19 +71,30 @@ estimates an answer from memory/summary text.
    which source identity, with what result -- for "was a job run" questions
    distinct from "was code changed."
 
-## Honest current state of #4 (2026-09-03, do not assume otherwise)
+## Honest current state of #4 (re-checked 2026-09-04, do not assume otherwise)
 
-This project (`D:\DV\Task\DV_Agent_Harness_L5\v50`) currently has **no
-GitHub remote configured** (`git remote -v` is empty) and its entire
-history is direct commits to a local-only `master` branch -- there is no
-live PR to read yet. When asked to audit a change today, report this
-honestly (`git log`/`.dv-harness/events.jsonl` are real and queryable now;
-`gh pr ...` has nothing to query until a remote exists) rather than
-fabricating or assuming a PR trail that isn't there. The policy and
-tooling (`tools/git-hooks/`, `dv_harness/git_governance.py`,
-`git-guard`) are already active regardless, per CLAUDE.md's "gh CLI +
-PR-Only Governance Policy" section, so this agent's job the moment a
-remote and real PRs exist is unchanged -- only the data becomes non-empty.
+This project (`D:\DV\Task\DV_Agent_Harness_L5\v50`) now HAS a GitHub remote
+(`origin https://github.com/YuTienL/DV_Agent_Harness.git`), but it is
+**empty**: `git ls-remote origin` returns no refs, `master` has no
+upstream, and the entire history is still direct commits to a local
+`master`. So there are **no PRs to read yet** -- `gh pr ...` has nothing to
+query, and (because the remote has no branches) no server-side branch
+protection exists either. When asked to audit a change today, report that
+honestly (`git log` / `.dv-harness/events.jsonl` are real and queryable
+now) rather than fabricating or assuming a PR trail that isn't there.
+Separately, `gh` is installed but NOT on PATH here -- invoke it as
+`"C:\Program Files\GitHub CLI\gh.exe"` if you need it.
+
+The local gate (`tools/git-hooks/`, `dv_harness/git_governance.py`,
+`git-guard`) is **installed and live** (`core.hooksPath = tools/git-hooks`)
+and is currently the only gate on `master`, per CLAUDE.md's "gh CLI +
+PR-Only Governance Policy" section. Its `GIT_GUARD_DECISION` trail is real
+and non-empty. Caveat worth stating when asked: every entry recorded so far
+in THIS repo came from a direct `git-guard`/hook invocation, not from an
+organic `git push`/`git merge` -- the organic path itself is proven, but by
+`dv_harness_tests/test_git_hooks_e2e.py` in throwaway repos, not by an
+incident in this repo's own trail. This agent's job is unchanged the moment
+real PRs exist -- only the data becomes non-empty.
 
 ## Reversibility assessment
 

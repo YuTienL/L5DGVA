@@ -319,23 +319,37 @@ any push) and `CORE/git-workflow` (the full SYNC->...->PUSH lifecycle,
 including its own "禁止自動 force push" rule) -- this section adds the
 specific main/master-protection rule those two skills did not yet state.
 
-**Real current state of this repo (checked 2026-09-03, kept honest rather
-than assumed)**: no GitHub remote is configured (`git remote -v` is empty)
-and this session's own git history has been direct commits to a
-local-only `master` branch the whole time -- there is no live PR workflow
-to point at today. The policy and its enforcement below are written and
-active regardless, so they are already in force the moment a real remote
-(and GitHub branch-protection rules requiring PR review) is added.
+**Real current state of this repo (re-checked 2026-09-04, kept honest
+rather than assumed -- the 2026-09-03 wording below it was already stale
+within a day, which is exactly why this paragraph is dated)**:
+- A GitHub remote now EXISTS: `remote.origin.url =
+  https://github.com/YuTienL/DV_Agent_Harness.git`, reachable
+  (`git ls-remote origin` exits 0) but currently **empty** -- it returns no
+  refs, and `master` has no upstream. So there is still no live PR workflow
+  and, with no branches on the remote, no server-side branch-protection
+  rule can exist on it yet. What HAS changed since 2026-09-03 is that a
+  `git push origin master` from this repo is now a real, reachable
+  operation rather than `fatal: No configured push destination.` -- i.e.
+  the local hook gate below is now the thing that actually stands between
+  an agent and a direct write to `master`.
+- The local hooks below are **INSTALLED and live** (see enforcement item 2).
+- `gh.exe` v2.99.0 is installed at `C:\Program Files\GitHub CLI\gh.exe` but
+  is **not on PATH**, including in a fresh shell -- invoke it by full path
+  until that is fixed. (An earlier build report claimed "a new terminal
+  will see `gh` on PATH"; that claim was false and is corrected here.)
 
 **Layered enforcement**:
-1. **Primary (once a remote exists): server-side branch protection** on
+1. **Primary (still ASPIRATIONAL here): server-side branch protection** on
    `main`/`master` requiring PR review before merge, disallowing direct
    pushes. This is the authoritative gate -- it holds even if a local hook
-   is missing or bypassed.
-2. **Secondary (coded and tested, NOT YET INSTALLED as of 2026-09-03 --
-   `git config --get core.hooksPath` returns nothing in this repo and
-   neither hook file exists under `.git/hooks/`; run
-   `git config core.hooksPath tools/git-hooks` to activate): local
+   is missing or bypassed. Not in force today: the `origin` repo is empty,
+   so it has no branches to protect yet. Set this up as soon as the first
+   branch is pushed; until then layer 2 is the only gate.
+2. **Secondary (INSTALLED AND LIVE, verified 2026-09-04 --
+   `git config --get core.hooksPath` returns `tools/git-hooks`; it was
+   activated on 2026-09-03 *after* the original build task's own report was
+   written, which is why that report and this section both used to say
+   "NOT YET INSTALLED"): local
    `tools/git-hooks/pre-push` and
    `tools/git-hooks/pre-merge-commit`**, backed by
    `dv_harness/git_governance.py` (`dv-harness git-guard`). These detect an
@@ -346,8 +360,17 @@ active regardless, so they are already in force the moment a real remote
    into `main`/`master` from that environment. A human pushing/merging from
    their own interactive terminal (no agent marker present) is never
    blocked by this gate -- see `tools/git-hooks/README.md` for install
-   (`git config core.hooksPath tools/git-hooks`) and the deliberate
-   fail-open behavior when Python is unavailable.
+   (`git config core.hooksPath tools/git-hooks`; note git does NOT clone
+   `core.hooksPath`, so every fresh clone must re-run that one line) and
+   the deliberate fail-open behavior when Python is unavailable.
+   This gate is proven end-to-end by `dv_harness_tests/test_git_hooks_e2e.py`,
+   which drives a REAL `git push` and a REAL `git merge --no-ff` in a
+   throwaway repo using these same hook scripts and asserts git itself
+   aborts the operation, nothing lands on the remote, and a
+   `GIT_GUARD_DECISION` reaches `dv-harness audit` -- so the claim in this
+   section is a tested claim, not a description. Those tests also assert
+   this repo's own `core.hooksPath` is still set, so the "INSTALLED AND
+   LIVE" statement above cannot silently go stale again.
 
 Every `git-guard` decision that touched a protected branch is logged as a
 `GIT_GUARD_DECISION` event in `.dv-harness/events.jsonl` -- the same real
