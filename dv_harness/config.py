@@ -142,6 +142,29 @@ DEFAULT_CONFIG = {
         "shell": "csh",
         "require_license_configured": True,
     },
+    # Planner -> Execution Layer gate (2026-09-04, governance-architecture
+    # routing pass). Wires the `preflight` block above into
+    # engine.DVHarness.run_stage() itself for BUILD/REGRESSION-family stages
+    # -- i.e. any graph node declaring one of `skills` below -- so the full
+    # 6-check preflight suite runs as part of the Planner's own flow instead
+    # of only from `dv-harness preflight` / `dv-harness lsf-submit`. A BLOCKED
+    # verdict parks the stage in WAIT_USER before any agent is dispatched.
+    # There is no second preflight config: this block only says WHEN to run
+    # the gate, never WHAT to check.
+    #
+    # `probe_resources` OFF by default for exactly the reason the
+    # `degradation` block below states for its own identical flag: the checks
+    # shell out to real `lmutil`/`bqueues`/`df`/csh env probes that exist only
+    # server-side, and reading "command not found" as a jammed farm would be a
+    # fabricated BLOCK. Turn it on for a server-side deployment, or assign
+    # engine.DVHarness.execution_preflight_runner a
+    # preflight.RemoteRelayCommandRunner() to probe the real server from a
+    # PC-side session (an injected runner arms the gate on its own).
+    "execution_preflight": {
+        "enabled": True,
+        "probe_resources": False,
+        "skills": ["devops-pipeline", "vcs-build"],
+    },
     # --- Reliability blocks (2026-09-03 user spec: dry-run / checkpoint 與
     # 回滾 / 降級路徑). All three are read by dv_harness/engine.py's
     # run_stage(); see docs/ENGINE_STAGE_LIFECYCLE.md for how each one

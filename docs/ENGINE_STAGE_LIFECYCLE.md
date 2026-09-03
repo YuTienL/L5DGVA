@@ -23,6 +23,7 @@ effects; steps marked **[R]** are read-only.
 | 0 | **TAKEOVER short-circuit** -- any active takeover returns `BLOCKED_BY_TAKEOVER` immediately. Human Override outranks everything, including a dry-run. | [R] |
 | 0a | **dry-run branch** -- if enabled, `_dry_run_stage()` runs and returns. See §2. | [R]+1 report |
 | 0b | **DEGRADED gate** -- `_degraded_gate()` re-probes the triggers, then either returns a DEGRADED result or falls through. See §4. | [W] |
+| 0c | **Execution-layer preflight gate** -- `_execution_preflight_gate()`: for a BUILD/REGRESSION-family stage only, runs `preflight.run_preflight()`'s full 6-check suite and parks the stage in `WAIT_USER` on BLOCKED. See §4a. | [W] |
 | 1 | Stage-entry marker; `ss["status"]=RUNNING`, `attempts+=1`, `started_at`, `git_sha`; `store.save()`. | [W] |
 | 2 | **`_gather_stage_context()`** -- everything needed to decide *what* to execute (see §1a). | mixed |
 | 3 | `profiler.begin_stage()` -- telemetry record for this attempt. | [W] |
@@ -37,7 +38,7 @@ effects; steps marked **[R]** are read-only.
 | 10a | **Auto-checkpoint** -- `_auto_checkpoint()`. See §3. | [W] |
 | 11 | `self_tuning.increment_execution_counter()`, self-tuning review. | [W] |
 
-`run_stage()` has exactly one early `return` other than steps 0/0a/0b: none.
+`run_stage()` has exactly one early `return` other than steps 0/0a/0b/0c: none.
 Every verdict branch falls through to step 10-11, which is why the
 auto-checkpoint at 10a fires exactly once per real attempt regardless of
 outcome.
@@ -288,6 +289,71 @@ preflight's existing three-valued outcome rather than inventing a fourth.
 
 ---
 
+## 4a. Execution-layer preflight gate (Planner -> Execution Layer)
+
+> 「bsub / sbatch 前先做 license、queue、host、disk、workdir、EDA env 檢查。
+> 沒過就 BLOCKED，不派 job」
+
+**What it is.** `_execution_preflight_gate()` (step 0c) is `run_stage()`'s own
+call site into `dv_harness/preflight.py`'s aggregate `run_preflight()` -- the
+same six real checks (`lmutil lmstat`, `bqueues`, `hostname`, `df -Pk`,
+`test -d`/`-w`, the csh `$?VAR` env probe) that `dv-harness preflight` and
+`dv-harness lsf-submit` already run. It exists because the architecture's
+"Planner -> Execution Layer -> Preflight Agent" edge previously had **no
+code-level dispatch at all**: the full suite was reachable only from those two
+CLI subcommands, which a stage transition never reaches, and §4's DEGRADED
+probe covers only 2 of the 6 checks (license + queue) for a different purpose
+entirely (deciding whether to skip an LLM judgment call).
+
+**Scope.** Only stages whose real graph node declares `vcs-build` or
+`devops-pipeline` -- today `DE_BASELINE_REPRODUCTION`, `BUILD`, `BUILD_DEBUG`,
+`SERVER_SYNC`, `REGRESSION`, `INFRA_RECOVERY`. Scope is read from
+`.dv-harness/graph/main_graph.json`'s own skill declarations, not a hardcoded
+stage list, so a project that adds its own build node inherits the gate.
+
+**On BLOCKED**: `ss["status"]=WAIT_USER` with the real `blocked_on` check names
+in `blocking_reason`, an `EXECUTION_PREFLIGHT_BLOCKED` event (carrying the full
+`PreflightResult`) in `.dv-harness/events.jsonl`, an auto-checkpoint, and an
+early return. Because the gate sits **before** step 1, a blocked stage spends
+no `attempts` and never reaches `adapter.run()` -- no `claude` subprocess is
+dispatched for a build whose farm resources are already known to be absent.
+**On PASS**: an `EXECUTION_PREFLIGHT_PASS` event (the same real evidence, kept
+so a later signoff can substantiate "the farm was checked before this build"),
+then normal execution.
+
+**This does not replace the submission-time gate.**
+`lsf_client.bsub_submit_with_preflight()` remains the authoritative gate
+immediately before a real `bsub`, and keeps
+`PreflightConfig.require_license_configured=True` (an unconfigured license
+server FAILs rather than silently passing). Step 0c is earlier and cheaper: it
+saves the agent dispatch, not the job submission.
+
+**Configuration** (`config.py`'s `execution_preflight` block) says only *when*
+to run the gate -- never *what* to check; the checks come from the shared
+`preflight` block, so there is no second place to configure them.
+
+```json
+"execution_preflight": {
+  "enabled": true,
+  "probe_resources": false,
+  "skills": ["devops-pipeline", "vcs-build"]
+}
+```
+
+`probe_resources` is OFF by default for exactly the reason §4 gives for
+`degradation.probe_resources`: the checks shell out to real EDA/scheduler
+binaries that exist only server-side, and reading "command not found" as a
+jammed farm would be a fabricated BLOCK. A server-side deployment turns it on;
+a PC-side one in REMOTE_EXECUTION mode assigns
+`preflight.RemoteRelayCommandRunner()` to
+`DVHarness.execution_preflight_runner` and probes the real server through the
+already-sanctioned relay (an injected transport arms the gate on its own --
+the same injected-transport seam `degradation_runner` uses, and the seam every
+test drives a pure mock through). A crash inside the gate leaves the stage
+running normally: an unreachable probe must never become an unbreakable block.
+
+---
+
 ## 5. Interaction ordering
 
 1. **TAKEOVER** -- outranks everything, including dry-run. Human Override is
@@ -295,7 +361,10 @@ preflight's existing three-valued outcome rather than inventing a fourth.
 2. **dry-run** -- before the DEGRADED gate, because planning is read-only and
    stays useful precisely when execution is blocked.
 3. **DEGRADED** -- before any state mutation.
-4. normal execution.
+4. **Execution-layer preflight** -- after DEGRADED (a degraded harness must not
+   spend farm probes it has already decided not to act on) and still before any
+   state mutation, so a block costs no retry budget.
+5. normal execution.
 
 ## 6. Tests
 
@@ -307,6 +376,16 @@ real round-trip restore; all three degradation triggers driven through
 `run_stage()`, degraded data-collection behaviour, `status` observability,
 and self-clearing resumption.
 
+`dv_harness_tests/test_execution_preflight_wiring.py` (17 tests): the §4a
+Planner -> Execution Layer edge -- that `run_stage()` really issues
+`preflight.py`'s own `lmstat`/`bqueues`/`hostname`/env commands for a
+BUILD-family stage, that a BLOCKED verdict stops the stage before
+`adapter.run()` and before `attempts+=1`, that `loop()` does not advance past
+it, that the event lands in the shared audit trail, that scope matches the real
+project graph's `vcs-build`/`devops-pipeline` nodes, and that the gate is
+neither a fabricated block (probe off by default, crash fails open) nor a
+silent bypass.
+
 License/queue fixtures are the real captured `lmutil lmstat`/`bqueues` output
-imported from `test_preflight.py`, so the two suites cannot drift and no test
+imported from `test_preflight.py`, so the suites cannot drift and no test
 contacts a live license server or scheduler.

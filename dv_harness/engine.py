@@ -485,6 +485,18 @@ class DVHarness:
         # the seam dv_harness_tests/test_harness_reliability.py injects a
         # pure mock through so no test ever contacts a live license server.
         self.degradation_runner = None
+        # Transport for the Planner->Execution-Layer preflight gate
+        # (_execution_preflight_gate(), 2026-09-04). Same injected-transport
+        # seam and same default as degradation_runner immediately above: None
+        # means preflight.LocalCommandRunner() (correct only server-side),
+        # and a PC-side REMOTE_EXECUTION deployment assigns
+        # preflight.RemoteRelayCommandRunner() to probe the REAL server.
+        # Assigning a runner here also ARMS the gate on its own -- see
+        # _execution_preflight_gate()'s probe_resources branch: an explicitly
+        # injected transport is itself the statement that a real probe is
+        # possible here, which is what lets a test drive the whole
+        # run_stage()->preflight edge through a pure mock.
+        self.execution_preflight_runner = None
 
         # Plan-and-Execute / Multi-Agent / Blackboard / ReAct (see module
         # docstring above): constructed unconditionally -- all four are
@@ -2292,6 +2304,131 @@ class DVHarness:
             print(f"[dv-harness] degradation check failed (continuing normally): {e}")
             return None
 
+    # ---- Planner -> Execution Layer -------------------------------------
+    #
+    # Which graph-node skills mark a stage as an EXECUTION-LAYER stage: one
+    # whose routed agent's actual job is to build, submit, or drive real work
+    # on the DV farm (`.dv-harness/graph/main_graph.json` gives `vcs-build` to
+    # DE_BASELINE_REPRODUCTION / BUILD / BUILD_DEBUG and `devops-pipeline` to
+    # SERVER_SYNC / REGRESSION / INFRA_RECOVERY -- exactly the BUILD/
+    # REGRESSION family). Skills, not a hardcoded stage-name list, because the
+    # graph is the single place stage->work-kind is already declared, so a
+    # project that adds its own build node inherits this gate for free.
+    EXECUTION_PREFLIGHT_SKILLS = ("devops-pipeline", "vcs-build")
+
+    def _execution_preflight_cfg(self) -> Dict[str, Any]:
+        block = self.cfg.get("execution_preflight")
+        return block if isinstance(block, dict) else {}
+
+    def _execution_preflight_skills(self, stage: str) -> List[str]:
+        """The execution-layer skills THIS stage's real graph node declares
+        (empty for every non-execution stage). Read from self.graph so a
+        node-less/legacy stage simply never triggers the gate."""
+        node = self.graph.nodes.get(stage) if self.graph is not None else None
+        declared = list(getattr(node, "skills", None) or []) if node is not None else []
+        want = self._execution_preflight_cfg().get("skills")
+        want = [s for s in want if isinstance(s, str)] if isinstance(want, list) \
+            else list(self.EXECUTION_PREFLIGHT_SKILLS)
+        return [s for s in declared if s in want]
+
+    def _execution_preflight_gate(self, stage: str) -> Optional[AgentResult]:
+        """Planner -> Execution Layer, enforced. Returns a BLOCKED
+        AgentResult when this stage must NOT dispatch its build/regression
+        agent because the real farm resources it is about to consume are not
+        there, or None to proceed normally.
+
+        WHY THIS EXISTS: before this gate, run_stage() had no call site into
+        dv_harness/preflight.py's full check suite at all -- the architecture
+        diagram's "Planner -> Execution Layer -> Preflight Agent" arrow was
+        satisfied only by _degraded_gate()'s narrow license+queue slice (2 of
+        the 6 real checks, and only to decide whether to skip an LLM judgment
+        call), while run_preflight()'s full suite -- disk, workdir, env, host
+        included -- was reachable ONLY from `dv-harness preflight` and
+        `dv-harness lsf-submit`, i.e. never from a stage transition. This
+        closes that specific edge: the same real preflight code, the same
+        `preflight` config block, now runs as part of the Planner's own flow
+        for exactly the stages whose agent is about to build or submit.
+
+        It does NOT replace lsf_client.bsub_submit_with_preflight() -- that
+        remains the authoritative gate immediately before a real `bsub`. This
+        one is earlier and cheaper: it stops the harness from spending a full
+        agent dispatch (a real `claude` subprocess with full tool access) on a
+        stage whose farm resources are already known to be unavailable.
+
+        CONFIG, and why probe_resources is OFF by default: identical
+        reasoning to degradation.probe_resources (config.py states it in
+        full) -- run_preflight() shells out to real `lmutil`/`bqueues`/`df`/
+        `test -d`/csh env probes, which per preflight.py's own transport
+        docstring exist only where dv_harness runs server-side on the Linux DV
+        server. On a PC-side session those binaries are simply absent, and
+        reading "command not found" as evidence of a jammed farm would be a
+        fabricated BLOCK. A server-side deployment turns this on; a PC-side
+        one in REMOTE_EXECUTION mode assigns
+        preflight.RemoteRelayCommandRunner() to execution_preflight_runner and
+        probes the REAL server through the already-sanctioned relay, the same
+        injected-transport seam degradation_runner uses.
+
+        Unlike degradation's probe, this one does NOT force
+        require_license_configured=False: it honours the project's `preflight`
+        block verbatim, exactly as `dv-harness preflight` and `dv-harness
+        lsf-submit` already do -- there is no second place to configure this,
+        and a deployment that deliberately opted this gate on is a deployment
+        whose preflight block carries its real values.
+
+        WAIT_USER (not a retry) on BLOCKED, for _degraded_gate()'s own stated
+        reason: loop() reads ss["status"], and its fallthrough is an
+        unconditional advance(), so a blocked stage must park on a status
+        loop() already stops cleanly on rather than be advanced as though it
+        had passed. blocked_on carries the real failing check names, so the
+        park is never unexplained. Best-effort like every other side effect in
+        this file: a crash inside the gate leaves the stage running normally
+        rather than stranding it -- an unreachable probe must never become an
+        unbreakable block.
+        """
+        conf = self._execution_preflight_cfg()
+        if not conf.get("enabled", True):
+            return None
+        skills = self._execution_preflight_skills(stage)
+        if not skills:
+            return None
+        if not conf.get("probe_resources", False) and self.execution_preflight_runner is None:
+            return None
+        try:
+            from . import preflight as _preflight
+            pf_cfg = _preflight.config_from_dict(self.cfg.get("preflight"))
+            result = _preflight.run_preflight(pf_cfg, runner=self.execution_preflight_runner)
+            if result.overall == "PASS":
+                self.store.event({"ts": now(), "stage": stage,
+                                   "event": "EXECUTION_PREFLIGHT_PASS",
+                                   "execution_skills": skills,
+                                   "preflight": result.to_dict()})
+                return None
+            reason = (f"EXECUTION_PREFLIGHT_BLOCKED: stage {stage} routes an execution-layer "
+                      f"agent (skills={skills}) but dv_harness/preflight.py reports "
+                      f"{result.overall} on {result.blocked_on}. No agent dispatched. "
+                      f"Fix the farm/environment condition, or run `dv-harness preflight` "
+                      f"for the full check detail.")
+            ss = self.state.stages[stage]
+            ss["status"] = Status.WAIT_USER.value
+            ss["blocking_reason"] = reason[:2000]
+            self.state.overall_status = Status.WAIT_USER.value
+            self.store.save(self.state)
+            self.store.event({"ts": now(), "stage": stage,
+                               "event": "EXECUTION_PREFLIGHT_BLOCKED",
+                               "execution_skills": skills,
+                               "blocked_on": result.blocked_on,
+                               "preflight": result.to_dict()})
+            self._auto_checkpoint(stage, note=f"execution preflight blocked: {reason[:300]}")
+            print(f"[dv-harness] {reason}")
+            return AgentResult(ok=False, text=reason,
+                                raw={"preflight_blocked": True, "stage": stage,
+                                     "execution_skills": skills,
+                                     "preflight": result.to_dict()},
+                                session_id=None)
+        except Exception as e:
+            print(f"[dv-harness] execution preflight check failed (continuing normally): {e}")
+            return None
+
     def _auto_checkpoint(self, stage: str, note: str = "") -> None:
         """Automatic stage-transition recovery point ("每個階段留可回復點,
         agent 走偏時不必從頭"). session_snapshot.save_session() already does
@@ -2381,6 +2518,19 @@ class DVHarness:
         degraded = self._degraded_gate(stage)
         if degraded is not None:
             return degraded
+
+        # Planner -> Execution Layer: for a BUILD/REGRESSION-family stage
+        # (graph node declaring `vcs-build`/`devops-pipeline`), run
+        # dv_harness/preflight.py's REAL full check suite before spending an
+        # agent dispatch on farm resources that are not there. Placed here,
+        # beside the DEGRADED gate and before _emit_stage_start_marker() /
+        # the attempts++ below, so a blocked stage consumes no retry budget
+        # and adapter.run() is never reached. See
+        # _execution_preflight_gate()'s docstring for why this does not
+        # replace lsf_client.bsub_submit_with_preflight().
+        blocked = self._execution_preflight_gate(stage)
+        if blocked is not None:
+            return blocked
 
         # Distinctive stage-entry marker (see STAGE_MARKER_PREFIX's RULING
         # comment above) -- emitted here, AFTER the TAKEOVER short-circuit
