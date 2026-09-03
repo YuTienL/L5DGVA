@@ -78,3 +78,27 @@ jobs:
       - name: Run harness self-audit
         run: python -m dv_harness.cli --project-root . self-audit
         timeout-minutes: 10
+
+      # The STANDING bind-connectivity trigger (2026-09-04). CLAUDE.md's
+      # "Bind-Location Rules" makes connectivity.py's 3 machine gates a
+      # REQUIRED checkpoint, and connectivity.py's own
+      # run_gate3_against_live_simv() docstring calls for them to be re-run
+      # "on every RTL update" -- which needs an automatic trigger, not a
+      # recipe someone remembers to type. `--check-only` runs no gate; it
+      # re-computes the content fingerprint of the RTL declared in
+      # .dv-harness/connectivity_check.json and compares it against the
+      # fingerprint recorded by the last real `just connectivity-check`
+      # run. Exit 2 (job fails) means the RTL moved on this branch but the
+      # gates were not re-run, so the recorded Gate 1/2/3 statuses describe
+      # different RTL and must not be cited.
+      #
+      # HONEST NO-OP FOR THIS REPO TODAY: the harness repo itself has no RTL
+      # tree and therefore no connectivity_check.json, so this step prints
+      # NOT_CONFIGURED and exits 0. It becomes a real gate the moment a
+      # project checkout carries that config -- verified locally
+      # 2026-09-04 (`just connectivity-check-status` -> NOT_CONFIGURED,
+      # exit 0) and covered end-to-end by
+      # dv_harness_tests/test_connectivity_check.py.
+      - name: Bind-connectivity staleness check (3 machine gates)
+        run: python -m dv_harness.connectivity_check --project-root . --check-only
+        timeout-minutes: 5

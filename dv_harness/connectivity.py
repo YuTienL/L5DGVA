@@ -1415,11 +1415,20 @@ def evaluate_transaction_activity(monitor_transaction_counts: dict) -> GateResul
 
 def run_gate3_against_live_simv(*args, **kwargs) -> GateResult:
     """Honest NOT_AVAILABLE integration point, same treatment as Gate 2:
-    real recipe is a minimal directed test (recommended as a standing 'just
-    connectivity-check' recipe re-run on every RTL update, per Part C) whose
-    UVM monitors' own `analysis_port` write counts are tallied into a
+    real recipe is a minimal directed test whose UVM monitors' own
+    `analysis_port` write counts are tallied into a
     `monitor_transaction_counts` dict and passed to
-    `evaluate_transaction_activity()`."""
+    `evaluate_transaction_activity()`.
+
+    Part C's "standing 'just connectivity-check' recipe re-run on every RTL
+    update" is no longer only a recommendation in this docstring: it is
+    implemented as `dv_harness/connectivity_check.py` and the root
+    justfile's `connectivity-check` / `connectivity-check-status` recipes
+    (2026-09-04). That runner drives `run_machine_gates()` and records the
+    RTL content fingerprint each verdict was produced against, so a later
+    `--check-only` run fails when the RTL moved but the gates were not
+    re-run. Supplying real counts here is still the project's own job --
+    this function fabricates none."""
     return GateResult(
         gate="gate3_transaction_activity", status=GateStatus.NOT_AVAILABLE,
         detail={"reason": "no live simv/directed test run exists in this repo to source real monitor transaction counts from.",

@@ -207,6 +207,36 @@ check:
 list-patterns:
     {{python}} "{{remote_exec}}" --cwd "{{sim_dir}}" "make list_patterns {{make_paths}}"
 
+# --- Bind connectivity: the standing 3-gate recipe ---------------------------
+# CLAUDE.md's "Bind-Location Rules (2026-09-03)" makes the 3 machine gates
+# (Gate 1 elaboration / Gate 2 static zero-time connectivity / Gate 3
+# transaction activity) a REQUIRED checkpoint, and
+# dv_harness/connectivity.py's own run_gate3_against_live_simv() docstring
+# calls for them as "a standing 'just connectivity-check' recipe re-run on
+# every RTL update". These two recipes ARE that -- backed by the real
+# dv_harness/connectivity_check.py runner, which drives
+# connectivity.run_machine_gates() (all 3 gates, never a subset) and records
+# the RTL content fingerprint the resulting verdicts were produced against.
+#
+# LOCAL, not remote: this reads the local RTL tree and the local
+# .dv-harness/ state, submits no LSF job and needs no license, so unlike
+# build/verify/run there is deliberately no `preflight` dependency here.
+#
+# Inputs come from .dv-harness/connectivity_check.json (rtl_sources,
+# filelists, top_module, optional signal_trace_path / monitor transaction
+# counts / pattern_completed). A project without that file is reported
+# NOT_CONFIGURED rather than silently passing.
+connectivity-check:
+    {{python}} -m dv_harness.connectivity_check --project-root "{{justfile_directory()}}"
+
+# The standing TRIGGER, for CI / a pre-push hook / any "did anything change"
+# poll: runs no gate, only compares the current RTL fingerprint against the
+# last recorded `just connectivity-check` run. Exit 2 means the RTL moved
+# but the gates were not re-run, so the recorded Gate 1/2/3 statuses
+# describe different RTL and must not be cited.
+connectivity-check-status:
+    {{python}} -m dv_harness.connectivity_check --project-root "{{justfile_directory()}}" --check-only
+
 # =============================================================================
 # 4. WAVE=1 RUN
 # =============================================================================

@@ -651,6 +651,32 @@ Concretely, for every IP_UVM_DV_Gen build from this point forward (full mechanic
   future code path that comes to drive this build mechanically instead of via agent-followed
   prose. See `.work/gap-close-mandatory-gates-report.md` for the full evidence and verification.
 
+**The gates are also a STANDING recipe re-run on every RTL update (2026-09-04).** The checkpoint
+above fires once, at first successful compile. `connectivity.py`'s own
+`run_gate3_against_live_simv()` docstring additionally called for the gates as "a standing
+`just connectivity-check` recipe re-run on every RTL update" — a recipe that did not exist
+anywhere (no justfile target, no CI job, no hook; `connectivity.py` was imported by nothing but
+itself and `bind_verification_lint.py`). It now does:
+- `just connectivity-check` runs all 3 gates through `connectivity.run_machine_gates()` (never a
+  subset) via the real `dv_harness/connectivity_check.py` runner, and records the resulting
+  statuses **together with a content fingerprint of the RTL they were produced against**
+  (`.dv-harness/connectivity_check_state.json`, plus a lint-clean
+  `.dv-harness/connectivity_check_report.md` rendered by the same
+  `render_bind_verification_status_markdown()`).
+- `just connectivity-check-status` (= `python -m dv_harness.connectivity_check --check-only`) is
+  the automatic TRIGGER: it runs no gate, only re-computes that fingerprint and exits **2** when
+  the RTL moved since the last real gate run, or when no run was ever recorded. Wired as a CI
+  step in `.github/workflows/dv-harness-ci.yml`, so "RTL changed but nobody re-ran connectivity"
+  becomes a real failure instead of something a reviewer has to notice. Content-hash based, not
+  mtime — a no-op touch does not fire it, and a content change that preserves mtime does.
+- Inputs are declared once per project in `.dv-harness/connectivity_check.json` (`rtl_sources`
+  globs, `filelists`, `top_module`, optional `signal_trace_path`, monitor transaction counts,
+  `pattern_completed`). A project without that file reports NOT_CONFIGURED rather than a silent
+  pass; a config whose `rtl_sources` match zero files is a hard config error, never a vacuous
+  constant fingerprint that would compare equal forever. **This harness repo itself has no RTL
+  tree, so its own CI step is honestly a no-op today** — the mechanism is real and tested
+  (`dv_harness_tests/test_connectivity_check.py`), the RTL it watches is per-project.
+
 
 ## Context Budget: 3 Tiers + MCP-First Routing (2026-09-03)
 
