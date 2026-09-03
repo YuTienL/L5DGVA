@@ -26,10 +26,22 @@ Design, matching this codebase's existing conventions (memory_vault.py's own
     what kind, without the credential itself ever landing in a note, in git
     history, or in a shared Knowledge Center push.
 
-Wired into `memory_vault.FileSystemMarkdownAdapter.create()`/`update()`
-(see that module's own comments at the call sites) so redaction happens
-BEFORE any content is written to a vault note -- never as an after-the-fact
-scrub.
+Wired at BOTH real write layers, so no record can reach disk unscanned:
+  - `memory.MemoryStore.add()` / `memory.CornerCaseLibrary.add()` via
+    `redact_record()` below -- the durable JSON store `memory_router.py`
+    calls "the system of record", written for EVERY tier including
+    WORKING_MEMORY (which is deliberately never mirrored into the vault at
+    all, see memory_router._VAULT_WRITE_THROUGH_DESTINATIONS, and so has no
+    other scanner).
+  - `memory_vault.FileSystemMarkdownAdapter.create()`/`update()` via
+    `redact_note_content()` (see that module's own comments at the call
+    sites) for the Markdown mirror.
+Both run BEFORE any content is written -- never as an after-the-fact scrub.
+`route_memory()`'s hard `REJECT` of a record whose `kind` is
+credential/password/token/secret is a separate, coarser gate: it stops a
+record that IS a credential, and cannot see a secret-shaped string embedded
+in a legitimate record's free-text field. That case is what `redact_record()`
+covers.
 """
 
 from __future__ import annotations
@@ -215,6 +227,69 @@ def redact_sections(sections: Dict[str, str]) -> Tuple[Dict[str, str], List[Dict
                 f["field"] = f"section:{name}"
             all_findings.extend(findings)
     return out, all_findings
+
+
+# Structural/identity keys on a JSON MemoryStore / CornerCaseLibrary record,
+# never scanned by `redact_record()` -- the same reasoning as
+# `_FRONTMATTER_SKIP_KEYS` above, applied to the record shape
+# `MemoryStore.add()` actually writes: none of them can hold free text a
+# secret could hide in, and rewriting `memory_id`/`ccl_id` would break the
+# identity every upsert, index row and vault-note id keys on. Matched at any
+# nesting depth, because these names mean the same thing wherever they appear
+# in this schema (e.g. a nested `provenance` block's own `created_at`).
+_RECORD_SKIP_KEYS = {
+    "memory_id", "ccl_id", "level", "created_at", "updated_at", "last_used_at",
+    "reuse_count", "confidence", "status", "confirmation_count",
+    "last_confirmed_at", "knowledge_commit_sha", "rtl_sha", "tb_sha",
+    "revalidate_by", "secrets_redacted", "secrets_redacted_types",
+}
+
+
+def redact_record(record: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Recursively redact every free-text string in a JSON memory record --
+    the counterpart of `redact_note_content()` for the durable JSON store
+    rather than the Markdown mirror. Returns (redacted_copy, findings).
+
+    Recursion is required, not decorative: the real records this repo writes
+    nest genuinely free-form text several levels down -- a job-tier record's
+    `prior_related_knowledge` is a LIST of related-case dicts each carrying
+    note titles/frontmatter, an engineering record's `evidence` is an
+    arbitrary caller-supplied dict or list, and a working-memory
+    react-reasoning step carries hypothesis/evidence/next-action prose. A
+    top-level-only scan would miss every one of them.
+
+    Each finding carries a dotted `field` path (`prior_related_knowledge[0].
+    frontmatter.title`) on top of `detect_secrets()`'s type/line/preview, so
+    a reader can find exactly where the secret was without the finding itself
+    ever quoting the secret.
+    """
+    findings: List[Dict[str, Any]] = []
+    return _redact_mapping(record, "", findings), findings
+
+
+def _redact_mapping(mapping: Dict[str, Any], prefix: str,
+                     findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in mapping.items():
+        if key in _RECORD_SKIP_KEYS:
+            out[key] = value
+            continue
+        out[key] = _redact_any(value, f"{prefix}.{key}" if prefix else str(key), findings)
+    return out
+
+
+def _redact_any(value: Any, path: str, findings: List[Dict[str, Any]]) -> Any:
+    if isinstance(value, str):
+        redacted, found = redact_secrets(value)
+        for f in found:
+            f["field"] = path
+        findings.extend(found)
+        return redacted
+    if isinstance(value, dict):
+        return _redact_mapping(value, path, findings)
+    if isinstance(value, (list, tuple)):
+        return [_redact_any(v, f"{path}[{i}]", findings) for i, v in enumerate(value)]
+    return value
 
 
 def redact_note_content(frontmatter: Dict[str, Any],

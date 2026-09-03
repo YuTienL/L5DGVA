@@ -14,12 +14,14 @@ verdicts:
     run over the actual 06_Agent_Memory/** notes, never a synthetic sample)
   - broken wiki-links, duplicate note IDs, invalid/unparsable YAML
     frontmatter, missing required metadata
-  - large/forbidden-artifact files (an own, documented heuristic -- see
-    LARGE_FILE_EXTENSIONS below; Phase 12's forbidden-artifact list is a
-    separate, differently-scoped workstream's deliverable and was not yet
-    available as importable code when this was written, so this defines its
-    own conservative extension/size heuristic rather than blocking on that
-    dependency)
+  - large/forbidden-artifact files, against Phase 12's own policy definition
+    (`memory_artifact_policy.FORBIDDEN_ARTIFACT_EXTENSIONS` and its size
+    thresholds, imported rather than re-declared here). This scan is the
+    POST-HOC half of that policy -- it catches an artifact that landed in the
+    vault tree by some route other than a memory write (a hand-dropped file,
+    a stray simulator output); the WRITE-TIME half is
+    `memory_artifact_policy.enforce_record_artifact_policy()`, run by
+    `memory.MemoryStore.add()` on every record before it reaches disk.
   - secret leakage (dv_harness/memory_security.py's real detector, run over
     every note's raw on-disk text -- should normally find nothing, since
     memory_vault.py's create()/update() already redact before writing, but
@@ -51,13 +53,16 @@ from typing import Any, Dict, List, Optional
 from . import memory_vault as mv
 from . import memory_security as msec
 
-# Own, documented large/forbidden-artifact heuristic (see module docstring
-# for why this doesn't defer to Phase 12's list). Extensions in this set are
-# flagged at ANY nonzero size -- these should never legitimately exist inside
-# a Markdown knowledge vault at all. Everything else is judged purely by size.
-LARGE_FILE_EXTENSIONS = {".fsdb", ".vpd", ".vdb", ".shm", ".db", ".wdb", ".fsdb.gz", ".vcd"}
-LARGE_FILE_SIZE_BYTES = 5 * 1024 * 1024   # 5 MB -- any other non-.md file past this size
-HUGE_LOG_SIZE_BYTES = 20 * 1024 * 1024    # 20 MB -- a plain .log/.txt only flagged past this size
+# Phase 12's single policy definition, imported rather than duplicated.
+# Extensions in this set are flagged at ANY nonzero size -- these should never
+# legitimately exist inside a Markdown knowledge vault at all. Everything else
+# is judged purely by size. Re-exported under this module's long-standing
+# LARGE_FILE_EXTENSIONS name so existing callers/tests keep working.
+from .memory_artifact_policy import (
+    FORBIDDEN_ARTIFACT_EXTENSIONS as LARGE_FILE_EXTENSIONS,
+    HUGE_LOG_SIZE_BYTES,
+    LARGE_FILE_SIZE_BYTES,
+)
 
 
 def _memory_notes_root(vault_path: Path) -> Path:

@@ -90,6 +90,48 @@ A `kind` of `credential`/`password`/`token`/`secret` is hard-`REJECT`ed
 before any write happens — see the Engineering Memory Policy's "Never"
 rules in `CLAUDE.md`.
 
+### The write-time guard: secrets and large artifacts
+
+`route_memory()`'s `REJECT` above stops a record that **is** a credential. It
+cannot see a secret-shaped string embedded in a legitimate record's free-text
+field, and it says nothing about artifact size. Both of those are enforced one
+layer down, inside `memory._guard_record_before_write()`, which every
+`MemoryStore.add()` and `CornerCaseLibrary.add()` call passes through before
+anything reaches disk — including `WORKING_MEMORY`, the tier that is
+deliberately never mirrored into the Vault
+(`memory_router._VAULT_WRITE_THROUGH_DESTINATIONS`) and therefore has no other
+scanner.
+
+1. **Secret redaction** — `memory_security.redact_record()` walks the record
+   recursively (nested dicts, lists of dicts) and redacts every match of the
+   pattern registry in `memory_security.SECRET_PATTERNS`, replacing only the
+   secret VALUE with `***REDACTED-<TYPE>***` and keeping the surrounding key
+   name legible. The record is stamped `secrets_redacted: true` /
+   `secrets_redacted_types: [...]`. Structural/identity keys
+   (`_RECORD_SKIP_KEYS`, notably `memory_id`/`ccl_id`) are never rewritten.
+   The Markdown mirror runs the same detector independently via
+   `memory_vault.FileSystemMarkdownAdapter.create()`/`update()`.
+2. **Large-artifact policy** (`memory_artifact_policy.py`) — raw binary or
+   waveform-dump content (a NUL byte; `$enddefinitions` + `$dumpvars`) raises
+   `EmbeddedArtifactError` and nothing is written. Oversized free text
+   (>`MAX_RECORD_FIELD_CHARS` / >`MAX_RECORD_FIELD_LINES`) is bounded to head
+   **and tail** — a sim.log's UVM epilogue lives at the end — with an explicit
+   in-band marker, and the affected fields are recorded as
+   `large_artifact_truncated`. `memory_doctor.check_large_files()` is the
+   post-hoc half of the same policy, scanning the Vault tree on disk for
+   artifacts that arrived by some route other than a memory write.
+
+Redaction runs **before** truncation: truncating first can split a multi-line
+secret (an SSH PEM block) so its BEGIN/END-anchored pattern no longer matches.
+
+Artifacts are referenced, never embedded.
+`memory_artifact_policy.build_evidence_reference()` is the one builder for the
+`evidence: {sim_log, fsdb, coverage, lsf_job}` block (plus `run_dir`); it takes
+paths and ids only and raises on anything multi-line or content-sized. A key
+with no real source is omitted rather than written as `null` — `coverage` is
+omitted today because no code path in this repo records a per-job coverage
+database path.
+
 ### The admission boundary: (Working/Project) → Engineering
 
 `route_memory()`'s `verified` column above is a caller-supplied boolean, so

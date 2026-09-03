@@ -36,6 +36,33 @@ def fmt(v, default='-'):
     if v is None or v=='': return default
     return str(v)
 
+def attach_job_memory_columns(root: Path, rows):
+    """Join each snapshot row with that job's Job-tier memory record, adding
+    the three debug-knowledge columns the Phase 11 spec names -- confidence,
+    failure signature, prior related knowledge -- to the SINGLE per-job view
+    (2026-09-04 gap closure).
+
+    Before this, those three lived only inside
+    `.dv-harness/memory/job/JOB-<id>-TERMINAL-RECONCILE.json` and appeared in
+    no per-job view at all, so the harness could have already matched a
+    failure against five prior vault cases and the engineer reading the
+    regression table would see no sign of it.
+
+    Mutates and returns `rows` in place. A row that already carries the
+    columns (built by `to_snapshot_row(..., job_memory=...)`) is left alone;
+    a job with no memory record simply gains nothing and renders as `-`."""
+    for row in rows:
+        if 'failure_signature' in row:
+            continue
+        record = lsf_client.load_job_tier_memory_record(root, row.get('job_id'))
+        if not record:
+            continue
+        row['confidence'] = record.get('confidence')
+        row['failure_signature'] = lsf_client.format_failure_signature(record.get('failure_signature'))
+        row['prior_related_knowledge_count'] = len(record.get('prior_related_knowledge') or [])
+    return rows
+
+
 def render_snapshot(jobs):
     now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     counts={}
@@ -47,16 +74,24 @@ def render_snapshot(jobs):
         header.append('Regression ID : '+(', '.join(reg_ids)))
     lines=header + [
            'SUMMARY: '+ ' | '.join([f'Total: {len(jobs)}']+[f'{k}: {v}' for k,v in sorted(counts.items())]),'',
-           f"{'Job':<10} {'Pattern / Combination':<36} {'LSF':<10} {'DV Analysis':<18} {'UVM_ERR':<9} {'UVM_FATAL':<10} Agent Action / Note",
-           '-'*130]
+           f"{'Job':<10} {'Pattern / Combination':<36} {'LSF':<10} {'DV Analysis':<18} {'UVM_ERR':<9} {'UVM_FATAL':<10} {'Confidence':<11} {'Failure Signature':<32} {'Prior':<6} Agent Action / Note",
+           '-'*190]
     attention=[]
     for j in jobs:
         jid=fmt(j.get('job_id')); pat=fmt(j.get('pattern')); lsf=fmt(j.get('lsf_status'),'UNKNOWN')
         dv=fmt(j.get('dv_analysis_status') or j.get('sim_status'),'UNKNOWN')
         ue=fmt(j.get('uvm_error_count'),'pending' if lsf=='DONE' else '-')
         uf=fmt(j.get('uvm_fatal_count'),'pending' if lsf=='DONE' else '-')
+        # Confidence / Failure Signature / Prior are populated from the Job
+        # Memory record by attach_job_memory_columns() (or by
+        # to_snapshot_row(job_memory=...)). A job that has no such record yet
+        # renders '-' -- honestly "not computed", never a fabricated level.
+        conf=fmt(j.get('confidence'),'-')
+        sig=fmt(j.get('failure_signature'),'-')
+        prior=fmt(j.get('prior_related_knowledge_count'),'-')
         action=fmt(j.get('agent_action') or j.get('root_cause_status') or j.get('kill_reason'),'monitoring')
-        lines.append(f'{jid:<10} {pat[:35]:<36} {lsf:<10} {dv:<18} {ue:<9} {uf:<10} {action}')
+        lines.append(f'{jid:<10} {pat[:35]:<36} {lsf:<10} {dv:<18} {ue:<9} {uf:<10} '
+                      f'{conf:<11} {sig[:31]:<32} {prior:<6} {action}')
         if lsf=='EXIT' or dv in ('FAIL','ROOT_CAUSE','RERUN_REQUIRED') or (isinstance(j.get('uvm_error_count'),int) and j.get('uvm_error_count',0)>0):
             attention.append(f"- {jid} {pat}: LSF={lsf}, DV={dv}, UVM_ERROR={ue}, action={action}")
     lines += ['', 'ATTENTION'] + (attention or ['- none'])
@@ -521,7 +556,11 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
     _write_reconciliation_evidence_if_configured(root, reconciled)
     _write_normalized_evidence_if_configured(root, reconciled)
 
-    snapshot = render_snapshot(jobs_for_snapshot)
+    # Join AFTER every writer above (reconcile_batch() and the epilogue-parse
+    # re-upsert) has finished writing this cycle's Job-tier memory records, so
+    # the snapshot shows this cycle's failure signature / prior-knowledge
+    # matches rather than the previous cycle's.
+    snapshot = render_snapshot(attach_job_memory_columns(root, jobs_for_snapshot))
     snapshot_path = root / ".dv-harness" / "lsf" / "latest_snapshot.txt"
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(snapshot, encoding="utf-8")
@@ -719,7 +758,7 @@ def _run_one_cycle(root: Path, vcuser, uvm_root_path) -> None:
         # No vcuser means discover_live_jobs() has nothing to query --
         # fall back to the pre-existing behavior of re-rendering
         # whatever is already registered locally, rather than crashing.
-        print(render_snapshot(load_jobs(root)), flush=True)
+        print(render_snapshot(attach_job_memory_columns(root, load_jobs(root))), flush=True)
 
 
 if __name__=='__main__':

@@ -4,7 +4,47 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .memory_artifact_policy import enforce_record_artifact_policy
+from .memory_security import redact_record
+
 MEMORY_LEVELS=["working","job","project","engineering","organizational"]
+
+
+def _guard_record_before_write(mem: Dict[str,Any]) -> Dict[str,Any]:
+    """The one write-time guard every record in this module passes through
+    before it reaches disk (2026-09-04, gap-close-obsidian-memory phases
+    12+19).
+
+    THE GAP THIS CLOSES, confirmed by full-repo grep before it was written:
+    `memory_security.py`'s real secret detector/redactor was wired ONLY into
+    `memory_vault.FileSystemMarkdownAdapter.create()`/`update()` -- the
+    Markdown MIRROR. This module, which `memory_router.py` itself documents
+    as "the durable JSON record (the system of record)", never referenced it.
+    Every record write lands here FIRST and unredacted; the mirror, if any,
+    is written seconds later, only for JOB/PROJECT/ENGINEERING/
+    ORGANIZATIONAL destinations, and only when a truthy `cfg` was passed --
+    while WORKING_MEMORY (every react-loop reasoning step) is excluded from
+    the mirror by design and so was never scanned by anything at all. A
+    secret-shaped string embedded in a legitimate record's free-text field
+    (symptom/evidence/terminal_signature/hypothesis) passed
+    `route_memory()`'s kind-only REJECT untouched and was written verbatim,
+    permanently. The same hole existed for CLAUDE.md's "never store giant
+    logs or raw FSDB content" rule: `memory_doctor.check_large_files()` only
+    ever walked the Markdown vault tree, never `.dv-harness/memory/**`.
+
+    Ordering is deliberate: REDACT FIRST, then bound size. Truncating first
+    can split a multi-line secret (an SSH PEM block) so that its
+    BEGIN/END-anchored pattern no longer matches, leaving real key material
+    in the surviving text unredacted.
+    """
+    mem, secret_findings = redact_record(mem)
+    if secret_findings:
+        mem["secrets_redacted"] = True
+        mem["secrets_redacted_types"] = sorted({f["type"] for f in secret_findings})
+    mem, artifact_report = enforce_record_artifact_policy(mem)
+    if artifact_report["truncated_fields"]:
+        mem["large_artifact_truncated"] = artifact_report["truncated_fields"]
+    return mem
 
 
 class PropertyFilterError(ValueError):
@@ -157,6 +197,7 @@ class MemoryStore:
         mem.setdefault("provenance",None)
         mem.setdefault("confirmation_count",0)
         mem.setdefault("last_confirmed_at",None)
+        mem=_guard_record_before_write(mem)
         p=self.dir/level/f"{mid}.json"
         p.write_text(json.dumps(mem,ensure_ascii=False,indent=2),encoding="utf-8")
         with self._index_lock():
@@ -569,6 +610,13 @@ class CornerCaseLibrary:
         rec.setdefault("provenance", None)
         rec.setdefault("confirmation_count", 0)
         rec.setdefault("last_confirmed_at", None)
+        # Same write-time secret/large-artifact guard MemoryStore.add() runs
+        # (see _guard_record_before_write above). The corner-case library is a
+        # separate file store that never passes through MemoryStore, and its
+        # records ARE pushed to the shared cross-user Knowledge Center
+        # (memory_router._SHAREABLE_DESTINATIONS), so leaving it unguarded
+        # would keep exactly the leak path this guard exists to close.
+        rec = _guard_record_before_write(rec)
         p = self.dir/f"{ccid}.json"
         p.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
         rows = [x for x in self._index() if x.get("ccl_id") != ccid]

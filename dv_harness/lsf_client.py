@@ -661,8 +661,77 @@ def save_job_state(root: Path, state: JobState) -> None:
     path.write_text(json.dumps(asdict(state), indent=2), encoding="utf-8")
 
 
-def to_snapshot_row(state: JobState, *, agent_action: str, note: Optional[str] = None) -> dict:
-    return {
+JOB_TIER_MEMORY_ID_TEMPLATE = "JOB-{job_id}-TERMINAL-RECONCILE"
+
+
+def job_tier_memory_id(job_id) -> str:
+    """The one deterministic Job-tier memory id for a job, so the two writers
+    (`_upsert_job_tier_memory_record()` below) and every reader
+    (`load_job_tier_memory_record()`, the periodic snapshot's failure-knowledge
+    columns) key on the same string instead of each re-spelling the format."""
+    return JOB_TIER_MEMORY_ID_TEMPLATE.format(job_id=job_id)
+
+
+def load_job_tier_memory_record(root: Path, job_id) -> Optional[dict]:
+    """The Job-tier memory record this harness wrote for `job_id`, or None.
+
+    Read-only and best-effort: a project with no memory store yet, or a
+    job that never reached a terminal reconcile, is a normal state and
+    returns None rather than raising -- a reporting join must never be the
+    thing that breaks a regression snapshot."""
+    try:
+        from .memory import MemoryStore
+        return MemoryStore(root).get(job_tier_memory_id(job_id))
+    except Exception:
+        return None
+
+
+def format_failure_signature(signature: Optional[dict]) -> Optional[str]:
+    """One-line rendering of a `memory_vault.build_failure_signature()` dict
+    for the periodic regression table's Failure Signature column.
+
+    Deliberately NOT `evidence_db.signature_key()`: that is a sha256 dedup
+    key, unreadable to the engineer reading the table. This renders only
+    fields the signature genuinely carries (an absent/zero one is omitted, not
+    printed as `0`), so the column shows the real failure shape --
+    `EXIT/FATAL=1/ERR=5/assert` -- rather than a hash."""
+    if not signature:
+        return None
+    parts = []
+    lsf_status = signature.get("lsf_status")
+    if lsf_status:
+        parts.append(str(lsf_status))
+    if signature.get("uvm_fatal_count"):
+        parts.append(f"FATAL={signature['uvm_fatal_count']}")
+    if signature.get("uvm_error_count"):
+        parts.append(f"ERR={signature['uvm_error_count']}")
+    if signature.get("assertion_failure"):
+        parts.append("assert")
+    if signature.get("simulator_crash"):
+        parts.append("crash")
+    terminal_signature = signature.get("terminal_signature")
+    if terminal_signature:
+        parts.append(str(terminal_signature))
+    if not parts and signature.get("abnormal_termination"):
+        parts.append("abnormal_termination")
+    return "/".join(parts) or None
+
+
+def to_snapshot_row(state: JobState, *, agent_action: str, note: Optional[str] = None,
+                     job_memory: Optional[dict] = None) -> dict:
+    """One row of the periodic per-job regression table.
+
+    `job_memory` (2026-09-04, Phase 11 gap closure) is that job's Job-tier
+    memory record, from `load_job_tier_memory_record()`. Before it, the three
+    debug-knowledge columns the spec names -- failure signature, prior related
+    knowledge, and confidence -- existed ONLY inside that separate JSON record
+    and were surfaced by no per-job view anywhere (grep-confirmed: zero hits
+    in regression_reporter.py, dashboard.py or cli.py), so an engineer reading
+    the regression table could not see that the harness had already matched
+    this failure against prior knowledge. Optional: a caller that has no
+    memory record (or does not want the join) gets exactly the pre-existing
+    eight-key row, and `render_snapshot()` renders those columns as `-`."""
+    row = {
         "job_id": state.job_id,
         "pattern": state.pattern,
         "lsf_status": state.lsf_status,
@@ -672,6 +741,11 @@ def to_snapshot_row(state: JobState, *, agent_action: str, note: Optional[str] =
         "agent_action": agent_action,
         "note": note,
     }
+    if job_memory:
+        row["confidence"] = job_memory.get("confidence")
+        row["failure_signature"] = format_failure_signature(job_memory.get("failure_signature"))
+        row["prior_related_knowledge_count"] = len(job_memory.get("prior_related_knowledge") or [])
+    return row
 
 
 _RUN_TIME_SECONDS_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:second\(s\)|seconds?|s)?\s*$",
@@ -909,6 +983,75 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
     _upsert_job_tier_memory_record(root, jid, state)
 
 
+def _score_job_memory_confidence(state: JobState) -> dict:
+    """Real per-job confidence, via `inference.score_confidence()` -- the same
+    function CLAUDE.md's Engineering Memory Policy already names as THE
+    quantitative confidence input, never a second scoring scheme.
+
+    THE GAP THIS CLOSES: `confidence` is a first-class field of both the JSON
+    record (`MemoryStore.add()`'s setdefault) and the vault-note frontmatter
+    (`memory_vault.build_frontmatter_from_memory_record`), it is a ranking
+    term in `MemoryRetriever.search()`, and it is one of the columns the
+    per-job regression view is supposed to carry -- but nothing in the
+    job-tier write path ever set it, so every Job Memory record this harness
+    has ever written carried the literal string "UNKNOWN".
+
+    Every input below is read off real evidence already on `state`, never
+    guessed:
+
+    * independent_sources_count -- how many genuinely DIFFERENT evidence
+      sources agree this job reached a terminal outcome: (1) LSF itself
+      (a terminal `bjobs` status), (2) a real sim.log epilogue parse (a
+      determinate PASS/FAIL `sim_status`, which only
+      `regression_reporter.run_reconciliation_cycle()` sets, and only from a
+      real parsed epilogue), (3) a marker-level signal from the log body
+      (UVM_ERROR/UVM_FATAL counts, an assertion failure, a simulator crash,
+      or a terminal signature).
+    * evidence_refs_verified -- the cited sim.log path EXISTS on disk. This is
+      a real filesystem check, so a record citing a path that has since been
+      swept scores lower rather than claiming verified references.
+    * counter_evidence_count -- a genuine contradiction, not a formality:
+      `sim_status == "PASS"` while a real failure marker is present is
+      exactly CLAUDE.md's "LSF DONE is not equal to DV PASS" hazard in
+      reverse, and `score_confidence()`'s own safety floor then caps the
+      result below HIGH.
+    * multi_agent_consensus_count -- honestly 0: no multi-agent evidence
+      acquisition happens at this reconcile layer, and inventing a nonzero
+      value would manufacture confidence out of nothing.
+
+    Returns score_confidence()'s own dict plus the inputs it was given, so the
+    stored `confidence_basis` shows exactly why the level is what it is.
+    """
+    from .inference import score_confidence
+
+    has_marker_evidence = bool(
+        state.uvm_error_count or state.uvm_fatal_count or state.assertion_failure
+        or state.simulator_crash or state.terminal_signature
+    )
+    independent_sources_count = sum((
+        state.lsf_status in ("DONE", "EXIT", "KILLED"),
+        state.sim_status in ("PASS", "FAIL"),
+        has_marker_evidence,
+    ))
+    try:
+        evidence_refs_verified = bool(state.sim_log) and Path(state.sim_log).exists()
+    except (OSError, ValueError):
+        # A malformed path string (a Windows-illegal character, an embedded
+        # NUL) is not verified evidence -- and must not make a memory write
+        # raise on its way through a confidence calculation.
+        evidence_refs_verified = False
+    counter_evidence_count = 1 if (state.sim_status == "PASS" and has_marker_evidence) else 0
+
+    inputs = {
+        "independent_sources_count": independent_sources_count,
+        "evidence_refs_verified": evidence_refs_verified,
+        "counter_evidence_count": counter_evidence_count,
+        "multi_agent_consensus_count": 0,
+    }
+    result = score_confidence(**inputs)
+    return {**result, "inputs": inputs}
+
+
 def _upsert_job_tier_memory_record(root: Path, jid: int, state: JobState) -> None:
     """The real persistence body behind `_write_job_tier_memory_on_terminal_
     reconcile()` above, factored out (Phase 11, 2026-09-03, obsidian-memory-
@@ -960,7 +1103,7 @@ def _upsert_job_tier_memory_record(root: Path, jid: int, state: JobState) -> Non
     )
     kind = "job_failure" if is_failure else "job_result"
     record = {
-        "memory_id": f"JOB-{jid}-TERMINAL-RECONCILE",
+        "memory_id": job_tier_memory_id(jid),
         "kind": kind,
         "job_id": jid,
         "pattern": state.pattern,
@@ -1002,6 +1145,39 @@ def _upsert_job_tier_memory_record(root: Path, jid: int, state: JobState) -> Non
     if state.early_kill:
         record["early_kill"] = True
         record["kill_reason"] = state.kill_reason
+
+    # Phase 11/12 record ENRICHMENT (2026-09-04), best-effort like the
+    # failure-signature search below and for the same reason: this function's
+    # first call site (`reconcile_batch()`) does not wrap it, so a problem
+    # while computing an added field must never break an already-completed,
+    # already-saved reconciliation. A failure here costs the enrichment only
+    # -- the real job record is still written by route_and_store() below.
+    #
+    #   confidence / confidence_basis -- a real, evidence-derived level from
+    #     inference.score_confidence(); see _score_job_memory_confidence().
+    #     Omitted on failure, leaving MemoryStore.add()'s honest "UNKNOWN"
+    #     default rather than a fabricated level.
+    #   evidence -- the spec's `{sim_log, fsdb, coverage, lsf_job}` reference
+    #     block from the one shared builder, which takes PATHS AND IDS ONLY
+    #     and raises on anything multi-line or content-sized. `coverage` is
+    #     deliberately not passed: no code path anywhere in this repo records
+    #     a per-job coverage-database path today, and the builder omits an
+    #     absent key rather than writing a null placeholder that would look
+    #     like coverage was captured. The loose top-level `sim_log`/
+    #     `fsdb_path` keys stay for the existing readers
+    #     (evidence_db.insert_job_memory_record() selects them by name); this
+    #     block is the additive, spec-named view of the same facts.
+    try:
+        from .memory_artifact_policy import build_evidence_reference
+        confidence_basis = _score_job_memory_confidence(state)
+        record["confidence"] = confidence_basis["level"]
+        record["confidence_basis"] = confidence_basis
+        evidence = build_evidence_reference(
+            sim_log=state.sim_log, fsdb=fsdb_path, lsf_job=jid, run_dir=state.run_dir)
+        if evidence:
+            record["evidence"] = evidence
+    except Exception:
+        pass
 
     # Phase 11 (2026-09-03, obsidian-memory-debugflow task -- Regression
     # Integration): on a real UVM_ERROR/UVM_FATAL/abnormal-termination signal
