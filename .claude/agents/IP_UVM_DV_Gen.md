@@ -1109,6 +1109,42 @@ bring-up branches running alongside it.
 
 ## Step 7 -- Wrap VIP sequences, then convert the BFM patterns
 
+### Required first: the reference-pattern coverage audit
+
+> **Required, not optional (2026-09-03, gap-close-reference-audit
+> workstream) -- same weight as this document's other required steps.**
+> **Before writing or converting any bring-up pattern, run the reference-
+> pattern coverage audit and review its findings:**
+>
+> ```
+> dv-harness reference-audit <reference-pattern-dir>
+> ```
+>
+> (`dv_harness/reference_pattern_audit.py`, wired as the `reference-audit`
+> CLI subcommand.) This closes a confirmed real gap: the reference BFM
+> pattern files (the DE-provided originals, `reference/bfm_patterns/*.txt`
+> in this project's own convention) were previously only ever consulted
+> reactively, bug by bug -- never with an upfront systematic pass. That cost
+> 3 real debugging rounds finding that `usb_p2_switch_en` was written on the
+> host-side TCA register (`` `HOSTWRITE4B(32'h161A_0020, ...)` ``) but never
+> on the DUT-side TCA register (`` `CPUWRITE4B(32'h1272_0020, ...)` ``) in
+> any HS-speed pattern -- a mechanically-detectable host/DUT write asymmetry
+> a systematic audit would have caught on day one, before a single line of
+> the converted environment was written. The tool mechanically extracts
+> every register-write macro call into `{file, line, macro,
+> address_or_register, value, host_or_dut_context}` records, generically
+> pairs host-side/DUT-side register blocks from real offset-overlap
+> evidence (never a hardcoded base-address table), and flags any offset one
+> side writes that the paired side never touches in that same file --
+> confirmed to reproduce the real `usb_p2_switch_en` finding verbatim
+> against the real `reference/bfm_patterns/` directory (see
+> `dv_harness_tests/test_reference_pattern_audit.py`'s real-content
+> integration test and `.work/gap-close-reference-audit-report.md`).
+> Every finding it reports must be resolved (fixed in the converted
+> pattern, or explicitly justified and recorded as intentional) before the
+> "Converting" and "Prove equivalence" work below proceeds -- do not treat
+> its output as advisory background reading.
+
 ### Wrapping
 
 Goal: a pattern calls a named task and never sees a sequencer, a factory or a

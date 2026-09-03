@@ -624,6 +624,27 @@ def main():
     pexempt_report.add_argument("--out", default=None, help="Override review_queue.json output path.")
     pexempt_report.add_argument("--as-of", default=None, dest="as_of")
 
+    # Reference-pattern coverage audit (2026-09-03, gap-close-reference-audit
+    # workstream): closes the confirmed gap that reference/bfm_patterns/*.txt
+    # files were only ever consulted reactively, bug by bug -- never with an
+    # upfront systematic pass. See dv_harness/reference_pattern_audit.py and
+    # .work/gap-close-reference-audit-report.md. Required (not optional) as
+    # the first step of IP_UVM_DV_Gen.md's Step 7 before writing/converting
+    # any bring-up pattern.
+    prefaudit = sub.add_parser("reference-audit", help="Mechanically extract every register-write macro call "
+                                                          "(CPUWRITE*B/HOSTWRITE*B/similar) from a directory of "
+                                                          "reference BFM pattern files and flag any host/DUT "
+                                                          "register-write asymmetry (a paired host-side/DUT-side "
+                                                          "register block where one side writes an offset the "
+                                                          "other side never touches, per file) -- the class of "
+                                                          "fact that would have caught the real usb_p2_switch_en "
+                                                          "TCA asymmetry on day one instead of after 3 debugging "
+                                                          "rounds. See dv_harness/reference_pattern_audit.py. "
+                                                          "Exits 1 if any asymmetry is found.")
+    prefaudit.add_argument("pattern_dir", help="Directory of reference BFM pattern files (e.g. reference/bfm_patterns/).")
+    prefaudit.add_argument("--glob", default="*.txt")
+    prefaudit.add_argument("--json", action="store_true", help="Print raw JSON instead of the human-readable report.")
+
     pconfig = sub.add_parser("config", help="View/update .dv-harness/config.json's policy block.")
     pconfig_sub = pconfig.add_subparsers(dest="config_cmd", required=True)
     pconfig_set = pconfig_sub.add_parser("set", help="dv-harness config set require_dv_review_cosign true|false")
@@ -1334,6 +1355,14 @@ def main():
             # run-profile's RunProfileValidationError handling above.
             print(f"exemptions {args.exemptions_cmd} FAILED: {exc}", file=sys.stderr)
             raise SystemExit(1)
+    elif args.cmd == "reference-audit":
+        from . import reference_pattern_audit
+        result = reference_pattern_audit.audit_directory(Path(args.pattern_dir), glob=args.glob)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(reference_pattern_audit.format_report(result))
+        raise SystemExit(0 if result["summary"]["verdict"] == "CLEAN" else 1)
     elif args.cmd == "config":
         from .config import load_config, save_config
         cfg = load_config(h.root)
