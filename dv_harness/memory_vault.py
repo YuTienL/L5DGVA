@@ -1221,6 +1221,120 @@ def build_failure_signature(*, protocol: Optional[str] = None, pattern: Optional
     }
 
 
+_EVIDENCE_DB_SIGNATURE_COLUMNS = [
+    "signature_key", "protocol", "pattern", "symptom", "root_cause_hint",
+    "uvm_error_count", "uvm_fatal_count", "assertion_failure", "simulator_crash",
+    "terminal_signature", "lsf_status", "abnormal_termination", "extra_text",
+    "occurrence_count", "first_seen", "last_seen", "sample_job_id", "sample_memory_id",
+]
+
+
+def search_evidence_db_failure_signatures(root: Path, failure_signature: Dict[str, Any],
+                                           limit: int = 5) -> Dict[str, Any]:
+    """Knowledge Layer -> Evidence Layer DuckDB READ edge (2026-09-04).
+
+    THE GAP THIS CLOSES: `evidence_db.py`'s `failure_signatures` table is
+    written exclusively from the Execution/Evidence side --
+    `EvidenceStore.insert_job_memory_record()` upserts one row per distinct
+    failure SHAPE (see `evidence_db.signature_key()`), fed by
+    `lsf_client.py`/`regression_reporter.py` from real JobState/sim.log
+    evidence. Nothing on the Knowledge side ever read it back: before this
+    function, `memory_vault.py`/`memory_router.py` contained no reference to
+    `evidence_db` or `duckdb` in either direction, so the accumulated
+    `occurrence_count`/`first_seen`/`last_seen` history of "we have hit this
+    exact failure shape N times before" was invisible to every debug-time
+    prior-evidence lookup. `search_related_memory_for_debug()` below now
+    merges these rows with the vault's own Markdown notes.
+
+    READ-ONLY BY CONSTRUCTION: opens `EvidenceStore(..., read_only=True)`, so
+    (per that class's own docstring) no mkdir happens, no schema DDL is
+    issued, and DuckDB's own read-only connection refuses any write at the
+    engine level. This function must never be able to create or migrate the
+    evidence database -- a Knowledge-Layer prior-evidence lookup is not a
+    reason for a database to spring into existence.
+
+    Ranking deliberately mirrors `FileSystemMarkdownAdapter.search()`'s own
+    scoring rather than inventing a second, divergent notion of relevance:
+    `protocol` is a hard filter worth 3.0 when supplied (the vault treats it
+    as a `property_filters` entry, same weight), and each shared query token
+    adds 1.0 via the SAME `_tokenize` this module already imports from
+    `memory.py`. That is why the merged list in
+    `search_related_memory_for_debug()` can be sorted on one common `score`.
+
+    Best-effort and silent about absence: no evidence database yet (this
+    project's `.dv-harness/evidence/evidence.duckdb` genuinely does not exist
+    until a first reconciliation cycle runs), no `duckdb` package installed,
+    or a locked/corrupt file all return `{"ok": False, "reason": ...,
+    "results": []}` -- never a raise, and never a fabricated row. A missing
+    evidence DB is a normal state, not an error a debug attempt should feel."""
+    results: List[Dict[str, Any]] = []
+    try:
+        from . import evidence_db as _evdb
+    except Exception as exc:  # pragma: no cover - import of a sibling module
+        return {"ok": False, "reason": "EVIDENCE_DB_IMPORT_FAILED", "detail": str(exc), "results": results}
+
+    db_path = _evdb.default_db_path(Path(root))
+    if not db_path.exists():
+        return {"ok": False, "reason": "EVIDENCE_DB_NOT_PRESENT", "db_path": str(db_path), "results": results}
+
+    protocol = failure_signature.get("protocol")
+    q_tokens = _tokenize(" ".join(str(v) for v in (
+        failure_signature.get("symptom"), failure_signature.get("root_cause_hint"),
+        failure_signature.get("terminal_signature"), failure_signature.get("extra_text"),
+    ) if v))
+
+    cols = ", ".join(_EVIDENCE_DB_SIGNATURE_COLUMNS)
+    sql = f"SELECT {cols} FROM failure_signatures"
+    params: List[Any] = []
+    if protocol:
+        sql += " WHERE protocol = ?"
+        params.append(str(protocol))
+
+    try:
+        store = _evdb.EvidenceStore(db_path, read_only=True)
+    except Exception as exc:
+        # duckdb raises IOException for a missing/locked file and
+        # CatalogException for a database predating this table -- all of
+        # which mean "no prior evidence available here", not a debug failure.
+        return {"ok": False, "reason": "EVIDENCE_DB_UNAVAILABLE", "detail": str(exc),
+                "db_path": str(db_path), "results": results}
+    try:
+        rows = store.query(sql, params)
+    except Exception as exc:
+        return {"ok": False, "reason": "EVIDENCE_DB_QUERY_FAILED", "detail": str(exc),
+                "db_path": str(db_path), "results": results}
+    finally:
+        try:
+            store.close()
+        except Exception:  # pragma: no cover - closing a read-only handle
+            pass
+
+    for row in rows:
+        record = dict(zip(_EVIDENCE_DB_SIGNATURE_COLUMNS, row))
+        score = 3.0 if protocol else 0.0
+        if q_tokens:
+            haystack = " ".join(str(record.get(k) or "") for k in
+                                ("protocol", "pattern", "symptom", "root_cause_hint",
+                                 "terminal_signature", "extra_text"))
+            score += float(len(q_tokens & _tokenize(haystack)))
+        if score <= 0:
+            continue
+        # DuckDB hands back real datetime objects for first_seen/last_seen;
+        # every consumer of `related_cases` (lsf_client's job-memory record,
+        # prompts.py's stage prompt) JSON-serialises it, so stringify here
+        # rather than leaking a non-serialisable value into a memory record.
+        for ts in ("first_seen", "last_seen"):
+            if record.get(ts) is not None and not isinstance(record[ts], str):
+                record[ts] = str(record[ts])
+        record["score"] = score
+        record["source"] = "evidence_db"
+        results.append(record)
+
+    results.sort(key=lambda r: (-r["score"], -(r.get("occurrence_count") or 0),
+                                str(r.get("signature_key") or "")))
+    return {"ok": True, "db_path": str(db_path), "results": results[:limit]}
+
+
 def search_related_memory_for_debug(root: Path, cfg: Optional[Dict[str, Any]],
                                      failure_signature: Dict[str, Any], limit: int = 5) -> Dict[str, Any]:
     """THE shared Memory Agent interface (Phase 10 debug-flow prior-evidence
@@ -1232,6 +1346,18 @@ def search_related_memory_for_debug(root: Path, cfg: Optional[Dict[str, Any]],
     .search()` -- protocol/property match + text-token overlap, see its own
     docstring) -- never an assumed root cause; `related_cases` is prior
     evidence ONLY.
+
+    TWO SOURCES, ONE RANKED LIST (2026-09-04): `related_cases` merges the
+    vault's Markdown notes with matching `failure_signatures` rows read out
+    of the Evidence Layer's DuckDB store (`search_evidence_db_failure_
+    signatures()` above -- read-only, best-effort, silent when no evidence
+    database exists yet). Every entry carries a `source` of `"vault"` or
+    `"evidence_db"` so a caller can always tell which store a case came from,
+    and both are scored on the same scale so one `score`-descending sort is
+    meaningful across them. `vault_count`/`evidence_db_count` report the
+    split, and `evidence_db` carries that read's own ok/reason so "the
+    evidence DB had nothing" and "there is no evidence DB" stay
+    distinguishable rather than both looking like an empty result.
 
     Real callers today: `engine.py`'s `DVHarness.run_stage()` (FAILURE_RECOVERY,
     the actual debug-attempt entry point -- folded into the stage prompt as
@@ -1276,9 +1402,18 @@ def search_related_memory_for_debug(root: Path, cfg: Optional[Dict[str, Any]],
         if protocol:
             query["protocol"] = protocol
         result = provider.search(query, limit=limit)
-        related = (result.get("results") or []) if result.get("ok") else []
-        return {"ok": bool(result.get("ok")), "failure_signature": failure_signature,
-                "related_cases": related, "count": len(related)}
+        vault_ok = bool(result.get("ok"))
+        vault_cases = [{**r, "source": "vault"} for r in ((result.get("results") or []) if vault_ok else [])]
+
+        evidence = search_evidence_db_failure_signatures(root, failure_signature, limit=limit)
+        evidence_cases = evidence.get("results") or []
+
+        related = sorted(vault_cases + evidence_cases,
+                         key=lambda c: -float(c.get("score") or 0.0))
+        return {"ok": vault_ok or bool(evidence.get("ok")), "failure_signature": failure_signature,
+                "related_cases": related, "count": len(related),
+                "vault_count": len(vault_cases), "evidence_db_count": len(evidence_cases),
+                "evidence_db": {k: v for k, v in evidence.items() if k != "results"}}
     except Exception as exc:  # pragma: no cover - a memory search failure must never break a debug attempt
         return {"ok": False, "error": "MEMORY_SEARCH_FAILED", "detail": str(exc),
                 "failure_signature": failure_signature, "related_cases": [], "count": 0}

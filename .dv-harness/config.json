@@ -44,6 +44,12 @@
     "vchost": "vchost-b",
     "vchop": "host-c"
   },
+  "memory": {
+    "provider": "hybrid",
+    "vault_path": "",
+    "obsidian_cli": "auto",
+    "git_enabled": true
+  },
   "rtl_protection": {
     "protected_paths": [
       "D:/DV/Task/USB/DUT",

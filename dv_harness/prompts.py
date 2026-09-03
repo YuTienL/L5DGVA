@@ -2765,6 +2765,28 @@ UNKNOWN_FAILURE_ATTRIBUTION_CANNOT_PROMOTE FAIL（代表 root cause 歸因都還
 """
 }
 
+def _format_vault_related_case(case: dict) -> str:
+    """One line per prior-evidence hit, formatted on the terms of whichever
+    store it came from (`source`, set by memory_vault.
+    search_related_memory_for_debug()).
+
+    An `evidence_db` row has no `frontmatter`/`note_id` at all, so the vault
+    row's accessors would render it as a content-free "- [?]" line. It is
+    labelled with its real identity instead -- its `signature_key`, plus the
+    aggregated `occurrence_count` that is exactly what the Evidence Layer
+    knows and the Markdown vault does not ("this same failure shape has been
+    recorded N times"). An unknown/absent `source` falls back to the vault
+    shape, which is what every caller produced before 2026-09-04."""
+    if case.get("source") == "evidence_db":
+        key = str(case.get("signature_key") or "?")[:12]
+        detail = " / ".join(str(v) for v in (case.get("symptom"), case.get("root_cause_hint")) if v)
+        occurrences = case.get("occurrence_count")
+        suffix = f"（evidence_db 累計出現 {occurrences} 次）" if occurrences else "（evidence_db）"
+        return f"- [sig:{key}] {detail}{suffix}"
+    fm = case.get("frontmatter") or {}
+    return f"- [{fm.get('id', case.get('note_id', '?'))}] {fm.get('failure') or ''}"
+
+
 def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
                         constraints: list | None = None,
                         correction_note: str | None = None,
@@ -2801,17 +2823,28 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
     vault_related_cases (Phase 10, 2026-09-03, obsidian-memory-debugflow
     task): an optional list of DV-Knowledge Vault search hits
     (dv_harness.memory_vault.search_related_memory_for_debug()'s own
-    "related_cases" payload -- each a FileSystemMarkdownAdapter.search()
-    result: {"score","note_id","path","frontmatter"}), e.g. from
-    engine.run_stage() for FAILURE_RECOVERY/RE_AUDIT only, BEFORE that
-    attempt's own adapter call runs. A third, distinct source from
-    relevant_memory (local per-project MemoryStore) and kc_search_results
-    (shared cross-user Knowledge Center): this one is the local, git/
-    Obsidian-compatible Markdown vault. Disclaimed exactly like the other
-    two -- prior evidence to independently re-verify, never an assumed
-    answer (CLAUDE.md Evidence Truth Rule / "不得直接假設 previous root cause ==
-    current root cause"). A falsy value (None or []) leaves the prompt
-    unchanged, same as every other additive kwarg here.
+    "related_cases" payload), e.g. from engine.run_stage() for
+    FAILURE_RECOVERY/RE_AUDIT only, BEFORE that attempt's own adapter call
+    runs. A third, distinct source from relevant_memory (local per-project
+    MemoryStore) and kc_search_results (shared cross-user Knowledge Center):
+    this one is the local, git/Obsidian-compatible Markdown vault.
+    Disclaimed exactly like the other two -- prior evidence to independently
+    re-verify, never an assumed answer (CLAUDE.md Evidence Truth Rule /
+    "不得直接假設 previous root cause == current root cause"). A falsy value
+    (None or []) leaves the prompt unchanged, same as every other additive
+    kwarg here.
+
+    Since 2026-09-04 that payload carries TWO row shapes, each tagged by its
+    own `source` field, and the renderer below formats each on its own terms
+    rather than assuming one: `source="vault"` rows are
+    FileSystemMarkdownAdapter.search() results ({"score","note_id","path",
+    "frontmatter"}) and `source="evidence_db"` rows are `failure_signatures`
+    rows read out of the Evidence Layer's DuckDB store (keyed by
+    `signature_key`, carrying protocol/symptom/root_cause_hint plus the
+    aggregated `occurrence_count` -- see memory_vault.
+    search_evidence_db_failure_signatures()). Rendering an evidence_db row
+    through the vault row's `frontmatter` accessor would emit a content-free
+    "- [?]" line, so the two are formatted separately here.
 
     engine.DVHarness.run_stage() is the one caller that passes all six
     extra kwargs: constraints/correction_note/human_approval are sourced
@@ -2900,11 +2933,7 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
             "（Prior Evidence，僅供參考 -- 依 CLAUDE.md Evidence Truth Rule，"
             "current evidence 永遠優先於這裡任何一筆記錄；不得直接假設 previous root cause == "
             "current root cause，目前 RTL/VIP/log/waveform 證據仍須獨立重新驗證）：\n"
-            + "\n".join(
-                f"- [{(c.get('frontmatter') or {}).get('id', c.get('note_id', '?'))}] "
-                f"{(c.get('frontmatter') or {}).get('failure') or ''}"
-                for c in vault_related_cases
-            )
+            + "\n".join(_format_vault_related_case(c) for c in vault_related_cases)
         )
     return prompt
 

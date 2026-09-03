@@ -43,3 +43,16 @@ replay.ps1
 .dv-harness/blackboard/
 .dv-harness/state.json
 .dv-harness/events.jsonl
+
+# The DV-Knowledge Vault (dv_harness/memory_vault.py) is its OWN git
+# repository as of 2026-09-04, when this project turned on
+# `memory.git_enabled` in .dv-harness/config.json -- that is the entire
+# point of the "Markdown + Git" design: every real memory promotion commits
+# its own note with a `memory(<protocol>): ...` message, inside the vault.
+# It was already untracked-but-not-ignored here (confirmed via `git
+# check-ignore` before this line was added, so nothing is being untracked by
+# it). Now that a real .git tree lives inside it, leaving it merely
+# untracked would let a `git add -A` embed it in THIS repo as a bare gitlink
+# -- a commit pointing at a SHA no clone can resolve. Browse its history
+# with `git -C .dv-harness/vault log --oneline`.
+.dv-harness/vault/
