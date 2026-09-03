@@ -10,12 +10,34 @@ READY parts, real code for the PARTIAL/BLOCKED parts. 2026-09-04.
 | 9-level conflict authority order | PARTIAL (prose only, no code, no applier) | **READY** |
 | Mismatch → question-queue escalation, both evidence paths | BLOCKED (no wire between real detectors and the real queue) | **READY** |
 
+Commit: `1fbb11e` — `feat(source-authority): make the 9-level conflict order
+code, and wire mismatches to the question queue`. Hand-scoped: five other
+workflows were editing this tree concurrently, so `cli.py` and `CLAUDE.md`
+were committed by trimming `git diff` to this workstream's own hunks and
+applying them to a temporary index seeded from HEAD — no other agent's
+staged or unstaged work is in the commit, and the shared index was rebased
+onto the new HEAD afterwards so none of it was orphaned either.
+
 Test summary: `419 passed` over the 10 directly-affected suites
 (`test_source_authority.py` 35 new + `test_reference_pattern_audit.py`,
 `test_address_map_verifier.py`, `test_question_queue.py`,
 `test_cli_question_queue.py`, `test_connectivity.py`, `test_run_profile.py`,
 `test_run_profile_to_justfile.py`, `test_four_key_judgments_enforcement.py`,
-`test_asset_processing_artifacts.py`), plus the full `dv_harness_tests` suite.
+`test_asset_processing_artifacts.py`), re-run to `115 passed` after the
+idempotence fix and `104 passed` on the committed tree, plus `207 passed`
+over the early-alphabet block and `163 passed` over the generator/doc-gate
+block.
+
+**Full-suite honesty note.** A whole-`dv_harness_tests` run was started three
+times and abandoned each time: with five other workflows saturating this
+machine it was at ~40% after 30 minutes. What it did surface — 5 failures
+clustered early — was chased down and is **not** from this change:
+`test_cli_pueue.py`'s 5 daemon tests fail because `pueued` is not running
+(`Failed to connect to the daemon on 127.0.0.1:6924. Did you start it?`,
+reproduced directly). That file's skip guard checks only that the `pueue`
+BINARY exists, not that the daemon is up, so it fails rather than skips on
+this machine. Nothing else failed anywhere: the 10 files I re-ran in
+isolation around that region are all green.
 
 ---
 
