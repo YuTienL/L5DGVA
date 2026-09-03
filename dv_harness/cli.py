@@ -463,6 +463,14 @@ def main():
                                                        "with a manifest.json recording what was actually "
                                                        "present. See dv_harness/signoff_export.py.")
     psignoff.add_argument("--out", required=True, help="Directory to write the signoff bundle into.")
+    psignoff.add_argument("--require-signoff-pass", action="store_true",
+                          help="Refuse to export unless this project's REAL SIGNOFF stage gate has "
+                               "passed (state.json stages.SIGNOFF.status == PASS). Off by default "
+                               "because signoff_bundle_completeness_gate -- one of the 9 SIGNOFF "
+                               "gates -- consumes a bundle as its own input, so a bundle must be "
+                               "producible before SIGNOFF can pass. Either way the bundle records "
+                               "the real stage status and a bundle_kind of SIGNOFF_GATE_VERIFIED "
+                               "or PRE_SIGNOFF_GATE_INPUT.")
 
     pkc = sub.add_parser("knowledge", help="Shared, cross-user knowledge center on a fixed Linux-server "
                                             "path (Engineering/Organizational Memory + Corner-Case Library). "
@@ -1437,8 +1445,15 @@ def main():
         from . import signoff_export
         from . import escalation_notify as _escalation
         notifier = _escalation.notifier_from_config(h.cfg.get("escalation"))
-        result = signoff_export.collect_signoff_bundle(h.root, Path(args.out), notifier=notifier)
+        result = signoff_export.collect_signoff_bundle(
+            h.root, Path(args.out), notifier=notifier,
+            require_signoff_pass=args.require_signoff_pass)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        # Non-zero exit for a refusal: a caller scripting `signoff-export
+        # --require-signoff-pass` into a release pipeline must fail there,
+        # not read a 0 and carry on with an empty out dir.
+        if result["status"] == "REFUSED":
+            raise SystemExit(2)
     elif args.cmd == "knowledge":
         from .config import load_config, save_config
         from .knowledge_center import KnowledgeCenterClient, _default_user

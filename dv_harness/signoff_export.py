@@ -58,6 +58,42 @@ sha256 hex digest); `collect_signoff_bundle` now calls it for real and
 writes the result into both its return dict and `manifest.json`'s own
 content, so the gate can read the real manifest.json back and recompute the
 same hash independently rather than trusting a bare self-reported value.
+
+GATE-AWARENESS (2026-09-04, mechanism #8 Qualification/Signoff Engine
+gap-close): this module knew nothing about the SIGNOFF stage gate. A
+re-audit ran `dv-harness signoff-export` against this repo's own real
+`.dv-harness/state.json` -- `current_stage: ENV_CHECK`,
+`stages["SIGNOFF"]["status"] == "NOT_STARTED"`, zero `"SIGNOFF"` records in
+any `events.jsonl`, no
+`.dv-harness/soc-composer/subsystem_environment_registry.json` -- and got
+back a `status: OK` bundle indistinguishable from one produced after a real
+gate-verified signoff. The bundled `self_audit_result.json` made that worse:
+it is `self_audit.run_self_audit()`, a HARNESS meta-integrity check over the
+harness's own registries/schemas, NOT the 9 real `gates.STAGE_GATES["SIGNOFF"]`
+gates (false_pass_resistance_gate, evidence_freshness_gate,
+signoff_trace_crosscheck_gate, ...) -- so a complete-looking bundle proved
+nothing about whether the project's SIGNOFF gate battery had ever run.
+
+`read_signoff_stage_status()` reads the REAL, harness-owned
+`.dv-harness/state.json` / `events.jsonl` / subsystem registry (never an
+agent-attested claim) and `collect_signoff_bundle()` stamps the result into
+`signoff_stage_status.json` inside the bundle, into `manifest.json`'s
+top-level `signoff_stage` key, and into its own return dict, plus a
+`bundle_kind` of `SIGNOFF_GATE_VERIFIED` vs `PRE_SIGNOFF_GATE_INPUT`.
+`require_signoff_pass=True` (`dv-harness signoff-export
+--require-signoff-pass`) turns that into a hard refusal that writes nothing.
+
+Why refusal is OPT-IN and not the default: `signoff_bundle_completeness_gate`
+-- one of those 9 SIGNOFF gates -- takes a real `bundle_dir` produced by this
+function as its INPUT and recomputes `compute_bundle_hash()` over its real
+manifest.json. A bundle therefore has to be producible BEFORE SIGNOFF can
+pass; defaulting to refusal would make the SIGNOFF gate battery unsatisfiable
+by construction. The honest fix is that a pre-gate bundle can no longer look
+like a gate-verified one, not that pre-gate bundles are forbidden.
+
+`engine.py:_export_signoff_bundle()` is the real production-path caller that
+produces the `SIGNOFF_GATE_VERIFIED` bundle, on an actual gate-verified
+SIGNOFF PASS.
 """
 from __future__ import annotations
 
@@ -206,7 +242,92 @@ def compute_bundle_hash(manifest: List[Dict[str, Any]]) -> str:
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
 
-def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None) -> Dict[str, Any]:
+# The one stage-status value that means the 9 real gates.STAGE_GATES["SIGNOFF"]
+# gates were actually satisfied by engine.run_stage() (which is the only
+# writer of stages[...]["status"] == "PASS" for a gate-mapped stage).
+SIGNOFF_VERIFIED_STATUS = "PASS"
+# Returned as stage_status when the project has no state.json at all, or its
+# state.json carries no `stages` map (a real shape found in this repo:
+# .work/_e2e_demo_usb3_lfps/.dv-harness/state.json is a 3-key stub). This is
+# deliberately NOT collapsed into "NOT_STARTED" -- "the harness never recorded
+# a SIGNOFF stage here" and "the harness recorded that SIGNOFF has not started"
+# are different facts, and only one of them is evidence about the project.
+SIGNOFF_STATUS_NOT_RECORDED = "NOT_RECORDED"
+
+
+def read_signoff_stage_status(root: Path) -> Dict[str, Any]:
+    """Read the REAL SIGNOFF stage-gate outcome for the project at `root`.
+
+    Every field comes from a harness-written file, never from an agent claim:
+      - `.dv-harness/state.json` -> `stages["SIGNOFF"]["status"]` (written
+        only by engine.run_stage()/storage.StateStore.save()),
+      - `.dv-harness/events.jsonl` -> how many audit-trail records name the
+        SIGNOFF stage at all,
+      - `.dv-harness/soc-composer/subsystem_environment_registry.json` -> the
+        file engine._persist_subsystem_registry_entry() writes ONLY on a real
+        SIGNOFF PASS, so its presence is independent corroboration.
+
+    Deliberately reads state.json with a plain json.loads instead of going
+    through storage.StateStore: StateStore.load() CREATES a state.json (and
+    the whole .dv-harness dir) when none exists, which would make merely
+    exporting a bundle mutate the project's governance state and turn
+    "this project has no recorded SIGNOFF" into "this project has a freshly
+    minted NOT_STARTED SIGNOFF". An export must never write governance state.
+    """
+    root = Path(root)
+    state_path = root / ".dv-harness" / "state.json"
+    events_path = root / ".dv-harness" / "events.jsonl"
+    registry_path = root / ".dv-harness" / "soc-composer" / "subsystem_environment_registry.json"
+
+    stage_status = SIGNOFF_STATUS_NOT_RECORDED
+    current_stage: Optional[str] = None
+    state_present = state_path.is_file()
+    if state_present:
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        if isinstance(state, dict):
+            current_stage = state.get("current_stage")
+            stages = state.get("stages")
+            if isinstance(stages, dict) and isinstance(stages.get("SIGNOFF"), dict):
+                stage_status = stages["SIGNOFF"].get("status") or SIGNOFF_STATUS_NOT_RECORDED
+
+    signoff_event_count = 0
+    if events_path.is_file():
+        try:
+            for line in events_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(ev, dict) and ev.get("stage") == "SIGNOFF":
+                    signoff_event_count += 1
+        except OSError:
+            pass
+
+    # Imported lazily: gates.py pulls in the whole gate-registry module, and
+    # signoff_export is also imported by tools/verification_flow/
+    # signoff_bundle_completeness_gate.py, which must stay a cheap subprocess.
+    from .gates import STAGE_GATES
+    required_gates = [gid for gid, _, _ in STAGE_GATES.get("SIGNOFF", [])]
+
+    return {
+        "state_file_present": state_present,
+        "current_stage": current_stage,
+        "stage_status": stage_status,
+        "gate_verified": stage_status == SIGNOFF_VERIFIED_STATUS,
+        "signoff_event_count": signoff_event_count,
+        "subsystem_registry_present": registry_path.is_file(),
+        "required_signoff_gates": required_gates,
+    }
+
+
+def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None,
+                           require_signoff_pass: bool = False) -> Dict[str, Any]:
     """`notifier` (2026-09-03, dv_harness/escalation_notify.py): an
     optional EscalationNotifier. Omitted (the default) means no
     notification is ever attempted, keeping this function pure for the
@@ -215,9 +336,41 @@ def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None) -> Dict[str
     fires EXACTLY when the self-audit result bundled below (see step 6)
     reports a real gate failure -- this project's own most direct
     "signoff blocked" signal (CLAUDE.md: "All actionable findings must
-    close before Final Deep Audit"), never on a clean audit."""
+    close before Final Deep Audit"), never on a clean audit.
+
+    `require_signoff_pass` (2026-09-04): refuse to produce a bundle at all
+    unless the project's REAL SIGNOFF stage gate has passed -- see this
+    module's docstring for why that is opt-in rather than the default (the
+    SIGNOFF gate battery consumes a bundle as input, so it must be
+    producible before SIGNOFF passes). Refusal writes nothing at all, not
+    even an empty out_dir, so a refused export cannot leave behind a
+    directory a later reader mistakes for a partial bundle."""
     root = Path(root).resolve()
     out_dir = Path(out_dir).resolve()
+
+    # Read BEFORE anything is written: the status must describe the project
+    # as it stood when the export was asked for, and a refusal must be able
+    # to happen before out_dir exists.
+    signoff_stage = read_signoff_stage_status(root)
+    if require_signoff_pass and not signoff_stage["gate_verified"]:
+        return {
+            "status": "REFUSED",
+            "reason": "SIGNOFF_STAGE_NOT_PASSED",
+            "detail": (
+                f"SIGNOFF stage status is {signoff_stage['stage_status']}, not "
+                f"{SIGNOFF_VERIFIED_STATUS}: the {len(signoff_stage['required_signoff_gates'])} "
+                f"SIGNOFF gates have not been satisfied by a real stage transition for this "
+                f"project, so no gate-verified signoff bundle can be produced."
+            ),
+            "out_dir": str(out_dir),
+            "signoff_stage": signoff_stage,
+            "bundle_kind": None,
+            "manifest": [],
+            "bundle_hash": None,
+            "bundled_count": 0,
+            "missing_count": 0,
+        }
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: List[Dict[str, Any]] = []
@@ -308,6 +461,17 @@ def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None) -> Dict[str
     else:
         record("regression_manifest", False, None)
 
+    # 11: the real SIGNOFF stage-gate status -- generated, never copied, like
+    # step 6's self-audit. Recorded as a real manifest entry (so its presence
+    # is covered by bundle_hash, and a legacy bundle produced before this
+    # existed hashes differently) AND written out as its own file, so a
+    # reader who only ever opens the bundle directory still sees whether the
+    # 9 real SIGNOFF gates were ever satisfied for this project.
+    stage_rel = Path("signoff_stage_status.json")
+    (out_dir / stage_rel).write_text(
+        json.dumps(signoff_stage, ensure_ascii=False, indent=2), encoding="utf-8")
+    record("signoff_stage_status", True, stage_rel)
+
     bundle_hash = compute_bundle_hash(manifest)
 
     # manifest.json's content is {"manifest": [...], "bundle_hash": "..."}
@@ -316,8 +480,19 @@ def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None) -> Dict[str
     # location -- signoff_bundle_completeness_gate.py reads this file back
     # and recomputes compute_bundle_hash(manifest_list) itself, never
     # trusting this written bundle_hash value on its own).
+    #
+    # `signoff_stage` is a third top-level key (2026-09-04): the real
+    # stage-gate status, readable straight off manifest.json without opening
+    # signoff_stage_status.json. It is deliberately OUTSIDE compute_bundle_hash's
+    # material -- that function's contract (and signoff_bundle_completeness_gate's
+    # independent recomputation of it) is over the artifact list only, and
+    # widening it would change every previously-computed bundle_hash for a
+    # value the gate can read directly anyway.
+    bundle_kind = "SIGNOFF_GATE_VERIFIED" if signoff_stage["gate_verified"] else "PRE_SIGNOFF_GATE_INPUT"
     (out_dir / "manifest.json").write_text(
-        json.dumps({"manifest": manifest, "bundle_hash": bundle_hash}, ensure_ascii=False, indent=2),
+        json.dumps({"manifest": manifest, "bundle_hash": bundle_hash,
+                    "signoff_stage": signoff_stage, "bundle_kind": bundle_kind},
+                   ensure_ascii=False, indent=2),
         encoding="utf-8")
 
     bundled_count = sum(1 for m in manifest if m["present"])
@@ -330,4 +505,9 @@ def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None) -> Dict[str
         "bundle_hash": bundle_hash,
         "bundled_count": bundled_count,
         "missing_count": missing_count,
+        # An honest bundle can no longer claim, by omission, to be a
+        # gate-verified signoff: PRE_SIGNOFF_GATE_INPUT says outright that
+        # the 9 real SIGNOFF gates have not passed for this project.
+        "bundle_kind": bundle_kind,
+        "signoff_stage": signoff_stage,
     }

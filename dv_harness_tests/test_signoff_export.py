@@ -42,7 +42,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _make_partial_project():
-    """SOME (not all) of the 10 candidate artifacts present:
+    """SOME (not all) of the 11 candidate artifacts present:
     - blackboard/signoff_state.json, blackboard/findings.json: present
     - blackboard/regression_state.json, blackboard/requirements.json: absent
     - vplan/: present (one real schema-shaped file)
@@ -50,6 +50,7 @@ def _make_partial_project():
     - pattern_registry/: absent (no such convention exists in this project)
     - tb_source: absent (no generated UVM environment present)
     - regression_manifest: absent (no .dv-harness/regression.list present)
+    - signoff_stage_status: present (always generated fresh, like self_audit_result)
     """
     tmp = _fresh_project_with_tools()
     _write_json(tmp / ".dv-harness" / "blackboard" / "signoff_state.json",
@@ -73,11 +74,11 @@ def test_bundles_only_present_artifacts_and_manifest_marks_rest_absent():
         assert result["out_dir"] == str(out_dir.resolve())
 
         by_artifact = {m["artifact"]: m for m in result["manifest"]}
-        assert len(by_artifact) == 10
+        assert len(by_artifact) == 11
 
         present_expected = {
             "blackboard/signoff_state.json", "blackboard/findings.json",
-            "vplan", "telemetry", "self_audit_result",
+            "vplan", "telemetry", "self_audit_result", "signoff_stage_status",
         }
         absent_expected = {
             "blackboard/regression_state.json", "blackboard/requirements.json",
@@ -125,9 +126,10 @@ def test_no_exception_when_nothing_at_all_is_present():
         result = signoff_export.collect_signoff_bundle(tmp, out_dir)
         assert result["status"] == "OK"
         by_artifact = {m["artifact"]: m for m in result["manifest"]}
-        # only self_audit_result is always generated fresh -- everything else
-        # is a real absent artifact under this bare project root.
-        assert result["bundled_count"] == 1
+        # self_audit_result and signoff_stage_status are the two always
+        # freshly-generated artifacts -- everything else is a real absent
+        # artifact under this bare project root.
+        assert result["bundled_count"] == 2
         assert result["missing_count"] == 9
         assert by_artifact["self_audit_result"]["present"] is True
     finally:
@@ -354,7 +356,7 @@ def test_cli_signoff_export_subcommand():
         assert r.returncode == 0, r.stderr
         out = json.loads(r.stdout.strip())
         assert out["status"] == "OK"
-        assert out["bundled_count"] == 5
+        assert out["bundled_count"] == 6
         assert out["missing_count"] == 5
         assert (out_dir / "manifest.json").exists()
         assert (out_dir / "self_audit_result.json").exists()

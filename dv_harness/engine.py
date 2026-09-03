@@ -1068,6 +1068,60 @@ class DVHarness:
         self.store.event({"ts": now(), "stage": stage, "event": "SUBSYSTEM_ENVIRONMENT_REGISTERED",
                            "name": entry.get("name"), "qualification_state": entry.get("qualification_state")})
 
+    def _export_signoff_bundle(self, stage: str) -> None:
+        """The real production-path caller for
+        dv_harness/signoff_export.py's collect_signoff_bundle() (2026-09-04,
+        mechanism #8 Qualification/Signoff Engine gap-close).
+
+        Before this, that module's ONLY callers were `dv-harness
+        signoff-export` and the dashboard's POST /api/signoff-export button --
+        both of which bypass gates.STAGE_GATES["SIGNOFF"] entirely, so a
+        complete-looking "signoff bundle" was produced for projects whose
+        SIGNOFF stage had never started (confirmed against this repo's own
+        .dv-harness/state.json). Nothing anywhere produced a bundle as a
+        consequence of a real, gate-verified SIGNOFF PASS.
+
+        Called from run_stage()'s `verdict == "PASS"` side-effect block, so
+        it runs only after all 9 real SIGNOFF gates accepted this attempt's
+        evidence.
+
+        Two conditions are re-checked here rather than assumed from the call
+        site, because that block runs on gate verdict alone:
+        1. The stage's own in-memory status must really be PASS. SIGNOFF is
+           one of the stages run_stage() downgrades to WAIT_USER when no
+           `dv-harness approve SIGNOFF` is on record -- gates passing is not
+           the same as the stage closing, and a bundle must not be exported
+           for a signoff still waiting on a human.
+        2. state.json must be flushed to disk FIRST. The final
+           store.save(self.state) of run_stage() happens well after this
+           side-effect block; without this flush, signoff_export's
+           read_signoff_stage_status() would read the RUNNING status written
+           at the START of this attempt and stamp a genuinely gate-verified
+           bundle PRE_SIGNOFF_GATE_INPUT.
+
+        Same best-effort contract as _persist_subsystem_registry_entry above:
+        an export failure is recorded as a real event and never downgrades an
+        already-earned SIGNOFF PASS.
+        """
+        if stage != Stage.SIGNOFF.value:
+            return
+        if self.state.stages.get(stage, {}).get("status") != Status.PASS.value:
+            return
+        from . import signoff_export
+        out_dir = self.root / ".dv-harness" / "signoff_bundle"
+        try:
+            self.store.save(self.state)
+            result = signoff_export.collect_signoff_bundle(self.root, out_dir)
+        except Exception as exc:
+            self.store.event({"ts": now(), "stage": stage, "event": "SIGNOFF_BUNDLE_EXPORT_FAILED",
+                               "out_dir": str(out_dir), "error": str(exc)})
+            return
+        self.store.event({"ts": now(), "stage": stage, "event": "SIGNOFF_BUNDLE_EXPORTED",
+                           "out_dir": result["out_dir"], "bundle_hash": result["bundle_hash"],
+                           "bundle_kind": result["bundle_kind"],
+                           "bundled_count": result["bundled_count"],
+                           "missing_count": result["missing_count"]})
+
     def _compose_soc_environment_files(self, stage: str, evidence_blocks: dict) -> None:
         """Real call site for
         dv_harness/uvm_generator/soc_environment_composer.compose_soc_environment()
@@ -3204,6 +3258,7 @@ class DVHarness:
                 if verdict == "PASS":
                     self._promote_experience_knowledge(stage, evidence_blocks)
                     self._persist_subsystem_registry_entry(stage, evidence_blocks)
+                    self._export_signoff_bundle(stage)
                     self._compose_soc_environment_files(stage, evidence_blocks)
                     self._score_root_cause_confidence(stage, evidence_blocks, verdict)
                     self._append_coverage_history_sample(stage, evidence_blocks)

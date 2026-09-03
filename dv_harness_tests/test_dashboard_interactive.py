@@ -1149,9 +1149,11 @@ def test_signoff_export_with_no_artifacts_reports_all_absent_honestly():
         assert by_artifact["blackboard/findings.json"]["bundled_path"] is None
         assert by_artifact["vplan"]["present"] is False
         assert by_artifact["pattern_registry"]["present"] is False
-        # self_audit_result is always generated fresh, even with nothing else present.
+        # self_audit_result and signoff_stage_status are always generated
+        # fresh, even with nothing else present.
         assert by_artifact["self_audit_result"]["present"] is True
-        assert data["bundled_count"] == 1
+        assert by_artifact["signoff_stage_status"]["present"] is True
+        assert data["bundled_count"] == 2
         assert (out_dir / "self_audit_result.json").exists()
         assert not (out_dir / "vplan").exists()
     finally:
