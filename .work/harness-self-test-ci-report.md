@@ -2,7 +2,7 @@
 
 **Status: DONE**
 
-One-line test summary: `python tools/testing/self_test.py --skip-pytest` real-run PASS (import-sanity 94 modules / cli-help-sanity all subcommands / self-audit 7 PASS+0 FAIL+16 NO_SOURCE_DATA of 23); full `pytest dv_harness_tests/` (2567 tests) genuinely started and reached ~23% before the session ended, with 2 FAILED lines surfaced and investigated in isolation (1 confirmed a transient contention flake, 1 a pre-existing timing-sensitive test unrelated to this change) — see "What was NOT fully verified" below.
+One-line test summary: `python tools/testing/self_test.py --skip-pytest` real-run PASS (import-sanity 94 modules / cli-help-sanity all subcommands / self-audit 7 PASS+0 FAIL+16 NO_SOURCE_DATA of 23); full `pytest dv_harness_tests/` (2567 tests) genuinely started and reached ~25% before the session ended, with 4 FAILED lines surfaced and each investigated in isolation (2 confirmed transient contention flakes, 1 a pre-existing timing-sensitive test unrelated to this change, 1 a real self-inflicted timeout regression that was found and fixed) — see "What was NOT fully verified" below.
 
 ## Scope discipline (read first)
 
@@ -75,9 +75,12 @@ The full 2567-test suite did not finish within this session. Two real, confirmed
 
 Given both, the honest position is: the pytest step's *wiring* is proven correct (it launches the real suite, streams real per-test PASS/FAIL) but a clean, complete, single full run was not obtained this session. On an isolated GitHub Actions runner (no sibling contention) this should complete well inside the workflow's 45-minute step budget; if that turns out generous or tight in practice, `--pytest-timeout` on the local script and the workflow's `timeout-minutes` are both one-line adjustments.
 
-**Two real FAILED lines did surface** in the partial run, both investigated by re-running in isolation (unrelated to any file this work touched -- `dashboard.py`/`debug_flow`/engine background-loop internals, not `self_audit.py` or `test_collection_health_gate.py`):
-- `test_debug_flow_memory.py::test_engineering_memory_promotion_gets_a_real_knowledge_commit_sha_when_git_enabled` -- **PASSED** in isolation. Transient flake under the concurrent load described above, not a real regression.
-- `test_dashboard_interactive.py::test_start_loop_true_advances_through_multiple_stages_in_background` -- **FAILED again in isolation** (`assert state["running"] is False` timed out mid-poll after the background loop worked through all ~30 real stages). This is a pre-existing timing-sensitive test (a background thread polled with `time.sleep(0.1)` against a bounded wait) that this session's sustained heavy CPU contention (confirmed via `ps aux`) appears to push past whatever polling budget it assumes; it does not touch, import, or exercise anything this work changed. Left as-is and out of scope for this task -- flagged here rather than silently ignored, per the same "harness's own infrastructure breaking is easy to miss" concern this whole task exists to address. Worth a follow-up look under normal (uncontended) conditions to confirm whether it is contention-only or a genuine intermittent flake.
+**Four real FAILED lines surfaced** in the partial run; every one was investigated by re-running in isolation rather than left as an unread red line:
+
+- `test_debug_flow_memory.py::test_engineering_memory_promotion_gets_a_real_knowledge_commit_sha_when_git_enabled` -- **PASSED** in isolation. Transient flake under the concurrent load described above, not a real regression, unrelated to this work.
+- `test_dashboard_interactive.py::test_start_loop_true_advances_through_multiple_stages_in_background` -- **FAILED again in isolation** (`assert state["running"] is False` timed out mid-poll after the background loop worked through all ~30 real stages). Pre-existing timing-sensitive test (a background thread polled with `time.sleep(0.1)` against a bounded wait) that this session's sustained heavy CPU contention (confirmed via `ps aux`) appears to push past whatever polling budget it assumes; it does not touch, import, or exercise anything this work changed. Left as-is and out of scope -- flagged here rather than silently ignored. Worth a follow-up look under normal (uncontended) conditions.
+- `test_engine_gates_and_routing.py::test_self_audit_against_real_repo_reports_real_current_findings` -- **PASSED** standalone (39.2s). A same-window contention artifact from running two self-audit-shelling tests back to back, not a real issue.
+- `test_engine_gates_and_routing.py::test_self_audit_cli_subcommand_against_real_repo` -- **a real, self-inflicted regression, found and fixed**: `subprocess.TimeoutExpired: ... 'self-audit', '--all'] timed out after 60 seconds`. This pre-existing test's own outer subprocess timeout (60s) was never updated when `self_audit.py`'s ROOT_GATES wrapper timeout was widened 30->100 above -- under real load, `test_collection_health_gate` alone can now legitimately take close to that 100s, which the test's old 60s no longer covered. Fixed by widening this test's own timeout to 150s (`dv_harness_tests/test_engine_gates_and_routing.py`, one isolated hunk, separately committed); confirmed passing standalone afterward. This is exactly the kind of second-order breakage the "run it for real, don't just assert it runs" instruction in this task exists to catch -- it would not have been found by inspection alone.
 
 ## Files changed/added
 
@@ -86,6 +89,7 @@ Given both, the honest position is: the pytest step's *wiring* is proven correct
 - `tools/self_test.sh` (new)
 - `dv_harness/self_audit.py` (modified — one isolated hunk, the 30->100 wrapper-timeout fix; verified via `git diff --stat` that no sibling-workflow content was mixed in)
 - `tools/verification_flow/test_collection_health_gate.py` (modified — one isolated hunk, the 25->90 fix; same verification)
+- `dv_harness_tests/test_engine_gates_and_routing.py` (modified — one isolated hunk, widening `test_self_audit_cli_subcommand_against_real_repo`'s own outer timeout 60->150 to stay consistent with the `self_audit.py` change above; same verification, found by actually running the suite, not by inspection)
 - `.work/harness-self-test-ci-report.md` (this file)
 
 No other file was touched.
