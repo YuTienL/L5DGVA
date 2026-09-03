@@ -276,6 +276,21 @@ Everything else uses `bind`, targeted at **where the signals actually are** --
 signals declared at chip level with the subsystem merely connecting to them
 get bound at chip level.
 
+**Bind-location rules (CLAUDE.md's own "Bind-Location Rules" section, not
+restated here in full -- cross-reference, not duplicate): bare-module-name
+vs. full-instance-path scope, centralized `*_bind.sv` files under `tb/`
+(never a bind statement inserted directly into read-only RTL), clock/reset
+through the bind's own port list (never a cross-level hierarchical
+reference), and no generate/for-loop bind targets (explicit literal indices
+only).** `dv_harness/connectivity.py` is the real code backing the 4-tier
+bind-confidence classification (T1 already-decided / T2 structural
+protocol-fingerprint match / T3 naming-heuristic-only, always
+human-confirmed / T4 undecidable, routed to the question queue) and the
+3-gate pipeline (elaboration check, static zero-time connectivity,
+transaction-activity check) a connectivity plan must clear before it is
+presented for human confirmation -- see
+`.work/mcp-bind-connectivity-report.md`.
+
 ---
 
 ## Bridges
