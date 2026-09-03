@@ -1,3 +1,11 @@
 # Core harness uses Python standard library only.
 # Optional Anthropic Python adapter:
 claude-code-sdk
+# Optional: real MCP transport for dv_harness/mcp/server.py (the internal
+# read-only env.manifest.json/evidence-DB MCP server, 2026-09-03). The 5
+# verbs themselves (dv_harness/mcp/verbs.py + runtime.py) have no dependency
+# on this package -- only server.py's thin transport wrapper does.
+mcp>=2.1.1,<3
+# Optional: JSON Schema validation for dv_harness/mcp/schema.py's fixed
+# per-verb param/result schemas and the env.manifest.json contract.
+jsonschema>=4.0
