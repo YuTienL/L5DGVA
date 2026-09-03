@@ -211,7 +211,10 @@ def _write_reconciliation_evidence_if_configured(root: Path, reconciled: dict) -
 
     For every reconciled job: insert_job_state(state) unconditionally -- a
     job's own state IS the fact being recorded, pass, fail, or still
-    pending. insert_regression_verdict() additionally fires under the SAME
+    pending. insert_job_memory_record() additionally fires for every job
+    that really has a Job-tier memory record on disk by this point in the
+    cycle (see the "MEMORY-TIER MIRROR" paragraph below).
+    insert_regression_verdict() additionally fires under the SAME
     condition the regression-list safety net above (`state.pattern and
     verdict in ("PASSED", "FAILED")`, the `apply_verdict_to_file()` call
     site a few dozen lines up in this same function) uses to decide whether
@@ -231,7 +234,41 @@ def _write_reconciliation_evidence_if_configured(root: Path, reconciled: dict) -
     insert(s) now get their OWN inner try/except, same print-and-continue
     discipline `_write_normalized_evidence_if_configured()` below already
     uses per-job -- one bad job is isolated to itself and every sibling job
-    in the same cycle still gets its real evidence written."""
+    in the same cycle still gets its real evidence written.
+
+    MEMORY-TIER MIRROR (2026-09-04, 5-level-memory-engine gap-close):
+    `EvidenceStore.insert_job_memory_record()` -- the one function in
+    evidence_db.py whose entire purpose is mirroring the Memory engine's
+    JOB tier into DuckDB, and the only reason the `job_memory_records` and
+    `failure_signatures` tables exist -- had ZERO callers anywhere outside
+    evidence_db.py and its own unit tests (full-repo grep, 2026-09-04),
+    while both of its siblings in this very function were wired. So a real
+    reconciliation cycle wrote the job's `jobs` row and its
+    `regression_verdicts` row but never the job-memory row, and
+    `failure_signatures` -- the cross-run "has this exact failure shape
+    been seen before, how often" aggregate the whole table was built for --
+    stayed permanently empty no matter how many real failures reconciled.
+    This is that missing call site.
+
+    The record is READ BACK from the real Memory store
+    (`lsf_client.load_job_tier_memory_record()`, the existing named reader,
+    keyed by the same deterministic `job_tier_memory_id(jid)` both writers
+    use) rather than re-derived here. Two reasons, both real:
+      * `_upsert_job_tier_memory_record()` runs EARLIER in this same cycle
+        (the per-job analysis loop above calls it once the sim.log epilogue
+        has been parsed, which is what upgrades a premature `job_result`
+        classification to the accurate `job_failure` one, with its
+        `failure_signature`/`prior_related_knowledge` attached). Reading at
+        THIS point therefore mirrors the final, best-evidence record --
+        re-deriving it here would produce a second, possibly disagreeing
+        copy of a record the Memory tier already owns.
+      * What lands in DuckDB is then, by construction, what the JSON
+        Memory tier actually holds. The mirror cannot silently drift from
+        the thing it mirrors.
+    A job with no Job-tier memory record yet (never reached a terminal
+    reconcile, or a project with no memory store) returns None and is
+    skipped -- an absent record is a real, normal state, never backfilled
+    with an invented one."""
     try:
         from . import config as _config
         cfg = _config.load_config(root).get("evidence_db", {})
@@ -243,6 +280,9 @@ def _write_reconciliation_evidence_if_configured(root: Path, reconciled: dict) -
             for jid, (state, _discrepancies) in reconciled.items():
                 try:
                     store.insert_job_state(state)
+                    job_memory_record = lsf_client.load_job_tier_memory_record(root, jid)
+                    if job_memory_record is not None:
+                        store.insert_job_memory_record(job_memory_record)
                     if state.pattern and state.sim_status in ("PASS", "FAIL"):
                         # git_sha (cross-run-trend task, 2026-09-03): the real
                         # source SHA this job ran against, already captured on
