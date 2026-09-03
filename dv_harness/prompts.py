@@ -1594,9 +1594,19 @@ evidence.semantic_verdict 為 TRUE_PASS/TRUE_FAIL，不能只看 confidence 欄�
 都從零猜測；沿用時標記 `classification_basis: "REUSED_CCL:<ccl_id>"`，自行判斷時標記
 `classification_basis: "DV_JUDGMENT"`。
 
-有 coverage hole 時，每個 hole 都要有 root_cause_classification（不是 waived 就必須分類；
-MISSING_TEST/INSUFFICIENT_CONSTRAINT/UNREACHABLE_STIMULUS 這三類必須附上重新產生的
-testcase 與 rerun 證據，不能只記錄分類就結案）：
+有 coverage hole 時，每個 hole 都要有 root_cause_classification（不是 waived 就必須分類）。
+分類共四種，**每一種要求的補救證據不同**（2026-09-04 起生效；先前四類被錯誤地一律要求「重新
+產生 testcase」，其中 UNREACHABLE_STIMULUS 這一類再生 testcase 本來就不可能關掉，已修正）：
+
+- `MISSING_TEST` / `INSUFFICIENT_CONSTRAINT`：附 `regenerated_testcase_ids` + `rerun_evidence`。
+- `INSUFFICIENT_SEED_ATTEMPTS`（新增）：這個 bin 的 seed 數還不夠多，還不能下結構性結論。
+  附 `added_seed_evidence`（加了哪些 seed、用這些 seed 重跑的證據）。**不要**為這一類另外生
+  testcase——test 已經存在，只是還沒跑夠。harness 端會用 evidence DB 裡 `jobs` 表真實的
+  distinct seed 數（經 `.dv-harness/requirements.csv` 的 COVERAGE_ID→PATTERN_ID 追溯）核對，
+  seed 數不足時即使你分類成 UNREACHABLE/CONSTRAINT 也會被降級成這一類。
+- `UNREACHABLE_STIMULUS`：附 `escalation_question_id`。這一類會被 harness 自動轉成
+  question queue 的 Tier-3（cannot-assume）問題、owner 是 designer；gate 會實際去
+  `.dv-harness/question_queue/questions.json` 確認那個 Q-ID 真的存在。
 
 ```dv-harness-evidence:coverage_hole_regeneration_gate
 {"coverage_holes": [{"coverage_id": "...", "waived": false,

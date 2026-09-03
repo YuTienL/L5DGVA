@@ -220,16 +220,30 @@ class EscalationNotifier:
         return self._fire("license_starvation", condition, title, body, detail)
 
     def uvm_fatal_burst(self, fatal_job_count: int, *, total_jobs: Optional[int] = None,
-                         job_ids: Optional[Sequence[int]] = None) -> EscalationEvent:
+                         job_ids: Optional[Sequence[int]] = None,
+                         tier: Optional[str] = None,
+                         threshold: Optional[int] = None) -> EscalationEvent:
         """Fires when `fatal_job_count` (jobs reporting a real epilogue
         uvm_fatal count > 0 within ONE reconciliation cycle -- see
         dv_harness.regression_reporter.run_reconciliation_cycle()) meets or
-        exceeds cfg.uvm_fatal_burst_threshold (default 3, see
-        EscalationConfig's own docstring for the justification)."""
-        condition = fatal_job_count >= self.cfg.uvm_fatal_burst_threshold
+        exceeds the effective threshold.
+
+        TIERED THRESHOLD (2026-09-04, Section 3 item 3c): `threshold`, when
+        given, is the per-tier value resolved by
+        `dv_harness.regression_tiers.active_uvm_fatal_burst_threshold()` for
+        whatever regression tier is actually running, and `tier` is its name
+        (carried into the notification body so the recipient can see WHICH
+        cadence tripped). Both default to None, in which case this behaves
+        byte-for-byte as before: cfg.uvm_fatal_burst_threshold (3), applied
+        flat. A batch's size is what makes a given fatal count meaningful --
+        see regression_tiers.py's own docstring for why SMOKE is 1 and
+        WEEKLY is 5 while NIGHTLY keeps the historical 3."""
+        effective = threshold if isinstance(threshold, int) and threshold > 0 \
+            else self.cfg.uvm_fatal_burst_threshold
+        condition = fatal_job_count >= effective
         reason = (f"{fatal_job_count} job(s) reporting UVM_FATAL this cycle "
-                  f"(threshold={self.cfg.uvm_fatal_burst_threshold})")
-        title = "DV Harness: UVM_FATAL burst"
+                  f"(threshold={effective}" + (f", tier={tier}" if tier else "") + ")")
+        title = "DV Harness: UVM_FATAL burst" + (f" ({tier})" if tier else "")
         body = reason
         if total_jobs is not None:
             body += f"; total jobs this cycle: {total_jobs}"

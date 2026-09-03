@@ -744,6 +744,70 @@ class DVHarness:
             "subsystem_boundary": " ".join(str(s) for s in subsystem_terms) or None,
         }
 
+    def _escalate_unreachable_coverage_holes(self, text: Optional[str]) -> List[Dict[str, Any]]:
+        """Turn every UNREACHABLE_STIMULUS coverage hole in a COVERAGE_CLOSURE
+        response into a REAL Tier-3 question-queue entry owned by the
+        designer (2026-09-04, Section 3 item 3b -- see
+        coverage_analysis.escalate_unreachable_holes()'s own docstring for
+        the seed-attempt precedence rule and why the queue is the right
+        destination).
+
+        Best-effort and never raising, exactly like every other side effect
+        around this call site: an escalation-store problem must not be the
+        reason a stage cannot be judged. The gate that consumes this fails
+        the hole honestly if the question really did not land."""
+        if not text:
+            return []
+        try:
+            from .coverage_analysis import escalate_unreachable_holes
+            blocks = extract_evidence_blocks(text) or {}
+            payload = blocks.get("coverage_hole_regeneration_gate")
+            holes = payload.get("coverage_holes") if isinstance(payload, dict) else None
+            if not holes:
+                return []
+            return escalate_unreachable_holes(self.root, holes, cfg=self.cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"[dv-harness] coverage-hole escalation failed (continuing): {e}")
+            return []
+
+    def _computed_regression_selection(self) -> Optional[Dict[str, Any]]:
+        """REAL, harness-computed RTL-diff-driven regression selection for
+        Stage.REGRESSION_SELECT (2026-09-04, Section 3 item 3a).
+
+        Before this existed, REGRESSION_SELECT was pure agent self-report:
+        prompts.py asked the agent to hand-fill targeted/dependency/safety/
+        mandatory_signoff, and regression_selection_completeness_gate.py
+        only checked that the resulting JSON had non-empty categories. No
+        code anywhere computed an impact scope from a diff -- the one real
+        `git diff` call in this engine (`_git_modified_files()`) fed only
+        the protocol router. This method is the missing computation; see
+        dv_harness/change_impact.py's module docstring for the full data
+        lineage (real git diff -> real rtl_modules parse rows -> real
+        .dv-harness/requirements.csv traceability registry).
+
+        BASE SHA (never guessed silently): `config.json`'s
+        `regression.change_impact_base_sha` when a project declares one,
+        else `HEAD~1`. A repo with no HEAD~1 (a single-commit or non-git
+        checkout) produces an honest UNKNOWN_BASE/NO_GIT diff status that
+        change_impact.py itself converts into LOW confidence +
+        expand_to_full_regression -- i.e. "we could not narrow, so do not
+        narrow", never a fabricated narrow selection.
+
+        Returns None (and the stage keeps its previous behavior exactly)
+        only if the computation itself raises -- wrapped like every other
+        best-effort side effect in this file, because a selection helper
+        must never be the reason a stage cannot run at all.
+        """
+        try:
+            from . import change_impact
+            block = self.cfg.get(change_impact.CONFIG_KEY) or {}
+            base = block.get("change_impact_base_sha") or "HEAD~1"
+            head = block.get("change_impact_head_sha") or "HEAD"
+            return change_impact.compute_and_write(
+                self.root, base_sha=str(base), head_sha=str(head), cfg=self.cfg)
+        except Exception:
+            return None
+
     def _environment_mode_router_evidence(self) -> Dict[str, Any]:
         """Real per-run evidence for environment_mode_router.
         resolve_environment_mode(): requested_subsystems from the same real
@@ -2286,7 +2350,24 @@ class DVHarness:
         if plan_section:
             prompt = prompt + plan_section
 
+        # REGRESSION_SELECT only: compute the real RTL-diff impact scope and
+        # show it to the agent BEFORE it writes its own selection (2026-09-04,
+        # Section 3 item 3a). Placed after the plan section so it is the last
+        # thing in the prompt, and gated on the stage so no other stage pays
+        # for a git diff it has no use for. The same computation writes
+        # .dv-harness/regression/computed_selection.json, which
+        # regression_selection_completeness_gate.py then enforces the agent's
+        # answer against (add-only, never drop) -- so this is a real
+        # mechanism, not merely advisory prompt text.
+        computed_selection: Optional[Dict[str, Any]] = None
+        if stage == Stage.REGRESSION_SELECT.value:
+            computed_selection = self._computed_regression_selection()
+            if computed_selection:
+                from .change_impact import render_selection_section
+                prompt = prompt + render_selection_section(computed_selection)
+
         return {
+            "computed_selection": computed_selection,
             "node": node, "route_info": route_info, "plan": plan, "bb_snapshot": bb_snapshot,
             "agent_profile": agent_profile, "plan_section": plan_section, "task": task,
             "relevant_memory": relevant_memory, "kc_search_results": kc_search_results,
@@ -2858,7 +2939,29 @@ class DVHarness:
             except Exception as e:
                 print(f"[dv-harness] degradation bookkeeping failed (continuing): {e}")
 
+        if result.ok and stage == Stage.COVERAGE_CLOSURE.value:
+            # Differentiated coverage-hole remediation (2026-09-04, Section 3
+            # item 3b). Runs BEFORE gate evaluation, because the gate's
+            # UNREACHABLE_STIMULUS branch verifies that a real question-queue
+            # entry exists -- and this is what creates it. An agent that
+            # honestly classifies a bin as structurally unreachable therefore
+            # gets the correct action (ask the design owner) performed for it,
+            # instead of being told to invent another testcase, which was the
+            # old gate's only accepted answer for that class.
+            self._escalate_unreachable_coverage_holes(result.text)
+
         evidence_blocks: Dict[str, Any] = {}
+        # Initialized here rather than only inside the result.ok branch below:
+        # step 4's _react_step_inference() call reads it on EVERY exit path,
+        # including ADAPTER_FAIL (which never evaluates a gate and so never
+        # assigns it there).
+        structured_signatures: List[Any] = []
+        # THIS attempt's own inner-ReAct reroute choice, deliberately a local
+        # rather than a read of ss["react_reroute_target"]: that state key
+        # survives across attempts and is only ever rewritten on the inner-
+        # ReAct branch, so reading it back at step 4 would attribute a prior
+        # attempt's reroute to an attempt that never made one.
+        react_reroute_target: Optional[str] = None
         if result.ok:
             # Transport success (the Claude subprocess call returning ok) is
             # NOT the same as DV PASS -- same principle as "LSF DONE != DV

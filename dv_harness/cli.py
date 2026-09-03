@@ -599,6 +599,28 @@ def main():
                          help="Flag a passing job at or above this many standard deviations over its "
                               "pattern's baseline mean runtime (default 3.0).")
 
+    prt = sub.add_parser("regression-tier", help="Tiered regression cadence (SMOKE/NIGHTLY/WEEKLY): which "
+                                                    "tests, what time budget, which UVM_FATAL escalation "
+                                                    "threshold. See dv_harness/regression_tiers.py.")
+    prt_sub = prt.add_subparsers(dest="rt_cmd", required=True)
+    prt_sub.add_parser("list", help="Print every tier's effective policy (defaults + config.json overrides).")
+    prt_plan = prt_sub.add_parser("plan", help="Resolve the concrete test list one tier would run, from the "
+                                                 "harness-COMPUTED change-impact selection "
+                                                 "(.dv-harness/regression/computed_selection.json). Read-only.")
+    prt_plan.add_argument("tier", help="SMOKE | NIGHTLY | WEEKLY")
+    prt_plan.add_argument("--base-sha", default=None,
+                           help="Recompute the change-impact selection against this base revision first "
+                                "(default: use the already-computed selection on disk, if any).")
+    prt_start = prt_sub.add_parser("start", help="Declare that the regression now being submitted belongs to "
+                                                   "this tier -- writes .dv-harness/regression/active_tier.json, "
+                                                   "which the lsf-watch reconciliation loop reads to apply this "
+                                                   "tier's UVM_FATAL escalation threshold instead of the flat one.")
+    prt_start.add_argument("tier", help="SMOKE | NIGHTLY | WEEKLY")
+    prt_start.add_argument("--base-sha", default=None,
+                           help="Recompute the change-impact selection against this base revision first.")
+    prt_sub.add_parser("status", help="Print the active-tier record (null if no tiered run is declared).")
+    prt_sub.add_parser("clear", help="Clear the active-tier record; escalation returns to the flat threshold.")
+
     pvplan = sub.add_parser("vplan-export", help="Write a real, openable vPlan .xlsx workbook (verification_plan + "
                                                    "coverage_summary sheets) from a JSON list of structured "
                                                    "verification-item dicts, validated against real pattern-dir/"
@@ -1493,6 +1515,38 @@ def main():
             "coverage_percent": result.coverage_percent, "counts_by_state": result.counts_by_state,
             "gaps_ranked_count": len(result.gaps_ranked),
         }, ensure_ascii=False, indent=2))
+    elif args.cmd == "regression-tier":
+        from . import change_impact, regression_tiers
+
+        def _selection_payload(base_sha):
+            """The harness-COMPUTED selection: recomputed when a base SHA is
+            given, else whatever the last real computation left on disk.
+            Never fabricated -- with neither available, the tier resolves
+            against an empty selection and says so through
+            full_universe_available/empty class lists."""
+            if base_sha:
+                return change_impact.compute_and_write(h.root, base_sha=base_sha, cfg=h.cfg)
+            return change_impact.read_computed_selection(h.root) or {}
+
+        if args.rt_cmd == "list":
+            print(regression_tiers.render_tier_table(h.cfg))
+        elif args.rt_cmd in ("plan", "start"):
+            payload = _selection_payload(getattr(args, "base_sha", None))
+            resolved = regression_tiers.tests_for_tier(
+                args.tier, payload.get("selection") or {}, cfg=h.cfg,
+                full_pattern_universe=change_impact.full_pattern_universe(h.root))
+            resolved["change_impact_evidence_id"] = payload.get("change_impact_evidence_id")
+            if args.rt_cmd == "start":
+                resolved["active_tier_record"] = regression_tiers.record_active_tier(
+                    h.root, args.tier, cfg=h.cfg, tests=resolved["tests"],
+                    selection_evidence_id=payload.get("change_impact_evidence_id"))
+            print(json.dumps(resolved, ensure_ascii=False, indent=2))
+        elif args.rt_cmd == "status":
+            print(json.dumps(regression_tiers.read_active_tier(h.root),
+                              ensure_ascii=False, indent=2))
+        elif args.rt_cmd == "clear":
+            print(json.dumps({"cleared": regression_tiers.clear_active_tier(h.root)},
+                              ensure_ascii=False))
     elif args.cmd == "trend":
         from . import trend_analysis
         kwargs = {}

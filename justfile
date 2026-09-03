@@ -238,6 +238,57 @@ connectivity-check-status:
     {{python}} -m dv_harness.connectivity_check --project-root "{{justfile_directory()}}" --check-only
 
 # =============================================================================
+# 3b. TIERED REGRESSION CADENCE (2026-09-04, Section 3 item 3c)
+# =============================================================================
+# Regression used to be flat here: one submission mechanism, one escalation
+# threshold, no cadence. These three recipes are the real invocation points
+# for the SMOKE/NIGHTLY/WEEKLY tiers defined in dv_harness/regression_tiers.py
+# -- each resolves the tier's own test list from the harness-COMPUTED
+# change-impact selection (dv_harness/change_impact.py, recomputed here
+# against the tier's own base revision) and declares the active tier, which
+# is what makes the lsf-watch reconciliation loop apply THAT tier's
+# UVM_FATAL escalation threshold instead of the flat one.
+#
+# HONEST DISCLOSURE: these recipes are the TRIGGER POINT, not the scheduler.
+# Nothing in this repo installs a cron entry or a Windows scheduled task --
+# doing so is a machine-level act outside version control, and claiming a
+# schedule exists when none is installed would be exactly the fabricated
+# evidence this project's Evidence Truth Rule forbids. Install one of:
+#
+#   # Linux crontab -e
+#   */30 * * * *  cd <project> && just regression-smoke
+#   0 22 * * 1-5  cd <project> && just regression-nightly
+#   0 2  * * 6    cd <project> && just regression-weekly
+#
+#   # Windows Task Scheduler (PowerShell, run once per tier)
+#   schtasks /Create /TN "DV nightly regression" /SC DAILY /ST 22:00 ^
+#            /TR "cmd /c cd /d <project> && just regression-nightly"
+#
+# `regression-tier plan` (read-only, declares nothing) is available via
+# `dv-harness regression-tier plan <TIER>` for inspecting a tier's test list
+# without starting it.
+#
+# base_sha defaults are per-tier ON PURPOSE: a SMOKE run answers "did the
+# change I just made break the sanity set", so it diffs against the previous
+# commit; NIGHTLY diffs against the last day of history, WEEKLY against the
+# last week. Override on the command line (e.g. `just regression-nightly
+# origin/main`) when a project's real baseline is a branch point rather than
+# a commit count.
+regression-smoke base_sha="HEAD~1":
+    {{python}} -m dv_harness.cli --project-root "{{justfile_directory()}}" regression-tier start SMOKE --base-sha "{{base_sha}}"
+
+regression-nightly base_sha="HEAD~10":
+    {{python}} -m dv_harness.cli --project-root "{{justfile_directory()}}" regression-tier start NIGHTLY --base-sha "{{base_sha}}"
+
+regression-weekly base_sha="HEAD~50":
+    {{python}} -m dv_harness.cli --project-root "{{justfile_directory()}}" regression-tier start WEEKLY --base-sha "{{base_sha}}"
+
+# Read-only: which tier (if any) is currently declared, and therefore which
+# UVM_FATAL escalation threshold the watcher is applying right now.
+regression-tier-status:
+    {{python}} -m dv_harness.cli --project-root "{{justfile_directory()}}" regression-tier status
+
+# =============================================================================
 # 4. WAVE=1 RUN
 # =============================================================================
 # remote-executor SKILL.md's step 5 and CLAUDE.md's First-Failure Waveform

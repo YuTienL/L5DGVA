@@ -139,9 +139,22 @@ def _escalate_uvm_fatal_burst_if_needed(root: Path, jobs_for_snapshot: list) -> 
         if fatal_job_ids:
             from . import config as _config
             from . import escalation_notify as _escalation
-            notifier = _escalation.notifier_from_config(_config.load_config(root).get("escalation"))
-            notifier.uvm_fatal_burst(len(fatal_job_ids), total_jobs=len(jobs_for_snapshot),
-                                      job_ids=fatal_job_ids)
+            from . import regression_tiers as _tiers
+            cfg = _config.load_config(root)
+            notifier = _escalation.notifier_from_config(cfg.get("escalation"))
+            # Tiered threshold (2026-09-04, Section 3 item 3c): a SMOKE run's
+            # handful of fixed sanity patterns and a WEEKLY full-universe run
+            # are not the same statistical population, so the same absolute
+            # fatal count does not mean the same thing in both. Reads the
+            # active-tier record written by `dv-harness regression-tier run`;
+            # returns None when no tiered run was declared, which keeps the
+            # flat pre-existing threshold exactly as it was.
+            active = _tiers.read_active_tier(root)
+            notifier.uvm_fatal_burst(
+                len(fatal_job_ids), total_jobs=len(jobs_for_snapshot),
+                job_ids=fatal_job_ids,
+                tier=(active or {}).get("tier"),
+                threshold=_tiers.active_uvm_fatal_burst_threshold(root, cfg))
     except Exception as e:
         print(f"[reconciliation_cycle] escalation notify failed: {e}", flush=True)
 
