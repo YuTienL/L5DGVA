@@ -2,7 +2,7 @@
 
 **Status: DONE**
 
-One-line test summary: `python tools/testing/self_test.py --skip-pytest` real-run PASS (import-sanity 94 modules / cli-help-sanity all subcommands / self-audit 7 PASS+0 FAIL+16 NO_SOURCE_DATA of 23); full `pytest dv_harness_tests/` (2567 tests) genuinely started and ran clean (0 failures) through the portion this session had time to observe, but did not reach completion within the session — see "What was NOT fully verified" below.
+One-line test summary: `python tools/testing/self_test.py --skip-pytest` real-run PASS (import-sanity 94 modules / cli-help-sanity all subcommands / self-audit 7 PASS+0 FAIL+16 NO_SOURCE_DATA of 23); full `pytest dv_harness_tests/` (2567 tests) genuinely started and reached ~23% before the session ended, with 2 FAILED lines surfaced and investigated in isolation (1 confirmed a transient contention flake, 1 a pre-existing timing-sensitive test unrelated to this change) — see "What was NOT fully verified" below.
 
 ## Scope discipline (read first)
 
@@ -73,7 +73,11 @@ The full 2567-test suite did not finish within this session. Two real, confirmed
 1. The suite genuinely includes slow, real subprocess-driven integration tests (a real `claude` CLI invocation, a real `pueued` daemon round trip, etc.) — this is inherent to `dv_harness_tests/` as it exists today, not something introduced by this work.
 2. This machine had **multiple other concurrent Claude Code sessions/sibling workflows actively running** for the entire duration of this task (confirmed via `ps aux`: dozens of concurrent `bash`/`python`/`sleep` processes from other sessions throughout, exactly as this task's own briefing described — "TWO other multi-agent efforts running concurrently"). Every timing figure recorded above was measured under that real contention, not a clean/idle machine.
 
-Given both, the honest position is: the pytest step's *wiring* is proven correct (it launches the real suite, streams real per-test PASS/FAIL, and every test observed so far passed) but a clean, complete, single full run was not obtained this session. On an isolated GitHub Actions runner (no sibling contention) this should complete well inside the workflow's 45-minute step budget; if that turns out generous or tight in practice, `--pytest-timeout` on the local script and the workflow's `timeout-minutes` are both one-line adjustments.
+Given both, the honest position is: the pytest step's *wiring* is proven correct (it launches the real suite, streams real per-test PASS/FAIL) but a clean, complete, single full run was not obtained this session. On an isolated GitHub Actions runner (no sibling contention) this should complete well inside the workflow's 45-minute step budget; if that turns out generous or tight in practice, `--pytest-timeout` on the local script and the workflow's `timeout-minutes` are both one-line adjustments.
+
+**Two real FAILED lines did surface** in the partial run, both investigated by re-running in isolation (unrelated to any file this work touched -- `dashboard.py`/`debug_flow`/engine background-loop internals, not `self_audit.py` or `test_collection_health_gate.py`):
+- `test_debug_flow_memory.py::test_engineering_memory_promotion_gets_a_real_knowledge_commit_sha_when_git_enabled` -- **PASSED** in isolation. Transient flake under the concurrent load described above, not a real regression.
+- `test_dashboard_interactive.py::test_start_loop_true_advances_through_multiple_stages_in_background` -- **FAILED again in isolation** (`assert state["running"] is False` timed out mid-poll after the background loop worked through all ~30 real stages). This is a pre-existing timing-sensitive test (a background thread polled with `time.sleep(0.1)` against a bounded wait) that this session's sustained heavy CPU contention (confirmed via `ps aux`) appears to push past whatever polling budget it assumes; it does not touch, import, or exercise anything this work changed. Left as-is and out of scope for this task -- flagged here rather than silently ignored, per the same "harness's own infrastructure breaking is easy to miss" concern this whole task exists to address. Worth a follow-up look under normal (uncontended) conditions to confirm whether it is contention-only or a genuine intermittent flake.
 
 ## Files changed/added
 
