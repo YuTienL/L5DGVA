@@ -534,3 +534,75 @@ long-term cost to the team's own capability, not merely a short-term efficiency 
 adopting this harness should deliberately route some fraction of real failures to a human for
 hands-on debug rather than letting the harness resolve every one it technically could, treating
 this as an investment in the team's future capability rather than lost efficiency today.
+
+
+## Bind-Location Rules (2026-09-03)
+
+Four hard project rules for every `bind` statement an agent proposes or reviews — not
+suggestions, and not judgment calls left to per-instance discretion. Backed by real code in
+`dv_harness/connectivity.py` (the 4-tier bind-confidence classifier, existing-bind grep, and the
+3-gate connectivity pipeline — see `.work/mcp-bind-connectivity-report.md`) and
+`dv_harness/uvm_generator/bind_mechanism_generator.py` (evidence-gated `bind`/hook-skeleton
+emission, already real — this section adds the four location rules that generator's own output
+must satisfy; it does not re-implement that generator's emission logic here).
+
+1. **Bare module name vs. full instance path.** Binding to a bare module name applies to
+   **every** instance of that module. Appropriate at IP-level (one DUT instance, one intended
+   bind target). Usually **wrong** at SoC level — a bare-module-name bind against a module
+   instantiated more than once silently binds all of them. SoC-level work must always bind by
+   full instance path (`chip.core.subsys0.usb0`, not `usb3_subsystem`).
+2. **Centralized `*_bind.sv` files under `tb/`.** Every bind statement lives in a centralized
+   `*_bind.sv` file under `tb/` (matches the existing `<ip>_uvm_bind_inst.sv` — "every bind, in
+   ONE file" — convention already documented in `ip-uvm-dv-gen/SKILL.md`'s directory table). RTL
+   files are **read-only**: an agent must never insert a `bind` statement directly into RTL.
+3. **Clock/reset through the bind's own port list.** Clock and reset must be passed explicitly
+   through the bind instance's own port connections, never grabbed via a cross-level
+   hierarchical reference (`chip.core.clk` reached through an XMR from inside the bound module).
+   A hierarchical grab breaks at gate-level netlists and after any wrapper swap — the bind's own
+   port list is the only connection method that survives both.
+4. **No generate/for-loop bind targets.** Any bind-target path containing a generate-block or
+   for-loop construct must be expanded to explicit literal indices in the actual bind statement
+   (`chip.core.phy_array[0].u_phy`, `chip.core.phy_array[1].u_phy`, ... — never
+   `chip.core.phy_array[*].u_phy` or an unrolled-loop placeholder). No wildcard/loop-based bind
+   target is accepted, precisely because a generate-loop bind path is one of the two situations
+   `connectivity.py`'s T3 tier explicitly flags as most error-prone (the other being inconsistent
+   wrapper depth across a hierarchy).
+
+These four rules are enforced by review, not (yet) by a standalone lint gate — `connectivity.py`'s
+T1–T4 tier classifier and its `grep_existing_binds()`/matrix output make a violation visible (a
+bare-module-name target at SoC scope, or a generate-index-bearing bind target, shows up directly
+in the connectivity matrix's `bind_target` column for a human reviewer to catch), but does not
+yet hard-block generation on one. See the report referenced above for what is real/tested today
+versus NOT_AVAILABLE-by-honest-design (anything requiring a live `simv`, a licensed VCS install,
+or `slang`, none of which are present in this environment as of this writing).
+
+**The 3 machine gates are a REQUIRED workflow checkpoint, not merely available tooling
+(2026-09-03, Gap #2 closure).** `connectivity.py`'s 3-gate standard (elaboration / static
+zero-time connectivity / transaction activity) existing and being importable is not sufficient —
+it must actually be RUN. This was confirmed as a real gap: the live `usb31_dev_uvm` build reached
+first successful compile and moved on through later build steps without the 3-gate standard ever
+being applied to it, because the standard was built mid-session by a separate concurrent effort
+and nothing retroactively flagged that in-flight build against new verification infrastructure.
+Concretely, for every IP_UVM_DV_Gen build from this point forward (full mechanics in
+`.claude/agents/IP_UVM_DV_Gen.md`'s "Mandatory bind-verification checkpoint" subsection under Step
+9):
+- Running Gate 1 (`run_gate1_elaboration_check()`) and Gate 2 (`evaluate_zero_time_connectivity()`
+  / `run_gate2_against_live_simv()`) is REQUIRED immediately after the first successful
+  compile/elaboration — an honest NOT_AVAILABLE result (no `slang`/`vcs`/trace present) satisfies
+  this checkpoint; never invoking either gate at all does not.
+- Gate 3 (transaction activity) cannot PASS or FAIL until a real pattern actually completes. That
+  is expected and must be tracked explicitly as **PENDING**
+  (`evaluate_transaction_activity_status(pattern_completed=False)`) — `connectivity.py`'s
+  `GateStatus` enum now carries `NOT_YET_RUN` and `PENDING` alongside `PASS`/`FAIL`/
+  `NOT_AVAILABLE` specifically so this state is never conflated with FAILED, with "not
+  applicable", or silently omitted from a report.
+- Every build-status report produced from that checkpoint onward must explicitly carry Gate
+  1/2/3's current status (`render_bind_verification_status_markdown()` /
+  `bind_verification_status_block()`) — a report that omits this section is a defect in the
+  report. `python -m dv_harness.uvm_generator.bind_verification_lint <report_path>` is a real,
+  standalone check that flags exactly this against any build tree's own status-report artifact
+  (markdown or JSON), independent of which agent or code path produced it.
+- `assert_bind_gates_checkpoint(first_compile_succeeded, gate_report)` is the corresponding
+  code-level assertion (raises `BindGateCheckpointError`, never a silently-ignorable bool) for any
+  future code path that comes to drive this build mechanically instead of via agent-followed
+  prose. See `.work/gap-close-mandatory-gates-report.md` for the full evidence and verification.

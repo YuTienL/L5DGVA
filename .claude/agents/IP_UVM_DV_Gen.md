@@ -1631,6 +1631,64 @@ empty.
   does not hit; a switch that silences or redirects a later, more useful
   diagnostic is worse than no switch at all.
 
+### Mandatory bind-verification checkpoint (2026-09-03, Gap #2 closure)
+
+**The moment the build above reaches its first successful compile/
+elaboration (the first clean `vlogan`/`vcs -elab_only` or `fourstep`
+stage-2 elaboration, whichever this build actually uses), running Gates 1
+and 2 of `dv_harness/connectivity.py`'s 3-gate bind-verification standard
+is a REQUIRED checkpoint of this workflow -- not optional, not "when
+convenient", not something to get to after Step 11's deliverables are
+already written.** This closes a confirmed, evidence-based gap: a real
+build (`usb31_dev_uvm`) reached first successful compile and moved on
+through this agent's later steps without the 3-gate standard ever being
+applied to it, because the standard was built mid-session by a separate
+concurrent effort and nothing retroactively flagged the in-flight build
+against it. Do not let that repeat on a build this agent authors from here
+on:
+
+1. As soon as first successful compile/elaboration is confirmed, call
+   `dv_harness.connectivity.run_gate1_elaboration_check()` and either
+   `dv_harness.connectivity.evaluate_zero_time_connectivity()` (with a real
+   captured signal trace) or `run_gate2_against_live_simv()` (the honest
+   NOT_AVAILABLE path when no trace exists yet) -- or drive both through
+   `run_machine_gates()`. Gate 1/2 reporting NOT_AVAILABLE because a
+   licensed `slang`/`vcs`/live-trace path is genuinely absent still counts
+   as the checkpoint being satisfied -- it is a real, honest status, never a
+   silent skip. What is NOT acceptable is reaching this point and simply
+   never invoking either gate.
+2. Gate 3 (transaction activity) legitimately cannot PASS or FAIL until a
+   real pattern actually completes -- do not force or fake a Gate 3 verdict
+   at this checkpoint. Instead report it as **PENDING**
+   (`dv_harness.connectivity.evaluate_transaction_activity_status(pattern_completed=False)`),
+   an explicit, trackable status distinct from FAIL, from NOT_AVAILABLE, and
+   from simply omitting it. A build stuck with no pattern reaching a
+   terminal PASS/FAIL (the exact `usb31_dev_uvm` TCA-hang shape) must show
+   Gate 3 as PENDING for as long as that remains true, never silently
+   indistinguishable from "not checked."
+3. **From this checkpoint forward, every build-status report this agent
+   produces (the "first status report" convention above, and every one
+   after it, through Steps 10-11) MUST include Gate 1/2/3's current status
+   explicitly** -- paste in
+   `dv_harness.connectivity.render_bind_verification_status_markdown(gate_report)`'s
+   `## Bind Verification Status` section verbatim (or the equivalent JSON
+   block via `bind_verification_status_block()`) rather than composing the
+   three lines by hand. A status report that omits this section is
+   itself a defect in the report, exactly as much as a report that omits a
+   compile error would be -- run
+   `python -m dv_harness.uvm_generator.bind_verification_lint <report_path>`
+   against any status report before treating it as final; it flags a
+   missing or unrecognized gate status by name.
+4. If gate results are only available informally (no code path in this
+   particular authoring session actually calls `connectivity.py`), the
+   REPORTED status must still be one of `NOT_YET_RUN` / `PENDING` / `PASS` /
+   `FAIL` / `NOT_AVAILABLE` for each of Gate 1/2/3, chosen honestly against
+   real evidence -- never left blank, never inferred as "probably fine."
+
+This checkpoint governs Step 9 (build) through Step 11 (deliverables); it
+does not relax or replace CLAUDE.md's own **Bind-Location Rules (2026-09-03)**
+section, which states this same requirement from the CLAUDE.md side.
+
 - **`-debug_access`, not `-debug_access+all`**, for a post-processing flow --
   the latter is for interactive debug and costs simulation speed a
   post-process flow never recovers.
