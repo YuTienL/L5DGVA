@@ -194,6 +194,41 @@ _None linked yet._
 | `JOB_MEMORY` | `job_result`/`job_failure`/`job_rerun` | no |
 | `WORKING_MEMORY` | `react_reasoning_step`, or anything unmatched | no |
 | `PROJECT_MEMORY` | `project_fact`/`project_topology`/`tool_flow`/`known_issue` | **yes** |
-| `ENGINEERING_MEMORY` | `root_cause`/`verified_fix`/`debug_lesson` | **yes** |
+| `ENGINEERING_MEMORY` | `root_cause`/`verified_fix`/`debug_lesson` | **yes**, plus `engineering_admission_gate()`'s evidence + confidence + reusable bar — a record clearing `verified` but failing that gate is demoted to `WORKING_MEMORY` (see MEMORY_ARCHITECTURE.md) |
 | `ORGANIZATIONAL_MEMORY` | `cross_project_lesson`/`methodology`/`best_practice` | **yes**, and only reachable directly if you bypass `promote_to_organizational()` — don't; see MEMORY_ARCHITECTURE.md |
 | `CORNER_CASE_LIBRARY` | `corner_case` | **yes** |
+
+## 5. Job Memory record fields (`lsf_client._upsert_job_tier_memory_record()`)
+
+One record per LSF job, keyed `JOB-<job_id>-TERMINAL-RECONCILE` (a stable id,
+so repeat polls of the same stuck job upsert rather than duplicate). Written
+on `reconcile_job()`'s CRITICAL `sim_status`→`ANALYSIS_OWED` discrepancy, and
+re-upserted with better evidence by
+`regression_reporter.run_reconciliation_cycle()` once a real sim.log epilogue
+has been parsed.
+
+**Always present** — every one carries a real value, so absence would itself
+be misleading:
+
+| Field | Source |
+|---|---|
+| `kind` | `job_failure` when `lsf_status=="EXIT"`, `uvm_fatal_count>0`, an assertion failure, a simulator crash, or `sim_status=="FAIL"`; else `job_result` |
+| `job_id`, `pattern`, `lsf_status`, `terminal_signature` | `JobState` |
+| `uvm_error_count`, `uvm_fatal_count` | `JobState` (real sim.log-derived counts) |
+| `dv_analysis_status` | always `ANALYSIS_OWED` at this trigger |
+| `dv_result` | `JobState.sim_status` — the DV verdict, deliberately separate from `lsf_status` per CLAUDE.md's "LSF DONE is not equal to DV PASS" |
+| `root_cause_status`, `fix_proposal_status` | `JobState` — the spec's "fix attempt" fields; `NOT_STARTED` is itself informative |
+
+**Present only when genuinely captured** (omitted, never written as `null` —
+so a reader can tell "not captured" from "captured as null"):
+
+| Field | Source |
+|---|---|
+| `command` | the exact command handed to `bsub` (`dv-harness lsf-submit`, or `register_external_job(command=…)`) |
+| `runlimit_minutes` | the `bsub -W <minutes>` limit actually requested (`--runlimit-min`) — this job's real timeout budget |
+| `submit_time`, `run_time` | LSF's own `bjobs -json` `SUBMIT_TIME`/`RUN_TIME`, stored verbatim as LSF's strings |
+| `observed_terminal_at` | ISO-8601 UTC, when THIS harness first observed a terminal status; set once, never refreshed by later polls. Named for what it is — LSF's own finish time is not requested by this module, and calling a poll timestamp the job's end time would be dressed-up inference |
+| `seed`, `fsdb_path` | first-class `JobState` fields, else extracted from `options` text when it carries a documented marker |
+| `run_dir`, `sim_log`, `regression_id` | `JobState` |
+| `early_kill`, `kill_reason` | only when an early kill actually fired |
+| `failure_signature`, `prior_related_knowledge` | only on a real failure signal, via `memory_vault.build_failure_signature()`/`search_related_memory_for_debug()` — candidate prior evidence for the Debug Agent, never an assumed root cause |

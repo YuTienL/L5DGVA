@@ -241,6 +241,13 @@ def main():
     # at reconcile time if --options happens to carry one of those markers.
     plsf_submit.add_argument("--seed", default=None, help="Simulation seed for the job snapshot.")
     plsf_submit.add_argument("--fsdb-path", default=None, help="FSDB waveform path for the job snapshot, if known at submit time.")
+    # --runlimit-min (2026-09-03, gap-close-obsidian-memory phase 4+5): the
+    # real `bsub -W <minutes>` wall-clock limit, recorded onto JobState as
+    # this job's timeout budget so the Job Memory record written at terminal
+    # reconcile can state it. Omitted passes no -W at all (queue default) and
+    # honestly records no limit.
+    plsf_submit.add_argument("--runlimit-min", type=int, default=None, dest="runlimit_minutes",
+                              help="Wall-clock run limit in minutes (bsub -W). Also stored on the job snapshot.")
     # lmstat + scheduler preflight gate (2026-09-03, highest-priority
     # workstream): dv_harness.preflight.run_preflight() runs BEFORE bsub --
     # see lsf_client.bsub_submit_with_preflight(). --skip-preflight is an
@@ -1038,6 +1045,7 @@ def main():
             job_id, pf_result = lsf_client.bsub_submit_with_preflight(
                 args.command, queue=args.queue, cores=args.cores,
                 mem_mb=args.mem_mb, run_dir=args.run_dir,
+                runlimit_minutes=args.runlimit_minutes,
                 preflight_cfg=pf_cfg, skip_preflight=args.skip_preflight,
                 notifier=notifier,
             )
@@ -1054,6 +1062,7 @@ def main():
             job_id=job_id, regression_id=args.regression_id, pattern=args.pattern,
             options=args.options, run_dir=args.run_dir, sim_log=args.sim_log,
             seed=seed, fsdb_path=fsdb_path,
+            command=args.command, runlimit_minutes=args.runlimit_minutes,
             lsf_status="PEND",
         )
         lsf_client.save_job_state(h.root, state)

@@ -25,6 +25,12 @@ verdicts:
     memory_vault.py's create()/update() already redact before writing, but
     this re-checks the actual files, catching a hand-edited note or a note
     written before this feature existed)
+  - JSON MemoryStore index integrity (2026-09-03): the 5-tier JSON store
+    (dv_harness/memory.py) that the vault notes MIRROR, not the vault itself
+    -- deliberately included here because it is the system of record behind
+    every Memory Note, and a record file with no index.json row is invisible
+    to MemoryRetriever.search() while still looking perfectly healthy in the
+    vault. Read-only here; `python -m dv_harness.memory_cli reindex` repairs.
 
 Only `06_Agent_Memory/**/*.md` is scanned for schema/duplicate-ID/invalid-
 YAML/broken-link/secret checks -- Phase 7's Memory Note schema applies to
@@ -220,6 +226,30 @@ def check_secrets(notes: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"status": "BLOCKED" if found else "READY", "notes_with_secrets": found}
 
 
+def check_memory_store_index(root: Path) -> Dict[str, Any]:
+    """JSON MemoryStore index-vs-files drift (see module docstring). A record
+    file with no index.json row is PARTIAL, not BLOCKED: the record itself is
+    intact and still reachable by exact memory_id via MemoryStore.get(), it
+    is only invisible to search -- and `python -m dv_harness.memory_cli
+    reindex` closes it without any data loss."""
+    from .memory import MemoryStore
+    try:
+        report = MemoryStore(Path(root)).index_integrity()
+    except (OSError, ValueError) as exc:
+        return {"status": "PARTIAL", "error": str(exc)}
+    if report["ok"]:
+        return {"status": "READY", **report}
+    missing = len(report["files_missing_from_index"])
+    orphaned = len(report["index_rows_without_file"])
+    return {
+        "status": "PARTIAL",
+        "reason": (f"{missing} record file(s) have no index.json row (invisible to "
+                    f"MemoryRetriever.search()); {orphaned} index row(s) point at a missing file. "
+                    f"Repair with `python -m dv_harness.memory_cli reindex`."),
+        **report,
+    }
+
+
 def _aggregate(checks: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     blocked = [k for k, v in checks.items() if v.get("status") == "BLOCKED"]
     partial = [k for k, v in checks.items() if v.get("status") == "PARTIAL"]
@@ -275,6 +305,7 @@ def run_doctor(root: Path, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, An
         "broken_links": check_broken_links(notes),
         "large_files": check_large_files(vault_path),
         "secrets": check_secrets(notes),
+        "memory_store_index": check_memory_store_index(root),
     }
 
     result = _aggregate(checks)

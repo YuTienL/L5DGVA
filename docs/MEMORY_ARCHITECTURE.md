@@ -90,6 +90,51 @@ A `kind` of `credential`/`password`/`token`/`secret` is hard-`REJECT`ed
 before any write happens — see the Engineering Memory Policy's "Never"
 rules in `CLAUDE.md`.
 
+### The admission boundary: (Working/Project) → Engineering
+
+`route_memory()`'s `verified` column above is a caller-supplied boolean, so
+for the Engineering tier it is a necessary but **not** sufficient condition.
+`memory_router.engineering_admission_gate(record)` runs on every
+`ENGINEERING_MEMORY` write and requires all three of:
+
+1. **Evidence** — non-empty `evidence`, OR a `verification` block in one of
+   the two gate-validated shapes below (the SAME
+   `_verification_is_gate_validated()` the organizational gate uses).
+2. **Confidence** — `confidence` in `HIGH`/`CONFIRMED`
+   (`ENGINEERING_ADMISSION_CONFIDENCE_LEVELS`), or, equivalently, a
+   gate-validated `verification` block (independently gate-script-verified
+   evidence rather than a self-declared label).
+3. **Reusable** — `reusable` not explicitly `False`, and at least one of
+   `root_cause`/`fix`/`lesson` (`ENGINEERING_REUSABLE_CLAIM_FIELDS`) present.
+
+A record failing any of them is **demoted to Working Memory**, not dropped
+and not raised on: it is written to the working tier carrying
+`engineering_admission_rejected: [<reason codes>]`, and `route_and_store()`
+returns `{"destination": "WORKING_MEMORY", "requested_destination":
+"ENGINEERING_MEMORY", "engineering_admission": {...}}`. That is CLAUDE.md's
+Engineering Memory Policy ("an unverified hypothesis … belongs in Working
+Memory until it clears verification") as enforced code rather than trusted
+prose. Reason codes: `NO_EVIDENCE`, `CONFIDENCE_BELOW_HIGH`,
+`EXPLICITLY_NOT_REUSABLE`, `NO_REUSABLE_CLAIM`.
+
+### index.json integrity
+
+`index.json` is a derived search projection of the per-tier record files
+(`MemoryStore._index_row()`), and the record files are the system of record.
+`MemoryRetriever.search()` iterates the index; `MemoryStore.get()` reads the
+file — so a record file with no index row is silently unsearchable while
+still looking healthy. `MemoryStore.add()` holds a cross-process lock
+(`.dv-harness/memory/.index.lock`, atomic `os.mkdir`) around the index's
+read-modify-write and replaces it atomically, so concurrent harness
+processes cannot lose each other's rows. `MemoryStore.index_integrity()`
+reports drift (surfaced by `dv-harness memory doctor`'s `memory_store_index`
+check) and `MemoryStore.reindex()` repairs it from the files:
+
+```
+python -m dv_harness.memory_cli --project-root . index-check
+python -m dv_harness.memory_cli --project-root . reindex
+```
+
 ### Organizational Memory has no local file store, by design
 
 Unlike the other 4 tiers, `OrganizationalMemoryStore.add()` writes straight

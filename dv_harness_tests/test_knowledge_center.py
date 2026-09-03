@@ -194,7 +194,9 @@ def test_route_and_store_with_knowledge_center_enabled_attempts_shared_push():
         cfg = {"knowledge_center": {"enabled": True, "sync_on_promote": True,
                                      "remote_root": "/srv/kc", "hop_script": "/nonexistent/remote_hop.py"}}
         result = route_and_store(tmp, {"kind": "root_cause", "verified": True, "title": "t",
-                                        "protocol": "usb"}, cfg=cfg)
+                                        "protocol": "usb", "root_cause": "ep0 fifo underrun",
+                                        "confidence": "HIGH",
+                                        "evidence": ["sim.log:8821 UVM_ERROR"]}, cfg=cfg)
         # No real server reachable in this test -- must degrade gracefully,
         # never raise, and never lose the LOCAL write (memory_id present).
         assert "memory_id" in result

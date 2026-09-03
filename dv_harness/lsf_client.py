@@ -33,9 +33,23 @@ except ImportError:  # pragma: no cover - exercised for real on this
 JOBS_DIR_NAME = (".dv-harness", "lsf", "jobs")
 EARLY_FAIL_POLICY_PATH = (".dv-harness", "lsf", "early_fail_policy.json")
 
+# REMOVED (2026-09-03, gap-close-obsidian-memory phase 4+5): "MEMLIMIT",
+# "TIMEOUT" and "LICENSE_WAIT" used to be declared here alongside the five
+# real values below, but NO code path could ever produce them --
+# map_bjobs_stat_to_lsf_status() is the one and only writer of
+# JobState.lsf_status, and _BJOBS_STAT_MAP has no entry yielding any of the
+# three (bjobs' STAT column reports PEND/RUN/DONE/EXIT/... ; a run-limit or
+# memory-limit kill surfaces there as plain EXIT, with the distinguishing
+# detail in an exit/pending REASON field this module deliberately does not
+# request -- see _run_bjobs()'s -o list). Declaring statuses nothing can emit
+# made JobState look like it captured a timeout/memlimit/license-wait
+# distinction it never did. Restoring that distinction for real needs a
+# reason-field mapping validated against a live LSF instance, which this
+# environment has none of; a Job Memory record's real, honest timeout input
+# today is the run limit the submitter itself requested
+# (JobState.runlimit_minutes below, the `-W` value actually passed to bsub).
 if Literal is not None:
-    LsfStatus = Literal["PEND", "RUN", "DONE", "EXIT", "KILLED",
-                         "MEMLIMIT", "TIMEOUT", "LICENSE_WAIT", "UNKNOWN"]
+    LsfStatus = Literal["PEND", "RUN", "DONE", "EXIT", "KILLED", "UNKNOWN"]
 else:  # pragma: no cover - real fallback path, only reachable on Python < 3.8
     LsfStatus = str
 
@@ -102,6 +116,40 @@ class JobState:
     # handles an absent key exactly like every other optional field).
     seed: Optional[str] = None
     fsdb_path: Optional[str] = None
+    # command / runlimit_minutes / submit_time / run_time / observed_terminal_at
+    # (2026-09-03, gap-close-obsidian-memory phase 4+5): the Job Memory tier's
+    # spec-named "start/end time, command, timeout" fields. Each is populated
+    # from a real source, never derived or guessed, and each stays None when
+    # that source genuinely did not supply it:
+    #   command           -- the exact command string handed to bsub
+    #                        (cli.py's `lsf-submit`, or register_external_job()'s
+    #                        optional kwarg for a job submitted by someone
+    #                        else's script). Without it a Job Memory record
+    #                        could say a job failed but never what it ran.
+    #   runlimit_minutes  -- the `-W <minutes>` wall-clock limit actually
+    #                        requested at submit time (bsub_submit() emits it),
+    #                        i.e. this job's real timeout budget. Same units and
+    #                        meaning as the generated environments' own
+    #                        LSF_TIMEOUT (templates/sim_scripts/lsf_regress.sh).
+    #   submit_time /     -- LSF's OWN reported times, captured by
+    #   run_time             reconcile_job() from the bjobs -json record's
+    #                        SUBMIT_TIME/RUN_TIME fields (already requested by
+    #                        _run_bjobs()'s -o list, and until now discarded).
+    #                        Stored verbatim as LSF's own strings -- never
+    #                        reformatted into a fabricated epoch/ISO value.
+    #   observed_terminal_at -- ISO-8601 UTC, the moment THIS harness first
+    #                        observed a terminal (DONE/EXIT) status for the job.
+    #                        Deliberately named for what it is (a harness
+    #                        observation) rather than "end_time": LSF's own
+    #                        finish time is not in this module's -o list, and
+    #                        claiming a poll timestamp is the job's finish time
+    #                        would be exactly the kind of dressed-up inference
+    #                        the Evidence Truth Rule forbids.
+    command: Optional[str] = None
+    runlimit_minutes: Optional[int] = None
+    submit_time: Optional[str] = None
+    run_time: Optional[str] = None
+    observed_terminal_at: Optional[str] = None
     lsf_status: str = "UNKNOWN"
     sim_status: str = "UNKNOWN"
     last_log_offset: int = 0
@@ -167,6 +215,7 @@ class PreflightBlockedError(RuntimeError):
 
 def bsub_submit_with_preflight(command: str, *, queue: str, cores: int = 1,
                                 mem_mb: Optional[int] = None, run_dir: Optional[str] = None,
+                                runlimit_minutes: Optional[int] = None,
                                 extra_args: Optional[list[str]] = None,
                                 preflight_cfg=None, preflight_runner=None,
                                 skip_preflight: bool = False, notifier=None):
@@ -217,7 +266,8 @@ def bsub_submit_with_preflight(command: str, *, queue: str, cores: int = 1,
             raise PreflightBlockedError(result)
     try:
         job_id = bsub_submit(command, queue=queue, cores=cores, mem_mb=mem_mb,
-                              run_dir=run_dir, extra_args=extra_args)
+                              run_dir=run_dir, runlimit_minutes=runlimit_minutes,
+                              extra_args=extra_args)
     except LsfUnavailableError as e:
         if notifier is not None:
             notifier.job_submission_failure(command=command, queue=queue, reason=str(e))
@@ -227,10 +277,20 @@ def bsub_submit_with_preflight(command: str, *, queue: str, cores: int = 1,
 
 def bsub_submit(command: str, *, queue: str, cores: int = 1,
                 mem_mb: Optional[int] = None, run_dir: Optional[str] = None,
+                runlimit_minutes: Optional[int] = None,
                 extra_args: Optional[list[str]] = None) -> int:
+    """`runlimit_minutes` (2026-09-03) emits the real `bsub -W <minutes>`
+    wall-clock run limit -- the same knob the generated environments' own
+    lsf_regress.sh already drives via LSF_TIMEOUT. Omitted (the default)
+    means no -W is passed at all, exactly as before this parameter existed:
+    the queue's own default limit applies and JobState.runlimit_minutes
+    honestly stays None rather than recording a limit this harness never
+    actually requested."""
     argv = ["bsub", "-q", queue, "-n", str(cores)]
     if mem_mb is not None:
         argv += ["-R", f"rusage[mem={mem_mb}]"]
+    if runlimit_minutes is not None:
+        argv += ["-W", str(int(runlimit_minutes))]
     if run_dir:
         argv += ["-cwd", run_dir]
     if extra_args:
@@ -437,7 +497,9 @@ def bkill_job(job_id: int, *, verify: bool = True, poll_timeout_s: int = 30) -> 
 def register_external_job(root: Path, job_id: int, *, log_path: str,
                            pattern: Optional[str] = None,
                            seed: Optional[str] = None,
-                           fsdb_path: Optional[str] = None) -> None:
+                           fsdb_path: Optional[str] = None,
+                           command: Optional[str] = None,
+                           runlimit_minutes: Optional[int] = None) -> None:
     """Register a job that was submitted OUTSIDE this module's own
     bsub_submit() -- e.g. a generated environment's own Makefile-native
     `bsub` -- so reconcile_batch()/save_job_state() treat it identically to
@@ -449,10 +511,17 @@ def register_external_job(root: Path, job_id: int, *, log_path: str,
     structural pass-throughs onto the new JobState fields -- populated only
     when the caller wrapping the external submission genuinely knows them
     (e.g. the same value it assigned to the generated environment's own
-    lsf_regress.sh $SEED before invoking it), never guessed here."""
+    lsf_regress.sh $SEED before invoking it), never guessed here.
+
+    `command`/`runlimit_minutes` (2026-09-03): the same structural
+    pass-through for the Job Memory tier's spec-named "command"/"timeout"
+    fields -- the external submitter's own command string and its `-W`
+    minutes (e.g. lsf_regress.sh's $LSF_TIMEOUT). Omitted stays None; this
+    function never reconstructs a command line it did not receive."""
     jid = _validate_job_id(job_id)
     state = JobState(job_id=jid, pattern=pattern, sim_log=log_path,
-                      seed=seed, fsdb_path=fsdb_path)
+                      seed=seed, fsdb_path=fsdb_path,
+                      command=command, runlimit_minutes=runlimit_minutes)
     save_job_state(root, state)
 
 
@@ -603,6 +672,20 @@ def reconcile_job(state: JobState, live_bjobs_record: dict, *,
             raise ValueError(
                 f"live bjobs record job id {live_id} does not match state.job_id {state.job_id}"
             )
+
+    # LSF's own SUBMIT_TIME/RUN_TIME (2026-09-03, gap-close-obsidian-memory
+    # phase 4+5): _run_bjobs()'s -o list has always requested both, and every
+    # caller discarded them, so the Job Memory tier had no start-time or
+    # elapsed-runtime evidence at all. Copied verbatim onto the state (LSF's
+    # own strings, never reparsed into a fabricated timestamp) and only when
+    # the live record genuinely carries a value -- an absent field must never
+    # blank out a time this state already recorded from an earlier poll,
+    # exactly like the terminal-status protection below.
+    for live_key, field in (("SUBMIT_TIME", "submit_time"), ("RUN_TIME", "run_time")):
+        live_value = live_bjobs_record.get(live_key)
+        if live_value and live_value != getattr(state, field):
+            setattr(state, field, live_value)
+            changed = True
 
     live_status = map_bjobs_stat_to_lsf_status(live_bjobs_record.get("STAT"))
     # BUG FIX (2026-09-01, lsf-reconcile-terminal-status-hardening): a real,
@@ -808,13 +891,37 @@ def _upsert_job_tier_memory_record(root: Path, jid: int, state: JobState) -> Non
         "uvm_error_count": state.uvm_error_count,
         "uvm_fatal_count": state.uvm_fatal_count,
         "terminal_signature": state.terminal_signature,
+        # FIX ATTEMPT + RESULT (2026-09-03, gap-close-obsidian-memory phase
+        # 4+5): the Job Memory tier's spec-named "fix attempt"/"result"
+        # fields. root_cause_status/fix_proposal_status are real JobState
+        # enums the per-job debug flow advances off "NOT_STARTED"; dv_result
+        # is state.sim_status, the real DV verdict (deliberately a separate
+        # key from lsf_status above, per CLAUDE.md's "LSF DONE is not equal
+        # to DV PASS"). All three always carry a real value, so unlike the
+        # optional fields below they are never omitted -- "NOT_STARTED"/
+        # "UNKNOWN" is itself the honest, informative answer.
+        "root_cause_status": state.root_cause_status,
+        "fix_proposal_status": state.fix_proposal_status,
+        "dv_result": state.sim_status,
     }
+    # Optional fields follow the same convention seed/fsdb_path established:
+    # a key is OMITTED when its source genuinely captured nothing, never
+    # written as a null placeholder that would look like the schema captured
+    # this data when it did not.
     seed = state.seed or extract_seed_from_options(state.options)
     if seed is not None:
         record["seed"] = seed
     fsdb_path = state.fsdb_path or extract_fsdb_path_from_options(state.options)
     if fsdb_path is not None:
         record["fsdb_path"] = fsdb_path
+    for field in ("command", "runlimit_minutes", "submit_time", "run_time",
+                   "observed_terminal_at", "run_dir", "sim_log", "regression_id"):
+        value = getattr(state, field)
+        if value is not None:
+            record[field] = value
+    if state.early_kill:
+        record["early_kill"] = True
+        record["kill_reason"] = state.kill_reason
 
     # Phase 11 (2026-09-03, obsidian-memory-debugflow task -- Regression
     # Integration): on a real UVM_ERROR/UVM_FATAL/abnormal-termination signal

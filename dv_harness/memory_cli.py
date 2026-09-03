@@ -27,6 +27,15 @@ def main():
                            "-- when given, goes through CornerCaseLibraryConsolidator's validation gate")
     ccd=sp.add_parser("corner-case-deprecate"); ccd.add_argument("ccl_id"); ccd.add_argument("--reason",required=True)
 
+    sp.add_parser("index-check",help="Read-only drift report between the per-tier record files on disk "
+                                      "and index.json's rows (MemoryStore.index_integrity()). Repairs nothing.")
+    rix=sp.add_parser("reindex",help="Rebuild index.json from the real record files on disk, restoring any "
+                                      "record that had no index row to MemoryRetriever.search() visibility "
+                                      "(MemoryStore.reindex()).")
+    rix.add_argument("--prune-missing",action="store_true",dest="prune_missing",
+                      help="Also DROP index rows whose record file no longer exists (off by default -- such a "
+                           "row is already inert for search, and dropping it is destructive).")
+
     a=ap.parse_args()
     store=MemoryStore(Path(a.project_root))
     if a.cmd=="search":
@@ -57,5 +66,9 @@ def main():
     elif a.cmd=="corner-case-deprecate":
         library=CornerCaseLibrary(Path(a.project_root))
         print("OK" if library.deprecate(a.ccl_id,a.reason) else "NOT_FOUND")
+    elif a.cmd=="index-check":
+        print(json.dumps(store.index_integrity(),ensure_ascii=False,indent=2))
+    elif a.cmd=="reindex":
+        print(json.dumps(store.reindex(prune_missing=a.prune_missing),ensure_ascii=False,indent=2))
 
 if __name__=="__main__": main()

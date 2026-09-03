@@ -52,7 +52,8 @@ class TestBsubSubmitWithPreflight:
             job_id, result = lsf_client.bsub_submit_with_preflight(
                 "vcs -R sim1", queue="vcs", cores=4, run_dir="/some/dir")
         bsub.assert_called_once_with(
-            "vcs -R sim1", queue="vcs", cores=4, mem_mb=None, run_dir="/some/dir", extra_args=None)
+            "vcs -R sim1", queue="vcs", cores=4, mem_mb=None, run_dir="/some/dir",
+            runlimit_minutes=None, extra_args=None)
         assert job_id == 987654
         assert result.overall == "PASS"
 

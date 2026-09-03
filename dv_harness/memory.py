@@ -1,5 +1,6 @@
 from __future__ import annotations
-import json, uuid, time
+import json, os, uuid, time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,7 +40,86 @@ class MemoryStore:
         return json.loads(self.index_file.read_text(encoding="utf-8"))
 
     def _save_index(self, rows):
-        self.index_file.write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding="utf-8")
+        # Atomic replace rather than a truncate-then-write (2026-09-03,
+        # gap-close-obsidian-memory phase 4+5): index.json is read by every
+        # MemoryRetriever.search() call, and a plain write_text() leaves a
+        # real window in which a concurrent reader sees a truncated/partial
+        # JSON document and raises JSONDecodeError. os.replace() is atomic on
+        # both POSIX and Windows, so a reader always sees either the whole
+        # previous index or the whole new one.
+        tmp=self.index_file.with_name(f"index.json.tmp-{os.getpid()}")
+        tmp.write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding="utf-8")
+        os.replace(str(tmp),str(self.index_file))
+
+    # Cross-process lock guarding index.json's read-modify-write (2026-09-03,
+    # gap-close-obsidian-memory phase 4+5). REAL, MEASURED DEFECT this closes:
+    # this project's own live store had 18 of 31 engineering-tier and 13 of 14
+    # working-tier record FILES on disk with no corresponding index.json row,
+    # making them invisible to MemoryRetriever.search() (which iterates
+    # _index(), memory.py's search() below) while still reachable by exact id
+    # via get() (which reads the file directly). The signature -- every record
+    # file intact, only index rows missing -- is a classic lost update: two
+    # processes (this session runs several concurrent agents, each calling
+    # route_and_store()) both _index(), both append their own row, and the
+    # second _save_index() overwrites the first's row. A lock directory is
+    # used because os.mkdir() is atomic on both POSIX and Windows with no
+    # extra dependency (fcntl/msvcrt differ per platform; this module must
+    # work on both this project's Windows dev end and its Linux server).
+    #
+    # AVAILABILITY over strictness, deliberately: if the lock cannot be
+    # acquired within _INDEX_LOCK_TIMEOUT_S even after breaking a stale one,
+    # add() proceeds WITHOUT the lock rather than raising -- a memory write
+    # must never break the engine stage/reconcile that triggered it (the same
+    # best-effort discipline every route_and_store() call site already
+    # applies). reindex() below exists to repair whatever such a window loses.
+    _INDEX_LOCK_TIMEOUT_S = 10.0
+    _INDEX_LOCK_STALE_S = 60.0
+
+    @contextmanager
+    def _index_lock(self):
+        lock_dir=self.dir/".index.lock"
+        acquired=False
+        deadline=time.monotonic()+self._INDEX_LOCK_TIMEOUT_S
+        while True:
+            try:
+                os.mkdir(str(lock_dir))
+                acquired=True
+                break
+            except FileExistsError:
+                try:
+                    age=time.time()-lock_dir.stat().st_mtime
+                except OSError:
+                    age=0.0
+                if age>self._INDEX_LOCK_STALE_S:
+                    try:
+                        os.rmdir(str(lock_dir))
+                    except OSError:
+                        pass
+                    continue
+                if time.monotonic()>=deadline:
+                    break
+                time.sleep(0.02)
+            except OSError:
+                break
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                try:
+                    os.rmdir(str(lock_dir))
+                except OSError:
+                    pass
+
+    def _index_row(self, level: str, mem: Dict[str,Any], path: Path) -> Dict[str,Any]:
+        return {
+            "memory_id":mem.get("memory_id"),"level":level,"title":mem.get("title",""),
+            "protocol":mem.get("protocol"),"scope":mem.get("scope"),
+            "symptoms":mem.get("symptoms",[]),"root_cause":mem.get("root_cause"),
+            "confidence":mem.get("confidence"),"status":mem.get("status","ACTIVE"),
+            "path":str(path.relative_to(self.root)),
+            "created_at":mem.get("created_at"),
+            "last_used_at":mem.get("last_used_at"),"reuse_count":mem.get("reuse_count",0)
+        }
 
     def add(self, level: str, memory: Dict[str,Any]):
         if level not in MEMORY_LEVELS:
@@ -58,18 +138,97 @@ class MemoryStore:
         mem.setdefault("last_confirmed_at",None)
         p=self.dir/level/f"{mid}.json"
         p.write_text(json.dumps(mem,ensure_ascii=False,indent=2),encoding="utf-8")
-        rows=[x for x in self._index() if x.get("memory_id")!=mid]
-        rows.append({
-            "memory_id":mid,"level":level,"title":mem.get("title",""),
-            "protocol":mem.get("protocol"),"scope":mem.get("scope"),
-            "symptoms":mem.get("symptoms",[]),"root_cause":mem.get("root_cause"),
-            "confidence":mem.get("confidence"),"status":mem.get("status","ACTIVE"),
-            "path":str(p.relative_to(self.root)),
-            "created_at":mem.get("created_at"),
-            "last_used_at":mem.get("last_used_at"),"reuse_count":mem.get("reuse_count",0)
-        })
-        self._save_index(rows)
+        with self._index_lock():
+            rows=[x for x in self._index() if x.get("memory_id")!=mid]
+            rows.append(self._index_row(level,mem,p))
+            self._save_index(rows)
         return mem
+
+    def index_integrity(self) -> Dict[str,Any]:
+        """Read-only drift report between the real per-tier record FILES on
+        disk and index.json's rows -- the two halves MemoryRetriever.search()
+        (index-driven) and get() (file-driven) each read. Never repairs
+        anything; reindex() below does that. Backs memory_doctor's
+        `memory_store_index` check."""
+        rows=self._index()
+        indexed={str(r.get("memory_id")) for r in rows if r.get("memory_id")}
+        files_missing_from_index: List[Dict[str,Any]] = []
+        per_level: Dict[str,Dict[str,int]] = {}
+        on_disk=set()
+        for lv in MEMORY_LEVELS:
+            level_files=sorted(p for p in (self.dir/lv).glob("*.json"))
+            level_rows=[r for r in rows if r.get("level")==lv]
+            per_level[lv]={"files":len(level_files),"index_rows":len(level_rows)}
+            for p in level_files:
+                on_disk.add(p.stem)
+                if p.stem not in indexed:
+                    files_missing_from_index.append({"memory_id":p.stem,"level":lv,
+                                                      "path":str(p.relative_to(self.root))})
+        index_rows_without_file=[
+            {"memory_id":r.get("memory_id"),"level":r.get("level"),"path":r.get("path")}
+            for r in rows if str(r.get("memory_id")) not in on_disk
+        ]
+        return {
+            "ok":not files_missing_from_index and not index_rows_without_file,
+            "index_row_count":len(rows),
+            "record_file_count":len(on_disk),
+            "per_level":per_level,
+            "files_missing_from_index":files_missing_from_index,
+            "index_rows_without_file":index_rows_without_file,
+        }
+
+    def reindex(self, prune_missing: bool=False) -> Dict[str,Any]:
+        """Repair index.json from the real record files on disk -- the one
+        source of truth for what this store actually holds (each tier file IS
+        the record; the index is a derived search projection of it, see
+        _index_row()).
+
+        Adds a row for every record file that has none (making it visible to
+        MemoryRetriever.search() again) and refreshes the row of every file
+        whose stored row has drifted from the file's own current content.
+        Rows whose record file no longer exists are only REPORTED by default,
+        never dropped -- dropping is destructive and such a row is already
+        inert for search purposes (search() calls get(), which returns None,
+        and the hit is skipped); pass prune_missing=True to remove them
+        deliberately. An unreadable/unparseable record file is reported and
+        skipped, never guessed at."""
+        with self._index_lock():
+            rows=self._index()
+            by_id={str(r.get("memory_id")):r for r in rows if r.get("memory_id")}
+            added: List[str] = []
+            refreshed: List[str] = []
+            unreadable: List[Dict[str,str]] = []
+            on_disk=set()
+            for lv in MEMORY_LEVELS:
+                for p in sorted((self.dir/lv).glob("*.json")):
+                    on_disk.add(p.stem)
+                    try:
+                        mem=json.loads(p.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, OSError) as exc:
+                        unreadable.append({"memory_id":p.stem,"level":lv,"error":str(exc)})
+                        continue
+                    mem.setdefault("memory_id",p.stem)
+                    row=self._index_row(lv,mem,p)
+                    prior=by_id.get(p.stem)
+                    if prior is None:
+                        by_id[p.stem]=row
+                        added.append(p.stem)
+                    elif prior!=row:
+                        by_id[p.stem]=row
+                        refreshed.append(p.stem)
+            pruned: List[str] = []
+            for mid in [m for m in by_id if m not in on_disk]:
+                if prune_missing:
+                    by_id.pop(mid)
+                pruned.append(mid)
+            self._save_index(sorted(by_id.values(), key=lambda r: (r.get("level") or "",
+                                                                    str(r.get("memory_id")))))
+        return {
+            "added":added,"refreshed":refreshed,
+            "rows_without_file":pruned,"pruned":prune_missing,
+            "unreadable_record_files":unreadable,
+            "index_row_count":len(by_id),
+        }
 
     def get(self, memory_id: str) -> Optional[Dict[str,Any]]:
         for lv in MEMORY_LEVELS:

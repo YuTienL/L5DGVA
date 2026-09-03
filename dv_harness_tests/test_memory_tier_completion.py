@@ -12,6 +12,20 @@ from dv_harness.memory import (
 from dv_harness.memory_router import route_and_store
 from dv_harness.knowledge_center import RESULT_MARKER
 
+# A record that actually CLEARS memory_router.engineering_admission_gate()
+# (2026-09-03): real evidence, HIGH confidence, and a reusable claim
+# (root_cause/fix). The tests below are about cfg auto-loading / shared-push
+# behavior on the engineering route, so they need a record that genuinely
+# belongs at that tier -- a bare {"verified": True} record is now correctly
+# demoted to Working Memory (see
+# test_engineering_admission_gate_demotes_an_unevidenced_record_to_working_memory).
+ENGINEERING_ADMISSIBLE_RECORD = {
+    "kind": "verified_fix", "verified": True, "title": "USB2 EP0 FIFO underrun fix",
+    "protocol": "USB2", "root_cause": "ep0 fifo prefetch guard missing",
+    "fix": "prefetch one packet before ep0 IN token", "confidence": "HIGH",
+    "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun", "rtl: no prefetch guard on ep0 fifo"],
+}
+
 
 def test_job_memory_store_round_trips_through_real_filesystem():
     tmp = Path(tempfile.mkdtemp())
@@ -282,10 +296,7 @@ def test_route_and_store_auto_loads_cfg_and_shares_when_caller_omits_it():
 
         with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as add_mock:
             add_mock.return_value = {"ok": True, "memory_id": "MEM-SHARED-1"}
-            result = route_and_store(tmp, {
-                "kind": "verified_fix", "verified": True, "title": "t",
-                "root_cause": "x", "fix": "y",
-            })
+            result = route_and_store(tmp, ENGINEERING_ADMISSIBLE_RECORD)
         assert result["destination"] == "ENGINEERING_MEMORY"
         add_mock.assert_called_once()
         assert result.get("shared_push") == {"ok": True, "memory_id": "MEM-SHARED-1"}
@@ -301,10 +312,7 @@ def test_route_and_store_stays_local_only_when_knowledge_center_not_configured()
     tmp = Path(tempfile.mkdtemp())
     try:
         with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as add_mock:
-            result = route_and_store(tmp, {
-                "kind": "verified_fix", "verified": True, "title": "t",
-                "root_cause": "x", "fix": "y",
-            })
+            result = route_and_store(tmp, ENGINEERING_ADMISSIBLE_RECORD)
         assert result["destination"] == "ENGINEERING_MEMORY"
         add_mock.assert_not_called()
         assert "shared_push" not in result
@@ -322,10 +330,7 @@ def test_route_and_store_explicit_empty_cfg_still_opts_out_of_sharing():
         }), encoding="utf-8")
 
         with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as add_mock:
-            result = route_and_store(tmp, {
-                "kind": "verified_fix", "verified": True, "title": "t",
-                "root_cause": "x", "fix": "y",
-            }, cfg={})
+            result = route_and_store(tmp, ENGINEERING_ADMISSIBLE_RECORD, cfg={})
         assert result["destination"] == "ENGINEERING_MEMORY"
         add_mock.assert_not_called()
     finally:

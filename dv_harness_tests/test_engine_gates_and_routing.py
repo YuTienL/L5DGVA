@@ -346,7 +346,15 @@ def test_memory_router_was_previously_dead_code_now_wired():
     # with hardcoded levels). route_and_store() is the missing entry point.
     tmp = Path(tempfile.mkdtemp())
     try:
-        engineering = route_and_store(tmp, {"kind": "root_cause", "verified": True, "title": "t"})
+        engineering = route_and_store(tmp, {
+            "kind": "root_cause", "verified": True, "title": "t",
+            # Real evidence + HIGH confidence + a reusable claim: the bar
+            # memory_router.engineering_admission_gate() enforces at this tier
+            # boundary since 2026-09-03 (a bare {"verified": True} record is
+            # now correctly demoted to Working Memory instead).
+            "root_cause": "ep0 fifo prefetch guard missing", "confidence": "HIGH",
+            "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun"],
+        })
         assert engineering["destination"] == "ENGINEERING_MEMORY"
         assert engineering["level"] == "engineering"
 

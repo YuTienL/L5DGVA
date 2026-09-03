@@ -251,6 +251,7 @@ def test_engineering_memory_promotion_gets_a_real_knowledge_commit_sha_when_git_
         result = route_and_store(tmp, {
             "kind": "verified_fix", "verified": True, "protocol": "USB2",
             "title": "Verified fix: ep0 underrun", "root_cause": "missing prefetch guard",
+            "confidence": "HIGH", "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun"],
         }, cfg=cfg)
         assert result["vault_write"]["ok"] is True
         assert result["vault_write"].get("knowledge_commit_sha")

@@ -14,6 +14,20 @@ from .blackboard import Blackboard
 # single_sim/regression/reaudit gate is also unconditional.
 ORGANIZATIONAL_MIN_CONFIRMATIONS = 2
 
+# Engineering-tier admission bar (2026-09-03, gap-close-obsidian-memory phase
+# 4+5). The confidence vocabulary this codebase already uses -- HIGH is
+# inference.score_confidence()'s own top level and the bar
+# inference.promote_if_high_confidence() already applies to the Engineering
+# -> shared-KC push; CONFIRMED is MemoryConsolidator.from_closed_finding()'s
+# own label for a single_sim+regression+reaudit-validated record. No third
+# scale is invented here.
+ENGINEERING_ADMISSION_CONFIDENCE_LEVELS = ("HIGH", "CONFIRMED")
+
+# Fields any one of which carries the reusable engineering CLAIM of a record.
+# A record with none of them is a note about a run, not reusable engineering
+# knowledge, regardless of how well evidenced it is.
+ENGINEERING_REUSABLE_CLAIM_FIELDS = ("root_cause", "fix", "lesson")
+
 _STORE_LEVEL = {
     "JOB_MEMORY": "job",
     "PROJECT_MEMORY": "project",
@@ -154,6 +168,27 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
                 result["vault_write"] = vault
         return result
     if destination == "ENGINEERING_MEMORY":
+        admitted, admission_reasons = engineering_admission_gate(record)
+        if not admitted:
+            # CLAUDE.md's Engineering Memory Policy, made real code rather
+            # than trusted prose: "Promote an unverified hypothesis straight
+            # to Engineering or Organizational Memory -- it belongs in
+            # Working Memory ... until it clears verification." Demote rather
+            # than raise or drop: the record is real content someone wanted
+            # kept, it just has not earned engineering-tier reusability, and
+            # every route_and_store() caller in the engine treats an
+            # exception here as a promotion failure it then has to report.
+            demoted = WorkingMemoryStore(root).add({
+                **record,
+                "engineering_admission_rejected": admission_reasons,
+                "requested_destination": "ENGINEERING_MEMORY",
+            })
+            return {
+                "destination": "WORKING_MEMORY", "level": demoted["level"],
+                "memory_id": demoted["memory_id"],
+                "requested_destination": "ENGINEERING_MEMORY",
+                "engineering_admission": {"admitted": False, "reasons": admission_reasons},
+            }
         mem, confirmed_existing = _add_or_confirm_engineering(root, record)
         result = {"destination": destination, "level": mem["level"], "memory_id": mem["memory_id"]}
         if confirmed_existing:
@@ -186,6 +221,74 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
             result["vault_write"] = vault
             _write_back_knowledge_commit_sha(root, mem, vault)
     return result
+
+
+def engineering_admission_gate(record: Dict[str, Any]):
+    """The (Working/Project) -> Engineering tier boundary's real gate --
+    the counterpart, one tier down, of promote_to_organizational()'s
+    three-gate Engineering -> Organizational bar (2026-09-03,
+    gap-close-obsidian-memory phase 4+5).
+
+    THE GAP THIS CLOSES, confirmed live before it was written: route_memory()
+    routes any record whose `kind` is root_cause/verified_fix/debug_lesson and
+    whose `verified` flag is True straight to ENGINEERING_MEMORY. `verified`
+    is a plain caller-supplied boolean -- nothing re-derived it, and nothing
+    else was checked at write time. A record reading
+    {"kind": "root_cause", "verified": True, "root_cause": "unverified
+    guess", "verification": {}} therefore landed in the engineering tier and
+    was only ever rejected LATER, at the organizational gate. Everything
+    downstream that treats engineering-tier membership as meaning "verified
+    reusable engineering knowledge" (MemoryRetriever.search() results fed into
+    stage prompts, _maybe_share()'s push to the cross-user Knowledge Center,
+    the vault's Engineering/ note folder) inherited that unearned status.
+
+    Three all-required gates, mirroring the spec's own
+    confidence/evidence/reusable wording and reusing this module's existing
+    machinery rather than inventing parallel checks:
+
+    1. EVIDENCE: real `evidence` content, OR a verification block in one of
+       the two shapes an independent gate script actually produces
+       (_verification_is_gate_validated() -- the SAME function the
+       organizational gate uses, not a second, looser copy). This is the gate
+       the "unverified guess" case above fails.
+    2. CONFIDENCE: `confidence` at HIGH/CONFIRMED
+       (ENGINEERING_ADMISSION_CONFIDENCE_LEVELS), or -- equivalently and by
+       construction stronger -- a gate-validated verification block, which is
+       independently gate-script-verified evidence rather than a
+       self-declared confidence label. engine.py's two real engineering-tier
+       promotion call sites (_promote_experience_knowledge,
+       _promote_verified_fix_knowledge) both already set "HIGH" explicitly.
+    3. REUSABLE: `reusable` not explicitly False, AND at least one
+       ENGINEERING_REUSABLE_CLAIM_FIELDS value present -- a record with
+       neither a root cause nor a fix nor a lesson has nothing for a future
+       run to reuse, whatever its evidence.
+
+    Returns (admitted, reasons) -- reasons is a list of stable reason codes,
+    empty when admitted, and is persisted onto the demoted Working Memory
+    record by route_and_store() so a reader can see exactly what was missing.
+    """
+    reasons = []
+
+    gate_validated, _shape = _verification_is_gate_validated(record)
+
+    evidence = record.get("evidence")
+    if isinstance(evidence, str):
+        has_evidence = bool(evidence.strip())
+    else:
+        has_evidence = bool(evidence)
+    if not has_evidence and not gate_validated:
+        reasons.append("NO_EVIDENCE")
+
+    confidence = str(record.get("confidence") or "").strip().upper()
+    if confidence not in ENGINEERING_ADMISSION_CONFIDENCE_LEVELS and not gate_validated:
+        reasons.append("CONFIDENCE_BELOW_HIGH")
+
+    if record.get("reusable") is False:
+        reasons.append("EXPLICITLY_NOT_REUSABLE")
+    elif not any(str(record.get(f) or "").strip() for f in ENGINEERING_REUSABLE_CLAIM_FIELDS):
+        reasons.append("NO_REUSABLE_CLAIM")
+
+    return (not reasons), reasons
 
 
 def _add_or_confirm_engineering(root: Path, record: Dict[str, Any]):

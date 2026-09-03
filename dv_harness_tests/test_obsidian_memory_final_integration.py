@@ -38,6 +38,8 @@ import pytest
 
 from dv_harness import memory_dedup, memory_router, memory_security, memory_vault as mv
 from dv_harness import session_snapshot as snap
+from dv_harness.memory import MemoryStore
+from dv_harness.memory_router import ORGANIZATIONAL_MIN_CONFIRMATIONS
 
 
 # ---------------------------------------------------------------------------
@@ -291,17 +293,40 @@ def test_case_08_memory_promotion_engineering_to_organizational(project, cfg_no_
     assert second_try["destination"] == "ORGANIZATIONAL_MEMORY"
     assert second_try["promotion_gate"]["confidence_result"]["level"] == "HIGH"
 
-    # A record whose evidence never clears the qualitative gate is honestly rejected.
+    # An unevidenced "verified" record never even REACHES the engineering
+    # tier now (2026-09-03: memory_router.engineering_admission_gate()) -- it
+    # is demoted to Working Memory at write time, so the organizational gate
+    # rejects it as NOT_ENGINEERING_TIER rather than having to catch it one
+    # tier too late.
     unverified = memory_router.route_and_store(
         project,
         {"kind": "root_cause", "verified": True, "protocol": "PCIe", "scope": "x",
          "root_cause": "unverified guess", "verification": {}},
         cfg=cfg_no_git,
     )
+    assert unverified["destination"] == "WORKING_MEMORY"
+    assert unverified["requested_destination"] == "ENGINEERING_MEMORY"
+    assert "NO_EVIDENCE" in unverified["engineering_admission"]["reasons"]
     bad_try = memory_router.promote_to_organizational(project, unverified["memory_id"], high_conf_inputs,
                                                         cfg=cfg_no_git)
     assert bad_try["promoted"] is False
-    assert bad_try["reason"] == "QUALITATIVE_GATE_FAILED"
+    assert bad_try["reason"] == "NOT_ENGINEERING_TIER"
+
+    # And the organizational qualitative gate itself still independently
+    # rejects an engineering-tier record whose verification block is empty --
+    # seeded straight into the store here (bypassing the router) precisely
+    # because the router will no longer admit such a record, and this
+    # assertion is about promote_to_organizational()'s OWN gate, not the
+    # admission gate above.
+    seeded = MemoryStore(project).add("engineering", {
+        "kind": "root_cause", "protocol": "PCIe", "scope": "x",
+        "root_cause": "engineering-tier record with no verification block",
+        "confirmation_count": ORGANIZATIONAL_MIN_CONFIRMATIONS, "verification": {},
+    })
+    gate_try = memory_router.promote_to_organizational(project, seeded["memory_id"], high_conf_inputs,
+                                                        cfg=cfg_no_git)
+    assert gate_try["promoted"] is False
+    assert gate_try["reason"] == "QUALITATIVE_GATE_FAILED"
 
 
 # ===========================================================================

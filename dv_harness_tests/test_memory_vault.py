@@ -500,7 +500,8 @@ def test_route_and_store_engineering_memory_writes_a_real_vault_note():
         cfg = {"knowledge_center": {"enabled": False}, "memory": {"vault_path": "", "git_enabled": False}}
         result = route_and_store(tmp, {
             "kind": "root_cause", "verified": True, "title": "USB2 EP0 underrun",
-            "protocol": "USB2", "root_cause": "missing prefetch",
+            "protocol": "USB2", "root_cause": "missing prefetch", "confidence": "HIGH",
+            "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun", "rtl: no prefetch guard on ep0 fifo"],
         }, cfg=cfg)
         assert result["destination"] == "ENGINEERING_MEMORY"
         assert result["vault_write"]["ok"] is True
@@ -548,6 +549,7 @@ def test_route_and_store_vault_write_failure_never_breaks_the_local_json_write()
         with patch("dv_harness.memory_vault.get_active_provider", side_effect=RuntimeError("disk full")):
             result = route_and_store(tmp, {
                 "kind": "root_cause", "verified": True, "title": "t", "protocol": "USB2", "root_cause": "x",
+                "confidence": "HIGH", "evidence": ["sim.log:41 UVM_ERROR"],
             }, cfg=cfg)
         assert result["destination"] == "ENGINEERING_MEMORY"
         assert "memory_id" in result
@@ -579,13 +581,15 @@ def test_second_route_and_store_call_for_the_same_finding_confirms_instead_of_du
         cfg = {"knowledge_center": {"enabled": False}, "memory": {"vault_path": "", "git_enabled": False}}
         r1 = route_and_store(tmp, {
             "kind": "root_cause", "verified": True, "title": "first report",
-            "protocol": "USB2", "root_cause": "ep0 fifo underrun",
+            "protocol": "USB2", "root_cause": "ep0 fifo underrun", "confidence": "HIGH",
+            "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun"],
         }, cfg=cfg)
         assert "confirmed_existing" not in r1
 
         r2 = route_and_store(tmp, {
             "kind": "root_cause", "verified": True, "title": "independent re-derivation",
             "protocol": "USB2", "root_cause": "EP0 FIFO Underrun",  # same claim, different casing
+            "confidence": "HIGH", "evidence": ["second run sim.log:9104 same UVM_ERROR"],
         }, cfg=cfg)
         assert r2["memory_id"] == r1["memory_id"]
         assert r2["confirmed_existing"] is True
