@@ -96,9 +96,17 @@ PARAM_SCHEMAS: dict[str, dict] = {
 # ---- per-verb RESULT schemas ------------------------------------------------
 # Loose on the payload sub-shape (that mirrors whatever the manifest/DB
 # actually held) but strict on the envelope every result always carries:
-# `verb` + `status` are present on every single result, so a caller (or a
-# test) can always tell which verb answered and whether the data was really
-# there without inspecting payload internals.
+# `verb` is present on every single result, and so is a status field, so a
+# caller (or a test) can always tell which verb answered and whether the data
+# was really there without inspecting payload internals. Four verbs carry one
+# `status`; `get_topology` deliberately carries TWO -- component_hierarchy_status
+# and config_db_trace_status -- because its two sub-layers come from genuinely
+# separate real sources (uvm_top.print_topology() output vs
+# +UVM_CONFIG_DB_TRACE) and either can be absent while the other is captured.
+# Collapsing them into one `status` would have to report a half-available
+# result as either CAPTURED or NOT_AVAILABLE, and both would be a lie. Read the
+# required-key list below (never a hardcoded "status") to know a verb's real
+# envelope.
 
 RESULT_SCHEMAS: dict[str, dict] = {
     "get_vip_config": {

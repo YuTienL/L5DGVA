@@ -881,6 +881,55 @@ if Python is unavailable. It is a large reduction in bypass surface, not a seal.
 (the rule still fires and is recorded in the decision) — never a silent retry.
 
 
+## MCP Query Interface: the 5 Verbs (index) (2026-09-04)
+
+The section above says routing goes through MCP first. This is the index that makes that
+actionable: which verb answers which question, and which two files on disk this server is allowed
+to touch. It is an index, not a manual — every verb's real parameter/result schema lives in
+`dv_harness/mcp/schema.py` and the design writeup in `.work/mcp-server-report.md`; read those on
+demand, never preemptively.
+
+**The rule.** If one of these 5 verbs can answer your question, ask it — do not read the underlying
+file. There are exactly 5, dispatched through one `dispatch()` with no free-text fallback, no
+caller-supplied SQL, and no write verb of any kind; asking for a 6th name raises rather than
+falling through to something general.
+
+| verb | ask it when | required args |
+|---|---|---|
+| `get_vip_config` | you need a VIP instance's already-resolved config value (from a real zero-time elaboration dump, never a document) | *(none — omit both filters to list every captured instance)* |
+| `get_dut_port` | you need one RTL module's ports or parameters, verible-parsed, with the source sha256 | `module_name` |
+| `get_register` | you need one register's fields/offset/absolute address — never a whole regmap | *(none — omit all filters to list every register)* |
+| `get_topology` | you need the UVM component hierarchy or the raw config_db SET/GET trace under some path | *(none)* |
+| `query_regression` | you need regression evidence, via one of a fixed set of shapes — never raw SQL | `query_shape`, one of `latest` / `by_pattern` / `by_verdict` / `by_date_range` |
+
+**Read-only fact sources.** This server reads exactly two things and writes neither. The manifest is
+opened with `Path.read_text()` and the package has no writer; the evidence DB is opened
+`read_only=True`, which DuckDB itself enforces at the engine level:
+
+- `.dv-harness/env.manifest.json` — the 3-layer generated fact file (`vip_config` / `dut_facts` /
+  `env_topology`), written only by `dv_harness/env_manifest.py`. Backs the first four verbs.
+- `.dv-harness/evidence/evidence.duckdb` — the regression evidence store. Backs `query_regression`.
+
+**Which protocols exist is deliberately not listed here.** Which protocols/VIPs an environment
+actually contains is a manifest fact that changes per environment, not a rule that belongs in this
+file — call `get_vip_config` with no arguments and read the `vip_type` of each captured instance. A
+hardcoded protocol list here would be stale the day a second environment is built.
+
+Run it against a real environment:
+
+```
+python -m dv_harness.mcp.server --manifest .dv-harness/env.manifest.json --evidence-db .dv-harness/evidence/evidence.duckdb
+```
+
+This section is **parsed and checked against the code on every test run**
+(`dv_harness/mcp/claude_md_index.py`, `python -m dv_harness.mcp.claude_md_index`): the verb rows
+must equal `verbs.VERBS`, each row's required args must equal that verb's real
+`PARAM_SCHEMAS[...]["required"]`, the shapes must equal `regression_queries.QUERY_SHAPES`, the two
+paths must equal the code-owned ones, and the invocation's flags must be flags `server.py` really
+defines. Adding a verb without indexing it here fails a test. Moving the index into code without
+holding the prose to it would only have created a second place to be wrong.
+
+
 ## Source Authority Order: 9 Levels, Enforced (2026-09-04)
 
 When two sources disagree about the same fact, which one is true is decided by a fixed 9-level
