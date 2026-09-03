@@ -8,7 +8,7 @@ from .models import HarnessState, Stage, Status
 from .storage import StateStore
 from .config import load_config
 from .prompts import build_stage_prompt
-from .policy import next_stage, graph_next, can_signoff
+from .policy import ORDER, next_stage, graph_next, can_signoff
 from .gates import evaluate_stage_evidence, extract_evidence_blocks, STAGE_GATES, JUDGMENT_FIELDS
 from .react_loop import InnerReactLoop, evaluate_stage_evidence_with_detail
 from .memory_router import route_and_store, promote_to_organizational
@@ -251,11 +251,41 @@ def _bb_generic_fallback(node, evidence: dict, stage: str, result) -> Dict[str, 
     summary = {"evidence": evidence, "summary": (result.text or "")[:2000]}
     return {topic: summary for topic in node.blackboard_write}
 
+def _bb_rca_join(evidence: dict, stage: str, result) -> Dict[str, Any]:
+    """RCA_JOIN's fused-evidence record, in the SAME "rca_evidence_fusion"
+    Blackboard topic shape .claude/workflows/rca-multi-agent-fusion.js writes
+    via `dv-harness blackboard write` -- deliberately one topic and one shape
+    for the two real ways this harness can run a multi-agent RCA (the engine's
+    own RCA_G1 graph fan-out, and that Workflow script when a coordinating
+    session invokes it by name), so a later root_cause_evidence_gate block or
+    audit reads one record regardless of which path produced it.
+
+    Every field comes from RCA_JOIN's own gate-verified root_cause_evidence_
+    gate block; nothing is synthesized. `contributing_agents` is deliberately
+    NOT taken from the agent's text -- see _write_blackboard_from_evidence,
+    which overlays the real branch agent ids from the graph itself."""
+    rc = evidence.get("root_cause_evidence_gate", {})
+    if not isinstance(rc, dict):
+        rc = {}
+    return {"rca_evidence_fusion": {
+        "symptom": rc.get("symptom"),
+        "root_cause": rc.get("root_cause"),
+        "first_bad_event": rc.get("first_bad_event"),
+        "causal_chain": rc.get("causal_chain", []),
+        "fused_findings": rc.get("supporting_evidence", []),
+        "disagreements": rc.get("counter_evidence", []),
+        "hypotheses": rc.get("hypotheses", []),
+        "fusion_confidence": rc.get("confidence"),
+        "produced_by": "engine:RCA_G1_graph_fanout",
+        "summary": (result.text or "")[:2000],
+    }}
+
 STAGE_BLACKBOARD_WRITERS = {
     "ENV_CHECK": _bb_env_check,
     "INTAKE": _bb_intake,
     "VERIFY": _bb_verify,
     "REGRESSION_MONITOR": _bb_regression_monitor,
+    "RCA_JOIN": _bb_rca_join,
 }
 
 
@@ -1021,7 +1051,8 @@ class DVHarness:
         "first_bad_event", "causal_chain", "supporting_evidence", "counter_evidence",
     ]
 
-    def _root_cause_confidence_inputs(self, block: dict) -> Dict[str, Any]:
+    def _root_cause_confidence_inputs(self, block: dict,
+                                       concurrent_agent_evidence_count: int = 0) -> Dict[str, Any]:
         """Real independent_sources_count/evidence_refs_verified/
         counter_evidence_count/multi_agent_consensus_count derivation from a
         root_cause_evidence_gate evidence block -- factored out of
@@ -1032,8 +1063,20 @@ class DVHarness:
         evaluation, rather than inventing a second, parallel derivation of
         the same real evidence for a different call site. See
         _score_root_cause_confidence()'s own docstring for the full
-        rationale behind each of these four counts -- unchanged by this
-        refactor, only given a name so a second caller can reuse it."""
+        rationale behind each of these four counts.
+
+        `concurrent_agent_evidence_count` (2026-09-03, RCA_G1 multi-agent gap
+        closure): how many genuinely CONCURRENT specialist agents contributed
+        their own independently-gathered evidence to this root cause, counted
+        from real state by _rca_fanout_agent_evidence_count(). Zero (the
+        default) for every caller and stage where no concurrent fan-out ran,
+        which keeps the pre-existing single-agent behavior byte-identical.
+        Added to -- never substituted for -- the refuted-alternative-
+        hypothesis count below: at RCA_JOIN both signals are real and
+        independent (three different agent profiles over three different
+        evidence domains, AND the surviving hypothesis having survived
+        recorded refutations), so both legitimately count toward
+        score_confidence()'s multi_agent_consensus_count >= 2 bonus."""
         def _cite_count(v):
             if isinstance(v, list):
                 return len(v)
@@ -1048,10 +1091,10 @@ class DVHarness:
         )
 
         hyps = block.get("hypotheses")
-        multi_agent_consensus_count = 0
+        multi_agent_consensus_count = int(concurrent_agent_evidence_count)
         if isinstance(hyps, list):
             selected_claim = block.get("root_cause")
-            multi_agent_consensus_count = sum(
+            multi_agent_consensus_count += sum(
                 1 for h in hyps
                 if isinstance(h, dict) and h.get("claim") != selected_claim and h.get("counter_evidence")
             )
@@ -1099,18 +1142,29 @@ class DVHarness:
             in this exact block (not assumed just because the gate passed).
           - counter_evidence_count: real citation count in the selected
             root_cause's own `counter_evidence` (same counting rule).
-          - multi_agent_consensus_count: this harness runs ONE agent per
-            stage attempt (no concurrent multi-agent branch exists for
-            RE_AUDIT, unlike e.g. the ANALYSIS_G1 fan-out) -- the real,
-            structurally-guaranteed independent-corroboration signal
-            available here is root_cause_evidence_gate.py's own
-            NO_ALTERNATIVE_HYPOTHESIS_REFUTED requirement: how many OTHER
-            candidate hypotheses in the agent's `hypotheses` array were
-            independently evaluated and carry their own recorded
-            counter_evidence ruling them out. Each is a genuinely distinct,
-            gate-verified line of reasoning that converged on the same
-            selected root_cause by elimination -- a real count from real
-            data, not a fabricated stand-in for concurrent agents.
+          - multi_agent_consensus_count: the sum of two real, independent
+            signals (UPDATED 2026-09-03, RCA_G1 multi-agent gap closure --
+            this used to read "this harness runs ONE agent per stage attempt,
+            no concurrent multi-agent branch exists", which is no longer
+            true):
+              (1) Genuinely concurrent specialist agents, when this stage IS
+                  the RCA_G1 join. _rca_fanout_agent_evidence_count() counts
+                  the RCA_*_EVIDENCE branches that really PASSed AND really
+                  wrote their own Blackboard topic -- three different agent
+                  profiles (rtl-evidence-agent / log-evidence-agent /
+                  vip-spec-evidence-agent) dispatched concurrently by
+                  _advance_with_fanout()'s ThreadPoolExecutor over three
+                  different evidence domains. Zero at RE_AUDIT and every
+                  other stage, where no fan-out ran.
+              (2) root_cause_evidence_gate.py's own
+                  NO_ALTERNATIVE_HYPOTHESIS_REFUTED requirement: how many
+                  OTHER candidate hypotheses in the agent's `hypotheses`
+                  array were independently evaluated and carry their own
+                  recorded counter_evidence ruling them out. Each is a
+                  genuinely distinct, gate-verified line of reasoning that
+                  converged on the same selected root_cause by elimination --
+                  a real count from real data, and the ONLY one of the two
+                  available at a single-agent stage like RE_AUDIT.
 
         identify_gap() then reports which of ROOT_CAUSE_EVIDENCE_CATEGORIES
         the selected root_cause is still missing (e.g. a MEDIUM-confidence
@@ -1133,7 +1187,10 @@ class DVHarness:
         if not isinstance(block, dict):
             return
 
-        confidence_result = score_confidence(**self._root_cause_confidence_inputs(block))
+        concurrent_agents = (self._rca_fanout_agent_evidence_count()
+                             if stage == Stage.RCA_JOIN.value else 0)
+        confidence_result = score_confidence(
+            **self._root_cause_confidence_inputs(block, concurrent_agents))
 
         supplied = [c for c in self.ROOT_CAUSE_EVIDENCE_CATEGORIES if block.get(c)]
         gap = identify_gap(self.ROOT_CAUSE_EVIDENCE_CATEGORIES, supplied)
@@ -1159,6 +1216,7 @@ class DVHarness:
             "stage": stage,
             "recomputed_confidence": confidence_result,
             "agent_reported_confidence": block.get("confidence"),
+            "concurrent_agent_evidence_count": concurrent_agents,
             "gap": gap,
             "next_best_action": next_actions,
             "promotion": promotion,
@@ -1167,6 +1225,7 @@ class DVHarness:
             "ts": now(), "stage": stage, "event": "ROOT_CAUSE_CONFIDENCE_SCORED",
             "recomputed_confidence": confidence_result,
             "agent_reported_confidence": block.get("confidence"),
+            "concurrent_agent_evidence_count": concurrent_agents,
             "gap": gap, "next_best_action": next_actions, "promotion": promotion,
         })
 
@@ -1197,6 +1256,81 @@ class DVHarness:
             # never break an already-earned stage PASS.
             self.store.event({"ts": now(), "stage": stage, "event": "QUALIFIED_CONCLUSION_BUILD_FAILED",
                                "error": str(exc)})
+
+    def _arm_rca_evidence_fanout(self, stage: str, evidence_blocks: dict) -> None:
+        """Decides, from FAILURE_RECOVERY's own gate-verified triage evidence,
+        whether the next advance() takes the RCA_G1 multi-agent evidence
+        fan-out (RCA_RTL_EVIDENCE / RCA_LOG_EVIDENCE / RCA_VIP_SPEC_EVIDENCE
+        -> RCA_JOIN) or FAILURE_RECOVERY's original single CHANGE_IMPACT
+        edge. This is the trigger half of CLAUDE.md's "Important DUT/PHY/
+        Register/VIP changes require Multi-Agent evidence acquisition plus
+        independent synthesis"; _resolve_conditional_fanout_frontier()/
+        _advance_with_fanout() are the dispatch half.
+
+        Trigger is REAL_ISSUE, and nothing weaker. That is not a proxy for
+        "touches RTL/PHY/register/VIP" -- it is the same requirement stated
+        in the harness's own vocabulary, because
+        tools/verification_flow/issue_triage_classification_gate.py already
+        FAILs (REAL_ISSUE_WITHOUT_DEEP_RCA) any REAL_ISSUE classification
+        that did not also set deep_rca_triggered. So a REAL_ISSUE block that
+        got this far is, structurally, a failure the harness has already
+        ruled needs deep RCA, and the three RCA_G1 branches ARE the
+        RTL / log / VIP+spec evidence domains that rule names. A
+        MISCLASSIFIED / KNOWN / BLOCKED triage is left on the original single
+        path, matching rca-multi-agent-fusion.js's own `whenToUse`.
+
+        The agent's classification is never trusted on its own here: this
+        method only ever runs from the `verdict == "PASS"` branch, i.e. after
+        issue_triage_classification_gate.py itself already accepted the block
+        (valid classification vocabulary, non-empty classification_reason AND
+        evidence_hash, deep_rca_triggered set). The token stored on
+        HarnessState carries that real evidence_hash so the state file
+        records WHICH triage decision authorized the fan-out.
+
+        Every other stage is a no-op, and a FAILURE_RECOVERY PASS that is not
+        REAL_ISSUE actively CLEARS any stale arming rather than leaving an
+        older failure's authorization live."""
+        if stage != Stage.FAILURE_RECOVERY.value:
+            return
+        block = evidence_blocks.get("issue_triage_classification_gate")
+        classification = block.get("classification") if isinstance(block, dict) else None
+        if classification != "REAL_ISSUE":
+            if self.state.rca_evidence_fanout_armed:
+                self.state.rca_evidence_fanout_armed = None
+                self.store.save(self.state)
+            return
+        token = f"REAL_ISSUE:{block.get('evidence_hash') or 'NO_EVIDENCE_HASH'}"
+        self.state.rca_evidence_fanout_armed = token
+        self.store.save(self.state)
+        self.store.event({"ts": now(), "stage": stage, "event": "RCA_EVIDENCE_FANOUT_ARMED",
+                           "parallel_group": self.RCA_EVIDENCE_FANOUT_GROUP,
+                           "classification": classification, "armed_by": token})
+
+    def _rca_fanout_agent_evidence_count(self) -> int:
+        """How many of the RCA_G1 evidence branches genuinely produced their
+        own independent evidence for the failure RCA_JOIN is now synthesizing
+        -- a branch counts only if BOTH its stage reached PASS in this run's
+        real HarnessState AND its own declared Blackboard topic was actually
+        written (Blackboard.read() returns a value). Two independent real
+        facts, neither of them the synthesizing agent's own say-so.
+
+        This is what lets _score_root_cause_confidence()'s
+        multi_agent_consensus_count stop being a single-agent proxy at
+        RCA_JOIN: the branches really were dispatched concurrently by
+        _advance_with_fanout()'s ThreadPoolExecutor, each running a different
+        real agent profile over a different evidence domain."""
+        if self.graph is None:
+            return 0
+        count = 0
+        for node in self.graph.nodes.values():
+            if node.parallel_group != self.RCA_EVIDENCE_FANOUT_GROUP:
+                continue
+            ss = self.state.stages.get(node.id) or {}
+            if ss.get("status") != Status.PASS.value:
+                continue
+            if all(self.blackboard.read(topic) is not None for topic in node.blackboard_write):
+                count += 1
+        return count
 
     def _append_coverage_history_sample(self, stage: str, evidence_blocks: dict) -> None:
         """Closed-loop wiring (Task 6, 2026-08-31 poster-gap-closing round 2):
@@ -1937,6 +2071,24 @@ class DVHarness:
     def _write_blackboard_from_evidence(self, node, stage: str, evidence: dict, result) -> None:
         writer = STAGE_BLACKBOARD_WRITERS.get(stage)
         values = writer(evidence, stage, result) if writer else _bb_generic_fallback(node, evidence, stage, result)
+        if stage == Stage.RCA_JOIN.value and "rca_evidence_fusion" in values:
+            # contributing_agents comes from the REAL graph + REAL branch
+            # results, never from RCA_JOIN's own agent text -- a synthesis
+            # agent claiming three branches corroborated it is exactly the
+            # kind of unverified claim CLAUDE.md's Evidence Truth Rule
+            # forbids trusting. Same two-fact test _rca_fanout_agent_evidence
+            # _count() uses (branch stage really PASSed, branch topic really
+            # written).
+            contributing = []
+            for branch in sorted(self.graph.nodes.values(), key=lambda n: n.id) if self.graph else []:
+                if branch.parallel_group != self.RCA_EVIDENCE_FANOUT_GROUP:
+                    continue
+                if (self.state.stages.get(branch.id) or {}).get("status") != Status.PASS.value:
+                    continue
+                if all(self.blackboard.read(t) is not None for t in branch.blackboard_write):
+                    contributing.append({"stage": branch.id, "agent": branch.agent,
+                                          "evidence_topics": list(branch.blackboard_write)})
+            values["rca_evidence_fusion"]["contributing_agents"] = contributing
         for topic in node.blackboard_write:
             value = values.get(topic, {"evidence": evidence, "summary": (result.text or "")[:2000]})
             if topic == "findings":
@@ -2758,6 +2910,7 @@ class DVHarness:
                     self._promote_project_topology_knowledge(stage, evidence_blocks)
                     self._promote_vplan_summary_knowledge(stage, evidence_blocks)
                     self._promote_verified_fix_knowledge(stage, evidence_blocks)
+                    self._arm_rca_evidence_fanout(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness
                 # design pass): previously this was indistinguishable from
@@ -3026,6 +3179,60 @@ class DVHarness:
         self._maybe_run_self_tuning_review()
         return result
 
+    # main_graph.json's one CONDITIONAL parallel_group (2026-09-03,
+    # multi-agent-orchestrator gap closure). ANALYSIS_G1 is unconditional:
+    # PROTOCOL_CAPABILITY's PASS edges lead ONLY to its three branches, so
+    # next_frontier() already resolves it with no state to consult.
+    # FAILURE_RECOVERY is different -- its PASS frontier deliberately mixes
+    # the three RCA_G1 evidence branches WITH the original CHANGE_IMPACT
+    # edge, because CLAUDE.md scopes multi-agent evidence acquisition to
+    # "important DUT/PHY/Register/VIP changes", not to every triaged failure
+    # (rca-multi-agent-fusion.js's own `whenToUse` draws the same line: a
+    # failure one evidence domain already explains should stay on the single
+    # sequential path). The real, gate-verified discriminator is
+    # FAILURE_RECOVERY's own issue_triage_classification_gate verdict --
+    # see _arm_rca_evidence_fanout().
+    RCA_EVIDENCE_FANOUT_GROUP = "RCA_G1"
+
+    def _resolve_conditional_fanout_frontier(self, source_node: str, frontier: List[str]) -> List[str]:
+        """Narrows a PASS frontier that mixes RCA_G1 fan-out branches with a
+        non-fan-out sequential target down to whichever set this failure's
+        real triage classification authorized, and CONSUMES the arming token
+        when it hands back the fan-out.
+
+        Byte-identical passthrough for every other frontier in the graph: a
+        frontier of 0/1 targets, or one containing no RCA_G1 branch at all
+        (ANALYSIS_G1's three branches included), is returned unchanged, so
+        neither the existing unconditional fan-out nor any ordinary single-
+        edge stage transition is affected by this method existing."""
+        if len(frontier) <= 1 or self.graph is None:
+            return frontier
+        branches = [t for t in frontier
+                    if (self.graph.nodes.get(t) is not None
+                        and self.graph.nodes[t].parallel_group == self.RCA_EVIDENCE_FANOUT_GROUP)]
+        if not branches:
+            return frontier
+        sequential = [t for t in frontier if t not in branches]
+        armed = self.state.rca_evidence_fanout_armed
+        if not armed:
+            self.store.event({"ts": now(), "stage": source_node,
+                               "event": "RCA_EVIDENCE_FANOUT_NOT_ARMED",
+                               "parallel_group": self.RCA_EVIDENCE_FANOUT_GROUP,
+                               "sequential_target": sequential[0] if sequential else None})
+            return sequential or frontier
+        # Single-use: one gate-verified REAL_ISSUE triage authorizes exactly
+        # one fan-out. A later FAILURE_RECOVERY PASS must re-arm from its own
+        # fresh triage evidence (CLAUDE.md: "Any current root cause must be
+        # revalidated with current evidence") rather than inheriting this
+        # one's authorization.
+        self.state.rca_evidence_fanout_armed = None
+        self.store.save(self.state)
+        self.store.event({"ts": now(), "stage": source_node,
+                           "event": "RCA_EVIDENCE_FANOUT_DISPATCHED",
+                           "parallel_group": self.RCA_EVIDENCE_FANOUT_GROUP,
+                           "branches": sorted(branches), "armed_by": armed})
+        return branches
+
     def advance(self, user_goal: str = ""):
         # Graph-level parallel fan-out/join (2026-08-29): main_graph.json's
         # parallel_group/join_group metadata (ANALYSIS_G1: REQUIREMENTS_
@@ -3039,14 +3246,39 @@ class DVHarness:
         # single-element list carrying the exact same target next_for()
         # already returned -- so the fallback path below (unchanged from
         # before this feature) is taken whenever len(frontier) <= 1, which is
-        # every node except PROTOCOL_CAPABILITY today. Only when it returns
-        # more than one target does _advance_with_fanout() run at all.
+        # every node except PROTOCOL_CAPABILITY and FAILURE_RECOVERY today.
+        # Only when it returns more than one target does
+        # _advance_with_fanout() run at all.
+        #
+        # FAILURE_RECOVERY (2026-09-03, RCA_G1 multi-agent gap closure) is the
+        # second real fan-out source, and the first CONDITIONAL one:
+        # _resolve_conditional_fanout_frontier() below decides between its
+        # RCA_G1 evidence branches and its original single CHANGE_IMPACT edge
+        # from FAILURE_RECOVERY's own gate-verified triage classification.
+        resolved_single = None
         if self.graph is not None:
-            frontier = self.graph.next_frontier(self.state.current_stage, Status.PASS.value)
+            raw_frontier = self.graph.next_frontier(self.state.current_stage, Status.PASS.value)
+            frontier = self._resolve_conditional_fanout_frontier(self.state.current_stage, raw_frontier)
             if len(frontier) > 1:
                 return self._advance_with_fanout(self.state.current_stage, frontier, user_goal)
-        n = graph_next(self.state.current_stage, Status.PASS.value, self.root) \
-            or next_stage(self.state.current_stage)
+            if len(frontier) == 1 and len(raw_frontier) > 1:
+                # A conditional fan-out that was NOT armed this time: the one
+                # surviving target (e.g. CHANGE_IMPACT) is the real sequential
+                # edge. Named explicitly here rather than left to
+                # graph_next(), whose next_for() picks the lowest-priority-
+                # number matching edge -- correct for FAILURE_RECOVERY today
+                # only because main_graph.json deliberately gives its
+                # CHANGE_IMPACT edge priority 10 against the RCA_G1 branches'
+                # 100. Every non-narrowed frontier (every other node in the
+                # graph) still falls through to the unchanged graph_next()
+                # path below, which is the ONLY thing that knows how to pass
+                # THROUGH a synthetic non-Stage node like ANALYSIS_JOIN.
+                resolved_single = frontier[0]
+        if resolved_single is not None:
+            n = resolved_single
+        else:
+            n = graph_next(self.state.current_stage, Status.PASS.value, self.root) \
+                or next_stage(self.state.current_stage)
         if not n:
             return None
         self.state.current_stage = n
@@ -3166,11 +3398,28 @@ class DVHarness:
             self.store.save(self.state)
             return n
 
-        # All branches PASSed: reuse graph_next()'s existing synthetic-node
-        # passthrough (it already knows how to skip a non-Stage node like
-        # ANALYSIS_JOIN through to the real next Stage, e.g. VPLAN) by
-        # starting the lookup FROM the join node, not from the last branch.
-        n = graph_next(join_node, Status.PASS.value, self.root) or next_stage(join_node)
+        # All branches PASSed. Two genuinely different kinds of join node
+        # exist in main_graph.json and they must not be treated alike:
+        #
+        #   - A SYNTHETIC join node with no corresponding Stage enum member
+        #     (ANALYSIS_JOIN) is pure graph bookkeeping -- there is no
+        #     StageState for it, no STAGE_INSTRUCTIONS, and run_stage() could
+        #     not execute it. graph_next()'s existing synthetic-node
+        #     passthrough already knows how to skip through it to the real
+        #     next Stage (VPLAN), so the lookup starts FROM the join node
+        #     rather than from the last branch. Unchanged behavior.
+        #   - A REAL executable join Stage (RCA_JOIN, 2026-09-03) is the
+        #     independent-synthesis half of CLAUDE.md's "Multi-Agent evidence
+        #     acquisition plus independent synthesis" rule: analysis_debug
+        #     re-reads the three RCA_G1 branches' own Blackboard topics and
+        #     rules on them under root_cause_evidence_gate. Passing THROUGH
+        #     it would silently delete the synthesis half of the mechanism,
+        #     so current_stage advances TO it and the next loop()/run-stage
+        #     call executes it for real.
+        if join_node in ORDER:
+            n = join_node
+        else:
+            n = graph_next(join_node, Status.PASS.value, self.root) or next_stage(join_node)
         if not n:
             return None
         # The fan-out is fully resolved -- clear active_stages back to []

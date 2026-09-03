@@ -1853,6 +1853,109 @@ failure 之後 200us 更長的窗口；`simulation_stopped_at_fsdb_stop`/`job_ki
 （`deep_debug_required` 為 false 時，`deep_debug_not_required_reason` 必須非空說明為什麼低成本
 證據已足夠，否則 FAIL（DEEP_DEBUG_NOT_REQUIRED_WITHOUT_REASON）——不能什麼都不填就跳過波形
 window 檢查；理由夠了就直接 PASS，不必假裝做了一次不存在的 rerun。）
+
+Multi-Agent RCA Evidence Fan-Out（RCA_G1）觸發條件：只要你在
+`issue_triage_classification_gate` 裡把這個 failure 分類成 `REAL_ISSUE`（依那個 gate 本身的
+規則，REAL_ISSUE 必須同時 `deep_rca_triggered: true`），harness 會在這個 stage PASS 之後自動
+把 graph 分岔成 RCA_RTL_EVIDENCE / RCA_LOG_EVIDENCE / RCA_VIP_SPEC_EVIDENCE 三條真正並行的
+branch（各自跑 rtl-evidence-agent / log-evidence-agent / vip-spec-evidence-agent），再匯流到
+RCA_JOIN（analysis_debug）做獨立綜合，最後才進 CHANGE_IMPACT。分類成
+MISCLASSIFIED/KNOWN/BLOCKED 時不會分岔，直接走原本的 FAILURE_RECOVERY -> CHANGE_IMPACT。
+所以這裡的分類不只是紀錄，它會真的改變後面的執行路徑——不要為了省事把真的 REAL_ISSUE
+寫成 KNOWN，也不要把單一 log 就能解釋完的 TB 問題硬報成 REAL_ISSUE。
+""",
+Stage.RCA_RTL_EVIDENCE.value: """
+你是 RCA_G1 multi-agent evidence fan-out 的 RTL/TB 證據 branch（rtl-evidence-agent）。同一時間
+RCA_LOG_EVIDENCE 與 RCA_VIP_SPEC_EVIDENCE 兩條 branch 正在真的並行執行，而且對你的工作完全
+不知情（blind）——這是刻意的，目的是讓三個領域的證據彼此獨立，不互相污染。
+
+只蒐集真實的 RTL/testbench source 證據：module/instance 階層、signal、FSM、register default、
+bind 位置、clock/reset domain。每一條 claim 都要有精確的 file:line 引用。
+
+不要做的事：不要去讀 sim.log/trace/FSDB，不要查 VIP/spec（那是另外兩條 branch 的職責）；
+不要單憑 RTL 靜態閱讀就宣告 root cause——跨領域的綜合判定是 RCA_JOIN 的工作，你的輸出是
+給它的輸入。有把握不足的地方寫進 open_questions，不要補完成看起來完整的故事。
+
+這個 stage 沒有對應的 hard gate（NO_GATE_REQUIRED）；你的回覆內容本身會被寫進 Blackboard
+topic `rca_rtl_evidence`，RCA_JOIN 一定會真的去讀它。
+""",
+Stage.RCA_LOG_EVIDENCE.value: """
+你是 RCA_G1 multi-agent evidence fan-out 的 log/trace/scoreboard 證據 branch
+（log-evidence-agent）。同一時間 RCA_RTL_EVIDENCE 與 RCA_VIP_SPEC_EVIDENCE 兩條 branch 正在
+真的並行執行，而且對你的工作完全不知情（blind）。
+
+只蒐集真實的 sim.log / UVM report / scoreboard report / assertion / command.txt 語意證據：
+第一個異常事件的實際時間戳與訊息原文、UVM_ERROR/UVM_FATAL 全文、command.txt 宣稱要做的事
+與 log 實際發生的事之間的落差（command_semantic_gaps）。每一條 claim 要有
+file:line 或 timestamp 引用，引用原文不要改寫。
+
+不要做的事：不要讀 RTL、不要開 FSDB、不要查 VIP/spec；不要單憑 scoreboard mismatch 就宣告
+DUT bug——那需要 RTL 側證據支撐，而那是別的 branch 的輸出，由 RCA_JOIN 交叉比對。
+
+這個 stage 沒有對應的 hard gate（NO_GATE_REQUIRED）；你的回覆內容本身會被寫進 Blackboard
+topic `rca_log_evidence`，RCA_JOIN 一定會真的去讀它。
+""",
+Stage.RCA_VIP_SPEC_EVIDENCE.value: """
+你是 RCA_G1 multi-agent evidence fan-out 的 VIP/spec 證據 branch（vip-spec-evidence-agent）。
+同一時間 RCA_RTL_EVIDENCE 與 RCA_LOG_EVIDENCE 兩條 branch 正在真的並行執行，而且對你的
+工作完全不知情（blind）。
+
+只蒐集真實的 VIP source/example/user manual/class reference 與 protocol standard spec/PHY
+document 證據（依 CLAUDE.md 的 branch-B/VIP 規則：先查 VIP examples、user manual、source
+code、class/API reference，不得憑印象發明 VIP API/class/sequence）。每一條 claim 要有
+VIP file:line 或 spec 文件+clause 引用；spec 本身語意模糊的地方寫進 spec_ambiguity_notes，
+不要自己選一個解讀當成 spec 規定。
+
+不要做的事：不要讀 DUT RTL、不要讀 sim.log、不要開 FSDB。
+
+這個 stage 沒有對應的 hard gate（NO_GATE_REQUIRED）；你的回覆內容本身會被寫進 Blackboard
+topic `rca_vip_spec_evidence`，RCA_JOIN 一定會真的去讀它。
+""",
+Stage.RCA_JOIN.value: """
+你是 RCA_G1 的 join stage（analysis_debug）：三條 branch 剛剛真的並行跑完，這裡負責獨立綜合
+並做出唯一的 root cause 裁定。這是 CLAUDE.md「Important DUT/PHY/Register/VIP changes require
+Multi-Agent evidence acquisition plus independent synthesis」裡 independent synthesis 那一半。
+
+第一件事，先真的把三個 branch 的 Blackboard topic 讀出來，不要只憑 prompt 裡看到的摘要：
+
+    dv-harness blackboard read rca_rtl_evidence
+    dv-harness blackboard read rca_log_evidence
+    dv-harness blackboard read rca_vip_spec_evidence
+
+（console script 不在 PATH 時用 `python -m dv_harness.cli blackboard read <topic>`。）
+任何一個 topic 讀出來是 null，就代表那條 branch 沒有真的留下證據——照實反映在 confidence 與
+counter_evidence 裡，不要假裝三方都到齊。
+
+然後：
+1. 把三個領域的 findings 合併去重（同一個底層事實從兩個領域看到，合併成一條，並記錄是哪些
+   branch 支撐它）。
+2. 交叉比對：每一條合併後的 finding 要說明它跟其他領域的證據是互相印證、無關、還是衝突。
+3. 真正衝突的地方不准用「投票」或「取平均」解決——自己回去讀被引用的原始檔案判定，並把
+   兩邊的引用都保留在 counter_evidence 裡。
+4. attribution 只能由證據決定：不得只憑 scoreboard mismatch 就判 DUT_BUG，必須有 RTL 側證據。
+5. confidence 誠實填：證據真的不足就是 LOW/MEDIUM，不要為了看起來有結論而往上調。
+
+本 stage 的 PASS 由 harness 端 gate 腳本裁定。回覆結尾附上（欄位定義與 RE_AUDIT 用的同一個
+gate 完全相同——這是刻意重用同一個 `root_cause_evidence_gate`，不是另一個新 gate）：
+
+```dv-harness-evidence:root_cause_evidence_gate
+{"symptom": "...", "first_bad_event": "...", "causal_chain": ["..."],
+ "root_cause": "...", "supporting_evidence": ["..."], "counter_evidence": ["..."],
+ "confidence": "LOW|MEDIUM|HIGH|CONFIRMED",
+ "hypotheses": [{"claim": "...", "category": "...", "supporting_evidence": ["..."],
+   "counter_evidence": ["..."], "missing_evidence": ["..."], "confidence": "...",
+   "next_action": "..."}]}
+```
+（`hypotheses` 至少要兩筆、`root_cause` 必須等於其中一筆的 `claim`，而且至少要有另外一筆帶
+非空 `counter_evidence`（代表真的考慮並排除了替代解釋），否則 FAIL
+NO_ALTERNATIVE_HYPOTHESES/NO_ALTERNATIVE_HYPOTHESIS_REFUTED。confidence 填 HIGH/CONFIRMED
+時 `counter_evidence` 不得為空。可選的 `evidence_refs`: [{"path": ..., "quote": ...}] 會被
+harness 拿去真的開檔比對原文，寫了就必須是真的引用。）
+
+Harness 會在 PASS 之後把這份裁定寫進 Blackboard topic `rca_evidence_fusion`——跟
+`.claude/workflows/rca-multi-agent-fusion.js` 寫的是同一個 topic、同一個形狀，兩條路徑刻意
+共用一份記錄。其中 `contributing_agents` 由 harness 自己從真實的 branch 執行結果填入，不採用
+你自己聲稱有幾個 agent 支持——這是 Evidence Truth Rule。
 """,
 Stage.RE_AUDIT.value: """
 重新執行 original workflow audit，確認原 findings closed 且沒有新增 actionable issue。
@@ -2831,6 +2934,41 @@ checker/scoreboard 盯著看過、而且真的驗證過結果對不對」。如�
 active failure（還在燒的 bug），不能因為程式跑到那一行就發 coverage 額度——
 這等於 regression 還在紅燈卻先蓋章通過。coverage 有洞的時候，正確做法是回頭
 補測試，而不是直接用 waiver 蓋過去（除非那個功能真的確認不支援/不適用）。
+""",
+Stage.RCA_RTL_EVIDENCE.value: """
+【白話說明】這是 REAL_ISSUE 深度除錯時「同時派三組人去查不同來源」裡的第一組：
+只負責從 RTL/testbench 原始碼裡撈真實證據（哪個 module、哪條訊號、哪個暫存器
+預設值、哪個 FSM 狀態），每一句話都要附上 file:line。它刻意不去看 sim.log、
+不去開波形、也不查 VIP/spec——那三件事同時由另外兩組在跑，而且三組彼此看不到
+對方的結果。這樣做的理由跟你請三個人各自獨立看同一個 bug 一樣：先各查各的，
+才不會第一個人講的方向把後面兩個人的判斷都帶偏；等三份證據都到齊，再由
+RCA_JOIN 那一關統一交叉比對。這一關本身不下結論、不判 root cause。
+""",
+Stage.RCA_LOG_EVIDENCE.value: """
+【白話說明】這是深度除錯三組平行證據裡的第二組：只負責 sim.log／UVM report／
+scoreboard report／assertion／command.txt 這些「執行當下真的發生了什麼」的文字
+證據。重點是找出第一個異常事件的實際時間戳和原文，以及 command.txt 說要做的事
+跟 log 裡實際發生的事有沒有對不上（這一項最常被忽略，卻常常就是真正的原因）。
+引用要原文照抄、附行號或時間戳，不能憑印象改寫。它不看 RTL、不開波形、不查
+VIP/spec。特別注意：光憑 scoreboard 對不上就說是 DUT 的錯是不成立的，那需要
+RTL 側的證據配合，而那是別組的工作，由 RCA_JOIN 統一裁定。
+""",
+Stage.RCA_VIP_SPEC_EVIDENCE.value: """
+【白話說明】這是深度除錯三組平行證據裡的第三組：只負責查 VIP 本身（source、
+example、user manual、class reference）和協定標準 spec／PHY 文件，回答「照規格
+和 VIP 的用法，這裡本來應該長什麼樣」。規矩是先查再說，不可以憑印象發明 VIP 的
+API/class/sequence 名稱——這跟你改 code 前一定會先翻 datasheet 是同一件事。
+如果 spec 本身寫得模稜兩可，要如實記成 spec_ambiguity_note，不能自己挑一種解讀
+當成規格規定。它不看 RTL、不看 sim.log、不開波形。
+""",
+Stage.RCA_JOIN.value: """
+【白話說明】三組平行查證跑完之後，這一關負責「把三份證據合在一起，做出唯一的
+結論」。做法是：先真的把三組各自寫下的紀錄讀出來（不是看別人轉述的摘要），把
+同一件事從不同角度看到的證據合併成一條，標記每一條是被哪幾組支持；三組講法真的
+互相衝突的時候，不准用「少數服從多數」或取平均帶過，要自己回去讀被引用的原始
+檔案判定，並且把兩邊的說法都留在紀錄裡。判定歸屬（DUT_BUG／TB_BUG／VIP_ISSUE／
+TEST_ISSUE／SPEC_AMBIGUITY／INFRA_ISSUE）只能靠證據，證據不足就誠實填 LOW，
+不為了看起來有結論而往上調。這一關是整個多方查證流程真正「下判斷」的地方。
 """,
 Stage.RE_AUDIT.value: """
 【白話說明】RE_AUDIT 就是修完 bug 之後的「第二輪 code review」：確認之前提的

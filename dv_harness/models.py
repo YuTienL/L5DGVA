@@ -43,6 +43,27 @@ class Stage(str, Enum):
     COVERAGE_CLOSURE = "COVERAGE_CLOSURE"
     INFRA_RECOVERY = "INFRA_RECOVERY"
     FAILURE_RECOVERY = "FAILURE_RECOVERY"
+    # RCA_G1 multi-agent evidence fan-out + independent synthesis (2026-09-03,
+    # multi-agent-orchestrator gap closure). These four are REAL executable
+    # Stages, not synthetic graph bookkeeping nodes: main_graph.json fans
+    # FAILURE_RECOVERY's PASS edge out to the three RCA_*_EVIDENCE branches
+    # (parallel_group "RCA_G1", one real specialist agent profile each --
+    # rtl-evidence-agent / log-evidence-agent / vip-spec-evidence-agent) and
+    # joins at RCA_JOIN (join_group "RCA_G1", played by analysis_debug), which
+    # independently re-reads the three branches' Blackboard topics before
+    # ruling. The fan-out is CONDITIONAL: it is taken only when
+    # FAILURE_RECOVERY's own issue_triage_classification_gate evidence
+    # classified this failure REAL_ISSUE (engine.py's
+    # _arm_rca_evidence_fanout/_resolve_conditional_fanout_frontier) -- a
+    # MISCLASSIFIED/KNOWN/BLOCKED triage keeps the original single-path
+    # FAILURE_RECOVERY -> CHANGE_IMPACT edge. This is what makes CLAUDE.md's
+    # "Important DUT/PHY/Register/VIP changes require Multi-Agent evidence
+    # acquisition plus independent synthesis" a real engine mechanism rather
+    # than a coordinating session's own remembered technique.
+    RCA_RTL_EVIDENCE = "RCA_RTL_EVIDENCE"
+    RCA_LOG_EVIDENCE = "RCA_LOG_EVIDENCE"
+    RCA_VIP_SPEC_EVIDENCE = "RCA_VIP_SPEC_EVIDENCE"
+    RCA_JOIN = "RCA_JOIN"
     RE_AUDIT = "RE_AUDIT"
     SYSTEM_LEVEL = "SYSTEM_LEVEL"
     EXPERT_FEEDBACK_LOOP = "EXPERT_FEEDBACK_LOOP"
@@ -171,6 +192,20 @@ class HarnessState:
     # field existed simply has no key here, degrading to None (no banner),
     # never a KeyError -- same convention as last_evidence_blocks above.
     last_transition: Optional[Dict[str, Any]] = None
+    # Conditional RCA_G1 fan-out arming token (2026-09-03, multi-agent-
+    # orchestrator gap closure). None/"" means "the RCA multi-agent evidence
+    # fan-out is NOT armed" -- advance() then takes FAILURE_RECOVERY's
+    # original single CHANGE_IMPACT edge, byte-identically to before this
+    # feature. Set to a real, human-readable token derived from
+    # FAILURE_RECOVERY's own gate-verified issue_triage_classification_gate
+    # evidence block (classification + its real evidence_hash) by
+    # engine._arm_rca_evidence_fanout(), and ONLY when that classification is
+    # genuinely REAL_ISSUE -- never a bare True, so the state file records
+    # WHICH real triage decision authorized the fan-out. Consumed (cleared)
+    # by advance() the moment it dispatches the fan-out, so one triage
+    # decision authorizes exactly one fan-out -- same single-use idiom
+    # run_stage() already uses for ControlPlane.clear_approval().
+    rca_evidence_fanout_armed: Optional[str] = None
 
     def effective_active_stages(self) -> List[str]:
         return self.active_stages or [self.current_stage]

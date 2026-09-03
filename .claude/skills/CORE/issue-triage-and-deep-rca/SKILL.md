@@ -16,7 +16,22 @@ REAL_ISSUE:
 launch deep analysis_debug over scoreboard report, PHY model, Standard spec,
 VIP examples/source/docs, RTL, TB, command.txt, sim.log, trace and FSDB if needed.
 
-## Two real paths for launching deep RCA -- pick honestly, do not overclaim
+## Three real paths for launching deep RCA -- pick honestly, do not overclaim
+
+**Automatic, and the one to expect first: the engine's own RCA_G1 graph
+fan-out (2026-09-03).** When this triage runs as the harness's FAILURE_RECOVERY
+stage and your `issue_triage_classification_gate` evidence block classifies the
+failure `REAL_ISSUE`, you do not have to launch anything: `dv_harness/engine.py`
+itself fans `main_graph.json` out to RCA_RTL_EVIDENCE / RCA_LOG_EVIDENCE /
+RCA_VIP_SPEC_EVIDENCE (the same three specialist agent profiles the Workflow
+script below uses) on a real `ThreadPoolExecutor`, then lands on the real
+RCA_JOIN stage where `analysis_debug` re-reads the three branches' Blackboard
+topics and rules under `root_cause_evidence_gate`. Classifying
+MISCLASSIFIED/KNOWN/BLOCKED keeps the original single FAILURE_RECOVERY ->
+CHANGE_IMPACT path. So the classification you write is not just a record -- it
+really does select the investigation shape. The two manual paths below stay for
+RCA that is NOT happening inside a FAILURE_RECOVERY stage run.
+
 
 **Default: single-sub-agent sequential path (analysis_debug).** One
 analysis_debug sub-agent call pulls the evidence types above itself, in
@@ -46,10 +61,13 @@ that independently re-reads that topic and produces the final verdict.
 Be honest about what each path actually is: the sequential path is one agent
 pulling several evidence types itself, one after another; the fan-out path is
 this repo's own Workflow tool genuinely running several distinct, narrow
-specialist agents (see `.claude/agents/ROSTER.md`) concurrently -- a real,
-different mechanism from `CORE/multi-agent-orchestrator`'s documented
-today-state (a human/LLM session manually issuing several Agent-tool calls in
-one turn is not this). Reach for the fan-out script by name when parallel
+specialist agents (see `.claude/agents/ROSTER.md`) concurrently; and the
+engine's RCA_G1 fan-out above is a third, separate mechanism again -- the
+Python engine's own threads, driven by the graph rather than by anyone
+remembering to call something. All three are real; a human/LLM session
+manually issuing several Agent-tool calls in one turn is none of them (see
+`CORE/multi-agent-orchestrator`, which now lists all three side by side).
+Reach for the fan-out script by name when parallel
 multi-angle gathering is genuinely warranted; do not invoke it reflexively
 for every REAL_ISSUE, and do not describe the plain sequential analysis_debug
 path as "multi-agent parallel" -- it is not.

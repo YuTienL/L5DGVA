@@ -32,9 +32,10 @@ def _fresh_harness(with_graph=True):
 
 def _write_synthetic_fanout_graph(tmp: Path):
     """A small, standalone, test-only graph -- deliberately separate from
-    the real main_graph.json, per the actual fan-out node ids/roles it
-    reuses real Stage enum members (so HarnessState.ensure_stages() already
-    has a StageState for each) but its edges/parallel_group/join_group are
+    the real main_graph.json. Its three BRANCH nodes reuse real Stage enum
+    members (so HarnessState.ensure_stages() already has a StageState for
+    each to execute against); its join node deliberately does NOT (see the
+    comment on TESTG1_JOIN below). Edges/parallel_group/join_group are
     entirely test-local, not the real pipeline's semantics."""
     nodes = [
         {"id": "ENV_CHECK", "route": "analysis-route", "agent": "analysis-agent"},
@@ -44,7 +45,15 @@ def _write_synthetic_fanout_graph(tmp: Path):
          "parallel_group": "TESTG1", "blackboard_write": ["bw_b"]},
         {"id": "COMMAND_PATTERN", "route": "analysis-route", "agent": "analysis-agent",
          "parallel_group": "TESTG1", "blackboard_write": ["bw_c"]},
-        {"id": "DE_BASELINE_REPRODUCTION", "route": "lead-route", "agent": "dv-lead",
+        # Deliberately a SYNTHETIC join node id with no Stage enum member --
+        # this fixture models the real graph's ANALYSIS_JOIN (also synthetic),
+        # whose whole point is that _advance_with_fanout() passes THROUGH it
+        # to the next real Stage. It used to borrow the real
+        # DE_BASELINE_REPRODUCTION Stage id here purely for convenience,
+        # which stopped modelling ANALYSIS_JOIN once RCA_JOIN made
+        # "join node that IS a real executable Stage" a genuinely different,
+        # separately-tested case (see test_rca_multi_agent_fanout.py).
+        {"id": "TESTG1_JOIN", "route": "lead-route", "agent": "dv-lead",
          "join_group": "TESTG1"},
         {"id": "ARCH_DISCOVERY", "route": "analysis-route", "agent": "analysis-agent"},
     ]
@@ -52,10 +61,10 @@ def _write_synthetic_fanout_graph(tmp: Path):
         {"source": "ENV_CHECK", "target": "INTAKE", "condition": "PASS"},
         {"source": "ENV_CHECK", "target": "DISCOVERY", "condition": "PASS"},
         {"source": "ENV_CHECK", "target": "COMMAND_PATTERN", "condition": "PASS"},
-        {"source": "INTAKE", "target": "DE_BASELINE_REPRODUCTION", "condition": "PASS"},
-        {"source": "DISCOVERY", "target": "DE_BASELINE_REPRODUCTION", "condition": "PASS"},
-        {"source": "COMMAND_PATTERN", "target": "DE_BASELINE_REPRODUCTION", "condition": "PASS"},
-        {"source": "DE_BASELINE_REPRODUCTION", "target": "ARCH_DISCOVERY", "condition": "PASS"},
+        {"source": "INTAKE", "target": "TESTG1_JOIN", "condition": "PASS"},
+        {"source": "DISCOVERY", "target": "TESTG1_JOIN", "condition": "PASS"},
+        {"source": "COMMAND_PATTERN", "target": "TESTG1_JOIN", "condition": "PASS"},
+        {"source": "TESTG1_JOIN", "target": "ARCH_DISCOVERY", "condition": "PASS"},
     ]
     (tmp / ".dv-harness" / "graph").mkdir(parents=True)
     (tmp / ".dv-harness" / "graph" / "main_graph.json").write_text(
@@ -101,14 +110,15 @@ def test_next_frontier_returns_all_three_analysis_g1_targets_for_protocol_capabi
 
 
 def test_next_frontier_regression_matches_next_for_across_all_real_nodes():
-    # Backward-compatibility proof: for every one of the 37 real nodes except
-    # PROTOCOL_CAPABILITY (the only real fan-out source today), next_frontier()
-    # on a PASS transition returns a single-element list carrying exactly the
-    # same target next_for() already returned -- a strict superset, never a
-    # behavior change, for every other stage in the pipeline.
+    # Backward-compatibility proof: for every one of the 41 real nodes except
+    # the two real fan-out sources (PROTOCOL_CAPABILITY -> ANALYSIS_G1, and
+    # FAILURE_RECOVERY -> RCA_G1), next_frontier() on a PASS transition
+    # returns a single-element list carrying exactly the same target
+    # next_for() already returned -- a strict superset, never a behavior
+    # change, for every other stage in the pipeline.
     gd = GraphDefinition.load(REAL_GRAPH)
-    assert len(gd.nodes) == 37
-    changed = {"PROTOCOL_CAPABILITY"}
+    assert len(gd.nodes) == 41
+    changed = {"PROTOCOL_CAPABILITY", "FAILURE_RECOVERY"}
     for node_id in gd.nodes:
         frontier = gd.next_frontier(node_id, "PASS")
         single = gd.next_for(node_id, "PASS")
@@ -274,7 +284,7 @@ def test_engine_fanout_join_does_not_proceed_when_one_branch_fails():
 
         n = h.advance("goal")
 
-        # The join node (DE_BASELINE_REPRODUCTION -> ARCH_DISCOVERY) must NOT
+        # The join node (TESTG1_JOIN -> ARCH_DISCOVERY) must NOT
         # be reached -- DISCOVERY has no FAIL edge in the synthetic graph
         # (mirroring the real ANALYSIS_G1 branches, none of which have one
         # either), so the engine stays parked on the failed branch, exactly

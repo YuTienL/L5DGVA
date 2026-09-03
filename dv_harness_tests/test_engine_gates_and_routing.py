@@ -259,9 +259,19 @@ def test_graph_next_walks_full_mechanism_first_pipeline():
         visited.append(nxt)
         cur = nxt
     assert visited[-1] == "SIGNOFF"
+    # UPDATED (2026-09-03, RCA_G1 multi-agent evidence fan-out): the four RCA
+    # stages join this expected-unvisited set for BOTH of the reasons already
+    # represented in it. They hang off FAILURE_RECOVERY, which this walk never
+    # enters (a FAIL-only branch); and they are themselves a parallel_group
+    # fan-out plus its join, which a single-target-per-step walker structurally
+    # cannot enumerate -- the same reason SOC_SCENARIO_PLANNER/
+    # INFRASTRUCTURE_AUDIT are listed. test_rca_multi_agent_fanout.py's
+    # next_frontier()/advance()-based tests are what prove all three RCA
+    # branches and RCA_JOIN are real, reachable, executed graph targets.
     assert set(ORDER) - set(visited) == {
         "FAILURE_RECOVERY", "BUILD_DEBUG", "INFRA_RECOVERY",
         "SOC_SCENARIO_PLANNER", "INFRASTRUCTURE_AUDIT",
+        "RCA_RTL_EVIDENCE", "RCA_LOG_EVIDENCE", "RCA_VIP_SPEC_EVIDENCE", "RCA_JOIN",
     }
     assert len(visited) == len(set(visited))
 
@@ -2598,8 +2608,11 @@ def test_de_explainer_is_additive_and_does_not_change_agent_prompt():
     )
 
 
-def test_all_35_stages_have_real_de_explainer_entries():
-    # DE onboarding gap fix: originally only 8/35 stages had a
+def test_every_declared_stage_has_a_real_de_explainer_entry():
+    # Named for the invariant, not a stage count -- the count really does move
+    # (35 -> 39 when the RCA_G1 fan-out stages landed, 2026-09-03) and a number
+    # baked into the test name goes stale silently.
+    # DE onboarding gap fix: originally only 8 of the then-35 stages had a
     # STAGE_DE_EXPLAINER entry, and the fallback text explicitly tells the DE
     # to "ask the DV owner" -- which is the opposite of useful for a DE with
     # no DV owner to ask, and previously covered the exact stages (ENV_CHECK/

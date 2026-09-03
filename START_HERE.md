@@ -111,7 +111,7 @@ init). Known issue: on Windows PowerShell 5.1 this currently fails with a
 
 ## Core mechanisms (verified against current code)
 
-- **Graph routing.** `.dv-harness/graph/main_graph.json` (37 nodes, 48
+- **Graph routing.** `.dv-harness/graph/main_graph.json` (41 nodes, 58
   edges) is read by `dv_harness/policy.py::graph_next()`, which is the real
   routing authority: a stage's PASS/FAIL/PARTIAL outcome is looked up in the
   graph to pick the next stage — e.g. a `BUILD`/`REGRESSION_MONITOR` failure

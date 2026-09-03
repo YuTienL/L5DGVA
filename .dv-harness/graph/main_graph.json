@@ -354,6 +354,46 @@
       "join_group": null
     },
     {
+      "id": "RCA_RTL_EVIDENCE",
+      "route": "debug-route",
+      "agent": "rtl-evidence-agent",
+      "skills": ["issue-triage-and-deep-rca", "hierarchy-discovery"],
+      "blackboard_read": ["findings"],
+      "blackboard_write": ["rca_rtl_evidence"],
+      "parallel_group": "RCA_G1",
+      "join_group": null
+    },
+    {
+      "id": "RCA_LOG_EVIDENCE",
+      "route": "debug-route",
+      "agent": "log-evidence-agent",
+      "skills": ["issue-triage-and-deep-rca", "per-job-simlog-analysis"],
+      "blackboard_read": ["findings"],
+      "blackboard_write": ["rca_log_evidence"],
+      "parallel_group": "RCA_G1",
+      "join_group": null
+    },
+    {
+      "id": "RCA_VIP_SPEC_EVIDENCE",
+      "route": "debug-route",
+      "agent": "vip-spec-evidence-agent",
+      "skills": ["issue-triage-and-deep-rca", "vip-scenario-branch"],
+      "blackboard_read": ["findings"],
+      "blackboard_write": ["rca_vip_spec_evidence"],
+      "parallel_group": "RCA_G1",
+      "join_group": null
+    },
+    {
+      "id": "RCA_JOIN",
+      "route": "debug-route",
+      "agent": "analysis_debug",
+      "skills": ["independent-evidence-synthesis", "counter-evidence-review", "issue-triage-and-deep-rca"],
+      "blackboard_read": ["rca_rtl_evidence", "rca_log_evidence", "rca_vip_spec_evidence", "findings"],
+      "blackboard_write": ["rca_evidence_fusion"],
+      "parallel_group": null,
+      "join_group": "RCA_G1"
+    },
+    {
       "id": "RE_AUDIT",
       "route": "review-route",
       "agent": "review-agent",
@@ -477,7 +517,15 @@
     { "source": "INFRA_RECOVERY", "target": "FAILURE_RECOVERY", "condition": "FAIL" },
     { "source": "COVERAGE_CLOSURE", "target": "RE_AUDIT", "condition": "PASS" },
     { "source": "COVERAGE_CLOSURE", "target": "FAILURE_RECOVERY", "condition": "FAIL" },
-    { "source": "FAILURE_RECOVERY", "target": "CHANGE_IMPACT", "condition": "PASS" },
+    { "source": "FAILURE_RECOVERY", "target": "CHANGE_IMPACT", "condition": "PASS", "priority": 10 },
+    { "source": "FAILURE_RECOVERY", "target": "RCA_RTL_EVIDENCE", "condition": "PASS", "priority": 100 },
+    { "source": "FAILURE_RECOVERY", "target": "RCA_LOG_EVIDENCE", "condition": "PASS", "priority": 100 },
+    { "source": "FAILURE_RECOVERY", "target": "RCA_VIP_SPEC_EVIDENCE", "condition": "PASS", "priority": 100 },
+    { "source": "RCA_RTL_EVIDENCE", "target": "RCA_JOIN", "condition": "PASS" },
+    { "source": "RCA_LOG_EVIDENCE", "target": "RCA_JOIN", "condition": "PASS" },
+    { "source": "RCA_VIP_SPEC_EVIDENCE", "target": "RCA_JOIN", "condition": "PASS" },
+    { "source": "RCA_JOIN", "target": "CHANGE_IMPACT", "condition": "PASS" },
+    { "source": "RCA_JOIN", "target": "WAIT_USER", "condition": "BLOCKED" },
     { "source": "FAILURE_RECOVERY", "target": "WAIT_USER", "condition": "BLOCKED" },
     { "source": "RE_AUDIT", "target": "SYSTEM_LEVEL", "condition": "PASS" },
     { "source": "RE_AUDIT", "target": "IMPLEMENT", "condition": "FAIL" },

@@ -254,6 +254,30 @@ STAGE_GATES = {
         # fabric_topology_completeness_gate and friends.
         ("focused_wave_debug_window_gate", "focused_wave_debug_window_gate.py", "--rerun"),
     ],
+    # RCA_G1 multi-agent evidence fan-out (2026-09-03, multi-agent-orchestrator
+    # gap closure). Only the JOIN stage is gated, deliberately:
+    #
+    #   - RCA_RTL_EVIDENCE / RCA_LOG_EVIDENCE / RCA_VIP_SPEC_EVIDENCE are
+    #     single-domain evidence GATHERERS. None of them is allowed to reach a
+    #     root cause on its own (each agent profile says so, and the fan-out's
+    #     whole point is that they run blind to each other), so there is no
+    #     root-cause claim for a gate to check at a branch. Gating a branch on
+    #     root_cause_evidence_gate would actively push it to invent the very
+    #     cross-domain conclusion RCA_JOIN exists to make. They stay
+    #     unmapped -- NO_GATE_REQUIRED -- exactly like INFRA_RECOVERY and the
+    #     other Stage values with no entry here, and their real output is
+    #     still captured: each writes its own Blackboard topic from its own
+    #     evidence, which RCA_JOIN then has to actually read.
+    #   - RCA_JOIN is where the single root-cause claim is finally made, so it
+    #     gets the SAME already-real root_cause_evidence_gate RE_AUDIT uses --
+    #     reused, not duplicated under a new name. That reuse also switches on
+    #     engine.py's existing _score_root_cause_confidence() wiring for this
+    #     stage (it keys off this gate id being registered), which is what
+    #     lets multi_agent_consensus_count finally derive from real concurrent
+    #     agents here instead of the single-agent hypothesis proxy alone.
+    "RCA_JOIN": [
+        ("root_cause_evidence_gate", "root_cause_evidence_gate.py", "--root-cause"),
+    ],
     "COVERAGE_CLOSURE": [
         ("coverage_signoff_verdict_gate", "coverage_signoff_verdict_gate.py", "--state"),
         ("coverage_credit_consistency_gate", "coverage_credit_consistency_gate.py", "--coverage"),
