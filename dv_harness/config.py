@@ -217,11 +217,26 @@ DEFAULT_CONFIG = {
     # server-side deployment (it reuses the `preflight` block above for the
     # license server/queue names -- there is no second place to configure
     # them).
+    #
+    # `transport` (2026-09-04) is what finally makes those two triggers
+    # REACHABLE without hand-written Python. Until it existed, the only
+    # documented way to probe the real DV server from a PC-side
+    # REMOTE_EXECUTION session was to assign engine.DVHarness.
+    # degradation_runner yourself, so in practice only the Claude-API trigger
+    # was ever live. Values: "auto" (default -- resolve on real evidence:
+    # persistent relay if READY for the configured VCHOST/VCHOP hop, else
+    # local if lmutil/bqueues are genuinely on PATH, else NOTHING is armed),
+    # "local", "remote_relay", "off". Overridable per invocation with
+    # `dv-harness --degradation-transport ...`, and always visible in
+    # `dv-harness status` (degraded_probe_transport). "auto" is safe as a
+    # default precisely because it arms nothing it has not confirmed -- see
+    # preflight.resolve_transport()'s comment block.
     "degradation": {
         "enabled": True,
         "adapter_failure_threshold": 3,
         "probe_resources": False,
         "probe_min_interval_sec": 60,
+        "transport": "auto",
     },
     # Local PC-side task orchestration (2026-09-03, see dv_harness/
     # pueue_client.py). `group` keeps this project's pueue tasks visually/

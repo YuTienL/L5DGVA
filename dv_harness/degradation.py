@@ -50,6 +50,20 @@ exactly the kind of invented conclusion CLAUDE.md's Evidence Truth Rule
 forbids, so a project opts in once it is really running where those commands
 exist (or injects its own Runner, as the tests do).
 
+HOW THE PROBE ACTUALLY GETS ARMED (2026-09-04 gap close): keeping the flag
+opt-in was right, but for a year nothing shipped ever turned it on and
+nothing shipped ever injected a Runner, so on this project's own PC-side
+REMOTE_EXECUTION deployment triggers 2 and 3 were correct, tested code that
+could never fire in normal operation. `degradation.transport` (default
+"auto") now resolves a real transport through preflight.resolve_transport()
+-- relay-if-READY, else local-if-lmutil/bqueues-on-PATH, else NONE -- and
+engine.DVHarness injects the result. evaluate() treats an explicitly
+injected Runner as arming on its own, the same rule
+engine._execution_preflight_gate() already used. The Evidence Truth Rule
+still holds exactly as stated above, because "auto" arms nothing at all
+unless a real probe confirmed a real transport: a missing binary resolves to
+NONE, not to a DEGRADED verdict.
+
 WHY require_license_configured IS FORCED False FOR THE PROBE: the preflight
 GATE must block on an unconfirmed license ("沒過就 BLOCKED，不派 job" -- an
 unconfigured license_server FAILs there on purpose, see
@@ -99,11 +113,28 @@ _CHECK_TO_TRIGGER = {
 
 STATE_FILENAME = "degradation.json"
 
+#: Per-process override for `degradation.transport` (see resolve_transport()).
+#: dv_harness_tests/conftest.py pins this to "off" so this package's own test
+#: suite can never reach a live license server or a real relay by accident,
+#: the same "no test ever talks to a live server" rule preflight.py's module
+#: docstring already states for its injected mock Runner.
+ENV_TRANSPORT_OVERRIDE = "DV_HARNESS_DEGRADATION_TRANSPORT"
+
 DEFAULTS = {
     "enabled": True,
     "adapter_failure_threshold": 3,
     "probe_resources": False,
     "probe_min_interval_sec": 60,
+    # Which real transport the license/queue probes use, and -- crucially --
+    # whether a usable one exists here at all (2026-09-04). See
+    # resolve_transport() below and preflight.resolve_transport()'s own
+    # comment block: "auto" arms a transport ONLY on real evidence (a READY
+    # relay hop, or lmutil/bqueues actually on PATH), so it can never turn a
+    # missing binary into a fabricated DEGRADED verdict. That evidence-based
+    # arming is what makes it safe to default this to "auto" while
+    # `probe_resources` stays False: on a machine where nothing can be
+    # probed, "auto" resolves to none and changes nothing.
+    "transport": "auto",
 }
 
 
@@ -266,6 +297,39 @@ def probe_resources(cfg: Optional[Dict[str, Any]] = None,
     return [check_license(runner, pf), check_queue_health(runner, pf)]
 
 
+def resolve_transport(cfg: Optional[Dict[str, Any]] = None,
+                       env: Optional[Dict[str, str]] = None,
+                       requested: Optional[str] = None,
+                       **kwargs):
+    """Resolves this deployment's real probe transport for the license/queue
+    triggers, honouring `degradation.transport` from config.json unless
+    `requested` overrides it (that override is what `dv-harness
+    --degradation-transport` passes down).
+
+    Precedence, highest first:
+      1. `requested` (the `dv-harness --degradation-transport` flag).
+      2. $DV_HARNESS_DEGRADATION_TRANSPORT -- a per-shell/per-process
+         override for an environment that must never probe (CI, this
+         package's own test suite via dv_harness_tests/conftest.py) or that
+         always uses one specific transport, without editing config.json.
+      3. `degradation.transport` from config.json (default "auto").
+
+    Thin by design: the actual choosing and all the probe evidence live in
+    preflight.resolve_transport(), the same one-implementation/N-callers
+    discipline this module already applies to check_license/
+    check_queue_health -- degradation.py implements no probing of its own.
+    """
+    from .preflight import resolve_transport as _resolve
+    conf = _cfg(cfg)
+    source = dict(os.environ if env is None else env)
+    name = requested
+    if name is None:
+        name = source.get(ENV_TRANSPORT_OVERRIDE) or None
+    if name is None:
+        name = conf.get("transport", "auto")
+    return _resolve(name, cfg=cfg, env=env, **kwargs)
+
+
 def evaluate(root: Path, cfg: Optional[Dict[str, Any]] = None,
              runner: Optional[Runner] = None, force_probe: bool = False) -> Dict[str, Any]:
     """Re-evaluates the license/queue triggers against REAL current evidence
@@ -277,14 +341,28 @@ def evaluate(root: Path, cfg: Optional[Dict[str, Any]] = None,
     -- SKIP means "this check genuinely does not apply here" (preflight's own
     semantics), which is never evidence of a problem.
 
-    Probing is skipped entirely (state returned unchanged) when
-    `degradation.probe_resources` is off, or when the last probe was more
-    recent than `probe_min_interval_sec` and `force_probe` is False -- a
-    stage transition must not fire an lmstat/bqueues round trip every few
-    seconds."""
+    Probing is skipped entirely (state returned unchanged) when neither
+    arming condition holds, or when the last probe was more recent than
+    `probe_min_interval_sec` and `force_probe` is False -- a stage transition
+    must not fire an lmstat/bqueues round trip every few seconds.
+
+    TWO WAYS TO ARM (2026-09-04), identical to the rule engine.
+    _execution_preflight_gate() already states for its own probe:
+      1. `degradation.probe_resources` true -- an explicit config opt-in.
+      2. A Runner explicitly INJECTED here. An injected transport is itself
+         the statement that a real probe is possible on this machine, and it
+         is only ever injected by a test's own mock or by
+         resolve_transport() having CONFIRMED a real one (a READY relay hop,
+         or lmutil/bqueues genuinely on PATH). That is what closes the gap
+         where the license/queue triggers were correctly implemented but
+         structurally unreachable on a PC-side deployment: nothing shipped
+         ever set probe_resources, and nothing shipped ever injected a
+         runner. Neither arming path can fabricate a verdict from a missing
+         binary -- when nothing is confirmed, runner stays None and this
+         still returns unchanged."""
     conf = _cfg(cfg)
     st = load_state(root)
-    if not conf["probe_resources"]:
+    if not conf["probe_resources"] and runner is None:
         return st
     last = st.get("last_probe_at")
     if (not force_probe and last is not None

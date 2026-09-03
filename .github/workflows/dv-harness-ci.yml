@@ -5,17 +5,30 @@
 # harder-to-notice failure mode than a wrong judgment call, so it gets its
 # own always-on regression net.
 #
-# HONEST DISCLOSURE (2026-09-03, confirmed this session -- `git remote -v`
-# is empty): this repo has no GitHub remote configured yet, so this
-# workflow file does not actually execute anywhere today. It is written as
-# real, correct, ready-to-activate infrastructure -- the moment a GitHub
-# remote exists and this file is pushed to it, `push`/`pull_request`
-# triggers below start firing for real, with no further edits needed. Do
-# not read this file's presence as "CI is running" -- it presently is not,
-# for the same reason .github/... itself did not exist before this change
-# (see tools/git-hooks/README.md for the exact same disclosure pattern
-# already established for this repo's gh-CLI/PR-only governance hooks, and
-# .work/harness-self-test-ci-report.md for this workflow's own report).
+# HONEST DISCLOSURE, re-checked 2026-09-04 (the 2026-09-03 wording below was
+# stale and has been corrected against real commands, not assumption):
+#
+#   $ git remote -v
+#   origin  https://github.com/YuTienL/DV_Agent_Harness.git (fetch/push)
+#   $ git ls-remote origin
+#   (no output)          # <- remote EXISTS and is reachable, but is EMPTY
+#
+# So a GitHub remote now exists -- the earlier "no remote is configured"
+# claim is no longer true -- but nothing has ever been pushed to it, there
+# are no remote branches, and therefore this workflow has still never
+# actually executed a single time. It remains real, correct,
+# ready-to-activate infrastructure: the first push of this file to a branch
+# on that remote starts the `push`/`pull_request`/`schedule` triggers below
+# firing for real, with no further edits needed. Do not read this file's
+# presence as "CI is running" -- it presently is not.
+#
+# BECAUSE of that, the harness self-test is ALSO wired to a trigger that
+# genuinely fires today with no remote and no runner: tools/git-hooks/
+# pre-push (this repo's live `core.hooksPath`) runs the fast checks as a
+# real gate before every push, and records the run to
+# .dv-harness/self_test/runs.jsonl. See tools/git-hooks/README.md. This
+# workflow is the authoritative gate once the remote has branches; that hook
+# is the one that exists now.
 #
 # What this runs is a strict SUBSET of tools/testing/self_test.py (see that
 # script's own docstring) -- the two checks that make sense on a hosted
@@ -35,6 +48,13 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  # A STANDING trigger, not only a change-driven one (2026-09-04). Silent
+  # infrastructure rot is the failure mode this whole workflow exists for,
+  # and the push/PR triggers only fire when someone is already changing
+  # something -- a harness that nobody touched for two weeks while a
+  # dependency moved underneath it would report nothing. Nightly, off-peak.
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -102,3 +122,27 @@ jobs:
       - name: Bind-connectivity staleness check (3 machine gates)
         run: python -m dv_harness.connectivity_check --project-root . --check-only
         timeout-minutes: 5
+
+      # The RUN RECORD (2026-09-04). Runs the self-test's own fast checks
+      # through tools/testing/self_test.py with --record, tagged by what
+      # actually triggered this workflow, and uploads the record as an
+      # artifact. Exists so "an automated trigger really did execute the
+      # harness self-test, at this sha, at this time" is a retrievable
+      # artifact rather than a claim -- the same question
+      # .dv-harness/self_test/runs.jsonl answers locally for the pre-push
+      # hook's own gate. `if: always()` so a FAILED run is recorded too; a
+      # record that only ever exists on success is not an audit trail.
+      - name: Record the self-test run
+        if: always()
+        run: >
+          python tools/testing/self_test.py --only import-sanity --only self-audit
+          --record --trigger ${{ github.event_name == 'schedule' && 'scheduled' || 'ci' }}
+        timeout-minutes: 10
+
+      - name: Upload self-test run record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test-run-record-${{ github.run_id }}
+          path: .dv-harness/self_test/
+          if-no-files-found: warn

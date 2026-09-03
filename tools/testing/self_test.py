@@ -30,6 +30,16 @@ for the same root cause anyway):
          gives for excluding tools/verification_flow/test_*.py from pytest
          collection: standalone argparse scripts that only happen to share
          a filename pattern with real package modules.
+     A module that fails ONLY because a declared-OPTIONAL third-party
+     package is absent is reported as SKIPPED with the real reason, not as
+     a failure: every entry in requirements-harness.txt is annotated
+     "Optional" (its first line is "Core harness uses Python standard
+     library only") and pyproject.toml declares no runtime dependencies at
+     all, so absent-by-choice is not broken. Found the moment this check
+     was first wired to an automatic trigger -- the pre-push hook's
+     interpreter has no `mcp` SDK, and a GitHub runner would not have one
+     either. A ModuleNotFoundError naming a `dv_harness.*` module still
+     FAILS, as does any other exception, and every skip is printed.
 
   2. cli-help-sanity -- every subcommand argparse registers under
      `dv-harness` (discovered live from the real parser's own `--help`
@@ -72,12 +82,33 @@ failure -- a broken import very often ALSO breaks CLI --help and pytest
 collection for the same root cause, and seeing all three fail together vs.
 only pytest failing is itself diagnostic).
 
+AUTOMATIC TRIGGERS, AND THE RUN RECORD (2026-09-04 gap close). Until this
+change nothing ever RAN this script on its own: tools/self_test.sh is a
+developer types-it-by-hand wrapper, and .github/workflows/dv-harness-ci.yml
+is real but has never fired (this repo's `origin` exists yet has no pushed
+refs). "Real, correct, and only run when a human remembers to" is exactly
+the silent-infrastructure-rot failure mode the script was written against,
+so two things were added:
+
+  * tools/git-hooks/pre-push now runs the fast checks as a real gate before
+    any push. That hook directory is already this repo's live
+    `core.hooksPath`, so it is a trigger that genuinely fires here today,
+    with no remote and no Actions runner required.
+  * `--record` appends a real run record to .dv-harness/self_test/runs.jsonl
+    (and rewrites last_run.json), tagged with `--trigger` -- manual /
+    pre-push / ci / scheduled. This is what turns "has anything automated
+    ever actually executed the self-test?" from an unanswerable question
+    into a file you can read. Recording is opt-in so an ordinary
+    developer-invoked run does not dirty the tree unasked; every automatic
+    trigger passes it.
+
 Usage:
     python tools/testing/self_test.py                  # all four checks
     python tools/testing/self_test.py --skip-pytest     # fast 3-check pass
     python tools/testing/self_test.py --only import-sanity
     python tools/testing/self_test.py --pytest-timeout 1800
     python tools/testing/self_test.py --json            # machine-readable
+    python tools/testing/self_test.py --record --trigger pre-push
 
 Exists as a plain script (not a `dv-harness` subcommand) so it never
 requires editing dv_harness/cli.py -- see .work/harness-self-test-ci-
@@ -118,6 +149,23 @@ DEFAULT_MAX_SUBCOMMAND_DEPTH = 4  # real parser today nests at most 2 deep
 
 CHECK_NAMES = ["import-sanity", "cli-help-sanity", "self-audit", "pytest"]
 
+# Who/what caused this run. Recorded verbatim in the run record so "the
+# self-test passes" and "something other than a human running it by hand has
+# ever actually made it pass" stay distinguishable claims.
+TRIGGER_NAMES = ["manual", "pre-push", "ci", "scheduled"]
+
+DEFAULT_RUN_RECORD_DIR = REPO_ROOT / ".dv-harness" / "self_test"
+#: Redirects the run record elsewhere. A real use (a read-only checkout, a
+#: CI runner collecting records into its own workspace) and also what lets
+#: dv_harness_tests/test_self_test_gate_e2e.py assert on a real record
+#: without appending to this repo's own history on every test run.
+ENV_RECORD_DIR = "DV_HARNESS_SELF_TEST_RECORD_DIR"
+
+
+def run_record_dir() -> Path:
+    override = os.environ.get(ENV_RECORD_DIR)
+    return Path(override) if override else DEFAULT_RUN_RECORD_DIR
+
 
 class CheckResult:
     __slots__ = ("name", "ok", "seconds", "detail")
@@ -155,10 +203,51 @@ def _discover_importable_modules() -> List[str]:
     return names
 
 
+def _optional_dependency_import_names() -> Dict[str, str]:
+    """Every third-party package requirements-harness.txt declares, as
+    {import name: requirement line}. That file's own first line is
+    "Core harness uses Python standard library only" and every entry in it
+    is annotated "Optional:" -- pyproject.toml correspondingly declares NO
+    runtime dependencies at all -- so a package listed there being absent is
+    a deployment CHOICE, not a broken harness.
+
+    Read from the real file rather than hardcoded, so a newly-declared
+    optional dependency is covered without editing this script."""
+    names: Dict[str, str] = {}
+    req = REPO_ROOT / "requirements-harness.txt"
+    try:
+        lines = req.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return names
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        # "mcp>=2.1.1,<3" -> "mcp"; "claude-code-sdk" -> "claude_code_sdk"
+        pkg = re.split(r"[<>=!~\[; ]", line, maxsplit=1)[0].strip()
+        if pkg:
+            names[pkg.replace("-", "_").lower()] = line
+    return names
+
+
+def _missing_optional_dependency(exc: BaseException, optional: Dict[str, str]) -> Optional[str]:
+    """Returns the requirement line when `exc` is a ModuleNotFoundError for a
+    declared-optional third-party package, else None. Deliberately narrow: a
+    ModuleNotFoundError naming a `dv_harness.*` module is a REAL broken
+    import and must still fail, and any other exception type fails too."""
+    if not isinstance(exc, ModuleNotFoundError):
+        return None
+    missing = (getattr(exc, "name", "") or "").split(".")[0].lower()
+    if not missing or missing.startswith("dv_harness"):
+        return None
+    return optional.get(missing)
+
+
 def run_import_sanity() -> CheckResult:
     t0 = time.monotonic()
     modules = _discover_importable_modules()
-    failures = []
+    optional = _optional_dependency_import_names()
+    failures, skipped = [], []
     for name in modules:
         # Fresh interpretation of each module's own top-level code every
         # time this check runs, not a cached prior success -- pop any
@@ -168,11 +257,25 @@ def run_import_sanity() -> CheckResult:
         try:
             importlib.import_module(name)
         except BaseException as exc:  # noqa: BLE001 -- a bad module can raise anything, incl. SystemExit
+            # An OPTIONAL dependency this interpreter does not have is not a
+            # broken harness (2026-09-04, found the moment this check was
+            # first wired to an automatic trigger: the pre-push hook's
+            # interpreter has no `mcp` SDK, and a GitHub runner would not
+            # either, since pyproject.toml declares no dependencies to
+            # install). Reported as SKIPPED with the real reason -- never
+            # silently, and never as a pass for a module that is genuinely
+            # broken.
+            requirement = _missing_optional_dependency(exc, optional)
+            if requirement is not None:
+                skipped.append({"module": name, "missing_optional_dependency": requirement,
+                                 "error": f"{type(exc).__name__}: {exc}"})
+                continue
             failures.append({"module": name, "error": f"{type(exc).__name__}: {exc}",
                               "traceback": traceback.format_exc(limit=6)})
     ok = not failures
     return CheckResult("import-sanity", ok, time.monotonic() - t0,
-                        {"modules_checked": len(modules), "failures": failures})
+                        {"modules_checked": len(modules), "failures": failures,
+                         "skipped_optional": skipped})
 
 
 # --- 2. cli-help-sanity -------------------------------------------------------
@@ -280,6 +383,57 @@ def run_pytest_suite(timeout: int, extra_args: Optional[List[str]] = None) -> Ch
                         {"returncode": proc.returncode, "output_tail": tail})
 
 
+# --- run record ----------------------------------------------------------------
+
+def _git_head_sha() -> Optional[str]:
+    """Best-effort real HEAD sha for the run record. None (not a fabricated
+    placeholder) when git is unavailable or this is not a checkout."""
+    try:
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(REPO_ROOT),
+                               capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout.strip() or None if proc.returncode == 0 else None
+
+
+def build_run_record(results: List[CheckResult], trigger: str, overall_ok: bool) -> Dict[str, Any]:
+    """The record itself: what ran, whether it passed, and -- the reason this
+    exists at all -- WHAT CAUSED IT TO RUN. Deliberately small and flat; the
+    per-check `detail` blobs (full tracebacks, whole pytest tails) stay out of
+    it so an append-only history stays cheap to keep."""
+    return {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "trigger": trigger,
+        "ok": overall_ok,
+        "checks": [{"name": r.name, "ok": r.ok, "seconds": round(r.seconds, 2)} for r in results],
+        "failed_checks": [r.name for r in results if not r.ok],
+        "git_sha": _git_head_sha(),
+        "host": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "",
+        "user": os.environ.get("USERNAME") or os.environ.get("USER") or "",
+        "python": sys.version.split()[0],
+    }
+
+
+def write_run_record(record: Dict[str, Any]) -> Optional[Path]:
+    """Appends to runs.jsonl and rewrites last_run.json. Best-effort: a
+    read-only checkout or a full disk must never turn a PASSING self-test
+    into a failing push -- the check results are the verdict, this is only
+    the audit trail of them."""
+    try:
+        directory = run_record_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        log = directory / "runs.jsonl"          # append-only history
+        last = directory / "last_run.json"      # newest run, cheap to read
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        last.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                         encoding="utf-8")
+        return log
+    except OSError as exc:
+        print(f"    (could not write run record: {exc})", flush=True)
+        return None
+
+
 # --- driver --------------------------------------------------------------------
 
 CHECK_FUNCS = {
@@ -311,6 +465,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                           "--pytest-args -k test_foo or --pytest-args -x.")
     ap.add_argument("--json", action="store_true", help="Print a single JSON result object instead of "
                                                           "the human-readable report.")
+    ap.add_argument("--record", action="store_true",
+                     help="Append a run record (what ran, whether it passed, and WHAT TRIGGERED it) to "
+                          ".dv-harness/self_test/runs.jsonl and rewrite last_run.json. Every automatic "
+                          "trigger (the pre-push hook, CI) passes this; a hand-run does not by default, "
+                          "so the history stays an honest record of automated execution.")
+    ap.add_argument("--trigger", default="manual", choices=TRIGGER_NAMES,
+                     help="What caused this run; recorded verbatim by --record (default: manual).")
     args = ap.parse_args(argv)
 
     if args.only:
@@ -329,6 +490,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.json:
             status = "PASS" if result.ok else "FAIL"
             print(f"    {status} ({result.seconds:.1f}s)", flush=True)
+            # A skip is never silent, PASS or FAIL -- "3 modules were not
+            # actually imported" is exactly the kind of thing a green check
+            # must not hide.
+            for entry in result.detail.get("skipped_optional") or []:
+                print(f"      SKIP {entry['module']}: optional dependency "
+                       f"{entry['missing_optional_dependency']!r} not installed", flush=True)
             if not result.ok:
                 # Print enough of the detail to act on immediately, without
                 # requiring --json for the common case.
@@ -340,14 +507,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                         print(f"      {key}: {val}", flush=True)
 
     overall_ok = all(r.ok for r in results)
+    record, record_path = None, None
+    if args.record:
+        record = build_run_record(results, args.trigger, overall_ok)
+        record_path = write_run_record(record)
     if args.json:
-        print(json.dumps({"ok": overall_ok, "checks": [r.to_dict() for r in results]}, ensure_ascii=False, indent=2))
+        payload = {"ok": overall_ok, "checks": [r.to_dict() for r in results]}
+        if record is not None:
+            payload["run_record"] = record
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print()
         print("=== self-test summary ===")
         for r in results:
             print(f"  [{'PASS' if r.ok else 'FAIL'}] {r.name} ({r.seconds:.1f}s)")
         print(f"Overall: {'PASS' if overall_ok else 'FAIL'}")
+        if record is not None and record_path is not None:
+            print(f"Recorded (trigger={record['trigger']}) -> {record_path}")
     return 0 if overall_ok else 1
 
 

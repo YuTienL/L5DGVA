@@ -67,6 +67,13 @@ def _base_env(agent: bool):
         env["CLAUDECODE"] = "1"
     env["PYTHONPATH"] = str(ROOT)
     env.pop("GIT_DIR", None)
+    # pre-push carries a SECOND gate since 2026-09-04 (the harness self-test,
+    # ~50s of real checks). These tests are about the governance gate, so the
+    # documented bypass is used here to keep them scoped and fast -- the
+    # self-test gate has its own end-to-end coverage in
+    # dv_harness_tests/test_self_test_gate_e2e.py, including a test asserting
+    # this governance gate still runs FIRST and still blocks an agent.
+    env["DV_HARNESS_SKIP_SELF_TEST"] = "1"
     return env
 
 

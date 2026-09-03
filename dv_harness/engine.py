@@ -529,7 +529,23 @@ class DVHarness:
         # "fully injected, never assumed" principle preflight.py states, and
         # the seam dv_harness_tests/test_harness_reliability.py injects a
         # pure mock through so no test ever contacts a live license server.
-        self.degradation_runner = None
+        #
+        # RESOLVED, not left at None (2026-09-04 harness-reliability gap
+        # close). Leaving it None meant the sentence above described a
+        # capability nobody could reach: no CLI flag, no config key, and no
+        # code path anywhere in `dv-harness start`/`run`/`run-stage` ever
+        # assigned this attribute, so on this project's own PC-side
+        # REMOTE_EXECUTION deployment the license-full/farm-congested
+        # triggers were correct, tested, and structurally dead. It is now
+        # chosen from `degradation.transport` (default "auto") on REAL probe
+        # evidence -- and stays None when no transport is confirmed, so a
+        # machine without lmutil/bqueues and without a READY relay behaves
+        # exactly as it did before rather than fabricating a verdict from a
+        # missing binary. The attribute remains freely assignable afterwards
+        # (tests do exactly that); _degraded_gate() arms on whatever runner
+        # is present at call time, never on this initial decision.
+        self.degradation_transport = self._resolve_degradation_transport()
+        self.degradation_runner = self.degradation_transport.runner
         # Transport for the Planner->Execution-Layer preflight gate
         # (_execution_preflight_gate(), 2026-09-04). Same injected-transport
         # seam and same default as degradation_runner immediately above: None
@@ -881,6 +897,18 @@ class DVHarness:
             "degraded_since": degraded_detail["entered_at"],
             "degraded_cycles": degraded_detail["degraded_cycles"],
             "adapter_failure_streak": degraded_detail["adapter_failure_streak"],
+            # WHICH of the three triggers can actually fire here (2026-09-04).
+            # The adapter trigger is always live; the license-full and
+            # farm-congested ones need a real probe transport, and this names
+            # the one that was resolved plus the evidence for it. `available`
+            # false with resolved "none" is the honest "those two triggers
+            # cannot fire on this machine" answer -- previously that was the
+            # silent, undiscoverable default everywhere.
+            "degraded_probe_transport": self.degradation_transport.to_dict()
+            if getattr(self, "degradation_transport", None) is not None else None,
+            "degraded_resource_triggers_armed": bool(
+                self._degradation_cfg().get("probe_resources", False)
+                or self.degradation_runner is not None),
             "dry_run_mode": bool(self._dry_run_cfg().get("enabled", False)),
         }, ensure_ascii=False, indent=2)
 
@@ -2605,6 +2633,39 @@ class DVHarness:
         # and raise AttributeError instead of failing toward "dry-run off".
         block = self.cfg.get("dry_run")
         return block if isinstance(block, dict) else {}
+
+    def _resolve_degradation_transport(self, requested: Optional[str] = None):
+        """Chooses the real transport for DEGRADED mode's license/queue
+        probes. `requested` (from `dv-harness --degradation-transport`) wins
+        over config.json's `degradation.transport`; both default to "auto",
+        which arms a transport only when one is genuinely confirmed here.
+
+        Best-effort like every other side effect in this class: if resolution
+        itself blows up (a broken tools/remote/, an unreadable config), the
+        harness runs with NO probe transport rather than failing to start --
+        an unreachable probe must never become an unbootable harness.
+        """
+        try:
+            from . import degradation
+            return degradation.resolve_transport(self.cfg, requested=requested)
+        except Exception as e:  # noqa: BLE001
+            from .preflight import TransportDecision, TRANSPORT_NONE
+            return TransportDecision(requested=str(requested or "auto"),
+                                      resolved=TRANSPORT_NONE, available=False,
+                                      reason=f"transport resolution failed: {type(e).__name__}: {e}",
+                                      evidence={})
+
+    def set_degradation_transport(self, requested: Optional[str]):
+        """Re-resolves and installs the DEGRADED-mode probe transport for
+        this process -- the call site behind `dv-harness
+        --degradation-transport {auto,local,remote_relay,off}`. Returns the
+        TransportDecision so a caller can report what it actually got (an
+        explicitly requested transport is honoured, but the decision still
+        carries the real probe evidence, so "you asked for local and lmutil
+        is not on PATH" is visible rather than silent)."""
+        self.degradation_transport = self._resolve_degradation_transport(requested)
+        self.degradation_runner = self.degradation_transport.runner
+        return self.degradation_transport
 
     def _degraded_gate(self, stage: str) -> Optional[AgentResult]:
         """降級路徑, enforced. Returns a DEGRADED AgentResult when this stage

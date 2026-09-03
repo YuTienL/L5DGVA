@@ -44,6 +44,14 @@ replay.ps1
 .dv-harness/state.json
 .dv-harness/events.jsonl
 
+# Harness self-test run records (2026-09-04, tools/testing/self_test.py
+# --record; written by the pre-push hook's self-test gate and by CI). Same
+# reasoning as the runtime state above: an append-only per-machine execution
+# log, rewritten on every push, that answers "did an automated trigger
+# actually run the self-test on THIS machine" -- which is a local question,
+# not shared history. Read it with `cat .dv-harness/self_test/last_run.json`.
+.dv-harness/self_test/
+
 # The DV-Knowledge Vault (dv_harness/memory_vault.py) is its OWN git
 # repository as of 2026-09-04, when this project turned on
 # `memory.git_enabled` in .dv-harness/config.json -- that is the entire

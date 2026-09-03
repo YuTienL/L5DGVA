@@ -29,6 +29,12 @@ lsf_client.py and tools/remote/remote_exec.py already establish):
   mode (see CLAUDE.md's Execution Mode Gate) needs to preflight-check the
   real server before telling it to submit a job. Never spawns its own
   authenticated subprocess and never reads VCPW.
+- resolve_transport() (2026-09-04) is what actually CHOOSES between the two
+  above for a given deployment, on real probe evidence (a READY persistent
+  relay for the configured VCHOST/VCHOP hop; lmutil/bqueues actually on
+  PATH), and reports "none available" rather than guessing. Without it the
+  runners were injectable but nothing shipped ever injected one -- see its
+  own comment block for the full reasoning.
 - dv_harness_tests/test_preflight.py injects a third, pure-mock Runner
   built from REAL captured lmstat/bqueues/df/env-check output (gathered
   2026-09-03 against the real project license server/queue/workdir over
@@ -51,8 +57,10 @@ name follows.
 """
 from __future__ import annotations
 
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
@@ -192,7 +200,6 @@ class RemoteRelayCommandRunner:
     action, per "Remote Linux Execution (Persistent Relay)")."""
 
     def __init__(self, vchost: Optional[str] = None, vchop: Optional[str] = None):
-        import os
         self.vchost = vchost or os.environ.get("VCHOST", "")
         self.vchop = vchop or os.environ.get("VCHOP", "")
 
@@ -216,6 +223,183 @@ class RemoteRelayCommandRunner:
                                   error=resp.get("error") or "RELAY_RUN_FAILED")
         return CommandResult(ok=True, exit_code=resp.get("exit_code"),
                               stdout=resp.get("stdout") or "")
+
+
+# --- transport RESOLUTION (which of the two real runners applies here) ------
+#
+# WHY THIS EXISTS (2026-09-04, harness-reliability gap close): both runners
+# above were real and both were injectable, but nothing in the shipped
+# `dv-harness` command paths ever CHOSE one. `engine.DVHarness.
+# degradation_runner` defaulted to None (= LocalCommandRunner), and the only
+# documented way to get the relay transport on a PC-side REMOTE_EXECUTION
+# deployment was for a human to hand-write Python assigning the attribute --
+# which meant the DEGRADED mode's license-full / farm-congested triggers were
+# structurally unreachable in normal operation on this project's own actual
+# deployment shape, however correct their implementation was.
+#
+# The resolution is deliberately EVIDENCE-BASED, never optimistic. "auto"
+# arms a transport only when a real probe confirms one is genuinely usable
+# here (a READY relay info file for the configured VCHOST/VCHOP hop, or
+# lmutil+bqueues actually present on PATH). When neither is confirmed it
+# resolves to "none" and NOTHING is armed -- because turning "command not
+# found" into a DEGRADED verdict is precisely the fabricated conclusion
+# CLAUDE.md's Evidence Truth Rule forbids, and is the exact reason
+# `probe_resources` was made opt-in in the first place (see degradation.py's
+# module docstring). An explicit "local"/"remote_relay" request from a human
+# is honoured as stated -- that is what explicit means -- but the probe still
+# runs and its real result is recorded in `evidence` so a deployment that
+# asked for a transport it does not actually have can see that in
+# `dv-harness status` rather than discovering it as a mystery FAIL.
+
+TRANSPORT_AUTO = "auto"
+TRANSPORT_LOCAL = "local"
+TRANSPORT_REMOTE_RELAY = "remote_relay"
+TRANSPORT_OFF = "off"
+#: Resolved-only value: asked for auto, no real transport could be confirmed.
+TRANSPORT_NONE = "none"
+#: What a caller (config key / CLI flag) may REQUEST.
+TRANSPORT_CHOICES = (TRANSPORT_AUTO, TRANSPORT_LOCAL, TRANSPORT_REMOTE_RELAY, TRANSPORT_OFF)
+
+#: Commands the local transport must actually be able to find for the
+#: license/queue probes to mean anything. Names, not paths -- the license
+#: binary is overridable via PreflightConfig.lmutil_path.
+_LOCAL_REQUIRED_COMMANDS = ("lmutil", "bqueues")
+
+
+@dataclass
+class TransportDecision:
+    """The real, inspectable answer to 'which transport applies here, and on
+    what evidence'. `runner` is the live object to inject; every other field
+    exists so the decision can be surfaced verbatim (`dv-harness status`)
+    instead of being an invisible internal branch."""
+    requested: str
+    resolved: str          # TRANSPORT_LOCAL | TRANSPORT_REMOTE_RELAY | TRANSPORT_OFF | TRANSPORT_NONE
+    available: bool
+    reason: str
+    evidence: Dict[str, object] = field(default_factory=dict)
+    runner: Optional[Runner] = None
+
+    def to_dict(self) -> dict:
+        """Serialisable view -- deliberately omits `runner` (a live callable)."""
+        return {"requested": self.requested, "resolved": self.resolved,
+                "available": self.available, "reason": self.reason,
+                "evidence": self.evidence}
+
+
+def _probe_relay(env: Dict[str, str], relay_probe=None) -> Dict[str, object]:
+    """Real readiness evidence for RemoteRelayCommandRunner: is a VCHOST/VCHOP
+    hop configured, and does the persistent relay's own info file exist and
+    parse? Uses tools/remote/remote_exec.py's read_relay_info() -- the same
+    function RemoteRelayCommandRunner itself calls -- so this can never claim
+    a relay is ready that the runner would then find missing. Never starts,
+    reconnects, or authenticates anything (that stays a human/CLAUDE.md-gated
+    action, per 'Remote Linux Execution (Persistent Relay)')."""
+    vchost, vchop = env.get("VCHOST", ""), env.get("VCHOP", "")
+    if not vchost or not vchop:
+        return {"ready": False, "detail": "VC_HOST_HOP_NOT_CONFIGURED",
+                "vchost_set": bool(vchost), "vchop_set": bool(vchop)}
+    probe = relay_probe
+    if probe is None:
+        try:
+            probe = _remote_exec_module().read_relay_info
+        except Exception as e:  # noqa: BLE001 -- a missing/broken tools/remote is evidence, not a crash
+            return {"ready": False, "detail": f"REMOTE_EXEC_UNAVAILABLE: {e}"}
+    try:
+        info = probe(vchost, vchop)
+    except Exception as e:  # noqa: BLE001
+        return {"ready": False, "detail": f"RELAY_PROBE_FAILED: {e}"}
+    if not info:
+        return {"ready": False, "detail": "RELAY_NOT_READY"}
+    return {"ready": True, "detail": "RELAY_READY", "vchost": vchost, "vchop": vchop}
+
+
+def _probe_local(lmutil_path: str, which=None) -> Dict[str, object]:
+    """Real presence evidence for LocalCommandRunner: are the binaries the
+    license/queue checks actually shell out to on PATH here? Presence is the
+    only claim made -- this never runs them."""
+    resolver = which or shutil.which
+    wanted = [lmutil_path or "lmutil"] + [c for c in _LOCAL_REQUIRED_COMMANDS if c != "lmutil"]
+    found = {cmd: resolver(cmd) for cmd in wanted}
+    missing = [cmd for cmd, path in found.items() if not path]
+    return {"ready": not missing, "found": {k: bool(v) for k, v in found.items()},
+            "missing": missing,
+            "detail": "LOCAL_COMMANDS_PRESENT" if not missing
+                      else f"LOCAL_COMMANDS_MISSING: {', '.join(missing)}"}
+
+
+def resolve_transport(requested: str = TRANSPORT_AUTO,
+                       cfg: Optional[dict] = None,
+                       env: Optional[Dict[str, str]] = None,
+                       which=None,
+                       relay_probe=None) -> TransportDecision:
+    """Picks the real transport for this deployment and returns it together
+    with the evidence the choice was made on.
+
+    `cfg` may be the whole config dict or just its `preflight` block (same
+    forgiving shape degradation._cfg() already accepts) -- only
+    `lmutil_path` is read from it. `env`/`which`/`relay_probe` are injected
+    exactly the way every other probe in this module is, so a test decides
+    the whole answer without touching a real PATH or a real relay.
+    """
+    env = dict(os.environ if env is None else env)
+    block = cfg or {}
+    if isinstance(block, dict) and isinstance(block.get("preflight"), dict):
+        block = block["preflight"]
+    lmutil_path = (block or {}).get("lmutil_path", "lmutil") if isinstance(block, dict) else "lmutil"
+
+    req = (requested or TRANSPORT_AUTO).strip().lower()
+    if req not in TRANSPORT_CHOICES:
+        # A typo in config.json must fail toward "probe nothing", never
+        # toward an unintended live probe of a real license server.
+        return TransportDecision(requested=requested, resolved=TRANSPORT_NONE, available=False,
+                                  reason=(f"unknown transport {requested!r}; expected one of "
+                                          f"{', '.join(TRANSPORT_CHOICES)}. No probe transport armed."),
+                                  evidence={"unknown_transport": requested})
+
+    if req == TRANSPORT_OFF:
+        return TransportDecision(requested=req, resolved=TRANSPORT_OFF, available=False,
+                                  reason="transport explicitly disabled (off): no resource probing.",
+                                  evidence={})
+
+    if req == TRANSPORT_LOCAL:
+        ev = _probe_local(lmutil_path, which=which)
+        return TransportDecision(requested=req, resolved=TRANSPORT_LOCAL, available=True,
+                                  reason=f"local transport explicitly requested ({ev['detail']}).",
+                                  evidence={"local": ev}, runner=LocalCommandRunner())
+
+    if req == TRANSPORT_REMOTE_RELAY:
+        ev = _probe_relay(env, relay_probe=relay_probe)
+        return TransportDecision(requested=req, resolved=TRANSPORT_REMOTE_RELAY, available=True,
+                                  reason=f"remote relay transport explicitly requested ({ev['detail']}).",
+                                  evidence={"relay": ev},
+                                  runner=RemoteRelayCommandRunner(env.get("VCHOST") or None,
+                                                                   env.get("VCHOP") or None))
+
+    # auto: relay first (a PC-side REMOTE_EXECUTION session is this
+    # project's own real deployment shape, and a READY relay is positive
+    # evidence that the REAL server is reachable), then local, then nothing.
+    relay_ev = _probe_relay(env, relay_probe=relay_probe)
+    if relay_ev.get("ready"):
+        return TransportDecision(requested=req, resolved=TRANSPORT_REMOTE_RELAY, available=True,
+                                  reason=("auto: persistent relay is READY for the configured "
+                                          "VCHOST/VCHOP hop -- probing the real DV server through it."),
+                                  evidence={"relay": relay_ev},
+                                  runner=RemoteRelayCommandRunner(env.get("VCHOST") or None,
+                                                                   env.get("VCHOP") or None))
+    local_ev = _probe_local(lmutil_path, which=which)
+    if local_ev.get("ready"):
+        return TransportDecision(requested=req, resolved=TRANSPORT_LOCAL, available=True,
+                                  reason=("auto: running where the real license/scheduler binaries "
+                                          "exist on PATH -- probing locally."),
+                                  evidence={"relay": relay_ev, "local": local_ev},
+                                  runner=LocalCommandRunner())
+    return TransportDecision(
+        requested=req, resolved=TRANSPORT_NONE, available=False,
+        reason=("auto: no usable probe transport here -- "
+                f"relay: {relay_ev['detail']}; local: {local_ev['detail']}. "
+                "Resource probing stays OFF rather than reading a missing binary as a "
+                "full license or a jammed farm."),
+        evidence={"relay": relay_ev, "local": local_ev})
 
 
 # --- individual checks (pure parse helpers + thin runner-calling wrappers) --

@@ -1,5 +1,10 @@
 #!/bin/sh
-# dv_harness PR-only governance gate -- pre-push hook template.
+# dv_harness pre-push hook -- TWO gates, in this order:
+#   1. the PR-only governance gate (documented immediately below), and
+#   2. the harness self-test gate (2026-09-04; see its own block further
+#      down for why an automatic trigger had to exist somewhere).
+#
+# --- gate 1: PR-only governance -------------------------------------------
 #
 # Blocks a direct `git push` onto a protected branch (main/master) when
 # this process is running inside a detected AI-agent environment. See
@@ -30,12 +35,91 @@
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0  # not inside a git repo somehow -- never block on our own confusion
 cd "$REPO_ROOT" || exit 0
 
-PYTHON=python3
-command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python
+# DV_HARNESS_HOOK_PYTHON pins the interpreter (2026-09-04). Real finding on
+# this project's own Windows/Git-Bash machine: `python3` and `python` resolve
+# to DIFFERENT installs (C:\Users\...\pythoncore-3.14-64 vs C:\Python314),
+# only one of which has the project's optional packages, so "whichever is on
+# PATH first" is not a safe assumption for a gate. Both gates below use the
+# same interpreter, whichever it ends up being.
+PYTHON=${DV_HARNESS_HOOK_PYTHON:-}
+if [ -z "$PYTHON" ]; then
+    PYTHON=python3
+    command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python
+fi
 command -v "$PYTHON" >/dev/null 2>&1 || {
-    echo "[git-guard] no python3/python on PATH -- cannot run the PR-only governance gate; allowing push (fail-open, see tools/git-hooks/README.md)." >&2
+    echo "[git-guard] no usable python on PATH ('$PYTHON') -- cannot run the PR-only governance gate; allowing push (fail-open, see tools/git-hooks/README.md)." >&2
     exit 0
 }
 
-"$PYTHON" -m dv_harness.cli --project-root "$REPO_ROOT" git-guard --check pre-push
-exit $?
+# git feeds the refspecs on stdin, and stdin can only be consumed ONCE. The
+# governance gate is the consumer, so it must run first and its input must be
+# captured here if anything after it also needs to look at the push.
+"$PYTHON" -m dv_harness.cli --project-root "$REPO_ROOT" git-guard --check pre-push || exit $?
+
+# ---------------------------------------------------------------------------
+# HARNESS SELF-TEST GATE (2026-09-04). The second thing this hook enforces:
+# do not push a harness whose own infrastructure is broken.
+#
+# WHY HERE. tools/testing/self_test.py was real and passing but nothing ever
+# ran it automatically -- tools/self_test.sh is typed by hand, and
+# .github/workflows/dv-harness-ci.yml has never actually fired (this repo's
+# `origin` exists but has no pushed refs, so no Actions run has ever
+# happened). "Infrastructure breaking is harder to notice than a bad
+# judgment call" is the exact premise the self-test was written on, and a
+# check that only runs when someone remembers it does not address that
+# premise. This hook directory is already this repo's live `core.hooksPath`,
+# so a gate placed here is one that genuinely fires today, on this machine,
+# with no remote and no CI runner involved. CI stays the authoritative gate
+# once the remote has branches; this is the local one that exists now.
+#
+# WHICH CHECKS. import-sanity + self-audit -- roughly 50s combined, the two
+# that are both fast and specifically about the harness's OWN scripts.
+# cli-help-sanity is deliberately NOT in the default set: it spawns a real
+# `--help` subprocess per leaf subcommand and takes ~7 minutes, which is a
+# gate people would learn to bypass. It stays part of the full manual/CI
+# pass. Override with DV_HARNESS_SELF_TEST_CHECKS (comma-separated).
+#
+# FAIL-CLOSED, unlike the governance gate above. A missing python or a
+# missing script still fails OPEN (an unrelated environment problem must not
+# block a human's push), but a self-test that actually RUNS and reports FAIL
+# aborts the push -- that is the whole point of the gate. Escape hatch for
+# the legitimate "I know, I am pushing the fix" case:
+#   DV_HARNESS_SKIP_SELF_TEST=1 git push ...
+# ---------------------------------------------------------------------------
+
+if [ "${DV_HARNESS_SKIP_SELF_TEST:-0}" = "1" ]; then
+    echo "[self-test] skipped: DV_HARNESS_SKIP_SELF_TEST=1" >&2
+    exit 0
+fi
+
+# Resolved relative to THIS SCRIPT, not to the pushing repo's root: the hooks
+# live next to tools/testing/, and core.hooksPath may legitimately point at a
+# checkout other than the one being pushed. DV_HARNESS_SELF_TEST_SCRIPT
+# overrides it -- the seam the end-to-end test uses to drive a genuinely
+# failing self-test through git's own hook runner without breaking this repo.
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SELF_TEST=${DV_HARNESS_SELF_TEST_SCRIPT:-"$HOOK_DIR/../testing/self_test.py"}
+
+if [ ! -f "$SELF_TEST" ]; then
+    echo "[self-test] $SELF_TEST not found -- skipping the harness self-test gate (fail-open)." >&2
+    exit 0
+fi
+
+CHECKS=${DV_HARNESS_SELF_TEST_CHECKS:-"import-sanity,self-audit"}
+ONLY_ARGS=""
+OLD_IFS=$IFS
+IFS=,
+for check in $CHECKS; do
+    [ -n "$check" ] && ONLY_ARGS="$ONLY_ARGS --only $check"
+done
+IFS=$OLD_IFS
+
+echo "[self-test] harness self-test gate (checks: $CHECKS) -- set DV_HARNESS_SKIP_SELF_TEST=1 to bypass." >&2
+# shellcheck disable=SC2086 -- ONLY_ARGS is intentionally word-split into repeated --only flags
+"$PYTHON" "$SELF_TEST" $ONLY_ARGS --record --trigger pre-push >&2
+SELF_TEST_RC=$?
+if [ "$SELF_TEST_RC" -ne 0 ]; then
+    echo "[self-test] FAILED (exit $SELF_TEST_RC) -- push aborted. Fix the harness, or bypass with DV_HARNESS_SKIP_SELF_TEST=1 if you are pushing the fix itself." >&2
+    exit "$SELF_TEST_RC"
+fi
+exit 0

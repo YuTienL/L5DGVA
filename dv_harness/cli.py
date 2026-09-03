@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from .engine import DVHarness
 from .models import Stage, Status
+from .preflight import TRANSPORT_CHOICES
 
 
 def _access_user() -> str:
@@ -90,6 +91,21 @@ def main():
 
     ap = argparse.ArgumentParser(prog="dv-harness", description="DV Agent Harness Edition v15")
     ap.add_argument("--project-root", default=".")
+    # DEGRADED-mode probe transport (2026-09-04). Overrides config.json's
+    # `degradation.transport` for this invocation. This is the flag that
+    # makes the "license 全滿 / farm 塞車" triggers reachable at all from a
+    # shipped command path: before it, the only documented way to give them a
+    # transport on a PC-side REMOTE_EXECUTION session was to hand-write
+    # Python assigning DVHarness.degradation_runner. Applies to every
+    # subcommand because the harness is constructed once, below.
+    ap.add_argument("--degradation-transport", dest="degradation_transport",
+                     default=None, choices=list(TRANSPORT_CHOICES),
+                     help="Transport for DEGRADED mode's license/queue probes. "
+                          "'auto' (config default) arms one only on real evidence -- a READY "
+                          "persistent relay for $VCHOST/$VCHOP, else lmutil+bqueues actually on "
+                          "PATH, else nothing. 'local'/'remote_relay' force one; 'off' disables "
+                          "resource probing. Overrides config.json's degradation.transport; the "
+                          "resolved decision is shown by `dv-harness status`.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     # --dry-run (2026-09-03, user spec: "agent 產出完整計畫但不執行, 人可事前
@@ -970,6 +986,13 @@ def main():
 
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
+    # Per-invocation override of the DEGRADED-mode probe transport, applied
+    # before any subcommand runs so `status` reports the transport this
+    # invocation would actually use, not the config default it overrode.
+    if getattr(args, "degradation_transport", None):
+        _decision = h.set_degradation_transport(args.degradation_transport)
+        print(f"[dv-harness] degradation probe transport: {_decision.resolved} "
+               f"({_decision.reason})", file=sys.stderr)
     # Usage record for `user-info` (dv_harness/user_info.py): logged for
     # EVERY subcommand, including read-only ones (status/explain/...) --
     # user-info's whole point is "who has used this deployment, and when",

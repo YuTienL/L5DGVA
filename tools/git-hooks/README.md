@@ -1,4 +1,38 @@
-# tools/git-hooks/ -- gh CLI + PR-only governance gate
+# tools/git-hooks/ -- PR-only governance gate + harness self-test gate
+
+`pre-push` enforces **two** gates, in order: the PR-only governance gate
+(everything below), then the **harness self-test gate** (2026-09-04).
+
+## The harness self-test gate
+
+`tools/testing/self_test.py` is the CI for the harness's OWN scripts, on the
+premise that "agent 的基礎設施壞掉比 agent 判斷錯更難察覺". It was real and
+passing, but nothing ever ran it on its own: `tools/self_test.sh` is typed by
+hand, and `.github/workflows/dv-harness-ci.yml` has never actually fired
+(`origin` exists but has no pushed refs, so there has never been an Actions
+run). A regression net that only runs when someone remembers it does not
+address the premise it was built on.
+
+Because `core.hooksPath` already points here, `pre-push` is a trigger that
+genuinely fires on this machine today, with no remote and no CI runner. It
+runs the two fast, harness-specific checks (`import-sanity` + `self-audit`,
+~50s combined; `cli-help-sanity` is excluded on purpose -- ~7 minutes would
+train people to bypass the gate) and **aborts the push** if either fails.
+
+- Bypass (for the legitimate "I am pushing the fix" case):
+  `DV_HARNESS_SKIP_SELF_TEST=1 git push ...`
+- Different check set: `DV_HARNESS_SELF_TEST_CHECKS=import-sanity git push ...`
+- Fails OPEN only on an unrelated environment problem (no python, script
+  missing); a self-test that really ran and really failed fails CLOSED.
+- Every run through this gate appends a record to
+  `.dv-harness/self_test/runs.jsonl` (`--record --trigger pre-push`), so
+  "has an automated trigger ever actually executed the self-test here?" is
+  answerable from a file instead of from memory. Gitignored -- it is a
+  per-machine execution log, not shared history.
+- Proven end-to-end (real `git push`, git's own hook runner, this exact
+  script) by `dv_harness_tests/test_self_test_gate_e2e.py`.
+
+## The PR-only governance gate
 
 Real, callable enforcement point for this project's L5 governance policy
 (2026-09-03): an AI agent (Claude Code or any other automated caller) may

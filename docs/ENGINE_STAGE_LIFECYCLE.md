@@ -260,7 +260,8 @@ NORMAL.
   "enabled": true,
   "adapter_failure_threshold": 3,
   "probe_resources": false,
-  "probe_min_interval_sec": 60
+  "probe_min_interval_sec": 60,
+  "transport": "auto"
 }
 ```
 
@@ -273,11 +274,42 @@ fabricate a farm problem that does not exist. Turn it on for a server-side
 deployment; it reuses the `preflight` block for the license server and queue
 names, so there is no second place to configure them.
 
-A PC-side session in REMOTE_EXECUTION mode can instead inject
-`preflight.RemoteRelayCommandRunner()` via `DVHarness.degradation_runner` to
-probe the real server through the sanctioned credential-free relay -- the
-same "transport fully injected, never assumed" principle `preflight.py`
-states, and the seam the tests inject a pure mock through.
+### How the license/queue triggers actually get armed (2026-09-04)
+
+Keeping `probe_resources` opt-in was right, but for a while it left triggers
+2 and 3 **structurally unreachable**: nothing shipped ever turned the flag on,
+and the only documented way to give a PC-side REMOTE_EXECUTION session a
+transport was for a human to hand-write Python assigning
+`DVHarness.degradation_runner`. Correct, tested, dead code. Two changes close
+that, neither of which weakens the Evidence Truth Rule reasoning above:
+
+- **`degradation.transport`** (default `"auto"`) is resolved by
+  `preflight.resolve_transport()` and installed by `DVHarness.__init__`.
+  `auto` arms a transport **only on real probe evidence** -- the persistent
+  relay if `read_relay_info()` reports it READY for the configured
+  `$VCHOST`/`$VCHOP` hop, else `LocalCommandRunner` if `lmutil` *and*
+  `bqueues` are genuinely on PATH, else **nothing**. A machine that can
+  confirm neither resolves to `none` and behaves exactly as before. Values:
+  `auto` / `local` / `remote_relay` / `off`; an unrecognised value fails
+  toward `none`.
+- **An explicitly injected Runner arms the probe on its own**, the identical
+  rule `_execution_preflight_gate()` already applied to its own transport --
+  an injected transport *is* the statement that a real probe is possible
+  here. This is what lets a resolved transport reach `check_license()` /
+  `check_queue_health()` without a second opt-in, and it is what the tests
+  have always used to drive the whole path through a pure mock.
+
+Overrides, highest precedence first: `dv-harness --degradation-transport
+{auto,local,remote_relay,off}` (per invocation, every subcommand) ->
+`$DV_HARNESS_DEGRADATION_TRANSPORT` (per shell/process; `dv_harness_tests/
+conftest.py` pins it to `off` so the suite can never reach a live server) ->
+`degradation.transport` in config.json.
+
+The decision is never silent: `dv-harness status` reports
+`degraded_probe_transport` (requested / resolved / available / reason /
+evidence) and `degraded_resource_triggers_armed`, so "those two triggers
+cannot fire on this machine" is a printed answer rather than something you
+discover by them never firing.
 
 **One deliberate asymmetry**: the probe forces
 `require_license_configured=False`, where the preflight *gate* leaves it

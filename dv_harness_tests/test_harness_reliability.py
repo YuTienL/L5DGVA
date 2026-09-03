@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from dv_harness import degradation, session_snapshot
+from dv_harness import degradation, preflight, session_snapshot
 from dv_harness.adapters.base import AgentResult
 from dv_harness.engine import DVHarness
 from dv_harness.models import Stage, Status
@@ -83,8 +83,15 @@ def _fresh(with_graph=True):
             src.read_text(encoding="utf-8"), encoding="utf-8")
     h = DVHarness(tmp)
     # Keep every test off the real farm/license server unless it explicitly
-    # injects its own mock runner.
+    # injects its own mock runner. Both halves matter since 2026-09-04: the
+    # opt-in flag AND the resolved transport can each arm the probe on their
+    # own, so a suite-wide pin of degradation.transport to "off" lives in
+    # dv_harness_tests/conftest.py (see its docstring -- "auto" resolves to
+    # a genuinely LIVE relay on this project's own developer machine).
     h.cfg["degradation"]["probe_resources"] = False
+    assert h.degradation_runner is None, (
+        "conftest.py should have pinned degradation.transport to off; a test "
+        "harness must never start with a live probe transport installed")
     return tmp, h
 
 
@@ -722,3 +729,214 @@ class TestDegradationStateFile:
             assert degradation.describe(tmp)["mode"] == degradation.NORMAL
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ===========================================================================
+# 4. 降級路徑, ACTIVATION -- which of the three triggers can actually fire
+#    here, and how the license/queue pair finally became reachable from a
+#    shipped command path (2026-09-04 gap close).
+#
+#    The audit finding these close: TRIGGER_LICENSE/TRIGGER_QUEUE were real,
+#    correct and tested, but `probe_resources` defaulted False and
+#    DVHarness.degradation_runner defaulted None, and grepping cli.py for
+#    either name returned ZERO hits -- so on this project's own PC-side
+#    REMOTE_EXECUTION deployment nothing shipped could ever arm them. These
+#    tests assert both halves: that a real transport now gets resolved and
+#    injected, AND that resolution stays evidence-based so a machine with no
+#    usable transport still arms nothing.
+# ===========================================================================
+
+
+class TestDegradationTransportResolution:
+    """preflight.resolve_transport() -- every branch driven through injected
+    env/which/relay probes, so none of these touch a real PATH or relay."""
+
+    def test_auto_picks_the_relay_when_the_real_relay_is_ready(self):
+        d = preflight.resolve_transport(
+            "auto",
+            env={"VCHOST": "vchost-b", "VCHOP": "host-c"},
+            relay_probe=lambda h, p: {"host": "127.0.0.1", "port": 5000, "token": "t"},
+            which=lambda cmd: None,          # nothing on PATH -- relay still wins
+        )
+        assert d.resolved == preflight.TRANSPORT_REMOTE_RELAY
+        assert d.available is True
+        assert isinstance(d.runner, preflight.RemoteRelayCommandRunner)
+        assert d.evidence["relay"]["detail"] == "RELAY_READY"
+
+    def test_auto_falls_back_to_local_when_the_real_binaries_are_on_path(self):
+        d = preflight.resolve_transport(
+            "auto",
+            env={},                                   # no VCHOST/VCHOP hop at all
+            which=lambda cmd: "/usr/bin/" + cmd,      # lmutil + bqueues both present
+        )
+        assert d.resolved == preflight.TRANSPORT_LOCAL
+        assert d.available is True
+        assert isinstance(d.runner, preflight.LocalCommandRunner)
+        assert d.evidence["relay"]["detail"] == "VC_HOST_HOP_NOT_CONFIGURED"
+
+    def test_auto_arms_nothing_when_no_transport_is_confirmed(self):
+        """The Evidence Truth Rule half: a PC with no relay and no EDA
+        binaries must resolve to NONE, never to a runner that would report
+        "command not found" as a full license / jammed farm."""
+        d = preflight.resolve_transport("auto", env={}, which=lambda cmd: None)
+        assert d.resolved == preflight.TRANSPORT_NONE
+        assert d.available is False
+        assert d.runner is None
+        assert "lmutil" in d.evidence["local"]["missing"]
+        assert "bqueues" in d.evidence["local"]["missing"]
+
+    def test_a_configured_hop_with_no_relay_info_is_not_ready(self):
+        d = preflight.resolve_transport(
+            "auto", env={"VCHOST": "vchost-b", "VCHOP": "host-c"},
+            relay_probe=lambda h, p: None,      # read_relay_info() found no info file
+            which=lambda cmd: None)
+        assert d.resolved == preflight.TRANSPORT_NONE
+        assert d.evidence["relay"]["detail"] == "RELAY_NOT_READY"
+
+    def test_explicit_requests_are_honoured_but_still_carry_real_evidence(self):
+        local = preflight.resolve_transport("local", env={}, which=lambda cmd: None)
+        assert local.resolved == preflight.TRANSPORT_LOCAL and local.available is True
+        assert isinstance(local.runner, preflight.LocalCommandRunner)
+        # ...and the human can still SEE that what they asked for is absent.
+        assert "LOCAL_COMMANDS_MISSING" in local.evidence["local"]["detail"]
+
+        relay = preflight.resolve_transport("remote_relay", env={},
+                                             relay_probe=lambda h, p: None)
+        assert relay.resolved == preflight.TRANSPORT_REMOTE_RELAY
+        assert isinstance(relay.runner, preflight.RemoteRelayCommandRunner)
+        assert relay.evidence["relay"]["detail"] == "VC_HOST_HOP_NOT_CONFIGURED"
+
+    def test_off_and_a_typo_both_fail_toward_probing_nothing(self):
+        off = preflight.resolve_transport("off", env={})
+        assert off.resolved == preflight.TRANSPORT_OFF and off.runner is None
+        typo = preflight.resolve_transport("remot_relay", env={})   # config.json typo
+        assert typo.resolved == preflight.TRANSPORT_NONE and typo.runner is None
+        assert typo.available is False
+
+    def test_precedence_flag_beats_env_beats_config(self):
+        """degradation.resolve_transport()'s documented precedence, driven
+        with real values rather than asserted from the docstring."""
+        cfg = {"degradation": {"transport": "off"}}
+        env = {"DV_HARNESS_DEGRADATION_TRANSPORT": "local"}
+        probes = {"which": lambda cmd: "/usr/bin/" + cmd}
+
+        from_cfg = degradation.resolve_transport(cfg, env={}, **probes)
+        assert from_cfg.resolved == preflight.TRANSPORT_OFF
+
+        from_env = degradation.resolve_transport(cfg, env=env, **probes)
+        assert from_env.resolved == preflight.TRANSPORT_LOCAL
+
+        from_flag = degradation.resolve_transport(cfg, env=env, requested="off", **probes)
+        assert from_flag.resolved == preflight.TRANSPORT_OFF
+
+
+class TestDegradationTransportWiring:
+    """The engine/CLI half: the resolved transport is actually INSTALLED on
+    the harness and actually ARMS the license/queue probe."""
+
+    def test_harness_construction_installs_the_resolved_runner(self):
+        tmp, h = _fresh()
+        try:
+            # conftest.py pins the suite to "off", so a stock harness here
+            # is transport-less -- the honest answer on a machine that has
+            # confirmed nothing.
+            assert h.degradation_transport.resolved == preflight.TRANSPORT_OFF
+            assert h.degradation_runner is None
+
+            # ...and the CLI flag's own call site really installs one.
+            decision = h.set_degradation_transport("local")
+            assert decision.resolved == preflight.TRANSPORT_LOCAL
+            assert isinstance(h.degradation_runner, preflight.LocalCommandRunner)
+            assert h.degradation_transport is decision
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_an_injected_runner_arms_the_probe_without_probe_resources(self):
+        """THE gap-closing assertion. Before this change, an injected runner
+        with probe_resources=False did nothing at all: evaluate() returned
+        immediately, so a resolved transport could never have reached a real
+        check. Now the injected transport arms it on its own -- the same rule
+        engine._execution_preflight_gate() already used."""
+        tmp, h = _fresh()
+        try:
+            h.cfg["preflight"]["license_server"] = "2900@host-a"
+            h.cfg["degradation"]["probe_resources"] = False      # NOT opted in
+            h.cfg["degradation"]["probe_min_interval_sec"] = 0
+            runner = _ScriptedRunner([
+                _res(stdout=REAL_LMSTAT_VCS_STARVED),
+                _res(stdout=REAL_BQUEUES_VCS_OPEN_ACTIVE),
+            ])
+            degradation.evaluate(tmp, h.cfg, runner=runner)
+            detail = degradation.describe(tmp)
+            assert detail["degraded"] is True
+            assert detail["triggers"] == [degradation.TRIGGER_LICENSE]
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_no_runner_and_no_opt_in_still_probes_nothing(self):
+        """The other half of the same rule: nothing was confirmed, so nothing
+        happens -- unchanged behaviour on a machine with no transport."""
+        tmp, h = _fresh()
+        try:
+            h.cfg["degradation"]["probe_resources"] = False
+            h.cfg["degradation"]["probe_min_interval_sec"] = 0
+            degradation.evaluate(tmp, h.cfg, runner=None)
+            assert degradation.is_degraded(tmp) is False
+            assert degradation.load_state(tmp).get("last_probe_at") is None
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_real_stage_run_degrades_through_the_resolved_transport(self):
+        """End-to-end, not unit-level: install a transport the way the CLI
+        flag does (only the Runner object is a mock), then drive a REAL
+        run_stage() and assert the stage parked in WAIT_USER on the
+        farm-congested trigger with no adapter judgment call made."""
+        tmp, h = _fresh()
+        try:
+            h.cfg["preflight"]["license_server"] = "2900@host-a"
+            h.cfg["degradation"]["probe_resources"] = False       # armed ONLY by the transport
+            h.cfg["degradation"]["probe_min_interval_sec"] = 0
+            h.degradation_runner = _ScriptedRunner([
+                _res(stdout=REAL_LMSTAT_VCS_HEADER),              # license healthy
+                _res(stdout=REAL_BQUEUES_VCS_CONGESTED),          # farm jammed
+            ])
+            adapter = _CountingAdapter(ok=True, text="should never be called")
+            h.adapter = adapter
+
+            stage = Stage.INTAKE.value
+            h.run_stage("goal", stage=stage)
+
+            assert degradation.is_degraded(tmp) is True
+            assert degradation.describe(tmp)["triggers"] == [degradation.TRIGGER_QUEUE]
+            assert adapter.calls == 0, "DEGRADED must make no judgment call"
+            assert h.state.stages[stage]["status"] == Status.WAIT_USER.value
+            assert "farm_queue_congested" in h.state.stages[stage]["blocking_reason"]
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_status_reports_which_triggers_can_actually_fire(self):
+        """Observability: the previously-silent "those two triggers cannot
+        fire on this machine" answer is now printed by `dv-harness status`."""
+        tmp, h = _fresh()
+        try:
+            summary = json.loads(h.summary())
+            assert summary["degraded_probe_transport"]["resolved"] == preflight.TRANSPORT_OFF
+            assert summary["degraded_resource_triggers_armed"] is False
+
+            h.degradation_runner = _ScriptedRunner([])
+            summary = json.loads(h.summary())
+            assert summary["degraded_resource_triggers_armed"] is True
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_cli_really_exposes_the_transport_flag(self):
+        """The literal audit finding was that grepping cli.py for
+        degradation_runner/probe_resources returned 0 matches -- no flag, no
+        wiring, nothing shipped could arm these triggers. Assert against the
+        REAL parser (built by importing cli.main's own argv handling via a
+        --help round trip is covered by self_test's cli-help-sanity; here we
+        assert the source-level wiring the audit grepped for)."""
+        cli_src = (ROOT / "dv_harness" / "cli.py").read_text(encoding="utf-8")
+        assert "--degradation-transport" in cli_src
+        assert "set_degradation_transport" in cli_src
+        assert set(preflight.TRANSPORT_CHOICES) == {"auto", "local", "remote_relay", "off"}
