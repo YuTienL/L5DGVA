@@ -552,6 +552,63 @@ def main():
                          help="Sheet registry key (repeatable). Default: verification_plan, coverage_summary.")
     pvplan.add_argument("--workbook-title", default=None)
 
+    # --- Structured deliberate-exemption records (2026-09-03,
+    # exemptions-yaml, see dv_harness/exemptions.py's own module docstring
+    # for the full design rationale). `valid_until` is REQUIRED on every
+    # entry -- schema-enforced, no "no expiry" escape hatch -- so `check`/
+    # `expire-report` have something real to report once an entry lapses.
+    pexempt = sub.add_parser("exemptions", help="Structured record of every check/gate/assertion/coverage-bin "
+                                                  "deliberately disabled or relaxed for a cited reason (e.g. an "
+                                                  "IP/tooling restriction), so an agent never re-litigates or "
+                                                  "silently deletes a deliberate exemption. Every entry carries a "
+                                                  "REQUIRED valid_until -- an expired entry surfaces via `check`/"
+                                                  "`expire-report`, it never stays in force forever unreviewed. "
+                                                  "See dv_harness/exemptions.py.")
+    pexempt_sub = pexempt.add_subparsers(dest="exemptions_cmd", required=True)
+
+    pexempt_list = pexempt_sub.add_parser("list", help="List exemption entries as JSON.")
+    pexempt_list.add_argument("--path", default=None, help="Override exemptions.yaml path "
+                                                              "(default: .dv-harness/exemptions/exemptions.yaml "
+                                                              "under --project-root).")
+    pexempt_list.add_argument("--expired-only", action="store_true", dest="expired_only")
+    pexempt_list.add_argument("--as-of", default=None, dest="as_of",
+                               help="YYYY-MM-DD to evaluate expiry against (default: today). Only affects "
+                                    "--expired-only.")
+
+    pexempt_add = pexempt_sub.add_parser("add", help="Append one new exemption entry. Schema-validated before "
+                                                        "write -- a missing/malformed field (valid_until included) "
+                                                        "refuses the write rather than persisting a bad record.")
+    pexempt_add.add_argument("--id", default=None, help="Omit to auto-generate EXEMPT-NNNN.")
+    pexempt_add.add_argument("--check-id", required=True, dest="check_id",
+                              help="The exact check/gate/assertion/coverage-bin being exempted.")
+    pexempt_add.add_argument("--reason", required=True, help="Free text: the actual engineering why.")
+    pexempt_add.add_argument("--basis-document", required=True, dest="basis_document",
+                              help="A citation: file path (optionally with a line range), doc reference, or "
+                                   "ticket id. Never empty.")
+    pexempt_add.add_argument("--owner", required=True, help="Accountable person/team, not a role placeholder.")
+    pexempt_add.add_argument("--valid-until", required=True, dest="valid_until",
+                              help="YYYY-MM-DD. REQUIRED -- no permanent exemptions.")
+    pexempt_add.add_argument("--protocol", default=None, help="Optional protocol/IP scope, e.g. USB.")
+    pexempt_add.add_argument("--notes", default=None)
+    pexempt_add.add_argument("--path", default=None)
+
+    pexempt_check = pexempt_sub.add_parser("check", help="Report expired vs. active entries. Exits 1 if any "
+                                                            "entry's valid_until has passed (CI-friendly), same "
+                                                            "convention as the generated environment's own "
+                                                            "dv-check run_all.sh.")
+    pexempt_check.add_argument("--path", default=None)
+    pexempt_check.add_argument("--as-of", default=None, dest="as_of")
+
+    pexempt_report = pexempt_sub.add_parser("expire-report", help="Write .dv-harness/exemptions/review_queue.json "
+                                                                     "listing every currently-expired entry -- the "
+                                                                     "documented hand-off point a future "
+                                                                     "question-queue system should read from (see "
+                                                                     "dv_harness/exemptions.py's module docstring). "
+                                                                     "Exits 1 if any entry expired (CI-friendly).")
+    pexempt_report.add_argument("--path", default=None)
+    pexempt_report.add_argument("--out", default=None, help="Override review_queue.json output path.")
+    pexempt_report.add_argument("--as-of", default=None, dest="as_of")
+
     pconfig = sub.add_parser("config", help="View/update .dv-harness/config.json's policy block.")
     pconfig_sub = pconfig.add_subparsers(dest="config_cmd", required=True)
     pconfig_set = pconfig_sub.add_parser("set", help="dv-harness config set require_dv_review_cosign true|false")
@@ -1213,6 +1270,55 @@ def main():
             "signatures": classified,
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.cmd == "exemptions":
+        from . import exemptions as exemptions_mod
+        from .exemptions import ExemptionValidationError
+        ex_path = Path(args.path) if getattr(args, "path", None) else exemptions_mod.default_exemptions_path(h.root)
+        try:
+            if args.exemptions_cmd == "list":
+                as_of = exemptions_mod.parse_as_of(args.as_of)
+                entries = exemptions_mod.list_exemptions(ex_path)
+                if args.expired_only:
+                    entries = exemptions_mod.find_expired(entries, as_of)
+                print(json.dumps(entries, ensure_ascii=False, indent=2))
+            elif args.exemptions_cmd == "add":
+                entry = {
+                    "id": args.id,
+                    "check_id": args.check_id,
+                    "reason": args.reason,
+                    "basis_document": args.basis_document,
+                    "owner": args.owner,
+                    "valid_until": args.valid_until,
+                }
+                if args.protocol:
+                    entry["protocol"] = args.protocol
+                if args.notes:
+                    entry["notes"] = args.notes
+                entry = {k: v for k, v in entry.items() if v is not None}
+                saved = exemptions_mod.add_exemption(ex_path, entry)
+                print(json.dumps(saved, ensure_ascii=False, indent=2))
+            elif args.exemptions_cmd == "check":
+                as_of = exemptions_mod.parse_as_of(args.as_of)
+                result = exemptions_mod.check_expiry(ex_path, as_of=as_of)
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                raise SystemExit(0 if not result["expired"] else 1)
+            elif args.exemptions_cmd == "expire-report":
+                as_of = exemptions_mod.parse_as_of(args.as_of)
+                out_path = Path(args.out) if args.out else exemptions_mod.default_review_queue_path(h.root)
+                queue = exemptions_mod.build_review_queue(ex_path, as_of=as_of)
+                exemptions_mod.write_review_queue(queue, out_path)
+                print(json.dumps({"review_queue_path": str(out_path), "expired_count": len(queue),
+                                   "entries": queue}, ensure_ascii=False, indent=2))
+                raise SystemExit(0 if not queue else 1)
+        except ExemptionValidationError as exc:
+            # BUG FIX (2026-09-03): before this, a schema-invalid write (add)
+            # or a hand-edited bad file on disk (list/check/expire-report,
+            # e.g. a calendar-invalid valid_until like "2026-02-30") raised a
+            # raw ExemptionValidationError/ValueError traceback straight out
+            # of main(). Same clean-message-then-exit(1) convention as
+            # run-profile's RunProfileValidationError handling above.
+            print(f"exemptions {args.exemptions_cmd} FAILED: {exc}", file=sys.stderr)
+            raise SystemExit(1)
     elif args.cmd == "config":
         from .config import load_config, save_config
         cfg = load_config(h.root)

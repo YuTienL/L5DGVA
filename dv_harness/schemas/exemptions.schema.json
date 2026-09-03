@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/exemptions.schema.json",
+  "title": "exemptions",
+  "description": "Machine-readable record of every check/gate/assertion/coverage-bin that is DELIBERATELY disabled or relaxed for a specific, cited reason (e.g. an IP/tooling restriction) -- so an agent never re-litigates 'why is this off' from a code comment or word of mouth, and never silently re-enables or deletes a deliberate exemption believing it found a bug. `valid_until` is the load-bearing field: it is REQUIRED on every entry and must be a syntactically- and calendar-valid ISO 8601 date -- there is no way to omit it or to represent 'no expiry' as a value. That said, nothing in this schema stops an operator from choosing a far-future `valid_until` (e.g. `9999-12-31`) as a de-facto permanent exemption; the schema enforces that an expiry date is always present and valid, not how far in the future it may be. An entry whose valid_until has passed is a real fact `dv_harness/exemptions.py`'s check_expiry()/build_review_queue() surface for human re-review; the schema itself only enforces that every exemption HAS a valid expiry, not that it is still valid or that it is genuinely temporary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "exemptions"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "exemptions": {
+      "type": "array",
+      "description": "One entry per deliberately-disabled/relaxed check. Order carries no meaning.",
+      "items": { "$ref": "#/$defs/exemption" }
+    }
+  },
+  "$defs": {
+    "exemption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "check_id", "reason", "basis_document", "owner", "valid_until"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable unique identifier for this exemption record itself (e.g. EXEMPT-0001), distinct from check_id -- one check_id could in principle have more than one exemption entry over time (superseded/re-approved)."
+        },
+        "check_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The exact thing being exempted: a specific static-check rule id, a specific coverage bin/covergroup.bin name, a specific assertion/property name, or a specific gate id. Must name the concrete real check, never a vague category -- an agent matches against this string to decide whether a given check's current failure/skip is a known, deliberate exemption."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Free text: the actual engineering 'why' (e.g. an IP/tooling restriction, a licensing limitation, a known false-positive shape). This is what stops an agent from re-litigating or silently deleting the exemption -- it is not enough to just say the check is off, the agent must be able to read why."
+        },
+        "basis_document": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A citation an agent or reviewer can actually go open: a file path (optionally with a line range/anchor), a doc reference, or a ticket id. Never empty -- 'reason' explains why, this says where that reasoning is grounded."
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Who is accountable for this exemption still being correct -- a person or team identifier, not a role placeholder like 'TBD'."
+        },
+        "valid_until": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "format": "date",
+          "description": "REQUIRED. ISO 8601 date (YYYY-MM-DD) after which this exemption is treated as expired and surfaces in the review queue (see dv_harness/exemptions.py build_review_queue()). This is the field that keeps a temporary workaround from silently becoming a permanent, un-reviewed fact -- there is no 'no expiry' value; a still-needed exemption must be explicitly re-confirmed with a new valid_until, not left to run forever."
+        },
+        "created_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "format": "date",
+          "description": "ISO 8601 date this entry was first recorded. Optional but recommended; add_exemption() stamps it automatically when omitted."
+        },
+        "status": {
+          "enum": ["active", "retired"],
+          "default": "active",
+          "description": "'retired' marks an entry kept for history (e.g. the check it referenced no longer exists) without deleting the record -- a retired entry is excluded from expiry checking regardless of valid_until."
+        },
+        "protocol": {
+          "type": "string",
+          "description": "Optional protocol/IP scope this exemption applies to (e.g. USB, PCIE). Omit for a project-wide exemption."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional free-text addendum -- context that doesn't belong in the single-purpose reason/basis_document fields."
+        }
+      }
+    }
+  }
+}
