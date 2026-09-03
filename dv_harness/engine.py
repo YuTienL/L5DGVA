@@ -1184,6 +1184,109 @@ class DVHarness:
             "multi_agent_consensus_count": multi_agent_consensus_count,
         }
 
+    def _react_step_inference(self, stage: str, evidence_blocks: Dict[str, Any],
+                               signatures: Optional[List[Any]] = None,
+                               adapter_ok: bool = True,
+                               reroute_target: Optional[str] = None,
+                               protocol: Optional[str] = None) -> Dict[str, Any]:
+        """Real inference.score_confidence()/identify_gap()/next_best_action()
+        for the IN-FLIGHT stage attempt -- the values ReactRecorder.record()
+        persists as this attempt's `react_reasoning_step` Working Memory
+        record (kind routed to WORKING_MEMORY by memory_router.route_memory()).
+
+        WHY THIS EXISTS (2026-09-04 gap closure): CLAUDE.md's Engineering
+        Memory Policy names score_confidence()/identify_gap()/
+        next_best_action() as the mechanism behind exactly this record kind,
+        but the record's `confidence` and `next_action` were a hardcoded
+        3-way/2-way string map on ss["status"] and there was no `gap` field
+        at all. inference.py's real math was wired only into
+        _score_root_cause_confidence() below, which runs solely on a RE_AUDIT/
+        RCA_JOIN stage PASS -- so the per-attempt reasoning record, the one
+        place a debug loop actually reads mid-run, carried none of it. This
+        does NOT duplicate _root_cause_confidence_inputs(): that derives its
+        four counts from a single root_cause_evidence_gate evidence BLOCK's
+        cited sources, which only exists after a stage has already passed.
+        The in-flight attempt has a different real evidence surface -- the
+        stage's configured gate list and this attempt's own gate signatures --
+        so the counts are derived from those, and both feed the same one
+        score_confidence() implementation.
+
+        Real inputs, all from data this attempt actually produced:
+          - required: the gate ids really configured for this stage
+            (gates.effective_stage_gates, i.e. STAGE_GATES plus any
+            project-level override) -- the evidence vocabulary the agent was
+            actually obliged to supply.
+          - supplied: which of those the agent's response really carried a
+            ```dv-harness-evidence:<gate_id>``` block for.
+          - gap = identify_gap(required, supplied): the real set difference.
+          - independent_sources_count = len(supplied): distinct gate-scoped
+            evidence sources this attempt produced.
+          - evidence_refs_verified: the adapter call succeeded AND no gate is
+            missing its block AND every gate signature is ok -- a real bool
+            about THIS attempt, never assumed from the status string.
+          - counter_evidence_count = the number of gate signatures that
+            really failed: concrete recorded evidence against "this attempt
+            is complete", which is exactly what score_confidence()'s
+            counter-evidence term (and its HIGH safety floor) is for.
+          - multi_agent_consensus_count: reuses the SAME real
+            _rca_fanout_agent_evidence_count() signal
+            _root_cause_confidence_inputs() already uses, at the one stage
+            (RCA_JOIN) where a concurrent fan-out really ran.
+
+        next_action is likewise derived, never mapped from a status string:
+        a real reroute target when the inner ReAct loop chose one, else the
+        real next_best_action() suggestion for the first gap, else the real
+        failing gate ids to retry against, else "advance".
+
+        DELIBERATE, VISIBLE CONSEQUENCE: a stage with NO configured gate at
+        all (verdict NO_GATE_REQUIRED) now scores LOW, where the old string
+        map reported HIGH purely because ss["status"] read PASS. That is the
+        honest answer under this project's own formula -- zero independent
+        sources and nothing verified -- and it is the same principle
+        run_stage() already applies one level up ("transport success is NOT
+        the same as DV PASS"). A single-gate stage that really passes scores
+        MEDIUM, and a multi-gate stage that really passes scores HIGH; the
+        number now tracks how much real evidence backs the step."""
+        from .gates import effective_stage_gates
+
+        try:
+            required = [gid for gid, _script, _flag in effective_stage_gates(stage, self.root)]
+        except Exception:
+            required = [gid for gid, _script, _flag in STAGE_GATES.get(stage, [])]
+        blocks = evidence_blocks if isinstance(evidence_blocks, dict) else {}
+        supplied = [gid for gid in required if blocks.get(gid) is not None]
+        gap = identify_gap(required, supplied)
+
+        sigs = list(signatures or [])
+        failing = [getattr(s, "gate_id", "") for s in sigs if not getattr(s, "ok", False)]
+        confidence_detail = score_confidence(
+            independent_sources_count=len(supplied),
+            evidence_refs_verified=bool(adapter_ok and required and not gap and not failing),
+            counter_evidence_count=len(failing),
+            multi_agent_consensus_count=(self._rca_fanout_agent_evidence_count()
+                                          if stage == Stage.RCA_JOIN.value else 0),
+        )
+
+        next_actions = next_best_action(protocol or "_general", gap, self.root) if gap else []
+        if reroute_target:
+            next_action = f"reroute:{reroute_target}"
+        elif next_actions:
+            next_action = next_actions[0]["suggested_action"]
+        elif failing:
+            next_action = "retry_targeted:" + ",".join(str(g) for g in failing[:3])
+        elif not adapter_ok:
+            next_action = "retry_after_adapter_failure"
+        else:
+            next_action = "advance"
+
+        return {
+            "gap": gap,
+            "confidence": confidence_detail["level"],
+            "confidence_detail": confidence_detail,
+            "next_action": next_action,
+            "next_best_action": next_actions,
+        }
+
     def _score_root_cause_confidence(self, stage: str, evidence_blocks: dict,
                                       verdict: str = "PASS") -> None:
         """Wires dv_harness/inference.py's score_confidence/identify_gap/
@@ -3095,10 +3198,16 @@ class DVHarness:
                 # InnerReactLoop attribute its own real adapter.run() calls
                 # (reflection + RETRY_TARGETED/REQUEST_EVIDENCE retries) to
                 # this same stage profile instead of leaving them invisible.
+                # protocol (2026-09-04): the SAME RouteResolver-resolved
+                # protocol already folded into this attempt's route_info --
+                # build_menu()'s NO_EVIDENCE_BLOCK_SUPPLIED source needs it to
+                # cite a real protocol_builder_registry.json item, since a
+                # gate that never ran cannot name a protocol in its own detail.
                 outcome = InnerReactLoop(
                     self.root, self.adapter, self.react, self.cfg, graph=self.graph,
                     profiler=self.profiler, profile_id=profile["profile_id"],
                     agent_name=route_info["agent"],
+                    protocol=((route_info or {}).get("protocol_decision") or {}).get("protocol"),
                 ).run(
                     stage, node, ss["attempts"], result, verdict, reasons,
                     structured_signatures, base_prompt=prompt,
@@ -3109,10 +3218,8 @@ class DVHarness:
                     ss["session_id"] = result.session_id
                     self.state.last_session_id = result.session_id
                 ss["last_message"] = result.text[-6000:] if result.text else ""
-                if outcome.reroute_target:
-                    ss["react_reroute_target"] = outcome.reroute_target
-                else:
-                    ss["react_reroute_target"] = None
+                react_reroute_target = outcome.reroute_target or None
+                ss["react_reroute_target"] = react_reroute_target
 
                 ss["status"] = Status.PARTIAL.value
                 self.state.overall_status = Status.PARTIAL.value
@@ -3183,6 +3290,19 @@ class DVHarness:
         #         multi-iteration loop above are two different, both-real
         #         things, not a contradiction. --------------------------
         if node is not None:
+            # Hypothesis -> Evidence -> Confidence -> Gap -> Next-Best-Action,
+            # the full chain CLAUDE.md's Engineering Memory Policy specifies
+            # for this exact record kind: `confidence`/`gap`/`next_action`
+            # below are now real dv_harness.inference.score_confidence()/
+            # identify_gap()/next_best_action() output over this attempt's own
+            # gate signatures and evidence blocks, not the status-keyed string
+            # literals they used to be. See _react_step_inference().
+            step_inference = self._react_step_inference(
+                stage, evidence_blocks, structured_signatures,
+                adapter_ok=bool(result.ok),
+                reroute_target=react_reroute_target,
+                protocol=((route_info or {}).get("protocol_decision") or {}).get("protocol"),
+            )
             # action carries route/protocol_decision/environment_mode_decision
             # (2026-09-03, gap-close-engine cleanup): these three resolver
             # decisions were previously folded ONLY into the ephemeral
@@ -3215,9 +3335,10 @@ class DVHarness:
                 tool="ClaudeAdapter.run",
                 observation={"ok": result.ok, "status": ss["status"], "session_id": result.session_id},
                 evidence=evidence_blocks,
-                confidence=("HIGH" if ss["status"] == Status.PASS.value
-                            else "LOW" if ss["status"] == Status.FAIL.value else "MEDIUM"),
-                next_action=("advance" if ss["status"] == Status.PASS.value else "retry_or_reroute"),
+                confidence=step_inference["confidence"],
+                next_action=step_inference["next_action"],
+                gap=step_inference["gap"],
+                confidence_detail=step_inference["confidence_detail"],
             )
 
         # This attempt's own extracted evidence blocks, persisted onto the

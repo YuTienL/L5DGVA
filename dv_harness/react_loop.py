@@ -46,6 +46,20 @@
 # below) when omitted, so every pre-existing unit test in
 # dv_harness_tests/test_react_loop.py that constructs InnerReactLoop directly
 # (never passing these) is unaffected.
+#
+# THIRD DEVIATION (2026-09-04, plan-and-execute/ReAct gap closure): an
+# additive `protocol=None` on build_menu() and InnerReactLoop.__init__.
+# Motivation is a confirmed real-data gap, not a hypothetical: every
+# reflect_*.json this harness had actually persisted showed a 1-option
+# CONVERGE_TERMINATE-only menu, because build_menu()'s four original option
+# sources all require the failing gate's OWN detail to already enumerate what
+# is missing, and the failure shape that actually occurs in practice --
+# gates._evaluate_stage_evidence_core()'s synthetic
+# {"reason": "NO_EVIDENCE_BLOCK_SUPPLIED"} for a gate the agent supplied no
+# evidence block for -- carries no such enumeration and never ran a gate
+# script that could have named a protocol. build_menu()'s new source #5
+# handles exactly that shape; `protocol` is what lets it still cite a real
+# protocol_builder_registry.json item there. Degrades safely to "_general".
 from __future__ import annotations
 
 import json
@@ -148,12 +162,23 @@ def _signatures_equal(a: List[GateSignature], b: Optional[List[GateSignature]]) 
 
 def build_menu(root: Path, stage: str, node, signatures: List[GateSignature],
                prior_signatures: Optional[List[GateSignature]] = None,
-               graph=None) -> List[MenuOption]:
+               graph=None, protocol: Optional[str] = None) -> List[MenuOption]:
     """Constructs the constrained option menu -- the ONLY vocabulary the
     reflection call is allowed to choose from. See the module docstring for
     why `graph` is an additive parameter beyond the design spec's illustrative
     signature. Never returns a free-form option; the two CONVERGE_* controls
-    are always the fallback."""
+    are always the fallback.
+
+    `protocol` (additive, 2026-09-04): the real resolved protocol name
+    engine.py's RouteResolver already produced for this stage attempt
+    (route_info["protocol_decision"]["protocol"]), threaded through so
+    next_best_action() can cross-reference the real
+    protocol_builder_registry.json for a gate whose own detail does NOT
+    already name a protocol -- which is every NO_EVIDENCE_BLOCK_SUPPLIED
+    signature, since no gate script ever ran to produce one. None degrades to
+    "_general", which next_best_action() answers with its generic
+    inspect-current-evidence suggestion rather than an invented registry item.
+    """
     options: List[MenuOption] = []
     seen_ids = set()
 
@@ -167,6 +192,19 @@ def build_menu(root: Path, stage: str, node, signatures: List[GateSignature],
     graph_nodes = graph.nodes if graph is not None else {}
     outgoing = graph.outgoing(stage) if graph is not None else []
     no_new_information = _signatures_equal(signatures, prior_signatures)
+
+    # Which of this stage's REAL configured gates got no evidence block at
+    # all this attempt -- computed once, through the real
+    # inference.identify_gap() set difference rather than a hand-rolled
+    # comprehension, over the exact gate-id vocabulary
+    # gates._evaluate_stage_evidence_core() already emits one signature per
+    # (it appends a synthetic NO_EVIDENCE_BLOCK_SUPPLIED signature for a gate
+    # the agent never supplied a block for, so `signatures` really is the
+    # full configured-gate list, never only the gates that ran).
+    all_gate_ids = [s.gate_id for s in signatures]
+    supplied_gate_ids = [s.gate_id for s in signatures
+                         if s.detail.get("reason") != "NO_EVIDENCE_BLOCK_SUPPLIED"]
+    missing_evidence_blocks = identify_gap(all_gate_ids, supplied_gate_ids)
 
     for sig in signatures:
         if sig.ok:
@@ -221,16 +259,52 @@ def build_menu(root: Path, stage: str, node, signatures: List[GateSignature],
             # missing list (identify_gap(missing, []) == missing), and
             # next_best_action() cites the real registry item per gap
             # instead of inventing one.
-            protocol = sig.detail.get("protocol")
+            gate_protocol = sig.detail.get("protocol")
             gap_source = missing if isinstance(missing, list) else []
-            if protocol and gap_source:
+            if gate_protocol and gap_source:
                 gap = identify_gap(gap_source, [])
-                for action in next_best_action(protocol, gap, root):
+                for action in next_best_action(gate_protocol, gap, root):
                     if action.get("source") == "protocol_builder_registry":
                         _add(f"REQUEST_EVIDENCE:{sig.gate_id}:{action['gap']}", "REQUEST_EVIDENCE",
                              sig.gate_id,
                              f"{action['suggested_action']} (gap: {action['gap']}).",
                              "protocol_builder_registry")
+
+            # 5. NO_EVIDENCE_BLOCK_SUPPLIED (2026-09-04 gap closure). Sources
+            # 1-4 above all require the FAILING GATE'S OWN detail to already
+            # enumerate what is missing -- a `missing`/`dv_review_unresolved_
+            # fields`/`missing_subpayload` list, or a protocol+missing pair.
+            # A gate the agent supplied no evidence block for never ran, so
+            # its synthetic detail is only {"status": "FAIL", "reason":
+            # "NO_EVIDENCE_BLOCK_SUPPLIED"} and none of those four fire --
+            # which is why every real reflect_*.json recorded to date was
+            # offered a 1-option CONVERGE_TERMINATE-only menu and trivially
+            # "chose" it. The missing thing here is nonetheless completely
+            # unambiguous and comes from real data, not a guess: it is this
+            # exact gate's own ```dv-harness-evidence:<gate_id>``` block,
+            # named by STAGE_GATES[stage] (via the signature list gates.py
+            # built from it) and confirmed absent by identify_gap() above.
+            # next_best_action() adds the real protocol_builder_registry.json
+            # item when the resolved protocol has one, and is simply omitted
+            # from the rationale when it does not -- the option is offered
+            # either way, because "supply the block this gate requires" is a
+            # genuinely actionable next step regardless of registry coverage.
+            if sig.gate_id in missing_evidence_blocks:
+                registry_hint = next(
+                    (a["suggested_action"]
+                     for a in next_best_action(protocol or "_general", [sig.gate_id], root)
+                     if a.get("source") == "protocol_builder_registry"),
+                    "",
+                )
+                _add(f"REQUEST_EVIDENCE:{sig.gate_id}:evidence_block", "REQUEST_EVIDENCE",
+                     sig.gate_id,
+                     f"{sig.gate_id} is a configured gate for stage {stage} but this attempt "
+                     f"supplied no ```dv-harness-evidence:{sig.gate_id}``` block at all "
+                     f"(identify_gap over this stage's real configured gate list reports "
+                     f"{missing_evidence_blocks} still missing) -- request exactly that block, "
+                     f"naming this gate_id verbatim in the fence."
+                     + (f" {registry_hint}." if registry_hint else ""),
+                     "stage_gate_missing_evidence_block")
 
     _add("CONVERGE_TERMINATE", "CONVERGE_TERMINATE", None,
          "Accept the current verdict as final; no further constrained action "
@@ -381,7 +455,7 @@ def _build_action_prompt(base_prompt: str, chosen: MenuOption, decision: ReactDe
 
 class InnerReactLoop:
     def __init__(self, root, adapter, react_recorder, cfg, graph=None,
-                 profiler=None, profile_id=None, agent_name=""):
+                 profiler=None, profile_id=None, agent_name="", protocol=None):
         self.root = Path(root)
         self.adapter = adapter
         self.react_recorder = react_recorder
@@ -394,6 +468,11 @@ class InnerReactLoop:
         self.profiler = profiler
         self.profile_id = profile_id
         self.agent_name = agent_name
+        # The real RouteResolver-produced protocol for this stage attempt --
+        # forwarded to build_menu() so its NO_EVIDENCE_BLOCK_SUPPLIED source
+        # can cross-reference protocol_builder_registry.json. See
+        # build_menu()'s own `protocol` docstring paragraph.
+        self.protocol = protocol
 
     def run(self, stage: str, node, attempt: int, first_result, first_verdict: str,
             first_reasons: List[str], first_signatures: List[GateSignature],
@@ -424,7 +503,8 @@ class InnerReactLoop:
                 inner_iter -= 1
                 break
 
-            menu = build_menu(self.root, stage, node, signatures, prior_signatures, graph=self.graph)
+            menu = build_menu(self.root, stage, node, signatures, prior_signatures,
+                              graph=self.graph, protocol=self.protocol)
             prompt_context = {
                 "stage": stage, "attempt": attempt, "inner_iteration": inner_iter,
                 "verdict": verdict, "reasons": reasons,

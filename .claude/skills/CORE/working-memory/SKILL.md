@@ -39,6 +39,19 @@ including an unverified hypothesis, which is exactly where it belongs.
 3. Never call `WorkingMemoryStore.add()` directly from a debugging agent --
    go through the router so routing/sharing rules stay centralized.
 
+**What the engine itself already writes here (2026-09-04)**: for every real
+stage attempt, `engine.DVHarness.run_stage()` computes
+`_react_step_inference()` and hands `ReactRecorder.record()` a real `gap`
+(`inference.identify_gap()` over the stage's configured gates vs. the
+evidence blocks the attempt actually supplied), a real `confidence` +
+`confidence_detail` (`inference.score_confidence()`'s exact
+level/score/capped_by_counter_evidence dict) and a real `next_action`
+(`inference.next_best_action()`'s suggestion for the first gap, a
+`reroute:<node>` when the inner ReAct loop chose one, or the real failing
+gate ids to retry). These used to be hardcoded strings keyed off the stage
+status; do not re-derive them by hand in an agent -- read the persisted
+record.
+
 **Fallback**: none needed -- writing here never fails on missing
 verification, since nothing here claims to be verified.
 

@@ -47,6 +47,24 @@
 # hypothesis/evidence/next-action record -- and are deliberately NOT
 # additionally pushed here; they stay real, inspectable evidence under
 # react/ only.
+#
+# GAP + CONFIDENCE_DETAIL (2026-09-04, plan-and-execute/ReAct gap closure):
+# CLAUDE.md's Engineering Memory Policy names the Working Memory contract as
+# the full Hypothesis -> Evidence -> Confidence -> Gap -> Next-Best-Action
+# chain, computed by dv_harness.inference.score_confidence()/identify_gap()/
+# next_best_action(). `hypothesis`/`evidence`/`next_action`/`confidence`
+# already existed; `gap` had no field at all and `confidence` arrived from a
+# hardcoded status->string map in engine.py rather than from the real scorer.
+# record() now additionally accepts `gap` (identify_gap()'s real list of
+# still-missing evidence categories for this attempt) and `confidence_detail`
+# (the exact dict score_confidence() returned -- level/score/
+# capped_by_counter_evidence), persisting both into iteration_NNN.json AND
+# the Working Memory projection, so a reader can trace the confidence string
+# back to the real score that produced it. Both stay OPTIONAL and default to
+# []/None: every pre-existing caller/test that omits them is unaffected, and
+# a caller with no real gate signatures to derive them from (e.g. a bare
+# unit-test record) must not be forced to invent a gap it cannot compute.
+# engine.py's _react_step_inference() is the real production supplier.
 import json
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -54,12 +72,14 @@ class ReactRecorder:
  def __init__(self,root):
   self.project_root=Path(root)
   self.root=self.project_root/'.dv-harness'/'react';self.root.mkdir(parents=True,exist_ok=True)
- def record(self,node,iteration,reason_summary,action,tool,observation,evidence,confidence,next_action):
-  d=self.root/node;d.mkdir(parents=True,exist_ok=True);r={'iteration':iteration,'node':node,'reason_summary':reason_summary,'action':action,'tool':tool,'observation':observation,'evidence':evidence,'confidence':confidence,'next_action':next_action};(d/f'iteration_{iteration:03d}.json').write_text(json.dumps(r,ensure_ascii=False,indent=2),encoding='utf-8')
-  self._write_working_memory_tier_record(node, iteration, reason_summary, evidence, confidence, next_action)
+ def record(self,node,iteration,reason_summary,action,tool,observation,evidence,confidence,next_action,gap=None,confidence_detail=None):
+  d=self.root/node;d.mkdir(parents=True,exist_ok=True);r={'iteration':iteration,'node':node,'reason_summary':reason_summary,'action':action,'tool':tool,'observation':observation,'evidence':evidence,'confidence':confidence,'next_action':next_action,'gap':list(gap) if gap is not None else [],'confidence_detail':confidence_detail if isinstance(confidence_detail,dict) else None};(d/f'iteration_{iteration:03d}.json').write_text(json.dumps(r,ensure_ascii=False,indent=2),encoding='utf-8')
+  self._write_working_memory_tier_record(node, iteration, reason_summary, evidence, confidence, next_action,
+                                          gap=r['gap'], confidence_detail=r['confidence_detail'])
   return r
 
- def _write_working_memory_tier_record(self, node, iteration, reason_summary, evidence, confidence, next_action):
+ def _write_working_memory_tier_record(self, node, iteration, reason_summary, evidence, confidence, next_action,
+                                        gap=None, confidence_detail=None):
   """Best-effort push of this same record() call's real hypothesis/evidence/
   next-action content into memory.py's WorkingMemoryStore tier, via the
   real memory_router.route_and_store() entry point -- see the module-level
@@ -81,8 +101,10 @@ class ReactRecorder:
    "iteration": iteration,
    "hypothesis": reason_summary,
    "evidence": evidence,
+   "gap": list(gap) if gap is not None else [],
    "next_action": next_action,
    "confidence": confidence,
+   "confidence_detail": confidence_detail if isinstance(confidence_detail, dict) else None,
   }
   try:
    from .memory_router import route_and_store
