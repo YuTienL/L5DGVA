@@ -169,7 +169,7 @@ def bsub_submit_with_preflight(command: str, *, queue: str, cores: int = 1,
                                 mem_mb: Optional[int] = None, run_dir: Optional[str] = None,
                                 extra_args: Optional[list[str]] = None,
                                 preflight_cfg=None, preflight_runner=None,
-                                skip_preflight: bool = False):
+                                skip_preflight: bool = False, notifier=None):
     """The real, GATED submission entry point (2026-09-03 lmstat + scheduler
     preflight task -- highest-priority workstream per the user's own spec:
     "bsub / sbatch 前先做 license、queue、host、disk、workdir、EDA env 檢查。
@@ -185,6 +185,19 @@ def bsub_submit_with_preflight(command: str, *, queue: str, cores: int = 1,
     reason to bypass this; `skip_preflight=True` is an explicit, audited
     escape hatch here, never a silent default.
 
+    `notifier` (2026-09-03, dv_harness/escalation_notify.py): an optional
+    EscalationNotifier. Omitted (the default) means no notification is
+    ever attempted -- this function stays pure/side-effect-free for the
+    existing test suite and any caller with no escalation config. When
+    supplied (dv_harness/cli.py's `lsf-submit` builds one from
+    `h.cfg["escalation"]`), it is consulted at exactly the two real
+    escalation-worthy failure points below: an eda_license-starvation
+    PreflightBlockedError, and a genuine post-preflight-PASS `bsub`
+    failure (LsfUnavailableError) -- never on PASS, never on a
+    non-starvation preflight block (e.g. a down LSF queue), matching the
+    user's own "license starvation" / "farm/job submission failure" as
+    two DISTINCT named conditions.
+
     Returns (job_id, PreflightResult) on success -- PreflightResult is
     None only when skip_preflight=True (there is genuinely nothing to
     report). Raises PreflightBlockedError (never a bare bool/log line) on
@@ -197,9 +210,18 @@ def bsub_submit_with_preflight(command: str, *, queue: str, cores: int = 1,
     if not skip_preflight:
         result = _preflight.run_preflight(cfg, runner=preflight_runner)
         if result.overall != "PASS":
+            if notifier is not None:
+                for check in result.checks:
+                    if check.name == "eda_license" and check.status == "FAIL":
+                        notifier.license_starvation(check)
             raise PreflightBlockedError(result)
-    job_id = bsub_submit(command, queue=queue, cores=cores, mem_mb=mem_mb,
-                          run_dir=run_dir, extra_args=extra_args)
+    try:
+        job_id = bsub_submit(command, queue=queue, cores=cores, mem_mb=mem_mb,
+                              run_dir=run_dir, extra_args=extra_args)
+    except LsfUnavailableError as e:
+        if notifier is not None:
+            notifier.job_submission_failure(command=command, queue=queue, reason=str(e))
+        raise
     return job_id, result
 
 

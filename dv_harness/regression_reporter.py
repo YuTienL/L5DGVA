@@ -118,6 +118,34 @@ def _job_still_owes_reconciliation(state) -> bool:
             or state.lsf_status not in ("DONE", "EXIT", "KILLED"))
 
 
+def _escalate_uvm_fatal_burst_if_needed(root: Path, jobs_for_snapshot: list) -> None:
+    """Escalation-ONLY UVM_FATAL burst check (2026-09-03, see
+    dv_harness/escalation_notify.py), extracted into its own function so it
+    is directly testable without faking run_reconciliation_cycle()'s whole
+    live/disk job-discovery machinery. Best-effort, wrapped exactly like
+    every other real side-effect in that function ("a persistence problem
+    here must never break this cycle's own real reconciliation work") -- a
+    config-read or transport hiccup must never kill the watcher. Reads
+    `.dv-harness/config.json`'s `escalation` block fresh each call (cheap:
+    one small JSON file) rather than threading a notifier through
+    ensure_watcher_running()/_run_one_cycle()/main(), keeping this the one
+    and only place in this module that needs to know about escalation at
+    all. `jobs_for_snapshot` rows follow to_snapshot_row()'s shape
+    (job_id/uvm_fatal_count among others) -- a row with uvm_fatal_count
+    None/0 (unregistered jobs, or a job with no fatal) never counts."""
+    try:
+        fatal_job_ids = [row["job_id"] for row in jobs_for_snapshot
+                         if (row.get("uvm_fatal_count") or 0) > 0]
+        if fatal_job_ids:
+            from . import config as _config
+            from . import escalation_notify as _escalation
+            notifier = _escalation.notifier_from_config(_config.load_config(root).get("escalation"))
+            notifier.uvm_fatal_burst(len(fatal_job_ids), total_jobs=len(jobs_for_snapshot),
+                                      job_ids=fatal_job_ids)
+    except Exception as e:
+        print(f"[reconciliation_cycle] escalation notify failed: {e}", flush=True)
+
+
 def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> str:
     """One pass of Part 2's reconciliation cycle: discover every live job
     under vcuser, MERGE that set with every job dv_harness already has a
@@ -328,6 +356,8 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         if jid in seen_ids:
             continue
         jobs_for_snapshot.append(lsf_client.to_snapshot_row(state, agent_action="monitoring"))
+
+    _escalate_uvm_fatal_burst_if_needed(root, jobs_for_snapshot)
 
     snapshot = render_snapshot(jobs_for_snapshot)
     snapshot_path = root / ".dv-harness" / "lsf" / "latest_snapshot.txt"

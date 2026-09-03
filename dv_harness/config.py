@@ -141,7 +141,30 @@ DEFAULT_CONFIG = {
         "lmutil_path": "lmutil",
         "shell": "csh",
         "require_license_configured": True,
-    }
+    },
+    # Local PC-side task orchestration (2026-09-03, see dv_harness/
+    # pueue_client.py). `group` keeps this project's pueue tasks visually/
+    # queryably separate from any unrelated task a shared local pueue
+    # daemon may also be running.
+    "pueue": {
+        "binary": "pueue",
+        "daemon_binary": "pueued",
+        "group": "dv_harness",
+    },
+    # Escalation-ONLY notifications (2026-09-03, see dv_harness/
+    # escalation_notify.py) -- fires ONLY for license starvation, a large
+    # UVM_FATAL burst, a real farm job submission failure, or a blocked
+    # signoff; never for a routine PASS. `enabled` defaults False (same
+    # explicit-opt-in convention as self_tuning/knowledge_center above) --
+    # a project must supply its own real apprise URL(s)
+    # (e.g. "ntfy://topic@ntfy.sh") once it has a real endpoint; none are
+    # hardcoded here since no real endpoint credentials exist in this
+    # session (see .work/governance-pueue-notify-report.md).
+    "escalation": {
+        "enabled": False,
+        "apprise_urls": [],
+        "uvm_fatal_burst_threshold": 3,
+    },
 }
 
 def load_config(project_root: Path) -> Dict[str, Any]:

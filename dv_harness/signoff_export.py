@@ -206,7 +206,16 @@ def compute_bundle_hash(manifest: List[Dict[str, Any]]) -> str:
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
 
-def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
+def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None) -> Dict[str, Any]:
+    """`notifier` (2026-09-03, dv_harness/escalation_notify.py): an
+    optional EscalationNotifier. Omitted (the default) means no
+    notification is ever attempted, keeping this function pure for the
+    existing test suite. When supplied (dv_harness/cli.py's
+    `signoff-export` command builds one from `h.cfg["escalation"]"), it
+    fires EXACTLY when the self-audit result bundled below (see step 6)
+    reports a real gate failure -- this project's own most direct
+    "signoff blocked" signal (CLAUDE.md: "All actionable findings must
+    close before Final Deep Audit"), never on a clean audit."""
     root = Path(root).resolve()
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -248,6 +257,9 @@ def collect_signoff_bundle(root: Path, out_dir: Path) -> Dict[str, Any]:
     (out_dir / audit_rel).write_text(
         json.dumps(audit_result, ensure_ascii=False, indent=2), encoding="utf-8")
     record("self_audit_result", True, audit_rel)
+    if notifier is not None and audit_result["summary"]["fail"] > 0:
+        failing = [g["gate_id"] for g in audit_result["gates"] if g["status"] == "FAIL"]
+        notifier.signoff_blocked(stage="SIGNOFF", reasons=failing)
 
     # 7: stage execution profile telemetry (.dv-harness/telemetry/ --
     # see dv_harness/stage_profile.py's StageExecutionProfiler).
