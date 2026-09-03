@@ -32,6 +32,60 @@ Before accepting an engineering conclusion:
 If CLAUDE.md conflicts with current evidence, current evidence wins and this file must be updated.
 
 
+## Engineering Memory Policy (2026-09-03)
+
+Concrete before/during/after mechanics for the 5-tier Memory system
+(`dv_harness/memory.py`, routed by `dv_harness/memory_router.py`, mirrored
+into the DV-Knowledge Vault by `dv_harness/memory_vault.py` -- see
+`docs/MEMORY_ARCHITECTURE.md`). This operationalizes the Core Operating
+Rules' "Memory is prior knowledge, not current evidence" and the Evidence
+Truth Rule above; it does not restate them.
+
+**Before debugging**: Search relevant Project Memory and Engineering Memory
+for the current protocol/scope/symptom before forming a first hypothesis
+(`python -m dv_harness.memory_cli search --protocol <p> --text <symptom>`,
+or the `memory-retrieval` skill). Any hit is a candidate hypothesis to rank
+higher, never an accepted root cause -- validate it against current
+RTL/VIP/sim.log/waveform evidence exactly as the Evidence Truth Rule
+requires, and as `memory-confidence-gate` keeps historical-memory
+confidence and current root-cause-evidence confidence from being conflated
+into one number.
+
+**During debugging**: Maintain Hypothesis -> Evidence -> Confidence -> Gap ->
+Next-Best-Action for every open failure (`dv_harness.inference.score_confidence()`
+/ `identify_gap()` / `next_best_action()` -- see debug-agent.md's "v20
+Autonomous Inference"). Each stage transition is a real, persisted Working
+Memory record (`memory_router.route_memory()` routes `kind="react_reasoning_step"`
+there), not only conversation state.
+
+**After verified PASS**: Record root cause, evidence, fix, verification, and
+confidence together as one Engineering Memory record (`kind` one of
+`root_cause`/`verified_fix`/`debug_lesson`, `verified: true`), then evaluate
+promotion:
+- Engineering -> Organizational happens ONLY through
+  `memory_router.promote_to_organizational()`, never a direct write. It
+  requires all three: the qualitative CLOSED/VERIFIED + single PASS +
+  regression PASS/NOT_REQUIRED + re-audit CLEAN gate (`memory-consolidation`
+  skill), a HIGH `inference.score_confidence()` result, and
+  `confirmation_count >= ORGANIZATIONAL_MIN_CONFIRMATIONS` (2, i.e. a second
+  independent run re-deriving the same root_cause/protocol -- not the same
+  run reported twice).
+- A record failing any one gate stays at Engineering tier (or lower). Do not
+  re-word the qualitative gate's inputs to force a pass.
+
+**Never**:
+- Store secrets/passwords/tokens/credentials in any memory tier or vault
+  note -- `memory_router.route_memory()` already hard-`REJECT`s any record
+  whose `kind` is `credential`/`password`/`token`/`secret`; this is enforced
+  code, not policy prose.
+- Store giant logs or raw FSDB content in a memory record or vault note --
+  cite a path/offset/signature only, per the Waveform Dump User Gate and
+  Simulation Observability Default above.
+- Promote an unverified hypothesis straight to Engineering or Organizational
+  Memory -- it belongs in Working Memory (or Blackboard, for current-run
+  state) until it clears verification.
+
+
 # AI Agent Harness L5 Canonical Identity
 
 This directory is the canonical AI Agent Harness L5 baseline.

@@ -1,0 +1,196 @@
+> See START_HERE.md for the canonical entry point and current mechanism overview; this page covers the Engineering Memory system specifically. See also KNOWLEDGE_CENTER_GUIDE.md (the separate, cross-user shared store) and USAGE_MULTI_USER_SAFETY.md.
+
+# AI Agent Harness L5 — Memory Architecture
+
+This is the real, wired architecture of the 5-tier Memory system as of
+2026-09-03 (Obsidian+Git/Markdown Hybrid Engineering Memory integration).
+Every module/class/function named below is real code, not aspirational —
+file:line references are given so any claim here can be checked against
+the source directly.
+
+## Why two memory systems exist, and how they relate
+
+There are THREE distinct stores in this harness that are easy to conflate.
+Do not conflate them:
+
+| Store | Scope | Format | Where |
+|---|---|---|---|
+| **`.dv-harness/memory/`** (`dv_harness/memory.py`) | per-project, 5 tiers | JSON files, system of record | local project dir |
+| **DV-Knowledge Vault** (`dv_harness/memory_vault.py`) | per-project, human-browsable mirror of Engineering/Organizational promotions | Markdown + YAML frontmatter | `.dv-harness/vault/` (configurable) |
+| **Knowledge Center** (`tools/knowledge_center/broker.py`) | cross-user, cross-project shared | plain JSON on a remote Linux server | `/home/svcacct/AI/DB` |
+
+The **JSON MemoryStore is the system of record** for every gate, router,
+and skill in this codebase — nothing was replaced by this workstream. The
+**Vault is an ADDITIVE, write-through mirror**: on an ENGINEERING_MEMORY or
+ORGANIZATIONAL_MEMORY promotion, `memory_router.py` also writes a
+Markdown+YAML note so a human can browse/search/link engineering knowledge
+in a normal text editor or (optionally, opportunistically) real Obsidian —
+see OBSIDIAN_INTEGRATION.md. The **Knowledge Center is a completely
+different, pre-existing thing**: a cross-user shared server-side store,
+not git/markdown, not this workstream's subject — see
+KNOWLEDGE_CENTER_GUIDE.md. A promotion to ENGINEERING_MEMORY or
+CORNER_CASE_LIBRARY can push to BOTH the Vault and the Knowledge Center
+independently; neither depends on the other.
+
+```
+                      route_and_store(root, record, cfg)
+                                  |
+                        route_memory(record) -> destination
+                                  |
+        +----------------+----------------+-----------------+------------------+
+        |                |                |                 |                  |
+   WORKING_MEMORY   JOB/PROJECT_MEMORY  ENGINEERING_MEMORY  ORGANIZATIONAL_MEMORY  BLACKBOARD /
+   (fallback for     (tier-scoped        |                   |                  CLAUDE_PROJECT_MEMORY /
+   unmatched kind,   JSON stores)        |                   |                  CORNER_CASE_LIBRARY / REJECT
+   react_reasoning_                      |                   |
+   step)                                 v                   v
+                              .dv-harness/memory/     OrganizationalMemoryStore
+                              engineering/*.json      (no local file store --
+                              (dedup+confirm via       Knowledge Center IS
+                              _add_or_confirm_          its backing store)
+                              engineering())
+                                  |                        |
+                                  +-----------+------------+
+                                              |
+                                   _maybe_write_vault_note()
+                                   (best-effort, never blocks
+                                    the local write)
+                                              |
+                                              v
+                                 HybridMemoryProvider
+                                 (Obsidian per-call if READY,
+                                  else FileSystemMarkdownAdapter)
+                                              |
+                                              v
+                                  .dv-harness/vault/06_Agent_Memory/*/*.md
+```
+
+## The 5 tiers (`dv_harness/memory.py`)
+
+`MEMORY_LEVELS = ["working", "job", "project", "engineering", "organizational"]`
+(`dv_harness/memory.py:6`). Each tier's records live at
+`.dv-harness/memory/<level>/<memory_id>.json`, with a flat
+`.dv-harness/memory/index.json` summary across all tiers.
+
+| Tier | Class | Real trigger (routing rule) | Verified required? |
+|---|---|---|---|
+| Working | `WorkingMemoryStore` | fallback for any unmatched `kind`; explicit for `kind="react_reasoning_step"` | no |
+| Job | `JobMemoryStore` | `kind` in `job_result`/`job_failure`/`job_rerun` | no |
+| Project | `ProjectMemoryStore` | `kind` in `project_fact`/`project_topology`/`tool_flow`/`known_issue` | **yes** |
+| Engineering | plain `MemoryStore.add("engineering", ...)` (no dedicated tier class — see `memory_router.py`'s comment on why) | `kind` in `root_cause`/`verified_fix`/`debug_lesson` | **yes** |
+| Organizational | `OrganizationalMemoryStore` (no local JSON file — see below) | `kind` in `cross_project_lesson`/`methodology`/`best_practice`, **and only ever reached via `promote_to_organizational()`** | **yes**, plus 3-gate promotion (see below) |
+
+Routing itself is `dv_harness.memory_router.route_memory(record) -> str`
+(`memory_router.py:386`) — a pure function, kind/verified/scope in,
+destination string out. `route_and_store(root, record, cfg)`
+(`memory_router.py:59`) is the real entry point: routes, persists, and
+(for shareable destinations) pushes to the Knowledge Center and/or Vault.
+
+A `kind` of `credential`/`password`/`token`/`secret` is hard-`REJECT`ed
+before any write happens — see the Engineering Memory Policy's "Never"
+rules in `CLAUDE.md`.
+
+### Organizational Memory has no local file store, by design
+
+Unlike the other 4 tiers, `OrganizationalMemoryStore.add()` writes straight
+to the shared Knowledge Center (`memory.py:479-501`) — there is no
+`.dv-harness/memory/organizational/*.json`. The Vault write-through still
+happens locally (a human-browsable copy), but the tier's actual backing
+store IS the cross-user Knowledge Center, because organizational knowledge
+is by definition meant to be reused across projects, not kept siloed in
+the one project that happened to promote it.
+
+### The promotion boundary: Engineering → Organizational
+
+`memory_router.promote_to_organizational(root, memory_id, confidence_inputs,
+cfg, kind)` (`memory_router.py:260`) is the ONLY code path allowed to move
+a record across this boundary. Three independent, all-required gates:
+
+1. **Qualitative**: `_verification_is_gate_validated(mem)` recognizes
+   exactly two real verification shapes this codebase's write paths
+   produce (`finding_consolidation_shape` from
+   `MemoryConsolidator.from_closed_finding()`, or `re_audit_gate_shape`
+   from `engine.py`'s `_promote_verified_fix_knowledge()`) — see
+   MEMORY_SCHEMA.md for both shapes' exact fields.
+2. **Quantitative**: `inference.score_confidence(independent_sources_count,
+   evidence_refs_verified, counter_evidence_count,
+   multi_agent_consensus_count)` must return `level == "HIGH"`.
+3. **Repeated confirmation**: `confirmation_count >=
+   ORGANIZATIONAL_MIN_CONFIRMATIONS` (2, hardcoded — not a per-project
+   config knob). `confirmation_count` is incremented by
+   `_add_or_confirm_engineering()` when a LATER, independent
+   `route_and_store()` call lands on the same ACTIVE engineering record
+   (same `protocol` + `root_cause`, exact-string match) — i.e. a genuinely
+   separate run re-deriving the same conclusion, not the same run reported
+   twice.
+
+Any gate miss returns `{"promoted": False, "reason": "..."}` — it never
+raises for an ordinary miss, only for an unknown `memory_id`.
+
+## Corner Case Library (`dv_harness.memory.CornerCaseLibrary`)
+
+A separate class in the same file, at `.dv-harness/memory/corner_case_library/`.
+Not one of the 5 tiers — routed via `kind == "corner_case"` +
+`verified=True` → `CORNER_CASE_LIBRARY` destination, consolidated through
+`CornerCaseLibraryConsolidator.from_resolved_corner_case()`
+(`memory_router.py`'s `CORNER_CASE_LIBRARY` branch). Already wired into
+`gates.py`'s `_ccl_reuse_verified()` for reuse revalidation
+(`current_evidence_required`/`revalidate_by`/runtime-evidence checks) —
+see MEMORY_SCHEMA.md for its field set.
+
+## Confidence scoring (`dv_harness/inference.py`)
+
+`score_confidence()` implements the real Hypothesis → Evidence →
+Confidence → Gap → Next-Best-Action formula (see `debug-agent.md`'s
+"v20 Autonomous Inference"):
+
+```
+base = min(independent_sources_count, 3) * 2
+       + (2 if evidence_refs_verified else 0)
+       - counter_evidence_count * 3
+if multi_agent_consensus_count >= 2: base += 2
+level = HIGH if base >= 6 else MEDIUM if base >= 3 else LOW
+```
+
+Safety floor: `counter_evidence_count > 0` can never coexist with a
+reported `HIGH` — it is downgraded to `MEDIUM` with
+`capped_by_counter_evidence: true`. `identify_gap()` and
+`next_best_action()` (same module) round out the Gap/Next-Best-Action
+half of the loop.
+
+## The DV-Knowledge Vault (`dv_harness/memory_vault.py`)
+
+See OBSIDIAN_INTEGRATION.md for the Vault's structure, the
+`MemoryProvider` interface, and honest current Obsidian-availability
+status. In one line: `HybridMemoryProvider` tries a real installed
+Obsidian CLI per call when available (today, on every checked machine,
+never), and always falls back to `FileSystemMarkdownAdapter` — the real,
+fully-functional Markdown+YAML implementation — so the Vault is never
+blocked by Obsidian's absence.
+
+## The Memory Agent (`.claude/agents/memory-agent.md`)
+
+See MEMORY_AGENT.md. The Memory Agent is the one designated caller for
+search/retrieve/summarize/write/link/deduplicate/promote/demote/archive/
+validate operations across all of the above — always through this real
+API, never by hand-editing a memory file or vault note.
+
+## Config (`dv_harness/config.py`)
+
+```json
+"memory": {
+    "provider": "hybrid",
+    "vault_path": "",
+    "obsidian_cli": "auto",
+    "git_enabled": false
+}
+```
+
+`vault_path` empty resolves to a project-relative `.dv-harness/vault`
+default (`memory_vault.resolve_vault_path()`) — never hardcoded to an
+external path. `git_enabled` defaults `false` (opt-in): a real full-suite
+regression run found that defaulting it `true` breaks Windows tmp-dir
+cleanup in tests whose teardown never anticipated a `.git` tree appearing
+inside them (git's read-only object files raise `PermissionError` on
+`shutil.rmtree`) — a project that wants real git history for its vault
+opts in explicitly.
