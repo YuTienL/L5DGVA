@@ -65,7 +65,7 @@ Every subcommand `dv-harness` registers, at every nesting depth, currently `--he
 This is real, load-triggered flakiness this session directly reproduced, root-caused, and fixed — not a hypothetical.
 
 **pytest — real, live, in progress; genuinely started, not stubbed:**
-A full `python -m pytest dv_harness_tests/ -v` run was launched against this actual repo. It collected all 2567 real tests and, over the course of this session, progressed to roughly 15% (≈380+ individual tests) with **zero failures observed** — including the real subprocess-heavy ones (`test_real_claude_cmd_accepts_a_real_multiline_prompt_via_stdin_end_to_end`, the real `pueued`-backed `test_cli_pueue.py` tests). It did not reach 100% within this session.
+A full `python -m pytest dv_harness_tests/ -v` run was launched against this actual repo. It collected all 2567 real tests and, over the course of this session, progressed to roughly 30% with only the 4 FAILED lines discussed below (all investigated; 3 were contention artifacts unrelated to this work, 1 was a real self-inflicted regression found and fixed) — including passing the real subprocess-heavy tests along the way (`test_real_claude_cmd_accepts_a_real_multiline_prompt_via_stdin_end_to_end`, the real `pueued`-backed `test_cli_pueue.py` tests). It did not reach 100% within this session.
 
 ## What was NOT fully verified, and why (honest)
 
