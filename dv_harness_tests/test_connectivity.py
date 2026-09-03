@@ -269,6 +269,166 @@ def test_capture_dut_instance_tree_real_from_ast_json_file(tmp_path):
     assert result["tree"].module_name == "chip_top"
 
 
+def test_capture_dut_instance_tree_not_available_names_both_capture_methods():
+    """The NOT_AVAILABLE detail must document BOTH documented capture
+    methods, not just slang -- a site with VCS but no slang has to be told
+    the `scope -tree` route is genuinely usable, not a docstring promise."""
+    result = conn.capture_dut_instance_tree()
+    assert result["status"] == "NOT_AVAILABLE"
+    assert "slang" in result["detail"]
+    assert "scope -tree" in result["detail"]
+    assert "scope_tree_path" in result["detail"]
+
+
+# ===========================================================================
+# DUT instance tree, capture method (b): `simv -ucli -do "scope -tree"`
+# ===========================================================================
+
+SCOPE_TREE_FIXTURE = """ucli% scope -tree
+tb_top
+  dut (chip_top)
+    usb0 (usb3_subsystem)
+      phy (usb3_phy)
+    axi0 (axi_slave_wrap)
+$unit
+"""
+
+
+def test_parse_scope_tree_dump_recovers_full_instance_paths():
+    parsed = conn.parse_scope_tree_dump(SCOPE_TREE_FIXTURE)
+    assert parsed.unparsed_lines == []
+    paths = {n.full_path: n.module_name
+             for r in parsed.roots for n in conn.flatten_instance_tree(r)}
+    assert paths["tb_top"] is None            # no annotation -> honest unknown
+    assert paths["tb_top.dut"] == "chip_top"
+    assert paths["tb_top.dut.usb0"] == "usb3_subsystem"
+    assert paths["tb_top.dut.usb0.phy"] == "usb3_phy"
+    assert paths["tb_top.dut.axi0"] == "axi_slave_wrap"
+    # `$unit` is a second root at indent 0, not a child of tb_top.
+    assert [r.full_path for r in parsed.roots] == ["tb_top", "$unit"]
+    assert parsed.parsed_node_count == 6
+
+
+def test_parse_scope_tree_dump_accepts_brace_and_colon_annotation_forms():
+    parsed = conn.parse_scope_tree_dump(
+        "tb_top {tb_top_module}\n  dut : chip_top\n    usb0    usb3_subsystem\n")
+    assert parsed.unparsed_lines == []
+    nodes = {n.full_path: n.module_name for n in conn.flatten_instance_tree(parsed.roots[0])}
+    assert nodes["tb_top"] == "tb_top_module"
+    assert nodes["tb_top.dut"] == "chip_top"
+    assert nodes["tb_top.dut.usb0"] == "usb3_subsystem"
+
+
+def test_parse_scope_tree_dump_ascii_tree_glyph_indentation():
+    """Some UCLI builds draw the tree with `|`/`+`/backtick glyphs -- those
+    are indentation, and depth must still come from the name's start column."""
+    parsed = conn.parse_scope_tree_dump(
+        "tb_top\n"
+        "|-- dut (chip_top)\n"
+        "|   `-- usb0 (usb3_subsystem)\n"
+    )
+    assert parsed.unparsed_lines == []
+    paths = [n.full_path for n in conn.flatten_instance_tree(parsed.roots[0])]
+    assert paths == ["tb_top", "tb_top.dut", "tb_top.dut.usb0"]
+
+
+def test_parse_scope_tree_dump_preserves_literal_generate_array_indices():
+    """Bind-Location Rule 4 requires literal indices in a bind target -- the
+    parser must carry `phy_array[0]`/`[1]` through verbatim, never collapse
+    them to a wildcard or drop the index."""
+    parsed = conn.parse_scope_tree_dump(
+        "chip\n  phy_array[0] (usb3_phy)\n  phy_array[1] (usb3_phy)\n")
+    paths = [n.full_path for n in conn.flatten_instance_tree(parsed.roots[0])]
+    assert paths == ["chip", "chip.phy_array[0]", "chip.phy_array[1]"]
+
+
+def test_parse_scope_tree_dump_escaped_identifier_keeps_its_depth():
+    """A SystemVerilog escaped identifier starts with `\\`, which is also an
+    ASCII tree-drawing glyph. It must be read as part of the NAME, not as
+    one extra column of indentation (which would silently reparent it)."""
+    parsed = conn.parse_scope_tree_dump("chip\n  \\u_phy[0] (usb3_phy)\n")
+    child = parsed.roots[0].children[0]
+    assert child.instance_name == "\\u_phy[0]"
+    assert child.full_path == "chip.\\u_phy[0]"
+
+
+def test_parse_scope_tree_dump_flat_absolute_path_listing_is_not_double_prefixed():
+    parsed = conn.parse_scope_tree_dump(
+        "tb_top.dut (chip_top)\ntb_top.dut.usb0 (usb3_subsystem)\n")
+    assert [r.full_path for r in parsed.roots] == ["tb_top.dut", "tb_top.dut.usb0"]
+
+
+def test_parse_scope_tree_dump_is_fail_closed_on_unrecognized_lines():
+    """An unrecognized line must be REPORTED, never silently dropped: a
+    dropped line is a silently-missing bind target."""
+    parsed = conn.parse_scope_tree_dump(
+        "tb_top\n  dut (chip_top)\nTop level modules:\n")
+    assert parsed.parsed_node_count == 2
+    assert len(parsed.unparsed_lines) == 1
+    assert parsed.unparsed_lines[0] == (3, "Top level modules:")
+
+
+def test_capture_dut_instance_tree_real_from_scope_tree_file(tmp_path):
+    dump = tmp_path / "scope_tree.txt"
+    dump.write_text(SCOPE_TREE_FIXTURE, encoding="utf-8")
+    result = conn.capture_dut_instance_tree(scope_tree_path=str(dump))
+    assert result["status"] == "REAL"
+    assert result["source"] == "simv_ucli_scope_tree"
+    assert result["instance_paths"] == [
+        "tb_top", "tb_top.dut", "tb_top.dut.usb0", "tb_top.dut.usb0.phy",
+        "tb_top.dut.axi0", "$unit",
+    ]
+    assert result["unparsed_lines"] == []
+
+
+def test_capture_dut_instance_tree_scope_tree_partial_is_flagged_not_hidden(tmp_path):
+    dump = tmp_path / "scope_tree.txt"
+    dump.write_text("tb_top\n  dut (chip_top)\n?? weird vcs line ??\n", encoding="utf-8")
+    result = conn.capture_dut_instance_tree(scope_tree_path=str(dump))
+    assert result["status"] == "REAL_PARTIAL"
+    assert result["parsed_node_count"] == 2
+    assert len(result["unparsed_lines"]) == 1
+
+
+def test_capture_dut_instance_tree_scope_tree_parse_failed_not_empty_real(tmp_path):
+    """A capture whose format this parser does not understand must NOT come
+    back as a confident REAL empty hierarchy."""
+    dump = tmp_path / "scope_tree.txt"
+    dump.write_text("?? 1 ??\n?? 2 ??\n", encoding="utf-8")
+    result = conn.capture_dut_instance_tree(scope_tree_path=str(dump))
+    assert result["status"] == "PARSE_FAILED"
+    assert result["parsed_node_count"] == 0
+    assert result["tree"] is None
+
+
+def test_capture_dut_instance_tree_rejects_both_sources_at_once(tmp_path):
+    ast_path = tmp_path / "ast.json"
+    ast_path.write_text(json.dumps(SLANG_AST_FIXTURE), encoding="utf-8")
+    dump = tmp_path / "scope_tree.txt"
+    dump.write_text(SCOPE_TREE_FIXTURE, encoding="utf-8")
+    with pytest.raises(conn.BindTierError) as exc:
+        conn.capture_dut_instance_tree(str(ast_path), scope_tree_path=str(dump))
+    assert exc.value.reason == "AMBIGUOUS_DUT_TREE_SOURCE"
+
+
+def test_both_capture_methods_yield_the_same_interchangeable_path_list(tmp_path):
+    """The point of implementing method (b): both methods must feed the SAME
+    flat full-instance-path list downstream, so a site with only VCS gets the
+    same Input 1 a site with only slang gets."""
+    ast_path = tmp_path / "ast.json"
+    ast_path.write_text(json.dumps(SLANG_AST_FIXTURE), encoding="utf-8")
+    from_slang = conn.capture_dut_instance_tree(str(ast_path))
+    slang_paths = [n.full_path for n in conn.flatten_instance_tree(from_slang["tree"])
+                   if n.full_path]
+
+    dump = tmp_path / "scope_tree.txt"
+    dump.write_text("usb0 (usb3_subsystem)\n  phy (usb3_phy)\n", encoding="utf-8")
+    from_scope = conn.capture_dut_instance_tree(scope_tree_path=str(dump))
+
+    assert slang_paths == ["usb0", "usb0.phy"]
+    assert from_scope["instance_paths"] == slang_paths
+
+
 # ===========================================================================
 # Count-check equations
 # ===========================================================================

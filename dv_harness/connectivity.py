@@ -22,7 +22,11 @@ pass across both workstreams' capture-shape assumptions is expected and is
 flagged in the report rather than guessed away here.
 
 Four real inputs (Part C):
-1. DUT instance tree       -> capture_dut_instance_tree() / parse_slang_ast_json()
+1. DUT instance tree       -> capture_dut_instance_tree(), via EITHER
+                              parse_slang_ast_json() (`slang --ast-json`) OR
+                              parse_scope_tree_dump() (`simv -ucli -do
+                              "scope -tree"`) -- both alternatives implemented,
+                              neither assumed equivalent to the other
 2. Interface signal sets   -> build_interface_fingerprints() (extends verible_parser.py)
 3. Existing binds          -> grep_existing_binds()
 4. VIP instances/config_db -> parse_topology_dump() / parse_config_db_trace()
@@ -206,10 +210,19 @@ def assert_t3_never_auto_accepted(result: BindTierResult) -> None:
 
 
 # ===========================================================================
-# Input 1: DUT instance tree (slang --ast-json, honestly NOT_AVAILABLE here)
+# Input 1: DUT instance tree -- two independent capture methods, EITHER of
+# which produces the same DutInstanceNode tree:
+#   (a) `slang --ast-json`            -> parse_slang_ast_json()
+#   (b) `simv -ucli -do "scope -tree"` -> parse_scope_tree_dump()
+# Both are implemented so the input is not single-tool-dependent: neither
+# `slang` nor `simv` is on PATH in this environment (confirmed live
+# 2026-09-03 via `which slang` / `which simv` / `which vcs`, all exit 1), so
+# method (a) alone would leave this input with no usable code path at any
+# site that has VCS but not slang -- the common case for a real DV team.
 # ===========================================================================
 
 DEFAULT_SLANG_BIN = "slang"
+DEFAULT_SIMV_BIN = "simv"
 
 
 def check_slang_available(which_fn: Callable[[str], Optional[str]] = shutil.which) -> Optional[str]:
@@ -219,6 +232,16 @@ def check_slang_available(which_fn: Callable[[str], Optional[str]] = shutil.whic
     live automatically the moment slang is installed, with no code change
     needed here."""
     return which_fn(DEFAULT_SLANG_BIN)
+
+
+def check_simv_available(which_fn: Callable[[str], Optional[str]] = shutil.which) -> Optional[str]:
+    """Availability check for capture method (b)'s binary, the same real
+    (not hardcoded) shape as `check_slang_available()`. Confirmed this
+    session via `which simv`: NOT on PATH here. Note a real project's `simv`
+    is usually a build-local executable rather than a PATH entry, so a
+    caller that already knows its own build directory should pass that
+    binary's path directly rather than relying on this PATH probe."""
+    return which_fn(DEFAULT_SIMV_BIN)
 
 
 @dataclass
@@ -262,28 +285,187 @@ def parse_slang_ast_json(ast: dict) -> DutInstanceNode:
     return _walk(ast, "")
 
 
+def flatten_instance_tree(node: DutInstanceNode) -> list[DutInstanceNode]:
+    """Depth-first flattening of either capture method's tree into the flat
+    `full_path` list the bind-target/tier logic actually consumes. Shared by
+    both methods so a caller never has to know which one produced the tree."""
+    out = [node]
+    for child in node.children:
+        out.extend(flatten_instance_tree(child))
+    return out
+
+
+@dataclass
+class ScopeTreeParseResult:
+    """Result of parsing one `scope -tree` capture. `unparsed_lines` is the
+    fail-closed half: every non-blank line the parser did NOT recognize is
+    reported rather than silently dropped, because a silently-dropped line
+    is a silently-missing bind target -- exactly the failure mode Rule 1
+    ("SoC-level work must always bind by full instance path") depends on not
+    happening."""
+    roots: list = field(default_factory=list)          # list[DutInstanceNode]
+    unparsed_lines: list = field(default_factory=list)  # list[tuple[int, str]]
+    parsed_node_count: int = 0
+
+
+#: Lines a real UCLI capture carries around the actual tree that are NOT
+#: hierarchy rows: the `ucli%` prompt (with or without the echoed command),
+#: pure ASCII rules, and the VCS/simv startup banner lines. Deliberately
+#: NARROW -- anything else unrecognized goes to `unparsed_lines` instead of
+#: being quietly discarded.
+_SCOPE_TREE_IGNORE_RE = re.compile(
+    r"^\s*(?:ucli%.*|[-=_]{3,}|Chronologic VCS.*|Copyright \(c\).*|"
+    r"Compiler version.*|Runtime version.*|\$?finish.*|V C S .*)\s*$",
+    re.IGNORECASE,
+)
+
+#: One hierarchy row of a `scope -tree` capture. Leading indentation may be
+#: plain spaces or the ASCII tree glyphs some UCLI builds draw (`|`, `+`,
+#: `` ` ``, `-`); both are treated purely as indentation, and the NESTING
+#: DEPTH is taken from the column the name starts at, never guessed from the
+#: name text. Backslash is deliberately EXCLUDED from the indent class even
+#: though a UCLI variant may draw with it: `\` also begins a SystemVerilog
+#: escaped identifier (`\u_phy[0] `), and letting it count as indentation
+#: would silently shift such a row one level shallower -- a corrupted
+#: hierarchy is worse than a row that lands in `unparsed_lines` and shows up
+#: as REAL_PARTIAL. The optional trailing module/definition name is accepted
+#: in the three annotation forms seen across UCLI builds: `name (module)`,
+#: `name {module}`, and `name : module`; a row with no annotation yields
+#: `module_name=None` (honest unknown, never back-filled from the instance
+#: name).
+_SCOPE_TREE_ROW_RE = re.compile(
+    r"^(?P<indent>[\s|`+-]*)"
+    r"(?P<name>[A-Za-z_$\\][\w$.\[\]]*)"
+    r"(?:\s*[({]\s*(?P<type_paren>[\w$]+)\s*[)}]"
+    r"|\s*:\s*(?P<type_colon>[\w$]+)"
+    r"|\s{2,}(?P<type_col>[\w$]+))?"
+    r"\s*$"
+)
+
+
+def parse_scope_tree_dump(text: str) -> ScopeTreeParseResult:
+    """Capture method (b): parses a `simv -ucli -do "scope -tree"` hierarchy
+    dump into the SAME `DutInstanceNode` tree `parse_slang_ast_json()`
+    produces, so the two methods are genuinely interchangeable at every
+    downstream call site rather than one being a docstring-only promise.
+
+    Shape parsed (indent-nested, one instance per line, module/definition
+    name optional)::
+
+        tb_top
+          dut (chip_top)
+            usb0 (usb3_subsystem)
+              phy (usb3_phy)
+
+    Nesting comes from each row's own start column (ASCII tree glyphs count
+    as indentation), matching `parse_topology_dump()`'s already-proven
+    parent-stack approach. Multiple roots are supported -- a real UCLI dump
+    commonly lists `$unit`/`$root` alongside the testbench top -- so
+    `roots` is a list, not a single node.
+
+    HONESTY NOTE (the same caveat `parse_slang_ast_json()` carries, and for
+    the same reason): the exact text UCLI emits varies by VCS version and is
+    NOT verified against a live simv here -- `check_simv_available()`
+    confirms no simv on PATH in this environment. That uncertainty is the
+    precise reason this parser is FAIL-CLOSED rather than tolerant: an
+    unrecognized line is recorded in `unparsed_lines` and surfaces as a
+    `REAL_PARTIAL`/`PARSE_FAILED` status from `capture_dut_instance_tree()`,
+    so a real format mismatch shows up as a visibly incomplete hierarchy
+    instead of a confident-looking tree that is quietly missing the very
+    instance a bind was going to target."""
+    result = ScopeTreeParseResult()
+    stack: list[tuple[int, DutInstanceNode]] = []  # (indent_col, node)
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if not line.strip() or _SCOPE_TREE_IGNORE_RE.match(line):
+            continue
+        m = _SCOPE_TREE_ROW_RE.match(line)
+        if not m:
+            result.unparsed_lines.append((line_no, line.rstrip()))
+            continue
+        indent_col = len(m.group("indent"))
+        name = m.group("name")
+        module_name = m.group("type_paren") or m.group("type_colon") or m.group("type_col")
+        while stack and stack[-1][0] >= indent_col:
+            stack.pop()
+        parent = stack[-1][1] if stack else None
+        # A name that already carries dots is an ABSOLUTE path -- some UCLI
+        # builds emit a flat `scope -tree` listing of full paths rather than
+        # an indent-nested one. Prepending a parent to it would produce a
+        # doubled, non-existent hierarchy path, so it is taken as-is.
+        if "." in name:
+            full_path = name
+        else:
+            full_path = f"{parent.full_path}.{name}" if parent else name
+        node = DutInstanceNode(instance_name=name, module_name=module_name,
+                                full_path=full_path, children=[])
+        if parent is not None:
+            parent.children.append(node)
+        else:
+            result.roots.append(node)
+        stack.append((indent_col, node))
+        result.parsed_node_count += 1
+    return result
+
+
 def capture_dut_instance_tree(
     ast_json_path: Optional[str] = None,
     slang_bin: str = DEFAULT_SLANG_BIN,
     which_fn: Callable[[str], Optional[str]] = shutil.which,
+    scope_tree_path: Optional[str] = None,
 ) -> dict:
-    """The honest entry point for Input 1. If `ast_json_path` is supplied
-    (a file already produced by a real `slang --ast-json <top>.sv > path`
-    run), parses and returns it as REAL. Otherwise checks whether `slang`
-    is even on PATH; since it is not in this environment, returns a
-    documented NOT_AVAILABLE result rather than fabricating a tree --
-    matching this repo's own NOT_AVAILABLE convention (see
-    `uvm_generator/address_map_verifier.py`, `memory_vault.py`).
+    """The honest entry point for Input 1, covering BOTH documented capture
+    methods. Supply exactly one already-captured input file:
 
-    Documented fallback path (per Part C's own alternative): a live
-    `simv -ucli -do "scope -tree"` dump, captured to a text file and parsed
-    by a hierarchy-line scanner -- NOT implemented here because no live simv
-    exists in this repo either (same NOT_AVAILABLE reason); the fallback is
-    documented, not silently assumed equivalent to the slang path."""
+    * `ast_json_path`   -- output of a real `slang --ast-json <top>.sv > f`
+    * `scope_tree_path` -- output of a real
+      `simv -ucli -do "scope -tree; quit" > f`
+
+    With neither supplied, probes whether either tool is on PATH and returns
+    a documented NOT_AVAILABLE / TOOL_PRESENT_NO_INPUT result rather than
+    fabricating a tree -- matching this repo's own NOT_AVAILABLE convention
+    (see `uvm_generator/address_map_verifier.py`, `memory_vault.py`).
+
+    The `scope -tree` result additionally carries a fail-closed completeness
+    verdict, because its source text's exact form varies by VCS version (see
+    `parse_scope_tree_dump()`'s honesty note):
+
+    * `REAL`         -- every non-blank line parsed into a node
+    * `REAL_PARTIAL` -- nodes parsed, but `unparsed_lines` is non-empty; the
+      hierarchy may be missing instances, so a bind target absent from
+      `instance_paths` must NOT be read as "that instance does not exist"
+    * `PARSE_FAILED` -- the file was read but produced zero nodes"""
+    if ast_json_path and scope_tree_path:
+        raise BindTierError(
+            "AMBIGUOUS_DUT_TREE_SOURCE",
+            {"detail": "Supply either ast_json_path or scope_tree_path, not both -- "
+                       "the two capture methods are alternatives, and silently "
+                       "preferring one would hide a disagreement between them.",
+             "ast_json_path": ast_json_path, "scope_tree_path": scope_tree_path},
+        )
     if ast_json_path:
         raw = json.loads(Path(ast_json_path).read_text(encoding="utf-8"))
         tree = parse_slang_ast_json(raw)
         return {"status": "REAL", "source": "slang_ast_json", "path": ast_json_path, "tree": tree}
+    if scope_tree_path:
+        parsed = parse_scope_tree_dump(
+            Path(scope_tree_path).read_text(encoding="utf-8", errors="replace"))
+        if parsed.parsed_node_count == 0:
+            status = "PARSE_FAILED"
+        elif parsed.unparsed_lines:
+            status = "REAL_PARTIAL"
+        else:
+            status = "REAL"
+        return {
+            "status": status,
+            "source": "simv_ucli_scope_tree",
+            "path": scope_tree_path,
+            "roots": parsed.roots,
+            "tree": parsed.roots[0] if parsed.roots else None,
+            "instance_paths": [n.full_path for r in parsed.roots
+                               for n in flatten_instance_tree(r)],
+            "parsed_node_count": parsed.parsed_node_count,
+            "unparsed_lines": parsed.unparsed_lines,
+        }
     resolved = check_slang_available(which_fn)
     if resolved:
         return {
@@ -295,17 +477,31 @@ def capture_dut_instance_tree(
                 f"then call capture_dut_instance_tree(ast_json_path='ast.json')."
             ),
         }
+    resolved_simv = check_simv_available(which_fn)
+    if resolved_simv:
+        return {
+            "status": "TOOL_PRESENT_NO_INPUT",
+            "source": "simv_ucli_scope_tree",
+            "detail": (
+                f"simv resolved at {resolved_simv!r} but no scope_tree_path was "
+                f"supplied. Run: `{resolved_simv} -ucli -do \"scope -tree; quit\" "
+                f"> scope_tree.txt` then call "
+                f"capture_dut_instance_tree(scope_tree_path='scope_tree.txt')."
+            ),
+        }
     return {
         "status": "NOT_AVAILABLE",
-        "source": "slang_ast_json",
+        "source": "slang_ast_json_or_simv_ucli_scope_tree",
         "detail": (
-            "`slang` is not on PATH in this environment (confirmed 2026-09-03 via "
-            "`which slang`). Documented fallback path: run "
-            "`simv -ucli -do \"scope -tree\"` against a compiled DUT and capture the "
-            "text dump, or install slang "
-            "(https://github.com/MikePopoloski/slang) and re-invoke "
-            "`slang --ast-json <top>.sv -f <filelist> > ast.json`, then pass that "
-            "path to capture_dut_instance_tree(ast_json_path=...)."
+            "Neither capture method's binary is on PATH in this environment "
+            "(confirmed 2026-09-03 via `which slang` / `which simv` / `which vcs`, "
+            "all exit 1). Either method yields the same instance tree: (a) install "
+            "slang (https://github.com/MikePopoloski/slang), run "
+            "`slang --ast-json <top>.sv -f <filelist> > ast.json`, and pass that path "
+            "as `ast_json_path`; or (b) against an already-compiled DUT run "
+            "`./simv -ucli -do \"scope -tree; quit\" > scope_tree.txt` and pass that "
+            "path as `scope_tree_path` -- a project-local ./simv needs no PATH entry, "
+            "pass its captured output directly."
         ),
     }
 
