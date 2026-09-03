@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/init_seq.schema.json",
+  "title": "init_seq",
+  "description": "The asset-processing table's row-10 artifact ('IP programming guide -> init_seq.yaml: register write order and wait conditions -> directed test, connectivity check'). Authored as YAML (a real programming guide's init sequence is read and maintained by humans, and YAML keeps the step list reviewable); this schema validates the parsed document, so the same contract holds whether it arrives as YAML or JSON. INPUT CONTRACT, per the same discipline as register_map.schema.json: the ORDER and the WAIT CONDITIONS come from a real programming guide, never from an agent's guess about what a sensible bring-up order would be -- an invented init order is exactly the kind of plausible-looking content that produces a false PASS. What dv_harness/init_seq.py generates FROM this file is the Gate-2 precondition evaluation and the directed-test step list, not the sequence itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "interface", "steps"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "interface": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The DUT interface this sequence brings up. Matches the names used in sys_regmap.json's governs_interfaces, so the two artifacts join without a translation layer."
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "description": "e.g. 'programming_guide_transcription'." },
+        "document": { "type": "string" },
+        "section": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered bring-up steps. Array order IS the required write order -- unlike register_map.schema.json's blocks array, where order explicitly carries no meaning.",
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "kind"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0, "description": "Explicit ordinal, validated by init_seq.py to be contiguous and ascending so a step deleted during editing cannot silently reorder the sequence." },
+        "kind": {
+          "enum": ["write", "read_check", "wait_us", "wait_condition"],
+          "description": "write: program a register field. read_check: read back and require a value. wait_us: wait a documented settling time. wait_condition: poll until a field reaches a value, with a documented timeout."
+        },
+        "description": { "type": "string" },
+        "block": { "type": "string", "description": "Register block name, resolved against sys_regmap.json (or register_map.json) by init_seq.py -- never a bare address typed in by hand." },
+        "register": { "type": "string" },
+        "field": { "type": ["string", "null"], "description": "Field within the register; null/absent means the whole register." },
+        "value": { "type": ["string", "null"], "pattern": "^0x[0-9A-Fa-f]+$", "description": "Required for write and read_check and wait_condition; the value to write, expect, or poll for." },
+        "wait_us": { "type": ["number", "null"], "minimum": 0, "description": "Required for wait_us. A documented settling time from the programming guide." },
+        "timeout_us": { "type": ["number", "null"], "minimum": 0, "description": "Required for wait_condition -- a poll with no documented timeout is a hang, so the schema does not permit omitting it." }
+      }
+    }
+  }
+}

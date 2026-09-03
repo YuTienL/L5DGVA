@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/vip_symbol_index.schema.json",
+  "title": "vip_symbol_index",
+  "description": "GENERATED artifact for the asset-processing table's row 13 ('VIP source -> NOT loaded into context, only symbol-indexed (class/method names + file:line) -> targeted read when needed'). Produced by dv_harness/vip_symbol_index.py. The defining constraint, enforced in code and asserted by a real test: this index stores DECLARATIONS AND LOCATIONS ONLY -- a class name, its base class, its method signatures, its config field names, and the file:line each was found at. It never stores a method body, a statement, or any implementation text. That is what makes it safe to hold in context while CLAUDE.md's context-budget tier 1 (NEVER-VIP-SOURCE) still denies reading the VIP source itself: the index answers 'what exists and where', and the answer to 'what does it do' is a targeted Read of the cited file:line, one method at a time, exempted deliberately rather than by loading the tree.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generator", "protocol", "roots", "stats", "classes"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "version"],
+      "properties": { "tool": { "type": "string" }, "version": { "type": "string" } }
+    },
+    "protocol": { "type": "string", "minLength": 1, "description": "The protocol this VIP implements, supplied by the caller -- never inferred from a directory name." },
+    "roots": { "type": "array", "items": { "type": "string" }, "description": "The VIP source roots that were scanned." },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files_scanned", "classes_indexed", "methods_indexed", "bytes_scanned"],
+      "properties": {
+        "files_scanned": { "type": "integer", "minimum": 0 },
+        "classes_indexed": { "type": "integer", "minimum": 0 },
+        "methods_indexed": { "type": "integer", "minimum": 0 },
+        "bytes_scanned": { "type": "integer", "minimum": 0, "description": "Total source bytes read to build the index. Recorded so the compression ratio against the index's own size is a real, checkable number rather than a claim." }
+      }
+    },
+    "classes": { "type": "array", "items": { "$ref": "#/$defs/class_entry" } }
+  },
+  "$defs": {
+    "class_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "file", "line", "methods", "config_fields"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "base_class": { "type": ["string", "null"], "description": "The `extends` target, when declared. Real inheritance evidence -- this is how a caller finds the sequence/driver/config base a VIP class actually derives from, without reading the file." },
+        "is_virtual": { "type": "boolean" },
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1, "description": "1-indexed declaration line, so a targeted read can jump straight here." },
+        "methods": { "type": "array", "items": { "$ref": "#/$defs/method_entry" } },
+        "config_fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field_entry" },
+          "description": "Class properties declared `rand`/`bit`/`int`/`string`/etc at class scope -- the candidate config knobs of a VIP config object. Name, type and location only; never a default value expression, which would be implementation text."
+        }
+      }
+    },
+    "method_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "file", "line"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["function", "task"] },
+        "return_type": { "type": ["string", "null"] },
+        "is_virtual": { "type": "boolean" },
+        "is_extern": { "type": "boolean" },
+        "arguments": { "type": ["string", "null"], "description": "The literal argument list text as declared, so a caller knows the signature without opening the file. This is a DECLARATION, not a body." },
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "field_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "data_type", "file", "line"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "data_type": { "type": "string" },
+        "is_rand": { "type": "boolean" },
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

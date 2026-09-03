@@ -94,12 +94,40 @@ def test_a_cited_distiller_really_handles_that_content_class(policy):
         assert token.lower() in text.lower(), (rule["rule_id"], rule["distiller"], token)
 
 
-def test_vip_source_rule_admits_it_has_no_distiller(policy):
-    """Named explicitly so the miscitation cannot quietly come back."""
+def test_vip_source_rule_cites_a_real_vip_source_distiller(policy):
+    """Updated 2026-09-04: this rule used to assert `distiller is None`,
+    because no VIP-source distiller existed. One now does --
+    dv_harness/vip_symbol_index.py -- so the rule cites it.
+
+    The test's ORIGINAL intent is preserved and is the important half: the
+    miscitation of `vip_distill.py` (an evidence-envelope normaliser for sim
+    logs/job records/fsdb reports, which never reads VIP source) must not
+    quietly come back. So this asserts the cited distiller is the real one,
+    that it genuinely reads VIP source, and that the note still disclaims
+    vip_distill.py by name."""
     rule = next(r for r in policy["never_load"] if r["rule_id"] == "NEVER-VIP-SOURCE")
-    assert rule["distiller"] is None
+    assert rule["distiller"] == "dv_harness/vip_symbol_index.py"
     assert rule["mcp_redirect"] == "get_vip_config"
+    # The miscitation guard, unchanged in spirit.
     assert "vip_distill.py" in rule["distiller_note"]
+    assert "does not read VIP source" in rule["distiller_note"]
+    # The cited distiller must really be a VIP-source reader, not another
+    # suggestively-named module.
+    src = (ROOT / rule["distiller"]).read_text(encoding="utf-8", errors="replace")
+    assert "build_symbol_index" in src and "vip_ref" in src
+
+
+def test_vip_distiller_retains_no_bodies(policy):
+    """The property that makes indexing a tier-1-denied tree legitimate at
+    all: the distiller keeps declarations and locations, never bodies. If
+    this invariant were dropped, this rule would be routing agents to a
+    module that smuggles VIP source into context."""
+    from dv_harness import vip_symbol_index
+
+    index = vip_symbol_index.build_symbol_index(
+        [ROOT / "examples" / "asset_processing" / "inputs" / "vip_src"], "demo")
+    vip_symbol_index.assert_no_bodies_retained(index)
+    assert index["stats"]["classes_indexed"] > 0
 
 
 def test_mcp_redirects_name_only_the_five_real_fixed_verbs(policy):

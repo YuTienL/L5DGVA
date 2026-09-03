@@ -28,8 +28,8 @@
         "**/vip/**/*.f"
       ],
       "mcp_redirect": "get_vip_config",
-      "distiller": null,
-      "distiller_note": "There is NO VIP-source distiller in this repo. dv_harness/vip_distill.py is named suggestively but is an evidence-envelope normaliser for sim logs / job records / fsdb reports (see its distill_sim_log/distill_job_record/distill_fsdbreport functions) -- it does not read VIP source. The real route is the get_vip_config verb; the intended distilled artifact is the tier-3 docs/vip_ref/<protocol>.md, which does not exist yet."
+      "distiller": "dv_harness/vip_symbol_index.py",
+      "distiller_note": "CORRECTED 2026-09-04: a VIP-source distiller now exists. dv_harness/vip_symbol_index.py reads a VIP source tree and retains DECLARATIONS AND LOCATIONS ONLY -- class names, base classes, method signatures, config field names, and the file:line of each -- never a method body; assert_no_bodies_retained() makes that a checkable invariant and a real test exercises it. That is what makes indexing a tree this rule otherwise denies legitimate: the index answers 'what exists and where', and 'what does it do' is then ONE targeted read of a cited file:line rather than paging the tree into context. It also renders the tier-3 vip_ref/<protocol>.md, which previously did not exist. Still true, and still the reason this rule does not point at it: dv_harness/vip_distill.py is named suggestively but is an evidence-envelope normaliser for sim logs / job records / fsdb reports (distill_sim_log/distill_job_record/distill_fsdbreport) and does not read VIP source at all. get_vip_config remains the right route for an already-resolved config value."
     },
     {
       "rule_id": "NEVER-RAW-PDF",

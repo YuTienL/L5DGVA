@@ -1,0 +1,211 @@
+{
+  "status": "PARSED",
+  "reason": null,
+  "files": [
+    {
+      "file_path": "examples\\asset_processing\\inputs\\phy_boundary_demo.sv",
+      "source_sha256": "87ac463cc33709d7f5f9f53361a9ab4eac18a341eec8a040ba225e6251de1676",
+      "verible_version": "v0.0-4150-gfe58e708",
+      "modules": [
+        {
+          "name": "demo_usb_phy",
+          "parameters": [],
+          "ports": [
+            {
+              "name": "pclk",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "preset_n",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "txp",
+              "direction": "output",
+              "data_type": "logic"
+            },
+            {
+              "name": "txn",
+              "direction": "output",
+              "data_type": "logic"
+            },
+            {
+              "name": "rxp",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "rxn",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "pipe_txdata",
+              "direction": "input",
+              "data_type": "logic [31:0]"
+            },
+            {
+              "name": "pipe_txdatak",
+              "direction": "input",
+              "data_type": "logic [3:0]"
+            },
+            {
+              "name": "pipe_rxdata",
+              "direction": "output",
+              "data_type": "logic [31:0]"
+            },
+            {
+              "name": "pipe_rxdatak",
+              "direction": "output",
+              "data_type": "logic [3:0]"
+            },
+            {
+              "name": "pipe_rxvalid",
+              "direction": "output",
+              "data_type": "logic"
+            },
+            {
+              "name": "pipe_powerdown",
+              "direction": "input",
+              "data_type": "logic [1:0]"
+            }
+          ],
+          "signals": []
+        },
+        {
+          "name": "demo_usb_controller",
+          "parameters": [],
+          "ports": [
+            {
+              "name": "pclk",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "preset_n",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "pipe_txdata",
+              "direction": "output",
+              "data_type": "logic [31:0]"
+            },
+            {
+              "name": "pipe_txdatak",
+              "direction": "output",
+              "data_type": "logic [3:0]"
+            },
+            {
+              "name": "pipe_rxdata",
+              "direction": "input",
+              "data_type": "logic [31:0]"
+            },
+            {
+              "name": "pipe_rxdatak",
+              "direction": "input",
+              "data_type": "logic [3:0]"
+            },
+            {
+              "name": "pipe_rxvalid",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "pipe_powerdown",
+              "direction": "output",
+              "data_type": "logic [1:0]"
+            },
+            {
+              "name": "app_wdata",
+              "direction": "input",
+              "data_type": "logic [63:0]"
+            },
+            {
+              "name": "app_rdata",
+              "direction": "output",
+              "data_type": "logic [63:0]"
+            }
+          ],
+          "signals": []
+        },
+        {
+          "name": "demo_analog_phy",
+          "parameters": [],
+          "ports": [
+            {
+              "name": "refclk",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "por_n",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "serial_txp",
+              "direction": "output",
+              "data_type": "logic"
+            },
+            {
+              "name": "serial_txn",
+              "direction": "output",
+              "data_type": "logic"
+            },
+            {
+              "name": "serial_rxp",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "serial_rxn",
+              "direction": "input",
+              "data_type": "logic"
+            }
+          ],
+          "signals": []
+        },
+        {
+          "name": "demo_serdes_controller",
+          "parameters": [],
+          "ports": [
+            {
+              "name": "refclk",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "por_n",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "serial_txp",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "serial_txn",
+              "direction": "input",
+              "data_type": "logic"
+            },
+            {
+              "name": "serial_rxp",
+              "direction": "output",
+              "data_type": "logic"
+            },
+            {
+              "name": "serial_rxn",
+              "direction": "output",
+              "data_type": "logic"
+            }
+          ],
+          "signals": []
+        }
+      ]
+    }
+  ]
+}

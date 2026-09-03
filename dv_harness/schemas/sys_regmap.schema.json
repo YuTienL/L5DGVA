@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/sys_regmap.schema.json",
+  "title": "sys_regmap",
+  "description": "The GLOBAL/system-control register map -- the asset-processing table's row-8 artifact ('Global register file -> sys_regmap.json: clock/reset/mux/pinmux control bits -> mode-determining bits'). This is deliberately a SEPARATE schema from register_map.schema.json rather than a flag added to it, because the two answer different questions and have different consumers: register_map.schema.json describes the DUT's own functional registers (consumed by address decode and get_register), while this file describes the chip-level bits that decide whether the DUT is clocked, out of reset, and muxed onto the pins at all. register_map.schema.json's flat `blocks` array has no field that could express 'this block is the clock-enable/pinmux/PHY-select block', which is exactly why row 8 was BLOCKED. Like register_map.schema.json this is an INPUT CONTRACT -- transcribed from a real chip-level programming guide or exported from a real system RAL model, never invented by this harness. What IS generated is the classification and the Gate-2 precondition derived from it (dv_harness/sys_regmap.py).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "blocks"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "description": "e.g. 'programming_guide_transcription', 'system_ral_export', 'ip_xact_conversion'." },
+        "description": { "type": "string" }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "description": "One entry per system-control register block (CRU/PMU/SYSCFG/PINMUX/...).",
+      "items": { "$ref": "#/$defs/block" }
+    }
+  },
+  "$defs": {
+    "block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "base_address", "kind", "registers"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "base_address": { "type": "string", "pattern": "^0x[0-9A-Fa-f]+$" },
+        "kind": {
+          "enum": ["clock_control", "reset_control", "mux_control", "pinmux", "power_control", "phy_control", "misc_syscfg"],
+          "description": "The system function this block governs. This is the field register_map.schema.json has no equivalent of -- it is what makes a block's bits identifiable as mode-determining rather than functional."
+        },
+        "description": { "type": "string" },
+        "registers": { "type": "array", "items": { "$ref": "#/$defs/register" } }
+      }
+    },
+    "register": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "address_offset", "width", "access"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "address_offset": { "type": "string", "pattern": "^0x[0-9A-Fa-f]+$" },
+        "width": { "enum": [8, 16, 32, 64, 128] },
+        "access": { "$ref": "#/$defs/access_kind" },
+        "reset_value": { "type": ["string", "null"], "pattern": "^0x[0-9A-Fa-f]+$" },
+        "description": { "type": "string" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "bit_offset", "bit_width", "access", "control_kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "bit_offset": { "type": "integer", "minimum": 0 },
+        "bit_width": { "type": "integer", "minimum": 1 },
+        "access": { "$ref": "#/$defs/access_kind" },
+        "reset_value": { "type": ["string", "null"], "pattern": "^0x[0-9A-Fa-f]+$" },
+        "description": { "type": "string" },
+        "control_kind": {
+          "enum": ["clock_enable", "reset_release", "mux_select", "pinmux_select", "power_enable", "phy_select", "not_mode_determining"],
+          "description": "What this bit actually decides. Every entry EXCEPT not_mode_determining is a mode-determining bit: a bit whose value changes whether an interface is clocked / out of reset / connected to the pins at all, and therefore a precondition for interpreting any Gate-2 zero-time connectivity result. not_mode_determining exists so a real programming guide's non-control bits can be transcribed faithfully in the same file instead of being silently dropped."
+        },
+        "required_value": {
+          "type": ["string", "null"],
+          "pattern": "^0x[0-9A-Fa-f]+$",
+          "description": "The value this field must hold for the interface named in `governs_interfaces` to be operational, when the programming guide states one. null when genuinely not documented -- never a guessed placeholder."
+        },
+        "governs_interfaces": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of the DUT interfaces this bit gates. An empty list means the programming guide did not scope it to a specific interface; a Gate-2 precondition check treats an unscoped mode-determining bit as applying to every interface, since assuming it is irrelevant would be the unsafe direction."
+        }
+      }
+    },
+    "access_kind": {
+      "enum": ["RW", "RO", "WO", "W1C", "RW1C", "RC", "WC", "W1S"],
+      "description": "Same RAL/IP-XACT-style access encoding as register_map.schema.json, deliberately identical so the two files can be read by one consumer without a translation layer."
+    }
+  }
+}

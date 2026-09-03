@@ -1,0 +1,88 @@
+# SYNTHETIC WORKED EXAMPLE -- the asset-processing table's row-11 artifact.
+#
+# Not a real IP's user guide content. Fabricated deliberately and labeled as
+# such; the "DEMO IP User Guide" cited below does not exist. A real project
+# replaces this file wholesale with content transcribed from its own IP user
+# guide and analog/digital datasheet.
+#
+# The untestable_items below are the load-bearing part: each is converted by
+# design_intent.write_exemptions_from_constraints() into a real exemption
+# record in exemptions.yaml, with the owner and review date the exemptions
+# schema requires. That is what stops an untestable item from becoming a
+# permanent, unowned, unreviewed hole in the checking.
+
+schema_version: "1.0"
+ip_name: demo_usb_ip
+
+source:
+  document: "DEMO IP User Guide (SYNTHETIC -- no such document exists)"
+  section: "1 Introduction"
+  version: "0.1"
+
+timing_constraints:
+  - id: TIM-001
+    parameter: tRESET_WIDTH
+    description: Minimum assertion width of the functional reset.
+    min: 100.0
+    typ: null
+    max: null
+    unit: ns
+    basis: { document: "DEMO IP User Guide", section: "6.1 Reset Timing" }
+  - id: TIM-002
+    parameter: tCLK_SETTLE
+    description: >-
+      Settling time after the clock enable is written, before reset may be
+      released. This is the documented basis for the 10 us wait in
+      init_seq.yaml step 1.
+    min: 10.0
+    typ: 12.0
+    max: 50.0
+    unit: us
+    basis: { document: "DEMO IP User Guide", section: "6.2 Clock Bring-up" }
+
+electrical_limits:
+  - id: ELEC-001
+    parameter: VDD_CORE
+    description: Core supply operating range.
+    min: 0.81
+    max: 0.99
+    unit: V
+    basis: { document: "DEMO IP User Guide", section: "7.1 Supplies" }
+  - id: ELEC-002
+    parameter: TX_DIFF_SWING
+    description: Transmitter differential output swing.
+    min: 800.0
+    max: 1200.0
+    unit: mV
+    basis: { document: "DEMO IP User Guide", section: "7.3 Transmitter" }
+
+untestable_items:
+  - id: EXEMPT-DEMO-001
+    check_id: chk_tx_diff_swing_within_limits
+    reason: >-
+      Transmitter differential swing is an analog quantity with no digital
+      observable in the delivered RTL model; the PHY model drives an ideal
+      digital level regardless of the configured swing.
+    category: analog_no_digital_observable
+    owner: analog-dv-lead
+    valid_until: "2027-06-30"
+    basis: { document: "DEMO IP User Guide", section: "7.3 Transmitter" }
+  - id: EXEMPT-DEMO-002
+    check_id: chk_vdd_core_brownout_recovery
+    reason: >-
+      Brown-out recovery behaviour requires real silicon; the digital model
+      has no supply-collapse representation at all.
+    category: requires_silicon
+    owner: analog-dv-lead
+    valid_until: "2027-06-30"
+    basis: { document: "DEMO IP User Guide", section: "7.1 Supplies" }
+  - id: EXEMPT-DEMO-003
+    check_id: chk_low_power_mode_entry_latency
+    reason: >-
+      The delivered controller model does not implement the low_power entry
+      latency counter, so its documented latency bound cannot be checked at
+      this level.
+    category: not_implemented_in_model
+    owner: digital-dv-lead
+    valid_until: "2026-12-31"
+    basis: { document: "DEMO IP User Guide", section: "3.2 Low Power" }

@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.0",
+  "generator": {
+    "tool": "dv_harness.phy_boundary",
+    "version": "1.0"
+  },
+  "status": "EXTRACTED",
+  "reason": null,
+  "phy_module": "demo_usb_phy",
+  "controller_module": "demo_usb_controller",
+  "boundary_signals": [
+    {
+      "name": "pclk",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "input",
+      "controller_direction": "input",
+      "direction_opposed": false
+    },
+    {
+      "name": "pipe_powerdown",
+      "width": 2,
+      "width_source": "logic [1:0]",
+      "phy_direction": "input",
+      "controller_direction": "output",
+      "direction_opposed": true
+    },
+    {
+      "name": "pipe_rxdata",
+      "width": 32,
+      "width_source": "logic [31:0]",
+      "phy_direction": "output",
+      "controller_direction": "input",
+      "direction_opposed": true
+    },
+    {
+      "name": "pipe_rxdatak",
+      "width": 4,
+      "width_source": "logic [3:0]",
+      "phy_direction": "output",
+      "controller_direction": "input",
+      "direction_opposed": true
+    },
+    {
+      "name": "pipe_rxvalid",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "output",
+      "controller_direction": "input",
+      "direction_opposed": true
+    },
+    {
+      "name": "pipe_txdata",
+      "width": 32,
+      "width_source": "logic [31:0]",
+      "phy_direction": "input",
+      "controller_direction": "output",
+      "direction_opposed": true
+    },
+    {
+      "name": "pipe_txdatak",
+      "width": 4,
+      "width_source": "logic [3:0]",
+      "phy_direction": "input",
+      "controller_direction": "output",
+      "direction_opposed": true
+    },
+    {
+      "name": "preset_n",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "input",
+      "controller_direction": "input",
+      "direction_opposed": false
+    }
+  ],
+  "classification": {
+    "kind": "PARALLEL",
+    "tier": "B2_STRUCTURAL_WIDTH",
+    "rationale": "payload signals ['pipe_rxdata', 'pipe_txdata'] are >= 8 bits wide, a symbol/transaction-level boundary",
+    "serial_signals": [],
+    "parallel_signals": [
+      "pipe_rxdata",
+      "pipe_txdata"
+    ],
+    "unresolved_width_signals": []
+  },
+  "bind_decision": {
+    "mount_layer": "controller_phy_parallel_boundary",
+    "bindable": true,
+    "rationale": "a parallel controller-facing boundary exists, so protocol transactions are observable there; mount the bind at that port set and pass clock/reset through the bind instance's own port list (CLAUDE.md Bind-Location Rule 3)",
+    "recommended_bind_signals": [
+      "pipe_rxdata",
+      "pipe_txdata"
+    ]
+  },
+  "source": {
+    "kind": "verible_parse",
+    "files": [
+      "examples/asset_processing/inputs/phy_boundary_demo.sv"
+    ]
+  }
+}

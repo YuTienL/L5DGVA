@@ -729,14 +729,30 @@ auto-loads it), plus `.dv-harness/env.manifest.json`, `.dv-harness/run_profile.j
 `.dv-workflow/hierarchy.json`, `.dv-workflow/phy_boundary.json`, injected as a size-capped summary
 pack (`MAX_PACK_BYTES`, JSON summarised by shape, never inlined). Run
 `python -m dv_harness.context_budget resident` to see current residency; it exits 2 while any
-declared artifact is MISSING and prints the real command that would produce it. As of 2026-09-03
-only `CLAUDE.md` is PRESENT — `hierarchy.json` has a declared producer
-(`.claude/skills/CORE/hierarchy-discovery/SKILL.md`) but no non-agent extractor, and
-`phy_boundary.json` has no extractor at all. That is reported, not hidden.
+declared artifact is MISSING and prints the real command that would produce it. Residency in this
+repo is still only `CLAUDE.md` (this harness has no RTL tree or VIP of its own to extract from),
+but the extractor situation changed on 2026-09-04: **`phy_boundary.json` now HAS a real extractor**,
+`dv_harness/phy_boundary.py`, which derives the PHY↔controller serial/parallel boundary from the
+same verible-parsed port table `env_manifest.py` already produces and turns it into an explicit
+bind-location decision (a SERIAL-only boundary is reported NOT bindable, because a protocol monitor
+bound there passes Gates 1–2 and fails Gate 3 as a silent monitor). `hierarchy.json` is unchanged:
+it still has a declared producer (`.claude/skills/CORE/hierarchy-discovery/SKILL.md`) but no
+non-agent extractor. That is reported, not hidden.
 
 **Tier 3 — LOAD ON DEMAND**: single-register/regmap lookups via `get_register` (never a whole
 system regmap), the distilled per-protocol `docs/vip_ref/<protocol>.md`, and `docs/intent.md`.
-Read one when a specific question needs it; never preload.
+Read one when a specific question needs it; never preload. As of 2026-09-04 both of those
+distilled artifacts have real generators: `dv_harness/vip_symbol_index.py` indexes a VIP source
+tree to declarations and `file:line` locations ONLY — never method bodies, which is what makes it
+legitimate against tier 1's own `NEVER-VIP-SOURCE` denial — and renders `vip_ref/<protocol>.md`
+from that index; `dv_harness/design_intent.py` renders `intent.md` and `constraints.md` from
+schema-validated structured sources in which every legal-drop/backpressure condition REQUIRES a
+document+section citation, so an uncited (i.e. possibly invented) condition cannot validate. The
+matching `sys_regmap.json` / `init_seq.yaml` pair (`dv_harness/sys_regmap.py`,
+`dv_harness/init_seq.py`) supplies the Gate-2 mode-bit precondition connectivity.py never had, so
+a dead clock caused by an unwritten clock-enable reads as `PRECONDITION_NOT_MET` rather than as a
+connectivity failure against a bind that was correct all along. See
+`.work/gap-close-asset-table-asset-processing-table-14-rows-hierarchy-report.md`.
 
 **MCP-first routing.** `dv_harness/mcp` exposes exactly 5 fixed, read-only verbs —
 `get_vip_config`, `get_dut_port`, `get_register`, `get_topology`, `query_regression` — dispatched
