@@ -293,6 +293,41 @@ def main():
     # fires when this subcommand (or a future explicit scheduled call to it) is
     # actually invoked -- see lsf_client.evaluate_auto_kill()'s docstring for
     # exactly which .dv-harness/lsf/early_fail_policy.json toggles drive it.
+    ppueue = sub.add_parser("pueue", help="Real LOCAL PC-side task orchestration via pueue "
+        "(dv_harness/pueue_client.py). Sequences local/remote_exec.py-driven harness steps as "
+        "a real dependency chain; NEVER manages a real farm job's own lifecycle -- the real "
+        "bsub/sbatch call is one caller-supplied step command, and pueue's role ends the "
+        "moment that command's process exits (ongoing farm-job tracking stays lsf-watch-start).")
+    ppueue_sub = ppueue.add_subparsers(dest="pueue_cmd", required=True)
+    ppueue_add = ppueue_sub.add_parser("add", help="Enqueue one local task; starts the pueued "
+        "daemon first if it is not already running.")
+    ppueue_add.add_argument("command", help="Shell command this task runs (e.g. a "
+        "`python tools/remote/remote_exec.py \"...\"` call, or a local build/lint command).")
+    ppueue_add.add_argument("--label", default=None)
+    ppueue_add.add_argument("--after", type=int, action="append", default=None,
+        help="Task id this task depends on (repeatable). Only starts once every listed "
+             "dependency has SUCCEEDED; fails automatically if one of them fails.")
+    ppueue_add.add_argument("--group", default=None, help="Overrides config.json's pueue.group.")
+    ppueue_add.add_argument("--working-directory", default=None)
+    ppueue_sub.add_parser("status", help="Real `pueue status -j`.").add_argument(
+        "--group", default=None)
+    ppueue_log = ppueue_sub.add_parser("log", help="Real `pueue log -j` for one or more tasks.")
+    ppueue_log.add_argument("task_ids", nargs="*", type=int)
+    ppueue_log.add_argument("--full", action="store_true")
+    ppueue_wait = ppueue_sub.add_parser("wait", help="Poll a task until Done; exits 1 if its "
+        "result was not Success (a nonzero exit, a killed task, or a failed dependency).")
+    ppueue_wait.add_argument("task_id", type=int)
+    ppueue_wait.add_argument("--timeout", type=int, default=1800)
+    ppueue_chain = ppueue_sub.add_parser("chain", help="Enqueue the real build->verify->submit->"
+        "fsdbreport local-PC chain as dependent pueue tasks. Every step's command is exactly "
+        "what you pass here -- this never fabricates a bsub/remote_exec.py command itself; "
+        "omit a step to leave it out of the chain.")
+    ppueue_chain.add_argument("--build", default=None)
+    ppueue_chain.add_argument("--verify", default=None)
+    ppueue_chain.add_argument("--submit", default=None)
+    ppueue_chain.add_argument("--fsdbreport", default=None)
+    ppueue_chain.add_argument("--group", default=None)
+
     plsf_autokill = sub.add_parser("lsf-auto-kill-scan",
         help="Scan every RUNNING job under .dv-harness/lsf/jobs/ against "
              ".dv-harness/lsf/early_fail_policy.json via evaluate_auto_kill(); "
@@ -447,6 +482,23 @@ def main():
     prestore.add_argument("--require-sha-match", action="store_true",
         help="Refuse to restore if the current git SHA differs from the snapshot's saved git_sha "
              "(CLAUDE.md's 'same source/build/config identity' rule enforced at restore time).")
+
+    prp = sub.add_parser("run-profile", help="run_profile.json: reverse-derive the machine-readable IR of a "
+                                              "generated environment's Makefile (its sole execution authority), "
+                                              "and generate the justfile an agent must use instead of composing "
+                                              "vcs/simv command lines itself. See dv_harness/uvm_generator/"
+                                              "run_profile.py.")
+    prp_sub = prp.add_subparsers(dest="rp_cmd", required=True)
+    prp_extract = prp_sub.add_parser("extract", help="Parse a Makefile and write run_profile.json.")
+    prp_extract.add_argument("--makefile", required=True, help="Path to the environment's Makefile.")
+    prp_extract.add_argument("--out", required=True, help="Where to write run_profile.json.")
+    prp_extract.add_argument("--target-ip", required=True, help="Upper-case protocol name, e.g. USB, PCIE.")
+    prp_extract.add_argument("--ip-prefix", required=True, help="Lower-case file/class prefix, e.g. usb_.")
+    prp_justfile = prp_sub.add_parser("justfile", help="Generate a justfile (+ its standalone, "
+                                                         "dv_harness-independent argument validator) from an "
+                                                         "already-extracted run_profile.json.")
+    prp_justfile.add_argument("--profile", required=True, help="Path to run_profile.json.")
+    prp_justfile.add_argument("--out", required=True, help="Where to write the justfile.")
 
     pfsdb = sub.add_parser("fsdb-report", help="Run the real `fsdbreport` CLI tool against an FSDB file and "
                                                  "parse/emit its text report. See dv_harness/fsdb_report.py.")
@@ -762,16 +814,23 @@ def main():
             print(json.dumps(load_jobs(h.root), ensure_ascii=False, indent=2))
     elif args.cmd == "preflight":
         from . import preflight as _preflight
+        from . import escalation_notify as _escalation
         pf_cfg = _preflight.config_from_dict(
             h.cfg.get("preflight"), queue=args.queue, workdir=args.workdir,
             license_server=args.license_server)
         runner = _preflight.RemoteRelayCommandRunner() if args.remote else None
         result = _preflight.run_preflight(pf_cfg, runner=runner)
+        if result.overall != "PASS":
+            notifier = _escalation.notifier_from_config(h.cfg.get("escalation"))
+            for check in result.checks:
+                if check.name == "eda_license" and check.status == "FAIL":
+                    notifier.license_starvation(check)
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
         raise SystemExit(0 if result.overall == "PASS" else 1)
     elif args.cmd == "lsf-submit":
         from . import lsf_client
         from . import preflight as _preflight
+        from . import escalation_notify as _escalation
         # lmstat + scheduler preflight gate (2026-09-03): build the real
         # PreflightConfig from config.json's `preflight` block (never
         # guessed/hardcoded -- see config.py's own comment), overridden by
@@ -779,11 +838,13 @@ def main():
         # SAME queue/workdir this job is actually about to use.
         pf_cfg = _preflight.config_from_dict(
             h.cfg.get("preflight"), queue=args.queue, workdir=args.run_dir)
+        notifier = _escalation.notifier_from_config(h.cfg.get("escalation"))
         try:
             job_id, pf_result = lsf_client.bsub_submit_with_preflight(
                 args.command, queue=args.queue, cores=args.cores,
                 mem_mb=args.mem_mb, run_dir=args.run_dir,
                 preflight_cfg=pf_cfg, skip_preflight=args.skip_preflight,
+                notifier=notifier,
             )
         except lsf_client.PreflightBlockedError as e:
             print(json.dumps({"error": "PREFLIGHT_BLOCKED", "preflight": e.result.to_dict()},
@@ -805,6 +866,43 @@ def main():
         if pf_result is not None:
             out["preflight"] = pf_result.to_dict()
         print(json.dumps(out, ensure_ascii=False, indent=2))
+    elif args.cmd == "pueue":
+        from . import pueue_client
+        pq_cfg = pueue_client.config_from_dict(h.cfg.get("pueue"))
+        client = pueue_client.PueueClient(pq_cfg)
+        if args.pueue_cmd == "add":
+            if not client.ensure_daemon():
+                print(json.dumps({"error": "PUEUED_NOT_AVAILABLE"}, ensure_ascii=False))
+                raise SystemExit(1)
+            try:
+                task_id = client.add(args.command, label=args.label, after=args.after,
+                                      group=args.group, working_directory=args.working_directory)
+            except pueue_client.PueueError as e:
+                print(json.dumps({"error": "PUEUE_ADD_FAILED", "message": str(e)}, ensure_ascii=False))
+                raise SystemExit(1)
+            print(json.dumps({"task_id": task_id}, ensure_ascii=False))
+        elif args.pueue_cmd == "status":
+            print(json.dumps(client.status(group=args.group), ensure_ascii=False, indent=2))
+        elif args.pueue_cmd == "log":
+            print(json.dumps(client.log(args.task_ids or None, full=args.full),
+                              ensure_ascii=False, indent=2))
+        elif args.pueue_cmd == "wait":
+            result = client.wait(args.task_id, timeout=args.timeout)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if result.get("success") else 1)
+        elif args.pueue_cmd == "chain":
+            if not client.ensure_daemon():
+                print(json.dumps({"error": "PUEUED_NOT_AVAILABLE"}, ensure_ascii=False))
+                raise SystemExit(1)
+            steps = [(name, cmd) for name, cmd in
+                     (("build", args.build), ("verify", args.verify),
+                      ("submit", args.submit), ("fsdbreport", args.fsdbreport))
+                     if cmd]
+            if not steps:
+                print(json.dumps({"error": "NO_STEPS"}, ensure_ascii=False))
+                raise SystemExit(2)
+            enqueued = pueue_client.enqueue_harness_chain(client, steps, group=args.group)
+            print(json.dumps({"chain": enqueued}, ensure_ascii=False, indent=2))
     elif args.cmd == "lsf-kill":
         from . import lsf_client
         try:
@@ -936,7 +1034,9 @@ def main():
         raise SystemExit(0 if result["summary"]["fail"] == 0 and result["summary"]["smoke_fail"] == 0 else 1)
     elif args.cmd == "signoff-export":
         from . import signoff_export
-        result = signoff_export.collect_signoff_bundle(h.root, Path(args.out))
+        from . import escalation_notify as _escalation
+        notifier = _escalation.notifier_from_config(h.cfg.get("escalation"))
+        result = signoff_export.collect_signoff_bundle(h.root, Path(args.out), notifier=notifier)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.cmd == "knowledge":
         from .config import load_config, save_config
@@ -1036,6 +1136,22 @@ def main():
             h.store.event({"ts": cp_now(), "event": "SESSION_RESTORED",
                             "name": args.name, "auto_backup": result.get("auto_backup")})
             print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.cmd == "run-profile":
+        from .uvm_generator.run_profile import RunProfileValidationError
+        try:
+            if args.rp_cmd == "extract":
+                from .uvm_generator.makefile_to_run_profile import extract_and_write
+                profile = extract_and_write(
+                    Path(args.makefile), Path(args.out), target_ip=args.target_ip, ip_prefix=args.ip_prefix
+                )
+                print(json.dumps(profile, ensure_ascii=False, indent=2))
+            elif args.rp_cmd == "justfile":
+                from .uvm_generator.run_profile_to_justfile import generate_and_write
+                text = generate_and_write(Path(args.profile), Path(args.out))
+                print(text)
+        except RunProfileValidationError as exc:
+            print(f"run-profile {args.rp_cmd} FAILED: {exc}", file=sys.stderr)
+            raise SystemExit(1)
     elif args.cmd == "fsdb-report":
         from . import fsdb_report
         result = fsdb_report.run_fsdbreport(args.fsdb, fsdbreport_bin=args.fsdbreport_bin, timeout=args.timeout)

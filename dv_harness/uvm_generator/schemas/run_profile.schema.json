@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/run_profile.schema.json",
+  "title": "run_profile",
+  "description": "Machine-readable IR of a generated UVM environment's single authoritative execution surface (its Makefile, or an SoC-level reference command.txt). An agent must never compose a vcs/simv command line from scratch or from a paraphrase of documentation -- it may only invoke the params/targets listed here, exactly as reverse-derived from the real source file named in `source`. A knob an agent believes is missing goes to the question queue; it is never silently added here by an agent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "target", "runtime_params", "targets"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": {
+          "enum": ["makefile", "command_txt"],
+          "description": "makefile: a Make-based build/run driver (this harness's own generated IP-level UVM environments). command_txt: an SoC-level reference command.txt whose SystemVerilog tasks are the sole authority for a SYSTEM_LEVEL_MODE environment's execution method. Both kinds normalize into the same fields below."
+        },
+        "path": { "type": "string", "description": "Path to the real source file this profile was extracted from, relative to the environment root." },
+        "extracted_at": { "type": "string", "format": "date-time" },
+        "content_sha256": { "type": "string", "description": "Hash of the source file at extraction time, so a stale run_profile.json (source changed since) can be detected before an agent trusts it." }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_ip", "ip_prefix"],
+      "properties": {
+        "target_ip": { "type": "string", "description": "Upper-case protocol name, e.g. USB, PCIE, MIPI_CSI. Matches TARGET_IP." },
+        "ip_prefix": { "type": "string", "pattern": "^[a-z][a-z0-9]*_$", "description": "Lower-case file/class prefix with trailing underscore. Matches IP_PREFIX." },
+        "topmod": { "type": "string", "description": "Elaboration top module. Matches TOPMOD." },
+        "extra_tops": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Modules referenced by bare name but never instantiated, so VCS drops them unless named as extra elaboration tops. Matches EXTRA_TOPS. Never guessed -- only ever populated from a real Error-[XMRE]/Error-[NTMES] evidence trail, same discipline as the reference Makefile's own comment for this field."
+        }
+      }
+    },
+    "required_paths": {
+      "type": "array",
+      "description": "Paths the source file's own consistency-check block $(error)s on if unset or malformed. Order carries no meaning; `required` distinguishes a hard stop from an optional/defaulted path.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "required"],
+        "properties": {
+          "name": { "type": "string" },
+          "required": { "type": "boolean" },
+          "default": { "type": ["string", "null"] },
+          "description": { "type": "string" },
+          "must_contain": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Sibling files/directories the source's own tree-integrity check requires directly under this path (e.g. DUT_ROOT_PATH needing MACRO/MODEL/ENV/DUMMY_TOP/RTLCAT)."
+          }
+        }
+      }
+    },
+    "compile_time_params": {
+      "type": "array",
+      "description": "Knobs that select DUT/VIP configuration and require a rebuild to take effect. An agent must treat a change to any of these as invalidating the current simv.",
+      "items": { "$ref": "#/$defs/param" }
+    },
+    "runtime_params": {
+      "type": "array",
+      "description": "Knobs applied as run-time plusargs; changing one costs one simulation, never a rebuild.",
+      "items": { "$ref": "#/$defs/param" }
+    },
+    "defines": {
+      "type": "array",
+      "description": "Compile-time +define+ macros, unconditional or gated behind a compile_time_param.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "always_on": { "type": "boolean", "default": false },
+          "controlled_by": { "type": "string", "description": "Name of the compile_time_param whose value gates this define." },
+          "when": { "type": "string", "description": "The controlling param value that turns this define on." },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "compile_flags": {
+      "type": "object",
+      "description": "Fixed (non-user-overridable) flag groups the source always passes to vlogan/vcs -- bitmode, NTB/Vera compatibility, VIP/TB incdirs, VIP interface-width macros. Captured verbatim so a justfile/agent never has to reconstruct them by reading the VIP examples again.",
+      "additionalProperties": true
+    },
+    "lsf": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled_by": { "type": "string", "description": "Var name that switches local vs LSF-batch execution, e.g. LSF." },
+        "default": { "type": ["string", "integer"] },
+        "ncore_var": { "type": "string" },
+        "ncore_default": { "type": "integer" },
+        "required_scripts": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "pattern_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "description": "Registry file mapping a PATTERN/scenario name to its directory, e.g. tb/patterns/pattern_list.txt." },
+        "selector_param": { "type": "string", "description": "Name of the runtime_params entry that selects a registry row, e.g. PATTERN." }
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Cross-field validity rules reverse-derived from the source's own $(error)/$(warning) guard blocks. Every rule here MUST be checked before invoking the underlying make/run command -- this is what lets a justfile recipe fail fast with the source's own actionable message instead of vcs failing silently or thousands of lines deep.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "params", "message"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": {
+            "enum": ["enum_membership", "mutual_requirement", "forbidden_combination", "retired"],
+            "description": "enum_membership: field value must be in the field's own enum (redundant safety net, already expressible via param.enum, kept when the guard names extra invalid-looking-but-plausible values e.g. 'gen3'). mutual_requirement: fields A implies B must satisfy some condition. forbidden_combination: named combination is rejected outright. retired: the param itself is a hard error now, never a no-op."
+          },
+          "params": { "type": "array", "items": { "type": "string" } },
+          "message": { "type": "string", "description": "Verbatim (or lightly trimmed) $(error) text -- this is what surfaces to the agent/user, not a paraphrase." }
+        }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The only verbs an agent may invoke. Each corresponds 1:1 to a real make target / command.txt entry point.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "description": "e.g. compile, sim, regress, check, help, clean, list_patterns." },
+          "description": { "type": "string" },
+          "params": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Subset of compile_time_params/runtime_params names this target actually reads. An agent passing a param not listed here for this target is a sign it is guessing, not reading the profile."
+          },
+          "requires_rebuild": { "type": "boolean", "default": false }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "param": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "enum": ["string", "int", "bool01", "enum", "path"] },
+        "default": {},
+        "enum": { "type": "array", "items": { "type": "string" } },
+        "plusarg": { "type": "string", "description": "The literal +NAME= or +NAME token forwarded at run time, when different from the bare var name (e.g. TEST -> +UVM_TESTNAME=)." },
+        "requires_rebuild": { "type": "boolean", "default": false },
+        "per_instance_of": { "type": "string", "description": "If set, this param is the per-instance override family root (e.g. SPEED -> SPEED0/SPEED1 exist as siblings with the same enum, defaulting to this param's value)." },
+        "description": { "type": "string" }
+      }
+    }
+  }
+}
