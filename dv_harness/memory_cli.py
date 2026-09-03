@@ -1,7 +1,10 @@
 from __future__ import annotations
 import argparse, json
 from pathlib import Path
-from .memory import MemoryStore, MemoryRetriever, MemoryGC, CornerCaseLibrary, CornerCaseLibraryConsolidator
+from .memory import (
+    MEMORY_LEVELS, MemoryStore, MemoryRetriever, MemoryGC, CornerCaseLibrary,
+    CornerCaseLibraryConsolidator, PropertyFilterError, parse_property_filters,
+)
 
 def main():
     ap=argparse.ArgumentParser()
@@ -12,6 +15,18 @@ def main():
     s.add_argument("--scope",default="")
     s.add_argument("--symptom",action="append",default=[])
     s.add_argument("--text",default="")
+    s.add_argument("--level",action="append",default=[],choices=MEMORY_LEVELS,
+                    help="Restrict to one or more memory tiers (repeatable).")
+    s.add_argument("--confidence",default="",
+                    help="Exact confidence filter (CONFIRMED/HIGH/MEDIUM/LOW/UNKNOWN). "
+                         "Without it confidence only ranks, never filters.")
+    s.add_argument("--status",default="",
+                    help="Record status to match; default ACTIVE-only. Use ANY to include "
+                         "DEPRECATED/SUPERSEDED records too.")
+    s.add_argument("--property",action="append",default=[],dest="properties",metavar="KEY=VALUE",
+                    help="Arbitrary record-field filter, repeatable (e.g. --property kind=root_cause). "
+                         "Reads the record file for fields index.json does not carry.")
+    s.add_argument("--limit",type=int,default=8)
     g=sp.add_parser("get"); g.add_argument("memory_id")
     d=sp.add_parser("deprecate"); d.add_argument("memory_id"); d.add_argument("--reason",required=True)
 
@@ -39,9 +54,16 @@ def main():
     a=ap.parse_args()
     store=MemoryStore(Path(a.project_root))
     if a.cmd=="search":
+        try:
+            property_filters=parse_property_filters(a.properties)
+        except PropertyFilterError as e:
+            print(json.dumps({"ok":False,"error":"BAD_PROPERTY_FILTER","detail":str(e)},ensure_ascii=False))
+            raise SystemExit(2)
         print(json.dumps(MemoryRetriever(store).search({
-            "protocol":a.protocol,"scope":a.scope,"symptoms":a.symptom,"text":a.text
-        }),ensure_ascii=False,indent=2))
+            "protocol":a.protocol,"scope":a.scope,"symptoms":a.symptom,"text":a.text,
+            "level":a.level,"confidence":a.confidence,"status":a.status,
+            "property":property_filters,
+        },limit=a.limit),ensure_ascii=False,indent=2))
     elif a.cmd=="get":
         print(json.dumps(store.get(a.memory_id),ensure_ascii=False,indent=2))
     elif a.cmd=="deprecate":

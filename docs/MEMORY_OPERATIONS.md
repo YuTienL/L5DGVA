@@ -5,21 +5,23 @@
 Concrete, copy-pasteable commands for every real Memory operation, run
 from the project root (the directory holding `.dv-harness/`).
 
-As of the foundational Obsidian+Git/Markdown Hybrid Memory layer (commit
-`ceab932`, confirmed DONE), there is no dedicated `dv-harness memory ...`
-/ `dv-harness vault ...` CLI subcommand — real operations go through
-`dv_harness.memory_cli` (a separate `python -m` entry point) for the JSON
-`MemoryStore`/`CornerCaseLibrary`, and short Python snippets for the
-router and Vault. This is honest, not an oversight — check
-`dv-harness --help` on your checkout before assuming a `dv-harness memory`
-command does or doesn't exist: a native `dv-harness memory
-status/search/show/add/promote/graph/validate/sync/doctor` surface over
-the Vault was under active, separate development in this same tree at the
-time this page was written. If it has landed on your checkout, prefer
-`dv-harness memory --help` for day-to-day use and treat the Python API
-below as the stable, always-available layer it wraps. Every command below
-is real and works regardless of whether that additional CLI surface
-exists on your checkout.
+Two real CLI surfaces exist, over two different stores — pick by which
+store holds what you want:
+
+- **`dv-harness memory status/search/show/add/promote/graph/validate/sync/
+  doctor`** — the Markdown+YAML **DV-Knowledge Vault** (`memory_vault.py`).
+  Human-browsable notes; the Job/Project/Engineering/Organizational mirror.
+- **`python -m dv_harness.memory_cli`** — the JSON `MemoryStore` /
+  `CornerCaseLibrary` (`memory.py`), i.e. the primary tier-1..5 records
+  themselves, **including Working Memory, which is deliberately never
+  mirrored into the Vault** (`memory_router.py`) and so is reachable only
+  here.
+
+Both accept the same filter vocabulary (`--protocol`, `--level`,
+`--confidence`, `--status`, repeatable `--property KEY=VALUE`, free text);
+`--tag`, `--exact` and `--linked-to` are Vault-only, because a JSON
+MemoryStore record carries neither tags nor wiki-links. The Python APIs
+below remain the stable layer both CLIs wrap.
 
 ## JSON MemoryStore — search / get / deprecate
 
@@ -29,6 +31,17 @@ exists on your checkout.
 # come from the Knowledge Center, not this local search, per its own store).
 python -m dv_harness.memory_cli --project-root . search \
   --protocol USB --scope branch_b0 --symptom "scoreboard mismatch" --text "split transaction"
+
+# Structural filters (repeatable --level, exact --confidence, arbitrary
+# --property KEY=VALUE read straight off the record file). A filter alone is
+# a valid query -- no free text needed:
+python -m dv_harness.memory_cli --project-root . search \
+  --level engineering --level project --confidence HIGH --property kind=root_cause
+
+# Deprecated/superseded records are excluded by default (status defaults to
+# ACTIVE). Ask for them explicitly, or use ANY for every status at once:
+python -m dv_harness.memory_cli --project-root . search --protocol USB --status DEPRECATED
+python -m dv_harness.memory_cli --project-root . search --protocol USB --status ANY
 
 # Or via the PowerShell wrapper at the repo root:
 .\DV_MEMORY_SEARCH.ps1 -Protocol USB -Symptom "scoreboard mismatch" -Text "split transaction"
@@ -98,7 +111,21 @@ print(promotion)  # {"promoted": False, "reason": "INSUFFICIENT_CONFIRMATION",
 write-through AND shared Knowledge Center push) — use it for a
 deliberately local-only, no-network-activity write.
 
-## Vault (`dv_harness.memory_vault`) — direct provider access (Python, no CLI wrapper yet)
+## Vault (`dv_harness.memory_vault`) — direct provider access
+
+`dv-harness memory search` exposes every filter `provider.search()` accepts
+(`--protocol`, `--project`, `--level`, `--confidence`, `--status`, `--tag`,
+`--exact`, `--linked-to`, repeatable `--property KEY=VALUE`, free text), so
+day-to-day retrieval needs no Python:
+
+```bash
+dv-harness memory search "scoreboard" --protocol USB --confidence HIGH --limit 5
+dv-harness memory search --exact "lfps_detect_sync" --property subsystem=link_training
+dv-harness memory search --linked-to MEM-A1B2C3D4E5      # notes wiki-linking to that note
+```
+
+Use the Python API below for writes/reads the CLI does not wrap
+(`update`, `delete`, `list_tags`, `list_links`):
 
 ```python
 from pathlib import Path

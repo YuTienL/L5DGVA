@@ -14,22 +14,31 @@ allowed-tools: Read Grep Glob Edit Write PowerShell Skill
 (Engineering Memory Policy's "Before debugging" step) -- ranking input only,
 never an accepted conclusion.
 
-**Inputs**: `protocol`/`scope`/`symptom`(s)/free `text`, optionally `tag`,
-`exact`, `linked_to`, or a `property` filter dict (for vault notes).
+**Inputs**: `protocol`/`scope`/`symptom`(s)/free `text`, plus structural
+filters both backends share -- `level`, `confidence`, `status` (defaults to
+ACTIVE-only; `ANY` includes DEPRECATED/SUPERSEDED), and an arbitrary
+`property` filter dict. `tag`/`exact`/`linked_to` are vault-only, because a
+JSON MemoryStore record carries neither tags nor wiki-links. A structural
+filter alone is a valid query -- no free text required.
 
 **Outputs** (two real backends, use whichever holds the tier you need):
 - `dv_harness.memory.MemoryRetriever(store).search(query, limit, now)` --
   JSON-file `MemoryStore` records (working/job/project/engineering/
-  organizational, plus `CornerCaseLibrary.search()` for CCL entries).
-  Also reachable via CLI: `python -m dv_harness.memory_cli search
-  --protocol <p> --scope <s> --symptom <s1> --symptom <s2> --text <text>`
-  (`corner-case-search` for CCL), or `DV_MEMORY_SEARCH.ps1` /
-  `DV_MEMORY_GET.ps1`.
+  organizational, plus `CornerCaseLibrary.search()` for CCL entries). This
+  is the ONLY path to Working Memory: `memory_router.py` deliberately never
+  mirrors that tier into the vault. Also reachable via CLI:
+  `python -m dv_harness.memory_cli search --protocol <p> --scope <s>
+  --symptom <s1> --text <text> --level engineering --confidence HIGH
+  --status ANY --property kind=root_cause` (`corner-case-search` for CCL),
+  or `DV_MEMORY_SEARCH.ps1` / `DV_MEMORY_GET.ps1`.
 - `dv_harness.memory_vault.get_active_provider(root, cfg).search(query, limit)`
   -- the human-browsable Markdown+YAML DV-Knowledge Vault note mirror (see
   `docs/MEMORY_OPERATIONS.md`); real keyword/tag/property/wiki-link
   filtering, `rg`-accelerated with a correct pure-Python fallback, no vector
-  index.
+  index. Fully exposed on the CLI as `dv-harness memory search [<text>]
+  [--protocol|--project|--level|--confidence|--status|--tag|--exact
+  |--linked-to|--property KEY=VALUE]` -- no Python needed to reach any
+  filter.
 
 **Preconditions**: none to search -- a low/no-match result is a valid,
 common outcome (start from a fresh hypothesis).

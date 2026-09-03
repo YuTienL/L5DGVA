@@ -751,11 +751,26 @@ def main():
 
     pmem_search = pmem_sub.add_parser("search", help="Real keyword/tag/property/wiki-link search over vault notes "
                                                        "(FileSystemMarkdownAdapter.search() -- no embedding/vector DB).")
-    pmem_search.add_argument("query", nargs="?", default="", help="Free-text query. Omit for tag/protocol/level-only filtering.")
+    pmem_search.add_argument("query", nargs="?", default="", help="Free-text query. Omit for filter-only search.")
     pmem_search.add_argument("--protocol", default=None)
     pmem_search.add_argument("--tag", default=None)
     pmem_search.add_argument("--level", default=None, choices=["working", "job", "project", "engineering", "organizational"],
                               dest="memory_level")
+    # Every remaining filter FileSystemMarkdownAdapter.search() already
+    # accepts, exposed on the CLI too (2026-09-04, gap-close-obsidian-memory
+    # phase 9) -- previously reachable only from the Python API, which made
+    # them unusable from an agent/shell invocation.
+    pmem_search.add_argument("--exact", default=None,
+                              help="Substring that must appear literally in the note's raw text "
+                                   "(frontmatter + body), for signatures a tokenizer would split.")
+    pmem_search.add_argument("--property", action="append", default=[], dest="properties", metavar="KEY=VALUE",
+                              help="Arbitrary YAML frontmatter filter, repeatable "
+                                   "(e.g. --property subsystem=link_training).")
+    pmem_search.add_argument("--linked-to", default=None, dest="linked_to", metavar="NOTE_ID",
+                              help="Only notes whose body wiki-links to this note id, e.g. [[MEM-1A2B3C4D5E]].")
+    pmem_search.add_argument("--project", default=None)
+    pmem_search.add_argument("--confidence", default=None, choices=["CONFIRMED", "HIGH", "MEDIUM", "LOW", "UNKNOWN"])
+    pmem_search.add_argument("--status", default=None, help="Note status to match, e.g. ACTIVE or DEPRECATED.")
     pmem_search.add_argument("--limit", type=int, default=10)
 
     pmem_show = pmem_sub.add_parser("show", help="Print one note's full frontmatter + body.")
@@ -1708,14 +1723,29 @@ def main():
                 "note_counts": counts,
             }, ensure_ascii=False, indent=2))
         elif args.memory_cmd == "search":
+            from .memory import PropertyFilterError, parse_property_filters
+
             provider = mv.get_active_provider(h.root, h.cfg)
             query: Dict[str, Any] = {"text": args.query}
-            if args.protocol:
-                query["protocol"] = args.protocol
             if args.tag:
                 query["tag"] = args.tag
+            if args.exact:
+                query["exact"] = args.exact
+            if args.linked_to:
+                query["linked_to"] = args.linked_to
             if args.memory_level:
                 query["memory_level"] = args.memory_level
+            for flag in ("protocol", "project", "confidence", "status"):
+                value = getattr(args, flag, None)
+                if value:
+                    query[flag] = value
+            if args.properties:
+                try:
+                    query["property"] = parse_property_filters(args.properties)
+                except PropertyFilterError as e:
+                    print(json.dumps({"ok": False, "error": "BAD_PROPERTY_FILTER", "detail": str(e)},
+                                      ensure_ascii=False))
+                    raise SystemExit(2)
             result = provider.search(query, limit=args.limit)
             print(json.dumps(result, ensure_ascii=False, indent=2))
         elif args.memory_cmd == "show":

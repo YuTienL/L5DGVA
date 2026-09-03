@@ -6,6 +6,27 @@ from typing import Any, Dict, List, Optional
 
 MEMORY_LEVELS=["working","job","project","engineering","organizational"]
 
+
+class PropertyFilterError(ValueError):
+    """A `--property` CLI argument that is not `KEY=VALUE`."""
+
+
+def parse_property_filters(items) -> Dict[str,str]:
+    """Turn repeated `--property KEY=VALUE` CLI arguments into the
+    `query["property"]` dict both MemoryRetriever.search() (JSON MemoryStore)
+    and memory_vault.FileSystemMarkdownAdapter.search() (Markdown vault
+    mirror) already accept. Shared by `dv-harness memory search` and
+    `python -m dv_harness.memory_cli search` so the two CLIs cannot drift on
+    how a property filter is spelled. Only the FIRST `=` splits, so a value
+    may itself contain `=`."""
+    out: Dict[str,str]={}
+    for item in items or []:
+        key,sep,value=str(item).partition("=")
+        if not sep or not key.strip():
+            raise PropertyFilterError(f"expected KEY=VALUE, got {item!r}")
+        out[key.strip()]=value.strip()
+    return out
+
 # REMOVED (2026-09-03, gap-close-engine cleanup): a `current_evidence_required`
 # field used to be set to `True` on every MemoryStore record (all 5 tiers)
 # via `add()`'s setdefault below, and again explicitly `True` in
@@ -278,16 +299,68 @@ def _recency_score(row: Dict[str,Any], now: float) -> float:
     return 1.0 * (0.5 ** (age_days / 90.0))
 
 class MemoryRetriever:
+    # Sentinel accepted by search()'s `status` key to mean "any status at all"
+    # (including DEPRECATED/SUPERSEDED records MemoryGC.deprecate() wrote) --
+    # search() otherwise defaults to ACTIVE-only, which is what every existing
+    # caller relies on.
+    STATUS_ANY = ("ANY", "*")
+
     def __init__(self, store: MemoryStore): self.store=store
+
+    def _record_field(self, row: Dict[str,Any], key: str, record_cache: Dict[str,Any]):
+        """Value of `key` for an index row, reading the full record file only
+        when the index row does not carry that key. _index_row() persists a
+        fixed subset (protocol/scope/symptoms/root_cause/confidence/status/
+        level/title/...); an arbitrary property filter must still be able to
+        reach a field that lives only in the record itself (e.g. `subsystem`,
+        `kind`, `project`, `verified`). The cache keeps that to at most one
+        file read per candidate row, not one per filter key."""
+        if key in row:
+            return row.get(key)
+        mid=str(row.get("memory_id"))
+        if mid not in record_cache:
+            record_cache[mid]=self.store.get(mid) or {}
+        return record_cache[mid].get(key)
+
+    @staticmethod
+    def _property_matches(actual: Any, wanted: Any) -> bool:
+        if isinstance(actual, (list, tuple, set)):
+            return str(wanted) in {str(x) for x in actual}
+        return str(actual)==str(wanted)
+
     def search(self, query: Dict[str,Any], limit: int=8, now: Optional[float]=None):
         q_protocol=str(query.get("protocol","")).lower()
         q_scope=str(query.get("scope","")).lower()
         q_sym=_tok(query.get("symptoms",[]))
         q_text=_tok(query.get("text",""))
+        # Structural filters (2026-09-04, gap-close-obsidian-memory phase 9):
+        # level/confidence/status/arbitrary-property, so the JSON MemoryStore's
+        # own retrieval reaches the same filter classes the Vault mirror's
+        # FileSystemMarkdownAdapter.search() already offered. Tag and wiki-link
+        # filters are deliberately NOT added here: MemoryStore records carry
+        # neither field (they are Markdown-note concepts owned by
+        # memory_vault.py), so a filter for them would match nothing by
+        # construction.
+        q_levels=query.get("level") or query.get("memory_level")
+        if isinstance(q_levels,str): q_levels=[q_levels]
+        q_levels={str(x) for x in (q_levels or [])}
+        q_confidence=str(query.get("confidence","")).upper()
+        status_raw=query.get("status")
+        status_explicit=bool(status_raw)
+        q_status=str(status_raw or "ACTIVE").upper()
+        status_any=status_explicit and q_status in self.STATUS_ANY
+        property_filters=dict(query.get("property") or {})
+        record_cache: Dict[str,Any]={}
         now = now if now is not None else time.time()
         scored=[]
         for row in self.store._index():
-            if row.get("status")!="ACTIVE": continue
+            if not status_any and str(row.get("status","")).upper()!=q_status: continue
+            if q_levels and str(row.get("level")) not in q_levels: continue
+            if q_confidence and str(row.get("confidence","")).upper()!=q_confidence: continue
+            if property_filters and not all(
+                self._property_matches(self._record_field(row,k,record_cache),v)
+                for k,v in property_filters.items()
+            ): continue
             # Relevance floor (2026-08-31 fix wave, finding I2): _recency_score
             # is ALWAYS positive for any record with a timestamp (up to 1.0,
             # decaying), and confidence contributes independently of the
@@ -302,7 +375,20 @@ class MemoryRetriever:
             # how confident it is -- recency/confidence still shape ranking
             # AMONG genuinely relevant hits, they just can't manufacture
             # relevance on their own.
+            #
+            # A structural filter the caller EXPLICITLY passed (level/
+            # confidence/status/property) does count toward relevance: unlike
+            # recency/confidence-as-ranking-bonus, a record that survives an
+            # explicit filter genuinely matched a stated part of the query, so
+            # "list every ACTIVE engineering-tier record" must not be emptied
+            # out by the floor. Queries that pass no structural filter are
+            # unaffected -- their relevance is still text/protocol/scope/
+            # symptom overlap only, exactly as finding I2 required.
             relevance=0.0
+            if q_levels: relevance+=1
+            if q_confidence: relevance+=1
+            if status_explicit: relevance+=1
+            relevance += len(property_filters) * 1.0
             if q_protocol and str(row.get("protocol","")).lower()==q_protocol: relevance+=3
             if q_scope and str(row.get("scope","")).lower()==q_scope: relevance+=2
             relevance += len(q_sym & _tok(row.get("symptoms",[]))) * 1.5
