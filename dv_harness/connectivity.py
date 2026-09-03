@@ -209,6 +209,128 @@ def assert_t3_never_auto_accepted(result: BindTierResult) -> None:
         )
 
 
+#: The only two tiers whose `bind` statement a generator may emit with no
+#: human sign-off. T3 needs a real human confirmation; T4 must never be
+#: emitted at all (it belongs in the question queue).
+AUTO_EMITTABLE_TIERS = frozenset({BindTier.T1_ALREADY_DECIDED, BindTier.T2_STRUCTURAL_MATCH})
+
+#: Tier recorded for a bind entry that was never run through
+#: classify_bind_tier(). A real, greppable value rather than a silent `None`
+#: so a legacy topology JSON reads as visibly UNCLASSIFIED in the policy
+#: decision list instead of merely absent from it.
+BIND_TIER_UNCLASSIFIED = "UNCLASSIFIED"
+
+
+def _t3_human_confirmation_is_real(entry: dict) -> bool:
+    """A T3 bind entry may only be emitted once a REAL human confirmed it.
+    Reuses `question_queue.HUMAN_DECISION_SOURCE` -- the single sanctioned
+    decision source that module already uses to stop the harness answering
+    its own Tier-3 escalation with its own earlier guess -- rather than
+    inventing a second, parallel notion of "confirmed" here."""
+    from . import question_queue  # local import, same convention as
+                                  # build_t4_question_queue_entry() below
+    conf = entry.get("human_confirmation")
+    if not isinstance(conf, dict):
+        return False
+    if conf.get("source") != question_queue.HUMAN_DECISION_SOURCE:
+        return False
+    return bool(conf.get("confirmed_by")) and bool(conf.get("basis"))
+
+
+def assert_bind_entry_tier_allows_emission(
+    entry: dict, *, index: int = 0, require_tier: bool = False,
+) -> str:
+    """Hard tier gate for ONE bind entry, called right before a generator
+    would emit its `bind` statement. This is the "downstream consumer"
+    `assert_t3_never_auto_accepted()`'s own docstring names and which did not
+    previously exist anywhere in this repo -- without it, the real emission
+    path (`uvm_generator.bind_mechanism_generator.emit_bind_sv`, driven by
+    `tools/generate_bind_mechanism.py`) would write a naming-heuristic-only
+    bind into a `.sv` file with no human ever confirming it.
+
+    Returns the entry's tier value (`BIND_TIER_UNCLASSIFIED` when absent and
+    `require_tier` is False). Raises `BindTierError` for every case Part C
+    says must never reach a generated bind file:
+      * T4 -> never emittable; it belongs in the question queue
+        (`build_t4_question_queue_entry()`), not in a bind file.
+      * T3 -> emittable ONLY with a real human confirmation, per "ALWAYS
+        requires human confirmation, NEVER auto-accepted".
+      * an unrecognized tier string -> never silently treated as safe.
+      * a missing tier, when `require_tier=True`.
+
+    `require_tier` defaults to False so the existing 3-field bind-entry
+    contract (`target_instance`/`ports`/`reason`, documented in every
+    PROTOCOL_BUILDERS skill and used by the real
+    `examples/generated_usb_real_evidence_v1/manifest_inputs/usb_bind_topology.json`)
+    keeps working unchanged. That is a deliberate, disclosed residual: an
+    entry carrying NO tier is still emittable. What this gate closes hard is
+    the dangerous case -- an entry the pipeline already classified as
+    unconfirmed (T3) or undecidable (T4) being emitted anyway."""
+    raw = entry.get("tier")
+    if raw is None or raw == "":
+        if require_tier:
+            raise BindTierError("BIND_ENTRY_MISSING_TIER", {
+                "index": index, "target_instance": entry.get("target_instance"),
+                "hint": "run classify_bind_tier() on the candidate and record its tier on the bind entry",
+            })
+        return BIND_TIER_UNCLASSIFIED
+
+    value = raw.value if isinstance(raw, BindTier) else str(raw)
+    try:
+        tier = BindTier(value)
+    except ValueError:
+        raise BindTierError("BIND_ENTRY_UNKNOWN_TIER", {
+            "index": index, "target_instance": entry.get("target_instance"),
+            "tier": value, "known_tiers": [t.value for t in BindTier],
+        }) from None
+
+    if tier is BindTier.T4_UNDECIDABLE:
+        raise BindTierError("T4_BIND_MUST_GO_TO_QUESTION_QUEUE", {
+            "index": index, "target_instance": entry.get("target_instance"),
+            "tier": tier.value,
+        })
+
+    if tier is BindTier.T3_NAMING_HEURISTIC:
+        # Defense in depth: re-run the standalone guard against a result
+        # rebuilt from this entry's OWN claimed flags, so an entry that
+        # hand-writes `auto_acceptable: true` is caught by the very function
+        # the "T3 never auto-accepted" rule was written into.
+        assert_t3_never_auto_accepted(BindTierResult(
+            tier=tier,
+            rationale="rebuilt from bind entry for emission-time re-check",
+            auto_acceptable=bool(entry.get("auto_acceptable", False)),
+            requires_human_confirmation=bool(entry.get("requires_human_confirmation", True)),
+            requires_question_queue_entry=False,
+        ))
+        if not _t3_human_confirmation_is_real(entry):
+            raise BindTierError("T3_BIND_REQUIRES_HUMAN_CONFIRMATION", {
+                "index": index, "target_instance": entry.get("target_instance"),
+                "tier": tier.value,
+                "required_shape": {"human_confirmation": {
+                    "source": "human_answer", "confirmed_by": "<who>", "basis": "<why>"}},
+            })
+    return tier.value
+
+
+def enforce_bind_tier_policy(bind_entries: list, *, require_tier: bool = False) -> list[dict]:
+    """Whole-list form of `assert_bind_entry_tier_allows_emission()`. Raises
+    on the FIRST offending entry (so nothing is emitted from a list that
+    contains even one unconfirmed T3 or any T4), otherwise returns one
+    decision record per entry for a report/audit trail."""
+    decisions = []
+    auto_ok = {t.value for t in AUTO_EMITTABLE_TIERS}
+    for i, entry in enumerate(bind_entries or []):
+        tier = assert_bind_entry_tier_allows_emission(entry, index=i, require_tier=require_tier)
+        decisions.append({
+            "index": i,
+            "target_instance": entry.get("target_instance"),
+            "tier": tier,
+            "auto_emittable": tier in auto_ok,
+            "human_confirmed": tier == BindTier.T3_NAMING_HEURISTIC.value,
+        })
+    return decisions
+
+
 # ===========================================================================
 # Input 1: DUT instance tree -- two independent capture methods, EITHER of
 # which produces the same DutInstanceNode tree:
@@ -940,6 +1062,28 @@ class ConnectivityRow:
     def to_dict(self) -> dict:
         return {col: getattr(self, col) for col in MATRIX_COLUMNS}
 
+    @classmethod
+    def from_dut_port(cls, *, dut_instance: str, interface: str,
+                      dut_port_direction: str, vip_type: str, count: int,
+                      active_passive: str, bind_target: str, tier: str) -> "ConnectivityRow":
+        """Build a matrix row whose `role` is DERIVED, not typed in: the only
+        constructor that guarantees the role came from
+        `determine_role_from_port_direction()` (real DUT port direction) and
+        not from an instance name. `direction` is likewise taken from the
+        same single source, so the two columns can never disagree.
+
+        Prefer this over the bare `ConnectivityRow(...)` constructor -- the
+        plain one still accepts any string for `role`, which is exactly the
+        naming-derived-role hole `determine_role_from_port_direction()`'s
+        name-free signature exists to prevent."""
+        return cls(
+            dut_instance=dut_instance, interface=interface,
+            direction=dut_port_direction,
+            role=determine_role_from_port_direction(dut_port_direction),
+            vip_type=vip_type, count=count, active_passive=active_passive,
+            bind_target=bind_target, tier=tier,
+        )
+
 
 def build_connectivity_matrix(rows: list) -> list[dict]:
     """Fixed-column JSON form of the required matrix. `rows` may be
@@ -967,12 +1111,90 @@ def render_matrix_table(rows: list) -> str:
     return "\n".join(lines)
 
 
-def write_connectivity_manifest(path, rows: list, metadata: Optional[dict] = None) -> dict:
+#: `vip_type` values that mean "this verified interface has NO VIP on it".
+#: Such a row must be covered by an explicit, reasoned exemption or the
+#: self-check identity below fails -- that is the "no unexplained gap" rule.
+NO_VIP_MARKERS = frozenset({"", "-", "NONE", "N/A", "NA", REQUIRED_HUMAN_INPUT})
+
+#: The three legal outputs of `determine_role_from_port_direction()`, by
+#: prefix. Any other `role` value in a matrix row was not derived from a real
+#: DUT port direction.
+LEGAL_ROLE_PREFIXES = (
+    "vip_role=slave_responder",
+    "vip_role=master_initiator",
+    "vip_role=AMBIGUOUS_FROM_DIRECTION_ALONE",
+)
+
+
+def count_vip_instances_in_matrix(rows: list) -> int:
+    """How many matrix rows actually carry a VIP instance -- the `vip_instance
+    _count` term of the self-check identity, read off the real matrix rather
+    than supplied by the caller as a separate (and therefore forgeable)
+    number."""
+    return sum(
+        1 for r in build_connectivity_matrix(rows)
+        if str(r.get("vip_type") or "").strip().upper() not in NO_VIP_MARKERS
+    )
+
+
+def assert_role_provenance(rows: list) -> None:
+    """Matrix-level enforcement that every `role` value is one
+    `determine_role_from_port_direction()` could actually have produced.
+    Closes the gap between that function's deliberately name-free signature
+    and `ConnectivityRow.role` being a plain, hand-settable string: a
+    naming-derived role such as "master (u_axi_m looks like a master)" is
+    rejected here even though the dataclass itself would accept it."""
+    for i, r in enumerate(build_connectivity_matrix(rows)):
+        role = str(r.get("role") or "")
+        if not role.startswith(LEGAL_ROLE_PREFIXES):
+            raise ConnectivityError("ROLE_NOT_DERIVED_FROM_PORT_DIRECTION", {
+                "row_index": i, "dut_instance": r.get("dut_instance"),
+                "interface": r.get("interface"), "role": role,
+                "legal_prefixes": list(LEGAL_ROLE_PREFIXES),
+                "hint": "build the row with ConnectivityRow.from_dut_port(), which derives role from the real DUT port direction",
+            })
+
+
+def verify_matrix_self_check_identity(rows: list, exemptions: Optional[list] = None) -> dict:
+    """Run Part C's hard identity over a REAL connectivity matrix:
+    sum(verified interfaces) == sum(VIP instances) + sum(explicit exemptions),
+    with both left- and right-hand terms read off the matrix itself
+    (one row per verified interface; a row whose `vip_type` is a
+    `NO_VIP_MARKERS` value contributes no VIP instance).
+
+    This is the wiring `verify_self_check_identity()` previously lacked: the
+    equation existed and was tested, but nothing ever fed a real matrix into
+    it, so a matrix containing an uncovered no-VIP interface could still be
+    rendered and persisted. Raises `ConnectivitySelfCheckError` (never a
+    bool/warning) exactly as that function does."""
+    exemptions = list(exemptions or [])
+    verified = len(build_connectivity_matrix(rows))
+    vip = count_vip_instances_in_matrix(rows)
+    verify_self_check_identity(verified, vip, exemptions)
+    return {
+        "verified_interface_count": verified,
+        "vip_instance_count": vip,
+        "exemption_count": len(exemptions),
+        "exemptions": exemptions,
+        "identity_holds": True,
+    }
+
+
+def write_connectivity_manifest(path, rows: list, metadata: Optional[dict] = None,
+                                exemptions: Optional[list] = None) -> dict:
+    """Persist the connectivity matrix. The self-check identity and role
+    provenance are verified BEFORE anything is written, so a manifest file
+    that exists on disk is one that reconciled -- a matrix with an
+    unexplained no-VIP interface, or a hand-typed naming-derived role,
+    raises instead of silently producing an authoritative-looking artifact."""
+    assert_role_provenance(rows)
+    self_check = verify_matrix_self_check_identity(rows, exemptions)
     manifest = {
         "generated_at": _utcnow_iso(),
         "metadata": metadata or {},
         "columns": MATRIX_COLUMNS,
         "rows": build_connectivity_matrix(rows),
+        "self_check": self_check,
     }
     Path(path).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest

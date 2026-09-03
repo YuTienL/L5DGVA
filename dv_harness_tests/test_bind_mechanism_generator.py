@@ -74,3 +74,61 @@ def test_emit_hook_svh_contains_macro_redirect_before_decls_and_run_test():
     decl_pos = svh.index("dv_uvm_seq_launcher u_seq_launcher();")
     run_test_pos = svh.index("initial run_test();")
     assert redirect_pos < decl_pos < run_test_pos
+
+
+# ===========================================================================
+# Bind-confidence TIER gate on the real emission path (gap closure
+# 2026-09-04). Before this wiring, emit_bind_sv() would happily write a
+# naming-heuristic-only (T3) or undecidable (T4) bind into a .sv file.
+# ===========================================================================
+
+def _tiered(tier, **over):
+    e = dict(VALID_ENTRY)
+    e["tier"] = tier
+    e.update(over)
+    return e
+
+
+def test_emit_bind_sv_still_accepts_a_legacy_untiered_entry():
+    """The existing 3-field contract (used by the real
+    examples/.../usb_bind_topology.json) keeps working unchanged."""
+    assert "bind chip.core.evt_ctrl" in emit_bind_sv([VALID_ENTRY])
+
+
+def test_emit_bind_sv_emits_a_t1_or_t2_entry():
+    assert "bind chip.core.evt_ctrl" in emit_bind_sv([_tiered("T2_STRUCTURAL_MATCH")])
+
+
+def test_emit_bind_sv_refuses_an_unconfirmed_t3_entry():
+    from dv_harness.connectivity import BindTierError
+    with pytest.raises(BindTierError) as exc:
+        emit_bind_sv([_tiered("T3_NAMING_HEURISTIC")])
+    assert exc.value.reason == "T3_BIND_REQUIRES_HUMAN_CONFIRMATION"
+
+
+def test_emit_bind_sv_emits_a_t3_entry_once_a_human_confirmed_it():
+    from dv_harness.question_queue import HUMAN_DECISION_SOURCE
+    sv = emit_bind_sv([_tiered("T3_NAMING_HEURISTIC", human_confirmation={
+        "source": HUMAN_DECISION_SOURCE, "confirmed_by": "dv_owner",
+        "basis": "confirmed against the RTL hierarchy dump"})])
+    assert "bind chip.core.evt_ctrl" in sv
+
+
+def test_emit_bind_sv_never_emits_a_t4_entry():
+    from dv_harness.connectivity import BindTierError
+    with pytest.raises(BindTierError) as exc:
+        emit_bind_sv([_tiered("T4_UNDECIDABLE")])
+    assert exc.value.reason == "T4_BIND_MUST_GO_TO_QUESTION_QUEUE"
+
+
+def test_emit_bind_sv_require_tier_refuses_an_untiered_entry():
+    from dv_harness.connectivity import BindTierError
+    with pytest.raises(BindTierError) as exc:
+        emit_bind_sv([VALID_ENTRY], require_tier=True)
+    assert exc.value.reason == "BIND_ENTRY_MISSING_TIER"
+
+
+def test_nothing_is_emitted_when_any_entry_in_the_list_is_blocked():
+    from dv_harness.connectivity import BindTierError
+    with pytest.raises(BindTierError):
+        emit_bind_sv([_tiered("T1_ALREADY_DECIDED"), _tiered("T4_UNDECIDABLE")])

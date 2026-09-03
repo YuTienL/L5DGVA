@@ -1133,3 +1133,168 @@ def test_build_t4_question_queue_entry_accepts_plain_string_options(tmp_path):
     entry = _ask_t4(tmp_path, options=["bind to phy0", "bind to phy1"],
                     recommendation="bind to phy0")
     assert entry["options"] == [{"label": "bind to phy0"}, {"label": "bind to phy1"}]
+
+
+# ===========================================================================
+# Tier gate on the REAL bind-emission path (gap closure 2026-09-04):
+# assert_t3_never_auto_accepted()'s docstring named a "downstream consumer"
+# that did not exist -- these prove one now does, end to end.
+# ===========================================================================
+
+_BASE_ENTRY = {
+    "target_instance": "chip.core.usb0",
+    "ports": ["phy0_sram_init_done"],
+    "reason": "declared at chip.core.usb0 per real RTL evidence",
+}
+
+
+def _entry(**over):
+    e = dict(_BASE_ENTRY)
+    e.update(over)
+    return e
+
+
+def test_enforce_bind_tier_policy_allows_t1_and_t2():
+    decisions = conn.enforce_bind_tier_policy([
+        _entry(tier="T1_ALREADY_DECIDED"), _entry(tier="T2_STRUCTURAL_MATCH"),
+    ])
+    assert [d["auto_emittable"] for d in decisions] == [True, True]
+
+
+def test_enforce_bind_tier_policy_refuses_unconfirmed_t3():
+    with pytest.raises(conn.BindTierError) as exc:
+        conn.enforce_bind_tier_policy([_entry(tier="T3_NAMING_HEURISTIC")])
+    assert exc.value.reason == "T3_BIND_REQUIRES_HUMAN_CONFIRMATION"
+
+
+def test_enforce_bind_tier_policy_accepts_t3_with_real_human_confirmation():
+    from dv_harness import question_queue
+    decisions = conn.enforce_bind_tier_policy([_entry(
+        tier="T3_NAMING_HEURISTIC",
+        human_confirmation={"source": question_queue.HUMAN_DECISION_SOURCE,
+                            "confirmed_by": "dv_owner",
+                            "basis": "confirmed against RTL hierarchy dump"},
+    )])
+    assert decisions[0]["human_confirmed"] is True
+
+
+def test_t3_confirmation_must_come_from_the_real_human_decision_source():
+    """A harness-minted decision source must never satisfy a T3 confirmation
+    -- reuses question_queue's own HUMAN_DECISION_SOURCE rule rather than a
+    parallel notion of "confirmed"."""
+    with pytest.raises(conn.BindTierError) as exc:
+        conn.enforce_bind_tier_policy([_entry(
+            tier="T3_NAMING_HEURISTIC",
+            human_confirmation={"source": "tier2_auto_assumption",
+                                "confirmed_by": "harness", "basis": "looked right"},
+        )])
+    assert exc.value.reason == "T3_BIND_REQUIRES_HUMAN_CONFIRMATION"
+
+
+def test_t3_entry_hand_marked_auto_acceptable_is_caught_by_the_original_guard():
+    with pytest.raises(conn.BindTierError) as exc:
+        conn.enforce_bind_tier_policy([_entry(
+            tier="T3_NAMING_HEURISTIC", auto_acceptable=True)])
+    assert exc.value.reason == "T3_MUST_NEVER_AUTO_ACCEPT"
+
+
+def test_enforce_bind_tier_policy_never_emits_t4():
+    with pytest.raises(conn.BindTierError) as exc:
+        conn.enforce_bind_tier_policy([_entry(tier="T4_UNDECIDABLE")])
+    assert exc.value.reason == "T4_BIND_MUST_GO_TO_QUESTION_QUEUE"
+
+
+def test_enforce_bind_tier_policy_rejects_unknown_tier_string():
+    with pytest.raises(conn.BindTierError) as exc:
+        conn.enforce_bind_tier_policy([_entry(tier="T2_LOOKS_FINE_TO_ME")])
+    assert exc.value.reason == "BIND_ENTRY_UNKNOWN_TIER"
+
+
+def test_untiered_entry_is_unclassified_by_default_but_refused_under_require_tier():
+    assert conn.enforce_bind_tier_policy([_entry()])[0]["tier"] == conn.BIND_TIER_UNCLASSIFIED
+    with pytest.raises(conn.BindTierError) as exc:
+        conn.enforce_bind_tier_policy([_entry()], require_tier=True)
+    assert exc.value.reason == "BIND_ENTRY_MISSING_TIER"
+
+
+def test_one_bad_entry_blocks_the_whole_list():
+    """Raises before any entry is emitted, so a list containing one T4 never
+    produces a partially-written bind file."""
+    with pytest.raises(conn.BindTierError):
+        conn.enforce_bind_tier_policy([
+            _entry(tier="T1_ALREADY_DECIDED"), _entry(tier="T4_UNDECIDABLE")])
+
+
+def test_classify_bind_tier_output_feeds_the_gate_directly():
+    """End-to-end: the classifier's own tier value is the exact string the
+    emission gate consumes -- no translation layer that could drift."""
+    t2 = conn.classify_bind_tier(structural_match={"matched": True, "protocol": "AXI",
+                                                    "matched_signals": ["AWVALID"]})
+    assert conn.enforce_bind_tier_policy([_entry(tier=t2.tier.value)])[0]["auto_emittable"]
+    t3 = conn.classify_bind_tier(naming_match="u_usb3_top")
+    with pytest.raises(conn.BindTierError):
+        conn.enforce_bind_tier_policy([_entry(tier=t3.tier.value)])
+
+
+# ===========================================================================
+# Matrix-level self-check identity + role provenance wiring
+# ===========================================================================
+
+def test_from_dut_port_derives_role_instead_of_accepting_one():
+    row = conn.ConnectivityRow.from_dut_port(
+        dut_instance="chip.core.usb0", interface="axi_if", dut_port_direction="output",
+        vip_type="AXI", count=1, active_passive="active",
+        bind_target="chip.core.usb0", tier="T2_STRUCTURAL_MATCH")
+    assert row.role == conn.determine_role_from_port_direction("output")
+    assert row.direction == "output"
+
+
+def test_assert_role_provenance_rejects_a_naming_derived_role():
+    bad = _sample_row()
+    bad.role = "master (u_axi_m looks like a master)"
+    with pytest.raises(conn.ConnectivityError) as exc:
+        conn.assert_role_provenance([bad])
+    assert exc.value.reason == "ROLE_NOT_DERIVED_FROM_PORT_DIRECTION"
+
+
+def test_verify_matrix_self_check_identity_counts_terms_off_the_real_matrix():
+    result = conn.verify_matrix_self_check_identity([_sample_row()])
+    assert result["verified_interface_count"] == 1
+    assert result["vip_instance_count"] == 1
+    assert result["identity_holds"] is True
+
+
+def test_matrix_with_an_uncovered_no_vip_interface_fails_loudly():
+    no_vip = _sample_row()
+    no_vip.vip_type = "NONE"
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.verify_matrix_self_check_identity([_sample_row(), no_vip])
+    assert exc.value.reason == "SELF_CHECK_IDENTITY_MISMATCH"
+    assert exc.value.detail["gap"] == 1
+
+
+def test_an_explicit_reasoned_exemption_closes_the_gap():
+    no_vip = _sample_row()
+    no_vip.vip_type = "NONE"
+    result = conn.verify_matrix_self_check_identity(
+        [_sample_row(), no_vip],
+        exemptions=[{"interface": "usb3_if", "reason": "monitored by the DUT's own internal checker"}])
+    assert result["identity_holds"] is True
+
+
+def test_write_connectivity_manifest_refuses_an_unreconciled_matrix(tmp_path):
+    """The manifest file must not exist on disk if the identity failed."""
+    no_vip = _sample_row()
+    no_vip.vip_type = REQUIRED_HUMAN_INPUT_SENTINEL = conn.REQUIRED_HUMAN_INPUT
+    out_path = tmp_path / "manifest.json"
+    with pytest.raises(conn.ConnectivitySelfCheckError):
+        conn.write_connectivity_manifest(out_path, [_sample_row(), no_vip])
+    assert not out_path.exists()
+
+
+def test_write_connectivity_manifest_records_the_self_check_it_ran(tmp_path):
+    out_path = tmp_path / "manifest.json"
+    conn.write_connectivity_manifest(out_path, [_sample_row()], metadata={"project": "test"})
+    loaded = json.loads(out_path.read_text(encoding="utf-8"))
+    assert loaded["self_check"]["identity_holds"] is True
+    assert loaded["self_check"]["verified_interface_count"] == 1
