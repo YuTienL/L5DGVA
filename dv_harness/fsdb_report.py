@@ -293,3 +293,73 @@ def parse_fsdbreport_output(report_text: str) -> Dict[str, Any]:
         "fieldnames": header,
         "records": [dict(zip(header, r)) for r in data_rows],
     }
+
+
+# ---------------------------------------------------------------------------
+# fsdbreport -> vip_distill -> evidence_db bridge (2026-09-04)
+# ---------------------------------------------------------------------------
+#
+# THE GAP THIS CLOSES. `vip_distill.distill_fsdbreport()` was real,
+# unit-tested code with ZERO live call sites anywhere in this repo -- a
+# repo-wide grep for it hit only its own definition, docstrings, and test
+# bodies. The one real production producer of fsdbreport output, the CLI's
+# `fsdb-report` command, ran the real `fsdbreport` binary through
+# `run_fsdbreport()` + `parse_fsdbreport_output()` and then only printed or
+# file-dumped the raw JSON: FSDB evidence never reached the Distillation
+# layer, and never reached DuckDB. The architecture diagram draws
+# `FSDB -> Distillation -> vip_distill.py -> DuckDB`; that edge did not
+# exist in code. This function is that edge.
+#
+# It lives HERE, in the module that owns the real fsdbreport producer,
+# rather than inside vip_distill.py -- vip_distill's own AST-enforced test
+# (test_vip_distill.py::test_module_does_not_import_orchestration_or_memory_
+# modules) permanently forbids it importing `evidence_db`, so the store-side
+# half of the bridge can never live there. Same placement rule the two
+# already-wired bridges follow: regression_reporter._write_normalized_
+# evidence_if_configured() (sim.log) and dashboard._ingest_coverage_summary_
+# to_evidence_db() (coverage) each sit in the module owning their producer,
+# not in the producer library and not in the store.
+#
+# vip_distill and evidence_db are imported INSIDE the function, not at
+# module scope: vip_distill imports THIS module at its own module scope
+# (`fsdb_report_mod`), so a top-level import back would be a hard circular
+# import at load time.
+
+def ingest_report_to_evidence_db(root, *, fsdb_path: str,
+                                  report_text: Optional[str] = None,
+                                  parsed_report: Optional[Dict[str, Any]] = None,
+                                  topic: Optional[str] = None,
+                                  job_id: Optional[int] = None,
+                                  pattern: Optional[str] = None) -> Optional[str]:
+    """Normalize one real fsdbreport extract through
+    `vip_distill.distill_fsdbreport()` and land it as a `normalized_evidence`
+    row in this project's DuckDB evidence store. Returns the written
+    `evidence_id`, or None when nothing was written.
+
+    Exactly one of `report_text`/`parsed_report` is passed straight through
+    to `distill_fsdbreport()`, which enforces that contract itself -- this
+    function never re-shapes or second-guesses the envelope vip_distill
+    returns, it only stores it (the identical discipline
+    regression_reporter's sim.log bridge documents).
+
+    Best-effort, same as every other evidence-store write in this project:
+    a duckdb-not-installed / locked-file / disabled-store condition returns
+    None and prints, and must never break the real `fsdb-report` run whose
+    report the caller already has in hand. Returns None (writing nothing)
+    when the evidence store is disabled via config's `evidence_db.enabled`.
+    """
+    try:
+        from . import config as _config
+        if not _config.load_config(Path(root)).get("evidence_db", {}).get("enabled", True):
+            return None
+        from . import evidence_db as _evidence_db
+        from . import vip_distill as _vip_distill
+        envelope = _vip_distill.distill_fsdbreport(
+            report_text=report_text, parsed_report=parsed_report,
+            fsdb_path=fsdb_path, topic=topic, job_id=job_id, pattern=pattern)
+        with _evidence_db.EvidenceStore(_evidence_db.default_db_path(Path(root))) as store:
+            store.insert_normalized_evidence(envelope)
+        return envelope.get("evidence_id")
+    except Exception as e:
+        print(f"[fsdb-report] normalized evidence store write failed: {e}", flush=True)
+        return None

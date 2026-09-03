@@ -62,6 +62,27 @@ before designing this schema:
                             `ModuleInfo`/`PortInfo`/`SignalInfo`/`ParamInfo`,
                             the real structured output of running verible
                             `--export_json` against an actual .sv/.v file.
+  - `normalized_evidence`  <- the real "Normalized Evidence" envelope dict
+                            `dv_harness.vip_distill.py`'s `distill_sim_log()`/
+                            `distill_job_record()`/`distill_fsdbreport()`/
+                            `merge_evidence()` all return (and
+                            `write_normalized_evidence()` writes to disk
+                            unchanged) -- `schema_version`/`evidence_id`/
+                            `source_kind`/`job_id`/`pattern`/`protocol`/
+                            `run_dir`/`verdict`/`counts`/`detail`/
+                            `provenance`, 1:1 (evidence-db-wiring step 2,
+                            2026-09-03; closes the exact gap both
+                            `.work/governance-vip-distill-report.md` and
+                            `.work/governance-evidence-report.md` flagged as
+                            open when each landed independently -- vip_distill
+                            producing a schema with nowhere to land, this
+                            store having no table shaped for it). Upsert key
+                            is `evidence_id` itself, vip_distill's own
+                            deterministic content hash (same real evidence ->
+                            same id -> re-ingesting is idempotent), not a
+                            second key invented here -- the real, already-
+                            defined shape of this record IS `evidence_id`-
+                            keyed at its own source.
 
 Deliberately NOT built: a full ETL pipeline, a generic "events" table, or
 any speculative column with no real producer in this codebase today. This
@@ -217,6 +238,22 @@ _SCHEMA_STATEMENTS = [
         param_name VARCHAR,
         type_text VARCHAR,
         default_text VARCHAR
+    )""",
+    """CREATE TABLE IF NOT EXISTS normalized_evidence (
+        evidence_id VARCHAR PRIMARY KEY,
+        schema_version VARCHAR,
+        source_kind VARCHAR,
+        job_id BIGINT,
+        pattern VARCHAR,
+        protocol VARCHAR,
+        run_dir VARCHAR,
+        verdict VARCHAR,
+        counts_json VARCHAR,
+        detail_json VARCHAR,
+        provenance_json VARCHAR,
+        distilled_at DOUBLE,
+        distiller VARCHAR,
+        ingested_at TIMESTAMP DEFAULT now()
     )""",
 ]
 
@@ -496,6 +533,45 @@ class EvidenceStore:
                     [module_id, prm.get("name"), prm.get("type_text"), prm.get("default_text")],
                 )
         return module_ids
+
+    # ---- normalized_evidence (vip_distill.py envelope mirror) --------------
+
+    def insert_normalized_evidence(self, record: dict) -> None:
+        """Upserts one row from a real `vip_distill.py` Normalized Evidence
+        envelope -- whatever `distill_sim_log()`/`distill_job_record()`/
+        `distill_fsdbreport()`/`merge_evidence()` returned (or the same dict
+        read back from a `write_normalized_evidence()`'d JSON file). Keyed
+        on `record["evidence_id"]`, vip_distill's OWN deterministic
+        content-derived id (see `vip_distill._evidence_id()`'s docstring --
+        the same real evidence always hashes to the same id), so
+        re-distilling and re-ingesting the same sim.log/job record/
+        fsdbreport twice upserts the SAME row rather than duplicating it --
+        the identical idempotent-upsert-by-real-natural-key convention
+        `insert_job_memory_record()` above already follows for
+        `memory_id`. `counts`/`detail`/`provenance` are stored as JSON text
+        (same convention `insert_job_memory_record()` uses for
+        `failure_signature_json`/`prior_related_knowledge_json`) since their
+        internal shape varies by `source_kind` and this table does not
+        itself need to query into them structurally."""
+        if not record.get("evidence_id"):
+            raise ValueError("insert_normalized_evidence: record['evidence_id'] is required")
+        cols = ["evidence_id", "schema_version", "source_kind", "job_id", "pattern",
+                "protocol", "run_dir", "verdict", "distilled_at", "distiller"]
+        values = [record.get(c) for c in cols]
+        cols += ["counts_json", "detail_json", "provenance_json"]
+        counts = record.get("counts")
+        values += [
+            json.dumps(counts, default=str) if counts is not None else None,
+            json.dumps(record.get("detail", {}), default=str),
+            json.dumps(record.get("provenance", {}), default=str),
+        ]
+        assignments = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "evidence_id")
+        placeholders = ", ".join("?" for _ in cols)
+        self._conn.execute(
+            f"INSERT INTO normalized_evidence ({', '.join(cols)}) VALUES ({placeholders}) "
+            f"ON CONFLICT (evidence_id) DO UPDATE SET {assignments}",
+            values,
+        )
 
     # ---- generic read-back (tests / ad-hoc CLI inspection) -----------------
 

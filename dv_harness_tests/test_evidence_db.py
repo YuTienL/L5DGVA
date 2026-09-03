@@ -8,6 +8,7 @@ category, and the real `verible_parser` output for a synthesized .sv
 fixture (via test_verible_parser.py's own FIFO_FIXTURE)."""
 from __future__ import annotations
 
+import json
 import shutil
 
 import pytest
@@ -332,3 +333,75 @@ def test_insert_rtl_parse_on_empty_modules_list_inserts_nothing(store):
                                           "verible_version": "v1", "modules": []})
     assert module_ids == []
     assert store.query("SELECT count(*) FROM rtl_modules")[0][0] == 0
+
+
+# ---- normalized_evidence (vip_distill.py envelope mirror) ------------------
+# (evidence-db-wiring step 2, 2026-09-03)
+
+def _sample_normalized_evidence(**overrides):
+    """A real envelope shape -- this is exactly what
+    `vip_distill.distill_sim_log()` returns for a real epilogue-bearing
+    sim.log (see test_vip_distill.py's own FAILING_LOG fixture), not an
+    invented shape."""
+    base = dict(
+        schema_version="0.1.0-draft", evidence_id="EVID-abc123def456",
+        source_kind="sim_log", job_id=123456, pattern="usb3_lfps_basic",
+        run_dir="/proj/run/123456", verdict="FAILED",
+        counts={"uvm_fatal": 1, "uvm_error": 2, "uvm_warning": 0},
+        detail={"total_lines": 6, "epilogue": {"verdict": "FAILED"}, "signatures": []},
+        provenance={"parser": "sim_log_analysis.parse_sim_log", "source_path": "/proj/run/123456/sim.log"},
+        distilled_at=1234567890.5, distiller="vip_distill.py",
+    )
+    base.update(overrides)
+    return base
+
+
+def test_insert_normalized_evidence_round_trips_real_envelope_fields(store):
+    store.insert_normalized_evidence(_sample_normalized_evidence())
+    rows = store.query(
+        "SELECT evidence_id, schema_version, source_kind, job_id, pattern, "
+        "run_dir, verdict, distiller FROM normalized_evidence"
+    )
+    assert rows == [("EVID-abc123def456", "0.1.0-draft", "sim_log", 123456,
+                      "usb3_lfps_basic", "/proj/run/123456", "FAILED", "vip_distill.py")]
+
+
+def test_insert_normalized_evidence_stores_counts_detail_provenance_as_json(store):
+    store.insert_normalized_evidence(_sample_normalized_evidence())
+    counts_json, detail_json, provenance_json = store.query(
+        "SELECT counts_json, detail_json, provenance_json FROM normalized_evidence"
+    )[0]
+    assert json.loads(counts_json) == {"uvm_fatal": 1, "uvm_error": 2, "uvm_warning": 0}
+    assert json.loads(detail_json)["epilogue"]["verdict"] == "FAILED"
+    assert json.loads(provenance_json)["parser"] == "sim_log_analysis.parse_sim_log"
+
+
+def test_insert_normalized_evidence_upserts_by_evidence_id(store):
+    """Mirrors vip_distill's own deterministic evidence_id: re-distilling
+    and re-ingesting the SAME real evidence twice must update the same row,
+    not duplicate it -- the identical idempotency convention
+    insert_job_memory_record() already follows for memory_id."""
+    store.insert_normalized_evidence(_sample_normalized_evidence(verdict="FAILED"))
+    store.insert_normalized_evidence(_sample_normalized_evidence(verdict="PASSED"))
+    rows = store.query("SELECT verdict FROM normalized_evidence WHERE evidence_id = 'EVID-abc123def456'")
+    assert rows == [("PASSED",)]
+    count = store.query("SELECT count(*) FROM normalized_evidence")[0][0]
+    assert count == 1
+
+
+def test_insert_normalized_evidence_requires_evidence_id(store):
+    with pytest.raises(ValueError):
+        store.insert_normalized_evidence({"source_kind": "sim_log"})
+
+
+def test_insert_normalized_evidence_with_null_counts_stores_null_not_placeholder(store):
+    """fsdbreport-sourced envelopes carry counts=None (no PASS/FAIL concept
+    of their own, per vip_distill's own docstring) -- must round-trip as a
+    real SQL NULL, never a JSON-encoded 'null' string masquerading as
+    checked-but-unknown counts."""
+    store.insert_normalized_evidence(_sample_normalized_evidence(
+        evidence_id="EVID-fsdb000", source_kind="fsdbreport", verdict=None, counts=None))
+    rows = store.query(
+        "SELECT counts_json, verdict FROM normalized_evidence WHERE evidence_id = 'EVID-fsdb000'"
+    )
+    assert rows == [(None, None)]

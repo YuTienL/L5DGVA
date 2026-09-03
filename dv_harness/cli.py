@@ -565,6 +565,19 @@ def main():
     pfsdb.add_argument("--out", default=None, help="Write the result JSON here instead of stdout.")
     pfsdb.add_argument("--fsdbreport-bin", default="fsdbreport")
     pfsdb.add_argument("--timeout", type=int, default=60)
+    # Provenance for the normalized_evidence row this command now lands via
+    # vip_distill.distill_fsdbreport(). All three are optional -- an
+    # fsdbreport extract taken outside any registered LSF job is real
+    # evidence too, and vip_distill stores them as honest NULLs rather than
+    # inventing a job/pattern the run did not have.
+    pfsdb.add_argument("--topic", default=None,
+                        help="What signal-level question this extract answers (e.g. 'lfps_handshake'). "
+                             "Recorded on the normalized_evidence row.")
+    pfsdb.add_argument("--job-id", type=int, default=None,
+                        help="LSF job id this FSDB came from, if any. Recorded on the "
+                             "normalized_evidence row so it joins to that job's other evidence.")
+    pfsdb.add_argument("--pattern", default=None,
+                        help="Pattern/testcase name this FSDB came from, if any.")
 
     psimlog = sub.add_parser("sim-log-analyze", help="Real sim.log marker parsing/classification/epilogue "
                                                         "extraction. See dv_harness/sim_log_analysis.py.")
@@ -1466,12 +1479,32 @@ def main():
                     VeribleParseError, VeribleUnavailableError) as exc:
                 print(f"env-manifest generate FAILED: {exc}", file=sys.stderr)
                 raise SystemExit(1)
+            # verible parse -> DuckDB (2026-09-04). The manifest write above
+            # was previously the ONLY destination this run's real verible
+            # output reached; evidence_db.insert_rtl_parse() and its four
+            # rtl_* traceability tables had zero live callers. Runs on the
+            # parse this generation already performed -- verible is not
+            # re-run -- and is best-effort, so it can never turn an
+            # already-written, already-validated manifest into a failure.
+            env_manifest.ingest_rtl_parse_to_evidence_db(h.root, manifest)
             print(json.dumps(manifest, ensure_ascii=False, indent=2))
     elif args.cmd == "fsdb-report":
         from . import fsdb_report
         result = fsdb_report.run_fsdbreport(args.fsdb, fsdbreport_bin=args.fsdbreport_bin, timeout=args.timeout)
         if result.get("ok"):
             result["parsed_report"] = fsdb_report.parse_fsdbreport_output(result["report_text"])
+            # FSDB -> Distillation -> vip_distill -> DuckDB (2026-09-04).
+            # vip_distill.distill_fsdbreport() had zero live callers; this
+            # real fsdbreport run is the project's only real producer of the
+            # evidence it normalizes. Passes the ALREADY-parsed report
+            # (never a second parse of the same text) and records the
+            # evidence_id it landed in the emitted JSON, so the row is
+            # traceable from this command's own output.
+            evidence_id = fsdb_report.ingest_report_to_evidence_db(
+                h.root, fsdb_path=args.fsdb, parsed_report=result["parsed_report"],
+                topic=args.topic, job_id=args.job_id, pattern=args.pattern)
+            if evidence_id:
+                result["evidence_id"] = evidence_id
         payload = json.dumps(result, ensure_ascii=False, indent=2)
         if args.out:
             Path(args.out).write_text(payload, encoding="utf-8")

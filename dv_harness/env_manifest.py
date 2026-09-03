@@ -417,3 +417,90 @@ def generate_and_write(out_path, *, rtl_files=None, register_map_path=None,
     )
     save_env_manifest(manifest, out_path)
     return manifest
+
+
+# ---------------------------------------------------------------------------
+# verible parse -> evidence_db.rtl_modules bridge (2026-09-04)
+# ---------------------------------------------------------------------------
+#
+# THE GAP THIS CLOSES. `evidence_db.insert_rtl_parse()` and its four
+# traceability tables (rtl_modules/rtl_ports/rtl_signals/rtl_parameters)
+# were real and tested against real verible-derived JSON, and
+# `verible_parser.run_export_json()`/`parse_file()` really shell out to
+# `verible-verilog-syntax --export_json --printtree` -- but NO code path
+# anywhere called both together outside test bodies (both
+# .work/evidence-db-wiring-step1-report.md and step2-report.md list
+# insert_rtl_parse as "remains unwired"). The one real production caller of
+# verible is `dv-harness env-manifest generate`, which routed the parse into
+# env.manifest.json and nowhere else. The architecture diagram draws
+# `verible JSON/parsers -> DuckDB`; that edge did not exist in code. This
+# function is that edge.
+#
+# It re-uses the parse this generation run ALREADY performed -- it reads
+# `manifest["dut_facts"]["rtl"]["files"]`, which is verbatim
+# `verible_parser.to_dict(parse_file(...))` per file (see
+# build_dut_facts_rtl above), the exact dict shape insert_rtl_parse()
+# documents as its input. verible is never re-run, and RTL is never
+# re-parsed here.
+
+def ingest_rtl_parse_to_evidence_db(root, manifest: dict) -> list:
+    """Land this manifest's real verible parse results as
+    `rtl_modules`/`rtl_ports`/`rtl_signals`/`rtl_parameters` rows in the
+    project's DuckDB evidence store. Returns the flat list of inserted
+    module row ids (empty when nothing was written).
+
+    Writes nothing, and reports it honestly as `[]`, when dut_facts.rtl is
+    NOT_AVAILABLE (no --rtl-file was supplied to this generation run) --
+    "no RTL was parsed" and "RTL was parsed and had no modules" both
+    correctly produce no rows, and neither is ever faked into one.
+
+    RE-GENERATION IS NOT RE-INSERTION. `insert_rtl_parse()` is deliberately
+    append-only (a `rtl_modules_id_seq` id plus `parsed_at`, so the store
+    keeps the history of a file as it really changed over time), and
+    `env-manifest generate` is a command an engineer re-runs routinely,
+    often against untouched RTL. Left alone, that combination would grow
+    duplicate module/port/signal/parameter rows on every regeneration and
+    silently corrupt any "how many modules does this file have" query. So
+    this bridge skips a file whose exact
+    (file_path, source_sha256, verible_version) parse identity is already
+    stored -- identical bytes parsed by the identical tool cannot yield a
+    different result, so re-storing it adds no fact. Edit the RTL (new
+    source_sha256) or upgrade verible (new verible_version) and the next
+    generate really does append a new, genuinely different parse, which is
+    the history the append-only design exists to keep. The dedup lives here
+    rather than inside `insert_rtl_parse()` because that method's
+    append-only contract is already relied on and tested elsewhere; this
+    only decides whether THIS caller has anything new to hand it.
+
+    Best-effort, same discipline as every other evidence-store write in
+    this project (regression_reporter._write_reconciliation_evidence_if_
+    configured, dashboard._ingest_coverage_summary_to_evidence_db,
+    fsdb_report.ingest_report_to_evidence_db): a duckdb-not-installed /
+    locked-file / disabled-store condition prints and returns [], and must
+    never break the env.manifest.json this run already validated and wrote.
+    """
+    try:
+        from . import config as _config
+        if not _config.load_config(Path(root)).get("evidence_db", {}).get("enabled", True):
+            return []
+        rtl = ((manifest or {}).get("dut_facts") or {}).get("rtl") or {}
+        files = rtl.get("files") or []
+        if not files:
+            return []
+        from . import evidence_db as _evidence_db
+        module_ids = []
+        with _evidence_db.EvidenceStore(_evidence_db.default_db_path(Path(root))) as store:
+            for parse_result in files:
+                already = store.query(
+                    "SELECT count(*) FROM rtl_modules WHERE file_path = ? "
+                    "AND source_sha256 = ? AND verible_version IS NOT DISTINCT FROM ?",
+                    [parse_result.get("file_path"), parse_result.get("source_sha256"),
+                     parse_result.get("verible_version")],
+                )[0][0]
+                if already:
+                    continue
+                module_ids.extend(store.insert_rtl_parse(parse_result))
+        return module_ids
+    except Exception as e:
+        print(f"[env-manifest] rtl parse evidence store write failed: {e}", flush=True)
+        return []
