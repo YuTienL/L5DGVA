@@ -23,6 +23,22 @@ shape to write into. When Part A lands, its MCP `get_*` verbs can and
 should consult this same decisions store as one more fact source (see
 `find_decision()`) -- no format change needed on this side.
 
+Blackboard mirror (2026-09-04): keeping decisions OUT of env.manifest.json
+(above) is not a reason to keep them out of the BLACKBOARD, and a
+2026-09-04 audit found this module had no blackboard path at all. A
+decision, once made, IS current-run truth -- exactly what CLAUDE.md says
+the Blackboard holds -- and without a mirror a later stage had no way to
+see "this was already asked and answered / already auto-assumed" short of
+knowing to open this module's own private store. `QuestionQueueStore` now
+refreshes the `open_questions_decisions` topic from `_save_decisions()` --
+the single choke point every decision write and every revocation already
+passes through, so the topic cannot drift from decisions.json the way a
+second hand-called write could. The mirror is ON by default: an injectable
+`blackboard` argument exists (for tests, and for handing in an already-open
+board such as `DVHarness.blackboard`), but omitting it resolves to a real
+Blackboard at this store's own project root, never to "no mirror" -- every
+construction site gets it without having to remember to ask.
+
 Four pieces, matching Part B 1:1:
   - classify_tier() / is_cannot_assume(): the 3-tier decision logic. The
     Tier-3 trigger is a hard-coded, explicit predicate -- never a vague
@@ -113,6 +129,11 @@ _SAFE_BLAST_RADII = frozenset({"single_regression"})
 # not an answer -- treating it as one lets the harness answer its own
 # escalation with its own earlier guess. See classify_tier().
 HUMAN_DECISION_SOURCE = "human_answer"
+
+#: Blackboard topic this module's decisions store mirrors itself into -- see
+#: the module docstring's "Blackboard mirror" note and
+#: QuestionQueueStore._sync_decisions_to_blackboard().
+BLACKBOARD_TOPIC = "open_questions_decisions"
 
 
 def _is_human_decision(prior_decision: Optional[Dict[str, Any]]) -> bool:
@@ -326,7 +347,8 @@ class QuestionQueueStore:
     StateStore, memory.py's MemoryStore, evidence_db's default_db_path, all
     root the same way) rather than inventing a new location convention."""
 
-    def __init__(self, root: Path, *, manifest_lookup: Optional[Callable[[str], Any]] = None):
+    def __init__(self, root: Path, *, manifest_lookup: Optional[Callable[[str], Any]] = None,
+                   blackboard: Optional[Any] = None):
         self.root = Path(root)
         self.dir = self.root / ".dv-harness" / "question_queue"
         self.questions_path = self.dir / "questions.json"
@@ -337,6 +359,18 @@ class QuestionQueueStore:
         # resolvable from the manifest yet", never a fake always-empty stub
         # pretending to have consulted a real source.
         self.manifest_lookup = manifest_lookup
+        # Blackboard for the decisions mirror (see the module docstring's
+        # "Blackboard mirror" note). Deliberately DEFAULTED ON rather than
+        # opt-in: this class is constructed all over the codebase (cli.py's
+        # `question-queue`, connectivity.py's two T4 entry points,
+        # coverage_analysis.py, source_authority.py, uvm_generator/
+        # run_profile_to_justfile.py, and growing), and a mirror every one of
+        # them has to remember to switch on is the same "built but never
+        # wired" gap this mirror exists to close. Omitting it resolves to a
+        # real Blackboard rooted at this store's own project root,
+        # constructed lazily in _sync_decisions_to_blackboard() so merely
+        # constructing a store creates no directories.
+        self.blackboard = blackboard
 
     # -- raw storage ------------------------------------------------------
 
@@ -352,6 +386,69 @@ class QuestionQueueStore:
     def _save_decisions(self, data: dict) -> None:
         _atomic_write_json(self.decisions_path, data)
         self._render_decisions_md(data)
+        self._sync_decisions_to_blackboard(data)
+
+    def _sync_decisions_to_blackboard(self, data: dict) -> Optional[dict]:
+        """Refresh the `open_questions_decisions` Blackboard topic from the
+        decisions store that was just written.
+
+        Called from `_save_decisions()` rather than from `_persist_decision`
+        / `revoke_decision` individually, because that is the one write path
+        both already go through -- a second call site is a second chance for
+        the topic and decisions.json to disagree.
+
+        Records the answer/basis/decided_by/decided_at/source of every LIVE
+        decision (a revoked one is gone from `decisions`, exactly as
+        `find_decision()` sees it, so a reading stage can never act on a
+        decision a human has withdrawn) plus the revocation COUNT for
+        auditability. `source` is kept per entry so a reader can tell a real
+        human answer from a Tier-2 auto-assumption -- collapsing those two
+        into an undifferentiated "decided" is precisely the conflation the
+        3-tier protocol exists to prevent.
+
+        Never raises: a blackboard write failure must not turn an
+        already-written decisions.json into a failed `question-queue answer`
+        (same best-effort discipline as env_manifest's evidence-store
+        write)."""
+        decisions = data.get("decisions") or {}
+        entries = {}
+        human_answered = 0
+        for key, entry in sorted(decisions.items()):
+            current = entry.get("current") or {}
+            if current.get("source") == HUMAN_DECISION_SOURCE:
+                human_answered += 1
+            entries[key] = {
+                "domain": entry.get("domain"),
+                "owner": entry.get("owner"),
+                "question": entry.get("question"),
+                "answer": current.get("answer"),
+                "basis": current.get("basis"),
+                "decided_by": current.get("decided_by"),
+                "decided_at": current.get("decided_at"),
+                "source": current.get("source"),
+                "ever_tier2_assumed": bool(entry.get("ever_tier2_assumed")),
+                "overturned": bool(entry.get("overturned")),
+            }
+        value = {
+            "decisions_path": str(self.decisions_path),
+            "decision_count": len(entries),
+            "human_answered_count": human_answered,
+            "tier2_assumed_count": len(entries) - human_answered,
+            "revoked_count": len(data.get("revoked") or []),
+            "decisions": entries,
+        }
+        try:
+            blackboard = self.blackboard
+            if blackboard is None:
+                # Lazy, and inside the try: constructing a Blackboard mkdirs
+                # its directory, which is exactly the kind of environment
+                # failure that must not take a written decision down with it.
+                from .blackboard import Blackboard
+                blackboard = Blackboard(self.root)
+            return blackboard.write(BLACKBOARD_TOPIC, value, source="question_queue")
+        except Exception as e:
+            print(f"[question-queue] blackboard decisions sync failed: {e}", flush=True)
+            return None
 
     def _render_decisions_md(self, data: dict) -> None:
         """Regenerated in full from decisions.json on every write (same

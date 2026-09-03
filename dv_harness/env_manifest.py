@@ -504,3 +504,122 @@ def ingest_rtl_parse_to_evidence_db(root, manifest: dict) -> list:
     except Exception as e:
         print(f"[env-manifest] rtl parse evidence store write failed: {e}", flush=True)
         return []
+
+
+# ---------------------------------------------------------------------------
+# env.manifest.json -> Blackboard bridge (2026-09-04)
+# ---------------------------------------------------------------------------
+#
+# THE GAP THIS CLOSES. CLAUDE.md's Blackboard rule says the Blackboard is
+# where "current verification truth" lives so any later stage can read it
+# through its node's `blackboard_read` declaration (engine.py's
+# `_gather_stage_context` snapshots exactly those topics into the real
+# prompt). env.manifest.json IS current verification truth -- the captured
+# vip_config / dut_facts / env_topology of the environment as it actually
+# is -- but it was written ONLY to its own git-tracked fact file: a
+# 2026-09-04 audit found zero occurrences of "blackboard" anywhere in this
+# module, and no `env_manifest`-shaped topic in any node of
+# `.dv-harness/graph/main_graph.json`. A stage that wanted the real VIP
+# instance list or the real parsed RTL module names had no blackboard path
+# to it at all. This function is that edge.
+#
+# WHY A SUMMARY AND NOT THE MANIFEST VERBATIM. The blackboard snapshot of a
+# node's `blackboard_read` topics is serialized straight into the stage
+# prompt (engine.py `_build_plan_section`). `dut_facts.rtl.files` holds the
+# full per-file verible parse (every port, signal and parameter of every
+# module); pasting that into every reading stage's prompt would drown the
+# actual instruction. So this records the layer STATUS/reason/source path
+# verbatim -- the honesty contract each builder above establishes, including
+# every NOT_AVAILABLE and its real reason -- plus identifying names and
+# counts, and points at the manifest file for the full detail. Nothing is
+# invented: every field is copied or counted from the real manifest, and a
+# NOT_AVAILABLE layer stays NOT_AVAILABLE here rather than being flattened
+# into a silent empty list that reads like "captured, and there was nothing".
+
+BLACKBOARD_TOPIC = "env_manifest"
+
+
+def summarize_for_blackboard(manifest: dict, *, manifest_path=None) -> dict:
+    """The blackboard-topic value for one real env.manifest.json dict.
+
+    Prompt-sized by construction (names and counts, never parse trees), and
+    honest by construction (each layer's own `status`/`reason` survives
+    verbatim, so a reader can always tell "not captured yet" from "captured
+    and empty")."""
+    manifest = manifest or {}
+    vip = manifest.get("vip_config") or {}
+    dut = manifest.get("dut_facts") or {}
+    rtl = dut.get("rtl") or {}
+    regs = dut.get("registers") or {}
+    topo = manifest.get("env_topology") or {}
+    hier = topo.get("component_hierarchy") or {}
+    trace = topo.get("config_db_trace") or {}
+
+    rtl_files = rtl.get("files") or []
+    return {
+        "manifest_path": str(manifest_path) if manifest_path is not None else None,
+        "schema_version": manifest.get("schema_version"),
+        "vip_config": {
+            "status": vip.get("status"),
+            "reason": vip.get("reason"),
+            "source": vip.get("source"),
+            "instance_count": len(vip.get("vip_instances") or []),
+            "instances": [
+                {"instance_path": i.get("instance_path"), "vip_type": i.get("vip_type"),
+                 "config_field_count": len(i.get("config_fields") or [])}
+                for i in (vip.get("vip_instances") or [])
+            ],
+        },
+        "dut_facts": {
+            "rtl": {
+                "status": rtl.get("status"),
+                "reason": rtl.get("reason"),
+                "file_count": len(rtl_files),
+                "files": [
+                    {"file_path": f.get("file_path"), "source_sha256": f.get("source_sha256"),
+                     "modules": [m.get("name") for m in (f.get("modules") or [])]}
+                    for f in rtl_files
+                ],
+            },
+            "registers": {
+                "status": regs.get("status"),
+                "reason": regs.get("reason"),
+                "source": regs.get("source"),
+                "block_count": len(regs.get("blocks") or []),
+                "blocks": [b.get("name") for b in (regs.get("blocks") or [])],
+            },
+        },
+        "env_topology": {
+            "component_hierarchy": {
+                "status": hier.get("status"),
+                "reason": hier.get("reason"),
+                "source": hier.get("source"),
+                "component_count": len(hier.get("components") or []),
+            },
+            "config_db_trace": {
+                "status": trace.get("status"),
+                "reason": trace.get("reason"),
+                "source": trace.get("source"),
+                "parse_confidence": trace.get("parse_confidence"),
+                "entry_count": len(trace.get("entries") or []),
+            },
+        },
+    }
+
+
+def sync_to_blackboard(blackboard, manifest: dict, *, manifest_path=None,
+                        source: str = "env-manifest") -> dict:
+    """Mirror this generation run's real manifest into the Blackboard's
+    `env_manifest` topic and return the written entry.
+
+    Called from the ONE real production caller of `generate_and_write()` --
+    `dv-harness env-manifest generate` (cli.py) -- so a re-generation always
+    refreshes the topic rather than leaving a stale snapshot of an older
+    environment behind. `source` lands in the entry's own `source` field, so
+    an audit can tell a manifest-sourced topic apart from a stage-sourced
+    one at a glance (blackboard.py's entry shape)."""
+    return blackboard.write(
+        BLACKBOARD_TOPIC,
+        summarize_for_blackboard(manifest, manifest_path=manifest_path),
+        source=source,
+    )

@@ -736,6 +736,42 @@ itself and `bind_verification_lint.py`). It now does:
   (`dv_harness_tests/test_connectivity_check.py`), the RTL it watches is per-project.
 
 
+## Blackboard Topics Written Outside the Graph (2026-09-04)
+
+"Blackboard stores current verification truth" (Core Operating Rules) was met only for topics a
+graph STAGE writes: `engine.py`'s `run_stage()` PASS branch calls `_write_blackboard_from_evidence()`
+per `node.blackboard_write`, which is real and firing. Three subsystems built after that mechanism
+never joined it — a 2026-09-04 audit found zero occurrences of "blackboard" in `env_manifest.py`,
+`question_queue.py`, `connectivity.py`/`connectivity_check.py`, and no node in
+`.dv-harness/graph/main_graph.json` naming any topic they could have written. Each persisted only
+to its own private store, so no stage could see any of it. Three topics now close that, written by
+real CLI/runner entry points rather than by a graph node:
+
+- **`env_manifest`** (`source: env-manifest`) — written by `dv-harness env-manifest generate`
+  (`env_manifest.sync_to_blackboard()`). A prompt-sized SUMMARY: each layer's own `status`/`reason`
+  verbatim (so a NOT_AVAILABLE stays NOT_AVAILABLE, never a bare empty list), plus VIP instance
+  paths/types, parsed RTL file paths + module names, and counts. The full verible parse trees stay
+  in `env.manifest.json`, which the topic points at — inlining them would drown every reading
+  stage's prompt. Read by `ARCH_DISCOVERY`, `PROJECT_MODEL`, `IMPLEMENT`.
+- **`open_questions_decisions`** (`source: question_queue`) — refreshed from
+  `QuestionQueueStore._save_decisions()`, the one choke point both `_persist_decision()` and
+  `revoke_decision()` already pass through, so it cannot drift from `decisions.json`. Carries every
+  LIVE decision (a revoked one is gone, exactly as `find_decision()` sees it) with its `source`
+  kept per entry, so a Tier-2 auto-assumption stays distinguishable from a real human answer. The
+  mirror is ON by default at every construction site, not opt-in. Read by `IMPLEMENT`,
+  `FAILURE_RECOVERY`, `SIGNOFF`.
+- **`connectivity_gates`** (`source: connectivity-check`) — written by a real `just
+  connectivity-check` gate run (`connectivity_check.sync_gates_to_blackboard()`), carrying each
+  gate's `GateStatus` VALUE (PASS/FAIL/NOT_AVAILABLE/PENDING/NOT_YET_RUN stay five distinct states,
+  never a bool) plus the RTL fingerprint they ran against. `--check-only` runs no gate and
+  deliberately does NOT refresh it, so stale verdicts can never look freshly produced. Read by
+  `BUILD_DEBUG`, `VERIFY`, `SIGNOFF`.
+
+All three writes are best-effort: a blackboard failure must never turn an already-written manifest,
+an already-recorded decision, or an already-completed gate run into a failed command. The edges
+(both halves — the write, and a real node declaring the `blackboard_read`) are proven end-to-end
+against the real shipped graph by `dv_harness_tests/test_blackboard_subsystem_wiring.py`.
+
 ## Context Budget: 3 Tiers + MCP-First Routing (2026-09-03)
 
 An agent's context window is a finite verification resource and is budgeted like one. The tiers

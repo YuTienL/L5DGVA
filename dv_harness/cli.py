@@ -1543,6 +1543,15 @@ def main():
             # re-run -- and is best-effort, so it can never turn an
             # already-written, already-validated manifest into a failure.
             env_manifest.ingest_rtl_parse_to_evidence_db(h.root, manifest)
+            # env.manifest.json -> Blackboard (2026-09-04). The manifest is
+            # current verification truth (CLAUDE.md's Blackboard rule), but it
+            # reached only its own git-tracked fact file: no graph node could
+            # name it in `blackboard_read`, so no stage could see the real VIP
+            # instances / parsed RTL modules / captured topology through the
+            # harness's own current-truth channel. Writes a prompt-sized
+            # summary (statuses, reasons, names, counts -- never the full
+            # verible parse trees); see env_manifest.sync_to_blackboard.
+            env_manifest.sync_to_blackboard(h.blackboard, manifest, manifest_path=args.out)
             print(json.dumps(manifest, ensure_ascii=False, indent=2))
     elif args.cmd == "fsdb-report":
         from . import fsdb_report
@@ -2076,7 +2085,14 @@ def main():
             raise SystemExit(0 if result["overall"] != "BLOCKED" else 1)
     elif args.cmd == "question-queue":
         from .question_queue import QuestionQueueStore
-        qq = QuestionQueueStore(h.root)
+        # Every decision written or revoked through this command refreshes the
+        # `open_questions_decisions` Blackboard topic (2026-09-04) -- a
+        # decision, once made, is current-run truth, and before this a later
+        # stage had no way to see it without opening the question queue's own
+        # private store. The store would build its own Blackboard from
+        # h.root anyway; handing it this session's already-open one just
+        # avoids a second object over the same directory.
+        qq = QuestionQueueStore(h.root, blackboard=h.blackboard)
         if args.qq_cmd == "add":
             if len(args.options) < 2:
                 print(json.dumps({"ok": False, "error": "AT_LEAST_TWO_OPTIONS_REQUIRED"}, ensure_ascii=False))

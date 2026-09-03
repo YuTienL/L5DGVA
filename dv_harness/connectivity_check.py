@@ -89,6 +89,18 @@ DEFAULT_CONFIG_RELPATH = ".dv-harness/connectivity_check.json"
 DEFAULT_STATE_RELPATH = ".dv-harness/connectivity_check_state.json"
 DEFAULT_REPORT_RELPATH = ".dv-harness/connectivity_check_report.md"
 
+#: Blackboard topic a real gate run publishes its 3 statuses into (2026-09-04).
+#: The state file and the markdown report above are both artifacts a HUMAN
+#: opens; neither is reachable from a graph stage, whose only structured view
+#: of current truth is its node's `blackboard_read` snapshot (engine.py's
+#: `_gather_stage_context`). Before this topic existed, a BUILD_DEBUG or
+#: SIGNOFF stage had no way to see that Gate 2 had FAILED -- CLAUDE.md's
+#: "Blackboard stores current verification truth" rule was simply not met for
+#: the 3-gate standard. Written only on a real `write=True` run, so a
+#: `--check-only` staleness probe (which runs no gate) can never refresh the
+#: topic and make stale verdicts look current.
+BLACKBOARD_TOPIC = "connectivity_gates"
+
 EXIT_OK = 0
 EXIT_GATE_FAIL = 1
 EXIT_STALE = 2
@@ -359,11 +371,55 @@ def run_connectivity_check(
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(render_connectivity_check_report(fp, staleness, report) + "\n",
                                encoding="utf-8")
+        sync_gates_to_blackboard(root, fp, staleness, report, block)
 
     return ConnectivityCheckResult(
         rtl_fingerprint=fp["fingerprint"], rtl_file_count=fp["file_count"],
         staleness=staleness, gate_report=report, status_block=block, exit_code=exit_code,
     )
+
+
+def sync_gates_to_blackboard(project_root, fingerprint: dict, staleness: dict,
+                               report: Optional[GateReport], block: dict,
+                               *, blackboard=None) -> Optional[dict]:
+    """Publish this real gate run's 3 statuses into the `connectivity_gates`
+    Blackboard topic and return the written entry.
+
+    The value carries each gate's own `GateStatus` VALUE verbatim -- PASS /
+    FAIL / NOT_AVAILABLE / PENDING / NOT_YET_RUN stay five distinct states,
+    never collapsed into a boolean. That distinction is the whole point of
+    the enum (CLAUDE.md: NOT_AVAILABLE and PENDING must "never be conflated
+    with FAILED"), and a stage reading this topic has to be able to tell "no
+    slang/vcs on PATH" from "the bind is wrong".
+
+    The RTL fingerprint the gates ran against travels with them, so a reader
+    can tell whether the verdicts still describe the current RTL rather than
+    having to trust that the topic was refreshed.
+
+    Best-effort by design: a blackboard write failure must never turn an
+    already-completed gate run (whose state file and report are on disk) into
+    a failed run."""
+    try:
+        if blackboard is None:
+            from dv_harness.blackboard import Blackboard
+            blackboard = Blackboard(Path(project_root))
+        gates = {}
+        for gate in ((report.gate1, report.gate2, report.gate3) if report is not None else ()):
+            gates[gate.gate] = {"status": gate.status.value, "detail": gate.detail}
+        value = {
+            "rtl_fingerprint": fingerprint.get("fingerprint"),
+            "rtl_file_count": fingerprint.get("file_count"),
+            "staleness_at_run": staleness,
+            "bind_verification_status": block,
+            "gates": gates,
+            "ready_for_human_review": report.ready_for_human_review() if report is not None else None,
+            "not_available_gates": report.not_available_gates() if report is not None else [],
+            "pending_gates": report.pending_gates() if report is not None else [],
+        }
+        return blackboard.write(BLACKBOARD_TOPIC, value, source="connectivity-check")
+    except Exception as e:
+        print(f"[connectivity-check] blackboard gate-status sync failed: {e}", flush=True)
+        return None
 
 
 def render_connectivity_check_report(fingerprint: dict, staleness: dict,

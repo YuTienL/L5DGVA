@@ -67,7 +67,7 @@
       "route": "analysis-route",
       "agent": "analysis-agent",
       "skills": ["hierarchy-discovery"],
-      "blackboard_read": ["baseline"],
+      "blackboard_read": ["baseline", "env_manifest"],
       "blackboard_write": ["architecture"],
       "parallel_group": null,
       "join_group": null
@@ -87,7 +87,7 @@
       "route": "analysis-route",
       "agent": "analysis-agent",
       "skills": ["project-model"],
-      "blackboard_read": ["architecture"],
+      "blackboard_read": ["architecture", "env_manifest"],
       "blackboard_write": ["project_model"],
       "parallel_group": null,
       "join_group": null
@@ -173,7 +173,7 @@
       "route": "implementation-route",
       "agent": "implementation-agent",
       "skills": ["workflow-closure-loop"],
-      "blackboard_read": ["findings", "vplan", "patterns", "verification_architecture"],
+      "blackboard_read": ["findings", "vplan", "patterns", "verification_architecture", "env_manifest", "open_questions_decisions"],
       "blackboard_write": ["implementation"],
       "parallel_group": null,
       "join_group": null
@@ -241,7 +241,7 @@
       "route": "build-route",
       "agent": "build-agent",
       "skills": ["vcs-build"],
-      "blackboard_read": ["build_state"],
+      "blackboard_read": ["build_state", "connectivity_gates"],
       "blackboard_write": ["build_state"],
       "parallel_group": null,
       "join_group": null
@@ -251,7 +251,7 @@
       "route": "build-route",
       "agent": "build-agent",
       "skills": ["verification-signoff"],
-      "blackboard_read": [],
+      "blackboard_read": ["connectivity_gates"],
       "blackboard_write": ["verification_state"],
       "parallel_group": null,
       "join_group": null,
@@ -348,7 +348,7 @@
       "route": "debug-route",
       "agent": "debug-agent",
       "skills": ["failure-triage", "systematic-debug", "workflow-closure-loop"],
-      "blackboard_read": ["findings", "regression_state", "coverage"],
+      "blackboard_read": ["findings", "regression_state", "coverage", "open_questions_decisions"],
       "blackboard_write": ["findings"],
       "parallel_group": null,
       "join_group": null
@@ -448,7 +448,7 @@
       "route": "review-route",
       "agent": "review-agent",
       "skills": ["verification-signoff"],
-      "blackboard_read": ["requirements", "reaudit", "git_state", "server_state", "regression_state", "promotion"],
+      "blackboard_read": ["requirements", "reaudit", "git_state", "server_state", "regression_state", "promotion", "connectivity_gates", "open_questions_decisions"],
       "blackboard_write": [],
       "parallel_group": null,
       "join_group": null,
