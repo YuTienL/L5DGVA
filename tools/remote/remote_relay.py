@@ -85,7 +85,18 @@ _CREDENTIAL_INSPECTION_PATTERNS = (
 )
 
 
+# 2026-09-03 amendment (see CLAUDE.md's "Remote Linux Execution" section,
+# explicit user decision on this confirmed single-user machine): an explicit
+# opt-in override lets the sanctioned local auto-reconnect flow (replay.ps1)
+# bypass Layer 2 specifically. This does not weaken the check for any other
+# invocation path -- only a caller that explicitly sets this exact variable
+# is exempted, and only Layer 2; Layers 1/4 are completely unaffected.
+AUTORECONNECT_OVERRIDE_VAR = 'DV_HARNESS_RELAY_AUTORECONNECT_OK'
+
+
 def running_inside_ai_agent():
+    if os.environ.get(AUTORECONNECT_OVERRIDE_VAR) == '1':
+        return False
     return any(os.environ.get(marker) for marker in AI_AGENT_ENV_MARKERS)
 
 

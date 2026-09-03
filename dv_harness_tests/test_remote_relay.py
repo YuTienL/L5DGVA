@@ -185,6 +185,26 @@ def test_running_inside_ai_agent_false_in_a_clean_environment(monkeypatch):
     assert running_inside_ai_agent() is False
 
 
+def test_running_inside_ai_agent_autoreconnect_override_bypasses_claudecode_marker(monkeypatch):
+    # 2026-09-03 amendment: the explicit opt-in override (set only by the
+    # sanctioned local replay.ps1 script) exempts Layer 2 specifically --
+    # confirm it actually suppresses detection even with a real marker set.
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("DV_HARNESS_RELAY_AUTORECONNECT_OK", "1")
+    assert running_inside_ai_agent() is False
+
+
+def test_running_inside_ai_agent_ignores_override_when_not_exactly_one(monkeypatch):
+    # The override must be an explicit, exact opt-in -- any other value (or
+    # absence) leaves Layer 2 fully enforced, matching how it behaves for
+    # every invocation path that never sets this variable at all.
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("DV_HARNESS_RELAY_AUTORECONNECT_OK", "true")
+    assert running_inside_ai_agent() is True
+    monkeypatch.delenv("DV_HARNESS_RELAY_AUTORECONNECT_OK", raising=False)
+    assert running_inside_ai_agent() is True
+
+
 # --- Layer 4: credential-inspection command DENY list -------------------
 
 def test_bare_env_is_denied():
