@@ -11,8 +11,20 @@ failing deep, or a knob being silently ignored.
 
 A modeled recipe missing an option an agent believes it needs is a
 question-queue item, not a reason to hand-edit this file or fall back to
-`make` directly -- see the `human_raw_override` recipe's own warning
-comment for the one sanctioned human-only escape hatch.
+`make` directly. As of 2026-09-04 that is a real code path rather than only
+this comment: `assert_option_modeled()` refuses the option and
+`build_missing_option_question_queue_entry()` asks it through the SAME
+`question_queue.QuestionQueueStore` `connectivity.build_t4_question_queue_
+entry()` uses. The one sanctioned human-only escape hatch,
+`human_raw_override`, now demands an explicit acknowledgment token
+(`HUMAN_OVERRIDE_ACK_TOKEN`) instead of being restricted by a comment.
+
+And because the knob worth smuggling in is in the PROFILE rather than in the
+generated justfile, `verify_source_authority()` re-reads the real Makefile /
+reference command.txt before generating anything and refuses a profile whose
+params do not trace back to it -- the enforced form of "the reference source
+is the highest authority", which the schema previously only asserted in
+prose.
 """
 from __future__ import annotations
 
@@ -22,10 +34,128 @@ from pathlib import Path
 
 from dv_harness.uvm_generator.run_profile import (
     RunProfileValidationError,
+    assert_params_traceable_to_source,
+    assert_source_unchanged,
     check_constraints,
     find_param,
     load_run_profile,
 )
+
+#: Every missing-option question is asked in the `env` domain -- this is a
+#: question about the ENVIRONMENT's own build/run surface, not about VIP
+#: behaviour or DUT design, and `question_queue.route_owner()` routes it to
+#: the DV-owner accordingly. Named here rather than passed by callers so the
+#: routing cannot drift per call site.
+MISSING_OPTION_QUESTION_DOMAIN = "env"
+
+#: The literal token the generated `human_raw_override` recipe demands as its
+#: first argument. Spelled as a first-person human claim so it cannot be
+#: mistaken for a flag, and so its appearance in a CI log or shell history is
+#: legible as what it is.
+HUMAN_OVERRIDE_ACK_TOKEN = "I-AM-A-HUMAN-BYPASSING-RUN-PROFILE"
+
+#: A missing execution knob decides how the DUT is BUILT or RUN (a compile
+#: define, a plusarg, a testname). Getting it wrong does not produce a
+#: visibly broken run -- it produces a run that passes while verifying
+#: something other than what was intended. So this is `affects_pass_fail_
+#: verdict: True`, exactly as `connectivity.T4_QUESTION_CONTEXT` is for an
+#: undecidable bind, which pushes it to Tier 3 (CANNOT_ASSUME).
+MISSING_OPTION_QUESTION_CONTEXT: dict = {"affects_pass_fail_verdict": True}
+
+
+class UnmodeledOptionError(RunProfileValidationError):
+    """An option an agent wants is not in the authoritative source's profile.
+
+    A subclass of RunProfileValidationError so existing fail-closed handling
+    of an invalid profile also catches this, while a caller that wants to
+    route the question rather than abort can catch it specifically."""
+
+
+def missing_option_context_path(target: str, option: str) -> str:
+    """The stable evidence path one missing-option question is anchored to.
+    `question_queue.make_question_key()` hashes this, so the SAME missing
+    option on the SAME target always mints the SAME Q-ID however many times
+    generation is re-run -- the same repeat-question-rate=0 property
+    `connectivity.scoreboard_field_context_path()` exists to preserve."""
+    return f"run_profile/targets/{target}/params/{option}"
+
+
+def assert_option_modeled(profile: dict, target: str, option: str) -> dict:
+    """Raise UnmodeledOptionError unless `option` is a real param of the
+    authoritative source. Returns the param definition when it is.
+
+    This is the code form of the rule this module's docstring has always
+    stated in prose: a modeled recipe missing an option an agent believes it
+    needs is a question-queue item, not a reason to add the knob. Before
+    2026-09-04 nothing in `dv_harness/uvm_generator/` referenced the question
+    queue at all -- the instruction existed only as this file's own comments
+    and the generated justfile's banner, both of which an agent editing
+    run_profile.json is by definition not being stopped by."""
+    param = find_param(profile, option)
+    if param is None:
+        raise UnmodeledOptionError(
+            f"UNMODELED_OPTION: {option!r} is not a param of "
+            f"{profile.get('source', {}).get('path')!r}, the authoritative source for target "
+            f"{target!r}. Route it via build_missing_option_question_queue_entry(); do not add "
+            "it to run_profile.json and regenerate."
+        )
+    return param
+
+
+def build_missing_option_question_queue_entry(
+    store, *, profile: dict, target: str, option: str, options: list,
+    recommendation: str, assumption_if_unanswered: str,
+    context: dict | None = None, now=None,
+) -> dict:
+    """Ask, through the REAL question queue, for an execution option the
+    authoritative source does not model.
+
+    Deliberately the same shape and the same store as
+    `connectivity.build_t4_question_queue_entry()` -- one question queue for
+    this harness, not a second parallel one for execution options. The
+    returned record is that store's own persisted, schema-validated
+    question: its `id` is DERIVED by `question_queue.make_question_id()`, its
+    `owner` by `route_owner()`, its `tier`/`blocking` by `classify_tier()`.
+
+    `options` must be a real pre-researched 2-3 item list, enforced as a hard
+    length check -- an open-ended "what should we do?" is not a queue item,
+    it is a shrug. `recommendation` must be one of those labels."""
+    from dv_harness import question_queue  # local import: keeps this module
+                                            # importable without the queue's deps
+
+    if isinstance(store, (str, Path)):
+        store = question_queue.QuestionQueueStore(Path(store))
+    if find_param(profile, option) is not None:
+        raise RunProfileValidationError(
+            f"OPTION_ALREADY_MODELED: {option!r} IS a param of the authoritative source; invoke "
+            "it through the generated recipe rather than asking whether it should exist."
+        )
+    if not (2 <= len(options) <= 3):
+        raise RunProfileValidationError(
+            f"OPTIONS_MUST_BE_PRE_RESEARCHED_2_TO_3: got {len(options)} for {option!r}"
+        )
+    normalized = [o if isinstance(o, dict) else {"label": str(o)} for o in options]
+    labels = [o.get("label") for o in normalized]
+    if recommendation not in labels:
+        raise RunProfileValidationError(
+            f"RECOMMENDATION_MUST_BE_ONE_OF_OPTIONS: {recommendation!r} not in {labels}"
+        )
+
+    merged_context = dict(MISSING_OPTION_QUESTION_CONTEXT)
+    merged_context.update(context or {})
+    source_path = (profile.get("source") or {}).get("path")
+    return store.add_question(
+        domain=MISSING_OPTION_QUESTION_DOMAIN,
+        question=(
+            f"Target {target!r} needs option {option!r}, which {source_path!r} does not define. "
+            "Should the authoritative source gain this knob, or is an existing modeled param the "
+            "right way to express it?"
+        ),
+        context_path=missing_option_context_path(target, option),
+        options=normalized, recommendation=recommendation,
+        assumption_if_unanswered=assumption_if_unanswered,
+        context=merged_context, now=now,
+    )
 
 _STANDALONE_VALIDATOR_TEMPLATE = (
     Path(__file__).resolve().parent / "templates" / "sim_scripts" / "validate_run_profile_args.py"
@@ -136,7 +266,23 @@ def generate_justfile(profile: dict) -> str:
         "is bypassing the reason run_profile.json exists. If a modeled recipe is missing "
         "a real option, that is a question-queue item, never a reason to use this."
     )
-    lines.append("human_raw_override target *args:")
+    lines.append(
+        "# The `ack` parameter is a real gate, not ceremony: until 2026-09-04 this recipe "
+        "was restricted by the comment above and nothing else, so it was indistinguishable "
+        "from a modeled recipe at the point of invocation. Requiring the literal token "
+        f"below means the bypass cannot happen by reflex or by tab-completion, and it "
+        "appears verbatim in shell history and CI logs as an attributable claim. HONEST "
+        "RESIDUAL: an agent CAN type this token. What is closed is silent, deniable bypass; "
+        "what is not closed, and cannot be from inside a justfile, is a deliberate one."
+    )
+    lines.append(f'human_raw_override ack target *args:')
+    lines.append(
+        f'\t@[ "{{{{ack}}}}" = "{HUMAN_OVERRIDE_ACK_TOKEN}" ] || '
+        f'{{ echo "refusing: human_raw_override requires the literal first argument '
+        f'{HUMAN_OVERRIDE_ACK_TOKEN}. An agent that wants an unmodeled option must raise it '
+        f'via the question queue (run_profile_to_justfile.build_missing_option_question_queue_entry), '
+        f'not bypass run_profile.json." >&2; exit 1; }}'
+    )
     lines.append("\tmake {{target}} {{args}}")
     lines.append("")
 
@@ -154,8 +300,48 @@ def copy_standalone_validator(out_dir: Path) -> Path:
     return dest
 
 
-def generate_and_write(profile_path: Path, out_path: Path, copy_validator: bool = True) -> str:
+def resolve_source_path(profile: dict, profile_path: Path) -> Path | None:
+    """The real authoritative source file this profile claims to describe,
+    resolved relative to the profile's own directory (`source.path` is
+    documented as relative to the environment root, and run_profile.json
+    lives at that root). Returns None when it is not present on disk --
+    which is a real and common case (a profile inspected away from its
+    environment), and is reported as NOT_AVAILABLE rather than guessed at."""
+    raw = (profile.get("source") or {}).get("path")
+    if not raw:
+        return None
+    candidate = Path(profile_path).resolve().parent / raw
+    return candidate if candidate.is_file() else None
+
+
+def verify_source_authority(profile: dict, profile_path: Path) -> dict:
+    """Confirm this profile is still derivable from its real source before
+    anything is generated from it. Two independent checks, both against the
+    file rather than against the profile's own claims: the recorded content
+    hash still matches, and every param name still appears as a token in it.
+
+    Returns a status dict; raises RunProfileValidationError on a real
+    violation. `status: "NOT_AVAILABLE"` when the source file is not on disk
+    -- generation still proceeds, because refusing to generate a justfile
+    away from its environment would be a false positive that gets this check
+    routed around, and the profile itself was already schema-validated."""
+    source_path = resolve_source_path(profile, profile_path)
+    if source_path is None:
+        return {"status": "NOT_AVAILABLE",
+                "reason": "the authoritative source file named in source.path is not present "
+                          "next to this run_profile.json, so it cannot be re-read to verify "
+                          "the profile against it"}
+    assert_source_unchanged(profile, source_path)
+    assert_params_traceable_to_source(profile, source_path.read_text(encoding="utf-8",
+                                                                     errors="replace"))
+    return {"status": "VERIFIED", "source": str(source_path)}
+
+
+def generate_and_write(profile_path: Path, out_path: Path, copy_validator: bool = True,
+                       verify_source: bool = True) -> str:
     profile = load_run_profile(profile_path)
+    if verify_source:
+        verify_source_authority(profile, Path(profile_path))
     text = generate_justfile(profile)
     out_path.write_text(text, encoding="utf-8")
     if copy_validator:
@@ -203,11 +389,25 @@ def _cli_validate(argv: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        print("usage: run_profile_to_justfile.py {generate|validate} ...", file=sys.stderr)
+        print("usage: run_profile_to_justfile.py {generate|validate|verify-source} ...",
+              file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
     if cmd == "validate":
         return _cli_validate(rest)
+    if cmd == "verify-source":
+        if len(rest) < 1:
+            print("usage: verify-source <run_profile.json>", file=sys.stderr)
+            return 2
+        path = Path(rest[0])
+        try:
+            profile = load_run_profile(path)
+            result = verify_source_authority(profile, path)
+        except RunProfileValidationError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"{result['status']}: {result.get('source') or result.get('reason')}")
+        return 0 if result["status"] == "VERIFIED" else 3
     if cmd == "generate":
         if len(rest) < 2:
             print("usage: generate <run_profile.json> <out justfile path>", file=sys.stderr)

@@ -129,6 +129,103 @@ def check_constraints(profile: dict, values: dict[str, str]) -> list[str]:
     return violations
 
 
+# ===========================================================================
+# Source authority: the reference Makefile/command.txt outranks this IR.
+#
+# This module's own docstring has stated since it was written that a knob an
+# agent believes is missing "goes to a question queue -- it is never silently
+# added here by an agent". Until 2026-09-04 that was prose only: nothing
+# distinguished a param this file's extractor derived from the real source
+# from one an agent typed into run_profile.json by hand and then regenerated
+# a justfile around. The justfile carries a "DO NOT hand-edit" banner, but
+# the PROFILE is the thing worth editing to smuggle in a knob, and it had no
+# such check at all.
+#
+# The two functions below close that, in the only way that respects the
+# authority ordering: they do not trust anything IN the profile, they re-read
+# the real source file and confirm the profile is derivable from it. An
+# invented knob has no token in the source, and says so.
+# ===========================================================================
+
+# Token boundaries only. A param named SPEED must not be "found" inside
+# HIGH_SPEED_MODE -- that is exactly the false negative that would let an
+# invented knob validate against an unrelated coincidence.
+_TOKEN_RE_CACHE: dict[str, Any] = {}
+
+
+def _source_defines_token(source_text: str, name: str) -> bool:
+    import re
+    pattern = _TOKEN_RE_CACHE.get(name)
+    if pattern is None:
+        pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])")
+        _TOKEN_RE_CACHE[name] = pattern
+    return bool(pattern.search(source_text))
+
+
+def untraceable_params(profile: dict, source_text: str) -> list[str]:
+    """Every param name in `profile` that does not appear as a whole token in
+    `source_text` (the real Makefile / reference command.txt this profile
+    claims to be an IR of).
+
+    Deliberately a NAME-token check and nothing cleverer. Parsing Make
+    conditionals or SystemVerilog task bodies well enough to prove a param's
+    semantics would be a second extractor, and a wrong one would either
+    reject real params (which gets the check switched off) or accept invented
+    ones (which is the whole failure). A name that appears nowhere in the
+    authoritative source cannot have come from it, and that single claim is
+    checkable with certainty.
+    """
+    missing = []
+    for bucket in ("compile_time_params", "runtime_params"):
+        for p in profile.get(bucket, []):
+            if not _source_defines_token(source_text, p["name"]):
+                missing.append(p["name"])
+    return missing
+
+
+def assert_params_traceable_to_source(profile: dict, source_text: str) -> None:
+    """Raise RunProfileValidationError naming every param that cannot be
+    traced to the authoritative source, and the sanctioned route for it.
+
+    This is the enforced form of "reference command.txt is the highest
+    authority": the profile does not get to assert what the source contains.
+    """
+    missing = untraceable_params(profile, source_text)
+    if missing:
+        raise RunProfileValidationError(
+            "PARAM_NOT_TRACEABLE_TO_SOURCE: "
+            + ", ".join(sorted(missing))
+            + f" -- none of these appear as a token in the authoritative source "
+              f"{profile.get('source', {}).get('path')!r}, so they were not extracted from it. "
+              "A knob an agent believes is missing is a question-queue item "
+              "(run_profile_to_justfile.build_missing_option_question_queue_entry), never "
+              "something added to run_profile.json and regenerated around."
+        )
+
+
+def assert_source_unchanged(profile: dict, source_path: Path) -> None:
+    """Raise if the real source file's current content hash differs from the
+    `source.content_sha256` recorded at extraction time.
+
+    A stale profile is a quieter version of the same failure as an invented
+    param: the environment's real execution surface moved and the IR an agent
+    is invoking through no longer describes it. Silently skipped (returns
+    None) when the profile recorded no hash -- absence of a recorded hash is
+    not evidence of a match, and inventing one here would be the same sin
+    this module refuses everywhere else.
+    """
+    recorded = (profile.get("source") or {}).get("content_sha256")
+    if not recorded:
+        return
+    actual = sha256_of_file(source_path)
+    if actual != recorded:
+        raise RunProfileValidationError(
+            f"SOURCE_CHANGED_SINCE_EXTRACTION: {source_path} now hashes {actual}, but this "
+            f"profile was extracted from {recorded}. Re-run the extractor against the real "
+            "source; do not reconcile by editing run_profile.json."
+        )
+
+
 def new_empty_profile(source_kind: str, source_path: str, target_ip: str, ip_prefix: str) -> dict:
     """Construct the minimal skeleton of a valid run_profile.json. Used by
     extractors as their starting point -- never hand-authored for a real

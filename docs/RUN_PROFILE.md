@@ -86,9 +86,16 @@ run_profile.json           --[run_profile_to_justfile.py]-->  justfile + validat
    Makefile's own `?=`, never duplicated in the justfile.
    Every recipe calls `validate_run_profile_args.py` first and only reaches
    `make` if that exits 0. A `human_raw_override` recipe exists for a human
-   operator reaching an unmodeled real target (e.g. `verdi`, `cov_gui`) --
-   loudly commented as human-only; an agent using it instead of a modeled
-   recipe is bypassing the reason this file exists.
+   operator reaching an unmodeled real target (e.g. `verdi`, `cov_gui`).
+   Until 2026-09-04 it was restricted by a loud comment and nothing else, so
+   at the point of invocation it was indistinguishable from a modeled recipe.
+   It now takes an `ack` parameter ahead of the target and refuses anything
+   but the literal `HUMAN_OVERRIDE_ACK_TOKEN`
+   (`I-AM-A-HUMAN-BYPASSING-RUN-PROFILE`), whose refusal message names the
+   question queue as the alternative. **Honest residual**: an agent can type
+   that token. What is closed is a silent, deniable bypass -- the token
+   appears verbatim in shell history and CI logs as an attributable claim.
+   A deliberate bypass cannot be closed from inside a justfile.
 
 5. **`dv_harness/uvm_generator/templates/sim_scripts/validate_run_profile_args.py`**
    -- copied (not imported) into every generated environment. Deliberately
@@ -108,6 +115,46 @@ run_profile.json           --[run_profile_to_justfile.py]-->  justfile + validat
    correct because this justfile, like every other one this harness
    generates, is always invoked from its own directory.
 
+6. **Source authority is verified, not asserted (2026-09-04).** The knob
+   worth smuggling in was never in the generated justfile -- that file
+   carries a "DO NOT hand-edit" banner and is regenerated anyway. It is in
+   `run_profile.json`, which had no such check: an agent could add the param
+   it wished existed and regenerate a perfectly valid justfile around it.
+   `run_profile.assert_params_traceable_to_source()` re-reads the real
+   Makefile / reference `command.txt` and refuses any param whose name does
+   not appear in it as a whole token; `assert_source_unchanged()` refuses a
+   profile whose recorded `source.content_sha256` no longer matches.
+   `run_profile_to_justfile.verify_source_authority()` runs both before
+   `generate_and_write()` emits anything, and is exposed as
+   `python -m dv_harness.uvm_generator.run_profile_to_justfile verify-source
+   <run_profile.json>` (exit 0 VERIFIED / 1 violation / 3 NOT_AVAILABLE).
+   A profile inspected away from its environment reports NOT_AVAILABLE and
+   still generates -- refusing there would be the false positive that gets
+   the check routed around. The name-token check is deliberately not
+   cleverer than that: parsing Make conditionals or SystemVerilog task
+   bodies well enough to prove a param's *semantics* would be a second
+   extractor, and a wrong one either rejects real params or accepts invented
+   ones. A name absent from the authoritative source cannot have come from
+   it, and that one claim is checkable with certainty.
+
+7. **The question-queue route is a real code path (2026-09-04).** "A knob an
+   agent believes is missing goes to the question queue" appeared in this
+   document, in `run_profile.py`'s docstring, in the schema's own
+   `description` and in the generated justfile's banner -- and in no code;
+   `dv_harness/uvm_generator/` referenced `question_queue` nowhere.
+   `run_profile_to_justfile.assert_option_modeled()` now refuses an
+   unmodeled option as `UnmodeledOptionError`, and
+   `build_missing_option_question_queue_entry()` asks it through the SAME
+   `question_queue.QuestionQueueStore` that `connectivity.
+   build_t4_question_queue_entry()` uses -- one queue for this harness, not
+   a second parallel one. The record is owner-routed via `route_owner("env")`,
+   id-derived (so regenerating does not mint a duplicate question), and
+   carries `affects_pass_fail_verdict: True`, which classifies it Tier 3
+   CANNOT_ASSUME: a silently-added execution knob does not produce a visibly
+   broken run, it produces a PASS that verified something other than what
+   was intended. Open-ended option lists and an already-modeled option are
+   both refused.
+
 ## CLI
 
 ```
@@ -123,7 +170,13 @@ template Makefile's real variable names/enum values/plusarg bindings --
 never a synthetic fixture, so a regression in the real file's own idioms is
 caught), `test_run_profile_to_justfile.py` (generation, plus real `just`
 subprocess execution when the `just` binary is present -- the two bugs
-above are both regression-guarded here, not just fixed).
+above are both regression-guarded here, not just fixed), and
+`test_four_key_judgments_enforcement.py` (the 2026-09-04 source-authority
+and question-queue wiring: traceability against the REAL template Makefile,
+a hand-added knob refused at `generate_and_write()` time with no justfile
+written, whole-token matching, staleness, the NOT_AVAILABLE path, the CLI's
+0/1/3 exit codes, a real persisted queue record with a stable derived id,
+and the `human_raw_override` ack driven through the real `just` binary).
 
 ## Known scope limits (honest, not silently patched over)
 
@@ -136,7 +189,16 @@ above are both regression-guarded here, not just fixed).
   enum but has no extractor yet -- that source format is fundamentally
   different syntax (SystemVerilog tasks, not Make variable assignments) and
   needs its own extractor built against a real command.txt, not adapted by
-  guesswork from this one.
+  guesswork from this one. **This is the one place the "reference source is
+  the highest authority" rule is still only partly mechanical**: for a
+  `command_txt`-sourced environment, `run_profile.json` is authored rather
+  than extracted. Note the 2026-09-04 verification above does still apply to
+  that case -- `assert_params_traceable_to_source()` reads whatever file
+  `source.path` names, Makefile or command.txt, and a param absent from it
+  is refused either way. So an authored profile is checked against its real
+  source even though nothing yet derives it from one. Building the extractor
+  is a separate effort: it needs a real SoC-level command.txt to be written
+  against, and none is present in this repo.
 - `mutual_requirement`/`forbidden_combination` constraints are captured in
   the schema shape but `check_constraints()` only evaluates
   `enum_membership` generically (re-implementing arbitrary Make-language

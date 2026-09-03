@@ -22,6 +22,7 @@ from dv_harness.uvm_generator.makefile_to_run_profile import extract_run_profile
 from dv_harness.uvm_generator.run_profile import save_run_profile
 from dv_harness.uvm_generator.run_profile_to_justfile import (
     _STANDALONE_VALIDATOR_TEMPLATE,
+    HUMAN_OVERRIDE_ACK_TOKEN,
     copy_standalone_validator,
     generate_and_write,
     generate_justfile,
@@ -101,8 +102,12 @@ def test_generate_justfile_only_models_known_targets(profile):
 
 def test_generate_justfile_has_human_override_escape_hatch(profile):
     text = generate_justfile(profile)
-    assert "human_raw_override target *args:" in text
+    # The recipe now takes an `ack` parameter ahead of the target: the escape
+    # hatch still exists (an unmodeled target is reachable no other way), but
+    # it can no longer be invoked without stating the bypass out loud.
+    assert "human_raw_override ack target *args:" in text
     assert "HUMAN OVERRIDE ONLY" in text
+    assert HUMAN_OVERRIDE_ACK_TOKEN in text
 
 
 def test_generate_and_write_copies_standalone_validator(tmp_path):

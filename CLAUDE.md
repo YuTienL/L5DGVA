@@ -571,12 +571,13 @@ this as an investment in the team's future capability rather than lost efficienc
 
 ## Bind-Location Rules (2026-09-03)
 
-Four hard project rules for every `bind` statement an agent proposes or reviews — not
+Five hard project rules for every `bind` statement an agent proposes or reviews — not
 suggestions, and not judgment calls left to per-instance discretion. Backed by real code in
 `dv_harness/connectivity.py` (the 4-tier bind-confidence classifier, existing-bind grep, and the
-3-gate connectivity pipeline — see `.work/mcp-bind-connectivity-report.md`) and
+3-gate connectivity pipeline — see `.work/mcp-bind-connectivity-report.md`),
+`dv_harness/phy_boundary.py` (the mount-layer decision, Rule 5) and
 `dv_harness/uvm_generator/bind_mechanism_generator.py` (evidence-gated `bind`/hook-skeleton
-emission, already real — this section adds the four location rules that generator's own output
+emission, already real — this section adds the location rules that generator's own output
 must satisfy; it does not re-implement that generator's emission logic here).
 
 1. **Bare module name vs. full instance path.** Binding to a bare module name applies to
@@ -600,8 +601,41 @@ must satisfy; it does not re-implement that generator's emission logic here).
    target is accepted, precisely because a generate-loop bind path is one of the two situations
    `connectivity.py`'s T3 tier explicitly flags as most error-prone (the other being inconsistent
    wrapper depth across a hierarchy).
+5. **The PHY model decides the mount LAYER first; only then is the hierarchy path a question.**
+   Rules 1–4 all assume the layer is already settled and ask *where inside it* to bind. Rule 5 is
+   the step before them, and it is an ORDERING rule: decide from the PHY model's existence and
+   type which layer a monitor may mount at, and only after that layer is fixed go looking for the
+   instance path. Choosing a target path first — typically by recognising a familiar module or
+   signal name in the RTL — and asking afterwards whether a PHY sits in between is the backwards
+   order, and it is not a harmless reordering. It is how a bind lands on line-rate serial lanes: a
+   protocol VIP monitor there decodes nothing without a PHY model, so it **elaborates (Gate 1
+   PASS), sees a toggling clock and a released reset (Gate 2 PASS), and only fails at Gate 3, as a
+   silent monitor** — the most expensive place in the pipeline to discover a mount-layer mistake.
+   Note the tier classifier cannot catch this: a serial-lane bind target can be a perfectly clean
+   T1 structural match, because layer-correctness and path-correctness are independent properties.
+   That is why this is a separate gate rather than another tier.
+   The confirmed real drift this rule is written from (2026-08-31, recorded in
+   `.claude/agents/IP_UVM_DV_Gen.md:541-649`): an agent disabled a whole PHY instance for USB3 on
+   the assumption that PIPE4 replaced it, and was corrected by the user — 「USB3 也是要經過 PHY，
+   不是 PIPE 介面」. The agent had reasoned from interface naming instead of from whether a PHY
+   model was actually in the path.
+   **Enforced in code (2026-09-04), not by review**: `dv_harness/phy_boundary.py` derives the
+   serial/parallel boundary from the same verible-parsed port table `env_manifest.py` produces,
+   and `bind_mechanism_generator.assert_phy_boundary_decided_first()` runs that decision as a gate
+   **before** the tier gate inside `validate_bind_entries()`/`emit_bind_sv()` — a SERIAL-only or
+   UNDECIDABLE boundary raises `PhyBoundaryValidationError` and nothing is written. An entry may
+   declare the boundary signals it connects through as `phy_boundary_signals`, which additionally
+   refuses binding the serial lanes of a MIXED boundary (a boundary whose document says
+   `bindable: true`, so the layer check alone would pass it). `tools/generate_bind_mechanism.py`
+   takes `--phy-boundary <phy_boundary.json>` and `--require-phy-boundary`.
+   **Disclosed residual**, mirroring `require_tier`'s: `require_phy_boundary` defaults to False, so
+   a caller that supplies no boundary document at all still emits. That default is deliberate — an
+   IP-level DUT with no PHY sub-block genuinely has no boundary to decide — and it means Rule 5 is
+   hard-enforced whenever a boundary is in scope and known, not universally. Pass
+   `--require-phy-boundary` for the strict contract.
 
-These four rules are enforced by review, not (yet) by a standalone lint gate — `connectivity.py`'s
+Rules 1–4 (the path rules) are enforced by review, not (yet) by a standalone lint gate — Rule 5
+is the exception and hard-blocks in code, per its own paragraph above. `connectivity.py`'s
 T1–T4 tier classifier and its `grep_existing_binds()`/matrix output make a violation visible (a
 bare-module-name target at SoC scope, or a generate-index-bearing bind target, shows up directly
 in the connectivity matrix's `bind_target` column for a human reviewer to catch), but does not
@@ -609,8 +643,9 @@ yet hard-block generation on one. See the report referenced above for what is re
 versus NOT_AVAILABLE-by-honest-design (anything requiring a live `simv`, a licensed VCS install,
 or `slang`, none of which are present in this environment as of this writing).
 
-**The bind-CONFIDENCE tier, unlike the four location rules above, now DOES hard-block generation
-(2026-09-04).** `connectivity.assert_t3_never_auto_accepted()` previously had no caller anywhere
+**The bind-CONFIDENCE tier, like Rule 5 but unlike path rules 1–4, DOES hard-block generation
+(2026-09-04).** It is the second of the two independent gates `validate_bind_entries()` runs, and
+runs after Rule 5's: layer first, then path confidence. `connectivity.assert_t3_never_auto_accepted()` previously had no caller anywhere
 in the repo — its own docstring named a "downstream consumer" that did not exist — so the real
 emission path (`tools/generate_bind_mechanism.py` → `uvm_generator.bind_mechanism_generator.
 emit_bind_sv()`) would write a naming-heuristic-only bind into a `.sv` file with no tier check at

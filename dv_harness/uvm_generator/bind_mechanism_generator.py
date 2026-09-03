@@ -30,9 +30,70 @@ class BindTopologyError(ValueError):
         self.detail = detail
 
 
-def validate_bind_entries(bind_entries, *, require_tier: bool = False):
-    """Evidence check for every bind entry, then the bind-confidence TIER
-    gate. The tier gate is `connectivity.enforce_bind_tier_policy()` -- the
+def assert_phy_boundary_decided_first(bind_entries, phy_boundary_doc,
+                                       *, require_phy_boundary: bool = False):
+    """The MOUNT-LAYER gate, run BEFORE the bind-confidence tier gate.
+
+    CLAUDE.md Bind-Location Rule 5 states the ordering this function is: the
+    PHY model's existence and type decides WHICH LAYER a monitor may be
+    mounted at; only after that layer is fixed does locating the hierarchy
+    path inside it become a question at all. Choosing a target path first
+    and asking afterwards whether a PHY sits in between is the backwards
+    order, and it is not a harmless reordering -- it is how a bind lands on
+    line-rate serial lanes. Such a bind elaborates (Gate 1 PASS), sees a
+    toggling clock and a released reset (Gate 2 PASS), and only fails at
+    Gate 3, as a monitor that decoded nothing. `connectivity.py`'s tier
+    classifier cannot catch that: a serial-lane target can be a perfectly
+    good T1 structural match. Layer-correctness and path-correctness are
+    independent, so they need independent gates.
+
+    `phy_boundary_doc` is a real `dv_harness.phy_boundary` document
+    (`extract_phy_boundary()` / `load_phy_boundary()`), never a hand-written
+    dict -- its `bind_decision` carries the port widths it was computed
+    from. Refusal is `phy_boundary.PhyBoundaryValidationError`, propagated
+    unwrapped exactly as `BindTierError` is from the tier gate, so a caller
+    sees which of the two independent gates refused.
+
+    An entry may declare the boundary signals it actually connects through
+    as `phy_boundary_signals`; when it does, those are checked against the
+    sanctioned parallel port set as well. That is what refuses the specific
+    case of binding the SERIAL lanes of a MIXED boundary -- a boundary whose
+    document says `bindable: true`, so the mount-layer check alone passes it.
+
+    `require_phy_boundary=True` makes an ABSENT document a hard refusal:
+    that is the strict reading of the ordering rule (no bind may be emitted
+    before the layer decision exists). It defaults False so the existing
+    3-field entry contract, and every caller that has no PHY in scope at all
+    (an IP-level DUT with no PHY sub-block), keeps working unchanged."""
+    if phy_boundary_doc is None:
+        if require_phy_boundary:
+            raise BindTopologyError(
+                "PHY_BOUNDARY_NOT_DECIDED",
+                {"detail": "require_phy_boundary=True but no phy_boundary document was supplied; "
+                           "run dv_harness.phy_boundary.extract_phy_boundary() and decide the "
+                           "mount layer BEFORE choosing a bind target (CLAUDE.md Bind-Location "
+                           "Rule 5)"})
+        return None
+    # Local import, same convention as the tier gate below: keeps this
+    # generator importable without pulling in phy_boundary's jsonschema
+    # dependency surface at module-import time.
+    from ..phy_boundary import assert_bind_location_allowed
+
+    decision = assert_bind_location_allowed(phy_boundary_doc)
+    for entry in bind_entries or []:
+        declared = entry.get("phy_boundary_signals")
+        if declared:
+            assert_bind_location_allowed(phy_boundary_doc, target_signals=declared)
+    return decision
+
+
+def validate_bind_entries(bind_entries, *, require_tier: bool = False,
+                          phy_boundary_doc=None, require_phy_boundary: bool = False):
+    """Evidence check for every bind entry, then the MOUNT-LAYER gate, then
+    the bind-confidence TIER gate -- in that order, which is itself the rule
+    (see `assert_phy_boundary_decided_first`).
+
+    The tier gate is `connectivity.enforce_bind_tier_policy()` -- the
     downstream consumer `connectivity.assert_t3_never_auto_accepted()` was
     written for. Before it was wired here, this generator would emit a
     `bind` statement for an entry the pipeline had already classified as
@@ -54,6 +115,10 @@ def validate_bind_entries(bind_entries, *, require_tier: bool = False):
         if not entry.get("reason"):
             raise BindTopologyError("MISSING_BIND_EVIDENCE",
                                      {"index": i, "target_instance": target, "field": "reason"})
+    # Mount layer BEFORE hierarchy path: a serial-lane bind can be a clean
+    # T1 structural match, so running the tier gate first would pass it.
+    assert_phy_boundary_decided_first(
+        bind_entries, phy_boundary_doc, require_phy_boundary=require_phy_boundary)
     # Local import: keeps this generator importable without pulling in
     # connectivity's own dependency surface at module-import time, matching
     # connectivity.build_t4_question_queue_entry()'s own convention.
@@ -62,12 +127,15 @@ def validate_bind_entries(bind_entries, *, require_tier: bool = False):
     return bind_entries
 
 
-def emit_bind_sv(bind_entries, *, require_tier: bool = False) -> str:
+def emit_bind_sv(bind_entries, *, require_tier: bool = False,
+                 phy_boundary_doc=None, require_phy_boundary: bool = False) -> str:
     """Pure textual `bind` statement assembly from input evidence only --
-    never invents a signal/module name not present in `bind_entries`, and
-    never emits an unconfirmed T3 or any T4 entry (see
-    `validate_bind_entries`)."""
-    validate_bind_entries(bind_entries, require_tier=require_tier)
+    never invents a signal/module name not present in `bind_entries`, never
+    mounts at a layer the PHY boundary says is not bindable, and never emits
+    an unconfirmed T3 or any T4 entry (see `validate_bind_entries`)."""
+    validate_bind_entries(bind_entries, require_tier=require_tier,
+                          phy_boundary_doc=phy_boundary_doc,
+                          require_phy_boundary=require_phy_boundary)
     lines = [
         "// GENERATED by dv_harness/uvm_generator/bind_mechanism_generator.py --",
         "// every bind target below is evidence-supplied (bind_entries), never invented.",
