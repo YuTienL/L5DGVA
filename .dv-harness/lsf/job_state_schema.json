@@ -26,6 +26,7 @@
   "fix_proposal_status": "NOT_STARTED",
   "git_sha": null,
   "server_sha": null,
+  "runtime_seconds": null,
   "last_change_time": null,
   "state_fingerprint": null
 }

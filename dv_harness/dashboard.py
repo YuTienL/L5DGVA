@@ -1501,6 +1501,58 @@ def _run_and_parse_fsdb_report(fsdb_path: str, period: str = "", hier: str = "")
     return {"ok": True, "hier_requested": hier, **parsed}
 
 
+def _ingest_coverage_summary_to_evidence_db(root: Path, timestamp: Any = None) -> int:
+    """Lands this project's REAL current per-category coverage numbers as
+    append-only `coverage_samples` rows in the DuckDB evidence store, so the
+    cross-run daily coverage curve has something to be computed FROM
+    (cross-run-trend task, 2026-09-03).
+
+    THE GAP THIS CLOSES: `evidence_db.insert_coverage_sample()` and its
+    append-only `coverage_samples` table were both real and unit-tested but
+    had ZERO production call sites -- no real coverage run ever landed a row,
+    so the table was permanently empty and every coverage trend query over it
+    returned nothing. This is that call site.
+
+    Reads `.dv-harness/coverage/summary.json` through
+    `coverage_analysis.parse_coverage_summary()`, the SAME validated
+    `{"name","percent","bins_total","bins_hit"}` shape GET /api/coverage
+    already renders -- never a re-parse with different rules. Returns the
+    number of category rows written (0 when there is no summary file yet, or
+    when it is malformed, or when the evidence store is disabled/unavailable).
+
+    Deliberately NOT invented when summary.json is absent: the aggregate
+    `coverage_credit_percent` its caller has in hand carries no real
+    bins_total/bins_hit, and fabricating those two columns to force a row in
+    would put invented numbers into the evidence database. No summary file
+    means no per-category evidence, and this honestly writes nothing -- the
+    percent still reaches `history.json` through the caller either way."""
+    try:
+        from . import config as _config
+        if not _config.load_config(root).get("evidence_db", {}).get("enabled", True):
+            return 0
+        s_path = _default_coverage_summary_path(root)
+        if not s_path.exists():
+            return 0
+        from . import coverage_analysis as ca
+        parsed = ca.parse_coverage_summary(json.loads(s_path.read_text(encoding="utf-8")))
+        from . import evidence_db as _evidence_db
+        written = 0
+        with _evidence_db.EvidenceStore(_evidence_db.default_db_path(root)) as store:
+            for category in parsed["categories"]:
+                store.insert_coverage_sample(category, timestamp=timestamp,
+                                              source=str(s_path))
+                written += 1
+        return written
+    except Exception as e:
+        # Same best-effort discipline every other evidence-store write in this
+        # project uses (see regression_reporter._write_reconciliation_evidence_
+        # if_configured): a duckdb-not-installed / locked-file / malformed-
+        # summary problem must never break an already-earned COVERAGE_CLOSURE
+        # PASS, nor the history.json append its caller performs regardless.
+        print(f"[coverage] evidence store coverage sample write failed: {e}", flush=True)
+        return 0
+
+
 def append_coverage_history_sample(root: Path, percent: float, timestamp: Any = None) -> list:
     """Thin wrapper over coverage_analysis.append_history_sample(), pointed
     at this project's default .dv-harness/coverage/history.json -- the real
@@ -1510,9 +1562,19 @@ def append_coverage_history_sample(root: Path, percent: float, timestamp: Any = 
     COVERAGE_CLOSURE PASS (Task 6, 2026-08-31 poster-gap-closing round 2),
     with the percent taken from coverage_signoff_verdict_gate's own
     gate-verified coverage_credit_percent evidence field -- never a
-    placeholder."""
+    placeholder.
+
+    Also mirrors this project's real per-category coverage summary into the
+    DuckDB evidence store (cross-run-trend task, 2026-09-03) -- see
+    `_ingest_coverage_summary_to_evidence_db()`. Wired HERE rather than at
+    engine.py's call site so both the flat history.json trend chart and the
+    cross-run daily coverage curve are fed by the same one real moment (a
+    gate-verified COVERAGE_CLOSURE PASS), with no second call site an engine
+    change could forget."""
     from . import coverage_analysis as ca
-    return ca.append_history_sample(_default_coverage_history_path(root), percent, timestamp)
+    history = ca.append_history_sample(_default_coverage_history_path(root), percent, timestamp)
+    _ingest_coverage_summary_to_evidence_db(root, timestamp=timestamp)
+    return history
 
 
 def _blackboard_topics(root: Path):

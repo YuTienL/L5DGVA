@@ -30,6 +30,28 @@ before designing this schema:
                             it) -- this table is the queryable mirror of
                             that same file, gaining a real recorded_at this
                             project's flat-file format has no room for.
+  - `regression_verdict_history`
+                         <- the SAME real verdict events `regression_verdicts`
+                            mirrors, kept APPEND-ONLY instead of upserted
+                            (cross-run-trend task, 2026-09-03). Deliberately a
+                            second table, not a replacement: `regression_verdicts`
+                            is the one-row-per-pattern "currently verified PASS"
+                            snapshot that mirrors regression.list's own
+                            semantics and that `dv_harness/mcp/regression_queries.py`
+                            already reads -- overwriting a pattern's row on
+                            every cycle is CORRECT for that question ("is this
+                            pattern passing right now?") and structurally
+                            destroys the different question the cross-run time
+                            dimension asks ("what was this pattern's verdict
+                            yesterday, and against which RTL commit?"). This
+                            table answers only the second, carries the real
+                            `git_sha` the job ran against (`JobState.git_sha`,
+                            already captured per job) so a PASS->FAIL
+                            transition can be attributed to a real commit
+                            range, and is written by the SAME
+                            `insert_regression_verdict()` call so no
+                            production call site has to remember to write
+                            both.
   - `coverage_samples`    <- the real per-category shape
                             `coverage_analysis.parse_coverage_summary()`
                             validates ({"name","percent","bins_total",
@@ -58,6 +80,18 @@ from typing import Any, Optional
 
 DB_PATH_PARTS = (".dv-harness", "evidence", "evidence.duckdb")
 
+# Additive column migrations for an evidence.duckdb that already exists from
+# an earlier run (cross-run-trend task, 2026-09-03). `CREATE TABLE IF NOT
+# EXISTS` alone silently leaves an OLD database on its old column set, so a
+# column added to a table below would exist only in freshly-created files --
+# every real .dv-harness/evidence/evidence.duckdb already on disk would keep
+# failing the insert. Each statement here must be idempotent (`ADD COLUMN IF
+# NOT EXISTS`, verified real DuckDB 1.5 syntax) because __init__ replays the
+# whole list on every single connect.
+_MIGRATION_STATEMENTS = [
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS runtime_seconds DOUBLE",
+]
+
 _SCHEMA_STATEMENTS = [
     """CREATE TABLE IF NOT EXISTS jobs (
         job_id BIGINT PRIMARY KEY,
@@ -84,6 +118,7 @@ _SCHEMA_STATEMENTS = [
         server_sha VARCHAR,
         last_change_time VARCHAR,
         state_fingerprint VARCHAR,
+        runtime_seconds DOUBLE,
         ingested_at TIMESTAMP DEFAULT now()
     )""",
     """CREATE TABLE IF NOT EXISTS job_memory_records (
@@ -108,6 +143,15 @@ _SCHEMA_STATEMENTS = [
         pattern VARCHAR PRIMARY KEY,
         verdict_passed BOOLEAN,
         job_id BIGINT,
+        recorded_at TIMESTAMP DEFAULT now()
+    )""",
+    "CREATE SEQUENCE IF NOT EXISTS regression_verdict_history_id_seq",
+    """CREATE TABLE IF NOT EXISTS regression_verdict_history (
+        id BIGINT PRIMARY KEY DEFAULT nextval('regression_verdict_history_id_seq'),
+        pattern VARCHAR,
+        verdict_passed BOOLEAN,
+        job_id BIGINT,
+        git_sha VARCHAR,
         recorded_at TIMESTAMP DEFAULT now()
     )""",
     "CREATE SEQUENCE IF NOT EXISTS coverage_samples_id_seq",
@@ -238,6 +282,8 @@ class EvidenceStore:
         self._conn = duckdb.connect(str(self.db_path))
         for stmt in _SCHEMA_STATEMENTS:
             self._conn.execute(stmt)
+        for stmt in _MIGRATION_STATEMENTS:
+            self._conn.execute(stmt)
 
     def close(self) -> None:
         self._conn.close()
@@ -263,7 +309,7 @@ class EvidenceStore:
                 "uvm_error_count", "uvm_fatal_count", "assertion_failure",
                 "simulator_crash", "terminal_signature", "early_kill", "kill_reason",
                 "root_cause_status", "fix_proposal_status", "git_sha", "server_sha",
-                "last_change_time", "state_fingerprint"]
+                "last_change_time", "state_fingerprint", "runtime_seconds"]
         values = [d.get(c) for c in cols]
         assignments = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "job_id")
         placeholders = ", ".join("?" for _ in cols)
@@ -349,7 +395,32 @@ class EvidenceStore:
     # ---- regression_verdicts (regression.list mirror) ----------------------
 
     def insert_regression_verdict(self, pattern: str, verdict_passed: bool,
-                                   job_id: Optional[int] = None) -> None:
+                                   job_id: Optional[int] = None,
+                                   git_sha: Optional[str] = None) -> None:
+        """Records one real PASS/FAIL verdict for `pattern` in BOTH shapes the
+        rest of this harness asks for:
+
+        1. `regression_verdicts` -- upserted, one row per pattern. The
+           "currently verified PASS" snapshot that mirrors regression.list's
+           own one-line-per-pattern semantics, and the table
+           `dv_harness/mcp/regression_queries.py` reads. Unchanged.
+        2. `regression_verdict_history` -- APPENDED, one row per call, carrying
+           the real `git_sha` this verdict was produced against
+           (cross-run-trend task, 2026-09-03).
+
+        Both, from one call, deliberately: the upsert in (1) OVERWRITES the
+        previous row, so before (2) existed no query could answer "what was
+        this pattern's verdict yesterday" or "between which two RTL commits
+        did it stop passing" -- the history was destroyed as it was written.
+        Writing both here rather than adding a second method means no
+        production call site (today: `regression_reporter.
+        _write_reconciliation_evidence_if_configured()`) can grow history
+        that silently disagrees with the snapshot.
+
+        `git_sha` is optional and never invented: a caller with no real SHA
+        for the job passes nothing and the history row records NULL, which
+        `trend_analysis.detect_pattern_regressions()` then reports honestly as
+        an un-bisectable transition rather than guessing a commit."""
         if not pattern:
             raise ValueError("insert_regression_verdict: pattern must be non-empty")
         self._conn.execute(
@@ -360,6 +431,12 @@ class EvidenceStore:
                    job_id = excluded.job_id,
                    recorded_at = now()""",
             [pattern, verdict_passed, job_id],
+        )
+        self._conn.execute(
+            """INSERT INTO regression_verdict_history
+               (pattern, verdict_passed, job_id, git_sha, recorded_at)
+               VALUES (?, ?, ?, ?, now())""",
+            [pattern, verdict_passed, job_id, git_sha],
         )
 
     # ---- coverage_samples (parse_coverage_summary category mirror) --------

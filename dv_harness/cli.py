@@ -566,6 +566,33 @@ def main():
     psimlog_group.add_argument("--log", default=None, help="Path to a sim.log file.")
     psimlog_group.add_argument("--log-text", default=None, help="Inline log text (for testing).")
 
+    # Cross-run time dimension (2026-09-03). Reads .dv-harness/evidence/
+    # evidence.duckdb READ-ONLY -- never creates or migrates it, so running
+    # this while a background `lsf-watch` writer is live is safe.
+    ptrend = sub.add_parser("trend", help="Cross-run trend over the evidence DB: daily pass-rate/coverage/"
+                                            "runtime/license-hour curves plus day-over-day, PASS->FAIL "
+                                            "regressions bisected to the responsible RTL commit range, and "
+                                            "passed-but-abnormally-slow runtime anomalies. See "
+                                            "dv_harness/trend_analysis.py.")
+    ptrend.add_argument("--json", action="store_true", help="Emit the raw report dict instead of the text table.")
+    ptrend.add_argument("--seats-per-job", type=float, default=None,
+                         help="Simulator seats one running job is modelled as holding, for the license-hours "
+                              "curve (default 1). This harness reads no license manager -- license_hours is a "
+                              "derived estimate from real measured job runtime; see trend_analysis."
+                              "LICENSE_HOURS_MODEL.")
+    ptrend.add_argument("--rtl-pathspec", action="append", default=None,
+                         help="Git pathspec deciding which commits in a regression's range count as RTL "
+                              "(repeatable; default *.v/*.sv/*.svh/*.vh).")
+    ptrend.add_argument("--min-baseline-samples", type=int, default=None,
+                         help="Prior PASS runs a pattern needs before any runtime-anomaly verdict is issued "
+                              "for it (default 5).")
+    ptrend.add_argument("--ratio-threshold", type=float, default=None,
+                         help="Flag a passing job at or above this multiple of its pattern's baseline median "
+                              "runtime (default 2.0).")
+    ptrend.add_argument("--z-threshold", type=float, default=None,
+                         help="Flag a passing job at or above this many standard deviations over its "
+                              "pattern's baseline mean runtime (default 3.0).")
+
     pvplan = sub.add_parser("vplan-export", help="Write a real, openable vPlan .xlsx workbook (verification_plan + "
                                                    "coverage_summary sheets) from a JSON list of structured "
                                                    "verification-item dicts, validated against real pattern-dir/"
@@ -1424,6 +1451,24 @@ def main():
             "coverage_percent": result.coverage_percent, "counts_by_state": result.counts_by_state,
             "gaps_ranked_count": len(result.gaps_ranked),
         }, ensure_ascii=False, indent=2))
+    elif args.cmd == "trend":
+        from . import trend_analysis
+        kwargs = {}
+        if args.seats_per_job is not None:
+            kwargs["seats_per_job"] = args.seats_per_job
+        if args.rtl_pathspec:
+            kwargs["rtl_pathspecs"] = tuple(args.rtl_pathspec)
+        if args.min_baseline_samples is not None:
+            kwargs["min_samples"] = args.min_baseline_samples
+        if args.ratio_threshold is not None:
+            kwargs["ratio_threshold"] = args.ratio_threshold
+        if args.z_threshold is not None:
+            kwargs["z_threshold"] = args.z_threshold
+        report = trend_analysis.trend_report(h.root, **kwargs)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(trend_analysis.render_trend_report_text(report))
     elif args.cmd == "sim-log-analyze":
         from . import sim_log_analysis
         if args.log:

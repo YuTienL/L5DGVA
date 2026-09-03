@@ -196,8 +196,19 @@ def _write_reconciliation_evidence_if_configured(root: Path, reconciled: dict) -
                 try:
                     store.insert_job_state(state)
                     if state.pattern and state.sim_status in ("PASS", "FAIL"):
+                        # git_sha (cross-run-trend task, 2026-09-03): the real
+                        # source SHA this job ran against, already captured on
+                        # JobState and already stored in the `jobs` row above.
+                        # Passing it here is what lets
+                        # `trend_analysis.detect_pattern_regressions()` attribute
+                        # a PASS->FAIL transition to a real commit RANGE
+                        # (last-good..first-bad) instead of merely noticing the
+                        # flip. A JobState with no recorded SHA passes None and
+                        # the transition is reported as un-bisectable -- never
+                        # attributed to a guessed commit.
                         store.insert_regression_verdict(
-                            state.pattern, state.sim_status == "PASS", job_id=state.job_id)
+                            state.pattern, state.sim_status == "PASS", job_id=state.job_id,
+                            git_sha=state.git_sha)
                 except Exception as e:
                     print(f"[reconciliation_cycle] job {jid} evidence store write failed: {e}",
                           flush=True)

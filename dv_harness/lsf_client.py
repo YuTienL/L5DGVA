@@ -164,6 +164,24 @@ class JobState:
     fix_proposal_status: str = "NOT_STARTED"
     git_sha: Optional[str] = None
     server_sha: Optional[str] = None
+    # runtime_seconds (cross-run-trend task, 2026-09-03): this DUT testcase's
+    # own real LSF wall-clock runtime as a NUMBER of seconds, parsed by
+    # parse_run_time_seconds() in reconcile_job() from the `run_time` column
+    # _run_bjobs()'s -o list has always requested and every caller discarded.
+    # A number rather than LSF's own free-form string because this is what the
+    # cross-run trend database aggregates -- the daily runtime and
+    # license-hour curves, and the per-pattern baseline trend_analysis.py
+    # compares a suspiciously slow PASS against -- none of which a string can
+    # be SUMmed or MEDIANed into.
+    #
+    # This is DUT simulation time, NOT any agent/LLM orchestration timing --
+    # that is dv_harness/stage_profile.py's separate, unrelated concept and
+    # the two must never be conflated into one curve. None means LSF reported
+    # no runtime for this job yet, or reported it in a format
+    # parse_run_time_seconds() has not confirmed against a real LSF instance
+    # -- never 0, which would be a real measured "finished instantly" claim
+    # this field has no evidence for.
+    runtime_seconds: Optional[float] = None
     last_change_time: Optional[str] = None
     state_fingerprint: Optional[str] = None
 
@@ -656,6 +674,39 @@ def to_snapshot_row(state: JobState, *, agent_action: str, note: Optional[str] =
     }
 
 
+_RUN_TIME_SECONDS_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:second\(s\)|seconds?|s)?\s*$",
+                                   re.IGNORECASE)
+
+
+def parse_run_time_seconds(raw) -> Optional[float]:
+    """Real `bjobs -o run_time` value -> seconds as a float, or None.
+
+    LSF renders this column as a bare number of seconds, usually with the
+    literal unit suffix `second(s)` (e.g. `"1234 second(s)"`); this repo's own
+    existing test fixture for a live bjobs record uses the bare-number form
+    (`"RUN_TIME": "10"`, test_lsf_client.py). Both are accepted, plus a
+    numeric type if a caller ever hands one through unstringified.
+
+    Returns None -- never 0.0 -- for anything that is not a real measured
+    duration: an empty string, LSF's `"-"` placeholder for a job that has not
+    started, or any other unit/format this function has NOT confirmed against
+    a real LSF instance. Per this project's Tool Usage Verification Gate, an
+    unrecognized format is reported as "no runtime evidence" rather than
+    guessed at -- a wrongly-parsed duration would silently poison both the
+    daily runtime curve and the runtime-anomaly baseline that read this
+    field."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    m = _RUN_TIME_SECONDS_RE.match(str(raw))
+    if not m:
+        return None
+    return float(m.group(1))
+
+
 def reconcile_job(state: JobState, live_bjobs_record: dict, *,
                    require_exact_job_id: bool = True,
                    require_log_job_match: bool = True) -> tuple[JobState, list]:
@@ -713,6 +764,35 @@ def reconcile_job(state: JobState, live_bjobs_record: dict, *,
             reported=state.lsf_status, live=live_status, severity="WARN",
         ))
         state.lsf_status = live_status
+        changed = True
+
+    # Real DUT-testcase runtime capture (cross-run-trend task, 2026-09-03).
+    # `run_time` is already in every _run_bjobs() `-o` column list above -- it
+    # was requested on every single poll and then discarded. This parses it
+    # into the queryable number the cross-run trend database aggregates (daily
+    # runtime/license-hour curves, and the per-pattern baseline
+    # `trend_analysis.detect_runtime_anomalies()` compares a passing job
+    # against), which LSF's own free-form string cannot be SUMmed or MEDIANed.
+    #
+    # Recorded MONOTONICALLY: a poll that reports a smaller runtime than one
+    # already recorded (or none at all, which is what bjobs_query_many()
+    # returns for a job LSF has forgotten past CLEAN_PERIOD) must never
+    # overwrite a larger, real, previously-observed duration -- the same "an
+    # ABSENCE of information is not new evidence that the outcome changed"
+    # reasoning the terminal-status protection above rests on. A job polled at
+    # 200s and again after it finished at 900s keeps 900s.
+    live_runtime = parse_run_time_seconds(live_bjobs_record.get("RUN_TIME"))
+    if live_runtime is not None and (state.runtime_seconds is None
+                                     or live_runtime > state.runtime_seconds):
+        state.runtime_seconds = live_runtime
+        changed = True
+
+    # First observation of a terminal LSF status for this job (2026-09-03):
+    # set once and never overwritten, so repeated polls of the same finished
+    # job keep reporting when this harness ACTUALLY first saw it finish
+    # rather than the timestamp of the most recent poll.
+    if live_status in ("DONE", "EXIT") and state.observed_terminal_at is None:
+        state.observed_terminal_at = datetime.now(timezone.utc).isoformat()
         changed = True
 
     if live_status in ("DONE", "EXIT") and state.sim_status in ("UNKNOWN", "RUNNING"):
