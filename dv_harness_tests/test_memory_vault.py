@@ -515,6 +515,49 @@ def test_route_and_store_engineering_memory_writes_a_real_vault_note():
         _rmtree(tmp)
 
 
+def test_vault_note_frontmatter_carries_the_records_measured_confidence():
+    """The vault note is the human-browsable mirror of the JSON system of
+    record; a HIGH-confidence verified fix must not read UNKNOWN there.
+
+    The second half pins the honest complement: a record admitted through
+    engineering_admission_gate()'s gate-validated-`verification` path carries
+    no `confidence` key of its own, and the note says UNKNOWN rather than
+    inventing a level the record never asserted. That is why the USB3 LFPS
+    end-to-end demo now puts score_confidence()'s real result ON the record
+    (.work/e2e_usb3_lfps_demo.py STEP 10) instead of the note's builder
+    guessing one.
+    """
+    tmp = _tmp()
+    try:
+        cfg = {"knowledge_center": {"enabled": False}, "memory": {"vault_path": "", "git_enabled": False}}
+        measured = route_and_store(tmp, {
+            "kind": "root_cause", "verified": True, "protocol": "USB3",
+            "title": "Polling.LFPS timeout -- lfps_detect CDC missing synchronizer",
+            "root_cause": "lfps_detect crosses into core_clk with no 2-flop synchronizer",
+            "fix": "add a 2-flop synchronizer on lfps_detect", "confidence": "HIGH",
+            "evidence": ["sim.log:4412 UVM_ERROR polling.lfps timeout"],
+        }, cfg=cfg)
+        assert measured["destination"] == "ENGINEERING_MEMORY"
+        fm, _ = mv.parse_note_markdown(
+            (tmp / ".dv-harness" / "vault" / measured["vault_write"]["path"]).read_text(encoding="utf-8"))
+        assert fm["confidence"] == "HIGH"
+        assert "high" in fm["tags"]
+
+        unstated = route_and_store(tmp, {
+            "kind": "root_cause", "verified": True, "protocol": "USB3",
+            "title": "gate-validated but confidence never stated",
+            "root_cause": "second, independent root cause with no confidence key",
+            "evidence": ["sim.log:9001 UVM_ERROR distinct symptom"],
+            "verification": {"single_sim": "PASS", "regression": "PASS", "reaudit": "CLEAN"},
+        }, cfg=cfg)
+        assert unstated["destination"] == "ENGINEERING_MEMORY"
+        fm2, _ = mv.parse_note_markdown(
+            (tmp / ".dv-harness" / "vault" / unstated["vault_write"]["path"]).read_text(encoding="utf-8"))
+        assert fm2["confidence"] == "UNKNOWN"
+    finally:
+        _rmtree(tmp)
+
+
 def test_route_and_store_organizational_memory_writes_a_vault_note_only_on_success():
     tmp = _tmp()
     try:

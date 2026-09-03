@@ -6,7 +6,13 @@ This is the real, wired architecture of the 5-tier Memory system as of
 2026-09-03 (Obsidian+Git/Markdown Hybrid Engineering Memory integration).
 Every module/class/function named below is real code, not aspirational —
 file:line references are given so any claim here can be checked against
-the source directly.
+the source directly. Those line numbers rot every time a cited module is
+edited, so they are no longer trusted on sight: `python -m
+dv_harness.doc_citation_check --memory-docs` re-derives each cited symbol's
+real definition line and exits non-zero on drift, and
+`dv_harness_tests/test_doc_citation_check.py` runs it over all 5 memory docs
+as part of the suite. Function/file names are the durable half of a citation;
+the number is the checked half.
 
 ## Why two memory systems exist, and how they relate
 
@@ -68,7 +74,7 @@ independently; neither depends on the other.
 ## The 5 tiers (`dv_harness/memory.py`)
 
 `MEMORY_LEVELS = ["working", "job", "project", "engineering", "organizational"]`
-(`dv_harness/memory.py:6`). Each tier's records live at
+(`dv_harness/memory.py:10`). Each tier's records live at
 `.dv-harness/memory/<level>/<memory_id>.json`, with a flat
 `.dv-harness/memory/index.json` summary across all tiers.
 
@@ -81,9 +87,9 @@ independently; neither depends on the other.
 | Organizational | `OrganizationalMemoryStore` (no local JSON file — see below) | `kind` in `cross_project_lesson`/`methodology`/`best_practice`, **and only ever reached via `promote_to_organizational()`** | **yes**, plus 3-gate promotion (see below) |
 
 Routing itself is `dv_harness.memory_router.route_memory(record) -> str`
-(`memory_router.py:386`) — a pure function, kind/verified/scope in,
+(`memory_router.py:571`) — a pure function, kind/verified/scope in,
 destination string out. `route_and_store(root, record, cfg)`
-(`memory_router.py:59`) is the real entry point: routes, persists, and
+(`memory_router.py:91`) is the real entry point: routes, persists, and
 (for shareable destinations) pushes to the Knowledge Center and/or Vault.
 
 A `kind` of `credential`/`password`/`token`/`secret` is hard-`REJECT`ed
@@ -180,7 +186,7 @@ python -m dv_harness.memory_cli --project-root . reindex
 ### Organizational Memory has no local file store, by design
 
 Unlike the other 4 tiers, `OrganizationalMemoryStore.add()` writes straight
-to the shared Knowledge Center (`memory.py:479-501`) — there is no
+to the shared Knowledge Center (`memory.py:783-789`) — there is no
 `.dv-harness/memory/organizational/*.json`. The Vault write-through still
 happens locally (a human-browsable copy), but the tier's actual backing
 store IS the cross-user Knowledge Center, because organizational knowledge
@@ -190,7 +196,7 @@ the one project that happened to promote it.
 ### The promotion boundary: Engineering → Organizational
 
 `memory_router.promote_to_organizational(root, memory_id, confidence_inputs,
-cfg, kind)` (`memory_router.py:260`) is the ONLY code path allowed to move
+cfg, kind)` (`memory_router.py:445`) is the ONLY code path allowed to move
 a record across this boundary. Three independent, all-required gates:
 
 1. **Qualitative**: `_verification_is_gate_validated(mem)` recognizes

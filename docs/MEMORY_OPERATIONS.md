@@ -234,3 +234,17 @@ ORGANIZATIONAL_MEMORY, which has no local JSON file to patch.
 ```
 Both are thin wrappers around `python -m dv_harness.memory_cli` — see
 their source at the repo root for the exact argument mapping.
+
+## Checking these docs' own file:line citations
+
+```
+python -m dv_harness.doc_citation_check --memory-docs
+python -m dv_harness.doc_citation_check docs/MEMORY_ARCHITECTURE.md
+```
+Every `` `module.py:<line>` `` citation in the 5 memory docs is re-derived
+from the source: the checker finds the symbol the surrounding prose names,
+looks up its real definition line, and exits 1 with the correct number when
+the cited one has drifted (2 if a citation names no symbol that exists in the
+cited file, so nothing can be checked). Run it after editing `memory.py`,
+`memory_router.py` or `memory_vault.py`; `dv_harness_tests/
+test_doc_citation_check.py` runs it for you in the suite.

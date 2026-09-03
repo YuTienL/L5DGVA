@@ -243,6 +243,13 @@ def main() -> None:
     # STEP 10 -- ENGINEERING MEMORY (real route_and_store(), kind="root_cause",
     # verified=True, source_finding_id links back to the Job Memory record --
     # this is what produces the real [[WikiLink]])
+    #
+    # `confidence` carries STEP 7's real score_confidence() level onto the
+    # record. CLAUDE.md's Engineering Memory Policy requires root cause,
+    # evidence, fix, verification AND confidence to land as ONE record; leaving
+    # it off let MemoryStore.add()'s "UNKNOWN" setdefault stand, which then
+    # surfaced as `confidence: UNKNOWN` in the vault note's frontmatter while
+    # the chain had just measured HIGH.
     # -----------------------------------------------------------------
     line("STEP 10 -- ENGINEERING MEMORY (real write, auto-linked to Job Memory via [[WikiLink]])")
     engineering_record = {
@@ -251,6 +258,7 @@ def main() -> None:
         "root_cause": root_cause, "fix": fix,
         "symptoms": [failure_symptom, synthetic_sim_log_excerpt],
         "evidence": evidence, "verification": verification,
+        "confidence": confidence_post_fix["level"],
         "source_finding_id": job_memory_id,  # -> real [[WikiLink]] in Related Knowledge
     }
     eng_result = memory_router.route_and_store(DEMO_ROOT, engineering_record, cfg=CFG)
@@ -287,6 +295,15 @@ def main() -> None:
     eng_note = provider.read(eng_vault_note_id)
     print(f"Engineering note body 'Related Knowledge' section contains: "
           f"{[l for l in eng_note['body'].splitlines() if '[[' in l]}")
+    # The note's frontmatter must carry the SAME confidence the chain measured
+    # at STEP 7 -- a vault note reading UNKNOWN over a HIGH-confidence verified
+    # fix is a traceability break between the JSON system of record and its
+    # human-browsable mirror.
+    note_confidence = (eng_note.get("frontmatter") or {}).get("confidence")
+    print(f"Engineering note frontmatter confidence: {note_confidence}")
+    assert note_confidence == confidence_post_fix["level"], (
+        f"vault note confidence {note_confidence!r} != measured "
+        f"{confidence_post_fix['level']!r}")
     links = provider.list_links(eng_vault_note_id)
     print(f"forward_links (Engineering note -> Job note): {links['forward_links']}")
     assert job_vault_note_id in links["forward_links"]
