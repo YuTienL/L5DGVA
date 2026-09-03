@@ -15,6 +15,17 @@ ongoing farm-job tracking stays with `dv_harness.regression_reporter`'s own
 constructs a `bsub`/`sbatch` command line itself -- every command string is
 caller-supplied.
 
+That last sentence used to be the ONLY thing keeping an un-gated farm
+submission out of a pueue task: nothing stopped a caller handing `add()` a
+bare `bsub -q vcs simv` string, which would have run a real submission with
+`dv_harness/preflight.py`'s license/queue/host/disk/workdir/env gate never
+consulted -- the exact "沒過就 BLOCKED，不派 job" rule
+`lsf_client.bsub_submit_with_preflight()` enforces on every other path. It is
+now enforced code: `assert_farm_submission_is_preflight_gated()` (below) runs
+inside `add()`, so every task -- including every step of
+`enqueue_harness_chain()` and every `dv-harness pueue add`/`pueue chain`
+invocation -- is checked before it can be enqueued.
+
 INSTALL: no winget/choco package exists for pueue as of this writing (both
 searched live, 2026-09-03: `winget search pueue` / `choco search pueue` ->
 zero hits). The real, official channel is Nukesor/pueue's own GitHub
@@ -174,6 +185,151 @@ class PueueError(RuntimeError):
     pass
 
 
+# --- un-gated farm-submission guard ---------------------------------------
+#
+# See the module docstring's "Claude -> pueue -> harness task -> LSF/Slurm"
+# spec: the ONE real farm submission in this repo goes through
+# `lsf_client.bsub_submit_with_preflight()`, which runs
+# `preflight.run_preflight()` (license/queue/host/disk/workdir/env) first and
+# refuses to call `bsub_submit()` at all on BLOCKED. A pueue task carrying a
+# raw `bsub`/`sbatch` would route around that gate entirely, so this guard
+# refuses to enqueue one.
+
+FARM_SUBMIT_COMMANDS = ("bsub", "sbatch")
+
+# Shell separators that start a fresh command position within one task string.
+_SEGMENT_SPLIT_RE = re.compile(r"[;|&()`\n]+")
+# `FOO=bar bsub ...` -- a leading env assignment does not consume the command
+# position, so keep walking past it.
+_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Commands that RUN another command rather than being the command themselves.
+# `remote_exec.py` is the load-bearing one: `python tools/remote/remote_exec.py
+# "bsub -q vcs simv"` is exactly the pueue step shape this module's own
+# `enqueue_harness_chain()` docstring recommends, and its real payload is the
+# quoted string, not `python`.
+_COMMAND_WRAPPERS = frozenset({
+    "ssh", "nohup", "time", "env", "exec", "sudo", "xargs", "eval",
+    "sh", "bash", "csh", "tcsh", "python", "python3", "py", "remote_exec.py",
+})
+
+
+def _basename(token: str) -> str:
+    return token.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _farm_submit_hits(command: str) -> List[tuple]:
+    """Returns [(token, segment), ...] -- each `bsub`/`sbatch` this command
+    would actually EXECUTE, paired with the shell segment it runs in. The
+    segment is kept (not just the token) so the gate below can look for a
+    gated-entry-point marker in the SAME segment, rather than accepting
+    `dv-harness lsf-submit x && bsub -q vcs y` because the marker appeared
+    somewhere else in the string."""
+    hits: List[tuple] = []
+    for segment in _SEGMENT_SPLIT_RE.split(command or ""):
+        wrapper_seen = False
+        for raw in segment.split():
+            token = raw.strip("\"'").lstrip("$")
+            if not token:
+                continue
+            if _ENV_ASSIGNMENT_RE.match(token):
+                continue
+            name = _basename(token)
+            if name in FARM_SUBMIT_COMMANDS:
+                hits.append((name, segment))
+                break
+            if name in _COMMAND_WRAPPERS:
+                wrapper_seen = True
+                continue
+            if token.startswith("-"):
+                continue
+            if not wrapper_seen:
+                # This segment's real command is something else entirely.
+                break
+    return hits
+
+
+def find_farm_submit_tokens(command: str) -> List[str]:
+    """Returns the `bsub`/`sbatch` commands `command` would actually EXECUTE,
+    in order, deduplicated -- not every occurrence of the substring. A token
+    counts only in command position: first word of a shell segment, after a
+    leading env assignment, or anywhere in a segment that already went through
+    a wrapper (`ssh host bsub ...`, `python tools/remote/remote_exec.py "bsub
+    ..."`). So `grep bsub sim.log` and `./rerun_bsub_failures.sh` are not
+    matches, while `/usr/lsf/bin/bsub -q vcs simv` and `cd run && sbatch j.sh`
+    are."""
+    found: List[str] = []
+    for token, _segment in _farm_submit_hits(command):
+        if token not in found:
+            found.append(token)
+    return found
+
+
+# The `dv-harness` subcommand whose handler calls
+# lsf_client.bsub_submit_with_preflight() (dv_harness/cli.py).
+GATED_SUBMIT_CLI_SUBCOMMAND = "lsf-submit"
+
+
+def gated_submit_markers() -> tuple:
+    """The real, preflight-gated submission entry points a task command may
+    name, read off the LIVE code objects rather than copy-pasted strings --
+    rename `lsf_client.bsub_submit_with_preflight` and this guard's accepted
+    spelling follows it instead of silently going stale."""
+    from . import lsf_client  # local import: keeps pueue import cost low
+    return (GATED_SUBMIT_CLI_SUBCOMMAND,
+            lsf_client.bsub_submit_with_preflight.__name__)
+
+
+class UngatedFarmSubmissionError(RuntimeError):
+    """Raised by `add()` when a task command would run a real `bsub`/`sbatch`
+    without going through the preflight gate.
+
+    Deliberately NOT a PueueError subclass, for the same reason
+    `lsf_client.PreflightBlockedError` is deliberately not an
+    `LsfUnavailableError`: a caller must never catch "pueue itself failed" and
+    silently absorb "this harness refused to submit an un-gated farm job" as
+    the same condition. Carries `.command`, `.tokens` and `.markers` so a
+    report can name the offending token and the accepted route."""
+
+    def __init__(self, command: str, tokens: Sequence[str], markers: Sequence[str]):
+        self.command = command
+        self.tokens = list(tokens)
+        self.markers = list(markers)
+        super().__init__(
+            "UNGATED_FARM_SUBMISSION: pueue task command runs "
+            f"{'/'.join(self.tokens)} directly, bypassing the "
+            "license/queue/host/disk/workdir/env preflight gate "
+            "(dv_harness/preflight.py). Submit through "
+            f"`dv-harness {GATED_SUBMIT_CLI_SUBCOMMAND} ...` (or a script "
+            "calling lsf_client.bsub_submit_with_preflight()) as the task "
+            f"command instead. Refused command: {command!r}"
+        )
+
+
+def assert_farm_submission_is_preflight_gated(command: str) -> None:
+    """Raises UngatedFarmSubmissionError if `command` would execute a raw
+    `bsub`/`sbatch` whose own shell segment does not also name a gated entry
+    point. Returns None (never a bool a caller could forget to check) when the
+    command is fine.
+
+    Honest limit: the acceptance test is a marker STRING in the same segment,
+    so a command that merely writes `lsf-submit` next to a raw `bsub` (in a
+    comment, say) is accepted. This guard stops the accident -- a task author
+    reaching for `bsub` out of habit -- not a caller deliberately dressing one
+    up to look gated; only the gate inside
+    lsf_client.bsub_submit_with_preflight() can do that, and it is what the
+    accepted route actually runs."""
+    ungated = []
+    markers = gated_submit_markers()
+    for token, segment in _farm_submit_hits(command):
+        if any(marker in segment for marker in markers):
+            continue
+        if token not in ungated:
+            ungated.append(token)
+    if not ungated:
+        return
+    raise UngatedFarmSubmissionError(command, ungated, markers)
+
+
 # --- client ----------------------------------------------------------------
 
 
@@ -250,12 +406,27 @@ class PueueClient:
     def add(self, command: str, *, label: Optional[str] = None,
             after: Optional[Sequence[int]] = None, group: Optional[str] = None,
             working_directory: Optional[str] = None, immediate: bool = False,
-            timeout: int = 30) -> int:
+            timeout: int = 30, allow_ungated_farm_submit: bool = False) -> int:
         """Enqueues ONE task. Returns the real pueue task id (via
         `-p/--print-task-id`, so the id is parsed from bare stdout, never
         guessed from ordering). Raises PueueError on any failure -- a
         caller must never treat a missing/unparseable id as "probably
-        task 0"."""
+        task 0".
+
+        Refuses, BEFORE `pueue add` is invoked at all, a command that would
+        run a raw `bsub`/`sbatch` around the preflight gate
+        (UngatedFarmSubmissionError -- see
+        assert_farm_submission_is_preflight_gated()).
+        `allow_ungated_farm_submit=True` is the single named, greppable
+        override, mirroring `lsf_client.bsub_submit_with_preflight()`'s own
+        explicit `skip_preflight` opt-out rather than inventing a second
+        style of exemption. It exists for the guard's known false-positive
+        shape -- a task that merely MENTIONS the token past a wrapper, e.g.
+        `ssh host "grep bsub sim.log"` -- and never as a way to submit a real
+        job un-gated. It is deliberately NOT exposed as a `dv-harness pueue
+        add` flag, so the CLI path has no bypass at all."""
+        if not allow_ungated_farm_submit:
+            assert_farm_submission_is_preflight_gated(command)
         args = ["add", "-p"]
         if label:
             args += ["-l", label]
@@ -366,14 +537,22 @@ def enqueue_harness_chain(client: PueueClient, steps: Sequence[Sequence[str]],
     order as `steps`.
 
     Every `command` string is exactly what the caller supplied -- this
-    function never inspects, rewrites, or synthesizes a bsub/sbatch/
-    remote_exec.py invocation. A caller building the real DV pipeline
-    passes e.g. `python tools/remote/remote_exec.py "make compile"` for a
-    build step, or `dv-harness lsf-submit ...` (which itself runs the real,
-    preflight-GATED bsub) for a submit step -- pueue's own role ends the
-    moment that ONE shell command exits; it never tracks the resulting
-    farm job's own lifecycle (that stays dv_harness.regression_reporter's
-    lsf-watch-start watcher, per this module's own docstring)."""
+    function never rewrites or synthesizes a bsub/sbatch/remote_exec.py
+    invocation. A caller building the real DV pipeline passes e.g.
+    `python tools/remote/remote_exec.py "make compile"` for a build step, or
+    `dv-harness lsf-submit ...` (which itself runs the real, preflight-GATED
+    bsub) for a submit step -- pueue's own role ends the moment that ONE
+    shell command exits; it never tracks the resulting farm job's own
+    lifecycle (that stays dv_harness.regression_reporter's lsf-watch-start
+    watcher, per this module's own docstring).
+
+    Every command IS checked against the un-gated farm-submission guard, and
+    ALL of them are checked BEFORE the first `pueue add` -- one step running a
+    raw `bsub`/`sbatch` raises UngatedFarmSubmissionError with the chain
+    entirely un-enqueued, rather than leaving a half-built dependency chain
+    behind whose earlier tasks are already running."""
+    for _, command in steps:
+        assert_farm_submission_is_preflight_gated(command)
     enqueued: List[Dict[str, object]] = []
     prev_id: Optional[int] = None
     for label, command in steps:

@@ -318,13 +318,18 @@ def main():
     ppueue = sub.add_parser("pueue", help="Real LOCAL PC-side task orchestration via pueue "
         "(dv_harness/pueue_client.py). Sequences local/remote_exec.py-driven harness steps as "
         "a real dependency chain; NEVER manages a real farm job's own lifecycle -- the real "
-        "bsub/sbatch call is one caller-supplied step command, and pueue's role ends the "
-        "moment that command's process exits (ongoing farm-job tracking stays lsf-watch-start).")
+        "farm submission is one caller-supplied step command (which must be the "
+        "preflight-gated `dv-harness lsf-submit ...`, never a raw bsub/sbatch), and pueue's "
+        "role ends the moment that command's process exits (ongoing farm-job tracking stays "
+        "lsf-watch-start).")
     ppueue_sub = ppueue.add_subparsers(dest="pueue_cmd", required=True)
     ppueue_add = ppueue_sub.add_parser("add", help="Enqueue one local task; starts the pueued "
         "daemon first if it is not already running.")
     ppueue_add.add_argument("command", help="Shell command this task runs (e.g. a "
-        "`python tools/remote/remote_exec.py \"...\"` call, or a local build/lint command).")
+        "`python tools/remote/remote_exec.py \"...\"` call, or a local build/lint command). "
+        "A command that would run a raw `bsub`/`sbatch` is REFUSED (exit 2, "
+        "UNGATED_FARM_SUBMISSION) because it would bypass the preflight gate -- submit "
+        "through `dv-harness lsf-submit ...` as the task command instead.")
     ppueue_add.add_argument("--label", default=None)
     ppueue_add.add_argument("--after", type=int, action="append", default=None,
         help="Task id this task depends on (repeatable). Only starts once every listed "
@@ -343,7 +348,8 @@ def main():
     ppueue_chain = ppueue_sub.add_parser("chain", help="Enqueue the real build->verify->submit->"
         "fsdbreport local-PC chain as dependent pueue tasks. Every step's command is exactly "
         "what you pass here -- this never fabricates a bsub/remote_exec.py command itself; "
-        "omit a step to leave it out of the chain.")
+        "omit a step to leave it out of the chain. Every step is preflight-gate-checked "
+        "BEFORE any task is enqueued: one raw `bsub`/`sbatch` step refuses the whole chain.")
     ppueue_chain.add_argument("--build", default=None)
     ppueue_chain.add_argument("--verify", default=None)
     ppueue_chain.add_argument("--submit", default=None)
@@ -1123,6 +1129,15 @@ def main():
             try:
                 task_id = client.add(args.command, label=args.label, after=args.after,
                                       group=args.group, working_directory=args.working_directory)
+            except pueue_client.UngatedFarmSubmissionError as e:
+                # Exit 2, and a distinct error code from PUEUE_ADD_FAILED: this
+                # is the preflight gate refusing an un-gated farm submission,
+                # not pueue itself failing.
+                print(json.dumps({"error": "UNGATED_FARM_SUBMISSION", "message": str(e),
+                                   "tokens": e.tokens,
+                                   "use_instead": f"dv-harness {pueue_client.GATED_SUBMIT_CLI_SUBCOMMAND}"},
+                                  ensure_ascii=False))
+                raise SystemExit(2)
             except pueue_client.PueueError as e:
                 print(json.dumps({"error": "PUEUE_ADD_FAILED", "message": str(e)}, ensure_ascii=False))
                 raise SystemExit(1)
@@ -1137,9 +1152,6 @@ def main():
             print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(0 if result.get("success") else 1)
         elif args.pueue_cmd == "chain":
-            if not client.ensure_daemon():
-                print(json.dumps({"error": "PUEUED_NOT_AVAILABLE"}, ensure_ascii=False))
-                raise SystemExit(1)
             steps = [(name, cmd) for name, cmd in
                      (("build", args.build), ("verify", args.verify),
                       ("submit", args.submit), ("fsdbreport", args.fsdbreport))
@@ -1147,6 +1159,21 @@ def main():
             if not steps:
                 print(json.dumps({"error": "NO_STEPS"}, ensure_ascii=False))
                 raise SystemExit(2)
+            # Gate-check every step BEFORE touching the daemon, so an un-gated
+            # `bsub`/`sbatch` step is refused on its own merits rather than
+            # depending on whether pueued happened to be reachable.
+            try:
+                for step_name, step_cmd in steps:
+                    pueue_client.assert_farm_submission_is_preflight_gated(step_cmd)
+            except pueue_client.UngatedFarmSubmissionError as e:
+                print(json.dumps({"error": "UNGATED_FARM_SUBMISSION", "step": step_name,
+                                   "message": str(e), "tokens": e.tokens,
+                                   "use_instead": f"dv-harness {pueue_client.GATED_SUBMIT_CLI_SUBCOMMAND}"},
+                                  ensure_ascii=False))
+                raise SystemExit(2)
+            if not client.ensure_daemon():
+                print(json.dumps({"error": "PUEUED_NOT_AVAILABLE"}, ensure_ascii=False))
+                raise SystemExit(1)
             enqueued = pueue_client.enqueue_harness_chain(client, steps, group=args.group)
             print(json.dumps({"chain": enqueued}, ensure_ascii=False, indent=2))
     elif args.cmd == "lsf-kill":
