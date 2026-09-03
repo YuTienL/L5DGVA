@@ -11,6 +11,7 @@ skills:
   - CORE/command-inventory
   - CORE/command-gap-analysis
   - CORE/command-generator
+  - CORE/agent-checkpoint-discipline
 ---
 
 # IP-level UVM DV environment generator
@@ -2290,6 +2291,27 @@ is a decision to record, not a default.
                          command.txt is an acceptable equivalent, not a
                          missing deliverable (same confirmed drift note)
 ```
+
+> **Standing rule (2026-09-03, gap-close-agent-checkpoint): `CLAUDE.md`'s
+> trap catalogue and `docs/dut-request.md`'s open-items list above are not
+> optional documentation polish -- for this agent and any build/debug agent
+> it dispatches for long-running work, they are the **required resume-state
+> checkpoint**, per `CORE/agent-checkpoint-discipline/SKILL.md`. That
+> skill was reverse-distilled from a real incident: a real build agent
+> investigating the TCA NC->USB hang in `usb31_dev_uvm` this session became
+> permanently unresumable mid-investigation (a real `No transcript found
+> for agent ID` failure on `SendMessage`), and only recovered because this
+> exact `CLAUDE.md`+`dut-request.md` pair already carried enough state --
+> current hypothesis/status, evidence with citations, next planned step,
+> decisions pending confirmation, files touched this session -- for a fresh
+> agent to resume from. Maintain both **continuously, after every round
+> that changes the investigation's state**, not only when the deliverable
+> is finalized -- a checkpoint written once at the start and never updated
+> again is worse than none, because it actively misleads whoever reads it
+> after a session loss. `dv_harness/agent_checkpoint_check.py` is the real,
+> standalone checker that verifies a given build tree's artifact actually
+> matches this schema and is not stale relative to the rest of the tree;
+> run it before ending any long build/investigation agent's session.
 
 > **Standing rule (2026-09-01, distilled and genericized): two pattern
 > file authoring shapes, and the dispatcher's own detection rule.** A
