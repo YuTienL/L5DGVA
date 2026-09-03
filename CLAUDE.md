@@ -72,6 +72,16 @@ promotion:
   run reported twice).
 - A record failing any one gate stays at Engineering tier (or lower). Do not
   re-word the qualitative gate's inputs to force a pass.
+- Reaching the Engineering tier at all is itself gated
+  (`memory_router.engineering_admission_gate()`, 2026-09-03): a
+  `verified: true` flag alone is not enough. The record must ALSO carry real
+  `evidence` (or a gate-validated `verification` block), `confidence`
+  HIGH/CONFIRMED (or that same gate-validated block), and a reusable claim
+  (`root_cause`/`fix`/`lesson`, with `reusable` not `false`). A record
+  failing any of those is written to Working Memory instead, carrying
+  `engineering_admission_rejected` — this is the "Never promote an unverified
+  hypothesis straight to Engineering" rule below as enforced code, not
+  trusted prose. Do not pad an `evidence` field to clear it.
 
 **Never**:
 - Store secrets/passwords/tokens/credentials in any memory tier or vault
@@ -575,6 +585,40 @@ in the connectivity matrix's `bind_target` column for a human reviewer to catch)
 yet hard-block generation on one. See the report referenced above for what is real/tested today
 versus NOT_AVAILABLE-by-honest-design (anything requiring a live `simv`, a licensed VCS install,
 or `slang`, none of which are present in this environment as of this writing).
+
+**The bind-CONFIDENCE tier, unlike the four location rules above, now DOES hard-block generation
+(2026-09-04).** `connectivity.assert_t3_never_auto_accepted()` previously had no caller anywhere
+in the repo — its own docstring named a "downstream consumer" that did not exist — so the real
+emission path (`tools/generate_bind_mechanism.py` → `uvm_generator.bind_mechanism_generator.
+emit_bind_sv()`) would write a naming-heuristic-only bind into a `.sv` file with no tier check at
+all. `validate_bind_entries()` now calls `connectivity.enforce_bind_tier_policy()` before emitting
+anything, which refuses, as a hard `BindTierError` and before any file is written:
+- **T4** (`T4_BIND_MUST_GO_TO_QUESTION_QUEUE`) — never emittable; it belongs in the question queue
+  via `build_t4_question_queue_entry()`, not in a bind file.
+- **T3 without a real human confirmation** (`T3_BIND_REQUIRES_HUMAN_CONFIRMATION`) — the entry must
+  carry `human_confirmation: {source, confirmed_by, basis}` whose `source` is
+  `question_queue.HUMAN_DECISION_SOURCE`. That is the same single sanctioned decision source the
+  question queue already uses to stop the harness answering its own Tier-3 escalation with its own
+  earlier guess — deliberately reused, not a second parallel notion of "confirmed".
+- an unrecognized tier string, and (under `--require-tier` / `require_tier=True`) an entry carrying
+  no tier at all.
+
+**Disclosed residual**: `require_tier` defaults to False, so an entry carrying NO tier is still
+emittable. This keeps the existing 3-field entry contract (`target_instance`/`ports`/`reason`,
+documented in every PROTOCOL_BUILDERS skill and used by the real
+`examples/generated_usb_real_evidence_v1/manifest_inputs/usb_bind_topology.json`, re-verified
+working) unbroken. What is closed hard is the dangerous case: an entry the pipeline already
+classified as unconfirmed or undecidable being emitted anyway. Pass `--require-tier` for the
+strict contract.
+
+Two matrix-level guarantees were wired at the same time, both previously uncalled primitives:
+`write_connectivity_manifest()` now runs `verify_matrix_self_check_identity()` (Part C's
+sum(verified interfaces) == sum(VIP instances) + sum(exemptions), with both terms read off the
+real matrix rather than caller-supplied) and `assert_role_provenance()` BEFORE writing, so a
+manifest on disk is one that reconciled — an uncovered no-VIP interface or a hand-typed
+naming-derived `role` raises instead of producing an authoritative-looking artifact.
+`ConnectivityRow.from_dut_port()` is the sanctioned row constructor that derives `role` through
+`determine_role_from_port_direction()` instead of accepting a typed-in string.
 
 **The 3 machine gates are a REQUIRED workflow checkpoint, not merely available tooling
 (2026-09-03, Gap #2 closure).** `connectivity.py`'s 3-gate standard (elaboration / static
