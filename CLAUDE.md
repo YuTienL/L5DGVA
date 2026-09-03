@@ -322,7 +322,11 @@ active regardless, so they are already in force the moment a real remote
    `main`/`master` requiring PR review before merge, disallowing direct
    pushes. This is the authoritative gate -- it holds even if a local hook
    is missing or bypassed.
-2. **Secondary (active now, local): `tools/git-hooks/pre-push` and
+2. **Secondary (coded and tested, NOT YET INSTALLED as of 2026-09-03 --
+   `git config --get core.hooksPath` returns nothing in this repo and
+   neither hook file exists under `.git/hooks/`; run
+   `git config core.hooksPath tools/git-hooks` to activate): local
+   `tools/git-hooks/pre-push` and
    `tools/git-hooks/pre-merge-commit`**, backed by
    `dv_harness/git_governance.py` (`dv-harness git-guard`). These detect an
    AI-agent execution environment using the same env-marker pattern
