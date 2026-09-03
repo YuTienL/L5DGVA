@@ -2,7 +2,7 @@
 # grade-audit NOTICE below claimed this module was "NOT invoked by any
 # executing code path" -- that is now FALSE, per CLAUDE.md's own Evidence
 # Truth Rule ("current evidence wins and this file must be updated"). Real
-# caller as of this audit: dv_harness/engine.py's run_stage() calls MultiAgentOrchestrator.delegate(node, plan) before every LLM call.
+# caller as of this audit: dv_harness/engine.py's run_stage() calls MultiAgentOrchestrator.delegate(node, plan, route_info=...) before every LLM call.
 # Original NOTICE text, now superseded: "this module is NOT invoked by any
 # executing code path in dv_harness/ or .claude/agents/*.md as of this audit
 # -- it is standalone/orphaned code."
@@ -95,4 +95,18 @@ class AgentTaskStore:
    o[res]={'task_id':task_id,'agent':agent,'mode':'WRITE'};self._write_json_atomic(self.own,o);return True,o[res]
 class MultiAgentOrchestrator:
  def __init__(self,root):self.store=AgentTaskStore(root)
- def delegate(self,node,plan):return self.store.create_task(node.agent,node.route,node.skills,plan['plan_id'],node.parallel_group)
+ def delegate(self,node,plan,route_info=None):
+  """Creates the real AgentTaskStore record for one stage's delegated work.
+
+  `route_info` is router.RouteResolver.resolve()'s output for this node. Until
+  2026-09-04 this method read node.agent/node.route/node.skills directly, so
+  the task actually delegated carried the design-time skill list even when the
+  run's evidence-driven protocol decision had widened it -- the delegated task
+  and the resolved route disagreed. Taking route_info makes the delegated task
+  the resolved one. Falls back to the node's own fields when no route_info is
+  supplied (defensive; engine.run_stage() always supplies one)."""
+  ri=route_info or {}
+  agent=ri.get('agent') or node.agent
+  route=ri.get('route') or node.route
+  skills=ri['skills'] if ri.get('skills') is not None else node.skills
+  return self.store.create_task(agent,route,skills,plan['plan_id'],node.parallel_group)

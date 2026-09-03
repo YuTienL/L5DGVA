@@ -51,16 +51,16 @@ from .multi_agent import MultiAgentOrchestrator
 from .react import ReactRecorder
 from .skill_resolver import SkillResolver
 # --- Real, input-driven protocol/environment-mode resolution (2026-09-01,
-# route-skill-resolver-dynamic-implementation task): RouteResolver.resolve()/
-# SkillResolver.resolve() above are real callers but only ever do a STATIC
-# dict lookup on the graph node's own pre-declared route/agent/skills fields
-# (see router.py's own NOTICE) -- the same route/agent/skills come back
-# regardless of protocol/failure/evidence. These two resolvers apply the
+# route-skill-resolver-dynamic-implementation task; wiring completed
+# 2026-09-04, AI-mechanism re-audit gap #4). These two resolvers apply the
 # genuinely input-driven rules documented in .claude/skills/CORE/
 # protocol-router/SKILL.md and CLAUDE.md's "Environment Generation Mode"
 # gate (previously prose-only -- see each module's own docstring for the
-# full gap/ruling this closes). Their real output is folded into route_info
-# in run_stage() below, alongside the two calls above.
+# full gap/ruling this closes). resolve_protocol() is called BEFORE
+# RouteResolver.resolve()/SkillResolver.resolve() in run_stage() below and
+# passed into the former, so its evidence-driven answer actually widens the
+# skills a protocol-sensitive stage resolves and delegates -- it is no
+# longer a parallel audit-only field beside a purely static answer.
 from .protocol_router import resolve_protocol
 from .environment_mode_router import resolve_environment_mode, read_registered_subsystem_names
 from .uvm_generator.generator import sv_id
@@ -462,7 +462,21 @@ def _build_plan_section(route_info: dict, resolved_skills: list, plan: dict,
     """Folds the resolved route/agent/skills/plan/blackboard-snapshot into the
     prompt so the agent's response is genuinely informed by an explicit plan,
     rather than the plan being write-only (Core Operating Rule: 'Graph is the
-    global workflow authority')."""
+    global workflow authority').
+
+    `resolved_skills` is SkillResolver's output for route_info["skills"] --
+    the graph node's static skills PLUS whatever this run's real protocol
+    decision added (2026-09-04). When something was added, the registry-path-
+    prefixed routes are named explicitly, because those are the exact strings
+    protocol_profile_binding_gate expects back in a PROTOCOL_CAPABILITY
+    stage's `profile_skills_consulted` list."""
+    protocol_routes = route_info.get("protocol_skill_routes") or []
+    protocol_line = (
+        "Skills added by the resolved protocol (consult these; they are the "
+        "registry's own profile/vip-lookup routes, quote them verbatim in any "
+        f"profile_skills_consulted evidence): {json.dumps(protocol_routes, ensure_ascii=False)}\n"
+        if protocol_routes else ""
+    )
     return (
         "\n---\n"
         "[Harness Plan-and-Execute / Multi-Agent / Blackboard context -- "
@@ -470,6 +484,7 @@ def _build_plan_section(route_info: dict, resolved_skills: list, plan: dict,
         "executing, not decorative]\n"
         f"Resolved route: {route_info['route']} -> agent: {route_info['agent']}\n"
         f"Resolved skills: {json.dumps(resolved_skills, ensure_ascii=False)}\n"
+        + protocol_line +
         f"Resolved protocol/profile (protocol_router.resolve_protocol): "
         f"{json.dumps(route_info.get('protocol_decision'), ensure_ascii=False)}\n"
         f"Resolved environment mode (environment_mode_router.resolve_environment_mode): "
@@ -533,7 +548,7 @@ class DVHarness:
         # cheap, file-based, and create their own directories lazily.
         self.graph = self._load_graph()
         self.blackboard = Blackboard(self.root)
-        self.router = RouteResolver()
+        self.router = RouteResolver(self.root)
         self.plans = PlanStore(self.root)
         self.agents = MultiAgentOrchestrator(self.root)
         self.react = ReactRecorder(self.root)
@@ -2155,9 +2170,20 @@ class DVHarness:
         plan_section = ""
         task: Optional[dict] = None
         if node is not None:
-            route_info = self.router.resolve(node)
-            resolved_skills = self.skills.resolve(node.skills)
-            route_info["protocol_decision"] = resolve_protocol(self._protocol_router_evidence(user_goal))
+            # Order matters (2026-09-04, AI-mechanism re-audit gap #4): the
+            # evidence-driven protocol decision is computed FIRST and passed
+            # INTO RouteResolver.resolve(), which folds the resolved
+            # protocol's real skills into route_info["skills"] for a
+            # protocol-sensitive node. SkillResolver then resolves THAT list
+            # (not node.skills), and delegate() below delegates THAT route
+            # info (not the raw node) -- so the decision is a routing input,
+            # not the audit-only telemetry field it used to be. Previously
+            # these three ran in the opposite order and resolve_protocol()'s
+            # result reached nothing but the prompt/ReAct record.
+            protocol_decision = resolve_protocol(self._protocol_router_evidence(user_goal))
+            route_info = self.router.resolve(node, protocol_decision=protocol_decision)
+            route_info["protocol_decision"] = protocol_decision
+            resolved_skills = self.skills.resolve(route_info["skills"])
             route_info["environment_mode_decision"] = resolve_environment_mode(
                 self._environment_mode_router_evidence())
             plan = _find_latest_plan(self.plans.dir, stage)
@@ -2180,14 +2206,14 @@ class DVHarness:
                 # _build_plan_section() below -- shared, heavily-tested, and
                 # deliberately left untouched -- renders the same prompt
                 # shape with only the task_id marked as not allocated.
-                task = {"task_id": "DRY-RUN-NOT-DELEGATED", "agent": node.agent,
-                        "route": node.route, "skills": node.skills,
+                task = {"task_id": "DRY-RUN-NOT-DELEGATED", "agent": route_info["agent"],
+                        "route": route_info["route"], "skills": route_info["skills"],
                         "parent_plan": plan.get("plan_id"),
                         "parallel_group": node.parallel_group, "depends_on": [],
                         "status": "DRY_RUN", "started_at": None,
                         "completed_at": None, "duration_sec": None}
             else:
-                task = self.agents.delegate(node, plan)
+                task = self.agents.delegate(node, plan, route_info=route_info)
             bb_snapshot = self.blackboard.snapshot(node.blackboard_read) if node.blackboard_read else {}
             agent_profile = load_agent_profile(self.root, route_info["agent"])
             plan_section = _build_plan_section(route_info, resolved_skills, plan, bb_snapshot, task)
@@ -2326,6 +2352,13 @@ class DVHarness:
                 "adapter": type(self.adapter).__name__,
                 "agent": route_info.get("agent"),
                 "route": route_info.get("route"),
+                # The RESOLVED skill list (static graph skills plus whatever
+                # this run's protocol decision added), and the static list it
+                # was folded onto, so a human reviewing the dry-run can see
+                # exactly what the evidence-driven decision changed.
+                "skills": route_info.get("skills"),
+                "static_skills": route_info.get("static_skills"),
+                "protocol_skill_routes": route_info.get("protocol_skill_routes"),
                 "protocol_decision": route_info.get("protocol_decision"),
                 "environment_mode_decision": route_info.get("environment_mode_decision"),
                 "resume_session": ss.get("session_id") or None,
@@ -2732,7 +2765,7 @@ class DVHarness:
 
         # ---- Multi-agent task lifecycle start (2026-09-01,
         #      multi-agent-timing-reconciliation pass): AgentTaskStore.
-        #      create_task() (step 1's `self.agents.delegate(node, plan)`
+        #      create_task() (step 1's `self.agents.delegate(node, plan, route_info=...)`
         #      above) previously produced a task dict with zero timing
         #      fields and nothing ever called a completion method -- the
         #      delegation/locking layer was completely disconnected from
@@ -2784,7 +2817,7 @@ class DVHarness:
         _model = ((result.raw or {}).get("response") or {}).get("model", "")
         # Per-agent-attribution fix (2026-09-01 audit): this used to hardcode
         # the literal "stage-agent" regardless of which real agent actually
-        # ran -- route_info["agent"] (from self.router.resolve(node) above,
+        # ran -- route_info["agent"] (from self.router.resolve(node, ...) above,
         # step 1) is the real resolved agent name for this stage and is
         # already in scope by the time this call runs. A node-less stage
         # (route_info is None -- no graph node at all, e.g. a legacy/no-graph
@@ -3066,6 +3099,13 @@ class DVHarness:
                 action={"adapter": type(self.adapter).__name__,
                         "agent": route_info["agent"] if route_info else None,
                         "route": route_info["route"] if route_info else None,
+                        # The resolved skill list actually delegated this
+                        # attempt, alongside the node's static one -- without
+                        # both, an after-the-fact auditor cannot tell whether
+                        # protocol_decision below changed anything.
+                        "skills": (route_info or {}).get("skills"),
+                        "static_skills": (route_info or {}).get("static_skills"),
+                        "protocol_skill_routes": (route_info or {}).get("protocol_skill_routes"),
                         "protocol_decision": (route_info or {}).get("protocol_decision"),
                         "environment_mode_decision": (route_info or {}).get("environment_mode_decision"),
                         "resume_session": resume},

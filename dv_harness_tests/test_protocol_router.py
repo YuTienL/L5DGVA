@@ -161,3 +161,57 @@ def test_normalize_mmc_alias():
 
 def test_normalize_sdio_alias():
     assert resolve_protocol({"protocol_hint": "SDIO interrupt function"})["protocol"] == "sdio"
+
+
+# --- Registry-backed profile/vip-lookup binding (2026-09-04, gap #4) --------
+# protocol_skill_routes() is what turns a resolved protocol into the actual
+# skills router.RouteResolver.resolve() folds into a protocol-sensitive stage.
+# The riskiest part is bridging this module's SKILL.md-derived canonical keys
+# to the registry's own naming, so every protocol that differs is pinned here
+# against the REAL registry file, not a fixture.
+import pathlib
+
+from dv_harness.protocol_router import load_registry_entry, protocol_skill_routes
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def test_registry_lookup_bridges_every_canonical_key_the_registry_names_differently():
+    # amba -> amba4-soc, mipi_csi2 -> mipi-csi, sdio -> sd are the three real
+    # naming mismatches between PRIMARY_ROUTES and the registry today.
+    assert load_registry_entry(_REPO_ROOT, "amba")["profile_skill"] == "AMBA/amba-profile"
+    assert load_registry_entry(_REPO_ROOT, "mipi_csi2")["profile_skill"] == "MIPI/csi2-profile"
+    assert load_registry_entry(_REPO_ROOT, "sdio") is not None
+    # ...and the exactly-matching ones still match exactly.
+    assert load_registry_entry(_REPO_ROOT, "usb")["vip_lookup_skill"] == "USB/usb-vip-lookup"
+    assert load_registry_entry(_REPO_ROOT, "pcie")["profile_skill"] == "PCIe/pcie-profile"
+
+
+def test_registry_lookup_never_invents_an_entry():
+    assert load_registry_entry(_REPO_ROOT, "not-a-real-protocol") is None
+    assert load_registry_entry(_REPO_ROOT, None) is None
+    assert load_registry_entry(None, "usb") is None
+    # A project with no registry file at all resolves to None, not a crash.
+    assert load_registry_entry(pathlib.Path(__file__).parent / "no-such-project", "usb") is None
+
+
+def test_protocol_skill_routes_returns_primary_then_profile_then_vip_lookup():
+    usb = resolve_protocol({"protocol_hint": "USB3 enumeration failure"})
+    assert protocol_skill_routes(_REPO_ROOT, usb) == ["USB/usb-profile", "USB/usb-vip-lookup"]
+    pcie = resolve_protocol({"protocol_hint": "PCIe LTSSM failure"})
+    assert protocol_skill_routes(_REPO_ROOT, pcie) == ["PCIe/pcie-profile"]
+
+
+def test_protocol_skill_routes_skips_null_registry_fields_without_inventing_names():
+    # SKILL.md explicitly calls out that eMMC/SD have profile_skill: null --
+    # only the primary builder route survives, and nothing is fabricated.
+    emmc = resolve_protocol({"protocol_hint": "MMC boot partition failure"})
+    assert protocol_skill_routes(_REPO_ROOT, emmc) == [
+        "PROTOCOL_BUILDERS/emmc-environment-builder"]
+
+
+def test_protocol_skill_routes_is_empty_for_an_unresolved_decision():
+    unresolved = resolve_protocol({"protocol_hint": "please continue"})
+    assert unresolved["resolved"] is False
+    assert protocol_skill_routes(_REPO_ROOT, unresolved) == []
+    assert protocol_skill_routes(_REPO_ROOT, None) == []

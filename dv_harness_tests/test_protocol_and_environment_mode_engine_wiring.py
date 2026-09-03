@@ -34,6 +34,22 @@ def _mk_project_with_graph_and_agents() -> Path:
     return tmp
 
 
+def _add_real_registry_and_protocol_skills(tmp: Path) -> None:
+    """Gives the temp project the two real inputs RouteResolver's protocol
+    fold-in reads: the REAL protocol_builder_registry.json (copied verbatim,
+    so profile_skill/vip_lookup_skill are the production values, not invented
+    ones) and SKILL.md stubs at the skill paths that registry names, so
+    SkillResolver can report found=True for them."""
+    reg_src = ROOT / ".dv-harness" / "builder" / "protocol_builder_registry.json"
+    reg_dst = tmp / ".dv-harness" / "builder" / "protocol_builder_registry.json"
+    reg_dst.parent.mkdir(parents=True, exist_ok=True)
+    reg_dst.write_text(reg_src.read_text(encoding="utf-8"), encoding="utf-8")
+    for rel in ("CORE/protocol-router", "USB/usb-profile", "USB/usb-vip-lookup", "PCIe/pcie-profile"):
+        d = tmp / ".claude" / "skills" / rel
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text("# stub skill\n", encoding="utf-8")
+
+
 class _CapturingAdapter:
     """Records the exact prompt run_stage() sends, never runs a real gate --
     text is deliberately gate-agnostic; these tests only care about what the
@@ -212,5 +228,164 @@ def test_project_model_stage_passes_and_dashboard_now_reads_a_real_environment_m
         # selection block that a real gate verified -- dashboard.py's scan
         # finds it.
         assert _environment_mode_selected(tmp) == "SUBSYSTEM_MODE"
+    finally:
+        shutil.rmtree(tmp)
+
+
+# ---------------------------------------------------------------------------
+# AI-mechanism re-audit gap #4 ("Route & Skill Resolver"), closed 2026-09-04.
+#
+# The gap the audit named precisely: resolve_protocol() fired on real per-run
+# evidence and its answer was faithfully persisted, but route_info["skills"] /
+# resolved_skills / the delegated task's skills were computed from node.skills
+# alone and came back BYTE-FOR-BYTE IDENTICAL for two different evidence sets
+# against the same graph node. Every assertion below fails on the pre-fix code
+# -- that is what makes them a regression test for the wiring rather than yet
+# another test that resolve_protocol() works in isolation.
+# ---------------------------------------------------------------------------
+
+def _seed_failing_test(h, testcase_id: str) -> None:
+    """Writes the REAL blackboard record engine._protocol_router_evidence()
+    reads for failing_test_name: the "verification_state" topic's results[]
+    (same shape engine._bb_verify() writes). Deliberately used instead of the
+    user_goal so the evidence under test is a genuine mid-run signal, not the
+    prompt text -- this is the audit's own proposed crux case."""
+    h.blackboard.write("verification_state",
+                       {"simulation_passed": False,
+                        "results": [{"testcase_id": testcase_id, "result": "FAIL"}]},
+                       source="VERIFY")
+
+
+def _tasks(tmp: Path):
+    return json.loads((tmp / ".dv-harness" / "agents" / "tasks.json").read_text(encoding="utf-8"))
+
+
+def test_same_node_two_evidence_sets_produce_different_delegated_skills():
+    from dv_harness.engine import DVHarness
+
+    observed = {}
+    for testcase_id, protocol in [("test_usb3_enum", "usb"), ("test_pcie_link_train", "pcie")]:
+        tmp = _mk_project_with_graph_and_agents()
+        _add_real_registry_and_protocol_skills(tmp)
+        try:
+            h = DVHarness(tmp)
+            _seed_failing_test(h, testcase_id)
+            h.adapter = _CapturingAdapter()
+            h.set_stage("DISCOVERY")
+            # Deliberately protocol-free user_goal: the ONLY protocol signal
+            # in this run is the failing test name seeded above.
+            h.run_stage("continue the current investigation")
+
+            tasks = _tasks(tmp)
+            assert tasks, "run_stage() must delegate a real AgentTaskStore task"
+            task = tasks[0]
+            react = json.loads((tmp / ".dv-harness" / "react" / "DISCOVERY"
+                                / "iteration_001.json").read_text(encoding="utf-8"))
+            observed[protocol] = {
+                "task_skills": task["skills"],
+                "react_skills": react["action"]["skills"],
+                "static_skills": react["action"]["static_skills"],
+                "protocol_routes": react["action"]["protocol_skill_routes"],
+                "decided": react["action"]["protocol_decision"]["protocol"],
+                "prompt": h.adapter.prompts[0],
+            }
+        finally:
+            shutil.rmtree(tmp)
+
+    usb, pcie = observed["usb"], observed["pcie"]
+
+    # The dynamic decision itself differs (this part already worked pre-fix).
+    assert usb["decided"] == "usb" and pcie["decided"] == "pcie"
+
+    # THE GAP: the SAME graph node's static skills are identical...
+    assert usb["static_skills"] == pcie["static_skills"] == [
+        "subsystem-to-soc-verification", "protocol-router"]
+    # ...but the skills actually DELEGATED are now genuinely different.
+    assert usb["task_skills"] != pcie["task_skills"]
+    assert usb["react_skills"] == usb["task_skills"]
+    assert pcie["react_skills"] == pcie["task_skills"]
+
+    # And different in the specific, registry-backed way SKILL.md's
+    # "Profile/VIP-Lookup Binding" section prescribes -- USB has both a
+    # profile_skill and a vip_lookup_skill in the real registry, PCIe only a
+    # profile_skill, so USB legitimately gains one more skill than PCIe.
+    assert usb["task_skills"] == usb["static_skills"] + ["usb-profile", "usb-vip-lookup"]
+    assert pcie["task_skills"] == pcie["static_skills"] + ["pcie-profile"]
+    assert usb["protocol_routes"] == ["USB/usb-profile", "USB/usb-vip-lookup"]
+    assert pcie["protocol_routes"] == ["PCIe/pcie-profile"]
+
+    # The prompt the adapter actually received carries the resolved paths --
+    # so the agent is handed the skills, not merely told a protocol name.
+    assert "usb-profile" in usb["prompt"] and "usb-vip-lookup" in usb["prompt"]
+    assert "usb-profile" not in pcie["prompt"]
+    assert "pcie-profile" in pcie["prompt"]
+
+
+def test_resolved_protocol_skills_are_real_resolvable_paths_not_just_names():
+    """SkillResolver runs over the WIDENED list, so the folded-in protocol
+    skills come back with real found=True paths -- proving the fold-in happens
+    before path resolution, not after it."""
+    from dv_harness.engine import DVHarness
+
+    tmp = _mk_project_with_graph_and_agents()
+    _add_real_registry_and_protocol_skills(tmp)
+    try:
+        h = DVHarness(tmp)
+        _seed_failing_test(h, "test_usb3_enum")
+        h.adapter = _CapturingAdapter()
+        h.set_stage("DISCOVERY")
+        h.run_stage("continue the current investigation")
+        prompt = h.adapter.prompts[0]
+        assert '{"skill": "usb-profile", "path": ' in prompt, prompt
+        assert '"found": true' in prompt
+        # The path is the real on-disk location, not a fabricated string.
+        assert (tmp / ".claude" / "skills" / "USB" / "usb-profile" / "SKILL.md").exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_non_protocol_sensitive_node_keeps_its_static_skills_unchanged():
+    """The fold-in is scoped to nodes that declared the `protocol-router`
+    skill. A node that did not (GIT_SYNC) must be untouched even when the
+    run's protocol resolves -- otherwise this would be noise injection, not
+    routing."""
+    from dv_harness.engine import DVHarness
+
+    tmp = _mk_project_with_graph_and_agents()
+    _add_real_registry_and_protocol_skills(tmp)
+    try:
+        h = DVHarness(tmp)
+        h.adapter = _CapturingAdapter()
+        h.set_stage("GIT_SYNC")
+        h.run_stage("investigate a USB3 link training failure")
+        react = json.loads((tmp / ".dv-harness" / "react" / "GIT_SYNC"
+                            / "iteration_001.json").read_text(encoding="utf-8"))
+        action = react["action"]
+        assert action["protocol_decision"]["protocol"] == "usb"   # decision still fires
+        assert action["skills"] == action["static_skills"] == ["git-pull-sync", "git-workflow"]
+        assert action["protocol_skill_routes"] == []
+        assert _tasks(tmp)[0]["skills"] == ["git-pull-sync", "git-workflow"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_unresolved_protocol_leaves_the_static_skill_list_untouched():
+    """No fabricated widening when resolve_protocol() finds nothing -- an
+    unresolved decision must leave the graph's own answer exactly as-is."""
+    from dv_harness.engine import DVHarness
+
+    tmp = _mk_project_with_graph_and_agents()
+    _add_real_registry_and_protocol_skills(tmp)
+    try:
+        h = DVHarness(tmp)
+        h.adapter = _CapturingAdapter()
+        h.set_stage("DISCOVERY")
+        h.run_stage("continue the current investigation")
+        react = json.loads((tmp / ".dv-harness" / "react" / "DISCOVERY"
+                            / "iteration_001.json").read_text(encoding="utf-8"))
+        action = react["action"]
+        assert action["protocol_decision"]["resolved"] is False
+        assert action["skills"] == action["static_skills"]
+        assert action["protocol_skill_routes"] == []
     finally:
         shutil.rmtree(tmp)

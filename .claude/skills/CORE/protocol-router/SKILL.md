@@ -30,6 +30,17 @@ from this static list.
 
 ## Profile/VIP-Lookup Binding
 
+The harness now performs this binding in code before your stage starts
+(2026-09-04): `dv_harness/router.py`'s `RouteResolver.resolve()` calls
+`protocol_router.protocol_skill_routes()` with the run's real resolved
+protocol and folds the primary route plus the registry's `profile_skill`/
+`vip_lookup_skill` into the stage's resolved skill list. Your prompt's
+"Skills added by the resolved protocol" line names those routes verbatim,
+and "Resolved skills" carries their real on-disk paths. Reuse those strings
+rather than re-deriving them; the manual lookup below stays the definition
+of correctness (and the fallback when that line is absent, e.g. for a stage
+that does not declare this skill).
+
 After detecting the protocol, read `.dv-harness/builder/protocol_builder_registry.json`'s
 entry for it and resolve `profile_skill` and `vip_lookup_skill` (either may
 be `null` -- several protocols have no profile skill yet). For every

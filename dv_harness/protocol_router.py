@@ -13,6 +13,16 @@ invents no new normalization rule or tie-break order. Every alias/route
 entry below carries a comment pointing at the exact SKILL.md line it
 encodes, so a future SKILL.md edit is easy to re-sync against.
 
+WIRING UPDATE (2026-09-04, AI-mechanism re-audit gap #4): the "RouteResolver
+is purely static" statement above described the state through 2026-09-03.
+resolve_protocol()'s result was computed from real per-run evidence and
+persisted, but was stored BESIDE the static route/agent/skills rather than
+feeding them, so the skills a stage actually resolved and delegated never
+varied with evidence. RouteResolver.resolve() now takes this module's
+decision as an argument and folds protocol_skill_routes() (below) into the
+skills it returns for a protocol-sensitive node -- so the classification is
+now an input to routing, not a parallel audit field.
+
 Scope ruling (full write-up in
 .work/route-skill-resolver-dynamic-implementation-report.md): SKILL.md's
 tie-break order is "user intent -> failing test -> active config ->
@@ -47,7 +57,9 @@ non-empty "evidence" string on every return, matching that same discipline.
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # --- Primary builder routes -------------------------------------------------
@@ -228,3 +240,79 @@ def resolve_protocol(evidence: Dict[str, Any]) -> Dict[str, Any]:
             "routing question only.'"
         ),
     }
+
+
+# --- Registry-backed profile/vip-lookup binding ------------------------------
+# SKILL.md's "Profile/VIP-Lookup Binding" section: "After detecting the
+# protocol, read .dv-harness/builder/protocol_builder_registry.json's entry
+# for it and resolve `profile_skill` and `vip_lookup_skill` (either may be
+# null) ... For every non-null value, actually read that skill file before
+# proceeding". Until 2026-09-04 that step existed only as prose an agent was
+# trusted to perform: resolve_protocol()'s output was recorded but never
+# turned into an actual skill list handed to the stage. The two functions
+# below do that resolution in code, so router.RouteResolver.resolve() can
+# fold the result into the skills a protocol-routing stage is actually given.
+PROTOCOL_REGISTRY_RELPATH: Tuple[str, ...] = (
+    ".dv-harness", "builder", "protocol_builder_registry.json")
+
+
+def load_registry_entry(root: Any, protocol: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Looks `protocol` (a resolve_protocol() canonical key such as `usb`,
+    `mipi_csi2`, `sdio`) up in the real protocol_builder_registry.json and
+    returns its entry dict, or None when the registry is absent/unreadable or
+    knows no matching protocol -- never a fabricated entry.
+
+    Exact key match first, then the same substring fallback
+    gates._protocol_discover_checklist() already uses against this same
+    registry (`k in key or key in k` over `-`-normalized keys). The fallback
+    is what bridges resolve_protocol()'s SKILL.md-derived canonical keys to
+    the registry's own naming for the three protocols where they genuinely
+    differ: `amba` -> `amba4-soc`, `mipi_csi2` -> `mipi-csi`, `sdio` -> `sd`."""
+    if not protocol or root is None:
+        return None
+    try:
+        raw = (Path(root).joinpath(*PROTOCOL_REGISTRY_RELPATH)).read_text(encoding="utf-8")
+        entries = (json.loads(raw) or {}).get("protocols") or {}
+    except Exception:
+        return None
+    if not isinstance(entries, dict):
+        return None
+    key = str(protocol).strip().lower().replace(" ", "-").replace("_", "-")
+    entry = entries.get(key)
+    if isinstance(entry, dict):
+        return entry
+    for k, v in entries.items():
+        if isinstance(v, dict) and (k in key or key in k):
+            return v
+    return None
+
+
+def protocol_skill_routes(root: Any, decision: Optional[Dict[str, Any]]) -> List[str]:
+    """The registry-path-prefixed skill routes this run's resolved protocol
+    actually implies, in SKILL.md's own order: the primary builder route
+    first (PRIMARY_ROUTES, e.g. `USB/usb-profile`), then the registry's
+    `profile_skill` and `vip_lookup_skill` for the same protocol when they
+    are non-null (e.g. `USB/usb-vip-lookup`).
+
+    Returns [] for an unresolved decision, and skips any null registry field
+    rather than inventing a skill name for it -- several registered protocols
+    (emmc, sd, edp, ucie) genuinely have `profile_skill: null` today, which
+    SKILL.md itself calls out as expected, not a contradiction.
+
+    The strings returned here are deliberately the registry's own
+    path-prefixed form, because that is exactly what
+    tools/verification_flow/protocol_profile_binding_gate.py compares a
+    PROTOCOL_CAPABILITY stage's `profile_skills_consulted` list against."""
+    if not isinstance(decision, dict) or not decision.get("resolved"):
+        return []
+    routes: List[str] = []
+    primary = decision.get("route")
+    if primary:
+        routes.append(str(primary))
+    entry = load_registry_entry(root, decision.get("protocol"))
+    if entry:
+        for field in ("profile_skill", "vip_lookup_skill"):
+            value = entry.get(field)
+            if value and str(value) not in routes:
+                routes.append(str(value))
+    return routes
