@@ -92,13 +92,28 @@ def main():
     ap.add_argument("--project-root", default=".")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    # --dry-run (2026-09-03, user spec: "agent 產出完整計畫但不執行, 人可事前
+    # 檢視。導入初期與大改動前必用"). Produces the full intended plan/evidence-
+    # request for the stage -- real route/agent/protocol decisions, real plan
+    # steps, the real required gates, and the byte-exact prompt that would
+    # have been sent -- into .dv-harness/dry_run/<stage>-<ts>.json, WITHOUT
+    # calling the adapter, submitting any job, or writing any run state. See
+    # DVHarness._dry_run_stage() for the exact list of suppressed side
+    # effects, and config.json's `dry_run` block to turn it on for every
+    # invocation during an onboarding/large-change period.
+    _DRY_RUN_HELP = ("Produce the full plan for the stage and STOP: no adapter/LLM call, no job "
+                     "submission, no state mutation. Writes a reviewable plan report to "
+                     ".dv-harness/dry_run/. ORs with config.json's dry_run.enabled.")
+
     pstart = sub.add_parser("start")
     pstart.add_argument("--goal", required=True)
     pstart.add_argument("--loop", action="store_true")
+    pstart.add_argument("--dry-run", action="store_true", dest="dry_run", help=_DRY_RUN_HELP)
 
     prun = sub.add_parser("run-stage")
     prun.add_argument("--goal", required=True)
     prun.add_argument("--stage", choices=[s.value for s in Stage])
+    prun.add_argument("--dry-run", action="store_true", dest="dry_run", help=_DRY_RUN_HELP)
 
     sub.add_parser("status")
     sub.add_parser("advance")
@@ -1640,15 +1655,18 @@ def main():
         commands.cmd_mark(h, args.status, args.message)
         print(args.status)
     elif args.cmd == "run-stage":
-        r = h.run_stage(args.goal, args.stage)
+        r = h.run_stage(args.goal, args.stage, dry_run=args.dry_run)
         print(r.text)
         raise SystemExit(0 if r.ok else 1)
     elif args.cmd == "start":
         if args.loop:
-            h.loop(args.goal)
+            # loop(dry_run=True) plans the CURRENT stage and returns without
+            # looping -- see DVHarness.loop()'s docstring for why a dry-run
+            # deliberately never speculates past one real stage.
+            h.loop(args.goal, dry_run=args.dry_run)
             print(h.summary())
         else:
-            r = h.run_stage(args.goal)
+            r = h.run_stage(args.goal, dry_run=args.dry_run)
             print(r.text)
             raise SystemExit(0 if r.ok else 1)
 

@@ -100,6 +100,40 @@ RESTORE_FILES = [f for f in SESSION_FILES if f != "events.jsonl"]
 
 SESSIONS_SUBDIR = "sessions"
 
+# --- Auto-checkpoint naming + bounded retention (2026-09-03, harness-
+# reliability task: "checkpoint 與回滾：每個階段留可回復點, agent 走偏時不必
+# 從頭") -----------------------------------------------------------------
+#
+# save_session()/restore_session() above already do all the real work,
+# including the source-identity (git SHA) mismatch protection a rollback
+# needs. What was missing was that NOTHING called save_session()
+# automatically -- it fired only on an explicit `dv-harness save-session`,
+# so an agent that went off the rails mid-run had a recovery point only if a
+# human had happened to make one. engine.DVHarness.run_stage() now calls
+# save_auto_checkpoint() at every real stage transition (see its own
+# best-effort call site there).
+#
+# Two prefixes, deliberately distinct, because retention MUST be able to tell
+# these three kinds of snapshot apart:
+#   - AUTO_CHECKPOINT_PREFIX ("auto_"): machine-generated, one per stage
+#     transition, cheap and numerous -- the ONLY kind prune_auto_checkpoints()
+#     is ever allowed to delete.
+#   - PRE_RESTORE_PREFIX ("_pre_restore_"): restore_session()'s own
+#     auto-backup of the state it is about to overwrite. Never pruned here:
+#     it is the undo of a destructive action, and deleting it would remove
+#     the very safety net that makes a restore reversible.
+#   - anything else: a human's deliberately-named `save-session --name foo`.
+#     Never pruned here -- an explicit name is a request for a stable,
+#     reusable label (see save_session()'s own FileExistsError docstring).
+AUTO_CHECKPOINT_PREFIX = "auto_"
+PRE_RESTORE_PREFIX = "_pre_restore_"
+
+# Keep the last N auto-checkpoints. A stage transition snapshot is small
+# (control-plane JSON + per-run dirs; FSDB/coverage are references, never
+# copied -- see Ruling 2 above), but "small" times "every transition of every
+# retry of every stage, forever" is still unbounded growth on a long project.
+DEFAULT_AUTO_CHECKPOINT_KEEP = 10
+
 
 def _default_user() -> str:
     # Same fallback chain as control_plane.py's _default_user() / this
@@ -426,6 +460,80 @@ def list_sessions(project_root: Path) -> List[Dict[str, Any]]:
             out.append(mf)
     out.sort(key=lambda m: m.get("saved_at") or 0, reverse=True)
     return out
+
+
+def is_auto_checkpoint(name: str) -> bool:
+    """True only for a machine-generated auto-checkpoint. Deliberately does
+    NOT match PRE_RESTORE_PREFIX or a human's own --name, so retention can
+    never reach either -- see AUTO_CHECKPOINT_PREFIX's comment above."""
+    return bool(name) and name.startswith(AUTO_CHECKPOINT_PREFIX)
+
+
+def list_auto_checkpoints(project_root: Path) -> List[Dict[str, Any]]:
+    """The auto-checkpoint subset of list_sessions(), newest first. Reuses
+    list_sessions() rather than re-walking the sessions directory, so both
+    always agree on what exists and on the sort order."""
+    return [m for m in list_sessions(project_root) if is_auto_checkpoint(str(m.get("name") or ""))]
+
+
+def prune_auto_checkpoints(project_root: Path,
+                            keep: int = DEFAULT_AUTO_CHECKPOINT_KEEP) -> List[str]:
+    """Deletes the oldest auto-checkpoints beyond the newest `keep`, and
+    returns the names actually removed (empty list when nothing needed
+    pruning). Only ever touches names is_auto_checkpoint() accepts.
+
+    `keep <= 0` is treated as "retention disabled" and deletes NOTHING --
+    the safe reading of a misconfigured value, since the alternative
+    (deleting every checkpoint) would destroy exactly the recovery points
+    this feature exists to create."""
+    if keep is None or int(keep) <= 0:
+        return []
+    checkpoints = list_auto_checkpoints(project_root)  # newest first
+    removed: List[str] = []
+    for manifest in checkpoints[int(keep):]:
+        name = str(manifest.get("name") or "")
+        if not is_auto_checkpoint(name):
+            continue
+        if delete_session(project_root, name):
+            removed.append(name)
+    return removed
+
+
+def save_auto_checkpoint(project_root: Path, stage: Optional[str] = None,
+                          attempt: Optional[int] = None, note: str = "",
+                          keep: int = DEFAULT_AUTO_CHECKPOINT_KEEP) -> Dict[str, Any]:
+    """One automatic stage-transition recovery point: a real save_session()
+    (identical content and identical manifest to a hand-made one -- this adds
+    no second snapshot format) under an `auto_`-prefixed name, immediately
+    followed by bounded-retention pruning.
+
+    The name embeds the real stage and attempt number so `dv-harness
+    list-sessions` reads as a legible history ("auto_VERIFY_2_20260903-..."),
+    and so two transitions within the same wall-clock second (a fast retry)
+    do not collide. A collision is still possible in principle -- save_session()
+    raises FileExistsError by design rather than clobbering -- so a bounded
+    numeric suffix is tried before giving up, instead of letting a name clash
+    silently cost a recovery point.
+
+    Returns the manifest, with `pruned` added: the names retention removed on
+    this call."""
+    base = f"{AUTO_CHECKPOINT_PREFIX}{_slug(stage or 'stage')}"
+    if attempt is not None:
+        base += f"_{int(attempt)}"
+    base += f"_{time.strftime('%Y%m%d-%H%M%S')}"
+    manifest = None
+    for suffix in ("", "-2", "-3", "-4", "-5"):
+        try:
+            manifest = save_session(project_root, name=base + suffix, note=note)
+            break
+        except FileExistsError:
+            continue
+    if manifest is None:
+        raise FileExistsError(
+            f"could not allocate an auto-checkpoint name from base '{base}' "
+            f"(5 suffixes already taken)")
+    manifest["pruned"] = prune_auto_checkpoints(project_root, keep=keep)
+    return manifest
 
 
 class SourceIdentityMismatchError(RuntimeError):

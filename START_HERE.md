@@ -138,6 +138,16 @@ init). Known issue: on Windows PowerShell 5.1 this currently fails with a
   `audit`. `takeover` is checked first in both `loop()` and `run_stage()`,
   so a human can hold a stage even against a direct CLI bypass of the loop —
   this is the concrete implementation of "Human Override is always valid."
+- **Stage lifecycle + reliability modes.** `docs/ENGINE_STAGE_LIFECYCLE.md`
+  is the reference for what `run_stage()`/`loop()` actually do step by step,
+  which steps have real side effects, and the three modes layered on that
+  lifecycle: **dry-run** (`dv-harness run-stage --dry-run` — produce the full
+  plan and the exact prompt for review, execute nothing), **auto-checkpoint**
+  (a bounded-retention `session_snapshot` recovery point at every stage
+  transition, restorable with `dv-harness restore-session`), and **DEGRADED**
+  (on repeated adapter failure, a full EDA license, or a congested farm
+  queue, keep collecting data but make no judgment call — surfaced as
+  `operation_mode` in `dv-harness status`).
 - **Self-Audit.** `dv_harness/self_audit.py` runs 22 real gate scripts that
   check the HARNESS'S OWN registry/skill/pipeline/protocol-catalog
   consistency (not DUT evidence) via `dv-harness self-audit [--all|--gate ID]`

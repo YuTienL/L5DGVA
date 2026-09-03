@@ -474,6 +474,17 @@ class DVHarness:
         self.state = self.store.load()
         self.adapter = self._adapter()
         self.profiler = StageExecutionProfiler(self.root)
+        # Transport for the DEGRADED mode's license/queue probes (2026-09-03).
+        # None means preflight.LocalCommandRunner(), which per preflight.py's
+        # own transport docstring is the correct default only when dv_harness
+        # runs server-side on the Linux DV server (lmutil/bqueues natively on
+        # PATH). A PC-side deployment in REMOTE_EXECUTION mode should assign
+        # preflight.RemoteRelayCommandRunner() here to probe the REAL server
+        # through the already-sanctioned credential-free relay -- the same
+        # "fully injected, never assumed" principle preflight.py states, and
+        # the seam dv_harness_tests/test_harness_reliability.py injects a
+        # pure mock through so no test ever contacts a live license server.
+        self.degradation_runner = None
 
         # Plan-and-Execute / Multi-Agent / Blackboard / ReAct (see module
         # docstring above): constructed unconditionally -- all four are
@@ -705,6 +716,19 @@ class DVHarness:
         # forcing every caller (CLI/dashboard) to re-derive them.
         cp_state = ControlPlane(self.root).load()
         takeover = cp_state.get("takeover", {})
+        # DEGRADED must be an EXPLICIT, OBSERVABLE state, not a silent
+        # internal branch (2026-09-03 user spec) -- folded in here so
+        # `dv-harness status` shows it with no CLI change, exactly the way
+        # paused/takeover_active above are surfaced. Best-effort: an
+        # unreadable degradation.json degrades to "NORMAL, nothing recorded"
+        # rather than making `status` itself fail.
+        try:
+            from . import degradation
+            degraded_detail = degradation.describe(self.root)
+        except Exception:
+            degraded_detail = {"mode": "NORMAL", "degraded": False, "triggers": [],
+                                "trigger_details": {}, "entered_at": None, "cleared_at": None,
+                                "adapter_failure_streak": 0, "degraded_cycles": 0}
         return json.dumps({
             "project": self.state.project,
             "scope": self.state.scope,
@@ -724,6 +748,19 @@ class DVHarness:
             "takeover_stage": takeover.get("stage") if takeover.get("active") else None,
             "active_constraint_count": len(cp_state.get("constraints", [])),
             "dv_review_cosign_enforced": bool(self.cfg["policy"].get("require_dv_review_cosign", False)),
+            # 降級路徑 (2026-09-03): DEGRADED means the harness is still
+            # collecting/persisting real data but is deliberately making no
+            # judgment-requiring stage transition until the named trigger(s)
+            # clear. `degraded_triggers` names which of the three real
+            # conditions is live; see dv_harness/degradation.py.
+            "operation_mode": degraded_detail["mode"],
+            "degraded": degraded_detail["degraded"],
+            "degraded_triggers": degraded_detail["triggers"],
+            "degraded_trigger_details": degraded_detail["trigger_details"],
+            "degraded_since": degraded_detail["entered_at"],
+            "degraded_cycles": degraded_detail["degraded_cycles"],
+            "adapter_failure_streak": degraded_detail["adapter_failure_streak"],
+            "dry_run_mode": bool(self._dry_run_cfg().get("enabled", False)),
         }, ensure_ascii=False, indent=2)
 
     def set_stage(self, stage: str):
@@ -1906,8 +1943,390 @@ class DVHarness:
         if "verification_state" in node.blackboard_write:
             self._sync_dut_tb_version_from_blackboard()
 
-    def run_stage(self, user_goal: str, stage: Optional[str] = None):
+    # ---- Reliability layer (2026-09-03 user spec: dry-run 模式 / checkpoint
+    #      與回滾 / 降級路徑). The four helpers below are what run_stage()
+    #      calls; see docs/ENGINE_STAGE_LIFECYCLE.md for the lifecycle view
+    #      and dv_harness/degradation.py's module docstring for the DEGRADED
+    #      design. ------------------------------------------------------
+
+    def _gather_stage_context(self, user_goal: str, stage: str, cp_state: Dict[str, Any],
+                               *, dry_run: bool = False) -> Dict[str, Any]:
+        """Steps 1 / 1b / 1b-2 / 1b-3 / 1c of run_stage(), plus the prompt
+        build: everything the harness does to decide WHAT to execute, all of
+        it BEFORE any adapter call.
+
+        EXTRACTED (2026-09-03, dry-run wiring) rather than duplicated. The
+        whole value of a dry-run plan is that it is what the real run would
+        actually have done -- if this context gathering existed twice, the
+        two copies would drift the first time anyone touched (say) the
+        Knowledge Center query, and the "plan" a human reviewed would quietly
+        stop matching the run they were approving. One code path, one
+        `dry_run` flag, guarantees the equivalence by construction. The
+        statement order is unchanged from the original inline code with ONE
+        deliberate exception, noted below.
+
+        Everything here is read-only EXCEPT two calls, and those two are
+        exactly what `dry_run=True` suppresses:
+          - self.plans.create()  -- writes .dv-harness/plans/PLAN-XXXXXXXX.json
+          - self.agents.delegate() -- writes an AgentTaskStore task AND
+            acquires blackboard-topic ownership for it
+        In dry-run, an EXISTING plan is still reused when one is in flight
+        (a read), and only a never-persisted in-memory plan is synthesized
+        when there is none -- so a dry-run never creates a plan a later real
+        run would then treat as "already in flight", and never takes a topic
+        lock a concurrent branch would then block on.
+
+        The one deliberate reordering: the prompt is now built here, i.e.
+        BEFORE profiler.begin_stage() instead of after it. build_stage_prompt()
+        is pure and self.summary() only reads state that begin_stage() does
+        not touch, so this is behaviorally inert -- it exists so the dry-run
+        path can produce the real prompt without also writing a telemetry
+        record for an attempt that never happens.
+        """
+        node = self.graph.nodes.get(stage) if self.graph else None
+        route_info: Optional[dict] = None
+        plan: Optional[dict] = None
+        bb_snapshot: Dict[str, Any] = {}
+        agent_profile = None
+        plan_section = ""
+        task: Optional[dict] = None
+        if node is not None:
+            route_info = self.router.resolve(node)
+            resolved_skills = self.skills.resolve(node.skills)
+            route_info["protocol_decision"] = resolve_protocol(self._protocol_router_evidence(user_goal))
+            route_info["environment_mode_decision"] = resolve_environment_mode(
+                self._environment_mode_router_evidence())
+            plan = _find_latest_plan(self.plans.dir, stage)
+            if plan is None:
+                if dry_run:
+                    # Never written to disk -- plan_id says so explicitly
+                    # rather than carrying a PLAN-XXXXXXXX id that looks
+                    # real but names no file.
+                    plan = {"plan_id": "DRY-RUN-NOT-PERSISTED", "node_id": stage,
+                            "goal": f"{user_goal} :: stage={stage}", "status": "DRY_RUN",
+                            "steps": default_plan(node), "revision": 0}
+                else:
+                    plan = self.plans.create(stage, f"{user_goal} :: stage={stage}", default_plan(node))
+            if dry_run:
+                # A DESCRIPTION of the delegation that would happen, never a
+                # real one: delegate() writes an AgentTaskStore record AND
+                # takes blackboard-topic ownership, so a dry-run must not
+                # call it (a stale lock would block a later real run). The
+                # agent/parallel_group values are the node's real ones, so
+                # _build_plan_section() below -- shared, heavily-tested, and
+                # deliberately left untouched -- renders the same prompt
+                # shape with only the task_id marked as not allocated.
+                task = {"task_id": "DRY-RUN-NOT-DELEGATED", "agent": node.agent,
+                        "route": node.route, "skills": node.skills,
+                        "parent_plan": plan.get("plan_id"),
+                        "parallel_group": node.parallel_group, "depends_on": [],
+                        "status": "DRY_RUN", "started_at": None,
+                        "completed_at": None, "duration_sec": None}
+            else:
+                task = self.agents.delegate(node, plan)
+            bb_snapshot = self.blackboard.snapshot(node.blackboard_read) if node.blackboard_read else {}
+            agent_profile = load_agent_profile(self.root, route_info["agent"])
+            plan_section = _build_plan_section(route_info, resolved_skills, plan, bb_snapshot, task)
+
+        relevant_memory: List[Dict[str, Any]] = []
+        try:
+            from .memory import MemoryStore, MemoryRetriever
+            memory_hits = MemoryRetriever(MemoryStore(self.root)).search({"text": f"{stage} {user_goal}"})
+            relevant_memory = [hit["memory"] for hit in memory_hits]
+        except Exception:
+            relevant_memory = []
+
+        kc_search_results: List[Dict[str, Any]] = []
+        if stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value):
+            try:
+                kc_client = KnowledgeCenterClient(self.cfg, self.root)
+                if kc_client.configured():
+                    findings_payload = bb_snapshot.get("findings")
+                    findings_value = findings_payload.get("value") if isinstance(findings_payload, dict) else None
+                    last_report = findings_value.get("last_report") if isinstance(findings_value, dict) else None
+                    query_bits = [user_goal]
+                    if isinstance(last_report, dict):
+                        for key in ("symptom", "failure_signature_before", "root_cause"):
+                            v = last_report.get(key)
+                            if v:
+                                query_bits.append(str(v))
+                    query_text = " ".join(query_bits)[:500]
+                    kc_protocol = ((route_info or {}).get("protocol_decision") or {}).get("protocol") or ""
+                    kc_result = kc_client.search(category="root_cause", protocol=kc_protocol, text=query_text)
+                    if kc_result.get("ok"):
+                        kc_search_results = kc_result.get("records") or []
+            except Exception:
+                kc_search_results = []
+
+        vault_related_cases: List[Dict[str, Any]] = []
+        debug_failure_signature: Optional[Dict[str, Any]] = None
+        if stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value):
+            try:
+                findings_payload = bb_snapshot.get("findings")
+                findings_value = findings_payload.get("value") if isinstance(findings_payload, dict) else None
+                last_report = findings_value.get("last_report") if isinstance(findings_value, dict) else None
+                symptom = last_report.get("symptom") if isinstance(last_report, dict) else None
+                root_cause_hint = None
+                if isinstance(last_report, dict):
+                    root_cause_hint = last_report.get("root_cause") or last_report.get("failure_signature_before")
+                debug_failure_signature = build_failure_signature(
+                    protocol=((route_info or {}).get("protocol_decision") or {}).get("protocol"),
+                    symptom=symptom, root_cause_hint=root_cause_hint, extra_text=user_goal,
+                )
+                vault_search = search_related_memory_for_debug(
+                    self.root, self.cfg, debug_failure_signature, limit=5)
+                vault_related_cases = vault_search.get("related_cases") or []
+            except Exception:
+                vault_related_cases = []
+
+        entry_checklist = build_stage_entry_checklist(node, self.blackboard, self.root,
+                                                        stage_history=self.state.stages)
+
+        constraints = [c["text"] for c in cp_state.get("constraints", [])]
+        correction = cp_state.get("corrections", {}).get(stage)
+        correction_note = correction["note"] if correction and not correction.get("consumed") else None
+        approval = cp_state.get("approvals", {}).get(stage)
+        prompt = build_stage_prompt(stage, self.summary(), user_goal,
+                                     constraints=constraints,
+                                     correction_note=correction_note,
+                                     human_approval=approval,
+                                     relevant_memory=relevant_memory or None,
+                                     kc_search_results=kc_search_results or None,
+                                     vault_related_cases=vault_related_cases or None)
+        if plan_section:
+            prompt = prompt + plan_section
+
+        return {
+            "node": node, "route_info": route_info, "plan": plan, "bb_snapshot": bb_snapshot,
+            "agent_profile": agent_profile, "plan_section": plan_section, "task": task,
+            "relevant_memory": relevant_memory, "kc_search_results": kc_search_results,
+            "vault_related_cases": vault_related_cases,
+            "debug_failure_signature": debug_failure_signature,
+            "entry_checklist": entry_checklist, "constraints": constraints,
+            "correction_note": correction_note, "approval": approval, "prompt": prompt,
+        }
+
+    def _dry_run_stage(self, user_goal: str, stage: str, cp_state: Dict[str, Any]) -> AgentResult:
+        """dry-run 模式: "agent 產出完整計畫但不執行, 人可事前檢視。導入初期與
+        大改動前必用."
+
+        Produces the FULL intended plan/evidence-request for this stage --
+        the real resolved route/agent/protocol/environment-mode decisions,
+        the real plan steps, the real Blackboard/Memory/Knowledge-Center/
+        Vault context, the real entry checklist, and the byte-exact prompt
+        that would have been sent -- and then stops. It reuses
+        _gather_stage_context(dry_run=True), so this is genuinely "what the
+        real run would have done", not a separate approximation.
+
+        What is guaranteed NOT to happen (the precise side-effect call sites
+        in the normal path, each verified against this file rather than
+        assumed):
+          - self.adapter.run()                  -- no LLM/adapter call at all
+          - self.plans.create()                 -- no plan file written
+          - self.agents.delegate()/start_task()/complete_task()
+          - self.profiler.begin_stage()/add_agent_run()/end_stage()
+          - self.store.save()/self.store.event() -- no state.json/events.jsonl write
+          - ss["status"]/["attempts"]/["started_at"] mutation
+          - self.react.record(), self._write_blackboard_from_evidence()
+          - replan_stage(), cp.consume_correction(), cp.clear_approval()
+          - every _promote_*/_persist_*/_score_*/_append_* knowledge write
+          - self_tuning.increment_execution_counter()
+          - session_snapshot auto-checkpointing (there is no transition to
+            checkpoint -- nothing moved)
+        No LSF submission is possible either: run_stage() has no bsub call
+        site at all. Every real submission in this codebase goes through
+        `dv-harness lsf-submit` -> lsf_client.bsub_submit_with_preflight()
+        (cli.py), a separate command a dry-run never reaches. The dry-run
+        test asserts this rather than trusting the claim.
+
+        The ONE write is the explicit dry-run report the spec permits:
+        `.dv-harness/dry_run/<stage>-<timestamp>.json`, which is the artifact
+        a human reviews. It lives in its own directory precisely so it can
+        never be confused with -- or restored as -- real run state; note that
+        `dry_run` is not in session_snapshot.SESSION_DIRS, so these reports
+        are deliberately never copied into a session snapshot either.
+        """
+        ctx = self._gather_stage_context(user_goal, stage, cp_state, dry_run=True)
+        node = ctx["node"]
+        route_info = ctx["route_info"] or {}
+        plan = ctx["plan"] or {}
+        ss = self.state.stages.get(stage, {})
+        report = {
+            "dry_run": True,
+            "generated_at": now(),
+            "stage": stage,
+            "user_goal": user_goal,
+            "project": self.state.project,
+            "git_sha": self.state.git_sha,
+            "would_execute": {
+                "adapter": type(self.adapter).__name__,
+                "agent": route_info.get("agent"),
+                "route": route_info.get("route"),
+                "protocol_decision": route_info.get("protocol_decision"),
+                "environment_mode_decision": route_info.get("environment_mode_decision"),
+                "resume_session": ss.get("session_id") or None,
+                "agent_profile_found": bool(getattr(ctx["agent_profile"], "found", False)),
+            },
+            "plan": {
+                "plan_id": plan.get("plan_id"),
+                "persisted": plan.get("plan_id") != "DRY-RUN-NOT-PERSISTED",
+                "revision": plan.get("revision"),
+                "steps": plan.get("steps", []),
+            },
+            # The evidence the stage would be judged on: which gates must
+            # accept this stage's output, and what the entry checklist says
+            # is already present. This is the "evidence-request" half of the
+            # plan a human reviews before authorizing a real run.
+            "required_gates": [gid for gid, _, _ in STAGE_GATES.get(stage, [])],
+            "entry_checklist": ctx["entry_checklist"],
+            "expected_outputs": list(getattr(node, "expected_outputs", []) or []) if node else [],
+            "blackboard_read": list(getattr(node, "blackboard_read", []) or []) if node else [],
+            "blackboard_write": list(getattr(node, "blackboard_write", []) or []) if node else [],
+            "context_counts": {
+                "relevant_memory": len(ctx["relevant_memory"]),
+                "kc_search_results": len(ctx["kc_search_results"]),
+                "vault_related_cases": len(ctx["vault_related_cases"]),
+                "constraints": len(ctx["constraints"]),
+            },
+            "human_controls": {
+                "correction_note": ctx["correction_note"],
+                "approval": ctx["approval"],
+            },
+            # The real prompt, in full. This is the point of a dry-run: a
+            # human can read exactly what the agent would be asked.
+            "prompt": ctx["prompt"],
+        }
+        out_dir = self.root / ".dv-harness" / "dry_run"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{stage}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+        out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        report["report_path"] = str(out_path)
+        print(f"[dv-harness] DRY_RUN stage={stage}: plan written to {out_path} "
+              f"(nothing executed, no state changed).")
+        return AgentResult(
+            ok=True,
+            text=(f"DRY_RUN: produced the full intended plan for stage {stage} without executing it. "
+                  f"Report: {out_path}"),
+            raw=report,
+            session_id=None,
+        )
+
+    def _degradation_cfg(self) -> Dict[str, Any]:
+        block = self.cfg.get("degradation")
+        return block if isinstance(block, dict) else {}
+
+    def _dry_run_cfg(self) -> Dict[str, Any]:
+        # Same isinstance guard as _degradation_cfg()/_auto_checkpoint()'s own
+        # `auto_checkpoint` read: `self.cfg.get("dry_run") or {}` only covers
+        # a FALSY misconfiguration (None, "", 0) -- a truthy-but-wrong-shaped
+        # value (e.g. `"dry_run": true` or `"dry_run": ["enabled"]` from a
+        # hand-edited config.json) would still reach `.get("enabled", ...)`
+        # and raise AttributeError instead of failing toward "dry-run off".
+        block = self.cfg.get("dry_run")
+        return block if isinstance(block, dict) else {}
+
+    def _degraded_gate(self, stage: str) -> Optional[AgentResult]:
+        """降級路徑, enforced. Returns a DEGRADED AgentResult when this stage
+        must NOT attempt a judgment-requiring transition, or None to proceed
+        normally.
+
+        Order of operations matters: the license/queue triggers are
+        RE-EVALUATED against real current evidence first (degradation.
+        evaluate(), rate-limited by probe_min_interval_sec), so a condition
+        that has cleared lets this same call fall straight through to normal
+        operation -- the harness resumes on its own rather than needing a
+        human to un-stick it. Only if a trigger is still live do we degrade.
+
+        While degraded the harness keeps doing real DATA COLLECTION -- it
+        writes an auto-checkpoint session snapshot and appends a real
+        DEGRADED_CYCLE event carrying the live trigger detail -- and refuses
+        only the judgment call (no adapter.run() proposing a verdict/next
+        action, no gate evaluation, no stage transition). Entirely
+        best-effort: any failure inside this gate leaves the harness in
+        NORMAL operation rather than stranding it in a state it cannot get
+        out of, the same discipline regression_reporter.py's
+        _escalate_uvm_fatal_burst_if_needed() applies to its own side effects.
+        """
+        conf = self._degradation_cfg()
+        if not conf.get("enabled", True):
+            return None
+        try:
+            from . import degradation
+            degradation.evaluate(self.root, self.cfg, runner=self.degradation_runner)
+            if not degradation.is_degraded(self.root):
+                return None
+            reason = degradation.blocking_reason(self.root)
+            detail = degradation.describe(self.root)
+            ss = self.state.stages[stage]
+            # ss["status"] MUST be set, not just overall_status: loop() reads
+            # ss["status"] to decide what to do next, and its final fallthrough
+            # is an unconditional self.advance() -- i.e. a stage left at
+            # NOT_STARTED here would be routed along the graph's PASS edge as
+            # though a stage that never ran had passed. WAIT_USER is the
+            # existing status loop() already stops cleanly on (the TAKEOVER
+            # path above sets exactly the same one for the same reason), so a
+            # degraded harness parks instead of advancing or tight-looping --
+            # "只收集資料、不做判斷", never 胡亂重試. blocking_reason carries the
+            # real trigger detail, so the WAIT_USER is never unexplained.
+            ss["status"] = Status.WAIT_USER.value
+            ss["blocking_reason"] = reason[:2000]
+            self.state.overall_status = Status.WAIT_USER.value
+            self.store.save(self.state)
+
+            # Real, persisted data collection while degraded -- ordered AFTER
+            # the store.save() above so the snapshot and the event both record
+            # the degraded state itself, not the state as it was a moment
+            # before it was marked.
+            self.store.event({"ts": now(), "stage": stage, "event": "DEGRADED_CYCLE",
+                               "triggers": detail["triggers"],
+                               "trigger_details": detail["trigger_details"],
+                               "degraded_cycles": detail["degraded_cycles"] + 1})
+            degradation.note_cycle(self.root)
+            self._auto_checkpoint(stage, note=f"degraded cycle: {reason[:300]}")
+
+            print(f"[dv-harness] {reason}")
+            return AgentResult(ok=False, text=reason,
+                                raw={"degraded": True, "stage": stage, **detail},
+                                session_id=None)
+        except Exception as e:
+            print(f"[dv-harness] degradation check failed (continuing normally): {e}")
+            return None
+
+    def _auto_checkpoint(self, stage: str, note: str = "") -> None:
+        """Automatic stage-transition recovery point ("每個階段留可回復點,
+        agent 走偏時不必從頭"). session_snapshot.save_session() already does
+        all the real work including source-identity protection on restore --
+        this only makes it fire automatically instead of only on an explicit
+        `dv-harness save-session`, with the bounded retention that turning a
+        manual action into an automatic one requires.
+
+        Best-effort, wrapped exactly like every other real side effect in
+        this file and like regression_reporter.py's
+        _escalate_uvm_fatal_burst_if_needed(): a snapshot is a convenience
+        for recovering from a bad run, and failing to take one must never
+        itself break the real cycle. A full disk, a Windows file lock on a
+        file being copied, or a permission error prints and continues.
+        """
+        conf = self.cfg.get("auto_checkpoint")
+        conf = conf if isinstance(conf, dict) else {}
+        if not conf.get("enabled", True):
+            return
+        try:
+            from . import session_snapshot
+            attempts = self.state.stages.get(stage, {}).get("attempts")
+            session_snapshot.save_auto_checkpoint(
+                self.root, stage=stage, attempt=attempts, note=note,
+                keep=int(conf.get("keep_last", session_snapshot.DEFAULT_AUTO_CHECKPOINT_KEEP)))
+        except Exception as e:
+            print(f"[dv-harness] auto-checkpoint failed (stage {stage}, continuing): {e}")
+
+    def run_stage(self, user_goal: str, stage: Optional[str] = None, dry_run: bool = False):
         stage = stage or self.state.current_stage
+        # dry-run resolves from the explicit argument (CLI --dry-run) OR the
+        # config toggle -- the flag can turn dry-run ON, never off. See
+        # config.py's `dry_run` block for why a config that silently disabled
+        # an explicitly-requested dry-run would be the dangerous direction.
+        dry_run = bool(dry_run) or bool(self._dry_run_cfg().get("enabled", False))
 
         # Human Override, strongest form: TAKEOVER must be honored even when
         # run_stage() is called directly (CLI `run-stage`, bypassing loop()'s
@@ -1941,6 +2360,28 @@ class DVHarness:
                 session_id=None,
             )
 
+        # dry-run, checked SECOND -- after TAKEOVER (a human holding the
+        # stage outranks everything, including a request to plan it) and
+        # before every state mutation below, including the stage-entry
+        # marker: a dry-run never starts the stage, so it must not print a
+        # START it never earns, exactly the reasoning the TAKEOVER
+        # short-circuit above already applies to itself.
+        #
+        # Deliberately checked BEFORE the DEGRADED gate: a dry-run makes no
+        # adapter call and no judgment at all, so it is precisely the kind
+        # of read-only planning that stays safe (and useful) while the farm
+        # or the API is unavailable. Refusing to plan while degraded would
+        # deny the operator the one action that still works.
+        if dry_run:
+            return self._dry_run_stage(user_goal, stage, cp_state)
+
+        # 降級路徑: enters/stays DEGRADED (collect data, make no judgment) or
+        # falls through to normal operation once the condition clears. See
+        # _degraded_gate() and dv_harness/degradation.py.
+        degraded = self._degraded_gate(stage)
+        if degraded is not None:
+            return degraded
+
         # Distinctive stage-entry marker (see STAGE_MARKER_PREFIX's RULING
         # comment above) -- emitted here, AFTER the TAKEOVER short-circuit
         # above (a takeover'd call never actually starts the stage, so it
@@ -1956,207 +2397,35 @@ class DVHarness:
         self.state.git_sha = self._git_sha() or self.state.git_sha
         self.store.save(self.state)
 
-        # ---- 1. Plan-and-Execute + Blackboard read + Multi-Agent delegate,
-        #         all BEFORE the LLM call, so the agent's response is
-        #         genuinely informed by an explicit plan/route/prior-state
-        #         instead of the plan being write-only metadata. A plan
-        #         already in flight for this node (an earlier attempt of the
-        #         same stage) is reused rather than creating a fresh
-        #         plan_id every retry -- control_plane._find_latest_plan is
-        #         the same lookup replan_stage() already uses below and in
-        #         loop(), so a stage's plan history stays one coherent
-        #         PLAN-XXXXXXXX.json with an incrementing revision, not N
-        #         unrelated plans for N attempts. ------------------------
-        node = self.graph.nodes.get(stage) if self.graph else None
-        route_info: Optional[dict] = None
-        plan: Optional[dict] = None
-        bb_snapshot: Dict[str, Any] = {}
-        agent_profile = None
-        plan_section = ""
-        task: Optional[dict] = None
-        if node is not None:
-            route_info = self.router.resolve(node)
-            resolved_skills = self.skills.resolve(node.skills)
-            # --- Real, input-driven protocol/environment-mode resolution --
-            # (2026-09-01, route-skill-resolver-dynamic-implementation task):
-            # unlike self.router.resolve(node) above (a static per-node dict
-            # lookup, see router.py's own NOTICE), these two calls genuinely
-            # depend on THIS run's own evidence (user_goal text, blackboard
-            # "project"/"verification_state" topics, real git diff, real subsystem
-            # registry) and can pick a different real decision run-to-run.
-            # Folded into route_info (and therefore into _build_plan_section's
-            # prompt text below) so this is load-bearing, not a disconnected
-            # module -- see protocol_router.py/environment_mode_router.py for
-            # the full ruling on evidence sourcing.
-            route_info["protocol_decision"] = resolve_protocol(self._protocol_router_evidence(user_goal))
-            route_info["environment_mode_decision"] = resolve_environment_mode(
-                self._environment_mode_router_evidence())
-            plan = _find_latest_plan(self.plans.dir, stage)
-            if plan is None:
-                plan = self.plans.create(stage, f"{user_goal} :: stage={stage}", default_plan(node))
-            task = self.agents.delegate(node, plan)
-            bb_snapshot = self.blackboard.snapshot(node.blackboard_read) if node.blackboard_read else {}
-            agent_profile = load_agent_profile(self.root, route_info["agent"])
-            plan_section = _build_plan_section(route_info, resolved_skills, plan, bb_snapshot, task)
-
-        # ---- 1b. Memory-tier read (Task 9, 2026-08-31 poster-gap-closing
-        #          round 2): MemoryRetriever.search() had zero callers
-        #          anywhere in the real engine flow before this -- every
-        #          stage's prompt was informed by the Blackboard snapshot
-        #          above (this run's OWN current-run state) but never by
-        #          Memory (prior knowledge from past runs/stages, per
-        #          CLAUDE.md's "Memory is prior knowledge, not current
-        #          evidence"). Best-effort and a true no-op when nothing is
-        #          relevant: an empty/failed search yields relevant_memory=[]
-        #          (falsy), and build_stage_prompt's own additive-kwargs
-        #          contract guarantees a falsy relevant_memory reproduces the
-        #          exact prompt as if this kwarg were never threaded in at
-        #          all (see prompts.build_stage_prompt's docstring). -------
-        relevant_memory: List[Dict[str, Any]] = []
-        try:
-            from .memory import MemoryStore, MemoryRetriever
-            memory_hits = MemoryRetriever(MemoryStore(self.root)).search({"text": f"{stage} {user_goal}"})
-            relevant_memory = [hit["memory"] for hit in memory_hits]
-        except Exception:
-            relevant_memory = []
-
-        # ---- 1b-2. Shared Knowledge Center pre-stage read (2026-09-02,
-        #          knowledge-center-pre-stage-read gap-closing task):
-        #          KnowledgeCenterClient.search() (dv_harness/knowledge_center.py)
-        #          previously had exactly two callers -- the manual
-        #          `dv-harness knowledge search` CLI subcommand and the
-        #          dashboard GUI -- never the real engine flow. The
-        #          relevant_memory read directly above (1b) queries the
-        #          purely LOCAL per-project MemoryStore under
-        #          .dv-harness/memory/ -- a different store than the shared,
-        #          cross-user Knowledge Center this reads (see
-        #          knowledge_center.py's own module docstring: OrganizationalMemoryStore
-        #          is yet a third, different destination).
+        # ---- 1. Plan / route / Blackboard / Memory / Knowledge-Center /
+        #         Vault context + the stage prompt, all gathered BEFORE the
+        #         LLM call so the agent's response is genuinely informed by
+        #         an explicit plan/route/prior-state instead of the plan
+        #         being write-only metadata.
         #
-        #          Scoped to FAILURE_RECOVERY/RE_AUDIT only -- the two stages
-        #          that conclude a fresh root cause (unlike the generic,
-        #          every-stage relevant_memory read above). Best-effort and a
-        #          true no-op when the shared KC is unconfigured/unreachable:
-        #          same try/except-swallow discipline as memory_router.py's
-        #          _maybe_share and this same module's maybe_push_to_shared()
-        #          call site above -- a KC outage must never break a stage.
-        #          Query text is derived from real, already-available
-        #          context only -- this run's own user_goal plus the most
-        #          recent real failure symptom/root cause already recorded on
-        #          the "findings" Blackboard topic's last_report (read into
-        #          bb_snapshot in step 1a above), never invented. Protocol is
-        #          the SAME real route_info["protocol_decision"] this stage's
-        #          prompt already carries (step 1 above), not a separate
-        #          guess. Folded into the prompt the same additive-kwarg way
-        #          relevant_memory is (see build_stage_prompt's docstring). -
-        kc_search_results: List[Dict[str, Any]] = []
-        if stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value):
-            try:
-                kc_client = KnowledgeCenterClient(self.cfg, self.root)
-                if kc_client.configured():
-                    findings_payload = bb_snapshot.get("findings")
-                    findings_value = findings_payload.get("value") if isinstance(findings_payload, dict) else None
-                    last_report = findings_value.get("last_report") if isinstance(findings_value, dict) else None
-                    query_bits = [user_goal]
-                    if isinstance(last_report, dict):
-                        for key in ("symptom", "failure_signature_before", "root_cause"):
-                            v = last_report.get(key)
-                            if v:
-                                query_bits.append(str(v))
-                    query_text = " ".join(query_bits)[:500]
-                    kc_protocol = ((route_info or {}).get("protocol_decision") or {}).get("protocol") or ""
-                    kc_result = kc_client.search(category="root_cause", protocol=kc_protocol, text=query_text)
-                    if kc_result.get("ok"):
-                        kc_search_results = kc_result.get("records") or []
-            except Exception:
-                kc_search_results = []
-
-        # ---- 1b-3. Debug-flow prior-evidence search via the Workstream-1
-        #          DV-Knowledge Vault MemoryProvider (Phase 10, 2026-09-03,
-        #          obsidian-memory-debugflow task): BEFORE a debug attempt
-        #          actually runs, capture a real failure signature and search
-        #          the LOCAL vault (dv_harness/memory_vault.py -- a DIFFERENT
-        #          store than the shared cross-user Knowledge Center searched
-        #          in step 1b-2 above, and a different store than the plain
-        #          per-project relevant_memory read in step 1b) via the
-        #          shared Phase 10/11 interface
-        #          memory_vault.search_related_memory_for_debug() -- the SAME
-        #          function lsf_client.py's regression-job memory extraction
-        #          calls (see its own docstring) and the one the future
-        #          Memory Agent (.claude/agents/memory-agent.md, a separate
-        #          workstream) should call too, rather than a third search
-        #          path. Scoped to FAILURE_RECOVERY/RE_AUDIT, same as 1b-2.
-        #
-        #          `debug_failure_signature` is also kept in scope (not just
-        #          `vault_related_cases`) for step 3c below (the AFTER-hook's
-        #          FAIL/PARTIAL Job Memory record) -- one real failure
-        #          signature, built once per attempt, used by both the BEFORE
-        #          prompt-context surfacing here and the AFTER persistence
-        #          there, never two different derivations of "what this
-        #          failure looks like" for the same attempt.
-        #
-        #          Per CLAUDE.md's Evidence Truth Rule / "不得直接假設 previous
-        #          root cause == current root cause": vault_related_cases is
-        #          folded into the prompt as PRIOR EVIDENCE ONLY (see
-        #          build_stage_prompt's new `vault_related_cases` kwarg,
-        #          disclaimed exactly like relevant_memory/kc_search_results
-        #          above) -- current RTL/VIP/log/waveform evidence must
-        #          always be independently re-verified regardless of what a
-        #          historical match suggests.
-        vault_related_cases: List[Dict[str, Any]] = []
-        debug_failure_signature: Optional[Dict[str, Any]] = None
-        if stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value):
-            try:
-                findings_payload = bb_snapshot.get("findings")
-                findings_value = findings_payload.get("value") if isinstance(findings_payload, dict) else None
-                last_report = findings_value.get("last_report") if isinstance(findings_value, dict) else None
-                symptom = last_report.get("symptom") if isinstance(last_report, dict) else None
-                root_cause_hint = None
-                if isinstance(last_report, dict):
-                    root_cause_hint = last_report.get("root_cause") or last_report.get("failure_signature_before")
-                debug_failure_signature = build_failure_signature(
-                    protocol=((route_info or {}).get("protocol_decision") or {}).get("protocol"),
-                    symptom=symptom, root_cause_hint=root_cause_hint, extra_text=user_goal,
-                )
-                vault_search = search_related_memory_for_debug(
-                    self.root, self.cfg, debug_failure_signature, limit=5)
-                vault_related_cases = vault_search.get("related_cases") or []
-            except Exception:
-                vault_related_cases = []
-
-        # ---- 1c. Stage entry evidence checklist (expected-evidence-checklist
-        #          design pass, 2026-09-01): informational-only presence
-        #          report over node.expected_evidence, computed BEFORE
-        #          build_stage_prompt/adapter.run so it can never reflect the
-        #          attempt about to run -- see build_stage_entry_checklist's
-        #          own docstring. A node with no expected_evidence (the
-        #          overwhelming majority, unaffected by this pass) yields the
-        #          trivial {"items":[],...,"completeness_percent":100.0}
-        #          report and never blocks or alters ss["status"]. Persisted
-        #          into the SAME per-attempt telemetry record
-        #          profiler.begin_stage() already writes, not a separate file.
-        entry_checklist = build_stage_entry_checklist(node, self.blackboard, self.root,
-                                                        stage_history=self.state.stages)
+        #         EXTRACTED into _gather_stage_context() (2026-09-03, dry-run
+        #         wiring) so `dv-harness run-stage --dry-run` produces the
+        #         plan THIS path would really have executed, from this exact
+        #         code, rather than a second implementation that would drift.
+        #         See that method's docstring for the full step-by-step
+        #         (former inline steps 1 / 1b / 1b-2 / 1b-3 / 1c) and for the
+        #         only two calls dry-run suppresses (plans.create /
+        #         agents.delegate).
+        ctx = self._gather_stage_context(user_goal, stage, cp_state)
+        node = ctx["node"]
+        route_info = ctx["route_info"]
+        plan = ctx["plan"]
+        bb_snapshot = ctx["bb_snapshot"]
+        agent_profile = ctx["agent_profile"]
+        task = ctx["task"]
+        debug_failure_signature = ctx["debug_failure_signature"]
+        entry_checklist = ctx["entry_checklist"]
+        correction_note = ctx["correction_note"]
+        approval = ctx["approval"]
+        prompt = ctx["prompt"]
 
         profile = self.profiler.begin_stage(stage, stage, graph_node=stage,
             metadata={"git_sha": self.state.git_sha}, entry_checklist=entry_checklist)
-        # CONSTRAINT / CORRECT / APPROVE integration: fold the persisted
-        # control-plane state into this stage's prompt (prompts.build_stage_prompt
-        # is purely additive on these kwargs -- omitting them reproduces the
-        # pre-control-plane prompt exactly).
-        constraints = [c["text"] for c in cp_state.get("constraints", [])]
-        correction = cp_state.get("corrections", {}).get(stage)
-        correction_note = correction["note"] if correction and not correction.get("consumed") else None
-        approval = cp_state.get("approvals", {}).get(stage)
-        prompt = build_stage_prompt(stage, self.summary(), user_goal,
-                                     constraints=constraints,
-                                     correction_note=correction_note,
-                                     human_approval=approval,
-                                     relevant_memory=relevant_memory or None,
-                                     kc_search_results=kc_search_results or None,
-                                     vault_related_cases=vault_related_cases or None)
-        if plan_section:
-            prompt = prompt + plan_section
         resume = ss.get("session_id") or None
 
         # ---- Multi-agent task lifecycle start (2026-09-01,
@@ -2229,6 +2498,30 @@ class DVHarness:
             self.state.last_session_id = result.session_id
         ss["last_message"] = result.text[-6000:] if result.text else ""
         ss["finished_at"] = now()
+
+        # 降級路徑, evidence collection point (2026-09-03): this adapter call
+        # just succeeded or failed for real, and that outcome IS the evidence
+        # for the TRIGGER_ADAPTER condition ("Claude API 不可用"). Recorded
+        # here, at the one place run_stage() already knows the answer, rather
+        # than by a separate poller that would have to guess. This only
+        # COUNTS -- it never retries and never re-calls the adapter; stage
+        # retry stays entirely in loop()'s existing max_stage_retries policy.
+        # Best-effort on both sides: a degradation-bookkeeping failure must
+        # never change the real stage result already in `result`.
+        # Gated on the same `enabled` flag _degraded_gate() honours, so a
+        # project that turned degradation off gets no degradation.json
+        # written at all -- a disabled feature should leave no trace on disk.
+        if self._degradation_cfg().get("enabled", True):
+            try:
+                from . import degradation
+                if result.ok:
+                    degradation.record_adapter_success(self.root, self.cfg)
+                else:
+                    degradation.record_adapter_failure(
+                        self.root, self.cfg, stage=stage,
+                        detail=(result.raw or {}).get("stderr", "") or (result.text or ""))
+            except Exception as e:
+                print(f"[dv-harness] degradation bookkeeping failed (continuing): {e}")
 
         evidence_blocks: Dict[str, Any] = {}
         if result.ok:
@@ -2530,6 +2823,28 @@ class DVHarness:
         _emit_stage_done_marker(stage, stage_detail.get("gate_verdict"),
                                  stage_detail.get("stage_completion_percent"))
 
+        # ---- 6b. Automatic stage-transition checkpoint (2026-09-03, user
+        #          spec: "checkpoint 與回滾：每個階段留可回復點, agent 走偏時不
+        #          必從頭"). Fired HERE, immediately after last_transition and
+        #          its store.save() above, for a specific reason: this is the
+        #          point where the stage's FINAL terminal status is both
+        #          decided AND already persisted, so the snapshot captures the
+        #          completed transition rather than a half-written one. It is
+        #          also on the single real terminal exit path every verdict
+        #          branch falls through to (see step 7's own comment below for
+        #          why that is true), so exactly one checkpoint is taken per
+        #          real attempt -- PASS, FAIL, PARTIAL and WAIT_USER alike,
+        #          since "agent 走偏" is precisely the non-PASS case a human
+        #          most needs to roll back from.
+        #
+        #          session_snapshot.save_session() already does all the real
+        #          work, including the git-SHA source-identity mismatch
+        #          protection restore_session() enforces -- nothing about
+        #          checkpointing is rebuilt here. Best-effort and bounded:
+        #          see _auto_checkpoint() and session_snapshot.
+        #          prune_auto_checkpoints().
+        self._auto_checkpoint(stage, note=f"auto stage transition: {stage} -> {ss['status']}")
+
         # ---- 7. Autonomous gate self-tuning review (2026-09-02 design):
         #         this is the ONE real terminal exit point of run_stage() --
         #         every verdict branch above (PASS, WAIT_USER/approval-
@@ -2736,7 +3051,26 @@ class DVHarness:
         self.state.overall_status = status
         self.store.save(self.state)
 
-    def loop(self, user_goal: str):
+    def loop(self, user_goal: str, dry_run: bool = False):
+        """`dry_run=True` plans the CURRENT stage and returns immediately,
+        without looping.
+
+        This is a deliberate design decision, not a shortcut. loop()'s only
+        way to reach a next stage is advance()/graph_next(), which route on a
+        REAL terminal status produced by a real gate evaluation of a real
+        adapter response. A dry-run produces none of those, so the only way
+        to "keep looping" would be to invent a verdict for a stage that never
+        ran and then plan the stage that fictional verdict pointed to --
+        precisely the fabricated-evidence failure CLAUDE.md's Evidence Truth
+        Rule forbids, and it would make the reviewed plan diverge further
+        from reality at every step. Planning one real stage against real
+        current state is honest; a speculative N-stage plan is not.
+
+        Reviewing the whole pipeline is therefore an iterative, real loop:
+        dry-run a stage, review it, run it for real, dry-run the next.
+        """
+        if dry_run or bool(self._dry_run_cfg().get("enabled", False)):
+            return self.run_stage(user_goal, stage=self.state.current_stage, dry_run=True)
         while True:
             stage = self.state.current_stage
 

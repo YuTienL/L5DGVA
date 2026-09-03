@@ -142,6 +142,64 @@ DEFAULT_CONFIG = {
         "shell": "csh",
         "require_license_configured": True,
     },
+    # --- Reliability blocks (2026-09-03 user spec: dry-run / checkpoint 與
+    # 回滾 / 降級路徑). All three are read by dv_harness/engine.py's
+    # run_stage(); see docs/ENGINE_STAGE_LIFECYCLE.md for how each one
+    # changes the stage lifecycle.
+    #
+    # dry-run ("agent 產出完整計畫但不執行，人可事前檢視。導入初期與大改動前必
+    # 用"): OFF by default -- dry-run is a deliberate per-invocation choice
+    # (`dv-harness run-stage --dry-run`), and a config file that silently
+    # made every stage a no-op would be a far worse failure mode than
+    # forgetting the flag. Setting `enabled` true here is for exactly the
+    # case the spec names: an onboarding/large-change period where EVERY
+    # stage should be planned-and-reviewed before it is allowed to execute.
+    # The CLI flag ORs with this -- it can turn dry-run on, never off.
+    "dry_run": {
+        "enabled": False,
+    },
+    # Automatic stage-transition checkpoints ("每個階段留可回復點, agent 走偏
+    # 時不必從頭"). ON by default, unlike the opt-in blocks above, for the
+    # reason evidence_db gives for its own default: this is purely local
+    # file copying under .dv-harness/sessions/ -- no network call, no
+    # credential, no external binary -- and the whole value of a recovery
+    # point is that it already exists when you discover you need it.
+    # `keep_last` bounds the growth (see session_snapshot.
+    # prune_auto_checkpoints(), which only ever deletes `auto_`-prefixed
+    # snapshots -- never a human's --name snapshot, never a _pre_restore_
+    # undo backup). 0 or less disables pruning rather than deleting
+    # everything.
+    "auto_checkpoint": {
+        "enabled": True,
+        "keep_last": 10,
+    },
+    # DEGRADED mode ("Claude API 不可用、license 全滿、farm 塞車時, harness 應
+    # 降級成「只收集資料、不做判斷」"). See dv_harness/degradation.py's module
+    # docstring for what each trigger reuses and why.
+    #
+    # `enabled` on by default: the adapter-failure trigger it gates costs
+    # nothing (it only counts outcomes run_stage() already computes) and its
+    # whole purpose is to stop a broken-adapter run from thrashing.
+    # `adapter_failure_threshold` is deliberately policy.max_stage_retries
+    # (2) + 1 -- degradation begins only after the EXISTING stage-retry
+    # budget has been spent and the adapter is still failing; this adds no
+    # parallel retry mechanism of its own.
+    #
+    # `probe_resources` OFF by default: the license/queue triggers shell out
+    # to real `lmutil lmstat`/`bqueues`, which per preflight.py's own
+    # transport docstring only exist when dv_harness runs server-side on the
+    # Linux DV server. On a PC-side session those commands are simply
+    # absent, and treating "command not found" as evidence of a full license
+    # or a jammed farm would be a fabricated conclusion. Turn this on for a
+    # server-side deployment (it reuses the `preflight` block above for the
+    # license server/queue names -- there is no second place to configure
+    # them).
+    "degradation": {
+        "enabled": True,
+        "adapter_failure_threshold": 3,
+        "probe_resources": False,
+        "probe_min_interval_sec": 60,
+    },
     # Local PC-side task orchestration (2026-09-03, see dv_harness/
     # pueue_client.py). `group` keeps this project's pueue tasks visually/
     # queryably separate from any unrelated task a shared local pueue
