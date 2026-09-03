@@ -798,3 +798,62 @@ tests: the guard classifies literal paths only, so a shell-variable-indirected r
 `ls`/`find`/`stat`/`wc`/`file` may name a tier-1 file without reading it; and the guard fails open
 if Python is unavailable. It is a large reduction in bypass surface, not a seal. A genuinely necessary tier-1 read gets a reasoned entry in the policy's `exemptions` array
 (the rule still fires and is recorded in the decision) — never a silent retry.
+
+
+## Source Authority Order: 9 Levels, Enforced (2026-09-04)
+
+When two sources disagree about the same fact, which one is true is decided by a fixed 9-level
+order, highest first — not by which one an agent happened to read last, and not by judgment:
+
+1. elaboration / actual simulation result
+2. the reference Makefile/command.txt itself
+3. DUT RTL
+4. register file (DUT then Global)
+5. existing testbench binds
+6. controller doc/programming guide
+7. IP user guide
+8. VIP example
+9. VIP document
+
+This lived only as a paragraph in `docs/RUN_PROFILE.md` until 2026-09-04 — a repo-wide grep for
+its own distinctive terms found zero hits outside that one paragraph, so it was a convention an
+agent was trusted to have read, the exact failure class the Engineering Discipline Rules name. It
+is now real code: `dv_harness/source_authority.py` (`AUTHORITY_ORDER`, `authority_rank()`,
+`resolve_conflict()`) and `dv-harness authority order|check-doc|resolve`. The markdown paragraph is
+PARSED and compared against the code on every test run (`assert_doc_matches_code()`), so the two
+cannot drift apart in either direction — moving a rule into code is only an improvement if the
+prose it came from is then held to it. The "(DUT then Global)" clause tier 4 carries is a real
+sub-ordering (`REGISTER_FILE_SUBORDER`), not a parenthetical.
+
+**It is not `tools/verification_flow/evidence_source_priority_gate.py`'s `ORDER`.** Both lists are
+9 items long, which has already caused one mis-identification. That one is a DISCOVERY order (which
+source to consult first for a fact you do not have yet, ending at `ASK_USER`); this one is a
+CONFLICT order (which source wins when two you already read disagree). Separate mechanisms, kept
+separate on purpose.
+
+**A mismatch is escalated, not just reported.** `resolve_conflict()` deciding which VALUE to use
+never means the losing artifact is fine to leave wrong, and two claims at the SAME tier cannot be
+decided by the order at all. Both cases go to the real question queue through
+`source_authority.escalate_conflict()`, which files a Tier-3 (`affects_spec_intent`) entry whose
+two options ARE the two sides and whose per-option `rationale` is that side's evidence path.
+`assert_both_evidence_paths_present()` runs BEFORE the record is persisted, so a conflict question
+that names a disagreement without citing where both halves of it live can never reach the queue.
+
+Two real detectors are wired into it. Both previously terminated at report text — the detectors
+were real, the queue was real, the wire between them did not exist:
+- `reference_pattern_audit.audit_directory(..., question_store=)`, i.e. `dv-harness
+  reference-audit --escalate` — a host/DUT register-write asymmetry. Both halves come from the
+  same tier-2 source (the reference pattern file), so the order returns
+  UNDECIDABLE_SAME_AUTHORITY and escalating is mandatory rather than advisory. The missing side is
+  cited AS an absence ("no DUT-side write to base BB00 offset 0020 in this file"), which is what
+  makes an absence checkable by the person who receives it.
+- `uvm_generator/address_map_verifier.verify_address_map(..., question_store=)` — a register
+  document whose base address disagrees with the decoder. **This does not make committal
+  blocking.** The decoder (tier 3) still wins over the doc (tier 6) mechanically, and the verified
+  entry plus its `` `define `` are byte-identical with or without the store. What was missing is
+  the OTHER question — which of the two artifacts is stale — which nothing asked anybody, and
+  which a `//` comment inside generated Verilog is not an escalation of.
+
+Both escalations are idempotent: the Q-ID is derived from the finding, so re-running a detector
+over unchanged sources re-mints the same id instead of growing the queue. Proven end to end
+against a real `QuestionQueueStore` (never a mock) by `dv_harness_tests/test_source_authority.py`.

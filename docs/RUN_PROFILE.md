@@ -31,6 +31,21 @@ Global), 5) existing testbench binds, 6) controller doc/programming guide,
 at tier 2 by construction -- it is a lossless, mechanical reflection of the
 Makefile, never an independent guess.
 
+That paragraph is no longer prose an agent is trusted to have read: it is
+parsed and compared, level for level, against `AUTHORITY_ORDER` in
+`dv_harness/source_authority.py` (`assert_doc_matches_code()`, run by
+`dv-harness authority check-doc` and by
+`dv_harness_tests/test_source_authority.py`), so editing either side without
+the other is a test failure. That module also owns `resolve_conflict()` --
+which applies the order, including the "(DUT then Global)" sub-ordering
+inside tier 4 -- and `escalate_conflict()`, which turns a disagreement the
+order cannot settle into a real `question_queue` Tier-3 entry carrying both
+sides' evidence paths. It is deliberately NOT the same list as
+`tools/verification_flow/evidence_source_priority_gate.py`'s `ORDER`: that
+one is a DISCOVERY order (which source to consult first for a fact you do not
+have), this one is a CONFLICT order (which source wins when two you already
+read disagree).
+
 ## Pipeline
 
 ```

@@ -298,6 +298,81 @@ def find_symmetry_asymmetries(
     return findings
 
 
+# --- escalation: an asymmetry finding -> a real question-queue entry ---------
+
+def asymmetry_conflict(finding) -> dict:
+    """Turn one `AsymmetryFinding` into a resolved `source_authority` conflict.
+
+    Both sides of a host/DUT write asymmetry come from the SAME authority
+    level -- the reference pattern file itself (tier 2, "the reference
+    Makefile/command.txt itself") -- so `resolve_conflict()` returns
+    UNDECIDABLE_SAME_AUTHORITY every time. That is the honest answer and the
+    reason this escalation exists: no amount of re-reading the pattern file
+    settles whether the missing write is a real bug (the DUT-side register
+    was forgotten) or intended (this speed/mode genuinely does not need it).
+    Only the designer knows, so it goes to the queue.
+
+    The second claim's evidence path is an ABSENCE, and it is cited the way
+    an absence has to be cited to be checkable: the file, the exact base and
+    offset, and the fact that no write to it exists anywhere in that file.
+    """
+    from . import source_authority as sa
+
+    f = finding if isinstance(finding, dict) else asdict(finding)
+    written_base = f["host_base"] if f["written_side"] == "HOST" else f["dut_base"]
+    missing_base = f["dut_base"] if f["missing_side"] == "DUT" else f["host_base"]
+    hint = f" // {f['field_hint']}" if f.get("field_hint") else ""
+    return sa.resolve_conflict([
+        sa.SourceClaim(
+            source="reference_pattern_file",
+            claim=(f"offset {f['offset']} IS programmed {f['written_side']}-side "
+                   f"(base {written_base}) in this pattern"),
+            evidence_path=(f"{f['file']}:{f['example_line']} "
+                           f"`{f['example_macro']}({f['example_address']}){hint}"),
+        ),
+        sa.SourceClaim(
+            source="reference_pattern_file",
+            claim=(f"offset {f['offset']} is NEVER programmed {f['missing_side']}-side "
+                   f"(base {missing_base}) in this pattern"),
+            evidence_path=(f"{f['file']} (whole file): no {f['missing_side']}-side write to "
+                           f"base {missing_base} offset {f['offset']}"),
+        ),
+    ])
+
+
+def escalate_asymmetries(result: dict, question_store, *, now=None) -> list[dict]:
+    """File every finding in an `audit_directory()` result into the REAL
+    question queue, one Tier-3 question per asymmetry, and return the
+    persisted records.
+
+    `domain="dut"` (-> owner `designer` via `question_queue.route_owner`): a
+    missing DUT-side register write is a question about the DUT's programming
+    sequence, not about the VIP or the environment.
+
+    Idempotent by construction, and deliberately so: the question key is
+    derived from the question text, which is derived from the finding's own
+    file/base/offset/line, so re-running the audit over unchanged patterns
+    re-mints the SAME Q-ID instead of a duplicate ask. That is what makes it
+    safe to wire this into `audit_directory()` itself rather than leaving it
+    as a thing a human has to remember to run once.
+    """
+    from . import source_authority as sa
+
+    records = []
+    for f in result.get("findings", []):
+        conflict = asymmetry_conflict(f)
+        rec = sa.escalate_conflict(
+            question_store, conflict, domain="dut",
+            subject=(f"host/DUT register-write symmetry for offset {f['offset']} "
+                     f"in {f['file']}"),
+            context_path=f"{f['file']}:{f['example_line']}",
+            now=now,
+        )
+        if rec is not None:
+            records.append(rec)
+    return records
+
+
 # --- single entry point -------------------------------------------------------
 
 def audit_directory(
@@ -305,11 +380,22 @@ def audit_directory(
     glob: str = "*.txt",
     min_shared_offsets: int = DEFAULT_MIN_SHARED_OFFSETS,
     min_jaccard: float = DEFAULT_MIN_JACCARD,
+    question_store=None,
 ) -> dict:
     """Run the full audit against `pattern_dir`: extract every register
     write, discover host/DUT paired register blocks, and flag every
     per-file symmetry gap. Returns a JSON-serializable dict; never raises
     on a directory with zero matches (reports zero files instead).
+
+    `question_store` (a `question_queue.QuestionQueueStore` or a project-root
+    path): when supplied, every finding is ALSO escalated into the real
+    question queue via `escalate_asymmetries()`, and the returned dict gains
+    an `escalated_questions` list of Q-IDs. Before this existed, a finding
+    terminated at report text -- the 2026-09-04 audit's confirmed gap ("the
+    mismatch detectors exist and are real; the question-queue mechanism
+    exists and is real; the wire between them does not"). It stays opt-in so
+    `audit_directory()` remains a pure, side-effect-free read for the
+    report-only callers that already exist.
     """
     pattern_dir = Path(pattern_dir)
     writes = extract_directory(pattern_dir, glob=glob)
@@ -319,7 +405,7 @@ def audit_directory(
 
     files_scanned = sorted({w.file for w in writes}) or sorted(p.name for p in Path(pattern_dir).glob(glob) if p.is_file())
 
-    return {
+    result = {
         "pattern_dir": str(pattern_dir),
         "glob": glob,
         "files_scanned": files_scanned,
@@ -335,6 +421,13 @@ def audit_directory(
             "verdict": "ASYMMETRY_FOUND" if findings else "CLEAN",
         },
     }
+
+    if question_store is not None:
+        escalated = escalate_asymmetries(result, question_store)
+        result["escalated_questions"] = [r["id"] for r in escalated]
+        result["summary"]["escalated_questions_count"] = len(escalated)
+
+    return result
 
 
 def format_report(result: dict) -> str:
@@ -367,6 +460,11 @@ def format_report(result: dict) -> str:
             f"citation: {f['example_macro']}({f['example_address']}) at line {f['example_line']}"
             + (f" // {f['field_hint']}" if f['field_hint'] else "")
         )
+    if "escalated_questions" in result:
+        lines.append("")
+        lines.append(f"Escalated to the question queue ({len(result['escalated_questions'])} "
+                     f"Tier-3 entries, each carrying both sides' evidence paths): "
+                     + ", ".join(result["escalated_questions"]))
     return "\n".join(lines)
 
 

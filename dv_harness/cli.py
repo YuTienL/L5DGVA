@@ -750,6 +750,39 @@ def main():
     prefaudit.add_argument("pattern_dir", help="Directory of reference BFM pattern files (e.g. reference/bfm_patterns/).")
     prefaudit.add_argument("--glob", default="*.txt")
     prefaudit.add_argument("--json", action="store_true", help="Print raw JSON instead of the human-readable report.")
+    prefaudit.add_argument("--escalate", action="store_true",
+                           help="Also file every asymmetry into the real question queue "
+                                "(--project-root's .dv-harness/question_queue/) as a Tier-3 "
+                                "entry carrying BOTH sides' evidence paths -- the written-side "
+                                "file:line and the cited absence on the paired base. Idempotent: "
+                                "the Q-ID is derived from the finding, so re-running over "
+                                "unchanged patterns re-mints the same id, never a duplicate.")
+
+    # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
+    # ordering as an executable, queryable rule rather than prose an agent is
+    # trusted to have read. NOT the same list as tools/verification_flow/
+    # evidence_source_priority_gate.py's ORDER, which is a discovery/search
+    # order -- see dv_harness/source_authority.py's module docstring.
+    pauth = sub.add_parser("authority", help="The 9-level source authority order (which source wins when "
+                                             "two sources disagree) and the conflict escalation built on it. "
+                                             "See dv_harness/source_authority.py.")
+    pauth_sub = pauth.add_subparsers(dest="authority_cmd", required=True)
+    pauth_sub.add_parser("order", help="Print the 9 levels, highest authority first.").add_argument(
+        "--json", action="store_true", dest="auth_json")
+    pauth_sub.add_parser("check-doc", help="Verify docs/RUN_PROFILE.md's written order and the code's "
+                                           "AUTHORITY_ORDER are still the same list, level for level. "
+                                           "Exits 1 on drift.")
+    pauth_resolve = pauth_sub.add_parser(
+        "resolve", help="Apply the order to a JSON file of claims "
+                        "([{source, claim, evidence_path, qualifier?}, ...]) and print the verdict.")
+    pauth_resolve.add_argument("claims", help="Path to the claims JSON file ('-' for stdin).")
+    pauth_resolve.add_argument("--json", action="store_true", dest="auth_json")
+    pauth_resolve.add_argument("--escalate", action="store_true",
+                               help="Also file the conflict into the real question queue.")
+    pauth_resolve.add_argument("--domain", choices=["vip", "dut", "env"], default="dut",
+                               help="Question domain, which decides the owner it routes to.")
+    pauth_resolve.add_argument("--subject", default=None,
+                               help="What the two sources disagree ABOUT (required with --escalate).")
 
     pconfig = sub.add_parser("config", help="View/update .dv-harness/config.json's policy block.")
     pconfig_sub = pconfig.add_subparsers(dest="config_cmd", required=True)
@@ -1660,9 +1693,46 @@ def main():
             # run-profile's RunProfileValidationError handling above.
             print(f"exemptions {args.exemptions_cmd} FAILED: {exc}", file=sys.stderr)
             raise SystemExit(1)
+    elif args.cmd == "authority":
+        from . import source_authority as sa
+        try:
+            if args.authority_cmd == "order":
+                if args.auth_json:
+                    print(json.dumps(sa.describe_order(), ensure_ascii=False, indent=2))
+                else:
+                    print(sa.format_order())
+            elif args.authority_cmd == "check-doc":
+                print(json.dumps(sa.assert_doc_matches_code(), ensure_ascii=False, indent=2))
+            else:  # resolve
+                raw = sys.stdin.read() if args.claims == "-" else Path(args.claims).read_text(encoding="utf-8")
+                claims = [sa.SourceClaim(**c) for c in json.loads(raw)]
+                conflict = sa.resolve_conflict(claims)
+                if args.escalate:
+                    if not args.subject:
+                        print("authority resolve --escalate requires --subject", file=sys.stderr)
+                        raise SystemExit(2)
+                    rec = sa.escalate_conflict(h.root, conflict, domain=args.domain,
+                                                subject=args.subject)
+                    conflict["escalated_question_id"] = rec["id"] if rec else None
+                if args.auth_json:
+                    print(json.dumps(conflict, ensure_ascii=False, indent=2))
+                else:
+                    print(f"{conflict['verdict']}: {conflict['rule']}")
+                    for c in conflict["claims"]:
+                        print(f"  tier {c['rank']} {c['doc_phrase']}: {c['claim']}")
+                        print(f"      evidence: {c['evidence_path']}")
+                    if conflict.get("escalated_question_id"):
+                        print(f"  escalated as {conflict['escalated_question_id']}")
+                raise SystemExit(0 if conflict["verdict"] == sa.VERDICT_NO_CONFLICT else 1)
+        except sa.SourceAuthorityError as exc:
+            print(f"authority {args.authority_cmd} FAILED: {exc.reason} "
+                  f"{json.dumps(exc.detail, ensure_ascii=False, default=str)}", file=sys.stderr)
+            raise SystemExit(1)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
-        result = reference_pattern_audit.audit_directory(Path(args.pattern_dir), glob=args.glob)
+        result = reference_pattern_audit.audit_directory(
+            Path(args.pattern_dir), glob=args.glob,
+            question_store=h.root if args.escalate else None)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
