@@ -146,6 +146,142 @@ def _escalate_uvm_fatal_burst_if_needed(root: Path, jobs_for_snapshot: list) -> 
         print(f"[reconciliation_cycle] escalation notify failed: {e}", flush=True)
 
 
+def _write_reconciliation_evidence_if_configured(root: Path, reconciled: dict) -> None:
+    """Best-effort DuckDB evidence-store write for this cycle's reconciled
+    jobs (2026-09-03, evidence-db-wiring step 1 -- see
+    dv_harness/evidence_db.py's own module docstring for the real data
+    shapes this mirrors). Extracted into its own function for the same
+    reason _escalate_uvm_fatal_burst_if_needed() above is: directly
+    testable without faking this function's whole live/disk job-discovery
+    machinery. Wrapped exactly like that function too ("a persistence
+    problem here must never break this cycle's own real reconciliation
+    work") and reads its own tiny `evidence_db` config block fresh from
+    `.dv-harness/config.json` each call rather than threading an
+    EvidenceStore through every function signature in this module --
+    same reasoning, same convention, so this stays the one and only place
+    in this module that needs to know about the evidence store at all.
+
+    For every reconciled job: insert_job_state(state) unconditionally -- a
+    job's own state IS the fact being recorded, pass, fail, or still
+    pending. insert_regression_verdict() additionally fires under the SAME
+    condition the regression-list safety net above (`state.pattern and
+    verdict in ("PASSED", "FAILED")`, the `apply_verdict_to_file()` call
+    site a few dozen lines up in this same function) uses to decide whether
+    a job has a determinate verdict and a known pattern -- mirrored here as
+    `state.pattern and state.sim_status in ("PASS", "FAIL")` since
+    state.sim_status is set from that exact same `verdict` in lock-step
+    (PASSED->PASS, FAILED->FAIL) a few lines above that call site, and
+    `verdict` itself is a local variable no longer in scope by the time
+    `reconciled` reaches this function.
+
+    BUG FIX (post-review fault injection, 2026-09-03): this used to have
+    only an OUTER try/except around the whole per-job loop. A single bad
+    insert (e.g. a locked row, a constraint violation for one specific job)
+    raised out of the loop body, which the outer except then caught -- but
+    by then every job after the bad one in iteration order had never even
+    been attempted, silently losing their evidence too. Each job's own
+    insert(s) now get their OWN inner try/except, same print-and-continue
+    discipline `_write_normalized_evidence_if_configured()` below already
+    uses per-job -- one bad job is isolated to itself and every sibling job
+    in the same cycle still gets its real evidence written."""
+    try:
+        from . import config as _config
+        cfg = _config.load_config(root).get("evidence_db", {})
+        if not cfg.get("enabled", True):
+            return
+        from . import evidence_db as _evidence_db
+        db_path = _evidence_db.default_db_path(root)
+        with _evidence_db.EvidenceStore(db_path) as store:
+            for jid, (state, _discrepancies) in reconciled.items():
+                try:
+                    store.insert_job_state(state)
+                    if state.pattern and state.sim_status in ("PASS", "FAIL"):
+                        store.insert_regression_verdict(
+                            state.pattern, state.sim_status == "PASS", job_id=state.job_id)
+                except Exception as e:
+                    print(f"[reconciliation_cycle] job {jid} evidence store write failed: {e}",
+                          flush=True)
+    except Exception as e:
+        print(f"[reconciliation_cycle] evidence store write failed: {e}", flush=True)
+
+
+def _write_normalized_evidence_if_configured(root: Path, reconciled: dict) -> None:
+    """Best-effort vip_distill.py -> EvidenceStore.normalized_evidence
+    bridge for this cycle's reconciled jobs (2026-09-03, evidence-db-wiring
+    STEP 2). This is the exact gap both sides of the pipeline had already
+    disclosed as open when they landed independently: vip_distill.py's own
+    report noted `write_normalized_evidence()`'s output "has nowhere to
+    land" and that a real evidence_db.py schema/loader "must be reconciled
+    ... once that workstream lands" (see
+    .work/governance-vip-distill-report.md's "Follow-ups" #1/#2); this
+    module's own evidence-db-wiring step 1 left `insert_normalized_evidence`
+    /vip_distill among the "remaining-unwired API surface" (see
+    .work/evidence-db-wiring-step1-report.md). This function is that
+    reconciliation: the caller lives here (not inside vip_distill.py itself
+    -- its own AST-enforced test, test_vip_distill.py's
+    test_module_does_not_import_orchestration_or_memory_modules(),
+    permanently forbids it importing `evidence_db`/`regression_reporter`/
+    `duckdb`/`lsf_client`/`memory_router`/`memory_vault`), using
+    vip_distill's Normalized Evidence envelope UNCHANGED (this module never
+    re-shapes or second-guesses it, only stores it).
+
+    Same discipline as `_write_reconciliation_evidence_if_configured()` and
+    `_escalate_uvm_fatal_burst_if_needed()` above: try/except, print-and-
+    continue -- a distill/store failure here must never break this cycle's
+    own real reconciliation work. Deliberately reuses the SAME `evidence_db`
+    config block those functions read (not a second config key): the
+    `normalized_evidence` table lives in the same `evidence.duckdb` file
+    this cycle's `jobs`/`regression_verdicts` rows already land in, so one
+    on/off switch controls the whole evidence store rather than two
+    independently toggleable ones.
+
+    For every reconciled job with a real `state.sim_log`: `distill_sim_log()`
+    alone (fresh `log_path` parse -- mirrors
+    `_write_reconciliation_evidence_if_configured()`'s own "reads fresh
+    rather than threaded" precedent, not the earlier per-job loop's already-
+    parsed result a few dozen lines up in this same function) is what gets
+    normalized and stored, NOT a `merge_evidence()` of `distill_sim_log()`
+    plus `distill_job_record()`. Deliberate: `state.uvm_error_count`/
+    `uvm_fatal_count`/`sim_status` were themselves DERIVED from this SAME
+    log's epilogue a few lines above in this same function's per-job loop
+    (`if verdict == "PASSED": state.sim_status = "PASS"`, etc.) -- so a
+    `distill_job_record(asdict(state))` envelope would restate the identical
+    real fact `distill_sim_log()` already captured, only under a different
+    source's own verdict vocabulary ("PASS" vs. sim_log's "PASSED").
+    `merge_evidence()`'s combined-verdict logic (by design, per vip_distill's
+    own docstring: each source's real vocabulary is "never coerced") reads
+    that cosmetic vocabulary mismatch as genuinely conflicting evidence and
+    reports `AMBIGUOUS` -- which would misrepresent a real, unambiguous
+    PASS/FAIL as ambiguous on every single job, not a real disagreement
+    worth surfacing. `distill_sim_log()` alone is also the richer of the two
+    sources here (full classified signatures + epilogue detail, not just
+    passthrough fields), so nothing is lost by not merging. A job with no
+    `sim_log` (nothing for vip_distill to normalize) is silently skipped,
+    not an error."""
+    try:
+        from . import config as _config
+        cfg = _config.load_config(root).get("evidence_db", {})
+        if not cfg.get("enabled", True):
+            return
+        from . import evidence_db as _evidence_db
+        from . import vip_distill as _vip_distill
+        db_path = _evidence_db.default_db_path(root)
+        with _evidence_db.EvidenceStore(db_path) as store:
+            for jid, (state, _discrepancies) in reconciled.items():
+                if not state.sim_log:
+                    continue
+                try:
+                    envelope = _vip_distill.distill_sim_log(
+                        log_path=state.sim_log, job_id=state.job_id,
+                        pattern=state.pattern, run_dir=state.run_dir)
+                    store.insert_normalized_evidence(envelope)
+                except Exception as e:
+                    print(f"[reconciliation_cycle] job {jid} normalized evidence distill "
+                          f"failed: {e}", flush=True)
+    except Exception as e:
+        print(f"[reconciliation_cycle] normalized evidence store write failed: {e}", flush=True)
+
+
 def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> str:
     """One pass of Part 2's reconciliation cycle: discover every live job
     under vcuser, MERGE that set with every job dv_harness already has a
@@ -358,6 +494,8 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
         jobs_for_snapshot.append(lsf_client.to_snapshot_row(state, agent_action="monitoring"))
 
     _escalate_uvm_fatal_burst_if_needed(root, jobs_for_snapshot)
+    _write_reconciliation_evidence_if_configured(root, reconciled)
+    _write_normalized_evidence_if_configured(root, reconciled)
 
     snapshot = render_snapshot(jobs_for_snapshot)
     snapshot_path = root / ".dv-harness" / "lsf" / "latest_snapshot.txt"

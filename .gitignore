@@ -9,3 +9,9 @@ __pycache__/
 # Local-only credential script for relay auto-reconnect (CLAUDE.md 2026-09-03
 # amendment) -- must never be committed, this machine only.
 replay.ps1
+
+# Local DuckDB evidence store (evidence-db-wiring, 2026-09-03, default-ON --
+# see dv_harness/config.py's evidence_db block and dv_harness/evidence_db.py).
+# Generated locally by every reconciliation cycle; a multi-MB binary file
+# with no place in version control.
+.dv-harness/evidence/

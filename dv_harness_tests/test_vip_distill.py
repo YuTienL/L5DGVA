@@ -262,6 +262,7 @@ def test_module_does_not_import_orchestration_or_memory_modules():
                 imported_names.add(node.module)
             imported_names.update(alias.name for alias in node.names)
     forbidden = {"memory_router", "memory_vault", "lsf_client", "route_and_store",
-                 "bsub_submit", "MemoryStore", "duckdb", "preflight"}
+                 "bsub_submit", "MemoryStore", "duckdb", "preflight",
+                 "evidence_db", "regression_reporter"}
     hit = imported_names & forbidden
     assert not hit, f"vip_distill.py must stay evidence-normalization-only; found forbidden import(s): {hit}"

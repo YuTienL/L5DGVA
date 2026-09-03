@@ -165,6 +165,23 @@ DEFAULT_CONFIG = {
         "apprise_urls": [],
         "uvm_fatal_burst_threshold": 3,
     },
+    # Local DuckDB evidence store (2026-09-03, evidence-db-wiring step 1 --
+    # see dv_harness/evidence_db.py and regression_reporter.
+    # _write_reconciliation_evidence_if_configured(); evidence-db-wiring
+    # step 2 added regression_reporter._write_normalized_evidence_if_
+    # configured(), the vip_distill.py -> normalized_evidence bridge, gated
+    # by this SAME flag rather than a second one). Writes land ONLY in a
+    # local `.dv-harness/evidence/evidence.duckdb` file on this machine --
+    # no network call, no credential, unlike knowledge_center/escalation
+    # above -- so this block defaults ENABLED rather than opt-in: a project
+    # gets its reconciliation cycle's real job/regression-verdict/
+    # normalized-evidence rows persisted automatically, with an explicit
+    # off-switch for a dry-run environment or a machine without the duckdb
+    # package installed (a failed EvidenceStore construction is caught and
+    # logged, never fatal to the cycle either way).
+    "evidence_db": {
+        "enabled": True,
+    },
 }
 
 def load_config(project_root: Path) -> Dict[str, Any]:
