@@ -1191,40 +1191,311 @@ def verify_matrix_self_check_identity(rows: list, exemptions: Optional[list] = N
     }
 
 
+def annotate_rows_with_confirmation(rows: list, lock_store: Optional["RowLockStore"] = None,
+                                    row_id_fn: Optional[Callable[[Any], str]] = None) -> list:
+    """The matrix rows, each carrying a `confirmation` block read off the real
+    `RowLockStore` -- `{status, row_id, confirmed_by, confirmed_date,
+    evidence, content_hash}`.
+
+    This is the manifest WRITEBACK the per-row confirmation mechanism
+    previously lacked: before 2026-09-04 confirmation state lived only in a
+    side lock file, so the connectivity manifest -- the artifact a human
+    actually reads and a downstream generator actually consumes -- showed no
+    trace of who had signed off on which bind target, or of the fact that a
+    row had changed since the last sign-off. `status` is one of the three
+    `CONFIRMATION_*` values; with no lock store it is UNCONFIRMED for every
+    row, which is the honest reading of "no confirmation record exists"."""
+    row_id_fn = row_id_fn or (lambda r: r.row_id() if hasattr(r, "row_id") else
+                              f"{r.get('dut_instance')}::{r.get('interface')}")
+    out = []
+    for row in rows:
+        content = row.to_dict() if hasattr(row, "to_dict") else dict(row)
+        matrix_row = {col: content.get(col) for col in MATRIX_COLUMNS}
+        row_id = row_id_fn(row)
+        if lock_store is None:
+            block = {"status": CONFIRMATION_UNCONFIRMED, "row_id": row_id,
+                     "confirmed_by": None, "confirmed_date": None,
+                     "evidence": None, "content_hash": _content_hash(matrix_row)}
+        else:
+            status = lock_store.confirmation_status(row_id, matrix_row)
+            rec = lock_store.confirmation(row_id) or {}
+            block = {
+                "status": status,
+                "row_id": row_id,
+                "confirmed_by": rec.get("confirmed_by"),
+                "confirmed_date": rec.get("confirmed_date"),
+                "evidence": rec.get("evidence"),
+                "content_hash": _content_hash(matrix_row),
+            }
+            if status == CONFIRMATION_CHANGED_SINCE_CONFIRMATION:
+                block["confirmed_content_hash"] = rec.get("content_hash")
+                block["diff_since_confirmation"] = lock_store.row_diff(row_id, matrix_row)
+        matrix_row["confirmation"] = block
+        out.append(matrix_row)
+    return out
+
+
 def write_connectivity_manifest(path, rows: list, metadata: Optional[dict] = None,
-                                exemptions: Optional[list] = None) -> dict:
+                                exemptions: Optional[list] = None,
+                                lock_store: Optional["RowLockStore"] = None,
+                                row_id_fn: Optional[Callable[[Any], str]] = None) -> dict:
     """Persist the connectivity matrix. The self-check identity and role
     provenance are verified BEFORE anything is written, so a manifest file
     that exists on disk is one that reconciled -- a matrix with an
     unexplained no-VIP interface, or a hand-typed naming-derived role,
-    raises instead of silently producing an authoritative-looking artifact."""
+    raises instead of silently producing an authoritative-looking artifact.
+
+    Pass `lock_store` to write per-row human confirmation back into the
+    manifest itself (`confirmed_by`/`confirmed_date`/`evidence`/`status` per
+    row, plus a `confirmation_summary` roll-up). Omitting it is honest, not
+    silent: every row is then stamped UNCONFIRMED rather than being left
+    with no confirmation field at all, so a manifest can never be read as
+    "reviewed" merely because it lacks the evidence that it wasn't."""
     assert_role_provenance(rows)
     self_check = verify_matrix_self_check_identity(rows, exemptions)
+    annotated = annotate_rows_with_confirmation(rows, lock_store, row_id_fn)
+    summary: dict = {CONFIRMATION_UNCONFIRMED: 0, CONFIRMATION_CONFIRMED: 0,
+                     CONFIRMATION_CHANGED_SINCE_CONFIRMATION: 0}
+    for r in annotated:
+        summary[r["confirmation"]["status"]] += 1
     manifest = {
         "generated_at": _utcnow_iso(),
         "metadata": metadata or {},
         "columns": MATRIX_COLUMNS,
-        "rows": build_connectivity_matrix(rows),
+        "rows": annotated,
         "self_check": self_check,
+        "confirmation_summary": {
+            "lock_store": str(lock_store.path) if lock_store is not None else None,
+            "counts": summary,
+            "all_rows_confirmed": summary[CONFIRMATION_CONFIRMED] == len(annotated) and bool(annotated),
+        },
     }
     Path(path).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest
 
 
-def render_hierarchy_diagram(rows: list) -> str:
-    """Minimal mermaid-flowchart rendering of DUT instance -> bind target ->
-    VIP type, one edge per matrix row, tier annotated on the edge label --
-    the second of Part C's 3 final artifacts (matrix / hierarchy diagram /
-    question queue). Deliberately simple (a topology overview, not a
-    full schematic) -- the matrix itself remains the authoritative detail
-    source."""
+def _mermaid_id(path: str) -> str:
+    """A mermaid-safe node id derived from a real hierarchy path (mermaid
+    node ids cannot contain '.', '[', ']' or '/')."""
+    return "N_" + re.sub(r"[^0-9A-Za-z_]", "_", path)
+
+
+def render_hierarchy_diagram(rows: list, instance_tree: Optional["DutInstanceNode"] = None,
+                             lock_store: Optional["RowLockStore"] = None,
+                             row_id_fn: Optional[Callable[[Any], str]] = None) -> str:
+    """Mermaid rendering of the DUT hierarchy with every BIND POINT and VIP
+    MOUNT LOCATION marked -- the second of Part C's 3 final artifacts
+    (matrix / hierarchy diagram / question queue).
+
+    Two modes, deliberately distinct rather than one degrading silently into
+    the other:
+
+    - `instance_tree=None` (the original mode): a flat one-edge-per-row
+      overview, `DUT_instance/interface --tier: bind_target--> VIP`. Honest
+      about what it is -- with no captured DUT instance tree there is no
+      hierarchy to draw, and inventing nesting from dotted path strings alone
+      would be a guess about module structure this module never makes
+      elsewhere.
+    - `instance_tree` supplied (a real `DutInstanceNode` from
+      `capture_dut_instance_tree()` / `parse_slang_ast_json()` /
+      `parse_scope_tree_dump()`): the actual nested module hierarchy is
+      rendered as nested mermaid `subgraph`s, each node labelled
+      `instance : module`, with a `:::bindpoint` class on every node that is
+      a bind target and an edge out to each VIP mount at that point. A bind
+      target naming a path NOT present in the captured tree is emitted into
+      an explicit `UNRESOLVED_BIND_TARGETS` subgraph rather than silently
+      dropped -- a bind target that does not exist in the real hierarchy is
+      exactly the T3/T4 error class this module exists to surface.
+
+    `lock_store`, when given, appends each row's confirmation status to its
+    VIP node label, so the diagram shows unreviewed bind points at a glance
+    instead of presenting every edge as equally settled.
+    """
     matrix = build_connectivity_matrix(rows)
-    lines = ["flowchart LR"]
-    for i, r in enumerate(matrix):
-        dut_node = f'D{i}["{r["dut_instance"]}<br/>{r["interface"]}"]'
-        vip_node = f'V{i}["{r["vip_type"]}<br/>({r["active_passive"]})"]'
-        lines.append(f"  {dut_node} -->|{r['tier']}: {r['bind_target']}| {vip_node}")
-    return "\n".join(lines)
+    row_id_fn = row_id_fn or (lambda r: f"{r.get('dut_instance')}::{r.get('interface')}")
+
+    def _conf_suffix(r: dict) -> str:
+        if lock_store is None:
+            return ""
+        status = lock_store.confirmation_status(row_id_fn(r), r)
+        return f"<br/>[{status}]"
+
+    if instance_tree is None:
+        lines = ["flowchart LR"]
+        for i, r in enumerate(matrix):
+            dut_node = f'D{i}["{r["dut_instance"]}<br/>{r["interface"]}"]'
+            vip_node = f'V{i}["{r["vip_type"]}<br/>({r["active_passive"]}){_conf_suffix(r)}"]'
+            lines.append(f"  {dut_node} -->|{r['tier']}: {r['bind_target']}| {vip_node}")
+        return "\n".join(lines)
+
+    # Rows grouped by the hierarchy path they bind into.
+    by_bind_target: dict[str, list] = {}
+    for r in matrix:
+        by_bind_target.setdefault(str(r.get("bind_target")), []).append(r)
+
+    tree_paths: set = set()
+
+    lines = ["flowchart TB",
+             "  classDef bindpoint stroke-width:3px;",
+             "  classDef vipmount stroke-dasharray: 4 3;"]
+    vip_edges: list = []
+
+    def _walk(node: "DutInstanceNode", depth: int) -> None:
+        pad = "  " * (depth + 1)
+        tree_paths.add(node.full_path)
+        nid = _mermaid_id(node.full_path)
+        label = f"{node.instance_name or node.full_path} : {node.module_name or '?'}"
+        rows_here = by_bind_target.get(node.full_path, [])
+        if node.children:
+            lines.append(f'{pad}subgraph {nid}["{label}"]')
+            lines.append(f"{pad}  direction TB")
+            for child in node.children:
+                _walk(child, depth + 1)
+            lines.append(f"{pad}end")
+            anchor = nid
+        else:
+            lines.append(f'{pad}{nid}["{label}"]')
+            anchor = nid
+        if rows_here:
+            lines.append(f"{pad}class {nid} bindpoint;")
+            for r in rows_here:
+                vid = _mermaid_id(f"{node.full_path}__{r['interface']}__{r['vip_type']}")
+                vip_edges.append(
+                    f'  {vid}["VIP {r["vip_type"]}<br/>({r["active_passive"]} x{r["count"]})'
+                    f'<br/>{r["interface"]}{_conf_suffix(r)}"]')
+                vip_edges.append(f"  class {vid} vipmount;")
+                vip_edges.append(f"  {anchor} -->|bind {r['tier']}| {vid}")
+
+    _walk(instance_tree, 0)
+
+    unresolved = [t for t in by_bind_target if t not in tree_paths]
+    if unresolved:
+        lines.append('  subgraph UNRESOLVED_BIND_TARGETS["UNRESOLVED_BIND_TARGETS"]')
+        lines.append("    direction TB")
+        for t in sorted(unresolved):
+            uid = _mermaid_id("unresolved_" + t)
+            lines.append(f'    {uid}["{t}<br/>NOT FOUND IN CAPTURED DUT TREE"]')
+            for r in by_bind_target[t]:
+                vid = _mermaid_id(f"unresolved_{t}__{r['interface']}__{r['vip_type']}")
+                vip_edges.append(
+                    f'  {vid}["VIP {r["vip_type"]}<br/>({r["active_passive"]} x{r["count"]})'
+                    f'<br/>{r["interface"]}{_conf_suffix(r)}"]')
+                vip_edges.append(f"  class {vid} vipmount;")
+                vip_edges.append(f"  {uid} -->|bind {r['tier']}| {vid}")
+        lines.append("  end")
+
+    return "\n".join(lines + vip_edges)
+
+
+# ---------------------------------------------------------------------------
+# The 3 final artifacts, emitted together
+# ---------------------------------------------------------------------------
+
+#: Filenames `emit_connectivity_artifacts()` writes into its output directory.
+#: Fixed (not caller-chosen) so a downstream reader/CI step can locate all
+#: three by name without being told where each one went.
+ARTIFACT_FILENAMES = {
+    "matrix_manifest": "connectivity_matrix.json",
+    "matrix_table": "connectivity_matrix.md",
+    "hierarchy_diagram": "connectivity_hierarchy.md",
+    "question_queue": "connectivity_questions.md",
+}
+
+
+def render_question_queue_artifact(question_store, *, context_prefix: Optional[str] = None) -> str:
+    """Markdown rendering of the OPEN/ASSUMED entries of the REAL
+    `question_queue.QuestionQueueStore` -- the third of Part C's 3 artifacts.
+
+    Reads `store.list_questions()` (the actual persisted queue), never a
+    hand-built list: the questions shown here are the same records
+    `build_t4_question_queue_entry()` and
+    `route_unfilled_fields_to_question_queue()` wrote, so the artifact
+    cannot drift from the queue it claims to present. `context_prefix`
+    filters to one manifest's own questions when several subsystems share a
+    queue."""
+    open_qs = [q for q in question_store.list_questions() if q.get("status") in ("OPEN", "ASSUMED")]
+    if context_prefix:
+        open_qs = [q for q in open_qs if str(q.get("context_path", "")).startswith(context_prefix)]
+    lines = ["# Connectivity question queue", ""]
+    if not open_qs:
+        lines.append("(no open questions)")
+        return "\n".join(lines) + "\n"
+    open_qs.sort(key=lambda q: (-int(q.get("tier") or 0), str(q.get("owner")), str(q.get("id"))))
+    lines += ["| id | tier | blocking | owner | context | question | status |",
+              "|---|---|---|---|---|---|---|"]
+    for q in open_qs:
+        lines.append("| {id} | T{tier} | {blocking} | {owner} | {ctx} | {question} | {status} |".format(
+            id=q.get("id"), tier=q.get("tier"), blocking=q.get("blocking"),
+            owner=q.get("owner"), ctx=q.get("context_path"),
+            question=str(q.get("question", "")).replace("|", "\\|"), status=q.get("status")))
+    return "\n".join(lines) + "\n"
+
+
+def emit_connectivity_artifacts(out_dir, rows: list, *,
+                                metadata: Optional[dict] = None,
+                                exemptions: Optional[list] = None,
+                                lock_store: Optional["RowLockStore"] = None,
+                                question_store=None,
+                                instance_tree: Optional["DutInstanceNode"] = None,
+                                row_id_fn: Optional[Callable[[Any], str]] = None,
+                                context_prefix: Optional[str] = None) -> dict:
+    """Write ALL THREE of Part C's final presentation artifacts in one call,
+    from one matrix, into `out_dir`: the connectivity matrix (JSON manifest
+    + human-readable table), the hierarchy diagram marking bind points and
+    VIP mount locations, and the question queue.
+
+    This entry point exists because the three renderers were each real but
+    individually callable only -- nothing in the harness emitted the set, so
+    "the 3 artifacts" was a property of the code, not of any output a human
+    ever received. `write_connectivity_manifest()`'s own guards (role
+    provenance, self-check identity) run first, so a partial artifact set is
+    never left behind by a matrix that would have failed the manifest write.
+
+    Returns `{artifact_key: Path}` plus `"manifest"` (the manifest dict) and
+    `"pending_reconfirmations"` (the review worklist, empty when every row is
+    confirmed and unchanged)."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    manifest = write_connectivity_manifest(
+        out / ARTIFACT_FILENAMES["matrix_manifest"], rows,
+        metadata=metadata, exemptions=exemptions,
+        lock_store=lock_store, row_id_fn=row_id_fn)
+
+    table_path = out / ARTIFACT_FILENAMES["matrix_table"]
+    table_path.write_text("# Connectivity matrix\n\n```\n"
+                          + render_matrix_table(rows) + "\n```\n", encoding="utf-8")
+
+    diagram_path = out / ARTIFACT_FILENAMES["hierarchy_diagram"]
+    diagram_path.write_text("# Connectivity hierarchy (bind points + VIP mount locations)\n\n"
+                            "```mermaid\n"
+                            + render_hierarchy_diagram(rows, instance_tree=instance_tree,
+                                                       lock_store=lock_store, row_id_fn=row_id_fn)
+                            + "\n```\n", encoding="utf-8")
+
+    questions_path = out / ARTIFACT_FILENAMES["question_queue"]
+    if question_store is None:
+        questions_path.write_text(
+            "# Connectivity question queue\n\n"
+            "(no question-queue store supplied to emit_connectivity_artifacts(); "
+            "this is NOT an assertion that no questions exist)\n", encoding="utf-8")
+    else:
+        questions_path.write_text(
+            render_question_queue_artifact(question_store, context_prefix=context_prefix),
+            encoding="utf-8")
+
+    _rid = row_id_fn or (lambda r: r.row_id() if hasattr(r, "row_id") else
+                         f"{r.get('dut_instance')}::{r.get('interface')}")
+    pending = lock_store.pending_reconfirmations(rows, _rid) if lock_store is not None else []
+
+    return {
+        "matrix_manifest": out / ARTIFACT_FILENAMES["matrix_manifest"],
+        "matrix_table": table_path,
+        "hierarchy_diagram": diagram_path,
+        "question_queue": questions_path,
+        "manifest": manifest,
+        "pending_reconfirmations": pending,
+    }
 
 
 # ===========================================================================
@@ -1667,13 +1938,85 @@ def assert_bind_gates_checkpoint(first_compile_succeeded: bool, gate_report: Opt
 # Per-row confirmation / locking mechanism
 # ===========================================================================
 
+class RowLockConflictError(ConnectivityError):
+    """A locked (already human-confirmed) row was asked to be re-confirmed
+    with DIFFERENT content, without the caller having acknowledged the exact
+    prior confirmation it supersedes.
+
+    Before 2026-09-04 this could not happen because it was not checked:
+    `confirm_row()` unconditionally overwrote `self._locks[row_id]`, so a
+    second call carrying a different `bind_target` or a downgraded `tier`
+    on an already-confirmed row succeeded silently -- the lock recorded a
+    confirmation that no human had ever seen the new content of. `.detail`
+    carries the real field-level `diff` (see `diff_row_fields()`) plus the
+    `expected_supersedes_hash` a caller must pass back to proceed, so the
+    error itself is the diff artifact a reviewer reads."""
+
+
+#: Confirmation-state values reported by `RowLockStore.confirmation_status()`
+#: and written into each manifest row's `confirmation` block. Three DISTINCT
+#: states, never collapsed into a bool: an unconfirmed row and a row that was
+#: confirmed and has since changed are both "not currently trustworthy", but
+#: only the second one has a prior human confirmation to diff against.
+CONFIRMATION_UNCONFIRMED = "UNCONFIRMED"
+CONFIRMATION_CONFIRMED = "CONFIRMED"
+CONFIRMATION_CHANGED_SINCE_CONFIRMATION = "CHANGED_SINCE_CONFIRMATION"
+
+
+def diff_row_fields(old_content: Optional[dict], new_content: dict) -> list:
+    """Field-level old-vs-new change list between two row contents -- the
+    actual DIFF a human reviewer reads before re-confirming, as opposed to a
+    bare changed/unchanged flag.
+
+    Returns one entry per differing key, in sorted key order:
+    `{"field", "change", "old", "new"}` where `change` is one of
+    `ADDED` / `REMOVED` / `CHANGED`. `old_content=None` (a never-confirmed
+    row) yields one `ADDED` entry per field, which is what a first-time
+    review is: every field is new information."""
+    old = dict(old_content or {})
+    new = dict(new_content or {})
+    changes = []
+    for key in sorted(set(old) | set(new)):
+        if key not in old:
+            changes.append({"field": key, "change": "ADDED", "old": None, "new": new[key]})
+        elif key not in new:
+            changes.append({"field": key, "change": "REMOVED", "old": old[key], "new": None})
+        elif old[key] != new[key]:
+            changes.append({"field": key, "change": "CHANGED", "old": old[key], "new": new[key]})
+    return changes
+
+
+def render_row_diff(row_id: str, diff: list) -> str:
+    """Human-readable rendering of one `diff_row_fields()` result -- the text
+    a reviewer is shown when a locked row's content moved under them."""
+    if not diff:
+        return f"{row_id}: (no field changes)"
+    lines = [f"{row_id}:"]
+    for d in diff:
+        lines.append(f"  {d['change']:<8} {d['field']}: {d['old']!r} -> {d['new']!r}")
+    return "\n".join(lines)
+
+
 class RowLockStore:
     """JSON-file-backed lock store for per-row (interface row or
     scoreboard-plan-entry row) human confirmation. A confirmed row is
     LOCKED: `diff_rows_needing_reconfirmation()` will not re-surface it
     unless its content actually changed since the last confirmation --
     keeping confirmation cost from scaling linearly with project size on
-    every regeneration, per Part C."""
+    every regeneration, per Part C.
+
+    LOCKED here means enforced, not merely labelled (2026-09-04): once a row
+    is confirmed, `confirm_row()` refuses any attempt to write different
+    content over it unless the caller passes back the exact
+    `supersedes_hash` of the confirmation it is replacing -- i.e. unless it
+    has actually looked at `row_diff()`. `is_locked()` was previously a
+    passive query nothing in the module consulted; it is now the guard
+    `confirm_row()` itself runs.
+
+    Every confirmation record carries WHO confirmed it and on WHAT evidence
+    (`confirmed_by` / `evidence`, both required, non-empty) -- an anonymous
+    confirmation is exactly what a per-row human-sign-off mechanism must not
+    be able to record."""
 
     def __init__(self, path):
         self.path = Path(path)
@@ -1685,38 +2028,124 @@ class RowLockStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self._locks, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 
-    def confirm_row(self, row_id: str, row_content: dict) -> None:
-        """Lock one row as human-confirmed.
+    def confirm_row(self, row_id: str, row_content: dict, *,
+                    confirmed_by: str, evidence: Any,
+                    supersedes_hash: Optional[str] = None) -> dict:
+        """Lock one row as human-confirmed, recording who confirmed it and on
+        what evidence. Returns the persisted confirmation record.
 
-        Refuses (hard `ConnectivityError`, never a warning) to confirm a row
-        that still contains the literal `REQUIRED_HUMAN_INPUT` sentinel
-        anywhere in its content. Confirming such a row is the precise failure
-        this whole mechanism exists to prevent: it would mark a scoreboard
-        plan row with an unfilled ordering/legal-drop as reviewed-and-locked,
-        after which `diff_rows_needing_reconfirmation()` would stop
-        re-surfacing it and the unanswered field would never be seen again.
-        Fill the field -- directly, or via `apply_answered_questions()` once a
-        human has answered the queue entry `route_unfilled_fields_to_question_queue()`
-        raised -- and confirm then."""
+        Four hard refusals, every one a raised `ConnectivityError` subclass
+        rather than a warning or a silently-skipped write:
+
+        1. `confirmed_by` empty/blank/non-string -- an unattributed
+           confirmation is not a confirmation. The manifest's whole purpose
+           is answering "who signed off on this bind target"; a row whose
+           answer is "nobody recorded" is worse than an unconfirmed row,
+           because it LOOKS reviewed.
+        2. `evidence` empty -- the basis (RTL path + line, a topology dump, a
+           designer's answer id) is what makes the confirmation auditable
+           later. `confirmed_by` alone records only that someone clicked.
+        3. Content still containing the literal `REQUIRED_HUMAN_INPUT`
+           sentinel. Confirming such a row would mark a scoreboard plan row
+           with an unfilled ordering/legal-drop as reviewed-and-locked, after
+           which `diff_rows_needing_reconfirmation()` would stop re-surfacing
+           it and the unanswered field would never be seen again. Fill the
+           field -- directly, or via `apply_answered_questions()` once a human
+           has answered the queue entry
+           `route_unfilled_fields_to_question_queue()` raised -- and confirm
+           then.
+        4. The row is already locked and the new content DIFFERS, without
+           `supersedes_hash` matching the currently-locked hash
+           (`RowLockConflictError`, carrying the field-level diff). This is
+           the explicit diff+reconfirm flow: read `row_diff(row_id, content)`,
+           show it to the human, and only then re-confirm passing
+           `supersedes_hash=store.locked_hash(row_id)`.
+
+        Re-confirming a locked row with IDENTICAL content is a permitted
+        no-op-shaped refresh (a second reviewer countersigning the same
+        content) -- it never needs `supersedes_hash`, because nothing changed
+        for a human to have missed."""
+        if not isinstance(confirmed_by, str) or not confirmed_by.strip():
+            raise ConnectivityError("ROW_CONFIRMATION_REQUIRES_CONFIRMED_BY",
+                                     {"row_id": row_id, "confirmed_by": confirmed_by})
+        if evidence is None or (isinstance(evidence, (str, list, tuple, dict)) and len(evidence) == 0) \
+                or (isinstance(evidence, str) and not evidence.strip()):
+            raise ConnectivityError("ROW_CONFIRMATION_REQUIRES_EVIDENCE",
+                                     {"row_id": row_id, "confirmed_by": confirmed_by,
+                                      "evidence": evidence})
         unfilled = find_required_human_input_paths(row_content)
         if unfilled:
             raise ConnectivityError(
                 "CANNOT_CONFIRM_ROW_WITH_UNFILLED_REQUIRED_HUMAN_INPUT",
                 {"row_id": row_id, "unfilled_paths": unfilled},
             )
-        self._locks[row_id] = {
-            "content_hash": _content_hash(row_content),
+
+        new_hash = _content_hash(row_content)
+        prior = self._locks.get(row_id)
+        if prior is not None and prior.get("content_hash") != new_hash:
+            if supersedes_hash != prior.get("content_hash"):
+                raise RowLockConflictError(
+                    "LOCKED_ROW_CHANGED_REQUIRES_EXPLICIT_RECONFIRM",
+                    {
+                        "row_id": row_id,
+                        "locked_hash": prior.get("content_hash"),
+                        "new_hash": new_hash,
+                        "expected_supersedes_hash": prior.get("content_hash"),
+                        "previously_confirmed_by": prior.get("confirmed_by"),
+                        "previously_confirmed_date": prior.get("confirmed_date"),
+                        "diff": diff_row_fields(prior.get("content"), row_content),
+                        "hint": ("read RowLockStore.row_diff(row_id, new_content), show it to the "
+                                 "confirming human, then call confirm_row(..., supersedes_hash=<locked_hash>)"),
+                    },
+                )
+
+        record = {
+            "content_hash": new_hash,
             "content": row_content,
-            "confirmed_at": _utcnow_iso(),
+            "confirmed_by": confirmed_by.strip(),
+            "confirmed_date": _utcnow_iso(),
+            "evidence": evidence,
+            "supersedes_hash": prior.get("content_hash") if prior else None,
         }
+        # `confirmed_at` retained as an alias of `confirmed_date` so lock files
+        # written before 2026-09-04 and readers of either key stay valid.
+        record["confirmed_at"] = record["confirmed_date"]
+        self._locks[row_id] = record
         self.save()
+        return record
 
     def is_locked(self, row_id: str) -> bool:
         return row_id in self._locks
 
+    def confirmation(self, row_id: str) -> Optional[dict]:
+        """The full persisted confirmation record for one row, or None."""
+        entry = self._locks.get(row_id)
+        return dict(entry) if entry else None
+
     def locked_hash(self, row_id: str) -> Optional[str]:
         entry = self._locks.get(row_id)
         return entry["content_hash"] if entry else None
+
+    def locked_content(self, row_id: str) -> Optional[dict]:
+        entry = self._locks.get(row_id)
+        return entry.get("content") if entry else None
+
+    def row_diff(self, row_id: str, new_content: dict) -> list:
+        """Field-level diff of `new_content` against what was last confirmed
+        for `row_id` -- the artifact a reviewer must see before the
+        `supersedes_hash` re-confirmation path is legitimate to use."""
+        return diff_row_fields(self.locked_content(row_id), new_content)
+
+    def confirmation_status(self, row_id: str, row_content: dict) -> str:
+        """One of `CONFIRMATION_UNCONFIRMED` / `CONFIRMATION_CONFIRMED` /
+        `CONFIRMATION_CHANGED_SINCE_CONFIRMATION` for one row's CURRENT
+        content -- what `write_connectivity_manifest()` stamps onto each row."""
+        locked = self.locked_hash(row_id)
+        if locked is None:
+            return CONFIRMATION_UNCONFIRMED
+        if locked == _content_hash(row_content):
+            return CONFIRMATION_CONFIRMED
+        return CONFIRMATION_CHANGED_SINCE_CONFIRMATION
 
     def diff_rows_needing_reconfirmation(self, current_rows: list, row_id_fn: Callable[[Any], str]) -> list:
         """Returns the subset of `current_rows` that need (re)confirmation:
@@ -1733,6 +2162,28 @@ class RowLockStore:
             if locked_hash is None or locked_hash != current_hash:
                 needing.append(row)
         return needing
+
+    def pending_reconfirmations(self, current_rows: list, row_id_fn: Callable[[Any], str]) -> list:
+        """`diff_rows_needing_reconfirmation()` plus, for each returned row,
+        the actual field-level diff and the `supersedes_hash` the re-confirm
+        call will need. This is the review worklist: the earlier function
+        answers only WHICH rows moved, this one answers WHAT moved in each,
+        which is what a human actually needs in order to re-confirm."""
+        out = []
+        for row in self.diff_rows_needing_reconfirmation(current_rows, row_id_fn):
+            row_id = row_id_fn(row)
+            content = row.to_dict() if hasattr(row, "to_dict") else dict(row)
+            locked = self.locked_hash(row_id)
+            out.append({
+                "row_id": row_id,
+                "status": (CONFIRMATION_UNCONFIRMED if locked is None
+                           else CONFIRMATION_CHANGED_SINCE_CONFIRMATION),
+                "supersedes_hash": locked,
+                "current_hash": _content_hash(content),
+                "diff": self.row_diff(row_id, content),
+                "row": content,
+            })
+        return out
 
 
 # ===========================================================================

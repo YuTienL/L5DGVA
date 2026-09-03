@@ -904,7 +904,8 @@ def test_simulated_build_workflow_proceeds_once_gates_1_and_2_actually_run():
 def test_row_lock_confirm_then_no_op_regeneration_needs_zero_reconfirmation(tmp_path):
     store = conn.RowLockStore(tmp_path / "locks.json")
     row = _sample_row()
-    store.confirm_row(row.row_id(), row.to_dict())
+    store.confirm_row(row.row_id(), row.to_dict(),
+                      confirmed_by="dv-lead@example.com", evidence="rtl/usb_top.sv:214 port list")
 
     # regenerate with NO change
     regenerated = [_sample_row()]
@@ -920,8 +921,10 @@ def test_row_lock_changed_row_is_flagged_for_reconfirmation_others_are_not(tmp_p
         role="vip_role=master_initiator", vip_type="AXI", count=1,
         active_passive="active", bind_target="chip.core.axi0", tier="T1_ALREADY_DECIDED",
     )
-    store.confirm_row(row_a.row_id(), row_a.to_dict())
-    store.confirm_row(row_b.row_id(), row_b.to_dict())
+    store.confirm_row(row_a.row_id(), row_a.to_dict(),
+                      confirmed_by="dv-lead@example.com", evidence="rtl/usb_top.sv:214")
+    store.confirm_row(row_b.row_id(), row_b.to_dict(),
+                      confirmed_by="dv-lead@example.com", evidence="rtl/axi_top.sv:88")
 
     # regenerate: row_a changes tier (simulated RTL-driven reclassification), row_b unchanged
     row_a_changed = _sample_row(tier="T1_ALREADY_DECIDED")
@@ -940,7 +943,8 @@ def test_row_lock_persists_across_store_reload(tmp_path):
     path = tmp_path / "locks.json"
     row = _sample_row()
     store1 = conn.RowLockStore(path)
-    store1.confirm_row(row.row_id(), row.to_dict())
+    store1.confirm_row(row.row_id(), row.to_dict(),
+                       confirmed_by="dv-lead@example.com", evidence="rtl/usb_top.sv:214")
 
     store2 = conn.RowLockStore(path)  # fresh instance, same file
     assert store2.is_locked(row.row_id())
@@ -1515,7 +1519,8 @@ def test_confirm_row_refuses_a_row_that_still_holds_the_sentinel(tmp_path):
     lock_store = conn.RowLockStore(tmp_path / "locks.json")
     entry = _sb()
     with pytest.raises(conn.ConnectivityError) as exc:
-        lock_store.confirm_row(conn.scoreboard_entry_row_id(entry), entry)
+        lock_store.confirm_row(conn.scoreboard_entry_row_id(entry), entry,
+                               confirmed_by="dv-lead@example.com", evidence="scoreboard plan review")
     assert exc.value.reason == "CANNOT_CONFIRM_ROW_WITH_UNFILLED_REQUIRED_HUMAN_INPUT"
     assert "ordering" in exc.value.detail["unfilled_paths"]
     assert not lock_store.is_locked(conn.scoreboard_entry_row_id(entry))
@@ -1527,7 +1532,8 @@ def test_confirm_row_accepts_a_fully_filled_scoreboard_row(tmp_path):
                 legal_drop_conditions="none permitted", reset_flush_behavior="both sides flush",
                 orphan_threshold=0, orphan_timeout="end-of-test sweep")
     row_id = conn.scoreboard_entry_row_id(entry)
-    lock_store.confirm_row(row_id, entry)
+    lock_store.confirm_row(row_id, entry,
+                           confirmed_by="dv-lead@example.com", evidence="scoreboard plan review")
     assert lock_store.is_locked(row_id)
     assert conn.RowLockStore(tmp_path / "locks.json").is_locked(row_id)
 
@@ -1536,5 +1542,358 @@ def test_confirm_row_finds_a_sentinel_nested_inside_a_list(tmp_path):
     """The gate scans nested content, not just top-level values."""
     lock_store = conn.RowLockStore(tmp_path / "locks.json")
     with pytest.raises(conn.ConnectivityError) as exc:
-        lock_store.confirm_row("row1", {"a": [{"b": conn.REQUIRED_HUMAN_INPUT}]})
+        lock_store.confirm_row("row1", {"a": [{"b": conn.REQUIRED_HUMAN_INPUT}]},
+                               confirmed_by="dv-lead@example.com", evidence="review")
     assert exc.value.detail["unfilled_paths"] == ["a.0.b"]
+
+
+# ===========================================================================
+# Confirmation granularity + locking enforcement + the 3 presentation
+# artifacts (2026-09-04 gap closure).
+#
+# Prior state, all three re-verified live before this change:
+#   - `confirm_row()` recorded no `confirmed_by` and no `evidence`, so the
+#     lock file could say a row was confirmed without saying by whom or on
+#     what basis;
+#   - `is_locked()` was never consulted by any other function -- a second
+#     `confirm_row()` on an already-locked row with entirely different
+#     bind_target/tier content succeeded silently, no error, no diff;
+#   - the connectivity manifest itself carried no confirmation state at all
+#     (lock state lived only in a side JSON file), and nothing emitted the
+#     matrix + hierarchy diagram + question queue as one artifact set.
+# ===========================================================================
+
+CONFIRMER = "dv-lead@example.com"
+EVIDENCE = {"source": "rtl/usb_top.sv:214", "basis": "port list read directly"}
+
+
+def _lock_store(tmp_path):
+    return conn.RowLockStore(tmp_path / "locks.json")
+
+
+# -- confirmation record carries WHO and on WHAT evidence --------------------
+
+def test_confirm_row_records_confirmed_by_date_and_evidence(tmp_path):
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    rec = store.confirm_row(row.row_id(), row.to_dict(),
+                            confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    assert rec["confirmed_by"] == CONFIRMER
+    assert rec["evidence"] == EVIDENCE
+    assert rec["confirmed_date"]
+    # persisted, not only returned
+    reloaded = conn.RowLockStore(tmp_path / "locks.json").confirmation(row.row_id())
+    assert reloaded["confirmed_by"] == CONFIRMER
+    assert reloaded["evidence"] == EVIDENCE
+    assert reloaded["confirmed_date"] == rec["confirmed_date"]
+
+
+def test_confirm_row_refuses_an_anonymous_confirmation(tmp_path):
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    for bad in ("", "   ", None):
+        with pytest.raises(conn.ConnectivityError) as exc:
+            store.confirm_row(row.row_id(), row.to_dict(), confirmed_by=bad, evidence=EVIDENCE)
+        assert exc.value.reason == "ROW_CONFIRMATION_REQUIRES_CONFIRMED_BY"
+    assert not store.is_locked(row.row_id())
+
+
+def test_confirm_row_refuses_a_confirmation_with_no_evidence(tmp_path):
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    for bad in (None, "", "   ", [], {}):
+        with pytest.raises(conn.ConnectivityError) as exc:
+            store.confirm_row(row.row_id(), row.to_dict(), confirmed_by=CONFIRMER, evidence=bad)
+        assert exc.value.reason == "ROW_CONFIRMATION_REQUIRES_EVIDENCE"
+    assert not store.is_locked(row.row_id())
+
+
+# -- locking is ENFORCED, not merely queryable -------------------------------
+
+def test_locked_row_cannot_be_silently_overwritten_with_changed_content(tmp_path):
+    """The exact failure this gap closure exists to stop: before it, this
+    second confirm_row() succeeded silently and the lock recorded content no
+    human had ever reviewed."""
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    store.confirm_row(row.row_id(), row.to_dict(), confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    first_hash = store.locked_hash(row.row_id())
+
+    changed = _sample_row(tier="T3_NAMING_HEURISTIC")
+    changed.bind_target = "chip.core.SOMETHING_ELSE"
+    with pytest.raises(conn.RowLockConflictError) as exc:
+        store.confirm_row(changed.row_id(), changed.to_dict(),
+                          confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    assert exc.value.reason == "LOCKED_ROW_CHANGED_REQUIRES_EXPLICIT_RECONFIRM"
+    # the lock is untouched by the refused write
+    assert store.locked_hash(row.row_id()) == first_hash
+    assert conn.RowLockStore(tmp_path / "locks.json").locked_hash(row.row_id()) == first_hash
+
+
+def test_lock_conflict_error_carries_the_real_field_level_diff(tmp_path):
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    store.confirm_row(row.row_id(), row.to_dict(), confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    changed = _sample_row(tier="T3_NAMING_HEURISTIC")
+    changed.bind_target = "chip.core.SOMETHING_ELSE"
+    with pytest.raises(conn.RowLockConflictError) as exc:
+        store.confirm_row(changed.row_id(), changed.to_dict(),
+                          confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    diff = {d["field"]: d for d in exc.value.detail["diff"]}
+    assert set(diff) == {"tier", "bind_target"}
+    assert diff["tier"]["old"] == "T2_STRUCTURAL_MATCH"
+    assert diff["tier"]["new"] == "T3_NAMING_HEURISTIC"
+    assert diff["bind_target"]["new"] == "chip.core.SOMETHING_ELSE"
+    assert exc.value.detail["expected_supersedes_hash"] == store.locked_hash(row.row_id())
+    assert exc.value.detail["previously_confirmed_by"] == CONFIRMER
+
+
+def test_explicit_diff_then_reconfirm_with_supersedes_hash_succeeds(tmp_path):
+    """The sanctioned way past the lock: read the diff, then re-confirm
+    naming the exact confirmation being superseded."""
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    store.confirm_row(row.row_id(), row.to_dict(), confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    old_hash = store.locked_hash(row.row_id())
+
+    changed = _sample_row(tier="T1_ALREADY_DECIDED")
+    diff = store.row_diff(changed.row_id(), changed.to_dict())
+    assert [d["field"] for d in diff] == ["tier"]
+
+    rec = store.confirm_row(changed.row_id(), changed.to_dict(),
+                            confirmed_by="designer@example.com",
+                            evidence="existing bind at tb/usb_bind.sv:12",
+                            supersedes_hash=old_hash)
+    assert rec["supersedes_hash"] == old_hash
+    assert rec["confirmed_by"] == "designer@example.com"
+    assert store.locked_hash(row.row_id()) == rec["content_hash"] != old_hash
+
+
+def test_reconfirm_with_a_stale_supersedes_hash_is_still_refused(tmp_path):
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    store.confirm_row(row.row_id(), row.to_dict(), confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    changed = _sample_row(tier="T1_ALREADY_DECIDED")
+    with pytest.raises(conn.RowLockConflictError):
+        store.confirm_row(changed.row_id(), changed.to_dict(), confirmed_by=CONFIRMER,
+                          evidence=EVIDENCE, supersedes_hash="deadbeef")
+
+
+def test_reconfirming_identical_content_is_allowed_without_supersedes_hash(tmp_path):
+    """A countersignature on unchanged content is not a silent overwrite --
+    there is nothing a reviewer could have missed."""
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    store.confirm_row(row.row_id(), row.to_dict(), confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    rec = store.confirm_row(row.row_id(), row.to_dict(),
+                            confirmed_by="second-reviewer@example.com", evidence="peer review")
+    assert rec["confirmed_by"] == "second-reviewer@example.com"
+
+
+# -- diff artifact -----------------------------------------------------------
+
+def test_diff_row_fields_reports_added_removed_and_changed():
+    diff = conn.diff_row_fields({"a": 1, "b": 2}, {"a": 9, "c": 3})
+    by_field = {d["field"]: d for d in diff}
+    assert by_field["a"] == {"field": "a", "change": "CHANGED", "old": 1, "new": 9}
+    assert by_field["b"]["change"] == "REMOVED"
+    assert by_field["c"]["change"] == "ADDED"
+
+
+def test_diff_row_fields_against_never_confirmed_row_is_all_added():
+    diff = conn.diff_row_fields(None, {"a": 1, "b": 2})
+    assert {d["change"] for d in diff} == {"ADDED"}
+
+
+def test_pending_reconfirmations_returns_what_changed_not_only_which_rows(tmp_path):
+    store = _lock_store(tmp_path)
+    row_a = _sample_row()
+    row_b = conn.ConnectivityRow(
+        dut_instance="chip.core.axi0", interface="axi_if", direction="input",
+        role="vip_role=master_initiator", vip_type="AXI", count=1,
+        active_passive="active", bind_target="chip.core.axi0", tier="T1_ALREADY_DECIDED",
+    )
+    store.confirm_row(row_a.row_id(), row_a.to_dict(), confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    store.confirm_row(row_b.row_id(), row_b.to_dict(), confirmed_by=CONFIRMER, evidence=EVIDENCE)
+
+    pending = store.pending_reconfirmations(
+        [_sample_row(tier="T1_ALREADY_DECIDED"), row_b], lambda r: r.row_id())
+    assert len(pending) == 1
+    item = pending[0]
+    assert item["row_id"] == row_a.row_id()
+    assert item["status"] == conn.CONFIRMATION_CHANGED_SINCE_CONFIRMATION
+    assert item["supersedes_hash"] == store.locked_hash(row_a.row_id())
+    assert [d["field"] for d in item["diff"]] == ["tier"]
+    # and the diff renders for a human
+    assert "tier" in conn.render_row_diff(item["row_id"], item["diff"])
+
+
+def test_pending_reconfirmations_marks_a_never_confirmed_row_unconfirmed(tmp_path):
+    store = _lock_store(tmp_path)
+    pending = store.pending_reconfirmations([_sample_row()], lambda r: r.row_id())
+    assert pending[0]["status"] == conn.CONFIRMATION_UNCONFIRMED
+    assert pending[0]["supersedes_hash"] is None
+
+
+# -- manifest writeback ------------------------------------------------------
+
+def test_manifest_writes_back_confirmed_by_date_and_evidence(tmp_path):
+    store = _lock_store(tmp_path)
+    row = _sample_row()
+    store.confirm_row(row.row_id(), row.to_dict(), confirmed_by=CONFIRMER, evidence=EVIDENCE)
+
+    out_path = tmp_path / "manifest.json"
+    conn.write_connectivity_manifest(out_path, [row], metadata={"project": "test"},
+                                     lock_store=store)
+    loaded = json.loads(out_path.read_text(encoding="utf-8"))
+    block = loaded["rows"][0]["confirmation"]
+    assert block["status"] == conn.CONFIRMATION_CONFIRMED
+    assert block["confirmed_by"] == CONFIRMER
+    assert block["evidence"] == EVIDENCE
+    assert block["confirmed_date"]
+    assert loaded["confirmation_summary"]["all_rows_confirmed"] is True
+
+
+def test_manifest_marks_a_row_changed_since_confirmation_and_shows_the_diff(tmp_path):
+    store = _lock_store(tmp_path)
+    store.confirm_row(_sample_row().row_id(), _sample_row().to_dict(),
+                      confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    out_path = tmp_path / "manifest.json"
+    conn.write_connectivity_manifest(out_path, [_sample_row(tier="T3_NAMING_HEURISTIC")],
+                                     lock_store=store)
+    block = json.loads(out_path.read_text(encoding="utf-8"))["rows"][0]["confirmation"]
+    assert block["status"] == conn.CONFIRMATION_CHANGED_SINCE_CONFIRMATION
+    assert [d["field"] for d in block["diff_since_confirmation"]] == ["tier"]
+
+
+def test_manifest_without_a_lock_store_stamps_every_row_unconfirmed(tmp_path):
+    """Absence of a lock store must never read as 'reviewed'."""
+    out_path = tmp_path / "manifest.json"
+    conn.write_connectivity_manifest(out_path, [_sample_row()])
+    loaded = json.loads(out_path.read_text(encoding="utf-8"))
+    assert loaded["rows"][0]["confirmation"]["status"] == conn.CONFIRMATION_UNCONFIRMED
+    assert loaded["confirmation_summary"]["all_rows_confirmed"] is False
+
+
+# -- hierarchy diagram over a REAL captured DUT instance tree ----------------
+
+def _tree():
+    """A real `DutInstanceNode` tree of the shape
+    `parse_scope_tree_dump()`/`parse_slang_ast_json()` produce."""
+    usb = conn.DutInstanceNode(instance_name="usb0", module_name="usb3_subsystem",
+                               full_path="chip.core.usb0", children=[])
+    core = conn.DutInstanceNode(instance_name="core", module_name="chip_core",
+                                full_path="chip.core", children=[usb])
+    return conn.DutInstanceNode(instance_name="chip", module_name="chip_top",
+                                full_path="chip", children=[core])
+
+
+def test_hierarchy_diagram_renders_nested_subgraphs_and_marks_bind_points():
+    diagram = conn.render_hierarchy_diagram([_sample_row()], instance_tree=_tree())
+    assert diagram.startswith("flowchart TB")
+    # real nesting, not a flat edge list
+    assert "subgraph N_chip[" in diagram
+    assert "subgraph N_chip_core[" in diagram
+    # module names are visible, so this is a hierarchy view not just a path string
+    assert "chip_core" in diagram and "usb3_subsystem" in diagram
+    # the bind point is marked, and a VIP mount hangs off it
+    assert "class N_chip_core_usb0 bindpoint;" in diagram
+    assert "vipmount" in diagram
+    assert "VIP USB3" in diagram
+
+
+def test_hierarchy_diagram_surfaces_a_bind_target_absent_from_the_captured_tree():
+    row = _sample_row()
+    row.bind_target = "chip.core.PATH_THAT_DOES_NOT_EXIST"
+    diagram = conn.render_hierarchy_diagram([row], instance_tree=_tree())
+    assert "UNRESOLVED_BIND_TARGETS" in diagram
+    assert "NOT FOUND IN CAPTURED DUT TREE" in diagram
+
+
+def test_hierarchy_diagram_without_a_tree_keeps_the_flat_overview_mode():
+    diagram = conn.render_hierarchy_diagram([_sample_row()])
+    assert diagram.startswith("flowchart LR")
+    assert "chip.core.usb0" in diagram
+
+
+def test_hierarchy_diagram_shows_confirmation_status_per_bind_point(tmp_path):
+    store = _lock_store(tmp_path)
+    diagram = conn.render_hierarchy_diagram([_sample_row()], instance_tree=_tree(),
+                                            lock_store=store)
+    assert conn.CONFIRMATION_UNCONFIRMED in diagram
+    store.confirm_row(_sample_row().row_id(), _sample_row().to_dict(),
+                      confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    diagram2 = conn.render_hierarchy_diagram([_sample_row()], instance_tree=_tree(),
+                                             lock_store=store)
+    assert "[" + conn.CONFIRMATION_CONFIRMED + "]" in diagram2
+
+
+# -- all 3 artifacts emitted together ----------------------------------------
+
+def test_emit_connectivity_artifacts_writes_all_three(tmp_path):
+    from dv_harness import question_queue as qq
+
+    qstore = qq.QuestionQueueStore(tmp_path / "queue")
+    qstore.add_question(
+        domain="dut",
+        question="Which of chip.core.usb0 / chip.core.usb1 is the intended bind target?",
+        context_path="chip.core.usb0::usb3_if",
+        options=[{"label": "chip.core.usb0", "rationale": "matches the captured tree"},
+                 {"label": "chip.core.usb1", "rationale": "second instance of the same module"}],
+        recommendation="chip.core.usb0",
+        assumption_if_unanswered="bind to chip.core.usb0 (the recommendation)",
+        context={"affects_pass_fail_verdict": True},
+    )
+    lock_store = _lock_store(tmp_path)
+
+    out = conn.emit_connectivity_artifacts(
+        tmp_path / "artifacts", [_sample_row()],
+        metadata={"project": "test"}, lock_store=lock_store,
+        question_store=qstore, instance_tree=_tree())
+
+    for key in ("matrix_manifest", "matrix_table", "hierarchy_diagram", "question_queue"):
+        assert out[key].exists(), key
+
+    manifest = json.loads(out["matrix_manifest"].read_text(encoding="utf-8"))
+    assert manifest["rows"][0]["confirmation"]["status"] == conn.CONFIRMATION_UNCONFIRMED
+
+    table = out["matrix_table"].read_text(encoding="utf-8")
+    assert "dut_instance" in table and "chip.core.usb0" in table
+
+    diagram = out["hierarchy_diagram"].read_text(encoding="utf-8")
+    assert "mermaid" in diagram and "flowchart TB" in diagram
+    assert "bindpoint" in diagram
+
+    questions = out["question_queue"].read_text(encoding="utf-8")
+    assert "chip.core.usb0::usb3_if" in questions
+    assert "Which of chip.core.usb0" in questions
+
+    # the review worklist rides along with the artifacts
+    assert [p["row_id"] for p in out["pending_reconfirmations"]] == [_sample_row().row_id()]
+
+
+def test_emit_connectivity_artifacts_pending_worklist_empties_once_confirmed(tmp_path):
+    lock_store = _lock_store(tmp_path)
+    row = _sample_row()
+    lock_store.confirm_row(row.row_id(), row.to_dict(),
+                           confirmed_by=CONFIRMER, evidence=EVIDENCE)
+    out = conn.emit_connectivity_artifacts(tmp_path / "artifacts", [row], lock_store=lock_store)
+    assert out["pending_reconfirmations"] == []
+    assert out["manifest"]["confirmation_summary"]["all_rows_confirmed"] is True
+
+
+def test_emit_connectivity_artifacts_says_so_when_no_question_store_was_given(tmp_path):
+    out = conn.emit_connectivity_artifacts(tmp_path / "artifacts", [_sample_row()])
+    text = out["question_queue"].read_text(encoding="utf-8")
+    assert "NOT an assertion that no questions exist" in text
+
+
+def test_emit_connectivity_artifacts_writes_nothing_when_the_matrix_does_not_reconcile(tmp_path):
+    no_vip = _sample_row()
+    no_vip.vip_type = conn.REQUIRED_HUMAN_INPUT
+    out_dir = tmp_path / "artifacts"
+    with pytest.raises(conn.ConnectivitySelfCheckError):
+        conn.emit_connectivity_artifacts(out_dir, [_sample_row(), no_vip])
+    assert not (out_dir / conn.ARTIFACT_FILENAMES["matrix_manifest"]).exists()
+    assert not (out_dir / conn.ARTIFACT_FILENAMES["hierarchy_diagram"]).exists()
+
