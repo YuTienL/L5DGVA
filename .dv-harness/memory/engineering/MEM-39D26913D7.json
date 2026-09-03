@@ -1,0 +1,28 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "Multi-agent workflow, shared working tree, concurrent uncommitted edits to the same file (cli.py, CLAUDE.md): whole-file `git add` silently sweeps in a sibling workstream's in-progress changes -- isolate with a hand-built patch limited to your own hunks, not `git add <file>`",
+  "scope": "engine",
+  "symptoms": [
+    "6 parallel workstreams in one Workflow run, several editing dv_harness/cli.py concurrently (preflight+lsf-submit wiring, pueue subcommand, run-profile subcommand from an unrelated concurrent session) -- a plain `git add dv_harness/cli.py` after finishing one workstream's edit stages EVERY other workstream's uncommitted, unrelated, unfinished edits in the same file too",
+    "The gh_pr_policy workstream's own report independently describes the same failure mode: its first commit attempt swept in another session's already-staged, unrelated work; caught via `git status --short` review before push, fixed with `git reset --soft HEAD~1` + a re-commit scoped by explicit pathspec"
+  ],
+  "root_cause": "`git add <path>` stages the CURRENT on-disk content of that path, not a diff scoped to one author's intent -- when several workstreams edit the same file in a shared, uncommitted working tree, whole-file staging has no way to distinguish 'my finished hunk' from 'a sibling's in-progress hunk that happens to be sitting in the same file right now'.",
+  "fix": "Generate the current `git diff` for the shared file, identify which @@ hunk(s) are actually yours (by content, not by line-number proximity -- line numbers shift as sibling hunks land), extract just those hunks into a standalone patch file with correct context lines, `git reset <file>` to unstage everything, then `git apply --cached --check` followed by `git apply --cached` to stage only that patch against the index (which after reset equals HEAD). Verify with `git diff --cached <file>` before committing that the staged diff is exactly your own hunk and the working tree still carries every sibling's untouched, uncommitted edit.",
+  "verification": {
+    "single_sim": "N/A (git workflow lesson, not a simulation fix)",
+    "regression": "Applied twice for real in this session: once for a run_profile.json/justfile addition sharing cli.py with the governance workflow's pueue/escalation_notify hunks (`git apply --cached --check` passed, `git diff --cached` confirmed exactly 17 lines staged, commit 55d5b868), and independently re-derived by the governance workflow's own gh_pr_policy workstream for the same reason against the same shared file.",
+    "reaudit": "Independent review phase of the governance workflow confirmed no cross-workstream commit ever swept in unrelated hunks -- each of the 6 workstream commits + the concurrent run_profile.json commit stayed cleanly scoped to its own files."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: any time this harness runs multiple concurrent agents/sessions against one shared, uncommitted working tree (multi-agent Workflow runs, or a human + Claude Code session working side by side), a shared frequently-touched file (cli.py, config.py, CLAUDE.md) is a predictable collision point. The fix is not 'avoid touching shared files' (often impossible -- a new CLI subcommand has to go in cli.py) but 'never trust whole-file staging in a shared tree; always inspect `git diff --cached` against the specific hunk you intended before committing.' Two independent instances of this exact pattern occurring in one session (gh_pr_policy workstream, and the main session's own run_profile.json commit) suggests this should be distilled into a reusable skill/checklist rather than re-derived per incident.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, Production-Grade Execution Governance workflow (w79virzvx, 8 agents: preflight/just/evidence_store/gh_pr_policy/pueue_notify/vip_distill/finish/review) + concurrent main-session run_profile.json/justfile work. Commits 1459f99, c2dc146, 64bdf6e, 1875494, 4ab5f44, 36d0595, cca8820 (governance); 55d5b86, a705c56 (concurrent/follow-up).",
+  "memory_id": "MEM-39D26913D7",
+  "level": "engineering",
+  "created_at": 1788426361.5143802,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}
