@@ -1,0 +1,25 @@
+#!/bin/sh
+# dv_harness PR-only governance gate -- pre-merge-commit hook template.
+#
+# See tools/git-hooks/pre-push for the install instructions and full policy
+# background (dv_harness/git_governance.py, CLAUDE.md's "gh CLI + PR-Only
+# Governance Policy"). git invokes pre-merge-commit with NO stdin payload
+# and SKIPS it entirely for a fast-forward merge (githooks(5) -- there is
+# no merge commit to gate in that case); this script resolves the branch
+# the merge commit is about to land ON (git itself does not pass this) and
+# hands it to the same real decision logic pre-push uses.
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$REPO_ROOT" || exit 0
+
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+
+PYTHON=python3
+command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python
+command -v "$PYTHON" >/dev/null 2>&1 || {
+    echo "[git-guard] no python3/python on PATH -- cannot run the PR-only governance gate; allowing merge (fail-open, see tools/git-hooks/README.md)." >&2
+    exit 0
+}
+
+"$PYTHON" -m dv_harness.cli --project-root "$REPO_ROOT" git-guard --check pre-merge-commit --branch "$CURRENT_BRANCH"
+exit $?

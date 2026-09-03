@@ -297,6 +297,59 @@ the verification environment itself must be in English, regardless of what langu
 conversation is conducted in.
 
 
+## gh CLI + PR-Only Governance Policy (2026-09-03)
+
+L5 governance requirement: an agent (Claude Code or any other automated
+caller) may `git branch` / `git commit` / open a PR (`gh pr create`), but
+must **never merge or push directly into a protected branch** (`main` or
+`master`). Human review via PR is the only path onto those branches. This
+is additive to, not a replacement for, the existing git-safety language in
+`CORE/git-push-gate` (secret/scope/diff/commit-message discipline before
+any push) and `CORE/git-workflow` (the full SYNC->...->PUSH lifecycle,
+including its own "禁止自動 force push" rule) -- this section adds the
+specific main/master-protection rule those two skills did not yet state.
+
+**Real current state of this repo (checked 2026-09-03, kept honest rather
+than assumed)**: no GitHub remote is configured (`git remote -v` is empty)
+and this session's own git history has been direct commits to a
+local-only `master` branch the whole time -- there is no live PR workflow
+to point at today. The policy and its enforcement below are written and
+active regardless, so they are already in force the moment a real remote
+(and GitHub branch-protection rules requiring PR review) is added.
+
+**Layered enforcement**:
+1. **Primary (once a remote exists): server-side branch protection** on
+   `main`/`master` requiring PR review before merge, disallowing direct
+   pushes. This is the authoritative gate -- it holds even if a local hook
+   is missing or bypassed.
+2. **Secondary (active now, local): `tools/git-hooks/pre-push` and
+   `tools/git-hooks/pre-merge-commit`**, backed by
+   `dv_harness/git_governance.py` (`dv-harness git-guard`). These detect an
+   AI-agent execution environment using the same env-marker pattern
+   `tools/remote/remote_relay.py`'s own Layer 2 guard already established
+   (`AI_AGENT_ENV_MARKERS`, reused via import -- not duplicated) and BLOCK
+   (non-zero exit, which git treats as hook failure) a direct push/merge
+   into `main`/`master` from that environment. A human pushing/merging from
+   their own interactive terminal (no agent marker present) is never
+   blocked by this gate -- see `tools/git-hooks/README.md` for install
+   (`git config core.hooksPath tools/git-hooks`) and the deliberate
+   fail-open behavior when Python is unavailable.
+
+Every `git-guard` decision that touched a protected branch is logged as a
+`GIT_GUARD_DECISION` event in `.dv-harness/events.jsonl` -- the same real
+audit trail `dv-harness audit` already surfaces (see
+`.claude/agents/audit-change-governance-agent.md`, the agent responsible
+for reading this trail back and answering "what changed, by what/whom,
+when, with what evidence, is it reversible" from real sources only).
+
+`gh` (GitHub CLI) is the sanctioned tool for opening/inspecting PRs
+(`gh pr create`, `gh pr view`, `gh pr checks`) once a remote exists. An
+agent may run any read-only or PR-creating `gh`/`git` command freely; it
+must never run `gh pr merge` (or an equivalent `git push`/`git merge`
+straight onto `main`/`master`) itself -- that action is reserved for a
+human, per this section's own rule and `git-guard`'s enforcement of it.
+
+
 ## Remote Control Mode
 Claude Web/App may control this local Claude Code session through Remote Control.
 Remote Control is transport only; Harness governance remains authoritative.

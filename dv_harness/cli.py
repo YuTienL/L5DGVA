@@ -347,6 +347,23 @@ def main():
                                            "control.json corrections/approvals/approval_history/cosigns.")
     paudit.add_argument("--limit", type=int, default=50)
 
+    # gh CLI + PR-only governance policy (2026-09-03, L5 governance
+    # workstream): the real enforcement point behind "an agent may branch/
+    # commit/open a PR, but must never merge/push directly into main/master
+    # -- human review via PR is the only path onto those branches". Invoked
+    # by the real git hook templates under tools/git-hooks/ -- see
+    # dv_harness/git_governance.py for the full detection/decision logic.
+    pgg = sub.add_parser("git-guard", help="PR-only governance gate for main/master: blocks a direct git "
+                                            "push/merge into a protected branch from a detected AI-agent "
+                                            "environment. See dv_harness/git_governance.py and "
+                                            "tools/git-hooks/.")
+    pgg.add_argument("--check", required=True, choices=["pre-push", "pre-merge-commit"],
+                      help="Which git hook is calling this. pre-push reads proposed refspecs from "
+                           "stdin (githooks(5)); pre-merge-commit takes --branch instead.")
+    pgg.add_argument("--branch", default=None,
+                      help="Current branch (pre-merge-commit only) -- the hook script supplies "
+                           "`git rev-parse --abbrev-ref HEAD`. Ignored/unused for --check pre-push.")
+
     paudit_self = sub.add_parser("self-audit",
         help="Run the 23 harness self-audit gates (registry/skill/pipeline/protocol-catalog "
              "meta-consistency) against the harness's OWN current repo state -- not per-DUT "
@@ -890,6 +907,28 @@ def main():
     elif args.cmd == "audit":
         from .dashboard import _audit_trail
         print(json.dumps(_audit_trail(h.root, args.limit), ensure_ascii=False, indent=2))
+    elif args.cmd == "git-guard":
+        from . import git_governance as _gg
+        if args.check == "pre-push":
+            decision = _gg.evaluate_pre_push(sys.stdin.read(), os.environ)
+        else:
+            if not args.branch:
+                print(json.dumps({"error": "BRANCH_REQUIRED_FOR_PRE_MERGE_COMMIT"}))
+                raise SystemExit(2)
+            decision = _gg.evaluate_pre_merge_commit(args.branch, os.environ)
+        # Audit/Change Governance trail: log every decision that actually
+        # touched a protected branch (allowed-for-a-human or
+        # blocked-for-an-agent) into the SAME events.jsonl every other "who
+        # changed what, when" view already reads (dv-harness audit /
+        # dashboard._audit_trail) -- reuse the one real audit substrate
+        # this harness has, never a second parallel audit file.
+        if decision.branch is not None:
+            h.store.event({"ts": cp_now(), "event": "GIT_GUARD_DECISION",
+                            "hook": decision.hook, "allowed": decision.allowed,
+                            "branch": decision.branch, "detected_markers": decision.detected_markers,
+                            "reason": decision.reason, "user": _access_user(), "host": _access_host()})
+        print(json.dumps(decision.to_dict(), ensure_ascii=False, indent=2))
+        raise SystemExit(0 if decision.allowed else 1)
     elif args.cmd == "self-audit":
         from . import self_audit
         result = self_audit.run_self_audit(h.root, args.gate, smoke=args.smoke)

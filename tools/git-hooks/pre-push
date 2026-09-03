@@ -1,0 +1,41 @@
+#!/bin/sh
+# dv_harness PR-only governance gate -- pre-push hook template.
+#
+# Blocks a direct `git push` onto a protected branch (main/master) when
+# this process is running inside a detected AI-agent environment. See
+# dv_harness/git_governance.py's module docstring for the full policy and
+# CLAUDE.md's "gh CLI + PR-Only Governance Policy" section. An ordinary
+# human push from their own interactive terminal (no AI-agent environment
+# marker present) is never blocked by this hook -- the policy is "an agent
+# may branch/commit/open a PR but must never merge/push main/master
+# itself", not a blanket local branch-protection reimplementation.
+#
+# INSTALL (this file is a TEMPLATE -- git never reads tools/git-hooks/ on
+# its own, it must be wired in explicitly):
+#   git config core.hooksPath tools/git-hooks
+# (recommended: one repo-local config line, both hooks active immediately,
+# survives a fresh clone if the clone re-runs this same command -- git does
+# NOT clone core.hooksPath itself, each clone must set it once). Or, to
+# install into the classic per-clone .git/hooks/ location instead:
+#   cp tools/git-hooks/pre-push .git/hooks/pre-push
+#   chmod +x .git/hooks/pre-push
+#
+# PROTOCOL: git invokes a real pre-push hook with the proposed refspecs on
+# stdin, one line per "<local ref> <local sha1> <remote ref> <remote sha1>"
+# (githooks(5)) -- piped straight through to the real decision logic in
+# dv_harness/git_governance.py; nothing here re-parses git's own protocol,
+# and nothing here decides the policy itself (that stays in one place,
+# unit-tested -- see dv_harness_tests/test_git_governance.py).
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0  # not inside a git repo somehow -- never block on our own confusion
+cd "$REPO_ROOT" || exit 0
+
+PYTHON=python3
+command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python
+command -v "$PYTHON" >/dev/null 2>&1 || {
+    echo "[git-guard] no python3/python on PATH -- cannot run the PR-only governance gate; allowing push (fail-open, see tools/git-hooks/README.md)." >&2
+    exit 0
+}
+
+"$PYTHON" -m dv_harness.cli --project-root "$REPO_ROOT" git-guard --check pre-push
+exit $?
