@@ -2629,12 +2629,26 @@ def test_cli_lsf_submit_reports_lsf_unavailable_cleanly_when_bsub_missing():
     # end; the test/CI environment has no real `bsub` on PATH, which is
     # itself the deterministic, OS-independent condition being asserted --
     # a clean JSON error + exit 1, never a raw traceback.
+    #
+    # REGRESSION FIX (2026-09-03, governance-final-report cross-workstream
+    # sweep): the same-day lmstat+scheduler preflight gate
+    # (dv_harness/preflight.py, .work/governance-preflight-report.md) wired
+    # `bsub_submit_with_preflight()` into this CLI path, so on a bare temp
+    # project (no license server/queue configured) the gate now BLOCKS
+    # before `bsub` is even attempted, and this test's un-gated invocation
+    # deterministically got PREFLIGHT_BLOCKED instead of LSF_UNAVAILABLE --
+    # a real, 100%-reproducible failure, not a flake (confirmed by running
+    # this test alone). This test's own purpose is specifically the
+    # bsub-missing path (see BUG FIX note above), which is exactly what
+    # `--skip-preflight` (the CLI's own documented, explicit bypass) exists
+    # for; the PREFLIGHT_BLOCKED path itself is already covered by
+    # dv_harness_tests/test_cli_preflight.py.
     import subprocess, sys
     tmp = Path(tempfile.mkdtemp())
     try:
         r = subprocess.run(
             [sys.executable, "-m", "dv_harness.cli", "--project-root", str(tmp),
-             "lsf-submit", "echo hi", "--queue", "normal"],
+             "lsf-submit", "echo hi", "--queue", "normal", "--skip-preflight"],
             cwd=str(ROOT), capture_output=True, text=True, timeout=30, encoding="utf-8",
         )
         assert r.returncode == 1
