@@ -606,3 +606,47 @@ Concretely, for every IP_UVM_DV_Gen build from this point forward (full mechanic
   code-level assertion (raises `BindGateCheckpointError`, never a silently-ignorable bool) for any
   future code path that comes to drive this build mechanically instead of via agent-followed
   prose. See `.work/gap-close-mandatory-gates-report.md` for the full evidence and verification.
+
+
+## Context Budget: 3 Tiers + MCP-First Routing (2026-09-03)
+
+An agent's context window is a finite verification resource and is budgeted like one. The tiers
+below are not advice — tier 1 is a real `PreToolUse` deny and tier 2 is a real `SessionStart`
+injection. Policy lives as data in `dv_harness/context_budget.policy.json` (validated against
+`dv_harness/schemas/context_budget.schema.json`); logic lives in `dv_harness/context_budget.py`;
+enforcement is `.claude/hooks/context-budget-guard.ps1` (registered for
+`Read|Grep|Bash|PowerShell|NotebookRead`) and `.claude/hooks/context-resident-pack.ps1`. Extend the
+policy JSON for a project's own DUT/VIP roots — never the Python.
+
+**Tier 1 — NEVER into context** (denied; four content classes, `NEVER-*` rule ids):
+VIP source full text, raw PDF originals (user guides/protocol specs/programming guides),
+whole-chip design·waveform·evidence databases (`.fsdb`/`.vpd`/`.vcd`/`simv.daidir`/the evidence
+SQLite store), and complete simulation/regression logs. Every denial names its route forward — a
+fixed MCP verb and/or the distiller that turns that content class into a bounded artifact
+(`vip_distill.py`, `doc_extraction.py`, `fsdb_report.py`, `sim_log_analysis.py`). Deliberate
+carve-outs: VIP `Examples/` reference testbenches and `.f` filelists stay readable, because
+denying the sanctioned reference material is the false positive that gets a gate switched off.
+
+**Tier 2 — ALWAYS resident**: `CLAUDE.md` (this file — resident because the agent harness
+auto-loads it), plus `.dv-harness/env.manifest.json`, `.dv-harness/run_profile.json`,
+`.dv-workflow/hierarchy.json`, `.dv-workflow/phy_boundary.json`, injected as a size-capped summary
+pack (`MAX_PACK_BYTES`, JSON summarised by shape, never inlined). Run
+`python -m dv_harness.context_budget resident` to see current residency; it exits 2 while any
+declared artifact is MISSING and prints the real command that would produce it. As of 2026-09-03
+only `CLAUDE.md` is PRESENT — `hierarchy.json` has a declared producer
+(`.claude/skills/CORE/hierarchy-discovery/SKILL.md`) but no non-agent extractor, and
+`phy_boundary.json` has no extractor at all. That is reported, not hidden.
+
+**Tier 3 — LOAD ON DEMAND**: single-register/regmap lookups via `get_register` (never a whole
+system regmap), the distilled per-protocol `docs/vip_ref/<protocol>.md`, and `docs/intent.md`.
+Read one when a specific question needs it; never preload.
+
+**MCP-first routing.** `dv_harness/mcp` exposes exactly 5 fixed, read-only verbs —
+`get_vip_config`, `get_dut_port`, `get_register`, `get_topology`, `query_regression` — dispatched
+through one `dispatch()` with no free-text fallback and no caller-supplied SQL. Anything those
+verbs answer must be asked of them rather than read raw. Three honest limits, all covered by named
+tests: the guard classifies literal paths only, so a shell-variable-indirected read
+(`sed -n "1,50p" $M`) or a directory-indirected one (`ls <dir> | xargs cat`) still gets through;
+`ls`/`find`/`stat`/`wc`/`file` may name a tier-1 file without reading it; and the guard fails open
+if Python is unavailable. It is a large reduction in bypass surface, not a seal. A genuinely necessary tier-1 read gets a reasoned entry in the policy's `exemptions` array
+(the rule still fires and is recorded in the decision) — never a silent retry.

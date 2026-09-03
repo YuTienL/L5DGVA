@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/context_budget.schema.json",
+  "title": "context_budget",
+  "description": "The 3-tier context budget policy: which content classes must NEVER enter an agent's context window (VIP source full text, raw PDF originals, whole-chip databases, complete regression logs), which bounded fact artifacts are ALWAYS resident, and which are LOADED ON DEMAND. This is the machine-readable form of the rule -- dv_harness/context_budget.py is the only consumer that matters, and .claude/hooks/context-budget-guard.ps1 turns tier-1 into a real PreToolUse deny rather than a principle nobody enforces. Written as data (not hard-coded Python) so a project can extend the never-load set for its own DUT/VIP roots without editing harness code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "never_load", "always_resident", "load_on_demand", "mcp"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "description": { "type": "string" },
+    "never_load": {
+      "type": "array",
+      "description": "Tier 1. A tool call that would pull matching content into context is DENIED. Every rule must name a real alternative (mcp_redirect and/or distiller) -- a deny with no route forward is a dead end, not a budget.",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/never_rule" }
+    },
+    "always_resident": {
+      "type": "array",
+      "description": "Tier 2. Bounded fact artifacts injected into every session by the SessionStart resident-pack hook (see context_budget.build_resident_pack).",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "load_on_demand": {
+      "type": "array",
+      "description": "Tier 3. Real artifacts an agent may read, but only when a specific question needs them -- never preloaded.",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "exemptions": {
+      "type": "array",
+      "description": "Audited, reasoned escape hatches from a never_load rule. An empty list is the correct default; each entry needs a real reason, in the same spirit as dv_harness/exemptions.py.",
+      "items": { "$ref": "#/$defs/exemption" }
+    },
+    "mcp": {
+      "type": "object",
+      "description": "The fixed-verb query interface tier-1 denials redirect to.",
+      "additionalProperties": false,
+      "required": ["module", "verbs"],
+      "properties": {
+        "module": { "type": "string", "minLength": 1 },
+        "verbs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "never_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "label", "reason"],
+      "properties": {
+        "rule_id": { "type": "string", "pattern": "^NEVER-[A-Z0-9-]+$" },
+        "label": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1, "description": "Why this content class blows the budget, in terms a denied agent can act on." },
+        "path_globs": {
+          "type": "array",
+          "description": "Posix-style globs matched against a forward-slash-normalised, case-folded path. '**' spans directory separators; '*' does not.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "allow_globs": {
+          "type": "array",
+          "description": "Carve-outs checked BEFORE path_globs -- e.g. a distilled summary that lives under an otherwise-never-load root.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "command_patterns": {
+          "type": "array",
+          "description": "Python regexes matched against a Bash/PowerShell command string. Used for commands that pull content into context without naming a matchable path (e.g. pdftotext of a VIP user guide).",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "mcp_redirect": {
+          "type": ["string", "null"],
+          "description": "The fixed MCP verb that answers this content class instead. Null when no verb covers it and only a distiller does."
+        },
+        "distiller": {
+          "type": ["string", "null"],
+          "description": "Repo-relative path to the real script that converts this content class into a bounded artifact."
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "path", "purpose"],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1, "description": "Canonical repo-relative path." },
+        "alt_paths": {
+          "type": "array",
+          "description": "Additional real locations searched, in order, when the canonical path is absent.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "purpose": { "type": "string", "minLength": 1 },
+        "produced_by": { "type": "string", "description": "The real generator/command that creates this artifact. Reported verbatim when the artifact is MISSING, so the gap is actionable rather than merely observed." },
+        "residency": {
+          "type": "string",
+          "enum": ["harness_auto_load", "session_start_hook", "on_demand_read", "mcp_verb"],
+          "description": "How this artifact actually reaches context. 'harness_auto_load' is Claude Code's own project-CLAUDE.md behaviour; 'session_start_hook' is this policy's own resident-pack injection."
+        },
+        "mcp_verb": { "type": ["string", "null"], "description": "Preferred fixed verb for targeted lookups into this artifact." },
+        "max_resident_bytes": { "type": "integer", "minimum": 1, "description": "Residency budget for this artifact: the pack summarises rather than inlines beyond this size." }
+      }
+    },
+    "exemption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "path_glob", "reason"],
+      "properties": {
+        "rule_id": { "type": "string", "pattern": "^NEVER-[A-Z0-9-]+$" },
+        "path_glob": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string" },
+        "valid_until": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+      }
+    }
+  }
+}
