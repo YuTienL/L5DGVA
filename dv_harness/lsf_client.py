@@ -148,6 +148,61 @@ def _validate_job_id(job_id) -> int:
     return job_id
 
 
+class PreflightBlockedError(RuntimeError):
+    """Raised by bsub_submit_with_preflight() when the preflight gate
+    (dv_harness/preflight.py) reports overall != "PASS". Carries the full
+    PreflightResult on `.result` so a caller can report every check's
+    detail, not just a bare blocked boolean. Deliberately a DIFFERENT
+    exception class from LsfUnavailableError: that one means "LSF itself
+    could not be reached/parsed"; this one means "LSF is reachable but the
+    real preflight gate refused to let this job go out" -- a caller must
+    not, and cannot accidentally, catch one and silently treat it as the
+    other."""
+
+    def __init__(self, result):
+        self.result = result
+        blocked = ", ".join(result.blocked_on) or "unknown"
+        super().__init__(f"PREFLIGHT_BLOCKED: {blocked}")
+
+
+def bsub_submit_with_preflight(command: str, *, queue: str, cores: int = 1,
+                                mem_mb: Optional[int] = None, run_dir: Optional[str] = None,
+                                extra_args: Optional[list[str]] = None,
+                                preflight_cfg=None, preflight_runner=None,
+                                skip_preflight: bool = False):
+    """The real, GATED submission entry point (2026-09-03 lmstat + scheduler
+    preflight task -- highest-priority workstream per the user's own spec:
+    "bsub / sbatch 前先做 license、queue、host、disk、workdir、EDA env 檢查。
+    沒過就 BLOCKED，不派 job"). Runs dv_harness.preflight.run_preflight()
+    FIRST; bsub_submit() below is never even called when the gate reports
+    BLOCKED -- this is a real, structural block, not a logged warning.
+
+    `dv_harness.cli`'s `lsf-submit` command (the one real, wired job-
+    submission call site in this project as of this task -- confirmed by
+    grepping every real caller of bsub_submit()) calls this function, not
+    bsub_submit() directly. bsub_submit() itself stays ungated below for
+    any caller (and the pre-existing test suite) that already has its own
+    reason to bypass this; `skip_preflight=True` is an explicit, audited
+    escape hatch here, never a silent default.
+
+    Returns (job_id, PreflightResult) on success -- PreflightResult is
+    None only when skip_preflight=True (there is genuinely nothing to
+    report). Raises PreflightBlockedError (never a bare bool/log line) on
+    BLOCKED, and LsfUnavailableError (unchanged) if bsub itself then
+    fails.
+    """
+    from . import preflight as _preflight
+    cfg = preflight_cfg or _preflight.PreflightConfig(queue=queue, workdir=run_dir or "")
+    result = None
+    if not skip_preflight:
+        result = _preflight.run_preflight(cfg, runner=preflight_runner)
+        if result.overall != "PASS":
+            raise PreflightBlockedError(result)
+    job_id = bsub_submit(command, queue=queue, cores=cores, mem_mb=mem_mb,
+                          run_dir=run_dir, extra_args=extra_args)
+    return job_id, result
+
+
 def bsub_submit(command: str, *, queue: str, cores: int = 1,
                 mem_mb: Optional[int] = None, run_dir: Optional[str] = None,
                 extra_args: Optional[list[str]] = None) -> int:

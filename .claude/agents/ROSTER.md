@@ -8,7 +8,7 @@ against the entries below.
 <!-- One entry per real .claude/agents/*.md file, name + its actual
      description: field, filled in from the real files at write time. -->
 
-## Real Agents (20)
+## Real Agents (21)
 
 1. **analysis-agent**: Read-only SoC hierarchy, interface, VIP/TB topology, protocol, command capability and readiness investigator.
 
@@ -34,18 +34,20 @@ against the entries below.
 
 12. **post-sim-command-log-validation-agent**: After simulation PASSED, compare command.txt verification intent with sim.log semantic evidence and block false-green runs.
 
-13. **protocol-corner-case-intelligence-agent**: Senior-DV reasoning agent for protocol corner case intelligence agent.
+13. **preflight-resource-guard-agent**: Read/write-free BLOCKING gate specialist that runs the real lmstat + scheduler preflight check (EDA license, LSF/Slurm queue health, host reachability, disk space, workdir, required EDA env vars) before any bsub/sbatch job submission and refuses to let a job go out when any check fails.
 
-14. **regression-agent**: Read/write-free targeted-test and regression specialist that captures test/seed/config evidence, clusters normalized failures, and distinguishes functional, flaky and infrastructure failures.
+14. **protocol-corner-case-intelligence-agent**: Senior-DV reasoning agent for protocol corner case intelligence agent.
 
-15. **review-agent**: Independent read-only signoff reviewer. Challenges low-confidence assumptions, diff scope, protocol correctness, vPlan traceability, validation evidence and regression risk.
+15. **regression-agent**: Read/write-free targeted-test and regression specialist that captures test/seed/config evidence, clusters normalized failures, and distinguishes functional, flaky and infrastructure failures.
 
-16. **rtl-evidence-agent**: Read-only RTL/testbench static-source evidence specialist for one RCA evidence-gathering fan-out branch -- pulls exact instance/signal/hierarchy/protocol-state evidence from real RTL and TB source, never from memory or assumption. Added for `.claude/workflows/rca-multi-agent-fusion.js`.
+16. **review-agent**: Independent read-only signoff reviewer. Challenges low-confidence assumptions, diff scope, protocol correctness, vPlan traceability, validation evidence and regression risk.
 
-17. **simulation-semantic-validation-agent**: Confirm a simulation PASSED run actually proves command.txt verification intent using sim.log evidence before TRUE_PASS.
+17. **rtl-evidence-agent**: Read-only RTL/testbench static-source evidence specialist for one RCA evidence-gathering fan-out branch -- pulls exact instance/signal/hierarchy/protocol-state evidence from real RTL and TB source, never from memory or assumption. Added for `.claude/workflows/rca-multi-agent-fusion.js`.
 
-18. **verification-risk-experience-agent**: Senior-DV reasoning agent for verification risk experience agent.
+18. **simulation-semantic-validation-agent**: Confirm a simulation PASSED run actually proves command.txt verification intent using sim.log evidence before TRUE_PASS.
 
-19. **vip-spec-evidence-agent**: Read-only VIP source/example/user-doc and protocol Standard-spec/PHY-model evidence specialist for one RCA evidence-gathering fan-out branch -- cites exact VIP class/sequence/config semantics and exact spec clauses, never invented VIP API or paraphrased spec text. Added for `.claude/workflows/rca-multi-agent-fusion.js`.
+19. **verification-risk-experience-agent**: Senior-DV reasoning agent for verification risk experience agent.
 
-20. **waveform-root-cause-agent**: Senior-DV reasoning agent for waveform root cause agent. Already covers the FSDB/waveform RCA evidence-gathering role reused (not duplicated) by `.claude/workflows/rca-multi-agent-fusion.js`.
+20. **vip-spec-evidence-agent**: Read-only VIP source/example/user-doc and protocol Standard-spec/PHY-model evidence specialist for one RCA evidence-gathering fan-out branch -- cites exact VIP class/sequence/config semantics and exact spec clauses, never invented VIP API or paraphrased spec text. Added for `.claude/workflows/rca-multi-agent-fusion.js`.
+
+21. **waveform-root-cause-agent**: Senior-DV reasoning agent for waveform root cause agent. Already covers the FSDB/waveform RCA evidence-gathering role reused (not duplicated) by `.claude/workflows/rca-multi-agent-fusion.js`.

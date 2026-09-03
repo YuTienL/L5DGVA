@@ -226,6 +226,36 @@ def main():
     # at reconcile time if --options happens to carry one of those markers.
     plsf_submit.add_argument("--seed", default=None, help="Simulation seed for the job snapshot.")
     plsf_submit.add_argument("--fsdb-path", default=None, help="FSDB waveform path for the job snapshot, if known at submit time.")
+    # lmstat + scheduler preflight gate (2026-09-03, highest-priority
+    # workstream): dv_harness.preflight.run_preflight() runs BEFORE bsub --
+    # see lsf_client.bsub_submit_with_preflight(). --skip-preflight is an
+    # explicit, audited escape hatch (never a silent default) for the rare
+    # case a human has already verified conditions out-of-band; every other
+    # invocation is gated.
+    plsf_submit.add_argument("--skip-preflight", action="store_true",
+        help="Bypass the lmstat/queue/host/disk/workdir/env preflight gate "
+             "(dv_harness/preflight.py) and submit directly. Explicit, "
+             "audited escape hatch -- never the default.")
+
+    # Standalone preflight gate (2026-09-03): lets a caller (in particular
+    # the Preflight/Resource Guard Agent -- .claude/agents/
+    # preflight-resource-guard-agent.md) run the exact same
+    # license/queue/host/disk/workdir/env gate lsf-submit runs internally,
+    # WITHOUT submitting anything -- e.g. to advise a human/agent whether a
+    # regression batch is even worth queuing up before spending time
+    # building bsub command lines.
+    ppreflight = sub.add_parser("preflight", help="Run the real lmstat + scheduler preflight gate "
+                                                    "(dv_harness/preflight.py) standalone, without submitting "
+                                                    "any job. Exits 1 on BLOCKED.")
+    ppreflight.add_argument("--queue", default=None, help="Overrides config.json's preflight.queue for this run.")
+    ppreflight.add_argument("--workdir", default=None, help="Overrides config.json's preflight.workdir for this run.")
+    ppreflight.add_argument("--license-server", default=None,
+                             help="Overrides config.json's preflight.license_server for this run (e.g. 2900@host-a).")
+    ppreflight.add_argument("--remote", action="store_true",
+                             help="Route checks through the persistent relay (tools/remote/remote_exec.py) "
+                                  "instead of running them as local subprocesses -- use this on a Windows-PC-side "
+                                  "session in REMOTE_EXECUTION mode. Requires VCHOST/VCHOP env vars and an "
+                                  "already-READY relay (see `python tools/remote/remote_exec.py --status`).")
 
     plsf_kill = sub.add_parser("lsf-kill", help="Real `bkill` on one job id, verifying it actually left RUN/PEND.")
     plsf_kill.add_argument("job_id", type=int)
@@ -713,13 +743,35 @@ def main():
             print(json.dumps(j, ensure_ascii=False, indent=2))
         else:
             print(json.dumps(load_jobs(h.root), ensure_ascii=False, indent=2))
+    elif args.cmd == "preflight":
+        from . import preflight as _preflight
+        pf_cfg = _preflight.config_from_dict(
+            h.cfg.get("preflight"), queue=args.queue, workdir=args.workdir,
+            license_server=args.license_server)
+        runner = _preflight.RemoteRelayCommandRunner() if args.remote else None
+        result = _preflight.run_preflight(pf_cfg, runner=runner)
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        raise SystemExit(0 if result.overall == "PASS" else 1)
     elif args.cmd == "lsf-submit":
         from . import lsf_client
+        from . import preflight as _preflight
+        # lmstat + scheduler preflight gate (2026-09-03): build the real
+        # PreflightConfig from config.json's `preflight` block (never
+        # guessed/hardcoded -- see config.py's own comment), overridden by
+        # this submission's own --queue/--run-dir so the gate checks the
+        # SAME queue/workdir this job is actually about to use.
+        pf_cfg = _preflight.config_from_dict(
+            h.cfg.get("preflight"), queue=args.queue, workdir=args.run_dir)
         try:
-            job_id = lsf_client.bsub_submit(
+            job_id, pf_result = lsf_client.bsub_submit_with_preflight(
                 args.command, queue=args.queue, cores=args.cores,
                 mem_mb=args.mem_mb, run_dir=args.run_dir,
+                preflight_cfg=pf_cfg, skip_preflight=args.skip_preflight,
             )
+        except lsf_client.PreflightBlockedError as e:
+            print(json.dumps({"error": "PREFLIGHT_BLOCKED", "preflight": e.result.to_dict()},
+                              ensure_ascii=False, indent=2))
+            raise SystemExit(1)
         except lsf_client.LsfUnavailableError as e:
             print(json.dumps({"error": "LSF_UNAVAILABLE", "message": str(e)}, ensure_ascii=False))
             raise SystemExit(1)
@@ -732,7 +784,10 @@ def main():
             lsf_status="PEND",
         )
         lsf_client.save_job_state(h.root, state)
-        print(json.dumps({"job_id": job_id, "state": lsf_client.asdict(state)}, ensure_ascii=False, indent=2))
+        out = {"job_id": job_id, "state": lsf_client.asdict(state)}
+        if pf_result is not None:
+            out["preflight"] = pf_result.to_dict()
+        print(json.dumps(out, ensure_ascii=False, indent=2))
     elif args.cmd == "lsf-kill":
         from . import lsf_client
         try:

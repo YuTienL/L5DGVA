@@ -116,6 +116,31 @@ DEFAULT_CONFIG = {
         # docs/superpowers/specs/2026-09-02-autonomous-gate-self-tuning-design.md.
         "enabled": False,
         "review_every_n_executions": 20,
+    },
+    # lmstat + scheduler preflight gate (2026-09-03, highest-priority
+    # workstream per the user's own spec -- see dv_harness/preflight.py and
+    # `dv-harness lsf-submit`, which builds a PreflightConfig from this
+    # block via preflight.config_from_dict()). `license_server`/`workdir`
+    # deliberately empty by default -- same "never guessed or hardcoded"
+    # convention as knowledge_center.remote_root/rtl_protection.protected_paths
+    # above: a project must explicitly fill these in with ITS real license
+    # server (e.g. "2900@host-a") and real remote working directory once
+    # discovered (this project's own real values were confirmed live
+    # 2026-09-03 -- see .work/governance-preflight-report.md -- but are not
+    # hardcoded here since dv_harness ships to other projects/servers too).
+    # An empty license_server FAILS (blocks) the license check by default
+    # (see PreflightConfig.require_license_configured's own docstring) --
+    # never a silent pass.
+    "preflight": {
+        "queue": "vcs",
+        "workdir": "",
+        "required_env_vars": ["VCS_HOME", "UVM_HOME", "VERDI_HOME"],
+        "min_free_disk_gb": 20.0,
+        "license_server": "",
+        "license_features": ["VCSRuntime"],
+        "lmutil_path": "lmutil",
+        "shell": "csh",
+        "require_license_configured": True,
     }
 }
 

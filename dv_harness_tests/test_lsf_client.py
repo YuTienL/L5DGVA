@@ -681,7 +681,16 @@ class TestCliLsfSubmitSeedFsdbPath:
     2026-09-01): the real writer for JobState.seed/JobState.fsdb_path at the
     point a caller submits a job -- exercised in-process (bsub_submit
     patched out) rather than via subprocess, matching
-    test_active_stages_read_sites.py's own `_run_cli` pattern."""
+    test_active_stages_read_sites.py's own `_run_cli` pattern.
+
+    `--skip-preflight` (2026-09-03 lmstat + scheduler preflight task): these
+    tests are about seed/fsdb-path wiring, not the preflight gate, and a
+    fresh tmp project has no license server/queue configured -- without
+    this flag, `lsf-submit` now genuinely BLOCKS before ever calling the
+    patched bsub_submit(), which is real, correct, intended behavior for
+    the gate but orthogonal to what this class tests. See
+    dv_harness_tests/test_preflight_lsf_wiring.py and
+    dv_harness_tests/test_cli_preflight.py for the gate's own coverage."""
 
     def setup_method(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -699,6 +708,7 @@ class TestCliLsfSubmitSeedFsdbPath:
         self._run_cli(monkeypatch, [
             "--project-root", str(self.tmp), "lsf-submit", "echo hi",
             "--queue", "normal", "--seed", "31337", "--fsdb-path", "/proj/run/fsdb/5001.fsdb",
+            "--skip-preflight",
         ])
         loaded = lsf_client.load_job_state(self.tmp, 5001)
         assert loaded.seed == "31337"
@@ -709,6 +719,7 @@ class TestCliLsfSubmitSeedFsdbPath:
         self._run_cli(monkeypatch, [
             "--project-root", str(self.tmp), "lsf-submit", "echo hi",
             "--queue", "normal", "--options", "+ntb_random_seed=2468 +fsdb_file=/proj/run/fsdb/5002.fsdb",
+            "--skip-preflight",
         ])
         loaded = lsf_client.load_job_state(self.tmp, 5002)
         assert loaded.seed == "2468"
@@ -718,6 +729,7 @@ class TestCliLsfSubmitSeedFsdbPath:
         monkeypatch.setattr(lsf_client, "bsub_submit", lambda *a, **k: 5003)
         self._run_cli(monkeypatch, [
             "--project-root", str(self.tmp), "lsf-submit", "echo hi", "--queue", "normal",
+            "--skip-preflight",
         ])
         loaded = lsf_client.load_job_state(self.tmp, 5003)
         assert loaded.seed is None
