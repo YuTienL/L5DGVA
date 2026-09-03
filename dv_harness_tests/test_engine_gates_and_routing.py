@@ -5000,9 +5000,17 @@ def test_self_audit_reports_tool_missing_when_scripts_absent():
 
 def test_self_audit_cli_subcommand_against_real_repo():
     import subprocess, sys
+    # TIMEOUT WIDENED 60->150 (2026-09-03, harness-self-test-ci pass): this test's own outer
+    # subprocess timeout must exceed the sum of what `self-audit --all` can legitimately take
+    # after self_audit.py's ROOT_GATES wrapper timeout was itself widened 30->100 (that change's
+    # own report: .work/harness-self-test-ci-report.md) -- test_collection_health_gate alone can
+    # now legitimately take up to that 100s under real load, which this test's prior 60s no
+    # longer covers (confirmed this session: this exact test TimeoutExpired'd at 60s under real
+    # concurrent multi-session load, not a code regression in self_audit.py -- it passes cleanly
+    # and quickly under normal load; this widening only removes a false failure under contention).
     r = subprocess.run(
         [sys.executable, "-m", "dv_harness.cli", "--project-root", ".", "self-audit", "--all"],
-        cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+        cwd=str(ROOT), capture_output=True, text=True, timeout=150,
     )
     # Real repo self-audit is now fully clean (see test above) -> exit 0, not
     # a crash and not a false FAIL either.
