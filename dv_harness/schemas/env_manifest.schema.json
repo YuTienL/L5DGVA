@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/env_manifest.schema.json",
+  "title": "env_manifest",
+  "description": "Machine-readable, git-tracked fact file for a generated verification environment: env.manifest.json. It has exactly three top-level layers -- vip_config (the VIP's own already-resolved config object, dumped by a zero-time UVM callback at end_of_elaboration_phase -- more reliable than a user guide because it reflects actually-applied values), dut_facts (ports/params reverse-derived from real verible --export_json RTL parsing, plus registers from a structured RAL/IP-XACT-style source), and env_topology (component hierarchy + config_db set/get pairing captured from a real uvm_top.print_topology() + +UVM_CONFIG_DB_TRACE run). Generated only -- dv_harness/env_manifest.py is the sole writer; this file is never hand-edited. Every layer that requires a real captured artifact (a VIP config dump, a topology dump, a config_db trace log) reports status=NOT_AVAILABLE with a `reason` when that artifact does not yet exist, rather than fabricating example content -- an agent reading this file must be able to tell 'genuinely captured from a real run' apart from 'not yet captured' at a glance. Deterministic key ordering and no timestamp/nondeterministic fields are baked into the content itself, so re-running the generator against unchanged real inputs produces a byte-identical file (a real diff means a real underlying change) -- this is why the schema deliberately has no 'generated_at'-style field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generator", "vip_config", "dut_facts", "env_topology"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "version"],
+      "properties": {
+        "tool": { "const": "dv_harness.env_manifest" },
+        "version": { "type": "string", "description": "env_manifest.py's own SCHEMA_VERSION at generation time, not a build timestamp -- kept diffable." }
+      }
+    },
+    "vip_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "source", "vip_instances"],
+      "properties": {
+        "status": {
+          "enum": ["CAPTURED", "NOT_AVAILABLE"],
+          "description": "CAPTURED: vip_instances below was parsed from a real dump file a live UVM simv actually produced. NOT_AVAILABLE: no such dump exists yet for this environment -- vip_instances is an empty array, never fabricated example content."
+        },
+        "source": { "$ref": "#/$defs/source_ref" },
+        "reason": { "type": ["string", "null"], "description": "Required explanation when status=NOT_AVAILABLE (e.g. 'no live simv exists yet for this environment'); null when CAPTURED." },
+        "vip_instances": {
+          "type": "array",
+          "description": "One entry per VIP config object the dump's end_of_elaboration_phase callback registered. Empty when status=NOT_AVAILABLE.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["instance_path", "vip_type", "config_fields"],
+            "properties": {
+              "instance_path": { "type": "string", "description": "Full hierarchical path of the VIP config object, exactly as get_full_name() reported it at dump time." },
+              "vip_type": { "type": "string", "description": "The VIP config class's own get_type_name()." },
+              "config_fields": {
+                "type": "object",
+                "description": "Field name -> stringified resolved value, exactly as the VIP's own config object reported them (never re-derived from documentation).",
+                "additionalProperties": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "dut_facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rtl", "registers"],
+      "properties": {
+        "rtl": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason", "files"],
+          "properties": {
+            "status": { "enum": ["PARSED", "NOT_AVAILABLE"] },
+            "reason": { "type": ["string", "null"], "description": "Required explanation when status=NOT_AVAILABLE (e.g. no rtl_files supplied); null when PARSED." },
+            "files": {
+              "type": "array",
+              "description": "One entry per RTL source file, sorted by file_path for a stable diff. Each entry is verible_parser.to_dict()'s own real, unmodified shape.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["file_path", "source_sha256", "verible_version", "modules"],
+                "properties": {
+                  "file_path": { "type": "string" },
+                  "source_sha256": { "type": "string" },
+                  "verible_version": { "type": ["string", "null"] },
+                  "modules": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name", "parameters", "ports", "signals"],
+                      "properties": {
+                        "name": { "type": ["string", "null"] },
+                        "parameters": {
+                          "type": "array",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["name", "type_text", "default_text"],
+                            "properties": {
+                              "name": { "type": ["string", "null"] },
+                              "type_text": { "type": ["string", "null"] },
+                              "default_text": { "type": ["string", "null"] }
+                            }
+                          }
+                        },
+                        "ports": {
+                          "type": "array",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["name", "direction", "data_type"],
+                            "properties": {
+                              "name": { "type": ["string", "null"] },
+                              "direction": { "type": ["string", "null"] },
+                              "data_type": { "type": ["string", "null"] }
+                            }
+                          }
+                        },
+                        "signals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["name", "data_type", "unpacked_dims"],
+                            "properties": {
+                              "name": { "type": ["string", "null"] },
+                              "data_type": { "type": ["string", "null"] },
+                              "unpacked_dims": { "type": ["string", "null"] }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "registers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "blocks"],
+          "properties": {
+            "status": {
+              "enum": ["LOADED", "NOT_AVAILABLE"],
+              "description": "LOADED: blocks below was read from a real register-map JSON file conforming to register_map.schema.json (dv_harness/schemas/register_map.schema.json is the input contract -- a RAL/IP-XACT export, never hand-invented content). NOT_AVAILABLE: no register-map input was supplied for this environment."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "blocks": {
+              "type": "array",
+              "description": "Passthrough of the register-map input's own `blocks` array, unmodified. Empty when status=NOT_AVAILABLE. See register_map.schema.json for the item shape -- deliberately not re-declared here so the two schemas cannot drift apart silently.",
+              "items": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "env_topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component_hierarchy", "config_db_trace"],
+      "properties": {
+        "component_hierarchy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "components"],
+          "properties": {
+            "status": {
+              "enum": ["CAPTURED", "NOT_AVAILABLE"],
+              "description": "CAPTURED: components below was parsed from a real hierarchy dump a live UVM run's end_of_elaboration_phase actually produced (walking uvm_top's real children -- see templates/uvm_env_manifest/dv_env_manifest_pkg.sv). NOT_AVAILABLE: no such dump exists yet."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["full_name", "type_name", "is_active"],
+                "properties": {
+                  "full_name": { "type": "string", "description": "get_full_name() exactly as reported." },
+                  "type_name": { "type": "string", "description": "get_type_name() exactly as reported." },
+                  "is_active": {
+                    "enum": ["UVM_ACTIVE", "UVM_PASSIVE", "NOT_APPLICABLE"],
+                    "description": "get_is_active() for a uvm_agent-derived component; NOT_APPLICABLE for a component with no active/passive concept -- an agent asking whether a component is active or passive reads this field instead of guessing from the component's name."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "config_db_trace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "parse_confidence", "entries"],
+          "properties": {
+            "status": {
+              "enum": ["CAPTURED", "NOT_AVAILABLE"],
+              "description": "CAPTURED: entries below was extracted from a real sim log produced by a run with +UVM_CONFIG_DB_TRACE set. NOT_AVAILABLE: no such log was supplied."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "parse_confidence": {
+              "enum": ["envelope_verified_message_opaque", null],
+              "description": "Honesty flag on how entries[].message was extracted: the outer UVM_INFO report envelope (file/line/time/reporter/id) is a stable, well-documented format and is fully parsed; the message BODY's own internal field/value sub-format is NOT further decomposed (never verified against a live UVM run in this repo) and is kept as opaque raw text in entries[].message rather than guessed apart into structured sub-fields. Null when status=NOT_AVAILABLE."
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "file", "line", "time", "reporter", "message"],
+                "properties": {
+                  "kind": { "enum": ["SET", "GET"], "description": "From the report's own [CFGDB/SET] / [CFGDB/GET] message id." },
+                  "file": { "type": ["string", "null"] },
+                  "line": { "type": ["integer", "null"] },
+                  "time": { "type": ["string", "null"] },
+                  "reporter": { "type": ["string", "null"] },
+                  "message": { "type": "string", "description": "Raw, unparsed message body -- see parse_confidence above." }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "source_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "type": "string", "description": "What real artifact this layer was read from, e.g. vip_config_dump_json, register_map_json, topology_dump_json, sim_log_uvm_config_db_trace." },
+        "path": { "type": ["string", "null"], "description": "Path to the real source artifact this layer was extracted from, relative to the environment root; null when status=NOT_AVAILABLE (nothing was read)." }
+      }
+    }
+  }
+}

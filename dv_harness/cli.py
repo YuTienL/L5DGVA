@@ -515,6 +515,37 @@ def main():
     prp_justfile.add_argument("--profile", required=True, help="Path to run_profile.json.")
     prp_justfile.add_argument("--out", required=True, help="Where to write the justfile.")
 
+    penvm = sub.add_parser("env-manifest", help="env.manifest.json: generated, diffable, git-tracked fact file "
+                                                   "with three layers -- vip_config (a real UVM simv's own "
+                                                   "already-resolved VIP config dump), dut_facts (verible-parsed "
+                                                   "RTL ports/params/signals plus a structured register-map "
+                                                   "input), env_topology (uvm_top component hierarchy + "
+                                                   "+UVM_CONFIG_DB_TRACE). See dv_harness/env_manifest.py.")
+    penvm_sub = penvm.add_subparsers(dest="envm_cmd", required=True)
+    penvm_gen = penvm_sub.add_parser("generate", help="Build env.manifest.json from whatever real inputs are "
+                                                         "supplied. Any input omitted reports its layer "
+                                                         "NOT_AVAILABLE with an honest reason -- never a "
+                                                         "fabricated example.")
+    penvm_gen.add_argument("--out", required=True, help="Where to write env.manifest.json.")
+    penvm_gen.add_argument("--rtl-file", action="append", default=None, dest="rtl_files",
+                            help="A real RTL source file to parse via verible (repeatable). Omit entirely to "
+                                 "report dut_facts.rtl as NOT_AVAILABLE.")
+    penvm_gen.add_argument("--register-map", default=None, dest="register_map_path",
+                            help="Path to a register-map JSON file conforming to "
+                                 "dv_harness/schemas/register_map.schema.json. Omit to report "
+                                 "dut_facts.registers as NOT_AVAILABLE.")
+    penvm_gen.add_argument("--vip-config-dump", default=None, dest="vip_config_dump_path",
+                            help="Path to a real vip_config dump JSON produced by a live UVM simv run (see "
+                                 "dv_harness/uvm_generator/templates/uvm_env_manifest/dv_env_manifest_pkg.sv). "
+                                 "Omit to report vip_config as NOT_AVAILABLE.")
+    penvm_gen.add_argument("--topology-dump", default=None, dest="topology_dump_path",
+                            help="Path to a real component_hierarchy dump JSON produced by the same template. "
+                                 "Omit to report env_topology.component_hierarchy as NOT_AVAILABLE.")
+    penvm_gen.add_argument("--config-db-trace-log", default=None, dest="config_db_trace_log_path",
+                            help="Path to a real sim log from a run with +UVM_CONFIG_DB_TRACE set. Omit to "
+                                 "report env_topology.config_db_trace as NOT_AVAILABLE.")
+    penvm_gen.add_argument("--verible-bin", default=None, help="Override the verible-verilog-syntax binary name.")
+
     pfsdb = sub.add_parser("fsdb-report", help="Run the real `fsdbreport` CLI tool against an FSDB file and "
                                                  "parse/emit its text report. See dv_harness/fsdb_report.py.")
     pfsdb.add_argument("--fsdb", required=True, help="Path to the .fsdb file.")
@@ -1245,6 +1276,26 @@ def main():
         except RunProfileValidationError as exc:
             print(f"run-profile {args.rp_cmd} FAILED: {exc}", file=sys.stderr)
             raise SystemExit(1)
+    elif args.cmd == "env-manifest":
+        from . import env_manifest
+        from .env_manifest import EnvManifestValidationError, RegisterMapValidationError
+        from .verible_parser import DEFAULT_VERIBLE_BIN, VeribleParseError, VeribleUnavailableError
+        if args.envm_cmd == "generate":
+            try:
+                manifest = env_manifest.generate_and_write(
+                    Path(args.out),
+                    rtl_files=args.rtl_files,
+                    register_map_path=args.register_map_path,
+                    vip_config_dump_path=args.vip_config_dump_path,
+                    topology_dump_path=args.topology_dump_path,
+                    config_db_trace_log_path=args.config_db_trace_log_path,
+                    verible_bin=args.verible_bin or DEFAULT_VERIBLE_BIN,
+                )
+            except (EnvManifestValidationError, RegisterMapValidationError,
+                    VeribleParseError, VeribleUnavailableError) as exc:
+                print(f"env-manifest generate FAILED: {exc}", file=sys.stderr)
+                raise SystemExit(1)
+            print(json.dumps(manifest, ensure_ascii=False, indent=2))
     elif args.cmd == "fsdb-report":
         from . import fsdb_report
         result = fsdb_report.run_fsdbreport(args.fsdb, fsdbreport_bin=args.fsdbreport_bin, timeout=args.timeout)
