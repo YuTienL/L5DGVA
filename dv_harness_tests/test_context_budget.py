@@ -565,3 +565,223 @@ def test_context_budget_is_documented_in_claude_md():
     for token in ("NEVER into context", "ALWAYS resident", "LOAD ON DEMAND",
                   "context_budget.policy.json", "context-budget-guard.ps1"):
         assert token in text, token
+
+
+# ---------------------------------------------------------------------------
+# produced_by drift: the resident pack must not misinform the session
+# ---------------------------------------------------------------------------
+#
+# Why this block exists (2026-09-04). `never_load[].distiller` was already
+# guarded three ways above: the cited file must exist, must really mention
+# its content class, and the specific vip_distill.py miscitation is named and
+# refused. `artifact[].produced_by` -- the OTHER half of exactly the same
+# "cite a real producer" contract -- was guarded only for non-emptiness by
+# test_missing_artifact_is_reported_with_the_command_that_produces_it.
+#
+# That asymmetry was not theoretical. Three produced_by fields had gone stale
+# and were caught by hand, not by this suite:
+#   * phy_boundary said "NOT IMPLEMENTED -- no extractor exists" while
+#     dv_harness/phy_boundary.py existed.
+#   * intent said "NOT IMPLEMENTED -- no generator exists" while
+#     dv_harness/design_intent.py existed.
+#   * vip_ref cited dv_harness/vip_distill.py -- the very miscitation the
+#     never_load rule's distiller_note already disclaims by name. Only the
+#     never_load half of that 2026-09-04 correction had been applied.
+#
+# build_resident_pack() prints produced_by VERBATIM into every session for a
+# MISSING artifact, so a stale field is not cosmetic: it is the context
+# budget's own resident pack telling every agent that a real generator does
+# not exist. These tests make that class of drift fail the suite instead.
+
+import re as _re
+
+_MODULE_CITATION_RX = _re.compile(r"\b((?:dv_harness|tools)/[A-Za-z0-9_./]+\.py)\b")
+_EXAMPLE_CITATION_RX = _re.compile(
+    r"\b(examples/[A-Za-z0-9_./-]+\.(?:json|md|ya?ml|sv))\b")
+
+#: Phrases that assert an artifact has no producer. Legitimate when true --
+#: the policy is deliberately allowed to say a slot is unfilled rather than
+#: fake one. A lie the moment the cited module lands.
+_NO_PRODUCER_PHRASES = ("NOT IMPLEMENTED", "no extractor exists", "no generator exists")
+
+
+def _all_artifacts(policy):
+    return policy["always_resident"] + policy["load_on_demand"]
+
+
+def test_every_produced_by_module_citation_is_a_real_file(policy):
+    """A produced_by that names `dv_harness/<x>.py` must name one that
+    exists. Same contract the cited-distiller test already enforces for
+    never_load; artifacts were exempt from it until now."""
+    seen = 0
+    for art in _all_artifacts(policy):
+        for cited in _MODULE_CITATION_RX.findall(art.get("produced_by", "")):
+            seen += 1
+            assert (ROOT / cited).is_file(), (art["artifact_id"], cited)
+    assert seen >= 4, "expected several artifacts to cite a real producer module"
+
+
+#: artifact_id -> extra module basenames that could be its producer, for the
+#: cases where the module is not simply named after the artifact. Kept small
+#: on purpose: the PRIMARY candidate is derived from artifact_id itself
+#: (dv_harness/<artifact_id>.py), so an artifact added later is checked
+#: automatically instead of silently escaping this guard until someone
+#: remembers to extend a list.
+_PRODUCER_ALIASES = {
+    "intent": ["design_intent"],
+    "constraints": ["design_intent"],
+    "vip_ref": ["vip_symbol_index"],
+    "regmap_single_lookup": ["sys_regmap"],
+    "claude_md_index": [],
+    "hierarchy": [],  # genuinely has no non-agent extractor; see its produced_by
+}
+
+
+def _existing_producer_modules(artifact_id):
+    """Every real dv_harness module that could plausibly produce this
+    artifact, found on disk right now."""
+    names = [artifact_id, *_PRODUCER_ALIASES.get(artifact_id, [])]
+    return [f"dv_harness/{n}.py" for n in names
+            if (ROOT / "dv_harness" / (n + ".py")).is_file()]
+
+
+def test_no_artifact_claims_unimplemented_while_its_producer_exists(policy):
+    """The exact drift that really happened: phy_boundary and intent kept
+    saying 'NOT IMPLEMENTED -- no extractor exists' for a day after their
+    extractors landed, and build_resident_pack() printed that verbatim into
+    every session.
+
+    The check deliberately does NOT read which module the text cites -- the
+    stale text cited none at all, which is precisely why an earlier version
+    of this test passed on the very state it was written to catch. It asks
+    the filesystem instead: does a producer for this artifact exist? If so,
+    the text may not claim one doesn't."""
+    checked = []
+    for art in _all_artifacts(policy):
+        produced_by = art.get("produced_by", "")
+        claims_absent = [p for p in _NO_PRODUCER_PHRASES if p in produced_by]
+        if not claims_absent:
+            continue
+        # A dated correction is allowed to quote the old wording it replaced.
+        if "CORRECTED" in produced_by:
+            continue
+        found = _existing_producer_modules(art["artifact_id"])
+        checked.append(art["artifact_id"])
+        assert not found, (
+            art["artifact_id"],
+            "produced_by claims %r but these real producers exist: %s"
+            % (claims_absent, ", ".join(found)))
+    assert checked == [], checked
+
+
+def test_the_unimplemented_guard_really_fires_on_the_real_pre_fix_text(policy):
+    """Guard the guard, against the REAL string that was in the policy on
+    2026-09-04 rather than an invented one.
+
+    Without this, test_no_artifact_claims_unimplemented_while_its_producer_exists
+    passes forever the moment the policy is clean, and nothing proves it
+    would ever fail -- which is exactly how its first version shipped
+    broken (it keyed off a cited module, and the stale text cited none)."""
+    import copy
+
+    stale = copy.deepcopy(policy)
+    art = next(a for a in stale["always_resident"] if a["artifact_id"] == "phy_boundary")
+    art["produced_by"] = (
+        "NOT IMPLEMENTED -- no extractor exists in this repo as of 2026-09-03; "
+        "the only real reference is the critical_fields entry at "
+        ".claude/skills/USB/usb-profile/PROFILE.yaml:8. Owned by the "
+        "asset-processing-table workstream.")
+    with pytest.raises(AssertionError, match="phy_boundary.py"):
+        test_no_artifact_claims_unimplemented_while_its_producer_exists(stale)
+
+
+def test_hierarchy_may_still_honestly_report_no_extractor(policy):
+    """The guard must not force a false claim in the other direction.
+    hierarchy.json really has no non-agent extractor -- only a skill that
+    declares the output path -- and saying so is correct, not drift."""
+    art = next(a for a in policy["always_resident"] if a["artifact_id"] == "hierarchy")
+    assert _existing_producer_modules("hierarchy") == []
+    assert "hierarchy-discovery" in art["produced_by"]
+    assert "no non-agent extractor exists" in art["produced_by"]
+
+
+def test_vip_ref_produced_by_is_not_the_vip_distill_miscitation(policy):
+    """Mirror of test_vip_source_rule_cites_a_real_vip_source_distiller, for
+    the produced_by half that the original correction missed."""
+    art = next(a for a in policy["load_on_demand"] if a["artifact_id"] == "vip_ref")
+    produced_by = art["produced_by"]
+    assert "dv_harness/vip_symbol_index.py" in produced_by
+    # vip_distill.py may only appear as the disclaimed miscitation.
+    if "vip_distill.py" in produced_by:
+        assert "never reads VIP source" in produced_by
+    src = (ROOT / "dv_harness" / "vip_symbol_index.py").read_text(
+        encoding="utf-8", errors="replace")
+    assert "def write_vip_ref" in src and "def build_symbol_index" in src
+
+
+def test_cited_worked_examples_really_exist(policy):
+    """produced_by cites `examples/asset_processing/...` files as the proof
+    that each generator really runs. A citation to a file nobody generated
+    is the same defect in a different field."""
+    seen = 0
+    for art in _all_artifacts(policy):
+        for cited in _EXAMPLE_CITATION_RX.findall(art.get("produced_by", "")):
+            seen += 1
+            assert (ROOT / cited).is_file(), (art["artifact_id"], cited)
+    assert seen >= 3, "expected the corrected artifacts to cite worked examples"
+
+
+# ---------------------------------------------------------------------------
+# tier 3 completeness against the asset-processing table
+# ---------------------------------------------------------------------------
+
+def test_tier3_covers_the_real_on_demand_artifact_types(policy):
+    """sys_regmap.json, init_seq.yaml and constraints.md gained real modules
+    and schemas but were in NO tier, so classify_path() called them
+    'unclassified' -- the budget had nothing to say about artifacts it
+    exists to route. Added 2026-09-04."""
+    ids = {a["artifact_id"] for a in policy["load_on_demand"]}
+    assert {"regmap_single_lookup", "vip_ref", "intent",
+            "constraints", "sys_regmap", "init_seq"} <= ids
+
+
+@pytest.mark.parametrize("relpath,artifact_id", [
+    ("examples/asset_processing/inputs/sys_regmap.json", "sys_regmap"),
+    ("examples/asset_processing/inputs/init_seq.yaml", "init_seq"),
+    ("examples/asset_processing/generated/docs/constraints.md", "constraints"),
+    ("examples/asset_processing/generated/docs/intent.md", "intent"),
+])
+def test_real_tier3_files_classify_as_load_on_demand(relpath, artifact_id, policy):
+    """Classified against files that really exist on disk, not invented
+    paths -- so this also asserts the worked examples stay put."""
+    assert (ROOT / relpath).is_file(), relpath
+    d = cb.classify_path(relpath, policy)
+    assert d["tier"] == cb.TIER_ON_DEMAND, d
+    assert d["artifact_id"] == artifact_id
+
+
+def test_tier3_additions_are_not_denied_by_any_tier1_rule(policy):
+    """A tier-3 artifact the budget tells you to read must not be one the
+    guard then denies."""
+    for art in policy["load_on_demand"]:
+        d = cb.classify_path(art["path"], policy)
+        assert d["tier"] != cb.TIER_NEVER, (art["artifact_id"], art["path"])
+
+
+def test_every_tier3_module_citation_names_a_module_that_handles_it(policy):
+    """Existence is not enough -- the vip_distill miscitation existed too.
+    Each new tier-3 artifact's cited producer must really mention it."""
+    must_mention = {
+        "sys_regmap": ("dv_harness/sys_regmap.py", "control_kind"),
+        "init_seq": ("dv_harness/init_seq.py", "init_seq"),
+        "constraints": ("dv_harness/design_intent.py", "write_constraints"),
+        "intent": ("dv_harness/design_intent.py", "write_intent"),
+    }
+    for art in policy["load_on_demand"]:
+        expect = must_mention.get(art["artifact_id"])
+        if expect is None:
+            continue
+        module, token = expect
+        assert module in art["produced_by"], (art["artifact_id"], module)
+        src = (ROOT / module).read_text(encoding="utf-8", errors="replace")
+        assert token in src, (module, token)
