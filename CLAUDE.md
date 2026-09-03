@@ -488,3 +488,49 @@ mechanics already codified in `.claude/skills/CORE/*`:
   Primary-DUT Master/Slave Redefinition" section. A future agent building a non-USB environment
   (CSI-2/DSI, or an AMBA-fabric-as-DUT/`SYSTEM_LEVEL_MODE` environment) should read these
   sections first rather than starting from zero.
+
+
+## Agent-Authored Change Accountability (2026-09-03)
+
+Explicit, written policy so this is settled before it becomes a real incident, per the user's
+own reasoning: without this stated up front, no human feels safe clicking Approve on an
+agent-authored change, and the harness stays permanently stuck below L5 regardless of how good
+its technical output is.
+
+- **The agent is a tool, not an accountable party.** Claude Code (or any automated caller)
+  proposes; it never bears responsibility for a merged/pushed change's consequences.
+- **The human approver of a PR/merge carries the same responsibility as if they had authored the
+  change by hand.** Approving an agent-authored PR is not a lower-scrutiny action than approving
+  a colleague's PR — the approver is the accountable party for any escape that change causes,
+  exactly as with any other PR they approve.
+- This is why `gh CLI + PR-Only Governance Policy` above exists as a hard technical gate (agent
+  proposes via PR, never merges/pushes to `main`/`master` directly): the accountability model
+  above only works if there really is always a human decision point in between an agent's
+  proposal and a protected branch. Removing or bypassing that gate would also remove the
+  precondition this accountability policy depends on.
+- This policy does not change any existing evidence/verification requirement in this file (the
+  Evidence Truth Rule, stage-gate checklists, etc.) — those still apply in full before a change
+  reaches PR stage. It only settles the separate question of who is accountable once a human
+  clicks Approve.
+
+
+## Trust Progression for Autonomous/Semi-Autonomous Work (2026-09-03)
+
+Real-world adoption should climb by task risk, not jump straight to the riskiest category:
+
+1. **Start with near-zero-risk tasks**: log/failure triage, report generation, coverage
+   summarization. A wrong output here costs a few minutes of a human's attention, not a bad
+   tapeout decision.
+2. **Only after a track record accumulates on tier 1** (accuracy data the team has actually
+   looked at, not an assumption) should autonomy extend toward stimulus/pattern modification —
+   the tier where a wrong output can silently produce a false PASS.
+3. This is a recommended adoption ordering for the humans operating this harness, not a
+   mechanically enforced gate in the engine — record it here so it is a deliberate team decision
+   each time scope expands, not a default that happens by not thinking about it.
+
+**Deliberately preserved knowledge asymmetry**: as this harness gets better at autonomous
+debug, new engineers get fewer chances to debug a real failure by hand — which is a genuine
+long-term cost to the team's own capability, not merely a short-term efficiency tradeoff. Teams
+adopting this harness should deliberately route some fraction of real failures to a human for
+hands-on debug rather than letting the harness resolve every one it technically could, treating
+this as an investment in the team's future capability rather than lost efficiency today.
