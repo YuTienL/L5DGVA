@@ -258,6 +258,7 @@ def classify_path(path: str, policy: Optional[dict] = None) -> dict:
             "reason": rule["reason"],
             "mcp_redirect": rule.get("mcp_redirect"),
             "distiller": rule.get("distiller"),
+            "distiller_note": rule.get("distiller_note"),
             "exemption": ex,
         }
     art = _artifact_hit(policy["always_resident"], path)
@@ -335,6 +336,7 @@ def classify_command(command: str, policy: Optional[dict] = None) -> dict:
                     "matched_command_pattern": pat, "label": rule["label"],
                     "reason": rule["reason"], "mcp_redirect": rule.get("mcp_redirect"),
                     "distiller": rule.get("distiller"),
+                    "distiller_note": rule.get("distiller_note"),
                     "exemption": None,
                 }
     if not _is_non_content_command(cmd):
@@ -367,6 +369,9 @@ def _deny_reason(d: dict, policy: dict) -> str:
         )
     if d.get("distiller"):
         parts.append(f"Or distil it first with {d['distiller']}, then read the distilled artifact.")
+    elif d.get("distiller_note"):
+        # Never send a denied agent hunting for a script nobody wrote.
+        parts.append(d["distiller_note"])
     parts.append(
         "If this read is genuinely necessary, add a reasoned entry to "
         "`exemptions` in dv_harness/context_budget.policy.json -- do not "

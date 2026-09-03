@@ -69,6 +69,37 @@ def test_every_tier1_rule_offers_a_real_route_forward(policy):
         assert rule.get("mcp_redirect") or rule.get("distiller"), rule["rule_id"]
         if rule.get("distiller"):
             assert (ROOT / rule["distiller"]).is_file(), rule["distiller"]
+        else:
+            assert rule.get("distiller_note", "").strip(), rule["rule_id"]
+
+
+#: A token each cited distiller must really mention, keyed by rule. Existence
+#: alone is not enough: the policy originally cited dv_harness/vip_distill.py
+#: as the VIP-source distiller purely because the name looked right -- that
+#: module is an evidence-envelope normaliser for sim logs, job records and
+#: fsdb reports and never reads VIP source. This check would have caught it.
+DISTILLER_MUST_MENTION = {
+    "NEVER-RAW-PDF": ".pdf",
+    "NEVER-WHOLE-CHIP-DB": ".fsdb",
+    "NEVER-REGRESSION-LOGS": "sim.log",
+}
+
+
+def test_a_cited_distiller_really_handles_that_content_class(policy):
+    for rule in policy["never_load"]:
+        token = DISTILLER_MUST_MENTION.get(rule["rule_id"])
+        if token is None or not rule.get("distiller"):
+            continue
+        text = (ROOT / rule["distiller"]).read_text(encoding="utf-8", errors="replace")
+        assert token.lower() in text.lower(), (rule["rule_id"], rule["distiller"], token)
+
+
+def test_vip_source_rule_admits_it_has_no_distiller(policy):
+    """Named explicitly so the miscitation cannot quietly come back."""
+    rule = next(r for r in policy["never_load"] if r["rule_id"] == "NEVER-VIP-SOURCE")
+    assert rule["distiller"] is None
+    assert rule["mcp_redirect"] == "get_vip_config"
+    assert "vip_distill.py" in rule["distiller_note"]
 
 
 def test_mcp_redirects_name_only_the_five_real_fixed_verbs(policy):

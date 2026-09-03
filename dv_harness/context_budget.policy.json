@@ -28,7 +28,8 @@
         "**/vip/**/*.f"
       ],
       "mcp_redirect": "get_vip_config",
-      "distiller": "dv_harness/vip_distill.py"
+      "distiller": null,
+      "distiller_note": "There is NO VIP-source distiller in this repo. dv_harness/vip_distill.py is named suggestively but is an evidence-envelope normaliser for sim logs / job records / fsdb reports (see its distill_sim_log/distill_job_record/distill_fsdbreport functions) -- it does not read VIP source. The real route is the get_vip_config verb; the intended distilled artifact is the tier-3 docs/vip_ref/<protocol>.md, which does not exist yet."
     },
     {
       "rule_id": "NEVER-RAW-PDF",
@@ -41,7 +42,8 @@
         "(?i)\\bpdftoppm\\b"
       ],
       "mcp_redirect": null,
-      "distiller": "dv_harness/doc_extraction.py"
+      "distiller": "dv_harness/doc_extraction.py",
+      "distiller_note": "doc_extraction.py really does handle .pdf (see its SUPPORTED set), but its own 2026-08-28 audit notice says it is standalone and invoked by no executing code path in dv_harness/ or .claude/agents/. So it is a real script you must call yourself, not a stage that runs on its own."
     },
     {
       "rule_id": "NEVER-WHOLE-CHIP-DB",

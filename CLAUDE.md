@@ -667,7 +667,11 @@ VIP source full text, raw PDF originals (user guides/protocol specs/programming 
 whole-chip design·waveform·evidence databases (`.fsdb`/`.vpd`/`.vcd`/`simv.daidir`/the evidence
 SQLite store), and complete simulation/regression logs. Every denial names its route forward — a
 fixed MCP verb and/or the distiller that turns that content class into a bounded artifact
-(`vip_distill.py`, `doc_extraction.py`, `fsdb_report.py`, `sim_log_analysis.py`). Deliberate
+(`doc_extraction.py` for PDFs, `fsdb_report.py` for waveforms, `sim_log_analysis.py` for logs).
+There is deliberately **no** distiller cited for VIP source: none exists — `vip_distill.py` is named
+suggestively but normalises sim-log/job/fsdb evidence envelopes and never reads VIP source, so that
+rule routes to `get_vip_config` and says so rather than sending you after a script nobody wrote.
+Deliberate
 carve-outs: VIP `Examples/` reference testbenches and `.f` filelists stay readable, because
 denying the sanctioned reference material is the false positive that gets a gate switched off.
 

@@ -77,7 +77,11 @@
         },
         "distiller": {
           "type": ["string", "null"],
-          "description": "Repo-relative path to the real script that converts this content class into a bounded artifact."
+          "description": "Repo-relative path to the real script that converts this content class into a bounded artifact. Null when no such script exists -- say so rather than citing a plausibly-named module that does something else."
+        },
+        "distiller_note": {
+          "type": "string",
+          "description": "Required reading when distiller is null: what the honest situation is, so a denied agent is not sent hunting for a script that was never written."
         }
       }
     },
