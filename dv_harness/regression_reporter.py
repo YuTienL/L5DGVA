@@ -250,6 +250,30 @@ def run_reconciliation_cycle(root: Path, vcuser: str, uvm_root_path: Path) -> st
             # reconciliation pass, never be silently guessed at.
             lsf_client.save_job_state(root, state)
 
+            # Phase 11 (2026-09-03, obsidian-memory-debugflow task --
+            # Regression Integration): re-upsert the SAME deterministic
+            # Job-tier memory record `reconcile_batch()` (inside
+            # `lsf_client.reconcile_batch()`, called a few lines above via
+            # this cycle's `registered_ids` pass) already wrote for this
+            # job, now that state.uvm_error_count/uvm_fatal_count reflect
+            # this REAL sim.log epilogue parse rather than whatever they
+            # were at the earlier, coarser bjobs-only reconcile point -- see
+            # lsf_client._upsert_job_tier_memory_record()'s own "THE GAP
+            # THIS CLOSES" docstring for why a second call site is needed
+            # rather than relying on the earlier one alone. Real UVM_ERROR/
+            # UVM_FATAL counts (or a real "FAILED" epilogue verdict with a
+            # terminal_signature -- e.g. a timeout/objection failure that
+            # raised neither) upgrade an earlier `job_result` classification
+            # to the accurate `job_failure` one, this time with a real
+            # failure_signature + prior_related_knowledge search attached.
+            # Best-effort, same discipline as every other call site of this
+            # function: a persistence problem here must never break this
+            # cycle's own real reconciliation work already completed above.
+            try:
+                lsf_client._upsert_job_tier_memory_record(root, jid, state)
+            except Exception as e:
+                print(f"[reconciliation_cycle] job {jid} memory upsert failed: {e}", flush=True)
+
             if state.pattern and verdict in ("PASSED", "FAILED"):
                 regression_list_path = Path(uvm_root_path) / "regression.list"
                 apply_verdict_to_file(regression_list_path, state.pattern, verdict == "PASSED")

@@ -17,6 +17,21 @@ from typing import Any, Dict, List, Optional
 # CURRENT-RUN layer with two more real per-run artifact kinds -- command.txt/
 # scenario content and FSDB/coverage -- while respecting this same
 # CURRENT-RUN-only intent; see their own comments for the two rulings.)
+# Phase 14 addendum (2026-09-03, obsidian-memory-debugflow task): SESSION_
+# FILES/SESSION_DIRS above already cover the raw files a resume needs
+# (state.json for current_stage/project, react/ for the latest hypothesis/
+# evidence/confidence/next_action, lsf/ for job state) -- what was missing
+# was a lightweight, save-time SUMMARY of them in session_manifest.json
+# itself, so a restored session can answer "where we stopped / what was
+# proven / what remains unknown / what action should execute next" by
+# reading the manifest, without first having to know react.py's/
+# lsf_client.py's own private directory layouts. See
+# _read_latest_react_iteration()/_collect_current_job_reference()/
+# _collect_related_memory_references()/describe_resume_point() below --
+# every one of these READS already-real files/records, none is a new write
+# path, and `related_memory` is deliberately REFERENCES ONLY (memory_id/
+# level/title), consistent with this module's own "never the durable
+# knowledge layer" design above -- it points at Memory, it does not copy it.
 SESSION_FILES = ["state.json", "control.json", "project_meta.json", "config.json", "events.jsonl"]
 SESSION_DIRS = ["blackboard", "plans", "react", "agents", "telemetry", "lsf"]
 
@@ -157,6 +172,127 @@ def _hash_file(path: Path, limit_bytes: int) -> Dict[str, Any]:
     return entry
 
 
+def _read_latest_react_iteration(dvh: Path, stage: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Session-snapshot extension (Phase 14, 2026-09-03, obsidian-memory-
+    debugflow task): the real hypothesis/evidence/confidence/next_action
+    snapshot for the CURRENT stage, read from the highest-numbered
+    `iteration_NNN.json` under `.dv-harness/react/<stage>/` -- the exact
+    same file `react.ReactRecorder.record()` already writes once per stage
+    attempt (`reason_summary`/`evidence`/`confidence`/`next_action` fields,
+    see react.py). This is a READ of an already-real file, not a new write
+    path: `react` is already one of SESSION_DIRS above, so the file this
+    reads is already copied into every snapshot regardless of this
+    function existing -- this only extracts a lightweight, save-time
+    summary of it into `session_manifest.json` so a restored session can
+    see "what was proven / what remains unknown / what action should
+    execute next" without having to know react.py's own directory layout
+    or open the raw per-iteration files itself."""
+    if not stage:
+        return None
+    d = dvh / "react" / stage
+    if not d.is_dir():
+        return None
+    files = sorted(d.glob("iteration_*.json"), key=lambda p: p.name)
+    if not files:
+        return None
+    return _read_json(files[-1])
+
+
+def _collect_current_job_reference(dvh: Path) -> Optional[Dict[str, Any]]:
+    """Session-snapshot extension (Phase 14): a lightweight REFERENCE
+    (job_id/pattern/lsf_status/sim_status/uvm_error_count/uvm_fatal_count),
+    never the full JobState content, for the single job most likely to be
+    "the current one" -- the most recently changed record under
+    `.dv-harness/lsf/jobs/*.json` (real files, already copied wholesale as
+    part of SESSION_DIRS' "lsf" entry above; this only extracts a quick-
+    glance index entry for the manifest, the same "reference, not full
+    content" discipline Ruling 2 above already applies to FSDB/coverage).
+    Returns None when no job has ever been recorded for this project --
+    an honest absence, not a fabricated placeholder job."""
+    d = dvh / "lsf" / "jobs"
+    if not d.is_dir():
+        return None
+    best = None
+    best_ts = ""
+    for p in sorted(d.glob("*.json")):
+        data = _read_json(p, {}) or {}
+        ts = str(data.get("last_change_time") or "")
+        if best is None or ts > best_ts:
+            best = data
+            best_ts = ts
+    if best is None:
+        return None
+    return {
+        "job_id": best.get("job_id"), "pattern": best.get("pattern"),
+        "lsf_status": best.get("lsf_status"), "sim_status": best.get("sim_status"),
+        "uvm_error_count": best.get("uvm_error_count"), "uvm_fatal_count": best.get("uvm_fatal_count"),
+    }
+
+
+def _collect_related_memory_references(root: Path, stage: Optional[str], project: Optional[str],
+                                        note: str = "") -> List[Dict[str, Any]]:
+    """Session-snapshot extension (Phase 14): REFERENCES ONLY (memory_id/
+    level/title/root_cause/confidence), never full record content -- the
+    durable Memory tier (`.dv-harness/memory/`) is deliberately excluded
+    from every session snapshot (see this module's own top-of-file design
+    comment: it is durable knowledge, not current-run state). This is a
+    lightweight index of which prior records were relevant AT SAVE TIME, so
+    a restored session knows WHICH memory to re-fetch (via
+    `dv_harness.memory.MemoryStore.get(memory_id)` / `memory_cli`) on
+    demand, rather than a duplicate copy of the records themselves. Reuses
+    the exact same MemoryRetriever.search() engine.py's own run_stage()
+    already calls for its `relevant_memory` prompt context (step 1b) --
+    not a second, differently-scored search."""
+    try:
+        from .memory import MemoryStore, MemoryRetriever
+        query_text = " ".join(str(v) for v in (stage, project, note) if v).strip()
+        hits = MemoryRetriever(MemoryStore(root)).search({"text": query_text}, limit=5)
+        return [
+            {"memory_id": h["memory"].get("memory_id"), "level": h["memory"].get("level"),
+             "title": h["memory"].get("title"), "root_cause": h["memory"].get("root_cause"),
+             "confidence": h["memory"].get("confidence")}
+            for h in hits
+        ]
+    except Exception:
+        return []
+
+
+def describe_resume_point(manifest: Dict[str, Any]) -> str:
+    """Session-snapshot extension (Phase 14): a short, plain-language answer
+    to "where we stopped / what was proven / what remains unknown / what
+    action should execute next", built ONLY from fields this same manifest
+    already carries (current_stage/current_job/current_hypothesis/
+    current_evidence/current_confidence/pending_action/related_memory) --
+    never a re-analysis, never new evidence gathering. Intended so an agent
+    (or a human) reading `restore_session()`'s return value does not have to
+    manually cross-reference every manifest field itself; this is purely a
+    formatting convenience over already-real data."""
+    lines = [f"Stopped at stage: {manifest.get('current_stage') or 'unknown'} "
+             f"(overall_status={manifest.get('overall_status') or 'unknown'})."]
+    if manifest.get("current_project"):
+        lines.append(f"Project: {manifest['current_project']}.")
+    job = manifest.get("current_job")
+    if job:
+        lines.append(f"Current job: {job.get('job_id')} (pattern={job.get('pattern')}, "
+                      f"lsf_status={job.get('lsf_status')}, sim_status={job.get('sim_status')}).")
+    if manifest.get("current_hypothesis"):
+        lines.append(f"What was proven / last hypothesis: {manifest['current_hypothesis']}")
+    if manifest.get("current_evidence"):
+        lines.append(f"Evidence gathered: {manifest['current_evidence']}")
+    if manifest.get("current_confidence"):
+        lines.append(f"Confidence: {manifest['current_confidence']}.")
+    related = manifest.get("related_memory") or []
+    if related:
+        lines.append("Related prior memory (references, re-fetch by memory_id before trusting): "
+                      + ", ".join(str(r.get("memory_id")) for r in related if r.get("memory_id")))
+    if manifest.get("pending_action"):
+        lines.append(f"What remains unknown / next action to execute: {manifest['pending_action']}")
+    else:
+        lines.append("No pending_action was recorded for this stage at save time -- "
+                      "re-evaluate the current stage's own gate evidence before proceeding.")
+    return "\n".join(lines)
+
+
 def _collect_artifact_references(root: Path) -> Dict[str, List[Dict[str, Any]]]:
     """See SESSION_ARTIFACT_REFERENCE_DIRS's own Ruling 2 comment: a
     REFERENCE (relative path + size/+hash) for every file under each
@@ -227,12 +363,24 @@ def save_session(project_root: Path, name: Optional[str] = None, note: str = "")
     artifact_references = _collect_artifact_references(root)
 
     state = _read_json(dest / "state.json", {}) or {}
+    current_stage = state.get("current_stage")
+    # Phase 14 (2026-09-03, obsidian-memory-debugflow task -- Session Save/
+    # Restore): "where we stopped" alone (current_stage/overall_status,
+    # already captured above since 2026-09-01) is not enough to resume
+    # without re-analyzing from zero. These four reads are ALL real,
+    # already-persisted CURRENT-RUN facts (never re-derived/guessed at save
+    # time): the current stage's own latest react iteration record supplies
+    # hypothesis/evidence/confidence/next_action; the LSF jobs dir and the
+    # Memory tier supply lightweight references. See each helper's own
+    # docstring above for why every one of these is a REFERENCE/READ, never
+    # a new write path or a duplicate copy of durable knowledge.
+    react_snapshot = _read_latest_react_iteration(dvh, current_stage) or {}
     manifest = {
         "name": name,
         "note": note,
         "saved_at": time.time(),
         "saved_by": _default_user(),
-        "current_stage": state.get("current_stage"),
+        "current_stage": current_stage,
         "active_stages": state.get("active_stages", []),
         "overall_status": state.get("overall_status"),
         "git_sha": state.get("git_sha"),
@@ -242,6 +390,17 @@ def save_session(project_root: Path, name: Optional[str] = None, note: str = "")
         # gate-validated VERIFY-stage identity when known, None otherwise.
         "dut_version": state.get("dut_version"),
         "tb_version": state.get("tb_version"),
+        # current_project/current_job/current_hypothesis/current_evidence/
+        # current_confidence/pending_action/related_memory (Phase 14,
+        # 2026-09-03): see the module-level docstring additions above for
+        # what each is sourced from and why.
+        "current_project": state.get("project"),
+        "current_job": _collect_current_job_reference(dvh),
+        "current_hypothesis": react_snapshot.get("reason_summary"),
+        "current_evidence": react_snapshot.get("evidence"),
+        "current_confidence": react_snapshot.get("confidence"),
+        "pending_action": react_snapshot.get("next_action"),
+        "related_memory": _collect_related_memory_references(root, current_stage, state.get("project"), note),
         "files": copied_files,
         "dirs": copied_dirs,
         "missing": missing,
@@ -354,7 +513,16 @@ def restore_session(project_root: Path, name: str, backup_current: bool = True,
         shutil.copytree(s, d)
 
     return {"restored": name, "auto_backup": backup_name, "manifest": manifest,
-            "saved_sha": saved_sha, "current_sha": current_sha, "sha_match": sha_match}
+            "saved_sha": saved_sha, "current_sha": current_sha, "sha_match": sha_match,
+            # resume_summary (Phase 14, 2026-09-03): a ready-to-read plain-
+            # language answer to "where we stopped / what was proven / what
+            # remains unknown / what action should execute next" -- see
+            # describe_resume_point()'s own docstring. `.get(..., {})` so
+            # restoring a snapshot saved BEFORE this feature (no
+            # current_hypothesis/pending_action/etc. keys in its manifest)
+            # degrades to the honest "no pending_action was recorded"
+            # fallback line rather than raising on a missing key.
+            "resume_summary": describe_resume_point(manifest)}
 
 
 def delete_session(project_root: Path, name: str) -> bool:

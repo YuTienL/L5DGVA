@@ -2667,7 +2667,8 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
                         correction_note: str | None = None,
                         human_approval: dict | None = None,
                         relevant_memory: list | None = None,
-                        kc_search_results: list | None = None) -> str:
+                        kc_search_results: list | None = None,
+                        vault_related_cases: list | None = None) -> str:
     """Purely additive over the pre-control-plane signature: called with
     only the original 3 positional args (constraints/correction_note/
     human_approval/relevant_memory all default None), the returned prompt is
@@ -2694,7 +2695,22 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
     A falsy value (None or []) leaves the prompt unchanged, same as every
     other additive kwarg here.
 
-    engine.DVHarness.run_stage() is the one caller that passes all five
+    vault_related_cases (Phase 10, 2026-09-03, obsidian-memory-debugflow
+    task): an optional list of DV-Knowledge Vault search hits
+    (dv_harness.memory_vault.search_related_memory_for_debug()'s own
+    "related_cases" payload -- each a FileSystemMarkdownAdapter.search()
+    result: {"score","note_id","path","frontmatter"}), e.g. from
+    engine.run_stage() for FAILURE_RECOVERY/RE_AUDIT only, BEFORE that
+    attempt's own adapter call runs. A third, distinct source from
+    relevant_memory (local per-project MemoryStore) and kc_search_results
+    (shared cross-user Knowledge Center): this one is the local, git/
+    Obsidian-compatible Markdown vault. Disclaimed exactly like the other
+    two -- prior evidence to independently re-verify, never an assumed
+    answer (CLAUDE.md Evidence Truth Rule / "不得直接假設 previous root cause ==
+    current root cause"). A falsy value (None or []) leaves the prompt
+    unchanged, same as every other additive kwarg here.
+
+    engine.DVHarness.run_stage() is the one caller that passes all six
     extra kwargs: constraints/correction_note/human_approval are sourced
     from control_plane.ControlPlane.load() for the CURRENT stage;
     relevant_memory is sourced from a fresh MemoryRetriever.search() call
@@ -2702,7 +2718,9 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
     a separate subsystem, not control-plane state; kc_search_results is
     sourced from a fresh KnowledgeCenterClient.search() call, gated on
     stage and on the client's own configured() check (see kc_search_results
-    above).
+    above); vault_related_cases is sourced from a fresh
+    memory_vault.search_related_memory_for_debug() call, gated on stage the
+    same way (see vault_related_cases above).
     - constraints: every active CONSTRAINT (`dv-harness constraint --add`),
       folded into every subsequent stage prompt until removed.
     - correction_note: an active CORRECT (`dv-harness correct <stage>
@@ -2771,6 +2789,18 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
                 f"- [{r.get('memory_id', '?')}] {r.get('symptom') or ''}"
                 + (f"：{r.get('root_cause')}" if r.get("root_cause") else "")
                 for r in kc_search_results
+            )
+        )
+    if vault_related_cases:
+        prompt += (
+            "\n\nDV-Knowledge Vault（本機 Obsidian/Markdown 知識庫）搜尋到的既有記錄"
+            "（Prior Evidence，僅供參考 -- 依 CLAUDE.md Evidence Truth Rule，"
+            "current evidence 永遠優先於這裡任何一筆記錄；不得直接假設 previous root cause == "
+            "current root cause，目前 RTL/VIP/log/waveform 證據仍須獨立重新驗證）：\n"
+            + "\n".join(
+                f"- [{(c.get('frontmatter') or {}).get('id', c.get('note_id', '?'))}] "
+                f"{(c.get('frontmatter') or {}).get('failure') or ''}"
+                for c in vault_related_cases
             )
         )
     return prompt

@@ -183,6 +183,22 @@ object files. This is why the default is `false` — enable it for a real,
 persistent vault you intend to keep, not for a throwaway/test project
 root.
 
+**Real commit policy (Phase 13, 2026-09-03)**: NOT on every Working Memory
+update — only on a `route_and_store()` write that lands on JOB_MEMORY
+("verified Job result"), PROJECT_MEMORY ("Project Memory update"),
+ENGINEERING_MEMORY (promotion), or ORGANIZATIONAL_MEMORY (approval); see
+`memory_router._VAULT_WRITE_THROUGH_DESTINATIONS`. Commit message is
+`memory(<protocol>): <short description>` (`_build_vault_commit_message()`
+— falls back to `_general` when the record carries no real protocol).
+Direct `provider.create()`/`update()`/`delete()` calls (this page's Vault
+examples above) keep the adapter's own generic commit message unless you
+pass `commit_message=` yourself — only the router applies this policy
+automatically. A real commit's SHA is written back onto the underlying
+JSON record as `knowledge_commit_sha` (`memory_router._write_back_
+knowledge_commit_sha()`), alongside `rtl_sha`/`tb_sha`, for cross-referencing
+which vault commit captured a given finding — not for
+ORGANIZATIONAL_MEMORY, which has no local JSON file to patch.
+
 ## Everyday PowerShell entry points (repo root)
 
 ```powershell

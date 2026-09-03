@@ -95,6 +95,88 @@ class TestRunReconciliationCycle:
         assert any(d.field == "sim_status" and d.severity == "CRITICAL"
                    for d in discrepancies)
 
+    def test_real_epilogue_uvm_fatal_upgrades_job_memory_to_job_failure_with_signature(self, tmp_path):
+        # Phase 11 (2026-09-03, obsidian-memory-debugflow task -- Regression
+        # Integration): the EARLIER reconcile_batch() call inside this same
+        # cycle (bjobs-only: lsf_status goes RUN->DONE, uvm_fatal_count still
+        # 0 at that point) can only write a premature "job_result" Job
+        # Memory record for this job -- the real UVM_FATAL is only visible
+        # once THIS test's real sim.log epilogue gets parsed a few lines
+        # later in the SAME cycle. Proves the second, real call site
+        # (lsf_client._upsert_job_tier_memory_record(), called right after
+        # save_job_state() below) upgrades that record to the accurate
+        # "job_failure" classification, with a real failure_signature
+        # attached, not just leaving the earlier "job_result" guess in place.
+        from dv_harness.memory import MemoryStore
+        uvm_root = tmp_path / "uvm"
+        run_dir = tmp_path / "sim" / "run" / "baz_1"
+        run_dir.mkdir(parents=True)
+        log_path = run_dir / "sim.log"
+        log_path.write_text(
+            "some output\nFINAL CHECK @ 1000 ns\n"
+            "UVM_FATAL = 1, UVM_ERROR = 3, UVM_WARNING = 0\nVERDICT: FAILED\n"
+        )
+        _write_job(tmp_path, 333, pattern="baz", sim_log=str(log_path), lsf_status="RUN")
+
+        live_bjobs = [{"job_id": 333, "stat": "DONE", "queue": "normal",
+                       "exec_host": "host1", "job_name": "baz", "submit_time": "x"}]
+        with patch("dv_harness.regression_reporter.lsf_client.discover_live_jobs",
+                   return_value=live_bjobs), \
+             patch("dv_harness.regression_reporter.lsf_client._run_bjobs",
+                   return_value={"RECORDS": [{"JOBID": "333", "STAT": "DONE"}]}):
+            regression_reporter.run_reconciliation_cycle(tmp_path, "vcuser1", uvm_root)
+
+        updated = lsf_client.load_job_state(tmp_path, 333)
+        assert updated.uvm_fatal_count == 1
+        assert updated.sim_status == "FAIL"
+
+        rec = MemoryStore(tmp_path).get("JOB-333-TERMINAL-RECONCILE")
+        assert rec is not None
+        assert rec["kind"] == "job_failure", (
+            "a real epilogue-parsed UVM_FATAL must upgrade the Job Memory "
+            f"record to job_failure, got: {rec}"
+        )
+        assert rec["failure_signature"]["uvm_fatal_count"] == 1
+        assert rec["failure_signature"]["abnormal_termination"] is True
+
+    def test_real_epilogue_failed_verdict_with_zero_counts_is_still_a_real_job_failure(self, tmp_path):
+        # Phase 11 fix (2026-09-03): a real "FAILED" epilogue verdict with
+        # BOTH uvm_error/uvm_fatal counts genuinely zero (a real, parser-
+        # permitted combination -- a timeout, or an objection/phase-declared
+        # failure that raised neither marker) must still classify as
+        # is_failure=True -- CLAUDE.md's "LSF DONE is not equal to DV PASS"
+        # cuts both ways: a real DV FAIL verdict is real failure evidence
+        # even when no UVM_ERROR/UVM_FATAL count says so.
+        from dv_harness.memory import MemoryStore
+        uvm_root = tmp_path / "uvm"
+        run_dir = tmp_path / "sim" / "run" / "timeout_1"
+        run_dir.mkdir(parents=True)
+        log_path = run_dir / "sim.log"
+        log_path.write_text(
+            "some output\nFINAL CHECK @ 5000 ns\n"
+            "UVM_FATAL = 0, UVM_ERROR = 0, UVM_WARNING = 0\nVERDICT: FAILED\n"
+        )
+        _write_job(tmp_path, 334, pattern="timeout", sim_log=str(log_path), lsf_status="RUN")
+
+        live_bjobs = [{"job_id": 334, "stat": "DONE", "queue": "normal",
+                       "exec_host": "host1", "job_name": "timeout", "submit_time": "x"}]
+        with patch("dv_harness.regression_reporter.lsf_client.discover_live_jobs",
+                   return_value=live_bjobs), \
+             patch("dv_harness.regression_reporter.lsf_client._run_bjobs",
+                   return_value={"RECORDS": [{"JOBID": "334", "STAT": "DONE"}]}):
+            regression_reporter.run_reconciliation_cycle(tmp_path, "vcuser1", uvm_root)
+
+        updated = lsf_client.load_job_state(tmp_path, 334)
+        assert updated.uvm_fatal_count == 0
+        assert updated.uvm_error_count == 0
+        assert updated.sim_status == "FAIL"
+
+        rec = MemoryStore(tmp_path).get("JOB-334-TERMINAL-RECONCILE")
+        assert rec is not None
+        assert rec["kind"] == "job_failure", (
+            f"a real FAILED verdict with zero UVM counts is still a real failure, got: {rec}"
+        )
+
     def test_registered_job_absent_from_live_jobs_is_still_analyzed(self, tmp_path):
         """Integration regression test for the CRITICAL seam bug found in the
         2026-09-01 whole-branch review: run_reconciliation_cycle() built its

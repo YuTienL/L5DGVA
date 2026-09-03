@@ -85,6 +85,26 @@ promotion:
   Memory -- it belongs in Working Memory (or Blackboard, for current-run
   state) until it clears verification.
 
+**Debug-flow / regression / git-integration mechanics (2026-09-03,
+obsidian-memory-debugflow, Workstream 3)**: `dv_harness.engine.DVHarness.
+run_stage()`'s FAILURE_RECOVERY/RE_AUDIT stages, and `dv_harness.lsf_client
+._write_job_tier_memory_on_terminal_reconcile()` (real UVM_ERROR/UVM_FATAL/
+abnormal-termination signal), both call the same shared interface --
+`dv_harness.memory_vault.build_failure_signature()` /
+`search_related_memory_for_debug()` -- to surface Vault matches as prior
+evidence BEFORE a debug attempt (never an assumed root cause: 不得直接假設
+previous root cause == current root cause). AFTER a debug attempt: FAIL/
+PARTIAL updates Job Memory only, no promotion; a RE_AUDIT PASS records
+symptom/root_cause/evidence/fix/verification/confidence/git SHA/test/result
+and always triggers (not always succeeds) the `promote_to_organizational()`
+evaluation. Vault git commits (`memory.git_enabled`, opt-in) fire only on a
+verified Job result, a Project Memory update, an Engineering Memory
+promotion, or an Organizational Memory approval -- never on a Working Memory
+update -- with message format `memory(<protocol>): <short description>`; a
+real commit's SHA is written back onto the underlying JSON MemoryStore
+record as `knowledge_commit_sha`, alongside its existing `rtl_sha`/`tb_sha`.
+See `.work/obsidian-memory-debugflow-report.md` for full detail.
+
 
 # AI Agent Harness L5 Canonical Identity
 

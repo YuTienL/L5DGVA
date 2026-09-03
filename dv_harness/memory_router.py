@@ -40,6 +40,24 @@ _TIER_STORE_CLASSES = {
     "WORKING_MEMORY": WorkingMemoryStore,
 }
 
+# Vault write-through destinations (Phase 13 -- Git Integration, 2026-09-03):
+# the user's spec's real commit policy is "NOT on every Working Memory
+# update, only on: verified Job result, Project Memory update, Engineering
+# Memory promotion, Organizational Memory approval". ENGINEERING_MEMORY and
+# ORGANIZATIONAL_MEMORY already write through their own dedicated branches
+# below (obsidian-memory-core, 2026-09-03); this set adds the other two named
+# destinations to the SAME generic-dispatch branch at the bottom of
+# route_and_store() -- WORKING_MEMORY is deliberately absent, satisfying the
+# spec's explicit negative ("not on every Working Memory update") by
+# construction rather than by a separate check. JOB_MEMORY is "verified" in
+# this codebase's own real-evidence sense even though route_memory() itself
+# does not gate it on a `verified` flag the way PROJECT_MEMORY/
+# ENGINEERING_MEMORY do: the only real writers of a JOB_MEMORY record today
+# (lsf_client.py's `_write_job_tier_memory_on_terminal_reconcile`, and this
+# workstream's new FAILURE_RECOVERY/RE_AUDIT-fail hook in engine.py) only
+# ever fire from a real, already-reconciled LSF/gate fact, never a guess.
+_VAULT_WRITE_THROUGH_DESTINATIONS = {"JOB_MEMORY", "PROJECT_MEMORY"}
+
 # Destinations eligible for an ADDITIONAL best-effort push to the shared,
 # cross-user Linux-server knowledge center (dv_harness/knowledge_center.py),
 # on top of (never instead of) the local write above. BLACKBOARD is
@@ -146,6 +164,7 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
         vault = _maybe_write_vault_note(root, cfg, destination, mem)
         if vault is not None:
             result["vault_write"] = vault
+            _write_back_knowledge_commit_sha(root, mem, vault)
         return result
     tier_cls = _TIER_STORE_CLASSES.get(destination)
     if tier_cls is not None:
@@ -157,6 +176,15 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
         shared = _maybe_share(root, cfg, destination, "_general", mem.get("protocol") or "_general", mem)
         if shared is not None:
             result["shared_push"] = shared
+    # Phase 13 -- Git Integration: JOB_MEMORY ("verified Job result") and
+    # PROJECT_MEMORY ("Project Memory update") vault write-through -- see
+    # _VAULT_WRITE_THROUGH_DESTINATIONS' own comment above for why
+    # WORKING_MEMORY never reaches this branch.
+    if destination in _VAULT_WRITE_THROUGH_DESTINATIONS:
+        vault = _maybe_write_vault_note(root, cfg, destination, mem)
+        if vault is not None:
+            result["vault_write"] = vault
+            _write_back_knowledge_commit_sha(root, mem, vault)
     return result
 
 
@@ -215,16 +243,40 @@ def _find_confirming_engineering_match(store: MemoryStore, record: Dict[str, Any
     return None
 
 
+# Phase 13 -- Git Integration commit-message policy: `memory(<protocol>):
+# <short description>`, exactly the format the user's spec names. A record
+# with no real protocol (e.g. a JOB_MEMORY reconcile record before this
+# workstream's engine.py FAILURE_RECOVERY hook adds one) falls back to
+# "_general", matching this router's own existing "_general" convention for
+# an absent protocol elsewhere (_maybe_share's category/protocol args
+# above) -- never a fabricated protocol name.
+def _build_vault_commit_message(mem: Dict[str, Any]) -> str:
+    protocol = mem.get("protocol") or "_general"
+    desc = str(mem.get("title") or mem.get("root_cause") or mem.get("failure")
+               or mem.get("memory_id") or "memory update")[:160]
+    return f"memory({protocol}): {desc}"
+
+
 def _maybe_write_vault_note(root: Path, cfg, destination: str, mem: Dict[str, Any]):
-    """ADDITIVE write-through (obsidian-memory-core, 2026-09-03): mirrors an
-    ENGINEERING_MEMORY/ORGANIZATIONAL_MEMORY promotion into a real
-    Markdown+YAML note in the DV-Knowledge Vault (dv_harness/memory_vault.py),
-    via HybridMemoryProvider -- Obsidian used opportunistically if/when its
-    own status() ever reports READY, the real FileSystemMarkdownAdapter
-    otherwise (today, always). Gated on `cfg` exactly like `_maybe_share()`
-    above (an explicit `cfg={}` opts out of every cfg-driven additive
-    behavior this router has, not just shared-knowledge-center push) so a
-    caller wanting pre-this-feature local-only behavior still gets it.
+    """ADDITIVE write-through (obsidian-memory-core, 2026-09-03; extended to
+    JOB_MEMORY/PROJECT_MEMORY by Phase 13, 2026-09-03): mirrors a
+    commit-worthy promotion/update into a real Markdown+YAML note in the
+    DV-Knowledge Vault (dv_harness/memory_vault.py), via HybridMemoryProvider
+    -- Obsidian used opportunistically if/when its own status() ever reports
+    READY, the real FileSystemMarkdownAdapter otherwise (today, always).
+    Gated on `cfg` exactly like `_maybe_share()` above (an explicit `cfg={}`
+    opts out of every cfg-driven additive behavior this router has, not just
+    shared-knowledge-center push) so a caller wanting pre-this-feature
+    local-only behavior still gets it.
+
+    Passes the real `memory(<protocol>): <short description>` commit message
+    (Phase 13's exact required format, see `_build_vault_commit_message()`)
+    through to the provider's `commit_message` parameter -- when git
+    integration is enabled (`memory.git_enabled`), this is the one real
+    commit-message policy this vault ever produces; every OTHER note
+    operation the codebase can also perform (e.g. a hand-authored
+    provider.create() call with no router involved) keeps
+    FileSystemMarkdownAdapter's own generic default message unchanged.
 
     A vault-write failure must NEVER affect the local JSON write this
     function is called after -- same non-negotiable ordering `_maybe_share`
@@ -246,15 +298,45 @@ def _maybe_write_vault_note(root: Path, cfg, destination: str, mem: Dict[str, An
         frontmatter = mv.build_frontmatter_from_memory_record(destination, mem, project_name=project_name)
         sections = mv.build_sections_from_memory_record(mem)
         note_id = frontmatter["id"]
+        commit_message = _build_vault_commit_message(mem)
         existing = provider.read(note_id)
         if existing.get("ok"):
-            return provider.update(note_id, frontmatter_patch=frontmatter, sections_patch=sections)
-        result = provider.create(frontmatter, sections=sections)
+            return provider.update(note_id, frontmatter_patch=frontmatter, sections_patch=sections,
+                                    commit_message=commit_message)
+        result = provider.create(frontmatter, sections=sections, commit_message=commit_message)
         if not result.get("ok") and result.get("error") == "ALREADY_EXISTS":
-            return provider.update(note_id, frontmatter_patch=frontmatter, sections_patch=sections)
+            return provider.update(note_id, frontmatter_patch=frontmatter, sections_patch=sections,
+                                    commit_message=commit_message)
         return result
     except Exception as exc:  # pragma: no cover - a vault-write failure must never break the local write
         return {"ok": False, "error": "VAULT_WRITE_FAILED", "detail": str(exc)}
+
+
+def _write_back_knowledge_commit_sha(root: Path, mem: Dict[str, Any], vault_result: Dict[str, Any]) -> None:
+    """Phase 13 traceability: after a real vault git commit, patch the SAME
+    local MemoryStore/tier-store record (`mem`, already written by this
+    router's own JOB_MEMORY/PROJECT_MEMORY/ENGINEERING_MEMORY branches above)
+    with the resulting `knowledge_commit_sha` -- so the durable JSON record
+    (the system of record) carries a real pointer to exactly which vault
+    commit captured it, alongside its existing `rtl_sha`/`tb_sha` fields
+    (memory_vault.MEMORY_NOTE_OPTIONAL_FIELDS). Deliberately never re-embeds
+    the SHA into the vault note's OWN frontmatter a second time: the note's
+    content was already committed by the time the SHA is known, so writing
+    it back into that same note would need a second, circular commit -- the
+    JSON record is the one real place this cross-reference belongs.
+
+    ORGANIZATIONAL_MEMORY is never passed here (see its own route_and_store()
+    branch): it has no local `.dv-harness/memory/organizational/` file store
+    to patch (memory.py's OrganizationalMemoryStore design), only the shared
+    Knowledge Center push. Best-effort: a failure here must never affect the
+    already-completed local write or vault write."""
+    sha = vault_result.get("knowledge_commit_sha") if isinstance(vault_result, dict) else None
+    if not sha or not mem.get("memory_id") or not mem.get("level"):
+        return
+    try:
+        MemoryStore(root).add(mem["level"], {**mem, "knowledge_commit_sha": sha})
+    except Exception:
+        pass
 
 
 def promote_to_organizational(root: Path, memory_id: str, confidence_inputs: Dict[str, Any],

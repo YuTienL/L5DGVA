@@ -31,14 +31,16 @@ def test_agent_count_matches_real_glob():
     """Finding I1 regression test: `.claude/agents/*.md` also contains
     ROSTER.md (Task 2's live-checkable agent roster doc), which is a roster
     document ABOUT the agents, not an agent profile itself, and must be
-    excluded from agent_count. Verified on this real repo: 20 total *.md
-    files under .claude/agents/, 19 of which are genuine agent profiles
+    excluded from agent_count. Verified on this real repo: 21 total *.md
+    files under .claude/agents/, 20 of which are genuine agent profiles
     (have YAML frontmatter with a description: field) and 1 (ROSTER.md)
     which is not -- matching this finding's own "N total, not N-1" evidence.
     (16 -> 19 profiles, 2026-09-01: rtl-evidence-agent/log-evidence-agent/
     vip-spec-evidence-agent added as real, narrow RCA evidence-gathering
     specialists for `.claude/workflows/rca-multi-agent-fusion.js` -- see
-    CORE/issue-triage-and-deep-rca and ROSTER.md.)"""
+    CORE/issue-triage-and-deep-rca and ROSTER.md. 19 -> 20 profiles,
+    2026-09-03: memory-agent.md added as the real, dedicated Memory Agent --
+    see docs/MEMORY_AGENT.md.)"""
     stats = compute_stats(ROOT)
     all_md = list((ROOT / ".claude" / "agents").glob("*.md"))
     real_count = _real_agent_profile_count()
@@ -51,7 +53,7 @@ def test_agent_count_matches_real_glob():
         "expected exactly one non-profile file (ROSTER.md) under .claude/agents/")
 
     assert stats["agent_count"] == real_count
-    assert stats["agent_count"] == 19
+    assert stats["agent_count"] == 20
     assert real_count > 0
 
     roster_files = [p for p in list_agent_files(ROOT) if p.stem == "ROSTER"]

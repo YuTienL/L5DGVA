@@ -537,6 +537,161 @@ def test_summarize_user_access_empty_project_returns_no_users():
         shutil.rmtree(tmp)
 
 
+# --- session_snapshot.py Phase 14 extension (2026-09-03, obsidian-memory-
+# debugflow task, Workstream 3): current job / current hypothesis / current
+# evidence / current confidence / pending action / related memory (refs
+# only) + describe_resume_point(). See session_snapshot.py's own module-level
+# "Phase 14 addendum" comment for what each field is sourced from.
+
+def _seed_debug_context(tmp: Path, stage: str = "FAILURE_RECOVERY") -> None:
+    """Writes the same real files the harness itself would have produced
+    mid-debug: one react iteration record (react.ReactRecorder.record()'s
+    exact file shape) and one LSF JobState -- so save_session() has real
+    current-run facts to summarize, without needing a full engine run."""
+    react_dir = tmp / ".dv-harness" / "react" / stage
+    react_dir.mkdir(parents=True, exist_ok=True)
+    (react_dir / "iteration_001.json").write_text(json.dumps({
+        "iteration": 1, "node": stage,
+        "reason_summary": "ep0 FIFO underrun suspected from sim.log UVM_ERROR",
+        "action": {"adapter": "FakeAdapter"}, "tool": "ClaudeAdapter.run",
+        "observation": {"ok": True}, "evidence": {"symptom": "usb ep0 timeout"},
+        "confidence": "MEDIUM", "next_action": "retry_or_reroute",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    from dv_harness.lsf_client import JobState, save_job_state
+    save_job_state(tmp, JobState(job_id=101, pattern="usb_ep0_timeout",
+                                  lsf_status="EXIT", sim_status="FAIL"))
+
+    from dv_harness.memory import MemoryStore
+    MemoryStore(tmp).add("engineering", {
+        "title": "ep0 FIFO underrun", "protocol": "USB2",
+        "root_cause": "missing prefetch guard", "confidence": "HIGH",
+    })
+
+
+def test_save_session_captures_current_debug_context_not_just_current_stage():
+    tmp = _tmp()
+    try:
+        r = _run_cli(tmp, "set-stage", "FAILURE_RECOVERY")
+        assert r.returncode == 0, r.stderr
+        _seed_debug_context(tmp)
+
+        manifest = save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+        assert manifest["current_stage"] == "FAILURE_RECOVERY"
+        assert manifest["current_hypothesis"] == "ep0 FIFO underrun suspected from sim.log UVM_ERROR"
+        assert manifest["current_evidence"] == {"symptom": "usb ep0 timeout"}
+        assert manifest["current_confidence"] == "MEDIUM"
+        assert manifest["pending_action"] == "retry_or_reroute"
+
+        job = manifest["current_job"]
+        assert job["job_id"] == 101
+        assert job["lsf_status"] == "EXIT"
+        assert job["pattern"] == "usb_ep0_timeout"
+
+        related = manifest["related_memory"]
+        assert related, f"expected at least one related-memory reference, got {related!r}"
+        assert related[0]["memory_id"]
+        assert related[0]["root_cause"] == "missing prefetch guard"
+        # REFERENCES ONLY -- the durable Memory tier's full record content
+        # (e.g. a "verification"/"evidence" key a real engineering-tier
+        # record might carry) must never be duplicated into the snapshot.
+        assert set(related[0].keys()) == {"memory_id", "level", "title", "root_cause", "confidence"}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_debug_context_fields_are_honestly_absent_with_no_debug_activity():
+    # A project that never entered a debug flow (no react/ iteration files,
+    # no LSF jobs, no Memory) must get honest None/empty defaults, never a
+    # fabricated placeholder.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert manifest["current_hypothesis"] is None
+        assert manifest["current_evidence"] is None
+        assert manifest["current_confidence"] is None
+        assert manifest["pending_action"] is None
+        assert manifest["current_job"] is None
+        assert manifest["related_memory"] == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_session_resume_summary_answers_where_we_stopped_what_remains_unknown_and_next_action():
+    tmp = _tmp()
+    try:
+        r = _run_cli(tmp, "set-stage", "FAILURE_RECOVERY")
+        assert r.returncode == 0, r.stderr
+        _seed_debug_context(tmp)
+        save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+
+        result = restore_session(tmp, "c1")
+        summary = result["resume_summary"]
+        # "where we stopped"
+        assert "FAILURE_RECOVERY" in summary
+        # "what was proven" (the last real hypothesis/evidence this attempt had)
+        assert "ep0 FIFO underrun suspected from sim.log UVM_ERROR" in summary
+        assert "usb ep0 timeout" in summary
+        # "what remains unknown / what action should execute next"
+        assert "retry_or_reroute" in summary
+        # related memory surfaced as a re-fetchable reference, not inlined content
+        assert any(
+            r.get("memory_id") and r["memory_id"] in summary for r in result["manifest"]["related_memory"]
+        )
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_session_save_restore_round_trip_preserves_debug_context_fields():
+    # Explicit round-trip proof (Phase 22 test-list requirement): every
+    # Phase 14 field written by save_session() must come back byte-identical
+    # through restore_session()'s own manifest, not just exist at save time.
+    tmp = _tmp()
+    try:
+        r = _run_cli(tmp, "set-stage", "FAILURE_RECOVERY")
+        assert r.returncode == 0, r.stderr
+        _seed_debug_context(tmp)
+        saved = save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+
+        r = _run_cli(tmp, "set-stage", "BUILD")  # move the live state away
+        assert r.returncode == 0, r.stderr
+
+        restored = restore_session(tmp, "c1")["manifest"]
+        for key in ("current_stage", "current_hypothesis", "current_evidence",
+                    "current_confidence", "pending_action", "current_job", "related_memory"):
+            assert restored[key] == saved[key], f"{key} did not round-trip: {restored[key]!r} != {saved[key]!r}"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_describe_resume_point_degrades_safely_for_a_manifest_predating_phase14():
+    from dv_harness.session_snapshot import describe_resume_point
+    # A snapshot saved before this feature existed has none of the new keys
+    # -- must produce an honest fallback, never a KeyError.
+    summary = describe_resume_point({"current_stage": "BUILD", "overall_status": "PARTIAL"})
+    assert "BUILD" in summary
+    assert "PARTIAL" in summary
+    assert "No pending_action was recorded" in summary
+
+
+def test_collect_current_job_reference_picks_the_most_recently_changed_job():
+    from dv_harness.session_snapshot import _collect_current_job_reference
+    from dv_harness.lsf_client import JobState, save_job_state
+    tmp = _tmp()
+    try:
+        (tmp / ".dv-harness").mkdir(parents=True, exist_ok=True)
+        save_job_state(tmp, JobState(job_id=1, pattern="older_job", lsf_status="DONE"))
+        time.sleep(0.01)
+        save_job_state(tmp, JobState(job_id=2, pattern="newer_job", lsf_status="EXIT"))
+
+        ref = _collect_current_job_reference(tmp / ".dv-harness")
+        assert ref["job_id"] == 2
+        assert ref["pattern"] == "newer_job"
+    finally:
+        shutil.rmtree(tmp)
+
+
 # --- tools/knowledge_center/broker.py: cmd_db_info --------------------------
 
 def _run_broker(verb, root, payload):

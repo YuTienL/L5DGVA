@@ -11,7 +11,8 @@ from .prompts import build_stage_prompt
 from .policy import next_stage, graph_next, can_signoff
 from .gates import evaluate_stage_evidence, extract_evidence_blocks, STAGE_GATES, JUDGMENT_FIELDS
 from .react_loop import InnerReactLoop, evaluate_stage_evidence_with_detail
-from .memory_router import route_and_store
+from .memory_router import route_and_store, promote_to_organizational
+from .memory_vault import build_failure_signature, search_related_memory_for_debug
 from .inference import score_confidence, identify_gap, next_best_action, promote_if_high_confidence
 from .qualified_conclusion import build_qualified_conclusion
 from .knowledge_center import KnowledgeCenterClient
@@ -971,6 +972,47 @@ class DVHarness:
         "first_bad_event", "causal_chain", "supporting_evidence", "counter_evidence",
     ]
 
+    def _root_cause_confidence_inputs(self, block: dict) -> Dict[str, Any]:
+        """Real independent_sources_count/evidence_refs_verified/
+        counter_evidence_count/multi_agent_consensus_count derivation from a
+        root_cause_evidence_gate evidence block -- factored out of
+        _score_root_cause_confidence() below (2026-09-03, obsidian-memory-
+        debugflow task, Phase 10) so _promote_verified_fix_knowledge() can
+        compose with the exact SAME real inference.score_confidence() inputs
+        when it triggers memory_router.promote_to_organizational()'s
+        evaluation, rather than inventing a second, parallel derivation of
+        the same real evidence for a different call site. See
+        _score_root_cause_confidence()'s own docstring for the full
+        rationale behind each of these four counts -- unchanged by this
+        refactor, only given a name so a second caller can reuse it."""
+        def _cite_count(v):
+            if isinstance(v, list):
+                return len(v)
+            if isinstance(v, dict):
+                return len(v)
+            return 1 if v else 0
+
+        independent_sources_count = _cite_count(block.get("supporting_evidence"))
+        counter_evidence_count = _cite_count(block.get("counter_evidence"))
+        evidence_refs_verified = bool(
+            block.get("first_bad_event") and block.get("causal_chain") and block.get("supporting_evidence")
+        )
+
+        hyps = block.get("hypotheses")
+        multi_agent_consensus_count = 0
+        if isinstance(hyps, list):
+            selected_claim = block.get("root_cause")
+            multi_agent_consensus_count = sum(
+                1 for h in hyps
+                if isinstance(h, dict) and h.get("claim") != selected_claim and h.get("counter_evidence")
+            )
+        return {
+            "independent_sources_count": independent_sources_count,
+            "evidence_refs_verified": evidence_refs_verified,
+            "counter_evidence_count": counter_evidence_count,
+            "multi_agent_consensus_count": multi_agent_consensus_count,
+        }
+
     def _score_root_cause_confidence(self, stage: str, evidence_blocks: dict,
                                       verdict: str = "PASS") -> None:
         """Wires dv_harness/inference.py's score_confidence/identify_gap/
@@ -1042,34 +1084,7 @@ class DVHarness:
         if not isinstance(block, dict):
             return
 
-        def _cite_count(v):
-            if isinstance(v, list):
-                return len(v)
-            if isinstance(v, dict):
-                return len(v)
-            return 1 if v else 0
-
-        independent_sources_count = _cite_count(block.get("supporting_evidence"))
-        counter_evidence_count = _cite_count(block.get("counter_evidence"))
-        evidence_refs_verified = bool(
-            block.get("first_bad_event") and block.get("causal_chain") and block.get("supporting_evidence")
-        )
-
-        hyps = block.get("hypotheses")
-        multi_agent_consensus_count = 0
-        if isinstance(hyps, list):
-            selected_claim = block.get("root_cause")
-            multi_agent_consensus_count = sum(
-                1 for h in hyps
-                if isinstance(h, dict) and h.get("claim") != selected_claim and h.get("counter_evidence")
-            )
-
-        confidence_result = score_confidence(
-            independent_sources_count=independent_sources_count,
-            evidence_refs_verified=evidence_refs_verified,
-            counter_evidence_count=counter_evidence_count,
-            multi_agent_consensus_count=multi_agent_consensus_count,
-        )
+        confidence_result = score_confidence(**self._root_cause_confidence_inputs(block))
 
         supplied = [c for c in self.ROOT_CAUSE_EVIDENCE_CATEGORIES if block.get(c)]
         gap = identify_gap(self.ROOT_CAUSE_EVIDENCE_CATEGORIES, supplied)
@@ -1405,6 +1420,30 @@ class DVHarness:
                     f"fix_regression_non_regression_gate both PASSed).",
             "provenance": f"RE_AUDIT auto-promotion, root_cause_id={root_cause_id}",
             "protocol": rc_block.get("protocol"),
+            # Phase 10 (2026-09-03, obsidian-memory-debugflow task): "record
+            # symptom/root_cause/evidence/fix/verification/confidence/git
+            # SHA/test/result" -- symptom/root_cause/fix/verification/
+            # confidence were already captured above; these three close the
+            # remaining gap, each from real gate-verified evidence, never
+            # guessed:
+            #   git_sha: the fix's own commit hash when the closure gate
+            #     captured one (fix_regression_non_regression_gate requires
+            #     fix_commit_hash non-empty to PASS at all), else this
+            #     harness's own current state.git_sha as an honest fallback.
+            #   rtl_sha/tb_sha: state.dut_version/tb_version -- the SAME
+            #     real, gate-validated VERIFY-stage identity fields
+            #     models.py's HarnessState already carries (never a second,
+            #     differently-sourced identity for this record).
+            #   test/result: fix_regression_non_regression_gate's own
+            #     target_testcase_id/target_post_fix_result -- the specific
+            #     testcase this fix was proven against and its real recorded
+            #     outcome (cross-checked against the real JobState registry
+            #     by that gate itself when a job_id was supplied).
+            "git_sha": closure_block.get("fix_commit_hash") or self.state.git_sha,
+            "rtl_sha": self.state.dut_version,
+            "tb_sha": self.state.tb_version,
+            "test": closure_block.get("target_testcase_id"),
+            "result": closure_block.get("target_post_fix_result"),
         }
         try:
             promotion = route_and_store(self.root, record, cfg=self.cfg)
@@ -1412,6 +1451,79 @@ class DVHarness:
             promotion = {"destination": "PROMOTION_FAILED", "error": str(exc)}
         self.store.event({
             "ts": now(), "stage": stage, "event": "VERIFIED_FIX_PROMOTED",
+            "promotion": promotion,
+        })
+
+        # Phase 10 (2026-09-03): "on PASS ... trigger the Workstream-1
+        # promotion evaluation" -- the moment a real ENGINEERING_MEMORY
+        # record exists for this verified fix, ask
+        # memory_router.promote_to_organizational() whether it ALSO now
+        # qualifies for Organizational Memory. Composes with the exact same
+        # real inference.score_confidence() inputs _score_root_cause_
+        # confidence() already derives from this same rc_block (via
+        # _root_cause_confidence_inputs()) -- never a second, parallel
+        # scoring system, per the user's spec's own explicit instruction.
+        # Whether this actually promotes depends entirely on
+        # promote_to_organizational()'s three real gates -- most commonly
+        # INSUFFICIENT_CONFIRMATION on a fix's first PASS here, since one
+        # verified fix is not yet "repeated confirmation"; this call's job
+        # is only to make sure that real evaluation runs on every verified
+        # fix, not to force a promotion. Best-effort: never allowed to
+        # affect the already-completed VERIFIED_FIX_PROMOTED event above.
+        if promotion.get("destination") == "ENGINEERING_MEMORY" and promotion.get("memory_id"):
+            try:
+                org_eval = promote_to_organizational(
+                    self.root, promotion["memory_id"],
+                    confidence_inputs=self._root_cause_confidence_inputs(rc_block),
+                    cfg=self.cfg, kind="methodology",
+                )
+            except Exception as exc:
+                org_eval = {"promoted": False, "reason": "PROMOTION_EVAL_EXCEPTION", "error": str(exc)}
+            self.store.event({
+                "ts": now(), "stage": stage, "event": "ORGANIZATIONAL_PROMOTION_EVALUATED",
+                "memory_id": promotion.get("memory_id"), "result": org_eval,
+            })
+
+    def _record_debug_attempt_job_memory(self, stage: str, ss: Dict[str, Any],
+                                          failure_signature: Optional[Dict[str, Any]]) -> None:
+        """Phase 10 AFTER-hook, FAIL/PARTIAL branch (2026-09-03,
+        obsidian-memory-debugflow task): "on FAIL, update Job Memory only (no
+        promotion)". A debug attempt (FAILURE_RECOVERY triage, or a RE_AUDIT
+        fix-verification attempt) that does not close this attempt with PASS
+        is real evidence about THIS run -- worth remembering for THIS job so
+        a later attempt/agent doesn't re-derive it from zero -- but it is not
+        yet reusable cross-run knowledge, so this deliberately calls
+        route_and_store() with kind="job_failure" only, never
+        kind="root_cause"/"verified_fix"/"debug_lesson" (which would route to
+        ENGINEERING_MEMORY and could trigger promotion evaluation on an
+        UNVERIFIED attempt -- exactly what the user's spec's "no promotion"
+        forbids). `failure_signature` is the SAME real signature the BEFORE
+        step (1b-3 above) built for this exact attempt, from the same
+        real Blackboard findings/protocol-decision evidence, not a second,
+        differently-derived one.
+
+        Best-effort, mirrors every other _promote_*/_record_* method's
+        try/except-wrapped route_and_store() call in this class -- a
+        persistence failure here must never affect the already-computed real
+        stage result run_stage() is about to return."""
+        record = {
+            "kind": "job_failure",
+            "scope": "debug",
+            "title": f"{stage} attempt {ss.get('attempts')} did not close ({ss.get('status')})",
+            "stage": stage,
+            "attempt": ss.get("attempts"),
+            "status": ss.get("status"),
+            "blocking_reason": ss.get("blocking_reason"),
+            "failure_signature": failure_signature,
+            "protocol": (failure_signature or {}).get("protocol"),
+            "git_sha": self.state.git_sha,
+        }
+        try:
+            promotion = route_and_store(self.root, record, cfg=self.cfg)
+        except Exception as exc:
+            promotion = {"destination": "PROMOTION_FAILED", "error": str(exc)}
+        self.store.event({
+            "ts": now(), "stage": stage, "event": "DEBUG_ATTEMPT_JOB_MEMORY_RECORDED",
             "promotion": promotion,
         })
 
@@ -1959,6 +2071,59 @@ class DVHarness:
             except Exception:
                 kc_search_results = []
 
+        # ---- 1b-3. Debug-flow prior-evidence search via the Workstream-1
+        #          DV-Knowledge Vault MemoryProvider (Phase 10, 2026-09-03,
+        #          obsidian-memory-debugflow task): BEFORE a debug attempt
+        #          actually runs, capture a real failure signature and search
+        #          the LOCAL vault (dv_harness/memory_vault.py -- a DIFFERENT
+        #          store than the shared cross-user Knowledge Center searched
+        #          in step 1b-2 above, and a different store than the plain
+        #          per-project relevant_memory read in step 1b) via the
+        #          shared Phase 10/11 interface
+        #          memory_vault.search_related_memory_for_debug() -- the SAME
+        #          function lsf_client.py's regression-job memory extraction
+        #          calls (see its own docstring) and the one the future
+        #          Memory Agent (.claude/agents/memory-agent.md, a separate
+        #          workstream) should call too, rather than a third search
+        #          path. Scoped to FAILURE_RECOVERY/RE_AUDIT, same as 1b-2.
+        #
+        #          `debug_failure_signature` is also kept in scope (not just
+        #          `vault_related_cases`) for step 3c below (the AFTER-hook's
+        #          FAIL/PARTIAL Job Memory record) -- one real failure
+        #          signature, built once per attempt, used by both the BEFORE
+        #          prompt-context surfacing here and the AFTER persistence
+        #          there, never two different derivations of "what this
+        #          failure looks like" for the same attempt.
+        #
+        #          Per CLAUDE.md's Evidence Truth Rule / "不得直接假設 previous
+        #          root cause == current root cause": vault_related_cases is
+        #          folded into the prompt as PRIOR EVIDENCE ONLY (see
+        #          build_stage_prompt's new `vault_related_cases` kwarg,
+        #          disclaimed exactly like relevant_memory/kc_search_results
+        #          above) -- current RTL/VIP/log/waveform evidence must
+        #          always be independently re-verified regardless of what a
+        #          historical match suggests.
+        vault_related_cases: List[Dict[str, Any]] = []
+        debug_failure_signature: Optional[Dict[str, Any]] = None
+        if stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value):
+            try:
+                findings_payload = bb_snapshot.get("findings")
+                findings_value = findings_payload.get("value") if isinstance(findings_payload, dict) else None
+                last_report = findings_value.get("last_report") if isinstance(findings_value, dict) else None
+                symptom = last_report.get("symptom") if isinstance(last_report, dict) else None
+                root_cause_hint = None
+                if isinstance(last_report, dict):
+                    root_cause_hint = last_report.get("root_cause") or last_report.get("failure_signature_before")
+                debug_failure_signature = build_failure_signature(
+                    protocol=((route_info or {}).get("protocol_decision") or {}).get("protocol"),
+                    symptom=symptom, root_cause_hint=root_cause_hint, extra_text=user_goal,
+                )
+                vault_search = search_related_memory_for_debug(
+                    self.root, self.cfg, debug_failure_signature, limit=5)
+                vault_related_cases = vault_search.get("related_cases") or []
+            except Exception:
+                vault_related_cases = []
+
         # ---- 1c. Stage entry evidence checklist (expected-evidence-checklist
         #          design pass, 2026-09-01): informational-only presence
         #          report over node.expected_evidence, computed BEFORE
@@ -1988,7 +2153,8 @@ class DVHarness:
                                      correction_note=correction_note,
                                      human_approval=approval,
                                      relevant_memory=relevant_memory or None,
-                                     kc_search_results=kc_search_results or None)
+                                     kc_search_results=kc_search_results or None,
+                                     vault_related_cases=vault_related_cases or None)
         if plan_section:
             prompt = prompt + plan_section
         resume = ss.get("session_id") or None
@@ -2250,6 +2416,28 @@ class DVHarness:
                     evidence={"stderr": ss["blocking_reason"], "attempt": ss["attempts"]},
                     new_steps=[dict(s, status="FAILED_ADAPTER_CALL") for s in plan["steps"]],
                 )
+
+        # ---- 3c. Debug-flow AFTER hook, FAIL/PARTIAL branch (Phase 10,
+        #          2026-09-03, obsidian-memory-debugflow task): a debug
+        #          attempt (FAILURE_RECOVERY triage, or a RE_AUDIT
+        #          fix-verification attempt) that does NOT close this
+        #          attempt with PASS updates Job Memory ONLY -- never
+        #          Engineering/Organizational Memory, per the user's spec
+        #          ("on FAIL, update Job Memory only (no promotion)"): a fix
+        #          that has not yet been proven is not reusable knowledge.
+        #          The PASS side of this same AFTER contract is handled
+        #          entirely by the existing _promote_verified_fix_knowledge()
+        #          call above (RE_AUDIT only, gated on verdict=="PASS") --
+        #          FAILURE_RECOVERY's own STAGE_GATES never include
+        #          fix_effectiveness_gate, so a FAILURE_RECOVERY PASS is
+        #          "triage complete", not "debug succeeded", and correctly
+        #          writes nothing here either way. WAIT_USER/NEEDS_USER_INPUT
+        #          are deliberately excluded: those are "PASS pending a human
+        #          action" or "need an answer to continue", neither a failed
+        #          debug attempt.
+        if (stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value)
+                and ss["status"] in (Status.FAIL.value, Status.PARTIAL.value)):
+            self._record_debug_attempt_job_memory(stage, ss, debug_failure_signature)
 
         # ---- 4. ReAct record: this call itself is one Reason/Act/Observe
         #         record per run_stage() attempt (iteration number is this

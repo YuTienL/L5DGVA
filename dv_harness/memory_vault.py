@@ -1237,11 +1237,19 @@ def search_related_memory_for_debug(root: Path, cfg: Optional[Dict[str, Any]],
     the actual debug-attempt entry point -- folded into the stage prompt as
     prior evidence, disclaimed exactly like `relevant_memory`/
     `kc_search_results`, see `prompts.build_stage_prompt`'s `vault_related_cases`
-    kwarg) and `lsf_client.py`'s `_write_job_tier_memory_on_terminal_reconcile()`
-    (attaches `related_cases` onto the job_failure record it already writes on
-    a real UVM_ERROR/UVM_FATAL/abnormal-termination signal, so the Debug Agent
-    that later picks the job up has it without a second search). The future
-    `.claude/agents/memory-agent.md` (Phase 17) should call this SAME function.
+    kwarg) and `lsf_client.py`'s `_upsert_job_tier_memory_record()` (called
+    from both `_write_job_tier_memory_on_terminal_reconcile()` -- the first,
+    coarser bjobs-only reconcile point -- and a second time from
+    `regression_reporter.run_reconciliation_cycle()` once a real sim.log
+    epilogue parse gives better evidence; see that function's own "THE GAP
+    THIS CLOSES" docstring). Either call attaches `related_cases` onto the
+    job_failure record it already writes on a real UVM_ERROR/UVM_FATAL/
+    abnormal-termination signal, so the Debug Agent that later picks the job
+    up has it without a second search. `.claude/agents/memory-agent.md`
+    (built by Workstream 4 during this same session) is a separate,
+    LLM-dispatched search path (via `memory_cli.py` subcommands) rather than
+    a caller of this exact function -- see this workstream's own report for
+    how the two relate.
 
     An empty query (no symptom/root_cause_hint/terminal_signature/protocol at
     all -- a caller with genuinely no real signal yet) deliberately returns no

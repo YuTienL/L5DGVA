@@ -220,6 +220,14 @@ def test_route_and_store_actually_uses_the_named_tier_classes_not_just_the_base_
         with patch.object(JobMemoryStore, "add", autospec=True) as job_add:
             job_add.return_value = {"memory_id": "MEM-JOB", "level": "job"}
             result = route_and_store(tmp, {"kind": "job_result", "job_id": "J-1"})
+            # Phase 13 -- Git Integration (2026-09-03): a JOB_MEMORY write now
+            # also attempts an additive vault write-through (see
+            # memory_router._VAULT_WRITE_THROUGH_DESTINATIONS) -- pop its
+            # result (asserted for real elsewhere, e.g. test_memory_vault.py)
+            # before checking the rest of this dict stays exactly what it was
+            # before that feature existed, same precedent as the
+            # ORGANIZATIONAL_MEMORY case below.
+            result.pop("vault_write", None)
             assert result == {"destination": "JOB_MEMORY", "level": "job", "memory_id": "MEM-JOB"}
             job_add.assert_called_once()
             assert job_add.call_args[0][1] == {"kind": "job_result", "job_id": "J-1"}

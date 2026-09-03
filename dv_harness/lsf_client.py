@@ -666,10 +666,59 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
     """
     if not any(d.field == "sim_status" and d.severity == "CRITICAL" for d in discrepancies):
         return
-    kind = "job_failure" if (
+    _upsert_job_tier_memory_record(root, jid, state)
+
+
+def _upsert_job_tier_memory_record(root: Path, jid: int, state: JobState) -> None:
+    """The real persistence body behind `_write_job_tier_memory_on_terminal_
+    reconcile()` above, factored out (Phase 11, 2026-09-03, obsidian-memory-
+    debugflow task -- Regression Integration) so a SECOND real caller can
+    upsert the SAME deterministic `JOB-{jid}-TERMINAL-RECONCILE` record once
+    it has BETTER evidence, without re-deriving the CRITICAL-discrepancy gate
+    (which only ever reflects the coarse `lsf_status` bjobs already knew,
+    BEFORE any real sim.log epilogue has been parsed).
+
+    THE GAP THIS CLOSES: `reconcile_job()`'s CRITICAL "sim_status"->
+    "ANALYSIS_OWED" discrepancy fires the FIRST time a job reaches a
+    terminal live LSF status with DV analysis not yet recorded -- at that
+    exact moment, `state.uvm_error_count`/`uvm_fatal_count` are whatever
+    they were BEFORE this cycle's real sim.log epilogue parse (typically
+    still 0/unset for a job whose failure only shows up in the log body,
+    e.g. `lsf_status=="DONE"` with a real UVM_FATAL inside). The gated
+    wrapper above, called from `reconcile_batch()`, can therefore
+    legitimately write `kind="job_result"` (not yet knowing better) for a
+    job that a moment later, in the SAME reconciliation cycle, turns out to
+    be a real failure once `regression_reporter.run_reconciliation_cycle()`
+    parses its epilogue (real `UVM_ERROR`/`UVM_FATAL` counts, or a `verdict`
+    of `FAILED`). That real epilogue-parse call site calls this function
+    directly (no discrepancy re-derivation needed -- the epilogue itself,
+    already reflected onto `state.uvm_error_count`/`uvm_fatal_count` by that
+    caller, IS the newer, better evidence), upserting the same
+    `memory_id` -- MemoryStore.add()'s existing upsert-by-memory_id behavior
+    (see this function's own idempotency note above) replaces the earlier,
+    premature `job_result` classification with the accurate `job_failure`
+    one, complete with a real failure_signature/prior_related_knowledge
+    search this time. Never invents a new record for the same job."""
+    # `state.sim_status == "FAIL"` (added Phase 11, 2026-09-03): the ORIGINAL
+    # `is_failure` definition below only ever looked at LSF-level/UVM-marker
+    # evidence -- never the real DV verdict itself. That was harmless at the
+    # gated call site above (state.sim_status is guaranteed UNKNOWN/RUNNING
+    # there, by the very CRITICAL discrepancy that gates this function), but
+    # left a real gap at the SECOND call site
+    # (regression_reporter.run_reconciliation_cycle(), called once
+    # state.sim_status has just been set from a real sim.log epilogue
+    # verdict): a "FAILED" epilogue with BOTH uvm_error/uvm_fatal counts
+    # genuinely zero (a real, parser-permitted combination -- a timeout, or
+    # an objection/phase-declared failure that raised neither) would
+    # otherwise never be classified `is_failure` here despite being a real,
+    # confirmed DV FAIL. Included unconditionally rather than only at that
+    # second call site so both callers share one honest definition.
+    is_failure = (
         state.lsf_status == "EXIT" or state.uvm_fatal_count > 0
         or state.assertion_failure or state.simulator_crash
-    ) else "job_result"
+        or state.sim_status == "FAIL"
+    )
+    kind = "job_failure" if is_failure else "job_result"
     record = {
         "memory_id": f"JOB-{jid}-TERMINAL-RECONCILE",
         "kind": kind,
@@ -689,6 +738,46 @@ def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: Jo
     fsdb_path = state.fsdb_path or extract_fsdb_path_from_options(state.options)
     if fsdb_path is not None:
         record["fsdb_path"] = fsdb_path
+
+    # Phase 11 (2026-09-03, obsidian-memory-debugflow task -- Regression
+    # Integration): on a real UVM_ERROR/UVM_FATAL/abnormal-termination signal
+    # (the exact same `is_failure` evidence this function already derives
+    # above, never a second definition), extract a failure signature and
+    # search prior knowledge via the SAME shared Phase 10/11 interface
+    # engine.py's FAILURE_RECOVERY debug flow calls
+    # (memory_vault.build_failure_signature()/search_related_memory_for_debug()
+    # -- see their own docstrings). The result is attached to this SAME
+    # job_failure record as `prior_related_knowledge`, so the Debug Agent
+    # that later picks this job up (a separate, pre-existing agent role) has
+    # it without a second search -- but per CLAUDE.md's Evidence Truth Rule,
+    # this is candidate prior evidence only: the Debug Agent must always
+    # independently re-verify against current RTL/VIP/log/waveform evidence
+    # and never copy a previous fix verbatim, exactly as the user's spec
+    # requires. Never attempted for a plain job_result (no failure signal to
+    # search against) -- searching would just be noise.
+    if is_failure:
+        try:
+            from .memory_vault import build_failure_signature, search_related_memory_for_debug
+            failure_signature = build_failure_signature(
+                pattern=state.pattern,
+                # `extra_text=state.pattern`: the real testcase/pattern name
+                # is the one text signal this low-level reconcile hook
+                # genuinely has for a prior-knowledge search (no protocol/
+                # symptom text is available at this layer) -- a recurring
+                # testcase name across vault notes is meaningful search
+                # signal, not noise.
+                extra_text=state.pattern,
+                uvm_error_count=state.uvm_error_count, uvm_fatal_count=state.uvm_fatal_count,
+                assertion_failure=state.assertion_failure, simulator_crash=state.simulator_crash,
+                terminal_signature=state.terminal_signature, lsf_status=state.lsf_status,
+            )
+            search = search_related_memory_for_debug(root, None, failure_signature, limit=5)
+            record["failure_signature"] = failure_signature
+            if search.get("related_cases"):
+                record["prior_related_knowledge"] = search["related_cases"]
+        except Exception:
+            pass  # a memory-search problem must never block the real job-memory write below
+
     try:
         from .memory_router import route_and_store
         route_and_store(root, record)
