@@ -20,6 +20,7 @@ from dv_harness.question_queue import (
     is_cannot_assume,
     make_question_id,
     make_question_key,
+    normalize_options,
     route_owner,
     validate_question,
 )
@@ -583,3 +584,82 @@ def test_metrics_on_empty_store_are_well_defined(tmp_path):
     assert metrics["self_resolve_rate_percent"] == 0.0
     assert metrics["repeat_question_rate_percent"] == 0.0
     assert metrics["assumption_overturned_rate_percent"] == 0.0
+
+
+# --- options normalization: the spec's literal flat-string shape ----------------
+# Before this, add_question() indexed `o["label"]` directly, so the spec's own
+# ["option a", "option b"] example shape died on a raw
+# `TypeError: string indices must be integers` -- not a QuestionValidationError
+# a caller could act on -- and three separate call sites each carried their own
+# `o if isinstance(o, dict) else {"label": str(o)}` copy to work around it.
+
+def test_add_question_accepts_plain_string_options_and_persists_canonical_shape(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="vip", question="8b10b or 128b130b?", context_path="vip.usb0.encoding",
+        options=["keep 8b10b", "switch to 128b130b"], recommendation="keep 8b10b",
+        assumption_if_unanswered="keep 8b10b",
+    )
+    # Accepted as input, but stored in the ONE canonical object shape.
+    assert q["options"] == [{"label": "keep 8b10b"}, {"label": "switch to 128b130b"}]
+    validate_question(q)
+    # And it round-trips through the real store, not just the return value.
+    assert store.get_question(q["id"])["options"] == q["options"]
+
+
+def test_add_question_still_accepts_object_options_with_rationale(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="vip", question="Slave or master?", context_path="vip.usb0.mode",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="a",
+    )
+    assert q["options"][0]["rationale"].startswith("DUT port direction")
+    validate_question(q)
+
+
+def test_mixed_string_and_object_options_normalize_together(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="env", question="Which topology?", context_path="env.top",
+        options=["flat", {"label": "hierarchical", "rationale": "matches the config_db trace"}],
+        recommendation="hierarchical", assumption_if_unanswered="flat",
+    )
+    assert q["options"] == [
+        {"label": "flat"},
+        {"label": "hierarchical", "rationale": "matches the config_db trace"},
+    ]
+    validate_question(q)
+
+
+def test_normalize_options_is_the_single_definition_used_by_add_question():
+    # The helper's own contract, independent of a store.
+    assert normalize_options(["a", "b"]) == [{"label": "a"}, {"label": "b"}]
+    # A falsy/absent rationale is dropped rather than persisted as null --
+    # question.schema.json's options.items has additionalProperties:false and
+    # no null-typed rationale, so emitting one would fail validation.
+    assert normalize_options([{"label": "a", "rationale": ""}]) == [{"label": "a"}]
+
+
+@pytest.mark.parametrize("bad, needle", [
+    ([{"lable": "typo"}, "b"], "label"),          # misspelled key caught at the door
+    ([{"label": "a", "why": "x"}, "b"], "unknown key"),
+    ([123, "b"], "must be a string"),
+    (["", "b"], "empty label"),
+    ("not-a-list", "must be a list"),
+])
+def test_normalize_options_raises_validation_error_never_typeerror(bad, needle):
+    with pytest.raises(QuestionValidationError) as exc:
+        normalize_options(bad)
+    assert needle in str(exc.value)
+
+
+def test_add_question_rejects_malformed_options_before_persisting_anything(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    with pytest.raises(QuestionValidationError):
+        store.add_question(
+            domain="vip", question="q?", context_path="p",
+            options=[{"lable": "typo"}, "other"], recommendation="other",
+            assumption_if_unanswered="a",
+        )
+    # Nothing was written -- the raise happens before the append/save.
+    assert store.list_questions() == []

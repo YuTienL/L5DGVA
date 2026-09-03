@@ -296,6 +296,73 @@ def make_question_id(domain: str, question_key: str) -> str:
     return f"Q-{domain.strip().upper()}-{digest}"
 
 
+#: Keys an option element may carry -- mirrors question.schema.json's own
+#: `options.items` (additionalProperties: false), checked here too so a bad key
+#: is a QuestionValidationError naming the key rather than a schema traceback.
+_OPTION_KEYS = frozenset({"label", "rationale"})
+
+
+def normalize_options(options: Any) -> List[Dict[str, str]]:
+    """Coerce an options list into the ONE canonical persisted shape --
+    `[{"label": str, "rationale": str?}, ...]` -- accepting BOTH the plain
+    `["option a", "option b"]` form and the object form.
+
+    Why the string form is accepted at the door but NOT in the schema: a
+    question record on disk has exactly one options shape, so every reader
+    (validate_question()'s recommendation-in-labels cross-check,
+    _render_decisions_md, build_digest) parses one thing rather than
+    branching per element. Loosening question.schema.json to allow bare
+    strings would put that branch into every reader forever, to buy nothing
+    -- the string form is an ergonomic INPUT convenience, not a second
+    storage format. So normalization happens once, here, and the persisted
+    contract stays single-shaped.
+
+    This is the single definition. Three call sites previously each carried
+    their own `o if isinstance(o, dict) else {"label": str(o)}` copy
+    (connectivity.build_t4_question_queue_entry,
+    run_profile_to_justfile.ask_missing_option_question, cli.py's
+    `question-queue add`) precisely because add_question() itself did not
+    accept the plain form -- it indexed `o["label"]` directly and a
+    string list died on a raw `TypeError: string indices must be integers`,
+    which is not a validation error a caller can act on. Those copies also
+    each passed a dict straight through unchecked, so a `{"lable": ...}`
+    typo surfaced as a schema traceback from deep inside validation rather
+    than at the caller's own boundary.
+
+    Raises QuestionValidationError (never TypeError/KeyError) for anything
+    that is not a string or a `label`-bearing dict."""
+    if isinstance(options, (str, bytes)) or not isinstance(options, (list, tuple)):
+        raise QuestionValidationError(
+            f"options must be a list of strings or {{'label': ...}} dicts, got {type(options).__name__}"
+        )
+    normalized: List[Dict[str, str]] = []
+    for i, opt in enumerate(options):
+        if isinstance(opt, str):
+            label, rationale = opt, None
+        elif isinstance(opt, dict):
+            unknown = sorted(set(opt) - _OPTION_KEYS)
+            if unknown:
+                raise QuestionValidationError(
+                    f"options[{i}] has unknown key(s) {unknown!r}; only {sorted(_OPTION_KEYS)!r} are allowed."
+                )
+            label, rationale = opt.get("label"), opt.get("rationale")
+            if not isinstance(label, str):
+                raise QuestionValidationError(
+                    f"options[{i}] is missing a string 'label' (got {label!r})."
+                )
+        else:
+            raise QuestionValidationError(
+                f"options[{i}] must be a string or a {{'label': ...}} dict, got {type(opt).__name__}"
+            )
+        if not label.strip():
+            raise QuestionValidationError(f"options[{i}] has an empty label.")
+        entry: Dict[str, str] = {"label": label}
+        if rationale:
+            entry["rationale"] = rationale
+        normalized.append(entry)
+    return normalized
+
+
 def _now_iso(now: Optional[datetime] = None) -> str:
     return (now or datetime.now(timezone.utc)).isoformat()
 
@@ -581,15 +648,23 @@ class QuestionQueueStore:
     # -- questions ------------------------------------------------------------
 
     def add_question(self, *, domain: str, question: str, context_path: str,
-                       options: List[Dict[str, str]], recommendation: str,
+                       options: Any, recommendation: str,
                        assumption_if_unanswered: str, question_key: Optional[str] = None,
                        context: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None) -> dict:
         """Ask one question. NEVER pings/notifies -- it only persists the
         record (see build_digest() for the only aggregation/reporting path,
         per Part B: "never real-time pings"). Returns the full persisted
         question record, already tier-classified and, if a prior decision
-        or Tier-2 default applied, already resolved."""
+        or Tier-2 default applied, already resolved.
+
+        `options` accepts either the plain `["option a", "option b"]` form or
+        the `[{"label": ..., "rationale": ...}]` form; both normalize through
+        normalize_options() to the single persisted shape (see its docstring
+        for why the string form is an input convenience and not a second
+        storage format). A malformed element raises QuestionValidationError
+        here, before anything is persisted."""
         context = dict(context or {})
+        options = normalize_options(options)
         question_key = question_key or make_question_key(domain, question, context_path)
         owner = route_owner(domain)
         qid = make_question_id(domain, question_key)
@@ -627,8 +702,7 @@ class QuestionQueueStore:
             "owner": owner,
             "question": question,
             "context_path": context_path,
-            "options": [{"label": o["label"], **({"rationale": o["rationale"]} if o.get("rationale") else {})}
-                        for o in options],
+            "options": options,
             "recommendation": recommendation,
             "assumption_if_unanswered": assumption_if_unanswered,
             "tier": tier,

@@ -134,8 +134,8 @@ def build_missing_option_question_queue_entry(
         raise RunProfileValidationError(
             f"OPTIONS_MUST_BE_PRE_RESEARCHED_2_TO_3: got {len(options)} for {option!r}"
         )
-    normalized = [o if isinstance(o, dict) else {"label": str(o)} for o in options]
-    labels = [o.get("label") for o in normalized]
+    normalized = question_queue.normalize_options(options)
+    labels = [o["label"] for o in normalized]
     if recommendation not in labels:
         raise RunProfileValidationError(
             f"RECOMMENDATION_MUST_BE_ONE_OF_OPTIONS: {recommendation!r} not in {labels}"

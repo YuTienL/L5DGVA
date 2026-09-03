@@ -2169,7 +2169,7 @@ def main():
             try:
                 record = qq.add_question(
                     domain=args.domain, question=args.question, context_path=args.context_path,
-                    options=[{"label": o} for o in args.options], recommendation=args.recommendation,
+                    options=args.options, recommendation=args.recommendation,
                     assumption_if_unanswered=args.assumption_if_unanswered,
                     question_key=args.question_key, context=context,
                 )

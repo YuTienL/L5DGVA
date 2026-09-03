@@ -44,7 +44,7 @@
       "type": "array",
       "minItems": 2,
       "maxItems": 3,
-      "description": "2-3 PRE-RESEARCHED options -- never an open-ended free-text question. Each option must already be a real, evaluated possibility, not a placeholder the human has to invent from scratch.",
+      "description": "2-3 PRE-RESEARCHED options -- never an open-ended free-text question. Each option must already be a real, evaluated possibility, not a placeholder the human has to invent from scratch. This object form is the single PERSISTED shape; callers may also hand add_question() a plain [\"option a\", \"option b\"] list, which question_queue.normalize_options() coerces to this shape at the door. That asymmetry is deliberate: accepting bare strings HERE would force every reader of a stored record (validate_question's recommendation-in-labels cross-check, decisions.md rendering, digest batching) to branch per element forever, to buy an input convenience that costs nothing to absorb once on the way in.",
       "items": {
         "type": "object",
         "additionalProperties": false,

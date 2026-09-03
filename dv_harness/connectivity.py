@@ -2733,8 +2733,8 @@ def build_t4_question_queue_entry(
     if not (2 <= len(options) <= 3):
         raise ConnectivityError("OPTIONS_MUST_BE_PRE_RESEARCHED_2_TO_3",
                                  {"context_path": context_path, "options": options})
-    normalized = [o if isinstance(o, dict) else {"label": str(o)} for o in options]
-    labels = [o.get("label") for o in normalized]
+    normalized = question_queue.normalize_options(options)
+    labels = [o["label"] for o in normalized]
     if recommendation not in labels:
         raise ConnectivityError("RECOMMENDATION_MUST_BE_ONE_OF_OPTIONS",
                                  {"recommendation": recommendation, "options": labels})
