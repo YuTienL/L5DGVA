@@ -203,13 +203,37 @@ class EvidenceStore:
     """Thin wrapper around a DuckDB connection with this project's real
     evidence schema. Safe to construct repeatedly against the same
     `db_path` -- schema init is `CREATE TABLE/SEQUENCE IF NOT EXISTS`
-    throughout, so it never clobbers existing rows."""
+    throughout, so it never clobbers existing rows.
 
-    def __init__(self, db_path):
+    `read_only=True` (2026-09-03, MCP read-only-boundary gap fix) opens the
+    connection via `duckdb.connect(path, read_only=True)` and skips the
+    mkdir()/schema-DDL step entirely -- see `__init__`'s own comment for
+    why. Use this for any caller (e.g. `dv_harness/mcp/runtime.py`'s
+    `ReadOnlyMcpContext`) whose entire design premise is that it must never
+    write to, or even create, the evidence database."""
+
+    def __init__(self, db_path, *, read_only: bool = False):
         import duckdb  # imported here, not at module load, so importing this
         # module never fails for a caller that only needs signature_key()/
         # default_db_path() on a machine without the duckdb package yet.
         self.db_path = Path(db_path)
+        self.read_only = read_only
+        if read_only:
+            # A genuinely read-only caller (dv_harness/mcp/runtime.py's
+            # ReadOnlyMcpContext, 2026-09-03 gap fix) must never be able to
+            # conjure a database into existence or alter an existing one's
+            # schema, no matter what state db_path is in -- so the mkdir()
+            # and CREATE TABLE/SEQUENCE DDL below are skipped ENTIRELY
+            # rather than merely made a no-op. duckdb.connect(...,
+            # read_only=True) itself raises duckdb.IOException when
+            # db_path does not already exist (verified: it never creates
+            # the file), and would raise duckdb.InvalidInputException on
+            # any DDL/DML a caller attempted afterward -- so DuckDB's own
+            # read-only connection already refuses writes at the engine
+            # level as defense in depth on top of this class simply never
+            # issuing any DDL in this branch.
+            self._conn = duckdb.connect(str(self.db_path), read_only=True)
+            return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = duckdb.connect(str(self.db_path))
         for stmt in _SCHEMA_STATEMENTS:

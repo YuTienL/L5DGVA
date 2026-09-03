@@ -84,6 +84,59 @@ def test_store_construction_creates_db_file_and_is_idempotent(tmp_path):
     s2.close()
 
 
+# ---- read_only=True (2026-09-03 MCP read-only-boundary gap fix) ------------
+# EvidenceStore's default (read-write) constructor above always mkdir()s the
+# parent dir and runs the full CREATE TABLE/SEQUENCE IF NOT EXISTS schema --
+# exactly what dv_harness/mcp/runtime.py's ReadOnlyMcpContext must NEVER do.
+# These tests exercise the real `read_only=True` branch directly (below the
+# MCP layer -- dv_harness_tests/test_mcp_read_only_boundary.py covers the
+# same guarantee through ReadOnlyMcpContext end to end).
+
+def test_read_only_true_against_missing_file_raises_without_creating_anything(tmp_path):
+    missing_dir = tmp_path / "nested" / "does_not_exist"
+    db_path = missing_dir / "evidence.duckdb"
+    with pytest.raises(duckdb.IOException):
+        EvidenceStore(db_path, read_only=True)
+    assert not missing_dir.exists()
+    assert not db_path.exists()
+
+
+def test_read_only_true_against_existing_db_does_not_add_missing_tables(tmp_path):
+    db_path = tmp_path / "evidence.duckdb"
+    rw = EvidenceStore(db_path)  # creates the full real schema
+    rw.close()
+
+    def _table_count():
+        conn = duckdb.connect(str(db_path), read_only=True)
+        try:
+            return len(conn.execute("SHOW TABLES").fetchall())
+        finally:
+            conn.close()
+
+    before = _table_count()
+    ro = EvidenceStore(db_path, read_only=True)
+    ro.query("SELECT count(*) FROM regression_verdicts")
+    ro.close()
+    assert _table_count() == before
+
+
+def test_read_only_true_blocks_ddl_and_dml(tmp_path):
+    """Even setting `read_only=True` aside, DuckDB's own read-only
+    connection refuses any write -- confirms this defense-in-depth layer
+    (not just this class skipping the schema DDL) is real."""
+    db_path = tmp_path / "evidence.duckdb"
+    rw = EvidenceStore(db_path)
+    rw.close()
+    ro = EvidenceStore(db_path, read_only=True)
+    try:
+        with pytest.raises(duckdb.Error):
+            ro._conn.execute("CREATE TABLE should_never_exist (id INTEGER)")
+        with pytest.raises(duckdb.Error):
+            ro.insert_regression_verdict("some_pattern", True, job_id=1)
+    finally:
+        ro.close()
+
+
 # ---- jobs (JobState mirror) -------------------------------------------------
 
 def test_insert_job_state_round_trips_real_jobstate_fields(store):
