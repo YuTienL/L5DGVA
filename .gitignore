@@ -5,3 +5,7 @@ __pycache__/
 
 .worktrees/
 .work/put_debug.log
+
+# Local-only credential script for relay auto-reconnect (CLAUDE.md 2026-09-03
+# amendment) -- must never be committed, this machine only.
+replay.ps1
