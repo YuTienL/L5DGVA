@@ -177,13 +177,31 @@ all pass — see the commit for the exact run.
 
 ## Concurrency handling
 
-`dv_harness/engine.py` was already dirty in this shared tree with ~92 lines
-from other concurrent workstreams (`_escalate_unreachable_coverage_holes`,
-`_computed_regression_selection`, the REGRESSION_SELECT prompt section). The
-commit uses the **hand-scoped patch technique**: this task's six engine.py
-edits were replayed onto `HEAD:dv_harness/engine.py` in a scratch file, that
-blob staged via `git hash-object` + `git update-index --cacheinfo`, and the
-result verified to contain none of the other workstreams' identifiers. Their
-work remains uncommitted in the working tree, untouched.
-`react.py`, `react_loop.py` and the skill file were clean at HEAD and are
-committed whole.
+`dv_harness/engine.py` is shared with other concurrent workstreams and moved
+twice during this task:
+
+- At the start it was dirty with ~92 uncommitted lines from the Section-3
+  resource/cost workstream (`_escalate_unreachable_coverage_holes`,
+  `_computed_regression_selection`).
+- Mid-task, that workstream committed (`a8d97f2`) and swept up one of this
+  task's already-made edits in the process — the `structured_signatures` /
+  `react_reroute_target` local initialization now sits in HEAD under their
+  commit rather than this one. Noted here rather than re-litigated: the code
+  is correct and present either way, and re-cutting it out would have
+  rewritten another workstream's commit.
+- A third workstream (harness-reliability: `_resolve_degradation_transport`,
+  `degraded_probe_transport`) then landed further uncommitted engine.py edits.
+
+The commit therefore uses the **hand-scoped patch technique**: `git diff` was
+split into hunks, only this task's four (`_react_step_inference`, the
+`InnerReactLoop(protocol=...)` + reroute-local hunk, the `step_inference`
+computation, and the `record()` arguments) were applied to the index with
+`git apply --cached`, and the staged blob was verified to contain none of the
+other workstreams' identifiers and to parse. Their work remains uncommitted in
+the working tree, untouched (`git status` still shows `M dv_harness/engine.py`).
+
+`react.py`, `react_loop.py`, the new test file and the skill file were clean at
+HEAD and are committed whole.
+
+Commit: `c2d6efd` (local, on `master`; not pushed — per CLAUDE.md's PR-only
+governance an agent never pushes/merges a protected branch).
