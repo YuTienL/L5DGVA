@@ -15,3 +15,31 @@ replay.ps1
 # Generated locally by every reconciliation cycle; a multi-MB binary file
 # with no place in version control.
 .dv-harness/evidence/
+
+# Per-run harness RUNTIME STATE under .dv-harness/ (2026-09-03). Everything
+# below is rewritten continuously by a live session -- the LSF watcher's PID
+# file and log (dv-harness lsf-watch-start), the blackboard's current-truth
+# snapshots, the engine's own state/event journal -- so it churns on every
+# run and belongs to the machine it was produced on, not to version control.
+# Only .dv-harness/evidence/ was previously excluded, which left a careless
+# `git add -A` free to sweep a stale watcher.pid (and a multi-MB watcher.log)
+# into an unrelated commit.
+#
+# Two honest caveats, both verified against `git ls-files` on 2026-09-03
+# rather than assumed:
+#  1. .dv-harness/state.json, .dv-harness/events.jsonl, and several files
+#     under .dv-harness/lsf/ and .dv-harness/blackboard/ are ALREADY TRACKED
+#     from earlier commits. .gitignore does not apply to tracked files, so
+#     their modifications still show in `git status` and can still be staged.
+#     These lines stop NEW runtime files from being swept in; they are not a
+#     substitute for never running `git add -A` / `git add .dv-harness`.
+#     Untracking the already-tracked ones is a separate, deliberate decision
+#     (`git rm --cached`) that has not been made here.
+#  2. Real, intentionally-versioned content does live under these paths
+#     (lsf/*_policy.json, lsf/job_state_schema.json, the blackboard's seed
+#     *_state.json files). Add such a file explicitly with `git add -f` --
+#     it will not be picked up automatically any more.
+.dv-harness/lsf/
+.dv-harness/blackboard/
+.dv-harness/state.json
+.dv-harness/events.jsonl
