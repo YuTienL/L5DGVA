@@ -239,6 +239,12 @@ def test_route_and_store_actually_uses_the_named_tier_classes_not_just_the_base_
         with patch.object(OrganizationalMemoryStore, "add", autospec=True) as org_add:
             org_add.return_value = {"ok": True, "memory_id": "KC-1"}
             result = route_and_store(tmp, {"kind": "methodology", "verified": True, "title": "t"})
+            # obsidian-memory-core (2026-09-03): a successful ORGANIZATIONAL_MEMORY
+            # push now also attempts an additive vault write-through -- pop its
+            # result (asserted for real elsewhere, e.g. test_memory_vault.py) before
+            # checking the rest of this dict stays exactly what it was before that
+            # feature existed.
+            result.pop("vault_write", None)
             assert result == {"destination": "ORGANIZATIONAL_MEMORY", "ok": True, "memory_id": "KC-1"}
             org_add.assert_called_once()
     finally:

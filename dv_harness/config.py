@@ -82,6 +82,34 @@ DEFAULT_CONFIG = {
     "rtl_protection": {
         "protected_paths": []
     },
+    # Obsidian+Git/Markdown Hybrid Engineering Memory vault (2026-09-03,
+    # obsidian-memory-core foundational layer -- see dv_harness/memory_vault.py).
+    # ADDITIVE to memory.py's JSON MemoryStore, never a replacement: on an
+    # ENGINEERING_MEMORY/ORGANIZATIONAL_MEMORY promotion, memory_router.py's
+    # route_and_store() also writes a human-browsable Markdown+YAML note here.
+    # `vault_path` empty (never hardcoded, same convention as
+    # knowledge_center.remote_root above) resolves to a project-relative
+    # `.dv-harness/vault` default -- see memory_vault.resolve_vault_path().
+    # `obsidian_cli`: "auto" probes for a real Obsidian CLI every call and
+    # safely falls back to the filesystem adapter when (as on every machine
+    # confirmed so far) none is found or wired; "disabled" skips probing
+    # Obsidian entirely and always uses the filesystem adapter.
+    # `git_enabled` defaults False (opt-in), same convention as
+    # knowledge_center.enabled/self_tuning.enabled above -- confirmed via a
+    # real full-suite regression run (2026-09-03) that defaulting it True
+    # makes every route_and_store() call that auto-loads this config
+    # silently `git init`+commit inside the vault, and on Windows a plain
+    # shutil.rmtree() of a directory containing a real .git tree fails with
+    # PermissionError on git's read-only object files -- broke 10
+    # pre-existing tests whose tmp-dir teardown never anticipated a git repo
+    # appearing inside it. A project that wants real git history for its
+    # vault opts in explicitly via config.json.
+    "memory": {
+        "provider": "hybrid",
+        "vault_path": "",
+        "obsidian_cli": "auto",
+        "git_enabled": False,
+    },
     "self_tuning": {
         # Autonomous gate self-tuning (2026-09-02 design). Disabled by
         # default -- a project must explicitly opt in. See
