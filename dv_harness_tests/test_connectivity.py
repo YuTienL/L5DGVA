@@ -478,6 +478,488 @@ def test_classification_is_json_serializable_for_a_downstream_topology_artifact(
 
 
 # ===========================================================================
+# AMBA-5: master/slave terminology -- BOTH perspectives required
+# AMBA-6: count all interfaces before endpoint tracing
+#
+# Same synthetic-fixture discipline as the AMBA-4 block above: nothing here
+# writes, emits or plans a `bind` statement, and one test asserts that of the
+# emitted artifact directly (AMBA-30/AMBA-31).
+# ===========================================================================
+
+#: The signals a transaction INITIATOR drives, spelled out literally here
+#: rather than imported from `connectivity.AMBA_INITIATOR_DRIVEN_REQUEST_SIGNALS`
+#: -- building the fixture from the constant under test would make
+#: `resolve_fabric_request_direction()` agree with itself by construction.
+_INITIATOR_DRIVEN_SUFFIXES = {
+    # AXI memory-mapped, master -> slave
+    "AWVALID", "AWADDR", "AWLEN", "AWSIZE", "AWBURST", "AWID", "AWQOS", "AWREGION",
+    "AWSNOOP", "AWDOMAIN", "AWBAR", "AWPROT",
+    "WVALID", "WDATA", "WLAST", "WSTRB", "WID",
+    "ARVALID", "ARADDR", "ARLEN", "ARSIZE", "ARBURST", "ARID", "ARQOS", "ARREGION",
+    "ARSNOOP", "ARDOMAIN", "ARBAR", "ARPROT",
+    "BREADY", "RREADY",
+    # AHB, master -> slave (HSEL travels with the request, from the decoder)
+    "HADDR", "HTRANS", "HWRITE", "HWDATA", "HSIZE", "HBURST", "HPROT", "HSEL",
+    "HMASTLOCK", "HMASTER", "HBUSREQ", "HLOCK",
+    # APB, master -> slave
+    "PADDR", "PSEL", "PENABLE", "PWRITE", "PWDATA", "PSTRB", "PPROT",
+    # AXI4-Stream, source -> sink
+    "TVALID", "TDATA", "TSTRB", "TKEEP", "TLAST", "TID", "TDEST", "TUSER",
+}
+
+
+def _fabric_signal_directions(ports, *, fabric_side_role):
+    """Real per-port directions for one fabric interface, as seen AT THE FABRIC.
+
+    A fabric SLAVE interface RECEIVES the request signals (an external master
+    drives them in); a fabric MASTER interface DRIVES them out. Response
+    signals go the other way. This is the shape `verible_parser` produces for a
+    real interconnect wrapper's port list."""
+    request = "input" if fabric_side_role == conn.FABRIC_SIDE_SLAVE_INTERFACE else "output"
+    response = "output" if request == "input" else "input"
+    return {p: (request if p.upper().rsplit("_", 1)[-1] in _INITIATOR_DRIVEN_SUFFIXES
+                else response)
+            for p in sorted(ports)}
+
+
+#: The AMBA-6 fixture: which side of the fabric each interface of
+#: `_SYNTHETIC_FABRIC_INTERFACES` really sits on. Used ONLY to generate real
+#: port directions -- every assertion below re-derives the role from those
+#: directions, never from this table or from the interface name.
+_SYNTHETIC_FABRIC_SIDES = {
+    "soc_fabric_s00_axi": conn.FABRIC_SIDE_SLAVE_INTERFACE,
+    "soc_fabric_s01_axi": conn.FABRIC_SIDE_SLAVE_INTERFACE,
+    "soc_fabric_m00_axi": conn.FABRIC_SIDE_MASTER_INTERFACE,
+    "soc_fabric_m01_apb": conn.FABRIC_SIDE_MASTER_INTERFACE,
+    "soc_fabric_m02_ahb": conn.FABRIC_SIDE_MASTER_INTERFACE,
+    "soc_fabric_m03_axis": conn.FABRIC_SIDE_MASTER_INTERFACE,
+}
+
+
+def _fabric_interface_specs():
+    """`build_amba_fabric_inventory()` input for the clean 2-slave/4-master
+    fabric: port names plus their real directions, nothing else."""
+    return [{"interface": name,
+             "dut_instance": "soc_fabric",
+             "port_names": sorted(ports),
+             "signal_directions": _fabric_signal_directions(
+                 ports, fabric_side_role=_SYNTHETIC_FABRIC_SIDES[name])}
+            for name, ports in _SYNTHETIC_FABRIC_INTERFACES.items()]
+
+
+# --- AMBA-5 --------------------------------------------------------------
+
+def test_amba5_reports_the_docs_own_two_worked_examples_verbatim():
+    """"External CPU master drives fabric S00_AXI" and "Fabric M00_AXI drives
+    DDR controller" -- the doc's own examples, with its own expected values."""
+    cpu_facing = conn.determine_fabric_interface_roles("input", protocol="AXI4")
+    assert cpu_facing.fabric_side_role == "SLAVE_INTERFACE"
+    assert cpu_facing.external_endpoint_role == "MASTER_ENDPOINT"
+
+    ddr_facing = conn.determine_fabric_interface_roles("output", protocol="AXI4")
+    assert ddr_facing.fabric_side_role == "MASTER_INTERFACE"
+    assert ddr_facing.external_endpoint_role == "SLAVE_ENDPOINT"
+
+
+def test_amba5_never_renders_a_perspective_less_master_or_slave():
+    """"Never output only 'Master' or 'Slave' without perspective." Every
+    rendering carries both lines, and every legal value names its perspective."""
+    for direction in ("input", "output"):
+        rendered = conn.determine_fabric_interface_roles(direction).render_lines()
+        assert "FABRIC_SIDE_ROLE = " in rendered
+        assert "EXTERNAL_ENDPOINT_ROLE = " in rendered
+    for value in conn.FABRIC_SIDE_ROLE_VALUES:
+        assert value.endswith("_INTERFACE") or "UNRESOLVED" in value
+    for value in conn.EXTERNAL_ENDPOINT_ROLE_VALUES:
+        assert value.endswith("_ENDPOINT") or "UNRESOLVED" in value
+
+
+def test_amba5_takes_no_interface_or_module_name_parameter():
+    """The same structural prohibition `classify_amba_protocol()` carries: a
+    role must come from direction evidence, never from a name."""
+    params = list(inspect.signature(conn.determine_fabric_interface_roles).parameters)
+    assert params == ["dut_port_direction", "protocol", "signal_directions"]
+
+
+def test_amba5_delegates_to_determine_role_from_port_direction_not_a_second_decision():
+    """The perspectives are a vocabulary layer over the existing function's
+    verdict, so a matrix row built from them still passes role provenance."""
+    roles = conn.determine_fabric_interface_roles("output", protocol="AXI4")
+    assert roles.vip_role == conn.determine_role_from_port_direction("output")
+    assert roles.vip_role.startswith(conn.LEGAL_ROLE_PREFIXES)
+
+
+def test_amba5_axi4_stream_also_reports_source_sink():
+    """"For AXI4-Stream also report SOURCE/SINK where appropriate" -- alongside
+    the memory-mapped pair, never instead of it."""
+    src = conn.determine_fabric_interface_roles("output", protocol="AXI4_STREAM")
+    assert src.fabric_side_role == "MASTER_INTERFACE"
+    assert src.stream_fabric_side_role == "SOURCE_INTERFACE"
+    assert src.stream_external_endpoint_role == "SINK_ENDPOINT"
+    sink = conn.determine_fabric_interface_roles("input", protocol="AXI4_STREAM")
+    assert sink.stream_fabric_side_role == "SINK_INTERFACE"
+    assert sink.stream_external_endpoint_role == "SOURCE_ENDPOINT"
+    assert "FABRIC_SIDE_STREAM_ROLE = SINK_INTERFACE" in sink.render_lines()
+    # A memory-mapped interface reports no stream pair at all.
+    assert conn.determine_fabric_interface_roles(
+        "input", protocol="AXI4").stream_fabric_side_role is None
+
+
+def test_amba5_inout_alone_is_unresolved_never_guessed():
+    roles = conn.determine_fabric_interface_roles("inout", protocol="AXI4")
+    assert roles.fabric_side_role == conn.ROLE_UNRESOLVED_REQUIRES_STRUCTURAL_ANALYSIS
+    assert roles.external_endpoint_role == conn.ROLE_UNRESOLVED_REQUIRES_STRUCTURAL_ANALYSIS
+    assert roles.direction == conn.DIRECTION_UNRESOLVED
+    assert roles.requires_human_confirmation is True
+    assert roles.resolved is False
+
+
+def test_amba5_inout_is_resolved_structurally_from_request_signal_directions():
+    """AMBA-5's implied follow-up for the ambiguous case, done for real: the
+    aggregate direction is inout, but the initiator-driven request signals
+    all agree, so the perspective IS established from RTL evidence."""
+    ports = _axi_mm_ports("s00_axi")
+    dirs = _fabric_signal_directions(ports, fabric_side_role=conn.FABRIC_SIDE_SLAVE_INTERFACE)
+    roles = conn.determine_fabric_interface_roles(
+        "inout", protocol="AXI4", signal_directions=dirs)
+    assert roles.resolved is True
+    assert roles.fabric_side_role == "SLAVE_INTERFACE"
+    assert roles.external_endpoint_role == "MASTER_ENDPOINT"
+    assert roles.direction == "input"
+    assert "structural analysis" in roles.direction_evidence
+
+
+def test_amba5_contradictory_request_signal_directions_are_reported_not_averaged():
+    ports = _axi_mm_ports("s00_axi")
+    dirs = _fabric_signal_directions(ports, fabric_side_role=conn.FABRIC_SIDE_SLAVE_INTERFACE)
+    dirs["S00_AXI_ARVALID"] = "output"           # one channel wired the other way
+    result = conn.resolve_fabric_request_direction(dirs)
+    assert result["status"] == conn.REQUEST_DIRECTION_CONTRADICTORY
+    assert result["direction"] is None
+    roles = conn.determine_fabric_interface_roles(
+        "inout", protocol="AXI4", signal_directions=dirs)
+    assert roles.resolved is False
+    assert conn.REQUEST_DIRECTION_CONTRADICTORY in roles.unresolved_reason
+
+
+def test_amba5_a_port_name_can_never_supply_the_direction():
+    """A port whose NAME says "master" but which carries no AMBA request-signal
+    token contributes nothing; the real request signals decide."""
+    dirs = {"M99_AXI_MASTER_PORT_ENABLE": "output", "M99_AXI_IS_MASTER": "output"}
+    dirs.update(_fabric_signal_directions(
+        _axi_mm_ports("m99_axi"), fabric_side_role=conn.FABRIC_SIDE_SLAVE_INTERFACE))
+    result = conn.resolve_fabric_request_direction(dirs)
+    assert result["status"] == conn.REQUEST_DIRECTION_RESOLVED
+    assert result["direction"] == "input"
+    assert "M99_AXI_MASTER_PORT_ENABLE" not in result["evidence"]
+    roles = conn.determine_fabric_interface_roles(signal_directions=dirs, protocol="AXI4")
+    assert roles.fabric_side_role == "SLAVE_INTERFACE"
+
+
+def test_amba5_no_request_signal_evidence_is_reported_not_defaulted():
+    result = conn.resolve_fabric_request_direction({"CLK": "input", "RST_N": "input"})
+    assert result["status"] == conn.REQUEST_DIRECTION_NO_EVIDENCE
+    assert result["direction"] is None
+    roles = conn.determine_fabric_interface_roles(signal_directions={"CLK": "input"})
+    assert roles.resolved is False
+    assert roles.vip_role is None
+
+
+def test_amba5_rejects_an_unknown_direction_and_demands_some_evidence():
+    with pytest.raises(conn.ConnectivityError):
+        conn.resolve_fabric_request_direction({"S_AXI_AWVALID": "sideways"})
+    with pytest.raises(conn.ConnectivityError):
+        conn.determine_fabric_interface_roles("weird")
+    with pytest.raises(conn.ConnectivityError):
+        conn.determine_fabric_interface_roles()
+
+
+# --- AMBA-6 --------------------------------------------------------------
+
+def _clean_inventory():
+    return conn.build_amba_fabric_inventory(_fabric_interface_specs())
+
+
+def test_amba6_inventory_derives_protocol_and_both_perspectives_per_interface():
+    inv = {i.interface: i for i in _clean_inventory()}
+    assert inv["soc_fabric_s00_axi"].protocol == "AXI4"
+    assert inv["soc_fabric_s00_axi"].fabric_side_role == "SLAVE_INTERFACE"
+    assert inv["soc_fabric_s01_axi"].protocol == "AXI3"
+    assert inv["soc_fabric_m00_axi"].protocol == "ACE_LITE"
+    assert inv["soc_fabric_m00_axi"].fabric_side_role == "MASTER_INTERFACE"
+    assert inv["soc_fabric_m01_apb"].display_name == "APB4"
+    assert inv["soc_fabric_m02_ahb"].display_name == "AHB-Lite"
+    stream = inv["soc_fabric_m03_axis"]
+    assert stream.display_name == "AXI4-Stream"
+    assert stream.roles.stream_fabric_side_role == "SOURCE_INTERFACE"
+    assert "EXTERNAL_ENDPOINT_ROLE = SLAVE_ENDPOINT" in stream.render_amba5_block()
+    assert json.loads(json.dumps(stream.to_dict()))["roles"]["fabric_side_role"] \
+        == "MASTER_INTERFACE"
+
+
+def test_amba6_count_table_over_the_clean_synthetic_fabric():
+    table = conn.build_protocol_interface_count_table(_clean_inventory())
+    by_proto = {r["protocol"]: r for r in table["rows"]}
+    assert by_proto["AXI4"]["fabric_slave_interfaces"] == 1
+    assert by_proto["AXI3"]["fabric_slave_interfaces"] == 1
+    assert by_proto["ACE_LITE"]["fabric_master_interfaces"] == 1
+    assert by_proto["APB4"]["fabric_master_interfaces"] == 1
+    assert by_proto["AHB_LITE"]["fabric_master_interfaces"] == 1
+    assert by_proto["AXI4_STREAM"]["fabric_master_interfaces"] == 1
+    assert by_proto["AXI4_LITE"]["total"] == 0 and by_proto["AHB"]["total"] == 0
+    assert table["total_fabric_slave_ports"] == 2
+    assert table["total_fabric_master_ports"] == 4
+    assert table["total_amba_ports"] == 6
+    assert table["role_unresolved_interfaces"] == []
+    assert table["unresolved_protocol_interfaces"] == []
+    conn.assert_amba_interface_table_fully_resolved(table)
+
+
+def test_amba6_table_always_carries_all_ten_rows_in_the_docs_order():
+    """A protocol absent from a fabric is a fact the table states, not one the
+    reader has to infer from a missing row."""
+    empty = conn.build_protocol_interface_count_table([])
+    assert [r["protocol"] for r in empty["rows"]] == list(conn.AMBA4_PROTOCOLS)
+    assert [r["display_name"] for r in empty["rows"]][:3] == ["AHB", "AHB-Lite", "APB"]
+    assert empty["total_amba_ports"] == 0
+
+
+def test_amba6_renders_the_mandated_table_and_the_three_total_lines():
+    rendered = conn.render_protocol_interface_count_table(
+        conn.build_protocol_interface_count_table(_clean_inventory()))
+    assert "| Protocol | Fabric Slave Interfaces | Fabric Master Interfaces | Total |" in rendered
+    assert "| AXI4-Lite | 0 | 0 | 0 |" in rendered
+    assert "| ACE-Lite | 0 | 1 | 1 |" in rendered
+    assert "TOTAL FABRIC SLAVE PORTS: 2" in rendered
+    assert "TOTAL FABRIC MASTER PORTS: 4" in rendered
+    assert "TOTAL AMBA PORTS: 6" in rendered
+
+
+# --- AMBA-6, the unresolved half ------------------------------------------
+
+def _ambiguous_inventory():
+    """The clean fabric plus two genuinely undecidable interfaces and one
+    non-AMBA one -- the states an untested happy-path-only counter would drop."""
+    specs = _fabric_interface_specs()
+    bridge_ports = _ahb_ports("ahb_s") | _apb_ports("apb_m", apb3=True)
+    specs.append({
+        "interface": "soc_fabric_top", "dut_instance": "soc_fabric",
+        "port_names": sorted(bridge_ports),
+        "signal_directions": _fabric_signal_directions(
+            bridge_ports, fabric_side_role=conn.FABRIC_SIDE_SLAVE_INTERFACE)})
+    inout_ports = _apb_ports("s02_apb", apb3=True)
+    specs.append({
+        "interface": "soc_fabric_s02_apb", "dut_instance": "soc_fabric",
+        "port_names": sorted(inout_ports), "dut_port_direction": "inout"})
+    specs.append({
+        "interface": "soc_fabric_usb_sideband", "dut_instance": "soc_fabric",
+        "port_names": ["DP", "DM", "VBUS"], "dut_port_direction": "input"})
+    return conn.build_amba_fabric_inventory(specs)
+
+
+def test_amba6_unresolved_protocol_gets_its_own_row_and_is_never_dropped():
+    """AMBA-3's "do not silently omit partial/incomplete interfaces" applied to
+    the count table: an AHB-to-APB bridge port list spans two families and
+    cannot be one protocol, but it is still an AMBA port. Its ROLE is
+    resolvable from its port directions even though its protocol is not -- the
+    two are independent properties and are reported independently."""
+    table = conn.build_protocol_interface_count_table(_ambiguous_inventory())
+    rows = {r["protocol"]: r for r in table["rows"]}
+    assert conn.AMBA_PROTOCOL_UNRESOLVED in rows
+    assert rows[conn.AMBA_PROTOCOL_UNRESOLVED]["total"] == 1
+    assert rows[conn.AMBA_PROTOCOL_UNRESOLVED]["fabric_slave_interfaces"] == 1
+    assert table["unresolved_protocol_interfaces"] == ["soc_fabric_top"]
+
+
+def test_amba6_role_unresolved_port_is_in_the_total_but_in_neither_column():
+    """The inout APB3 port is the mirror-image case: its PROTOCOL resolves
+    cleanly, so it sits in the APB3 row, but its perspective does not, so it is
+    counted in neither the slave nor the master column of that row."""
+    table = conn.build_protocol_interface_count_table(_ambiguous_inventory())
+    assert table["role_unresolved_interfaces"] == ["soc_fabric_s02_apb"]
+    apb3_row = next(r for r in table["rows"] if r["protocol"] == "APB3")
+    assert apb3_row["role_unresolved_interfaces"] == 1
+    assert apb3_row["fabric_slave_interfaces"] == 0
+    assert apb3_row["fabric_master_interfaces"] == 0
+    assert apb3_row["total"] == 1
+    # slave + master + role-unresolved == total, per row and in aggregate.
+    for r in table["rows"]:
+        assert (r["fabric_slave_interfaces"] + r["fabric_master_interfaces"]
+                + r["role_unresolved_interfaces"]) == r["total"]
+    assert table["total_amba_ports"] == 8            # 6 clean + bridge + inout APB
+    assert table["total_fabric_slave_ports"] + table["total_fabric_master_ports"] == 7
+    rendered = conn.render_protocol_interface_count_table(table)
+    assert "ROLE-UNRESOLVED AMBA PORTS (1)" in rendered
+    assert "soc_fabric_s02_apb" in rendered
+
+
+def test_amba6_non_amba_interface_is_excluded_from_the_counts_but_named():
+    table = conn.build_protocol_interface_count_table(_ambiguous_inventory())
+    assert table["excluded_not_amba"] == ["soc_fabric_usb_sideband"]
+    assert table["total_amba_ports"] == 8            # the USB sideband is not an AMBA port
+    assert "EXCLUDED, NOT AMBA (1)" in conn.render_protocol_interface_count_table(table)
+
+
+def test_amba6_fully_resolved_assertion_refuses_the_ambiguous_fabric():
+    table = conn.build_protocol_interface_count_table(_ambiguous_inventory())
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.assert_amba_interface_table_fully_resolved(table)
+    assert exc.value.reason == "AMBA_INTERFACE_TABLE_NOT_FULLY_RESOLVED"
+
+
+# --- AMBA-6: the per-protocol generalization of the self-check identity ----
+
+def test_amba6_per_protocol_identity_holds_when_every_protocol_reconciles():
+    table = conn.build_protocol_interface_count_table(_clean_inventory())
+    result = conn.verify_per_protocol_interface_count_identity(
+        table, {"AXI4": 1, "AXI3": 1, "ACE_LITE": 1, "APB4": 1,
+                "AHB_LITE": 1, "AXI4_STREAM": 1})
+    assert result["identity_holds"] is True
+    assert result["per_protocol"]["AXI4"] == {
+        "interface_count": 1, "vip_instance_count": 1, "exemption_count": 0}
+    assert result["total_amba_ports"] == 6
+    assert set(result["per_protocol"]) == {
+        "AXI4", "AXI3", "ACE_LITE", "APB4", "AHB_LITE", "AXI4_STREAM"}
+
+
+def test_amba6_per_protocol_identity_catches_a_gap_the_aggregate_hides():
+    """The whole reason this generalization exists. One uncovered AXI4 port and
+    one spurious extra APB4 VIP cancel exactly, so the SCALAR identity the
+    matrix already runs reports a clean reconciliation while both findings are
+    real."""
+    table = conn.build_protocol_interface_count_table(_clean_inventory())
+    counts = {"AXI4": 0, "AXI3": 1, "ACE_LITE": 1, "APB4": 2,
+              "AHB_LITE": 1, "AXI4_STREAM": 1}
+    # The aggregate really does reconcile -- proving the blind spot is real,
+    # not hypothetical.
+    assert conn.verify_self_check_identity(
+        table["total_amba_ports"], sum(counts.values()), []) is True
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.verify_per_protocol_interface_count_identity(table, counts)
+    assert exc.value.reason == "SELF_CHECK_IDENTITY_MISMATCH"
+
+
+def test_amba6_identity_accepts_a_reasoned_per_protocol_exemption():
+    table = conn.build_protocol_interface_count_table(_clean_inventory())
+    result = conn.verify_per_protocol_interface_count_identity(
+        table, {"AXI4": 1, "AXI3": 1, "ACE_LITE": 1, "APB4": 1, "AHB_LITE": 1},
+        [{"interface": "soc_fabric_m03_axis", "protocol": "AXI4_STREAM",
+          "reason": "video stream monitored by the display subsystem's own scoreboard"}])
+    assert result["per_protocol"]["AXI4_STREAM"]["exemption_count"] == 1
+    assert result["total_exemptions"] == 1
+
+
+def test_amba6_identity_refuses_an_unroutable_or_unexplained_exemption():
+    table = conn.build_protocol_interface_count_table(_clean_inventory())
+    counts = {"AXI4": 1, "AXI3": 1, "ACE_LITE": 1, "APB4": 1, "AHB_LITE": 1}
+    with pytest.raises(conn.ConnectivitySelfCheckError) as no_proto:
+        conn.verify_per_protocol_interface_count_identity(
+            table, counts, [{"interface": "soc_fabric_m03_axis", "reason": "later"}])
+    assert no_proto.value.reason == "EXEMPTION_PROTOCOL_UNROUTABLE"
+    # The "every exemption carries a reason" rule is the scalar function's, and
+    # is reached through it rather than re-implemented here.
+    with pytest.raises(conn.ConnectivitySelfCheckError) as no_reason:
+        conn.verify_per_protocol_interface_count_identity(
+            table, counts, [{"interface": "soc_fabric_m03_axis",
+                             "protocol": "AXI4_STREAM", "reason": ""}])
+    assert no_reason.value.reason == "EXEMPTION_MISSING_EXPLANATION"
+    with pytest.raises(conn.ConnectivitySelfCheckError) as bad_vip:
+        conn.verify_per_protocol_interface_count_identity(table, {"NOT_A_PROTOCOL": 1})
+    assert bad_vip.value.reason == "VIP_COUNT_FOR_UNKNOWN_PROTOCOL"
+
+
+# --- AMBA-6 <-> connectivity matrix ---------------------------------------
+
+def _amba_matrix_rows(inventory):
+    """Planning rows for the discovered fabric. `from_amba_fabric_interface()`
+    derives protocol/role from the discovery record -- nothing is typed in, and
+    no bind statement is produced (`bind_target` is a planned target string a
+    human reviews, per AMBA-30/AMBA-31)."""
+    return [conn.ConnectivityRow.from_amba_fabric_interface(
+        i, vip_type=f"svt_{i.protocol.lower()}_agent", count=1,
+        active_passive="active", bind_target=f"soc_fabric.{i.interface}",
+        tier=conn.BindTier.T3_NAMING_HEURISTIC.value) for i in inventory]
+
+
+def test_matrix_row_from_an_amba_interface_carries_protocol_and_fabric_side_role():
+    rows = _amba_matrix_rows(_clean_inventory())
+    matrix = conn.build_connectivity_matrix(rows)
+    assert "protocol" in conn.MATRIX_COLUMNS and "fabric_side_role" in conn.MATRIX_COLUMNS
+    assert list(matrix[0].keys()) == conn.MATRIX_COLUMNS
+    by_iface = {r["interface"]: r for r in matrix}
+    assert by_iface["soc_fabric_s00_axi"]["protocol"] == "AXI4"
+    assert by_iface["soc_fabric_s00_axi"]["fabric_side_role"] == "SLAVE_INTERFACE"
+    assert by_iface["soc_fabric_m00_axi"]["fabric_side_role"] == "MASTER_INTERFACE"
+    # The role column is still the derived VIP role, so provenance holds.
+    conn.assert_role_provenance(rows)
+    assert by_iface["soc_fabric_s00_axi"]["role"] == \
+        conn.determine_role_from_port_direction("input")
+
+
+def test_matrix_row_refuses_an_interface_whose_perspective_is_unresolved():
+    unresolved = next(i for i in _ambiguous_inventory() if not i.roles.resolved)
+    with pytest.raises(conn.ConnectivityError) as exc:
+        conn.ConnectivityRow.from_amba_fabric_interface(
+            unresolved, vip_type="svt_apb_agent", count=1, active_passive="active",
+            bind_target="soc_fabric.s02_apb", tier=conn.BindTier.T4_UNDECIDABLE.value)
+    assert exc.value.reason == "AMBA_INTERFACE_HAS_NO_ESTABLISHED_DIRECTION"
+
+
+def test_a_row_never_classified_says_so_rather_than_looking_amba_unresolved():
+    """`PROTOCOL_NOT_CLASSIFIED` ("never asked") must stay distinct from
+    `AMBA_PROTOCOL_UNRESOLVED` ("asked, evidence did not settle it")."""
+    row = conn.ConnectivityRow.from_dut_port(
+        dut_instance="chip.core.usb0", interface="utmi", dut_port_direction="output",
+        vip_type="svt_usb_agent", count=1, active_passive="active",
+        bind_target="chip.core.usb0", tier="T2_STRUCTURAL_MATCH")
+    assert row.protocol == conn.PROTOCOL_NOT_CLASSIFIED
+    assert row.fabric_side_role == conn.FABRIC_SIDE_ROLE_NOT_CLASSIFIED
+    assert conn.count_amba_ports_in_matrix([row]) == 0
+    # A pre-schema-change dict row re-loaded from an older manifest reads the
+    # same way rather than as a null.
+    legacy = {c: "x" for c in conn.MATRIX_COLUMNS[:9]}
+    assert conn.build_connectivity_matrix([legacy])[0]["protocol"] == \
+        conn.PROTOCOL_NOT_CLASSIFIED
+
+
+def test_amba6_table_and_matrix_port_counts_cannot_silently_disagree():
+    inventory = _clean_inventory()
+    rows = _amba_matrix_rows(inventory)
+    table = conn.build_protocol_interface_count_table(inventory)
+    assert conn.count_amba_ports_in_matrix(rows) == 6
+    assert conn.cross_check_amba_table_against_matrix(table, rows)["counts_agree"] is True
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.cross_check_amba_table_against_matrix(table, rows[:-1])
+    assert exc.value.reason == "AMBA_TABLE_AND_MATRIX_PORT_COUNTS_DISAGREE"
+    assert exc.value.detail["gap"] == 1
+
+
+def test_emit_connectivity_artifacts_writes_the_amba6_table_and_no_bind_statement(tmp_path):
+    inventory = _clean_inventory()
+    out = conn.emit_connectivity_artifacts(
+        tmp_path / "artifacts", _amba_matrix_rows(inventory), amba_interfaces=inventory)
+    written = out["amba_interface_counts"].read_text(encoding="utf-8")
+    assert "TOTAL AMBA PORTS: 6" in written
+    assert out["amba_interface_count_table"]["total_fabric_slave_ports"] == 2
+    # HARD CONSTRAINT (AMBA-30/AMBA-31): discovery/planning artifacts only.
+    for path in (out["amba_interface_counts"], out["matrix_table"],
+                 out["hierarchy_diagram"], out["matrix_manifest"]):
+        assert conn.parse_bind_line(path.read_text(encoding="utf-8")) is None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            assert not line.strip().startswith("bind ")
+
+
+def test_emit_connectivity_artifacts_without_an_inventory_writes_no_amba_file(tmp_path):
+    """Absence of the artifact means "no AMBA inventory was supplied", never
+    "this fabric has no AMBA ports" -- so no empty file is left behind."""
+    out = conn.emit_connectivity_artifacts(tmp_path / "artifacts", [_sample_row()])
+    assert out["amba_interface_counts"] is None
+    assert out["amba_interface_count_table"] is None
+    assert not (tmp_path / "artifacts" /
+                conn.ARTIFACT_FILENAMES["amba_interface_counts"]).exists()
+
+
+# ===========================================================================
 # Existing binds (grep/parse)
 # ===========================================================================
 
