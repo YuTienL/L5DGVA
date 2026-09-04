@@ -32,6 +32,14 @@ Read that module's own docstring "WHAT THIS DOES NOT DO" section first — it do
 invent AXI/AHB/APB channel/handshake signal names or VIP bindings; those still come
 from current evidence, supplied into the topology JSON, never fabricated.
 
+Since 2026-09-04 that same topology can instead be carried as a
+`protocol_model_topology` block inside the environment manifest, and
+`tools/generate_protocol_uvm_environment.py` layers the fabric model onto the
+generic skeleton in one run (see
+`dv_harness/uvm_generator/protocol_model_layer.py`). Use that when the fabric is part
+of an environment being generated; the standalone command above stays correct for
+generating the fabric model on its own.
+
 - master/slave registries
 - Concurrent multi-branch bus arbitration: when block-level traffic and multiple branch_a{N} DUT-side
   branches run concurrently on the same AMBA bus, treat each branch's driver as an independent AMBA

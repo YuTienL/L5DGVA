@@ -35,9 +35,35 @@ module's own docstring "WHAT THIS DOES NOT DO" section before assuming more than
 
 For LTSSM/link-training content specifically, use
 `dv_harness/uvm_generator/pcie_ltssm_generator.py` (a real LTSSM
-transition model, CLI: `tools/generate_pcie_ltssm_environment.py`) instead
-of hand-authoring link-training state logic — it already implements the
-transition model this section's "LTSSM/link training" bullet asks for.
+transition model) instead of hand-authoring link-training state logic — it
+already implements the transition model this section's "LTSSM/link training"
+bullet asks for.
+
+**Since 2026-09-04 that model is layered by the SAME
+`tools/generate_protocol_uvm_environment.py` run, not a second command.**
+Add a `protocol_model_topology` block to the manifest and the LTSSM package,
+its state-register module and a real transition-legality SVA in
+`tb/env/pcie_assertions.sv` are generated with the skeleton (see
+`dv_harness/uvm_generator/protocol_model_layer.py`):
+
+```json
+"protocol_model_topology": {
+  "name": "pcie_ep",
+  "lane_width": 4,
+  "gen_speed": "Gen3",
+  "role": "EP",
+  "ltssm_state_signal": "u_pcie_ctrl.ltssm_state_q"
+}
+```
+
+Every field is DUT evidence from the "Discover Before Generate" list above and
+none is defaulted: omit the block and the tool reports
+`PROTOCOL_MODEL_TOPOLOGY_NOT_SUPPLIED` in its `protocol_model` output (and in
+the generated `environment_manifest.json`) rather than quietly producing a
+skeleton that looks modelled; omit only `ltssm_state_signal` and the model
+still layers but no assertion is emitted against an unconfirmed signal. The
+standalone `tools/generate_pcie_ltssm_environment.py` still exists for
+generating the LTSSM model on its own, outside an environment.
 - VIP topology
 - LTSSM/link training
 - configuration space

@@ -16,9 +16,20 @@
 import argparse, json, pathlib, sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+#
+# 2026-09-04 (AI-mechanism re-audit gap #13): SUBSYSTEM_MODE now also layers
+# the protocol's OWN model (PCIe LTSSM, MIPI D-PHY, CAN-FD arbitration, AMBA
+# fabric, eMMC/SD command queue) onto that skeleton when the manifest supplies
+# `protocol_model_topology` -- previously those five real generators were
+# reachable only from their own standalone tools, so this entry point produced
+# the identical protocol-agnostic skeleton for every protocol. The
+# `protocol_model` block below reports which of "layered" / "no model for this
+# protocol" / "no topology supplied" happened, so a skeleton is never mistaken
+# for a modelled environment.
 from dv_harness.uvm_generator.create_environment import (
     create_environment, EnvironmentModeUnresolvedError, SubsystemModeRequiredError,
 )
+from dv_harness.uvm_generator.protocol_model_layer import ProtocolModelLayerError
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--manifest', required=True)
@@ -45,6 +56,16 @@ except EnvironmentModeUnresolvedError as exc:
     print(json.dumps({"status": "ENVIRONMENT_MODE_UNRESOLVED", "reason": exc.reason,
                       "detail": exc.detail}))
     sys.exit(3)
-print(json.dumps({"status": "OK", "environment_mode": result["environment_mode"],
-                  "generated_files": result["generated_files"], "out": result["out_dir"],
-                  "environment_mode_decision": result["decision"]}))
+except ProtocolModelLayerError as exc:
+    # The manifest asked for a protocol model and that model's own validator
+    # refused the topology. A refusal, not a partial environment reported as
+    # the requested one -- same posture as SUBSYSTEM_MODE_REQUIRED_FIRST above.
+    print(json.dumps({"status": exc.reason, "detail": exc.detail}))
+    sys.exit(4)
+out = {"status": "OK", "environment_mode": result["environment_mode"],
+       "generated_files": result["generated_files"], "out": result["out_dir"],
+       "environment_mode_decision": result["decision"]}
+if "protocol_model" in result:
+    out["protocol_model"] = result["protocol_model"]
+    out["protocol_model_files"] = result["protocol_model_files"]
+print(json.dumps(out))

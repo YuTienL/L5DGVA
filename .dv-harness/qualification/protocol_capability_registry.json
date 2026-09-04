@@ -39,7 +39,7 @@
       ],
       "dut_proof": [],
       "capability_status": "PROTOCOL_MODEL_PARTIAL",
-      "capability_note": "examples/generated_pcie_uvm_env/ proves the generation path executes end to end shape-wise, but examples/NOTICE_SCAFFOLDING_ONLY.md states it is an unconnected skeleton with no DUT ever bound and it has never been compiled. Reachable only via the standalone tool, not from engine.py/cli.py."
+      "capability_note": "examples/generated_pcie_uvm_env/ proves the generation path executes end to end shape-wise, but examples/NOTICE_SCAFFOLDING_ONLY.md states it is an unconnected skeleton with no DUT ever bound and it has never been compiled. Since 2026-09-04 the LTSSM model is layered onto the generic skeleton by the official CREATE ENVIRONMENT entry point (uvm_generator/protocol_model_layer.py <- create_environment.py) whenever the manifest supplies protocol_model_topology, so it is no longer reachable only via the standalone tool; still no DUT bind and no compile."
     },
     "Ethernet": {
       "qualification_status": "BUILDER_AVAILABLE",

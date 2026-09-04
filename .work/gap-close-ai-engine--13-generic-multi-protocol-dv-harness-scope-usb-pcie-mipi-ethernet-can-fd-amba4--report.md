@@ -1,169 +1,162 @@
-# Gap close: AI mechanism #13 -- Generic multi-protocol DV Harness scope
+# Gap close: AI mechanism #13 -- Generic multi-protocol DV Harness scope (USB/PCIe/MIPI/Ethernet/CAN-FD/AMBA4)
 
-**Result: DONE** (for the one in-scope, fixable gap the audit named)
-**Test summary**: 341 passed across `test_protocol_capability.py` + `test_qualification.py` +
-`test_dashboard_interactive.py` + `test_engine_gates_and_routing.py` (exit 0), plus 104 passed
-across the five protocol-model generator suites and 84 passed across the protocol/qualification
-gate suites. New suite: 29 passed.
+**Verdict: DONE**
 
-Date: 2026-09-04
+*Supersedes the earlier report at this same path (commit 7af2040), which covered the previous pass
+on this mechanism -- splitting the collapsed per-protocol capability CLAIM. That pass's content is
+preserved in git history and summarised in CLAUDE.md's "Per-Protocol Capability" section; this pass
+closes the WIRING gap that one explicitly left open.*
+
+**One-line test summary**: `dv_harness_tests/test_protocol_model_layer_wiring.py` -- 33 passed
+(new); regression set `test_protocol_capability.py` + `test_system_level_soc_composition_wiring.py`
++ `test_protocol_env_generator.py` + `test_protocol_router.py` -- 70 passed; the five protocol-model
+unit suites + `test_state_machine_checks.py` + `test_generator_wiring_notices.py` +
+`test_generate_observability_plan_assertions.py` -- 134 passed.
 
 ---
 
-## What was in scope and what was not
+## What the gap actually was (re-verified in the code, not restated from the audit)
 
-The audit's verdict was PARTIALLY_WIRED with **one concrete, checkable gap** named as fixable:
+The audit's verdict PARTIALLY_WIRED was correct, and its named cause was the right one. Re-checked
+before touching anything:
 
-> `.dv-harness/qualification/protocol_capability_registry.json` asserts
-> `"generation_capability": "REAL_CODE_GENERATOR_AVAILABLE"` for Ethernet, MIPI_CSI2, MIPI_DSI,
-> SD_SDIO, eDP, UCIe -- none of which have a real protocol-specific `.py` generator.
+```
+$ grep -rn "pcie_ltssm_generator\|canfd_arbitration_generator\|mipi_dphy_generator\|
+           emmc_cmdq_generator\|amba_fabric_generator" --include=*.py .   # minus tests/pycache
+```
 
-That is what this pass closed. Everything else in the audit (a first non-USB DUT-proof pilot,
-CSI-2/DSI packet layers, ACE-Lite/AXI-Stream, TLP/config-space) is a genuine separate build effort
-and was **not** attempted -- see "Explicitly not done" below.
+Every non-test caller of the five protocol-model generators was that model's own standalone
+`tools/generate_*.py` script (plus `amba_fabric_generator.parse_addr`, imported by
+`address_map_verifier.py` for address parsing only -- not for generation).
+`dv_harness/uvm_generator/create_environment.py` -- the CREATE ENVIRONMENT entry point
+`tools/generate_protocol_uvm_environment.py` calls, and the script every
+`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` invokes -- imported none of them. Its SUBSYSTEM_MODE
+branch was one unconditional line:
 
-## Evidence re-verified before touching anything
+```python
+generated = ProtocolEnvGenerator(out_dir).generate(manifest)
+```
 
-Re-checked directly this pass, not taken from the audit text:
+So a manifest carrying `protocol: "PCIe"` produced byte-for-byte the same protocol-agnostic
+skeleton a manifest carrying `protocol: "Ethernet"` produced. The LTSSM model's unit tests passed
+the whole time while the production path never called it -- the exact PARTIALLY_WIRED shape this
+audit hunts.
 
-- `grep -rln "builder_profile" --include=*.py .` -> **empty**. The entire
-  `.dv-harness/universal-protocol-platform/builders/` tree is inert metadata no Python reads.
-  Confirmed.
-- Real protocol-model generator modules present: `pcie_ltssm_generator.py`,
-  `mipi_dphy_generator.py`, `canfd_arbitration_generator.py`, `amba_fabric_generator.py`,
-  `emmc_cmdq_generator.py` -- **five**, plus the protocol-agnostic `protocol_env_generator.py`.
-  No `ethernet_*.py`, no eDP module, no UCIe module.
-- **Correction to the audit**: the audit treated the registry as a "status ledger". It is not
-  inert. `dv_harness/dashboard.py:_protocol_registry()` reads it and renders it as the project's
-  protocol readiness, and `_qualification_tier_reached()` derives the Qualification-Tiers card
-  from it. The overstatement therefore reached a real production surface -- which raised the bar
-  from "edit some JSON" to "wire the honest claim into the consumers".
-- **Second overstatement source the audit did not name**: `.dv-harness/semantic-models/*.json`
-  (10 files) carried the identical `"generation_capability": "REAL_CODE_GENERATOR_AVAILABLE"`.
-  Zero Python consumers -- which is exactly why nobody noticed.
-- **Third**: the registry's `new_interface_framework` block claimed the same
-  `REAL_GENERATION_READY` for `VIP_ADAPTER`/`NATIVE_UVC`, while
-  `grep -rn "NATIVE_UVC\|VIP_ADAPTER" --include=*.py .` returns nothing at all.
-- Git status checked on every file before editing. `CLAUDE.md` was modified by a concurrent
-  workstream mid-pass (an unrelated `memory_router.organizational_admission_gate()` paragraph), so
-  it was edited by hand-scoped append against a unique tail anchor, never rewritten.
+Everything else the audit found real, I found real: `protocol_capability.py` is genuine and
+self-checking (`--check` exits 0), `protocol_router.py` covers all 9 protocols, the five models are
+non-trivial math, `state_machine_checks.py` really does generalize the PCIe legality pattern into a
+manifest-driven DSL that `generator.assertions()` already consumes. Nothing needed to be built from
+scratch; the missing thing was a wire between pieces that all already existed.
 
-## The fix
+Out of scope by the task's own framing and left alone: proving any non-USB protocol against a real
+DUT, and the two UNTESTED non-USB topology variants (CSI-2/DSI simplex streaming,
+AMBA-as-primary-DUT).
 
-The audit proposed splitting `generation_capability` into two honest fields and updating
-`protocol_status.py`'s print format. Adjusted after being in the code: a hand-maintained pair of
-fields is the same defect a year later. The claim is now **derived from code and enforced**.
+## What changed
 
-### New: `dv_harness/protocol_capability.py`
+### New: `dv_harness/uvm_generator/protocol_model_layer.py`
 
-Answers three separately-checkable questions instead of one collapsed label:
+The wire. Reuses the three mechanisms that already exist rather than adding a parallel one:
 
-| question | how it is answered |
-|---|---|
-| generic skeleton available? | `protocol_env_generator`, verified importable. True for all 11 -- the true half of the old claim. |
-| protocol's own behaviour modelled? | `PROTOCOL_CAPABILITIES` table; every module verified through `importlib.util.find_spec` and every standalone tool verified on disk before being reported. No module -> `NONE`, not talked up. |
-| ever proven against a real DUT? | `dut_proof` paths that must EXIST. Only USB has any. |
+- **Which module implements a protocol** comes from
+  `protocol_capability.PROTOCOL_CAPABILITIES` -- already the single code-derived answer to that
+  question, already drift-checked by `--check`. No second table.
+- **How it is invoked** is that entry's `generator_class`, resolved through the import system by
+  the new `protocol_capability.resolve_generator_class()`.
+- **What it is invoked with** is the manifest's new `protocol_model_topology` key: that model's own
+  topology schema verbatim (the identical dict its standalone tool takes). Each generator's own
+  typed validator judges it; nothing is re-validated or defaulted here.
+- **Protocol resolution** goes through `capability_for()` (now case-insensitive, plus the
+  router-canonical `amba`/`canfd`/`sdio` aliases) and then `protocol_router.resolve_protocol()`, so
+  the registry's `PCIe`/`eMMC` casing, the router's lowercase canon and a hand-written
+  `PCI Express` all land on the same entry instead of silently reporting a modelled protocol as
+  unmodelled.
 
-- `derive_status()` computes `GENERIC_SKELETON_ONLY` / `PROTOCOL_MODEL_PARTIAL` /
-  `PROTOCOL_MODEL_COMPLETE` / `DUT_PROVEN` from those facts.
-- `assert_registry_matches_code()` raises `ProtocolCapabilityDriftError` (carrying **every**
-  mismatch, not the first) on: a reintroduced `generation_capability` key, the retired
-  `REAL_GENERATION_READY` status, the retired blanket per-entry note, any owned field disagreeing
-  with the computation, a declared module that does not import, a declared tool or DUT-proof path
-  that does not exist, a protocol missing from either side, or `new_interface_framework`
-  reclaiming its old status.
-- `--sync` regenerates the registry (and the 10 semantic-model files) from the code; `--check`
-  exits 2 on drift.
-- Harness assets (`tool`, `dut_proof`) resolve against `HARNESS_ROOT`, while the `root` argument
-  selects which project's registry to read -- so a downstream project does not report every
-  generator missing merely because its own tree has no `tools/`.
-- `capability_status` shares no token with `qualification.py`'s 8-tier ladder, on purpose: PCIe
-  has the deepest protocol model in the repo while sitting at `BUILDER_AVAILABLE`, which is why
-  one field could never carry both questions.
+Three deliberate properties:
 
-### Wired into both real consumers
+1. **The model reaches the MAIN environment, not just a side directory.** Emitting
+   `protocol_model/*.sv` alone would leave the generated testbench unchanged. Where a model exposes
+   a state graph (today PCIe's `LTSSM_TRANSITIONS`) and the manifest names the real DUT signal
+   carrying that state, the graph is compiled into a `state_machine_checks` entry -- the EXISTING
+   DSL `generator.assertions()` consumes, whose own docstring says it generalizes precisely
+   `pcie_ltssm_generator`'s hardcoded LTSSM-legality pattern -- so real transition-legality SVA
+   lands in `tb/env/<p>_assertions.sv`, typed against the package the same run layered. The model's
+   `.sv` files are PREPENDED to the environment filelist (a package must compile before the file
+   typed against it), in the order the model's own `filelist.f` declares.
+2. **Nothing is defaulted; no absence is silent.** `lane_width`/`gen_speed`/`role` and a state-signal
+   name are DUT facts. A manifest without them still generates, but the environment's own
+   `environment_manifest.json` carries a `protocol_model` record saying
+   `PROTOCOL_MODEL_TOPOLOGY_NOT_SUPPLIED` and naming the module that would have run -- the same
+   honesty contract `protocol_capability.py` enforces on the registry, applied per generated
+   environment. Missing state signal -> the model still layers, but no assertion is emitted against
+   a signal nobody confirmed, and the refusal is recorded.
+3. **A rejected topology refuses.** A supplied-but-invalid topology raises
+   `ProtocolModelLayerError` carrying the model's own `reason`/`detail` (e.g. `INVALID_LANE_WIDTH`
+   for a PCIe x3), rather than handing back a skeleton the caller reads as the modelled environment
+   they asked for. Same posture as `create_environment.py`'s existing `SubsystemModeRequiredError`.
 
-1. **`tools/universal_protocol/protocol_status.py`** -- now prints CAPABILITY and QUALIFICATION as
-   separate columns plus the module name, and **refuses to print at all** (exit 2) when the
-   registry claims more than the code backs. A status command that can print a stale overstatement
-   is how this one survived.
-2. **`dv_harness/dashboard.py`** -- `_protocol_registry()` carries `capability_status` and
-   `protocol_model_generator`; the Protocols card renders both per tile (module name on hover,
-   `cap-generic-only` / `cap-model` / `cap-dut-proven` CSS). Previously all 11 tiles read
-   `BUILDER_AVAILABLE`, i.e. indistinguishable readiness. `qualification_status` is untouched.
+### Modified
 
-### Data corrected
+- **`dv_harness/uvm_generator/create_environment.py`** -- SUBSYSTEM_MODE now plans the model,
+  injects the state-machine check, records the plan into the manifest (so it reaches the generated
+  `environment_manifest.json`), generates the skeleton, then emits the model's files. Returns
+  `protocol_model` and `protocol_model_files`.
+- **`dv_harness/protocol_capability.py`** -- `ProtocolModel` gains `generator_class` (declared with
+  the module so there is one place saying which module implements a protocol and how it is called);
+  `resolve_generator_class()`; `capability_for()` case-insensitive fallback + `amba`/`canfd`/`sdio`
+  aliases; `assert_registry_matches_code()` now resolves the declared class for real, so a renamed
+  class fails `--check` instead of a generation run. PCIe's `capability_note` corrected -- it said
+  "Reachable only via the standalone tool, not from engine.py/cli.py", which this change makes
+  false. Registry re-synced (`--sync`; one entry changed, `--check` exits 0).
+- **`tools/generate_protocol_uvm_environment.py`** -- reports the `protocol_model` block in its JSON
+  output and exits 4 on `ProtocolModelLayerError`, so the status is visible at the entry point and
+  not only inside the generated manifest.
+- **`CLAUDE.md`** -- "Per-Protocol Capability" section gains the wiring paragraph; its scope boundary
+  now reads "this closes the CLAIM and the WIRING, not the capability".
+- **`.claude/skills/PROTOCOL_BUILDERS/pcie-environment-builder/SKILL.md`** -- the concrete
+  `protocol_model_topology` block, what each field is evidence for, and what happens when it is
+  omitted. **`amba4-soc-environment-builder/SKILL.md`** -- same topology now usable in-manifest.
+  Both synced to `industrial/` and `PACKAGE/` per the Methodology Consolidation Rule.
 
-`.dv-harness/qualification/protocol_capability_registry.json` (regenerated, now self-describing as
-generated), `.dv-harness/semantic-models/*.json` (10 files), `new_interface_framework`. Memory
-records under `.dv-harness/memory/` are deliberately skipped by the legacy-claim scan -- they are
-an append-only record of what was believed at the time; rewriting them would falsify it.
+## Proof that the WIRING is what is tested (not the models in isolation)
 
-### Resulting honest state
+`dv_harness_tests/test_protocol_model_layer_wiring.py`, 33 tests, every one driving the real
+`create_environment()` entry point:
 
-| protocol | capability_status | protocol model generator |
-|---|---|---|
-| USB_2_3x | DUT_PROVEN | NONE (its proof is evidence artifacts, not a model module) |
-| PCIe | PROTOCOL_MODEL_PARTIAL | `pcie_ltssm_generator` |
-| MIPI_CSI2 / MIPI_DSI | PROTOCOL_MODEL_PARTIAL | `mipi_dphy_generator` (D-PHY layer only) |
-| CAN_FD | PROTOCOL_MODEL_PARTIAL | `canfd_arbitration_generator` |
-| AMBA4_MULTI_MASTER_MULTI_SLAVE | PROTOCOL_MODEL_PARTIAL | `amba_fabric_generator` |
-| eMMC / SD_SDIO | PROTOCOL_MODEL_PARTIAL | `emmc_cmdq_generator` |
-| **Ethernet / eDP_DisplayPort / UCIe** | **GENERIC_SKELETON_ONLY** | **NONE** |
+- the LTSSM package/state-register really appear in the generated environment for a PCIe manifest;
+- the emitted SV carries the real `LTSSM_TRANSITIONS` table, asserted state by state against the
+  live Python table (not a golden string);
+- **byte-comparison against the standalone tool's own `PCIeLTSSMGenerator(out).generate(topology)`**
+  -- this is the test that fails if anyone ever "wires in" a protocol model by reimplementing its
+  output inside the generation path instead of calling it;
+- the model reaches `tb/env/pcie_assertions.sv` with the real DUT signal and the layered package's
+  enum type;
+- filelist compile order (package before the file typed against it, before the skeleton);
+- **USB stays byte-identical** in every generated SV file (the only difference anywhere is the
+  honest `protocol_model` record in `environment_manifest.json`);
+- missing topology / missing state signal / a hand-written check of the same name / a rejected
+  topology -- each recorded or refused, never silent;
+- all five protocol-model modules layer through the entry point (parametrized over CAN_FD,
+  MIPI_CSI2, MIPI_DSI, AMBA4, eMMC, SD_SDIO) -- PCIe is the recommended first pilot, not a special
+  case in the code;
+- Ethernet / an unknown protocol claim nothing;
+- 13 manifest protocol spellings resolve to the right capability entry;
+- every declared `generator_class` resolves and has `generate()`;
+- this repo's shipped registry still matches the code.
 
-Every PARTIAL entry names its unmodelled layers in `does_not_model` -- AMBA's
-`ace_lite_coherency`/`axi_stream`, PCIe's `tlp_layer`/`config_space`, CSI-2's packet layer, and so
-on. Partial-ness is data, not a footnote.
+## What this does NOT close (stated so it is not read as more)
 
-## Tests
+- **No non-USB protocol is proven against a real DUT.** The layered output has still never been
+  compiled or bound. Steps 2 and 3 of the audit's own fix plan (bind a real PCIe RTL DUT, run
+  `connectivity.py`'s 3 machine gates against it; extend `pcie_ltssm_generator` past LTSSM into
+  `tlp_layer`/`config_space`) are untouched and remain the real remaining PCIe gap. Step 4
+  (`dut_proof` paths) is deliberately untouched: PCIe has no DUT evidence to point at, and pointing
+  the field at a path that is not there is what the registry's drift guard exists to catch.
+- The two UNTESTED non-USB topology variants (CSI-2/DSI simplex streaming, AMBA-as-primary-DUT) are
+  unchanged -- they are documentation for a future pilot, and this pass built no pilot.
+- Ethernet/eDP/UCIe gained nothing protocol-specific, because nothing protocol-specific exists for
+  them; they now say so per generated environment instead of only in the registry.
 
-`dv_harness_tests/test_protocol_capability.py` (29 tests). Deliberately about the **wiring**, since
-"the underlying function works in isolation" was never the gap:
+## Commit
 
-- the shipped registry is checked against the shipped code; every declared module really imports
-  and every declared tool really exists
-- a **negative control** proves an unmutated temp copy validates clean, so the drift tests below
-  cannot pass for the wrong reason
-- the original defect re-staged: Ethernet claiming `ethernet_mac_generator` is refused; so are a
-  reintroduced `generation_capability`, the retired blanket status, an over-claimed
-  `capability_status`, a dropped protocol, an unknown protocol, and `new_interface_framework`
-  reclaiming its status -- and all problems are reported at once
-- `--sync` is idempotent, repairs an overstated registry, and leaves fields owned by other
-  mechanisms (`qualification_status`, `builder_profile`, `qualification_suite`) untouched
-- **consumer 1**: `protocol_status.py` really prints both columns for the real registry and really
-  exits 2 rather than reporting an overstated one
-- **consumer 2**: a **real dashboard server** on a real port, real HTTP -- `/api/state` carries
-  `capability_status`/`protocol_model_generator`, and the served HTML really renders the class with
-  real CSS behind it
-- DUT_PROVEN drops when its evidence path does not exist; the two vocabularies share no token
-
-## Explicitly not done (NEEDS_SEPARATE_EFFORT, per task rule 3)
-
-This closes the CLAIM, not the capability. No non-USB protocol became DUT-proven. A follow-up
-effort should cover, in this order:
-
-1. **PCIe as the bounded first non-USB pilot** -- still the right choice: RC/EP asymmetry reuses
-   the proven `block/branch_a*/branch_fw/branch_b*` architecture directly (no new UNTESTED
-   topology doc needed first, unlike AMBA-as-primary-DUT or CSI-2/DSI simplex streaming), and it
-   is the only protocol with a generated example artifact. Scope: bind one real PCIe RTL DUT via
-   `tools/generate_pcie_ltssm_environment.py`, run the 3 machine gates
-   (`connectivity.run_machine_gates()`) against it, then extend past LTSSM into TLP/config-space.
-2. **CSI-2 / DSI packet layers** (short/long packets, virtual channels, ECC/CRC) -- currently zero
-   generator code; and validating the UNTESTED simplex-streaming `branch_fw` variant.
-3. **Ethernet / eDP / UCIe protocol models** -- from zero.
-4. **ACE-Lite and AXI-Stream** -- AXI-Stream has no address channel, so it is structurally out of
-   reach of an address-decode fabric generator and needs its own model, not an extension.
-5. **Making the `universal-protocol-platform/builders/` tree real** -- today no Python reads any
-   `builder_profile.json`. Either wire it into generation or retire it; leaving inert metadata that
-   looks authoritative is how this finding happened.
-
-## Files changed
-
-- `dv_harness/protocol_capability.py` (new)
-- `dv_harness_tests/test_protocol_capability.py` (new)
-- `tools/universal_protocol/protocol_status.py`
-- `dv_harness/dashboard.py`
-- `.dv-harness/qualification/protocol_capability_registry.json`
-- `.dv-harness/semantic-models/*.json` (10 files)
-- `CLAUDE.md` -- new "Per-Protocol Capability: Two Questions, Never One Label (2026-09-04)"
-  section (hand-scoped append; the file was concurrently edited mid-pass)
+Single scoped commit; see the repository log.

@@ -1259,8 +1259,45 @@ tile with the module name on hover. The same split was applied to
 `.dv-harness/semantic-models/*.json`, which asserted the identical collapsed value in ten more
 files nothing reads.
 
-**Scope boundary, stated so it is not read as more**: this closes the CLAIM, not the capability.
-No non-USB protocol is proven against a real DUT by any of this, and the "Non-USB topology
+**The five protocol models are now REACHED FROM the one generation entry point (2026-09-04,
+same-day gap close).** Splitting the claim honestly left a second, separate problem standing: a
+grep for each protocol-model module's non-test callers found only its own standalone
+`tools/generate_*.py` script. `uvm_generator/create_environment.py` -- what
+`tools/generate_protocol_uvm_environment.py` calls, and what every
+`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` invokes -- imported none of them, so a
+`protocol: "PCIe"` manifest produced byte-for-byte the same protocol-agnostic skeleton a
+`protocol: "Ethernet"` manifest produced, and the LTSSM model reached a generated environment only
+if an agent happened to know to run a second tool by hand. Their unit tests passed the whole time;
+that is the PARTIALLY_WIRED shape. `dv_harness/uvm_generator/protocol_model_layer.py` is the wire:
+- WHICH module implements a protocol comes from `PROTOCOL_CAPABILITIES` (already the one
+  code-derived answer, already drift-checked), and HOW to invoke it from that entry's new
+  `generator_class`, which `--check` now resolves through the import system -- so a renamed class
+  fails the drift check instead of a generation run.
+- WHAT it runs on is the manifest's `protocol_model_topology`, that model's own topology schema
+  verbatim (the same dict its standalone tool takes). Each model's own validator judges it; a
+  rejected topology raises `ProtocolModelLayerError` naming the model's own reason rather than
+  emitting a skeleton the caller would read as the modelled environment they asked for.
+- The model reaches the MAIN environment, not just a `protocol_model/` subdirectory: where it
+  exposes a state graph (today PCIe's `LTSSM_TRANSITIONS`) and the manifest names the real DUT
+  signal carrying that state, the graph is compiled through the EXISTING `state_machine_checks`
+  DSL -- whose own docstring says it generalizes exactly this -- into real transition-legality SVA
+  in `tb/env/<p>_assertions.sv`, and the model's package is PREPENDED to the environment filelist
+  so it compiles before the file typed against it.
+- **Nothing is defaulted and no absence is silent.** lane_width/gen_speed/role and a state-signal
+  name are DUT facts. A manifest without them still generates, but its own
+  `environment_manifest.json` carries a `protocol_model` record saying
+  `PROTOCOL_MODEL_TOPOLOGY_NOT_SUPPLIED` and naming the module that would have run -- the same
+  honesty contract this section applies to the registry, applied per generated environment. USB
+  (no protocol-model module by design) and Ethernet (none exists) record `NO_PROTOCOL_MODEL_FOR_
+  PROTOCOL` with their real `capability_status`, and every SV file USB generates stays
+  byte-identical.
+Proven -- including a byte-comparison against the standalone tool's own generator call, so a future
+reimplementation-instead-of-reuse fails -- by
+`dv_harness_tests/test_protocol_model_layer_wiring.py`.
+
+**Scope boundary, stated so it is not read as more**: this closes the CLAIM and the WIRING, not
+the capability. No non-USB protocol is proven against a real DUT by any of this -- the layered
+output has still never been compiled or bound -- and the "Non-USB topology
 variants" above remain UNTESTED. The recommended bounded first non-USB pilot is still PCIe -- its
 Root-Complex/Endpoint asymmetry reuses the proven `block/branch_a*/branch_fw/branch_b*`
 architecture directly (no new untested topology doc needed first, unlike AMBA-as-primary-DUT or

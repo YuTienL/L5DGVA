@@ -121,12 +121,24 @@ class ProtocolModel:
     `models` / `does_not_model` are quoted from each module's own SCOPE /
     "WHAT THIS DOES NOT DO" docstring section, so the partial-ness of a
     partial model is data a reader gets without opening the module.
+
+    `generator_class` is the module's `Class(out_dir).generate(topology)`
+    entry point -- the same uniform shape all five models already expose and
+    the only thing their five standalone `tools/generate_*.py` scripts do
+    with them. It is declared HERE rather than in a second table beside the
+    caller so there is one place that says which module implements a
+    protocol and how it is invoked; `assert_registry_matches_code()` resolves
+    it for real (import + getattr), so a renamed class fails the drift check
+    instead of surfacing as an AttributeError at generation time. Deliberately
+    NOT part of `capability_row()`: the registry records what the harness CAN
+    do per protocol, not this module's internal call convention.
     """
 
     module: str
     tool: str
     models: Tuple[str, ...]
     does_not_model: Tuple[str, ...]
+    generator_class: str = ""
 
 
 @dataclass(frozen=True)
@@ -151,15 +163,18 @@ _PCIE = ProtocolModel(
     tool="tools/generate_pcie_ltssm_environment.py",
     models=("ltssm_top_level_state_graph", "ltssm_transition_validator", "link_width_encoding"),
     does_not_model=("ltssm_sub_states", "ltssm_timeout_constants", "tlp_layer", "config_space"),
+    generator_class="PCIeLTSSMGenerator",
 )
 
 _MIPI_DPHY_MODELS = ("dphy_lane_lp_hs_state_transitions", "escape_mode_and_ulps_entry")
 _MIPI_DPHY_TOOL = "tools/generate_mipi_dphy_environment.py"
 _MIPI_DPHY_MODULE = "dv_harness.uvm_generator.mipi_dphy_generator"
+_MIPI_DPHY_CLASS = "MIPIDPHYGenerator"
 
 _EMMC_CMDQ_MODELS = ("cmdq_tag_lifecycle", "outstanding_tag_drain_check", "hs200_tuning_search_shape")
 _EMMC_CMDQ_TOOL = "tools/generate_emmc_cmdq_environment.py"
 _EMMC_CMDQ_MODULE = "dv_harness.uvm_generator.emmc_cmdq_generator"
+_EMMC_CMDQ_CLASS = "EMMCCmdqGenerator"
 
 PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
     ProtocolCapability(
@@ -184,7 +199,11 @@ PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
             "examples/generated_pcie_uvm_env/ proves the generation path executes end to "
             "end shape-wise, but examples/NOTICE_SCAFFOLDING_ONLY.md states it is an "
             "unconnected skeleton with no DUT ever bound and it has never been compiled. "
-            "Reachable only via the standalone tool, not from engine.py/cli.py."
+            "Since 2026-09-04 the LTSSM model is layered onto the generic skeleton by the "
+            "official CREATE ENVIRONMENT entry point (uvm_generator/protocol_model_layer.py "
+            "<- create_environment.py) whenever the manifest supplies "
+            "protocol_model_topology, so it is no longer reachable only via the standalone "
+            "tool; still no DUT bind and no compile."
         ),
     ),
     ProtocolCapability(
@@ -204,6 +223,7 @@ PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
                 "csi2_short_and_long_packet_layer", "virtual_channels", "packet_ecc_and_crc",
                 "cphy", "dphy_timing_constants",
             ),
+            generator_class=_MIPI_DPHY_CLASS,
         ),
         note=(
             "The D-PHY electrical lane layer only -- shared with MIPI_DSI. The CSI-2 "
@@ -220,6 +240,7 @@ PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
                 "dsi_command_and_video_packet_layer", "virtual_channels", "packet_ecc_and_crc",
                 "cphy", "dphy_timing_constants",
             ),
+            generator_class=_MIPI_DPHY_CLASS,
         ),
         note="Same shared D-PHY electrical layer as MIPI_CSI2; the DSI packet layer is unmodeled.",
     ),
@@ -232,7 +253,9 @@ PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
                     "crc15_crc17_crc21"),
             does_not_model=("bit_timing_segments_and_resynchronisation", "fd_bit_rate_switching",
                             "transceiver_delay_compensation"),
+            generator_class="CANFDArbitrationGenerator",
         ),
+        aliases=("canfd",),
         note=(
             "Genuinely protocol-specific math, unit-tested. Unlike PCIe it has produced no "
             "examples/generated_canfd_* artifact -- never even a full skeleton, let alone a "
@@ -248,8 +271,9 @@ PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
                     "per_master_slave_pair_scoreboard_pairing"),
             does_not_model=("axi_ahb_apb_handshake_signals", "burst_wrap_exclusive_qos",
                             "ace_lite_coherency", "axi_stream"),
+            generator_class="AMBAFabricGenerator",
         ),
-        aliases=("AMBA4_MMxMS",),
+        aliases=("AMBA4_MMxMS", "amba"),
         note=(
             "The only protocol model imported by production-adjacent code: "
             "uvm_generator/address_map_verifier.py does `from .amba_fabric_generator import "
@@ -265,6 +289,7 @@ PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
             module=_EMMC_CMDQ_MODULE, tool=_EMMC_CMDQ_TOOL, models=_EMMC_CMDQ_MODELS,
             does_not_model=("emmc_command_set_and_response_types", "boot_and_rpmb_partitions",
                             "bus_timing_constants"),
+            generator_class=_EMMC_CMDQ_CLASS,
         ),
         note="JEDEC-shaped command-queue tag lifecycle only; the eMMC command set is unmodeled.",
     ),
@@ -274,7 +299,9 @@ PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
             module=_EMMC_CMDQ_MODULE, tool=_EMMC_CMDQ_TOOL, models=_EMMC_CMDQ_MODELS,
             does_not_model=("sd_command_set_and_response_types", "sdio_cmd52_cmd53_io_functions",
                             "card_identification_and_initialisation", "bus_timing_constants"),
+            generator_class=_EMMC_CMDQ_CLASS,
         ),
+        aliases=("sdio",),
         note=(
             "Reuses the same protocol-agnostic tag-lifecycle model as eMMC -- real, but it is "
             "the command-queue bookkeeping, not anything SD/SDIO-specific."
@@ -294,10 +321,13 @@ PROTOCOL_CAPABILITIES: Tuple[ProtocolCapability, ...] = (
 )
 
 _BY_NAME: Dict[str, ProtocolCapability] = {}
+_BY_CASEFOLD: Dict[str, ProtocolCapability] = {}
 for _cap in PROTOCOL_CAPABILITIES:
     _BY_NAME[_cap.protocol] = _cap
+    _BY_CASEFOLD.setdefault(_cap.protocol.casefold(), _cap)
     for _alias in _cap.aliases:
         _BY_NAME[_alias] = _cap
+        _BY_CASEFOLD.setdefault(_alias.casefold(), _cap)
 
 
 def known_protocols() -> Tuple[str, ...]:
@@ -306,9 +336,44 @@ def known_protocols() -> Tuple[str, ...]:
 
 
 def capability_for(protocol: str) -> Optional[ProtocolCapability]:
-    """Accepts either the registry key or a known alias (e.g. the
-    semantic-models spelling `USB` / `AMBA4_MMxMS`)."""
-    return _BY_NAME.get(protocol)
+    """Accepts the registry key, a known alias (the semantic-models spelling
+    `USB` / `AMBA4_MMxMS`, or `protocol_router.resolve_protocol()`'s
+    canonical lowercase `amba`/`canfd`/`sdio`), or any casing of either.
+
+    The case-insensitive fallback exists because the two real spellings of a
+    protocol in this repo disagree on case by design: the registry writes
+    `PCIe`/`eMMC`, protocol_router writes `pcie`/`emmc`, and a generation
+    manifest written by hand writes whatever the author typed. An exact-match
+    lookup silently returned None for all of those, which would report a
+    modelled protocol as having no model -- the understatement version of
+    exactly the overstatement this module exists to prevent."""
+    cap = _BY_NAME.get(protocol)
+    if cap is not None:
+        return cap
+    return _BY_CASEFOLD.get(str(protocol).casefold()) if protocol else None
+
+
+def resolve_generator_class(model: ProtocolModel):
+    """Import `model.module` and return its `generator_class` entry point.
+
+    Raises ProtocolCapabilityDriftError (not ImportError/AttributeError) so a
+    declaration that no longer resolves is reported in the same vocabulary as
+    every other registry/code disagreement, and so `--check` catches it before
+    a generation run does."""
+    if not model.generator_class:
+        raise ProtocolCapabilityDriftError(
+            [f"{model.module}: declares no generator_class entry point"])
+    import importlib
+    try:
+        mod = importlib.import_module(model.module)
+    except ImportError as exc:
+        raise ProtocolCapabilityDriftError(
+            [f"{model.module}: does not import ({exc})"]) from exc
+    cls = getattr(mod, model.generator_class, None)
+    if cls is None:
+        raise ProtocolCapabilityDriftError(
+            [f"{model.module}: has no {model.generator_class!r} class"])
+    return cls
 
 
 def module_is_importable(dotted: str) -> bool:
@@ -429,6 +494,15 @@ def _check_entry(name: str, entry: Dict[str, object], cap: ProtocolCapability,
     if cap.model is not None:
         if not module_is_importable(cap.model.module):
             problems.append(f"{name}: declared protocol model {cap.model.module!r} does not import")
+        elif cap.model.generator_class:
+            # The module resolving is not enough now that create_environment.py
+            # invokes these models: the declared Class(out_dir).generate()
+            # entry point must be there too, or the layering call fails at
+            # generation time instead of at --check time.
+            try:
+                resolve_generator_class(cap.model)
+            except ProtocolCapabilityDriftError as exc:
+                problems.extend(f"{name}: {p}" for p in exc.problems)
         if not (HARNESS_ROOT / cap.model.tool).exists():
             problems.append(f"{name}: declared tool {cap.model.tool!r} does not exist")
     for proof in cap.dut_proof:

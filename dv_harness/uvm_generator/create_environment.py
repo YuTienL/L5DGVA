@@ -53,7 +53,16 @@ Three deliberate properties:
    system_level_validator.py's harness-supplied --registered cross-check
    gives on the SYSTEM_LEVEL stage path.
 
-3. **A missing subsystem REFUSES rather than degrading.** CLAUDE.md: "If a
+3. **SUBSYSTEM_MODE also layers the protocol's OWN model (2026-09-04,
+   re-audit gap #13 "Generic multi-protocol DV Harness scope").** Dispatching
+   the mode correctly still produced the same protocol-agnostic skeleton for
+   every protocol, because the five real protocol-model generators in this
+   package were reachable only from five standalone tools. `protocol_model_
+   layer.py` is that wire; see its module docstring. It changes nothing for a
+   protocol with no model (USB) or a manifest with no `protocol_model_
+   topology`, beyond recording which of those two it was.
+
+4. **A missing subsystem REFUSES rather than degrading.** CLAUDE.md: "If a
    required subsystem is missing in SYSTEM_LEVEL_MODE, build it through
    SUBSYSTEM_MODE then return to composition." Quietly generating one
    subsystem environment for a two-subsystem request, or composing whatever
@@ -73,6 +82,12 @@ from ..environment_mode_router import (
 )
 from .generator import sv_id
 from .protocol_env_generator import ProtocolEnvGenerator
+from .protocol_model_layer import (
+    add_protocol_model_to_filelist,
+    emit_protocol_model_files,
+    inject_state_machine_checks,
+    plan_protocol_model,
+)
 from .soc_environment_composer import compose_soc_environment, soc_composition_out_dir
 
 
@@ -166,12 +181,16 @@ def create_environment(root: Path, request: Dict[str, Any],
 
     Returns a dict carrying `environment_mode`, the full router `decision`
     (so a caller can log WHY this mode was chosen, not just which), the
-    `out_dir` written to, and `generated_files`. SYSTEM_LEVEL_MODE
-    additionally carries `composed_subsystems`.
+    `out_dir` written to, and `generated_files`. SUBSYSTEM_MODE additionally
+    carries `protocol_model` (the layering record, also written into the
+    generated environment_manifest.json) and `protocol_model_files`;
+    SYSTEM_LEVEL_MODE additionally carries `composed_subsystems`.
 
     Raises EnvironmentModeUnresolvedError / MissingOutputDirectoryError /
-    SubsystemModeRequiredError (see their docstrings), or propagates
-    compose_soc_environment()'s own
+    SubsystemModeRequiredError (see their docstrings),
+    protocol_model_layer.ProtocolModelLayerError when a supplied
+    protocol_model_topology is refused by that protocol's own model, or
+    propagates compose_soc_environment()'s own
     NotImplementedError for the genuinely protocol-specific
     cross_subsystem_scenarios/end_to_end_scoreboards/system_coverage content
     it deliberately refuses to fabricate."""
@@ -204,12 +223,31 @@ def create_environment(root: Path, request: Dict[str, Any],
         # overridden.
         manifest = dict(request)
         manifest.setdefault("protocol", decision["requested_subsystems"][0])
+        # SUBSYSTEM_MODE builds the protocol's OWN environment, so this is
+        # where the protocol's own model belongs -- see protocol_model_layer.py
+        # for what was wrong before it (five real, unit-tested protocol models
+        # whose only non-test callers were five standalone tools). The plan is
+        # computed and recorded for EVERY protocol, including the ones with no
+        # model, so a generated environment always states which of the two it
+        # is instead of leaving it to be inferred from an absence.
+        protocol_model = plan_protocol_model(manifest)
+        # The model runs BEFORE the skeleton, so a topology its own validator
+        # refuses leaves no half-written environment behind, and so the
+        # emitted file list is in the record ProtocolEnvGenerator serialises
+        # into environment_manifest.json. Only the filelist step waits, since
+        # there is no filelist until the skeleton is written.
+        model_files = emit_protocol_model_files(out_dir, manifest, protocol_model)
+        inject_state_machine_checks(manifest, protocol_model)
+        manifest["protocol_model"] = protocol_model
         generated = ProtocolEnvGenerator(out_dir).generate(manifest)
+        add_protocol_model_to_filelist(out_dir, model_files)
         return {
             "environment_mode": "SUBSYSTEM_MODE",
             "decision": decision,
             "out_dir": str(out_dir),
             "generated_files": generated,
+            "protocol_model": protocol_model,
+            "protocol_model_files": model_files,
         }
 
     # --- SYSTEM_LEVEL_MODE ---
