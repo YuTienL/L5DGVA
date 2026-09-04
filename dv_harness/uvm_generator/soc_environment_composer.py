@@ -97,6 +97,17 @@ class MissingSubsystemNameEvidenceError(ValueError):
         self.detail = detail
 
 
+def soc_composition_out_dir(root: Path, soc_name: Any) -> Path:
+    """The one on-disk location a composed SoC environment lands in, in one
+    place. Both real writers use it: engine.py's
+    _compose_soc_environment_files() (SYSTEM_LEVEL stage PASS) and
+    create_environment.py's SYSTEM_LEVEL_MODE dispatch (the CREATE
+    ENVIRONMENT entry point) -- so a composition produced through either
+    real path is found at the same path by the other, instead of two call
+    sites each hardcoding their own `generated/soc_composition/...` string."""
+    return Path(root) / "generated" / "soc_composition" / sv_id(soc_name or "soc")
+
+
 def _cite(entry: Dict[str, Any]) -> str:
     """One evidence-comment fragment identifying a registered subsystem by
     its real registry identity -- reused everywhere this module emits a

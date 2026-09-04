@@ -66,6 +66,7 @@ from .environment_mode_router import resolve_environment_mode, read_registered_s
 from .uvm_generator.generator import sv_id
 from .uvm_generator.soc_environment_composer import (
     compose_soc_environment, EmptySubsystemRegistryError, MissingSubsystemNameEvidenceError,
+    soc_composition_out_dir,
 )
 
 def now():
@@ -1188,7 +1189,11 @@ class DVHarness:
                                "detail": getattr(exc, "detail", {})})
             return
         soc_name = sv_id(registry.get("soc_name") or "soc")
-        out_dir = self.root / "generated" / "soc_composition" / soc_name
+        # Same helper the CREATE ENVIRONMENT entry point's SYSTEM_LEVEL_MODE
+        # dispatch uses (uvm_generator/create_environment.py), so a
+        # composition produced through either real path lands where the
+        # other looks for it.
+        out_dir = soc_composition_out_dir(self.root, soc_name)
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             for name, content in files.items():

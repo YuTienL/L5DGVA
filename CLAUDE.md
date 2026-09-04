@@ -450,6 +450,48 @@ Before CREATE ENVIRONMENT, select:
 
 If a required subsystem is missing in SYSTEM_LEVEL_MODE, build it through SUBSYSTEM_MODE then return to composition.
 
+**Dispatched in code at the generation entry point (2026-09-04), not left to the agent.**
+`environment_mode_router.resolve_environment_mode()` had computed this decision on every stage
+since 2026-09-01, but its result landed only in `route_info["environment_mode_decision"]` — the
+prompt and the ReAct record. Nothing branched on it: the one official CREATE ENVIRONMENT entry
+point, `tools/generate_protocol_uvm_environment.py` (the script all ten
+`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` invoke), called `ProtocolEnvGenerator`
+unconditionally, so a genuine two-subsystem request silently produced ONE subsystem environment
+and `soc_environment_composer.compose_soc_environment()` fired only if an agent happened to know
+to hand-assemble a `system_level_validator` evidence block for the SYSTEM_LEVEL stage instead.
+That script now routes through `dv_harness/uvm_generator/create_environment.py`, which:
+- resolves the mode with the real router and dispatches to `ProtocolEnvGenerator` (SUBSYSTEM_MODE)
+  or `compose_soc_environment()` (SYSTEM_LEVEL_MODE) — a branch in FRONT of the existing path, so
+  a single-protocol manifest still generates byte-identically;
+- composes only from the REAL registry (`read_registered_subsystem_entries()`, written solely by
+  `engine.py`'s `_persist_subsystem_registry_entry()` on a gate-validated SIGNOFF PASS), never
+  from what the caller claims;
+- REFUSES with `SubsystemModeRequiredError` naming the missing subsystems rather than composing
+  the registered subset — the "build it through SUBSYSTEM_MODE then return to composition" rule
+  above as enforced code, not trusted prose;
+- raises `EnvironmentModeUnresolvedError` on a request that names nothing, honoring
+  `environment_mode_policy.json`'s `mode_must_be_explicit_before_generation` instead of defaulting.
+
+The SYSTEM_LEVEL stage half is now proven through the REAL entry point too: the composer's only
+prior test called the private `_compose_soc_environment_files()` directly, so the chain gate
+evidence → `gates.py` verdict → PASS branch → `compose_soc_environment` → blackboard → event log
+had never been executed end to end. `dv_harness_tests/test_system_level_soc_composition_wiring.py`
+drives a real `DVHarness.run_stage("SYSTEM_LEVEL")` through all 14 real
+`STAGE_GATES["SYSTEM_LEVEL"]` scripts to a real PASS and asserts the real `SOC_ENVIRONMENT_COMPOSED`
+event and real generated `soc_tb_top.sv` content, plus the negative case (an unregistered
+subsystem fails the stage and composes nothing).
+
+**Two limits, disclosed rather than implied closed.** (1) `cross_subsystem_scenarios()` /
+`end_to_end_scoreboard()` / `system_coverage()` still raise `NotImplementedError` on purpose:
+that is protocol-BEHAVIOR content, which "No Golden-Reference Content Mining" requires be sourced
+from primary per-subsystem VIP/DUT evidence, and a registry entry carries only identity/
+qualification metadata. Closing them needs a real cross-subsystem topology descriptor
+(address/interrupt/DMA maps) that does not exist yet. (2) This harness repo's own
+`subsystem_environment_registry.json` is still legitimately EMPTY and mechanism #14 has never
+fired in its production history — it has no multi-subsystem project of its own. The mechanism is
+proven to fire when a real project supplies real registered subsystems; it was not made to "have
+fired" here by writing fabricated registry entries into this project's real audit trail.
+
 
 ## Methodology Consolidation Rule
 

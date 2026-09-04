@@ -51,27 +51,49 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-def read_registered_subsystem_names(root: Path) -> List[str]:
-    """Reads the REAL runtime subsystem registry
-    (.dv-harness/soc-composer/subsystem_environment_registry.json, written
-    by engine.py's _persist_subsystem_registry_entry() on an actual SIGNOFF
-    PASS -- deliberately NOT the empty
-    subsystem_environment_registry_template.json example) and returns the
-    list of registered subsystem `name` values. Missing/unreadable file
-    degrades to an empty list (same defensive default
-    _persist_subsystem_registry_entry() itself uses), never a fabricated
-    guess."""
+def registry_path(root: Path) -> Path:
+    """The one real runtime subsystem-registry path, in one place.
+    engine.py's _persist_subsystem_registry_entry() (the writer), gates.py's
+    STAGE_GATES["SYSTEM_LEVEL"] system_level_validator ContextFlag (the
+    harness-supplied --registered cross-check) and the two readers below all
+    mean this same file -- deliberately NOT the empty
+    subsystem_environment_registry_template.json example next to it."""
+    return Path(root) / ".dv-harness" / "soc-composer" / "subsystem_environment_registry.json"
+
+
+def read_registered_subsystem_entries(root: Path) -> List[Dict[str, Any]]:
+    """Reads the REAL runtime subsystem registry (see registry_path above,
+    written by engine.py's _persist_subsystem_registry_entry() on an actual
+    SIGNOFF PASS) and returns the FULL registered entries -- name plus the
+    environment_manifest/release_sha/qualification_state/interface_
+    compatibility/clock_reset_compatibility fields
+    subsystem_environment_registration_gate.py validated before the entry was
+    ever persisted. This is the shape
+    uvm_generator.soc_environment_composer.compose_soc_environment() consumes
+    as its `subsystem_registry_entries`, so a SYSTEM_LEVEL_MODE composition
+    can be built from what the harness really registered rather than from
+    what a caller claims. Missing/unreadable file degrades to an empty list
+    (same defensive default _persist_subsystem_registry_entry() itself uses),
+    never a fabricated guess."""
     import json
-    path = Path(root) / ".dv-harness" / "soc-composer" / "subsystem_environment_registry.json"
+    path = registry_path(root)
     try:
         registry = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except (OSError, ValueError):
         registry = {}
-    names = []
+    entries = []
     for entry in (registry.get("subsystems") or []):
         if isinstance(entry, dict) and entry.get("name"):
-            names.append(str(entry["name"]))
-    return names
+            entries.append(entry)
+    return entries
+
+
+def read_registered_subsystem_names(root: Path) -> List[str]:
+    """The registered subsystem `name` values only -- derived from
+    read_registered_subsystem_entries() above rather than re-reading and
+    re-parsing the same file a second way, so the two readers can never
+    disagree about what counts as a registered entry."""
+    return [str(e["name"]) for e in read_registered_subsystem_entries(root)]
 
 
 def _norm_list(values: Any) -> List[str]:
