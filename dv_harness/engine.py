@@ -1708,6 +1708,108 @@ SUBSYSTEM_TOPIC_REFRESHERS: Dict[str, Any] = {
             self.store.event({"ts": now(), "stage": stage, "event": "QUALIFIED_CONCLUSION_BUILD_FAILED",
                                "error": str(exc)})
 
+    def _file_waveform_dump_scope_question(self, stage: str,
+                                             evidence_blocks: dict) -> Optional[Dict[str, Any]]:
+        """Files the Waveform Dump User Gate's confirmation question into the
+        REAL question queue at the exact moment run_stage() parks the loop at
+        WAIT_USER for it, and returns the persisted record (or None when
+        nothing was filed).
+
+        The gap this closes (2026-09-04 re-audit of AI mechanism #12 "AI Debug
+        Closed Loop"). Both halves of the ask/answer round-trip already
+        existed -- `waveform_dump_gate.ask_dump_scope_confirmation()` files the
+        question, `QuestionQueueStore.answer_question()` records the human
+        answer -- but the ask half had exactly ONE caller in the whole repo:
+        cli.py's human-typed `dv-harness waveform-dump-scope ask`. Nothing in
+        engine.py called it. So on the autonomous path the sequence was:
+        headless `claude -p` subprocess emits a focused_wave_debug_window_gate
+        block whose `confirmed_by` cannot resolve to a human decision ->
+        gates.py returns NEEDS_USER_INPUT -> run_stage() sets WAIT_USER ->
+        loop() returns. Correct so far, and deliberately so. But the queue was
+        still EMPTY: `dv-harness question-queue list --blocking-only` showed
+        nothing, `build_digest()` had nothing to report, and the human who came
+        back to the parked run had to read the Q-ID out of a blocking_reason
+        string and hand-reconstruct the `waveform-dump-scope ask` invocation
+        (scope AND level/depth) before the answer verb had anything to answer.
+        The loop opened at WAIT_USER and left behind no artifact capable of
+        closing it. CLAUDE.md's "Waveform Dump User Gate" already claimed such
+        a run "parks at WAIT_USER with a real Q-ID for a human to answer" --
+        that claim is what this method makes true on the autonomous path.
+
+        The scope and the proposed level/depth are read from the SAME
+        `evidence_blocks` dict run_stage() already computed via
+        extract_evidence_blocks(result.text) -- the very block the gate just
+        rejected -- so the filed question describes the dump the agent actually
+        proposed, not a placeholder. Same convention as
+        _arm_rca_evidence_fanout() / _score_root_cause_confidence() below and
+        above: read the already-parsed blocks, never re-parse the text.
+
+        This files a QUESTION; it never writes a DECISION. Only
+        `QuestionQueueStore.answer_question()` -- i.e. a human running
+        `dv-harness question-queue answer` -- can do that, and this method
+        does not call it. The human checkpoint CLAUDE.md mandates is
+        untouched; what changes is that the human is now handed a real,
+        answerable Q-ID instead of an instruction to file one themselves.
+
+        Not filed, deliberately, in three cases:
+          * The stage produced no `focused_wave_debug_window_gate` block at
+            all -- this NEEDS_USER_INPUT is INTAKE's, not the waveform gate's.
+          * The block declares no scope or no level/depth
+            (WAVEFORM_DUMP_SCOPE_NOT_CONFIRMED / _CONFIRMATION_INCOMPLETE).
+            A question that cannot say what dump is being proposed cannot be
+            answered yes/no, which is exactly why
+            ask_dump_scope_confirmation() raises ValueError on it. That is
+            agent error with its own remedy already in `reasons`, not a
+            missing human decision.
+          * A question for this scope's question_key is ALREADY on file
+            (verify_dump_scope_confirmation()'s REASON_AWAITING_ANSWER case,
+            tested with the identical `get_question(qid) is not None`
+            predicate). add_question() APPENDS -- it does not dedupe on the
+            derived id -- so re-filing on every park would grow duplicate
+            records and re-arm `digest_batch_id` for a question already
+            waiting.
+
+        Best-effort, like every other post-verdict hook here: a question-queue
+        failure must never convert an already-correct WAIT_USER park into a
+        crash out of run_stage()."""
+        block = evidence_blocks.get("focused_wave_debug_window_gate")
+        confirm = block.get("dump_scope_confirmed") if isinstance(block, dict) else None
+        if not isinstance(confirm, dict):
+            return None
+        scope = str(confirm.get("scope") or "").strip()
+        level_or_depth = str(confirm.get("level_or_depth") or "").strip()
+        if not scope or not level_or_depth:
+            return None
+        try:
+            from . import question_queue as _qq
+            from . import waveform_dump_gate
+            from .question_queue import QuestionQueueStore
+            store = QuestionQueueStore(self.root, blackboard=self.blackboard)
+            key = waveform_dump_gate.dump_scope_question_key(scope)
+            qid = _qq.make_question_id(waveform_dump_gate.WAVEFORM_DUMP_DOMAIN, key)
+            if store.get_question(qid) is not None:
+                return None
+            record = waveform_dump_gate.ask_dump_scope_confirmation(
+                self.root, scope=scope, proposed_level_or_depth=level_or_depth,
+                # The failure this dump is meant to see. Optional in the ask
+                # API and genuinely optional here: it only enriches the
+                # APPROVE option's rationale so the human reads what the dump
+                # is FOR, never part of the question_key.
+                failure_cone=str(block.get("failure_cone") or "").strip(),
+                store=store,
+            )
+        except Exception as exc:
+            self.store.event({"ts": now(), "stage": stage,
+                               "event": "WAVEFORM_DUMP_SCOPE_QUESTION_FILE_FAILED",
+                               "scope": scope, "error": str(exc)})
+            return None
+        self.store.event({"ts": now(), "stage": stage,
+                           "event": "WAVEFORM_DUMP_SCOPE_QUESTION_FILED",
+                           "question_id": record["id"], "question_key": record["question_key"],
+                           "tier": record["tier"], "status": record["status"],
+                           "scope": scope, "level_or_depth": level_or_depth})
+        return record
+
     def _arm_rca_evidence_fanout(self, stage: str, evidence_blocks: dict) -> None:
         """Decides, from FAILURE_RECOVERY's own gate-verified triage evidence,
         whether the next advance() takes the RCA_G1 multi-agent evidence
@@ -3602,7 +3704,25 @@ SUBSYSTEM_TOPIC_REFRESHERS: Dict[str, Any] = {
                 # policy.py's graph_next() already applies to WAIT_USER).
                 ss["status"] = Status.WAIT_USER.value
                 self.state.overall_status = Status.WAIT_USER.value
-                ss["blocking_reason"] = ("NEEDS_USER_INPUT: " + "; ".join(str(r) for r in reasons))[:2000]
+                blocking_reason = ("NEEDS_USER_INPUT: " + "; ".join(str(r) for r in reasons))[:2000]
+                # The ask half of the Waveform Dump User Gate's round-trip,
+                # on the AUTONOMOUS path. Parking at WAIT_USER is correct but
+                # was not sufficient: the question the run is blocked on was
+                # never actually filed unless the headless subprocess happened
+                # to shell out to `dv-harness waveform-dump-scope ask` itself,
+                # so the human returning to the parked run had an empty queue.
+                # Appended AFTER the [:2000] truncation deliberately -- the
+                # real Q-ID and the single command that unblocks the run must
+                # never be the part that gets cut off.
+                filed = self._file_waveform_dump_scope_question(stage, evidence_blocks)
+                if filed is not None:
+                    blocking_reason += (
+                        f"\n[dv-harness] 已自動把這題送進 question queue（Q-ID {filed['id']}，"
+                        f"tier {filed['tier']}，status {filed['status']}）。真人只要執行："
+                        f"\n  dv-harness question-queue answer {filed['id']} "
+                        f"--answer <APPROVE/NARROW/WIDEN ...> --basis <依據> --decided-by <你的名字>"
+                        f"\n然後重跑 `dv-harness start --loop` 即可從這個 stage 續跑。")
+                ss["blocking_reason"] = blocking_reason
             elif (node is not None and node.react
                   and self.cfg["policy"].get("enable_inner_react_loop", True)):
                 # ---- Content-driven inner ReAct loop (2026-08-29): turns

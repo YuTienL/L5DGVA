@@ -310,6 +310,136 @@ def test_loop_gets_past_the_gate_once_a_real_human_answers():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ---------------------------------------------------------------------------
+# 3. The ASK half on the AUTONOMOUS path: parking at WAIT_USER is only half a
+#    round-trip if the question the run is blocked on was never filed.
+#    `waveform_dump_gate.ask_dump_scope_confirmation()` had exactly one caller
+#    in the repo -- cli.py's human-typed `dv-harness waveform-dump-scope ask`
+#    -- so a headless `claude -p` run that did not shell out to it left the
+#    human an EMPTY queue and a blocking_reason to hand-reconstruct the ask
+#    from. engine._file_waveform_dump_scope_question() closes that.
+# ---------------------------------------------------------------------------
+
+def _filed_events(root):
+    p = Path(root) / ".dv-harness" / "events.jsonl"
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()
+            if l.strip() and json.loads(l).get("event") == "WAVEFORM_DUMP_SCOPE_QUESTION_FILED"]
+
+
+def test_autonomous_loop_files_the_question_it_parks_on_and_a_human_answer_closes_it():
+    """The full round-trip, all of it on the real path: real shipped graph,
+    real gate subprocess, real QuestionQueueStore on disk. Nothing hand-files
+    the question -- `loop()` does -- and the answer is given against the Q-ID
+    the ENGINE minted, not one the test constructed."""
+    from dv_harness.engine import DVHarness
+
+    tmp = _mk_project()
+    try:
+        h = DVHarness(tmp)
+        store = QuestionQueueStore(tmp, blackboard=h.blackboard)
+        assert store.list_questions() == [], "precondition: the queue starts empty"
+
+        # The best a headless subprocess can do: a self-attested confirmation.
+        h.adapter = _FakeAdapter("targeted rerun done.\n" + _evidence_text(_rerun("user")))
+        h.set_stage("WAVE_ANALYSIS")
+        h.loop("root-cause the LTSSM timeout")
+
+        assert h.state.stages["WAVE_ANALYSIS"]["status"] == Status.WAIT_USER.value
+        assert h.adapter.calls == 1, "an unanswerable question must still not be retried"
+
+        # The gap: before this wiring the queue was still empty here.
+        filed = store.list_questions()
+        assert len(filed) == 1, filed
+        q = filed[0]
+        assert q["id"] == question_queue.make_question_id(
+            waveform_dump_gate.WAVEFORM_DUMP_DOMAIN,
+            waveform_dump_gate.dump_scope_question_key(SCOPE)), q
+        assert q["tier"] == question_queue.TIER3_CANNOT_ASSUME and q["blocking"] is True
+        assert q["status"] == "OPEN" and q["answer"] is None
+        # It describes the dump the AGENT actually proposed, read off the very
+        # evidence block the gate just rejected -- not a placeholder.
+        assert q["context_path"] == waveform_dump_gate.dump_scope_context_path(SCOPE)
+        assert SCOPE in q["recommendation"] and LEVEL in q["recommendation"]
+        # And it is the queue's own blocking view, i.e. what a digest reports.
+        assert [b["id"] for b in store.list_questions(blocking=True, status="OPEN")] == [q["id"]]
+
+        # The park now names the ONE command that unblocks the run.
+        reason = h.state.stages["WAVE_ANALYSIS"]["blocking_reason"]
+        assert f"question-queue answer {q['id']}" in reason, reason
+
+        # Real audit trail, not just state.
+        events = _filed_events(tmp)
+        assert len(events) == 1 and events[0]["question_id"] == q["id"], events
+        assert events[0]["scope"] == SCOPE and events[0]["level_or_depth"] == LEVEL
+
+        # The human answers the ENGINE-minted Q-ID. Nothing else changes.
+        _answer(store, q["id"])
+        h.adapter = _FakeAdapter("targeted rerun done.\n" + _evidence_text(_rerun(HUMAN)))
+        h.run_stage("root-cause the LTSSM timeout")
+        assert h.state.stages["WAVE_ANALYSIS"]["status"] == Status.PASS.value, \
+            h.state.stages["WAVE_ANALYSIS"]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_a_question_already_waiting_is_not_re_filed_by_a_second_loop_pass():
+    # add_question() APPENDS rather than deduping on the derived id, so an
+    # unconditional re-file would grow duplicate records and re-arm
+    # digest_batch_id for a question a human is already sitting on. This is
+    # verify_dump_scope_confirmation()'s REASON_AWAITING_ANSWER case, and the
+    # engine uses the identical "is it already on file" predicate.
+    from dv_harness.engine import DVHarness
+
+    tmp = _mk_project()
+    try:
+        h = DVHarness(tmp)
+        store = QuestionQueueStore(tmp, blackboard=h.blackboard)
+        already = _ask(tmp, store=store)
+
+        h.adapter = _FakeAdapter("targeted rerun done.\n" + _evidence_text(_rerun("user")))
+        h.set_stage("WAVE_ANALYSIS")
+        h.loop("root-cause the LTSSM timeout")
+        h.loop("root-cause the LTSSM timeout")
+
+        assert h.state.stages["WAVE_ANALYSIS"]["status"] == Status.WAIT_USER.value
+        ids = [q["id"] for q in store.list_questions()]
+        assert ids == [already["id"]], ids
+        assert _filed_events(tmp) == []
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_nothing_is_filed_when_the_agent_declared_no_scope_or_no_level():
+    # WAVEFORM_DUMP_SCOPE_NOT_CONFIRMED / _CONFIRMATION_INCOMPLETE are agent
+    # error, not a missing human decision: a question that cannot say what
+    # dump is proposed cannot be answered yes/no. The loop must still park
+    # (that behavior is unchanged), but it must not file an unanswerable
+    # question -- and it must not file a WAVEFORM question for an unrelated
+    # stage's NEEDS_USER_INPUT either.
+    from dv_harness.engine import DVHarness
+
+    for payload in (dict(_BASE_RERUN),
+                    dict(_BASE_RERUN, dump_scope_confirmed={"scope": SCOPE}),
+                    dict(_BASE_RERUN, dump_scope_confirmed={"level_or_depth": LEVEL})):
+        tmp = _mk_project()
+        try:
+            h = DVHarness(tmp)
+            h.adapter = _FakeAdapter("targeted rerun done.\n" + _evidence_text(payload))
+            h.set_stage("WAVE_ANALYSIS")
+            h.loop("root-cause the LTSSM timeout")
+
+            assert h.state.stages["WAVE_ANALYSIS"]["status"] == Status.WAIT_USER.value, payload
+            assert QuestionQueueStore(tmp).list_questions() == [], payload
+            assert _filed_events(tmp) == [], payload
+            # An INTAKE-shaped NEEDS_USER_INPUT carries no waveform block at
+            # all, so the same helper is a no-op for it.
+            assert h._file_waveform_dump_scope_question("INTAKE", {}) is None
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_stage_evaluation_routes_dump_scope_stalls_to_needs_user_input():
     # The gates.py half in isolation, against the real ROOT (which has no
     # question store, so nothing here can be confirmed): every dump-scope

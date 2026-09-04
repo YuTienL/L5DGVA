@@ -316,6 +316,28 @@ precisely when nobody had been asked. That is now closed:
   separate "waveform confirm" verb, because a second way to record a confirmation would be a second
   thing the gate has to trust. `dv-harness waveform-dump-scope status --scope <scope>` reports the
   same check (exit 2 when unconfirmed).
+- **The engine files that question ITSELF on the autonomous path (2026-09-04, same-day gap
+  close).** `ask_dump_scope_confirmation()` had exactly ONE caller in the repo — the human-typed
+  `waveform-dump-scope ask` verb above. Nothing in `engine.py` called it, so a headless `claude -p`
+  run that did not happen to shell out to that verb parked at WAIT_USER over an EMPTY queue:
+  `question-queue list --blocking-only` showed nothing, `build_digest()` had nothing to report, and
+  the human returning to the parked run had to read a Q-ID out of a `blocking_reason` string and
+  hand-reconstruct the ask (scope AND level/depth) before `answer` had anything to answer. The loop
+  opened and left behind no artifact capable of closing it — which made this section's own
+  "parks at WAIT_USER with a real Q-ID" claim true only on the interactive path.
+  `engine._file_waveform_dump_scope_question()` now runs at the exact point `run_stage()` assigns
+  WAIT_USER, reading the scope and proposed level/depth off the SAME
+  `focused_wave_debug_window_gate` evidence block the gate just rejected, and appends the real
+  `question-queue answer <Q-ID> ...` command to the `blocking_reason`. It files a QUESTION and never
+  a DECISION — only `answer_question()`, i.e. a human, writes one — so the human checkpoint is
+  unchanged; what changed is that the human is handed an answerable Q-ID instead of an instruction
+  to file one. It files nothing when the block declares no scope/level (that is agent error with its
+  own remedy, not a missing human decision), nothing for a non-waveform NEEDS_USER_INPUT, and
+  nothing when a question for that scope is already on file (`add_question()` appends rather than
+  deduping, so re-filing would grow duplicates and re-arm `digest_batch_id` on a question a human is
+  already sitting on). Every outcome is a real `WAVEFORM_DUMP_SCOPE_QUESTION_FILED` /
+  `..._FILE_FAILED` event in `.dv-harness/events.jsonl`, and the filing is best-effort — a queue
+  failure must never turn an already-correct WAIT_USER park into a crash.
 - An unconfirmed dump scope now STOPS the autonomous loop instead of failing it. `gates.py` maps
   the gate's confirmation failures to the `NEEDS_USER_INPUT` verdict INTAKE already used, which
   `run_stage()` turns into `Status.WAIT_USER` and `loop()` returns on — so the question is not
@@ -330,8 +352,10 @@ precisely when nobody had been asked. That is now closed:
 **Disclosed residual**, in the same spirit as `require_tier`'s and `require_qualified_conclusion`'s:
 this closes the gate on the WAVEFORM decision specifically. The broader "a headless autonomous run
 has no channel to ask a human anything mid-flight" limitation is unchanged — the fix is that such a
-run now parks at WAIT_USER with a real Q-ID for a human to answer, not that the subprocess gained a
-way to ask.
+run now parks at WAIT_USER with a real Q-ID the ENGINE filed for a human to answer, not that the
+subprocess gained a way to ask. The round-trip is still asynchronous and still requires a human to
+come back to it: the run stops, and only `dv-harness question-queue answer` followed by a fresh
+`dv-harness start --loop` resumes it.
 
 
 ## Simulation Observability Default
