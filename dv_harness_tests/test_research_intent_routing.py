@@ -474,3 +474,50 @@ def test_every_real_graph_stage_is_still_approvable():
     for stage in Stage:
         assert stage.value in choices
     assert len(choices) == len(list(Stage)) + len(commands.APPROVAL_ONLY_STAGES)
+
+
+# ---------------------------------------------------------------------------
+# Discoverability -- section 18's "without replaying the master prompt"
+# ---------------------------------------------------------------------------
+
+def _claude_md() -> str:
+    return (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def test_claude_md_documents_the_research_front_door():
+    """Section 18's promise is that a FUTURE user reaches this capability
+    without the master prompt in hand. CLAUDE.md is the standing instruction
+    file an agent actually reads, and until 2026-09-04 it contained the
+    substring "research" zero times -- so the entry point, the route and the
+    stop rule were discoverable only by reading router.py or by already
+    knowing. This asserts the documentation exists, not that it is pretty."""
+    text = _claude_md()
+    assert "dv-harness research" in text
+    assert ".claude/skills/research-ingestion/SKILL.md" in text
+    assert ".claude/agents/research-architect.md" in text
+    # The route and its terminus, in order, so a reordered doc fails.
+    for phrase in ("research-ingestion", "research-architect",
+                   "Human Approval Gate"):
+        assert phrase in text, phrase
+    assert text.index("research-ingestion") < text.index("research-architect")
+
+
+def test_claude_md_names_the_real_approval_stage_not_a_retyped_one():
+    """The documented approve command is the single thing a human is told to
+    run. It is asserted against the constant the code imports, so renaming
+    HUMAN_APPROVAL_STAGE fails this test instead of leaving CLAUDE.md quietly
+    instructing a command that no longer exists -- the exact defect commit
+    6fe388b had to fix in capability_evolution.human_approval_status()."""
+    text = _claude_md()
+    assert f"dv-harness approve {HUMAN_APPROVAL_STAGE}" in text
+
+
+def test_claude_md_records_that_slash_research_is_not_this_repos_mechanism():
+    """Section 19's fallback was taken deliberately. A reader who has seen the
+    master prompt will look for `/research`; the doc must say why it is not
+    here, or the next pass re-invents `.claude/commands/`."""
+    text = _claude_md()
+    assert ".claude/commands/" in text
+    assert not (ROOT / ".claude" / "commands").exists(), (
+        "`.claude/commands/` now exists -- CLAUDE.md's stated rationale for "
+        "the `dv-harness research` fallback is stale and must be revisited.")

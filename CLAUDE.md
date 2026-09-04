@@ -1165,3 +1165,46 @@ PCIe RTL DUT, run the 3 machine gates against it, and extend past LTSSM into TLP
 
 Proven -- including that the two real consumers carry the split claim and that a re-overstated
 registry is refused rather than reported -- by `dv_harness_tests/test_protocol_capability.py`.
+
+
+## Research Front Door: `dv-harness research` (2026-09-04)
+
+A research-capability path exists (Stage 1 of the Research-Capability Evolution master prompt:
+install the machinery, do not operate it). Nothing in this file mentioned it, so an agent reading
+only CLAUDE.md had no way to know the entry point, the route, or the stop rule. The three assets
+are `.claude/skills/research-ingestion/SKILL.md`, `.claude/agents/research-architect.md`, and
+`dv_harness/capability_evolution.py`.
+
+**The entry point is `dv-harness research`, not `/research`.** `.claude/commands/` does not exist
+in this repo and never has, so the master prompt's own fallback applies ("implement equivalent
+behavior using the repository's native mechanism"). Forms: `dv-harness research <doc>...`, plus
+`--compare` / `--impact` / `--deep` (at most one; two is a refusal, not a silent precedence rule)
+and `--focus regression|pss|debug|planning`. A focus narrows emphasis and never changes the route.
+`--request "<free text>"` classifies a natural-language request through the same function an
+unassisted request goes through.
+
+**The route is fixed and it STOPS:** research-ingestion -> prior-evidence lookup (only when the
+intent is COMPARE/DEEP/MULTI_DOCUMENT, or more than one document was supplied) -> research-architect
+-> Human Approval Gate. The gate is the EXISTING `ControlPlane.approve()`, keyed on
+`capability_evolution.HUMAN_APPROVAL_STAGE` (`RESEARCH_CAPABILITY_EVOLUTION`) -- not a new approval
+mechanism. Research is not implementation: no capability-evolution change reaches production code
+without `dv-harness approve RESEARCH_CAPABILITY_EVOLUTION --note ... --reviewer-id ...` first. That
+stage id is admitted by the `approve` verb ALONE; `set-stage`/`redirect`/`correct`/`cosign` still
+take real graph stages only, since those drive the engine loop and research owns no graph node.
+
+**No new router, and non-interference is structural rather than careful.** The classifier lives in
+`dv_harness/router.py` beside `resolve()` and shares its one `DEFAULT_ROUTES` table (which gained
+exactly one pair, `research-route` -> `research-architect`). `RouteResolver.resolve()` -- the
+function on `engine.py`'s real `run_stage()` path -- is untouched and is not a caller of any of it;
+research routing is a separate `resolve_intent()` entry point. The classifier also reads only
+`research_intent` and `protocol_hint`, never `modified_files`/`failing_test_name`/
+`subsystem_boundary`, so a git-modified file named `paper.pdf` cannot hijack a DV debug run. A
+request qualifies only on an ACTION+SUBJECT pair, and ambiguity resolves to NOT research.
+
+**Honest limits.** No graph node declares `research-route`, so `.claude/agents/ROSTER.md` still
+correctly records research-architect as `NOT_DISPATCHED` -- this is REACHED (a real CLI/agent
+caller exists), not WIRED (no engine stage invokes it). Nothing here has been run against a real
+external paper, and nothing research-origin may reach Organizational Memory on one session's
+evidence. Proven by `dv_harness_tests/test_research_intent_routing.py` (84 tests), including the
+master prompt's canonical natural-language request routing with no agent named, and 21 evidence
+strings copied out of `test_protocol_router.py` answering bit-for-bit identically before and after.

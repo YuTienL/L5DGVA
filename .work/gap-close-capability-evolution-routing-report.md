@@ -292,3 +292,107 @@ untracked mid-pass from a concurrent workflow and was deliberately **not** stage
    Methodology Consolidation Rule rather than adding a freestanding
    capability-evolution section; `CLAUDE.md` is also a file concurrent workflows
    in this session are likely touching. Left for the pass that owns that item.
+
+---
+
+# Addendum — independent re-verification + closure of disclosed limit #4 (2026-09-04, second pass)
+
+A second pass was dispatched with this same scope (minimal research intent routing +
+optional `/research` entry point). It did **not** take the sections above on faith. What
+follows is what that pass re-derived from the tree itself, and the one real gap it closed.
+
+## What was re-verified, and how
+
+| Claim from the sections above | How it was re-checked | Result |
+|---|---|---|
+| The classifier is an EXTENSION of `router.py`, not a second router | Read `router.py` in full (503 lines). `DEFAULT_ROUTES` is one dict with 8 entries; `research_route_plan()` resolves the agent name **through** it (`DEFAULT_ROUTES[RESEARCH_ROUTE]`) rather than hardcoding `'research-architect'` | Confirmed |
+| `RouteResolver.resolve()` — the function on the real `engine.run_stage()` path — is untouched | `inspect.signature` pinned by a real test to `(self, node, protocol_decision)`; read the method body; no call into any research function | Confirmed |
+| Section 17's five intents, verbatim | Diffed `RESEARCH_INTENTS` against master prompt lines 833-838 | Exact, ordered |
+| Section 17's default routing order | Diffed the emitted `steps` against master prompt lines 851-857 | Exact, including "prior evidence lookup **if applicable**" as a genuinely conditional step |
+| Section 53's mode flags and four focus domains | Diffed `cmd_research()` + the argparse parser against master prompt lines 2080-2103 | Exact; a focus never changes the route, two mode flags is a refusal |
+| Section 19's "Do NOT place core logic in the command itself" | Read `cli.py:1541-1561` — formatting only; read `commands.cmd_research()` — intent selection then delegation to `router.resolve_research_intent()`/`research_route_plan()` | Confirmed; one implementation, two callers |
+| `.claude/commands/` genuinely does not exist | `ls -la .claude/commands` returns "No such file or directory"; `.claude/` contains agents, hooks, reference, skills, templates, tools, workflows, worktrees | Confirmed — section 19's fallback legitimately applies, the front door was not a shortcut |
+| The published approve command actually runs | Ran `dv-harness research` as a **real subprocess** from a scratch project, both default and `--deep --focus regression` | Both printed the correct ordered route and the STOP line naming `dv-harness approve RESEARCH_CAPABILITY_EVOLUTION` |
+| No graph node declares `research-route` | Parsed `.dv-harness/graph/main_graph.json` and checked every node's `route`/`agent` | Confirmed — research-architect stays `NOT_DISPATCHED`, matching ROSTER.md |
+
+**One thing that looked like a defect and is not.** Invoked from a project directory outside the
+harness tree, every step of the emitted plan reports `exists: false` — including
+`dv_harness/control_plane.py`, which is unconditionally installed. That is not a research bug: it
+is this repo's uniform convention. `SkillResolver.__init__` and `agent_profile.load_agent_profile()`
+also resolve `.claude/**` against `root`, so the harness is driven from its own tree by design.
+Changing it here would have introduced an inconsistency, not fixed one. No change made.
+
+## Regression evidence (real commands, real output)
+
+```
+python -m pytest dv_harness_tests/test_protocol_router.py \
+  dv_harness_tests/test_route_resolver_protocol_fold_in.py \
+  dv_harness_tests/test_skill_resolver.py \
+  dv_harness_tests/test_engine_gates_and_routing.py \
+  dv_harness_tests/test_environment_mode_router.py \
+  dv_harness_tests/test_intake_readiness.py dv_harness_tests/test_intake_upload.py \
+  dv_harness_tests/test_protocol_and_environment_mode_engine_wiring.py \
+  dv_harness_tests/test_research_intent_routing.py -q
+403 passed in 769.29s (0:12:49)   [exit 0]
+```
+
+That is the entire router/intake/skill-resolver/protocol/engine-gates surface this change could
+touch, run together with the research suite. Zero regressions.
+
+## The one gap closed by this pass: disclosed limit #4
+
+Section 7's limit #4 above said `CLAUDE.md` was not edited and left it "for the pass that owns
+that item." Re-checked and it was still true and still real: `grep -ci research CLAUDE.md`
+returned **0** on an 83 KB file. So the standing instruction file an agent actually reads
+contained no record that the entry point, the route, the stop rule, or the
+`RESEARCH_CAPABILITY_EVOLUTION` approval stage existed. Section 18's requirement is precisely
+that a future user reaches this **without replaying the master prompt** — a capability
+documented only inside `router.py` does not meet that bar.
+
+**Placement diverges from limit #4's own suggestion, deliberately.** That note recommended
+extending the Methodology Consolidation Rule. Reading that rule, it is a policy about *where*
+validated methods get consolidated (skills / workflows / engine source) — it describes no
+specific mechanism, and this content is mechanism documentation. A freestanding section matches
+what every comparable entry in this file already is ("Blackboard Topics Written Outside the
+Graph", "Per-Protocol Capability", "Remote Control Mode"). Freestanding section it is.
+
+Added: **"Research Front Door: `dv-harness research` (2026-09-04)"** — the entry point and why
+it is not `/research`, the mode/focus flags, the fixed route and its Human-Approval-Gate
+terminus, the `approve`-verb-only scoping of the stage id, the structural (not careful)
+non-interference argument, and the honest REACHED-not-WIRED limit.
+
+**Three new tests keep it from silently reopening** (`test_research_intent_routing.py`, now 87):
+
+- `test_claude_md_documents_the_research_front_door`
+- `test_claude_md_names_the_real_approval_stage_not_a_retyped_one` — asserts against the
+  imported `HUMAN_APPROVAL_STAGE` constant, not a retyped literal, so renaming the stage fails
+  the test instead of leaving the doc instructing a command that no longer exists (the exact
+  defect `6fe388b` had to fix in `capability_evolution.human_approval_status()`)
+- `test_claude_md_records_that_slash_research_is_not_this_repos_mechanism` — also fails if
+  `.claude/commands/` ever appears, since the stated rationale would then be stale
+
+Proven discriminating rather than vacuous: every one of the five asserted substrings was checked
+against `git show HEAD:CLAUDE.md` and is absent from all of them, so all three tests genuinely
+fail without this change.
+
+```
+python -m pytest dv_harness_tests/test_research_intent_routing.py -q
+87 passed in 9.86s   [exit 0]
+```
+
+## Concurrency hazard that materialized
+
+`CLAUDE.md` was verified clean (`git status --porcelain CLAUDE.md` returned empty) before editing,
+and a **different** concurrent workflow modified it — a 13-line Engineering Memory Policy hunk near
+line 69 — during this pass. That hunk was left entirely alone: the commit was built with the
+hand-scoped patch technique (`git diff > patch`, trim to this pass's hunk only, rewrite the
+offset header, `git apply --cached --check` then `--cached`), so only the 43-line append is
+staged and the other workflow's in-flight edit remains unstaged and untouched. The appended
+block was also re-encoded to CRLF to match the file, so the diff is a clean append rather than
+a whole-file rewrite.
+
+## Still not done, still out of Stage-1 scope
+
+Unchanged from section 7 above: no document has been ingested, no capability-evolution change
+implemented, nothing promoted to Engineering or Organizational Memory, and no graph node wired.
+The remaining Stage-1 acceptance tests beyond F (A-E, G, H) are not this scope's to claim.
