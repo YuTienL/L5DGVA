@@ -244,3 +244,84 @@ other concurrent workflows are editing — `CLAUDE.md`, `gates.py`,
 `memory_router.py`, `cli.py`, `.claude/agents/ROSTER.md`, `.dv-harness/` — was
 touched. The commit adds exactly the six paths listed above, by explicit path,
 never a broad `git add`.
+
+---
+
+## Independent re-verification pass (2026-09-04, second agent)
+
+A second agent was dispatched with this same Stage-1 scope and found the work
+above already on disk and committed (`7137f50`). Rather than rebuild it or take
+the report on faith, it re-derived every load-bearing claim from the real files
+and real commands. **No file was changed by that pass**; this section is the
+only addition. Findings:
+
+**Scope completeness — all five assigned deliverables verified present and real**
+
+| Item | Verified how |
+|---|---|
+| 1. `research-ingestion/SKILL.md` | 208 lines. Frontmatter (`name`/`description`/`allowed-tools`) compared directly against `CORE/memory-link`, `CORE/memory-retrieval`, `CORE/evidence-truth-gate` — identical convention, identical `allowed-tools` string. All four section-6 non-responsibilities present. |
+| 2. Card schema | 37 properties / 37 required. All 31 of master prompt section 7's fields present (checked programmatically against the section's own list — zero missing), plus 6 mechanical fields. |
+| 3. `doc_extraction.py` extension | Confirmed still parser-free: grep for `extract_text`/`pypdf`/`PdfReader`/`BeautifulSoup` finds only the docstring pointing at `vip_user_guide_distill.py`. |
+| 4. `research/` + `research/evidence_cards/` | Both READMEs present; section 27's `paper_001`/`standard_001`/`vendor_report_001` convention documented, store correctly empty. |
+| 5. Tests | 35 named tests covering exactly the two required proofs (see below). |
+
+**Section 9 is genuinely schema-enforced, not prose.** `$defs/claim` requires all
+seven section-9 fields and carries two real `allOf`/`if`/`then` rules: `FACT`
+requires `supporting_evidence` `minItems: 1`; `AUTHOR_CLAIM`/`INFERENCE`/
+`HYPOTHESIS` each require a non-empty `verification_requirement`. The cheap
+path — relabel an unsupported claim as `FACT` — fails validation.
+
+**Skeleton correctness re-derived independently**, not read off a test assertion.
+A fresh document was written to a temp dir, its sha256 computed independently
+with `hashlib`, and compared to the builder's output:
+
+- `document_sha256` == independent `hashlib.sha256` digest — **match**
+- `document_id` == `DOC-` + digest[:12] — **derived correctly**
+- `source_provenance` keys == `evidence_ref()`'s own 5-key output — **match**
+- `version` slot == `sha256:<digest>` fallback — **match**
+- 24 analytical fields correctly left unfilled; `validate_research_evidence_card()`
+  **correctly raises** on the skeleton (fails loudly rather than looking finished)
+- document registered in the real `DocumentIndex` with `kind="research_document"`
+
+**The skill resolves through the REAL resolver despite living outside a category
+directory** — the report's disclosed divergence above is confirmed harmless:
+`SkillResolver(Path('.')).resolve(['research-ingestion'])` returns
+`found: True` at `.claude/skills/research-ingestion/SKILL.md`, out of 298 indexed
+skills.
+
+**Regression — full blast radius, not just the new file.** Every importer of
+`doc_extraction` was identified by grep (`capability_evolution.py`, `router.py`,
+`vip_user_guide_distill.py`, and the new test) and all four suites run together:
+
+```
+$ python -m pytest dv_harness_tests/test_research_evidence_card.py \
+    dv_harness_tests/test_research_intent_routing.py \
+    dv_harness_tests/test_capability_evolution_research_architect.py \
+    dv_harness_tests/test_vip_distill.py -q
+169 passed in 26.45s
+```
+
+**Safety constraints re-checked.** Every path in `7137f50` was tested against the
+forbidden set (`CLAUDE.md`, `gates.py`, `memory_router.py`, `cli.py`,
+`ROSTER.md`, `git_governance.py`, `tools/git-hooks/`, `qualified_conclusion.py`,
+`signoff_export.py`): **zero violations**. No verification-oracle semantics, no
+signoff authority, no PR-governance file was touched. Nothing was promoted to
+Organizational Memory. `research/evidence_cards/` remains empty — no real
+document was ingested (Stage 2 boundary) and no capability-evolution change was
+implemented (Stage 3 boundary).
+
+**The whole-suite gap disclosed above remains open, and for the same reason.**
+This pass also started `python -m pytest dv_harness_tests -q` and let it run
+past 30 minutes; its output file was still **0 bytes**, confirming the
+block-buffered/subprocess-heavy behaviour the section above describes. It was
+not waited out here either. This pass's DONE claim rests on the 35 + 169 real
+runs above, not on a whole-suite green — stated rather than implied closed.
+
+**One real gap outside this scope, flagged not fixed.** The sibling Stage-0
+agents/skills audit found `CLAUDE.md` has zero mention of `research-ingestion`,
+`research-architect`, or the `RESEARCH_CAPABILITY_EVOLUTION` approval stage
+(`grep -i "research\|capability.evolution" CLAUDE.md` → no matches). That is a
+genuine doc-currency gap, but `CLAUDE.md` is both outside this workflow's five
+assigned items and a file concurrent workflows are actively editing, so it was
+deliberately not touched. It belongs to whoever runs the Stage-1 acceptance
+tests A–H.
