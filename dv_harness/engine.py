@@ -1116,6 +1116,59 @@ SUBSYSTEM_TOPIC_REFRESHERS: Dict[str, Any] = {
             "record_kind": kind, "promotion": promotion,
         })
 
+        # THE GAP THIS CLOSES (2026-09-04, gap-close-ai-engine #7 "5-Level
+        # Memory Engine"), confirmed against the real on-disk store before it
+        # was written: promote_to_organizational()'s third gate
+        # (confirmation_count >= ORGANIZATIONAL_MIN_CONFIRMATIONS) can ONLY be
+        # cleared by MemoryGC.confirm(), which _add_or_confirm_engineering()
+        # fires when a write matches an ACTIVE engineering record on
+        # (protocol, root_cause) -- route_and_store() reports that as
+        # `confirmed_existing`. THIS method is one of the two real production
+        # writers that can cause it, but only the OTHER one
+        # (_promote_verified_fix_knowledge, RE_AUDIT/verified_fix) evaluated
+        # promotion afterwards. So the exact moment gate 3 newly became
+        # clearable on this path -- an EXPERT_FEEDBACK_LOOP PASS independently
+        # re-deriving a root cause a previous RE_AUDIT already recorded, which
+        # is precisely the "second independent run" CLAUDE.md's confirmation
+        # rule is written around -- had nothing listening. The Organizational
+        # tier was reachable from here only if a human remembered to run
+        # `dv-harness memory promote` by hand. Reuses the existing
+        # promote_to_organizational() mechanism verbatim; adds no second gate,
+        # no second scoring system and no new store.
+        #
+        # Gated on `confirmed_existing` deliberately: a freshly-minted record
+        # has confirmation_count 0 and could only ever produce an
+        # INSUFFICIENT_CONFIRMATION event, so evaluating it would add noise,
+        # not coverage.
+        #
+        # The confidence inputs are the ones REALLY persisted on the confirmed
+        # record by the run that first established it (see
+        # _promote_verified_fix_knowledge()), re-read here from the durable
+        # store. They are not re-derived from THIS stage's evidence, because
+        # experience_knowledge_gate is registered only on EXPERT_FEEDBACK_LOOP
+        # (gates.STAGE_GATES) and that stage carries no root_cause_evidence_
+        # gate, so this call site genuinely has no root_cause evidence block
+        # to score. A record with none persisted is evaluated as
+        # NO_CONFIDENCE_INPUTS rather than scored on invented counts.
+        #
+        # This cannot become a forgery surface on its own: gate 1 re-reads the
+        # source record's verification block and gate 3 re-reads its
+        # store-owned confirmation_count, both of which
+        # organizational_admission_gate() independently re-checks at the write
+        # boundary, so persisted confidence inputs alone promote nothing.
+        if promotion.get("destination") == "ENGINEERING_MEMORY" and promotion.get("confirmed_existing"):
+            confirmed = None
+            try:
+                from .memory import MemoryStore  # local import, same idiom as
+                                                  # _gather_stage_context below
+                confirmed = MemoryStore(self.root).get(promotion["memory_id"])
+            except Exception:
+                confirmed = None
+            inputs = (confirmed or {}).get("confidence_inputs")
+            self._evaluate_organizational_promotion(
+                stage, promotion["memory_id"],
+                inputs if isinstance(inputs, dict) else None)
+
     def _persist_subsystem_registry_entry(self, stage: str, evidence_blocks: dict) -> None:
         """Closed-loop wiring (2026-08-28, plan-subsystem-registry design
         pass): a PASS verdict on SIGNOFF whose STAGE_GATES include
@@ -2001,6 +2054,20 @@ SUBSYSTEM_TOPIC_REFRESHERS: Dict[str, Any] = {
             "test": closure_block.get("target_testcase_id"),
             "result": closure_block.get("target_post_fix_result"),
         }
+        # The four real inference.score_confidence() inputs this run's own
+        # gate-validated root_cause evidence produces. Computed ONCE and used
+        # twice: passed to the promotion evaluation at the bottom of this
+        # method (as it always was), and PERSISTED on the record itself
+        # (2026-09-04, gap-close-ai-engine #7) so a LATER independent run that
+        # re-derives this same finding on a stage carrying no
+        # root_cause_evidence_gate of its own -- EXPERT_FEEDBACK_LOOP, the only
+        # stage with experience_knowledge_gate -- can evaluate promotion
+        # against these same real inputs instead of having none at all. See
+        # _evaluate_organizational_promotion()'s docstring for why that call
+        # site could not derive them itself, and organizational_admission_
+        # gate()'s "HONEST LIMITATION" note for the limitation this narrows.
+        _confidence_inputs = self._root_cause_confidence_inputs(rc_block)
+        record["confidence_inputs"] = _confidence_inputs
         try:
             promotion = route_and_store(self.root, record, cfg=self.cfg)
         except Exception as exc:
@@ -2027,18 +2094,46 @@ SUBSYSTEM_TOPIC_REFRESHERS: Dict[str, Any] = {
         # fix, not to force a promotion. Best-effort: never allowed to
         # affect the already-completed VERIFIED_FIX_PROMOTED event above.
         if promotion.get("destination") == "ENGINEERING_MEMORY" and promotion.get("memory_id"):
+            self._evaluate_organizational_promotion(
+                stage, promotion["memory_id"], _confidence_inputs)
+
+    def _evaluate_organizational_promotion(self, stage: str, memory_id: str,
+                                            confidence_inputs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Run memory_router.promote_to_organizational() on `memory_id` and
+        record the real ORGANIZATIONAL_PROMOTION_EVALUATED event, whatever the
+        outcome. Factored out (2026-09-04, gap-close-ai-engine #7) so this
+        class's TWO Engineering-tier writers report one event vocabulary
+        rather than two -- the emitted payload is byte-identical to the one
+        _promote_verified_fix_knowledge() emitted inline before this existed.
+
+        Best-effort by contract: this is a side effect of an already-earned
+        stage PASS whose own promotion event is already recorded, so a failure
+        here becomes a recorded reason, never an exception that could
+        retroactively downgrade that PASS.
+
+        `confidence_inputs` may be None. That is not a bug and is never
+        papered over with invented counts: inference.score_confidence()'s four
+        inputs are only derivable from a real root_cause_evidence_gate
+        evidence block, and the record being evaluated may have been created
+        before those inputs were persisted, or by a write path that never had
+        such a block. NO_CONFIDENCE_INPUTS is then recorded as the reason and
+        no promotion is attempted -- an honest, visible non-evaluation instead
+        of a fabricated HIGH score."""
+        if not confidence_inputs:
+            org_eval = {"promoted": False, "reason": "NO_CONFIDENCE_INPUTS"}
+        else:
             try:
                 org_eval = promote_to_organizational(
-                    self.root, promotion["memory_id"],
-                    confidence_inputs=self._root_cause_confidence_inputs(rc_block),
+                    self.root, memory_id, confidence_inputs=confidence_inputs,
                     cfg=self.cfg, kind="methodology",
                 )
             except Exception as exc:
                 org_eval = {"promoted": False, "reason": "PROMOTION_EVAL_EXCEPTION", "error": str(exc)}
-            self.store.event({
-                "ts": now(), "stage": stage, "event": "ORGANIZATIONAL_PROMOTION_EVALUATED",
-                "memory_id": promotion.get("memory_id"), "result": org_eval,
-            })
+        self.store.event({
+            "ts": now(), "stage": stage, "event": "ORGANIZATIONAL_PROMOTION_EVALUATED",
+            "memory_id": memory_id, "result": org_eval,
+        })
+        return org_eval
 
     def _record_debug_attempt_job_memory(self, stage: str, ss: Dict[str, Any],
                                           failure_signature: Optional[Dict[str, Any]]) -> None:

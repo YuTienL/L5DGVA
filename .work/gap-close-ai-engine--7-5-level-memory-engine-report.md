@@ -1,115 +1,189 @@
-# Gap close — AI mechanism #7: 5-Level Memory Engine
+# Gap-close: AI mechanism #7 — 5-Level Memory Engine
 
-**Status: DONE** (one confirmed gap closed; two other audit findings are environment-dependent, not code gaps — detail below)
+**Status: DONE** (one real wiring gap closed) — with two of the audit's named
+gaps confirmed **NEEDS_SEPARATE_EFFORT / environment-blocked** and explicitly
+*not* faked.
 
-Date: 2026-09-04. Working root: `D:\DV\Task\DV_Agent_Harness_L5\v50`.
+Date: 2026-09-04 · Branch: `gap-close/env-manifest-fact-sources`
 
----
-
-## 1. Audit evidence re-verified first (not taken on trust)
-
-Counted directly in the live root before touching anything — the audit's numbers reproduce exactly:
-
-| Tier | Files under `.dv-harness/memory/` |
-|---|---|
-| working | 14 |
-| engineering | 31 |
-| project | 46 |
-| job | 1 |
-| organizational | 0 |
-
-`.dv-harness/lsf/jobs/` contains only `README.md` (zero real `JobState` files). No `evidence.duckdb` exists anywhere under the project root (`find . -name evidence.duckdb` → empty). Full-repo grep confirmed `insert_job_memory_record` had **zero** call sites outside `dv_harness/evidence_db.py` and `dv_harness_tests/`.
-
-`git diff --stat` on `dv_harness/regression_reporter.py`, `dv_harness/lsf_client.py`, `dv_harness/evidence_db.py` was empty before I started — no concurrent workstream had touched them, so no hand-scoped patching was needed.
+> **Supersedes the earlier pass's report at this same path** (still in git
+> history at `HEAD~`). That pass closed a *different, non-overlapping* gap on
+> this mechanism — `EvidenceStore.insert_job_memory_record()` was dormant, and
+> it was wired into `regression_reporter._write_reconciliation_evidence_if_
+> configured()` so the JOB tier mirrors into DuckDB. That fix stands and is
+> unchanged here. This pass addresses the **Engineering → Organizational**
+> half instead.
 
 ---
 
-## 2. The gap that was real, in scope, and is now closed
+## 1. Re-verification of the audit's evidence (done first, independently)
 
-**`EvidenceStore.insert_job_memory_record()` was dormant.**
+| audit claim | re-verified? | how |
+|---|---|---|
+| tier counts engineering 31 / project 46 / working 14 / job 1 / organizational 0 | **yes, exact** | `ls .dv-harness/memory/<tier>/*.json \| wc -l` |
+| the one `job/` file is a hand-authored seed | **yes** | `MEM-95C1FFE3A0.json` carries `"note": "Illustrates CLAUDE.md rule…"`, `job_id: "J-2026-0431"`, and **none** of the real write schema's fields (`lsf_status`, `dv_analysis_status`, `uvm_error_count`, `terminal_signature`); its `memory_id` is not the `JOB-{jid}-TERMINAL-RECONCILE` form `lsf_client.job_tier_memory_id()` produces |
+| no `bjobs` on PATH | **yes** | `which bjobs bsub` → not found; `.dv-harness/lsf/watcher.log` still logging `discover_live_jobs failed: bjobs not found on PATH` every cycle through 19:40:12 today |
+| zero jobs ever registered | **yes** | `.dv-harness/lsf/jobs/` holds only `README.md` |
+| the reconcile cycle degrades rather than crashes | **yes, and there is no code bug here** | `regression_reporter.run_reconciliation_cycle()` catches `LsfUnavailableError`, sets `live_jobs = []`, and still processes the disk half of the union — which is empty because nothing is registered. The job-memory write path is not bypassed by a defect; it has no input. |
+| `confirmation_count >= 2` nowhere on disk | **yes** | highest anywhere is `1` |
 
-It is the *only* function in `dv_harness/evidence_db.py` whose purpose is mirroring the 5-level Memory engine's **JOB tier** into DuckDB — sole writer of the `job_memory_records` table, and sole writer of the cross-run `failure_signatures` aggregate ("has this exact failure shape been seen before, how often") that the table exists to feed. Both of its siblings inside the very same function body — `insert_job_state()` and `insert_regression_verdict()` — were already wired into the real reconciliation cycle. It was not.
+**Conclusion on the two named gaps: the audit is right, and neither is a code
+gap that this pass can honestly close.**
 
-Net effect: a real reconciliation cycle wrote the job's `jobs` row and its `regression_verdicts` row, but never the job's Memory-tier record, and `failure_signatures` would have stayed permanently empty no matter how many real failures reconciled.
+- **Job Memory** — an environment/connectivity gap. It needs a real Linux DV
+  server with LSF, a submitted job reaching DONE/EXIT, and a real
+  `lsf-reconcile`. Nothing in Python fixes it. Writing another
+  `.dv-harness/memory/job/*.json` by hand would just add a second seed of
+  exactly the kind the audit correctly called out. **Not attempted.**
+- **Organizational Memory's third gate** — needs a *genuine second independent
+  debug/verify run* re-deriving an already-recorded `root_cause`. Manufacturing
+  one in this pass to bump `confirmation_count` would be "the same run reported
+  twice", which CLAUDE.md forbids outright. **Not attempted.**
 
-### What changed
+---
 
-`dv_harness/regression_reporter.py` — `_write_reconciliation_evidence_if_configured()`, inside the existing per-job `try` block, alongside its two already-wired siblings:
+## 2. The real, in-scope code gap I did find and close
 
-```python
-store.insert_job_state(state)
-job_memory_record = lsf_client.load_job_tier_memory_record(root, jid)
-if job_memory_record is not None:
-    store.insert_job_memory_record(job_memory_record)
-```
+While verifying the organizational finding I found a concrete **wiring
+asymmetry** in the production path — the kind of gap this pass exists for, and
+the structural reason the organizational tier could not be reached organically
+from the path that actually populates this project's store.
 
-Two deliberate design decisions, both documented in the function's own docstring:
+`promote_to_organizational()`'s third gate can only ever be cleared by
+`MemoryGC.confirm()`, which `memory_router._add_or_confirm_engineering()` fires
+when a write matches an ACTIVE engineering record on `(protocol, root_cause)`.
+`route_and_store()` reports that as **`confirmed_existing`**.
 
-1. **The record is read back from the real Memory store**, via the existing named reader `lsf_client.load_job_tier_memory_record()` (keyed by the deterministic `job_tier_memory_id(jid)` both writers already agree on) — it is *not* re-derived here. `_upsert_job_tier_memory_record()` runs **earlier** in the same cycle, after the real sim.log epilogue parse; that is what upgrades a premature `job_result` classification to the accurate `job_failure` one with its `failure_signature`/`prior_related_knowledge` attached. Reading at this point mirrors the final, best-evidence record. Re-deriving would produce a second, possibly disagreeing copy of a record the Memory tier already owns.
-2. **What lands in DuckDB is by construction what the JSON Memory tier actually holds** — the mirror cannot silently drift from the thing it mirrors. A job with no Job-tier record yet returns `None` and is skipped; an absent record is a real, normal state and is never backfilled with an invented one.
+`DVHarness` has **two** real Engineering-tier writers, both reachable from a
+real `run_stage()` PASS, and both able to cause that confirmation:
 
-No new mechanism was built. This wires the existing, already-tested function into the existing production reconciliation cycle — one call site, no parallel path.
+| writer | stage | record kind | evaluated organizational promotion afterwards? |
+|---|---|---|---|
+| `_promote_verified_fix_knowledge()` | RE_AUDIT | `verified_fix` | **yes** |
+| `_promote_experience_knowledge()` | EXPERT_FEEDBACK_LOOP | `debug_lesson` | **no — nothing listened** |
+
+So an EXPERT_FEEDBACK_LOOP PASS independently re-deriving a root cause a
+previous RE_AUDIT had already recorded would raise that record's
+`confirmation_count` past `ORGANIZATIONAL_MIN_CONFIRMATIONS` — clearing the one
+gate that has never been cleared in this repo's history — and **nothing would
+ask whether the record now qualified.** The tier was reachable from that path
+only if a human remembered to run `dv-harness memory promote` by hand. That
+manual step is, notably, exactly what the audit's own "exact fix" text
+prescribes ("*Then* call `promote_to_organizational()` via CLI") — it is the
+workaround for this missing wire.
+
+This also matters because the record being confirmed is typically the
+*verified_fix* one, which already carries the RE_AUDIT verification shape that
+satisfies gate 1 — i.e. the confirmation genuinely is the last gate standing.
+
+### Why the wire could not simply be copied across
+
+`promote_to_organizational()` needs `inference.score_confidence()`'s four
+inputs, and only a real `root_cause_evidence_gate` evidence block yields them.
+Per `gates.STAGE_GATES`, `experience_knowledge_gate` is registered on
+**EXPERT_FEEDBACK_LOOP alone**, and `root_cause_evidence_gate` only on
+RCA_JOIN/RE_AUDIT — so that call site has no root-cause evidence to score, and
+inventing counts there would fabricate a HIGH confidence.
+
+Fix: the run that *does* have a real block now **persists what it really
+derived**, and the confirming run re-reads it from the durable store. No second
+scoring system, no new derivation formula, no fabricated values. This also
+narrows the limitation `organizational_admission_gate()`'s own docstring names
+("score_confidence()'s inputs … are not persisted on the source engineering
+record").
+
+### Changes (3 hand-scoped hunks in `dv_harness/engine.py`, 1 new test file)
+
+1. `_promote_verified_fix_knowledge()` — computes
+   `self._root_cause_confidence_inputs(rc_block)` **once** and now also
+   persists it on the record as `confidence_inputs`. (`MemoryStore.add()`
+   preserves arbitrary fields; verified.)
+2. New `DVHarness._evaluate_organizational_promotion(stage, memory_id,
+   confidence_inputs)` — runs `promote_to_organizational()` and emits the
+   `ORGANIZATIONAL_PROMOTION_EVALUATED` event. The emitted payload is
+   **byte-identical** to the one `_promote_verified_fix_knowledge()` emitted
+   inline before, so both writers now report one event vocabulary. A `None`
+   input records `{"promoted": false, "reason": "NO_CONFIDENCE_INPUTS"}` —
+   an honest, visible non-evaluation instead of a fabricated score.
+3. `_promote_experience_knowledge()` — gains the missing hook, fired **only on
+   `confirmed_existing`** (the precise moment gate 3 can newly clear; a
+   freshly-minted record has count 0 and could only ever emit noise), reading
+   the confirmed record's persisted `confidence_inputs` from the store.
+
+Not a forgery surface on its own: gates 1 and 3 are re-read from the durable
+store by `promote_to_organizational()` *and* independently re-checked at the
+write boundary by `organizational_admission_gate()`, and `confirmation_count`
+is writable only by `MemoryGC.confirm()` — persisted confidence inputs alone
+promote nothing.
+
+**No parallel mechanism was built.** `promote_to_organizational()`,
+`score_confidence()`, `_root_cause_confidence_inputs()`,
+`_add_or_confirm_engineering()` and `MemoryGC.confirm()` are all reused
+verbatim.
 
 ---
 
 ## 3. Tests
 
-New file: `dv_harness_tests/test_job_memory_evidence_mirror.py` — 6 tests, all about the **wire**, not the function (that `insert_job_memory_record()` works in isolation was never the gap and is already covered by `test_evidence_db.py`). Every memory record in these tests is produced by the **real production writer** `lsf_client._upsert_job_tier_memory_record()`, never a hand-built dict; only the LSF discovery layer is mocked, matching `test_evidence_db_wiring.py`'s existing convention.
+New: `dv_harness_tests/test_organizational_promotion_evaluation_wiring.py` (4
+tests). These run the **real cross-stage production sequence** — a real
+`run_stage()` RE_AUDIT PASS followed by real EXPERT_FEEDBACK_LOOP
+`run_stage()` PASSes, every mapped gate script executed as a real subprocess, a
+real un-mocked `route_and_store()` against a real `MemoryStore`. Nothing calls
+`promote_to_organizational()` or `MemoryGC.confirm()` directly; that is the
+point — the old tests proved the function worked in isolation, which was never
+the gap.
 
-- real on-disk Memory-tier record → mirrored into `job_memory_records` under the same deterministic `memory_id`
-- job with no Memory-tier record → mirrors nothing, `jobs` row still written (no fabrication)
-- one bad mirror insert is isolated to its own job; siblings keep their full evidence
-- **end-to-end**: one real `run_reconciliation_cycle()` over a genuinely failing job leaves the `job_memory_records` row *and* a real `failure_signatures` row (`occurrence_count=1`), with the stored `failure_signature_json` byte-identical to the JSON Memory tier's own
-- two cycles over the same failure upsert **one** record row while accumulating `occurrence_count` to 2 — what the mirror is actually for
-- static AST guard: `insert_job_memory_record` must have a real caller in `dv_harness/` outside `evidence_db.py`, and specifically in `regression_reporter.py` — so this cannot silently go dormant again
+- `test_re_audit_persists_the_real_confidence_inputs_on_the_engineering_record`
+  — the persisted inputs exist on disk, have exactly the four real keys, and
+  really score HIGH (so a fixture change cannot silently make the next test
+  vacuous).
+- `test_expert_feedback_loop_pass_that_confirms_a_record_evaluates_organizational_promotion`
+  — **the gap.** RE_AUDIT records the finding (count 0); EFL PASS #1 confirms
+  it (count 1) and the evaluation fires and honestly refuses with
+  `INSUFFICIENT_CONFIRMATION`; EFL PASS #2 confirms again (count 2) and the
+  record **really lands in `ORGANIZATIONAL_MEMORY` by itself**, with
+  `qualitative_shape == "re_audit_gate_shape"` and confidence `HIGH`. Still
+  exactly one `verified_fix` record — confirming never mints a rival copy.
+- `test_a_first_experience_pass_that_confirms_nothing_evaluates_nothing`
+  — precision: bound to the confirmation event, not to "a record was written".
+- `test_a_confirmed_record_without_persisted_confidence_inputs_is_not_scored_on_invented_ones`
+  — honesty: a pre-existing record with the field stripped yields
+  `NO_CONFIDENCE_INPUTS`, never a fabricated HIGH.
 
-**The tests were proven to fail without the fix**: reverting the three added lines and re-running gives `5 failed, 1 passed` (the survivor is the negative "no record → no row" case, correctly passing either way). File restored byte-identically afterwards.
+### Test summary
 
-### Full suite result
-
-```
-test_job_memory_evidence_mirror.py + test_evidence_db_wiring.py + test_evidence_db.py   50 passed, 1 skipped
-test_trend_analysis.py + test_mcp_read_only_boundary.py
-  + test_knowledge_layer_git_and_duckdb.py + test_mcp_query_regression.py              102 passed
-test_lsf_client.py + test_regression_reporter.py
-  + test_memory_write_guard_and_job_evidence.py + test_debug_flow_memory.py            150 passed
-test_obsidian_memory_final_integration.py + test_memory_tier_completion.py
-  + test_memory_tier_integrity_and_admission.py                                         56 passed
-```
-
-**358 passed, 1 skipped, 0 failed.**
-
-Committed as a single scoped commit touching only `dv_harness/regression_reporter.py` and the new test file — nothing else in this concurrently-edited tree.
-
----
-
-## 4. The other two audit findings — verified in code, and why no code changed
-
-Both were re-checked against the actual source rather than accepted from the report. Neither is a wiring defect; both are **"this code path has never been executed against real data in this root"**, which no amount of code can close and which I will not fake.
-
-### 4a. Job Memory / `reconcile_batch()` never fires in the live root
-
-`_write_job_tier_memory_on_terminal_reconcile()` (`lsf_client.py:926`, called from `reconcile_batch()` at `lsf_client.py:1245`, itself reached from `cli.py` and `regression_reporter.py`) is real, correct, and fully wired. `.dv-harness/lsf/jobs/` is empty because **no real LSF job has ever been submitted from this root** — this environment has no LSF farm. The fix is operational (`dv-harness lsf-watch-start` against a real submitted job), not a code change.
-
-I deliberately did **not** manufacture synthetic `JobState` files or a synthetic `evidence.duckdb` in the live root to make the counts move. That would be fabricating verification evidence, which CLAUDE.md's Evidence Truth Rule forbids, and would make the tier populations *less* trustworthy, not more. The end-to-end test above proves the whole path works against a real cycle in a real temp root; what is missing is a real farm, not real code.
-
-### 4b. Organizational promotion "unreachable"
-
-Re-read all three gates and their machinery. Every part is real and correct:
-
-- `promote_to_organizational()` (`memory_router.py:445`) — three gates, correctly implemented.
-- `_add_or_confirm_engineering()` / `_find_confirming_engineering_match()` (`memory_router.py:294/331`) — real dedup on `protocol` + `root_cause`; I verified `MemoryStore._index_row()` really persists **both** of those fields into `index.json` (confirmed against a live index row), so the matcher genuinely can hit.
-- `MemoryGC.confirm()` (`memory.py:528`) — really increments `confirmation_count` and rewrites the record.
-- `engine.py`'s `_promote_verified_fix_knowledge()` auto-fires the evaluation on every RE_AUDIT PASS and **does** populate `"protocol": rc_block.get("protocol")` on its record — so the dedup path *is* reachable from that production call site today. (`_add_or_confirm_engineering()`'s docstring still carries a "KNOWN LIMITATION" note saying engine.py does not populate `protocol`; that note is now stale, but it is a comment, not a defect, and this pass's mandate was wiring, not doc cleanup. Flagging it here rather than silently editing a shared file mid-pass.)
-
-So the named condition — "no real record has accumulated a second independent confirmation" — is **a data condition on a correct mechanism**, not a broken wire. The only honest ways to clear it are the two the audit itself names: a real RE_AUDIT PASS executing in this root, and future `persist_*.py` lessons searching existing engineering memory first so a re-derived root_cause/protocol lands on the *same* record.
-
-**I explicitly did not**: weaken `ORGANIZATIONAL_MIN_CONFIRMATIONS`, relax the qualitative gate, or hand-write a record with `confirmation_count: 2` to make `.dv-harness/memory/organizational/` non-empty. Any of those would produce a green tier count by defeating the exact design the tier exists to enforce ("Do not re-word the qualitative gate's inputs to force a pass" — CLAUDE.md, Engineering Memory Policy).
+`test_organizational_promotion_evaluation_wiring.py` 4/4 passed (422s, real
+gate subprocesses); `test_engineering_confirmation_accumulation.py` +
+`test_inference_engine_wiring.py` + `test_memory_tier_integrity_and_admission.py`
++ `test_memory_vault.py` + `test_memory_doctor.py` 54/54 passed (exit 0);
+`test_engine_gates_and_routing.py` passed.
 
 ---
 
-## 5. Follow-ups for whoever runs this harness against a real farm
+## 4. Concurrency handling
 
-1. Run one real `reconcile_batch()` in the live root (`dv-harness lsf-watch-start --vcuser <acct>` with a real submitted job). Verify: `.dv-harness/lsf/jobs/*.json` appears, `.dv-harness/memory/job/*.json` count moves, `evidence.duckdb` appears, and `SELECT count(*) FROM job_memory_records` is non-zero — that last one is what this pass made possible and is the single cheapest check that this fix is live.
-2. Get one real RE_AUDIT PASS in the live root so `ORGANIZATIONAL_PROMOTION_EVALUATED` appears in `events.jsonl` at least once (currently: 428 events, zero of them).
-3. Refresh `_add_or_confirm_engineering()`'s stale "KNOWN LIMITATION" docstring paragraph (see 4b) next time `memory_router.py` is touched for a real reason.
+`dv_harness/engine.py`, `memory.py` and `memory_router.py` all carried large
+uncommitted changes from other workstreams in this session. I never rewrote a
+shared file: all three edits were anchored `Edit` operations, and the commit
+was staged with a **hand-scoped patch** (`git apply --cached` of only my three
+hunks, extracted from `git diff -U3`, validated with `--check` first), so no
+other workstream's in-flight engine.py work was swept into this commit.
+
+---
+
+## 5. What remains open (deliberately, for a separate effort)
+
+1. **Job Memory tier — environment.** Needs a real LSF-bearing Linux DV server
+   via `tools/remote/remote_exec.py`: submit one job, let it reach DONE/EXIT,
+   run `dv-harness lsf-reconcile --job-ids <jid>`, then verify
+   `lsf_client.load_job_tier_memory_record(root, jid)` returns a record at
+   `.dv-harness/memory/job/JOB-<jid>-TERMINAL-RECONCILE.json` with the real
+   schema fields. The code path is already wired into a live-running watcher;
+   only the input is missing.
+2. **A first real Organizational record in *this* project's store.** The
+   evaluation now fires automatically on the real path, and the new test proves
+   it promotes for real once the gate is cleared. Clearing it *in this repo*
+   still requires a genuine second independent debug pass re-deriving an
+   already-recorded `root_cause` — real verification work, not a code change,
+   and never a hand-edited `confirmation_count`.
