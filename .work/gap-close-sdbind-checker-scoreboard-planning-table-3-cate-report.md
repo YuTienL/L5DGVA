@@ -153,3 +153,42 @@ the pipeline does not yet *invoke* it to produce a planning table for a real
 build — the same "real but unwired" shape CLAUDE.md's Methodology Consolidation
 Rule warns about. Wiring it into the generator pipeline is a separate, larger
 effort than this scope covers.
+
+---
+
+## Independent re-verification pass (2026-09-04, second gap-close dispatch)
+
+This scope was dispatched a second time carrying an audit finding that reported
+`transformation_rules` BLOCKED, `endpoint_pairs`/`matching_key`/`ordering`
+PARTIAL, and the "empty field auto-becomes a question-queue entry" mechanism
+BLOCKED. **That finding was stale** — it describes the pre-`656c8c6` state.
+Nothing was re-implemented; the state above was re-confirmed against current
+code, since `fc82ff1` had landed in the meantime and drifted line numbers again.
+
+Re-verified by a live interpreter run against the current working tree, not by
+re-reading the previous report:
+
+| requirement | live result |
+|---|---|
+| 3 categories, no ambiguity | `protocol_checks` / `data_integrity_scoreboards` / `system_level_checks` |
+| endpoints empty | `REQUIRED_HUMAN_INPUT` (not silent `[]`) |
+| endpoints bare port name | raises `ENDPOINT_NOT_A_HIERARCHY_PATH` |
+| matching key empty | `REQUIRED_HUMAN_INPUT` |
+| ordering + tolerance depth | two separate columns in `SCOREBOARD_PLAN_FIELDS` |
+| transform rules omitted | `REQUIRED_HUMAN_INPUT`; explicit `[]` stays `[]` |
+| legal drop / reset flush / orphan threshold + timeout | sentinel-defaulted |
+| empty field -> question queue | 9 persisted Tier-3 blocking questions, routed `DV-owner` / `DV-owner/Synopsys-AE` / `designer` |
+| re-run idempotence | same 9 Q-IDs, queue does not grow |
+| confirm a row still holding the sentinel | raises `CANNOT_CONFIRM_ROW_WITH_UNFILLED_REQUIRED_HUMAN_INPUT` |
+| human answer read-back | `apply_answered_questions()` fills the field, 9 unfilled -> 8 |
+| answer persistence | real `decisions.json` + `decisions.md` on disk |
+
+Suites re-run on current HEAD: `test_connectivity.py` **175 passed**;
+`test_question_queue.py` + `test_connectivity_check.py` **67 passed**.
+
+No file was modified in this pass. The "still called by no other module"
+residual recorded above was re-checked and **still holds** — a repo-wide grep
+for `build_checker_scoreboard_plan` / `generate_scoreboard_entry` /
+`route_unfilled_fields_to_question_queue` / `apply_answered_questions` outside
+`connectivity.py` and its test returns only `.work/` report prose, no code.
+That remains out of this scope and needs a separate effort.
