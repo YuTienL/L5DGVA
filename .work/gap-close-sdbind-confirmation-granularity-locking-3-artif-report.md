@@ -207,3 +207,47 @@ clean bill.
   `evidence`. All 7 in-repo call sites (all in `test_connectivity.py`) were updated. An
   optional-with-default `confirmed_by` would have re-created the exact hole the
   requirement names, so the break is the point.
+
+---
+
+## Re-verification pass (2026-09-04, second sequential gap-close run)
+
+A second gap-close run was dispatched against this same scope carrying an audit finding
+that reported "Locking enforcement: **BLOCKED**" and "Per-row confirmation: **PARTIAL** —
+no `confirmed_by`, no `evidence`, never written back into the manifest". That finding was
+**stale**: it cited `RowLockStore` at `connectivity.py:1232-1279` and
+`render_hierarchy_diagram` at `:785-798`, whereas those live at `:2194` and `:1477` in the
+current file. It was gathered against the tree as it stood **before** commit `3fa5468`,
+which is the commit documented above. No code change was made in this second run; the
+work was already committed. Re-verified against current HEAD:
+
+- **Locking enforced** — the audit's own live repro re-run verbatim against current code
+  now REFUSES instead of succeeding silently:
+  ```
+  locked: True
+  confirmed_by: peter.lin | confirmed_date: 2026-09-04T00:42:15 | evidence: ['rtl/usb_top.sv:412']
+  REFUSED: LOCKED_ROW_CHANGED_REQUIRES_EXPLICIT_RECONFIRM
+  diff: [{'field': 'bind_target', 'change': 'CHANGED', 'old': 'chip.core.usb0.u_utmi',
+          'new': 'chip.core.usb0.u_pipe'},
+         {'field': 'tier', 'change': 'CHANGED', 'old': 'T1', 'new': 'T3'}]
+  ```
+  The guard is `confirm_row()` itself (`connectivity.py:2279-2294`), not the passive
+  `is_locked()` the stale finding described. The explicit diff+reconfirm path
+  (`row_diff()` then `confirm_row(..., supersedes_hash=locked_hash)`) then succeeds and
+  records `supersedes_hash` on the new record.
+- **`confirmed_by` / `confirmed_date` / `evidence`** are required, non-empty, and
+  persisted (`:2262-2306`); manifest writeback is `annotate_rows_with_confirmation()`
+  (`:1388`) called from `write_connectivity_manifest(..., lock_store=)` (`:1450`).
+- **All 3 artifacts** emit from one entry point, `emit_connectivity_artifacts()`
+  (`:1628`), with fixed filenames in `ARTIFACT_FILENAMES` (`:1591`); the hierarchy
+  diagram renders true nested `subgraph`s from a real `DutInstanceNode` tree (`:1537-1563`)
+  and surfaces unresolved bind targets rather than dropping them (`:1565-1579`).
+- Tests: `python -m pytest dv_harness_tests/test_connectivity.py -q` → **175 passed**;
+  the wider related battery (connectivity, connectivity_check, question_queue,
+  bind_mechanism_generator, source_authority, blackboard_subsystem_wiring) →
+  **314 passed in 78.48s**.
+
+The residuals listed above are unchanged and still accurate — in particular
+`emit_connectivity_artifacts()` remains unwired to `dv_harness/cli.py` (re-confirmed:
+a grep for `connectivity` in `cli.py` returns zero hits) and to the `just
+connectivity-check` recipe, which covers the 3 gates rather than the 3 artifacts.
