@@ -168,14 +168,39 @@ than taken at face value. **None are attributable to this change:**
   positions re-run clean in isolation (the 80-test row above); they failed only
   while two pytest processes contended for the machine.
 
-## Commit
+## Commit — and one honest note about how it landed
 
-`policy: refuse SIGNOFF while RE_AUDIT's Qualified Conclusion says it did not qualify`
-— `dv_harness/policy.py`, `dv_harness/engine.py`, `dv_harness/config.py`,
-`.dv-harness/graph/main_graph.json`,
-`dv_harness_tests/test_qualified_conclusion_closure_gate.py`, `CLAUDE.md`,
-this report. Scoped to those paths only, since the tree is being edited
-concurrently.
+All seven files are committed and intact in `e29725f`:
+
+```
+dv_harness/policy.py                                     | 72 +++-
+dv_harness/engine.py                                     |  7 +-
+dv_harness/config.py                                     |  5 +
+.dv-harness/graph/main_graph.json                        |  9 +-
+dv_harness_tests/test_qualified_conclusion_closure_gate.py | 344 +++++
+CLAUDE.md                                                | 26 ++
+.work/gap-close-ai-engine--9-...-report.md               | 188 +++
+```
+
+`git diff HEAD` over those paths is empty, `HEAD:dv_harness/policy.py` contains
+`require_qualified_conclusion`, and `HEAD:.dv-harness/graph/main_graph.json`
+contains 4 occurrences of `qualified_conclusion`.
+
+**But they landed under someone else's commit message.** This branch is being
+worked concurrently. I staged exactly my seven paths and then ran `git commit`;
+in the window between those two commands the concurrent memory workstream ran
+its own `git commit`, which swept my staged index into `e29725f`
+("docs: Phase 7 memory-note-schema gap-close report (DONE)"). My own commit then
+correctly reported "no changes added to commit".
+
+I deliberately did **not** amend or rebase to correct this. Another agent is
+actively working on this branch and may already reference `e29725f`; rewriting
+it to fix a commit message would risk real in-flight work to fix a cosmetic
+problem. The code, tests and history are all correct — only the message
+attribution is wrong, and this paragraph is the record of it. If the branch is
+later cleaned up, the intended message was:
+
+> `policy: refuse SIGNOFF while RE_AUDIT's Qualified Conclusion did not qualify`
 
 ## What is explicitly NOT claimed
 
