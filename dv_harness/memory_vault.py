@@ -772,9 +772,11 @@ class FileSystemMarkdownAdapter(MemoryProvider):
     embedding/vector index -- search() is real keyword/tag/YAML-property/
     wiki-link-traversal/protocol/project/memory-level/confidence/status
     filtering over an on-demand filesystem scan, optionally accelerated by
-    `rg` (used only as a candidate-file prefilter; every structural filter
-    still re-parses real frontmatter in Python, so a missing/broken `rg`
-    never changes correctness, only speed)."""
+    `rg` as a candidate-file prefilter. Every filter still re-parses real
+    frontmatter in Python, and `_candidate_paths()` narrows only on terms
+    that are mandatory constraints on the result, so a missing/broken `rg`
+    changes speed and never results -- see that method for the two rules
+    that keep it that way."""
 
     def __init__(self, vault_path: Path, git_enabled: bool = False):
         self.vault_path = Path(vault_path)
@@ -819,9 +821,11 @@ class FileSystemMarkdownAdapter(MemoryProvider):
             if query.get(f):
                 property_filters[f] = query[f]
 
-        candidates = self._candidate_paths(text_q or (exact_q or ""))
+        structural_filter = bool(tag_q or property_filters or linked_to)
+        any_filter = bool(text_q or exact_q or structural_filter)
+        candidates = self._candidate_paths(text_q, exact_q,
+                                            text_is_mandatory=not structural_filter)
         q_tokens = _tokenize(text_q) if text_q else set()
-        any_filter = bool(text_q or exact_q or tag_q or property_filters or linked_to)
 
         scored = []
         for p in candidates:
@@ -1030,17 +1034,44 @@ class FileSystemMarkdownAdapter(MemoryProvider):
                 return p
         return None
 
-    def _candidate_paths(self, term: str) -> List[Path]:
-        if not term:
+    def _candidate_paths(self, text_q: str, exact_q: Optional[str] = None,
+                          text_is_mandatory: bool = True) -> List[Path]:
+        """Optional `rg -l` prefilter narrowing which note files search()
+        parses. It is only ever allowed to be a SPEED optimization, so it may
+        narrow on a term only while that term is a MANDATORY constraint on the
+        final result -- otherwise `rg` being installed would silently change
+        what a search means, which is not an optimization but a second,
+        undeclared filter. Two rules follow, and both were real divergences:
+
+        `exact` is a hard `continue` in search() and is always mandatory, so
+        it prefilters unconditionally; `rg -i` makes the prefilter deliberately
+        over-inclusive against search()'s case-SENSITIVE check, which is the
+        safe direction (Python still rejects, rg never over-prunes).
+
+        Free text is scored by TOKEN OVERLAP, so its prefilter must be the
+        UNION of its tokens (one `-F -e` each), never the whole query as one
+        contiguous literal phrase -- and it is mandatory only when no
+        structural filter accompanies it, because a note matching a
+        tag/property/wiki-link filter alone still clears search()'s relevance
+        floor and must be returned whether or not it contains any query token.
+        """
+        if exact_q:
+            patterns = [str(exact_q)]
+        elif text_is_mandatory:
+            patterns = sorted(_tokenize(text_q))
+        else:
+            patterns = []
+        if not patterns:
             return self._iter_notes()
         rg = shutil.which("rg")
         if not rg:
             return self._iter_notes()
+        cmd = [rg, "-l", "-i", "-F", "--glob", "*.md"]
+        for pattern in patterns:
+            cmd += ["-e", pattern]
+        cmd.append(str(self.vault_path))
         try:
-            proc = subprocess.run(
-                [rg, "-l", "-i", "-F", "--glob", "*.md", term, str(self.vault_path)],
-                capture_output=True, text=True, timeout=10,
-            )
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if proc.returncode not in (0, 1):  # 1 == "ran fine, zero matches"
                 return self._iter_notes()
             return [Path(line) for line in proc.stdout.splitlines() if line.strip()]

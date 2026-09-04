@@ -30,6 +30,7 @@ import pytest
 
 import dv_harness.cli as cli_mod
 import dv_harness.memory_cli as memory_cli
+from dv_harness import memory_vault as memory_vault_mod
 from dv_harness.memory import (
     MemoryRetriever,
     MemoryStore,
@@ -326,3 +327,129 @@ def test_memory_search_project_flag_filters_on_the_project_frontmatter_field(mon
                      "failure": "ltssm recovery loop"})
 
     assert _search_ids(monkeypatch, tmp_root, capsys, ["--project", "usb31_dev_uvm"]) == [mine]
+
+
+# ===========================================================================
+# 4. The `rg` prefilter is a SPEED optimization only -- never a filter
+#
+# FileSystemMarkdownAdapter.search() optionally narrows which note files it
+# parses with `rg -l`. That is only sound while the prefilter's term is a
+# MANDATORY constraint on the final result. Two real query shapes broke that
+# and silently returned fewer notes on any machine that happens to have
+# ripgrep installed (which is the common case, including this repo's own dev
+# environment) than on one that does not:
+#
+#   - a multi-word free-text query, which the Python scorer matches by TOKEN
+#     OVERLAP but the prefilter demanded as one contiguous literal phrase;
+#   - free text combined with a structural filter (tag/property/protocol/...),
+#     where a note matching only the structural filter still scores above the
+#     relevance floor and must be returned.
+#
+# Each test below asserts rg-present and rg-absent results are EQUAL, so the
+# accelerator can never again change what a search means. The pre-existing
+# single-token coverage in test_memory_vault.py
+# (test_filesystem_adapter_search_degrades_correctly_without_rg) hits the one
+# shape that never diverged, which is why this went unnoticed.
+# ===========================================================================
+
+def _vault(tmp_root):
+    from dv_harness import memory_vault as mv
+    return mv.FileSystemMarkdownAdapter(tmp_root / "vault", git_enabled=False)
+
+
+def _note_fm(note_id, protocol="USB3"):
+    return {"id": note_id, "memory_level": "engineering", "protocol": protocol,
+            "confidence": "HIGH", "status": "ACTIVE", "tags": [protocol.lower()],
+            "verified": True}
+
+
+def _both_ways(fs, query):
+    """Same query, run with rg available and with it forced unavailable."""
+    from unittest.mock import patch
+
+    with_rg = sorted(r["note_id"] for r in fs.search(query)["results"])
+    with patch("dv_harness.memory_vault.shutil.which", return_value=None):
+        without_rg = sorted(r["note_id"] for r in fs.search(query)["results"])
+    return with_rg, without_rg
+
+
+@pytest.fixture()
+def two_notes(tmp_root):
+    fs = _vault(tmp_root)
+    fs.create(_note_fm("MEM-A"), sections={"Root Cause": "lfps underrun on the receiver"})
+    fs.create(_note_fm("MEM-B"), sections={"Root Cause": "descriptor fetch stalled"})
+    return fs
+
+
+def test_multi_word_text_query_matches_on_token_overlap_not_a_literal_phrase(two_notes):
+    # No note contains the phrase "underrun descriptor"; each contains one of
+    # the two tokens, so token-overlap scoring must return both.
+    with_rg, without_rg = _both_ways(two_notes, {"text": "underrun descriptor"})
+    assert with_rg == without_rg == ["MEM-A", "MEM-B"]
+
+
+def test_text_combined_with_a_property_filter_does_not_drop_filter_only_matches(two_notes):
+    # Both notes are protocol USB3, so both clear the relevance floor on the
+    # structural filter alone; "underrun" only ranks MEM-A higher.
+    with_rg, without_rg = _both_ways(two_notes, {"text": "underrun", "protocol": "USB3"})
+    assert with_rg == without_rg == ["MEM-A", "MEM-B"]
+
+
+def test_text_combined_with_a_tag_filter_does_not_drop_filter_only_matches(two_notes):
+    with_rg, without_rg = _both_ways(two_notes, {"text": "underrun", "tag": "usb3"})
+    assert with_rg == without_rg == ["MEM-A", "MEM-B"]
+
+
+def test_text_combined_with_a_linked_to_filter_does_not_drop_filter_only_matches(tmp_root):
+    fs = _vault(tmp_root)
+    fs.create(_note_fm("MEM-TARGET"), sections={"Root Cause": "lfps underrun on the receiver"})
+    fs.create(_note_fm("MEM-LINKER"),
+              sections={"Related Knowledge": "Supersedes [[MEM-TARGET]]."})
+
+    # MEM-LINKER satisfies --linked-to but contains none of the query tokens.
+    with_rg, without_rg = _both_ways(fs, {"text": "underrun", "linked_to": "MEM-TARGET"})
+    assert with_rg == without_rg == ["MEM-LINKER"]
+
+
+def test_single_token_text_query_still_narrows_and_agrees_both_ways(two_notes):
+    # The shape that always worked -- kept so the fix cannot regress it into
+    # "prefilter nothing, ever", which would preserve correctness by throwing
+    # the accelerator away entirely.
+    with_rg, without_rg = _both_ways(two_notes, {"text": "underrun"})
+    assert with_rg == without_rg == ["MEM-A"]
+
+
+def test_exact_query_still_narrows_and_agrees_both_ways(two_notes):
+    with_rg, without_rg = _both_ways(two_notes, {"exact": "lfps underrun"})
+    assert with_rg == without_rg == ["MEM-A"]
+
+
+def test_exact_query_prefilter_survives_a_case_difference(two_notes):
+    # The prefilter runs `rg -i` while the Python check is case-SENSITIVE, so
+    # the prefilter is deliberately over-inclusive and Python still rejects.
+    with_rg, without_rg = _both_ways(two_notes, {"exact": "LFPS underrun"})
+    assert with_rg == without_rg == []
+
+
+def test_stopword_only_text_query_agrees_both_ways(two_notes):
+    # "the on" tokenizes to nothing, so no note can clear the relevance floor.
+    with_rg, without_rg = _both_ways(two_notes, {"text": "the on"})
+    assert with_rg == without_rg == []
+
+
+def test_the_rg_prefilter_is_actually_exercised_when_it_is_sound(tmp_root, monkeypatch):
+    """Proves the accelerator is still USED for a bare multi-token text query
+    -- i.e. the fix narrows the candidate set rather than silently disabling
+    rg, which the result-parity tests above alone could not distinguish."""
+    fs = _vault(tmp_root)
+    fs.create(_note_fm("MEM-A"), sections={"Root Cause": "lfps underrun on the receiver"})
+    fs.create(_note_fm("MEM-B"), sections={"Root Cause": "descriptor fetch stalled"})
+    fs.create(_note_fm("MEM-C"), sections={"Root Cause": "entirely unrelated content"})
+
+    parsed = []
+    real_parse = memory_vault_mod.parse_note_markdown
+    monkeypatch.setattr(memory_vault_mod, "parse_note_markdown",
+                        lambda text: (parsed.append(text), real_parse(text))[1])
+
+    fs.search({"text": "underrun descriptor"})
+    assert len(parsed) == 2, "rg should have excluded MEM-C from the parsed candidate set"
