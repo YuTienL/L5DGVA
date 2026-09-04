@@ -15,6 +15,7 @@ skills:
   - CORE/memory-gc
   - CORE/memory-retrieval
   - CORE/memory-link
+  - CORE/memory-review
   - CORE/obsidian-cli
   - EXPERT_FEEDBACK/knowledge-promotion-gate
 ---
@@ -82,6 +83,13 @@ all of which only run inside the real functions.
   `_verification_is_gate_validated()` (via `memory-consolidation`) for
   whether a record's `verification` block actually satisfies one of the
   two real gate shapes before treating it as promotion-eligible.
+- **Review**: `dv-harness memory validate` (the 5 note-correctness checks)
+  and `dv-harness memory doctor` (those plus vault-writable/git/Obsidian/
+  filesystem-adapter/large-artifact/JSON-index-drift, 11 in total) via
+  `memory-review` -- the store-wide sweep that finds WHICH records need a
+  Validate repair or a `memory-gc` action, as opposed to `validate_note()`,
+  which answers that for one note already in hand. Read the per-check
+  `note_id`/`path` lists, not just `overall`.
 
 
 ## Explicitly NOT Responsible For
@@ -120,10 +128,16 @@ whichever agent just reached a verified PASS) rather than run standalone:
    also supplies `confidence_inputs` for a record that already has
    `confirmation_count >= 2`, attempt `promote_to_organizational()`.
 3. **Periodic hygiene** (dispatched on request, not on a fixed schedule
-   today -- no cron/loop wiring exists for this): search for
+   today -- no cron/loop wiring exists for this): start from a real
+   `dv-harness memory doctor` run (`memory-review`) rather than an ad-hoc
+   scan -- it names every schema-PARTIAL note's missing required fields,
+   every broken wiki-link, every duplicate id, every leaked secret and any
+   JSON-index drift in one pass. Then act on what it named: search for
    stale/superseded records (e.g. citing an RTL sha no longer current) and
-   flag them via `MemoryGC`; check vault notes for `schema_status:
-   PARTIAL` and report which required fields are missing.
+   flag them via `MemoryGC`, repair a schema-PARTIAL note through
+   `provider.update()`, and `python -m dv_harness.memory_cli reindex` for
+   index drift. Re-run `doctor` afterwards as the evidence the repair
+   landed.
 
 
 ## Evidence Discipline
