@@ -35,6 +35,48 @@ SUBSYSTEM_RECORD_FIELDS: tuple = (
 )
 
 
+# --- SYOSCB-3 THIRD-PARTY COMPONENT RECORD SHAPE ----------------------------
+# SYOSCB-3 ("KNOWLEDGE CENTER REGISTRATION") names nine fields to register per
+# reused third-party component, and closes with the same rule SYS-3 opens with:
+# "Do not create a parallel knowledge store." So this is the SUBSYSTEM_*
+# pattern above applied a second time -- another fixed category and field
+# vocabulary over the SAME add/search verbs, the same broker, the same
+# provenance/staleness lifecycle. It is deliberately a SEPARATE category from
+# `subsystem_environment`: a vendored library is not a subsystem environment,
+# has no COMMAND_TXT or REGRESSION_STATUS, and searching one shard for the
+# other would return neither.
+#
+# Two fields go beyond SYOSCB-3's own list, because a record without them is
+# not actionable: UPSTREAM_DEPENDENCIES (what the component itself needs in
+# order to compile at all -- a UVM version, here) and EVIDENCE (the same
+# citation field `SUBSYSTEM_RECORD_FIELDS` already carries, so a reader can
+# check a claim instead of trusting it).
+THIRD_PARTY_COMPONENT_CATEGORY = "third_party_component"
+THIRD_PARTY_COMPONENT_KIND = "third_party_component_record"
+
+THIRD_PARTY_COMPONENT_FIELDS: tuple = (
+    "COMPONENT", "VERSION", "SOURCE_REFERENCE", "ROLE", "INTEGRATION_POLICY",
+    "L5_DESTINATION", "BUILD_STATUS", "KNOWN_LIMITATIONS", "PROVENANCE",
+    "UPSTREAM_DEPENDENCIES", "EVIDENCE",
+)
+
+
+def normalize_component_record(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Project an arbitrary stored KC record onto the SYOSCB-3 field names,
+    case-insensitively, with the same present-and-null convention
+    `normalize_subsystem_record()` uses -- "the KC has no L5_DESTINATION for
+    this component" must be a readable fact, not a KeyError."""
+    lowered = {str(k).lower(): v for k, v in (raw or {}).items()}
+    out: Dict[str, Any] = {f: lowered.get(f.lower()) for f in THIRD_PARTY_COMPONENT_FIELDS}
+    out["_kc"] = {
+        k: (raw or {}).get(k)
+        for k in ("memory_id", "status", "written_at", "revalidate_by",
+                  "confirmation_count", "last_confirmed_at", "provenance")
+        if k in (raw or {})
+    }
+    return out
+
+
 def normalize_subsystem_record(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Project an arbitrary stored KC record onto the 21 SYS-3 field names,
     case-insensitively (a record written as `git_sha` and one written as
@@ -322,6 +364,58 @@ class KnowledgeCenterClient:
         payload["kind"] = SUBSYSTEM_RECORD_KIND
         payload["title"] = f"{subsystem_id} subsystem environment"
         return self.add(SUBSYSTEM_CATEGORY, str(record.get("PROTOCOL") or "_general"), payload)
+
+    def component_record(self, component: str, protocol: str = "",
+                         limit: int = 16) -> Dict[str, Any]:
+        """SYOSCB-3 read half: what does the shared Knowledge Center already
+        know about ONE reused third-party component. Routes through the
+        existing `search` verb on the fixed THIRD_PARTY_COMPONENT_CATEGORY
+        shard -- no new transport, no new server-side command, no second store.
+
+        Matching is exact, case-insensitive COMPONENT equality on the
+        normalized record, for the same reason `subsystem_record()` refuses a
+        substring hit: a free-text search for "uvm_syoscb" would happily return
+        a record about an AMBA adapter that merely mentions it."""
+        res = self.search(category=THIRD_PARTY_COMPONENT_CATEGORY, protocol=protocol,
+                          text=str(component), limit=limit)
+        if not res.get("ok", True) or res.get("error"):
+            return {"ok": False, "found": False, "record": None,
+                    "error": res.get("error", "SEARCH_FAILED"),
+                    "detail": res.get("detail", "")}
+        wanted = str(component).strip().lower()
+        candidates = [normalize_component_record(r) for r in (res.get("records") or [])]
+        exact = [c for c in candidates
+                 if str(c.get("COMPONENT") or "").strip().lower() == wanted]
+        return {
+            "ok": True,
+            "found": bool(exact),
+            "record": exact[0] if exact else None,
+            "candidates": [str(c.get("COMPONENT") or "") for c in candidates],
+        }
+
+    def record_component(self, record: Dict[str, Any],
+                         protocol: str = "_general") -> Dict[str, Any]:
+        """SYOSCB-3 write half: publish/refresh one third-party component
+        record on the same shard `component_record()` reads, through the
+        existing `add` verb, so the server stamps written_at/revalidate_by and
+        it joins the same staleness/confirm/deprecate lifecycle. Requires
+        COMPONENT -- a record nobody can look up by component name is not a
+        component record.
+
+        Build the record with
+        `syoscb_source_audit.build_component_registration_payload()`; that
+        function fills every field from a real read-only audit and never
+        performs transport, so "the payload was built" and "the payload was
+        published" stay two separately-visible events."""
+        component = str((record or {}).get("COMPONENT") or "").strip()
+        if not component:
+            return {"ok": False, "error": "COMPONENT_REQUIRED"}
+        payload = {f: (record or {}).get(f) for f in THIRD_PARTY_COMPONENT_FIELDS}
+        payload["COMPONENT"] = component
+        payload["kind"] = THIRD_PARTY_COMPONENT_KIND
+        version = str((record or {}).get("VERSION") or "").strip()
+        payload["title"] = f"{component} {version}".strip() + " third-party component"
+        return self.add(THIRD_PARTY_COMPONENT_CATEGORY, protocol, payload)
 
     def db_info(self, category: str = "", protocol: str = "", action: str = "",
                 limit: int = 100) -> Dict[str, Any]:
