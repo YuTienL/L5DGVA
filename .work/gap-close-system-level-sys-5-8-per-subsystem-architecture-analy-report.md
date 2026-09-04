@@ -5,10 +5,21 @@
 VERIFICATION INTEGRATION WORKFLOW (master prompt lines 4274–4519). Discovery/analysis/
 planning/reporting only, per the document's own SYS-39 stop condition.
 **Tests:** 53 new tests in
-`dv_harness_tests/test_subsystem_architecture_and_command_contract.py`, all pass; the seven
-related suites together (`test_reference_pattern_audit`, `test_source_authority`,
-`test_subsystem_discovery`, `test_env_manifest_fact_sources`, `test_environment_mode_router`,
-`test_system_level_soc_composition_wiring`, plus the new file) run **193 passed** (192 before the SYS-6 requirement drift guard was added).
+`dv_harness_tests/test_subsystem_architecture_and_command_contract.py`, all pass. Two suites
+were run covering everything this change touches, both green:
+
+- the seven SYS-relevant suites (`test_reference_pattern_audit`, `test_source_authority`,
+  `test_subsystem_discovery`, `test_env_manifest_fact_sources`, `test_environment_mode_router`,
+  `test_system_level_soc_composition_wiring`, plus the new file) — **192 passed in 141s**
+  (before the SYS-6 requirement drift guard was added; 193 with it);
+- the seven CLI-exercising suites (`test_cli_adapter_command_resolution`, `test_cli_blackboard`,
+  `test_cli_memory_commands`, `test_cli_question_queue`,
+  `test_command_semantic_expectation_parser_wiring`, `test_self_tuning_cli`,
+  `test_dashboard_cli_checklist_rendering`) — **90 passed in 110s**, covering the `cli.py`
+  parser change.
+
+A whole-repo `pytest dv_harness_tests` run was also started; it buffers all output and had not
+completed when this was written, so it is **not** claimed here as a result.
 
 ---
 
