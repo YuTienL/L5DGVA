@@ -148,16 +148,24 @@ new module alone **15 passed** (29s), the demo script re-run green (exit 0, real
 git log with 3 real `memory(USB):` commits), and `doc_citation_check --memory-docs`
 exit 0.
 
-**Full-suite caveat, stated rather than hidden**: a whole-`dv_harness_tests` run was
-attempted and showed failures/errors in the `test_p*` band. Those are in
-`protocol_capability` / protocol-builder territory, which is **being actively edited
-by a concurrent workflow right now** (`git status` shows uncommitted
+**Full-suite caveat, stated rather than hidden and then run down**: a whole-`dv_harness_tests`
+run was attempted mid-pass and showed failures/errors in the `test_p*` band. That band is
+`protocol_capability` / protocol-builder territory, which was **being actively edited by a
+concurrent workflow at that exact moment** (`git status` showed uncommitted
 `dv_harness/protocol_capability.py`, `.dv-harness/qualification/protocol_capability_registry.json`,
-two `PROTOCOL_BUILDERS/*/SKILL.md`, `create_environment.py`, `engine.py`). Nothing in
-this change can reach them: this change adds two test-only modules and edits two
-docstrings, one markdown doc, and a `.work/` script. Reported as an observation about
-repo state, not as a claim that this change is implicated or exonerated by a run I did
-not complete.
+two `PROTOCOL_BUILDERS/*/SKILL.md`, `create_environment.py`, `engine.py`). Rather than leave
+that as an assumption, those modules were re-run individually once the tree settled:
+
+- `test_protocol_capability.py` + `test_protocol_env_generator.py` → **34 passed**
+- `test_protocol_builder_registry_conformance_gate.py`, `test_protocol_isolation_gate.py`,
+  `test_protocol_model_layer_wiring.py`, `test_protocol_profile_binding_gate.py`,
+  `test_qualification.py` → **77 passed**
+
+So the mid-run red was a transient snapshot of another workflow's in-flight edits, not a
+standing failure — and in any case nothing in this change can reach those modules: it adds
+two test-only modules and edits two docstrings, one markdown doc, and a `.work/` script.
+The machine is running several workflows' test suites concurrently, which is why a single
+full-suite pass takes over an hour here.
 
 ---
 
