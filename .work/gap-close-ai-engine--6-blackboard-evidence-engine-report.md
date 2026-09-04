@@ -1,177 +1,185 @@
 # Gap close — AI mechanism #6: Blackboard / Evidence Engine
 
-**Verdict: DONE** (integration gap closed; the core mechanism needed no change)
+**Verdict: DONE.**
 
-Date: 2026-09-04. Scope: mechanism #6 only.
+Two real, concrete gaps named by the 2026-09-04 re-audit were closed for real in
+`v50/`. The core mechanism itself was confirmed WIRED_AND_FIRING by re-reading the
+cited evidence; nothing about the core write/read path was rebuilt or duplicated.
+
+**Test summary:** the new
+`dv_harness_tests/test_blackboard_automatic_path_and_concurrency.py` is 19 passed across
+4 runs (stable); with `test_blackboard_subsystem_wiring.py` alongside it, **39 passed** on
+the committed tree. Wider regression: the Blackboard/subsystem suites ran 177 passed / 2
+failed and the engine suites (`test_engine_gates_and_routing.py`,
+`test_graph_parallel_dispatch.py`, `test_harness_reliability.py`,
+`test_active_stages_read_sites.py`, `test_stage_progress_display.py`,
+`test_execution_preflight_wiring.py`, `test_multi_agent_timing.py`) ran 343 passed / 3
+failed — every one of those 5 failures re-run green afterwards and none is this pass's;
+see "Failures seen during regression" below.
 
 ---
 
-## 1. Re-verified the audit's evidence before touching anything
+## What I re-verified before changing anything
 
-The audit's line numbers had shifted (engine.py is concurrently edited), so the code path was
-re-located by grep rather than trusted:
+- `v50/dv_harness/blackboard.py` really is the whole mechanism (95 lines pre-change);
+  `write()` was `p.write_text(json.dumps(...))` with `tempfile` imported on line 2 and
+  used nowhere in the file.
+- `engine.py:_advance_with_fanout()` really runs branches through a genuine
+  `ThreadPoolExecutor`, and the `AgentTaskStore.acquire()` claim above it only guards
+  same-topic collisions between fan-out branches, not the file operation.
+- `engine.py` really had **zero** references to `env_manifest` / `question_queue` /
+  `connectivity_check`; the real graph really does declare the three subsystem topics in
+  seven nodes' `blackboard_read` (ARCH_DISCOVERY, PROJECT_MODEL, IMPLEMENT, BUILD_DEBUG,
+  VERIFY, FAILURE_RECOVERY, SIGNOFF) and in **no** node's `blackboard_write`.
+- `storage._atomic_replace()` and `question_queue._atomic_write_json()` already existed as
+  the codebase's own atomic-write utilities — so this was a reuse job, not a new mechanism.
 
-- `dv_harness/engine.py:3196-3197` — inside `run_stage()`'s real PASS branch:
-  `if node is not None and node.blackboard_write: self._write_blackboard_from_evidence(node, stage, evidence_blocks, result)`.
-- `dv_harness/engine.py:2281` — `_write_blackboard_from_evidence()`, dispatching through
-  `STAGE_BLACKBOARD_WRITERS` (engine.py:283) with `_bb_generic_fallback` for unmapped stages, and
-  calling `self.blackboard.write(topic, value, source=stage)` per declared topic.
-- `dv_harness/blackboard.py` — `write`/`read`/`snapshot` plus the findings registry
-  (`upsert_finding`/`findings_counts`) and debug-loop history, all with real engine callers.
-- Persisted evidence under `.dv-harness/blackboard/` (project/environment/hierarchy/
-  protocol_inventory) with real stage `source` values.
+## Fix A — `Blackboard.write()` is atomic, `read()` is resilient
 
-**The Blackboard mechanism itself is WIRED_AND_FIRING and was not modified.**
+`v50/dv_harness/blackboard.py`
 
-The named gap also re-confirmed: `grep -n "env_manifest|question_queue|connectivity" dv_harness/engine.py`
-returns nothing, and no node in `.dv-harness/graph/main_graph.json` declared any topic those
-subsystems could write.
+- `write()` now writes to a `tempfile.mkstemp()` file in the topic directory and
+  `storage._atomic_replace()`s it into place, `finally` unlinking any survivor. The
+  existing utility is **reused, not re-implemented**, so the Windows
+  `os.replace()`/PermissionError retry that `state.json` and `decisions.json` already
+  depend on covers the Blackboard too.
+- `read()` retries `json.JSONDecodeError` / `UnicodeDecodeError` / `PermissionError` for a
+  bounded budget (10 attempts, 0.01s escalating backoff), mirroring
+  `dashboard._read_json_file()`'s idiom. It still **raises** on a persistently corrupt
+  topic and returns `default` only for a genuinely absent one — reporting an unreadable
+  topic as absent would present "no verification truth recorded" as a fact.
+- `snapshot()` is unchanged and therefore inherits both.
 
-**One audit claim was stale and is corrected here (Evidence Truth Rule).** The audit said
-`connectivity.py`'s gate evaluators have "zero real callers outside their own test file". That is
-no longer true: a concurrent 2026-09-04 workstream landed `dv_harness/connectivity_check.py`, a
-real standing runner wired to `just connectivity-check` / `connectivity-check-status` and to
-`.github/workflows/dv-harness-ci.yml`, which calls `connectivity.run_machine_gates()` for real.
-The audit's stated prerequisite for item 2 was therefore already satisfied, so that item was
-closed in this pass rather than deferred.
+## Fix B — the autonomous path now PRODUCES the three subsystem topics
 
-## 2. What changed
+The audit's Fix B suggested either an `expected_evidence` entry or a prompt instruction.
+I used neither: a prompt instruction is prose an LLM is trusted to enact each time, which
+CLAUDE.md's own Methodology Consolidation Rule rules out for an AI-architecture decision,
+and an `expected_evidence` item flags absence without ever producing anything. Instead the
+engine calls each subsystem's **real existing producer**, driven by the graph's own
+declarations.
 
-Three write edges plus the reader half of each. Every write goes through the **existing**
-`Blackboard.write()` on an **existing** real production entry point — no parallel mechanism, no
-new store, no new engine hook.
+- `dv_harness/engine.py`
+  - `SUBSYSTEM_TOPIC_REFRESHERS` — a module-level table (`topic -> real producer`), lazily
+    importing each subsystem so engine import stays cheap. A table rather than an if/elif
+    chain specifically so a test can hold it against the real `main_graph.json`.
+  - `DVHarness._refresh_declared_subsystem_topics(stage, node)` — iterates the node's own
+    `blackboard_read` (never a hardcoded stage list), calls the registered producer,
+    swallows any exception into a report, and records one `BLACKBOARD_TOPIC_REFRESH` event
+    per stage carrying every outcome — including each honest absence and its reason.
+  - Called from `run_stage()` **after** the DEGRADED and execution-preflight gates (a run
+    making no judgment must not spend a connectivity gate run) and **before**
+    `_emit_stage_start_display()` and `_gather_stage_context()`'s
+    `blackboard.snapshot(node.blackboard_read)`, so both the human-facing entry checklist
+    and the agent's prompt see the refreshed topics.
+- `dv_harness/env_manifest.py` — `default_manifest_path()` (resolved through
+  `context_budget`'s tier-2 always-resident declaration, the one place that owns that path,
+  the same source `mcp/claude_md_index.manifest_rel_path()` uses) and
+  `ensure_blackboard_topic()`, which **mirrors** an existing `env.manifest.json` via the
+  existing `sync_to_blackboard()`. It never generates one: generation needs RTL /
+  register-map / SoC-arch / testplan inputs the engine does not have, and inventing a
+  manifest is exactly the fabrication the manifest's honesty contract forbids. No manifest
+  → topic stays absent, `MANIFEST_NOT_GENERATED` + the real producing command is recorded.
+  A schema-invalid manifest reports `MANIFEST_INVALID` and is not mirrored.
+- `dv_harness/question_queue.py` — `QuestionQueueStore.ensure_blackboard_topic()`, which
+  mirrors `decisions.json` through the existing single `_sync_decisions_to_blackboard()`
+  choke point and writes no decision. Answering stays human-only ("由真人執行"); what this
+  closes is that an EMPTY decision set is itself citable truth, distinct from "no record".
+- `dv_harness/connectivity_check.py` — `ensure_blackboard_topic()`, which runs the **real**
+  `run_connectivity_check()` 3-gate recipe (a real gate run is this topic's only producer,
+  so no second value-shape writer was created) using the **existing** staleness trigger:
+  never run, RTL fingerprint moved, or topic absent. This is the missing "`just
+  connectivity-check`, not `--check-only`, on the real automated flow" step. Unchanged RTL
+  costs nothing; no `.dv-harness/connectivity_check.json` → `NOT_CONFIGURED`, which is what
+  this harness repo itself honestly is.
 
-| Topic | Written by (real entry point) | `source` |
-|---|---|---|
-| `env_manifest` | `dv-harness env-manifest generate` → `env_manifest.sync_to_blackboard()` | `env-manifest` |
-| `open_questions_decisions` | `QuestionQueueStore._save_decisions()` (every decision write + every revocation) | `question_queue` |
-| `connectivity_gates` | a real `just connectivity-check` gate run → `connectivity_check.sync_gates_to_blackboard()` | `connectivity-check` |
+Every refresh is best-effort — the same discipline the three sync functions already apply
+to their own writes — and can never fail a stage.
 
-**`dv_harness/env_manifest.py`** — added `BLACKBOARD_TOPIC`, `summarize_for_blackboard()`,
-`sync_to_blackboard()`. Deliberately a SUMMARY, not the manifest verbatim: the topic is serialized
-into every reading stage's prompt by `engine._build_plan_section`, and `dut_facts.rtl.files` holds
-the full per-module verible parse. Each layer's own `status`/`reason`/`source` survives verbatim
-(a NOT_AVAILABLE stays NOT_AVAILABLE with its real reason, never a bare empty list that reads like
-"captured, and there was nothing"); names and counts are added; parse trees are not.
+## Tests
 
-**`dv_harness/question_queue.py`** — added `BLACKBOARD_TOPIC`, an injectable `blackboard`
-constructor argument, and `_sync_decisions_to_blackboard()` called from `_save_decisions()`. That
-is the single choke point `_persist_decision()` and `revoke_decision()` both already pass through,
-so the topic cannot drift from `decisions.json` the way a second hand-called write could. Per-entry
-`source` is preserved so a Tier-2 auto-assumption stays distinguishable from a real human answer.
+`v50/dv_harness_tests/test_blackboard_automatic_path_and_concurrency.py` (19 tests, new).
 
-  *Design correction made mid-pass:* the audit's plan implied injecting a board at the call site.
-  Grep found **five** real production construction sites (`cli.py`, `connectivity.py` x2,
-  `coverage_analysis.py`, `uvm_generator/run_profile_to_justfile.py`), only one of which this pass
-  would have touched. A mirror the other four had to remember to switch on is the same
-  "built but never wired" gap being closed, so the mirror **defaults ON** — omitting the argument
-  resolves to a real `Blackboard` at the store's own project root, constructed lazily so merely
-  constructing a store creates no directories.
+Part A runs a `ThreadPoolExecutor` harness shaped like `_advance_with_fanout()`'s real
+usage, and is deliberately **three-way** so the positive results have detection power:
 
-**`dv_harness/connectivity_check.py`** — added `BLACKBOARD_TOPIC` and
-`sync_gates_to_blackboard()`, called from inside `run_connectivity_check()`'s `if write:` block.
-Each gate's `GateStatus` **value** is recorded (PASS / FAIL / NOT_AVAILABLE / PENDING /
-NOT_YET_RUN stay five distinct states, never collapsed to a bool — CLAUDE.md requires
-NOT_AVAILABLE and PENDING never be conflated with FAILED), together with the RTL fingerprint they
-ran against. `--check-only` runs no gate and deliberately does **not** refresh the topic, so stale
-verdicts can never look freshly produced.
+1. a control `_NonAtomicBlackboard` (the pre-fix truncate-then-write, window widened to a
+   deterministic 5ms) really does produce `JSONDecodeError`s under an unretried reader —
+   without this, "no torn reads" would be indistinguishable from a test that never looked;
+2. the real writer, under **identical** load, produces none;
+3. the real `read()`, against that same non-atomic writer, survives with zero errors.
 
-**`dv_harness/cli.py`** (hand-scoped edits; file was already `M` from concurrent work) — the
-`env-manifest generate` branch now calls `sync_to_blackboard`, and `question-queue` constructs its
-store with the real `h.blackboard`.
+Plus: no temp files left behind; a write that dies mid-serialization leaves the previous
+value intact; a permanently corrupt topic still raises rather than reading as absent;
+`snapshot()` inherits the same behavior.
 
-**`.dv-harness/graph/main_graph.json`** — the reader half. A topic nothing reads is half an edge.
-7 nodes gained a `blackboard_read` entry (diff is 7 changed lines, nothing else):
+Part B drives the **real** `DVHarness.run_stage()` against the **real** shipped
+`main_graph.json` — which is exactly what `test_blackboard_subsystem_wiring.py` cannot
+show, because every test there invokes the CLI/runner itself:
 
-- `env_manifest` → `ARCH_DISCOVERY`, `PROJECT_MODEL`, `IMPLEMENT`
-- `connectivity_gates` → `BUILD_DEBUG`, `VERIFY`, `SIGNOFF`
-- `open_questions_decisions` → `IMPLEMENT`, `FAILURE_RECOVERY`, `SIGNOFF`
+- IMPLEMENT produces `open_questions_decisions` with **no CLI invoked**;
+- ARCH_DISCOVERY mirrors an on-disk manifest into `env_manifest` with no CLI invoked;
+- VERIFY runs the real 3 gates and produces `connectivity_gates`, cross-checked against the
+  runner's own state file and report;
+- the refreshed topics are present in the `blackboard.snapshot(node.blackboard_read)` that
+  reaches the stage prompt;
+- INTAKE (declaring none of them) produces none and emits no event — scoping proven;
+- an unproducible topic stays absent with the real reason and command in the audit trail;
+- a broken producer does not stop the stage;
+- gates are not re-run on unchanged RTL, and are re-run with reason `RTL_CHANGED` on a real
+  content change;
+- graph-coverage guards: every subsystem topic the real graph reads has a registered
+  producer, and none of them is written by any node's PASS branch.
 
-**`CLAUDE.md`** — new "Blackboard Topics Written Outside the Graph (2026-09-04)" section
-documenting the three topics, their sources, their honesty contracts and their readers.
+## Documentation
 
-All three writes are best-effort: a blackboard failure must never turn an already-written manifest,
-an already-recorded decision, or an already-completed gate run into a failed command.
+`v50/CLAUDE.md`, "Blackboard Topics Written Outside the Graph (2026-09-04)" — two added
+paragraphs: the autonomous path now producing all three (with each producer's explicit
+limit), and `Blackboard.write()`'s atomicity plus `read()`'s retry, including why a
+persistently corrupt topic still raises.
 
-## 3. Tests
+## Failures seen during regression — NOT caused by this pass
 
-New: `dv_harness_tests/test_blackboard_subsystem_wiring.py` (20 tests). These deliberately do not
-re-test any subsystem's internals — those already had suites and were never the gap. Every test
-drives a REAL production entry point (`dv_harness.cli.main()` for the two CLI commands,
-`connectivity_check.main()` for the runner) and asserts a real `.dv-harness/blackboard/<topic>.json`
-exists on disk with a real `source`. The graph tests assert against the REAL shipped
-`.dv-harness/graph/main_graph.json` (a fixture graph would pass while the shipped one stayed
-unwired), and one test exercises `Blackboard.snapshot(node.blackboard_read)` — the exact call
-engine.py makes to put a topic into a stage's prompt.
+**Two schema failures (now fixed by their own workstream).**
+`test_blackboard_subsystem_wiring.py::test_env_manifest_topic_agrees_with_the_manifest_and_omits_parse_trees`
+and `test_env_manifest.py::test_full_manifest_dut_facts_rtl_layer_round_trips_and_is_schema_valid`
+failed with `env_manifest.schema.json validation failed: at dut_facts/rtl/files/0/modules/0:
+Additional properties are not allowed ('continuous_assigns', 'instances' were unexpected)`.
 
-Notable coverage beyond "the file appears": NOT_AVAILABLE reasons survive; the topic is
-cross-checked against the manifest/decisions.json the same run wrote (not against a hand-written
-expectation); verible parse trees are asserted ABSENT from the topic; re-generation refreshes
-rather than leaving a stale snapshot; a revoked decision disappears; a Tier-2 assumption stays
-distinguishable from a human answer; `--check-only` and `write=False` write nothing.
+Attribution checked mechanically, not assumed: `git show HEAD:dv_harness/verible_parser.py`
+contained **zero** occurrences of those keys while the working-tree copy contained them —
+an uncommitted concurrent AMBA-fabric-discovery change. That workstream has since committed
+a matching `dv_harness/schemas/env_manifest.schema.json` edit, and
+`test_blackboard_subsystem_wiring.py` is now green (39/39 with the new file). This pass
+touched neither the parser nor the schema, and its `env_manifest.py` change is purely
+additive (two new functions, no change to any generation path).
 
-**Negative check (the point of the pass).** With the three sync call sites temporarily disabled
-(`cli.py`'s `sync_to_blackboard`, `_save_decisions`'s `_sync_decisions_to_blackboard`,
-`run_connectivity_check`'s `sync_gates_to_blackboard`) and restored programmatically,
-**14 of the 20 tests fail**. The 6 that still pass are exactly the ones that should be independent
-of those lines: the 4 graph-declaration/pinning tests, the `write=False` test, and the
-"constructing a store creates no directories" test. So these tests measure the edge, not the
-isolated functions.
+**Three self-audit failures (transient).**
+`test_engine_gates_and_routing.py`'s `test_self_audit_against_real_repo_reports_real_current_findings`
+and its two `self_audit` CLI siblings failed during a 42-minute run — one `'FAIL' == 'PASS'`
+and two `subprocess.TimeoutExpired` after 30s. These drive `dv-harness self-audit` against
+the REAL repo, which at that moment had five concurrent workstreams' files mid-write, on
+this environment's known-slow subprocess shell. Re-run afterwards: **all 8 `self_audit`
+tests pass** (61s). Not a code failure.
 
-**Test summary — everything relevant passes.**
-- `dv_harness_tests/test_blackboard_subsystem_wiring.py`: 20 passed.
-- Every suite covering a touched module: `test_env_manifest`, `test_question_queue`,
-  `test_cli_question_queue`, `test_connectivity`, `test_connectivity_check`, `test_cli_blackboard`,
-  `test_evidence_layer_wiring`, `test_mcp_env_manifest_integration`, `test_bind_verification_lint`,
-  `test_bind_mechanism_generator`, `test_coverage_analysis`, `test_run_profile_to_justfile`, and
-  `test_source_authority` (a sixth `QuestionQueueStore` construction site landed from a concurrent
-  workstream mid-pass and is covered by the default-on mirror): 336 + 266 + 55 passed, 0 failed.
-- `dv_harness_tests/test_engine_gates_and_routing.py` in full — the suite that exercises the real
-  graph and the real-repo self-audit, i.e. the one most exposed to the `main_graph.json` edit:
-  238 passed, 1 flake (below).
-- Both CI steps that could see the graph change: `dv-harness self-audit` exit 0,
-  `python -m dv_harness.connectivity_check --check-only` exit 0 (NOT_CONFIGURED — this repo has no
-  RTL tree).
+## Concurrency discipline in this shared tree
 
-**Full-suite runs and the failures in them, all attributed, none from this change.** Two full
-`dv_harness_tests` runs (3348 tests) were driven to 73% and 60% before being stopped; a complete
-run takes ~100 min on this loaded machine. Every failure seen in either run was identified and
-attributed:
+`dv_harness/engine.py` and `CLAUDE.md` both carried another agent's in-flight uncommitted
+work at commit time (a stage-progress-display workstream in `engine.py`, a "Research Stage
+Boundaries" section in `CLAUDE.md`). Both were committed with hand-scoped `-U0` patches
+containing only this pass's hunks, applied through a temporary index so a concurrently
+staged AMBA workstream was not swept into this commit. The other agents' work was left
+exactly where it was, staged and unstaged.
 
-- `test_cli_pueue.py` (5-6) and `test_pueue_client.py::TestRealPueueIntegration` (6) — a
-  machine-level environment condition, not code. `dv-harness pueue add` returns
-  `{"error": "PUEUED_NOT_AVAILABLE"}` and probing directly gives `Failed to connect to the daemon
-  on 127.0.0.1:6924`. A `pueued.exe` IS running but wedged, with ~28 orphaned `pueue.exe` clients
-  piled up from today's concurrent usage. The suites' skip guard only checks that the `pueue`
-  BINARY exists, not that the daemon answers, so an unreachable daemon fails instead of skipping.
-  Worth fixing separately (restart `pueued`, reap the orphans, widen the skipif to probe the
-  daemon); nothing in this change touches pueue.
-- `test_engine_gates_and_routing.py::test_self_audit_against_real_repo_reports_real_current_findings`,
-  `test_cli_remote_control.py::test_bootstrap_lands_on_running_and_is_idempotent_safe`,
-  `test_git_hooks_e2e.py::...test_agent_push_to_master_is_blocked_by_git_itself` — all three are
-  real-subprocess tests that **pass cleanly when re-run without other pytest processes competing**
-  (verified individually). The first fails on `test_collection_health_gate` == FAIL, and that gate
-  shells out to `pytest --collect-only`; querying it directly right now returns
-  `{"status": "PASS"}`. These are load/contention flakes in a tree several workstreams are editing
-  concurrently, not regressions.
+## Not attempted, and why
 
-## 4. Deliberately NOT done in this pass
+Nothing here required a separate effort. Two things were deliberately NOT done:
 
-The audit's framing of the MCP server (`dv_harness/mcp/`) as "heavily used" is not supported by
-evidence — it has no `cli.py` command, no `.mcp.json`, no launcher, and no caller outside
-`dv_harness_tests/`. Giving it a blackboard edge would be wiring a dormant server to a live
-channel, which is the wrong order of operations. **Making the MCP server actually runnable is a
-separate effort** and is not a Blackboard problem: it needs a real entry point (launcher +
-`.mcp.json` registration + a `dv-harness mcp-serve` command) decided on its own merits first. Only
-after it has a real caller does a `get_topology`-sourced blackboard topic mean anything.
-
-## 5. Follow-up noted, not a defect
-
-A concurrent workstream is expanding `env_manifest.py` in the working tree right now (adding
-`vip_config.vip_release`, `vip_config.user_guide_refs`, `dut_facts.address_map`,
-`dut_facts.clock_reset`). `summarize_for_blackboard()` names the fields it mirrors explicitly, so
-those new layers simply do not appear in the `env_manifest` topic yet — a graceful degrade, not a
-break: the 20 wiring tests were re-run against that in-flight version and all pass. Whoever lands
-those layers should add them to the summary (and only the names/counts/status, per the
-prompt-size rule this function documents). Deliberately not done here, because extending a
-summary against an uncommitted moving target would conflict with their pass.
+- **No prompt-text instruction** telling an agent to run `dv-harness env-manifest generate`
+  or `just connectivity-check`. Prose an LLM is trusted to enact each time is the failure
+  class CLAUDE.md's Methodology Consolidation Rule names; the code path is the fix.
+- **No `expected_evidence` gate on the three topics.** They are honestly unproducible in
+  some real projects (no RTL tree, no manifest inputs, no human answer yet), so gating on
+  presence would block legitimate runs. The absence is instead surfaced twice — the
+  pre-existing stage-entry checklist renders a missing `blackboard_read` topic as an unmet
+  input, and the new `BLACKBOARD_TOPIC_REFRESH` event records why it could not be produced.
