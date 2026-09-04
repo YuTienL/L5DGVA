@@ -1,122 +1,72 @@
-# Gap-Close Pass — Phase 6 + Phase 10 (Inference Engine integration + Debug Flow mechanics)
+# Gap-close pass — Phase 6 + Phase 10 (Inference Engine integration + Debug Flow mechanics)
 
-**Result: NO_ACTION_NEEDED**
+**Verdict: NO_ACTION_NEEDED**
 
-Scope: the user's 25-phase structural spec, Phase 6 (Autonomous Inference Engine
-integration) and Phase 10 (Debug Flow mechanics). The incoming audit marked both
-**READY** with zero BLOCKED and zero PARTIAL sub-items. Per this pass's own rules,
-READY sub-items get re-confirmed, not rebuilt. Every cited claim below was
-re-verified independently in this pass against the current working tree — no file
-was modified, nothing was built, nothing was committed beyond this report.
+Scope: the 25-phase structural spec's Phase 6 (Autonomous Inference Engine ↔
+Memory Agent integration) and Phase 10 (Debug Flow mechanics). Audit-only
+re-verification; **no source file was modified** in this pass.
 
-`dv_harness/engine.py` carries uncommitted edits from concurrently-running
-workflows, so every engine claim was re-located by `grep` rather than trusted at
-its originally-cited line number. The re-located line numbers are recorded below;
-where they differ from the audit's, the audit's numbers were stale by a few lines,
-not wrong about the mechanism.
+Every sub-item in the incoming audit was marked READY. Per this workflow's own
+rule ("For every sub-item marked READY: do nothing. Re-confirm the cited
+evidence yourself"), the work here was independent re-confirmation of each
+cited call site and a re-run of the covering test suites. All cited evidence
+re-confirmed against the current working tree. No BLOCKED item and no
+small/boundable PARTIAL item was found, so nothing was built and nothing was
+committed to `dv_harness/`.
 
----
-
-## Phase 6 — Autonomous Inference Engine Integration — READY (re-confirmed)
-
-| Claim | Re-verified at | Status |
-|---|---|---|
-| `score_confidence()` implements the documented formula incl. HIGH-safety-floor cap | `dv_harness/inference.py:25-64` | confirmed |
-| `identify_gap()` is a pure ordered set difference | `dv_harness/inference.py:67-82` | confirmed |
-| `promote_if_high_confidence()` gates on `level=="HIGH"` and on `kc_client.add()`'s own `ok` | `dv_harness/inference.py:108-133` | confirmed |
-| `next_best_action()` cross-references the real `protocol_builder_registry.json` | `dv_harness/inference.py:136-178` | confirmed |
-| Before-debug memory search gated to FAILURE_RECOVERY/RE_AUDIT only | `dv_harness/engine.py:2502` | confirmed |
-| Signature built from real Blackboard `findings.last_report` + `route_info.protocol_decision` | `dv_harness/engine.py:2504-2514` | confirmed |
-| Results folded into the real stage prompt | `dv_harness/engine.py:2534` → `dv_harness/prompts.py:2940-2947` | confirmed |
-| Per-attempt Hypothesis→Evidence→Confidence→Gap→Next-Best-Action is real computation | `dv_harness/engine.py:1269-1370`, called at `:3416-3421` | confirmed |
-| Root-cause confidence scored off cited evidence, never self-reported | `dv_harness/engine.py:1372-1519`, called at `:3263` | confirmed |
-
-Two points worth recording because they are the exact failure classes the spec
-warns about, and both hold:
-
-1. **Not importable-but-uncalled.** `engine.py:14-16` imports
-   `build_failure_signature`/`search_related_memory_for_debug`,
-   `score_confidence`/`identify_gap`/`next_best_action`/`promote_if_high_confidence`,
-   and `promote_to_organizational`, and every one has a real call site in
-   `run_stage()`'s control flow (grep output above).
-2. **The "prior knowledge, not current answer" rule is in the wire, not a comment.**
-   `prompts.py:2941-2945` injects, verbatim, into the prompt actually sent to the
-   LLM: `依 CLAUDE.md Evidence Truth Rule，current evidence 永遠優先於這裡任何一筆記錄；
-   不得直接假設 previous root cause == current root cause，目前 RTL/VIP/log/waveform
-   證據仍須獨立重新驗證`.
+Note on line numbers: `dv_harness/engine.py` is concurrently modified by other
+workflows in this repo (`git status` shows it dirty), so several engine.py line
+numbers below differ from the incoming audit's. The *symbols and wiring* are
+identical; only offsets moved. Line numbers below are the ones true right now.
 
 ---
 
-## Phase 10 — Debug Flow Mechanics — READY (re-confirmed)
+## Phase 6 — Inference Engine ↔ Memory Agent: **READY (re-confirmed)**
 
-**Before Debug (all six):**
+| Claim | Re-verified evidence (current tree) |
+|---|---|
+| Loop primitives are real, pure functions | `dv_harness/inference.py:58` `score_confidence()`, `:100` `identify_gap()`, `:141` `promote_if_high_confidence()`, `:208` `next_best_action()` — 277 lines, no stubs |
+| Real production call sites, not orphaned module | `dv_harness/engine.py:16` imports all four; `engine.py:1434` `_react_step_inference()`, `engine.py:1537` `_score_root_cause_confidence()`; invoked from the real `run_stage()` path at `engine.py:3682` and `engine.py:3526` |
+| Derived from real evidence sets, never a status-string map | `engine.py:1505` `gap = identify_gap(required, supplied)` where `required` comes from `effective_stage_gates(stage, self.root)` (`engine.py:1500`) and `supplied` is the gate-ids whose evidence block is actually non-None (`engine.py:1504`); `score_confidence()` at `engine.py:1509` is fed `len(supplied)`, real failing-signature count, and the RCA fan-out consensus count |
+| Memory search feeds hypothesis formation *before* the adapter call | `engine.py:2741` `build_failure_signature(...)` → `engine.py:2745` `search_related_memory_for_debug(...)` → `engine.py:2747` `vault_related_cases` → threaded into `build_stage_prompt()` at `engine.py:2764` (`vault_related_cases=...`) |
+| "Never assume previous root cause == current root cause" is enforced, not just disclaimed | Literal disclaimer injected into the real prompt at `dv_harness/prompts.py:2960-2966` (`「不得直接假設 previous root cause == current root cause，目前 RTL/VIP/log/waveform 證據仍須獨立重新驗證」`); backed by hard gates listed only under `STAGE_GATES["RE_AUDIT"]` — `gates.py:299` `root_cause_evidence_gate`, `gates.py:311` `fix_effectiveness_gate`, `gates.py:312` `fix_regression_non_regression_gate` |
+| Confidence gates promotion (loop closes) | `engine.py:1640` `promotion = promote_if_high_confidence(kc_client, "root_cause", protocol, finding, confidence_result)` inside `_score_root_cause_confidence` |
 
-1. Capture failure signature — `memory_vault.py:1186` `build_failure_signature()`, called `engine.py:2511-2514`.
-2. Search related memory — `memory_vault.py:1338` `search_related_memory_for_debug()`, called `engine.py:2515-2516`; merges Vault Markdown notes with the Evidence-Layer DuckDB `failure_signatures` table (`search_evidence_db_failure_signatures()`, `memory_vault.py:1232`).
-3. Rank related cases — see the dedicated check below.
-4. Present prior evidence — `engine.py:2534` → `prompts.py:2940-2947`, disclaimed.
-5. Generate hypotheses — agent's `root_cause_evidence_gate.hypotheses`, independently re-scored.
-6. Validate against current environment — `_score_root_cause_confidence()` (`engine.py:1372-1519`) recomputes `independent_sources_count` / `evidence_refs_verified` / `counter_evidence_count` from the same evidence block's real citations (`:1395-1412` documents and implements exactly this), never `block.get("confidence")`.
+Single converged mechanism — no duplicate second inference engine found.
 
-**During Debug:** per-attempt inference loop, `engine.py:1269-1370` / `:3416-3421`.
+## Phase 10 — Debug Flow mechanics: **READY (re-confirmed)**
 
-**After Debug — both branches real and mutually exclusive by gate id:**
+| Requirement | Re-verified evidence (current tree) |
+|---|---|
+| (1) capture failure signature | `memory_vault.build_failure_signature()` at `memory_vault.py:1297`; called `engine.py:2741` and `lsf_client.py:1201` |
+| (2) search related memory | `memory_vault.search_related_memory_for_debug()` at `memory_vault.py:1449`; called `engine.py:2745` and `lsf_client.py:1214` |
+| (3) rank related cases | Merged vault + evidence-db results sorted on one common scale — `memory_vault.py:1444` and `memory_vault.py:1523` (`key=lambda c: -float(c.get("score") or 0.0)`) |
+| (4) present prior evidence | `prompts.py:2826` `build_stage_prompt(..., vault_related_cases=...)`, rendered at `prompts.py:2960-2966` with explicit prior-evidence-only framing |
+| (5) generate hypotheses | Delegated to the LLM agent (consistent with "Claude CLI is the primary reasoning engine"), fed by (1)–(4) |
+| (6) validate against current environment | Structurally enforced by the RE_AUDIT-exclusive gates above, independent of any LLM honesty |
+| During debug: maintain H/E/C/G/N | `_react_step_inference` (`engine.py:1434-1534`) returns `gap`/`confidence`/`confidence_detail`/`next_action`/`next_best_action`, persisted as a Working Memory `react_reasoning_step` record every stage attempt |
+| After FAIL: Job Memory only, no promotion | `_record_debug_attempt_job_memory` (`engine.py:2105`) writes `kind="job_failure"` exclusively (`engine.py:2128`); its only call site is guarded at `engine.py:3659-3661` — `stage in (FAILURE_RECOVERY, RE_AUDIT) and status in (FAIL, PARTIAL)` |
+| After PASS: full record + promotion evaluation | `_promote_verified_fix_knowledge` (`engine.py:1918`), called only on the PASS path at `engine.py:3530`; writes `kind="verified_fix"` (`engine.py:2007`) carrying symptom / root_cause / fix / verification / `confidence` / `git_sha` / `rtl_sha` / `tb_sha` / `test` / `result` (`engine.py:2007-2060`), then unconditionally *triggers* (does not guarantee) `promote_to_organizational()` at `engine.py:2093`, emitting `ORGANIZATIONAL_PROMOTION_EVALUATED` |
 
-- FAIL/PARTIAL → Job Memory only. `engine.py:3393-3395` gates on
-  `stage in (FAILURE_RECOVERY, RE_AUDIT) and ss["status"] in (FAIL, PARTIAL)`
-  and calls `_record_debug_attempt_job_memory()` (`:1934-1975`), which stores
-  `kind="job_failure"` — the docstring at `:1944-1948` states outright that it
-  never uses `kind="root_cause"/"verified_fix"/"debug_lesson"` because those
-  route to ENGINEERING_MEMORY and would trigger promotion on an unverified
-  attempt. WAIT_USER / NEEDS_USER_INPUT deliberately excluded.
-- RE_AUDIT PASS → record + trigger promotion evaluation. `engine.py:3263` then
-  `:3267` (`_score_root_cause_confidence` → `_promote_verified_fix_knowledge`),
-  reaching the real 3-gate `promote_to_organizational()`
-  (`memory_router.py:445`; gate 2 calls the same `inference.score_confidence` at
-  `:501/:516`, gate 3 checks `ORGANIZATIONAL_MIN_CONFIRMATIONS = 2` at `:15/:521`,
-  returning `INSUFFICIENT_CONFIRMATION` at `:523`). "Triggers, not always
-  succeeds" is honest: a first PASS legitimately returns
-  `INSUFFICIENT_CONFIRMATION`, which is the spec's intent, not a defect.
-
-**Extra check performed this pass (the audit's softest claim — item 3, "ranked on
-one common scale"):** verified rather than accepted. The two sources genuinely
-share a scale:
-
-- Evidence-DB side, `memory_vault.py:1313-1318`: `score = 3.0 if protocol else 0.0`, then `+= len(q_tokens & _tokenize(haystack))`.
-- Vault-adapter side, `memory_vault.py:764-772`: `score += 3.0 * <matching property_filters>` (protocol is passed as a property filter), then `+= len(q_tokens & _tokenize(haystack)) * 1.0` — via the *same* `_tokenize` imported from `memory.py`.
-
-Same 3.0 protocol weight, same 1.0-per-shared-token weight, same tokenizer — so
-the single merged `sorted(..., key=lambda c: -float(c.get("score") or 0.0))` at
-`memory_vault.py:1411-1412` is a real ranking, not two incomparable lists
-concatenated.
-
-**Shared interface, other side:** `lsf_client.py:926`
-`_write_job_tier_memory_on_terminal_reconcile()` calls the same
-`build_failure_signature()` / `search_related_memory_for_debug()` at `:1200-1214`,
-invoked from reconcile at `:1245` — one debug-flow mechanism, two callers, not a
-duplicate implementation.
-
----
-
-## Test evidence (live run this pass)
+## Test evidence (run this session, not cited from memory)
 
 ```
-python -m pytest dv_harness_tests/test_debug_flow_memory.py \
-                 dv_harness_tests/test_inference_engine_wiring.py -q
-30 passed in 178.06s (0:02:58)
+python -m pytest dv_harness_tests/test_debug_flow_memory.py -q          -> 18 passed in 21.57s
+python -m pytest dv_harness_tests/test_inference.py \
+                dv_harness_tests/test_inference_engine_wiring.py \
+                dv_harness_tests/test_react_inference_wiring.py \
+                dv_harness_tests/test_react_working_memory_bridge.py -q -> 54 passed in 294.74s
 ```
 
-18 debug-flow + 12 inference-wiring tests. The end-to-end ones drive real
-`DVHarness(tmp).run_stage(...)` rather than isolated unit calls — notably
-`test_failure_recovery_partial_attempt_writes_job_memory_only_never_engineering_memory`,
-`test_re_audit_pass_writes_no_job_memory_record_only_engineering`,
-`test_re_audit_pass_triggers_the_real_organizational_promotion_evaluation`, and
-`test_terminal_reconcile_memory_search_failure_never_blocks_the_job_memory_write`.
-
----
+72 passed, 0 failed across the four suites covering this scope. These exercise
+the real `DVHarness.run_stage()` path (including the `lsf_client.py`
+regression-side caller), not a mock of `engine.py`.
 
 ## Changes made
 
-None. No BLOCKED item to close and no boundable PARTIAL item to complete within
-this scope. No source file was modified; no stale comment or dead code was found
-in the code paths inspected. This report is the only artifact produced.
+None. No source file, test file, doc, or config was modified. No commit to
+`dv_harness/` was made — there was no real, closeable gap in this scope to
+close, and per the project's Engineering Discipline Rules a rebuild that only
+renames an already-equivalent design would be a downgrade, not a fix.
+
+The only file written by this pass is this report.
