@@ -881,6 +881,54 @@ an already-recorded decision, or an already-completed gate run into a failed com
 (both halves — the write, and a real node declaring the `blackboard_read`) are proven end-to-end
 against the real shipped graph by `dv_harness_tests/test_blackboard_subsystem_wiring.py`.
 
+**The autonomous path now PRODUCES all three, not only reads them (2026-09-04, same-day gap
+close).** The three writers above are reached only from a human-invoked CLI/runner, and a re-audit
+found `engine.py` carried zero references to `env_manifest`/`question_queue`/`connectivity_check`,
+no node prompt anywhere instructed an agent to run `dv-harness env-manifest generate` or
+`just connectivity-check`, and CI ran only `connectivity-check --check-only`, which by its own
+contract refreshes nothing. Seven real nodes (ARCH_DISCOVERY, PROJECT_MODEL, IMPLEMENT,
+BUILD_DEBUG, VERIFY, FAILURE_RECOVERY, SIGNOFF) declare one of the three in `blackboard_read`, so a
+fully autonomous `loop()` from INTAKE to SIGNOFF could finish with all three permanently absent.
+`run_stage()` now calls `_refresh_declared_subsystem_topics()` before the stage-entry display and
+before `_gather_stage_context()`'s `blackboard.snapshot()`, driven by the node's OWN
+`blackboard_read` (never a hardcoded stage list — `engine.SUBSYSTEM_TOPIC_REFRESHERS` is a table
+precisely so a test can hold it against the real graph). Each entry calls that subsystem's REAL
+producer and nothing else:
+- `env_manifest.ensure_blackboard_topic()` MIRRORS an `env.manifest.json` already on disk. It never
+  generates one — generation needs RTL/register-map/SoC-arch/testplan inputs the engine does not
+  have, and inventing a manifest is exactly the fabrication the manifest's honesty contract
+  forbids. No manifest → the topic stays absent and `MANIFEST_NOT_GENERATED` plus the real
+  producing command is recorded.
+- `QuestionQueueStore.ensure_blackboard_topic()` mirrors `decisions.json` through the same single
+  `_sync_decisions_to_blackboard()` choke point and writes no decision. Answering stays human-only
+  ("由真人執行"); an EMPTY decision set is itself citable truth, distinct from "no record".
+- `connectivity_check.ensure_blackboard_topic()` runs the REAL 3-gate recipe (a real gate run is
+  this topic's only producer) using the EXISTING staleness trigger — never run, RTL fingerprint
+  moved, or topic absent. This is the missing "`just connectivity-check`, not `--check-only`, on
+  the real automated flow" step. Unchanged RTL costs nothing; a project with no
+  `.dv-harness/connectivity_check.json` reports NOT_CONFIGURED, as this harness repo itself does.
+Every refresh is best-effort (it can never fail a stage) and every outcome — including each honest
+absence and its reason — is one `BLACKBOARD_TOPIC_REFRESH` event in `.dv-harness/events.jsonl`, so
+"was this topic produced on this run, and if not why" is answerable from the audit trail rather
+than inferred from the topic's silence.
+
+**`Blackboard.write()` is atomic since 2026-09-04.** It was a plain truncate-then-write
+`p.write_text(...)` while `blackboard.py` imported `tempfile` and never used it — and the
+concurrency is real: `engine._advance_with_fanout()` runs parallel_group branches through a genuine
+`ThreadPoolExecutor` in one process, and `dashboard.py` polls topic files off disk from an HTTP
+thread. The fan-out `AgentTaskStore.acquire()` claim only stops two branches claiming the same
+WRITE topic; it never made the file operation safe, and none of `engine.py`'s ~17
+`self.blackboard.read/write()` call sites is wrapped in a try/except, so a torn read would have
+propagated out of `run_stage()`. `write()` now goes through `tempfile.mkstemp()` +
+`storage._atomic_replace()` (reused, not re-implemented, so the Windows `os.replace()` retry covers
+it too) and `read()` retries a transiently unparseable/locked topic — while still RAISING on a
+persistently corrupt one, because reporting an unreadable topic as absent would present "no
+verification truth recorded" as a fact. Both halves, and all three producers on the real
+`run_stage()` path, are proven by
+`dv_harness_tests/test_blackboard_automatic_path_and_concurrency.py` — whose concurrency tests
+include a deliberately non-atomic control writer, so "no torn reads" is a result with detection
+power behind it rather than a test that never looked hard enough.
+
 **A fourth topic joined them on 2026-09-04, from the opposite direction**: `qualified_conclusion`
 was already being WRITTEN on the real path — `engine._score_root_cause_confidence()` composes
 RE_AUDIT's hard-gate verdict and `inference.score_confidence()`'s independently recomputed

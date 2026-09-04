@@ -1,13 +1,75 @@
 from __future__ import annotations
-import json,os,tempfile
+import json,os,tempfile,time
 from pathlib import Path
+
+# Read/write retry budget (2026-09-04). Same shape and reasoning as
+# storage._atomic_replace()'s own loop -- see read() below for why a reader
+# needs one too.
+_READ_ATTEMPTS=10
+_READ_BACKOFF_SEC=0.01
+
 class Blackboard:
  def __init__(self,root):self.root=Path(root)/'.dv-harness'/'blackboard';self.root.mkdir(parents=True,exist_ok=True)
  def _path(self,t):return self.root/(t.strip('/').replace('/','__')+'.json')
  def read(self,t,default=None):
-  p=self._path(t);return json.loads(p.read_text(encoding='utf-8')) if p.exists() else default
+  """Read one topic, retrying a read that lost a race with a concurrent write.
+
+  Concurrency here is REAL, not hypothetical: engine._advance_with_fanout()
+  runs parallel_group branches through a genuine ThreadPoolExecutor inside
+  ONE process, and every branch's run_stage() reads/writes topics from its
+  own thread; dashboard.py additionally polls topic files straight off disk
+  (_read_json_file) from an HTTP handler thread while a background run
+  writes them. The engine's fan-out ownership claim
+  (AgentTaskStore.acquire()) only stops two BRANCHES claiming the same
+  WRITE topic -- it says nothing about a reader of an unrelated topic, and
+  nothing about the file operation itself.
+
+  Two distinct failures are retried, matching what write() below can and
+  cannot rule out:
+    - PermissionError -- Windows-only: a reader's CreateFile can lose the
+      race with the writer's os.replace() (storage._atomic_replace()'s
+      docstring describes the same window from the writer's side, and
+      dashboard._read_json_file() already retries it from a reader's).
+    - json.JSONDecodeError / UnicodeDecodeError -- a genuinely torn read.
+      write() is atomic now, so this cannot come from THIS class any more;
+      it can still come from a topic file written by an older harness
+      version, hand-edited, or produced by an external tool mid-write.
+  A file that stays unparseable across the whole budget raises, exactly as
+  before -- silently returning `default` for a corrupt topic would present
+  "no verification truth recorded" as if it were a fact, which is the one
+  outcome the Blackboard must never fabricate."""
+  p=self._path(t);last=None
+  for attempt in range(_READ_ATTEMPTS):
+   if not p.exists():return default
+   try:return json.loads(p.read_text(encoding='utf-8'))
+   except FileNotFoundError:return default
+   except (json.JSONDecodeError,UnicodeDecodeError,PermissionError) as e:
+    last=e;time.sleep(_READ_BACKOFF_SEC*(attempt+1))
+  raise last
  def write(self,t,value,source='',confidence='HIGH'):
-  payload={'topic':t,'value':value,'source':source,'confidence':confidence};p=self._path(t);p.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8');return payload
+  """Write one topic ATOMICALLY: temp file in the same directory, then
+  storage._atomic_replace() (2026-09-04).
+
+  This used to be a plain p.write_text(), i.e. truncate-then-write, so any
+  concurrent reader (see read()'s docstring for the three real concurrent
+  readers) could observe a half-written topic file and get a
+  JSONDecodeError -- and none of engine.py's ~17 self.blackboard.read/write
+  call sites wraps the call in a try/except, so that exception would
+  propagate straight out of run_stage() and fail an otherwise-good stage.
+  tempfile was already imported by this module for a temp-file write that
+  was never actually implemented; this is that write. _atomic_replace() is
+  reused (not re-implemented) so the Windows os.replace()/PermissionError
+  retry storage.py and question_queue.py already depend on covers this
+  writer too."""
+  from .storage import _atomic_replace
+  payload={'topic':t,'value':value,'source':source,'confidence':confidence};p=self._path(t)
+  fd,tmp=tempfile.mkstemp(prefix=p.stem+'.',suffix='.json',dir=str(self.root))
+  try:
+   with os.fdopen(fd,'w',encoding='utf-8') as f:json.dump(payload,f,ensure_ascii=False,indent=2)
+   _atomic_replace(tmp,p)
+  finally:
+   if os.path.exists(tmp):os.unlink(tmp)
+  return payload
  def snapshot(self,topics):return {t:self.read(t) for t in topics}
 
  # --- Findings registry (2026-08-29 reconciliation): the "findings" topic's

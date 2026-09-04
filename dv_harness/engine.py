@@ -574,6 +574,48 @@ class DVHarness:
         # registry on every load -- see _sync_findings_state()'s own
         # docstring; keeps a state.json saved before this fix (or edited by
         # hand) from staying stuck disagreeing with the real registry.
+# ---------------------------------------------------------------------------
+# Subsystem-written Blackboard topics (2026-09-04)
+#
+# The three topics NOT written by any graph node's own PASS branch (i.e. not
+# by _write_blackboard_from_evidence()), mapped to the REAL producer that can
+# refresh each one on the automatic path. DVHarness.
+# _refresh_declared_subsystem_topics() documents the gap this closes; each
+# `ensure_blackboard_topic()` documents what its own refresher will and will
+# not do. All three are best-effort, return a report dict rather than
+# raising, and none fabricates a topic it has no real source for.
+#
+# A table rather than an if/elif chain so the coverage claim is CHECKABLE: a
+# test compares it against every one of these topics the REAL
+# main_graph.json declares in some node's `blackboard_read`, so a topic added
+# to the graph with no producer here fails that test instead of silently
+# staying absent -- which is the exact failure mode this mechanism exists to
+# close. Each thunk imports lazily: engine.py must not pull env_manifest's
+# verible/jsonschema stack or connectivity_check's gate machinery in at
+# import time just to own this table.
+
+def _refresh_env_manifest_topic(root, blackboard) -> Dict[str, Any]:
+    from . import env_manifest as _env_manifest
+    return _env_manifest.ensure_blackboard_topic(root, blackboard=blackboard)
+
+
+def _refresh_open_questions_decisions_topic(root, blackboard) -> Dict[str, Any]:
+    from .question_queue import QuestionQueueStore
+    return QuestionQueueStore(root, blackboard=blackboard).ensure_blackboard_topic()
+
+
+def _refresh_connectivity_gates_topic(root, blackboard) -> Dict[str, Any]:
+    from . import connectivity_check as _connectivity_check
+    return _connectivity_check.ensure_blackboard_topic(root, blackboard=blackboard)
+
+
+SUBSYSTEM_TOPIC_REFRESHERS: Dict[str, Any] = {
+    "env_manifest": _refresh_env_manifest_topic,
+    "open_questions_decisions": _refresh_open_questions_decisions_topic,
+    "connectivity_gates": _refresh_connectivity_gates_topic,
+}
+
+
         self._sync_findings_state()
 
     def _adapter(self):
@@ -2461,6 +2503,65 @@ class DVHarness:
         deliberate exception, noted below.
 
         Everything here is read-only EXCEPT two calls, and those two are
+    def _refresh_declared_subsystem_topics(self, stage: str, node) -> List[Dict[str, Any]]:
+        """Refresh the three SUBSYSTEM-written Blackboard topics this stage
+        declares in `blackboard_read`, before the stage's prompt snapshots
+        them (2026-09-04).
+
+        The gap this closes, from a 2026-09-04 audit: `env_manifest`,
+        `open_questions_decisions` and `connectivity_gates` are the only
+        topics in this harness NOT written by a graph node's own PASS branch
+        (`_write_blackboard_from_evidence()` below). They are written by real
+        CLI/runner entry points -- `dv-harness env-manifest generate`,
+        `QuestionQueueStore._save_decisions()`, `just connectivity-check` --
+        and this file referenced NONE of those modules, no node prompt
+        instructed an agent to run either command, and CI ran only
+        `connectivity-check --check-only`, which by contract refreshes
+        nothing. Seven real graph nodes (ARCH_DISCOVERY, PROJECT_MODEL,
+        IMPLEMENT, BUILD_DEBUG, VERIFY, FAILURE_RECOVERY, SIGNOFF) declare
+        one or more of them in `blackboard_read`, so a fully autonomous
+        `loop()` from INTAKE to SIGNOFF could run start to finish with all
+        three permanently absent and nothing on the automatic path producing
+        them.
+
+        Driven by the node's OWN `blackboard_read` declaration, never by a
+        hardcoded stage list: adding the topic to another node in
+        main_graph.json is all it takes to have it refreshed there too, and
+        a node that does not read a topic never pays for producing it.
+
+        Each refresher is the REAL producer for its topic (see each
+        `ensure_blackboard_topic`), returns a report dict instead of raising,
+        and is additionally wrapped here -- same best-effort discipline the
+        three sync functions already apply to their own writes. A refresh
+        that cannot produce a topic (no manifest generated, no
+        connectivity_check.json) leaves it honestly absent; the stage-entry
+        checklist already renders a missing `blackboard_read` topic as a
+        real unmet input (stage_progress_display.build_stage_entry_checklist),
+        so the absence stays visible rather than being papered over.
+
+        Returns one report per attempted topic, recorded as a
+        BLACKBOARD_TOPIC_REFRESH event so an audit can answer "was this
+        topic ever produced on this run, and if not why" from the real event
+        trail instead of from the topic's mere absence."""
+        declared = list(getattr(node, "blackboard_read", None) or []) if node is not None else []
+        if not declared:
+            return []
+        reports: List[Dict[str, Any]] = []
+        for topic in declared:
+            refresher = SUBSYSTEM_TOPIC_REFRESHERS.get(topic)
+            if refresher is None:
+                continue
+            try:
+                reports.append(refresher(self.root, self.blackboard))
+            except Exception as exc:  # a refresh must never fail a real stage
+                reports.append({"topic": topic, "action": "REFRESHER_RAISED",
+                                "error": f"{type(exc).__name__}: {exc}"})
+        if reports:
+            self.store.event({"ts": now(), "stage": stage,
+                               "event": "BLACKBOARD_TOPIC_REFRESH",
+                               "topics": reports})
+        return reports
+
         exactly what `dry_run=True` suppresses:
           - self.plans.create()  -- writes .dv-harness/plans/PLAN-XXXXXXXX.json
           - self.agents.delegate() -- writes an AgentTaskStore task AND
@@ -3144,6 +3245,19 @@ class DVHarness:
         if task is not None:
             self.agents.store.start_task(task["task_id"])
         _t0 = time.perf_counter()
+
+        # Subsystem-written Blackboard topics (env_manifest /
+        # open_questions_decisions / connectivity_gates) this node declares
+        # in `blackboard_read`, produced by their REAL entry points before
+        # anything reads them -- see _refresh_declared_subsystem_topics()
+        # for why nothing on the autonomous path produced them before.
+        # Placed here, after the DEGRADED/preflight gates (a run making no
+        # judgment must not spend a connectivity gate run) and BEFORE the
+        # stage-entry display and _gather_stage_context()'s
+        # blackboard.snapshot(), so both the human-facing entry checklist
+        # and the agent's own prompt see the refreshed topics.
+        self._refresh_declared_subsystem_topics(
+            stage, self.graph.nodes.get(stage) if self.graph else None)
 
         # ---- 2. Multi-Agent dispatch: the resolved agent is threaded all
         #         the way into the adapter call, not just appended as a

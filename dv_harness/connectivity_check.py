@@ -422,6 +422,76 @@ def sync_gates_to_blackboard(project_root, fingerprint: dict, staleness: dict,
         return None
 
 
+def ensure_blackboard_topic(project_root, *, blackboard=None, config_path=None,
+                             state_path=None, report_path=None,
+                             which_fn: Optional[Callable[[str], Optional[str]]] = None,
+                             run_fn: Optional[Callable[..., Any]] = None) -> dict:
+    """Make the `connectivity_gates` topic PRESENT and CURRENT on the
+    automatic engine path, by running the real 3-gate recipe when it is
+    absent or stale (2026-09-04).
+
+    Why this exists: `sync_gates_to_blackboard()` above is real and fires,
+    but only from a full `just connectivity-check` run, which nothing on the
+    autonomous path ever performs -- a 2026-09-04 audit confirmed
+    `engine.py` has zero references to this module, no graph node prompt
+    instructs an agent to run the recipe, and CI runs only `--check-only`,
+    which by its own contract runs no gate and deliberately does NOT refresh
+    the topic. So a fully autonomous `engine.loop()` could reach SIGNOFF with
+    BUILD_DEBUG / VERIFY / SIGNOFF all declaring `connectivity_gates` in
+    `blackboard_read` and the topic permanently absent. The engine now calls
+    this before every stage that declares it. This is the missing
+    "`just connectivity-check` (not `--check-only`) on the real automated
+    flow" step, driven by the graph's own declarations rather than a
+    hardcoded stage list.
+
+    The trigger is the EXISTING standing one, not a second policy:
+    `evaluate_staleness()` against the RTL content fingerprint. Gates are
+    re-run when they have never run, when the RTL moved since they last ran,
+    or when the topic is absent (a real gate run is the ONLY producer of
+    this topic -- reconstructing a value from the recorded state file would
+    be a second writer of the same shape, free to drift from the first).
+    Otherwise nothing runs: an unchanged RTL tree does not pay for a gate
+    run on every stage.
+
+    Never raises. A project with no `.dv-harness/connectivity_check.json`
+    reports NOT_CONFIGURED and leaves the topic absent -- which is the
+    honest answer for a project that has declared no RTL to check, and is
+    exactly what this harness repo itself is."""
+    root = Path(project_root)
+    if blackboard is None:
+        from dv_harness.blackboard import Blackboard
+        blackboard = Blackboard(root)
+    try:
+        cfg_path = Path(config_path) if config_path else root / DEFAULT_CONFIG_RELPATH
+        if not cfg_path.is_file():
+            return {"topic": BLACKBOARD_TOPIC, "action": "NOT_CONFIGURED",
+                    "expected_config": str(cfg_path)}
+        cfg = load_config(cfg_path)
+        st_path = Path(state_path) if state_path else root / DEFAULT_STATE_RELPATH
+        fp = compute_rtl_fingerprint(root, cfg.rtl_sources)
+        staleness = evaluate_staleness(load_state(st_path), fp["fingerprint"])
+        topic_present = blackboard.read(BLACKBOARD_TOPIC) is not None
+        if topic_present and not staleness["stale"]:
+            return {"topic": BLACKBOARD_TOPIC, "action": "UP_TO_DATE",
+                    "staleness": staleness}
+        result = run_connectivity_check(
+            root, cfg, state_path=st_path, report_path=report_path,
+            which_fn=which_fn, run_fn=run_fn, write=True,
+        )
+        return {"topic": BLACKBOARD_TOPIC, "action": "GATES_RUN",
+                # The staleness verdict when it is what triggered the run
+                # (NEVER_RUN / RTL_CHANGED / STATE_MISSING_FINGERPRINT), and
+                # TOPIC_ABSENT only for the remaining case: recorded gates
+                # that still describe the current RTL, but no topic carrying
+                # them (a run predating this topic, or a wiped blackboard).
+                "reason": (staleness["reason"] if staleness["stale"] else "TOPIC_ABSENT"),
+                "staleness": result.staleness,
+                "gate_exit_code": result.exit_code}
+    except Exception as exc:
+        return {"topic": BLACKBOARD_TOPIC, "action": "GATE_RUN_FAILED",
+                "error": f"{type(exc).__name__}: {exc}"}
+
+
 def render_connectivity_check_report(fingerprint: dict, staleness: dict,
                                      report: Optional[GateReport]) -> str:
     """Emits `render_bind_verification_status_markdown()` verbatim as its

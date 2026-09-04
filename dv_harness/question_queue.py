@@ -662,6 +662,42 @@ class QuestionQueueStore:
             print(f"[question-queue] blackboard decisions sync failed: {e}", flush=True)
             return None
 
+    def ensure_blackboard_topic(self) -> dict:
+        """Make the `open_questions_decisions` topic PRESENT on the automatic
+        engine path, mirroring the decisions store already on disk
+        (2026-09-04).
+
+        `_save_decisions()` above refreshes the topic on every real write, so
+        a store that has been written since that mechanism landed already has
+        it. What this closes is the OTHER case, confirmed by a 2026-09-04
+        audit: `engine.py` has zero references to this module, and answering
+        a question is deliberately a human action ("由真人執行", prompts.py),
+        so a fully autonomous `engine.loop()` reaching IMPLEMENT /
+        FAILURE_RECOVERY / SIGNOFF -- all three declare this topic in
+        `blackboard_read` -- against a store written before the sync existed,
+        or never written at all, would read nothing at all where an EMPTY
+        decision set is itself real, citable current truth ("no question has
+        been answered yet"), quite different from "no record".
+
+        Reuses `_sync_decisions_to_blackboard()`, the single sync point, and
+        writes nothing to decisions.json -- this is a mirror of what is
+        already there, never a decision. Only fills an ABSENT topic, for the
+        same reason `env_manifest.ensure_blackboard_topic()` does: the real
+        writer already keeps a present one current."""
+        try:
+            from .blackboard import Blackboard
+            blackboard = self.blackboard or Blackboard(self.root)
+            if blackboard.read(BLACKBOARD_TOPIC) is not None:
+                return {"topic": BLACKBOARD_TOPIC, "action": "ALREADY_PRESENT"}
+            self._sync_decisions_to_blackboard(self._load_decisions())
+            present = blackboard.read(BLACKBOARD_TOPIC) is not None
+            return {"topic": BLACKBOARD_TOPIC,
+                    "action": "MIRRORED_FROM_STORE" if present else "SYNC_FAILED",
+                    "decisions_path": str(self.decisions_path)}
+        except Exception as exc:
+            return {"topic": BLACKBOARD_TOPIC, "action": "SYNC_FAILED",
+                    "error": f"{type(exc).__name__}: {exc}"}
+
     def _render_decisions_md(self, data: dict) -> None:
         """Regenerated in full from decisions.json on every write (same
         "generated, diffable" discipline as env.manifest.json itself) --

@@ -1419,3 +1419,76 @@ def sync_to_blackboard(blackboard, manifest: dict, *, manifest_path=None,
         summarize_for_blackboard(manifest, manifest_path=manifest_path),
         source=source,
     )
+
+
+def default_manifest_path(project_root) -> Optional[Path]:
+    """The project's real env.manifest.json path if one exists on disk, else
+    None.
+
+    Resolved through `context_budget`'s tier-2 always-resident declaration
+    (path + alt_paths) rather than a second hardcoded literal -- that policy
+    entry is the one place in this repo that owns the path, and
+    `mcp/claude_md_index.manifest_rel_path()` already reads it from there
+    for the same reason. This module's own CLI takes `--out` and owns no
+    default."""
+    from . import context_budget
+    try:
+        policy = context_budget.load_policy()
+    except Exception:
+        return None
+    for art in policy.get("always_resident", []) or []:
+        if str(art.get("path", "")).endswith("env.manifest.json"):
+            return context_budget.resolve_artifact(art, Path(project_root))
+    return None
+
+
+def ensure_blackboard_topic(project_root, *, blackboard=None, manifest_path=None) -> dict:
+    """Make the `env_manifest` topic PRESENT on the automatic engine path,
+    from the manifest already on disk (2026-09-04).
+
+    Why this exists: `sync_to_blackboard()` above is real and fires, but its
+    only caller is the interactive `dv-harness env-manifest generate`
+    command, and a 2026-09-04 audit confirmed `engine.py` has zero
+    references to this module, no graph node prompt instructs an agent to
+    run that command, and no CI job runs it. So a fully autonomous
+    `engine.loop()` from INTAKE to SIGNOFF could complete with the topic
+    permanently absent while ARCH_DISCOVERY / PROJECT_MODEL / IMPLEMENT all
+    declare it in `blackboard_read`. The engine now calls this before every
+    stage that declares the topic.
+
+    Deliberately a MIRROR of an existing manifest, never a generation. This
+    module's generator needs real inputs the engine does not have (RTL file
+    list, register map, SoC arch map, testplan sources -- all `--flag`
+    arguments of the CLI), and inventing a manifest from nothing would be
+    exactly the fabrication the manifest's own honesty contract forbids. A
+    project that has never generated one gets `MANIFEST_NOT_GENERATED` plus
+    the real command that produces it, which is an honest absence.
+
+    Only fills an ABSENT topic: `dv-harness env-manifest generate` already
+    refreshes it on every real regeneration (it is the sole writer of
+    env.manifest.json), so re-summarising an unchanged manifest on every
+    stage would be write churn with no new truth in it.
+
+    Never raises. A schema-invalid manifest on disk (e.g. a stale 1.0 file
+    that `load_env_manifest()` rejects) is reported as MANIFEST_INVALID and
+    leaves the topic absent -- it must not take down an unrelated stage,
+    and it must not be mirrored as if it were current truth either."""
+    root = Path(project_root)
+    if blackboard is None:
+        from .blackboard import Blackboard
+        blackboard = Blackboard(root)
+    try:
+        if blackboard.read(BLACKBOARD_TOPIC) is not None:
+            return {"topic": BLACKBOARD_TOPIC, "action": "ALREADY_PRESENT"}
+        path = Path(manifest_path) if manifest_path else default_manifest_path(root)
+        if path is None or not Path(path).is_file():
+            return {"topic": BLACKBOARD_TOPIC, "action": "MANIFEST_NOT_GENERATED",
+                    "produces_it": "dv-harness env-manifest generate --out "
+                                   ".dv-harness/env.manifest.json"}
+        manifest = load_env_manifest(path)
+        sync_to_blackboard(blackboard, manifest, manifest_path=str(path))
+        return {"topic": BLACKBOARD_TOPIC, "action": "SYNCED_FROM_MANIFEST",
+                "manifest_path": str(path)}
+    except Exception as exc:
+        return {"topic": BLACKBOARD_TOPIC, "action": "MANIFEST_INVALID",
+                "error": f"{type(exc).__name__}: {exc}"}
