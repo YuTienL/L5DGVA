@@ -52,6 +52,20 @@ replay.ps1
 # not shared history. Read it with `cat .dv-harness/self_test/last_run.json`.
 .dv-harness/self_test/
 
+# USB_UVM_Handoff (2026-09-04) -- the canonical structural reference tree
+# named in CLAUDE.md's "Architecture-conformance audit" section, consolidated
+# into this repo at the user's request so an agent doesn't need to reach
+# outside the project tree to check structural conformance / post-hoc
+# fidelity. Read-only, reference-only per CLAUDE.md's "No Golden-Reference
+# Content Mining" rule -- the real EVIDENCE_QUOTE_NOT_FOUND_IN_FILE gate
+# (dv_harness/prompts.py) still fails any generation evidence quote whose
+# path resolves under this directory, unchanged by this consolidation.
+# Excluded from git because the tree itself contains real internal
+# identifiers (service accounts, internal hostnames) from the original DE
+# handoff -- the same class of data this repo's own history was cleaned of
+# on 2026-09-04. Present on disk, never in version control.
+reference/USB_UVM_Handoff/
+
 # The DV-Knowledge Vault (dv_harness/memory_vault.py) is its OWN git
 # repository as of 2026-09-04, when this project turned on
 # `memory.git_enabled` in .dv-harness/config.json -- that is the entire

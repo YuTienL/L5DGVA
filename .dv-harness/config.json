@@ -50,6 +50,13 @@
     "obsidian_cli": "auto",
     "git_enabled": true
   },
+  "reference_tree": {
+    "name": "USB_UVM_Handoff",
+    "path": "reference/USB_UVM_Handoff",
+    "access": "read_only",
+    "usage": "structural_conformance_and_post_hoc_fidelity_only",
+    "content_mining_forbidden": true
+  },
   "rtl_protection": {
     "protected_paths": [
       "D:/DV/Task/USB/DUT",

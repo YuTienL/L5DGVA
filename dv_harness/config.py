@@ -115,6 +115,25 @@ DEFAULT_CONFIG = {
         "obsidian_cli": "auto",
         "git_enabled": False,
     },
+    # A project's read-only structural/conformance reference tree (2026-09-04
+    # consolidation) -- e.g. a prior completed environment used to check
+    # directory-layout/naming conformance and, after independent generation,
+    # measure fidelity/gap. `path` empty (never hardcoded, same convention as
+    # knowledge_center.remote_root / memory.vault_path above) means no
+    # reference tree is configured for this project. `content_mining_forbidden`
+    # documents rather than enforces the constraint in this dict -- the real
+    # enforcement is dv_harness/prompts.py's EVIDENCE_QUOTE_NOT_FOUND_IN_FILE
+    # gate, which fails any generation-evidence quote whose resolved path
+    # falls under `path`, independent of this config existing at all. This
+    # field exists so non-LLM code has somewhere to look up the path too,
+    # instead of only an agent reading CLAUDE.md's prose mention of it.
+    "reference_tree": {
+        "name": "",
+        "path": "",
+        "access": "read_only",
+        "usage": "structural_conformance_and_post_hoc_fidelity_only",
+        "content_mining_forbidden": True,
+    },
     "self_tuning": {
         # Autonomous gate self-tuning (2026-09-02 design). Disabled by
         # default -- a project must explicitly opt in. See
