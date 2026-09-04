@@ -1,213 +1,192 @@
-# Phase 13 + 14 gap-close — Git Integration policy / Session Save-Restore (memory-specific)
+# Gap close — Phase 13 (Git Integration policy) + Phase 14 (Session Save/Restore, memory-specific)
 
-**Verdict: DONE.** Both phases were audited READY, each with one explicitly
-disclosed, real, closeable residual. Both residuals are now closed for real,
-tested, and committed as `3d54424`.
+**Verdict: DONE.** Both phases re-confirmed READY against the audit's own cited
+evidence. One real, closeable gap the audit named *inside* its Phase 13 READY
+verdict — "the total absence of a retry/log-and-surface path when a commit was
+expected but silently didn't happen" — was built for real, tested, and
+committed (`2dac81d`).
 
-**Test summary**: `114 passed` (test_react_inference_wiring +
-test_memory_tier_integrity_and_admission + test_session_and_info +
-test_debug_flow_memory), `259 passed` (test_knowledge_layer_git_and_duckdb +
-test_engine_gates_and_routing + test_protocol_and_environment_mode_engine_wiring),
-`218 passed` (test_memory_tier_completion, test_knowledge_center,
-test_memory_vault, test_memory_write_guard_and_job_evidence,
-test_obsidian_memory_final_integration, test_cli_memory_commands,
-test_debug_flow_memory, test_memory_tier_integrity_and_admission,
-test_react_working_memory_bridge); `python -m dv_harness.doc_citation_check` →
-8 OK, 0 drifted, 0 unverifiable.
+Audit-only re-confirmation, no modification, for everything else.
 
 ---
 
-## 1. Re-confirmation of the audit's READY findings (no action taken)
+## 1. Re-confirmation of the READY items (no change made)
 
-Every cited item was independently re-checked against the current tree before
-anything was changed. All held.
+Line numbers in the incoming audit had shifted since it was written (concurrent
+Phase 18/19 work landed in `memory_router.py`). Every claim was re-verified
+against the file as it stands, not against the cited line.
 
-| Audit claim | Re-confirmed at |
+### Phase 13
+
+| Requirement | Re-confirmed at | Result |
+|---|---|---|
+| Commit only on verified Job result / Project update / Engineering promotion / Organizational approval — **never** on a Working Memory update | `dv_harness/memory_router.py:122` `_VAULT_WRITE_THROUGH_DESTINATIONS = {"JOB_MEMORY", "PROJECT_MEMORY"}`, with the spec's negative satisfied by construction (comment at `:106-121`); `ORGANIZATIONAL_MEMORY` writes only `if push.get("ok")` (`:248`), `ENGINEERING_MEMORY` only after `engineering_admission_gate()` (`:253` → `:281`); `WORKING_MEMORY` reaches no vault branch | READY |
+| Commit message `memory(<protocol>): <short description>` | `memory_router._build_vault_commit_message()` (now `:851-855`) | READY |
+| RTL SHA / TB SHA / Knowledge commit SHA preserved | `memory_vault.MEMORY_NOTE_OPTIONAL_FIELDS`; `_commit_vault_change()` returns a real `git rev-parse HEAD`; `_write_back_knowledge_commit_sha()` (now `:935`) patches the same JSON record | READY |
+
+Re-run live on this machine (not a mock, `git_enabled: true`), fresh tmp vault:
+
+```
+{"destination": "ENGINEERING_MEMORY", "memory_id": "MEM-9F69D1EBD3",
+ "vault_write": {"ok": true,
+   "knowledge_commit_sha": "bf3f70c1220184db98b0f7aeaa2ecec70f485e47", ...}}
+```
+```
+$ git log --oneline   # in the resulting vault
+bf3f70c memory(USB2): reconfirm phase13
+```
+
+### Phase 14
+
+All seven required Save fields re-confirmed real and sourced from live react/job
+state in `dv_harness/session_snapshot.py:608-626` — `current_project` (`:612`),
+`current_job` (`:613`, via `_collect_current_job_reference()`),
+`current_hypothesis` (`:614`), `current_evidence` (`:615`),
+`current_confidence` (`:616`), `pending_action` (`:617`), `related_memory`
+(`:618`, via `_resolve_related_memory_references()` at `:410-446`).
+
+Restore's four-question contract re-confirmed in `describe_resume_point()`
+(`:449-493`), including the provenance wording that keeps
+`react_iteration_memory_context` distinguishable from
+`recomputed_at_save_time` (`:478-483`) and the honest no-`pending_action`
+fallback (`:488-492`) instead of a fabricated next step.
+
+**No change made to Phase 14.** Per this effort's own rule, its
+really-consulted-vs-recomputed distinction is more rigorous than the spec's
+wording asks for and was kept rather than simplified.
+
+---
+
+## 2. The gap that was closed
+
+**What was wrong.** `memory_vault._run_git()` swallowed every exception and
+returned `None`. A `subprocess.TimeoutExpired` at the 10s cap under machine
+load, or a momentarily-held `index.lock`, therefore produced exactly the same
+observable result as the ordinary, expected "there was nothing to commit": a
+result dict with no `knowledge_commit_sha`, no error, no retry. A verified
+Engineering promotion could lose its traceability pointer with nothing anywhere
+recording that it had. The audit reproduced this live once
+(`knowledge_commit_sha == None` on a promotion whose vault note was genuinely
+new — a case where NOTHING_TO_COMMIT is impossible).
+
+**What was built** (`dv_harness/memory_vault.py`, `dv_harness/memory_router.py`):
+
+- `_run_git_ex()` — keeps the exception's reason instead of discarding it.
+  `_run_git()` is now a thin wrapper over it, so its non-commit callers
+  (`_ensure_git_repo()`, `memory_doctor.check_git()`, `cli.py`'s
+  `memory vault-commit`) keep their exact prior `Optional[CompletedProcess]`
+  contract.
+- `_commit_vault_change_detailed()` — retries a transient failure
+  (`_GIT_COMMIT_ATTEMPTS = 3`, 0.2s backoff) and reports one of four outcomes
+  instead of an Optional SHA:
+
+  | status | meaning |
+  |---|---|
+  | `COMMITTED` | real commit, real `git rev-parse HEAD` |
+  | `NOTHING_TO_COMMIT` | the write changed no bytes — returns at attempt 1, never burns the retry budget |
+  | `COMMITTED_SHA_UNRESOLVED` | the commit really landed; only reading its SHA back failed. Its own state, because calling this a failed commit would be a false claim about the repo |
+  | `COMMIT_FAILED` | expected commit did not happen; carries git's own bounded error text |
+
+  Never fabricates a SHA. `_commit_vault_change()` keeps its `Optional[str]`
+  contract for existing callers.
+- `apply_commit_outcome()` — surfaces the outcome as `knowledge_commit_status`
+  (+ `knowledge_commit_error` / `knowledge_commit_attempts`) on every provider
+  result, so it reaches `route_and_store()`'s `vault_write` unchanged. Also
+  wired into `_fold_into_matched_note()`, which was copying only the SHA — the
+  fold path writes no note of its own and so was the write most likely to stay
+  silent about a failure.
+- `_write_back_knowledge_commit_sha()` — writes a `COMMIT_FAILED` back onto the
+  durable JSON record. `COMMITTED` and `NOTHING_TO_COMMIT` are deliberately not
+  written back as a status (the first is fully carried by the SHA itself, the
+  second is the ordinary outcome of a re-write that changed nothing).
+
+**Explicitly unchanged:** with `git_enabled: false` — this project's documented
+default — a result carries none of these keys at all. Git being off is not a
+commit failure, the same distinction `memory_doctor.check_git()` already makes.
+
+Live demonstration of the closed gap (git commit forced to fail):
+
+```
+VAULT_WRITE: {"ok": true, "knowledge_commit_status": "COMMIT_FAILED",
+              "knowledge_commit_error": "TimeoutExpired: git commit timed out after 10 seconds",
+              "knowledge_commit_attempts": 3}
+RECORD:      {"knowledge_commit_status": "COMMIT_FAILED",
+              "knowledge_commit_error": "TimeoutExpired: git commit timed out after 10 seconds"}
+```
+
+The note itself still landed — a git failure never costs the knowledge, it only
+had to stop being silent about itself.
+
+---
+
+## 3. Items deliberately left alone
+
+- **`JOB_MEMORY` not gated on a `verified` flag inside `route_memory()`.** The
+  audit called this "a real, closeable gap in strictness … not currently
+  exploited by any real code path". Left as-is: it is a disclosed, reasoned
+  divergence documented at `memory_router.py:115-121`, the only two real
+  writers fire from an already-reconciled LSF/gate fact, and forcing a literal
+  `verified=True` gate would change real behaviour to match spec wording the
+  existing design already satisfies in substance. Per this effort's rule 3,
+  reported rather than rebuilt.
+- **`FileSystemMarkdownAdapter`'s generic default commit messages**
+  (`memory-vault: create <id>`) for direct, non-router callers. Documented
+  intentional non-change; format compliance is a router-level guarantee.
+- **`ORGANIZATIONAL_MEMORY` excluded from the SHA write-back.** It has no local
+  file-store record to patch by design (`OrganizationalMemoryStore`).
+
+---
+
+## 4. Tests
+
+New, each with real detection power (real repos, real `git log`, real
+`route_and_store()`, never a mocked success):
+
+`dv_harness_tests/test_debug_flow_memory.py`
+- `test_a_transient_git_failure_is_retried_and_the_retry_really_commits` —
+  fails the first `git commit` for real, asserts `attempts == 2` and that the
+  retry's SHA equals the repo's actual `git rev-parse HEAD`.
+- `test_a_persistent_git_failure_is_reported_as_COMMIT_FAILED_with_the_real_reason`
+- `test_nothing_to_commit_is_its_own_status_and_is_never_retried`
+- `test_a_silently_failed_vault_commit_now_reaches_route_and_store_and_the_durable_record`
+- `test_a_successful_promotion_records_the_sha_and_no_failure_status`
+- `test_a_git_disabled_vault_write_carries_no_commit_keys_at_all`
+- `test_the_sha_only_helper_keeps_its_prior_optional_str_contract`
+
+`dv_harness_tests/test_memory_dedup_write_path.py`
+- `test_a_folded_write_reports_a_failed_commit_instead_of_swallowing_it`
+
+**Results (all real runs this session):**
+
+| Suite | Result |
 |---|---|
-| `_VAULT_WRITE_THROUGH_DESTINATIONS = {"JOB_MEMORY", "PROJECT_MEMORY"}`, WORKING_MEMORY excluded by construction | `memory_router.py:74`, consumed at `:234-238`; ENGINEERING at `:199-218`, ORGANIZATIONAL at `:181-185` (still gated on `push.get("ok")` first) |
-| `memory(<protocol>): <desc>` commit message, `_general` only when genuinely absent | `_build_vault_commit_message()` — verified live by `test_knowledge_layer_git_and_duckdb.py` |
-| Real `git rev-parse HEAD` SHA, never fabricated; written back as `knowledge_commit_sha` alongside `rtl_sha`/`tb_sha` | `memory_vault._commit_vault_change()`, `memory_router._write_back_knowledge_commit_sha()` (now at `:521-545`) |
-| Phase 14's seven spec items (job/project/hypothesis/evidence/confidence/related memory/pending action) + `describe_resume_point()` | `session_snapshot.py` `save_session()` manifest block and `describe_resume_point()`; all seven still present and covered |
-| Session snapshots never copy the durable Memory tier | `session_snapshot.py` module design comment — unchanged, and the Phase 14 fix below deliberately keeps it (references only, no bodies) |
-
-Nothing in this list was modified except where the two residuals below
-required it.
+| `test_debug_flow_memory` + `test_knowledge_layer_git_and_duckdb` + `test_memory_dedup_write_path` + `test_memory_vault` (final code) | **102 passed** in 159.90s |
+| 11-file memory/vault/session suite (incl. `test_cli_memory_commands`, `test_memory_doctor`, `test_memory_security`, `test_obsidian_memory_final_integration`, `test_session_and_info`) | **262 passed** in 822.89s |
+| `test_react_working_memory_bridge` + `test_memory_write_guard_and_job_evidence` + `test_job_memory_evidence_mirror` | **42 passed** in 225.17s |
+| `test_memory_docs_mirror_source` + `test_memory_tier_completion` | **26 passed** in 29.47s |
+| `python -m dv_harness.doc_citation_check` | 8 citations, **8 OK, 0 drifted** |
 
 ---
 
-## 2. Phase 13 residual — CLOSED: `organizational_admission_gate()`
+## 5. Housekeeping done in the touched files
 
-**The gap, as audited**: `ENGINEERING_MEMORY` is hard-gated by
-`engineering_admission_gate()` before it can reach a store or a vault write.
-`ORGANIZATIONAL_MEMORY` had no equivalent. `route_memory()` sent any record
-with `kind ∈ {methodology, best_practice, cross_project_lesson}` and
-`verified: true` straight to `OrganizationalMemoryStore.add()` — i.e. to the
-**shared, cross-user** Knowledge Center — and, on a successful push, minted a
-real vault git commit correctly labelled "Organizational Memory approval".
-`promote_to_organizational()`'s three gates were enforced only by the fact
-that its two real callers (`cli.py`'s `pmem_promote`, `engine.py:1925`) happen
-to go through it.
+- `docs/MEMORY_ARCHITECTURE.md` gained a "Vault commit outcomes" section
+  documenting the four statuses and the retry, per the Methodology
+  Consolidation Rule.
+- Two `memory_router.py:NNN` citations in that same doc had drifted from my own
+  line-number shift and were corrected (`1098 → 1124`, `962 → 988`);
+  `doc_citation_check` was clean before my change and is clean again.
+- Stale comment text in `memory_vault.py`'s module changelog (which described
+  `_commit_vault_change()` as returning only a SHA) was updated rather than left
+  behind. No dead code introduced: `_run_git()` and `_commit_vault_change()`
+  both still have real callers.
 
-**What was built** — `memory_router.organizational_admission_gate(root, record)`,
-run first in the `ORGANIZATIONAL_MEMORY` branch of `route_and_store()`. It
-mirrors `promote_to_organizational()`'s three gates and **re-reads two of them
-from the durable store**, not from the payload asking to be admitted:
+## 6. Scope discipline
 
-1. **Provenance + qualitative** — `source_engineering_memory_id` must resolve
-   to a real ACTIVE engineering-tier record whose OWN `verification` block
-   `_verification_is_gate_validated()` accepts (the same function the
-   promotion path uses, not a looser copy). Reasons:
-   `NO_ACTIVE_ENGINEERING_SOURCE_RECORD`, `QUALITATIVE_GATE_FAILED`.
-2. **Repeated confirmation** — that source record's **on-disk**
-   `confirmation_count` must be `>= ORGANIZATIONAL_MIN_CONFIRMATIONS`. Because
-   `MemoryStore._apply_confirmation_integrity()` discards a payload-supplied
-   count and only `MemoryGC.confirm()` can advance it, this gate is not
-   forgeable. Reason: `INSUFFICIENT_CONFIRMATION`.
-3. **Confidence** — `confidence_result["level"] == "HIGH"`. Reason:
-   `CONFIDENCE_NOT_HIGH`.
+Concurrent agents hold `dv_harness/cli.py`, `dv_harness/engine.py`,
+`dv_harness/connectivity.py` and several test files. None were touched. The
+commit stages exactly five files, all of which were clean in `git status`
+before this pass began.
 
-Reason codes deliberately reuse `promote_to_organizational()`'s own strings so
-the two paths speak one vocabulary.
-
-**Rejection behaviour**: demotion to Working Memory carrying
-`organizational_admission_rejected` and `requested_destination`, exactly the
-contract `engineering_admission_gate()` already uses — never a raise, never a
-drop. Since `WORKING_MEMORY` is excluded from
-`_VAULT_WRITE_THROUGH_DESTINATIONS`, that demotion is also what makes "no
-unearned Organizational-approval commit" structurally true rather than a
-separate check.
-
-**Disclosed limitation, stated in the code and in
-`docs/MEMORY_ARCHITECTURE.md`**: gate 3 is checked as *stamped*, not
-recomputed. `score_confidence()`'s inputs (`independent_sources_count` etc.)
-exist only at promotion time and are not persisted on the source engineering
-record, so there is nothing to re-derive from. Gates 1 and 2 — the ones that
-were actually forgeable — are store-backed.
-
-**Tests** (new section 5 of `dv_harness_tests/test_memory_tier_integrity_and_admission.py`,
-7 cases):
-- the shared broker is **never contacted** (`OrganizationalMemoryStore` not
-  even constructed) for an ungated record;
-- the demoted record is readable in Working Memory with its reason codes;
-- **no vault note is written** for a rejected record (Phase 13's commit policy);
-- a payload declaring `source_confirmation_count = 7` against a source with 0
-  real confirmations is refused → `INSUFFICIENT_CONFIRMATION`;
-- provenance pointing at a source with two real confirmations but no
-  gate-validated verification block is refused → `QUALITATIVE_GATE_FAILED`,
-  even when the *promoted* record carries a valid-looking block;
-- retracting the source record re-closes an otherwise-passing gate;
-- the earned `promote_to_organizational()` path still clears the boundary,
-  asserted at the real push.
-
-**Existing tests updated, not weakened**: four modules
-(`test_memory_tier_completion`, `test_knowledge_center`, `test_memory_vault`,
-`test_memory_write_guard_and_job_evidence`) exercise what happens *after* this
-boundary, so they now build their record through one shared new helper,
-`dv_harness_tests/organizational_promotion_fixture.py`, which seeds a real
-engineering source record with two real `MemoryGC.confirm()` calls and a real
-`score_confidence()` result. Without it those tests would have silently become
-tests of the WORKING_MEMORY path — that risk is called out in
-`test_memory_write_guard_and_job_evidence.py`'s own helper docstring, and its
-now-stale class docstring ("reachable directly") was corrected.
-
----
-
-## 3. Phase 14 residual — CLOSED: `related_memory` is now the real one
-
-**The gap, as audited**: `related_memory` was a `MemoryRetriever.search()`
-**re-run at save time** over `stage + project + note`. The real per-stage
-memory context (`relevant_memory`, `vault_related_cases`, `kc_search_results`)
-was built fresh inside `_gather_stage_context()` on every `run_stage()` call,
-folded into the prompt and then discarded — so there was no ground truth for
-the snapshot to read. The engine searches on `stage + user_goal` and also
-consults the Vault and the shared Knowledge Center, so the two can genuinely
-disagree, and a resumed session could not tell which it was looking at.
-
-**What was built**:
-- `react.build_memory_context_references()` — a **references-only** projection
-  of the three real lists (local hits keep the same five keys
-  `session_snapshot`'s own reference shape uses; vault/evidence-DB cases keep
-  `note_id`/`path`/`protocol`/`score`/`source`; KC hits keep
-  `memory_id`/`title`/`protocol`). Never a record body — `iteration_NNN.json`
-  is copied wholesale into every snapshot, so a body there would duplicate the
-  durable Memory tier into the snapshot, which this module's own design
-  forbids. An empty result is `{}`, not a dict of empty lists, so "nothing was
-  in play" and "this attempt predates the field" stay distinguishable.
-- `ReactRecorder.record(..., memory_context=...)` persists it onto the same
-  `iteration_NNN.json` and its Working Memory projection every other field of
-  that record already uses. Optional, defaults to `None` — every pre-existing
-  caller is unaffected.
-- `engine.run_stage()` supplies it from `ctx["relevant_memory"]` /
-  `ctx["kc_search_results"]` / `ctx["vault_related_cases"]` — the exact three
-  lists it had already folded into the prompt.
-- `session_snapshot._resolve_related_memory_references()` **prefers** the
-  recorded context, falls back to the recompute, and records which in a new
-  manifest field `related_memory_source`
-  (`react_iteration_memory_context` / `recomputed_at_save_time` / `none`). The
-  stage's vault/KC half survives into the manifest too instead of being
-  flattened away. `describe_resume_point()` now *states* the provenance in
-  words ("the memory this stage really consulted" vs. "re-searched at save
-  time, may differ from what the stage consulted").
-
-**Tests** (5 new in `test_session_and_info.py`, 1 in
-`test_react_inference_wiring.py`):
-- the recorded and recomputed answers are made to genuinely **differ**, and
-  the manifest is asserted to carry the recorded one while a live
-  `_collect_related_memory_references()` call is asserted to return the other
-  — so this is not a test that would pass under the old behaviour;
-- fallback path is labelled `recomputed_at_save_time`, and a project with no
-  memory activity reports `none` rather than a misleading label;
-- the persisted `memory_context` carries references only, proven against a
-  source record that really does carry more (`evidence` present on the record,
-  absent from the reference);
-- the resume summary states provenance, both ways;
-- **wiring proof**: a real `DVHarness.run_stage()` over the real graph and
-  real gate scripts, with a memory record seeded beforehand, and the assertion
-  read off the real persisted `iteration_001.json` plus its Working Memory
-  twin — not a hand-written fixture file.
-
----
-
-## 4. Docs / policy updated (no stale claims left behind)
-
-- `CLAUDE.md` — Engineering Memory Policy: "ONLY through
-  `promote_to_organizational()`" is now stated as **enforced at the write
-  boundary** rather than trusted from callers.
-- `docs/MEMORY_ARCHITECTURE.md` — new "The admission gate" subsection (all
-  three gates, reason codes, the demotion contract, the disclosed limitation);
-  corrected the now-false "reachable from a plain `route_and_store()` call"
-  sentence in the write-guard section; two drifted `file.py:line` citations
-  re-pointed (`doc_citation_check` back to 8 OK / 0 drifted).
-- `docs/MEMORY_SCHEMA.md` — routing table row for `ORGANIZATIONAL_MEMORY`.
-- `docs/MEMORY_OPERATIONS.md` — commit-policy paragraph now notes both
-  admission gates run before a commit can be minted.
-- `docs/ENGINE_STAGE_LIFECYCLE.md` — the three memory rows of
-  `_gather_stage_context()` are read-only but no longer transient.
-- `.claude/skills/CORE/organizational-memory/SKILL.md` — "never write
-  ORGANIZATIONAL_MEMORY directly" is now "and you cannot"; the **Fallback**
-  section states that hand-constructing a record is not a workaround and why.
-- `.claude/skills/EXPERT_FEEDBACK/knowledge-promotion-gate/SKILL.md`,
-  `.claude/agents/memory-agent.md`, `docs/MEMORY_AGENT.md` — read and found
-  already correct ("never straight to Organizational", "promote_to_organizational() ONLY");
-  no edit needed.
-
-## 5. Concurrency / commit handling
-
-Other workflows were committing into this repo throughout. `CLAUDE.md` was
-hand-scoped (`git diff` → trim to my single hunk → `git apply --cached --check`
-→ `--cached`) rather than `git add`ed, twice: a concurrent
-`protocol-capability` commit landed a separate 61-line `CLAUDE.md` section
-between my first staging and my commit, and swept my staged hunk out of the
-index in the process. The final commit `3d54424` carries exactly my 18 files
-and none of any other workflow's. `dv_harness/engine.py` was checked for
-foreign hunks before staging (a concurrent waveform-gate change had already
-been committed as `b20e038`, leaving my diff clean).
-
-One self-inflicted defect, corrected: the first commit attempt used a
-PowerShell here-string in a bash heredoc, which produced a commit with a
-mangled subject and truncated body. It was amended in place (still tip, still
-unpushed, verified `HEAD` had not moved) into `3d54424` with the full message
-and the CLAUDE.md hunk included.
-
-No push, no merge to a protected branch — per this repo's
-gh-CLI/PR-only governance policy.
+**Commit:** `2dac81d memory(_general): report a vault commit that was expected
+and silently did not happen`
