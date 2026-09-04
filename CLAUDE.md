@@ -1221,3 +1221,34 @@ external paper, and nothing research-origin may reach Organizational Memory on o
 evidence. Proven by `dv_harness_tests/test_research_intent_routing.py` (84 tests), including the
 master prompt's canonical natural-language request routing with no agent named, and 21 evidence
 strings copied out of `test_protocol_router.py` answering bit-for-bit identically before and after.
+
+
+## Research Stage Boundaries (2026-09-04)
+
+The research capability above is now permanent and installed: the
+`research-ingestion` skill turns ONE external document into ONE
+provenance-carrying `ResearchEvidenceCard`, and the `research-architect` agent
+compares cards and proposes a `CapabilityEvolutionCandidate`. Both are proven
+operational by the master prompt's own 8 Stage-1 acceptance tests (A–H), listed
+with their test names in `.work/gap-close-capability-evolution-acceptance-tests-report.md`.
+
+**Installed is not running.** Two boundaries, and neither is a follow-on the
+harness takes by itself:
+
+- **Stage 2 — analyzing real external documents** (producing cards, the
+  research-to-harness matrix, cross-document synthesis, gap analysis) starts
+  only when a human asks for it, e.g. `dv-harness research <document>`. It never
+  begins as the tail of a Stage-1 or Stage-0 task.
+- **Stage 3 — implementing an approved capability change** requires a separate,
+  explicit human decision recorded through the existing gate:
+  `dv-harness approve --stage RESEARCH_CAPABILITY_EVOLUTION --note ...
+  --reviewer-id ... --reviewer-confidence ...`. A strong card, a confident
+  synthesis, or a HIGH-confidence candidate is never that approval, and reaching
+  `main`/`master` still goes through the gh/PR-Only Governance Policy above.
+
+Detail lives where it can stay current, per the Methodology Consolidation Rule —
+do not re-inline it here: `research/README.md` (the tree, the stage table, the
+independent-reading rule), `research/current_harness_baseline.md` (the Stage-0
+audit of what L5 already had, and what Stage 1 reused rather than rebuilt),
+`.claude/skills/research-ingestion/SKILL.md`, `.claude/agents/research-architect.md`,
+and `dv_harness/capability_evolution.py`.

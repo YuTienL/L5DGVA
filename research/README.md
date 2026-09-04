@@ -22,19 +22,28 @@ Installed, tested, usable:
 | `dv_harness/schemas/research_evidence_card.schema.json` | REAL — the card contract, every field required |
 | `dv_harness/doc_extraction.py` `build_research_evidence_card_skeleton()` | REAL — mechanical identity/provenance half |
 | `research/evidence_cards/` | REAL directory + naming convention; **contains no card yet** |
+| `.claude/agents/research-architect.md` | REAL — the agent that compares cards and proposes a candidate; read-only by construction (`disallowedTools: Edit, Write`) |
+| `dv_harness/capability_evolution.py` | REAL — the promotion state machine, the KEEP/ENHANCE/ADD/EXPERIMENT/REJECT decision, and the section-28 cross-card comparator |
+| `dv_harness/schemas/capability_evolution_candidate.schema.json` | REAL — the candidate contract |
+| `research/current_harness_baseline.md` | REAL — the **Stage 0** audit (master prompt section 4) of what L5 already had |
 | `dv_harness_tests/test_research_evidence_card.py` | REAL — schema rejection cases + skeleton correctness |
+| `dv_harness_tests/test_capability_evolution_research_architect.py` | REAL — acceptance tests B/C/D/E |
+| `dv_harness_tests/test_research_intent_routing.py` | REAL — acceptance test F |
+| `dv_harness_tests/test_research_memory_governance.py` | REAL — acceptance test H |
+| `dv_harness_tests/test_research_stage1_acceptance_a_g.py` | REAL — acceptance tests A and G, end to end on a synthetic document |
 
 Not built yet, and deliberately so — the master prompt's own First-Run Control
 Instruction (sections 57 / 82) says install the machinery before operating it:
 
-- `research-architect` (the agent that synthesizes across cards, master prompt
-  section 13) — separate Stage-1 work.
-- `research/current_harness_baseline.md`, `harness_research_matrix.md`,
-  `cross_research_synthesis.md`, `L5_gap_analysis.md`, and the
-  `DV_AGENT_HARNESS_L5_1_*` blueprint/priority/implementation/benchmark/
-  risk documents (section 48) — all **Stage 2** outputs. They are produced by
-  analyzing real documents, so creating empty files with those names now would
-  be creating artifacts to satisfy names, which section 48 explicitly forbids.
+- `harness_research_matrix.md`, `cross_research_synthesis.md`,
+  `L5_gap_analysis.md`, and the `DV_AGENT_HARNESS_L5_1_*` blueprint/priority/
+  implementation/benchmark/risk documents (section 48) — all **Stage 2**
+  outputs. They are produced by analyzing real documents, so creating empty
+  files with those names now would be creating artifacts to satisfy names,
+  which section 48 explicitly forbids.
+  (`current_harness_baseline.md` is NOT in that list: section 4 assigns it to
+  Stage 0, where it is produced by auditing this repository rather than by
+  reading any external document.)
 
 ## The stage boundaries this tree lives inside
 
@@ -76,8 +85,9 @@ search is the first step of exactly that failure.
 
 ```
 research/
-  README.md              <- this file
-  evidence_cards/        <- one card per document; see its own README for naming
+  README.md                     <- this file
+  current_harness_baseline.md   <- the Stage 0 audit (master prompt section 4)
+  evidence_cards/               <- one card per document; see its own README for naming
     README.md
   sources/               <- optional: local copies of ingested documents
                             (not created by default; documents may live anywhere,
@@ -91,6 +101,13 @@ research/
   (`build_research_evidence_card_skeleton()`, `validate_research_evidence_card()`,
   `research_card_missing_fields()`)
 - The reading discipline: `.claude/skills/research-ingestion/SKILL.md`
+- Cross-card comparison (section 28's SUPPORTS/OVERLAPS/EXTENDS/CONTRADICTS/
+  SUPERSEDES/UNRELATED/INSUFFICIENT_EVIDENCE), the promotion state machine and
+  the KEEP/ENHANCE/ADD/EXPERIMENT/REJECT decision:
+  `dv_harness/capability_evolution.py` (`compare_evidence_cards()`,
+  `link_prior_research()`, `decide_recommendation()`, `transition()`)
+- The Human Approval Gate, reused not reinvented: `dv_harness/control_plane.py`
+  (`dv-harness approve --stage RESEARCH_CAPABILITY_EVOLUTION`)
 - Confidence / gap math, reused not reinvented: `dv_harness/inference.py`
 - Source spec: `DV_Agent_Harness_L5_Research_Capability_Evolution_Master_Prompt_vLatest.md`
   (repo parent directory), sections 5–9, 27, 48, 57.

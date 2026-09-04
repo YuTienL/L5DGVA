@@ -187,6 +187,20 @@ def research_card_required_fields() -> List[str]:
     return list(_load_research_card_schema()["required"])
 
 
+def prior_research_relations() -> List[str]:
+    """The card schema's own `prior_research_link.relation` enum, in schema
+    order -- master prompt section 28's relation labels.
+
+    Read from the schema for the same reason research_card_required_fields()
+    is: a cross-card comparator (capability_evolution.compare_evidence_cards())
+    must speak THIS vocabulary and not a second one of its own. Section 28
+    names these seven once; giving a second module its own tuple of them is how
+    two vocabularies that agree today stop agreeing later.
+    """
+    schema = _load_research_card_schema()
+    return list(schema["$defs"]["prior_research_link"]["properties"]["relation"]["enum"])
+
+
 def validate_research_evidence_card(card: Dict[str, Any]) -> None:
     """Validate `card` against research_evidence_card.schema.json.
 

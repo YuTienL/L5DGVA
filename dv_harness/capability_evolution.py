@@ -1024,3 +1024,361 @@ def render_stop_report(checklist: Dict[str, Any]) -> str:
             f"incomplete: {blockers}"
         )
     return "\n".join(STOP_REPORT_LINES) + "\n\nSTOP."
+
+
+# ---------------------------------------------------------------------------
+# Master prompt section 28's cross-document comparison, and Stage-1 acceptance
+# test G ("a new paper overlapping an existing Evidence Card -> overlap / new /
+# contradiction status identified and linked").
+#
+# WHY IT LIVES HERE AND NOT IN doc_extraction.py / research-ingestion
+# -------------------------------------------------------------------
+# Section 27 forbids `research-ingestion` from looking at any other document
+# while it writes a card -- independent convergence is the only thing in this
+# tree that legitimately raises confidence, and it stops meaning anything the
+# moment card #2 was written while reading card #1. So the comparator cannot be
+# part of ingestion. Section 28 assigns cross-document synthesis to
+# `research-architect`, and this module is that agent's machinery, so the
+# comparator is an extension of it rather than a third research module.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+# --------------------------------
+#   * It never edits a card. A card is `research-ingestion`'s output and the
+#     record of what ONE document says on its own; `related_prior_research` on a
+#     card records what THAT DOCUMENT asserts about other work (the schema says
+#     so), not what a later architect concluded about it. Writing an
+#     architect-derived link back into that field would quietly destroy the
+#     distinction section 27 exists to protect. The comparison is persisted as
+#     its own Working Memory record instead.
+#   * It never invents a relation vocabulary. The seven labels come from the
+#     card schema itself via `doc_extraction.prior_research_relations()`; this
+#     module holds no tuple of its own to drift from it.
+#   * It never derives SUPPORTS or SUPERSEDES. Deciding that one document
+#     corroborates or replaces another is a reading judgement, not something set
+#     intersection can establish; those two are reachable only when a document
+#     itself declares them, and a comparator that guessed them would fabricate
+#     exactly the kind of agreement section 28 warns about.
+
+EVIDENCE_CARD_DIR = ("research", "evidence_cards")
+EVIDENCE_CARD_SUFFIX = ".card.json"
+
+# The `kind` a cross-card comparison is stored under. An EXISTING
+# memory_router.RESEARCH_EVIDENCE_KINDS member, not a new one: a comparison is a
+# research-origin claim about two documents, it carries no job_id, and it
+# therefore routes to WORKING_MEMORY through the same named branch every other
+# research record uses. Section 12 forbids a sixth memory tier; adding a kind
+# nothing else routes would be the same mistake one size down.
+PRIOR_RESEARCH_LINK_MEMORY_KIND = "research_claim"
+
+# The three relations that mean "these two documents do NOT stand together":
+# CONTRADICTS is tracked on its own because it must never be read as
+# convergence, and the other two are the outcomes of a comparison that found
+# nothing to relate. Everything ELSE in the schema's enum is an overlap, which
+# is why this is stated as the exclusion rather than as a second list of the
+# overlap labels -- a copy of four of the seven would be a second vocabulary,
+# and a relation added to the schema later would silently fall out of it.
+_NON_OVERLAP_RELATIONS = ("CONTRADICTS", "UNRELATED", "INSUFFICIENT_EVIDENCE")
+
+
+def prior_research_relations() -> List[str]:
+    """Section 28's seven relation labels, read from the card schema."""
+    from .doc_extraction import prior_research_relations as _relations
+
+    return _relations()
+
+
+def _norm_terms(values: Any) -> List[str]:
+    """Lowercased, whitespace-collapsed strings from a card list field."""
+    out: List[str] = []
+    for value in values or []:
+        if isinstance(value, str) and value.strip():
+            out.append(" ".join(value.strip().lower().split()))
+    return sorted(set(out))
+
+
+def _norm_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _declared_relation(new_card: Dict[str, Any], prior_document_id: str) -> Optional[str]:
+    """What the NEW document itself says about the prior one, if anything.
+
+    A document that names another work and labels the relation has already
+    answered the question with more authority than any set operation here can,
+    so a declaration wins over derivation -- except for CONTRADICTS, which is
+    checked first and from more sources than the declaration alone.
+    """
+    for entry in new_card.get("related_prior_research") or []:
+        if isinstance(entry, dict) and entry.get("document_id") == prior_document_id:
+            relation = entry.get("relation")
+            if relation in prior_research_relations():
+                return relation
+    return None
+
+
+def _contradiction_signals(new_card: Dict[str, Any], prior_card: Dict[str, Any]) -> List[str]:
+    """Every concrete reason to call this pair CONTRADICTS, named individually.
+
+    Three sources, in increasing order of independence from the reader:
+      1. the new card declares CONTRADICTS for this document_id;
+      2. one of the new card's own `contradictions[].against` entries names the
+         prior document by id or by title;
+      3. both cards report a quantitative result for the SAME metric with
+         DIFFERENT values -- the one contradiction two independently-written
+         cards can establish without either card mentioning the other.
+    A relation is never CONTRADICTS with this list empty, so "these disagree" is
+    always traceable to something written on one of the two cards.
+    """
+    signals: List[str] = []
+    prior_id = str(prior_card.get("document_id") or "")
+    prior_title = _norm_text(prior_card.get("title"))
+
+    if _declared_relation(new_card, prior_id) == "CONTRADICTS":
+        signals.append(f"DECLARED_CONTRADICTS:{prior_id}")
+
+    for entry in new_card.get("contradictions") or []:
+        against = _norm_text((entry or {}).get("against"))
+        if not against:
+            continue
+        if prior_id and prior_id.lower() in against:
+            signals.append(f"AGAINST_DOCUMENT_ID:{prior_id}")
+        elif prior_title and prior_title in against:
+            signals.append(f"AGAINST_TITLE:{prior_card.get('title')}")
+
+    prior_metrics: Dict[str, set] = {}
+    for result in prior_card.get("quantitative_results") or []:
+        metric = _norm_text((result or {}).get("metric"))
+        value = _norm_text((result or {}).get("value"))
+        if metric and value:
+            prior_metrics.setdefault(metric, set()).add(value)
+    for result in new_card.get("quantitative_results") or []:
+        metric = _norm_text((result or {}).get("metric"))
+        value = _norm_text((result or {}).get("value"))
+        if not metric or not value or metric not in prior_metrics:
+            continue
+        if value not in prior_metrics[metric]:
+            signals.append(
+                f"METRIC_VALUE_CONFLICT:{metric}:{value}!={sorted(prior_metrics[metric])}"
+            )
+    return signals
+
+
+def compare_evidence_cards(new_card: Dict[str, Any], prior_card: Dict[str, Any]) -> Dict[str, Any]:
+    """One new card against ONE prior card -> a section-28 relation plus its basis.
+
+    A pure function: reads no file, writes no file, calls no model, mutates
+    neither card. Rule order, first match wins, and every rule records what it
+    matched on so the relation can be re-derived by hand:
+
+      1. INSUFFICIENT_EVIDENCE when either card states neither key_mechanisms
+         nor verification_domain. There is nothing to compare, and UNRELATED
+         would be a claim ("we checked, they are unrelated") the inputs do not
+         support -- the same UNKNOWN-over-convenient-MISSING discipline
+         derive_overlap_status() applies.
+      2. OVERLAPS when the two cards carry the same document_sha256. Identical
+         bytes ingested twice, flagged in the note as NOT independent
+         corroboration, because counting a re-ingestion as convergence is
+         exactly what section 28's "repeated vendor marketing is not
+         convergence" line is about.
+      3. CONTRADICTS on any signal from _contradiction_signals().
+      4. Whatever the new document itself declared, when it declared something.
+      5. EXTENDS when the shared mechanisms are ALL of the prior card's and the
+         new card adds more; OVERLAPS when mechanisms are shared either way.
+      6. OVERLAPS on a shared verification_domain with no shared mechanism.
+      7. UNRELATED otherwise.
+    """
+    relations = prior_research_relations()
+    new_mech = _norm_terms(new_card.get("key_mechanisms"))
+    prior_mech = _norm_terms(prior_card.get("key_mechanisms"))
+    new_domain = _norm_terms(new_card.get("verification_domain"))
+    prior_domain = _norm_terms(prior_card.get("verification_domain"))
+    shared_mech = sorted(set(new_mech) & set(prior_mech))
+    new_only_mech = sorted(set(new_mech) - set(prior_mech))
+    prior_only_mech = sorted(set(prior_mech) - set(new_mech))
+    shared_domain = sorted(set(new_domain) & set(prior_domain))
+    prior_id = str(prior_card.get("document_id") or "")
+    identical = bool(
+        new_card.get("document_sha256")
+        and new_card.get("document_sha256") == prior_card.get("document_sha256")
+    )
+    declared = _declared_relation(new_card, prior_id)
+    signals = _contradiction_signals(new_card, prior_card)
+
+    if not (new_mech or new_domain) or not (prior_mech or prior_domain):
+        relation = "INSUFFICIENT_EVIDENCE"
+        note = (
+            "One of the two cards states neither key_mechanisms nor "
+            "verification_domain, so there is nothing to compare. Not UNRELATED: "
+            "that would claim a comparison that did not happen."
+        )
+    elif identical:
+        relation = "OVERLAPS"
+        note = (
+            f"Identical document bytes (sha256 {str(new_card.get('document_sha256'))[:12]}...) "
+            "already ingested as this card. This is a re-ingestion, NOT a second "
+            "independent source, and must not be counted as convergence."
+        )
+    elif signals:
+        relation = "CONTRADICTS"
+        note = "Contradiction signals: " + "; ".join(signals)
+    elif declared is not None:
+        relation = declared
+        note = (
+            f"Declared by the new document itself in related_prior_research for {prior_id}. "
+            "A document's own statement about another work outranks anything derived here."
+        )
+    elif shared_mech and not prior_only_mech and new_only_mech:
+        relation = "EXTENDS"
+        note = (
+            f"Covers every mechanism the prior card records ({', '.join(shared_mech)}) "
+            f"and adds {', '.join(new_only_mech)}."
+        )
+    elif shared_mech:
+        relation = "OVERLAPS"
+        note = f"Shared mechanisms: {', '.join(shared_mech)}."
+    elif shared_domain:
+        relation = "OVERLAPS"
+        note = (
+            f"Shared verification domain ({', '.join(shared_domain)}) with no shared "
+            "mechanism -- same problem area, different method."
+        )
+    else:
+        relation = "UNRELATED"
+        note = (
+            "No shared mechanism and no shared verification domain, and the new "
+            "document declares no relation to this one."
+        )
+
+    if relation not in relations:  # pragma: no cover - guards schema/code drift
+        raise CapabilityEvolutionCandidateValidationError(
+            f"{relation!r} is not one of the card schema's prior_research_link relations "
+            f"{relations}; the comparator and the schema have drifted apart."
+        )
+
+    return {
+        "document_id": prior_id,
+        "relation": relation,
+        "note": note,
+        "basis": {
+            "shared_mechanisms": shared_mech,
+            "new_only_mechanisms": new_only_mech,
+            "prior_only_mechanisms": prior_only_mech,
+            "shared_verification_domain": shared_domain,
+            "identical_document": identical,
+            "declared_relation": declared,
+            "contradiction_signals": signals,
+        },
+    }
+
+
+def prior_research_link(comparison: Dict[str, Any]) -> Dict[str, Any]:
+    """The comparison reduced to the card schema's own `prior_research_link`
+    shape -- exactly document_id / relation / note, because that $def sets
+    additionalProperties false. The full `basis` stays on the comparison and on
+    the persisted memory record."""
+    return {
+        "document_id": comparison["document_id"],
+        "relation": comparison["relation"],
+        "note": comparison["note"],
+    }
+
+
+def read_evidence_cards(root, *, exclude_document_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every filed card under `research/evidence_cards/`, sorted by document_id.
+
+    Only `*.card.json`: that directory's README documents an optional `<stem>.md`
+    rendering beside each card, and reading that as evidence would treat a
+    convenience copy as the canonical artifact.
+    """
+    directory = Path(root).joinpath(*EVIDENCE_CARD_DIR)
+    cards: List[Dict[str, Any]] = []
+    if not directory.is_dir():
+        return cards
+    for path in sorted(directory.glob(f"*{EVIDENCE_CARD_SUFFIX}")):
+        card = json.loads(path.read_text(encoding="utf-8"))
+        if exclude_document_id and card.get("document_id") == exclude_document_id:
+            continue
+        cards.append(card)
+    cards.sort(key=lambda c: str(c.get("document_id") or ""))
+    return cards
+
+
+def link_prior_research(new_card: Dict[str, Any],
+                        prior_cards: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Acceptance test G, whole: compare one new card against every prior card
+    and report the overlap / new / contradiction status, linked by document_id.
+
+    The three words in test G's own expectation are the three DERIVED booleans
+    below, computed from the section-28 relation of each comparison. They are
+    deliberately not a fourth status vocabulary: `has_overlap`,
+    `has_contradiction` and `is_new` are projections of the seven relation
+    labels the card schema already owns, so nothing here can disagree with a
+    card's own `related_prior_research` about what OVERLAPS means.
+
+    `is_new` means "every comparison came back UNRELATED or
+    INSUFFICIENT_EVIDENCE", which includes the no-prior-cards case: a first
+    document is trivially new.
+    """
+    new_id = str(new_card.get("document_id") or "")
+    comparisons = [
+        compare_evidence_cards(new_card, prior)
+        for prior in prior_cards
+        if str(prior.get("document_id") or "") != new_id
+    ]
+    relations = [c["relation"] for c in comparisons]
+    has_contradiction = "CONTRADICTS" in relations
+    has_overlap = any(r not in _NON_OVERLAP_RELATIONS for r in relations)
+    return {
+        "document_id": new_id,
+        "compared_against": [c["document_id"] for c in comparisons],
+        "comparisons": comparisons,
+        "links": [prior_research_link(c) for c in comparisons],
+        "relations": sorted(set(relations)),
+        "has_overlap": has_overlap,
+        "has_contradiction": has_contradiction,
+        "is_new": not (has_overlap or has_contradiction),
+    }
+
+
+def persist_prior_research_links(root, summary: Dict[str, Any], *,
+                                 source: str = "research-architect",
+                                 cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Write one Working Memory record per comparison, through the real router.
+
+    Same two disciplines persist_candidate() follows, for the same reasons: the
+    write goes through `memory_router.route_and_store()` rather than straight at
+    a tier, and the routed destination is ASSERTED to be WORKING_MEMORY. One
+    architect's reading of two external documents in one session is not verified
+    engineering knowledge about any DUT, and it must not be able to reach the
+    Engineering or Organizational tier even by a later editing accident.
+
+    Nothing here edits either card. `research/evidence_cards/` is never opened
+    for writing anywhere in this module.
+    """
+    from .memory_router import route_and_store
+
+    written: List[Dict[str, Any]] = []
+    for comparison in summary.get("comparisons", []):
+        record = {
+            "kind": PRIOR_RESEARCH_LINK_MEMORY_KIND,
+            "document_id": summary["document_id"],
+            "prior_document_id": comparison["document_id"],
+            "relation": comparison["relation"],
+            "note": comparison["note"],
+            "basis": comparison["basis"],
+            "source": source,
+            # Deliberately NOT `verified`, and deliberately carrying no
+            # `confidence`: a relation between two external documents is not a
+            # confidence-scored finding about this project, and putting a number
+            # here would hand the engineering admission gate one nothing
+            # measured.
+        }
+        routed = route_and_store(Path(root), record, cfg={} if cfg is None else cfg)
+        if routed.get("destination") != "WORKING_MEMORY":
+            raise CapabilityEvolutionCandidateValidationError(
+                f"a cross-card research comparison routed to {routed.get('destination')!r}; "
+                "it must land in WORKING_MEMORY. One session's reading of two external "
+                "documents is not verified engineering knowledge."
+            )
+        written.append(routed)
+    return written
