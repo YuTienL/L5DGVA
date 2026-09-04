@@ -10,7 +10,7 @@ subcommand (`resync-notes`) has since been added to `dv_harness/cli.py` by the c
 Phase-7 gap-close workflow, with no matching `just` recipe. The parity test was
 FAILING on the current tree when this pass started.
 
-Commit: `memory(cli): give the new resync-notes subcommand its just recipe`
+Commit: `d264449` — `memory(cli): give the new resync-notes subcommand its just recipe`
 (`justfile`, `dv_harness_tests/test_justfile.py`).
 
 Test summary: `309 passed` across all 14 memory/vault/CLI/justfile test files (the single
