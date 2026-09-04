@@ -13,6 +13,47 @@ from typing import Any, Dict, Optional
 # is the only thing on stdout, e.g. if the shell prints its own noise).
 RESULT_MARKER = "DVHKC_RESULT:"
 
+# --- SYS-3 SUBSYSTEM RECORD SHAPE -------------------------------------------
+# The System-Level Verification Integration workflow's SYS-3 ("KNOWLEDGE
+# CENTER CHECK") names 21 fields to retrieve per subsystem, and its own rule
+# is "Never create a parallel Knowledge Center". So this is a TYPED ACCESSOR
+# over the existing add/search verbs -- same broker, same shards, same
+# provenance/staleness lifecycle -- not a second store. All it adds is a
+# fixed category and a fixed field vocabulary, so that "what does the shared
+# KC know about subsystem X" is asked the same way by every caller instead of
+# each one inventing its own `record` shape inside the client's otherwise
+# opaque category/protocol/record envelope.
+SUBSYSTEM_CATEGORY = "subsystem_environment"
+SUBSYSTEM_RECORD_KIND = "subsystem_environment_record"
+
+SUBSYSTEM_RECORD_FIELDS: tuple = (
+    "SUBSYSTEM_ID", "PROTOCOL", "ROLE", "VERSION", "GIT_SHA",
+    "ENVIRONMENT_PATH", "RTL_PATH", "VIP", "VIP_VERSION", "BUILD_STATUS",
+    "LAST_KNOWN_PASS", "REGRESSION_STATUS", "COVERAGE_STATUS",
+    "KNOWN_LIMITATIONS", "KNOWN_FAILURES", "COMMAND_TXT", "OWNER_AGENT",
+    "OWNER_SKILL", "READINESS", "EVIDENCE", "CONFIDENCE",
+)
+
+
+def normalize_subsystem_record(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Project an arbitrary stored KC record onto the 21 SYS-3 field names,
+    case-insensitively (a record written as `git_sha` and one written as
+    `GIT_SHA` are the same fact). A field the record does not carry maps to
+    None -- deliberately present-and-null rather than absent, so "the KC has
+    no ROLE for this subsystem" is a readable fact instead of a KeyError at
+    every call site. The broker's own lifecycle columns (memory_id/status/
+    written_at/revalidate_by/confirmation_count/provenance) are carried
+    through under `_kc` because SYS-3's staleness rule needs them."""
+    lowered = {str(k).lower(): v for k, v in (raw or {}).items()}
+    out: Dict[str, Any] = {f: lowered.get(f.lower()) for f in SUBSYSTEM_RECORD_FIELDS}
+    out["_kc"] = {
+        k: (raw or {}).get(k)
+        for k in ("memory_id", "status", "written_at", "revalidate_by",
+                  "confirmation_count", "last_confirmed_at", "provenance")
+        if k in (raw or {})
+    }
+    return out
+
 
 def _default_user() -> str:
     # Same fallback chain as control_plane.py's _default_user() -- reused
@@ -232,6 +273,55 @@ class KnowledgeCenterClient:
             "max_age_days": self.cfg.get("max_age_days", 180),
         }
         return self._invoke("confirm", payload)
+
+    def subsystem_record(self, subsystem_id: str, protocol: str = "",
+                         limit: int = 16) -> Dict[str, Any]:
+        """SYS-3: what does the shared Knowledge Center know about ONE
+        subsystem environment. Routes through the existing `search` verb on
+        the fixed SUBSYSTEM_CATEGORY shard -- no new transport, no new
+        server-side command, no second store.
+
+        Returns {"ok", "found", "record", "candidates"}. `found` is False
+        (not an error) when the KC is reachable but holds no record for this
+        subsystem: absence of a KC record is itself citable truth, and SYS-2
+        treats it very differently from "the KC could not be reached".
+
+        Matching is an exact, case-insensitive SUBSYSTEM_ID equality on the
+        normalized record -- never a substring hit on the free-text search,
+        which would happily return "USB3_DEVICE" for a query of "USB"."""
+        res = self.search(category=SUBSYSTEM_CATEGORY, protocol=protocol,
+                          text=str(subsystem_id), limit=limit)
+        if not res.get("ok", True) or res.get("error"):
+            return {"ok": False, "found": False, "record": None,
+                    "error": res.get("error", "SEARCH_FAILED"),
+                    "detail": res.get("detail", "")}
+        wanted = str(subsystem_id).strip().lower()
+        candidates = [normalize_subsystem_record(r) for r in (res.get("records") or [])]
+        exact = [c for c in candidates if str(c.get("SUBSYSTEM_ID") or "").strip().lower() == wanted]
+        return {
+            "ok": True,
+            "found": bool(exact),
+            # search() already sorts newest-first, so the first exact hit is
+            # the most recently written record for this subsystem.
+            "record": exact[0] if exact else None,
+            "candidates": [str(c.get("SUBSYSTEM_ID") or "") for c in candidates],
+        }
+
+    def record_subsystem(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """SYS-3 write half: publish/refresh one subsystem environment record
+        on the same shard `subsystem_record()` reads. Uses the existing `add`
+        verb, so the server stamps written_at/revalidate_by and the record
+        joins the same staleness/confirm/deprecate lifecycle every other
+        shared record has. Requires SUBSYSTEM_ID -- a record nobody can look
+        up by subsystem is not a subsystem record."""
+        subsystem_id = str((record or {}).get("SUBSYSTEM_ID") or "").strip()
+        if not subsystem_id:
+            return {"ok": False, "error": "SUBSYSTEM_ID_REQUIRED"}
+        payload = {f: (record or {}).get(f) for f in SUBSYSTEM_RECORD_FIELDS}
+        payload["SUBSYSTEM_ID"] = subsystem_id
+        payload["kind"] = SUBSYSTEM_RECORD_KIND
+        payload["title"] = f"{subsystem_id} subsystem environment"
+        return self.add(SUBSYSTEM_CATEGORY, str(record.get("PROTOCOL") or "_general"), payload)
 
     def db_info(self, category: str = "", protocol: str = "", action: str = "",
                 limit: int = 100) -> Dict[str, Any]:

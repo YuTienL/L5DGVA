@@ -900,6 +900,34 @@ def main():
                                 "the Q-ID is derived from the finding, so re-running over "
                                 "unchanged patterns re-mints the same id, never a duplicate.")
 
+    # SYS-1..SYS-4 of the System-Level Verification Integration workflow
+    # (2026-09-04): discover candidate subsystem environments and present
+    # SUBSYSTEM / ENVIRONMENT PATH / KNOWLEDGE CENTER STATUS / READINESS /
+    # PROTOCOL / VERSION-SHA, so that the explicit user selection
+    # environment_mode_router.resolve_environment_mode() already REQUIRES is
+    # made against a real candidate list instead of from memory. Discovery/
+    # analysis/reporting only -- it generates no System-Level environment,
+    # which is SYS-40 and needs its own human approval.
+    psd = sub.add_parser("subsystem-discovery",
+                         help="SYS-1..4: list every candidate subsystem verification "
+                              "environment with its existence class (EXISTS_READY/"
+                              "EXISTS_PARTIAL/EXISTS_BLOCKED/EXISTS_UNKNOWN/NOT_FOUND), "
+                              "13-factor readiness (READY/PARTIAL/BLOCKED/UNKNOWN) and "
+                              "shared Knowledge Center status, then require an explicit "
+                              "selection. Reports only; composes nothing.")
+    psd.add_argument("--select", action="append", default=None, metavar="SUBSYSTEM",
+                     help="Name one subsystem to select for System-Level composition. "
+                          "Repeatable. Omitted means pure discovery: the candidate table "
+                          "is printed and the selection is explicitly refused, per SYS-1's "
+                          "'the Harness must NOT assume all available subsystems "
+                          "participate'.")
+    psd.add_argument("--knowledge-center", action="store_true", dest="knowledge_center",
+                     help="Also query the SHARED Knowledge Center (SYS-3) for each "
+                          "candidate and report contradictions/staleness against current "
+                          "repository evidence. Off by default: it is a real remote call.")
+    psd.add_argument("--json", action="store_true",
+                     help="Print raw JSON instead of the human-readable SYS-1..4 report.")
+
     # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
     # ordering as an executable, queryable rule rather than prose an agent is
     # trusted to have read. NOT the same list as tools/verification_flow/
@@ -2011,6 +2039,25 @@ def main():
             print(f"authority {args.authority_cmd} FAILED: {exc.reason} "
                   f"{json.dumps(exc.detail, ensure_ascii=False, default=str)}", file=sys.stderr)
             raise SystemExit(1)
+    elif args.cmd == "subsystem-discovery":
+        from . import subsystem_discovery as sd
+        kc_client = None
+        if args.knowledge_center:
+            from .config import load_config
+            from .knowledge_center import KnowledgeCenterClient
+            kc_client = KnowledgeCenterClient(load_config(h.root), h.root)
+        result = sd.require_explicit_selection(
+            h.root, args.select or [], knowledge_center_client=kc_client)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        else:
+            print(sd.format_report(result))
+        # Exit 0 for a pure listing (no --select is a legitimate discovery
+        # run, not a failure); exit 2 when a selection was made but is not
+        # admissible -- a selected subsystem that is not EXISTS_READY, or a
+        # candidate-set conflict that stands. CI-friendly, same convention as
+        # `connectivity-check --check-only`.
+        raise SystemExit(0 if (not args.select or result["selection_admissible"]) else 2)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
         result = reference_pattern_audit.audit_directory(

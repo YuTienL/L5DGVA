@@ -122,6 +122,18 @@ def resolve_environment_mode(evidence: Dict[str, Any]) -> Dict[str, Any]:
     the static environment_mode_policy.json file."""
     requested = _norm_list(evidence.get("requested_subsystems"))
     existing = {s.lower() for s in _norm_list(evidence.get("existing_registered_subsystems"))}
+    # SYS-1 ("USER CONTROLS SYSTEM COMPOSITION"): the discovered candidate
+    # set this selection is being made FROM. Optional -- every pre-existing
+    # caller omits it and gets exactly the previous behaviour -- and it is
+    # never a substitute for `requested_subsystems`: a candidate list can
+    # only ever be OFFERED, never auto-selected, because SYS-1's own rule is
+    # "The user decides which subsystem environments participate. The Harness
+    # must NOT assume that all available subsystems should be integrated."
+    # See subsystem_discovery.discover_subsystem_candidates() for the real
+    # producer of this list.
+    candidates = _norm_list(evidence.get("candidate_subsystems"))
+    requested_lower = {s.lower() for s in requested}
+    unselected = [c for c in candidates if c.lower() not in requested_lower]
 
     if not requested:
         return {
@@ -131,6 +143,8 @@ def resolve_environment_mode(evidence: Dict[str, Any]) -> Dict[str, Any]:
             "missing_subsystems": [],
             "reused_subsystems": [],
             "needs_subsystem_mode_first": False,
+            "candidate_subsystems": candidates,
+            "unselected_candidates": candidates,
             "reason": "MODE_MUST_BE_EXPLICIT_BEFORE_GENERATION",
             "evidence": (
                 "environment_mode_router.resolve_environment_mode received no "
@@ -139,6 +153,10 @@ def resolve_environment_mode(evidence: Dict[str, Any]) -> Dict[str, Any]:
                 "SYSTEM_LEVEL_MODE' (environment_mode_policy.json: "
                 "mode_must_be_explicit_before_generation=true) -- there is "
                 "nothing to select a mode FROM yet."
+                + (f" {len(candidates)} discovered candidate(s) are available "
+                   f"to choose from ({candidates}); SYS-1 requires an explicit "
+                   "user selection and forbids assuming all of them "
+                   "participate." if candidates else "")
             ),
         }
 
@@ -189,6 +207,13 @@ def resolve_environment_mode(evidence: Dict[str, Any]) -> Dict[str, Any]:
         "missing_subsystems": missing,
         "reused_subsystems": reused,
         "needs_subsystem_mode_first": needs_subsystem_mode_first,
+        # SYS-1: a DELIBERATELY unselected candidate is reported, not
+        # silently dropped. Composing a subset is the correct behaviour --
+        # what would be wrong is doing it invisibly, so that nobody can tell
+        # afterwards whether "PCIe is not in this system environment" was a
+        # user decision or the harness losing track of it.
+        "candidate_subsystems": candidates,
+        "unselected_candidates": unselected,
         "next_action": next_action,
         "evidence": evidence_str,
     }
