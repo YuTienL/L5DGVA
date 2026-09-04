@@ -3887,7 +3887,12 @@ class DVHarness:
                 return
 
             if stage == Stage.SIGNOFF.value:
-                ok, why, redirect_stage = can_signoff(self.state, self.cfg)
+                # self.blackboard (2026-09-04): can_signoff()'s qualified-
+                # conclusion check needs the REAL Blackboard the RE_AUDIT PASS
+                # wrote its QualifiedConclusion to. This is the one production
+                # caller, so passing it here is what makes that check fire on
+                # the real path rather than only when a test opts in.
+                ok, why, redirect_stage = can_signoff(self.state, self.cfg, self.blackboard)
                 if not ok:
                     if redirect_stage:
                         # Auto-recoverable (e.g. SHA drift -> re-sync,

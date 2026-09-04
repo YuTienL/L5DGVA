@@ -20,6 +20,11 @@ DEFAULT_CONFIG = {
         "stop_on_wait_user": True,
         "require_exact_server_sha": True,
         "require_second_pass_audit": True,
+        # Whether a recorded Qualified Conclusion that did NOT qualify blocks
+        # SIGNOFF (policy.can_signoff). Distinct from require_second_pass_audit
+        # above: that one asks whether RE_AUDIT reached PASS, this one asks
+        # what it concluded.
+        "require_qualified_conclusion": True,
         "require_all_actionable_findings_closed": True,
         "require_stage_gate_evidence": True,
         "require_dv_review_cosign": False,

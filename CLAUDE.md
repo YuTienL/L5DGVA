@@ -777,6 +777,32 @@ an already-recorded decision, or an already-completed gate run into a failed com
 (both halves — the write, and a real node declaring the `blackboard_read`) are proven end-to-end
 against the real shipped graph by `dv_harness_tests/test_blackboard_subsystem_wiring.py`.
 
+**A fourth topic joined them on 2026-09-04, from the opposite direction**: `qualified_conclusion`
+was already being WRITTEN on the real path — `engine._score_root_cause_confidence()` composes
+RE_AUDIT's hard-gate verdict and `inference.score_confidence()`'s independently recomputed
+confidence into one `QualifiedConclusion` (`dv_harness/qualified_conclusion.py`) on every
+gate-verified RE_AUDIT/RCA_JOIN PASS — but nothing on the production path READ it: no node declared
+it, and its only consumer was `dashboard.py`'s display. So the harness's "Hypothesis + Evidence +
+Result + Gate = Conclusion" chain produced a Conclusion that never entered closure. Both halves of
+that edge now exist:
+- `REQUIREMENT_CLOSURE`, `PROMOTION_READINESS` and `SIGNOFF` declare it in `blackboard_read`, so the
+  real conclusion reaches each closure stage's prompt; it is also a `blackboard_key` entry on
+  SIGNOFF's `expected_evidence` checklist.
+- `policy.can_signoff()` — the hard-stop `engine.loop()` consults BEFORE running SIGNOFF — now
+  REFUSES (BLOCKED, no auto-redirect, a human decision) while a recorded conclusion says
+  `is_qualified: false`. This is a different question from the neighbouring
+  `require_second_pass_audit`, which only asks whether RE_AUDIT reached stage PASS, never what it
+  concluded — and the difference is reachable, not theoretical: `root_cause_evidence_gate` mandates
+  non-empty `counter_evidence` only at its own HIGH/CONFIRMED tier, so a MEDIUM finding with one
+  supporting citation and two unrefuted counter-evidence entries passes all 11 RE_AUDIT gates while
+  the recompute lands at LOW (`2*1 + 2 - 3*2 = -2`). **Disclosed residual**, scoped like
+  `require_tier`'s: only a record that EXISTS and says false refuses. Absence is not a refusal —
+  `require_second_pass_audit` already covers "RE_AUDIT never passed", and blocking on absence would
+  make every pre-existing project unclosable. `policy.require_qualified_conclusion` (default true)
+  is the switch. Proven on the real path — including the reachability of the unqualified-yet-
+  gate-passing state, and `loop()` never dispatching SIGNOFF while it holds — by
+  `dv_harness_tests/test_qualified_conclusion_closure_gate.py`.
+
 ## env.manifest.json Fact Sources: schema 1.1 (2026-09-04)
 
 `env.manifest.json` keeps exactly three top-level layers (`vip_config` / `dut_facts` /

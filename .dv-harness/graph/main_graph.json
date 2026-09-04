@@ -428,7 +428,7 @@
       "route": "review-route",
       "agent": "review-agent",
       "skills": ["requirements-traceability", "verification-signoff"],
-      "blackboard_read": ["requirements", "reaudit", "system_level", "expert_feedback"],
+      "blackboard_read": ["requirements", "reaudit", "system_level", "expert_feedback", "qualified_conclusion"],
       "blackboard_write": [],
       "parallel_group": null,
       "join_group": null
@@ -438,7 +438,7 @@
       "route": "review-route",
       "agent": "review-agent",
       "skills": ["verification-signoff"],
-      "blackboard_read": ["requirements", "reaudit", "system_level", "expert_feedback"],
+      "blackboard_read": ["requirements", "reaudit", "system_level", "expert_feedback", "qualified_conclusion"],
       "blackboard_write": ["promotion"],
       "parallel_group": null,
       "join_group": null
@@ -448,14 +448,15 @@
       "route": "review-route",
       "agent": "review-agent",
       "skills": ["verification-signoff"],
-      "blackboard_read": ["requirements", "reaudit", "git_state", "server_state", "regression_state", "promotion", "connectivity_gates", "open_questions_decisions"],
+      "blackboard_read": ["requirements", "reaudit", "git_state", "server_state", "regression_state", "promotion", "connectivity_gates", "open_questions_decisions", "qualified_conclusion"],
       "blackboard_write": [],
       "parallel_group": null,
       "join_group": null,
       "expected_evidence": [
         { "item_id": "promotion", "description": "PROMOTION_READINESS's readiness record (node.blackboard_read) -- 'Promotion Readiness'-approved before SIGNOFF may run", "kind": "blackboard_key" },
         { "item_id": "reaudit", "description": "RE_AUDIT's closure record (node.blackboard_read)", "kind": "blackboard_key" },
-        { "item_id": "regression_state", "description": "REGRESSION_MONITOR's result record (node.blackboard_read)", "kind": "blackboard_key" }
+        { "item_id": "regression_state", "description": "REGRESSION_MONITOR's result record (node.blackboard_read)", "kind": "blackboard_key" },
+        { "item_id": "qualified_conclusion", "description": "RE_AUDIT's composed QualifiedConclusion -- gate verdict AND independently recomputed inference confidence as one is_qualified verdict (node.blackboard_read); policy.can_signoff() refuses SIGNOFF while a recorded one says is_qualified=false", "kind": "blackboard_key" }
       ],
       "expected_outputs": [
         { "item_id": "false_pass_resistance_gate.oracle_independent", "description": "oracle_independent field of SIGNOFF's dv-harness-evidence:false_pass_resistance_gate block", "kind": "evidence_field" },
