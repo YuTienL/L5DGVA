@@ -43,6 +43,19 @@
 # git binary already required by this project).
 set windows-shell := ["D:/Program Files/Git/bin/sh.exe", "-cu"]
 
+# REAL, CONFIRMED GOTCHA (found live via `just --dry-run` while adding the
+# memory recipes, 2026-09-04): just's `*variadic` interpolation `{{args}}`
+# joins the caller's arguments with spaces and does NOT re-quote them, so
+# `just memory-add --failure "enum timeout"` renders as `--failure enum
+# timeout` and argparse sees a stray positional. `set positional-arguments`
+# binds a recipe's arguments to the shell's own `$1..$n`/`$@` instead, so
+# `"$@"` forwards each one as a single word with its quoting intact. Every
+# pass-through recipe below therefore uses `"$@"`, never `{{args}}`.
+# Additive only: it defines shell positionals that nothing above this line
+# references, so every pre-existing `{{...}}`-interpolating recipe is
+# unchanged (asserted by dv_harness_tests/test_justfile.py).
+set positional-arguments := true
+
 # REAL, CONFIRMED GOTCHA (see tools/remote/remote_exec.py's own 2026-09-02
 # comment block): invoking remote_exec.py through Git Bash/MSYS's sh.exe
 # auto-rewrites a bare /home/... argument (e.g. --cwd, --put's REMOTE, a
@@ -327,3 +340,75 @@ fsdbreport fsdb bt et signals out fmt="-verilog":
 # =============================================================================
 pipeline pattern=pattern seed=seed queue=queue workdir=preflight_workdir license_server=license_server: (build queue workdir license_server) (verify pattern seed queue workdir license_server) (run pattern seed queue workdir license_server)
     @echo "pipeline done: build -> verify -> run for PATTERN={{pattern}} SEED={{seed}}. Run 'just fsdbreport' on the resulting FSDB next."
+
+# =============================================================================
+# 6. ENGINEERING MEMORY (DV-Knowledge Vault)
+# =============================================================================
+# One fixed recipe per `dv-harness memory <sub>` subcommand
+# (dv_harness/cli.py's `memory` command group, backed by
+# dv_harness/memory_vault.py + memory_dedup.py + memory_doctor.py). Same
+# reason the pipeline recipes above exist: the memory surface is the one an
+# agent reaches for mid-debug, which is exactly when a hand-composed
+# `python -m dv_harness.cli --project-root ... memory search --property
+# subsystem=link_training --limit 5` is most likely to be typed wrong.
+#
+# ALL LOCAL: every recipe here reads/writes the local vault and the local
+# .dv-harness/ store only. Nothing submits an LSF job, needs a license, or
+# touches the remote server, so -- like connectivity-check and
+# regression-tier above, and unlike build/verify/run -- none of them carry
+# a `preflight` dependency.
+#
+# `memory-doctor` and `memory-validate` exit NON-ZERO on a BLOCKED overall
+# verdict (cli.py: `raise SystemExit(0 if result["overall"] != "BLOCKED"
+# else 1)`), so either is usable directly as a CI/pre-commit gate. PARTIAL
+# exits 0 on purpose -- a genuinely absent Obsidian CLI is a disclosed
+# fallback, not a failure (see CLAUDE.md's Engineering Memory Policy).
+
+# Provider status (Obsidian detection + filesystem-adapter readiness) plus
+# real note counts per memory tier.
+memory-status:
+    {{python}} {{dv_harness_cli}} memory status
+
+# Full Phase-21 health check: vault writable, git, Obsidian CLI, filesystem
+# fallback, schema, broken links, duplicate IDs, invalid YAML, large/
+# forbidden artifacts, secret leakage, MemoryStore index drift.
+memory-doctor:
+    {{python}} {{dv_harness_cli}} memory doctor
+
+# The note-CORRECTNESS subset of doctor (no environment checks) -- the
+# cheaper one to run on every commit.
+memory-validate:
+    {{python}} {{dv_harness_cli}} memory validate
+
+# Keyword/tag/property/wiki-link search. The free-text query is the first
+# argument and every filter passes through with its quoting intact, e.g.
+# `just memory-search "link training" --protocol PCIE --limit 5`, or
+# filter-only `just memory-search "" --tag timeout`.
+memory-search *args:
+    {{python}} {{dv_harness_cli}} memory search "$@"
+
+# One note's full frontmatter + body.
+memory-show note_id:
+    {{python}} {{dv_harness_cli}} memory show "{{note_id}}"
+
+# Forward-link/backlink graph around one note, BFS over real [[WikiLink]]s.
+memory-graph note_id depth="2":
+    {{python}} {{dv_harness_cli}} memory graph "{{note_id}}" --depth {{depth}}
+
+# Write a new vault note. Phase-18 dedup runs FIRST and refuses a DUPLICATE
+# unless --force is passed, e.g. `just memory-add --protocol USB --failure
+# "enum timeout after SetAddress" --root-cause "..." --fix "..."`.
+memory-add *args:
+    {{python}} {{dv_harness_cli}} memory add "$@"
+
+# Engineering -> Organizational promotion gate. Takes a JSON MemoryStore
+# engineering-tier memory_id (MEM-...), not a vault note id, plus the
+# confidence inputs (--independent-sources, --evidence-refs-verified, ...).
+memory-promote *args:
+    {{python}} {{dv_harness_cli}} memory promote "$@"
+
+# Bootstrap the vault, then (when memory.git_enabled) commit pending vault
+# changes and report recent history. The optional message should follow this
+# project's own `memory(<protocol>): <description>` convention.
+memory-sync message="":
+    {{python}} {{dv_harness_cli}} memory sync {{ if message == "" { "" } else { '--message "' + message + '"' } }}

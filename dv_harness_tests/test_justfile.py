@@ -1,16 +1,25 @@
 """Real-subprocess tests for the project-root `justfile` (2026-09-03,
 "just" recipe layer task).
 
-Two things only, matching the task's own scope:
+Three things:
   1. The justfile parses/lists cleanly via a real `just --list` subprocess.
   2. Each recipe's GENERATED COMMAND STRING is correct for a given input,
      verified via `just --dry-run <recipe> <args>` -- a real `just`
      subprocess that renders the exact shell command a real run would
      execute, but never spawns it (see `just --help`: --dry-run "Print
-     what just would do without doing it"). No test here ever reaches a
-     real remote server, submits a real LSF job, or invokes
-     tools/remote/remote_exec.py's own network code -- `just` itself is
-     the only subprocess these tests spawn.
+     what just would do without doing it").
+  3. The `memory-*` recipes (2026-09-04) are additionally EXECUTED for
+     real, via `_just_real()`. They are the only recipes here that can be:
+     every one of them is a local, read-only-by-default
+     `dv-harness memory <sub>` invocation against this project's own vault
+     -- no remote server, no LSF job, no license. That matters because
+     their argument FORWARDING (`"$@"` under `set positional-arguments`)
+     is invisible to --dry-run, which renders the literal `"$@"` rather
+     than what the shell will expand it to.
+
+No test here reaches a real remote server, submits a real LSF job, or
+invokes tools/remote/remote_exec.py's own network code -- every
+remote-facing recipe is exercised through --dry-run only.
 
 `just` was installed this session via `winget install --id Casey.Just`
 (confirmed real package id via `winget search just`). Tests skip cleanly
@@ -20,6 +29,7 @@ used for the Obsidian-CLI-dependent memory tests.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -52,6 +62,19 @@ def _just(*args, timeout=30):
         cwd=str(ROOT), capture_output=True, text=True, timeout=timeout, encoding="utf-8",
     )
     return r.returncode, r.stdout + r.stderr, r.stderr
+
+
+def _just_real(*args, timeout=120):
+    """Really RUN a recipe (no --dry-run). Only ever called on `memory-*`
+    recipes -- see this module's docstring for why those, and only those,
+    are safe to execute here. Returns (returncode, stdout) with stdout kept
+    SEPARATE from stderr, because these tests parse the CLI's JSON result
+    and `just` itself echoes the resolved command line to stderr."""
+    r = subprocess.run(
+        [JUST_BIN, "--justfile", str(JUSTFILE), "--working-directory", str(ROOT), *args],
+        cwd=str(ROOT), capture_output=True, text=True, timeout=timeout, encoding="utf-8",
+    )
+    return r.returncode, r.stdout
 
 
 # --- 1. The justfile parses/lists cleanly -----------------------------------
@@ -286,3 +309,142 @@ class TestGeneratedCommandStrings:
         assert "VIP_HOME=/proj/vip/full_tree" in out
         assert "DUT_ROOT_PATH=/proj/rtl/lan063" in out
         assert "UVM_ROOT_PATH=/proj/uvm/usb_uvm" in out
+
+
+# --- 3. The memory recipes (2026-09-04) -------------------------------------
+# Phase 20 of the Obsidian+Git/Markdown Hybrid Engineering Memory spec: one
+# fixed `just` recipe per `dv-harness memory <sub>` subcommand, so the
+# memory surface an agent reaches for mid-debug is a named recipe rather
+# than a hand-composed `python -m dv_harness.cli --project-root ... memory
+# search --property subsystem=... --limit 5`.
+
+MEMORY_RECIPES = (
+    "memory-status", "memory-search", "memory-show", "memory-add",
+    "memory-promote", "memory-graph", "memory-validate", "memory-sync",
+    "memory-doctor",
+)
+
+
+class TestMemoryRecipes:
+    def test_every_memory_cli_subcommand_has_a_recipe(self):
+        """One recipe per subcommand the real `dv-harness memory` command
+        group defines -- checked against argparse's OWN subcommand list, so
+        a subcommand added to cli.py without a recipe fails here rather
+        than being noticed by nobody."""
+        rc, out, err = _just("--summary")
+        assert rc == 0, f"stderr={err!r}"
+        listed = set(out.split())
+        for name in MEMORY_RECIPES:
+            assert name in listed, f"recipe {name!r} missing from `just --summary`:\n{out}"
+
+        help_proc = subprocess.run(
+            [sys.executable, "-m", "dv_harness.cli", "--project-root", str(ROOT), "memory", "--help"],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=120, encoding="utf-8",
+        )
+        assert help_proc.returncode == 0, help_proc.stderr
+        # argparse renders the choice list as "{status,search,...}".
+        choices = help_proc.stdout.split("{", 1)[1].split("}", 1)[0].split(",")
+        assert sorted(choices) == sorted(n[len("memory-"):] for n in MEMORY_RECIPES), (
+            f"cli.py's memory subcommands {sorted(choices)} and the justfile's recipes disagree"
+        )
+
+    def test_memory_recipes_are_never_preflight_gated(self):
+        """Every one is local (own vault + own .dv-harness/ store): no LSF
+        job, no license, no remote server. Gating them on `preflight` would
+        make an offline `just memory-doctor` fail for no reason."""
+        for recipe in ("memory-status", "memory-doctor", "memory-validate"):
+            rc, out, err = _just("--dry-run", recipe)
+            assert rc == 0, f"stderr={err!r}"
+            assert "preflight" not in out, f"{recipe} must not be gated"
+
+    def test_no_arg_recipes_render_the_right_cli_command(self):
+        for recipe, sub in (("memory-status", "status"), ("memory-doctor", "doctor"),
+                            ("memory-validate", "validate")):
+            rc, out, err = _just("--dry-run", recipe)
+            assert rc == 0, f"stderr={err!r}"
+            assert "-m dv_harness.cli" in out
+            assert f"memory {sub}" in out
+            assert "--project-root" in out
+
+    def test_show_and_graph_quote_their_note_id(self):
+        rc, out, err = _just("--dry-run", "memory-show", "MEM-1A2B3C4D5E")
+        assert rc == 0, f"stderr={err!r}"
+        assert 'memory show "MEM-1A2B3C4D5E"' in out
+
+        rc, out, err = _just("--dry-run", "memory-graph", "MEM-1A2B3C4D5E")
+        assert rc == 0, f"stderr={err!r}"
+        assert 'memory graph "MEM-1A2B3C4D5E" --depth 2' in out
+
+        rc, out, err = _just("--dry-run", "memory-graph", "MEM-1A2B3C4D5E", "4")
+        assert rc == 0, f"stderr={err!r}"
+        assert "--depth 4" in out
+
+    def test_sync_omits_the_message_flag_when_no_message_is_given(self):
+        """`--message ""` and no `--message` are different requests: the
+        CLI substitutes its own default commit message only for the
+        latter, so an empty default must not render the flag at all."""
+        rc, out, err = _just("--dry-run", "memory-sync")
+        assert rc == 0, f"stderr={err!r}"
+        assert "memory sync" in out
+        assert "--message" not in out
+
+        rc, out, err = _just("--dry-run", "memory-sync", "memory(usb): record enum timeout")
+        assert rc == 0, f"stderr={err!r}"
+        assert '--message "memory(usb): record enum timeout"' in out
+
+    def test_pass_through_recipes_forward_arguments_not_interpolate_them(self):
+        """REGRESSION GUARD for the real defect found while writing these
+        recipes: just's `*variadic` interpolation (`{{args}}`) joins the
+        caller's arguments with spaces WITHOUT re-quoting, so
+        `--failure "enum timeout"` becomes two words and argparse sees a
+        stray positional. Every pass-through recipe must therefore use
+        `"$@"` (see `set positional-arguments` in the justfile), which
+        --dry-run renders literally -- which is exactly why the real-run
+        test below exists as well."""
+        for recipe, sub in (("memory-search", "search"), ("memory-add", "add"),
+                            ("memory-promote", "promote")):
+            rc, out, err = _just("--dry-run", recipe)
+            assert rc == 0, f"stderr={err!r}"
+            assert f'memory {sub} "$@"' in out, (
+                f"{recipe} must forward arguments with \"$@\", not interpolate them:\n{out}"
+            )
+
+    def test_real_run_memory_search_preserves_a_multi_word_query(self):
+        """REALLY RUNS the recipe (no --dry-run) with a quoted multi-word
+        query -- the only way to prove the `"$@"` forwarding above actually
+        survives the shell, since --dry-run only shows the literal `"$@"`.
+        Paired with the negative control below, which proves the query used
+        here really would have broken under the interpolating form."""
+        rc, out = _just_real("memory-search", "link training", "--limit", "2")
+        assert rc == 0, f"`just memory-search` failed:\n{out}"
+        payload = json.loads(out)
+        assert payload["ok"] is True
+        assert isinstance(payload["results"], list)
+
+    def test_negative_control_the_unquoted_split_form_really_fails(self):
+        """Proves the test above is testing something. The same query
+        passed as two bare words -- exactly what `{{args}}` interpolation
+        would have produced -- is rejected by argparse."""
+        proc = subprocess.run(
+            [sys.executable, "-m", "dv_harness.cli", "--project-root", str(ROOT),
+             "memory", "search", "link", "training", "--limit", "2"],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=120, encoding="utf-8",
+        )
+        assert proc.returncode != 0
+        assert "unrecognized arguments: training" in proc.stderr
+
+    def test_real_run_memory_doctor_reports_a_real_verdict(self):
+        """REALLY RUNS the Phase-21 health check through the recipe. Exit 0
+        covers both READY and PARTIAL: a genuinely absent Obsidian CLI is a
+        disclosed filesystem fallback, not a failure (cli.py exits non-zero
+        only on BLOCKED). Asserting the check NAMES are present, rather
+        than a fixed overall verdict, keeps this from becoming a test of
+        this one machine's vault contents."""
+        rc, out = _just_real("memory-doctor")
+        assert rc == 0, f"`just memory-doctor` exited {rc} (BLOCKED?):\n{out}"
+        payload = json.loads(out)
+        assert payload["overall"] in {"READY", "PARTIAL"}
+        for check in ("vault_writable", "git", "obsidian_cli", "filesystem_fallback",
+                      "schema", "duplicate_ids", "invalid_yaml", "broken_links",
+                      "large_files", "secrets"):
+            assert check in payload["checks"], f"doctor lost the {check!r} check"
