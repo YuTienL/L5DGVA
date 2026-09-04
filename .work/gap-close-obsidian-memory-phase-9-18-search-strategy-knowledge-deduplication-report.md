@@ -24,8 +24,18 @@ enforcement was a real, closeable gap and is now closed.
 `test_memory_search_filters.py`) → **50 passed**; the wider
 memory/vault/dedup/CLI/debug-flow/tier/doctor/security/knowledge-layer set
 (12 files) → **253 passed**; the doc-mirror / doc-citation / memory-review /
-research-memory-governance set → **80 passed**;
+research-memory-governance set → **80 passed**; the engine-gates-and-routing /
+session / react-inference / react-working-memory-bridge / job-memory-mirror /
+write-guard / engineering-confirmation-accumulation set (10 files) →
+**422 passed** (27m36s, machine under heavy concurrent load);
 `python -m dv_harness.doc_citation_check --memory-docs` → 8 OK, 0 drifted.
+No failure anywhere.
+
+A whole-`dv_harness_tests/` run was attempted first and its process was lost to
+machine contention (several other workflows are running pytest in this repo
+concurrently); it was replaced by the four targeted runs above, which together
+cover every file that imports or exercises `memory.py`'s search, `memory_router`'s
+write path, `memory_dedup`, and the memory docs. Stated rather than glossed.
 
 ---
 
