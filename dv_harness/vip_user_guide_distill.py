@@ -4,9 +4,10 @@ distiller behind env.manifest.json's `vip_config.user_guide_refs` sub-layer.
 THE GAP THIS CLOSES (2026-09-04). The env.manifest.json spec's VIP layer
 asks for the VIP user guide to be "distilled OFFLINE into a reference file,
 never loaded into runtime context". A 2026-09-04 re-audit found no module
-implementing it: `doc_extraction.py` is a 71-line index/record-normalizer
-that carries its own 2026-08-28 NOTICE calling itself orphaned and contains
-no PDF text extraction at all, and `vip_distill.py` -- despite the name --
+implementing it: `doc_extraction.py` is an identity/provenance index and
+record-normalizer that contains no PDF text extraction at all (still true
+after its 2026-09-04 ResearchEvidenceCard extension, which is likewise
+identity-only), and `vip_distill.py` -- despite the name --
 normalizes sim.log/job-record/fsdbreport RUNTIME evidence and never opens a
 document. `.work/pdftxt/*.txt` are real PDF-derived text files, but they are
 protocol SPEC documents and nothing wired them anywhere. So the whole bullet

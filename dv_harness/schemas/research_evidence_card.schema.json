@@ -1,0 +1,386 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/research_evidence_card.schema.json",
+  "title": "research_evidence_card",
+  "description": "ONE external technical document -> ONE independent ResearchEvidenceCard, the single output shape of the `research-ingestion` skill (Research-Capability Evolution master prompt sections 6-9). Two halves with different authors, deliberately in one schema so a half-filled card cannot be mistaken for a finished one: the MECHANICAL half (schema_version, document_id, title, source, document_type, document_sha256/path/bytes/suffix, source_provenance, ingestion_timestamp, ingestion_version, analysis_version) is built by dv_harness.doc_extraction.build_research_evidence_card_skeleton() from real file identity and never by an LLM; the ANALYTICAL half is authored by the skill from reading the document itself. Every field is REQUIRED, so a skeleton does NOT validate -- that is the point, not a defect: `research_card_missing_fields()` names exactly what the reader still owes. This schema deliberately does NOT model cross-document synthesis (that is research-architect's job, master prompt section 28); `related_prior_research` and `contradictions` only record what THIS document itself asserts about other work.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "document_id", "title", "authors", "date", "source",
+    "document_type", "document_sha256", "document_path", "document_bytes",
+    "document_suffix", "source_provenance", "verification_domain",
+    "problem_statement", "core_method", "architecture_pattern",
+    "key_mechanisms", "inputs", "outputs", "ai_role",
+    "deterministic_tool_role", "eda_tools", "feedback_loop",
+    "quantitative_results", "limitations", "assumptions", "maturity",
+    "production_relevance", "evidence_strength", "confidence", "claim_set",
+    "candidate_l5_mapping", "related_prior_research", "contradictions",
+    "ingestion_timestamp", "ingestion_version", "analysis_version"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+
+    "document_id": {
+      "type": "string",
+      "pattern": "^DOC-[0-9a-f]{12}$",
+      "description": "CONTENT identity, not filename identity: 'DOC-' plus the first 12 hex chars of the document's sha256 (dv_harness.doc_extraction.sha256_file). Renaming or re-filing a document keeps its document_id; editing the document changes it, which is what makes DocumentIndex.needs_extract()'s incremental reuse correct. Never hand-assigned."
+    },
+
+    "title": { "type": "string", "minLength": 1, "description": "The document's own title. The skeleton builder seeds this from the file stem because that is all a hash can honestly know; the reader must replace it with the real title." },
+
+    "authors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "May legitimately be empty (an anonymous standard, an unattributed internal report). Empty means 'the document names no author', never 'not looked up'."
+    },
+
+    "date": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Publication/revision date exactly as the document states it (a bare year is fine). null when the document genuinely carries no date -- never a guessed one."
+    },
+
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Where this document came from, as a citable string: an arXiv id, a DOI, a conference name, a standards-body publication id, or the internal report's own identifier. The local file path lives in document_path; this field is what a reader outside this machine could use to find the same document."
+    },
+
+    "document_type": { "$ref": "#/$defs/document_type" },
+
+    "document_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Full sha256 of the document bytes. document_id is derived from this; both are kept because document_id is the short key cards cite each other by and this is the value a reader re-computes to check it."
+    },
+
+    "document_path": { "type": "string", "minLength": 1, "description": "Absolute path of the ingested file on the machine that ingested it. Machine-local by nature -- `source` is the portable identifier." },
+
+    "document_bytes": { "type": "integer", "minimum": 0 },
+
+    "document_suffix": { "$ref": "#/$defs/document_suffix" },
+
+    "source_provenance": {
+      "allOf": [{ "$ref": "#/$defs/evidence_ref" }],
+      "description": "Card-level provenance for the document as a whole, in the exact 5-key shape dv_harness.doc_extraction.evidence_ref() already returns -- reused rather than re-invented, so a research citation and a register-map citation are the same shape. page/section are empty strings here on purpose: the whole document is the referent. Per-claim provenance (which page, which section) lives on each claim_set entry's own source_location."
+    },
+
+    "verification_domain": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Which parts of the verification problem this document is about, in this repo's own vocabulary where one fits (e.g. 'regression selection', 'failure triage', 'coverage closure', 'verification planning', 'formal'). At least one -- a document that maps to no verification domain does not belong in an evidence card."
+    },
+
+    "problem_statement": { "type": "string", "minLength": 1, "description": "Master prompt section 8 PROBLEM: what verification problem the document addresses." },
+
+    "core_method": { "type": "string", "minLength": 1, "description": "Master prompt section 8 CORE IDEA: the real engineering method, in mechanism terms. Marketing terminology restated is a defect, not a summary." },
+
+    "architecture_pattern": { "$ref": "#/$defs/architecture_pattern" },
+
+    "key_mechanisms": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Named mechanisms the document actually uses (master prompt section 8's list -- Structured IR, Executable Contract, Semantic Delta, Mutation Analysis, Coverage-Guided Generation, Graph Reasoning, PSS Constraint Solving, Regression Ranking, Failure Clustering, LLM Planning, Deterministic Tool Feedback, Proof-Guided Repair -- is illustrative, not a closed enum, so a genuinely new mechanism can be named rather than forced into a neighbouring bucket). May be empty when the document describes results without a mechanism."
+    },
+
+    "inputs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Information the method requires." },
+    "outputs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Artifacts/results the method produces." },
+
+    "ai_role": { "type": "string", "minLength": 1, "description": "What is reasoned/decided by AI/LLM. 'NONE' is a valid and common answer -- say it explicitly rather than leaving the split implied." },
+    "deterministic_tool_role": { "type": "string", "minLength": 1, "description": "What comes from simulator/formal/coverage/compiler/lint/waveform/protocol-checker/static-analysis/regression-DB instead. This split is the whole point of the field pair (master prompt section 2.3: the LLM is never the verification oracle) -- a document where the LLM IS the oracle must say so here, because that is exactly the finding that must not be lost." },
+
+    "eda_tools": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Named EDA tools the work depends on. A non-empty list is itself evidence for a VENDOR_DEPENDENCY limitation." },
+
+    "feedback_loop": { "$ref": "#/$defs/feedback_loop" },
+
+    "quantitative_results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/quantitative_result" },
+      "description": "Master prompt section 8 RESULTS: 'Extract quantitative results exactly. Never invent missing values.' An empty array is the correct card for a paper that reports no numbers -- and is a strong input to evidence_strength 1."
+    },
+
+    "limitations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/limitation" },
+      "description": "Master prompt section 8 LIMITATIONS. The tag vocabulary is the closed detection list from that section plus OTHER, so 'small benchmark' is a machine-countable property across cards rather than a phrase each reader words differently."
+    },
+
+    "assumptions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "What the method assumes but does not establish." },
+
+    "maturity": { "$ref": "#/$defs/maturity" },
+    "production_relevance": { "$ref": "#/$defs/production_relevance" },
+    "evidence_strength": { "$ref": "#/$defs/evidence_strength" },
+
+    "confidence": {
+      "allOf": [{ "$ref": "#/$defs/confidence_level" }],
+      "description": "Card-level confidence in this card's own reading of the document."
+    },
+
+    "claim_set": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/claim" },
+      "description": "Master prompt section 9. Every important claim, each classified as exactly one of FACT/AUTHOR_CLAIM/INFERENCE/HYPOTHESIS. At least one -- a card that extracts no claim has not read the document."
+    },
+
+    "candidate_l5_mapping": { "$ref": "#/$defs/candidate_l5_mapping" },
+
+    "related_prior_research": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/prior_research_link" },
+      "description": "Only relations THIS document itself asserts about other work (its own related-work section), or a link to another card whose document this one cites. Cross-card synthesis -- deciding that two independent papers converge -- is research-architect's job (master prompt section 28) and must NOT be performed while filling this field, per section 27's no-cross-document-contamination rule."
+    },
+
+    "contradictions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contradiction" },
+      "description": "Internal contradictions within this document, or a place where it contradicts something it cites. Same boundary as related_prior_research: cross-card contradiction hunting belongs to research-architect."
+    },
+
+    "ingestion_timestamp": { "type": "string", "format": "date-time", "description": "When the skeleton was built. Machine-set." },
+    "ingestion_version": { "const": "1.0", "description": "Version of the mechanical skeleton builder's own output contract." },
+    "analysis_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Version of the ANALYTICAL pass over this document. Separate from ingestion_version because re-reading the same unchanged document with better questions is a real event: document_sha256 and ingestion_version stay put while this increments."
+    }
+  },
+
+  "$defs": {
+    "document_type": {
+      "enum": [
+        "ACADEMIC_PAPER", "ARXIV_PAPER", "CONFERENCE_PAPER", "STANDARD",
+        "ACCELLERA_DOCUMENT", "VENDOR_TECHNICAL_REPORT",
+        "VENDOR_APPLICATION_NOTE", "ARCHITECTURE_REPORT",
+        "ENGINEERING_ARTICLE", "BENCHMARK_REPORT",
+        "INTERNAL_ENGINEERING_REPORT", "INTERNAL_VERIFICATION_REPORT",
+        "TECHNICAL_DESIGN_DOCUMENT", "UNCLASSIFIED"
+      ],
+      "description": "Master prompt section 6's supported source types. UNCLASSIFIED is what the mechanical skeleton builder writes, because a file hash cannot know the type -- it is a to-be-replaced default, not a legitimate resting state for a finished card."
+    },
+
+    "document_suffix": {
+      "enum": [".pdf", ".docx", ".html", ".htm", ".txt", ".md"],
+      "description": "Must equal dv_harness.doc_extraction.RESEARCH_DOCUMENT_SUFFIXES. Deliberately NARROWER than that module's pre-existing SUPPORTED set: the RTL suffixes (.sv/.v/.vh/.svh) and the spreadsheet/CSV ones in SUPPORTED are project design/data inputs, not external technical literature, and an .sv file arriving here means the caller reached for the wrong ingestion path."
+    },
+
+    "confidence_level": {
+      "enum": ["HIGH", "MEDIUM", "LOW", "UNKNOWN"],
+      "description": "HIGH/MEDIUM/LOW are exactly dv_harness.inference.CONFIDENCE_LEVELS -- this schema reuses that existing 3-level vocabulary rather than minting a parallel one. UNKNOWN is NOT a fourth level: it means 'not yet assessed', and it never orders against the other three. Master prompt section 8 requires it because a document can genuinely leave a claim unassessable."
+    },
+
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document", "version", "page", "section", "source_location"],
+      "description": "The exact 5-key return shape of dv_harness.doc_extraction.evidence_ref(document, version, page, section, location). page/section/source_location may be empty strings when the referent is the whole document; document and version never may.",
+      "properties": {
+        "document": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1, "description": "The document's own version string where it has one (e.g. 'rev 1.1'); otherwise the mechanical builder writes 'sha256:<64hex>', so a version is never blank and never guessed." },
+        "page": { "type": "string" },
+        "section": { "type": "string" },
+        "source_location": { "type": "string" }
+      }
+    },
+
+    "architecture_pattern": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "transformation", "decision", "tool", "evidence", "next_action"],
+      "description": "Master prompt section 8 ARCHITECTURE, as its six fixed stages (INPUT -> TRANSFORMATION -> DECISION -> TOOL -> EVIDENCE -> NEXT ACTION) rather than a prose paragraph, so two cards' architectures are comparable stage by stage. A stage the document does not have is written 'NONE' explicitly -- an absent stage is a finding.",
+      "properties": {
+        "input": { "type": "string", "minLength": 1 },
+        "transformation": { "type": "string", "minLength": 1 },
+        "decision": { "type": "string", "minLength": 1 },
+        "tool": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string", "minLength": 1 },
+        "next_action": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "feedback_loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hypothesis", "evidence_needed", "tool_action", "observation", "confidence_update", "gap", "next_best_action"],
+      "description": "Master prompt section 8 FEEDBACK LOOP, in the same seven stages this harness's own Autonomous Inference Engine already runs (dv_harness.inference.score_confidence -> identify_gap -> next_best_action). Keeping the document's loop in the harness's own stage names is what makes candidate_l5_mapping answerable at all. 'NONE' where the document has no such stage -- an open-loop method is a finding, not a blank.",
+      "properties": {
+        "hypothesis": { "type": "string", "minLength": 1 },
+        "evidence_needed": { "type": "string", "minLength": 1 },
+        "tool_action": { "type": "string", "minLength": 1 },
+        "observation": { "type": "string", "minLength": 1 },
+        "confidence_update": { "type": "string", "minLength": 1 },
+        "gap": { "type": "string", "minLength": 1 },
+        "next_best_action": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "quantitative_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "value", "context", "source_location"],
+      "description": "One reported number. `value` is a STRING on purpose: it is recorded exactly as the document prints it ('2.3x', '87.4%', '~40 min', '12/15'), because normalising it to a float is already an interpretation, and section 8 forbids inventing or reshaping reported values.",
+      "properties": {
+        "metric": { "type": "string", "minLength": 1 },
+        "value": { "type": "string", "minLength": 1 },
+        "unit": { "type": "string" },
+        "context": { "type": "string", "minLength": 1, "description": "What was measured against what -- the baseline, the benchmark, the design size. A number without its baseline is not a result." },
+        "source_location": { "$ref": "#/$defs/evidence_ref" }
+      }
+    },
+
+    "limitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "detail"],
+      "properties": {
+        "tag": {
+          "enum": [
+            "SMALL_BENCHMARK", "SYNTHETIC_DATA_OR_REGRESSION",
+            "BLOCK_ONLY_EVALUATION", "NO_SUBSYSTEM_EVALUATION",
+            "NO_SOC_EVALUATION", "VENDOR_DEPENDENCY",
+            "NO_PRODUCTION_DEPLOYMENT", "NO_INDEPENDENT_REPRODUCTION",
+            "LIMITED_PROTOCOL_COVERAGE", "LIMITED_DESIGN_SCALE",
+            "UNCLEAR_DATASET", "HIDDEN_PROMPT_OR_MODEL_DEPENDENCE", "OTHER"
+          ],
+          "description": "Master prompt section 8's twelve explicit detection targets, plus OTHER."
+        },
+        "detail": { "type": "string", "minLength": 1, "description": "The concrete instance, with the document's own numbers/scope where it gives them -- never the tag restated as a sentence." }
+      }
+    },
+
+    "maturity": {
+      "enum": ["RESEARCH", "PROTOTYPE", "ENGINEERING_READY", "PRODUCTION_PROVEN"],
+      "description": "Master prompt section 8 MATURITY. Deliberately shares no token with dv_harness/qualification.py's 8-tier ladder or protocol_capability.py's capability_status vocabulary: this rates an EXTERNAL document's own maturity, and a shared token would invite reading it as a claim about this harness."
+    },
+
+    "production_relevance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "explanation"],
+      "description": "Master prompt section 8: HIGH/MEDIUM/LOW *with explanation* -- the explanation is required precisely because the bare level is the part that gets quoted downstream.",
+      "properties": {
+        "level": { "enum": ["HIGH", "MEDIUM", "LOW"] },
+        "explanation": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "evidence_strength": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scale", "rationale"],
+      "description": "Master prompt section 8's 1-5 conceptual scale, kept as a SEPARATE axis from `confidence`: confidence is how sure this card is that it read the document right; evidence_strength is how much the document itself actually demonstrated. A perfectly-read idea paper is HIGH confidence, scale 1.",
+      "properties": {
+        "scale": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "1 idea/assertion only; 2 small experiment; 3 controlled meaningful benchmark; 4 strong subsystem/engineering evidence; 5 production-proven or independently validated."
+        },
+        "rationale": { "type": "string", "minLength": 1, "description": "Which reported evidence puts it at that number. A scale >= 3 whose rationale cites no entry in quantitative_results is a card to distrust." }
+      }
+    },
+
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_text", "claim_type", "source_location", "supporting_evidence", "confidence", "uncertainty", "verification_requirement"],
+      "description": "Master prompt section 9. The two allOf rules below are the schema-enforced half of 'Never silently convert AUTHOR_CLAIM into FACT': FACT is the only claim_type that may leave verification_requirement null, and it may only do so while carrying at least one piece of supporting evidence. So the cheap path -- relabel an unsupported author claim as FACT -- fails validation instead of passing review.",
+      "properties": {
+        "claim_text": { "type": "string", "minLength": 1, "description": "The claim itself, as close to the document's own wording as accuracy allows." },
+        "claim_type": {
+          "enum": ["FACT", "AUTHOR_CLAIM", "INFERENCE", "HYPOTHESIS"],
+          "description": "FACT: demonstrated in the document by evidence the document shows. AUTHOR_CLAIM: the authors assert it; the document does not demonstrate it. INFERENCE: this card's reader derived it from the document; the document does not state it. HYPOTHESIS: proposed, untested, by either the authors or this reader."
+        },
+        "source_location": { "$ref": "#/$defs/evidence_ref" },
+        "supporting_evidence": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "What in the document supports this claim -- a figure, a table, a measured result. Empty is legitimate for AUTHOR_CLAIM/HYPOTHESIS and is exactly what distinguishes them from FACT."
+        },
+        "confidence": { "$ref": "#/$defs/confidence_level" },
+        "uncertainty": { "type": "string", "minLength": 1, "description": "What is unresolved about this claim. 'NONE' must be written explicitly rather than left blank, so an unexamined claim is distinguishable from an examined one." },
+        "verification_requirement": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "What would have to be independently established for this claim to become a FACT for this harness's purposes. null ONLY on a FACT (see the allOf rules)."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "FACT requires real supporting evidence. Without this, relabelling an unsupported AUTHOR_CLAIM as FACT costs nothing.",
+          "if": { "properties": { "claim_type": { "const": "FACT" } }, "required": ["claim_type"] },
+          "then": { "properties": { "supporting_evidence": { "minItems": 1 } }, "required": ["supporting_evidence"] }
+        },
+        {
+          "$comment": "Everything that is not a FACT carries an open verification requirement. Section 9's 'verification requirement if unresolved' -- and by construction, AUTHOR_CLAIM/INFERENCE/HYPOTHESIS are all unresolved.",
+          "if": { "properties": { "claim_type": { "enum": ["AUTHOR_CLAIM", "INFERENCE", "HYPOTHESIS"] } }, "required": ["claim_type"] },
+          "then": { "properties": { "verification_requirement": { "type": "string", "minLength": 1 } }, "required": ["verification_requirement"] }
+        }
+      ]
+    },
+
+    "candidate_l5_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["existing_agent", "existing_skill", "existing_graph_node", "existing_blackboard_object", "existing_memory_layer", "existing_evidence_mechanism", "possible_enhancement"],
+      "description": "Master prompt section 8 CANDIDATE L5 MAPPING, whose one hard instruction is 'Do not assume absence.' That is enforced structurally: each of the six existing_* slots requires a `search_basis` even when `matches` is empty, so 'L5 has nothing like this' can only be recorded together with where the reader actually looked. This is the card-level expression of the REUSE-before-EXTEND-before-ADD rule (master prompt sections 2.2/14).",
+      "properties": {
+        "existing_agent": { "$ref": "#/$defs/l5_match" },
+        "existing_skill": { "$ref": "#/$defs/l5_match" },
+        "existing_graph_node": { "$ref": "#/$defs/l5_match" },
+        "existing_blackboard_object": { "$ref": "#/$defs/l5_match" },
+        "existing_memory_layer": { "$ref": "#/$defs/l5_match" },
+        "existing_evidence_mechanism": { "$ref": "#/$defs/l5_match" },
+        "possible_enhancement": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What COULD change in L5, phrased as a candidate for research-architect to weigh -- never a decision, never an instruction to implement. Stage boundaries: this card may not decide architecture (master prompt section 6) and may not implement anything (section 2.4). 'NONE' is a valid and frequent answer."
+        }
+      }
+    },
+
+    "l5_match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matches", "search_basis"],
+      "properties": {
+        "matches": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Real, named, already-existing L5 assets (e.g. 'dv_harness/change_impact.py select_regression()', 'CORE/failure-triage', 'REGRESSION_SELECT'). Empty means 'searched, found nothing' -- which is only meaningful alongside search_basis."
+        },
+        "search_basis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What was actually searched to reach this answer -- the tree, the grep, the file read. Required whether matches is empty or not, because an empty list is the claim that most needs its search shown."
+        }
+      }
+    },
+
+    "prior_research_link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document_id", "relation", "note"],
+      "properties": {
+        "document_id": { "type": "string", "minLength": 1, "description": "Another card's document_id where one exists, otherwise the cited work's own citable identifier (arXiv id, DOI, standard id)." },
+        "relation": {
+          "enum": ["SUPPORTS", "OVERLAPS", "EXTENDS", "CONTRADICTS", "SUPERSEDES", "UNRELATED", "INSUFFICIENT_EVIDENCE"],
+          "description": "Master prompt section 28's relation labels, reused here so a per-card link and a synthesis-time link speak the same vocabulary."
+        },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "contradiction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement", "source_location"],
+      "properties": {
+        "statement": { "type": "string", "minLength": 1 },
+        "against": { "type": "string", "description": "What it contradicts: another section of this same document, or a work this document cites." },
+        "source_location": { "$ref": "#/$defs/evidence_ref" }
+      }
+    }
+  }
+}
