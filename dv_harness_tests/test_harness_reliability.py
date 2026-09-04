@@ -331,6 +331,71 @@ class TestAutoCheckpoint:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_stage_transition_checkpoint_references_the_raw_command_txt_source(self):
+        """session_snapshot Ruling 4, proven on the PRODUCTION path.
+
+        `project_input/08_command/command.txt` is the raw source a run is
+        driven by, and Ruling 1 deliberately never copies it. It was also
+        never IDENTIFIED, on the reasoning that state.json's git_sha anchors
+        it -- an anchor that only exists if the project really git-tracks
+        project_input/. This asserts the reference lands via a real
+        `h.run_stage(...)` -> `_auto_checkpoint()` -> `save_auto_checkpoint()`
+        transition, not via a direct save_session() call, because "the
+        function can do it" was never the question."""
+        tmp, h = _fresh()
+        try:
+            cmd_dir = tmp / "project_input" / "08_command"
+            cmd_dir.mkdir(parents=True)
+            # write_bytes: the reference hashes what is really on disk, and
+            # text mode would translate \n to \r\n on Windows.
+            body = b"RUN usb3_lfps_polling\n"
+            (cmd_dir / "command.txt").write_bytes(body)
+
+            h.adapter = _CountingAdapter(ok=True, text="no gate evidence here")
+            h.run_stage("goal", stage=Stage.INTAKE.value)
+
+            checkpoints = session_snapshot.list_auto_checkpoints(tmp)
+            assert len(checkpoints) == 1
+            refs = checkpoints[0]["artifact_references"]["command_txt_source"]
+            assert [r["path"] for r in refs] == ["project_input/08_command/command.txt"]
+            import hashlib
+            assert refs[0]["sha256"] == hashlib.sha256(body).hexdigest()
+            assert refs[0]["size"] == len(body)
+
+            # Referenced, never copied -- Ruling 1 still holds on this path.
+            snap = tmp / ".dv-harness" / "sessions" / checkpoints[0]["name"]
+            assert not any(p.name == "command.txt" for p in snap.rglob("*"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_stage_transition_checkpoint_detects_a_drifted_command_txt_source(self):
+        """The risk case Ruling 4 exists for, end to end on the real path: a
+        checkpoint taken by a real stage transition, the raw source edited
+        afterwards, and a restore that REPORTS the drift instead of resuming
+        against a silently different command.txt."""
+        tmp, h = _fresh()
+        try:
+            cmd_dir = tmp / "project_input" / "08_command"
+            cmd_dir.mkdir(parents=True)
+            (cmd_dir / "command.txt").write_text("RUN original\n", encoding="utf-8")
+
+            h.adapter = _CountingAdapter(ok=True, text="no gate evidence here")
+            h.run_stage("goal", stage=Stage.INTAKE.value)
+            name = session_snapshot.list_auto_checkpoints(tmp)[0]["name"]
+
+            (cmd_dir / "command.txt").write_text("RUN edited_after_checkpoint\n",
+                                                  encoding="utf-8")
+            result = session_snapshot.restore_session(tmp, name)
+
+            verification = result["artifact_reference_verification"]["command_txt_source"]
+            assert verification["status"] == "MODIFIED"
+            assert verification["files"][0]["saved_sha256"] != verification["files"][0]["current_sha256"]
+            # Reported, not reverted: a reference is not a restore target, so
+            # the live source keeps the operator's newer content.
+            assert (cmd_dir / "command.txt").read_text(encoding="utf-8") == "RUN edited_after_checkpoint\n"
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_checkpoint_is_taken_on_a_failed_attempt_too(self):
         """"agent 走偏時不必從頭" -- the non-PASS case is exactly the one a
         human most needs to roll back from, so a FAIL must checkpoint too."""

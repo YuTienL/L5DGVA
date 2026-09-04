@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 # (SESSION_EXTRA_DIRS/SESSION_ARTIFACT_REFERENCE_DIRS below extend this
 # CURRENT-RUN layer with two more real per-run artifact kinds -- command.txt/
 # scenario content and FSDB/coverage -- while respecting this same
-# CURRENT-RUN-only intent; see their own comments for the two rulings.)
+# CURRENT-RUN-only intent; see their own comments for each ruling.)
 # Phase 14 addendum (2026-09-03, obsidian-memory-debugflow task): SESSION_
 # FILES/SESSION_DIRS above already cover the raw files a resume needs
 # (state.json for current_stage/project, react/ for the latest hypothesis/
@@ -111,15 +111,18 @@ EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
 # generated/06_tests/command_catalog qualifies as CURRENT-RUN state per this
 # module's own top-of-file design comment -- it is the harness's own
 # per-run-generated scenario/command catalog, the same tier as plans/react/
-# agents above. project_input/08_command is deliberately EXCLUDED: it is
-# durable project SOURCE material (the raw command.txt handed over once at
-# project onboarding, analogous to project_input/02_dut RTL, which this
-# module has likewise never copied since it is source-tree content, not
-# run state) -- copying it on every save-session would not track "what
-# changed this run" the way state.json/blackboard/plans genuinely do, and
-# would make every snapshot larger for no run-state benefit. It is small
-# text either way, so wholesale copy (not a reference) is the right choice
-# for the one directory that IS in scope.
+# agents above. project_input/08_command is NOT copied: it is durable
+# project SOURCE material (the raw command.txt handed over once at project
+# onboarding, analogous to project_input/02_dut RTL, which this module has
+# likewise never copied since it is source-tree content, not run state) --
+# copying it on every save-session would not track "what changed this run"
+# the way state.json/blackboard/plans genuinely do, and would make every
+# snapshot larger for no run-state benefit. It is small text either way, so
+# wholesale copy (not a reference) is the right choice for the one directory
+# that IS in scope.
+# NOT-copied is not NOT-captured: Ruling 4 below records the raw source's
+# real bytes as a VERIFIED reference, so "the command.txt this run was
+# driven by" is identified and checkable without duplicating source content.
 SESSION_EXTRA_DIRS = ["generated/06_tests/command_catalog"]
 
 # RULING 2 (FSDB waveform / coverage -- REFERENCE only, never copied): these
@@ -137,10 +140,38 @@ SESSION_EXTRA_DIRS = ["generated/06_tests/command_catalog"]
 # restore_session() deliberately never touches these directories either --
 # there is nothing here to restore, only a record of what existed at save
 # time.
+#
+# RULING 4 ("command_txt_source", added 2026-09-04 by a re-audit of this
+# mechanism against the user's own required-field list, which names
+# "command.txt" as a field a restored session must be able to account for):
+# Ruling 1 above correctly declines to COPY project_input/08_command, but it
+# then left the raw source entirely unidentified in the snapshot -- the
+# derived per-run catalog came back byte-for-byte while the source it was
+# derived FROM was not so much as named. Ruling 1's stated justification for
+# that was that the raw source's identity is already anchored by
+# state.json's git_sha. That anchor is real only when project_input/ is
+# genuinely git-tracked in the project at hand, which this module cannot
+# assume and does not check; where it is not, the content the run was
+# actually driven by was unrecoverable AND unidentifiable from the snapshot.
+# Recording it as a reference costs a sha256 over small text, contradicts
+# neither Ruling 1 (still not copied) nor Ruling 2 (this IS Ruling 2's
+# reference shape, reused rather than re-implemented), and turns a
+# conditional identity anchor into an unconditional one.
 SESSION_ARTIFACT_REFERENCE_DIRS = {
     "fsdb": "generated/10_runtime/waveform",
     "coverage": "generated/11_coverage",
+    "command_txt_source": "project_input/08_command",
 }
+
+# Which reference keys restore_session() re-hashes and REPORTS ON, rather
+# than merely carrying forward from the manifest. Deliberately not all of
+# them: re-hashing multi-GB FSDB/coverage dumps on every restore is exactly
+# the slow, disk-thrashing behaviour Ruling 2 exists to avoid, so those stay
+# record-only. The raw command source is small text, and it is the one
+# reference whose drift silently changes what a resumed session believes it
+# is verifying -- so it is the one that gets checked.
+SESSION_VERIFIED_REFERENCE_KEYS = {"command_txt_source"}
+
 # A file larger than this is listed by path+size only (sha256 omitted,
 # honestly, via "hash_skipped_reason" -- never a fabricated digest).
 # Hashing a many-GB waveform dump on every save-session would defeat the
@@ -517,6 +548,67 @@ def _collect_artifact_references(root: Path) -> Dict[str, List[Dict[str, Any]]]:
     return refs
 
 
+def verify_artifact_references(project_root: Path, manifest: Dict[str, Any],
+                                keys: Optional[set] = None) -> Dict[str, Any]:
+    """Re-hash the live files a snapshot recorded as references and report,
+    per file, whether they are still the bytes that existed at save time.
+
+    This is what makes Ruling 4 worth more than a logged digest: the raw
+    project_input/08_command source is never copied, so the ONLY way a
+    resumed session can establish "the command.txt I am resuming against is
+    the one this run was driven by" is to compare the live file against the
+    recorded sha256. Without this, the manifest holds the answer and nobody
+    asks it.
+
+    Per-file status is one of:
+      MATCH        -- live sha256 equals the recorded one.
+      MODIFIED     -- both hashes are real and they differ.
+      MISSING      -- the file recorded at save time is no longer on disk.
+      UNVERIFIABLE -- no recorded sha256 to compare against (the file was
+                      over ARTIFACT_REFERENCE_HASH_SIZE_LIMIT_BYTES, or was
+                      unreadable, at save time). Never reported as MATCH:
+                      an unknown comparison is not a passed one, the same
+                      discipline restore_session()'s `sha_match=None` already
+                      applies to the git SHA.
+
+    Each key's roll-up `status` is MATCH only when every one of its files is;
+    otherwise it names the worst outcome found (MISSING > MODIFIED >
+    UNVERIFIABLE), so a caller can branch on one field."""
+    root = Path(project_root)
+    keys = SESSION_VERIFIED_REFERENCE_KEYS if keys is None else keys
+    refs = manifest.get("artifact_references") or {}
+    out: Dict[str, Any] = {}
+    for key in sorted(keys):
+        entries = refs.get(key)
+        if not entries:
+            continue
+        files = []
+        for entry in entries:
+            rel = entry.get("path")
+            recorded = entry.get("sha256")
+            live = root / rel if rel else None
+            if live is None or not live.is_file():
+                status, live_sha = "MISSING", None
+            elif not recorded:
+                status, live_sha = "UNVERIFIABLE", None
+            else:
+                live_sha = _hash_file(live, ARTIFACT_REFERENCE_HASH_SIZE_LIMIT_BYTES).get("sha256")
+                if not live_sha:
+                    status = "UNVERIFIABLE"
+                else:
+                    status = "MATCH" if live_sha == recorded else "MODIFIED"
+            files.append({"path": rel, "status": status,
+                          "saved_sha256": recorded, "current_sha256": live_sha})
+        for worst in ("MISSING", "MODIFIED", "UNVERIFIABLE"):
+            if any(f["status"] == worst for f in files):
+                roll_up = worst
+                break
+        else:
+            roll_up = "MATCH"
+        out[key] = {"status": roll_up, "files": files}
+    return out
+
+
 def save_session(project_root: Path, name: Optional[str] = None, note: str = "") -> Dict[str, Any]:
     """Copy the current run-state layer under `.dv-harness/sessions/<name>/`.
     Raises FileExistsError if `name` already exists (an explicit --name
@@ -834,6 +926,15 @@ def restore_session(project_root: Path, name: str, backup_current: bool = True,
             # "restored" without checking it is reporting an incomplete
             # restore as a complete one.
             "dirs_restore_skipped": dirs_restore_skipped,
+            # artifact_reference_verification (Ruling 4, 2026-09-04): for the
+            # references restore does NOT copy back but CAN cheaply check --
+            # SESSION_VERIFIED_REFERENCE_KEYS, i.e. the raw command.txt source
+            # -- whether the live file is still the one this snapshot was
+            # taken against. Absent key = the snapshot recorded no such
+            # reference (nothing existed at save time), which is a different
+            # statement from "checked and matched" and is left as an absence
+            # rather than a fabricated MATCH.
+            "artifact_reference_verification": verify_artifact_references(root, manifest),
             # resume_summary (Phase 14, 2026-09-03): a ready-to-read plain-
             # language answer to "where we stopped / what was proven / what
             # remains unknown / what action should execute next" -- see

@@ -287,10 +287,12 @@ def test_save_and_restore_session_round_trips_command_catalog_extra_dir():
         shutil.rmtree(tmp)
 
 
-def test_save_session_excludes_project_input_command_raw():
+def test_save_session_never_copies_project_input_command_raw():
     # RULING 1 (session_snapshot.py): project_input/08_command is durable
-    # project SOURCE material, not current-run state -- deliberately never
-    # copied, unlike generated/06_tests/command_catalog above.
+    # project SOURCE material, not current-run state -- never copied, unlike
+    # generated/06_tests/command_catalog above. Ruling 4 (below) references
+    # it instead; this test guards the not-COPIED half specifically, so
+    # adding the reference cannot quietly become a copy.
     tmp = _tmp()
     try:
         _run_cli(tmp, "status")
@@ -300,7 +302,9 @@ def test_save_session_excludes_project_input_command_raw():
 
         manifest = save_session(tmp, name="c1")
         assert "project_input/08_command" not in manifest["extra_dirs"]
-        assert not (tmp / ".dv-harness" / "sessions" / "c1" / "extra" / "project_input").exists()
+        snap = tmp / ".dv-harness" / "sessions" / "c1"
+        assert not (snap / "extra" / "project_input").exists()
+        assert not any(p.name == "command.txt" for p in snap.rglob("*"))
     finally:
         shutil.rmtree(tmp)
 
@@ -320,6 +324,7 @@ def test_save_session_records_fsdb_and_coverage_as_hash_references_not_copies():
     assert SESSION_ARTIFACT_REFERENCE_DIRS == {
         "fsdb": "generated/10_runtime/waveform",
         "coverage": "generated/11_coverage",
+        "command_txt_source": "project_input/08_command",
     }
     tmp = _tmp()
     try:
@@ -354,6 +359,173 @@ def test_save_session_records_fsdb_and_coverage_as_hash_references_not_copies():
         assert not (snap_dir / "extra" / "generated" / "11_coverage").exists()
         assert not any(snap_dir.rglob("*.fsdb"))
         assert not any(snap_dir.rglob("*.ucdb"))
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- session_snapshot.py: RULING 4, the raw command.txt source reference
+# (2026-09-04) ------------------------------------------------------------
+
+def test_save_session_references_raw_command_txt_source_with_a_real_hash():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        # write_bytes, not write_text: the reference hashes the bytes really
+        # on disk, and text mode would translate \n to \r\n on Windows -- the
+        # assertion must be about the file, not about the source literal.
+        body = b"RUN usb2_hs_basic\nRUN usb3_lfps\n"
+        (cmd_dir / "command.txt").write_bytes(body)
+
+        manifest = save_session(tmp, name="c1")
+        refs = manifest["artifact_references"]["command_txt_source"]
+        assert [r["path"] for r in refs] == ["project_input/08_command/command.txt"]
+        import hashlib
+        assert refs[0]["sha256"] == hashlib.sha256(body).hexdigest()
+        assert refs[0]["size"] == len(body)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_reports_match_for_an_unchanged_command_txt_source():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("RUN foo\n", encoding="utf-8")
+
+        save_session(tmp, name="c1")
+        result = restore_session(tmp, "c1")
+        v = result["artifact_reference_verification"]["command_txt_source"]
+        assert v["status"] == "MATCH"
+        assert v["files"][0]["saved_sha256"] == v["files"][0]["current_sha256"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_reports_missing_when_the_command_txt_source_was_deleted():
+    # Distinct from MODIFIED on purpose: "the source this run was driven by
+    # is gone" and "it is different now" call for different operator action.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("RUN foo\n", encoding="utf-8")
+
+        save_session(tmp, name="c1")
+        (cmd_dir / "command.txt").unlink()
+
+        result = restore_session(tmp, "c1")
+        v = result["artifact_reference_verification"]["command_txt_source"]
+        assert v["status"] == "MISSING"
+        assert v["files"][0]["current_sha256"] is None
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_reports_unverifiable_rather_than_match_without_a_saved_hash():
+    # An unknown comparison is never a passed one -- the same discipline
+    # restore_session()'s own sha_match=None already applies to the git SHA.
+    from dv_harness import session_snapshot as _snap
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("x" * 4096, encoding="utf-8")
+
+        with patch.object(_snap, "ARTIFACT_REFERENCE_HASH_SIZE_LIMIT_BYTES", 1024):
+            manifest = save_session(tmp, name="c1")
+        assert manifest["artifact_references"]["command_txt_source"][0]["sha256"] is None
+
+        result = restore_session(tmp, "c1")
+        v = result["artifact_reference_verification"]["command_txt_source"]
+        assert v["status"] == "UNVERIFIABLE"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_never_writes_back_into_project_input():
+    # A reference is not a restore target: restoring an old snapshot must
+    # never overwrite the operator's current raw source with older content.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("RUN old\n", encoding="utf-8")
+        save_session(tmp, name="c1")
+
+        (cmd_dir / "command.txt").write_text("RUN new\n", encoding="utf-8")
+        (cmd_dir / "extra_scenarios.txt").write_text("RUN added_later\n", encoding="utf-8")
+        restore_session(tmp, "c1")
+
+        assert (cmd_dir / "command.txt").read_text(encoding="utf-8") == "RUN new\n"
+        assert (cmd_dir / "extra_scenarios.txt").exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_absent_command_txt_source_is_an_absence_not_a_fabricated_match():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert "command_txt_source" not in manifest["artifact_references"]
+        result = restore_session(tmp, "c1")
+        assert "command_txt_source" not in result["artifact_reference_verification"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_verification_is_scoped_to_small_text_and_never_rehashes_fsdb():
+    # Ruling 2's whole point is that a multi-GB waveform is never walked on a
+    # frequent operation. Verification must not quietly undo that.
+    from dv_harness.session_snapshot import SESSION_VERIFIED_REFERENCE_KEYS
+    assert SESSION_VERIFIED_REFERENCE_KEYS == {"command_txt_source"}
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        wave = tmp / "generated" / "10_runtime" / "waveform"
+        wave.mkdir(parents=True)
+        (wave / "run1.fsdb").write_bytes(b"FAKE-FSDB")
+        save_session(tmp, name="c1")
+
+        (wave / "run1.fsdb").write_bytes(b"FAKE-FSDB-CHANGED")
+        result = restore_session(tmp, "c1")
+        assert "fsdb" not in result["artifact_reference_verification"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_cli_restore_session_surfaces_command_txt_drift_and_logs_it():
+    # The real production surface: `dv-harness restore-session` must both
+    # print the verification and record its roll-up on the audit trail.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("RUN original\n", encoding="utf-8")
+        r = _run_cli(tmp, "save-session", "--name", "c1")
+        assert r.returncode == 0, r.stderr
+
+        (cmd_dir / "command.txt").write_text("RUN drifted\n", encoding="utf-8")
+        r = _run_cli(tmp, "restore-session", "c1")
+        assert r.returncode == 0, r.stderr
+        printed = json.loads(r.stdout)
+        assert printed["artifact_reference_verification"]["command_txt_source"]["status"] == "MODIFIED"
+
+        events = [json.loads(line) for line
+                  in (tmp / ".dv-harness" / "events.jsonl").read_text(
+                      encoding="utf-8").splitlines() if line.strip()]
+        restored = [e for e in events if e.get("event") == "SESSION_RESTORED"]
+        assert restored, "restore-session must leave a SESSION_RESTORED event"
+        assert restored[-1]["artifact_reference_verification"] == {
+            "command_txt_source": "MODIFIED"}
     finally:
         shutil.rmtree(tmp)
 

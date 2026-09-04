@@ -1,101 +1,157 @@
 # Gap close: AI mechanism #11 Session Save/Restore
 
-**Status: DONE**
+**Status: DONE** (2026-09-04 re-audit pass)
 
-Audit verdict was PARTIALLY_WIRED with one concrete, in-scope gap: the evidence
-store (`.dv-harness/evidence/`, `evidence_db.py`'s real `evidence_id`-keyed
-DuckDB) was named in NONE of `session_snapshot.py`'s four capture lists, so
-every save silently dropped the field the user's required list calls
-"Evidence IDs". Everything else on that list was already really captured and
-really restored. The fix is a wiring fix, not a new mechanism.
+Supersedes this file's previous contents (the 2026-09-04 Ruling 3 / evidence-store
+pass, still readable in git history). That pass is unchanged and still holds --
+this one closes a different, smaller item the fresh re-audit surfaced.
 
-## Gap re-confirmed independently, before changing anything
+## What the re-audit actually found
 
-- `grep evidence dv_harness/session_snapshot.py` — zero hits in `SESSION_FILES`,
-  `SESSION_DIRS`, `SESSION_EXTRA_DIRS`, `SESSION_ARTIFACT_REFERENCE_DIRS`.
-- This repo's own real snapshot `.dv-harness/sessions/2026-08-30_usb_gap_closing_progress/`
-  contains `agents blackboard config.json control.json events.jsonl lsf plans
-  react session_manifest.json state.json telemetry` — no `evidence`.
-- Live negative reproduction against the real functions (pre-fix code path
-  simulated by removing the entry again): write a real `normalized_evidence`
-  row through `evidence_db.EvidenceStore`, `save_session()`, delete
-  `.dv-harness/evidence/`, `restore_session()` → manifest `dirs` was
-  `['blackboard','plans','react','agents','telemetry']` and the DB **did not
-  come back**. So the new tests genuinely fail without the fix.
-- `git status` on all three target files was clean before editing — no
-  concurrent workstream had touched them.
+Verdict **WIRED_AND_FIRING**, and I re-confirmed the wiring myself before
+touching anything rather than taking it on report:
 
-## What changed
+- `engine.py:3638` calls `self._auto_checkpoint(stage, ...)` on every real stage
+  transition; `_auto_checkpoint()` (`engine.py:2983-3009`) calls
+  `session_snapshot.save_auto_checkpoint()` unless `config.json`'s
+  `auto_checkpoint.enabled` is explicitly false.
+- `cli.py:584/592/1765+` wires `save-session`/`restore-session` to the same
+  `save_session()`/`restore_session()`.
+- `test_harness_reliability.py::TestAutoCheckpoint` drives a real
+  `h.run_stage(...)` and asserts a real `auto_*` snapshot lands on disk.
 
-`dv_harness/session_snapshot.py` (the only production file touched):
+So mechanism #11 needed no wiring fix. 14 of the 16 required fields round-trip.
+The re-audit named two PARTIAL fields. They are not the same kind of problem and
+they are not resolved the same way here.
 
-1. **`"evidence"` added to `SESSION_DIRS`** — Ruling 3, documented in place
-   alongside the existing Rulings 1/2. It rides the existing generic
-   `copytree` loop in `save_session()` and the existing generic
-   `rmtree`+`copytree` loop in `restore_session()`; no parallel capture path
-   was built, and `restore_session()` needed no new manifest key to find it.
-2. **Write-safety, scoped to `SESSION_BEST_EFFORT_DIRS = {"evidence"}`** —
-   it is the one entry that is not plain JSON but a live DuckDB file real
-   production callers hold open (`regression_reporter.py`'s
-   `with EvidenceStore(db_path) as store:`, `mcp/runtime.py`). A copy or a
-   restore-rewind failure now costs that one directory and is recorded with
-   its reason (`manifest["dirs_copy_skipped"]`,
-   `restore_session()["dirs_restore_skipped"]`) instead of taking the whole
-   snapshot/restore down. Every other `SESSION_DIRS` entry still raises on
-   failure — a snapshot silently missing `blackboard` would be worse than no
-   snapshot. Restore is best-effort for the same entry specifically so a
-   locked DB cannot leave a **partial** rollback behind.
-3. **Size guard (`EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES`, 64 MB)** — added on
-   own judgment beyond the audit's plan, because `save_auto_checkpoint()`
-   fires at every stage transition with 10 retained: an unbounded wholesale
-   copy there is exactly the disk-doubling Ruling 2 already exists to prevent.
-   Over the limit the directory is recorded as a real path+size+sha256
-   REFERENCE (reusing `_hash_file()`, Ruling 2's own shape) rather than
-   dropped. This repo's real store is 2.1 MB, so the limit is a ceiling for a
-   pathological case, not a routine path.
+## Item 1 -- raw `command.txt` source: CLOSED
 
-Documented ruling, stated rather than glossed: restore rewinds this directory
-wholesale, which does rewind `evidence_db.py`'s deliberately append-only
-`regression_verdict_history`. Accepted, because `restore_session()`'s own
-`_pre_restore_` auto-backup captures the newer store first — the same safety
-net every other destructive directory restore here already relies on. Asserted
-by a test.
+**The real gap.** Ruling 1 (2026-09-01) deliberately declines to *copy*
+`project_input/08_command`, on the reasoning that it is durable project SOURCE
+whose identity is already anchored by `state.json`'s `git_sha`. Declining to copy
+it is right and is unchanged. What was wrong is that the snapshot then did not
+so much as **name** it: the derived per-run catalog
+(`generated/06_tests/command_catalog`) came back byte-for-byte while the source
+it was derived FROM appeared nowhere in the manifest. And the git_sha anchor that
+justified the omission is conditional -- it exists only if the project really
+git-tracks `project_input/`, which `session_snapshot.py` cannot assume and never
+checked. Where it does not, the content a run was driven by was both
+unrecoverable *and* unidentifiable from the snapshot.
+
+**The fix (`dv_harness/session_snapshot.py`), documented in place as Ruling 4:**
+
+1. `SESSION_ARTIFACT_REFERENCE_DIRS` gains
+   `"command_txt_source": "project_input/08_command"`. This is the EXISTING
+   Ruling 2 reference mechanism reused verbatim -- path + size + streamed
+   sha256, recorded into `manifest["artifact_references"]`, never copied, never
+   restored over. No parallel capture path was built and
+   `_collect_artifact_references()` needed no change at all: the one-line table
+   entry rides the loop that already existed.
+2. New `verify_artifact_references(project_root, manifest, keys=None)` re-hashes
+   the live files and reports per file `MATCH` / `MODIFIED` / `MISSING` /
+   `UNVERIFIABLE`, plus a worst-case roll-up per key. `UNVERIFIABLE` (no recorded
+   sha256, e.g. over the hash size limit at save time) is deliberately never
+   reported as `MATCH` -- the same discipline `restore_session()`'s existing
+   `sha_match=None` already applies to the git SHA: an unknown comparison is not
+   a passed one.
+3. `restore_session()` returns it as `artifact_reference_verification`. Without
+   this the manifest would hold the answer and nobody would ask it, which is what
+   makes the reference worth more than a logged digest.
+4. New `SESSION_VERIFIED_REFERENCE_KEYS = {"command_txt_source"}` scopes
+   verification to that one key. FSDB/coverage stay record-only on purpose:
+   re-hashing multi-GB dumps on every restore is exactly the slow, disk-thrashing
+   behaviour Ruling 2 exists to prevent, and silently undoing it here would have
+   been a real regression.
+
+`dv_harness/cli.py`: the printed result already `json.dumps`es the whole dict, so
+the new key surfaces with no change there. The one edit is that the
+`SESSION_RESTORED` event now carries the per-key roll-up status, so "did this
+restore resume against a modified command.txt" is answerable from
+`.dv-harness/events.jsonl` / `dv-harness audit` rather than only from stdout that
+nobody kept.
+
+## Item 2 -- resolved runtime environment: NEEDS_SEPARATE_EFFORT
+
+Not attempted, and deliberately not a same-pass fix. The gap is not that
+`session_snapshot.py` fails to capture a resolved-environment record; it is that
+**no such record exists anywhere in `dv_harness/`**. `preflight.py` computes its
+checks live and persists nothing -- `run_preflight()` returns a `PreflightResult`
+and no caller writes it. Adding the missing filename to `SESSION_FILES` is the
+last and smallest step; everything before it is new capability.
+
+It is also not merely "add a writer", because `check_env_vars()`
+(`preflight.py:608`) checks env var **presence** only, by design:
+`_build_env_check_command()` emits `$?VAR` / `[ -z "${VAR+x}" ]` presence tests
+and its docstring records that `printenv`/`env`/`set`/`export` are blocked
+outright by the persistent relay's own credential-inspection filter. Capturing
+resolved VALUES means emitting commands that echo environment variable contents
+on a remote DV server -- which runs straight into CLAUDE.md's standing rule that
+credentials must never be printed, echoed, or written into any evidence block,
+log, or gate payload. That needs a deliberate design decision about an allowlist
+of safe-to-record variables, not a wiring change made in passing.
+
+Scoped follow-up effort:
+1. Decide and document an explicit allowlist of environment values that may be
+   resolved and persisted (`$VCS_HOME`, license server host, `hostname`, tool
+   versions), with everything else recorded by NAME only as today.
+2. Add a value-resolving check to `preflight.py` restricted to that allowlist,
+   respecting the existing csh/tcsh vs sh branch and the relay's command filter.
+3. Persist a real `PreflightResult` (e.g. `.dv-harness/preflight_result.json`) on
+   every run, with the resolved values and the timestamp/host they were resolved
+   on.
+4. Only then add that filename to `session_snapshot.SESSION_FILES`.
+5. Verify: a real preflight run followed by save/restore shows the exact resolved
+   values surviving, not just the config-level names `config.json`'s
+   `preflight`/`execution_preflight` blocks already round-trip today.
 
 ## Verification
 
-Nine new tests in `dv_harness_tests/test_session_and_info.py`, all against the
-real functions and a real DuckDB (never a mock or a stubbed store):
+Negative reproduction first -- with the one table entry removed, the 6 new tests
+fail with `KeyError: 'command_txt_source'` (4 in `test_session_and_info.py`, 2 in
+`test_harness_reliability.py`), so they have real detection power rather than
+passing vacuously. Entry restored, all pass.
 
-- real `evidence_id` survives save → **delete the live directory** → restore,
-  read back through a real `EvidenceStore(read_only=True)`;
-- **the production entry point**: `save_auto_checkpoint()` — what
-  `engine.run_stage()` actually calls at every terminal exit — captures a real
-  evidence row, not just `save_session()`;
-- restore is a rollback not a merge (post-checkpoint row gone, checkpoint row
-  back, discarded row recoverable from the `_pre_restore_` backup);
-- `"evidence" in SESSION_DIRS` and in a fresh manifest's `dirs`, matching how
-  `lsf`/`blackboard` are already covered;
-- absent evidence dir reports absent, not skipped;
-- oversized dir → real sha256 reference, not copied, and restore leaves the
-  live store untouched;
-- a simulated `PermissionError` (Windows "file in use") on evidence records
-  why and still captures `blackboard`/`state.json`;
-- the same failure on `blackboard` still raises;
-- a locked evidence DB never aborts a restore midway.
+New tests, all against the real functions:
 
-Also verified on this project's own live tree: a real `save_session()` here
-now reports `dirs: [... 'lsf', 'evidence']`, `dirs_copy_skipped: {}`, and the
-snapshot's 2,109,440-byte `evidence.duckdb` opens read-only and queries
-(temporary session deleted afterwards).
+- **On the PRODUCTION path, not just the function** (`test_harness_reliability.py`,
+  `TestAutoCheckpoint`): a real `h.run_stage(...)` -> `_auto_checkpoint()` ->
+  `save_auto_checkpoint()` transition produces a checkpoint whose manifest
+  carries the real sha256 of the raw `command.txt` -- and still copies no
+  `command.txt` anywhere, so Ruling 1 is proven intact on that same path.
+- **The risk case end to end**: checkpoint via real `run_stage()`, edit the raw
+  source afterwards, restore -> `status == "MODIFIED"`, and the live file keeps
+  the operator's newer content (reported, never reverted).
+- `test_session_and_info.py`: real hash on save; `MATCH` unchanged; `MISSING` when
+  deleted (kept distinct from MODIFIED -- different operator action);
+  `UNVERIFIABLE` rather than `MATCH` when no hash was recorded; restore never
+  writes back into `project_input/`; an absent source dir is an absence, not a
+  fabricated `MATCH`; verification never re-hashes FSDB; and the real CLI
+  `restore-session` both prints the drift and leaves it on the
+  `SESSION_RESTORED` event.
+- The pre-existing `test_save_session_excludes_project_input_command_raw` was
+  renamed to `..._never_copies_...` and strengthened (it now also asserts no
+  `command.txt` exists anywhere under the snapshot), so adding the reference
+  cannot quietly become a copy later.
 
-**Test summary: 191 passed, 0 failed** — `test_session_and_info.py` (43),
-`test_harness_reliability.py` + `test_active_stages_read_sites.py` +
-`test_evidence_db.py` (80), `test_obsidian_memory_final_integration.py` +
-`test_dashboard_interactive.py` (68).
+**Test summary: 213 passed, 0 failed** -- `test_session_and_info.py` (57),
+`test_harness_reliability.py` (42), and the adjacent suites that touch
+`session_snapshot`/`cli` (`test_dashboard_interactive.py`,
+`test_agent_checkpoint_check.py`, `test_active_stages_read_sites.py`,
+`test_react_inference_wiring.py`, `test_debug_flow_memory.py` -- 114).
 
-## Not in scope / not done
+Also run against this repo's own live tree: a real `save_session()` here produced
+a `command_txt_source` reference and `verify_artifact_references()` returned
+`MATCH` (temporary session deleted immediately afterwards, no production file
+touched).
 
-The audit's own framing of the two analysis items (generic multi-protocol
-scope, subsystem-to-SoC generation) is untouched here. No CLI or dashboard
-change was needed: both already `json.dumps` the whole manifest/result, so the
-two new keys surface without edits.
+**Disclosed, in the same spirit as the re-audit's own caveat**: this repo's
+`project_input/08_command/` contains only a scaffolding `raw/.gitkeep`, because
+this meta-repo has no real DUT and no real command.txt. The mechanism is real and
+proven by the tests above against a real `run_stage()`; like several other
+mechanisms here it has simply never had a real command.txt of its own to
+identify. That is "no occasion to fire here", not "unreachable".
+
+## Not in scope
+
+Mechanism #13 (generic multi-protocol scope) and #14 (subsystem-to-SoC
+generation) are untouched, per the pass's own framing.

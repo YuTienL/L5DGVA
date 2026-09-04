@@ -1784,8 +1784,18 @@ def main():
             # copies back (see session_snapshot.RESTORE_FILES) -- an
             # append-only audit log should never be destructively rewound,
             # so this marker lands on the same continuous, live log.
+            # artifact_reference_verification (session_snapshot Ruling 4): the
+            # per-key roll-up only, so the audit trail records whether the
+            # never-copied raw command.txt source this session was saved
+            # against is still the file on disk. A restore that resumed
+            # against a MODIFIED source is exactly the "what changed, with
+            # what evidence" question `dv-harness audit` reads this log for;
+            # the full per-file detail stays in the printed result.
             h.store.event({"ts": cp_now(), "event": "SESSION_RESTORED",
-                            "name": args.name, "auto_backup": result.get("auto_backup")})
+                            "name": args.name, "auto_backup": result.get("auto_backup"),
+                            "artifact_reference_verification": {
+                                k: v.get("status") for k, v
+                                in (result.get("artifact_reference_verification") or {}).items()}})
             print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.cmd == "run-profile":
         from .uvm_generator.run_profile import RunProfileValidationError
