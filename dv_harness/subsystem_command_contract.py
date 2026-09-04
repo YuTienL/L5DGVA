@@ -362,17 +362,39 @@ def _reset_dependency(statements: Sequence[rpa.CommandStatement]) -> Dict[str, A
 
 
 def _address_dependency(statements: Sequence[rpa.CommandStatement]) -> List[Dict[str, Any]]:
+    """Per-ADDRESS dependency records, each carrying the literal value(s)
+    written to that address.
+
+    `written_values` is paired per address rather than left to the aggregated
+    `arguments` profile, which folds every invocation of a command together:
+    for a command writing three addresses, `arguments[1].distinct_values`
+    holds three values with nothing saying which went where. SYS-22's
+    "conflicting register writes" needs exactly that pairing -- two subsystems
+    writing 32'h1 and 32'h7 to one address is a conflict, and both writing
+    32'h1 is a duplicate initialization, which are different findings with
+    different remedies. An empty list means the value was not a literal in the
+    source (a variable, an expression), never that no value was written.
+    """
     seen: Dict[str, Dict[str, Any]] = {}
     for stmt in statements:
         if not stmt.address:
             continue
         entry = seen.setdefault(stmt.address, {
             "address": stmt.address, "base": stmt.base, "offset": stmt.offset,
-            "access": "READ", "evidence": []})
+            "access": "READ", "written_values": [], "evidence": []})
         if stmt.kind == rpa.K_REGISTER_WRITE:
             entry["access"] = "WRITE"
+            # Position 1 is the VALUE of a register write -- the same macro
+            # shape `_argument_profile()` reads its ADDRESS/VALUE roles from,
+            # so the two agree by construction rather than by coincidence.
+            if len(stmt.arguments) > 1:
+                value = stmt.arguments[1].strip()
+                if value and value not in entry["written_values"]:
+                    entry["written_values"].append(value)
         if len(entry["evidence"]) < 3:
             entry["evidence"].append(f"{stmt.file}:{stmt.line}")
+    for entry in seen.values():
+        entry["written_values"].sort()
     return sorted(seen.values(), key=lambda a: a["address"])
 
 

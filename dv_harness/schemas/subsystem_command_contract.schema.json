@@ -243,6 +243,11 @@
               "base": { "type": ["string", "null"] },
               "offset": { "type": ["string", "null"] },
               "access": { "enum": ["READ", "WRITE"] },
+              "written_values": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Distinct literal value(s) written to THIS address, paired per address rather than folded into the command-wide argument profile. SYS-22 needs the pairing: two subsystems writing different values to one address is a conflicting register write, both writing the same value is a duplicate initialization. Empty when the value was not a literal in the source, never a claim that nothing was written."
+              },
               "evidence": { "$ref": "#/$defs/evidence_list" }
             }
           }

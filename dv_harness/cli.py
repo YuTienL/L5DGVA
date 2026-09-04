@@ -1010,6 +1010,28 @@ def main():
     psip.add_argument("--json", action="store_true",
                       help="Print raw JSON instead of the human-readable SYS-15..17 report.")
 
+    pscp = sub.add_parser("system-command-plan",
+                          help="SYS-18..22: report the System-Level ARCHITECTURE, plan the System "
+                               "command.txt as routing/namespacing over existing subsystem command "
+                               "contracts, assess backward compatibility, derive the System Command "
+                               "IR, and detect command collisions. Reads only; emits no System "
+                               "command.txt, router, virtual sequencer, adapter or UVM source.")
+    pscp.add_argument("--select", action="append", default=None, metavar="SUBSYSTEM",
+                      help="Name one subsystem to include. Repeatable. Required -- SYS-1's "
+                           "explicit-selection refusal is not bypassed by this command.")
+    pscp.add_argument("--knowledge-center", action="store_true", dest="cmdplan_kc",
+                      help="Also query the shared Knowledge Center during the SYS-1 discovery "
+                           "this command runs first. Off by default (real remote call).")
+    pscp.add_argument("--command-inventory", default=None, metavar="CSV",
+                      help="Path to a command_inventory.csv to read as a DECLARED overlay for "
+                           "the SYS-8 contract set. Read-only; never rewritten.")
+    pscp.add_argument("--escalate", action="store_true",
+                      help="Also file every SYS-22 collision into the real question queue, "
+                           "through source_authority.escalate_conflict(). Idempotent: a re-run "
+                           "over unchanged command.txt files re-mints the same Q-IDs.")
+    pscp.add_argument("--json", action="store_true",
+                      help="Print raw JSON instead of the human-readable SYS-18..22 report.")
+
     # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
     # ordering as an executable, queryable rule rather than prose an agent is
     # trusted to have read. NOT the same list as tools/verification_flow/
@@ -2235,6 +2257,41 @@ def main():
         raise SystemExit(
             0 if (result["selection"]["selection_admissible"]
                   and plan["summary"]["integration_plan_clean"]) else 2)
+    elif args.cmd == "system-command-plan":
+        from . import system_command_plan as scp
+        kc_client = None
+        if args.cmdplan_kc:
+            from .config import load_config
+            from .knowledge_center import KnowledgeCenterClient
+            kc_client = KnowledgeCenterClient(load_config(h.root), h.root)
+        result = scp.plan_system_commands(
+            h.root, args.select or [], knowledge_center_client=kc_client,
+            inventory_overlay_path=args.command_inventory)
+        document = result["command_plan"]
+        escalated = []
+        if args.escalate:
+            from . import question_queue
+            escalated = scp.escalate_command_collisions(
+                question_queue.QuestionQueueStore(h.root), document["command_collisions"])
+        if args.json:
+            print(json.dumps({**result, "escalated_question_ids": [q["id"] for q in escalated]},
+                             ensure_ascii=False, indent=2, default=str))
+        else:
+            if not result["selection"]["selection_admissible"]:
+                from . import subsystem_discovery as sd
+                print(sd.format_report(result["selection"]))
+                print()
+            print(scp.format_system_command_plan_report(document))
+            if escalated:
+                print(f"\n{len(escalated)} collision question(s) filed into the real "
+                      "question queue: " + ", ".join(q["id"] for q in escalated))
+        # Exit 2 while any collision blocks integration, any subsystem's mode is
+        # at risk, or any command's System-level name is ambiguous. A System
+        # command.txt must not be synthesised on that plan, so a CI step must
+        # not read it as a clean run.
+        raise SystemExit(
+            0 if (result["selection"]["selection_admissible"]
+                  and document["summary"]["command_plan_clean"]) else 2)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
         result = reference_pattern_audit.audit_directory(
