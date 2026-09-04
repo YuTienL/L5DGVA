@@ -720,6 +720,14 @@ AXI4_LITE_EVIDENCE_SIGNALS = frozenset({"AWPROT", "ARPROT", "WSTRB"})
 #: requires reporting WHICH of these were actually found, not just the verdict.
 ACE_LITE_COHERENCY_SIGNALS = frozenset({
     "AWSNOOP", "ARSNOOP", "AWDOMAIN", "ARDOMAIN", "AWBAR", "ARBAR"})
+#: The optional per-channel USER sidebands. NOT a discriminator -- their width
+#: is implementation-defined and their presence distinguishes nothing, so they
+#: never enter sub-protocol resolution. They are in the vocabulary because
+#: AMBA-15 point 11 requires a bind-location checklist to report USER WIDTHS,
+#: and a port whose token is unknown to `ALL_AMBA_SIGNAL_NAMES` is not grouped
+#: into its interface's bundle at all, so its width could never be read.
+AXI_USER_SIDEBAND_SIGNALS = frozenset({
+    "AWUSER", "WUSER", "BUSER", "ARUSER", "RUSER"})
 
 #: AXI4-Stream: NOT memory-mapped, and reported as its own class per the doc
 #: ("Report AXI4-Stream separately from memory-mapped AXI").
@@ -1026,7 +1034,7 @@ _ALL_AMBA_SIGNALS = frozenset().union(
     APB_CORE_SIGNALS, APB3_EVIDENCE_SIGNALS, APB4_EVIDENCE_SIGNALS,
     AXI_MM_CORE_SIGNALS, AXI_BURST_EVIDENCE_SIGNALS, AXI_ID_EVIDENCE_SIGNALS,
     AXI3_ONLY_EVIDENCE_SIGNALS, AXI4_ONLY_EVIDENCE_SIGNALS, AXI4_LITE_EVIDENCE_SIGNALS,
-    ACE_LITE_COHERENCY_SIGNALS,
+    ACE_LITE_COHERENCY_SIGNALS, AXI_USER_SIDEBAND_SIGNALS,
     AXI4_STREAM_CORE_SIGNALS, AXI4_STREAM_OPTIONAL_EVIDENCE_SIGNALS,
 )
 
@@ -1036,6 +1044,206 @@ _ALL_AMBA_SIGNALS = frozenset().union(
 #: ports into interfaces; it reads THIS union rather than rebuilding one, so
 #: there stays exactly one AMBA signal vocabulary in the codebase.
 ALL_AMBA_SIGNAL_NAMES = _ALL_AMBA_SIGNALS
+
+
+# ===========================================================================
+# AMBA-15 evidence vocabulary: clock/reset association and per-signal-role
+# widths.
+#
+# AMBA-15's 13-point bind-location checklist asks for six facts the protocol
+# classifier above deliberately never looked at -- clock, reset, and the
+# address/data/ID/USER widths. They live here, next to the signal vocabulary
+# they extend, so this module stays the ONE place in the codebase that says
+# what an AMBA signal is called. The checklist that consumes them is in
+# `amba_fabric_discovery.py`, which has the elaborated netlist to read a real
+# instance's ports and data types from.
+# ===========================================================================
+
+#: Each of the ten AMBA-4 protocols to the family whose clock/reset naming and
+#: signal-role applicability it inherits. `AmbaProtocolClassification.family`
+#: already carries this for a live classification; this table answers the same
+#: question given only a protocol string (a matrix row re-loaded from a
+#: persisted artifact, say), so neither caller has to re-derive it.
+AMBA_PROTOCOL_FAMILY: dict = {
+    "AHB": "AHB", "AHB_LITE": "AHB",
+    "APB": "APB", "APB3": "APB", "APB4": "APB",
+    "AXI3": "AXI_MM", "AXI4": "AXI_MM", "AXI4_LITE": "AXI_MM", "ACE_LITE": "AXI_MM",
+    "AXI4_STREAM": "AXI_STREAM",
+}
+
+#: The AMBA specifications' own clock/reset port names, per family. AXI4-Stream
+#: shares AXI's ACLK/ARESETn naming; AHB and APB have their own.
+AMBA_FAMILY_CLOCK_SIGNALS: dict = {
+    "AHB": frozenset({"HCLK"}),
+    "APB": frozenset({"PCLK"}),
+    "AXI_MM": frozenset({"ACLK"}),
+    "AXI_STREAM": frozenset({"ACLK"}),
+}
+#: Both the `n`-suffixed and bare spellings: `ARESETN` tokenizes whole, while
+#: `ARESET_N` splits on the underscore and contributes `ARESET`.
+AMBA_FAMILY_RESET_SIGNALS: dict = {
+    "AHB": frozenset({"HRESETN", "HRESET"}),
+    "APB": frozenset({"PRESETN", "PRESET"}),
+    "AXI_MM": frozenset({"ARESETN", "ARESET"}),
+    "AXI_STREAM": frozenset({"ARESETN", "ARESET"}),
+}
+
+#: Non-spec fallback names, used ONLY when no spec-named candidate exists and
+#: reported at a lower evidence tier, because `clk` on a fabric wrapper is real
+#: evidence of a clock but not evidence that it is THIS interface's clock.
+GENERIC_CLOCK_SIGNAL_TOKENS = frozenset({"CLK", "CLOCK", "CLKIN"})
+GENERIC_RESET_SIGNAL_TOKENS = frozenset({"RST", "RSTN", "RESET", "RESETN", "RESET_N"})
+
+#: How a clock/reset candidate was named. A spec-named, bundle-prefixed port is
+#: the only tier that resolves without qualification.
+CLOCK_RESET_EVIDENCE_SPEC_PREFIXED = "SPEC_NAMED_BUNDLE_PREFIXED"
+CLOCK_RESET_EVIDENCE_SPEC_SHARED = "SPEC_NAMED_NOT_BUNDLE_PREFIXED"
+CLOCK_RESET_EVIDENCE_GENERIC_PREFIXED = "GENERIC_NAMED_BUNDLE_PREFIXED"
+CLOCK_RESET_EVIDENCE_GENERIC_SHARED = "GENERIC_NAMED_NOT_BUNDLE_PREFIXED"
+
+#: Outcomes of clock/reset association. UNKNOWN is AMBA-15's own word for "not
+#: provable"; the two unresolved outcomes are kept apart because "this module
+#: declares no clock port at all" and "it declares four and nothing says which
+#: one drives this interface" need different next actions from a human.
+CLOCK_RESET_RESOLVED = "RESOLVED"
+CLOCK_RESET_NO_CANDIDATE = "UNKNOWN_NO_CANDIDATE_PORT"
+CLOCK_RESET_AMBIGUOUS = "UNKNOWN_MULTIPLE_CANDIDATE_PORTS"
+
+
+def _clock_reset_candidates(port_names, spec_tokens: frozenset,
+                            generic_tokens: frozenset, bundle_prefix: str) -> dict:
+    """Group a module's real ports into the four evidence tiers above."""
+    prefix = str(bundle_prefix or "").upper()
+    tiers: dict = {CLOCK_RESET_EVIDENCE_SPEC_PREFIXED: [],
+                   CLOCK_RESET_EVIDENCE_SPEC_SHARED: [],
+                   CLOCK_RESET_EVIDENCE_GENERIC_PREFIXED: [],
+                   CLOCK_RESET_EVIDENCE_GENERIC_SHARED: []}
+    for port in port_names or ():
+        toks = amba_signal_tokens([port])
+        spec = bool(toks & spec_tokens)
+        generic = bool(toks & generic_tokens)
+        if not (spec or generic):
+            continue
+        # An empty bundle prefix means "unprefixed bundle": no port can be
+        # distinguished as belonging to it by prefix, so every candidate is
+        # SHARED rather than every candidate being PREFIXED.
+        prefixed = bool(prefix) and str(port).upper().startswith(prefix)
+        if spec:
+            key = (CLOCK_RESET_EVIDENCE_SPEC_PREFIXED if prefixed
+                   else CLOCK_RESET_EVIDENCE_SPEC_SHARED)
+        else:
+            key = (CLOCK_RESET_EVIDENCE_GENERIC_PREFIXED if prefixed
+                   else CLOCK_RESET_EVIDENCE_GENERIC_SHARED)
+        tiers[key].append(port)
+    return tiers
+
+
+def _resolve_one_clock_or_reset(port_names, spec_tokens: frozenset,
+                                generic_tokens: frozenset, bundle_prefix: str) -> dict:
+    """Pick this interface's clock (or reset) port from a module's real port
+    list, or report honestly why it could not be picked.
+
+    Tiers are tried best-first and the FIRST non-empty one decides -- a
+    spec-named, bundle-prefixed `S00_AXI_ACLK` is never overruled by a
+    top-level `clk` also being present. Within the deciding tier, more than one
+    candidate is AMBIGUOUS: choosing among `ACLK`/`ACLK_2` by position or
+    alphabet would be exactly the invented fact AMBA-15's "use UNKNOWN where
+    not provable" exists to prevent."""
+    tiers = _clock_reset_candidates(port_names, spec_tokens, generic_tokens, bundle_prefix)
+    for tier in (CLOCK_RESET_EVIDENCE_SPEC_PREFIXED, CLOCK_RESET_EVIDENCE_SPEC_SHARED,
+                 CLOCK_RESET_EVIDENCE_GENERIC_PREFIXED, CLOCK_RESET_EVIDENCE_GENERIC_SHARED):
+        found = sorted(tiers[tier])
+        if not found:
+            continue
+        if len(found) == 1:
+            return {"status": CLOCK_RESET_RESOLVED, "port": found[0],
+                    "evidence": tier, "candidates": found}
+        return {"status": CLOCK_RESET_AMBIGUOUS, "port": None,
+                "evidence": tier, "candidates": found}
+    return {"status": CLOCK_RESET_NO_CANDIDATE, "port": None,
+            "evidence": None, "candidates": []}
+
+
+def find_amba_clock_reset_ports(protocol: str, bundle_prefix: str, port_names) -> dict:
+    """AMBA-15 points 6 and 7 for one interface: which of an instance's real
+    ports is this interface's clock, and which is its reset.
+
+    Returns `{"clock": {...}, "reset": {...}}`, each a `_resolve_one_clock_or
+    _reset()` verdict. `port_names` is the WHOLE instance's port list, not just
+    the bundle's -- clock and reset carry no AMBA data-signal token, so
+    `group_ports_into_amba_bundles()` deliberately excludes them from every
+    bundle and they can only be found on the full list.
+
+    A protocol with no established family (an unresolved classification) still
+    gets a real answer from the generic tier rather than a raised error: an
+    interface whose protocol is undecided is exactly one a human is about to
+    look at, and "there is one port here called `clk`" is useful evidence to
+    hand them."""
+    family = AMBA_PROTOCOL_FAMILY.get(protocol)
+    spec_clocks = AMBA_FAMILY_CLOCK_SIGNALS.get(family, frozenset())
+    spec_resets = AMBA_FAMILY_RESET_SIGNALS.get(family, frozenset())
+    return {
+        "clock": _resolve_one_clock_or_reset(
+            port_names, spec_clocks, GENERIC_CLOCK_SIGNAL_TOKENS, bundle_prefix),
+        "reset": _resolve_one_clock_or_reset(
+            port_names, spec_resets, GENERIC_RESET_SIGNAL_TOKENS, bundle_prefix),
+    }
+
+
+#: AMBA-15 points 8-11: which signal-role's width a given AMBA signal carries.
+#: Only signals whose width IS the quantity being asked about appear here --
+#: `AWLEN` is address-channel signalling but its width is not the address
+#: width, so it is deliberately absent.
+AMBA_SIGNAL_ROLE_ADDRESS = "ADDRESS"
+AMBA_SIGNAL_ROLE_DATA = "DATA"
+AMBA_SIGNAL_ROLE_ID = "ID"
+AMBA_SIGNAL_ROLE_USER = "USER"
+AMBA_SIGNAL_ROLE_TOKENS: dict = {
+    AMBA_SIGNAL_ROLE_ADDRESS: frozenset({"AWADDR", "ARADDR", "HADDR", "PADDR"}),
+    AMBA_SIGNAL_ROLE_DATA: frozenset({
+        "WDATA", "RDATA", "HWDATA", "HRDATA", "PWDATA", "PRDATA", "TDATA"}),
+    AMBA_SIGNAL_ROLE_ID: frozenset({"AWID", "ARID", "BID", "RID", "TID"}),
+    AMBA_SIGNAL_ROLE_USER: frozenset({
+        "AWUSER", "WUSER", "BUSER", "ARUSER", "RUSER", "TUSER"}),
+}
+
+#: Which of those roles each protocol HAS. AMBA-15 asks for address/ID/USER
+#: widths "if applicable" / "where applicable", and this table is what makes
+#: NOT_APPLICABLE a derived verdict rather than an absence: AXI4-Lite has no
+#: transaction IDs and no USER sidebands by definition, APB and AHB have
+#: neither, and AXI4-Stream is not memory-mapped so it has no address at all.
+#: Reporting UNKNOWN for those would tell a reviewer to go find a width that
+#: does not exist.
+AMBA_PROTOCOL_SIGNAL_ROLES: dict = {
+    "AHB": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA}),
+    "AHB_LITE": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA}),
+    "APB": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA}),
+    "APB3": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA}),
+    "APB4": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA}),
+    "AXI3": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA,
+                       AMBA_SIGNAL_ROLE_ID, AMBA_SIGNAL_ROLE_USER}),
+    "AXI4": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA,
+                       AMBA_SIGNAL_ROLE_ID, AMBA_SIGNAL_ROLE_USER}),
+    "AXI4_LITE": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA}),
+    "ACE_LITE": frozenset({AMBA_SIGNAL_ROLE_ADDRESS, AMBA_SIGNAL_ROLE_DATA,
+                           AMBA_SIGNAL_ROLE_ID, AMBA_SIGNAL_ROLE_USER}),
+    "AXI4_STREAM": frozenset({AMBA_SIGNAL_ROLE_DATA, AMBA_SIGNAL_ROLE_ID,
+                              AMBA_SIGNAL_ROLE_USER}),
+}
+
+
+def amba_signal_role(port_name: str) -> Optional[str]:
+    """Which width-bearing signal role one real port carries, or None.
+
+    Token-based like every other presence test in this module: a port spelled
+    `S_AXI_AWADDR` contributes AWADDR and is an ADDRESS signal, while one
+    spelled `..._ADDRESS_VALID` contributes neither AWADDR nor PADDR and is
+    not."""
+    toks = amba_signal_tokens([port_name])
+    for role, tokens in AMBA_SIGNAL_ROLE_TOKENS.items():
+        if toks & tokens:
+            return role
+    return None
 
 
 def _resolve_ahb_variant(toks: set) -> tuple:
@@ -2320,6 +2528,54 @@ def render_matrix_table(rows: list) -> str:
     lines = [header, sep]
     for r in matrix:
         lines.append(" | ".join(str(r.get(c, "")).ljust(widths[c]) for c in MATRIX_COLUMNS))
+    return "\n".join(lines)
+
+
+#: How a markdown column is aligned. Anything else raises rather than silently
+#: rendering left-aligned, so a typo in a column spec is not invisible.
+MARKDOWN_ALIGN_SEPARATORS = {"left": "---", "right": "---:", "center": ":---:"}
+
+
+def render_markdown_table(columns: list, rows: list, *,
+                          aligns: Optional[dict] = None,
+                          empty_note: str = "(no rows)") -> str:
+    """A markdown pipe table over `columns`, one line per row dict.
+
+    `columns` is a list of `(key, header)` pairs, or bare strings used as both.
+    A row missing a column renders empty rather than raising -- a dict reloaded
+    from an artifact written before a column existed still renders.
+
+    This is the repo's ONLY parameterized table renderer, added 2026-09-04
+    because AMBA-16/17/20 each mandate a fixed but DIFFERENT column list and
+    three more hand-rolled `"| " + " | ".join(...)` loops is how column lists
+    drift out of agreement with the spec they came from. `render_matrix_table()`
+    above stays separate on purpose: it renders a fixed-width aligned block,
+    not markdown, and is what `emit_connectivity_artifacts()` already writes.
+
+    `empty_note` is returned for an empty row list INSTEAD of a bare header,
+    because AMBA-17's table is mandatory even when empty and "no unresolved
+    ports were found" and "this table was never produced" must not look alike."""
+    cols = [(c, c) if isinstance(c, str) else (c[0], c[1]) for c in columns]
+    if not cols:
+        raise ConnectivityError("MARKDOWN_TABLE_HAS_NO_COLUMNS", {
+            "hint": "a table with no columns cannot state anything"})
+    align_of = dict(aligns or {})
+    seps = []
+    for key, _ in cols:
+        align = align_of.get(key, "left")
+        if align not in MARKDOWN_ALIGN_SEPARATORS:
+            raise ConnectivityError("MARKDOWN_TABLE_UNKNOWN_ALIGNMENT", {
+                "column": key, "alignment": align,
+                "legal_values": sorted(MARKDOWN_ALIGN_SEPARATORS)})
+        seps.append(MARKDOWN_ALIGN_SEPARATORS[align])
+    lines = ["| " + " | ".join(h for _, h in cols) + " |",
+             "|" + "|".join(seps) + "|"]
+    for row in rows or ():
+        d = row.to_dict() if hasattr(row, "to_dict") else dict(row)
+        lines.append("| " + " | ".join(
+            str(d.get(key, "") if d.get(key) is not None else "") for key, _ in cols) + " |")
+    if not rows:
+        lines.append(f"| {empty_note} |" + " |" * (len(cols) - 1))
     return "\n".join(lines)
 
 

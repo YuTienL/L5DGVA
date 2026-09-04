@@ -77,8 +77,17 @@ from typing import Iterable, Optional
 from dv_harness import connectivity
 from dv_harness.connectivity import (
     ALL_AMBA_SIGNAL_NAMES,
+    AMBA_PROTOCOL_SIGNAL_ROLES,
     AMBA_PROTOCOL_UNRESOLVED,
+    AMBA_SIGNAL_ROLE_ADDRESS,
+    AMBA_SIGNAL_ROLE_DATA,
+    AMBA_SIGNAL_ROLE_ID,
+    AMBA_SIGNAL_ROLE_USER,
+    CLOCK_RESET_RESOLVED,
+    PASSIVE_INTERFACE,
+    REQUIRED_HUMAN_INPUT,
     ROLE_UNRESOLVED_REQUIRES_STRUCTURAL_ANALYSIS,
+    AMBA4_DISPLAY_NAMES,
     AmbaClassificationStatus,
     AmbaProtocolClassification,
     AmbaInterfaceRoles,
@@ -86,12 +95,21 @@ from dv_harness.connectivity import (
     ConnectivityError,
     FABRIC_SIDE_MASTER_INTERFACE,
     FABRIC_SIDE_SLAVE_INTERFACE,
+    VipInstanceRecord,
+    amba_signal_role,
     amba_signal_tokens,
     amba_structural_match,
+    assert_active_passive_vocabulary,
+    build_protocol_interface_count_table,
     classify_amba_protocol,
     classify_bind_tier,
     determine_fabric_interface_roles,
+    find_amba_clock_reset_ports,
+    parse_bind_line,
+    render_markdown_table,
+    render_protocol_interface_count_table,
 )
+from dv_harness.phy_boundary import parse_port_width
 
 
 class FabricDiscoveryError(ConnectivityError):
@@ -298,6 +316,15 @@ class ModuleDef:
     port_order: list = field(default_factory=list)
     instances: list = field(default_factory=list)         # list[InstanceDef]
     assigns: list = field(default_factory=list)           # list[AssignEdge]
+    #: port -> verible's own raw `data_type` text (`logic [31:0]`,
+    #: `logic [DW-1:0]`, `logic`). Carried unparsed: turning it into a bit
+    #: count is `phy_boundary.parse_port_width()`'s job, and it answers None
+    #: for a parameterized range rather than guessing -- which is the honesty
+    #: AMBA-15's width points depend on.
+    port_data_types: dict = field(default_factory=dict)
+    #: list of {name, type_text, default_text} -- verible's parsed parameter
+    #: list, AMBA-15 point 12's evidence.
+    parameters: list = field(default_factory=list)
 
 
 def _module_dicts(parse_results) -> Iterable[dict]:
@@ -318,6 +345,7 @@ def _module_dicts(parse_results) -> Iterable[dict]:
             yield {
                 "name": getattr(mod, "name", None),
                 "ports": [vars(p) for p in getattr(mod, "ports", []) or []],
+                "parameters": [vars(p) for p in getattr(mod, "parameters", []) or []],
                 "instances": [
                     {
                         "instance_name": i.instance_name,
@@ -351,6 +379,9 @@ def build_module_index(parse_results) -> dict:
             port_directions={p.get("name"): p.get("direction")
                              for p in ports if p.get("name")},
             port_order=[p.get("name") for p in ports if p.get("name")],
+            port_data_types={p.get("name"): p.get("data_type")
+                             for p in ports if p.get("name")},
+            parameters=[dict(p) for p in mod.get("parameters") or []],
             instances=[
                 InstanceDef(
                     instance_name=i.get("instance_name"),
@@ -391,6 +422,13 @@ class ElaboratedInstance:
     is_blackbox: bool
     port_names: list = field(default_factory=list)
     port_directions: dict = field(default_factory=dict)
+    #: Both empty for a black box: an instantiation names ports and nets, never
+    #: their declared types or the module's parameters. That emptiness is the
+    #: real reason AMBA-15's width/parameterization points report UNKNOWN
+    #: there, and it must not be confused with a parsed module that genuinely
+    #: declares no parameters.
+    port_data_types: dict = field(default_factory=dict)
+    parameters: list = field(default_factory=list)
 
     @property
     def path_str(self) -> str:
@@ -460,6 +498,8 @@ class FabricNetlist:
             path=path, module_name=module_name, is_blackbox=mod is None,
             port_names=list(mod.port_order) if mod else [],
             port_directions=dict(mod.port_directions) if mod else {},
+            port_data_types=dict(mod.port_data_types) if mod else {},
+            parameters=[dict(p) for p in mod.parameters] if mod else [],
         )
         if mod is None:
             return
@@ -1617,3 +1657,1173 @@ def discovered_topology_ids(traces) -> dict:
             elif entry not in slaves:
                 slaves.append(entry)
     return {"masters": masters, "slaves": slaves, "unresolved": unresolved}
+
+
+# ===========================================================================
+# AMBA-15: VIP BIND LOCATION VALIDATION
+#
+# Thirteen named checks against one candidate bind LOCATION. Every one answers
+# from real elaborated-RTL evidence or answers UNKNOWN -- AMBA-15's own
+# instruction ("Use UNKNOWN where not provable") is the whole design constraint
+# here, because the alternative failure mode is a checklist that reads
+# all-green because six of its rows quietly defaulted.
+#
+# No check here proposes, writes or implies a `bind` statement: the outputs are
+# a validation record and a readiness verdict a human reads at AMBA-30's gate.
+# ===========================================================================
+
+#: One check's outcome.
+BIND_CHECK_KNOWN = "KNOWN"
+BIND_CHECK_UNKNOWN = "UNKNOWN"
+#: The property does not exist for this protocol (AXI4-Lite has no ID width),
+#: so UNKNOWN would send a reviewer looking for a fact that cannot be found.
+BIND_CHECK_NOT_APPLICABLE = "NOT_APPLICABLE"
+#: Not merely unproven -- disproven. A bind location whose hierarchy does not
+#: exist, or whose signals are not individually reachable, is not a location a
+#: human can approve, and it must not be able to average out to PARTIAL.
+BIND_CHECK_FAILED = "FAILED"
+
+#: AMBA-15's thirteen points, in the doc's own order and numbering. The tuple
+#: is the contract: a validation record is built by iterating it, so a check
+#: cannot be silently skipped and a renderer cannot omit a row.
+BIND_LOCATION_CHECK_POINTS: tuple = (
+    (1, "hierarchy_exists", "hierarchy exists"),
+    (2, "amba_signals_exist", "AMBA signals exist"),
+    (3, "interface_complete", "interface sufficiently complete"),
+    (4, "protocol_identified", "protocol identified"),
+    (5, "roles_identified", "endpoint/fabric roles identified"),
+    (6, "clock_known", "clock known"),
+    (7, "reset_known", "reset known"),
+    (8, "address_width_known", "address width known if applicable"),
+    (9, "data_width_known", "data width known"),
+    (10, "id_width_known", "ID width known if applicable"),
+    (11, "user_width_known", "USER widths known where applicable"),
+    (12, "parameterization_known", "parameterization known where relevant"),
+    (13, "uvm_accessible", "bind/observe accessibility from UVM"),
+)
+
+#: AMBA-18's bind-readiness vocabulary. Deliberately NOT `BindTier`: a tier is
+#: how much CONFIDENCE the evidence supports for a location, readiness is how
+#: much of the required evidence was found at all. A T2 structural match whose
+#: clock and reset are unknown is high-confidence and not ready, and one
+#: vocabulary cannot say both.
+BIND_READINESS_READY = "READY"
+BIND_READINESS_PARTIAL = "PARTIAL"
+BIND_READINESS_BLOCKED = "BLOCKED"
+BIND_READINESS_UNKNOWN = "UNKNOWN"
+BIND_READINESS_VALUES: tuple = (BIND_READINESS_READY, BIND_READINESS_PARTIAL,
+                                BIND_READINESS_BLOCKED, BIND_READINESS_UNKNOWN)
+
+#: AMBA-15's own word for an unprovable value, used in every `value` field so a
+#: JSON dump of a checklist never carries a bare null a reader could mistake
+#: for a missing key.
+BIND_CHECK_UNKNOWN_VALUE = "UNKNOWN"
+
+
+def parse_instance_path(path_str) -> tuple:
+    """The inverse of `ElaboratedInstance.path_str` -- `"u_a/u_b"` -> `("u_a",
+    "u_b")`, and the top module's `"<top>"` (or `""`) -> `()`.
+
+    Exists because the records AMBA-15..20 consume (`VipBindCandidate`,
+    `TraceBranch`) carry instance paths as display STRINGS, including ones
+    re-loaded from a persisted artifact, while the netlist is keyed on tuples."""
+    text = str(path_str or "").strip()
+    if not text or text == "<top>":
+        return ()
+    return tuple(p for p in text.split("/") if p)
+
+
+@dataclass
+class BindLocationCheck:
+    """One of AMBA-15's thirteen points, answered."""
+    point: int
+    key: str
+    label: str
+    status: str
+    value: str
+    evidence: str
+
+    def to_dict(self) -> dict:
+        return {"point": self.point, "key": self.key, "label": self.label,
+                "status": self.status, "value": self.value, "evidence": self.evidence}
+
+
+@dataclass
+class BindLocationValidation:
+    """AMBA-15's complete checklist for ONE candidate bind location."""
+    instance_path: str
+    module_name: str
+    bundle_prefix: str
+    protocol: str
+    checks: list = field(default_factory=list)     # list[BindLocationCheck]
+
+    @property
+    def by_key(self) -> dict:
+        return {c.key: c for c in self.checks}
+
+    def value_of(self, key: str) -> str:
+        check = self.by_key.get(key)
+        return check.value if check else BIND_CHECK_UNKNOWN_VALUE
+
+    @property
+    def readiness(self) -> str:
+        """AMBA-18's READY/PARTIAL/BLOCKED/UNKNOWN for this location.
+
+        BLOCKED dominates: one disproven check is not offset by twelve
+        satisfied ones. READY requires every APPLICABLE check known -- a
+        NOT_APPLICABLE point is not a gap, so an APB4 slave is not held below
+        READY for having no ID width."""
+        statuses = [c.status for c in self.checks]
+        if BIND_CHECK_FAILED in statuses:
+            return BIND_READINESS_BLOCKED
+        applicable = [s for s in statuses if s != BIND_CHECK_NOT_APPLICABLE]
+        if not applicable:
+            return BIND_READINESS_UNKNOWN
+        known = sum(1 for s in applicable if s == BIND_CHECK_KNOWN)
+        if known == len(applicable):
+            return BIND_READINESS_READY
+        if known == 0:
+            return BIND_READINESS_UNKNOWN
+        return BIND_READINESS_PARTIAL
+
+    @property
+    def unknown_points(self) -> list:
+        return [c.label for c in self.checks if c.status == BIND_CHECK_UNKNOWN]
+
+    @property
+    def failed_points(self) -> list:
+        return [c.label for c in self.checks if c.status == BIND_CHECK_FAILED]
+
+    def to_dict(self) -> dict:
+        return {
+            "instance_path": self.instance_path, "module": self.module_name,
+            "bundle_prefix": self.bundle_prefix, "protocol": self.protocol,
+            "readiness": self.readiness,
+            "checks": [c.to_dict() for c in self.checks],
+            "unknown_points": self.unknown_points,
+            "failed_points": self.failed_points,
+        }
+
+    def render_checklist(self) -> str:
+        """All thirteen rows, always -- a point that could not be answered is a
+        visible UNKNOWN row, never an absent one."""
+        rows = [{"point": str(c.point), "check": c.label, "status": c.status,
+                 "value": c.value, "evidence": c.evidence} for c in self.checks]
+        return render_markdown_table(
+            [("point", "#"), ("check", "Check"), ("status", "Status"),
+             ("value", "Value"), ("evidence", "Evidence")],
+            rows, aligns={"point": "right"})
+
+
+def _check(point_key: str, status: str, value: str, evidence: str) -> BindLocationCheck:
+    point, key, label = next(p for p in BIND_LOCATION_CHECK_POINTS if p[1] == point_key)
+    return BindLocationCheck(point=point, key=key, label=label, status=status,
+                             value=value, evidence=evidence)
+
+
+def _role_width_check(point_key: str, role: str, instance: ElaboratedInstance,
+                      bundle: Optional[AmbaBundle], protocol: str) -> BindLocationCheck:
+    """AMBA-15 points 8-11: one signal role's bit width, read off the real
+    declared port types.
+
+    The width parser is `phy_boundary.parse_port_width()` -- imported, not
+    re-implemented, because it already answers None (rather than a defaulted 1)
+    for a parameterized `[DW-1:0]` range, and a second width parser in this
+    repo would be a second chance to disagree about that.
+
+    Two ports of the same role that disagree (`AWADDR[31:0]` against
+    `ARADDR[15:0]`) is UNKNOWN with both widths named, never the first one
+    found: a fabric port whose read and write address widths differ is a real
+    finding, and silently reporting one of them would erase it."""
+    applicable_roles = AMBA_PROTOCOL_SIGNAL_ROLES.get(protocol)
+    if applicable_roles is not None and role not in applicable_roles:
+        return _check(point_key, BIND_CHECK_NOT_APPLICABLE, "N/A",
+                      f"{protocol} has no {role.lower()} signals")
+    ports = [p for p in (bundle.ports if bundle else []) if amba_signal_role(p) == role]
+    if not ports:
+        if applicable_roles is None:
+            return _check(point_key, BIND_CHECK_UNKNOWN, BIND_CHECK_UNKNOWN_VALUE,
+                          f"protocol unresolved and no {role.lower()} signal is present "
+                          "on this interface, so neither the width nor its "
+                          "applicability is established")
+        return _check(point_key, BIND_CHECK_UNKNOWN, BIND_CHECK_UNKNOWN_VALUE,
+                      f"{protocol} has {role.lower()} signals but none is present on "
+                      "this interface")
+    widths: dict = {}
+    unresolved: list = []
+    for port in sorted(ports):
+        width = parse_port_width(instance.port_data_types.get(port))
+        if width is None:
+            unresolved.append(f"{port}={instance.port_data_types.get(port)!r}")
+        else:
+            widths.setdefault(width, []).append(port)
+    if unresolved:
+        return _check(point_key, BIND_CHECK_UNKNOWN, BIND_CHECK_UNKNOWN_VALUE,
+                      "declared width could not be resolved to literal bounds for "
+                      + ", ".join(unresolved))
+    if len(widths) > 1:
+        detail = "; ".join(f"{w}: {', '.join(ps)}" for w, ps in sorted(widths.items()))
+        return _check(point_key, BIND_CHECK_UNKNOWN, BIND_CHECK_UNKNOWN_VALUE,
+                      f"{role.lower()} signals of this interface disagree on width -- "
+                      + detail)
+    width = next(iter(widths))
+    return _check(point_key, BIND_CHECK_KNOWN, str(width),
+                  "declared port width of " + ", ".join(sorted(ports)))
+
+
+def _clock_reset_check(point_key: str, kind: str, verdict: dict) -> BindLocationCheck:
+    if verdict["status"] == CLOCK_RESET_RESOLVED:
+        return _check(point_key, BIND_CHECK_KNOWN, verdict["port"],
+                      f"{kind} port on this instance, matched {verdict['evidence']}")
+    if verdict["candidates"]:
+        return _check(point_key, BIND_CHECK_UNKNOWN, BIND_CHECK_UNKNOWN_VALUE,
+                      f"{len(verdict['candidates'])} candidate {kind} ports and no "
+                      "evidence which drives this interface: "
+                      + ", ".join(verdict["candidates"]))
+    return _check(point_key, BIND_CHECK_UNKNOWN, BIND_CHECK_UNKNOWN_VALUE,
+                  f"no port on this instance carries a {kind} name")
+
+
+def _uvm_accessibility_check(netlist: FabricNetlist, path_str: str,
+                             instance: ElaboratedInstance,
+                             bundle: Optional[AmbaBundle]) -> BindLocationCheck:
+    """AMBA-15 point 13: can a UVM interface handle actually observe these
+    signals at this location.
+
+    Structural, not a guess: the obstacles are the ones the elaboration
+    genuinely recorded -- a port whose formal name could not be resolved
+    (`POSITIONAL_PORT_UNRESOLVED`), and a port driven by a concatenation or
+    expression rather than one equipotential net, which is not a signal a
+    monitor can be pointed at.
+
+    It deliberately does NOT check this project's Bind-Location Rules 1-4 (bare
+    module name vs. full path, generate-loop targets, the centralized
+    `*_bind.sv` file). Those govern how a bind statement is WRITTEN, and
+    AMBA-30/AMBA-31 hold every bind statement behind human review -- nothing in
+    this module is authorised to write one, so nothing here validates one."""
+    ports = set(bundle.ports if bundle else [])
+    if POSITIONAL_PORT_UNRESOLVED in instance.port_names:
+        return _check("uvm_accessible", BIND_CHECK_FAILED, "PORT_NAMES_UNRESOLVED",
+                      f"{path_str} has positional connections into an unparsed module, "
+                      "so which formal port each signal is cannot be established")
+    split = [s for s in netlist.split_connections
+             if s["path"] == path_str and s["port"] in ports]
+    if split:
+        return _check("uvm_accessible", BIND_CHECK_UNKNOWN, BIND_CHECK_UNKNOWN_VALUE,
+                      "driven by a multi-net expression rather than one net: "
+                      + ", ".join(sorted(s["port"] for s in split)))
+    if not ports:
+        return _check("uvm_accessible", BIND_CHECK_FAILED, "NO_SIGNALS",
+                      "no AMBA bundle at this location to observe")
+    if instance.is_blackbox:
+        return _check("uvm_accessible", BIND_CHECK_UNKNOWN, BIND_CHECK_UNKNOWN_VALUE,
+                      f"the hierarchy path {path_str} exists, but module "
+                      f"{instance.module_name} is not in the parsed source set, so "
+                      "whether its boundary exposes these signals individually (rather "
+                      "than through a SystemVerilog interface port) is not established")
+    return _check("uvm_accessible", BIND_CHECK_KNOWN, path_str,
+                  f"{len(ports)} individually-named ports on a real elaborated "
+                  "instance path, each on a single equipotential net")
+
+
+def validate_vip_bind_location(netlist: FabricNetlist, instance_path,
+                               bundle_prefix: str) -> BindLocationValidation:
+    """AMBA-15's thirteen-point validation of one proposed bind location.
+
+    `instance_path` may be a tuple or the display string a `VipBindCandidate`
+    carries. The location is validated against the ELABORATED netlist, so
+    "hierarchy exists" means this exact instance path was really elaborated
+    from parsed RTL -- not that a module of that name exists somewhere."""
+    path = instance_path if isinstance(instance_path, tuple) \
+        else parse_instance_path(instance_path)
+    instance = netlist.instance(path)
+    path_str = "/".join(path) if path else "<top>"
+    if instance is None:
+        # Every remaining point rests on the instance existing. Reporting them
+        # as twelve UNKNOWNs would suggest twelve separate things to go find
+        # out, when there is exactly one.
+        checks = [_check("hierarchy_exists", BIND_CHECK_FAILED, "NOT_FOUND",
+                         f"{path_str} is not an elaborated instance of top module "
+                         f"{netlist.top_module}")]
+        checks += [_check(key, BIND_CHECK_FAILED, "NOT_EVALUATED_HIERARCHY_MISSING",
+                          "not evaluated: the bind location itself does not exist")
+                   for _, key, _ in BIND_LOCATION_CHECK_POINTS[1:]]
+        return BindLocationValidation(instance_path=path_str, module_name="",
+                                      bundle_prefix=bundle_prefix,
+                                      protocol=AMBA_PROTOCOL_UNRESOLVED, checks=checks)
+
+    bundle = find_bundle(netlist, path, bundle_prefix)
+    classification = bundle.classification if bundle else None
+    protocol = bundle.protocol if bundle else AMBA_PROTOCOL_UNRESOLVED
+    checks: list = []
+
+    checks.append(_check("hierarchy_exists", BIND_CHECK_KNOWN, path_str,
+                         f"elaborated instance of module {instance.module_name} under "
+                         f"top module {netlist.top_module}"))
+
+    if bundle and bundle.ports:
+        checks.append(_check(
+            "amba_signals_exist", BIND_CHECK_KNOWN, f"{len(bundle.ports)} signals",
+            "AMBA-named ports on this boundary: "
+            + ", ".join(sorted(classification.evidence_signals))))
+    else:
+        checks.append(_check(
+            "amba_signals_exist", BIND_CHECK_FAILED, "NONE",
+            f"no AMBA bundle with prefix {bundle_prefix!r} on {path_str}"))
+
+    if classification is None:
+        checks.append(_check("interface_complete", BIND_CHECK_FAILED, "NO_INTERFACE",
+                             "there is no interface here to be complete"))
+        checks.append(_check("protocol_identified", BIND_CHECK_FAILED, "NO_INTERFACE",
+                             "there is no interface here to classify"))
+    elif classification.status == AmbaClassificationStatus.RESOLVED.value:
+        checks.append(_check("interface_complete", BIND_CHECK_KNOWN, "COMPLETE",
+                             "every core signal of the "
+                             f"{classification.family} family is present"))
+        checks.append(_check("protocol_identified", BIND_CHECK_KNOWN,
+                             classification.display_name,
+                             "; ".join(classification.discriminators)
+                             or "signal-set classification"))
+    else:
+        missing = ", ".join(classification.missing_signals) or "none named"
+        checks.append(_check("interface_complete", BIND_CHECK_UNKNOWN,
+                             BIND_CHECK_UNKNOWN_VALUE,
+                             f"{classification.status}; missing: {missing}"))
+        checks.append(_check("protocol_identified", BIND_CHECK_UNKNOWN,
+                             BIND_CHECK_UNKNOWN_VALUE,
+                             f"{classification.status}; candidates: "
+                             + (", ".join(classification.candidates) or "none")))
+
+    roles = bundle.roles if bundle else None
+    if roles is not None and roles.resolved:
+        checks.append(_check("roles_identified", BIND_CHECK_KNOWN,
+                             f"{roles.fabric_side_role} / {roles.external_endpoint_role}",
+                             roles.direction_evidence))
+    elif roles is not None:
+        checks.append(_check("roles_identified", BIND_CHECK_UNKNOWN,
+                             BIND_CHECK_UNKNOWN_VALUE,
+                             roles.unresolved_reason or "direction evidence did not "
+                             "settle which perspective this interface holds"))
+    else:
+        checks.append(_check("roles_identified", BIND_CHECK_UNKNOWN,
+                             BIND_CHECK_UNKNOWN_VALUE,
+                             f"module {instance.module_name} declares no port "
+                             "directions (not in the parsed source set), so neither "
+                             "perspective can be derived"))
+
+    clock_reset = find_amba_clock_reset_ports(protocol, bundle_prefix, instance.port_names)
+    checks.append(_clock_reset_check("clock_known", "clock", clock_reset["clock"]))
+    checks.append(_clock_reset_check("reset_known", "reset", clock_reset["reset"]))
+
+    checks.append(_role_width_check("address_width_known", AMBA_SIGNAL_ROLE_ADDRESS,
+                                    instance, bundle, protocol))
+    checks.append(_role_width_check("data_width_known", AMBA_SIGNAL_ROLE_DATA,
+                                    instance, bundle, protocol))
+    checks.append(_role_width_check("id_width_known", AMBA_SIGNAL_ROLE_ID,
+                                    instance, bundle, protocol))
+    checks.append(_role_width_check("user_width_known", AMBA_SIGNAL_ROLE_USER,
+                                    instance, bundle, protocol))
+
+    if instance.is_blackbox:
+        checks.append(_check("parameterization_known", BIND_CHECK_UNKNOWN,
+                             BIND_CHECK_UNKNOWN_VALUE,
+                             f"module {instance.module_name} is not in the parsed "
+                             "source set, so its parameter list is unknown"))
+    elif instance.parameters:
+        named = ", ".join(f"{p.get('name')}={p.get('default_text')}"
+                          for p in instance.parameters)
+        checks.append(_check("parameterization_known", BIND_CHECK_KNOWN,
+                             f"{len(instance.parameters)} parameters",
+                             "declared parameters: " + named))
+    else:
+        checks.append(_check("parameterization_known", BIND_CHECK_KNOWN, "NONE",
+                             f"module {instance.module_name} is parsed and declares "
+                             "no parameters"))
+
+    checks.append(_uvm_accessibility_check(netlist, path_str, instance, bundle))
+    return BindLocationValidation(instance_path=path_str,
+                                  module_name=instance.module_name,
+                                  bundle_prefix=bundle_prefix, protocol=protocol,
+                                  checks=checks)
+
+
+# ===========================================================================
+# AMBA-16..20: the four mandated review artifacts
+#
+# All four are derived from the SAME `FabricPortTrace` list and the same
+# AMBA-15 validations -- never recomputed independently -- so the bind matrix,
+# the unresolved table, the summary counts, the tree and the VIP instance plan
+# cannot disagree with each other about a port. Every one is a planning
+# document a human reads at AMBA-30's gate; none emits SystemVerilog.
+# ===========================================================================
+
+def _display_protocol(protocol: str) -> str:
+    """The doc's own spelling ("AXI4-Lite", not "AXI4_LITE") for any
+    human-facing table."""
+    return AMBA4_DISPLAY_NAMES.get(protocol, protocol)
+
+
+def _bundle_of_trace(netlist: FabricNetlist, trace: FabricPortTrace) -> Optional[AmbaBundle]:
+    return find_bundle(netlist, parse_instance_path(trace.fabric_instance_path),
+                       trace.bundle_prefix)
+
+
+def _external_endpoint_role(bundle: Optional[AmbaBundle]) -> str:
+    if bundle is None or bundle.roles is None:
+        return ROLE_UNRESOLVED_REQUIRES_STRUCTURAL_ANALYSIS
+    return bundle.roles.external_endpoint_role
+
+
+#: Worst-first, for aggregating several branches' readiness into the one status
+#: their parent fabric port carries. A port with one BLOCKED branch is not a
+#: READY port, and a port whose branches are half-planned is PARTIAL at best.
+_READINESS_SEVERITY = {BIND_READINESS_BLOCKED: 0, BIND_READINESS_UNKNOWN: 1,
+                       BIND_READINESS_PARTIAL: 2, BIND_READINESS_READY: 3}
+
+
+def _worst_readiness(values) -> str:
+    vals = [v for v in values if v in _READINESS_SEVERITY]
+    if not vals:
+        return BIND_READINESS_UNKNOWN
+    return min(vals, key=lambda v: _READINESS_SEVERITY[v])
+
+
+def _cap_below_ready(readiness: str) -> str:
+    """READY means "nothing further is needed before a human approves this
+    location". A port with an open AMBA-12/13 branch choice does not qualify
+    however clean each branch is, so its readiness is held at PARTIAL."""
+    return BIND_READINESS_PARTIAL if readiness == BIND_READINESS_READY else readiness
+
+
+#: AMBA-16's twelve mandated columns, in the doc's own order. `(key, header)`
+#: pairs: the key is what a JSON row carries, the header is what the markdown
+#: table prints.
+AMBA16_MATRIX_COLUMNS: tuple = (
+    ("fabric_port", "Fabric Port"),
+    ("protocol", "Protocol"),
+    ("fabric_role", "Fabric Role"),
+    ("external_endpoint_role", "External Endpoint Role"),
+    ("endpoint", "Endpoint"),
+    ("trace_path", "Trace Path"),
+    ("proposed_vip_bind_hierarchy", "Proposed VIP Bind Hierarchy"),
+    ("vip_role", "VIP Role"),
+    ("clock", "Clock"),
+    ("reset", "Reset"),
+    ("confidence", "Confidence"),
+    ("status", "Status"),
+)
+
+#: What a parent row of a MULTIPLE_SOURCE / MULTIPLE_DESTINATION port carries
+#: instead of a bind hierarchy. AMBA-12/13 forbid choosing one branch, so the
+#: parent names none of them and the child rows carry the real candidates.
+MULTIPLE_BRANCH_PARENT_BIND = "MULTIPLE_CANDIDATE_LOCATIONS_SEE_CHILD_ROWS"
+
+
+def _candidate_cells(netlist: FabricNetlist, candidate: Optional[VipBindCandidate]) -> dict:
+    """The five columns that come from a proposed bind LOCATION, plus the
+    AMBA-15 validation they were read out of."""
+    if candidate is None:
+        return {
+            "proposed_vip_bind_hierarchy": REQUIRED_HUMAN_INPUT,
+            "vip_role": REQUIRED_HUMAN_INPUT,
+            "clock": BIND_CHECK_UNKNOWN_VALUE,
+            "reset": BIND_CHECK_UNKNOWN_VALUE,
+            "confidence": REQUIRED_HUMAN_INPUT,
+            "status": BIND_READINESS_BLOCKED,
+            "validation": None,
+        }
+    path = parse_instance_path(candidate.instance_path)
+    validation = validate_vip_bind_location(netlist, path, candidate.bundle_prefix)
+    bundle = find_bundle(netlist, path, candidate.bundle_prefix)
+    # The VIP watches the CANDIDATE interface, not the fabric port -- for a
+    # bind pushed out to a CPU's own master port those are opposite
+    # perspectives, and reporting the fabric port's role here would describe
+    # the wrong end of the link.
+    vip_role = (bundle.roles.vip_role if bundle and bundle.roles and bundle.roles.vip_role
+                else ROLE_UNRESOLVED_REQUIRES_STRUCTURAL_ANALYSIS)
+    return {
+        "proposed_vip_bind_hierarchy": f"{candidate.instance_path}:{candidate.bundle_prefix}",
+        "vip_role": vip_role,
+        "clock": validation.value_of("clock_known"),
+        "reset": validation.value_of("reset_known"),
+        "confidence": candidate.bind_tier,
+        "status": validation.readiness,
+        "validation": validation,
+    }
+
+
+def _branch_candidate(trace: FabricPortTrace,
+                      branch: Optional[TraceBranch]) -> Optional[VipBindCandidate]:
+    """The best candidate for one branch, falling back to AMBA-8's P4 (the
+    fabric port itself) so a branch that found nothing better still names a
+    real, watchable boundary rather than dropping out of the plan."""
+    pool = list(branch.candidates) if branch is not None else []
+    pool += list(trace.fallback_candidates)
+    if not pool:
+        return None
+    return sorted(pool, key=lambda c: (_priority_rank(VipPlacementPriority(c.priority)),
+                                       c.instance_path))[0]
+
+
+def _endpoint_cell(trace: FabricPortTrace, branch: Optional[TraceBranch]) -> str:
+    """The endpoint, or -- when there is none -- the AMBA-14 status saying why.
+    An empty cell would read as "not looked into"."""
+    if branch is not None and branch.endpoint_instance_path:
+        return f"{branch.endpoint_instance_path} ({branch.endpoint_module})"
+    return f"{trace.status} (no endpoint established)"
+
+
+def build_fabric_vip_bind_matrix(netlist: FabricNetlist, traces) -> list:
+    """AMBA-16's mandatory primary output: one row per fabric port, plus child
+    rows for every branch of a multiple-source / multiple-destination port.
+
+    Every traced fabric port appears, including one whose trace resolved
+    nothing -- AMBA-16 says "every fabric port must appear", and a port silently
+    absent from the matrix is the omission that makes the whole artifact
+    unreviewable.
+
+    Rows carry `row_id`/`parent_row_id` beyond the twelve rendered columns, so
+    `connectivity.RowLockStore` can lock and diff them per row with no changes
+    of its own -- it is already generic over `(row_id, dict)`."""
+    rows: list = []
+    for trace in traces or ():
+        bundle = _bundle_of_trace(netlist, trace)
+        base = {
+            "fabric_port": trace.interface_id,
+            "protocol": _display_protocol(trace.fabric_protocol),
+            "fabric_role": trace.fabric_side_role,
+            "external_endpoint_role": _external_endpoint_role(bundle),
+            "trace_status": trace.status,
+            "row_id": trace.interface_id,
+            "parent_row_id": None,
+        }
+        multi = trace.status in (TraceTerminationStatus.MULTIPLE_SOURCE.value,
+                                 TraceTerminationStatus.MULTIPLE_DESTINATION.value)
+        if multi and trace.branches:
+            children: list = []
+            for idx, branch in enumerate(trace.branches, 1):
+                cells = _candidate_cells(netlist, _branch_candidate(trace, branch))
+                child = dict(base)
+                child.update({
+                    "row_id": f"{trace.interface_id}#branch{idx}",
+                    "parent_row_id": trace.interface_id,
+                    "fabric_port": f"{trace.interface_id} [branch {idx}]",
+                    "endpoint": _endpoint_cell(trace, branch),
+                    "trace_path": " -> ".join(h.instance_path for h in branch.hops) or "-",
+                    "trace_status": branch.status,
+                })
+                child.update(cells)
+                children.append(child)
+            parent = dict(base)
+            parent.update({
+                "endpoint": f"{len(children)} branches enumerated below "
+                            f"({trace.status})",
+                "trace_path": "-",
+                "proposed_vip_bind_hierarchy": MULTIPLE_BRANCH_PARENT_BIND,
+                "vip_role": REQUIRED_HUMAN_INPUT,
+                "clock": BIND_CHECK_UNKNOWN_VALUE,
+                "reset": BIND_CHECK_UNKNOWN_VALUE,
+                # Not a tier: which of several enumerated branches to watch is
+                # a verification-architecture decision, not a confidence one.
+                "confidence": REQUIRED_HUMAN_INPUT,
+                # Capped below READY even when every branch validates cleanly:
+                # AMBA-12/13 leave the choice of which branches to observe to a
+                # human, so the PORT still has an open decision on it. Calling
+                # it READY would claim a decision nobody has made.
+                "status": _cap_below_ready(
+                    _worst_readiness(c["status"] for c in children)),
+                "validation": None,
+            })
+            rows.append(parent)
+            rows.extend(children)
+            continue
+        branch = trace.branches[0] if trace.branches else None
+        row = dict(base)
+        row.update({
+            "endpoint": _endpoint_cell(trace, branch),
+            "trace_path": (" -> ".join(h.instance_path for h in branch.hops)
+                           if branch else "-") or "-",
+        })
+        row.update(_candidate_cells(netlist, _branch_candidate(trace, branch)))
+        rows.append(row)
+        rows.extend(_bridge_second_side_rows(netlist, trace, base))
+    return rows
+
+
+def _bridge_second_side_rows(netlist: FabricNetlist, trace: FabricPortTrace,
+                             base: dict) -> list:
+    """AMBA-11's VIP-B: one subordinate row per protocol bridge the trace
+    crossed, carrying the DOWNSTREAM side's own protocol and its own candidate
+    location.
+
+    Recorded here, and deliberately NOT auto-planned as a VIP instance
+    (`amba11_second_side` makes `build_vip_instance_plan()` skip it): AMBA-11
+    says to record both sides but to "recommend both only when justified by
+    verification goals", so the downstream side is evidence a reviewer decides
+    on, not a VIP the plan asks for on its own initiative.
+
+    The downstream protocol is the bridge's own independent classification --
+    it is never inherited from the upstream side, which is what makes "do not
+    label a downstream APB endpoint as AXI" impossible to violate here."""
+    out: list = []
+    for idx, bridge in enumerate(trace.bridges or (), 1):
+        bridge_path = parse_instance_path(bridge.bridge_instance_path)
+        bundle = find_bundle(netlist, bridge_path, bridge.downstream_bundle_prefix)
+        candidate = _make_candidate(
+            bundle, VipPlacementPriority.P1_TRUE_IP_AMBA_BOUNDARY,
+            "AMBA-11 VIP-B: the downstream side of the protocol bridge this port's "
+            "trace terminated at") if bundle else None
+        row = dict(base)
+        row.update({
+            "row_id": f"{trace.interface_id}#bridge{idx}",
+            "parent_row_id": trace.interface_id,
+            "amba11_second_side": True,
+            "fabric_port": f"{trace.interface_id} [AMBA-11 VIP-B @ "
+                           f"{bridge.bridge_instance_path}]",
+            "protocol": _display_protocol(bridge.downstream_protocol),
+            "fabric_role": (bundle.fabric_side_role if bundle
+                            else ROLE_UNRESOLVED_REQUIRES_STRUCTURAL_ANALYSIS),
+            "external_endpoint_role": _external_endpoint_role(bundle),
+            "endpoint": f"{bridge.bridge_instance_path} ({bridge.bridge_module}) "
+                        "downstream side -- what lies beyond it is a separate trace",
+            "trace_path": f"{trace.fabric_instance_path} -> "
+                          f"{bridge.bridge_instance_path}",
+            "trace_status": TraceTerminationStatus.PROTOCOL_BRIDGE_FOUND.value,
+        })
+        row.update(_candidate_cells(netlist, candidate))
+        out.append(row)
+    return out
+
+
+def render_fabric_vip_bind_matrix(rows) -> str:
+    """AMBA-16's table in the doc's exact twelve-column shape."""
+    return render_markdown_table(list(AMBA16_MATRIX_COLUMNS), rows,
+                                 empty_note="(no fabric port was traced)")
+
+
+def parent_matrix_rows(rows) -> list:
+    """The one-row-per-fabric-port view of the matrix. Counting over the raw
+    row list would count a multiple-destination port once per branch."""
+    return [r for r in rows or () if not r.get("parent_row_id")]
+
+
+# ===========================================================================
+# AMBA-17: UNRESOLVED PORT TABLE (mandatory even when empty)
+# ===========================================================================
+
+AMBA17_UNRESOLVED_COLUMNS: tuple = (
+    ("fabric_port", "Fabric Port"),
+    ("protocol", "Protocol"),
+    ("fabric_role", "Fabric Role"),
+    ("trace_result", "Trace Result"),
+    ("last_known_hierarchy", "Last Known Hierarchy"),
+    ("why_not_found", "Why Endpoint/Bind Not Found"),
+    ("missing_evidence", "Missing Evidence"),
+    ("next_best_action", "Next-Best-Action"),
+)
+
+#: One next action per AMBA-14 termination state. A table keyed on the state
+#: rather than free prose per port means the advice cannot silently differ
+#: between two ports that failed for the same reason.
+NEXT_BEST_ACTION_BY_STATUS: dict = {
+    TraceTerminationStatus.SOURCE_NOT_FOUND.value:
+        "Add the missing driver's RTL to the parse set, or confirm the initiating master "
+        "is outside the parsed design and watch the fabric boundary itself (AMBA-8 P4).",
+    TraceTerminationStatus.DESTINATION_NOT_FOUND.value:
+        "Add the missing target's RTL to the parse set, or confirm the destination slave "
+        "is outside the parsed design and watch the fabric boundary itself (AMBA-8 P4).",
+    TraceTerminationStatus.TRACE_BLOCKED.value:
+        "Supply the unparsed module's RTL (or at minimum its port list) so the trace can "
+        "continue through it; do not assume it is the endpoint.",
+    TraceTerminationStatus.AMBIGUOUS.value:
+        "Human review: the correspondence between this module's interfaces is not visible "
+        "at syntax level. Confirm which bundles correspond before any VIP is placed.",
+    TraceTerminationStatus.MULTIPLE_SOURCE.value:
+        "Confirm which of the enumerated sources need independent VIP observation "
+        "(AMBA-12 forbids collapsing them to one); each child row is a separate decision.",
+    TraceTerminationStatus.MULTIPLE_DESTINATION.value:
+        "Confirm which of the enumerated destinations need independent VIP observation "
+        "(AMBA-13 forbids claiming a single final slave); each child row is a separate "
+        "decision.",
+    TraceTerminationStatus.INTERNAL_ONLY.value:
+        "Confirm whether this fabric-internal interface needs VIP observation at all; if "
+        "it does, the internal peer is the bind location.",
+}
+
+#: Used when the TRACE resolved but the proposed bind LOCATION did not pass
+#: AMBA-15 -- a different failure from an unresolved trace, and one whose next
+#: action is about evidence at the bind point rather than about the traversal.
+NEXT_BEST_ACTION_BIND_BLOCKED = (
+    "The endpoint was traced, but the bind location failed AMBA-15 validation. Resolve "
+    "the failed checks listed under 'Why Endpoint/Bind Not Found' before proposing this "
+    "location to a reviewer.")
+NEXT_BEST_ACTION_NO_CANDIDATE = (
+    "No watchable AMBA boundary was found for this port at any AMBA-8 priority. Confirm "
+    "whether the interface is observable at all, or route it to the question queue.")
+
+
+def _last_known_hierarchy(trace: FabricPortTrace) -> str:
+    """The deepest point the trace actually reached -- AMBA-17's own
+    requirement that an unresolved row still says where it got to."""
+    deepest = ""
+    for branch in trace.branches:
+        for hop in branch.hops:
+            if len(hop.instance_path.split("/")) > len(deepest.split("/")) or not deepest:
+                deepest = hop.instance_path
+    return deepest or trace.fabric_instance_path
+
+
+def build_unresolved_fabric_port_table(netlist: FabricNetlist, traces,
+                                       matrix_rows=None) -> list:
+    """AMBA-17: every fabric port whose endpoint OR whose bind location is not
+    established, with the reason, the missing evidence and a next action.
+
+    Two distinct populations, deliberately in one table because AMBA-17's
+    column set fits both and a reviewer wants one list of "what is not ready":
+    a port whose AMBA-14 trace ended in an unresolved state, and a port whose
+    trace resolved but whose proposed bind location failed an AMBA-15 check
+    (or has no candidate location at all)."""
+    rows = matrix_rows if matrix_rows is not None else \
+        build_fabric_vip_bind_matrix(netlist, traces)
+    by_port = {r["row_id"]: r for r in rows}
+    out: list = []
+    for trace in traces or ():
+        row = by_port.get(trace.interface_id)
+        unresolved_trace = trace.status in {s.value for s in UNRESOLVED_TERMINATION_STATUSES}
+        blocked_bind = bool(row) and row.get("status") == BIND_READINESS_BLOCKED
+        if not (unresolved_trace or blocked_bind):
+            continue
+        why: list = []
+        missing = list(trace.missing_evidence)
+        if unresolved_trace and trace.reason:
+            why.append(trace.reason)
+        validation = (row or {}).get("validation")
+        if blocked_bind and validation is not None:
+            why.extend(f"AMBA-15 check failed: {p}" for p in validation.failed_points)
+            missing.extend(c.evidence for c in validation.checks
+                           if c.status == BIND_CHECK_FAILED)
+        if blocked_bind and validation is None and not unresolved_trace:
+            why.append("no VIP bind candidate location was found for this port")
+        if unresolved_trace:
+            action = NEXT_BEST_ACTION_BY_STATUS.get(trace.status, REQUIRED_HUMAN_INPUT)
+        elif validation is None:
+            action = NEXT_BEST_ACTION_NO_CANDIDATE
+        else:
+            action = NEXT_BEST_ACTION_BIND_BLOCKED
+        out.append({
+            "fabric_port": trace.interface_id,
+            "protocol": _display_protocol(trace.fabric_protocol),
+            "fabric_role": trace.fabric_side_role,
+            "trace_result": trace.status,
+            "last_known_hierarchy": _last_known_hierarchy(trace),
+            "why_not_found": "; ".join(why) or REQUIRED_HUMAN_INPUT,
+            "missing_evidence": "; ".join(dict.fromkeys(missing)) or "-",
+            "next_best_action": action,
+            "row_id": trace.interface_id,
+        })
+    return out
+
+
+def render_unresolved_fabric_port_table(rows) -> str:
+    """AMBA-17's table, rendered even when empty -- "every fabric port
+    resolved" and "this table was never produced" must not look alike to a
+    reviewer."""
+    return render_markdown_table(
+        list(AMBA17_UNRESOLVED_COLUMNS), rows,
+        empty_note="(none -- every traced fabric port reached a resolved endpoint and a "
+                   "validated bind location)")
+
+
+# ===========================================================================
+# AMBA-18: TOPOLOGY SUMMARY
+# ===========================================================================
+
+def _fabric_interface_records(netlist: FabricNetlist, traces) -> list:
+    """One AMBA-6-shaped record per traced fabric port, for the count table.
+
+    Plain dicts rather than `AmbaFabricInterface` objects on purpose: a bundle
+    on a black-box instance has no port directions and therefore no
+    `AmbaInterfaceRoles` at all, and `build_protocol_interface_count_table()`
+    already accepts this dict shape (it is the form a re-loaded artifact takes)
+    and already counts a role-unresolved interface in the totals without
+    filing it as slave or master."""
+    records: list = []
+    for trace in traces or ():
+        bundle = _bundle_of_trace(netlist, trace)
+        records.append({
+            "interface": trace.interface_id,
+            "protocol": trace.fabric_protocol,
+            "status": (bundle.classification.status if bundle
+                       else AmbaClassificationStatus.UNRESOLVED_PARTIAL_EVIDENCE.value),
+            "fabric_side_role": trace.fabric_side_role,
+        })
+    return records
+
+
+def build_amba_topology_summary(netlist: FabricNetlist, traces,
+                                matrix_rows=None) -> dict:
+    """AMBA-18: the port totals, the per-protocol counts across all ten AMBA-4
+    protocols, and the READY/PARTIAL/BLOCKED/UNKNOWN bind-readiness tally.
+
+    The counts are `connectivity.build_protocol_interface_count_table()`'s --
+    the AMBA-6 table, reused rather than recomputed, so AMBA-6 and AMBA-18 can
+    never report different totals for the same fabric. Readiness is tallied
+    over PARENT rows only: a multiple-destination port is one port, not one per
+    branch."""
+    table = build_protocol_interface_count_table(_fabric_interface_records(netlist, traces))
+    rows = matrix_rows if matrix_rows is not None else \
+        build_fabric_vip_bind_matrix(netlist, traces)
+    readiness = {value: 0 for value in BIND_READINESS_VALUES}
+    for row in parent_matrix_rows(rows):
+        status = row.get("status")
+        readiness[status] = readiness.get(status, 0) + 1
+    return {
+        "total_fabric_slave_ports": table["total_fabric_slave_ports"],
+        "total_fabric_master_ports": table["total_fabric_master_ports"],
+        "total_amba_ports": table["total_amba_ports"],
+        "protocol_counts": table,
+        "bind_readiness": readiness,
+        "trace_terminations": summarize_trace_terminations(traces),
+    }
+
+
+def render_amba_topology_summary(summary: dict) -> str:
+    """AMBA-18's three totals, the ten protocol rows, and the readiness tally."""
+    lines = ["### Port counts and per-protocol breakdown (AMBA-18)", "",
+             render_protocol_interface_count_table(summary["protocol_counts"]).rstrip(),
+             "", "### Bind readiness", ""]
+    lines.append(render_markdown_table(
+        [("readiness", "Bind Readiness"), ("ports", "Fabric Ports")],
+        [{"readiness": value, "ports": summary["bind_readiness"].get(value, 0)}
+         for value in BIND_READINESS_VALUES],
+        aligns={"ports": "right"}))
+    lines += ["", "### Trace termination status (AMBA-14)", ""]
+    lines.append(render_markdown_table(
+        [("status", "Termination Status"), ("ports", "Fabric Ports")],
+        [{"status": status.value,
+          "ports": summary["trace_terminations"].get(status.value, 0)}
+         for status in TraceTerminationStatus],
+        aligns={"ports": "right"}))
+    return "\n".join(lines)
+
+
+# ===========================================================================
+# AMBA-19: TOPOLOGY TREE
+# ===========================================================================
+
+#: The literal ASCII connectors AMBA-19's example uses. A mermaid flowchart of
+#: the same information already exists (`connectivity.render_hierarchy_diagram()`)
+#: and is kept -- it is the right artifact for a rendered document, while this
+#: is the one the doc mandates and the one that survives a plain-text review
+#: comment.
+TREE_BRANCH = "|-- "
+TREE_LAST_BRANCH = "\\-- "
+TREE_PIPE = "|   "
+TREE_BLANK = "    "
+
+
+def _tree_child_lines(entries: list, prefix: str) -> list:
+    """Render `[(label, [children...]), ...]` under one parent, with the last
+    entry closing its branch."""
+    lines: list = []
+    for idx, (label, children) in enumerate(entries):
+        last = idx == len(entries) - 1
+        lines.append(prefix + (TREE_LAST_BRANCH if last else TREE_BRANCH) + label)
+        lines.extend(_tree_child_lines(
+            children, prefix + (TREE_BLANK if last else TREE_PIPE)))
+    return lines
+
+
+def render_topology_tree(netlist: FabricNetlist, traces, matrix_rows=None) -> str:
+    """AMBA-19's discovered-hierarchy tree.
+
+    `<fabric port> : <protocol> / <fabric role>` -> `<endpoint>` ->
+    `VIP_BIND_CANDIDATE = <hierarchy>`, and an unresolved branch shows its last
+    known hierarchy and its trace status, exactly as AMBA-19 requires.
+
+    The candidate line says CANDIDATE, and says it in a form
+    `connectivity.parse_bind_line()` does not recognise as a bind statement,
+    because AMBA-30 holds every bind behind human review and a plan artifact
+    that reads like emitted code is how that gate gets skipped by accident."""
+    rows = matrix_rows if matrix_rows is not None else \
+        build_fabric_vip_bind_matrix(netlist, traces)
+    by_id = {r["row_id"]: r for r in rows}
+    entries: list = []
+    for trace in traces or ():
+        label = (f"{trace.interface_id} : {_display_protocol(trace.fabric_protocol)} / "
+                 f"{trace.fabric_side_role}")
+        children: list = []
+        multi = trace.status in (TraceTerminationStatus.MULTIPLE_SOURCE.value,
+                                 TraceTerminationStatus.MULTIPLE_DESTINATION.value)
+        branch_rows = [(idx, branch,
+                        by_id.get(f"{trace.interface_id}#branch{idx}"
+                                  if multi else trace.interface_id))
+                       for idx, branch in enumerate(trace.branches, 1)]
+        if not branch_rows:
+            children.append((f"UNRESOLVED [{trace.status}]", [
+                (f"LAST_KNOWN_HIERARCHY = {_last_known_hierarchy(trace)}", []),
+                (f"REASON = {trace.reason or REQUIRED_HUMAN_INPUT}", []),
+            ]))
+        for idx, branch, row in branch_rows:
+            grandchildren: list = []
+            bind = (row or {}).get("proposed_vip_bind_hierarchy")
+            if bind and bind not in (REQUIRED_HUMAN_INPUT, MULTIPLE_BRANCH_PARENT_BIND):
+                grandchildren.append(
+                    (f"VIP_BIND_CANDIDATE = {bind} "
+                     f"[{(row or {}).get('confidence')}, {(row or {}).get('status')}]", []))
+            else:
+                grandchildren.append((f"VIP_BIND_CANDIDATE = {REQUIRED_HUMAN_INPUT}", []))
+            if branch.endpoint_instance_path:
+                endpoint_label = (f"{branch.endpoint_instance_path} "
+                                  f"({branch.endpoint_module}) [{branch.status}]")
+            else:
+                endpoint_label = f"UNRESOLVED [{branch.status}]"
+                grandchildren.insert(0, (
+                    f"LAST_KNOWN_HIERARCHY = "
+                    f"{branch.hops[-1].instance_path if branch.hops else trace.fabric_instance_path}",
+                    []))
+                grandchildren.insert(1, (
+                    f"REASON = {branch.reason or trace.reason or REQUIRED_HUMAN_INPUT}", []))
+            if multi:
+                endpoint_label = f"branch {idx}: {endpoint_label}"
+            children.append((endpoint_label, grandchildren))
+        entries.append((label, children))
+    return "\n".join(["BUS_FABRIC"] + _tree_child_lines(entries, ""))
+
+
+# ===========================================================================
+# AMBA-20: VIP INSTANCE PLAN
+# ===========================================================================
+
+AMBA20_VIP_PLAN_COLUMNS: tuple = (
+    ("vip_id", "VIP_ID"),
+    ("protocol", "Protocol"),
+    ("endpoint", "Endpoint"),
+    ("vip_mode", "VIP Mode"),
+    ("active_passive", "Active/Passive"),
+    ("master_slave_monitor", "Master/Slave/Monitor"),
+    ("bind_hierarchy", "Bind Hierarchy"),
+    ("clock", "Clock"),
+    ("reset", "Reset"),
+    ("scoreboard_connection", "Scoreboard Connection"),
+    ("status", "Status"),
+)
+
+#: AMBA-20's "Default topology observation: PASSIVE MONITOR". A vocabulary
+#: rather than a comment: `assert_vip_plan_defaults_passive()` below refuses a
+#: row that leaves it without naming the driving requirement.
+VIP_MODE_PASSIVE_MONITOR = "PASSIVE_MONITOR"
+VIP_MODE_ACTIVE_DRIVER = "ACTIVE_DRIVER"
+VIP_MSM_MONITOR = "MONITOR"
+
+_VIP_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _vip_id(index: int, protocol: str, instance_path: str, bundle_prefix: str) -> str:
+    """A stable, readable VIP_ID: the index keeps it unique, the rest makes it
+    greppable back to the location it names."""
+    where = _VIP_ID_SAFE_RE.sub("_", f"{instance_path}_{bundle_prefix}").strip("_").upper()
+    return f"VIP_{index:02d}_{protocol}_{where}"
+
+
+def build_vip_instance_plan(netlist: FabricNetlist, traces, matrix_rows=None) -> list:
+    """AMBA-20's eleven-column VIP instance plan, one row per proposed VIP.
+
+    Derived from AMBA-16's matrix rows, never re-traced, so a VIP row and its
+    matrix row cannot disagree about clock, reset or readiness. A matrix row
+    with no candidate location produces NO VIP row -- it is already in
+    AMBA-17's unresolved table, and a VIP instance naming
+    `REQUIRED_HUMAN_INPUT` as its bind hierarchy would be a planned instance
+    with nowhere to sit. An AMBA-11 second-side (VIP-B) row is likewise
+    recorded in the matrix but not planned here, per AMBA-11's "recommend both
+    only when justified by verification goals".
+
+    `Scoreboard Connection` is `REQUIRED_HUMAN_INPUT` by construction: which
+    scoreboard a monitor feeds is AMBA-21/AMBA-25's output, computed by
+    `uvm_generator/amba_fabric_generator.build_scoreboard_matrix()` from an
+    approved topology, and guessing it here would pre-empt the review gate.
+
+    Rows also carry `vip_type` and `active_passive` under
+    `connectivity`'s own matrix vocabulary, so the existing
+    `assert_active_passive_vocabulary()` / `matrix_vip_instance_records()` /
+    `check_vip_instance_count_matches_active_interfaces()` chain accepts them
+    with no changes."""
+    rows = matrix_rows if matrix_rows is not None else \
+        build_fabric_vip_bind_matrix(netlist, traces)
+    plan: list = []
+    for row in rows:
+        bind = row.get("proposed_vip_bind_hierarchy")
+        if not bind or bind in (REQUIRED_HUMAN_INPUT, MULTIPLE_BRANCH_PARENT_BIND):
+            continue
+        if row.get("amba11_second_side"):
+            continue
+        instance_path, _, bundle_prefix = bind.partition(":")
+        validation = row.get("validation")
+        protocol = validation.protocol if validation is not None else AMBA_PROTOCOL_UNRESOLVED
+        vip_id = _vip_id(len(plan) + 1, protocol, instance_path, bundle_prefix)
+        plan.append({
+            "vip_id": vip_id,
+            "protocol": _display_protocol(protocol),
+            "endpoint": row.get("endpoint"),
+            "vip_mode": VIP_MODE_PASSIVE_MONITOR,
+            "active_passive": PASSIVE_INTERFACE,
+            "master_slave_monitor": VIP_MSM_MONITOR,
+            "bind_hierarchy": bind,
+            "clock": row.get("clock"),
+            "reset": row.get("reset"),
+            "scoreboard_connection": REQUIRED_HUMAN_INPUT,
+            "status": row.get("status"),
+            # Beyond the eleven rendered columns, for the existing
+            # connectivity-matrix helpers and for row-level locking.
+            "vip_type": f"{protocol}_VIP",
+            "row_id": vip_id,
+            "source_row_id": row.get("row_id"),
+            "observed_endpoint_role": row.get("external_endpoint_role"),
+            "driving_requirement": None,
+        })
+    return plan
+
+
+def assert_vip_plan_defaults_passive(plan) -> None:
+    """AMBA-20: "Do not default ACTIVE unless verification architecture
+    explicitly requires driving."
+
+    Enforced rather than stated. An ACTIVE row must name the driving
+    requirement that justifies it; without one, the row is refused. The
+    `active_passive` vocabulary itself is `connectivity`'s
+    (`assert_active_passive_vocabulary()`), run here so a plan cannot carry a
+    third value that silently drops out of every count."""
+    assert_active_passive_vocabulary(plan)
+    for row in plan or ():
+        mode = row.get("vip_mode")
+        active = (row.get("active_passive") == "active"
+                  or mode == VIP_MODE_ACTIVE_DRIVER)
+        if not active:
+            continue
+        if not str(row.get("driving_requirement") or "").strip():
+            raise FabricDiscoveryError("VIP_ACTIVE_WITHOUT_DRIVING_REQUIREMENT", {
+                "vip_id": row.get("vip_id"), "vip_mode": mode,
+                "active_passive": row.get("active_passive"),
+                "hint": "AMBA-20 defaults to PASSIVE MONITOR; an ACTIVE VIP must name "
+                        "the verification-architecture requirement that needs it to "
+                        "drive, in 'driving_requirement'",
+            })
+
+
+def vip_instance_records_from_plan(plan) -> list:
+    """The plan as real `connectivity.VipInstanceRecord`s, so it can be fed to
+    the existing `check_vip_instance_count_matches_active_interfaces()` without
+    a second record type."""
+    return [VipInstanceRecord(vip_type=str(r.get("vip_type")),
+                              instance_path=str(r.get("bind_hierarchy")),
+                              active_passive=str(r.get("active_passive")))
+            for r in plan or ()]
+
+
+def render_vip_instance_plan(plan) -> str:
+    return render_markdown_table(
+        list(AMBA20_VIP_PLAN_COLUMNS), plan,
+        empty_note="(no VIP instance is proposed: no fabric port reached a validated "
+                   "bind location)")
+
+
+# ===========================================================================
+# The AMBA-15..20 review artifact, assembled
+# ===========================================================================
+
+@dataclass
+class VipBindPlan:
+    """Everything AMBA-16..20 mandate, computed once from one trace set."""
+    traces: list
+    matrix: list
+    unresolved: list
+    summary: dict
+    vip_instances: list
+    tree: str
+
+    def to_dict(self) -> dict:
+        return {
+            "fabric_port_to_vip_bind_matrix": [
+                {k: v for k, v in row.items() if k != "validation"} for row in self.matrix],
+            "bind_location_validations": [
+                row["validation"].to_dict() for row in self.matrix
+                if row.get("validation") is not None],
+            "unresolved_fabric_ports": list(self.unresolved),
+            "topology_summary": self.summary,
+            "topology_tree": self.tree,
+            "vip_instance_plan": list(self.vip_instances),
+        }
+
+
+def build_vip_bind_plan(netlist: FabricNetlist, traces) -> VipBindPlan:
+    """AMBA-15..20 in one pass over one trace set.
+
+    The order matters and is the doc's: validate the locations (AMBA-15) while
+    building the matrix (AMBA-16), derive the unresolved table (AMBA-17), the
+    summary (AMBA-18), the tree (AMBA-19) and the VIP plan (AMBA-20) FROM that
+    same matrix. Nothing is recomputed from the netlist a second time, so the
+    five artifacts are guaranteed consistent with each other."""
+    assert_unresolved_states_explained(traces)
+    matrix = build_fabric_vip_bind_matrix(netlist, traces)
+    plan = VipBindPlan(
+        traces=list(traces or ()),
+        matrix=matrix,
+        unresolved=build_unresolved_fabric_port_table(netlist, traces, matrix),
+        summary=build_amba_topology_summary(netlist, traces, matrix),
+        vip_instances=build_vip_instance_plan(netlist, traces, matrix),
+        tree=render_topology_tree(netlist, traces, matrix),
+    )
+    assert_vip_plan_defaults_passive(plan.vip_instances)
+    return plan
+
+
+def assert_no_bind_statement(text: str) -> None:
+    """Nothing this module renders may be a `bind` statement.
+
+    The test is `connectivity.parse_bind_line()` -- the repo's one definition
+    of what a bind statement is -- so this assertion cannot drift from the
+    grep that finds real binds in real source. AMBA-30/AMBA-31 put every bind
+    behind a human review gate; a planning report that accidentally rendered
+    emittable SystemVerilog would be a way past it."""
+    for lineno, line in enumerate(str(text or "").splitlines(), 1):
+        parsed = parse_bind_line(line)
+        if parsed:
+            raise FabricDiscoveryError("BIND_STATEMENT_IN_DISCOVERY_ARTIFACT", {
+                "line_number": lineno, "line": line.strip(), "parsed": list(parsed),
+                "hint": "AMBA-15..20 are discovery/planning artifacts; a bind statement "
+                        "may only be written after AMBA-31's explicit human approval",
+            })
+
+
+def render_vip_bind_plan_report(plan: VipBindPlan) -> str:
+    """The single human-review artifact AMBA-30's gate is held against.
+
+    Self-checked: the finished text is run through `assert_no_bind_statement()`
+    before it is returned, so this function cannot return a report carrying an
+    emittable bind."""
+    lines = ["# AMBA-15..20 Fabric Port to VIP Bind Plan", "",
+             "## AMBA-18. Topology summary", "",
+             render_amba_topology_summary(plan.summary), "",
+             "## AMBA-16. Fabric port to VIP bind matrix", "",
+             render_fabric_vip_bind_matrix(plan.matrix), "",
+             "## AMBA-17. Unresolved fabric ports", "",
+             render_unresolved_fabric_port_table(plan.unresolved), "",
+             "## AMBA-19. Discovered topology tree", "", "```", plan.tree, "```", "",
+             "## AMBA-20. VIP instance plan", "",
+             render_vip_instance_plan(plan.vip_instances), "",
+             "## AMBA-15. Bind location validation (13 points per location)", ""]
+    for row in plan.matrix:
+        validation = row.get("validation")
+        if validation is None:
+            continue
+        lines += [f"### {row['fabric_port']} -> {validation.instance_path}:"
+                  f"{validation.bundle_prefix} [{validation.readiness}]", "",
+                  validation.render_checklist(), ""]
+    lines.append(
+        "Discovery and planning only. No bind statement is proposed, emitted or implied "
+        "by this report (AMBA-30 / AMBA-31): a human reviews these candidate locations, "
+        "this VIP instance plan and every unresolved port above before any UVM/VIP code "
+        "is generated or modified.")
+    text = "\n".join(lines)
+    assert_no_bind_statement(text)
+    return text
