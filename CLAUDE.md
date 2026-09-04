@@ -135,6 +135,27 @@ real commit's SHA is written back onto the underlying JSON MemoryStore
 record as `knowledge_commit_sha`, alongside its existing `rtl_sha`/`tb_sha`.
 See `.work/obsidian-memory-debugflow-report.md` for full detail.
 
+**Knowledge deduplication runs on the AUTOMATIC write path too (2026-09-04)**:
+`memory_dedup.classify_note_candidate()` had exactly one caller, the manual
+`dv-harness memory add` verb. The path that actually populates this project's
+vault -- `memory_router._maybe_write_vault_note()`, which every real
+ENGINEERING_MEMORY/ORGANIZATIONAL_MEMORY promotion goes through -- decided
+create-vs-update from `memory_id` identity alone, so a second record with a new
+id but the same root cause minted a second note (the spec's own
+`USB3_LFPS_issue1/issue2/issue3` shape), and all 9 notes then on disk had
+reached the vault without passing the gate once. The gate now runs on the
+CREATE path: NEW creates a note, RELATED creates one AND writes real
+`[[WikiLink]]`s to what it overlaps, DUPLICATE/UPDATE_EXISTING create nothing
+and instead APPEND one recurrence line (carrying the real `memory_id`, and for
+UPDATE_EXISTING the differing configuration/symptom) to the matched note's
+`Related Knowledge` -- no existing section is ever rewritten. The corpus is
+restricted to the candidate's OWN tier, because an Engineering ->
+Organizational promotion is the same knowledge written again BY DESIGN and a
+tier-blind gate would make the Organizational tier unwritable; Job/Project
+notes are never gated at all. A dedup failure never blocks the write. See
+`docs/MEMORY_ARCHITECTURE.md` and
+`dv_harness_tests/test_memory_dedup_write_path.py`.
+
 
 # AI Agent Harness L5 Canonical Identity
 

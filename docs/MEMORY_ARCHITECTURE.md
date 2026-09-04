@@ -87,7 +87,7 @@ independently; neither depends on the other.
 | Organizational | `OrganizationalMemoryStore` (no local JSON file — see below) | `kind` in `cross_project_lesson`/`methodology`/`best_practice`, **and only ever reached via `promote_to_organizational()`** | **yes**, plus 3-gate promotion (see below) |
 
 Routing itself is `dv_harness.memory_router.route_memory(record) -> str`
-(`memory_router.py:920`) — a pure function, kind/verified/scope in,
+(`memory_router.py:1098`) — a pure function, kind/verified/scope in,
 destination string out. `route_and_store(root, record, cfg)`
 (`memory_router.py:140`) is the real entry point: routes, persists, and
 (for shareable destinations) pushes to the Knowledge Center and/or Vault.
@@ -214,7 +214,7 @@ the one project that happened to promote it.
 ### The promotion boundary: Engineering → Organizational
 
 `memory_router.promote_to_organizational(root, memory_id, confidence_inputs,
-cfg, kind)` (`memory_router.py:784`) is the ONLY code path allowed to move
+cfg, kind)` (`memory_router.py:962`) is the ONLY code path allowed to move
 a record across this boundary. Three independent, all-required gates:
 
 1. **Qualitative**: `_verification_is_gate_validated(mem)` recognizes
@@ -357,6 +357,42 @@ Obsidian CLI per call when available (today, on every checked machine,
 never), and always falls back to `FileSystemMarkdownAdapter` — the real,
 fully-functional Markdown+YAML implementation — so the Vault is never
 blocked by Obsidian's absence.
+
+### Knowledge deduplication before a note is created (`dv_harness/memory_dedup.py`)
+
+A vault note is keyed by the record's `memory_id`, so the write-through's
+create-vs-update check catches only a re-write of the SAME record. A second
+record with a NEW `memory_id` but the same underlying root cause used to mint
+a second note — the `USB3_LFPS_issue1/issue2/issue3` shape. Since 2026-09-04
+`_maybe_write_vault_note()` runs the real dedup gate on the CREATE path for
+ENGINEERING_MEMORY/ORGANIZATIONAL_MEMORY, the same
+`classify_note_candidate()` the manual `dv-harness memory add` verb already
+used:
+
+- **NEW** → the note is created, as before.
+- **RELATED** → the note is created AND `[[WikiLink]]`s to the notes it
+  overlaps with are written into its `Related Knowledge` section, so
+  `dv-harness memory search --linked-to` reaches auto-written notes.
+- **DUPLICATE / UPDATE_EXISTING** → no second note. The candidate is folded
+  into the matched note by APPENDING one recurrence line to that note's
+  `Related Knowledge` — no existing section is ever rewritten. The line
+  carries the real `memory_id` (the JSON record is still written and is
+  still the system of record), and UPDATE_EXISTING additionally carries the
+  candidate's own configuration/symptom, because that difference is the new
+  knowledge. Re-running the same record appends nothing a second time.
+
+The comparison corpus is restricted to the candidate's OWN tier. An
+Engineering → Organizational promotion writes the same knowledge a second
+time by design; compared across tiers it is a textbook DUPLICATE of its own
+engineering note, and folding it there would make the Organizational tier
+unwritable. Job/Project/Working notes are never gated — they are per-run and
+per-project, not reusable knowledge this gate protects. A dedup failure never
+blocks the write: an unclassifiable candidate is written normally.
+
+`route_and_store()`'s `vault_write` result carries `dedup_classification`
+plus either `note_created: true` or `folded_into: <note_id>`, so a skipped
+create is visible rather than silent. Proven end to end against real notes on
+disk by `dv_harness_tests/test_memory_dedup_write_path.py`.
 
 ## The Memory Agent (`.claude/agents/memory-agent.md`)
 

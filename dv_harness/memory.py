@@ -491,6 +491,16 @@ class MemoryRetriever:
         scored=[]
         for row in self.store._index():
             if not status_any and str(row.get("status","")).upper()!=q_status: continue
+            # `protocol` is a HARD filter (2026-09-04), matching the Vault
+            # mirror's own FileSystemMarkdownAdapter.search(), where it has
+            # always been one. It used to only add +3 to relevance, so it
+            # excluded a non-matching record ONLY when nothing else in the
+            # query cleared the relevance floor: `--protocol USB2 --level
+            # engineering` returned every engineering-tier record regardless
+            # of protocol. `scope` deliberately stays a ranking signal -- it
+            # is not one of the spec's named filter types, and the vault side
+            # has no scope filter either.
+            if q_protocol and str(row.get("protocol") or "").lower()!=q_protocol: continue
             if q_levels and str(row.get("level")) not in q_levels: continue
             if q_confidence and str(row.get("confidence","")).upper()!=q_confidence: continue
             if property_filters and not all(
@@ -525,7 +535,10 @@ class MemoryRetriever:
             if q_confidence: relevance+=1
             if status_explicit: relevance+=1
             relevance += len(property_filters) * 1.0
-            if q_protocol and str(row.get("protocol","")).lower()==q_protocol: relevance+=3
+            # Every surviving row already matched q_protocol (hard filter
+            # above); this keeps protocol's long-standing ranking weight, and
+            # keeps a protocol-only query above the relevance floor.
+            if q_protocol: relevance+=3
             if q_scope and str(row.get("scope","")).lower()==q_scope: relevance+=2
             relevance += len(q_sym & _tok(row.get("symptoms",[]))) * 1.5
             relevance += len(q_text & _tok([row.get("title",""),row.get("root_cause","")])) * 0.75

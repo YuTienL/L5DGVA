@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from .memory import (
     MemoryStore, MemoryGC, CornerCaseLibrary, CornerCaseLibraryConsolidator,
     JobMemoryStore, ProjectMemoryStore, WorkingMemoryStore, OrganizationalMemoryStore,
@@ -685,6 +685,162 @@ def _add_or_confirm_engineering(root: Path, record: Dict[str, Any]):
     return store.add("engineering", record), False
 
 
+# --- Phase 18 dedup gate on the AUTOMATIC vault write-through -------------
+#
+# The dedup gate (dv_harness/memory_dedup.py) existed and was wired into the
+# manual `dv-harness memory add` verb only. The path that actually populates
+# this project's vault -- route_and_store()'s promotion write-through below,
+# i.e. what engine.py's RE_AUDIT-PASS/promotion flow really calls -- decided
+# create-vs-update from note-id identity alone (`provider.read(note_id)`),
+# which catches only a re-write of the SAME memory_id. A second record with
+# a NEW memory_id but the same underlying root cause therefore minted a
+# second note every time: exactly the USB3_LFPS_issue1/issue2/issue3 shape
+# the spec names.
+#
+# Only these two destinations are gated, because they are the two tiers
+# memory_dedup compares against (DEDUP_SCOPE_MEMORY_LEVELS). A JOB_MEMORY or
+# PROJECT_MEMORY note is inherently per-run/per-project, so folding one into
+# an Engineering note would erase a separately-scoped record rather than
+# deduplicate reusable knowledge.
+_DEDUP_GATED_DESTINATIONS = {"ENGINEERING_MEMORY", "ORGANIZATIONAL_MEMORY"}
+
+# The classifications that mean "this knowledge is already on file": the
+# candidate is folded into the matched note instead of minting a second one.
+# NEW and RELATED both still create a real note -- RELATED additionally
+# records real `[[WikiLink]]`s to what it is related to, which is what makes
+# `dv-harness memory search --linked-to` reach auto-written notes at all.
+_DEDUP_FOLD_CLASSIFICATIONS = ("DUPLICATE", "UPDATE_EXISTING")
+
+# Placeholder strings memory_vault's render_note_markdown() /
+# build_sections_from_memory_record() write into a section with no real
+# content yet. A real entry REPLACES one of these rather than appending
+# below it -- appending would leave "_None linked yet._" standing above a
+# list of links.
+_SECTION_PLACEHOLDERS = frozenset({
+    "_None linked yet._", "_Not yet documented._", "_None documented._",
+    "_Not captured._", "_Not captured (see Root Cause)._",
+})
+
+# How much of a folded candidate's differing configuration/symptom text is
+# carried onto the recurrence line. Bounded on purpose: CLAUDE.md forbids
+# giant logs in a vault note, and this text comes from a record field that
+# can legitimately be long.
+_FOLD_DETAIL_MAX_CHARS = 240
+
+
+def _append_to_section(existing: Optional[str], lines: List[str]) -> str:
+    kept = (existing or "").strip()
+    if kept in _SECTION_PLACEHOLDERS:
+        kept = ""
+    return "\n".join(([kept] if kept else []) + list(lines))
+
+
+def _fold_detail(sections: Dict[str, str], name: str) -> Optional[str]:
+    value = " ".join(str(sections.get(name) or "").split())
+    if not value or value in _SECTION_PLACEHOLDERS:
+        return None
+    return value[:_FOLD_DETAIL_MAX_CHARS]
+
+
+def _classify_vault_candidate(root: Path, cfg, destination: str, frontmatter: Dict[str, Any],
+                               sections: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """Phase 18's classification for a note this write-through is about to
+    CREATE. Returns None when the destination is out of the gate's scope, or
+    when classification itself failed -- a dedup problem must never stop real
+    verified knowledge from reaching the vault, so an unclassifiable
+    candidate is written normally rather than dropped.
+
+    The candidate is built through memory_dedup's OWN note->fields mapper, so
+    it is shaped identically to every note it is compared against."""
+    if destination not in _DEDUP_GATED_DESTINATIONS:
+        return None
+    try:
+        from . import memory_dedup
+        candidate = memory_dedup.extract_note_fields(frontmatter, sections)
+        return memory_dedup.classify_note_candidate(
+            root, candidate, cfg=cfg, exclude_note_id=frontmatter.get("id"),
+            memory_levels=[str(frontmatter.get("memory_level") or "").lower()])
+    except Exception:
+        return None
+
+
+def _fold_into_matched_note(provider, decision: Dict[str, Any], mem: Dict[str, Any],
+                             sections: Dict[str, str], commit_message: str) -> Optional[Dict[str, Any]]:
+    """DUPLICATE / UPDATE_EXISTING: extend the note already on file instead
+    of writing a second one for the same knowledge.
+
+    APPEND-ONLY, and only into the note's own `Related Knowledge` section:
+    no existing section content is ever rewritten, so the absorbing note
+    cannot lose the root cause/fix an earlier run or a human put in it. The
+    recurrence line carries the real `memory_id`, because the per-tier JSON
+    record remains the system of record -- a fold that dropped that id would
+    deduplicate the knowledge by destroying its traceability. UPDATE_EXISTING
+    (same root cause under different circumstances) additionally carries the
+    candidate's own configuration/symptom onto that line: that difference IS
+    the new knowledge, and omitting it would make the fold lossy.
+
+    Idempotent -- a re-run producing the same memory_id finds its own line
+    already present and re-commits nothing. Returns None (i.e. "write the
+    note normally after all") whenever the fold cannot be completed, so a
+    match that vanished between scan and write never costs a record."""
+    best = decision.get("best_match") or {}
+    target = best.get("note_id")
+    memory_id = str(mem.get("memory_id") or "")
+    if not target or not memory_id:
+        return None
+    existing = provider.read(target)
+    if not existing.get("ok"):
+        return None
+    from . import memory_vault as mv
+
+    classification = decision["classification"]
+    similarity = float(best.get("similarity") or 0.0)
+    related = mv._body_to_sections(existing.get("body") or "").get("Related Knowledge") or ""
+    result = {
+        "ok": True, "note_id": target, "path": existing.get("path"),
+        "note_created": False, "folded_into": target, "record_memory_id": memory_id,
+        "dedup_classification": classification, "dedup_similarity": similarity,
+    }
+    marker = f"`{memory_id}`"
+    if marker in related:
+        result["already_folded"] = True
+        return result
+
+    line = f"- Recurrence {marker} ({classification}, similarity {similarity:.2f}, {mv._now_iso()})"
+    if classification == "UPDATE_EXISTING":
+        detail = [f"{label}: {value}" for label, value in (
+            ("configuration", _fold_detail(sections, "Context")),
+            ("symptom", _fold_detail(sections, "Symptom")),
+        ) if value]
+        if detail:
+            line += " -- " + "; ".join(detail)
+
+    update = provider.update(target, sections_patch={
+        "Related Knowledge": _append_to_section(related, [line])}, commit_message=commit_message)
+    if not update.get("ok"):
+        return None
+    result["path"] = update.get("path") or result["path"]
+    if update.get("knowledge_commit_sha"):
+        result["knowledge_commit_sha"] = update["knowledge_commit_sha"]
+    return result
+
+
+def _related_knowledge_with_links(decision: Dict[str, Any], sections: Dict[str, str]) -> Dict[str, str]:
+    """RELATED: the new note is written, and the notes it genuinely overlaps
+    with become real `[[WikiLink]]` entries in it. Only matches at or above
+    memory_dedup's own RELATED_THRESHOLD are linked -- `decision["matches"]`
+    is every compared note ranked, including ones the classifier already
+    judged unrelated."""
+    from . import memory_dedup
+
+    links = [f"- [[{m['note_id']}]] (related, similarity {m['similarity']:.2f})"
+             for m in decision.get("matches", [])
+             if m.get("similarity", 0.0) >= memory_dedup.RELATED_THRESHOLD]
+    if not links:
+        return sections
+    return {**sections, "Related Knowledge": _append_to_section(sections.get("Related Knowledge"), links)}
+
+
 # Phase 13 -- Git Integration commit-message policy: `memory(<protocol>):
 # <short description>`, exactly the format the user's spec names. A record
 # with no real protocol (e.g. a JOB_MEMORY reconcile record before this
@@ -720,6 +876,14 @@ def _maybe_write_vault_note(root: Path, cfg, destination: str, mem: Dict[str, An
     provider.create() call with no router involved) keeps
     FileSystemMarkdownAdapter's own generic default message unchanged.
 
+    Phase 18 (2026-09-04): an ENGINEERING_MEMORY/ORGANIZATIONAL_MEMORY note
+    that does not already exist goes through the real dedup gate BEFORE it is
+    created (`_classify_vault_candidate()` above) -- a DUPLICATE or
+    UPDATE_EXISTING candidate is folded into the note already on file rather
+    than minting a second note for the same root cause. `dedup_classification`
+    and `note_created` on the returned dict say which happened, so a skipped
+    create is visible in route_and_store()'s own result instead of silent.
+
     A vault-write failure must NEVER affect the local JSON write this
     function is called after -- same non-negotiable ordering `_maybe_share`
     already establishes for the shared-knowledge-center push, now applied to
@@ -745,10 +909,24 @@ def _maybe_write_vault_note(root: Path, cfg, destination: str, mem: Dict[str, An
         if existing.get("ok"):
             return provider.update(note_id, frontmatter_patch=frontmatter, sections_patch=sections,
                                     commit_message=commit_message)
+        # Phase 18 dedup gate -- only ever on the CREATE path: a re-write of
+        # this same memory_id (the branch above) is the record updating its
+        # own note, which is never a duplicate of anything.
+        decision = _classify_vault_candidate(root, cfg, destination, frontmatter, sections)
+        classification = (decision or {}).get("classification")
+        if classification in _DEDUP_FOLD_CLASSIFICATIONS:
+            folded = _fold_into_matched_note(provider, decision, mem, sections, commit_message)
+            if folded is not None:
+                return folded
+        if classification == "RELATED":
+            sections = _related_knowledge_with_links(decision, sections)
         result = provider.create(frontmatter, sections=sections, commit_message=commit_message)
         if not result.get("ok") and result.get("error") == "ALREADY_EXISTS":
             return provider.update(note_id, frontmatter_patch=frontmatter, sections_patch=sections,
                                     commit_message=commit_message)
+        if classification:
+            result["dedup_classification"] = classification
+            result["note_created"] = bool(result.get("ok"))
         return result
     except Exception as exc:  # pragma: no cover - a vault-write failure must never break the local write
         return {"ok": False, "error": "VAULT_WRITE_FAILED", "detail": str(exc)}

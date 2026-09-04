@@ -61,13 +61,22 @@ all of which only run inside the real functions.
 - **Link**: `provider.list_links()` / a `sections_patch` update adding
   `[[note_id]]` references (`memory-link`) -- keep the Vault's graph
   connected so related findings are traceable without re-searching.
-- **Deduplicate**: rely on `route_and_store()`'s built-in
-  protocol+root_cause exact-match confirm path
-  (`_add_or_confirm_engineering()`) for Engineering Memory; for anything
-  that dedup path cannot catch (paraphrased root_cause wording, a Corner
-  Case Library entry, a vault note), search first and manually confirm/
-  merge via `MemoryGC.confirm()` rather than letting a near-duplicate
-  accumulate.
+- **Deduplicate**: TWO real gates already run inside `route_and_store()`,
+  at different layers, and neither needs to be invoked by hand.
+  (1) The JSON MemoryStore record: `_add_or_confirm_engineering()`'s
+  protocol+root_cause EXACT-match confirm path -- a re-derivation confirms
+  the existing record instead of minting a new one.
+  (2) The vault note: `memory_dedup.classify_note_candidate()` on the
+  CREATE path (2026-09-04), a weighted-similarity comparison within the
+  candidate's own tier, so PARAPHRASED root_cause wording -- which gate (1)
+  cannot see -- is folded into the note already on file as a recurrence line
+  (DUPLICATE/UPDATE_EXISTING) instead of becoming a second note. The
+  `vault_write` result says which happened (`dedup_classification`, plus
+  `note_created` or `folded_into`).
+  What still needs a human/agent decision: a Corner Case Library entry (no
+  dedup gate of its own), and a near-duplicate whose JSON records should be
+  merged rather than merely cross-linked -- search first and confirm via
+  `MemoryGC.confirm()` rather than letting it accumulate.
 - **Promote**: `promote_to_organizational()` ONLY (`organizational-memory`
   skill) -- gathers/relays the caller-supplied `confidence_inputs`, never
   fabricates them; reports the gate that failed on any non-promotion.

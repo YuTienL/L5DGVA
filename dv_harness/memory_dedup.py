@@ -16,6 +16,16 @@ same fields, classifying the candidate as one of:
                       rather than duplicated.
   DUPLICATE        -- effectively the same claim already on file.
 
+Two real callers, both BEFORE a note is written: the manual
+`dv-harness memory add` verb (cli.py -- refuses a DUPLICATE unless
+`--force`) and, since 2026-09-04, the automatic ENGINEERING_MEMORY/
+ORGANIZATIONAL_MEMORY vault write-through the engine's own promotion flow
+uses (`memory_router._maybe_write_vault_note()`, which folds a DUPLICATE/
+UPDATE_EXISTING candidate into the note already on file instead of minting
+a second one). The automatic path had been the ONLY populated path in this
+project and had never run this gate, which is precisely how the spec's
+`USB3_LFPS_issue1/issue2/issue3` shape stays reachable in production.
+
 Deliberately NO embedding/vector database, per the spec's own instruction
 that string/set-based similarity on these 5 structured fields is sufficient
 here -- this reuses memory.py's existing stopword-aware tokenizer (`_tok`)
@@ -27,7 +37,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from .memory import _tok as _tokenize
 from . import memory_vault as mv
@@ -48,6 +58,10 @@ FIELD_WEIGHTS = {
     "configuration": 0.15,
     "error_pattern": 0.20,
 }
+
+# The memory tiers this gate compares against. Working/Job/Project are
+# excluded on purpose -- see _iter_dedup_scope_notes() below.
+DEDUP_SCOPE_MEMORY_LEVELS = ("engineering", "organizational")
 
 # Thresholds, likewise fixed/inspectable rather than tuned/learned.
 DUPLICATE_THRESHOLD = 0.90
@@ -85,7 +99,7 @@ def _jaccard(a: Set[str], b: Set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def _extract_note_fields(frontmatter: Dict[str, Any], sections: Dict[str, str]) -> Dict[str, Any]:
+def extract_note_fields(frontmatter: Dict[str, Any], sections: Dict[str, str]) -> Dict[str, Any]:
     """Maps a real vault note's frontmatter/body sections onto the same 5
     fingerprint fields memory_router.build_sections_from_memory_record()
     populates them from, so a note produced by the real ENGINEERING_MEMORY/
@@ -95,7 +109,11 @@ def _extract_note_fields(frontmatter: Dict[str, Any], sections: Dict[str, str]) 
       root_cause        <- body "Root Cause" section
       configuration     <- body "Context" section (built from record.scope)
       error_pattern     <- body "Symptom" section (built from record.symptoms)
-    """
+
+    Public because memory_router.py's automatic write-through builds its
+    candidate through this exact mapping too (see `_classify_vault_candidate()`
+    there) -- candidate and corpus must be derived by ONE function, or the
+    gate compares a note against a differently-shaped version of itself."""
     return {
         "protocol": frontmatter.get("protocol"),
         "failure_signature": frontmatter.get("failure"),
@@ -118,11 +136,20 @@ def _similarity(fp_a: Dict[str, Any], fp_b: Dict[str, Any]) -> Dict[str, Any]:
     return {"overall": overall, "per_field": per_field}
 
 
-def _iter_dedup_scope_notes(vault_path: Path):
+def _iter_dedup_scope_notes(vault_path: Path, memory_levels: Optional[Sequence[str]] = None):
     """Engineering + Organizational note files only -- Working/Job/Project
     tiers are inherently per-run/per-project scoped, not generalizable
-    knowledge this dedup gate needs to protect."""
-    for sub in ("06_Agent_Memory/Engineering", "06_Agent_Memory/Organizational"):
+    knowledge this dedup gate needs to protect. Folder names come from
+    memory_vault's own `_MEMORY_LEVEL_FOLDER` rather than a second copy of
+    the vault layout kept in sync by hand.
+
+    `memory_levels` narrows that scope to specific tiers (see
+    classify_note_candidate's own parameter)."""
+    levels = [str(x).lower() for x in (memory_levels or DEDUP_SCOPE_MEMORY_LEVELS)]
+    for level in levels:
+        sub = mv._MEMORY_LEVEL_FOLDER.get(level)
+        if sub is None:
+            continue
         d = vault_path / sub
         if not d.exists():
             continue
@@ -132,7 +159,8 @@ def _iter_dedup_scope_notes(vault_path: Path):
 
 def classify_note_candidate(root: Path, candidate: Dict[str, Any],
                              cfg: Optional[Dict[str, Any]] = None,
-                             exclude_note_id: Optional[str] = None) -> Dict[str, Any]:
+                             exclude_note_id: Optional[str] = None,
+                             memory_levels: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """Phase 18's real entry point: classify `candidate` (a dict carrying
     any/all of FINGERPRINT_FIELDS) against real existing vault notes as
     NEW/RELATED/DUPLICATE/UPDATE_EXISTING, BEFORE it is written.
@@ -147,7 +175,16 @@ def classify_note_candidate(root: Path, candidate: Dict[str, Any],
     already-written note still look like a duplicate of some OTHER note"
     case, e.g. a future `memory validate` self-check -- not used by `memory
     add`, which by definition compares a not-yet-written candidate against
-    everything)."""
+    everything).
+
+    `memory_levels`: restrict the comparison corpus to those tiers (default:
+    both DEDUP_SCOPE_MEMORY_LEVELS). memory_router.py's automatic
+    write-through passes the candidate's OWN tier, because an
+    Engineering -> Organizational promotion writes the same knowledge a
+    second time BY DESIGN: compared across tiers it is a textbook DUPLICATE
+    of its own engineering note, and folding it there would make the
+    Organizational tier unwritable. Within a tier, that same comparison is
+    exactly the duplicate this gate exists to stop."""
     fp = compute_fingerprint(candidate)
     candidate_protocol = str(candidate.get("protocol") or "").strip().lower()
 
@@ -155,7 +192,7 @@ def classify_note_candidate(root: Path, candidate: Dict[str, Any],
     mv.bootstrap_vault(vault_path)
 
     matches: List[Dict[str, Any]] = []
-    for p in _iter_dedup_scope_notes(vault_path):
+    for p in _iter_dedup_scope_notes(vault_path, memory_levels):
         try:
             text = p.read_text(encoding="utf-8")
         except OSError:
@@ -168,7 +205,7 @@ def classify_note_candidate(root: Path, candidate: Dict[str, Any],
         if candidate_protocol and note_protocol and note_protocol != candidate_protocol:
             continue
         sections = mv._body_to_sections(body)
-        note_fields = _extract_note_fields(frontmatter, sections)
+        note_fields = extract_note_fields(frontmatter, sections)
         note_fp = compute_fingerprint(note_fields)
         sim = _similarity(fp, note_fp)
         matches.append({

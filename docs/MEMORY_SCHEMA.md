@@ -55,7 +55,7 @@ No third shape is recognized — do not invent one.
 
 ## 2. Corner Case Library record (`.dv-harness/memory/corner_case_library/<ccl_id>.json`)
 
-`CornerCaseLibrary.add()` (`memory.py:735`), a separate class/store from
+`CornerCaseLibrary.add()` (`memory.py:748`), a separate class/store from
 the 5 tiers.
 
 | Field | Type | Required / Default |

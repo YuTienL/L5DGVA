@@ -1,4 +1,199 @@
-# Gap-close: Phase 9 (Search Strategy) + Phase 18 (Knowledge Deduplication)
+> This file holds TWO passes over the same scope. Pass 2 (below, current) closed
+> Phase 18's write-path enforcement and Phase 9's `protocol` soft-filter. Pass 1 is
+> retained verbatim in the appendix at the end: it closed a different Phase 9 gap
+> (the `rg` prefilter changing results rather than only speed), and its Phase 18
+> "READY, no change" verdict was right about the MECHANISM but did not examine the
+> automatic write path, which the later audit this pass acted on did.
+
+# Gap-close pass 2: Phase 9 (Search Strategy) + Phase 18 (Knowledge Deduplication)
+
+**Scope**: Obsidian+Git/Markdown Hybrid Engineering Memory, 25-phase STRUCTURAL
+spec, phases 9 and 18 only.
+**Mode**: LOCAL_ANALYSIS + local code change (no server, no VCS, no simulation).
+**Date**: 2026-09-04
+
+## Verdict: **DONE**
+
+Phase 9's ten filter types were re-confirmed READY as audited and were left
+alone, with ONE bounded exception fixed (`protocol` was a soft/ranking filter
+on the JSON backend). Phase 18's mechanism was READY; its production-path
+enforcement was a real, closeable gap and is now closed.
+
+**Test summary**: the two phase suites plus the new file
+(`test_memory_dedup_write_path.py` 11 new + `test_memory_dedup.py` +
+`test_memory_search_filters.py`) → **50 passed**; the wider
+memory/vault/dedup/CLI/debug-flow/tier/doctor/security/knowledge-layer set
+(12 files) → **253 passed**; the doc-mirror / doc-citation / memory-review /
+research-memory-governance set → **80 passed**;
+`python -m dv_harness.doc_citation_check --memory-docs` → 8 OK, 0 drifted.
+
+---
+
+## Phase 9 — Search Strategy: re-confirmed READY (one sub-item completed)
+
+Re-confirmed against the source, not the audit text:
+
+- `FileSystemMarkdownAdapter.search()` (`dv_harness/memory_vault.py`) really
+  applies `exact` / `tag` / `linked_to` / `property` as HARD filters and folds
+  `protocol` / `project` / `memory_level` / `confidence` / `status` into the
+  same `property_filters` dict — every one of them a `continue`, not a score
+  bonus. Free text is tokenized overlap. `rg` is a candidate prefilter only,
+  and every filter still re-parses real frontmatter in Python.
+- `MemoryRetriever.search()` (`dv_harness/memory.py`) really applies
+  `level` / `confidence` / `status` / `property` as hard filters, with the
+  documented `ANY`/`*` status sentinel and the finding-I2 relevance floor.
+- Both CLI surfaces are real: `dv-harness memory search --protocol --tag
+  --level --exact --property --linked-to --project --confidence --status
+  --limit`, and `python -m dv_harness.memory_cli search ...`.
+- No embedding/vector DB anywhere, as the spec allows. `MemoryProvider` is a
+  real ABC and `HybridMemoryProvider` already dispatches per call across two
+  implementations, so an embedding-backed adapter remains a drop-in third.
+
+**The one sub-item completed** — the audit flagged it inside an otherwise-READY
+phase, and it was small and boundable, so it was fixed rather than left:
+
+`MemoryRetriever.search()`'s `protocol` was a RANKING signal only (`+3`
+relevance). It therefore excluded a non-matching record only when nothing else
+in the query cleared the relevance floor: `--protocol USB3 --level engineering`
+returned every engineering-tier record regardless of protocol, while the vault
+mirror's own `search()` has always treated `protocol` as a hard filter. It is
+now a hard filter on both backends (`dv_harness/memory.py`,
+`MemoryRetriever.search()`), keeping its `+3` ranking weight so a
+protocol-only query still clears the floor. A record with NO protocol is also
+no longer matchable by the literal string `"None"` (the old code compared
+`str(row.get("protocol",""))`, which renders `None` as `"None"`).
+
+`scope` deliberately stays a ranking signal: it is not one of the spec's named
+filter types, and the vault side has no scope filter either. That asymmetry is
+now stated in the code rather than left to be rediscovered.
+
+## Phase 18 — Knowledge Deduplication: PARTIAL -> DONE
+
+**Mechanism (re-confirmed READY, unchanged)**: `dv_harness/memory_dedup.py`
+computes the spec's exact 5-field fingerprint, treats `protocol` as a hard gate
+and the other four as a weighted Jaccard similarity with an exact-hash
+short-circuit, and produces all four required classes
+(NEW / RELATED / DUPLICATE / UPDATE_EXISTING).
+
+**The gap that was real**: the gate had exactly one caller —
+`dv-harness memory add`. `memory_router._maybe_write_vault_note()`, the
+automatic write-through that `route_and_store()` runs on every real
+ENGINEERING_MEMORY / JOB_MEMORY / PROJECT_MEMORY / ORGANIZATIONAL_MEMORY
+promotion (i.e. the path engine.py's RE_AUDIT-PASS/promotion flow actually
+uses, and the only path that has ever populated this project's vault), decided
+create-vs-update from `provider.read(note_id)` alone. That catches a re-write
+of the SAME `memory_id` and nothing else, so a second record with a new id but
+the same root cause minted a second note — the spec's own
+`USB3_LFPS_issue1/issue2/issue3` shape.
+
+### What was built
+
+`dv_harness/memory_router.py` — the gate now runs on the CREATE path (never on
+the same-`memory_id` update path, where a record updating its own note is not a
+duplicate of anything):
+
+- **NEW** -> the note is created, exactly as before.
+- **RELATED** -> the note is created AND real `[[WikiLink]]`s to the notes it
+  overlaps with (at or above `memory_dedup.RELATED_THRESHOLD`) are written into
+  its `Related Knowledge` section. This is what makes
+  `dv-harness memory search --linked-to` reach auto-written notes at all —
+  before this, only hand-authored notes carried links.
+- **DUPLICATE / UPDATE_EXISTING** -> no second note. The candidate is folded
+  into the matched note by APPENDING one recurrence line to that note's
+  `Related Knowledge`. Append-only, into that one section: no existing section
+  content is ever rewritten, so the absorbing note cannot lose the root
+  cause/fix an earlier run or a human put in it. The line carries the real
+  `memory_id` (the per-tier JSON record is still written and is still the
+  system of record — a fold that dropped the id would deduplicate the
+  knowledge by destroying its traceability), and UPDATE_EXISTING additionally
+  carries the candidate's own configuration/symptom, bounded to 240 chars,
+  because that difference IS the new knowledge. Re-running the same record
+  finds its own line and re-commits nothing.
+- `vault_write` now carries `dedup_classification` plus either
+  `note_created: true` or `folded_into: <note_id>`, so a skipped create is
+  visible in `route_and_store()`'s result rather than silent. A fold's git
+  commit SHA still flows into `_write_back_knowledge_commit_sha()`.
+- A dedup failure never blocks the write: an unclassifiable candidate is
+  written normally. Real verified knowledge must never be lost to a dedup
+  problem.
+
+`dv_harness/memory_dedup.py`:
+
+- `_extract_note_fields()` -> public `extract_note_fields()`, because the
+  router now builds its candidate through it. Candidate and corpus must be
+  derived by ONE function, or the gate compares a note against a
+  differently-shaped version of itself.
+- `classify_note_candidate(..., memory_levels=...)` and
+  `DEDUP_SCOPE_MEMORY_LEVELS`; `_iter_dedup_scope_notes()` now reads the folder
+  layout from `memory_vault._MEMORY_LEVEL_FOLDER` instead of a second
+  hand-maintained copy of it.
+
+### Two scope decisions worth stating, both proven by a test
+
+1. **Only ENGINEERING_MEMORY / ORGANIZATIONAL_MEMORY are gated.** Those are the
+   two tiers `memory_dedup` compares against. A JOB_MEMORY or PROJECT_MEMORY
+   note is inherently per-run/per-project, so folding one into an Engineering
+   note would erase a separately-scoped record rather than deduplicate reusable
+   knowledge. Two identical job records still produce two job notes.
+2. **The comparison corpus is restricted to the candidate's OWN tier.** An
+   Engineering -> Organizational promotion writes the same knowledge a second
+   time BY DESIGN; compared across tiers it is a textbook DUPLICATE of its own
+   engineering note, and a tier-blind gate would have folded every promotion
+   back into Engineering and made the Organizational tier unwritable. This was
+   found while building, not after — the test
+   `test_an_organizational_candidate_is_not_folded_into_its_own_engineering_note`
+   holds it.
+
+### Tests (new file: `dv_harness_tests/test_memory_dedup_write_path.py`, 11)
+
+Every test drives the REAL `route_and_store()` against a REAL vault on disk and
+asserts what is on the filesystem afterwards — never that the classifier merely
+returned a string.
+
+- a duplicate promotion folds into the note already on file (one note on disk,
+  `folded_into` set, the absorbing note names the absorbed `memory_id`, the
+  JSON record is still written)
+- folding the same record twice appends only one recurrence line
+- UPDATE_EXISTING extends the note with the new configuration and symptom
+- a fold never overwrites the absorbing note's own Root Cause / Fix / Evidence
+- a different protocol is never folded and gets its own note
+- a RELATED candidate creates its own note and wiki-links the overlap — proven
+  by a real `provider.search({"linked_to": ...})` finding it
+- the gate never fires for Job or Project memory
+- an organizational candidate is not folded into its own engineering note
+- a re-write of the same `memory_id` still updates its own note
+- a dedup failure never stops the note from being written
+- (Phase 9) `protocol` filters rather than only ranks, alongside another filter
+
+### Docs
+
+- `docs/MEMORY_ARCHITECTURE.md` — new subsection "Knowledge deduplication
+  before a note is created", covering the four classifications, the
+  append-only fold, the tier restriction, and the result keys.
+- `CLAUDE.md` — one paragraph in the Engineering Memory Policy section, since
+  that is the always-resident file a future agent reads.
+- `.claude/agents/memory-agent.md` — the "Deduplicate" bullet was stale the
+  moment this change landed: it told the agent that paraphrased `root_cause`
+  wording is something the dedup path "cannot catch" and must be merged by
+  hand. It now names both real gates (the JSON store's exact-match confirm,
+  and the vault note's similarity gate) and narrows the manual case to what is
+  genuinely still manual (a Corner Case Library entry, a JSON-record merge).
+- `docs/MEMORY_ARCHITECTURE.md` / `docs/MEMORY_SCHEMA.md` — three `file:line`
+  citations repaired that my own line-number shifts had drifted;
+  `python -m dv_harness.doc_citation_check` now reports 8 OK, 0 drifted.
+
+## What was NOT done, and why
+
+- No embedding/vector index was added. The spec explicitly allows string/set
+  similarity here, and the existing `MemoryProvider` ABC keeps that door open.
+- `scope` was not converted to a hard filter (see Phase 9 above).
+- No new config knob was added for the dedup gate. The whole vault
+  write-through is already gated on `cfg`, and `cfg={}` still opts out of every
+  cfg-driven additive behaviour at once.
+
+---
+
+# Appendix - Pass 1 report (2026-09-04, earlier this session), retained verbatim
 
 **Date**: 2026-09-04
 **Scope**: Obsidian+Git/Markdown Hybrid Engineering Memory, 25-phase structural spec, phases 9 and 18 only.
