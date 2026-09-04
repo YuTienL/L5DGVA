@@ -928,6 +928,32 @@ def main():
     psd.add_argument("--json", action="store_true",
                      help="Print raw JSON instead of the human-readable SYS-1..4 report.")
 
+    # SYS-5..SYS-8 of the same workflow (2026-09-04): one INDEPENDENT analysis
+    # per selected subsystem (SYS-5, isolation enforced), the per-subsystem
+    # verification-architecture report over SYS-6's own 24-field list, the
+    # mandatory command.txt grammar/ordering/dependency analysis (SYS-7), and
+    # the SubsystemCommandContract set with its cross-subsystem conflicts
+    # (SYS-8). Every command.txt is read-only, and nothing here composes a
+    # System-Level environment -- that is SYS-40 and needs its own approval.
+    psa = sub.add_parser("subsystem-analysis",
+                         help="SYS-5..8: analyze each SELECTED subsystem's verification "
+                              "architecture and command.txt independently, then report the "
+                              "SubsystemCommandContracts and the cross-subsystem conflicts "
+                              "(duplicate active drivers, shared resources, address write "
+                              "collisions). Reads only; composes nothing.")
+    psa.add_argument("--select", action="append", default=None, metavar="SUBSYSTEM",
+                     help="Name one subsystem to analyze. Repeatable. Required -- SYS-1's "
+                          "explicit-selection refusal is not bypassed by this command.")
+    psa.add_argument("--knowledge-center", action="store_true", dest="analysis_kc",
+                     help="Also query the shared Knowledge Center during the SYS-1 "
+                          "discovery this command runs first. Off by default (real remote call).")
+    psa.add_argument("--command-inventory", default=None, metavar="CSV",
+                     help="Path to a command_inventory.csv to read as a DECLARED overlay "
+                          "(its HANDLER/VIP_SEQUENCE columns are reused rather than "
+                          "re-derived). Read-only; never rewritten.")
+    psa.add_argument("--json", action="store_true",
+                     help="Print raw JSON instead of the human-readable SYS-5..8 report.")
+
     # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
     # ordering as an executable, queryable rule rather than prose an agent is
     # trusted to have read. NOT the same list as tools/verification_flow/
@@ -2058,6 +2084,34 @@ def main():
         # candidate-set conflict that stands. CI-friendly, same convention as
         # `connectivity-check --check-only`.
         raise SystemExit(0 if (not args.select or result["selection_admissible"]) else 2)
+    elif args.cmd == "subsystem-analysis":
+        from . import subsystem_architecture_analysis as saa
+        kc_client = None
+        if args.analysis_kc:
+            from .config import load_config
+            from .knowledge_center import KnowledgeCenterClient
+            kc_client = KnowledgeCenterClient(load_config(h.root), h.root)
+        result = saa.analyze_selected_subsystems(
+            h.root, args.select or [], knowledge_center_client=kc_client,
+            inventory_overlay_path=args.command_inventory)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        else:
+            # The SYS-1 selection verdict is printed FIRST when it refused, so
+            # an empty analysis reads as "nothing was selected", never as
+            # "these subsystems are clean".
+            if not result["selection"]["selection_admissible"]:
+                from . import subsystem_discovery as sd
+                print(sd.format_report(result["selection"]))
+                print()
+            print(saa.format_analysis_report(result["synthesis"]))
+        # Exit 2 when no admissible selection was made (SYS-1's refusal), or
+        # when a cross-subsystem conflict stands -- a DUPLICATE_ACTIVE_DRIVER
+        # is SYS-12's "stop automatic integration of that resource", so it must
+        # not read as a clean run to a CI step.
+        conflicts = result["synthesis"]["summary"]["cross_subsystem_conflicts"]
+        raise SystemExit(
+            0 if (result["selection"]["selection_admissible"] and not conflicts) else 2)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
         result = reference_pattern_audit.audit_directory(

@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/subsystem_command_contract.schema.json",
+  "title": "subsystem_command_contract_set",
+  "description": "SYS-8 of the System-Level Verification Integration workflow. OUTPUT contract for dv_harness/subsystem_command_contract.py's build_contract_set(): one SubsystemCommandContract per (command.txt, command) of every selected subsystem, plus the cross-subsystem conflicts that contract set exposes. Unlike soc_arch_map.schema.json / register_map.schema.json (which are INPUT contracts a project supplies), this document is DERIVED: every field is computed from the real command.txt files by build_contract_set(), and the source command.txt is never modified -- SYS-7's 'Do not modify command.txt during discovery' and SYS-8's 'Keep original command.txt intact' are both properties of the only code that writes this document. This is a planning/reporting artifact: it describes what a System-Level composition WOULD have to schedule and arbitrate. It is never itself a System command.txt, a command router or a virtual sequencer, and nothing downstream may auto-apply it into a real generated artifact -- that is SYS-40 and requires a separate explicit human approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "subsystems",
+    "contracts",
+    "conflicts",
+    "summary",
+    "command_txt_modified",
+    "phase_boundary"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "subsystems": {
+      "type": "array",
+      "description": "The subsystem ids this contract set covers, as supplied by the SYS-1 selection. A one-element list is legal and is exactly the case in which every contract's parallel_safe must be UNKNOWN.",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "command_txt_modified": {
+      "const": false,
+      "description": "Structural restatement of SYS-8's 'Keep original command.txt intact'. The value is a const rather than a boolean: a document claiming a command.txt was modified is not a valid document of this schema, because no code path in this module can produce one."
+    },
+    "phase_boundary": {
+      "type": "string",
+      "description": "The SYS-39 stop condition carried on the artifact itself, so a reader of the file alone knows this is analysis and not an implementation authorization."
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["subsystem_count", "contract_count", "conflict_count"],
+      "properties": {
+        "subsystem_count": { "type": "integer", "minimum": 0 },
+        "contract_count": { "type": "integer", "minimum": 0 },
+        "conflict_count": { "type": "integer", "minimum": 0 },
+        "not_parallel_safe": { "type": "integer", "minimum": 0 },
+        "parallel_safety_undecidable": { "type": "integer", "minimum": 0 },
+        "duplicate_active_drivers": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "contracts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contract" }
+    },
+    "conflicts": {
+      "type": "array",
+      "description": "CROSS-SUBSYSTEM conflicts only. Contention inside one subsystem's own sequential command.txt is ordinary and is expressed by ordering_constraints, not reported here.",
+      "items": { "$ref": "#/$defs/conflict" }
+    }
+  },
+  "$defs": {
+    "evidence_list": {
+      "type": "array",
+      "description": "Real citations, each '<file>:<line>' against the unmodified source command.txt so any claim in this document can be checked at its origin.",
+      "items": { "type": "string" }
+    },
+    "contract": {
+      "type": "object",
+      "description": "SYS-8's own field list, verbatim and in its own order, plus parallel_safety_reason. The field list is held to dv_harness/subsystem_command_contract.py's SYS8_FIELDS by a test, so the requirement, the dataclass and this schema cannot drift apart.",
+      "additionalProperties": false,
+      "required": [
+        "subsystem_id",
+        "source_command_file",
+        "command_name",
+        "command_category",
+        "arguments",
+        "target_agent",
+        "target_vip",
+        "target_sequence",
+        "required_resources",
+        "preconditions",
+        "postconditions",
+        "ordering_constraints",
+        "clock_domain",
+        "reset_dependency",
+        "interrupt_dependency",
+        "address_dependency",
+        "shared_resource_dependency",
+        "parallel_safe",
+        "serialization_required",
+        "evidence"
+      ],
+      "properties": {
+        "subsystem_id": { "type": "string", "minLength": 1 },
+        "source_command_file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path of the real command.txt this contract was derived from. Read-only input."
+        },
+        "command_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The macro / model-task / system-task name as it is actually written in the file (e.g. 'HOSTWRITE4B', '`SMEMMODEL.FILLMEM'), never a normalised or invented name."
+        },
+        "command_category": {
+          "type": "string",
+          "description": "SYS-7's init/config/traffic wording made derivable. A register access is REGISTER_ACCESS and is deliberately NOT split into config-vs-traffic: nothing in the file states which it is, and a guess would be fabricated evidence.",
+          "enum": [
+            "INITIALIZATION",
+            "REGISTER_ACCESS",
+            "SYNCHRONIZATION",
+            "OBSERVATION",
+            "MEMORY_BACKDOOR",
+            "FORCE_OVERRIDE",
+            "MODEL_TASK",
+            "TERMINATION",
+            "CONTROL_FLOW",
+            "DECLARATION",
+            "PREPROCESSOR",
+            "UNCLASSIFIED"
+          ]
+        },
+        "arguments": {
+          "type": "array",
+          "description": "Positional argument profile across every invocation. role is derived from the macro SHAPE (position 0 of a register access is the ADDRESS), never from the value.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["position", "role", "distinct_value_count", "distinct_values", "truncated"],
+            "properties": {
+              "position": { "type": "integer", "minimum": 0 },
+              "role": { "enum": ["ADDRESS", "VALUE", "DESTINATION", "OTHER"] },
+              "distinct_value_count": { "type": "integer", "minimum": 0 },
+              "distinct_values": { "type": "array", "items": { "type": "string" } },
+              "truncated": { "type": "boolean" }
+            }
+          }
+        },
+        "target_agent": {
+          "type": "string",
+          "description": "The agent/handler that executes this command. Derived from the macro prefix's HOST/CPU/DEV convention, or taken from a declared command_inventory.csv HANDLER when the project has recorded one. 'UNKNOWN' when neither source answers."
+        },
+        "target_vip": {
+          "type": "string",
+          "description": "The VIP/model instance whose task is invoked. 'UNKNOWN' for a raw register macro, which names no VIP."
+        },
+        "target_sequence": {
+          "type": "string",
+          "description": "The invoked task/sequence name, or a declared command_inventory.csv VIP_SEQUENCE. Empty when the file names none -- empty is a fact here, not a placeholder."
+        },
+        "required_resources": {
+          "type": "array",
+          "description": "Prefixed resource ids (REGISTER_BLOCK / BFM / MODEL / MEMORY_MODEL / HIERARCHY) so SYS-9's inventory and SYS-10's duplicate detection can compare two subsystems by string equality rather than by class name -- SYS-10's own 'Do not decide duplicates by class names alone'.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["resource_id", "resource_kind", "name", "access", "basis", "evidence"],
+            "properties": {
+              "resource_id": { "type": "string", "minLength": 1 },
+              "resource_kind": {
+                "enum": ["REGISTER_BLOCK", "BFM", "MODEL", "MEMORY_MODEL", "HIERARCHY"]
+              },
+              "name": { "type": "string" },
+              "access": {
+                "enum": ["READ", "WRITE"],
+                "description": "WRITE means this command actively drives the resource. Two subsystems both READING one resource is not a driver conflict and is not reported as one."
+              },
+              "basis": {
+                "type": "string",
+                "description": "What in the statement made this resource visible, so the derivation is checkable."
+              },
+              "evidence": { "$ref": "#/$defs/evidence_list" }
+            }
+          }
+        },
+        "preconditions": { "$ref": "#/$defs/condition_list" },
+        "postconditions": { "$ref": "#/$defs/condition_list" },
+        "ordering_constraints": {
+          "type": "array",
+          "description": "This command's view of the SYS-7 ordering edges computed once per file by reference_pattern_audit.build_ordering_constraints(). Identical repeated edges are collapsed with an occurrences count -- 900 copies of one fact is not more evidence than one copy plus a number.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["direction", "relation", "other_command", "detail", "evidence"],
+            "properties": {
+              "direction": { "enum": ["PRECEDES", "FOLLOWS"] },
+              "relation": {
+                "enum": [
+                  "ADDRESS_READ_AFTER_WRITE",
+                  "ADDRESS_WRITE_AFTER_WRITE",
+                  "WAIT_GATED",
+                  "DELAY_GATED",
+                  "INITIALIZATION_PRECEDES",
+                  "FORCE_ACTIVE_DURING"
+                ]
+              },
+              "other_command": { "type": "string" },
+              "detail": { "type": "string" },
+              "evidence": { "type": "string" },
+              "occurrences": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "clock_domain": {
+          "type": "object",
+          "description": "Two-step resolution: the command's addresses are located in the project's real address map, then mapped to a clock through a declared region->clock mapping. Each step can honestly fail: a soc_arch_map address_map entry carries no clock of its own, so UNRESOLVED naming the located regions is the correct answer without a declared mapping, and is the input SYS-29's cross-subsystem clock-domain comparison will consume.",
+          "additionalProperties": true,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": { "enum": ["RESOLVED", "MULTIPLE", "UNRESOLVED", "NOT_APPLICABLE"] },
+            "clock": { "type": "string" },
+            "clocks": { "type": "array", "items": { "type": "string" } },
+            "reason": { "type": "string" },
+            "address_regions": { "type": "array", "items": { "type": "string" } },
+            "unmapped_addresses": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "reset_dependency": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["touches_reset", "basis"],
+          "properties": {
+            "touches_reset": { "type": "boolean" },
+            "basis": {
+              "type": "string",
+              "description": "Name-token evidence, and it says so. A register write whose trailing comment reads '//usb ctrl rst=1' is real evidence of reset involvement and is not proof; the matched token is carried so a reader can judge it."
+            },
+            "statements": { "type": "array", "items": { "type": "object" } }
+          }
+        },
+        "interrupt_dependency": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["depends_on_interrupt", "basis"],
+          "properties": {
+            "depends_on_interrupt": { "type": "boolean" },
+            "basis": { "type": "string" },
+            "waits": { "type": "array", "items": { "type": "object" } }
+          }
+        },
+        "address_dependency": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["address", "access", "evidence"],
+            "properties": {
+              "address": { "type": "string" },
+              "base": { "type": ["string", "null"] },
+              "offset": { "type": ["string", "null"] },
+              "access": { "enum": ["READ", "WRITE"] },
+              "evidence": { "$ref": "#/$defs/evidence_list" }
+            }
+          }
+        },
+        "shared_resource_dependency": {
+          "type": "array",
+          "description": "Resources this command needs that a DIFFERENT subsystem's command also needs. Empty in a single-subsystem set by construction.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["resource_id", "resource_kind", "this_access", "other_subsystems", "contention"],
+            "properties": {
+              "resource_id": { "type": "string" },
+              "resource_kind": { "type": "string" },
+              "this_access": { "enum": ["READ", "WRITE"] },
+              "other_subsystems": { "type": "array", "items": { "type": "string" } },
+              "other_contracts": { "type": "array", "items": { "type": "string" } },
+              "contention": {
+                "enum": ["ACTIVE_DRIVER_CONTENTION", "WRITE_VS_READ", "READ_ONLY_SHARING"]
+              },
+              "evidence": { "$ref": "#/$defs/evidence_list" }
+            }
+          }
+        },
+        "parallel_safe": {
+          "enum": ["PARALLEL_SAFE", "NOT_PARALLEL_SAFE", "UNKNOWN"],
+          "description": "Whether this command may run concurrently with ANOTHER SUBSYSTEM's commands. Three-valued on purpose: a contract set holding one subsystem has no second subsystem to be concurrent with and must report UNKNOWN rather than a verdict nothing supports."
+        },
+        "serialization_required": { "type": "boolean" },
+        "parallel_safety_reason": {
+          "type": "string",
+          "description": "Why parallel_safe holds that value. Required in practice for the UNKNOWN case, where the reason is the entire content of the verdict."
+        },
+        "evidence": { "$ref": "#/$defs/evidence_list" }
+      }
+    },
+    "condition_list": {
+      "type": "array",
+      "description": "Order-based, not causal: a command.txt's own text can support 'this initialization call appears before every invocation of this command' and cannot support 'this command requires it'. Each entry cites the line it was read from.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "detail", "evidence"],
+        "properties": {
+          "kind": {
+            "enum": [
+              "PRECEDING_INITIALIZATION",
+              "IMMEDIATELY_PRECEDING_WAIT",
+              "IMMEDIATELY_FOLLOWING_WAIT",
+              "FILE_TERMINATES_AFTER"
+            ]
+          },
+          "detail": { "type": "string" },
+          "evidence": { "type": "string" }
+        }
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["conflict_type", "subsystems", "writing_subsystems", "contracts", "evidence", "resolution", "detail"],
+      "properties": {
+        "conflict_type": {
+          "enum": ["DUPLICATE_ACTIVE_DRIVER", "SHARED_RESOURCE_CONTENTION", "ADDRESS_WRITE_COLLISION"],
+          "description": "DUPLICATE_ACTIVE_DRIVER is the 'PCIe and USB both contain a CPU AXI Master' shape SYS-10/SYS-12 exist for; its resolution is SYS-12's own rule -- stop automatic integration of that resource until ownership is resolved."
+        },
+        "resource_id": { "type": "string" },
+        "resource_kind": { "type": "string" },
+        "address": { "type": "string" },
+        "subsystems": { "type": "array", "minItems": 2, "items": { "type": "string" } },
+        "writing_subsystems": { "type": "array", "items": { "type": "string" } },
+        "contracts": { "type": "array", "items": { "type": "string" } },
+        "evidence": { "$ref": "#/$defs/evidence_list" },
+        "resolution": {
+          "enum": [
+            "STOP_AUTOMATIC_INTEGRATION_UNTIL_OWNERSHIP_RESOLVED",
+            "REQUIRES_SYSTEM_LEVEL_ARBITRATION_DECISION"
+          ],
+          "description": "A statement of what must happen next, never an action this module takes. Deciding the relationship is SYS-11..SYS-13; implementing a shared agent is SYS-40 and requires a separate explicit human approval."
+        },
+        "detail": { "type": "string" }
+      }
+    }
+  }
+}
