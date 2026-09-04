@@ -3094,6 +3094,18 @@ def test_engine_persists_subsystem_registry_entry_on_signoff_pass():
     # behavior: insert, update-by-name, and the skip path.
     tmp, h = _fresh_harness()
     try:
+        # The method's real precondition, restored here explicitly since
+        # this test calls it directly instead of through run_stage(): it
+        # persists ONLY when the SIGNOFF stage's own recorded status is
+        # already PASS. run_stage() holds a gate-verified SIGNOFF at
+        # WAIT_USER until `dv-harness approve SIGNOFF`, and the side-effect
+        # block that calls this runs after that downgrade -- see
+        # test_signoff_stage_gate_e2e.py's
+        # test_signoff_gates_passing_without_human_approval_qualifies_nothing
+        # for the end-to-end proof through a real 9-gate run_stage().
+        _signoff_pass = lambda harness: harness.state.stages["SIGNOFF"].__setitem__(
+            "status", Status.PASS.value)
+        _signoff_pass(h)
         entry = {"name": "USB", "environment_manifest": "generated/usb/environment_manifest.json",
                   "release_sha": "sha-1", "qualification_state": "PRODUCTION_QUALIFIED",
                   "interface_compatibility": "PASS", "clock_reset_compatibility": "PASS"}
@@ -3130,6 +3142,7 @@ def test_engine_persists_subsystem_registry_entry_on_signoff_pass():
         # registration_applicable: false -> nothing persisted (no new write).
         h2_tmp, h2 = _fresh_harness()
         try:
+            _signoff_pass(h2)
             h2._persist_subsystem_registry_entry("SIGNOFF", {"subsystem_environment_registration_gate":
                 {"registration_applicable": False, "registration_not_applicable_reason": "full-SoC signoff"}})
             assert not (h2_tmp / ".dv-harness" / "soc-composer" / "subsystem_environment_registry.json").exists()
@@ -3144,6 +3157,21 @@ def test_engine_persists_subsystem_registry_entry_on_signoff_pass():
             assert not (h3_tmp / ".dv-harness" / "soc-composer" / "subsystem_environment_registry.json").exists()
         finally:
             shutil.rmtree(h3_tmp)
+
+        # A SIGNOFF whose gates all passed but that is still held at
+        # WAIT_USER for `dv-harness approve SIGNOFF` persists NOTHING --
+        # the human-approval hard-stop governs the durable qualification
+        # artifact, not just the stage status.
+        h4_tmp, h4 = _fresh_harness()
+        try:
+            h4.state.stages["SIGNOFF"]["status"] = Status.WAIT_USER.value
+            h4._persist_subsystem_registry_entry(
+                "SIGNOFF", {"subsystem_environment_registration_gate": entry})
+            assert not (h4_tmp / ".dv-harness" / "soc-composer"
+                        / "subsystem_environment_registry.json").exists()
+            assert h4.blackboard.read("subsystem_registry") is None
+        finally:
+            shutil.rmtree(h4_tmp)
     finally:
         shutil.rmtree(tmp)
 

@@ -97,7 +97,15 @@ def _register_subsystems(h, entries):
     Deliberately not a hand-written JSON file: the point of these tests is
     that the composition's inputs came from the harness's own registration
     path, exactly as system_level_validator's --registered cross-check
-    assumes."""
+    assumes.
+
+    The SIGNOFF status is set to PASS first because that is the writer's
+    real precondition: it persists only for a SIGNOFF that actually closed,
+    never for one still held at WAIT_USER awaiting `dv-harness approve
+    SIGNOFF` (see engine._persist_subsystem_registry_entry's HUMAN-APPROVAL
+    HARD-STOP note). Seeding through the production writer means inheriting
+    its production precondition too."""
+    h.state.stages["SIGNOFF"]["status"] = Status.PASS.value
     for entry in entries:
         h._persist_subsystem_registry_entry(
             "SIGNOFF", {"subsystem_environment_registration_gate": dict(entry)})

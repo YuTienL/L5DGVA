@@ -1189,9 +1189,40 @@ SUBSYSTEM_TOPIC_REFRESHERS: Dict[str, Any] = {
         each name, matching how a single subsystem's environment evolves
         across projects/re-signoffs. The gate's own validation is what
         proves this entry PASSED before we ever get here; this method does
-        not re-validate, only persists."""
+        not re-validate, only persists.
+
+        HUMAN-APPROVAL HARD-STOP (2026-09-04, mechanism #8 Qualification/
+        Signoff Engine re-audit follow-up). run_stage()'s
+        `if verdict == "PASS":` side-effect block runs on GATE VERDICT
+        alone -- and it runs AFTER the branch that downgrades a fully
+        gate-verified SIGNOFF to WAIT_USER when no `dv-harness approve
+        SIGNOFF` is on record ("PROMOTION_READINESS/SIGNOFF passing their
+        own automated gates is not the same thing as a human sign-off",
+        same 'LSF DONE != DV PASS' principle one level up). So without the
+        status re-check below, a signoff still waiting on a human already
+        wrote its subsystem into the REAL runtime registry as
+        PRODUCTION_QUALIFIED. _export_signoff_bundle() immediately below
+        re-checks the recorded status for exactly this reason and says so
+        in its own docstring; this method -- the ONLY writer of that
+        registry file -- did not.
+
+        That file is not a log, which is why the check belongs here rather
+        than only at the call site: environment_mode_router.
+        read_registered_subsystem_entries() feeds it to
+        soc_environment_composer.compose_soc_environment(), STAGE_GATES
+        ["SYSTEM_LEVEL"]'s system_level_validator cross-checks agent claims
+        against it through its harness-supplied --registered ContextFlag,
+        and signoff_export.read_signoff_stage_status() reports its mere
+        presence as "independent corroboration" of a real SIGNOFF PASS --
+        so an entry written past the approval hold is a false corroboration
+        of the very approval it skipped. Reads self.state.stages (the same
+        dict run_stage() just wrote `ss` into), not the on-disk state.json,
+        because the final store.save() happens well after this block.
+        """
         gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
         if "subsystem_environment_registration_gate" not in gate_ids:
+            return
+        if self.state.stages.get(stage, {}).get("status") != Status.PASS.value:
             return
         block = evidence_blocks.get("subsystem_environment_registration_gate")
         if not isinstance(block, dict) or block.get("registration_applicable") is False:

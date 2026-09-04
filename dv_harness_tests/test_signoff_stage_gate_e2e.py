@@ -185,7 +185,15 @@ def _signoff_project():
     return tmp
 
 
-def _drive_signoff_to_pass(tmp: Path) -> DVHarness:
+def _drive_signoff(tmp: Path, approve: bool = True) -> DVHarness:
+    """Drive ONE real run_stage("SIGNOFF") whose 9 gates all pass.
+
+    `approve=False` is the same run with no `dv-harness approve SIGNOFF` on
+    record -- the case run_stage() holds at WAIT_USER. Everything else
+    (evidence, gates, subprocesses) is identical, which is what makes the
+    pair of tests below a controlled comparison of the human-approval
+    hard-stop alone.
+    """
     h = DVHarness(tmp)
     # The bundle the SIGNOFF gate battery itself consumes: produced BEFORE
     # the stage passes, which is why collect_signoff_bundle cannot require a
@@ -197,10 +205,15 @@ def _drive_signoff_to_pass(tmp: Path) -> DVHarness:
     h.set_stage("SIGNOFF")
     # SIGNOFF is one of the stages run_stage() holds at WAIT_USER without a
     # real human approval on record, regardless of gate verdict.
-    ControlPlane(tmp).approve("SIGNOFF", note="e2e signoff", reviewer_id="dv-lead")
+    if approve:
+        ControlPlane(tmp).approve("SIGNOFF", note="e2e signoff", reviewer_id="dv-lead")
     h.adapter = _PassAdapter(signoff_evidence_text(Path(pre["out_dir"]), pre["bundle_hash"]))
     h.run_stage("sign off the USB3 device subsystem environment")
     return h
+
+
+def _drive_signoff_to_pass(tmp: Path) -> DVHarness:
+    return _drive_signoff(tmp, approve=True)
 
 
 def test_run_stage_signoff_passes_all_nine_real_gates_end_to_end():
@@ -235,6 +248,88 @@ def test_run_stage_signoff_passes_all_nine_real_gates_end_to_end():
         signoff_events = [e for e in events if e.get("stage") == "SIGNOFF"]
         assert signoff_events
         assert any(e.get("event") == "SUBSYSTEM_ENVIRONMENT_REGISTERED" for e in signoff_events)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_signoff_gates_passing_without_human_approval_qualifies_nothing():
+    """The human-approval hard-stop must govern the DURABLE qualification
+    artifacts, not just the stage status (2026-09-04, mechanism #8 re-audit
+    follow-up).
+
+    run_stage() deliberately downgrades a fully gate-verified SIGNOFF to
+    WAIT_USER when no `dv-harness approve SIGNOFF` is on record ("gates
+    passing is not the same thing as a human sign-off", engine.py's own
+    comment). But the whole `if verdict == "PASS":` side-effect block runs on
+    GATE VERDICT ALONE, after that downgrade. _export_signoff_bundle()
+    re-checks the recorded stage status for exactly this reason and
+    documents why; its sibling _persist_subsystem_registry_entry() -- the
+    ONLY writer of the runtime subsystem registry -- did not, so a subsystem
+    was recorded PRODUCTION_QUALIFIED in the real registry while its signoff
+    was still waiting on a human.
+
+    That registry is not a log. environment_mode_router.
+    read_registered_subsystem_entries() feeds it to
+    soc_environment_composer.compose_soc_environment(), STAGE_GATES
+    ["SYSTEM_LEVEL"]'s system_level_validator cross-checks agent claims
+    against it via its --registered ContextFlag, and
+    signoff_export.read_signoff_stage_status() reports its mere presence as
+    "independent corroboration" of a real SIGNOFF PASS -- so an
+    unapproved entry there is a false corroboration of the very approval it
+    skipped.
+    """
+    tmp = _signoff_project()
+    try:
+        h = _drive_signoff(tmp, approve=False)
+
+        # 1. The gates really did all pass -- this is the same evidence the
+        #    approved run uses, so the ONLY difference is the missing human.
+        submitted = set(h.state.stages["SIGNOFF"]["last_evidence_blocks"])
+        assert {gid for gid, _, _ in STAGE_GATES["SIGNOFF"]} <= submitted
+
+        # 2. ...and the stage still correctly refused to close.
+        assert h.state.stages["SIGNOFF"]["status"] == Status.WAIT_USER.value
+        assert "HUMAN_APPROVAL_REQUIRED" in h.state.stages["SIGNOFF"]["blocking_reason"]
+
+        # 3. Nothing durable was qualified: no registry file at all.
+        assert not (tmp / ".dv-harness" / "soc-composer"
+                    / "subsystem_environment_registry.json").exists()
+        # ...which is also what signoff_export reports about the project.
+        status = signoff_export.read_signoff_stage_status(tmp)
+        assert status["stage_status"] == Status.WAIT_USER.value
+        assert status["gate_verified"] is False
+        assert status["subsystem_registry_present"] is False
+        # ...and no SYSTEM_LEVEL composition can be built from it.
+        from dv_harness.environment_mode_router import read_registered_subsystem_entries
+        assert read_registered_subsystem_entries(tmp) == []
+
+        # 4. No bundle either (this half already held before the fix).
+        assert not (tmp / ".dv-harness" / "signoff_bundle").exists()
+
+        # 5. The audit trail must not claim a registration happened, and the
+        #    blackboard must not carry one for a later stage to read.
+        events = [json.loads(line) for line in
+                  (tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+                  if line.strip()]
+        assert not [e for e in events
+                    if e.get("event") in ("SUBSYSTEM_ENVIRONMENT_REGISTERED",
+                                          "SIGNOFF_BUNDLE_EXPORTED")]
+        assert h.blackboard.read("subsystem_registry") is None
+
+        # 6. The hold is not permanent: the same evidence, once a human
+        #    really approves, does register. (Proves the guard blocks the
+        #    unapproved case specifically, not the mechanism as a whole.)
+        ControlPlane(tmp).approve("SIGNOFF", note="late approval", reviewer_id="dv-lead")
+        h2 = DVHarness(tmp)
+        h2.set_stage("SIGNOFF")
+        pre = signoff_export.collect_signoff_bundle(tmp, tmp / "signoff_gate_input_2")
+        h2.adapter = _PassAdapter(signoff_evidence_text(Path(pre["out_dir"]), pre["bundle_hash"]))
+        h2.run_stage("sign off the USB3 device subsystem environment")
+        assert h2.state.stages["SIGNOFF"]["status"] == Status.PASS.value, \
+            h2.state.stages["SIGNOFF"].get("blocking_reason")
+        reg = json.loads((tmp / ".dv-harness" / "soc-composer"
+                          / "subsystem_environment_registry.json").read_text(encoding="utf-8"))
+        assert [s["name"] for s in reg["subsystems"]] == ["USB3_DEVICE"]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
