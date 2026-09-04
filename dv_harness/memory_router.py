@@ -147,6 +147,24 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
             result["shared_push"] = shared
         return result
     if destination == "ORGANIZATIONAL_MEMORY":
+        admitted, admission_reasons = organizational_admission_gate(root, record)
+        if not admitted:
+            # Same demotion contract the ENGINEERING_MEMORY branch below
+            # already uses, for the same reason: the record is real content
+            # someone wanted kept, it just has not earned the shared,
+            # cross-user tier, and every route_and_store() caller treats an
+            # exception here as a failure it then has to report.
+            demoted = WorkingMemoryStore(root).add({
+                **record,
+                "organizational_admission_rejected": admission_reasons,
+                "requested_destination": "ORGANIZATIONAL_MEMORY",
+            })
+            return {
+                "destination": "WORKING_MEMORY", "level": demoted["level"],
+                "memory_id": demoted["memory_id"],
+                "requested_destination": "ORGANIZATIONAL_MEMORY",
+                "organizational_admission": {"admitted": False, "reasons": admission_reasons},
+            }
         # Unlike the other four levels, organizational memory has no local
         # `.dv-harness/memory/organizational/` file store of its own by
         # design (see memory.py's OrganizationalMemoryStore comment): its
@@ -303,6 +321,93 @@ def engineering_admission_gate(record: Dict[str, Any]):
         reasons.append("EXPLICITLY_NOT_REUSABLE")
     elif not any(str(record.get(f) or "").strip() for f in ENGINEERING_REUSABLE_CLAIM_FIELDS):
         reasons.append("NO_REUSABLE_CLAIM")
+
+    return (not reasons), reasons
+
+
+def organizational_admission_gate(root: Path, record: Dict[str, Any]):
+    """The Engineering -> Organizational tier boundary's gate, enforced at the
+    WRITE boundary (2026-09-04, gap-close-obsidian-memory phase 13+14) --
+    the counterpart, one tier up, of engineering_admission_gate() above.
+
+    THE GAP THIS CLOSES, confirmed live before it was written: unlike
+    ENGINEERING_MEMORY, whose route_and_store() branch is hard-gated by
+    engineering_admission_gate() before it can reach a store or a vault
+    write, the ORGANIZATIONAL_MEMORY branch had no gate of its own.
+    route_memory() sends any record with kind in methodology/best_practice/
+    cross_project_lesson and `verified: true` straight to
+    OrganizationalMemoryStore.add(), which applies no validation of its own
+    (its write-time guard, memory.py 2026-09-04, redacts secrets and bounds
+    artifact size -- it does not ask whether the record EARNED the tier).
+    promote_to_organizational()'s three gates were therefore enforced only by
+    the fact that today's two real callers happen to go through it. A future
+    caller constructing such a record directly would have pushed it to the
+    shared, cross-user Knowledge Center and minted a real vault git commit
+    labelled "Organizational Memory approval" without ever clearing a gate.
+
+    The three gates mirror promote_to_organizational()'s, and two of them are
+    re-read FROM THE DURABLE STORE rather than trusted from the payload --
+    which is what makes this a real gate and not a restatement of what the
+    caller already claimed:
+
+    1. PROVENANCE + QUALITATIVE: `source_engineering_memory_id` must resolve
+       to a real ACTIVE engineering-tier record in this project's MemoryStore
+       whose own `verification` block is gate-validated
+       (_verification_is_gate_validated(), the SAME function
+       promote_to_organizational() uses -- not a second, looser copy).
+       CLAUDE.md and docs/MEMORY_ARCHITECTURE.md both already state that
+       ORGANIZATIONAL_MEMORY is reachable only through
+       promote_to_organizational(); that stamp is now the structural evidence
+       of it rather than a documented convention.
+    2. REPEATED CONFIRMATION: that source record's ON-DISK
+       `confirmation_count` must be >= ORGANIZATIONAL_MIN_CONFIRMATIONS. Read
+       from the store, never from this record, so it inherits
+       MemoryStore._apply_confirmation_integrity()'s guarantee that only
+       MemoryGC.confirm() can raise it -- a payload-declared count is
+       discarded on write and cannot open this gate.
+    3. CONFIDENCE: `confidence_result["level"] == "HIGH"`, the
+       inference.score_confidence() result promote_to_organizational() stamps
+       onto the record.
+
+    HONEST LIMITATION, scoped and not glossed: gate 3 is the one input that
+    CANNOT be re-derived here. score_confidence()'s inputs
+    (independent_sources_count/evidence_refs_verified/counter_evidence_count/
+    multi_agent_consensus_count) exist only at promotion time and are not
+    persisted on the source engineering record, so this gate checks the
+    stamped result rather than recomputing it. Gates 1 and 2 are store-backed
+    and are the ones that were actually forgeable.
+
+    Returns (admitted, reasons); the reason codes are deliberately the same
+    strings promote_to_organizational() returns for the same failures, so the
+    two paths report one vocabulary rather than two.
+    """
+    reasons = []
+
+    source_id = record.get("source_engineering_memory_id")
+    source = None
+    if source_id:
+        try:
+            source = MemoryStore(root).get(str(source_id))
+        except Exception:
+            source = None
+    if (source is None or source.get("level") != "engineering"
+            or source.get("status") != "ACTIVE"):
+        reasons.append("NO_ACTIVE_ENGINEERING_SOURCE_RECORD")
+    else:
+        gate_ok, _shape = _verification_is_gate_validated(source)
+        if not gate_ok:
+            reasons.append("QUALITATIVE_GATE_FAILED")
+        try:
+            confirmations = int(source.get("confirmation_count", 0))
+        except (TypeError, ValueError):
+            confirmations = 0
+        if confirmations < ORGANIZATIONAL_MIN_CONFIRMATIONS:
+            reasons.append("INSUFFICIENT_CONFIRMATION")
+
+    confidence_result = record.get("confidence_result")
+    level = confidence_result.get("level") if isinstance(confidence_result, dict) else None
+    if str(level or "").strip().upper() != "HIGH":
+        reasons.append("CONFIDENCE_NOT_HIGH")
 
     return (not reasons), reasons
 
@@ -512,7 +617,10 @@ def promote_to_organizational(root: Path, memory_id: str, confidence_inputs: Dic
     kind="best_practice"/"cross_project_lesson" for those cases) so every
     existing ORGANIZATIONAL_MEMORY routing/sharing/vault-write-through
     behavior above applies unchanged -- this function only decides WHETHER
-    to call it.
+    to call it. Since 2026-09-04 that write boundary ALSO gates on its own
+    (organizational_admission_gate()), re-reading gates 1 and 3 off the
+    durable source record: this function is still the only sanctioned
+    promotion path, but it is no longer the only thing enforcing that.
     """
     from .inference import score_confidence
 

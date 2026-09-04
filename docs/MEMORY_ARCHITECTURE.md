@@ -87,7 +87,7 @@ independently; neither depends on the other.
 | Organizational | `OrganizationalMemoryStore` (no local JSON file — see below) | `kind` in `cross_project_lesson`/`methodology`/`best_practice`, **and only ever reached via `promote_to_organizational()`** | **yes**, plus 3-gate promotion (see below) |
 
 Routing itself is `dv_harness.memory_router.route_memory(record) -> str`
-(`memory_router.py:594`) — a pure function, kind/verified/scope in,
+(`memory_router.py:702`) — a pure function, kind/verified/scope in,
 destination string out. `route_and_store(root, record, cfg)`
 (`memory_router.py:92`) is the real entry point: routes, persists, and
 (for shareable destinations) pushes to the Knowledge Center and/or Vault.
@@ -116,8 +116,11 @@ thing between a record and the **shared, cross-user** Knowledge Center on the
 Linux server — an unredacted secret there reaches every other user's harness,
 not just this project's `.dv-harness/memory/`. `route_memory()` sends any
 `methodology`/`best_practice`/`cross_project_lesson` record with
-`verified: true` straight to it, so that path is reachable from a plain
-`route_and_store()` call and not only from `promote_to_organizational()`.
+`verified: true` to it, and until 2026-09-04 that reached the shared store
+from a plain `route_and_store()` call and not only from
+`promote_to_organizational()`. `organizational_admission_gate()` (see "The
+admission gate" below) now closes that door; the write-time guard still has to
+hold for every record that DOES clear it.
 `route_and_store()`'s `ORGANIZATIONAL_MEMORY` branch guards the record before
 the branch runs, so the Vault note mirrors byte-identical content to what was
 pushed — the other destinations get that for free by mirroring the guarded
@@ -211,7 +214,7 @@ the one project that happened to promote it.
 ### The promotion boundary: Engineering → Organizational
 
 `memory_router.promote_to_organizational(root, memory_id, confidence_inputs,
-cfg, kind)` (`memory_router.py:461`) is the ONLY code path allowed to move
+cfg, kind)` (`memory_router.py:566`) is the ONLY code path allowed to move
 a record across this boundary. Three independent, all-required gates:
 
 1. **Qualitative**: `_verification_is_gate_validated(mem)` recognizes
@@ -252,6 +255,47 @@ its own.
 
 Any gate miss returns `{"promoted": False, "reason": "..."}` — it never
 raises for an ordinary miss, only for an unknown `memory_id`.
+
+### The admission gate: enforced at the write boundary, not only by the caller
+
+"the ONLY code path allowed" above was, until 2026-09-04, a documented
+convention rather than a mechanism: `route_memory()` sends any
+`methodology`/`best_practice`/`cross_project_lesson` record with
+`verified: true` to `ORGANIZATIONAL_MEMORY`, and that branch called
+`OrganizationalMemoryStore.add()` with no gate of its own — so a caller
+constructing such a record directly would have pushed it to the shared,
+cross-user Knowledge Center and minted a real Vault git commit labelled
+"Organizational Memory approval" without clearing any of the three gates
+above. (`ENGINEERING_MEMORY` never had this hole:
+`engineering_admission_gate()` has guarded its branch since 2026-09-03.)
+
+`memory_router.organizational_admission_gate(root, record)` now runs FIRST in
+that branch. It mirrors the three gates above, and re-reads two of them **from
+the durable store** rather than from the payload that is asking to be admitted:
+
+1. **Provenance + qualitative** — `source_engineering_memory_id` must resolve
+   to a real ACTIVE engineering-tier record whose OWN `verification` block
+   `_verification_is_gate_validated()` accepts. Reason codes:
+   `NO_ACTIVE_ENGINEERING_SOURCE_RECORD`, `QUALITATIVE_GATE_FAILED`.
+2. **Repeated confirmation** — that source record's ON-DISK
+   `confirmation_count`, which only `MemoryGC.confirm()` can advance (see the
+   integrity note above), must be `>= ORGANIZATIONAL_MIN_CONFIRMATIONS`. A
+   `source_confirmation_count` in the payload is ignored. Reason code:
+   `INSUFFICIENT_CONFIRMATION`.
+3. **Confidence** — `confidence_result["level"] == "HIGH"`, the
+   `score_confidence()` result `promote_to_organizational()` stamps. Reason
+   code: `CONFIDENCE_NOT_HIGH`. **Disclosed limitation**: this is the one
+   input that cannot be re-derived here — `score_confidence()`'s arguments
+   exist only at promotion time and are not persisted on the source record —
+   so it is checked as stamped. Gates 1 and 2 are the ones that were forgeable.
+
+A rejected record is **demoted to Working Memory**, not raised and not
+dropped: it lands with `organizational_admission_rejected: [<reason codes>]`
+and `requested_destination: "ORGANIZATIONAL_MEMORY"`, exactly the contract
+`engineering_admission_gate()` already uses. Because `WORKING_MEMORY` is
+excluded from `_VAULT_WRITE_THROUGH_DESTINATIONS`, that demotion is also what
+makes "no unearned Organizational-approval commit" true. Regression coverage:
+`test_memory_tier_integrity_and_admission.py`, section 5.
 
 ## Corner Case Library (`dv_harness.memory.CornerCaseLibrary`)
 

@@ -214,7 +214,10 @@ root.
 update — only on a `route_and_store()` write that lands on JOB_MEMORY
 ("verified Job result"), PROJECT_MEMORY ("Project Memory update"),
 ENGINEERING_MEMORY (promotion), or ORGANIZATIONAL_MEMORY (approval); see
-`memory_router._VAULT_WRITE_THROUGH_DESTINATIONS`. Commit message is
+`memory_router._VAULT_WRITE_THROUGH_DESTINATIONS`. The last two are each
+gated first (`engineering_admission_gate()` /
+`organizational_admission_gate()`), so an unearned record is demoted to
+WORKING_MEMORY and no commit is minted for it at all. Commit message is
 `memory(<protocol>): <short description>` (`_build_vault_commit_message()`
 — falls back to `_general` when the record carries no real protocol).
 Direct `provider.create()`/`update()`/`delete()` calls (this page's Vault

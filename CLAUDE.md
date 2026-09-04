@@ -69,7 +69,14 @@ promotion:
   skill), a HIGH `inference.score_confidence()` result, and
   `confirmation_count >= ORGANIZATIONAL_MIN_CONFIRMATIONS` (2, i.e. a second
   independent run re-deriving the same root_cause/protocol -- not the same
-  run reported twice).
+  run reported twice). Since 2026-09-04 "ONLY through" is enforced at the
+  write boundary rather than trusted from callers:
+  `memory_router.organizational_admission_gate()` re-reads the promotion
+  provenance (`source_engineering_memory_id`) off the durable store -- the
+  source record must be ACTIVE, engineering-tier, gate-validated, and carry
+  an EARNED on-disk `confirmation_count` -- and demotes anything else to
+  Working Memory with `organizational_admission_rejected`, before it can
+  reach the shared Knowledge Center or mint an approval commit.
 - A record failing any one gate stays at Engineering tier (or lower). Do not
   re-word the qualitative gate's inputs to force a pass.
 - Reaching the Engineering tier at all is itself gated

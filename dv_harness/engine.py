@@ -48,7 +48,7 @@ from .blackboard import Blackboard
 from .router import RouteResolver
 from .planner import PlanStore, default_plan
 from .multi_agent import MultiAgentOrchestrator
-from .react import ReactRecorder
+from .react import ReactRecorder, build_memory_context_references
 from .skill_resolver import SkillResolver
 # --- Real, input-driven protocol/environment-mode resolution (2026-09-01,
 # route-skill-resolver-dynamic-implementation task; wiring completed
@@ -3457,6 +3457,19 @@ class DVHarness:
                 next_action=step_inference["next_action"],
                 gap=step_inference["gap"],
                 confidence_detail=step_inference["confidence_detail"],
+                # The prior knowledge this attempt REALLY consulted (2026-09-04,
+                # gap-close-obsidian-memory phase 13+14): the same three lists
+                # _gather_stage_context() folded into the prompt above, projected
+                # to references only. Until now they were transient -- built fresh
+                # per run_stage() call and never persisted -- so
+                # session_snapshot.save_session() had to re-run its own
+                # MemoryRetriever.search() at save time and could report memory
+                # this stage never saw. See react.build_memory_context_references().
+                memory_context=build_memory_context_references(
+                    relevant_memory=ctx.get("relevant_memory"),
+                    kc_search_results=ctx.get("kc_search_results"),
+                    vault_related_cases=ctx.get("vault_related_cases"),
+                ),
             )
 
         # This attempt's own extracted evidence blocks, persisted onto the

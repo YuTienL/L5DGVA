@@ -11,6 +11,7 @@ from dv_harness.memory import (
 )
 from dv_harness.memory_router import route_and_store
 from dv_harness.knowledge_center import RESULT_MARKER
+from dv_harness_tests.organizational_promotion_fixture import admitted_organizational_record
 
 # A record that actually CLEARS memory_router.engineering_admission_gate()
 # (2026-09-03): real evidence, HIGH confidence, and a reusable claim
@@ -260,7 +261,12 @@ def test_route_and_store_actually_uses_the_named_tier_classes_not_just_the_base_
 
         with patch.object(OrganizationalMemoryStore, "add", autospec=True) as org_add:
             org_add.return_value = {"ok": True, "memory_id": "KC-1"}
-            result = route_and_store(tmp, {"kind": "methodology", "verified": True, "title": "t"})
+            # Since 2026-09-04 this destination is gated at the write boundary
+            # too (memory_router.organizational_admission_gate) -- a bare
+            # {"kind": "methodology", "verified": True} record is now correctly
+            # demoted to Working Memory, so this tier-dispatch test needs a
+            # record carrying real promotion provenance.
+            result = route_and_store(tmp, admitted_organizational_record(tmp, title="t"))
             # obsidian-memory-core (2026-09-03): a successful ORGANIZATIONAL_MEMORY
             # push now also attempts an additive vault write-through -- pop its
             # result (asserted for real elsewhere, e.g. test_memory_vault.py) before

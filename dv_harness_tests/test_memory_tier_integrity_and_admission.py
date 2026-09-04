@@ -16,6 +16,10 @@ parse/import smoke test.
   4. (2026-09-04 re-audit) confirmation_count integrity -- the organizational
      gate's third input was itself caller-supplied, so one creation event
      could self-declare the repeated confirmation the gate exists to require.
+  5. (2026-09-04 phase 13+14) Engineering -> Organizational admission at the
+     WRITE boundary -- promote_to_organizational()'s three gates were enforced
+     only by its own callers, so a direct route_and_store() reached the
+     shared, cross-user Knowledge Center without clearing any of them.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ from dv_harness import lsf_client, memory_doctor
 from dv_harness.memory import MemoryGC, MemoryRetriever, MemoryStore
 from dv_harness.memory_router import (
     ORGANIZATIONAL_MIN_CONFIRMATIONS, engineering_admission_gate,
-    promote_to_organizational, route_and_store,
+    organizational_admission_gate, promote_to_organizational, route_and_store,
 )
 
 
@@ -521,3 +525,140 @@ def test_promoted_organizational_record_carries_source_count_not_its_own(tmp_roo
     # The promoted record must not carry a `confirmation_count` of its own at
     # all -- the field name that the gate reads back.
     assert "confirmation_count" not in pushed[0]
+
+
+# ===========================================================================
+# 5. Engineering -> Organizational admission gate at the WRITE boundary
+#    (2026-09-04, gap-close-obsidian-memory phase 13+14)
+#
+# The Phase 13 audit's disclosed residual: unlike ENGINEERING_MEMORY, whose
+# route_and_store() branch is hard-gated by engineering_admission_gate(), the
+# ORGANIZATIONAL_MEMORY branch had none. route_memory() sent any
+# methodology/best_practice/cross_project_lesson record with verified=True
+# straight to OrganizationalMemoryStore.add() -- i.e. to the shared,
+# cross-user Knowledge Center -- and on a successful push minted a real vault
+# git commit labelled "Organizational Memory approval", without the record
+# ever clearing promote_to_organizational()'s three gates. Those gates were
+# enforced only by the fact that today's two real callers happen to use it.
+# ===========================================================================
+
+_UNEARNED_ORGANIZATIONAL = {
+    "kind": "methodology", "verified": True, "protocol": "USB3",
+    "title": "always reconcile the sim.log epilogue before a batch clean",
+}
+
+
+def test_a_direct_route_and_store_can_no_longer_reach_the_shared_organizational_tier(tmp_root):
+    """The regression this section exists for: the shared broker must never
+    be contacted at all for a record that never cleared a gate."""
+    with patch("dv_harness.memory_router.OrganizationalMemoryStore") as org_store:
+        result = route_and_store(tmp_root, dict(_UNEARNED_ORGANIZATIONAL), cfg={})
+    org_store.assert_not_called()
+
+    assert result["destination"] == "WORKING_MEMORY"
+    assert result["requested_destination"] == "ORGANIZATIONAL_MEMORY"
+    assert result["organizational_admission"]["admitted"] is False
+    assert "NO_ACTIVE_ENGINEERING_SOURCE_RECORD" in result["organizational_admission"]["reasons"]
+    assert "CONFIDENCE_NOT_HIGH" in result["organizational_admission"]["reasons"]
+
+
+def test_a_rejected_organizational_record_is_kept_in_working_memory_with_its_reasons(tmp_root):
+    """Demotion, not a raise and not a drop -- the same contract the
+    engineering gate already uses. The content is real; it just has not
+    earned the shared tier, and the record itself says why."""
+    result = route_and_store(tmp_root, dict(_UNEARNED_ORGANIZATIONAL), cfg={})
+    stored = MemoryStore(tmp_root).get(result["memory_id"])
+    assert stored["level"] == "working"
+    assert stored["requested_destination"] == "ORGANIZATIONAL_MEMORY"
+    assert "NO_ACTIVE_ENGINEERING_SOURCE_RECORD" in stored["organizational_admission_rejected"]
+
+
+def test_no_vault_note_or_commit_is_minted_for_a_record_that_never_cleared_the_gate(tmp_root):
+    """Phase 13's commit policy names "Organizational Memory approval" as a
+    real commit trigger. A rejected record must therefore produce no vault
+    note at all -- WORKING_MEMORY is excluded from
+    _VAULT_WRITE_THROUGH_DESTINATIONS by construction, so the demotion is
+    what makes that true."""
+    cfg = {"knowledge_center": {"enabled": False},
+           "memory": {"vault_path": "", "git_enabled": False}}
+    result = route_and_store(tmp_root, dict(_UNEARNED_ORGANIZATIONAL), cfg=cfg)
+    assert "vault_write" not in result
+    vault = tmp_root / ".dv-harness" / "vault"
+    assert not vault.exists() or not list(vault.rglob("*.md"))
+
+
+def test_the_gate_reads_confirmation_count_off_the_store_never_off_the_payload(tmp_root):
+    """The one gate input a payload could otherwise self-declare. The source
+    record here is real, ACTIVE, engineering-tier and gate-validated -- only
+    the repeated confirmation is missing, and the record claims to have it."""
+    source_id = route_and_store(tmp_root, dict(_PROMOTABLE), cfg={})["memory_id"]
+    assert MemoryStore(tmp_root).get(source_id)["confirmation_count"] == 0
+
+    forged = dict(_UNEARNED_ORGANIZATIONAL,
+                  confidence_result={"level": "HIGH", "score": 10},
+                  source_confirmation_count=ORGANIZATIONAL_MIN_CONFIRMATIONS + 5,
+                  source_engineering_memory_id=source_id)
+    result = route_and_store(tmp_root, forged, cfg={})
+    assert result["destination"] == "WORKING_MEMORY"
+    assert result["organizational_admission"]["reasons"] == ["INSUFFICIENT_CONFIRMATION"]
+
+
+def test_the_gate_rejects_provenance_pointing_at_a_record_that_never_passed_its_own_gates(tmp_root):
+    """A source record with two REAL confirmations but no gate-validated
+    verification block is still not promotable -- the qualitative gate is
+    re-read from that record, not trusted from the promoted payload."""
+    store = MemoryStore(tmp_root)
+    unvalidated = store.add("engineering", {
+        "title": "no verification block", "protocol": "USB3", "root_cause": "guess",
+    })["memory_id"]
+    MemoryGC(store).confirm(unvalidated)
+    MemoryGC(store).confirm(unvalidated)
+
+    result = route_and_store(tmp_root, dict(
+        _UNEARNED_ORGANIZATIONAL,
+        confidence_result={"level": "HIGH"},
+        # A gate-validated block on the PROMOTED record does not help: the
+        # gate reads the source record's own.
+        verification={"single_sim": "PASS", "regression": "PASS", "reaudit": "CLEAN"},
+        source_engineering_memory_id=unvalidated), cfg={})
+    assert result["destination"] == "WORKING_MEMORY"
+    assert result["organizational_admission"]["reasons"] == ["QUALITATIVE_GATE_FAILED"]
+
+
+def test_a_retracted_source_record_can_no_longer_carry_a_promotion(tmp_root):
+    """Provenance is only as good as the record it points at: retracting the
+    source (MemoryGC's real lifecycle) must close the gate again, not leave
+    an already-minted stamp valid forever."""
+    store = MemoryStore(tmp_root)
+    source_id = route_and_store(tmp_root, dict(_PROMOTABLE), cfg={})["memory_id"]
+    MemoryGC(store).confirm(source_id)
+    MemoryGC(store).confirm(source_id)
+    record = dict(_UNEARNED_ORGANIZATIONAL, confidence_result={"level": "HIGH"},
+                  source_engineering_memory_id=source_id)
+
+    admitted, reasons = organizational_admission_gate(tmp_root, record)
+    assert (admitted, reasons) == (True, [])
+
+    MemoryGC(store).retract(source_id, reason="superseded by a later RTL revision")
+    admitted, reasons = organizational_admission_gate(tmp_root, record)
+    assert admitted is False
+    assert reasons == ["NO_ACTIVE_ENGINEERING_SOURCE_RECORD"]
+
+
+def test_the_earned_promotion_path_still_clears_the_write_boundary_gate(tmp_root):
+    """The positive half: promote_to_organizational() stamps exactly the
+    provenance this gate re-reads, so closing the bypass must not close the
+    one sanctioned door. Asserted at the real push boundary."""
+    store = MemoryStore(tmp_root)
+    source_id = route_and_store(tmp_root, dict(_PROMOTABLE), cfg={})["memory_id"]
+    MemoryGC(store).confirm(source_id, evidence={"independent_run": 1})
+    MemoryGC(store).confirm(source_id, evidence={"independent_run": 2})
+
+    pushed = []
+    with patch("dv_harness.memory_router.OrganizationalMemoryStore") as org_store:
+        org_store.return_value.add.side_effect = lambda rec: pushed.append(rec) or {"ok": True}
+        result = promote_to_organizational(tmp_root, source_id, _HIGH_CONF, cfg={})
+
+    assert result["destination"] == "ORGANIZATIONAL_MEMORY"
+    assert len(pushed) == 1
+    assert pushed[0]["source_engineering_memory_id"] == source_id

@@ -234,7 +234,7 @@ _None linked yet._
 | `WORKING_MEMORY` | `react_reasoning_step`, or anything unmatched | no |
 | `PROJECT_MEMORY` | `project_fact`/`project_topology`/`tool_flow`/`known_issue` | **yes** |
 | `ENGINEERING_MEMORY` | `root_cause`/`verified_fix`/`debug_lesson` | **yes**, plus `engineering_admission_gate()`'s evidence + confidence + reusable bar — a record clearing `verified` but failing that gate is demoted to `WORKING_MEMORY` (see MEMORY_ARCHITECTURE.md) |
-| `ORGANIZATIONAL_MEMORY` | `cross_project_lesson`/`methodology`/`best_practice` | **yes**, and only reachable directly if you bypass `promote_to_organizational()` — don't; see MEMORY_ARCHITECTURE.md |
+| `ORGANIZATIONAL_MEMORY` | `cross_project_lesson`/`methodology`/`best_practice` | **yes**, plus `organizational_admission_gate()`'s store-backed provenance + confirmation + HIGH-confidence bar — since 2026-09-04 a record that did not come through `promote_to_organizational()` is demoted to `WORKING_MEMORY` rather than reaching the shared Knowledge Center (see MEMORY_ARCHITECTURE.md) |
 | `CORNER_CASE_LIBRARY` | `corner_case` | **yes** |
 
 ## 5. Job Memory record fields (`lsf_client._upsert_job_tier_memory_record()`)

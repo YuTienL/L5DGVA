@@ -26,6 +26,7 @@ import pytest
 from dv_harness import memory_vault as mv
 from dv_harness.memory import MemoryStore, MemoryConsolidator, MemoryGC
 from dv_harness.memory_router import route_and_store, promote_to_organizational, ORGANIZATIONAL_MIN_CONFIRMATIONS
+from dv_harness_tests.organizational_promotion_fixture import admitted_organizational_record
 
 
 def _tmp() -> Path:
@@ -652,10 +653,8 @@ def test_route_and_store_organizational_memory_writes_a_vault_note_only_on_succe
                "memory": {"vault_path": "", "git_enabled": False}}
         with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as add_mock:
             add_mock.return_value = {"ok": True, "memory_id": "KC-42"}
-            result = route_and_store(tmp, {
-                "kind": "methodology", "verified": True, "title": "cross-project lesson",
-                "protocol": "USB2",
-            }, cfg=cfg)
+            result = route_and_store(tmp, admitted_organizational_record(
+                tmp, title="cross-project lesson", protocol="USB2"), cfg=cfg)
         assert result["destination"] == "ORGANIZATIONAL_MEMORY"
         assert result["vault_write"]["ok"] is True
         note_path = tmp / ".dv-harness" / "vault" / result["vault_write"]["path"]
@@ -663,9 +662,8 @@ def test_route_and_store_organizational_memory_writes_a_vault_note_only_on_succe
 
         # And the NOT_CONFIGURED failure path must NOT attempt a vault write.
         cfg_disabled = {"knowledge_center": {"enabled": False}, "memory": {"vault_path": "", "git_enabled": False}}
-        result2 = route_and_store(tmp, {
-            "kind": "methodology", "verified": True, "title": "t2", "protocol": "USB2",
-        }, cfg=cfg_disabled)
+        result2 = route_and_store(tmp, admitted_organizational_record(
+            tmp, title="t2", protocol="USB2"), cfg=cfg_disabled)
         assert result2["ok"] is False
         assert "vault_write" not in result2
     finally:

@@ -27,11 +27,17 @@ from typing import Any, Dict, List, Optional
 # reading the manifest, without first having to know react.py's/
 # lsf_client.py's own private directory layouts. See
 # _read_latest_react_iteration()/_collect_current_job_reference()/
-# _collect_related_memory_references()/describe_resume_point() below --
+# _resolve_related_memory_references()/describe_resume_point() below --
 # every one of these READS already-real files/records, none is a new write
 # path, and `related_memory` is deliberately REFERENCES ONLY (memory_id/
 # level/title), consistent with this module's own "never the durable
 # knowledge layer" design above -- it points at Memory, it does not copy it.
+# 2026-09-04 (gap-close-obsidian-memory phase 13+14): `related_memory` is
+# now read back from the stage's OWN react record (`memory_context`, written
+# by react.ReactRecorder.record()) whenever that stage really persisted one,
+# instead of always being a fresh save-time re-search that could report
+# memory the stage never saw. `related_memory_source` states which of the two
+# produced the list -- see _resolve_related_memory_references().
 SESSION_FILES = ["state.json", "control.json", "project_meta.json", "config.json", "events.jsonl"]
 SESSION_DIRS = ["blackboard", "plans", "react", "agents", "telemetry", "lsf", "evidence"]
 
@@ -379,9 +385,13 @@ def _collect_related_memory_references(root: Path, stage: Optional[str], project
     lightweight index of which prior records were relevant AT SAVE TIME, so
     a restored session knows WHICH memory to re-fetch (via
     `dv_harness.memory.MemoryStore.get(memory_id)` / `memory_cli`) on
-    demand, rather than a duplicate copy of the records themselves. Reuses
-    the exact same MemoryRetriever.search() engine.py's own run_stage()
-    already calls for its `relevant_memory` prompt context (step 1b) --
+    demand, rather than a duplicate copy of the records themselves.
+
+    The RECOMPUTED fallback, used only when the current stage's react
+    iteration record carries no `memory_context` -- see
+    _resolve_related_memory_references() for why that distinction matters.
+    Reuses the exact same MemoryRetriever.search() engine.py's own
+    run_stage() calls for its `relevant_memory` prompt context (step 1b) --
     not a second, differently-scored search."""
     try:
         from .memory import MemoryStore, MemoryRetriever
@@ -395,6 +405,45 @@ def _collect_related_memory_references(root: Path, stage: Optional[str], project
         ]
     except Exception:
         return []
+
+
+def _resolve_related_memory_references(root: Path, react_snapshot: Dict[str, Any],
+                                        stage: Optional[str], project: Optional[str],
+                                        note: str = "") -> tuple:
+    """Which prior memory was in play when the current hypothesis was formed,
+    and -- just as importantly -- whether that answer is the REAL one.
+
+    THE FIDELITY GAP THIS CLOSES (2026-09-04, gap-close-obsidian-memory phase
+    13+14): `related_memory` used to be a MemoryRetriever.search() re-run at
+    SAVE time over a query built from stage+project+note. That is not the
+    memory the stage actually consulted -- engine.run_stage() searches on
+    `stage + user_goal`, additionally consults the Vault and the shared
+    Knowledge Center, and does all of it at RUN time against whatever the
+    store held then. The two can legitimately disagree, and a resumed
+    session cannot tell which it is looking at.
+
+    react.ReactRecorder.record() now persists the real thing as
+    `memory_context` on the same iteration_NNN.json this manifest already
+    reads its hypothesis/evidence/confidence/next_action from (references
+    only -- see react.build_memory_context_references()). Prefer it; fall
+    back to the recompute only when it genuinely is not there (an attempt
+    recorded before this field existed, or a stage that consulted nothing).
+
+    Returns (references, source) where source is one of
+    "react_iteration_memory_context" / "recomputed_at_save_time" / "none",
+    written into the manifest so a reader never has to guess which of the
+    two produced the list. `vault_related_cases`/`kc_search_results` from
+    the same recorded context are returned as the third element, so the
+    Vault/Knowledge-Center half of what the stage cited is preserved too
+    instead of being flattened away."""
+    context = react_snapshot.get("memory_context") if isinstance(react_snapshot, dict) else None
+    if isinstance(context, dict):
+        recorded = context.get("related_memory") or []
+        other = {k: v for k, v in context.items() if k != "related_memory" and v}
+        if recorded or other:
+            return list(recorded), "react_iteration_memory_context", other
+    recomputed = _collect_related_memory_references(root, stage, project, note)
+    return recomputed, ("recomputed_at_save_time" if recomputed else "none"), {}
 
 
 def describe_resume_point(manifest: Dict[str, Any]) -> str:
@@ -423,8 +472,19 @@ def describe_resume_point(manifest: Dict[str, Any]) -> str:
         lines.append(f"Confidence: {manifest['current_confidence']}.")
     related = manifest.get("related_memory") or []
     if related:
-        lines.append("Related prior memory (references, re-fetch by memory_id before trusting): "
+        # The provenance is stated, not implied: a "recomputed_at_save_time"
+        # list is a proxy for what the stage consulted and can differ from it,
+        # so a resuming reader must not treat the two as the same claim.
+        provenance = ("the memory this stage really consulted"
+                      if manifest.get("related_memory_source") == "react_iteration_memory_context"
+                      else "re-searched at save time, may differ from what the stage consulted")
+        lines.append(f"Related prior memory ({provenance}; references, re-fetch by memory_id "
+                      "before trusting): "
                       + ", ".join(str(r.get("memory_id")) for r in related if r.get("memory_id")))
+    vault_cases = manifest.get("vault_related_cases") or []
+    if vault_cases:
+        lines.append("Vault/evidence-DB cases this stage consulted: "
+                      + ", ".join(str(c.get("note_id")) for c in vault_cases if c.get("note_id")))
     if manifest.get("pending_action"):
         lines.append(f"What remains unknown / next action to execute: {manifest['pending_action']}")
     else:
@@ -528,6 +588,8 @@ def save_session(project_root: Path, name: Optional[str] = None, note: str = "")
     # docstring above for why every one of these is a REFERENCE/READ, never
     # a new write path or a duplicate copy of durable knowledge.
     react_snapshot = _read_latest_react_iteration(dvh, current_stage) or {}
+    related_memory, related_memory_source, other_memory_context = _resolve_related_memory_references(
+        root, react_snapshot, current_stage, state.get("project"), note)
     manifest = {
         "name": name,
         "note": note,
@@ -553,7 +615,15 @@ def save_session(project_root: Path, name: Optional[str] = None, note: str = "")
         "current_evidence": react_snapshot.get("evidence"),
         "current_confidence": react_snapshot.get("confidence"),
         "pending_action": react_snapshot.get("next_action"),
-        "related_memory": _collect_related_memory_references(root, current_stage, state.get("project"), note),
+        "related_memory": related_memory,
+        # related_memory_source (2026-09-04): "react_iteration_memory_context"
+        # = the real memory the stage consulted, read back off its own react
+        # record; "recomputed_at_save_time" = the honest proxy this field used
+        # to be unconditionally; "none" = nothing found either way. See
+        # _resolve_related_memory_references(). vault_related_cases/
+        # kc_search_results appear only when the stage really consulted them.
+        "related_memory_source": related_memory_source,
+        **other_memory_context,
         "files": copied_files,
         "dirs": copied_dirs,
         "missing": missing,

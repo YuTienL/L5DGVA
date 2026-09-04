@@ -1273,3 +1273,161 @@ def test_dashboard_knowledge_db_info_not_configured():
         assert data["error"] == "NOT_CONFIGURED"
     finally:
         shutil.rmtree(tmp)
+
+
+# --- Phase 14 fidelity: `related_memory` is the memory the stage REALLY
+# consulted, not a save-time re-search (2026-09-04, gap-close-obsidian-memory
+# phase 13+14). See session_snapshot._resolve_related_memory_references() and
+# react.build_memory_context_references().
+
+def _seed_two_distinguishable_memories(tmp: Path):
+    """Two real engineering records: the one a save-time re-search over
+    stage+project+note would surface, and a different one the stage actually
+    cited. Returns (recomputed_id, really_consulted).
+    """
+    from dv_harness.memory import MemoryStore
+    store = MemoryStore(tmp)
+    recomputed = store.add("engineering", {
+        "title": "ep0 FIFO underrun", "protocol": "USB2",
+        "root_cause": "missing prefetch guard", "confidence": "HIGH",
+    })
+    really_consulted = store.add("engineering", {
+        "title": "USB3 LFPS handshake timeout", "protocol": "USB3",
+        "root_cause": "rx termination detected one polling cycle late",
+        "confidence": "HIGH", "evidence": ["fsdb: lfps_rx late by 1 cycle"],
+    })
+    return recomputed["memory_id"], really_consulted
+
+
+def _record_a_real_react_iteration(tmp: Path, stage: str, memory_context):
+    """Through the REAL ReactRecorder.record() -- not a hand-written JSON
+    file -- so this proves the production write path carries the field."""
+    from dv_harness.react import ReactRecorder
+    return ReactRecorder(tmp).record(
+        node=stage, iteration=1,
+        reason_summary="lfps handshake times out before rx termination is seen",
+        action={"adapter": "FakeAdapter"}, tool="ClaudeAdapter.run",
+        observation={"ok": False}, evidence={"symptom": "usb3 lfps timeout"},
+        confidence="MEDIUM", next_action="rerun_with_targeted_waveform",
+        memory_context=memory_context,
+    )
+
+
+def test_related_memory_is_what_the_stage_really_consulted_not_a_save_time_research():
+    """The fidelity gap this closes: the manifest used to report a
+    MemoryRetriever.search() re-run at SAVE time over stage+project+note,
+    which can surface memory the stage never saw. Here the two genuinely
+    differ, so only one of them can be right."""
+    from dv_harness.react import build_memory_context_references
+    tmp = _tmp()
+    try:
+        assert _run_cli(tmp, "set-stage", "FAILURE_RECOVERY").returncode == 0
+        recomputed_id, consulted = _seed_two_distinguishable_memories(tmp)
+        _record_a_real_react_iteration(tmp, "FAILURE_RECOVERY", build_memory_context_references(
+            relevant_memory=[consulted],
+            vault_related_cases=[{"note_id": "USB3-LFPS-0001", "path": "Engineering/usb3.md",
+                                   "score": 7.0, "source": "vault",
+                                   "frontmatter": {"protocol": "USB3"}}],
+        ))
+
+        manifest = save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+
+        assert manifest["related_memory_source"] == "react_iteration_memory_context"
+        ids = [r["memory_id"] for r in manifest["related_memory"]]
+        assert ids == [consulted["memory_id"]]
+        # The proof it is not the old behaviour: a save-time re-search over
+        # this stage/note really would have surfaced the OTHER record.
+        from dv_harness.session_snapshot import _collect_related_memory_references
+        would_have = _collect_related_memory_references(
+            tmp, "FAILURE_RECOVERY", None, "ep0 FIFO underrun regression")
+        assert recomputed_id in [r["memory_id"] for r in would_have]
+        assert recomputed_id not in ids
+
+        # The Vault half of what the stage cited survives too, instead of
+        # being flattened away into the local-memory list.
+        assert manifest["vault_related_cases"] == [
+            {"note_id": "USB3-LFPS-0001", "path": "Engineering/usb3.md",
+             "protocol": "USB3", "score": 7.0, "source": "vault"}]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_related_memory_falls_back_to_a_save_time_recompute_and_labels_it_as_one():
+    """A stage attempt recorded before this field existed (or one that
+    consulted nothing) still gets the proxy -- but the manifest says so, so a
+    resuming reader never mistakes it for what the stage really cited."""
+    tmp = _tmp()
+    try:
+        assert _run_cli(tmp, "set-stage", "FAILURE_RECOVERY").returncode == 0
+        _seed_debug_context(tmp)  # writes an iteration_NNN.json with no memory_context
+        manifest = save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+        assert manifest["related_memory_source"] == "recomputed_at_save_time"
+        assert manifest["related_memory"]
+        assert "vault_related_cases" not in manifest
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_project_with_no_memory_activity_at_all_says_none_not_recomputed():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert manifest["related_memory"] == []
+        assert manifest["related_memory_source"] == "none"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_the_recorded_memory_context_carries_references_never_record_bodies():
+    """`memory_context` rides on iteration_NNN.json, which every session
+    snapshot copies wholesale -- so a full record body there would duplicate
+    the durable Memory tier into the snapshot, exactly what this module's
+    design comment forbids."""
+    from dv_harness.react import build_memory_context_references
+    tmp = _tmp()
+    try:
+        assert _run_cli(tmp, "set-stage", "FAILURE_RECOVERY").returncode == 0
+        _recomputed, consulted = _seed_two_distinguishable_memories(tmp)
+        _record_a_real_react_iteration(tmp, "FAILURE_RECOVERY", build_memory_context_references(
+            relevant_memory=[consulted]))
+
+        on_disk = json.loads((tmp / ".dv-harness" / "react" / "FAILURE_RECOVERY"
+                              / "iteration_001.json").read_text(encoding="utf-8"))
+        reference = on_disk["memory_context"]["related_memory"][0]
+        assert set(reference) == {"memory_id", "level", "title", "root_cause", "confidence"}
+        # The source record really does carry more than that, so this is a
+        # projection, not an accident of a thin record.
+        assert "evidence" in consulted and "evidence" not in reference
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_resume_summary_states_whether_related_memory_was_consulted_or_re_searched():
+    from dv_harness.react import build_memory_context_references
+    tmp = _tmp()
+    try:
+        assert _run_cli(tmp, "set-stage", "FAILURE_RECOVERY").returncode == 0
+        _recomputed, consulted = _seed_two_distinguishable_memories(tmp)
+        _record_a_real_react_iteration(tmp, "FAILURE_RECOVERY", build_memory_context_references(
+            relevant_memory=[consulted],
+            vault_related_cases=[{"note_id": "USB3-LFPS-0001", "score": 7.0, "source": "vault"}]))
+        save_session(tmp, name="c1", note="usb3 lfps timeout")
+
+        summary = restore_session(tmp, "c1")["resume_summary"]
+        assert "the memory this stage really consulted" in summary
+        assert consulted["memory_id"] in summary
+        assert "USB3-LFPS-0001" in summary
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_recomputed_related_memory_list_is_never_described_as_really_consulted():
+    from dv_harness.session_snapshot import describe_resume_point
+    summary = describe_resume_point({
+        "current_stage": "FAILURE_RECOVERY", "overall_status": "PARTIAL",
+        "related_memory": [{"memory_id": "MEM-1"}],
+        "related_memory_source": "recomputed_at_save_time",
+    })
+    assert "may differ from what the stage consulted" in summary
+    assert "really consulted" not in summary

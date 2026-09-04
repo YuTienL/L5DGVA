@@ -14,7 +14,13 @@ allowed-tools: Read Grep Glob Edit Write PowerShell Skill
 practice/cross-project lesson knowledge, gated hardest because it is trusted
 across every project, not just the one that produced it.
 
-**Inputs**: never write `ORGANIZATIONAL_MEMORY` directly. Call
+**Inputs**: never write `ORGANIZATIONAL_MEMORY` directly -- and since
+2026-09-04 you cannot: `route_and_store()`'s ORGANIZATIONAL_MEMORY branch runs
+`organizational_admission_gate(root, record)` first, which re-reads the
+promotion provenance off the durable store and DEMOTES anything that did not
+come through the function below to Working Memory (carrying
+`organizational_admission_rejected`), so no unearned record reaches the shared
+Knowledge Center or mints an approval commit. Call
 `dv_harness.memory_router.promote_to_organizational(root, memory_id,
 confidence_inputs, cfg, kind="methodology"|"best_practice"|"cross_project_lesson")`
 against an EXISTING, ACTIVE Engineering Memory `memory_id`.
@@ -54,7 +60,13 @@ unknown `memory_id`).
    inputs to force a pass.
 
 **Fallback**: no fallback promotion path exists by design -- a record that
-cannot clear all three gates stays at Engineering tier until it can.
+cannot clear all three gates stays at Engineering tier until it can. Hand-
+constructing an ORGANIZATIONAL_MEMORY record for `route_and_store()` is not a
+workaround: the write-boundary gate re-reads the source record's ACTIVE
+status, its verification shape and its ON-DISK `confirmation_count` (which
+only `MemoryGC.confirm()` can advance), so a payload-declared count buys
+nothing. Its reason codes are the same strings listed under **Outputs**, plus
+`NO_ACTIVE_ENGINEERING_SOURCE_RECORD` when no real source record is cited.
 
 **Evidence Requirements**: real, current evidence for every
 `confidence_inputs` field -- this is the one place in the memory system

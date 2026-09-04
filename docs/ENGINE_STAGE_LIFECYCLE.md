@@ -64,6 +64,15 @@ Formerly inline steps 1 / 1b / 1b-2 / 1b-3 / 1c of `run_stage()`:
 The two bolded rows are **the only writes**, and they are exactly what
 dry-run suppresses.
 
+The three memory rows (`memory` / `knowledge center` / `vault`) are read-only
+here but no longer transient: step 9's `react.record()` persists a
+references-only projection of exactly what they returned as `memory_context`
+on `react/<node>/iteration_NNN.json` and its Working Memory twin
+(`react.build_memory_context_references()`, 2026-09-04). Before that, the
+prior knowledge a hypothesis was formed against was rebuilt fresh on every
+call and then discarded, so `session_snapshot.save_session()` had to re-run
+its own search at save time and could report memory the stage never saw.
+
 ---
 
 ## 2. Dry-run mode

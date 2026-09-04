@@ -380,3 +380,51 @@ def test_graph_node_react_default_and_policy_default_keep_this_wiring_live():
     assert graph.nodes["ARCH_CALIBRATION"].react is True
     doc = json.loads((ROOT / ".dv-harness" / "graph" / "main_graph.json").read_text(encoding="utf-8"))
     assert not any(n.get("react") is False for n in doc["nodes"])
+
+
+# --- The memory a stage attempt really consulted (2026-09-04, gap-close-
+#     obsidian-memory phase 13+14) --------------------------------------------
+
+def test_run_stage_persists_the_memory_context_it_really_consulted():
+    """Third gap of the same shape as the two above: `relevant_memory` /
+    `kc_search_results` / `vault_related_cases` were built fresh inside
+    _gather_stage_context(), folded into the prompt, and then discarded --
+    so nothing could later answer which prior knowledge was in play when a
+    hypothesis was formed, and session_snapshot.save_session() had to re-run
+    its own search at save time and label the guess `related_memory`.
+
+    Asserted on the REAL persisted iteration_NNN.json produced by a real
+    run_stage(), against a memory record seeded before the run."""
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+        from dv_harness.memory import MemoryStore
+
+        seeded = MemoryStore(tmp).add("engineering", {
+            "title": "architecture calibration drift after wrapper swap",
+            "protocol": "USB3", "root_cause": "calibrate step read a stale hierarchy path",
+            "confidence": "HIGH", "evidence": ["rtl: wrapper depth changed"],
+        })
+
+        h = DVHarness(tmp)
+        h.adapter = _RequestEvidenceFakeAdapter()
+        h.cfg["policy"]["inner_react_max_adapter_calls"] = 1
+        h.set_stage("ARCH_CALIBRATION")
+        h.run_stage("calibrate architecture")
+
+        iteration = json.loads(
+            (tmp / ".dv-harness" / "react" / "ARCH_CALIBRATION"
+             / "iteration_001.json").read_text(encoding="utf-8"))
+        related = iteration["memory_context"]["related_memory"]
+        assert seeded["memory_id"] in [r["memory_id"] for r in related]
+        # References only -- the same five keys session_snapshot's own
+        # related_memory shape uses, never the record body.
+        assert set(related[0]) == {"memory_id", "level", "title", "root_cause", "confidence"}
+        assert "evidence" not in related[0]
+
+        # And it reached the Working Memory projection of the same step, so a
+        # MemoryRetriever reader sees it too, not just the react/ file.
+        rec = _read_working_memory_react_record(tmp, "ARCH_CALIBRATION", 1)
+        assert rec["memory_context"]["related_memory"] == related
+    finally:
+        shutil.rmtree(tmp)

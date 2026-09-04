@@ -23,6 +23,7 @@ from dv_harness.config import load_config, DEFAULT_CONFIG
 from dv_harness.memory import MemoryStore, MemoryGC, CornerCaseLibrary, CornerCaseLibraryConsolidator
 from dv_harness.memory_router import route_and_store
 from dv_harness.gates import _ccl_reuse_verified
+from dv_harness_tests.organizational_promotion_fixture import admitted_organizational_record
 from dv_harness.knowledge_center import KnowledgeCenterClient, RESULT_MARKER, maybe_push_to_shared
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -238,10 +239,8 @@ def test_route_and_store_routes_organizational_memory_through_knowledge_center_c
     tmp = _tmp()
     try:
         cfg = {"knowledge_center": {"enabled": False, "remote_root": ""}}
-        result = route_and_store(tmp, {
-            "kind": "cross_project_lesson", "verified": True,
-            "title": "shared lesson", "protocol": "usb",
-        }, cfg=cfg)
+        result = route_and_store(tmp, admitted_organizational_record(
+            tmp, kind="cross_project_lesson", title="shared lesson", protocol="usb"), cfg=cfg)
         assert result["destination"] == "ORGANIZATIONAL_MEMORY"
         assert result["ok"] is False
         assert result["error"] == "NOT_CONFIGURED"

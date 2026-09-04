@@ -39,6 +39,7 @@ from dv_harness.memory_artifact_policy import (
     enforce_record_artifact_policy,
 )
 from dv_harness.memory_router import route_and_store
+from dv_harness_tests.organizational_promotion_fixture import admitted_organizational_record
 
 VC_PASSWORD_LINE = "run it with VCPW=Sup3rSecret!pw on vchost-a"
 SSH_KEY_BLOCK = (
@@ -140,10 +141,17 @@ class _FakeKnowledgeCenterRelay:
         ]
 
 
-ORGANIZATIONAL_RECORD = {
-    "kind": "methodology", "verified": True, "protocol": "USB3",
-    "title": "Reconcile every LSF job's sim.log epilogue before calling a batch clean",
-}
+def organizational_record(root, **extra):
+    """A methodology record that really reaches the ORGANIZATIONAL_MEMORY
+    branch. Since 2026-09-04 that branch is gated
+    (memory_router.organizational_admission_gate), so a record without real
+    promotion provenance is demoted to Working Memory and never touches the
+    shared broker at all -- which would silently turn every guard assertion
+    below into a test of the WORKING_MEMORY path instead."""
+    return admitted_organizational_record(
+        root, kind="methodology", protocol="USB3",
+        title="Reconcile every LSF job's sim.log epilogue before calling a batch clean",
+        **extra)
 
 
 class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
@@ -154,10 +162,13 @@ class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
     `OrganizationalMemoryStore.add()`, which forwarded the caller's record
     verbatim to `KnowledgeCenterClient.add()`; nothing on that path called
     `redact_record()` or `enforce_record_artifact_policy()`. So the most
-    exposed destination in the system was the least protected one, and it is
-    reachable directly: `route_memory()` sends any
+    exposed destination in the system was the least protected one, and at the
+    time it was reachable by any caller: `route_memory()` sent any
     methodology/best_practice/cross_project_lesson record with
-    `verified: True` straight there.
+    `verified: True` straight there. That second half was closed separately on
+    2026-09-04 by `organizational_admission_gate()` (which is why every test
+    below now builds its record through `organizational_record()`); the guard
+    these tests cover still has to hold for every record that DOES clear it.
     """
 
     def test_a_secret_never_reaches_the_shared_broker_over_the_wire(self, tmp_path, monkeypatch):
@@ -166,8 +177,8 @@ class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
         try:
             result = route_and_store(
                 tmp_path,
-                {**ORGANIZATIONAL_RECORD, "lesson": VC_PASSWORD_LINE,
-                 "evidence": {"how": SSH_KEY_BLOCK}},
+                organizational_record(tmp_path, lesson=VC_PASSWORD_LINE,
+                                      evidence={"how": SSH_KEY_BLOCK}),
                 cfg=KC_CFG)
         finally:
             relay.stop()
@@ -195,7 +206,7 @@ class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
         relay = _FakeKnowledgeCenterRelay(monkeypatch, tmp_path / "localappdata")
         relay.start(_FakeKnowledgeCenterRelay.ok_add_responses())
         try:
-            route_and_store(tmp_path, {**ORGANIZATIONAL_RECORD, "lesson": blob}, cfg=KC_CFG)
+            route_and_store(tmp_path, organizational_record(tmp_path, lesson=blob), cfg=KC_CFG)
         finally:
             relay.stop()
 
@@ -215,7 +226,7 @@ class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
         vcd = "$enddefinitions $end\n#0\n$dumpvars\n1!\n0\"\n"
         with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as kc_add:
             with pytest.raises(EmbeddedArtifactError):
-                route_and_store(tmp_path, {**ORGANIZATIONAL_RECORD, "lesson": vcd}, cfg=KC_CFG)
+                route_and_store(tmp_path, organizational_record(tmp_path, lesson=vcd), cfg=KC_CFG)
         kc_add.assert_not_called()
 
     def test_the_store_guards_even_when_called_directly_not_through_the_router(self, tmp_path):
@@ -226,7 +237,7 @@ class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
         with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add",
                     return_value={"ok": True, "memory_id": "KC-9"}) as kc_add:
             OrganizationalMemoryStore(tmp_path, cfg=KC_CFG).add(
-                {**ORGANIZATIONAL_RECORD, "lesson": VC_PASSWORD_LINE})
+                organizational_record(tmp_path, lesson=VC_PASSWORD_LINE))
         _category, _protocol, forwarded = kc_add.call_args[0]
         assert "Sup3rSecret!pw" not in json.dumps(forwarded)
         assert forwarded["secrets_redacted_types"] == ["vc_password"]
@@ -248,7 +259,7 @@ class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
         try:
             with patch("dv_harness.memory_router._maybe_write_vault_note") as vault_note:
                 vault_note.return_value = {"ok": True}
-                route_and_store(tmp_path, {**ORGANIZATIONAL_RECORD, "lesson": blob}, cfg=cfg)
+                route_and_store(tmp_path, organizational_record(tmp_path, lesson=blob), cfg=cfg)
         finally:
             relay.stop()
 
@@ -262,7 +273,7 @@ class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
         wraps `***REDACTED-VC_PASSWORD***` inside another marker."""
         from dv_harness.memory import _guard_record_before_write
 
-        once = _guard_record_before_write({**ORGANIZATIONAL_RECORD, "lesson": VC_PASSWORD_LINE})
+        once = _guard_record_before_write(organizational_record(tmp_path, lesson=VC_PASSWORD_LINE))
         twice = _guard_record_before_write(dict(once))
         assert twice == once
         assert once["lesson"].count("***REDACTED-") == 1

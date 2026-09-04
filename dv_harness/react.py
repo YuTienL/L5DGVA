@@ -65,21 +65,85 @@
 # a caller with no real gate signatures to derive them from (e.g. a bare
 # unit-test record) must not be forced to invent a gap it cannot compute.
 # engine.py's _react_step_inference() is the real production supplier.
+#
+# MEMORY_CONTEXT (2026-09-04, gap-close-obsidian-memory phase 13+14): the
+# memory a stage attempt ACTUALLY consulted -- engine.run_stage()'s
+# `relevant_memory` (MemoryRetriever), `vault_related_cases`
+# (memory_vault.search_related_memory_for_debug) and `kc_search_results`
+# (the shared Knowledge Center) -- was built fresh inside
+# _gather_stage_context() on every call, folded into the prompt string, and
+# then discarded. Nothing persisted it, so nothing could later answer "which
+# prior knowledge was in play when this hypothesis was formed". Concretely,
+# session_snapshot.save_session() had to RE-RUN a MemoryRetriever.search()
+# at save time and label the result `related_memory`, which can differ from
+# what the stage really cited. record() now accepts `memory_context` -- a
+# REFERENCES-ONLY projection (build_memory_context_references() below: ids/
+# titles/paths/scores, never record bodies) -- and persists it into the same
+# iteration_NNN.json and Working Memory projection every other field of this
+# record already uses, so the snapshot reads the real one instead of guessing.
 import json
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
+
+
+def build_memory_context_references(relevant_memory=None, kc_search_results=None,
+                                    vault_related_cases=None):
+ """Compact, references-only projection of the three memory sources a stage
+ attempt consulted. Deliberately never carries a record BODY: local hits
+ keep memory_id/level/title/root_cause/confidence (the exact five keys
+ session_snapshot's own `related_memory` reference shape already uses, so a
+ recorded context and a recomputed one are interchangeable to every
+ reader), vault/evidence-DB cases keep note_id/path/protocol/score/source,
+ and shared Knowledge Center hits keep memory_id/title/protocol. A caller
+ that consulted nothing gets an empty dict, not a dict of empty lists --
+ "no memory was in play" and "this stage predates the field" then stay
+ distinguishable at read time.
+
+ A vault case from the Evidence Layer's DuckDB store (source="evidence_db",
+ see memory_vault.search_evidence_db_failure_signatures) carries a
+ signature_key rather than a note_id/path; both shapes are projected here
+ rather than only the Markdown-note one, so an evidence-DB match is not
+ silently dropped from the record."""
+ def _local(m):
+  m = m or {}
+  return {"memory_id": m.get("memory_id"), "level": m.get("level"), "title": m.get("title"),
+          "root_cause": m.get("root_cause"), "confidence": m.get("confidence")}
+
+ def _vault(c):
+  c = c or {}
+  return {"note_id": c.get("note_id") or c.get("signature_key"),
+          "path": c.get("path"),
+          "protocol": (c.get("frontmatter") or {}).get("protocol") if isinstance(c.get("frontmatter"), dict)
+                      else c.get("protocol"),
+          "score": c.get("score"), "source": c.get("source")}
+
+ def _kc(r):
+  r = r or {}
+  return {"memory_id": r.get("memory_id"), "title": r.get("title"), "protocol": r.get("protocol")}
+
+ out = {}
+ if relevant_memory:
+  out["related_memory"] = [_local(m) for m in relevant_memory]
+ if vault_related_cases:
+  out["vault_related_cases"] = [_vault(c) for c in vault_related_cases]
+ if kc_search_results:
+  out["kc_search_results"] = [_kc(r) for r in kc_search_results]
+ return out
+
+
 class ReactRecorder:
  def __init__(self,root):
   self.project_root=Path(root)
   self.root=self.project_root/'.dv-harness'/'react';self.root.mkdir(parents=True,exist_ok=True)
- def record(self,node,iteration,reason_summary,action,tool,observation,evidence,confidence,next_action,gap=None,confidence_detail=None):
-  d=self.root/node;d.mkdir(parents=True,exist_ok=True);r={'iteration':iteration,'node':node,'reason_summary':reason_summary,'action':action,'tool':tool,'observation':observation,'evidence':evidence,'confidence':confidence,'next_action':next_action,'gap':list(gap) if gap is not None else [],'confidence_detail':confidence_detail if isinstance(confidence_detail,dict) else None};(d/f'iteration_{iteration:03d}.json').write_text(json.dumps(r,ensure_ascii=False,indent=2),encoding='utf-8')
+ def record(self,node,iteration,reason_summary,action,tool,observation,evidence,confidence,next_action,gap=None,confidence_detail=None,memory_context=None):
+  d=self.root/node;d.mkdir(parents=True,exist_ok=True);r={'iteration':iteration,'node':node,'reason_summary':reason_summary,'action':action,'tool':tool,'observation':observation,'evidence':evidence,'confidence':confidence,'next_action':next_action,'gap':list(gap) if gap is not None else [],'confidence_detail':confidence_detail if isinstance(confidence_detail,dict) else None,'memory_context':memory_context if isinstance(memory_context,dict) else None};(d/f'iteration_{iteration:03d}.json').write_text(json.dumps(r,ensure_ascii=False,indent=2),encoding='utf-8')
   self._write_working_memory_tier_record(node, iteration, reason_summary, evidence, confidence, next_action,
-                                          gap=r['gap'], confidence_detail=r['confidence_detail'])
+                                          gap=r['gap'], confidence_detail=r['confidence_detail'],
+                                          memory_context=r['memory_context'])
   return r
 
  def _write_working_memory_tier_record(self, node, iteration, reason_summary, evidence, confidence, next_action,
-                                        gap=None, confidence_detail=None):
+                                        gap=None, confidence_detail=None, memory_context=None):
   """Best-effort push of this same record() call's real hypothesis/evidence/
   next-action content into memory.py's WorkingMemoryStore tier, via the
   real memory_router.route_and_store() entry point -- see the module-level
@@ -105,6 +169,7 @@ class ReactRecorder:
    "next_action": next_action,
    "confidence": confidence,
    "confidence_detail": confidence_detail if isinstance(confidence_detail, dict) else None,
+   "memory_context": memory_context if isinstance(memory_context, dict) else None,
   }
   try:
    from .memory_router import route_and_store
