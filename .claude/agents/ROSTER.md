@@ -202,12 +202,25 @@ Counts by dispatch status: GRAPH_DISPATCHED 14, SUBGRAPH_DISPATCHED 0, WORKFLOW_
 
    *workflow callers*: `rca-multi-agent-fusion.js`
 
-## Role-shaped work that is deliberately NOT an agent
+## Answers to the asserted role taxonomy
 
-External posters and summaries of this harness have repeatedly asserted tidy
-role taxonomies that this repo does not implement. The recurring four are
-recorded here with the real, verified answer, so the question does not have to
-be re-litigated by grep every audit:
+External posters and summaries of this harness have repeatedly asserted a tidy
+seven-role taxonomy that this repo does not implement under those names. **All
+seven are answered here** -- four that are deliberately not an agent at all, and
+three whose work a real dispatched agent really does perform, under a different
+name -- so the question does not have to be re-litigated by grep every audit.
+
+Answering only some of them is what forced the 2026-09-04 re-audit to rebuild
+the correspondence by hand, so this section is only doing its job while it
+covers every asserted role. `test_agent_roster_doc.py` holds it to that, and
+holds the three name-mappings below against the live
+`agent_dispatch.agent_dispatch_map()` derivation rather than against this prose.
+
+None of the seven asserted names appears anywhere in this file, and none ever
+will: entries here are named after what each profile really is, and the same
+test fails the build if one of those names is reintroduced.
+
+### Four that are deliberately not an agent
 
 1. **A project-management / workflow-control role.** Not an agent, by design.
    Stage sequencing, gating and transition control are ordinary Python in
@@ -237,6 +250,31 @@ be re-litigated by grep every audit:
    `NOT_DISPATCHED` on purpose -- see its entry above. Memory work fires in
    production as engine-internal `route_and_store()` /
    `promote_to_organizational()` calls, not as a dispatched persona.
+
+### Three whose work a real agent really does, under a different name
+
+These three are the opposite case from the four above: the asserted NAME is
+still fiction, but the work is not deferred to engine code -- a real
+`GRAPH_DISPATCHED` agent owns it. Cite the real name and the real nodes:
+
+5. **A code / RTL / script implementation role** -- this is `implementation-agent`
+   (`COMMAND_PATTERN`, `GIT_PUSH`, `GIT_SYNC`, `IMPLEMENT`). It is the roster's
+   primary controlled writer: unlike `analysis-agent` and `review-agent` it
+   declares no `disallowedTools`, so it is the one that can really produce
+   files. Its node set deliberately never reaches `SIGNOFF`.
+
+6. **A simulation / job / regression-execution role** -- this is
+   `regression-agent` (`COVERAGE_CLOSURE`, `INFRA_RECOVERY`, `REGRESSION`,
+   `REGRESSION_SELECT`, plus 4 `lsf_per_job_monitor_template.json` subgraph
+   nodes). Of the seven asserted roles this is the only one whose real agent
+   matches the asserted scope essentially one-for-one. Note it owns coverage
+   *closure*, not coverage *intent* -- see item 3 above.
+
+7. **A qualification / signoff / evidence-closure role** -- this is
+   `review-agent` (`EXPERT_FEEDBACK_LOOP`, `PROMOTION_READINESS`,
+   `REQUIREMENT_CLOSURE`, `RE_AUDIT`, `SIGNOFF`, `SYSTEM_LEVEL`). It declares
+   `disallowedTools: Edit, Write`, which is what makes its signoff independent:
+   it genuinely cannot have written the work it is signing off.
 
 Separation of duties in this harness is real but is enforced by tool scope on
 the dispatched agents, not by role names: `analysis-agent` and `review-agent`

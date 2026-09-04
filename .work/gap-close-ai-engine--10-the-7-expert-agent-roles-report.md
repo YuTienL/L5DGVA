@@ -174,3 +174,89 @@ Mutation-checked (the tests really catch drift, then restored):
   persona would trade a deterministic, replayable, testable state machine for a
   non-deterministic one; that is a real design question, not a wiring gap, and it
   should not be decided as a side effect of a naming pass.
+
+---
+
+# Second pass — 2026-09-04 (re-audit of the same mechanism)
+
+**Verdict: DONE** (narrow follow-on; the mechanism itself needed no rewiring).
+
+**Test summary**: `test_agent_roster_doc.py` 2 -> 12 tests (10 new, parametrized);
+`test_agent_roster_doc.py` + `test_agent_dispatch_map.py` 21 passed; all real
+consumers of ROSTER.md / `agent_dispatch` / `list_agent_files` (7 files, incl. the
+research and stats-snapshot suites) 207 passed; both new guards mutation-verified
+to FAIL then restored.
+
+## What I re-verified before touching anything
+
+Every cited item in the re-audit holds, checked independently:
+
+- `agent_dispatch_map()` re-run live reproduces **14 GRAPH_DISPATCHED / 9
+  NOT_DISPATCHED** across 23 profiles, matching ROSTER.md's committed counts.
+- `SIGNOFF -> review-agent` and `IMPLEMENT -> implementation-agent` in the real
+  `main_graph.json`; `analysis-agent.md:5` and `review-agent.md:5` both really
+  declare `disallowedTools: Edit, Write`.
+- The seven asserted role names appear nowhere in `*.py`/`*.json`/`*.js` except
+  the forbidding test and `agent_dispatch.py`'s explanatory comment. ("Regression
+  Agent" also appears as prose inside `regression-agent.md`'s own body — that is a
+  real agent describing itself under its real name, not the fictional taxonomy.)
+- The first pass's 11 guard tests still pass unmodified.
+
+**So the mechanism is not the gap.** Differentiated, machine-derived, falsifiable
+dispatch with tool-scope-enforced separation of duties is wired and firing. The
+seven-name taxonomy remains deliberately unbuilt, and building it would reverse a
+documented, tested governance decision — correctly out of scope here.
+
+## The one real residual, and why it counted as a gap
+
+`ROSTER.md`'s anti-re-litigation section states its own contract explicitly: the
+asserted roles are "recorded here with the real, verified answer, so the question
+does not have to be re-litigated by grep every audit." It recorded **four**. The
+asserted taxonomy has **seven**.
+
+That is not a cosmetic shortfall — this re-audit is the evidence it failed. The
+auditor had to grep the repo and hand-build a seven-row correspondence table,
+because the roster gave no answer for the three roles that DO map to real agents
+under different names (`implementation-agent`, `regression-agent`, `review-agent`).
+A reader checking "is there a signoff/closure agent?" against the roster found
+nothing and could reasonably conclude the answer was no.
+
+## What changed
+
+1. **`.claude/agents/ROSTER.md`** — the section now answers all seven, split into
+   "Four that are deliberately not an agent" (unchanged content and rationale) and
+   a new "Three whose work a real agent really does, under a different name",
+   citing each one's real name and real `main_graph.json` nodes. Written in
+   descriptive wording throughout, so none of the seven forbidden names re-enters
+   the file.
+2. **`dv_harness_tests/test_agent_roster_doc.py`** — two new parametrized tests:
+   - `test_roster_answers_all_seven_asserted_roles` — the roster must keep a real
+     answer for each of the seven. Answering four of seven now fails the build.
+   - `test_name_mapped_roles_point_at_really_dispatched_agents` — the three
+     name-mappings are held against the **live `agent_dispatch_map()` derivation**,
+     not against the prose: the cited agent must really be `GRAPH_DISPATCHED`, and
+     the nodes the roster credits it with must exactly equal the nodes
+     `main_graph.json` really assigns it.
+
+## Mutation verification (real, run and reverted)
+
+- Repointed `SIGNOFF` to `implementation-agent` in the real `main_graph.json` →
+  **2 tests failed**, catching both halves: the write-capable agent gaining
+  `SIGNOFF`, and the independent reviewer losing it. Restored; graph byte-clean.
+- Deleted one of the seven role answers from ROSTER.md → the coverage test for
+  exactly that role failed. Restored.
+
+One true positive was found against my own first draft: the node-citation check
+initially read "`implementation-agent`'s node set never reaches `SIGNOFF`" — a
+*separation-of-duties* statement — as an ownership claim. The check is now scoped
+to the ownership parenthetical, so the roster can state what an agent must NOT own
+without tripping its own test.
+
+## Scope I deliberately did not take
+
+- Did not create `architect-agent`/`verification-agent`/`pm-agent` personas, or
+  rename/alias any existing agent to an asserted name. That reverses the first
+  pass's reasoned decision and reintroduces the exact fiction the forbidding test
+  was added to prevent — a governance decision, not a wiring fix.
+- Did not change any `node.agent` value, any agent profile's tool scope, or any
+  engine code. No production dispatch behavior is altered by this pass.
