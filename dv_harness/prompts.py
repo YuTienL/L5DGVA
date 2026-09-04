@@ -1415,11 +1415,23 @@ Stage.WAVE_ANALYSIS.value: """
 使用 fsdbreport；必要時 Verdi。保存 evidence。
 
 Waveform Dump User Gate（CLAUDE.md）：開啟波形前，先向使用者確認 dump scope 與 level/depth，
-優先根據目前 failure cone 用最小足夠波形，不可預設 full-chip/full-depth。回覆結尾附上：
+優先根據目前 failure cone 用最小足夠波形，不可預設 full-chip/full-depth。
+
+這個確認必須是 question queue 裡「真人回答過」的紀錄，不是你自己在 evidence block 填的字串
+（gate 會拿 scope 反推 question_key，去 decisions store 查 source 是否為 human_answer）：
+
+  1. `dv-harness waveform-dump-scope ask --scope <scope> --level-or-depth <level>`
+     （會開一筆 Tier-3 blocking 問題並印出 Q-ID；同一個 scope 重問是同一個 Q-ID）
+  2. 由真人執行 `dv-harness question-queue answer <Q-ID> --answer ... --basis ... --decided-by ...`
+  3. `confirmed_by` 必須填那位真人（即該筆 decision 的 `decided_by`），不是 "user"、"agent"
+     或你自己的名字。
+
+尚未被回答時，這個 stage 會停在 WAIT_USER 等人回答，不會重試——這是預期行為，不要改寫
+evidence 去繞過它。回覆結尾附上：
 
 ```dv-harness-evidence:focused_wave_debug_window_gate
 {"deep_debug_required": true, "dump_scope_confirmed": {"scope": "...",
-  "level_or_depth": "...", "confirmed_by": "..."},
+  "level_or_depth": "...", "confirmed_by": "<回答該 Q-ID 的真人>"},
  "wave_mode": 1, "fsdb_start_us": 0, "first_error_time_us": 0, "fsdb_stop_us": 200,
  "simulation_stopped_at_fsdb_stop": true, "job_killed_or_terminated": true,
  "identity_preserved": true, "waveform_or_fsdbreport_evidence_hash": "..."}
@@ -1849,7 +1861,15 @@ targeted、最小窗口的波形 rerun（WAVE=1、FSDB_START=0，在 first-failu
 ```
 （跟 WAVE_ANALYSIS stage 用的是同一個 gate：`dump_scope_confirmed` 缺
 scope/level_or_depth/confirmed_by 任一欄位都 FAIL（WAVEFORM_DUMP_SCOPE_NOT_CONFIRMED /
-_CONFIRMATION_INCOMPLETE）；`wave_mode` 必須是 1 且 `fsdb_start_us` 必須是 0，否則 FAIL
+_CONFIRMATION_INCOMPLETE）；欄位齊全還不夠——gate 會用 scope 反推 question_key 去
+question queue 的 decisions store 查，必須真的有一筆 source=human_answer 的紀錄，且
+`confirmed_by` 要等於那筆的 `decided_by`，否則 FAIL（WAVEFORM_DUMP_SCOPE_NOT_ASKED /
+_NOT_HUMAN_ANSWERED / _CONFIRMED_BY_MISMATCH）。先跑
+`dv-harness waveform-dump-scope ask --scope <scope> --level-or-depth <level>` 開問題，
+再由真人 `dv-harness question-queue answer <Q-ID> ...` 回答；沒被回答前這個 stage 會停在
+WAIT_USER 等人，不會重試。若這次 RCA 根本不需要開波形，改用下面
+deep_debug_required:false 的路徑，不要偽造確認。
+`wave_mode` 必須是 1 且 `fsdb_start_us` 必須是 0，否則 FAIL
 （FOCUSED_RERUN_MUST_USE_WAVE1_FROM_TIME0）；`fsdb_stop_us` 必須精確等於
 `first_error_time_us`+200，否則 FAIL（INVALID_FOCUSED_FSDB_STOP_WINDOW）——不得截到比 first
 failure 之後 200us 更長的窗口；`simulation_stopped_at_fsdb_stop`/`job_killed_or_terminated`/

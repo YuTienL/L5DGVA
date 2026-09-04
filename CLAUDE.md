@@ -250,6 +250,48 @@ Before any waveform-enabled simulation, ask the user to confirm dump scope and d
 Prefer minimum sufficient waveform based on the current failure cone.
 Do not silently default to full-chip/full-depth dumping.
 
+**Enforced against a real human answer, not a self-attested string (2026-09-04).** This rule had a
+real gate since 2026-08-28 (`tools/verification_flow/focused_wave_debug_window_gate.py`, mandatory
+on `WAVE_ANALYSIS` and `FAILURE_RECOVERY`), but it only required
+`dump_scope_confirmed.confirmed_by` to be a NON-EMPTY STRING — a field the agent writing the
+evidence block fills in itself. On the interactive path a human really was asked, so the string was
+honest. On the autonomous path it cannot be: `engine.loop()` dispatches a headless
+`claude -p --dangerously-skip-permissions` subprocess (`dv_harness/adapters/cli.py`) with the prompt
+piped once through stdin and no live channel back to a human, so an in-flight AskUserQuestion is
+unanswerable and the only way past the check was the LLM filling the field in — the gate passed
+precisely when nobody had been asked. That is now closed:
+
+- The gate re-derives the question_key from the DECLARED SCOPE and requires a persisted
+  question-queue decision whose `current.source` is `question_queue.HUMAN_DECISION_SOURCE`
+  (`dv_harness/waveform_dump_gate.py`). That is the same single sanctioned "a human really decided
+  this" source `connectivity.enforce_bind_tier_policy()` / `apply_answered_questions()` already use
+  for T3 binds — reused deliberately, so the harness cannot answer its own waveform escalation with
+  its own earlier Tier-2 guess, and so there is one notion of "confirmed" in this codebase, not two.
+  `confirmed_by` must additionally NAME that human (`current.decided_by`): a real decision cited
+  with a false attribution is not a confirmation. A different scope is a different decision.
+- The ask half is `dv-harness waveform-dump-scope ask --scope <scope> --level-or-depth <level>`,
+  which files one canonically-keyed Tier-3 blocking question through the real `QuestionQueueStore`;
+  a human answers it with the existing `dv-harness question-queue answer <Q-ID>`. There is no
+  separate "waveform confirm" verb, because a second way to record a confirmation would be a second
+  thing the gate has to trust. `dv-harness waveform-dump-scope status --scope <scope>` reports the
+  same check (exit 2 when unconfirmed).
+- An unconfirmed dump scope now STOPS the autonomous loop instead of failing it. `gates.py` maps
+  the gate's confirmation failures to the `NEEDS_USER_INPUT` verdict INTAKE already used, which
+  `run_stage()` turns into `Status.WAIT_USER` and `loop()` returns on — so the question is not
+  re-dispatched at a subprocess that cannot answer it until `max_stage_retries` is burned and the
+  graph's FAIL edge is taken with the question still open. An UNRELATED failure of the same gate (a
+  bad FSDB window, a missing evidence hash) stays an ordinary retry-worthy `GATE_FAIL`.
+- Proven on the real path — the real gate subprocess, the real shipped graph, a real
+  `QuestionQueueStore` on disk, and a real `loop()` that stops at WAIT_USER after exactly one
+  dispatch and then gets through once a human answers — by
+  `dv_harness_tests/test_waveform_dump_scope_human_confirmation.py`.
+
+**Disclosed residual**, in the same spirit as `require_tier`'s and `require_qualified_conclusion`'s:
+this closes the gate on the WAVEFORM decision specifically. The broader "a headless autonomous run
+has no channel to ask a human anything mid-flight" limitation is unchanged — the fix is that such a
+run now parks at WAIT_USER with a real Q-ID for a human to answer, not that the subprocess gained a
+way to ask.
+
 
 ## Simulation Observability Default
 

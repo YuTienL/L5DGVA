@@ -18,6 +18,17 @@ def _access_host() -> str:
     return os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "unknown-host"
 
 
+def _dump_scope_decided_by(store, scope: str) -> str:
+    """Who actually answered this scope's waveform-dump question, or "" if
+    nobody has. Used only by `waveform-dump-scope status` when the caller
+    supplied no --confirmed-by: the attribution half of the gate's check is
+    then not what is being asked, so feed it the real decider and let the
+    existence/human-source halves do the work."""
+    from . import waveform_dump_gate
+    decision = store.find_decision(waveform_dump_gate.dump_scope_question_key(scope))
+    return str(((decision or {}).get("current") or {}).get("decided_by") or "")
+
+
 # --- Human-readable stage completion / checklist rendering (2026-09-01,
 # runtime-progress-visibility pass) ------------------------------------------
 # control_plane.describe_stage() carries stage_completion_percent/
@@ -1030,6 +1041,38 @@ def main():
 
     pqq_sub.add_parser("status", help="Print the 4 tracking metrics: self-resolve rate, blocking-questions/week, "
                                         "repeat-question-rate, assumption-overturned-rate.")
+
+    # --- Waveform Dump User Gate (2026-09-04, AI-mechanism #12 closure) -----
+    # The ASK half of CLAUDE.md's "before any waveform-enabled simulation, ask
+    # the user to confirm dump scope and level/depth". Deliberately a thin
+    # front end onto `question-queue` -- it files one canonically-keyed Tier-3
+    # question through the same QuestionQueueStore, and a human answers it
+    # with the existing `question-queue answer <Q-ID>`. There is no separate
+    # "waveform confirm" verb, because a second way to record a confirmation
+    # would be a second thing focused_wave_debug_window_gate has to trust.
+    pwd_ = sub.add_parser("waveform-dump-scope",
+                           help="Ask a human to confirm this rerun's waveform dump scope/level, and check "
+                                "whether they already have. The gate "
+                                "(tools/verification_flow/focused_wave_debug_window_gate.py) verifies the "
+                                "answer recorded here, not the evidence block's own claim.")
+    pwd_sub = pwd_.add_subparsers(dest="wds_cmd", required=True)
+    pwd_ask = pwd_sub.add_parser("ask", help="File the dump-scope confirmation question (Tier 3, blocking). "
+                                                "Re-asking the same scope re-mints the same Q-ID; once answered "
+                                                "it self-resolves instead of escalating again.")
+    pwd_ask.add_argument("--scope", required=True,
+                          help="The proposed dump scope, e.g. top.usb_dev.ctrl. This IS the question's identity: "
+                               "a different scope is a different decision.")
+    pwd_ask.add_argument("--level-or-depth", required=True, dest="level_or_depth",
+                          help="The proposed dump level/depth, e.g. 'signal-level, block-scoped'.")
+    pwd_ask.add_argument("--failure-cone", default="", dest="failure_cone",
+                          help="The current failure cone this scope is minimally sufficient for.")
+    pwd_status = pwd_sub.add_parser("status", help="Report whether a real human answer exists for one scope -- "
+                                                     "the same check the gate runs. Exits 0 when confirmed, 2 "
+                                                     "when not.")
+    pwd_status.add_argument("--scope", required=True)
+    pwd_status.add_argument("--confirmed-by", default=None, dest="confirmed_by",
+                             help="Cross-check that this name matches the human who actually answered. "
+                                  "Omit to check against whoever did.")
 
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
@@ -2229,6 +2272,33 @@ def main():
             print(json.dumps(digest, ensure_ascii=False, indent=2))
         elif args.qq_cmd == "status":
             print(json.dumps(qq.compute_metrics(), ensure_ascii=False, indent=2))
+    elif args.cmd == "waveform-dump-scope":
+        from . import waveform_dump_gate
+        from .question_queue import QuestionQueueStore
+        wq = QuestionQueueStore(h.root, blackboard=h.blackboard)
+        if args.wds_cmd == "ask":
+            try:
+                record = waveform_dump_gate.ask_dump_scope_confirmation(
+                    h.root, scope=args.scope, proposed_level_or_depth=args.level_or_depth,
+                    failure_cone=args.failure_cone, store=wq)
+            except ValueError as e:
+                print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+                raise SystemExit(1)
+            h.store.event({"ts": cp_now(), "cmd": "waveform-dump-scope-ask", "id": record["id"],
+                            "scope": args.scope, "tier": record["tier"], "status": record["status"]})
+            print(json.dumps(record, ensure_ascii=False, indent=2))
+        elif args.wds_cmd == "status":
+            ok, detail = waveform_dump_gate.verify_dump_scope_confirmation(
+                h.root, {"scope": args.scope,
+                          # No --confirmed-by means "check that SOMEONE really
+                          # answered", so mirror back the real decider rather
+                          # than failing the attribution check on an empty
+                          # string the caller never claimed.
+                          "confirmed_by": args.confirmed_by} if args.confirmed_by else
+                {"scope": args.scope, "confirmed_by": _dump_scope_decided_by(wq, args.scope)},
+                store=wq)
+            print(json.dumps({"confirmed": ok, **detail}, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if ok else 2)
     elif args.cmd == "advance":
         # BUG FIX (2026-08-28, multi-persona interaction review -- DV
         # Engineer: "silently bypass all gates AND the event log ... a live,

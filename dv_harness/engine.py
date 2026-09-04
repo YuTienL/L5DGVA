@@ -3270,9 +3270,11 @@ class DVHarness:
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness
                 # design pass): previously this was indistinguishable from
                 # any other GATE_FAIL -- a genuine "the agent needs an answer
-                # from you before it can continue" moment (today, only
-                # INTAKE's intake_readiness gate produces this; see gates.py)
-                # looked identical to "the agent supplied invalid evidence".
+                # from you before it can continue" moment (INTAKE's
+                # intake_readiness gate, and since 2026-09-04
+                # WAVE_ANALYSIS/FAILURE_RECOVERY's unconfirmed waveform dump
+                # scope; see gates.py) looked identical to "the agent
+                # supplied invalid evidence".
                 # WAIT_USER already exists for the analogous
                 # PROMOTION_READINESS/SIGNOFF human-approval-required case
                 # above; this is its first use for a genuine question rather

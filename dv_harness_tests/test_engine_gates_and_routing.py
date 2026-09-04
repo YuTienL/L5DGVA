@@ -1338,23 +1338,35 @@ def test_wave_analysis_requires_confirmed_dump_scope():
             "simulation_stopped_at_fsdb_stop": True, "job_killed_or_terminated": True,
             "identity_preserved": True, "waveform_or_fsdbreport_evidence_hash": "h1"}
 
+    # UPDATED 2026-09-04 (AI-mechanism #12 "AI Debug Closed Loop" gap
+    # closure): all three shapes below now resolve to NEEDS_USER_INPUT rather
+    # than GATE_FAIL, because all three mean the same thing -- no human has
+    # confirmed dump scope -- and none of them is fixable by the agent
+    # retrying. WAVE_ANALYSIS has exactly one mapped gate, so this stage is
+    # where that routing is visible undiluted. See
+    # test_waveform_dump_scope_human_confirmation.py for the PASS side, which
+    # needs a seeded question store this real ROOT deliberately does not have.
     text_no_confirmation = f"```dv-harness-evidence:focused_wave_debug_window_gate\n{json.dumps(base)}\n```\n"
     verdict, reasons = evaluate_stage_evidence(ROOT, "WAVE_ANALYSIS", text_no_confirmation)
-    assert verdict == "GATE_FAIL", reasons
-    assert any("WAVEFORM_DUMP_SCOPE_NOT_CONFIRMED" in str(r) for r in reasons)
+    assert verdict == "NEEDS_USER_INPUT", reasons
 
     incomplete = dict(base, dump_scope_confirmed={"scope": "top.usb_dev"})
     text_incomplete = f"```dv-harness-evidence:focused_wave_debug_window_gate\n{json.dumps(incomplete)}\n```\n"
     verdict2, reasons2 = evaluate_stage_evidence(ROOT, "WAVE_ANALYSIS", text_incomplete)
-    assert verdict2 == "GATE_FAIL", reasons2
-    assert any("WAVEFORM_DUMP_SCOPE_CONFIRMATION_INCOMPLETE" in str(r) for r in reasons2)
+    assert verdict2 == "NEEDS_USER_INPUT", reasons2
 
+    # The case this test was originally written to allow: every field filled
+    # in, `confirmed_by` a plausible-looking string. It used to PASS. It is
+    # exactly what a headless `claude -p` subprocess can produce without any
+    # human having been asked, so it must NOT pass -- and it must stop the
+    # loop for an answer rather than look like agent error.
     complete = dict(base, dump_scope_confirmed={
         "scope": "top.usb_dev.ctrl", "level_or_depth": "signal-level, block-scoped",
         "confirmed_by": "user"})
     text_complete = f"```dv-harness-evidence:focused_wave_debug_window_gate\n{json.dumps(complete)}\n```\n"
     verdict3, reasons3 = evaluate_stage_evidence(ROOT, "WAVE_ANALYSIS", text_complete)
-    assert verdict3 == "PASS", reasons3
+    assert verdict3 == "NEEDS_USER_INPUT", reasons3
+    assert any("Q-ENV-" in str(r) for r in reasons3), reasons3
 
 
 def test_regression_monitor_requires_run_identity_consistency():
@@ -2395,8 +2407,15 @@ def test_failure_recovery_requires_focused_wave_debug_window_gate():
     assert verdict3 == "PASS", reasons3
 
     # A real targeted rerun still gets the exact same precise window/scope
-    # check WAVE_ANALYSIS already enforced -- an out-of-window stop still
-    # FAILs here too, proving this is the same gate, not a weaker copy.
+    # check WAVE_ANALYSIS already enforced, proving this is the same gate and
+    # not a weaker copy. UPDATED 2026-09-04: with the dump-scope confirmation
+    # now verified against a real question-queue human answer, this ROOT (no
+    # question store, deliberately) stops the payload at the confirmation
+    # check before the window math is ever reached -- so what this assertion
+    # can prove here is that a claimed rerun still cannot pass FAILURE_RECOVERY,
+    # and that it stops for a human rather than as agent error. The window
+    # rule itself is proven against a real seeded store, on this same script,
+    # in test_waveform_dump_scope_human_confirmation.py.
     bad_window = ('```dv-harness-evidence:focused_wave_debug_window_gate\n'
                   '{"deep_debug_required": true, "dump_scope_confirmed": '
                   '{"scope": "top.usb_dev.ctrl", "level_or_depth": "signal-level", "confirmed_by": "user"}, '
@@ -2405,8 +2424,7 @@ def test_failure_recovery_requires_focused_wave_debug_window_gate():
                   '"job_killed_or_terminated": true, "identity_preserved": true, '
                   '"waveform_or_fsdbreport_evidence_hash": "h1"}\n```\n')
     verdict4, reasons4 = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three + bad_window)
-    assert verdict4 == "GATE_FAIL", reasons4
-    assert any("INVALID_FOCUSED_FSDB_STOP_WINDOW" in str(r) for r in reasons4)
+    assert verdict4 == "NEEDS_USER_INPUT", reasons4
 
 
 def test_rca_replay_fix_closure_gate_cross_checks_boundary_trace():

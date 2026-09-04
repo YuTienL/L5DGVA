@@ -1241,6 +1241,34 @@ INTAKE_FIELD_QUESTIONS = {
     "vip_reference_path_not_found": "提供的 VIP Reference 路徑目前在磁碟上找不到，請確認路徑是否正確、檔案是否真的存在。",
 }
 
+
+def _waveform_dump_needs_user_input_reasons():
+    """The waveform-dump gate reasons that mean "a human must confirm dump
+    scope", imported lazily from the module that OWNS them
+    (dv_harness/waveform_dump_gate.py) rather than restated here -- a list
+    copied into this file could silently stop matching the gate the day a
+    reason is renamed. Lazy because gates.py is imported by nearly everything
+    and waveform_dump_gate pulls in question_queue."""
+    from .waveform_dump_gate import NEEDS_USER_INPUT_REASONS
+    return NEEDS_USER_INPUT_REASONS
+
+
+def _waveform_dump_user_question(detail: dict) -> str:
+    """The human-readable question rendered into WAIT_USER's blocking_reason
+    for a waveform-dump confirmation stall. Carries the real Q-ID and the
+    real remedy command the gate computed, so the human is told exactly what
+    to answer -- the same bar INTAKE_FIELD_QUESTIONS meets for INTAKE."""
+    scope = detail.get("scope") or "<未宣告 scope>"
+    qid = detail.get("question_id")
+    lines = [f"Waveform Dump User Gate：尚未有真人確認這次 targeted waveform rerun 的 "
+              f"dump scope／level_or_depth（scope={scope}）。"]
+    if qid:
+        lines.append(f"待回答的問題 ID：{qid}")
+    remedy = detail.get("remedy")
+    if remedy:
+        lines.append(remedy)
+    return "\n".join(lines)
+
 # BUG FIX (2026-08-29, poster-compliance-audit "INTAKE 問得太籠統" finding):
 # these fields are all "what technical material do you actually have" asks --
 # once the agent's own intake_readiness payload already names a `protocols`
@@ -1338,15 +1366,18 @@ def evaluate_stage_evidence(root: Path, stage: str, agent_text: str):
     MISSING_EVIDENCE  -> stage has mapped gate(s) but the agent's response
                          contained no matching evidence block.
     NEEDS_USER_INPUT  -> (2026-08-28) every gate that ran failed, and every
-                         one of those failures was intake_readiness.py's
-                         "missing": [...] shape -- the agent isn't wrong,
-                         it genuinely needs information from a human before
-                         it can proceed. `reasons` for this verdict are
-                         already human-readable questions (INTAKE_FIELD_QUESTIONS
-                         above), not raw gate-reason strings. engine.run_stage
-                         maps this to Status.WAIT_USER, not PARTIAL -- a
-                         "waiting for you to answer" state, not a
-                         retry-worthy failure.
+                         one of those failures was one of the two shapes that
+                         mean "the agent isn't wrong, it genuinely needs an
+                         answer from a human before it can proceed":
+                         intake_readiness.py's "missing": [...], and
+                         (2026-09-04) focused_wave_debug_window_gate's
+                         needs_user_input dump-scope confirmation failures.
+                         `reasons` for this verdict are already human-readable
+                         questions (INTAKE_FIELD_QUESTIONS above,
+                         _waveform_dump_user_question()), not raw gate-reason
+                         strings. engine.run_stage maps this to
+                         Status.WAIT_USER, not PARTIAL -- a "waiting for you
+                         to answer" state, not a retry-worthy failure.
     DV_REVIEW_PENDING -> (Tier 5, opt-in only) every gate that ran would
                          otherwise have passed its own script's checks, but
                          at least one DV_JUDGMENT field (gates.JUDGMENT_FIELDS)
@@ -1452,6 +1483,24 @@ def _evaluate_stage_evidence_core(root: Path, stage: str, agent_text: str):
                         needs_user_input_questions.append(base_q + "\n" + checklist)
                     else:
                         needs_user_input_questions.append(base_q)
+            # 2026-09-04 (AI-mechanism #12 "AI Debug Closed Loop"): the second
+            # genuine "stop and ask a human" shape. focused_wave_debug_window_gate
+            # now verifies CLAUDE.md's Waveform Dump User Gate against a real
+            # question-queue human answer instead of an agent-attested string
+            # (dv_harness/waveform_dump_gate.py), so its confirmation failures
+            # are precisely "nobody has confirmed dump scope yet" -- not agent
+            # error, and NOT retry-worthy: a headless `claude -p` subprocess
+            # cannot answer it however many times loop() re-dispatches it, so
+            # treating it as a plain GATE_FAIL burned max_stage_retries and
+            # then took the graph's FAIL edge with the question still open.
+            # Routed to WAIT_USER through the same mechanism INTAKE already
+            # uses. Scoped by gate id AND by the gate's own explicit
+            # needs_user_input flag, so an unrelated failure of this same gate
+            # (a bad FSDB window, a missing evidence hash) still fails normally.
+            elif (gate_id == "focused_wave_debug_window_gate"
+                    and gr.detail.get("needs_user_input")
+                    and gr.detail.get("reason") in _waveform_dump_needs_user_input_reasons()):
+                needs_user_input_questions.append(_waveform_dump_user_question(gr.detail))
             else:
                 all_failures_are_missing_input = False
     completion = _stage_completion_from_signatures(gates, signatures)
