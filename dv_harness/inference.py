@@ -7,6 +7,39 @@ inference-confidence-gate) previously only described in prose. The confidence
 level strings are intentionally kept to the 3 values gates.py already defines
 in REVIEWER_CONFIDENCE_LEVELS ("HIGH", "MEDIUM", "LOW") -- current evidence
 (gates.py) wins over any skill prose that mentions a 4th "CONFIRMED" level.
+
+NOT the same thing as the two TIER classifiers (2026-09-04). Two sibling
+modules also rank how much a decision can be trusted, and both were built on
+2026-09-03, the day BEFORE this module got its first real caller -- so
+neither could have reused it and neither does today:
+`connectivity.classify_bind_tier()` (T1_ALREADY_DECIDED / T2_STRUCTURAL_MATCH
+/ T3_NAMING_HEURISTIC / T4_UNDECIDABLE) and `question_queue.classify_tier()`
+(SELF_RESOLVE / SAFE_TO_ASSUME / CANNOT_ASSUME). They are deliberately NOT
+folded into score_confidence(), and the reason is semantic, not historical:
+
+  - score_confidence() scores evidence QUANTITY. It counts independent
+    sources, adds a verified-refs bonus, subtracts counter-evidence, and
+    the result is ordinal and additive -- more corroboration scores higher.
+  - Both tier classifiers rank evidence KIND, in strict priority order, and
+    the ranking is NOT a function of any count. A single already-existing
+    bind (T1) outranks a structural fingerprint match on several signals
+    (T2) precisely because of WHERE the evidence came from, not how much of
+    it there is; T3's `requires_human_confirmation` is hard-coded True with
+    no input that can flip it; and question_queue's Tier 3 is an ESCALATION
+    ROUTE ("a human must decide this"), not a low score.
+
+Mapping either onto this module's four counts would lose exactly the
+property they exist for. Counting T1's one existing bind as one verified
+independent source scores 1*2 + 2 = 4 -> MEDIUM, the same MEDIUM a T2
+structural match scores -- so the strict T1 > T2 ordering collapses, and
+the highest-trust bind tier in the codebase reports as merely MEDIUM
+confidence. The two vocabularies therefore share no token with
+CONFIDENCE_LEVELS by design, the same way protocol_capability.py's
+`capability_status` deliberately shares none with qualification.py's tier
+ladder. `dv_harness_tests/test_confidence_vocabulary_separation.py` holds
+that separation, and this rationale, in place so a future auditor finding
+"three confidence-ish mechanisms, none consolidated" does not have to
+re-derive whether that is a defect.
 """
 
 import json

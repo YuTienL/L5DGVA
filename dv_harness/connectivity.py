@@ -119,7 +119,19 @@ def _content_hash(obj: Any) -> str:
 
 
 # ===========================================================================
-# 4-tier confidence system (Part C)
+# 4-tier bind-decision-provenance system (Part C)
+#
+# Named "confidence" in Part C's own prose, but it is NOT
+# dv_harness.inference.score_confidence()'s HIGH/MEDIUM/LOW confidence and is
+# deliberately not expressed through it (2026-09-04). These four tiers rank
+# where a bind decision CAME FROM, in strict priority order, and that ordering
+# is not a function of any evidence count: one already-existing bind (T1)
+# outranks a structural fingerprint match on several signals (T2) because of
+# the source, not the quantity. score_confidence() counts quantity, so it
+# scores both at MEDIUM and cannot express T1 > T2 at all. See inference.py's
+# module docstring for the full rationale and
+# dv_harness_tests/test_confidence_vocabulary_separation.py, which keeps the
+# two vocabularies token-disjoint.
 # ===========================================================================
 
 class BindTier(str, Enum):

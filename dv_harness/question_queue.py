@@ -2,12 +2,16 @@
 queue mechanics (spec Part B: self-resolve / safe-to-assume / cannot-assume).
 
 Scope note (this module implements Part B only): Part A's env.manifest.json
-(VIP/DUT/env fact layers + a read-only MCP server) is a SEPARATE, not-yet-
-built workstream. This module's Tier-1 self-resolve path is therefore
-written against a `manifest_lookup` callable a caller may inject (e.g. once
-Part A exists, `lambda path: mcp_client.get(...)`), defaulting to "nothing
-resolvable" when omitted -- never a stub that pretends to read a manifest
-that isn't there yet. What Part A does NOT need to exist for is this
+(VIP/DUT/env fact layers + a read-only MCP server) is a SEPARATE workstream,
+and as of 2026-09-04 it EXISTS -- `dv_harness/env_manifest.py` writes the
+3-layer manifest and `dv_harness/mcp/` serves its 5 read-only verbs. This
+module's Tier-1 self-resolve path is written against a `manifest_lookup`
+callable a caller may inject (`lambda path: mcp_client.get(...)`), defaulting
+to "nothing resolvable" when omitted -- never a stub that pretends to read a
+manifest that isn't there. Disclosed residual: no PRODUCTION caller injects
+that callable yet (only `dv_harness_tests/test_question_queue.py` does), so
+Tier-1 manifest resolution is available but not in use on the real path.
+What Part A does NOT need to exist for is this
 module's other guarantee: a question, once answered by a human, is never
 asked again. That guarantee is met by this module's OWN persisted decisions
 store (`.dv-harness/question_queue/decisions.json` + a generated
@@ -84,6 +88,17 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "question.schema.jso
 SCHEMA_VERSION = "1.0"
 
 # ---- Tiers ------------------------------------------------------------------
+#
+# An ESCALATION ROUTE per question ("can this be self-resolved / safely
+# assumed / must a human decide it"), NOT a confidence score, and deliberately
+# not expressed through dv_harness.inference.score_confidence() (2026-09-04).
+# Tier 3 does not mean "low confidence" -- classify_tier() reaches it from a
+# hard trigger about BLAST RADIUS and authority (pass/fail verdict, spec
+# intent, read-only file change), which no amount of corroborating evidence
+# may downgrade. score_confidence() has no term that can express that, so
+# routing this decision through it would silently make a well-evidenced
+# spec-intent question auto-assumable. See inference.py's module docstring and
+# dv_harness_tests/test_confidence_vocabulary_separation.py.
 
 TIER1_SELF_RESOLVE = 1
 TIER2_SAFE_ASSUME = 2
