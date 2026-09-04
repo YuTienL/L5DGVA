@@ -21,11 +21,13 @@ being checkable against the real thing, and the citation checker reported
 live source of truth directly, so the next such addition fails a test instead
 of quietly making a doc wrong.
 """
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
+from dv_harness.memory import MEMORY_LEVELS
 from dv_harness.memory_vault import (
     MEMORY_NOTE_BODY_SECTIONS,
     MEMORY_NOTE_OPTIONAL_FIELDS,
@@ -38,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 AGENT_PROFILE = ROOT / ".claude" / "agents" / "memory-agent.md"
 AGENT_DOC = ROOT / "docs" / "MEMORY_AGENT.md"
 SCHEMA_DOC = ROOT / "docs" / "MEMORY_SCHEMA.md"
+ARCHITECTURE_DOC = ROOT / "docs" / "MEMORY_ARCHITECTURE.md"
 
 # The frontmatter keys docs/MEMORY_AGENT.md mirrors and therefore must keep
 # true. `description` is deliberately excluded: the doc quotes the profile's
@@ -127,6 +130,19 @@ def test_memory_schema_doc_field_lists_mirror_the_live_vault_constants(
     assert documented == list(live_list), (
         f"docs/MEMORY_SCHEMA.md's {heading_marker} block lists {documented} "
         f"but dv_harness.memory_vault really has {list(live_list)}"
+    )
+
+
+def test_architecture_doc_tier_list_mirrors_the_live_memory_levels():
+    """MEMORY_ARCHITECTURE.md quotes `MEMORY_LEVELS` inline as the tier order
+    the whole doc (routing diagram, tier table, promotion path) is built on."""
+    text = _read(ARCHITECTURE_DOC)
+    match = re.search(r"`MEMORY_LEVELS\s*=\s*\[(.*?)\]`", text, re.S)
+    assert match, "MEMORY_ARCHITECTURE.md no longer quotes MEMORY_LEVELS inline"
+    documented = [item.strip().strip('"\'') for item in match.group(1).split(",")]
+    assert documented == list(MEMORY_LEVELS), (
+        f"docs/MEMORY_ARCHITECTURE.md quotes MEMORY_LEVELS as {documented} but "
+        f"dv_harness.memory really has {list(MEMORY_LEVELS)}"
     )
 
 
