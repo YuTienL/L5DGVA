@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional
 from .engine import DVHarness
 from .models import Stage, Status
 from .preflight import TRANSPORT_CHOICES
+from .router import RESEARCH_FOCUS_DOMAINS
+from . import commands as _commands
 
 
 def _access_user() -> str:
@@ -174,7 +176,13 @@ def main():
     predirect.add_argument("--reason", default="")
 
     papprove = sub.add_parser("approve", help="Record a human sign-off for a stage (required for PROMOTION_READINESS/SIGNOFF).")
-    papprove.add_argument("stage", choices=[s.value for s in Stage])
+    # commands.approval_stage_choices() = the graph stages PLUS
+    # commands.APPROVAL_ONLY_STAGES (real code-owned approval points that are
+    # not graph stages -- see that constant's own comment for why the previous
+    # `[s.value for s in Stage]` made capability_evolution.py's Human Approval
+    # Gate un-operable by a human). One source, so the parser and the
+    # validation in commands.py cannot disagree.
+    papprove.add_argument("stage", choices=_commands.approval_stage_choices())
     papprove.add_argument("--note", default="")
     papprove.add_argument("--reviewer-id", default=None)
     papprove.add_argument("--reviewer-confidence", default="HIGH", choices=["HIGH", "MEDIUM", "LOW"])
@@ -400,6 +408,21 @@ def main():
                                           "parallelism efficiency, from data engine.py already collects on "
                                           "every real stage run. See dv_harness/stage_profile_report.py.")
 
+    # 2026-09-04, stage-progress-display gap-close: run_stage() already PRINTS
+    # and SAVES a stage-start/stage-done display at every real stage boundary
+    # (engine._emit_stage_start_display/_emit_stage_done_display). This is the
+    # re-read surface for those saved reports -- scrollback is lost, the report
+    # files are not.
+    pstage_report = sub.add_parser("stage-report",
+        help="Re-render a saved stage start/done progress report "
+             "(.dv-harness/stage_reports/), or list what has been saved.")
+    pstage_report.add_argument("stage", nargs="?",
+        help="Stage id to show the latest report for; omit to list all saved reports.")
+    pstage_report.add_argument("--phase", choices=["start", "done"],
+        help="Restrict to the stage-start or stage-done report.")
+    pstage_report.add_argument("--list", action="store_true",
+        help="List matching report files instead of printing the latest one's content.")
+
     # BUG FIX (2026-08-28, plan-remote-control-wiring design pass):
     # dv_harness/remote_control.py's session/gate substrate (bootstrap_session/
     # validate_and_transition/get_status) was complete, tested, and gated by 4
@@ -453,6 +476,37 @@ def main():
     pgg.add_argument("--branch", default=None,
                       help="Current branch (pre-merge-commit only) -- the hook script supplies "
                            "`git rev-parse --abbrev-ref HEAD`. Ignored/unused for --check pre-push.")
+
+    # Research-Capability Evolution master prompt sections 19/53 -- the
+    # `/research` front door, in this repo's own native command mechanism.
+    # `.claude/commands/` does not exist here and never has, so section 19's
+    # explicit fallback applies ("implement equivalent behavior using the
+    # repository's native mechanism rather than forcing this exact syntax").
+    # This parser holds no business logic of its own: it hands its arguments
+    # to commands.cmd_research(), which routes through
+    # router.resolve_research_intent()/research_route_plan() -- the SAME
+    # functions a natural-language research request goes through, never a
+    # second implementation.
+    pres = sub.add_parser("research",
+        help="Route a research request (one or more external technical documents) into the "
+             "installed research-ingestion skill + research-architect agent + Human Approval "
+             "Gate. Prints the resolved intent and the ordered route; it does not ingest, "
+             "analyze or approve anything itself.")
+    pres.add_argument("documents", nargs="*", default=[],
+        help="Document path(s). More than one selects RESEARCH_MULTI_DOCUMENT (one independent "
+             "ResearchEvidenceCard per document first, master prompt section 52).")
+    pres.add_argument("--compare", action="store_true",
+        help="Section 53: standard analysis + stronger prior-evidence comparison.")
+    pres.add_argument("--impact", action="store_true",
+        help="Section 53: current-L5 architecture-impact emphasis.")
+    pres.add_argument("--deep", action="store_true",
+        help="Section 53: extended evidence + contradiction + benchmark analysis.")
+    pres.add_argument("--focus", default=None, choices=list(RESEARCH_FOCUS_DOMAINS),
+        help="Section 53: narrow emphasis to one domain. Emphasis only -- the route is unchanged.")
+    pres.add_argument("--request", default="",
+        help="A natural-language research request, classified by the same "
+             "router.resolve_research_intent() an unassisted request goes through. Used only "
+             "when no mode flag and at most one document are given.")
 
     paudit_self = sub.add_parser("self-audit",
         help="Run the 23 harness self-audit gates (registry/skill/pipeline/protocol-catalog "
@@ -1450,6 +1504,18 @@ def main():
     elif args.cmd == "stage-profile":
         from . import stage_profile_report
         print(stage_profile_report.render(str(h.root)))
+    elif args.cmd == "stage-report":
+        from . import stage_progress_display as spd
+        reports = spd.list_stage_reports(h.root, stage=args.stage, phase=args.phase)
+        if not reports:
+            print(f"no saved stage reports found under {spd.stage_report_dir(h.root)}"
+                  + (f" for stage {args.stage}" if args.stage else ""))
+            raise SystemExit(2)
+        if args.list or not args.stage:
+            for p in reports:
+                print(p)
+        else:
+            print(reports[-1].read_text(encoding="utf-8"))
     elif args.cmd == "remote-control":
         from . import remote_control
         if args.rc_cmd == "bootstrap":
@@ -1472,6 +1538,27 @@ def main():
             print(json.dumps({"ok": ok, "state": new_state, "entry": entry, "error": error_reason},
                               ensure_ascii=False, indent=2))
             raise SystemExit(0 if ok else 1)
+    elif args.cmd == "research":
+        # Formatting only -- every decision was made by commands.cmd_research()
+        # -> router.resolve_research_intent()/research_route_plan().
+        try:
+            plan = _commands.cmd_research(
+                h, documents=args.documents, compare=args.compare,
+                impact=args.impact, deep=args.deep, focus=args.focus,
+                request=args.request)
+        except ValueError as e:
+            print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
+            raise SystemExit(2)
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        print("")
+        print(f"intent: {plan['intent']}"
+              + (f"  focus: {plan['focus']}" if plan['focus'] else ""))
+        for i, step in enumerate(plan["steps"], 1):
+            print(f"  {i}. {step['step']} ({step['kind']}) -> {step['asset']}")
+        print("STOP: research is not implementation (master prompt section 2.4). "
+              f"Nothing proceeds past the Human Approval Gate without "
+              f"`dv-harness approve {plan['human_approval_stage']} "
+              f"--note ... --reviewer-id ...`.")
     elif args.cmd == "audit":
         from .dashboard import _audit_trail
         print(json.dumps(_audit_trail(h.root, args.limit), ensure_ascii=False, indent=2))

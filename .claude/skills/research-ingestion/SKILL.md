@@ -38,6 +38,19 @@ Every function named below is real and tested
 not, because no `engine.py` stage and no graph node invokes any of it — an agent
 following this skill is the only caller today. REACHED, not WIRED.
 
+**How this skill is reached (2026-09-04)**: it is step 1 of the research route,
+and the route is real code, not an instruction to remember. A free-text request
+("Analyze this new paper through the existing DV Agent Harness L5 research
+workflow…") is classified by `dv_harness/router.py`'s
+`resolve_research_intent()`, and `research_route_plan()` orders the steps
+`research-ingestion → prior evidence lookup (if applicable) → research-architect
+→ Human Approval Gate` (master prompt section 17). `dv-harness research
+<document> [--compare|--impact|--deep] [--focus …]` is the same route through
+this repo's own command mechanism (section 19's fallback — `.claude/commands/`
+does not exist here). No user needs to name this skill for it to be reached; see
+`dv_harness_tests/test_research_intent_routing.py`. This does not make it WIRED:
+still no stage, still no graph node.
+
 
 **Purpose**: produce the single, schema-checked, independently-readable unit of
 research evidence this harness reasons over. Everything downstream — the

@@ -43,7 +43,20 @@ comparison can mistake one for the other.
 ## Mechanics (2026-09-04)
 
 Every function named below is real and tested
-(`dv_harness_tests/test_capability_evolution_research_architect.py`). REACHED,
+(`dv_harness_tests/test_capability_evolution_research_architect.py`).
+
+**How this profile is reached (2026-09-04)**: it is step 3 of the research
+route. `dv_harness/router.py`'s `DEFAULT_ROUTES['research-route']` names this
+profile, `resolve_research_intent()` classifies a free-text request into one of
+master prompt section 17's five research intents, and `research_route_plan()`
+orders `research-ingestion → prior evidence lookup (if applicable) →
+research-architect → Human Approval Gate`. `dv-harness research <document>
+[--compare|--impact|--deep] [--focus …]` is the same route through this repo's
+own command mechanism. A user never has to name this profile
+(`dv_harness_tests/test_research_intent_routing.py`). Being named by a route is
+still not being dispatched by a stage:
+
+REACHED,
 not WIRED: no `engine.py` stage and no graph node dispatches this profile — an
 agent following it is the only caller today, which is why `.claude/agents/ROSTER.md`
 records it as `NOT_DISPATCHED` rather than as a stage-owning role.

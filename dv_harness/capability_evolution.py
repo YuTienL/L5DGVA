@@ -673,8 +673,18 @@ def human_approval_status(root) -> Dict[str, Any]:
         "history": cp.get_approval_history(HUMAN_APPROVAL_STAGE),
         "paused": cp.is_paused(),
         "takeover_active": cp.is_takeover_active_for(HUMAN_APPROVAL_STAGE),
+        # BUG FIX (2026-09-04, research-intent-routing pass): this string used
+        # to read `approve --stage <STAGE>`, which is wrong twice and was
+        # never run before being published -- `stage` is a POSITIONAL argument
+        # on `dv-harness approve`, and its argparse `choices` admitted only
+        # models.Stage members, so argparse rejected this stage key before
+        # ControlPlane (which happily accepts any string) was ever reached.
+        # The gate was therefore un-operable by the human it instructs.
+        # commands.APPROVAL_ONLY_STAGES now admits HUMAN_APPROVAL_STAGE on the
+        # `approve` verb only, and the form below is the one that really runs
+        # (test_research_intent_routing.py executes it as a real subprocess).
         "approve_command": (
-            f"dv-harness approve --stage {HUMAN_APPROVAL_STAGE} "
+            f"dv-harness approve {HUMAN_APPROVAL_STAGE} "
             "--note '<what you are approving>' --reviewer-id <you> "
             "--reviewer-confidence HIGH|MEDIUM|LOW"
         ),

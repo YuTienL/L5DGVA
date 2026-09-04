@@ -24,9 +24,45 @@ from .models import Stage, Status
 
 _VALID_STAGES = {s.value for s in Stage}
 
+# APPROVAL-ONLY stage keys: real, code-owned approval points that are
+# deliberately NOT graph stages (2026-09-04).
+#
+# ControlPlane.approve()/get_approval() key on an arbitrary string -- only
+# reviewer_confidence is validated there -- which is exactly why
+# capability_evolution.py could reuse the real Human Approval Gate without a
+# new graph node. But `dv-harness approve` was reachable only for a
+# models.Stage member, on two independent chokepoints (this function, and
+# cli.py's `choices=[s.value for s in Stage]`), so
+# capability_evolution.human_approval_status()["approve_command"] and
+# assert_human_approval()'s error message BOTH instructed a human to run a
+# command argparse rejected before it ever reached ControlPlane -- an
+# approval gate no human could actually operate. Verified by running it.
+#
+# Deliberately scoped to cmd_approve() alone via _check_approval_stage():
+# `set-stage`/`redirect`/`correct`/`cosign` still accept graph stages ONLY,
+# because those verbs drive the real engine loop and a non-graph value there
+# would be a broken state, not an approval.
+# Imported, never re-typed, so this set and the module that owns the key
+# cannot drift apart.
+from .capability_evolution import HUMAN_APPROVAL_STAGE as _RESEARCH_APPROVAL_STAGE
+
+APPROVAL_ONLY_STAGES = frozenset({_RESEARCH_APPROVAL_STAGE})
+
 
 def _check_stage(stage: str) -> None:
     if stage not in _VALID_STAGES:
+        raise ValueError(f"Unknown stage: {stage}")
+
+
+def approval_stage_choices() -> list:
+    """Every stage key `dv-harness approve` accepts: the real graph stages
+    plus APPROVAL_ONLY_STAGES. Used by cli.py so the parser and this module
+    cannot disagree about what is approvable."""
+    return [s.value for s in Stage] + sorted(APPROVAL_ONLY_STAGES)
+
+
+def _check_approval_stage(stage: str) -> None:
+    if stage not in _VALID_STAGES and stage not in APPROVAL_ONLY_STAGES:
         raise ValueError(f"Unknown stage: {stage}")
 
 
@@ -82,7 +118,7 @@ def cmd_redirect(h, stage: str, reason: str = "") -> str:
 # ---- APPROVE ------------------------------------------------------------
 def cmd_approve(h, stage: str, note: str = "", reviewer_id: Optional[str] = None,
                  reviewer_confidence: str = "HIGH") -> Dict[str, Any]:
-    _check_stage(stage)
+    _check_approval_stage(stage)
     entry = ControlPlane(h.root).approve(stage, note, reviewer_id, reviewer_confidence)
     h.store.event({"ts": cp_now(), "cmd": "approve", "stage": stage,
                     "reviewer_id": entry["reviewer_id"], "reviewer_confidence": entry["reviewer_confidence"],
@@ -238,3 +274,91 @@ def cmd_advance(h) -> Dict[str, Any]:
                     "from_stage": from_stage, "to_stage": n,
                     "active_stages_before": active_before})
     return {"to_stage": n}
+
+
+# ---- research front door (master prompt sections 19 / 53) -------------------
+# `.claude/commands/` does not exist in this repository and nothing here has
+# ever used Claude Code's slash-command convention, so section 19's own
+# fallback applies verbatim: "If project command conventions differ, implement
+# equivalent behavior using the repository's native mechanism rather than
+# forcing this exact syntax." This repo's native front-door mechanism is the
+# `dv-harness <verb>` CLI, and this function is that verb's whole
+# implementation.
+#
+# Section 19: "Do NOT place core logic in the command itself. The command is
+# only an entry point into installed Skill/Agent orchestration." Held
+# literally -- everything below builds an evidence dict and hands it to
+# router.resolve_research_intent()/research_route_plan(). This function does
+# not read a document, does not build a card, does not score a candidate, and
+# does not approve anything. It ROUTES, and the route it returns names the
+# real installed assets that do those things.
+#
+# What it deliberately does NOT do is claim to have RUN the pipeline. A CLI
+# process cannot invoke a Claude Skill or Agent; the honest deliverable of a
+# front door in this harness is the resolved intent plus the ordered plan an
+# agent or human then follows. Saying otherwise would be the "prose describing
+# a mechanism nobody executes" failure CLAUDE.md's Methodology Consolidation
+# Rule names.
+_RESEARCH_FLAG_INTENTS = (
+    ("compare", "RESEARCH_COMPARE"),      # section 53: /research --compare
+    ("impact", "RESEARCH_ARCHITECTURE_IMPACT"),   # section 53: --impact
+    ("deep", "RESEARCH_DEEP_ANALYSIS"),   # section 53: --deep
+)
+
+
+def cmd_research(h, documents=None, compare: bool = False, impact: bool = False,
+                 deep: bool = False, focus: Optional[str] = None,
+                 request: str = "") -> Dict[str, Any]:
+    """`dv-harness research` -- section 19's `/research` front door.
+
+    Intent selection, in this order:
+      1. an explicit mode flag (--compare/--impact/--deep), section 53's own
+         semantics. More than one is a ValueError rather than a silent
+         precedence rule the user cannot see.
+      2. more than one document -> RESEARCH_MULTI_DOCUMENT (section 52's
+         multi-paper request: one independent card per paper first).
+      3. a free-text --request, classified by the SAME
+         router.resolve_research_intent() a natural-language request reaching
+         the harness any other way goes through -- not a second classifier.
+      4. otherwise RESEARCH_ANALYSIS (section 53: "/research <file> = standard
+         one-paper research analysis").
+
+    Raises ValueError on conflicting flags, an unknown --focus, or a
+    --request that does not read as a research request at all. Never prints;
+    the CLI formats.
+    """
+    from .router import resolve_research_intent, research_route_plan
+
+    docs = [str(d) for d in (documents or [])]
+    flags = {"compare": bool(compare), "impact": bool(impact), "deep": bool(deep)}
+    chosen = [intent for flag, intent in _RESEARCH_FLAG_INTENTS if flags[flag]]
+    if len(chosen) > 1:
+        raise ValueError(
+            "Choose at most one of --compare / --impact / --deep "
+            f"(got {chosen}); master prompt section 53 gives each its own "
+            "distinct semantics.")
+
+    if chosen:
+        evidence = {"research_intent": chosen[0]}
+    elif len(docs) > 1:
+        evidence = {"research_intent": "RESEARCH_MULTI_DOCUMENT"}
+    elif request.strip():
+        evidence = {"protocol_hint": request}
+    else:
+        evidence = {"research_intent": "RESEARCH_ANALYSIS"}
+
+    decision = resolve_research_intent(evidence)
+    if not decision.get("resolved"):
+        raise ValueError(
+            "Not recognized as a research request: "
+            f"{decision.get('evidence')}. Supply a document argument, or one "
+            "of --compare/--impact/--deep, to state the intent explicitly.")
+
+    plan = research_route_plan(decision, root=h.root, focus=focus,
+                               documents=docs)
+    h.store.event({"ts": cp_now(), "cmd": "research", "ungated": True,
+                   "intent": plan["intent"], "focus": plan["focus"],
+                   "documents": plan["documents"],
+                   "route": plan["route"], "agent": plan["agent"],
+                   "steps": [s["step"] for s in plan["steps"]]})
+    return plan
