@@ -36,6 +36,7 @@ skills:
   - CORE/memory-gc
   - CORE/memory-retrieval
   - CORE/memory-link
+  - CORE/memory-review
   - CORE/obsidian-cli
   - EXPERT_FEEDBACK/knowledge-promotion-gate
 ```
@@ -67,9 +68,13 @@ not run standalone against a user request:
   `promote_to_organizational()` when the record already has
   `confirmation_count >= 2` and the caller supplies real
   `confidence_inputs`.
-- **On request**, for hygiene: search for stale/superseded records
-  (e.g. citing an RTL sha that is no longer current) and flag them via
-  `MemoryGC`; check vault notes for `schema_status: PARTIAL`.
+- **On request**, for hygiene: sweep the store first with the read-only
+  `memory-review` skill (backed by `memory_doctor.run_validate()`/
+  `run_doctor()` — schema/`schema_status: PARTIAL`, duplicate ids, invalid
+  YAML, broken `[[WikiLink]]`s, secrets, index drift), then act on what it
+  named — flag stale/superseded records (e.g. one citing an RTL sha that is
+  no longer current) via `MemoryGC`. Review decides, `memory-gc` acts; the
+  agent never skips straight to the action.
 
 There is no cron/loop wiring that runs Memory Agent hygiene automatically
 today — it is dispatched, not scheduled.
