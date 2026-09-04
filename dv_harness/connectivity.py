@@ -2793,6 +2793,51 @@ def assert_role_provenance(rows: list) -> None:
             })
 
 
+def find_active_bind_target_collisions(rows: list) -> list[dict]:
+    """Every `bind_target` claimed as ACTIVE by more than one row of ONE matrix.
+
+    Two active agents must never independently drive the same physical
+    interface. Every check in this module measured the opposite direction --
+    `verify_matrix_vip_active_interface_count()` raises when an ACTIVE
+    interface has NO VIP, a coverage floor -- and nothing anywhere asserted
+    that a bind target is claimed at most once, so two rows both marked
+    `active` on the identical `bind_target` passed every existing gate:
+    `bind_target` was read only for rendering and hierarchy grouping.
+
+    Reported rather than raised, and that is deliberate. The count identity is
+    an arithmetic invariant of a matrix and a violation of it means the matrix
+    is wrong; a duplicate active claim is a REAL FINDING about the design or
+    the plan that a human resolves by deciding ownership, exactly as SYS-12
+    requires. Raising here would also make the finding unreportable by the
+    cross-subsystem layer that has to list every one of them at once.
+
+    Rows with no VIP are ignored (an interface with no VIP drives nothing) and
+    so are empty bind targets (an unfilled planning cell is not a claim)."""
+    by_target: dict = {}
+    for r in build_connectivity_matrix(rows):
+        if not _row_has_vip(r) or _row_active_passive(r) != ACTIVE_INTERFACE:
+            continue
+        target = str(r.get("bind_target") or "").strip()
+        if not target:
+            continue
+        by_target.setdefault(target, []).append(r)
+
+    collisions = []
+    for target, claiming in sorted(by_target.items()):
+        if len(claiming) < 2:
+            continue
+        collisions.append({
+            "bind_target": target,
+            "rows": [f"{r.get('dut_instance')}::{r.get('interface')}" for r in claiming],
+            "vip_types": sorted({str(r.get("vip_type")) for r in claiming}),
+            "active_claim_count": len(claiming),
+            "resolution": "STOP_AUTOMATIC_INTEGRATION_UNTIL_OWNERSHIP_RESOLVED",
+            "detail": (f"{len(claiming)} ACTIVE rows claim bind target {target!r}; two "
+                       f"active agents would independently drive one physical interface"),
+        })
+    return collisions
+
+
 def verify_matrix_self_check_identity(rows: list, exemptions: Optional[list] = None) -> dict:
     """Run Part C's hard identity over a REAL connectivity matrix:
     sum(verified interfaces) == sum(VIP instances) + sum(explicit exemptions),

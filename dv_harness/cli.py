@@ -954,6 +954,30 @@ def main():
     psa.add_argument("--json", action="store_true",
                      help="Print raw JSON instead of the human-readable SYS-5..8 report.")
 
+    # SYS-9..SYS-14 of the same workflow (2026-09-04): the CROSS-subsystem
+    # layer. Every check in connectivity.py is closed-world over ONE matrix, so
+    # a resource duplicated across two subsystems passes both subsystems' own
+    # self-checks with the duplicate never surfaced. This is the step that
+    # holds two subsystems' evidence at once. Reads only; composes nothing,
+    # and promotes nothing -- SYS-13's verdicts are recommendations for a human.
+    psri = sub.add_parser("system-resource-inventory",
+                          help="SYS-9..14: inventory every SELECTED subsystem's resources with "
+                               "OWNER_SUBSYSTEM, detect duplicate VIP/agents ACROSS subsystems, "
+                               "classify each relationship, apply the active-driver conflict "
+                               "rule, and evaluate shared-VIP promotion. Reads only.")
+    psri.add_argument("--select", action="append", default=None, metavar="SUBSYSTEM",
+                      help="Name one subsystem to inventory. Repeatable. Required -- SYS-1's "
+                           "explicit-selection refusal is not bypassed by this command.")
+    psri.add_argument("--knowledge-center", action="store_true", dest="resource_kc",
+                      help="Also query the shared Knowledge Center during the SYS-1 discovery "
+                           "this command runs first. Off by default (real remote call).")
+    psri.add_argument("--command-inventory", default=None, metavar="CSV",
+                      help="Path to a command_inventory.csv to read as a DECLARED overlay for "
+                           "the SYS-8 contract set this command's driver-ownership signal uses. "
+                           "Read-only; never rewritten.")
+    psri.add_argument("--json", action="store_true",
+                      help="Print raw JSON instead of the human-readable SYS-9..14 report.")
+
     # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
     # ordering as an executable, queryable rule rather than prose an agent is
     # trusted to have read. NOT the same list as tools/verification_flow/
@@ -2112,6 +2136,31 @@ def main():
         conflicts = result["synthesis"]["summary"]["cross_subsystem_conflicts"]
         raise SystemExit(
             0 if (result["selection"]["selection_admissible"] and not conflicts) else 2)
+    elif args.cmd == "system-resource-inventory":
+        from . import system_resource_inventory as sri
+        kc_client = None
+        if args.resource_kc:
+            from .config import load_config
+            from .knowledge_center import KnowledgeCenterClient
+            kc_client = KnowledgeCenterClient(load_config(h.root), h.root)
+        result = sri.analyze_selected_subsystem_resources(
+            h.root, args.select or [], knowledge_center_client=kc_client,
+            inventory_overlay_path=args.command_inventory)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        else:
+            if not result["selection"]["selection_admissible"]:
+                from . import subsystem_discovery as sd
+                print(sd.format_report(result["selection"]))
+                print()
+            print(sri.format_resource_report(result["resource_analysis"]))
+        # Exit 2 while SYS-12 has stopped or held any resource: automatic
+        # integration is not allowed until ownership is resolved, so a CI step
+        # must not read that as a clean run.
+        rule = result["resource_analysis"]["active_driver_conflict_rule"]
+        raise SystemExit(
+            0 if (result["selection"]["selection_admissible"]
+                  and rule["automatic_integration_allowed"]) else 2)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
         result = reference_pattern_audit.audit_directory(
