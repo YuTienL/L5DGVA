@@ -357,6 +357,50 @@ class MemoryStore:
         mem["reuse_count"]=int(mem.get("reuse_count",0))+1
         self.add(mem["level"],mem)
 
+    def find(self, level: Optional[str]=None, *, newest_first: bool=True, **field_equals) -> List[Dict[str,Any]]:
+        """Every stored record matching an exact-equality filter on any set of
+        top-level record fields, e.g. find("project", kind="self_tuning_adjustment",
+        status="REVERTED").
+
+        WHY THIS EXISTS (2026-09-04, Research-Capability Evolution Stage 0
+        audit finding): this store had no query method at all, so the
+        _index()-then-get()-then-filter-by-kind loop had already been hand-
+        rolled three separate times -- self_tuning.gate_ids_with_recent_reverts(),
+        self_tuning.read_recent_adjustment_records(), and cli.py's
+        _project_self_tuning_records(). dv_harness/capability_evolution.py needed
+        the same enumeration and would have made a fourth copy; the audit's
+        concrete recommendation was to promote it here instead, to the one
+        module that owns the index. The three existing copies are deliberately
+        left alone in this pass to keep its blast radius to additive code --
+        they are the obvious next callers, not a behaviour change this change
+        needs to make.
+
+        Ordering follows read_recent_adjustment_records()'s own reasoning
+        rather than index row order: add() re-appends an existing memory_id's
+        row to the end of index.json on every update, so a record merely
+        status-updated recently would otherwise outrank a genuinely newer one.
+        Sorting is by the record's own created_at, which add() always stamps.
+
+        `level` narrows to one MEMORY_LEVELS tier (index rows carry it, so an
+        unmatched tier costs no file read). A None level searches every tier.
+        Filtering is exact equality on the record as stored -- no fuzzy match,
+        no substring, no scoring: MemoryRetriever.search() is the relevance-
+        ranked path and this deliberately is not a second one.
+        """
+        if level is not None and level not in MEMORY_LEVELS:
+            raise ValueError(f"unknown memory level {level!r}; must be one of {MEMORY_LEVELS}")
+        out: List[Dict[str,Any]]=[]
+        for entry in self._index():
+            if level is not None and entry.get("level")!=level:
+                continue
+            rec=self.get(entry["memory_id"])
+            if rec is None:
+                continue
+            if all(rec.get(k)==v for k,v in field_equals.items()):
+                out.append(rec)
+        out.sort(key=lambda r: r.get("created_at") or 0, reverse=newest_first)
+        return out
+
 # Common English function words excluded from _tok so a shared preposition/
 # article/pronoun (e.g. both an unrelated LSF record's title and an
 # unrelated coverage query happening to each contain the word "in") can

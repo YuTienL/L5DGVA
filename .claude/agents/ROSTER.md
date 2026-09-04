@@ -40,9 +40,9 @@ library call, a Skill, or a sub-agent of a dispatched agent. It means only that
 this profile is not itself named by a stage's `node.agent` field, so it must
 never be described as a stage-owning role in the automatic flow.
 
-## Real Agents (22)
+## Real Agents (23)
 
-Counts by dispatch status: GRAPH_DISPATCHED 14, SUBGRAPH_DISPATCHED 0, WORKFLOW_DISPATCHED 0, NOT_DISPATCHED 8.
+Counts by dispatch status: GRAPH_DISPATCHED 14, SUBGRAPH_DISPATCHED 0, WORKFLOW_DISPATCHED 0, NOT_DISPATCHED 9.
 
 1. **IP_UVM_DV_Gen** -- Dispatch: `NOT_DISPATCHED`
 
@@ -150,7 +150,13 @@ Counts by dispatch status: GRAPH_DISPATCHED 14, SUBGRAPH_DISPATCHED 0, WORKFLOW_
 
    *subgraph nodes (4)*: `lsf_per_job_monitor_template.json:EARLY_FAIL_GATE`, `lsf_per_job_monitor_template.json:EARLY_KILL`, `lsf_per_job_monitor_template.json:JOB_STATE_QUERY`, `lsf_per_job_monitor_template.json:SIMLOG_ANALYSIS`
 
-17. **review-agent** -- Dispatch: `GRAPH_DISPATCHED`
+17. **research-architect** -- Dispatch: `NOT_DISPATCHED`
+
+   Principal Verification Research Architect. Takes ResearchEvidenceCards + the ACTUAL current L5 implementation + prior validated research and decides KEEP/ENHANCE/ADD/EXPERIMENT/REJECT for one capability, through the mandatory ten-question current-L5 check. Never implements anything, never decides alone, never issues a verification verdict.
+
+   *How this role really runs*: On-demand, human-invoked. Its decision is not this profile's prose -- it is made by real code, `dv_harness/capability_evolution.py`'s `decide_recommendation()`, from the six searches the agent records, and persisted by `persist_candidate()` to the `capability_evolution_candidates` Blackboard topic plus a Working Memory audit record through the real `memory_router.route_and_store()`. Its Human Approval Gate is the existing `dv_harness/control_plane.py` `ControlPlane.approve()`, not a second approval mechanism. Deliberately not on any automatic stage path: Stage 3 (implementing an approved change) is separate, human-approved work done by `implementation-agent` through a branch and a PR.
+
+18. **review-agent** -- Dispatch: `GRAPH_DISPATCHED`
 
    Independent read-only signoff reviewer. Challenges low-confidence assumptions, diff scope, protocol correctness, vPlan traceability, validation evidence and regression risk.
 
@@ -160,7 +166,7 @@ Counts by dispatch status: GRAPH_DISPATCHED 14, SUBGRAPH_DISPATCHED 0, WORKFLOW_
 
    *workflow callers*: `rca-multi-agent-fusion.js`
 
-18. **rtl-evidence-agent** -- Dispatch: `GRAPH_DISPATCHED`
+19. **rtl-evidence-agent** -- Dispatch: `GRAPH_DISPATCHED`
 
    Read-only RTL/testbench static-source evidence specialist for one RCA evidence-gathering fan-out branch -- pulls exact instance/signal/hierarchy/protocol-state evidence from real RTL and TB source, never from memory or assumption.
 
@@ -168,19 +174,19 @@ Counts by dispatch status: GRAPH_DISPATCHED 14, SUBGRAPH_DISPATCHED 0, WORKFLOW_
 
    *workflow callers*: `rca-multi-agent-fusion.js`
 
-19. **simulation-semantic-validation-agent** -- Dispatch: `NOT_DISPATCHED`
+20. **simulation-semantic-validation-agent** -- Dispatch: `NOT_DISPATCHED`
 
    Confirm a simulation PASSED run actually proves command.txt verification intent using sim.log evidence before TRUE_PASS.
 
    *How this role really runs*: Its check runs in production as the `simulation_semantic_validation_gate` gate registered for VERIFY (`dv_harness/gates.py:200`).
 
-20. **verification-risk-experience-agent** -- Dispatch: `NOT_DISPATCHED`
+21. **verification-risk-experience-agent** -- Dispatch: `NOT_DISPATCHED`
 
    Senior-DV reasoning agent for verification risk experience agent.
 
    *How this role really runs*: Its judgement runs in production as the `experience_applicability_gate` gate (`dv_harness/gates.py:351`), consumed by `engine.py`'s memory promotion path.
 
-21. **vip-spec-evidence-agent** -- Dispatch: `GRAPH_DISPATCHED`
+22. **vip-spec-evidence-agent** -- Dispatch: `GRAPH_DISPATCHED`
 
    Read-only VIP source/example/user-doc and protocol Standard-spec/PHY-model evidence specialist for one RCA evidence-gathering fan-out branch -- cites exact VIP class/sequence/config semantics and exact spec clauses, never invented VIP API or paraphrased spec text.
 
@@ -188,7 +194,7 @@ Counts by dispatch status: GRAPH_DISPATCHED 14, SUBGRAPH_DISPATCHED 0, WORKFLOW_
 
    *workflow callers*: `rca-multi-agent-fusion.js`
 
-22. **waveform-root-cause-agent** -- Dispatch: `GRAPH_DISPATCHED`
+23. **waveform-root-cause-agent** -- Dispatch: `GRAPH_DISPATCHED`
 
    Senior-DV reasoning agent for waveform root cause agent.
 

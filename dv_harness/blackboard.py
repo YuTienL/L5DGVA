@@ -58,3 +58,38 @@ class Blackboard:
  def debug_loop_round_count(self,failing_stage=None):
   entries=self.read_debug_loop_history().get('entries',[])
   return len(entries) if failing_stage is None else sum(1 for e in entries if e.get('failing_stage')==failing_stage)
+
+ # --- CapabilityEvolutionCandidate registry (2026-09-04, Research-Capability
+ # Evolution master prompt sections 63/70, Stage 1): the
+ # "capability_evolution_candidates" topic's value is the ONE live record of
+ # every proposed change to this harness's own capability --
+ # {"items": {candidate_id: {...the full schema-valid candidate...}}}.
+ # Same {"items": {...}} registry shape as `findings` above, on purpose:
+ # section 11 forbids a parallel Research Blackboard, and a second shape here
+ # would be one. dv_harness/capability_evolution.py's persist_candidate() is
+ # the ONE real caller and therefore the sync point -- as with findings and
+ # debug_loop_history, no second write path exists, so this topic cannot drift
+ # from the Working Memory audit record persist_candidate() writes alongside
+ # it via memory_router.route_and_store().
+ #
+ # A CANDIDATE lives here rather than in a Memory tier because it is live
+ # current-run state, not settled knowledge: it is a DISCOVERED -> ... ->
+ # PRODUCTION state machine, which is exactly what route_memory() already
+ # sends to BLACKBOARD for kinds like "active_hypothesis"/"plan_state".
+ # Nothing here is verification truth about a DUT: the confidence field on a
+ # candidate is confidence in a PROPOSAL, and this topic must never be read as
+ # evidence about a design.
+ def read_capability_evolution_candidates(self):
+  payload=self.read('capability_evolution_candidates');val=payload.get('value') if isinstance(payload,dict) else None
+  if not isinstance(val,dict) or not isinstance(val.get('items'),dict):val={'items':{}}
+  return val
+ def upsert_capability_evolution_candidate(self,candidate_id,candidate,source=''):
+  registry=self.read_capability_evolution_candidates();registry['items'][candidate_id]=dict(candidate)
+  self.write('capability_evolution_candidates',registry,source=source);return registry
+ def capability_evolution_counts(self):
+  """Per-promotion-state counts. Deliberately NOT an open/closed split like
+  findings_counts(): section 70's eleven states do not collapse into two
+  without losing the governance distinction the policy exists to enforce."""
+  items=self.read_capability_evolution_candidates().get('items',{});counts={}
+  for v in items.values():counts[v.get('current_status','UNKNOWN')]=counts.get(v.get('current_status','UNKNOWN'),0)+1
+  return {'total':len(items),'by_status':counts}

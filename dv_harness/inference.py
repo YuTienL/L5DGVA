@@ -133,7 +133,46 @@ def promote_if_high_confidence(kc_client, category, protocol, finding, confidenc
     return result
 
 
-def next_best_action(protocol, gaps, root):
+def _next_best_action_from_catalog(gaps, catalog):
+    """The catalog branch of next_best_action() -- see its docstring for the
+    catalog shape. Kept as a private helper rather than inlined so the
+    registry path above stays exactly the code it was."""
+    if not isinstance(catalog, dict):
+        raise ValueError(f"gap_action_catalog must be a dict, got {type(catalog).__name__}")
+    actions = catalog.get("actions")
+    if not isinstance(actions, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in actions.items()
+    ):
+        raise ValueError("gap_action_catalog['actions'] must be a dict of str -> str")
+    source = catalog.get("source")
+    if not isinstance(source, str) or not source:
+        raise ValueError("gap_action_catalog['source'] must be a non-empty string")
+    fallback = catalog.get("fallback")
+    if not isinstance(fallback, str) or not fallback:
+        raise ValueError("gap_action_catalog['fallback'] must be a non-empty string")
+
+    results = []
+    for gap in gaps:
+        gap_str = str(gap)
+        action = actions.get(gap_str)
+        if action is None:
+            gap_lower = gap_str.lower()
+            for key, value in actions.items():
+                if gap_lower in key.lower() or key.lower() in gap_lower:
+                    action = value
+                    break
+        if action is not None:
+            results.append({"gap": gap, "suggested_action": action, "source": source})
+        else:
+            results.append({
+                "gap": gap,
+                "suggested_action": fallback.replace("{gap}", gap_str),
+                "source": "generic",
+            })
+    return results
+
+
+def next_best_action(protocol, gaps, root, *, gap_action_catalog=None):
     """For each gap, suggest a concrete next step by cross-referencing the
     real per-protocol discover/build lists in protocol_builder_registry.json.
 
@@ -141,7 +180,34 @@ def next_best_action(protocol, gaps, root):
     logic (normalize to lower-kebab-case, exact key match, then substring
     alias-fallback loop) so behavior stays consistent with the INTAKE-stage
     fix already shipped.
+
+    `gap_action_catalog` (2026-09-04, Research-Capability Evolution Stage 1)
+    lets a NON-protocol caller supply its own gap->action lookup instead of the
+    protocol builder registry, without duplicating this function's matching
+    logic in a second module. Omit it and behavior is byte-identical to before
+    -- every existing caller (engine.py's `_react_step_inference` and
+    `_score_root_cause_confidence`, .work/e2e_usb3_lfps_demo.py) passes the
+    same three positional arguments and is unaffected.
+
+    It exists because the two DV-specific halves of this function are wrong for
+    a non-simulation gap, and only those two: the registry it reads, and the
+    "inspect current RTL/spec/VIP evidence directly" fallback. The Gap ->
+    Next-Best-Action ARCHITECTURE around them is domain-neutral and is what the
+    master prompt's section 10 forbids re-implementing ("Do NOT create a
+    Research Inference Engine"). A catalog is:
+
+        {"source": "<name recorded in each result's `source` field>",
+         "actions": {"<gap key>": "<the concrete next step>", ...},
+         "fallback": "<text, may contain {gap}>"}
+
+    Matching is exact key first, then the same substring pass the registry path
+    uses, so a caller may key its catalog by gap name or by a distinctive
+    fragment of one. An unmatched gap gets `fallback` with {gap} filled in and
+    `source` "generic", exactly as the registry path's own miss does.
     """
+    if gap_action_catalog is not None:
+        return _next_best_action_from_catalog(gaps, gap_action_catalog)
+
     registry = _load_registry(root)
     entry = _find_protocol_entry(registry, protocol)
     discover = (entry or {}).get("discover") or []

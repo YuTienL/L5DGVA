@@ -204,7 +204,7 @@ python -m dv_harness.memory_cli --project-root . reindex
 ### Organizational Memory has no local file store, by design
 
 Unlike the other 4 tiers, `OrganizationalMemoryStore.add()` writes straight
-to the shared Knowledge Center (`memory.py:840-873`) — there is no
+to the shared Knowledge Center (`memory.py:884-917`) — there is no
 `.dv-harness/memory/organizational/*.json`. The Vault write-through still
 happens locally (a human-browsable copy), but the tier's actual backing
 store IS the cross-user Knowledge Center, because organizational knowledge
