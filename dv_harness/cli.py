@@ -1087,6 +1087,46 @@ def main():
     psta.add_argument("--json", action="store_true",
                       help="Print raw JSON instead of the human-readable SYS-28..30 report.")
 
+    pspr = sub.add_parser("system-phase1-report",
+                          help="SYS-33..39: plan the System regression from known-good "
+                               "subsystem tests, selected command sequences, "
+                               "cross-subsystem scenarios, shared-resource contention, "
+                               "boot/config, interrupt, DMA and stress/concurrency; pin "
+                               "each subsystem's release_sha as one composition snapshot; "
+                               "diff each subsystem against that pin for change impact; "
+                               "derive READY/PARTIAL/BLOCKED/UNKNOWN; then produce SYS-38's "
+                               "twenty-two-section Phase-1 report and STOP per SYS-39. "
+                               "Runs no regression, submits no job, writes no System "
+                               "command.txt and publishes nothing to the Knowledge Center.")
+    pspr.add_argument("--select", action="append", default=None, metavar="SUBSYSTEM",
+                      help="Name one subsystem to include. Repeatable. Required -- SYS-1's "
+                           "explicit-selection refusal is not bypassed by this command.")
+    pspr.add_argument("--knowledge-center", action="store_true", dest="phase1_kc",
+                      help="Also query the shared Knowledge Center during the SYS-1 "
+                           "discovery this command runs first. Off by default (real "
+                           "remote call). It only READS: SYS-34's composition record is "
+                           "built and printed, never published, because SYS-39 stops "
+                           "before the integration SYS-34 records.")
+    pspr.add_argument("--command-inventory", default=None, metavar="CSV",
+                      help="Path to a command_inventory.csv to read as a DECLARED overlay "
+                           "for the SYS-8 contract set. Read-only; never rewritten.")
+    pspr.add_argument("--escalate", action="store_true", dest="phase1_escalate",
+                      help="Also file every cross-subsystem address conflict into the REAL "
+                           "question queue through source_authority.escalate_conflict(). "
+                           "Idempotent: a re-run over unchanged address maps re-mints the "
+                           "same Q-IDs.")
+    pspr.add_argument("--head-rev", default="HEAD", metavar="REV",
+                      help="The revision each subsystem's own tree is diffed TO for SYS-36 "
+                           "change impact. The BASE is always that subsystem's registered "
+                           "release_sha and is never overridable -- a pin the caller could "
+                           "move is not a pin.")
+    pspr.add_argument("--write-pin", action="store_true", dest="phase1_write_pin",
+                      help="Also append the SYS-35 composition snapshot to "
+                           ".dv-harness/soc-composer/system_composition_pins.json. Off by "
+                           "default: producing the report writes nothing.")
+    pspr.add_argument("--json", action="store_true",
+                      help="Print raw JSON instead of the SYS-38 twenty-two-section report.")
+
     # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
     # ordering as an executable, queryable rule rather than prose an agent is
     # trusted to have read. NOT the same list as tools/verification_flow/
@@ -2409,6 +2449,40 @@ def main():
         raise SystemExit(
             0 if (result["selection"]["selection_admissible"]
                   and document["summary"]["topology_clean"]) else 2)
+    elif args.cmd == "system-phase1-report":
+        from . import system_phase1_report as spr
+        from . import system_readiness as sr
+        kc_client = None
+        if args.phase1_kc:
+            from .config import load_config
+            from .knowledge_center import KnowledgeCenterClient
+            kc_client = KnowledgeCenterClient(load_config(h.root), h.root)
+        question_store = None
+        if args.phase1_escalate:
+            from . import question_queue
+            question_store = question_queue.QuestionQueueStore(h.root)
+        result = spr.produce_phase1_report(
+            h.root, args.select or [], knowledge_center_client=kc_client,
+            inventory_overlay_path=args.command_inventory,
+            question_store=question_store, head_rev=args.head_rev)
+        if args.phase1_write_pin:
+            sr.write_composition_pin(h.root, result["version_pin"])
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        else:
+            print(result["phase1_report_text"])
+            if args.phase1_write_pin:
+                print(f"\nSYS-35 composition snapshot appended to "
+                      f"{sr.pin_path(h.root)}")
+        # Exit 2 unless the selection was admissible AND SYS-37 derived READY.
+        # PARTIAL/BLOCKED/UNKNOWN each mean a human still has something to
+        # decide, and a CI step must not read any of them as a clean run. This
+        # exit code is NOT an approval signal in either direction: SYS-39 stops
+        # for an explicit human decision whatever it returns.
+        raise SystemExit(
+            0 if (result["selection"]["selection_admissible"]
+                  and result["system_readiness"]["system_readiness"] == sr.READY)
+            else 2)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
         result = reference_pattern_audit.audit_directory(

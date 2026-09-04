@@ -61,6 +61,72 @@ THIRD_PARTY_COMPONENT_FIELDS: tuple = (
 )
 
 
+# --- SYS-34 SYSTEM COMPOSITION RECORD SHAPE ---------------------------------
+# SYS-34 ("KNOWLEDGE CENTER UPDATE") names what to write back after a System-
+# Level integration succeeds, and closes with the same rule SYS-3 opens with:
+# "No parallel knowledge store." So this is the SUBSYSTEM_*/THIRD_PARTY_*
+# pattern applied a third time -- one more fixed category and field vocabulary
+# over the SAME add/search verbs, the same broker, the same provenance/
+# staleness/confirm/deprecate lifecycle. No new transport, no new server-side
+# command, no schema change on the broker (broker.py's cmd_add() passes
+# `record` through verbatim, so this is a documented convention rather than
+# something the server had to learn).
+#
+# A SEPARATE category from `subsystem_environment` on purpose: a composition
+# is a statement about N subsystems AT SPECIFIC SHAs plus the decisions taken
+# between them, and none of SUBSYSTEM_RECORD_FIELDS' per-subsystem columns
+# (BUILD_STATUS, COMMAND_TXT, COVERAGE_STATUS) has a single well-defined value
+# for a set. Searching one shard for the other would return neither.
+SYSTEM_COMPOSITION_CATEGORY = "system_composition"
+SYSTEM_COMPOSITION_RECORD_KIND = "system_composition_record"
+
+#: SYS-34's own list, in its own order ("System composition, subsystem
+#: versions/SHAs, paths, shared-resource decisions, dedup decisions, command
+#: mappings, System command.txt, limitations, PASS/regression evidence,
+#: architecture decisions"), plus three fields a reader needs for the record to
+#: be usable at all: COMPOSITION_ID (what you look it up BY -- SYS-35's pin id,
+#: so the KC record and the on-disk pin name the same composition), PHASE (see
+#: PUBLISHABLE_PHASES below) and CONFIDENCE (the same citation-grade field
+#: SUBSYSTEM_RECORD_FIELDS already carries).
+SYSTEM_COMPOSITION_FIELDS: tuple = (
+    "COMPOSITION_ID", "SYSTEM_COMPOSITION", "SUBSYSTEM_VERSIONS",
+    "SUBSYSTEM_PATHS", "SHARED_RESOURCE_DECISIONS", "DEDUPLICATION_DECISIONS",
+    "COMMAND_MAPPINGS", "SYSTEM_COMMAND_TXT", "KNOWN_LIMITATIONS",
+    "PASS_EVIDENCE", "REGRESSION_EVIDENCE", "ARCHITECTURE_DECISIONS",
+    "SYSTEM_READINESS", "PHASE", "EVIDENCE", "CONFIDENCE",
+)
+
+#: SYS-34's first four words are "After successful integration". A Phase-1
+#: PLAN is not that, and this shard is cross-project and cross-user -- a plan
+#: published here would be read by a later project as "this composition was
+#: built and passed". So PHASE is a required field with exactly two admissible
+#: values on the WRITE path, and the Phase-1 value is deliberately not one of
+#: them: `record_system_composition()` refuses it rather than letting a
+#: planning artifact become shared knowledge. Reading a Phase-1-phase record
+#: back is unrestricted; it just cannot be published from here.
+PHASE_1_PLAN = "PHASE_1_PLAN_AWAITING_USER_APPROVAL"
+PHASE_2_INTEGRATED = "PHASE_2_INTEGRATION_COMPLETE"
+PHASE_2_REGRESSION_PASSED = "PHASE_2_SYSTEM_REGRESSION_PASSED"
+PUBLISHABLE_PHASES: frozenset = frozenset({PHASE_2_INTEGRATED,
+                                           PHASE_2_REGRESSION_PASSED})
+
+
+def normalize_system_composition_record(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Project an arbitrary stored KC record onto the SYS-34 field names,
+    case-insensitively, with the same present-and-null convention
+    `normalize_subsystem_record()` uses -- "the KC has no REGRESSION_EVIDENCE
+    for this composition" must be a readable fact, not a KeyError."""
+    lowered = {str(k).lower(): v for k, v in (raw or {}).items()}
+    out: Dict[str, Any] = {f: lowered.get(f.lower()) for f in SYSTEM_COMPOSITION_FIELDS}
+    out["_kc"] = {
+        k: (raw or {}).get(k)
+        for k in ("memory_id", "status", "written_at", "revalidate_by",
+                  "confirmation_count", "last_confirmed_at", "provenance")
+        if k in (raw or {})
+    }
+    return out
+
+
 def normalize_component_record(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Project an arbitrary stored KC record onto the SYOSCB-3 field names,
     case-insensitively, with the same present-and-null convention
@@ -416,6 +482,79 @@ class KnowledgeCenterClient:
         version = str((record or {}).get("VERSION") or "").strip()
         payload["title"] = f"{component} {version}".strip() + " third-party component"
         return self.add(THIRD_PARTY_COMPONENT_CATEGORY, protocol, payload)
+
+    def system_composition_record(self, composition_id: str, protocol: str = "",
+                                  limit: int = 16) -> Dict[str, Any]:
+        """SYS-34 read half: what does the shared Knowledge Center already know
+        about ONE System composition. Routes through the existing `search` verb
+        on the fixed SYSTEM_COMPOSITION_CATEGORY shard -- no new transport, no
+        new server-side command, no second store.
+
+        Matching is exact, case-insensitive COMPOSITION_ID equality on the
+        normalized record, for the same reason `subsystem_record()` refuses a
+        substring hit: a free-text search for a composition id would happily
+        return a record that merely MENTIONS one of its subsystems."""
+        res = self.search(category=SYSTEM_COMPOSITION_CATEGORY, protocol=protocol,
+                          text=str(composition_id), limit=limit)
+        if not res.get("ok", True) or res.get("error"):
+            return {"ok": False, "found": False, "record": None,
+                    "error": res.get("error", "SEARCH_FAILED"),
+                    "detail": res.get("detail", "")}
+        wanted = str(composition_id).strip().lower()
+        candidates = [normalize_system_composition_record(r)
+                      for r in (res.get("records") or [])]
+        exact = [c for c in candidates
+                 if str(c.get("COMPOSITION_ID") or "").strip().lower() == wanted]
+        return {
+            "ok": True,
+            "found": bool(exact),
+            "record": exact[0] if exact else None,
+            "candidates": [str(c.get("COMPOSITION_ID") or "") for c in candidates],
+        }
+
+    def record_system_composition(self, record: Dict[str, Any],
+                                  protocol: str = "_general") -> Dict[str, Any]:
+        """SYS-34 write half: publish/refresh one System composition record on
+        the same shard `system_composition_record()` reads, through the existing
+        `add` verb, so the server stamps written_at/revalidate_by and it joins
+        the same staleness/confirm/deprecate lifecycle.
+
+        Two refusals, both returned as a result rather than raised so a
+        best-effort caller cannot be killed by them:
+
+          * COMPOSITION_ID_REQUIRED -- a record nobody can look up by
+            composition is not a composition record.
+          * PHASE_NOT_PUBLISHABLE -- SYS-34 is "After successful integration",
+            and this shard is shared across projects and users. A Phase-1 PLAN
+            published here would be read later as "this composition was built
+            and passed". Build the record with
+            `system_readiness.build_system_composition_record()`, which fills
+            every field from real artifacts and pins PHASE to
+            PHASE_1_PLAN_AWAITING_USER_APPROVAL; only a SYS-40 caller that has
+            really integrated may re-stamp it to a publishable phase. Keeping
+            "the payload was built" and "the payload was published" two
+            separately-visible events is the same split `record_component()`
+            makes.
+        """
+        composition_id = str((record or {}).get("COMPOSITION_ID") or "").strip()
+        if not composition_id:
+            return {"ok": False, "error": "COMPOSITION_ID_REQUIRED"}
+        phase = str((record or {}).get("PHASE") or "").strip()
+        if phase not in PUBLISHABLE_PHASES:
+            return {"ok": False, "error": "PHASE_NOT_PUBLISHABLE",
+                    "phase": phase or None,
+                    "publishable_phases": sorted(PUBLISHABLE_PHASES),
+                    "detail": "SYS-34 records knowledge AFTER successful integration; "
+                              "a Phase-1 plan is not publishable to the shared "
+                              "Knowledge Center (SYS-39 stops before SYS-40)"}
+        payload = {f: (record or {}).get(f) for f in SYSTEM_COMPOSITION_FIELDS}
+        payload["COMPOSITION_ID"] = composition_id
+        payload["kind"] = SYSTEM_COMPOSITION_RECORD_KIND
+        subsystems = (record or {}).get("SYSTEM_COMPOSITION") or []
+        joined = " + ".join(str(s) for s in subsystems) if isinstance(subsystems, (list, tuple)) \
+            else str(subsystems)
+        payload["title"] = f"System composition {composition_id} ({joined})".strip()
+        return self.add(SYSTEM_COMPOSITION_CATEGORY, protocol, payload)
 
     def db_info(self, category: str = "", protocol: str = "", action: str = "",
                 limit: int = 100) -> Dict[str, Any]:
