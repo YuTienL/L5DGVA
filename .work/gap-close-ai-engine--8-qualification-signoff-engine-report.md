@@ -1,147 +1,190 @@
-# Gap close — AI mechanism #8: Qualification / Signoff Engine
+# Gap-close: AI mechanism #8 — Qualification / Signoff Engine
 
-**Verdict: DONE.**
+**Status: DONE** (with a disclosed residual that is genuinely NEEDS_SEPARATE_EFFORT — see the last section)
 
-Audit verdict was PARTIALLY_WIRED with two concrete, in-scope gaps. Both are closed for real,
-with tests that fail against the pre-change code.
+Date: 2026-09-04
+Branch: `gap-close/env-manifest-fact-sources`
 
-## What the audit found (re-verified myself before touching anything)
+---
 
-1. `read`-only re-check of this repo's own real governance state, via the new reader:
+## 1. What I re-verified from the audit myself
 
-   ```
-   $ python -c "from pathlib import Path; from dv_harness import signoff_export; ..."
-   {"state_file_present": true, "current_stage": "ENV_CHECK", "stage_status": "NOT_STARTED",
-    "gate_verified": false, "signoff_event_count": 0, "subsystem_registry_present": false,
-    "required_signoff_gates": [ ...the 9 real gates... ]}
-   ```
+All of the audit's positive findings held up when I checked them directly, so
+none of them were re-litigated:
 
-   Exactly the audit's finding, now as a machine-readable fact instead of a hand-run grep:
-   SIGNOFF `NOT_STARTED`, zero `"stage": "SIGNOFF"` records in `events.jsonl`, and no
-   `.dv-harness/soc-composer/subsystem_environment_registry.json` (the file
-   `engine._persist_subsystem_registry_entry()` writes ONLY on a real SIGNOFF PASS).
+- `dv_harness/gates.py` — `STAGE_GATES["SIGNOFF"]` really lists 9 gate ids, and
+  `SIGNOFF` really is reachable in the shipped graph:
+  `.dv-harness/graph/main_graph.json` carries
+  `{"source": "PROMOTION_READINESS", "target": "SIGNOFF", "condition": "PASS"}`
+  and a real `SIGNOFF` node (`review-route` / `review-agent` /
+  `skills: ["verification-signoff"]`).
+- `engine.py`'s `run_stage()` PASS branch really calls
+  `_persist_subsystem_registry_entry()` then `_export_signoff_bundle()`
+  unconditionally, and `_export_signoff_bundle()` really is the production-path
+  caller of `signoff_export.collect_signoff_bundle()`.
+- `signoff_export.read_signoff_stage_status()` really reads the project's own
+  `state.json` / `events.jsonl` / subsystem registry, and really refuses under
+  `require_signoff_pass=True`.
+- `dv_harness_tests/test_signoff_stage_gate_e2e.py` really drives a
+  non-mocked 9-gate `run_stage("SIGNOFF")`.
 
-2. `grep -rn 'run_stage(\s*"SIGNOFF"' dv_harness_tests/*.py` → zero matches, and
-   `test_engine_gates_and_routing.py:3046`'s own comment says why: it calls the private
-   persistence method directly "rather than driving a full `run_stage()` SIGNOFF PASS, which
-   would require constructing valid payloads for all 9 real SIGNOFF gates".
+The audit's *named* condition also held: no project in this repo has ever
+reached SIGNOFF (`v50/.dv-harness/state.json` is still
+`current_stage: ENV_CHECK`, `stages.SIGNOFF.status: NOT_STARTED`).
 
-3. `signoff_export.collect_signoff_bundle()` contained no reference to `current_stage`,
-   `state.json` or `STAGE_GATES["SIGNOFF"]` — confirmed by reading the whole 333-line file.
+## 2. The real, in-scope defect I found while in the code
 
-## What changed
+Reading `run_stage()` around the PASS branch surfaced a concrete code defect
+in this exact mechanism that the audit had not isolated:
 
-### 1. `dv_harness/signoff_export.py` — the export is now gate-aware
+`run_stage()` deliberately holds a fully gate-verified SIGNOFF at `WAIT_USER`
+when no `dv-harness approve SIGNOFF` is on record — engine.py's own comment
+says why ("PROMOTION_READINESS/SIGNOFF passing their own automated gates is not
+the same thing as a human sign-off", the "LSF DONE != DV PASS" principle one
+level up). **But the whole `if verdict == "PASS":` side-effect block runs on
+gate verdict alone, and it runs after that downgrade.**
 
-- **New `read_signoff_stage_status(root)`**: reads the REAL harness-owned files — `state.json`'s
-  `stages["SIGNOFF"]["status"]`, the count of `events.jsonl` records naming the SIGNOFF stage,
-  and the presence of `subsystem_environment_registry.json` — never an agent-attested claim.
-  Deliberately reads `state.json` with a plain `json.loads` rather than through
-  `storage.StateStore`, because `StateStore.load()` *creates* a `state.json` when none exists;
-  an export must never mutate governance state, and "never recorded" must not become
-  "freshly-minted NOT_STARTED". Those two are kept as distinct values (`NOT_RECORDED` vs
-  `NOT_STARTED`) — the repo really does contain a `state.json` with no `stages` map at all
-  (`.work/_e2e_demo_usb3_lfps/`), and that is a different fact from a recorded not-started.
-- **`collect_signoff_bundle()` stamps it** into three places: a real bundled file
-  `signoff_stage_status.json` (an 11th manifest artifact, so its presence is covered by
-  `bundle_hash`), `manifest.json`'s new top-level `signoff_stage` + `bundle_kind` keys, and the
-  return dict. `bundle_kind` is `SIGNOFF_GATE_VERIFIED` or `PRE_SIGNOFF_GATE_INPUT`, so a bundle
-  from a project that never ran a SIGNOFF gate can no longer look equivalent to one that did.
-- **`require_signoff_pass=True`** (CLI `--require-signoff-pass`, exit code 2) refuses outright
-  and writes *nothing at all* — not even an empty `out_dir` a later reader could mistake for a
-  partial bundle.
+`_export_signoff_bundle()` re-checks the recorded stage status for precisely
+this reason and documents it. Its sibling
+`_persist_subsystem_registry_entry()` — **the only writer anywhere of
+`.dv-harness/soc-composer/subsystem_environment_registry.json`** — did not.
 
-  **Deliberate design ruling, differing from the audit's first suggestion:** refusal is opt-in,
-  not the default. `signoff_bundle_completeness_gate` — one of the 9 SIGNOFF gates — takes a real
-  `bundle_dir` produced by `collect_signoff_bundle()` as its own INPUT and recomputes
-  `compute_bundle_hash()` over its real `manifest.json`. A bundle therefore *has* to be producible
-  before SIGNOFF can pass; defaulting to refusal would make the SIGNOFF gate battery unsatisfiable
-  by construction. The honest fix is that a pre-gate bundle can no longer *look* gate-verified,
-  not that pre-gate bundles are forbidden. `compute_bundle_hash`'s material is unchanged (artifact
-  list only) so the gate's independent recomputation still works byte-for-byte.
+So: a SIGNOFF still waiting on a human already wrote its subsystem into the
+real runtime registry as `PRODUCTION_QUALIFIED`, emitted a
+`SUBSYSTEM_ENVIRONMENT_REGISTERED` audit event, and wrote the
+`subsystem_registry` Blackboard topic.
 
-  Proven live against this repo:
+That registry is not a log. It is consumed by:
 
-  ```
-  $ python -m dv_harness.cli --project-root . signoff-export --out .work/_audit_signoff_gateaware_check --require-signoff-pass
-  {"status": "REFUSED", "reason": "SIGNOFF_STAGE_NOT_PASSED", ...}
-  EXIT=2
-  $ ls .work/_audit_signoff_gateaware_check
-  ls: cannot access '.work/_audit_signoff_gateaware_check': No such file or directory
-  ```
+- `environment_mode_router.read_registered_subsystem_entries()` →
+  `uvm_generator.soc_environment_composer.compose_soc_environment()` (a
+  SYSTEM_LEVEL composition would be built on an unapproved subsystem);
+- `STAGE_GATES["SYSTEM_LEVEL"]`'s `system_level_validator`, whose
+  harness-supplied `--registered` ContextFlag cross-checks agent claims
+  against that file;
+- `signoff_export.read_signoff_stage_status()`, which reports
+  `subsystem_registry_present` as **"independent corroboration"** of a real
+  SIGNOFF PASS — making an unapproved entry a false corroboration of the very
+  approval it skipped.
 
-### 2. `dv_harness/engine.py` — the real production-path caller that never existed
+### Proven, not asserted
 
-New `_export_signoff_bundle(stage)`, called from `run_stage()`'s `verdict == "PASS"` side-effect
-block right after `_persist_subsystem_registry_entry()`. Before this, `signoff_export`'s only
-callers were the `signoff-export` CLI and the dashboard's POST button — **both of which bypass
-`STAGE_GATES["SIGNOFF"]` entirely**, so no bundle anywhere was ever the consequence of a
-gate-verified signoff. It writes `.dv-harness/signoff_bundle/` and logs a real
-`SIGNOFF_BUNDLE_EXPORTED` event.
+Written as a failing test first, against the real 9-gate path:
 
-Two conditions are re-checked inside it rather than assumed from the call site, because that
-block runs on gate verdict alone:
-- the stage's own in-memory status must really be `PASS` — SIGNOFF is downgraded to `WAIT_USER`
-  when no `dv-harness approve SIGNOFF` is on record, and gates passing is not the same as the
-  stage closing;
-- `state.json` is flushed to disk **first**. `run_stage()`'s final `store.save()` happens well
-  after this side-effect block, so without the flush the export would read back the `RUNNING`
-  status written at the *start* of the attempt and stamp a genuinely gate-verified bundle
-  `PRE_SIGNOFF_GATE_INPUT`.
+```
+python -m pytest dv_harness_tests/test_signoff_stage_gate_e2e.py::test_signoff_gates_passing_without_human_approval_qualifies_nothing -q
+→ FAILED ... AssertionError: assert not True      (registry file existed)
+```
 
-Same best-effort contract as its neighbours: an export failure logs `SIGNOFF_BUNDLE_EXPORT_FAILED`
-and never downgrades an already-earned SIGNOFF PASS.
+## 3. The fix
 
-### 3. `dv_harness_tests/test_signoff_stage_gate_e2e.py` (new) — the exact fix condition
+`dv_harness/engine.py`, `_persist_subsystem_registry_entry()` — one guard,
+placed in the writer rather than only at the call site so any future caller
+inherits it (and because it is the sole writer of a governance-critical file):
 
-`test_run_stage_signoff_passes_all_nine_real_gates_end_to_end` is the first
-`h.run_stage()` → SIGNOFF PASS anywhere in this repo. It drives the real engine with a real
-`main_graph.json` and the project's own copy of `tools/`, real `gates.run_gate()` subprocesses,
-a real `ControlPlane.approve("SIGNOFF")`, and evidence answering all 9 gates. Only the LLM
-adapter is stubbed. It asserts:
+```python
+if self.state.stages.get(stage, {}).get("status") != Status.PASS.value:
+    return
+```
 
-- `state.json`'s `stages["SIGNOFF"]["status"] == "PASS"` (on disk, not just in memory),
-- the submitted evidence blocks cover every id in `STAGE_GATES["SIGNOFF"]` — so the test cannot
-  silently go stale if a 10th gate is added,
-- `subsystem_environment_registry.json` gets written with this run's real entry,
-- `events.jsonl` carries real `"stage": "SIGNOFF"` records including
-  `SUBSYSTEM_ENVIRONMENT_REGISTERED`.
+Reads `self.state.stages` (the same dict `run_stage()` just wrote `ss` into),
+not on-disk `state.json`, because the final `store.save()` happens well after
+this block — exactly the reasoning `_export_signoff_bundle()` already documents.
+A ~28-line docstring section records the ruling in place.
 
-Note the gate battery is genuinely unfakeable at two points: `signoff_bundle_completeness_gate`
-recomputes the bundle hash off a real on-disk manifest, and `signoff_snapshot_immutability_gate`
-recomputes the snapshot digest — so the test derives both rather than hardcoding a literal.
+No parallel mechanism was built; nothing was reinvented. The existing
+approval hard-stop simply now governs the durable artifact too.
 
-Three more tests cover the export side: the gate-verified bundle appearing on the real path,
-`--require-signoff-pass` refusing before the gate and allowing after it (both halves of the
-audit's named bypass condition, in one test), and `read_signoff_stage_status` reporting absence
-honestly without minting a `state.json`.
+## 4. Tests
 
-## Files changed
+New end-to-end test (real subprocess gates, nothing mocked but the LLM
+adapter), `dv_harness_tests/test_signoff_stage_gate_e2e.py::test_signoff_gates_passing_without_human_approval_qualifies_nothing`.
+It is a controlled comparison — identical evidence, identical 9 real gates,
+the *only* difference being the missing `ControlPlane.approve("SIGNOFF")`:
 
-- `dv_harness/signoff_export.py`
-- `dv_harness/engine.py`
-- `dv_harness/cli.py` (`--require-signoff-pass` flag + non-zero exit on refusal)
-- `dv_harness_tests/test_signoff_stage_gate_e2e.py` (new)
-- `dv_harness_tests/test_signoff_export.py`, `dv_harness_tests/test_dashboard_interactive.py`
-  (updated for the 11th manifest artifact)
+1. all 9 SIGNOFF gates really passed (`last_evidence_blocks` ⊇ `STAGE_GATES["SIGNOFF"]`);
+2. stage correctly held at `WAIT_USER` with `HUMAN_APPROVAL_REQUIRED`;
+3. **no registry file at all**, `read_signoff_stage_status()` reports
+   `gate_verified: False` / `subsystem_registry_present: False`, and
+   `read_registered_subsystem_entries() == []`;
+4. no signoff bundle;
+5. no `SUBSYSTEM_ENVIRONMENT_REGISTERED` / `SIGNOFF_BUNDLE_EXPORTED` event and
+   no `subsystem_registry` Blackboard topic;
+6. **the hold is not permanent** — a real `approve` followed by the same
+   evidence does register, proving the guard blocks the unapproved case
+   specifically rather than the mechanism as a whole.
 
-`cli.py` also carried a *staged, uncommitted* change from a concurrent workstream (a
-`question_queue` `options=` fix). A hand-scoped blob — HEAD's `cli.py` plus my two hunks only,
-staged through a temporary index — was prepared for that case; by commit time that workstream had
-landed its own commit (`7603119 question-queue: accept the spec's flat-string options shape at one
-door`), so `cli.py`'s remaining diff was mine alone and a plain per-file `git add` was correct.
-`dv_harness/connectivity.py` / `dv_harness_tests/test_connectivity.py` had unstaged changes from
-another concurrent workstream and were deliberately left untouched and uncommitted.
+Also refactored `_drive_signoff_to_pass` into `_drive_signoff(tmp, approve=)`
+so both halves run the identical path.
 
-## Test summary
+Two existing tests that call the private writer directly now set its real
+precondition explicitly (this is a *more* faithful setup, not a weakening):
+`test_engine_gates_and_routing.py::test_engine_persists_subsystem_registry_entry_on_signoff_pass`
+(which also gained a direct `WAIT_USER → persists nothing` case) and
+`test_system_level_soc_composition_wiring.py::_register_subsystems`.
 
-`dv_harness_tests/test_signoff_stage_gate_e2e.py` 4 passed; the pre-existing signoff/export/
-escalation/bundle-gate suites 38 passed; `test_engine_gates_and_routing.py` +
-`test_blackboard_subsystem_wiring.py` re-run clean after the engine change.
+### Results
 
-## Not attempted (out of scope for this pass, per the audit's own item 3)
+| Suite | Result |
+|---|---|
+| `test_signoff_stage_gate_e2e.py` | **5 passed** in 251.81s |
+| `test_system_level_soc_composition_wiring.py` + `test_inference_engine_wiring.py` + `test_signoff_export.py` | **33 passed** in 858.81s |
+| `test_environment_mode_router.py` + `test_soc_environment_composer.py` + `test_signoff_bundle_hash.py` + `test_signoff_bundle_completeness_gate.py` | **40 passed** in 139.47s |
+| `test_engine_gates_and_routing.py` | **239 passed** in 1503.71s |
 
-Driving the real 34-stage graph end-to-end against `.work/_e2e_demo_usb3_lfps` to a genuine
-SIGNOFF PASS. That needs an agent walking `ENV_CHECK → … → PROMOTION_READINESS → SIGNOFF` with
-real evidence at every stage, which is a run, not a code fix. The mechanism it would have proven
-is now proven mechanically by the e2e test instead.
+Total: **317 passed, 0 failed**, all after the fix.
+
+## 5. Concurrency handling
+
+`dv_harness/engine.py` had large uncommitted changes from other concurrent
+workstreams in this same session (stage-progress-display, subsystem Blackboard
+topics), and the index carried another workstream's staged memory work. The
+commit was therefore produced through a **temporary index built from HEAD**
+with only my single engine.py hunk applied plus my three test files — the real
+index and every other workstream's staged/unstaged state were left untouched.
+
+Commit: `984d75e signoff: the human-approval hard-stop must govern the
+subsystem registry too` (4 files, +166/-4; `git diff <parent> 984d75e --stat`
+confirms it reverts nothing from the concurrent commits it landed on top of).
+The shared index's `engine.py` entry was then re-synced so a concurrent commit
+from another workstream could not silently revert the guard.
+
+## 6. Disclosed residual — NEEDS_SEPARATE_EFFORT
+
+The audit's *original* literal ask — drive a real project all the way to a
+SIGNOFF PASS inside this repo's own operational history — was **not** attempted
+and should not be attempted as a wiring pass. It requires:
+
+- a real subject project (not `v50` itself) with real RTL/VIP,
+- a real simulator (VCS) and real regression/coverage/RCA artifacts,
+- sequentially clearing ~30 real stage gates ENV_CHECK → … → PROMOTION_READINESS
+  with genuine evidence at each,
+- real human `dv-harness approve PROMOTION_READINESS` / `approve SIGNOFF`.
+
+That is a full DV campaign, not a code change, and no amount of code editing
+closes it. It is the same disclosed-residual shape this repo already carries
+for mechanism #14 (SoC composition): the code is proven correct on a real
+non-mocked path, but this harness's own dev-tree has never been the subject
+project that reaches that stage.
+
+**Scope for that follow-up effort:** run one real USB (or AMBA4) environment
+generation + verification campaign end-to-end through `DVHarness.run_stage()`
+against a project root with a real simulator available, and land its
+`.dv-harness/state.json` (`stages.SIGNOFF.status == "PASS"`), its
+`events.jsonl` `SIGNOFF_BUNDLE_EXPORTED` record, and its
+`subsystem_environment_registry.json` as the first real firing.
+
+## 7. Adjacent observation (NOT fixed — out of mechanism #8's scope)
+
+The same "side effects run past a human-approval downgrade" shape may affect
+`_promote_verified_fix_knowledge()` on a `RE_AUDIT` held at `WAIT_USER` by
+`_re_audit_requires_human_approval()` (HIGH risk / DUT_BUG). That belongs to
+mechanism #7 (5-Level Memory Engine); it was deliberately left alone here
+rather than widened into an unscoped edit, and is flagged for whoever owns #7.
+
+## 8. Files changed
+
+- `D:\DV\Task\DV_Agent_Harness_L5\v50\dv_harness\engine.py`
+- `D:\DV\Task\DV_Agent_Harness_L5\v50\dv_harness_tests\test_signoff_stage_gate_e2e.py`
+- `D:\DV\Task\DV_Agent_Harness_L5\v50\dv_harness_tests\test_engine_gates_and_routing.py`
+- `D:\DV\Task\DV_Agent_Harness_L5\v50\dv_harness_tests\test_system_level_soc_composition_wiring.py`
