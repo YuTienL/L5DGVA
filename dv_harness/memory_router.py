@@ -29,6 +29,54 @@ ENGINEERING_ADMISSION_CONFIDENCE_LEVELS = ("HIGH", "CONFIRMED")
 # knowledge, regardless of how well evidenced it is.
 ENGINEERING_REUSABLE_CLAIM_FIELDS = ("root_cause", "fix", "lesson")
 
+# --- Research / capability-evolution record kinds (2026-09-04, Research-
+# Capability Evolution master prompt sections 12/71/72, Stage 1) -------------
+#
+# Section 12's instruction is "Reuse the current memory hierarchy" and "Do NOT
+# add a sixth Research Memory". These are therefore `kind` strings routed by
+# the SAME route_memory() dispatch table below -- not a parallel router, not a
+# sixth tier, not a separate store. What they add is a NAMED routing rule for
+# each, in the precedent set by `react_reasoning_step`: research records
+# already landed in WORKING_MEMORY through the function's final fallthrough,
+# but by default rather than by decision, so nothing recorded WHY that tier is
+# the right one and nothing stopped a later reader assuming it was arbitrary.
+#
+# Section 12's own tier assignment, made mechanical:
+#   Working  -- current paper, temporary evidence/hypotheses/mappings
+#   Job      -- the current research-ingestion execution / research-architect
+#               task (a record carrying a real job_id)
+#   Project  -- project-specific architecture comparisons and L5/L5.x
+#               proposals, i.e. a DECIDED architecture_decision
+#   Engineering / Organizational -- unreachable by kind alone, see
+#               research_engineering_admission_reasons() and
+#               research_organizational_admission_reasons() below.
+RESEARCH_EVIDENCE_KINDS = ("research_evidence", "research_claim", "research_hypothesis")
+CAPABILITY_EVOLUTION_KINDS = ("capability_evolution_candidate",)
+ARCHITECTURE_DECISION_KIND = "architecture_decision"
+RESEARCH_ORIGIN_KINDS = (
+    RESEARCH_EVIDENCE_KINDS + CAPABILITY_EVOLUTION_KINDS + (ARCHITECTURE_DECISION_KIND,)
+)
+
+# The section-69 before/after benchmark, as the minimum field set that makes an
+# `internal_benchmark` block a real measurement rather than an assertion that
+# one happened. All four are required together: a metric with no before/after is
+# a name, and a before/after with no evidence pointer is a number nobody can
+# re-derive.
+RESEARCH_INTERNAL_BENCHMARK_FIELDS = ("metric", "before", "after", "evidence")
+
+# Record fields whose presence means "this content came from external research
+# or from the harness reasoning about itself", INDEPENDENT of the `kind` string
+# the caller chose. This is what makes the research bar unavoidable rather than
+# opt-in: relabelling a ResearchEvidenceCard-shaped record's kind to
+# `debug_lesson` does not shed its document_id / source_provenance / claim_set,
+# so it is still recognized here. `document_id` and `source_provenance` are the
+# real field names on research_evidence_card.schema.json; `candidate_id` and
+# `trigger_type` are capability_evolution_candidate.schema.json's.
+RESEARCH_PROVENANCE_FIELDS = (
+    "document_id", "source_provenance", "claim_set", "candidate_id",
+    "research_evidence_card_id",
+)
+
 _STORE_LEVEL = {
     "JOB_MEMORY": "job",
     "PROJECT_MEMORY": "project",
@@ -202,7 +250,7 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
                 result["vault_write"] = vault
         return result
     if destination == "ENGINEERING_MEMORY":
-        admitted, admission_reasons = engineering_admission_gate(record)
+        admitted, admission_reasons = engineering_admission_gate(record, root=root)
         if not admitted:
             # CLAUDE.md's Engineering Memory Policy, made real code rather
             # than trusted prose: "Promote an unverified hypothesis straight
@@ -257,7 +305,7 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
     return result
 
 
-def engineering_admission_gate(record: Dict[str, Any]):
+def engineering_admission_gate(record: Dict[str, Any], root=None):
     """The (Working/Project) -> Engineering tier boundary's real gate --
     the counterpart, one tier down, of promote_to_organizational()'s
     three-gate Engineering -> Organizational bar (2026-09-03,
@@ -297,6 +345,15 @@ def engineering_admission_gate(record: Dict[str, Any]):
        neither a root cause nor a fix nor a lesson has nothing for a future
        run to reuse, whatever its evidence.
 
+    A FOURTH set of reasons applies to research-origin records only
+    (2026-09-04): all three gates above are satisfiable from inside one
+    freshly-ingested paper card, so research content additionally has to clear
+    research_engineering_admission_reasons() -- see that function for why, and
+    for what `root` is needed for. `root` is optional purely so this stays a
+    drop-in for every existing caller; omitting it does not skip the research
+    bar, it fails it (RESEARCH_PROVENANCE_UNVERIFIABLE), because a corroboration
+    claim that cannot be re-read off disk is not a corroboration.
+
     Returns (admitted, reasons) -- reasons is a list of stable reason codes,
     empty when admitted, and is persisted onto the demoted Working Memory
     record by route_and_store() so a reader can see exactly what was missing.
@@ -321,6 +378,9 @@ def engineering_admission_gate(record: Dict[str, Any]):
         reasons.append("EXPLICITLY_NOT_REUSABLE")
     elif not any(str(record.get(f) or "").strip() for f in ENGINEERING_REUSABLE_CLAIM_FIELDS):
         reasons.append("NO_REUSABLE_CLAIM")
+
+    if is_research_origin(record):
+        reasons.extend(research_engineering_admission_reasons(root, record))
 
     return (not reasons), reasons
 
@@ -369,6 +429,11 @@ def organizational_admission_gate(root: Path, record: Dict[str, Any]):
        inference.score_confidence() result promote_to_organizational() stamps
        onto the record.
 
+    A FOURTH reason applies to research-origin records only (2026-09-04): master
+    prompt section 72's "Research Agent alone must not promote policy into
+    Organizational Memory" -- see research_organizational_admission_reasons().
+    It is an authority check, not a fourth evidence check.
+
     HONEST LIMITATION, scoped and not glossed: gate 3 is the one input that
     CANNOT be re-derived here. score_confidence()'s inputs
     (independent_sources_count/evidence_refs_verified/counter_evidence_count/
@@ -409,7 +474,178 @@ def organizational_admission_gate(root: Path, record: Dict[str, Any]):
     if str(level or "").strip().upper() != "HIGH":
         reasons.append("CONFIDENCE_NOT_HIGH")
 
+    if is_research_origin(record):
+        reasons.extend(research_organizational_admission_reasons(root, record))
+
     return (not reasons), reasons
+
+
+def research_provenance_signals(record: Dict[str, Any]):
+    """Which signals mark `record` as research- or capability-evolution-origin
+    content. Empty list means ordinary DV engineering content.
+
+    Deliberately NOT a `kind` check alone. The laundering path this closes is
+    real and one edit wide: take a ResearchEvidenceCard-shaped record, relabel
+    its `kind` from `research_evidence` to `debug_lesson`, set `verified: true`,
+    and before 2026-09-04 route_memory() sent it to ENGINEERING_MEMORY where
+    engineering_admission_gate()'s three gates were satisfiable by the paper's
+    own abstract (its `evidence` string), the ingesting agent's own
+    `confidence: HIGH`, and its own `lesson`. Nothing there asks whether the
+    claim was ever reproduced HERE. The card's identity fields survive that
+    relabelling, so they -- not the kind string -- are what this recognizes.
+    """
+    signals = []
+    kind = str(record.get("kind", "")).lower()
+    if kind in RESEARCH_ORIGIN_KINDS:
+        signals.append(f"KIND:{kind}")
+    if record.get("research_origin") is True:
+        signals.append("RESEARCH_ORIGIN_FLAG")
+    if str(record.get("trigger_type") or "").strip().upper() == "EXTERNAL_RESEARCH":
+        signals.append("TRIGGER_TYPE_EXTERNAL_RESEARCH")
+    for field in RESEARCH_PROVENANCE_FIELDS:
+        value = record.get(field)
+        if isinstance(value, str) and value.strip():
+            signals.append(f"FIELD:{field}")
+        elif isinstance(value, (list, dict)) and value:
+            signals.append(f"FIELD:{field}")
+    return signals
+
+
+def is_research_origin(record: Dict[str, Any]) -> bool:
+    return bool(research_provenance_signals(record))
+
+
+def _source_document_identity(record: Dict[str, Any]) -> str:
+    """The one external document a record's claim rests on, for the
+    "two INDEPENDENT sources" count below -- so the same paper cited twice
+    cannot be counted as two.
+
+    Falls back to the record's own memory_id, which makes an INTERNAL record
+    (one with no external document at all) count as its own distinct source:
+    a harness-produced engineering record corroborating a paper's claim is
+    exactly the independent second source section 71's lifecycle asks for.
+    """
+    doc = record.get("document_id")
+    if isinstance(doc, str) and doc.strip():
+        return f"document_id:{doc.strip()}"
+    prov = record.get("source_provenance")
+    if isinstance(prov, dict):
+        name = str(prov.get("document") or "").strip()
+        if name:
+            return f"document:{name}"
+    elif isinstance(prov, list):
+        for entry in prov:
+            if isinstance(entry, dict) and str(entry.get("document") or "").strip():
+                return "document:" + str(entry["document"]).strip()
+    sha = record.get("document_sha256")
+    if isinstance(sha, str) and sha.strip():
+        return f"sha256:{sha.strip()}"
+    return "memory_id:" + str(record.get("memory_id") or "").strip()
+
+
+def _has_internal_benchmark(record: Dict[str, Any]) -> bool:
+    bench = record.get("internal_benchmark")
+    if not isinstance(bench, dict):
+        return False
+    return all(str(bench.get(f) or "").strip() for f in RESEARCH_INTERNAL_BENCHMARK_FIELDS)
+
+
+def research_engineering_admission_reasons(root, record: Dict[str, Any]):
+    """The EXTRA bar a research-origin record must clear to reach the
+    Engineering tier, on top of engineering_admission_gate()'s existing three
+    (2026-09-04, Research-Capability Evolution master prompt sections 12/71).
+
+    Section 12: "A single paper claim must NOT automatically become Engineering
+    or Organizational truth." Section 71's lifecycle spells out what the missing
+    steps are: Raw Information -> Research Evidence -> Candidate Knowledge ->
+    **Repeated or Strong Evidence** -> **Internal Benchmark** -> Validated
+    Engineering Knowledge. The two bolded steps are exactly what the existing
+    three gates cannot see, because all three are satisfiable from inside a
+    single freshly-ingested card.
+
+    This mirrors organizational_admission_gate()'s rigor rather than inventing a
+    second, looser standard for research, and reuses its constants and its
+    method:
+
+    1. CORROBORATION, RE-READ OFF DISK. `corroborating_memory_ids` must resolve,
+       in this project's real MemoryStore, to at least
+       ORGANIZATIONAL_MIN_CONFIRMATIONS (the SAME constant, not a research-
+       specific number) ACTIVE records, spanning that many DISTINCT source
+       documents (`_source_document_identity()`). Re-read from the store for the
+       same reason the organizational gate re-reads `confirmation_count`: a
+       payload-declared corroboration is the claim, not evidence of it. One
+       paper cited twice, or two ids that both resolve to nothing, is one
+       occurrence.
+    2. INTERNAL VALIDATION. Either a gate-validated `verification` block
+       (_verification_is_gate_validated(), the same function both other gates
+       use) or a real `internal_benchmark` (all of
+       RESEARCH_INTERNAL_BENCHMARK_FIELDS). A technique corroborated only by
+       more literature has still never run here, and Engineering Memory is this
+       harness's own validated knowledge, not a literature review.
+
+    `root` is required to check gate 1 at all; a caller that cannot supply one
+    gets RESEARCH_PROVENANCE_UNVERIFIABLE rather than a pass, because an
+    unverifiable claim of corroboration is the exact failure mode this closes.
+    """
+    reasons = []
+
+    if root is None:
+        reasons.append("RESEARCH_PROVENANCE_UNVERIFIABLE")
+    else:
+        ids = record.get("corroborating_memory_ids")
+        ids = [str(i).strip() for i in ids if str(i or "").strip()] if isinstance(ids, list) else []
+        store = MemoryStore(Path(root))
+        documents = set()
+        for memory_id in ids:
+            try:
+                source = store.get(memory_id)
+            except Exception:
+                source = None
+            if not source or source.get("status") != "ACTIVE":
+                continue
+            documents.add(_source_document_identity(source))
+        if len(documents) < ORGANIZATIONAL_MIN_CONFIRMATIONS:
+            reasons.append("RESEARCH_SINGLE_SOURCE_CLAIM")
+
+    gate_validated, _shape = _verification_is_gate_validated(record)
+    if not gate_validated and not _has_internal_benchmark(record):
+        reasons.append("RESEARCH_NO_INTERNAL_VALIDATION")
+
+    return reasons
+
+
+def research_organizational_admission_reasons(root, record: Dict[str, Any]):
+    """The EXTRA bar a research-origin record must clear at the Organizational
+    boundary (2026-09-04, master prompt section 72).
+
+    Section 72 is not a confidence threshold, it is an authority rule: "Research
+    Agent alone must not promote policy into Organizational Memory." So the
+    check is not "is the evidence better" -- organizational_admission_gate()'s
+    existing three gates already ask that -- it is "did a HUMAN decide". The
+    record must name a ControlPlane stage under `human_approval.stage`, and that
+    approval must still be readable off `.dv-harness/control.json` through the
+    real ControlPlane. Re-read live for the same reason the source engineering
+    record is: a record that merely CONTAINS an approval-shaped dict is a record
+    that wrote its own approval.
+
+    Reuses the existing approval mechanism verbatim (`ControlPlane.get_approval`,
+    which `engine.loop()` already consults every iteration and which takes an
+    arbitrary stage string) -- no second approval mechanism, no new gate script.
+    """
+    approval = record.get("human_approval")
+    stage = str((approval or {}).get("stage") or "").strip() if isinstance(approval, dict) else ""
+    if not stage:
+        return ["RESEARCH_ORIGIN_REQUIRES_HUMAN_APPROVAL"]
+    if root is None:
+        return ["RESEARCH_HUMAN_APPROVAL_UNVERIFIABLE"]
+    try:
+        from .control_plane import ControlPlane
+        live = ControlPlane(Path(root)).get_approval(stage)
+    except Exception:
+        live = None
+    if live is None:
+        return ["RESEARCH_HUMAN_APPROVAL_NOT_ON_RECORD"]
+    return []
 
 
 def _add_or_confirm_engineering(root: Path, record: Dict[str, Any]):
@@ -728,6 +964,37 @@ def route_memory(record: Dict[str, Any]) -> str:
     # record, not the graph's current live state.
     if kind == "react_reasoning_step":
         return "WORKING_MEMORY"
+
+    # Research-Capability Evolution master prompt section 12 (2026-09-04). An
+    # external research claim and an in-flight capability-evolution candidate
+    # are BOTH unvalidated-by-construction at the moment they are written: one
+    # is a paper's assertion this harness has not reproduced, the other is a
+    # proposal about this harness that has not been through its own promotion
+    # policy yet. Both therefore start at the bottom two tiers regardless of any
+    # `verified` flag the caller set -- the flag is deliberately not consulted
+    # here, because "the paper says so" and "this harness verified it" are the
+    # exact two things section 12's "a single paper claim must NOT automatically
+    # become Engineering or Organizational truth" separates.
+    #
+    # JOB_MEMORY when the record names a real job (section 12's Job tier is
+    # literally "current research-ingestion execution ... current
+    # research-architect task"), WORKING_MEMORY otherwise. Neither is a new
+    # store: both are the tier stores route_and_store() already dispatches to.
+    if kind in RESEARCH_EVIDENCE_KINDS or kind in CAPABILITY_EVOLUTION_KINDS:
+        return "JOB_MEMORY" if str(record.get("job_id") or "").strip() else "WORKING_MEMORY"
+
+    # An architecture decision is section 12's Project-tier content
+    # ("project-specific architecture comparisons, current L5/L5.x proposals,
+    # project-specific accepted/rejected techniques") once it is actually
+    # decided. PROJECT_MEMORY is the CEILING for this kind, not a waypoint:
+    # section 12 also lists "architecture decision history" under Organizational
+    # Memory, but section 72 restricts that tier to human-approved governance
+    # decisions and states outright that "Research Agent alone must not promote
+    # policy into Organizational Memory". Reaching it therefore requires
+    # promote_to_organizational() with a real human approval, exactly like every
+    # other record -- never this kind string.
+    if kind == ARCHITECTURE_DECISION_KIND:
+        return "PROJECT_MEMORY" if verified else "WORKING_MEMORY"
 
     if kind in ("project_fact","project_topology","tool_flow","known_issue") and verified:
         return "PROJECT_MEMORY"

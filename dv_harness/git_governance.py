@@ -79,6 +79,14 @@ AI_AGENT_ENV_MARKERS = _remote_relay_module().AI_AGENT_ENV_MARKERS
 # is currently the only thing standing between an agent and a direct
 # `git push origin master`. See CLAUDE.md's gh CLI + PR-Only Governance
 # Policy section for the dated, authoritative state.)
+# AUTONOMY LEVEL C (Research-Capability Evolution master prompt section 61):
+# this constant, and the two evaluate_* functions below, are the REAL enforcement
+# behind section 61's first named example, "merging to main". The gate keys on
+# the destination branch and on nothing else -- not on which feature, agent or
+# workflow produced the commit -- so a capability-evolution change proposed by
+# research-architect is blocked here on exactly the same terms as any other
+# agent-authored push. Indexed, with the other eight LEVEL C examples and what
+# does or does not enforce each, in dv_harness/autonomy_levels.py.
 PROTECTED_BRANCHES = ("main", "master")
 
 _REF_HEADS_RE = re.compile(r"^refs/heads/(.+)$")

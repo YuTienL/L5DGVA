@@ -130,6 +130,16 @@ def read_parameters(root: Path) -> Dict[str, Any]:
 
 
 def _compute_protected_removals() -> set:
+    # AUTONOMY LEVEL C (master prompt section 61): computing this from the REAL
+    # STAGE_GATES["PROMOTION_READINESS"] / ["SIGNOFF"] lists is what makes this
+    # module's self-tuning path unable to weaken section 61's "changing signoff
+    # policy" example -- every gate on either stage is un-removable, and a new
+    # gate added to either stage is protected the moment it is registered rather
+    # than when someone remembers to extend a literal. Two scope limits, stated
+    # here because they are what dv_harness/autonomy_levels.py's LEVEL C table
+    # records as this row's residual: it covers gate MEMBERSHIP, never a gate
+    # script's own PASS/FAIL logic, and it covers the self-tuning override path,
+    # never a direct source edit.
     from . import gates as _gates
     protected = {
         ("IMPLEMENT", "rtl_write_scope_guard_gate"),

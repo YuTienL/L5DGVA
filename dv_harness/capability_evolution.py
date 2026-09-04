@@ -83,11 +83,15 @@ CANDIDATE_SCHEMA_VERSION = "1.0"
 # convention -- section 11 forbids a parallel Research Blackboard.
 BLACKBOARD_TOPIC = "capability_evolution_candidates"
 
-# The memory `kind` a candidate's audit record carries. Deliberately NOT added
-# to memory_router.route_memory()'s dispatch table: it falls through to that
-# function's WORKING_MEMORY default, which is the honest tier for an in-flight,
-# undecided state machine, and the Stage 0 audit's explicit recommendation was
-# that this needs zero new kind strings.
+# The memory `kind` a candidate's audit record carries. It used to reach
+# WORKING_MEMORY through route_memory()'s final fallthrough; since 2026-09-04 it
+# has a NAMED branch there (memory_router.CAPABILITY_EVOLUTION_KINDS, master
+# prompt section 12's memory-governance pass) which routes it to the same tier
+# by decision instead of by default -- WORKING_MEMORY, or JOB_MEMORY for a
+# record naming a real job_id. The destination for this module's own audit
+# record is unchanged, which is why persist_candidate()'s WORKING_MEMORY
+# assertion below still holds; what changed is that the tier is now documented
+# and test-covered rather than incidental.
 CANDIDATE_MEMORY_KIND = "capability_evolution_candidate"
 
 # The ControlPlane stage id this module's Human Approval Gate uses.
@@ -652,7 +656,74 @@ def assert_legal_transition(from_status: Optional[str], to_status: str,
 
 
 # ---------------------------------------------------------------------------
-# Human Approval Gate. Reuses dv_harness/control_plane.py's real ControlPlane
+# THE THREE AUTONOMY LEVELS (master prompt section 61)
+#
+# This block sits here, immediately above assert_human_approval() and
+# assert_no_production_write_authorized(), because those two functions ARE this
+# module's LEVEL B -> LEVEL C boundary. A reader who needs to know which side of
+# that boundary a piece of work is on should find the answer at the check that
+# enforces it, not in a design document filed somewhere else.
+#
+#   LEVEL A -- RESEARCH AUTONOMY. Fully automatable. Ingest, extract claims,
+#     collect and classify evidence, compare prior research, inspect current L5,
+#     identify gaps, generate hypotheses, recommend KEEP/ENHANCE/ADD/EXPERIMENT/
+#     REJECT, propose benchmarks, update temporary/job-level research state,
+#     create architecture proposals, detect contradictions. MUST NOT MODIFY
+#     PRODUCTION BEHAVIOR. Everything this module does today is Level A, which is
+#     why the module header's "writes nothing outside <root>/.dv-harness/" claim
+#     is a Level A statement and not an incidental one.
+#
+#   LEVEL B -- EXPERIMENT AUTONOMY. May be automated WITHIN existing policy:
+#     isolated experiment plans, an experiment/feature branch, bounded reversible
+#     changes, static checks, build, controlled simulation, targeted regression,
+#     coverage, before/after benchmark, PROMOTE/REVISE/REJECT recommendation.
+#     Two constraints, and the second is the one that gets forgotten:
+#       (1) changes stay isolated and reversible;
+#       (2) execution obeys the EXISTING security, resource, license,
+#           remote-execution and repository policies, and NEVER bypasses an
+#           existing human-approval requirement for an action current L5 policy
+#           already classifies as consequential. Level B is permission to
+#           automate work inside the fence, never permission to move the fence.
+#
+#   LEVEL C -- PRODUCTION PROMOTION. Always human-governed. A passing benchmark
+#     is not a promotion: section 61's own closing line is "Never automatically
+#     promote experimental capability into production merely because a benchmark
+#     passed", which is exactly what assert_no_production_write_authorized()
+#     refuses to let a caller do. Its nine named examples, and what really
+#     enforces each one today, are LEVEL_C_EXAMPLES / LEVEL_C_ENFORCEMENT below.
+#
+# WHAT "NONE" MEANS IN LEVEL_C_ENFORCEMENT, stated once so the table is not
+# read as more alarming or more reassuring than it is: every item below is
+# covered at the LAST mile by the generic PR gate (item 1) once the change has
+# to land on main/master, because git_governance.py keys on the destination
+# branch and nothing else -- it does not care what the change was. "NONE" means
+# there is no ITEM-SPECIFIC enforcement in front of that: nothing refuses the
+# edit at the point it is made, nothing marks the touched artifact as
+# consequential, and a human reviewing the resulting PR is the only thing
+# standing between the change and production. Those items are named as an OPEN
+# gap for a separate, dedicated effort. Building new production-safety
+# enforcement was deliberately NOT attempted in the same pass that wrote this
+# table: a safety mechanism authored by the same pass that decided it was needed
+# has had no independent review, which is the failure mode this whole governance
+# model exists to prevent.
+#
+# THE TABLE ITSELF LIVES IN dv_harness/autonomy_levels.py, not here, and the
+# reason is a real constraint rather than tidiness: section 61's own example
+# wording ("changing signoff policy", "changing regression selection policy used
+# for signoff") contains vocabulary this module is forbidden by test to name at
+# all. test_capability_evolution_research_architect.py's Acceptance Test E scans
+# this file's non-comment source for verdict/signoff tokens, so that an edit
+# giving this module verification authority fails before it ships. Writing the
+# table here would have meant weakening that guard to accommodate a docstring --
+# trading a real, enforced safety property for the convenience of co-locating
+# prose with it. autonomy_levels.py is also the more honest home: LEVEL C's
+# enforcement is spread across git_governance.py, self_tuning.py, gates.py,
+# policy.py and memory_router.py, and belongs to none of them individually.
+# Import it for LEVEL_C_EXAMPLES / LEVEL_C_ENFORCEMENT / LEVEL_C_UNENFORCED.
+
+# ---------------------------------------------------------------------------
+# Human Approval Gate -- the LEVEL B -> LEVEL C boundary in this module.
+# Reuses dv_harness/control_plane.py's real ControlPlane
 # verbatim -- the Stage 0 audit confirmed it is genuinely wired (engine.loop()
 # re-loads it every iteration) and that its `stage` key is an arbitrary string,
 # not a models.Stage member, so this needs no new graph node and no parallel
@@ -698,6 +769,10 @@ def assert_human_approval(root, candidate: Optional[Dict[str, Any]] = None) -> D
     This is what makes PROMOTION_CANDIDATE -> HUMAN_APPROVED a real gate rather
     than a state an agent can write for itself: section 70's "a successful
     experiment does not automatically imply HUMAN_APPROVED", enforced.
+
+    LEVEL C (see THE THREE AUTONOMY LEVELS above). Everything up to and including
+    BENCHMARKED is Level A/B work this module may do unattended; crossing into
+    HUMAN_APPROVED is not, no matter how the benchmark came out.
     """
     status = human_approval_status(root)
     if not status["approved"]:
@@ -717,6 +792,16 @@ def assert_no_production_write_authorized(root, candidate: Dict[str, Any]) -> No
     PRODUCTION *and* a real ControlPlane approval backs that. Nothing in this
     module ever writes a production file itself -- this exists so that a future
     Stage 3 caller cannot do so without passing the same gate.
+
+    LEVEL C (see THE THREE AUTONOMY LEVELS above). This is the only function in
+    this module a Level B experiment path can call and be told "no": Level B may
+    automate freely inside the existing fence, and this check is where the fence
+    is. It authorizes touching a production file AT ALL. It does NOT by itself
+    satisfy any of the nine item-specific LEVEL C rows in
+    `autonomy_levels.LEVEL_C_ENFORCEMENT` -- five of which
+    (`autonomy_levels.LEVEL_C_UNENFORCED`) have no item-specific enforcement to
+    satisfy today, so a caller that clears this check is at the START of the
+    LEVEL C obligations rather than the end of them.
     """
     current = candidate.get("current_status")
     if current not in PRODUCTION_WRITE_AUTHORIZED_STATES:
@@ -809,9 +894,9 @@ def persist_candidate(root, candidate: Dict[str, Any], *, source: str = "researc
         already routes live-state kinds (`active_hypothesis`, `plan_state`)
         there, so this is the tier the existing router's own logic points at.
       * memory_router.route_and_store(), which routes CANDIDATE_MEMORY_KIND to
-        WORKING_MEMORY through its existing fallthrough -- no new `kind` string
-        was added to route_memory()'s dispatch table, per the Stage 0 audit's
-        explicit recommendation.
+        WORKING_MEMORY -- since 2026-09-04 through a named branch in
+        route_memory() (memory_router.CAPABILITY_EVOLUTION_KINDS) rather than
+        through its fallthrough, same destination either way.
 
     The routed destination is ASSERTED to be WORKING_MEMORY. That guard is the
     global constraint made mechanical: a single design/build session is not the
