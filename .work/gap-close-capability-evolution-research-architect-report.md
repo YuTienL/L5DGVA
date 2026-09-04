@@ -274,3 +274,110 @@ writing.
 **DONE** — Stage 0 + Stage 1 scope only. Stage 2 (analyzing real papers/standards)
 and Stage 3 (implementing an approved change) both remain not started, which is
 what §57/§82's First-Run Control Instruction requires.
+
+---
+
+# Re-verification pass — 2026-09-04 (independent, second agent)
+
+A later agent was dispatched with the same Stage-0 + Stage-1 scope (build
+`research-architect`, wire it to `inference.py`, add the
+`CapabilityEvolutionCandidate` schema, persist to Blackboard/Memory, stop at a
+Human Approval Gate, prove Tests B/C/D/E). Everything above was already on disk
+and committed, so that pass became a verification pass rather than a build pass.
+The findings are recorded here rather than in a second report, so there is one
+place to read.
+
+## What was independently re-verified (not taken on faith)
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| §63's 30 candidate fields all exist | parsed `capability_evolution_candidate.schema.json`, set-differenced its `properties` against the 30 field names read out of §63 | 30/30 present, 0 missing. 6 extra (`schema_version`, `overlap_status`, `existing_files`, `enhance_insufficient_reason`, `decision_rationale`, `status_history`) — all load-bearing for the decision logic, none a renamed duplicate of a §63 field |
+| §70's 11 promotion states, exactly | compared `$defs.promotion_state.enum` and `capability_evolution.PROMOTION_STATES` against the 11 names read out of §70, in order | both exactly equal, order included |
+| §43's stop report is the exact text | printed `STOP_REPORT_LINES` and diffed against §43's seven lines | verbatim match |
+| §14's ten questions, in order | read `L5_CHECK_QUESTIONS` / `L5_QUESTION_FIELD` against §14's numbered list | all ten present, in order, each mapped to the candidate field that answers it and fed to the real `inference.identify_gap()` |
+| `inference.py` reused, not duplicated | read `decide_recommendation()` / `recompute_confidence()` / `next_actions_for_unanswered()` | all three call the real `score_confidence()` / `identify_gap()` / `next_best_action()`. The only signature change is `next_best_action(..., *, gap_action_catalog=None)` — keyword-only with a `None` default, so every pre-existing caller is byte-identical |
+| existing inference callers still pass | `pytest dv_harness_tests/test_inference.py test_inference_engine_wiring.py test_react_inference_wiring.py` | all pass |
+| ADD is genuinely unreachable when overlap exists (Test B) | read the rule order in `decide_recommendation()` | ADD is reachable only from `MISSING`, i.e. all six searches conclusive AND empty, plus a stated ENHANCE-insufficient reason, HIGH recomputed confidence and `evidence_strength >= 3`. Any short fall lands on EXPERIMENT, never ADD |
+| Decision logic touches no file (Test D) | read `decide_recommendation()` | pure function over the candidate dict: no open, no write, no model call |
+| `ROSTER.md` not concurrently edited | `git status --porcelain .claude/agents/ROSTER.md` | clean; `research-architect` already registered at line 153 as `NOT_DISPATCHED` |
+
+## One real defect found and fixed
+
+`test_no_new_kind_was_added_to_the_memory_router_dispatch_table` was **passing
+while no longer proving its own docstring** — a false-assurance test, the exact
+class of defect this project has been burned by before.
+
+The test asserted that `capability_evolution_candidate` reaches
+`WORKING_MEMORY` through `route_memory()`'s *fallthrough*, with no branch of its
+own, and enforced that by grepping `route_memory()`'s body for the literal kind
+string. Since then, section 12's memory-governance pass gave the kind a **real
+named branch**:
+
+```python
+if kind in RESEARCH_EVIDENCE_KINDS or kind in CAPABILITY_EVOLUTION_KINDS:
+```
+
+with `CAPABILITY_EVOLUTION_KINDS = ("capability_evolution_candidate",)` defined
+at module level. The branch the test existed to detect now exists — but the
+literal string moved into a constant, so the grep kept returning "not found" and
+the test kept passing. `capability_evolution.py`'s own header comments had
+already been updated (uncommitted) to describe the new named branch; the test
+was the half that went stale.
+
+The source grep was the wrong instrument regardless: it constrained **how**
+`route_memory()` is written rather than **what it decides**. It is replaced by
+`test_candidate_kind_can_never_route_above_job_memory`, which asserts the
+destination invariant this module actually depends on, behaviourally, across
+every record shape a caller could produce — including `verified: True`, the flag
+that unlocks the Engineering tier for other kinds:
+
+```
+{}                                              -> WORKING_MEMORY
+{'job_id': 'JOB-1'}                             -> JOB_MEMORY
+{'verified': True}                              -> WORKING_MEMORY
+{'verified': True, 'confidence': 'HIGH'}        -> WORKING_MEMORY
+{'job_id':'JOB-1','verified':True,...}          -> JOB_MEMORY
+```
+
+The assertion is discriminating rather than vacuous — the contrast case proves
+the same router really does promote a different kind on the same flags:
+
+```
+{'kind':'root_cause','verified':True,'confidence':'HIGH',...} -> ENGINEERING_MEMORY
+```
+
+So the global constraint ("never let this pass silently promote anything to
+Organizational Memory") is now enforced by a test that survives a refactor of
+the router, instead of one that silently stopped watching.
+
+## Test evidence (real commands, real output)
+
+```
+python -m pytest dv_harness_tests/test_capability_evolution_research_architect.py \
+                 dv_harness_tests/test_inference.py -q
+57 passed in 6.60s
+
+python -m pytest dv_harness_tests/test_inference_engine_wiring.py \
+                 dv_harness_tests/test_react_inference_wiring.py \
+                 dv_harness_tests/test_research_evidence_card.py \
+                 dv_harness_tests/test_research_intent_routing.py -q
+142 passed in 500.60s
+```
+
+## Scope discipline
+
+Only `dv_harness_tests/test_capability_evolution_research_architect.py` was
+modified by this pass. The uncommitted deltas in `engine.py` (stage-progress
+display + knowledge promotion) and `memory_router.py` / `memory.py` /
+`stage_profile_report.py` belong to other concurrent workflows in this repo and
+were read but never touched or staged.
+
+## Still open, flagged not fixed
+
+`CLAUDE.md` documents neither the `research-architect` agent, the
+`research-ingestion` skill, nor the `RESEARCH_CAPABILITY_EVOLUTION` human-approval
+stage (`grep -i "research\|capability.evolution" CLAUDE.md` returns nothing).
+This is a real documentation-currency gap. It was deliberately not fixed here:
+it is outside this pass's numbered build scope, and `CLAUDE.md` is one of the
+highest-collision shared files while several other workflows are active in this
+repo. It belongs to whoever runs Stage 1's remaining acceptance checks (A, F, G, H).

@@ -564,17 +564,49 @@ def test_candidate_audit_record_routes_to_working_memory_only(tmp_path):
     assert store.find("organizational") == []
 
 
-def test_no_new_kind_was_added_to_the_memory_router_dispatch_table():
-    """REUSE applies at the vocabulary level too: capability_evolution_candidate
-    reaches WORKING_MEMORY through route_memory()'s existing fallthrough, with
-    no new elif. If someone later adds one, this test says so rather than the
-    change passing silently."""
+def test_candidate_kind_can_never_route_above_job_memory():
+    """The tier invariant this module actually depends on, asserted against the
+    REAL route_memory() for every record shape this module can produce.
+
+    This test used to assert something else: that no branch for
+    CANDIDATE_MEMORY_KIND existed in route_memory() at all, on the theory that
+    the kind reached WORKING_MEMORY through the function's fallthrough. That
+    stopped being true -- section 12's memory-governance pass gave the kind a
+    NAMED branch (memory_router.CAPABILITY_EVOLUTION_KINDS) which routes it to
+    the same tier by decision instead of by default. The old assertion did not
+    fail, which is the problem worth recording: it grepped route_memory()'s body
+    for the literal kind string, and the branch refers to a module-level
+    constant, so it kept passing while no longer proving its own docstring.
+
+    A source grep was the wrong instrument regardless -- it constrained HOW the
+    router is written rather than WHAT it decides. What this module needs is a
+    destination guarantee, so that is what is asserted now, behaviourally:
+    a candidate record never reaches Engineering or Organizational Memory, no
+    matter which shape it carries or how route_memory() is refactored later.
+    A single design/build session is not the repeated, human-approved evidence
+    those two tiers require.
+    """
     from dv_harness.memory_router import route_memory
 
+    # The shape persist_candidate() actually writes: no job_id, no verified flag.
     assert route_memory({"kind": ce.CANDIDATE_MEMORY_KIND}) == "WORKING_MEMORY"
-    src = Path(ROOT / "dv_harness" / "memory_router.py").read_text(encoding="utf-8")
-    body = src.split("def route_memory(")[1]
-    assert ce.CANDIDATE_MEMORY_KIND not in body
+
+    # Every other shape a caller could hand it stays at or below Job Memory.
+    # `verified: True` is the important one: on other kinds that flag is the
+    # thing that unlocks the Engineering tier, and it must not do so here.
+    for extra in (
+        {},
+        {"job_id": "JOB-1"},
+        {"verified": True},
+        {"verified": True, "confidence": "HIGH"},
+        {"job_id": "JOB-1", "verified": True, "confidence": "HIGH"},
+    ):
+        record = {"kind": ce.CANDIDATE_MEMORY_KIND, **extra}
+        destination = route_memory(record)
+        assert destination in ("WORKING_MEMORY", "JOB_MEMORY"), (
+            f"{extra} routed a capability-evolution candidate to {destination}; "
+            "this kind must never reach Engineering or Organizational Memory"
+        )
 
 
 def test_candidate_id_is_stable_across_cycles_and_content_derived():
