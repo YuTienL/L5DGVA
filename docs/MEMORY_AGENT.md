@@ -1,4 +1,15 @@
-> See MEMORY_ARCHITECTURE.md for the system this agent operates, and .claude/agents/ROSTER.md for how it fits among the other 19 real agents.
+> See MEMORY_ARCHITECTURE.md for the system this agent operates, and .claude/agents/ROSTER.md for how it fits among the other real agents and what its real dispatch status is.
+
+> **Dispatch status: `NOT_DISPATCHED`, by design.** No `.dv-harness/graph/main_graph.json`
+> `node.agent` field, no subgraph node and no `.claude/workflows/*.js` caller names
+> `memory-agent` (machine-checked by `dv_harness/agent_dispatch.py` and
+> `dv_harness_tests/test_agent_dispatch_map.py`). Memory work fires in production as
+> engine-internal library calls — `memory_router.route_and_store()` /
+> `promote_to_organizational()`, imported and called directly by `dv_harness/engine.py`'s
+> own `run_stage()` paths — per CLAUDE.md's
+> Engineering Memory Policy. This profile documents and constrains that tier for a human
+> or sub-agent doing memory work by hand; it is not a stage-owning persona, and must not
+> be described as one.
 
 # AI Agent Harness L5 — Memory Agent
 
@@ -88,7 +99,13 @@ underlying single-sim/regression/re-audit runs itself.
 
 ## Worked example — before/after a debug cycle
 
-**Before** (dispatched by `debug-agent`):
+The two blocks below are the *shape of the memory operation*, not a real
+dispatch trace: `debug-agent.md` does not name `memory-agent`, and nothing in
+the graph dispatches it (see the dispatch-status note at the top). In
+production this same work runs as the `route_and_store()` call the second
+block already shows, made directly by `engine.py` on the debug path.
+
+**Before** a debug cycle:
 ```
 Agent(memory-agent): search Project+Engineering Memory for
   protocol=USB, symptoms=["scoreboard mismatch", "split transaction"]
@@ -96,7 +113,7 @@ Agent(memory-agent): search Project+Engineering Memory for
    explicitly labeled as prior knowledge, not current evidence
 ```
 
-**After** (dispatched once `debug-agent` has a verified fix):
+**After** a verified fix:
 ```
 Agent(memory-agent): persist
   kind=verified_fix, verified=true, protocol=USB, scope=branch_b0,
