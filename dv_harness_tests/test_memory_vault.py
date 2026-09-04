@@ -242,6 +242,138 @@ def test_validate_note_requires_both_halves_complete():
     assert bad_fm_good_body["body_status"] == "COMPLETE"
 
 
+def test_build_frontmatter_uses_the_general_protocol_key_for_a_protocol_less_record():
+    """The measured defect this pins (2026-09-04): all 9 of this project's
+    real vault notes were schema_status PARTIAL, every one on `protocol`
+    alone, because the mapper emitted null for a harness-engine/process
+    lesson that legitimately names no protocol -- while the vault commit that
+    captured that very note already said `memory(_general): ...`."""
+    engine_lesson = {"memory_id": "MEM-AAAA000001", "scope": "engine", "title": "stage retry loop",
+                     "confidence": "CONFIRMED", "status": "ACTIVE"}
+    fm = mv.build_frontmatter_from_memory_record("ENGINEERING_MEMORY", engine_lesson)
+    assert fm["protocol"] == mv.GENERAL_PROTOCOL
+    assert mv.validate_note_frontmatter(fm)["schema_status"] == "COMPLETE"
+    # The fallback is a searchable field value, never a tag -- "_general" on
+    # every non-protocol note's tag list would filter nothing.
+    assert mv.GENERAL_PROTOCOL not in fm["tags"]
+
+    real_protocol = mv.build_frontmatter_from_memory_record(
+        "ENGINEERING_MEMORY", {**engine_lesson, "protocol": "USB3"})
+    assert real_protocol["protocol"] == "USB3"
+    assert "usb3" in real_protocol["tags"]
+
+
+def test_route_and_store_writes_a_schema_complete_note_for_a_protocol_less_record():
+    """End-to-end through the REAL router write path, not the mapper alone:
+    a genuinely protocol-less engineering record must land on disk as a note
+    whose own frontmatter says COMPLETE, and must still say COMPLETE when the
+    file is re-parsed and re-validated from disk."""
+    tmp = _tmp()
+    try:
+        cfg = {"knowledge_center": {"enabled": False}, "memory": {"vault_path": "", "git_enabled": False}}
+        result = route_and_store(tmp, {
+            "kind": "debug_lesson", "verified": True, "scope": "engine",
+            "title": "gate evidence blocks were re-parsed per stage instead of cached",
+            "lesson": "cache the parsed evidence block per stage attempt",
+            "root_cause": "run_stage() re-parsed the same response text once per gate",
+            "confidence": "HIGH",
+            "evidence": [".dv-harness/events.jsonl:2211 STAGE_GATE re-parse", "stage_profile: 11 duplicate parses"],
+        }, cfg=cfg)
+        assert result["destination"] == "ENGINEERING_MEMORY"
+        note_path = tmp / ".dv-harness" / "vault" / result["vault_write"]["path"]
+        fm, body = mv.parse_note_markdown(note_path.read_text(encoding="utf-8"))
+        assert fm["protocol"] == mv.GENERAL_PROTOCOL
+        assert fm["schema_status"] == "COMPLETE"
+        assert mv.validate_note(fm, body)["note_status"] == "COMPLETE"
+    finally:
+        _rmtree(tmp)
+
+
+def test_resync_notes_repairs_a_legacy_protocol_null_note_from_its_source_record():
+    """The repair half: fixing the mapper cannot fix a note already on disk,
+    because nothing re-derives a note until its record is written again. This
+    drives a REAL note written the pre-fix way (protocol: null) against a
+    real, healthy MemoryStore record and asserts the resync makes it
+    COMPLETE without touching the record."""
+    tmp = _tmp()
+    try:
+        cfg = {"knowledge_center": {"enabled": False}, "memory": {"vault_path": "", "git_enabled": False}}
+        stored = route_and_store(tmp, {
+            "kind": "root_cause", "verified": True, "scope": "process",
+            "title": "reference BFM patterns were consulted reactively",
+            "root_cause": "no upfront line-by-line coverage audit of reference/bfm_patterns",
+            "fix": "run a full-coverage conversion pass before debugging",
+            "confidence": "CONFIRMED",
+            "evidence": ["reference/bfm_patterns/USB2_bulkin.txt:79", "3 debugging rounds lost"],
+        }, cfg=cfg)
+        note_id = stored["memory_id"]
+        vault_path = mv.resolve_vault_path(tmp, cfg)
+        note_path = vault_path / stored["vault_write"]["path"]
+
+        # Rewrite the note exactly as the pre-fix mapper did: protocol null,
+        # schema_status PARTIAL. Written directly, not through the adapter,
+        # because the adapter now refuses to record that as COMPLETE.
+        fm, body = mv.parse_note_markdown(note_path.read_text(encoding="utf-8"))
+        fm["protocol"] = None
+        fm["schema_status"] = "PARTIAL"
+        note_path.write_text(mv.render_note_markdown(fm, mv._body_to_sections(body)), encoding="utf-8")
+        legacy_fm, legacy_body = mv.parse_note_markdown(note_path.read_text(encoding="utf-8"))
+        assert mv.validate_note(legacy_fm, legacy_body)["note_status"] == "PARTIAL"
+        assert mv.validate_note(legacy_fm, legacy_body)["missing_required"] == ["protocol"]
+
+        report = mv.resync_notes_from_memory_store(tmp, cfg)
+        assert report["repaired"] == [note_id]
+        assert report["still_partial"] == []
+        assert report["skipped"] == []
+
+        fixed_fm, fixed_body = mv.parse_note_markdown(note_path.read_text(encoding="utf-8"))
+        assert fixed_fm["protocol"] == mv.GENERAL_PROTOCOL
+        assert fixed_fm["schema_status"] == "COMPLETE"
+        assert mv.validate_note(fixed_fm, fixed_body)["note_status"] == "COMPLETE"
+        # The repair re-renders from the record; it must not lose the body.
+        assert "no upfront line-by-line coverage audit" in fixed_body
+        assert MemoryStore(tmp).get(note_id).get("protocol") is None, \
+            "the fallback belongs to the note, not to the record -- the record stays as written"
+    finally:
+        _rmtree(tmp)
+
+
+def test_resync_notes_preserves_a_real_protocol_and_never_invents_one():
+    """Two honest-boundary halves in one: a note whose record names USB2 keeps
+    USB2 (the fallback only ever fills a genuine absence), and a note with no
+    source record left to mirror is reported skipped and left byte-identical
+    rather than rebuilt from guesses."""
+    tmp = _tmp()
+    try:
+        cfg = {"knowledge_center": {"enabled": False}, "memory": {"vault_path": "", "git_enabled": False}}
+        stored = route_and_store(tmp, {
+            "kind": "verified_fix", "verified": True, "protocol": "USB2",
+            "title": "EP0 underrun", "root_cause": "missing prefetch guard on the ep0 fifo",
+            "fix": "assert prefetch before ep0 IN", "confidence": "HIGH",
+            "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun"],
+        }, cfg=cfg)
+        vault_path = mv.resolve_vault_path(tmp, cfg)
+
+        orphan = mv.FileSystemMarkdownAdapter(vault_path, git_enabled=False).create({
+            "id": "MEM-ORPHAN0001", "memory_level": "engineering", "protocol": "PCIe",
+            "status": "ACTIVE", "confidence": "MEDIUM",
+        })
+        orphan_path = vault_path / orphan["path"]
+        orphan_before = orphan_path.read_text(encoding="utf-8")
+
+        report = mv.resync_notes_from_memory_store(tmp, cfg)
+        assert [e["note_id"] for e in report["resynced"]] == [stored["memory_id"]]
+        assert report["skipped"] == [{"note_id": "MEM-ORPHAN0001", "path": orphan["path"],
+                                      "before": "COMPLETE", "reason": "NO_SOURCE_RECORD"}]
+        assert orphan_path.read_text(encoding="utf-8") == orphan_before
+
+        fm, _ = mv.parse_note_markdown(
+            (vault_path / stored["vault_write"]["path"]).read_text(encoding="utf-8"))
+        assert fm["protocol"] == "USB2"
+    finally:
+        _rmtree(tmp)
+
+
 def test_render_and_parse_note_markdown_round_trip():
     fm = {
         "id": "MEM-ABC123", "memory_level": "engineering", "protocol": "USB2",

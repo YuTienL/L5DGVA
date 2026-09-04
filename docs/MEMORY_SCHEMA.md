@@ -87,6 +87,21 @@ silently marked complete):
 id, memory_level, protocol, status, confidence, created, updated
 ```
 
+`protocol` on a record that is genuinely not protocol-specific (a
+harness-engine or process lesson) is written as `GENERAL_PROTOCOL`
+(`_general`) by `build_frontmatter_from_memory_record()`, not as `null`.
+That is not a fabricated protocol name: `_general` is a real registered
+`knowledge_center.categories` entry, is already the protocol such a record
+is shared under, and is already what the vault's own git commit says
+(`memory(_general): ...`). Until 2026-09-04 the mapper was the one step in
+that write path that did not apply it, which is why all 9 of this project's
+real notes were `schema_status: PARTIAL` on `protocol` alone — with 9
+healthy source records sitting beside them — and why none of them could be
+reached by `dv-harness memory search --protocol ...`, since `null` matches
+no filter. The record itself is never rewritten; the fallback belongs to
+the note. A note built by any other caller (e.g. `dv-harness memory add`,
+which requires `--protocol`) is unaffected.
+
 `MEMORY_NOTE_OPTIONAL_FIELDS` (always emitted, as `null` when absent, so
 the schema shape is always visible):
 ```
@@ -156,6 +171,25 @@ section is not a violation, deleting or reshuffling one is.
 `body_status` are), keeping the two reported separately because they have
 different repairs: a missing required field is fixed by re-writing the note
 from its source record, a missing section by editing the note's body.
+
+### Repairing a note left PARTIAL by an older mapper
+
+A note is a mirror; the per-tier JSON record under
+`.dv-harness/memory/<level>/` is the system of record. Nothing re-derives a
+note until its record is written again, so a note written by an older
+`build_frontmatter_from_memory_record()` stays wrong on disk even after the
+mapper is fixed. `dv-harness memory resync-notes`
+(`memory_vault.resync_notes_from_memory_store()`) re-renders every vault
+note from its source record through that same mapper — the same repair
+relationship `python -m dv_harness.memory_cli reindex` already has to
+`index.json`. `--note-id` limits it to named notes; it exits 2 if any note
+is still PARTIAL afterwards.
+
+It invents nothing. A note whose record is gone, or whose `memory_level`
+names no known tier, is reported under `skipped` with its reason
+(`NO_SOURCE_RECORD` / `UNKNOWN_MEMORY_LEVEL`) and left byte-for-byte
+untouched: a mirror with nothing left to mirror is a fact to surface, not a
+note to rebuild from guesses.
 
 ### Example rendered note
 

@@ -120,12 +120,33 @@ from .memory import _tok as _tokenize  # reuse the existing stopword-aware token
 
 # Required per the user's spec -- absence of ANY of these forces
 # schema_status="PARTIAL" (see validate_note_frontmatter()). "protocol",
-# "status" and "confidence" are required because a memory note that cannot
-# say WHICH protocol, whether it is still trusted, or how confident it is,
-# is not yet reusable knowledge -- exactly the bar CLAUDE.md's "memory is
-# prior knowledge, not current evidence" already sets for anything read back
-# out of Memory.
+# "status" and "confidence" are required because a memory note that does not
+# say WHICH protocol it applies to, whether it is still trusted, or how
+# confident it is, is not yet reusable knowledge -- exactly the bar
+# CLAUDE.md's "memory is prior knowledge, not current evidence" already sets
+# for anything read back out of Memory. "applies to no particular protocol"
+# is itself one of those answers, and has its own value (GENERAL_PROTOCOL
+# below) rather than being left blank.
 MEMORY_NOTE_REQUIRED_FIELDS = ["id", "memory_level", "protocol", "status", "confidence", "created", "updated"]
+
+# The answer a record that is genuinely not protocol-specific (a harness-
+# engine or process lesson) gives to the required `protocol` field. NOT a
+# fabricated protocol name: `_general` is a real registered
+# `knowledge_center.categories` entry (config.py's DEFAULT_CONFIG), it is
+# already the value the vault's OWN git commit carries for such a record
+# (`memory(_general): ...`, memory_router._build_vault_commit_message()),
+# and it is already the protocol such a record is pushed to the shared
+# Knowledge Center under (memory_router._maybe_share(), memory.py's
+# SharedKnowledgeMemoryStore.add()).
+#
+# build_frontmatter_from_memory_record() was the one place in that same
+# write path that did NOT apply it, emitting `protocol: null` instead. The
+# measured consequence (2026-09-04): all 9 of this project's real vault
+# notes were schema_status PARTIAL, every one of them on `protocol` alone,
+# on a field the write path already had an honest answer for -- and
+# `dv-harness memory search --protocol ...` could not reach any of them,
+# because null matches no filter.
+GENERAL_PROTOCOL = "_general"
 
 # Optional -- present when the originating record/caller has them, never
 # required for a note to be written, but always emitted (as null) so a
@@ -1203,17 +1224,27 @@ def build_frontmatter_from_memory_record(destination: str, mem: Dict[str, Any],
     """Maps a MemoryStore/OrganizationalMemoryStore record onto the Phase 7
     note schema. Fields the record simply doesn't carry (rtl_sha, tb_sha,
     vip_vendor, ...) are emitted as null rather than omitted, so the note's
-    own frontmatter always shows the full schema shape."""
+    own frontmatter always shows the full schema shape.
+
+    `protocol` is the one exception, because it is a REQUIRED field: a
+    record with no protocol gets GENERAL_PROTOCOL, the same honest
+    "not protocol-specific" key the rest of this write path already uses
+    for that record -- see that constant's own comment."""
     level = _DESTINATION_TO_MEMORY_LEVEL.get(destination, "organizational")
     created = mem.get("created_at")
     created_iso = _epoch_to_iso(created) if isinstance(created, (int, float)) else (created or _now_iso())
+    # Tags stay derived from the record's OWN protocol, never from the
+    # GENERAL_PROTOCOL fallback: "_general" as a tag on every non-protocol
+    # note carries no information a reader could filter on, while the
+    # `protocol` field's own value is exactly what makes those notes
+    # reachable by `--protocol _general`.
     tags = sorted({str(v).lower().replace(" ", "-") for v in
                    (mem.get("protocol"), mem.get("scope"), level, mem.get("confidence")) if v})
     last_confirmed = mem.get("last_confirmed_at")
     return {
         "id": mem.get("memory_id") or mem.get("ccl_id") or _gen_note_id(),
         "memory_level": level,
-        "protocol": mem.get("protocol"),
+        "protocol": mem.get("protocol") or GENERAL_PROTOCOL,
         "subsystem": mem.get("scope"),
         "category": mem.get("category") or mem.get("scope"),
         "failure": str(mem.get("title") or mem.get("root_cause") or "untitled")[:200],
@@ -1272,6 +1303,106 @@ def build_sections_from_memory_record(mem: Dict[str, Any]) -> Dict[str, str]:
         "Known Limitations": str(mem.get("known_limitations") or "_None documented._"),
         "Related Knowledge": "\n".join(f"- {r}" for r in related) if related else "_None linked yet._",
     }
+
+
+_MEMORY_LEVEL_TO_DESTINATION = {level: dest for dest, level in _DESTINATION_TO_MEMORY_LEVEL.items()}
+
+
+def _project_name_from_disk(project_root: Path) -> Optional[str]:
+    """Same `.dv-harness/project.json` lookup memory_router._maybe_write_vault_note()
+    does before building a note's frontmatter, so a re-render produces the
+    same `project` value the original write did rather than dropping it."""
+    try:
+        import json as _json
+        project_json = Path(project_root) / ".dv-harness" / "project.json"
+        if project_json.exists():
+            return (_json.loads(project_json.read_text(encoding="utf-8")) or {}).get("project")
+    except Exception:
+        pass
+    return None
+
+
+def resync_notes_from_memory_store(project_root: Path, cfg: Optional[Dict[str, Any]] = None,
+                                    note_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Re-render vault notes from the durable MemoryStore records they mirror
+    (`dv-harness memory resync-notes`).
+
+    A Memory Note is a mirror; the per-tier JSON record under
+    `.dv-harness/memory/<level>/` is the system of record. So a note written
+    by an older/buggier version of build_frontmatter_from_memory_record()
+    stays wrong on disk forever even after the mapper is fixed -- nothing
+    re-derives it, because the router only writes a note when the underlying
+    record is written or updated. That is a real, measured state, not a
+    hypothetical: this project's own 9 vault notes were all schema_status
+    PARTIAL on `protocol` (see GENERAL_PROTOCOL's comment) with 9 perfectly
+    healthy source records sitting beside them. This is the repair, in the
+    same spirit as MemoryStore.reindex() repairing index.json from the record
+    files that are the truth behind it.
+
+    It NEVER invents content: every field comes from the source record via
+    the same build_frontmatter_from_memory_record()/
+    build_sections_from_memory_record() pair the real write path uses. A note
+    whose record is gone, or whose `memory_level` names no known tier, is
+    reported in `skipped` with its reason and left byte-for-byte untouched --
+    a mirror with nothing left to mirror is a fact to surface, not a note to
+    rewrite from guesses.
+    """
+    from .memory import MemoryStore
+
+    vault_path = resolve_vault_path(project_root, cfg)
+    provider = get_active_provider(project_root, cfg)
+    store = MemoryStore(Path(project_root))
+    project_name = _project_name_from_disk(project_root)
+    notes_root = vault_path / "06_Agent_Memory"
+    wanted = set(note_ids) if note_ids else None
+
+    resynced: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for path in sorted(notes_root.rglob("*.md")) if notes_root.exists() else []:
+        if ".git" in path.parts:
+            continue
+        frontmatter, body = parse_note_markdown(path.read_text(encoding="utf-8"))
+        note_id = frontmatter.get("id") or path.stem
+        if wanted is not None and note_id not in wanted:
+            continue
+        entry = {"note_id": note_id, "path": str(path.relative_to(vault_path)),
+                 "before": validate_note(frontmatter, body)["note_status"]}
+        destination = _MEMORY_LEVEL_TO_DESTINATION.get(str(frontmatter.get("memory_level") or "").lower())
+        if destination is None:
+            skipped.append({**entry, "reason": "UNKNOWN_MEMORY_LEVEL",
+                            "memory_level": frontmatter.get("memory_level")})
+            continue
+        record = store.get(note_id)
+        if not record:
+            skipped.append({**entry, "reason": "NO_SOURCE_RECORD"})
+            continue
+        result = provider.update(
+            note_id,
+            frontmatter_patch=build_frontmatter_from_memory_record(destination, record,
+                                                                    project_name=project_name),
+            sections_patch=build_sections_from_memory_record(record),
+            # One commit-message policy for this vault, not two: reuse the
+            # router's own `memory(<protocol>): ...` builder rather than
+            # re-deriving the format here. Imported lazily because
+            # memory_router imports THIS module the same way.
+            commit_message=_resync_commit_message(record, note_id),
+        )
+        if not result.get("ok"):
+            skipped.append({**entry, "reason": result.get("error") or "UPDATE_FAILED"})
+            continue
+        fm_after, body_after = parse_note_markdown(
+            (vault_path / result["path"]).read_text(encoding="utf-8"))
+        resynced.append({**entry, "after": validate_note(fm_after, body_after)["note_status"]})
+
+    still_partial = [e["note_id"] for e in resynced if e["after"] != "COMPLETE"]
+    return {"ok": True, "vault_path": str(vault_path), "resynced": resynced, "skipped": skipped,
+            "repaired": [e["note_id"] for e in resynced if e["before"] != "COMPLETE" and e["after"] == "COMPLETE"],
+            "still_partial": still_partial}
+
+
+def _resync_commit_message(record: Dict[str, Any], note_id: str) -> str:
+    from .memory_router import _build_vault_commit_message
+    return _build_vault_commit_message({**record, "title": f"resync note {note_id} from its MemoryStore record"})
 
 
 # ---------------------------------------------------------------------------

@@ -1035,6 +1035,15 @@ def main():
                                                   "pending vault changes and report recent commit history.")
     pmem_sync.add_argument("--message", default=None)
 
+    pmem_resync = pmem_sub.add_parser("resync-notes",
+                                       help="Re-render vault notes from the durable MemoryStore records they "
+                                            "mirror, repairing a note left schema-PARTIAL by an older mapper. "
+                                            "Invents nothing: a note whose source record is gone is reported "
+                                            "skipped, not rewritten. Exits 2 if any note is still PARTIAL after "
+                                            "the pass. See memory_vault.resync_notes_from_memory_store().")
+    pmem_resync.add_argument("--note-id", action="append", default=[], dest="note_ids",
+                              help="Repeatable. Limit the re-render to these note ids; default is every note.")
+
     pmem_sub.add_parser("doctor", help="Phase 21 full health check: vault writable, git status, Obsidian CLI, "
                                         "filesystem fallback, schema (frontmatter fields + body-section shape), "
                                         "broken links, duplicate IDs, invalid YAML, "
@@ -2321,6 +2330,10 @@ def main():
                 log = mv._run_git(vault_path, ["log", "--oneline", "-5"])
                 result["recent_commits"] = [l for l in (log.stdout or "").splitlines() if l.strip()] if log else []
             print(json.dumps(result, ensure_ascii=False, indent=2))
+        elif args.memory_cmd == "resync-notes":
+            result = mv.resync_notes_from_memory_store(h.root, h.cfg, note_ids=args.note_ids or None)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if not result["still_partial"] else 2)
         elif args.memory_cmd == "doctor":
             result = memory_doctor.run_doctor(h.root, h.cfg)
             print(json.dumps(result, ensure_ascii=False, indent=2))
