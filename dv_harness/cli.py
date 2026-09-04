@@ -978,6 +978,38 @@ def main():
     psri.add_argument("--json", action="store_true",
                       help="Print raw JSON instead of the human-readable SYS-9..14 report.")
 
+    # SYS-15..SYS-17 of the same workflow (2026-09-04): the SYSTEM_RESOURCE_
+    # REGISTRY plus the two tables the requirement calls "Mandatory". The
+    # registry is a THIRD granularity -- one entry per SYSTEM-level resource,
+    # with `owner` and `consumer_subsystems` as separate fields -- distinct
+    # from the SUBSYSTEM-granularity subsystem_environment_registry.json (one
+    # row per environment, six identity/qualification fields, validated by
+    # tools/real_env/system_level_validator.py) and from the connectivity
+    # matrix (one row per interface of ONE environment, no subsystem column).
+    # Planning only: every owner and reuse_decision is a recommendation.
+    psip = sub.add_parser("system-integration-plan",
+                          help="SYS-15..17: build the SYSTEM_RESOURCE_REGISTRY (one entry per "
+                               "SYSTEM-level resource, owner vs consumer_subsystems) and render "
+                               "the mandatory SUBSYSTEM INTEGRATION MATRIX and VIP/AGENT "
+                               "DEDUPLICATION MATRIX for the selected subsystems. Reads only; "
+                               "generates no System-Level UVM, command.txt or routing.")
+    psip.add_argument("--select", action="append", default=None, metavar="SUBSYSTEM",
+                      help="Name one subsystem to include. Repeatable. Required -- SYS-1's "
+                           "explicit-selection refusal is not bypassed by this command.")
+    psip.add_argument("--knowledge-center", action="store_true", dest="plan_kc",
+                      help="Also query the shared Knowledge Center during the SYS-1 discovery "
+                           "this command runs first. Off by default (real remote call).")
+    psip.add_argument("--command-inventory", default=None, metavar="CSV",
+                      help="Path to a command_inventory.csv to read as a DECLARED overlay for "
+                           "the SYS-8 contract set. Read-only; never rewritten.")
+    psip.add_argument("--write-registry", action="store_true",
+                      help="Also persist the SYS-15 registry to "
+                           ".dv-harness/soc-composer/system_resource_registry.json. A PLANNING "
+                           "document beside -- never inside -- the subsystem registry; nothing "
+                           "reads it back to apply it. Off by default.")
+    psip.add_argument("--json", action="store_true",
+                      help="Print raw JSON instead of the human-readable SYS-15..17 report.")
+
     # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
     # ordering as an executable, queryable rule rather than prose an agent is
     # trusted to have read. NOT the same list as tools/verification_flow/
@@ -2171,6 +2203,38 @@ def main():
         raise SystemExit(
             0 if (result["selection"]["selection_admissible"]
                   and rule["automatic_integration_allowed"]) else 2)
+    elif args.cmd == "system-integration-plan":
+        from . import system_resource_registry as srr
+        kc_client = None
+        if args.plan_kc:
+            from .config import load_config
+            from .knowledge_center import KnowledgeCenterClient
+            kc_client = KnowledgeCenterClient(load_config(h.root), h.root)
+        result = srr.plan_system_integration(
+            h.root, args.select or [], knowledge_center_client=kc_client,
+            inventory_overlay_path=args.command_inventory)
+        plan = result["integration_plan"]
+        written = (str(srr.write_system_resource_registry(
+            h.root, plan["system_resource_registry"])) if args.write_registry else "")
+        if args.json:
+            print(json.dumps({**result, "registry_written_to": written},
+                             ensure_ascii=False, indent=2, default=str))
+        else:
+            if not result["selection"]["selection_admissible"]:
+                from . import subsystem_discovery as sd
+                print(sd.format_report(result["selection"]))
+                print()
+            print(srr.format_integration_plan_report(plan))
+            if written:
+                print(f"\nSYS-15 registry written to {written} (planning artifact; nothing "
+                      "applies it -- that is SYS-40).")
+        # Exit 2 while any SYS-17 Decision is BLOCKED or any subsystem's
+        # Integration Status is a BLOCKED_* class: a System-Level composition
+        # must not be attempted on that plan, so a CI step must not read it as
+        # a clean run.
+        raise SystemExit(
+            0 if (result["selection"]["selection_admissible"]
+                  and plan["summary"]["integration_plan_clean"]) else 2)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
         result = reference_pattern_audit.audit_directory(

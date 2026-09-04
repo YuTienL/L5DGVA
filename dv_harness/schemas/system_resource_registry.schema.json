@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/system_resource_registry.schema.json",
+  "title": "system_resource_registry",
+  "description": "SYS-15 of the System-Level Verification Integration workflow: the SYSTEM_RESOURCE_REGISTRY, 'the authority for System-Level resource composition'. RESOURCE granularity -- one entry per SYSTEM-level resource, where the same physical resource seen in two subsystems' evidence collapses into ONE entry whose `owner` and `consumer_subsystems` are different fields. This is a DIFFERENT registry from .dv-harness/soc-composer/subsystem_environment_registry.json, which is SUBSYSTEM granularity (one row per ENVIRONMENT, exactly name/environment_manifest/release_sha/qualification_state/interface_compatibility/clock_reset_compatibility, written only by engine._persist_subsystem_registry_entry() on a gate-verified SIGNOFF PASS and validated by tools/real_env/system_level_validator.py). The two must not be merged: this document would break that validator's six-field contract. Every field here is DERIVED by dv_harness/system_resource_registry.py's build_system_resource_registry() from the SYS-9..14 cross-subsystem resource analysis; nothing in it is hand-authored. This is a PLANNING artifact: `owner`, `reuse_decision` and every proposed System owner are RECOMMENDATIONS. Nothing may auto-apply an entry into a bind, UVM or command.txt artifact -- that is SYS-40 and requires a separate explicit human approval.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "subsystems",
+    "entries",
+    "summary",
+    "authority_scope",
+    "artifacts_modified",
+    "phase_boundary"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "subsystems": {
+      "type": "array",
+      "description": "The subsystem ids this registry covers, as supplied by the SYS-1 selection.",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "authority_scope": {
+      "const": "PLANNING_ONLY",
+      "description": "A const rather than an enum: this module cannot produce a registry of any other scope, so a document claiming a wider authority is not a valid document of this schema. write_system_resource_registry() refuses to persist anything whose authority_scope is not this value."
+    },
+    "artifacts_modified": {
+      "const": false,
+      "description": "Structural restatement of the SYS-39 boundary. Building this registry reads real artifacts and writes none of them."
+    },
+    "phase_boundary": {
+      "type": "string",
+      "description": "The SYS-39 stop condition carried on the artifact itself, so a reader of the file alone knows this is analysis and not an implementation authorization."
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["entry_count", "member_resource_count", "collapsed_resource_count"],
+      "properties": {
+        "entry_count": { "type": "integer", "minimum": 0 },
+        "member_resource_count": {
+          "type": "integer", "minimum": 0,
+          "description": "How many SUBSYSTEM-LOCAL SYS-9 resource records fed this registry. Always >= entry_count; the difference is how many duplicates were collapsed."
+        },
+        "collapsed_resource_count": { "type": "integer", "minimum": 0 },
+        "shared_entry_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "entry_of_resource": {
+      "type": "object",
+      "description": "SYS-9 subsystem-local resource_id -> the registry entry that now holds it. The traceability link back to the per-subsystem inventory, so no entry can claim a member the inventory never produced.",
+      "additionalProperties": { "type": "string" }
+    },
+    "pair_decisions": {
+      "type": "object",
+      "description": "'<resource_a>|<resource_b>' -> the decide_reuse() verdict for that pair. The SAME objects SYS-17's deduplication matrix renders, so a registry entry and its row in that table can never disagree about what was decided.",
+      "additionalProperties": { "type": "object" }
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "One SYSTEM-LEVEL resource. The `required` list is SYS-15's own 19-field sentence, verbatim and in its own order; dv_harness/system_resource_registry.py's SYS15_FIELDS is held to this list by a test so the schema and the code cannot drift apart.",
+        "required": [
+          "resource_id",
+          "resource_type",
+          "protocol",
+          "physical_hierarchy",
+          "role",
+          "owner",
+          "consumer_subsystems",
+          "active_passive",
+          "shared",
+          "exclusive",
+          "clock",
+          "reset",
+          "address_domain",
+          "source_environment",
+          "source_config",
+          "conflict_status",
+          "reuse_decision",
+          "evidence",
+          "confidence"
+        ],
+        "properties": {
+          "resource_id": {
+            "type": "string",
+            "pattern": "^SYSRES::",
+            "description": "SYSTEM-level id. Deliberately a different shape from SYS-9's subsystem-local '<SUBSYS>::<hierarchy>::<interface>' so the two granularities cannot be confused in a report or a JSON file. Keyed on the strongest physical evidence available: a declared physical-interface id, then a shared bind target, then a digest of the member ids."
+          },
+          "resource_type": { "type": "string", "minLength": 1 },
+          "protocol": { "type": "string" },
+          "physical_hierarchy": {
+            "type": "array",
+            "description": "A LIST, not a string: two independently-generated environments name their own trees independently, so one physical resource genuinely has more than one hierarchy path and picking one would hide the other from whoever has to bind it.",
+            "items": { "type": "string" }
+          },
+          "role": { "type": "string" },
+          "owner": {
+            "type": "string",
+            "description": "Who would own this resource at System level. A subsystem id when exactly one subsystem consumes it or one subsystem drives it; 'PROPOSED_SYSTEM_SHARED::<type>' when SYS-13 evaluated it as promotable shared SoC infrastructure -- PROPOSED, because assigning a System owner means creating the shared agent, which is SYS-40; 'OWNER_UNRESOLVED' whenever a conflict stands."
+          },
+          "consumer_subsystems": {
+            "type": "array",
+            "description": "Every subsystem whose own evidence contributed a member record. Separate from `owner` on purpose: that separation is the statement neither the subsystem registry nor the connectivity matrix can make, and it is why this registry exists.",
+            "items": { "type": "string", "minLength": 1 },
+            "minItems": 1
+          },
+          "active_passive": { "type": "string" },
+          "shared": { "enum": ["SHARED_ACROSS_SUBSYSTEMS", "NOT_SHARED"] },
+          "exclusive": { "type": "string" },
+          "clock": { "type": "string" },
+          "reset": { "type": "string" },
+          "address_domain": {
+            "type": "array",
+            "description": "One block per member record, each carrying that subsystem's own resolved status and regions. Not merged into a single domain: a COARSE domain (the SoC map has no bus column, so which regions THIS resource reaches is not stated) merged with a RESOLVED one would present a guess as a fact.",
+            "items": {
+              "type": "object",
+              "required": ["owner_subsystem", "status"],
+              "properties": {
+                "owner_subsystem": { "type": "string" },
+                "status": { "type": "string" },
+                "regions": { "type": "array" }
+              }
+            }
+          },
+          "source_environment": {
+            "type": "array",
+            "description": "Which real environment each member record came from, with that environment's release_sha as recorded by the real subsystem registry. Never derived from the environment tree, which cannot vouch for its own version.",
+            "items": {
+              "type": "object",
+              "required": ["subsystem_id", "member_resource_id"],
+              "properties": {
+                "subsystem_id": { "type": "string" },
+                "release_sha": { "type": "string" },
+                "member_resource_id": { "type": "string" }
+              }
+            }
+          },
+          "source_config": {
+            "type": "array",
+            "description": "Each member's configuration fingerprint from the live vip_config dump. Two differing configuration_hash values on one entry are exactly the CONFIGURATION_CONFLICT case: one shared agent cannot hold two configurations.",
+            "items": {
+              "type": "object",
+              "required": ["subsystem_id", "configuration_hash"],
+              "properties": {
+                "subsystem_id": { "type": "string" },
+                "configuration_hash": { "type": "string" },
+                "config_field_count": { "type": "integer", "minimum": 0 },
+                "source": { "type": "string" }
+              }
+            }
+          },
+          "conflict_status": {
+            "enum": [
+              "NO_CONFLICT",
+              "DRIVER_CONFLICT",
+              "CONFIGURATION_CONFLICT",
+              "UNPROVEN_DUPLICATE_HELD"
+            ]
+          },
+          "reuse_decision": {
+            "enum": [
+              "REUSE_SHARED",
+              "KEEP_INDEPENDENT",
+              "PASSIVE_ONLY",
+              "RECONFIGURE",
+              "MERGE_ACCESS_PATH",
+              "BLOCKED",
+              "UNKNOWN"
+            ],
+            "description": "SYS-17's own closed Decision vocabulary, verbatim. SYS-15's reuse_decision and SYS-17's Decision column are produced by the ONE function decide_reuse(), so an entry and its row in the deduplication matrix cannot disagree."
+          },
+          "evidence": {
+            "type": "array",
+            "description": "The real artifact references every member record was built from.",
+            "items": { "type": "string" }
+          },
+          "confidence": {
+            "enum": ["HIGH", "MEDIUM", "LOW"],
+            "description": "inference.score_confidence()'s level -- the one confidence formula in this codebase, not a second scorer. Independent sources are the distinct ENVIRONMENTS that contributed a record; counter-evidence is every contradiction the entry carries, so an entry with a driver conflict or a clock disagreement can never be reported HIGH (that function's own safety floor)."
+          },
+          "member_resource_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "related_entries": {
+            "type": "array",
+            "description": "Entries this one has a SHARED_LOGICAL_RESOURCE or UNKNOWN relationship with. Those relationships deliberately do NOT merge two entries -- SYS-11's own reason string for SHARED_LOGICAL says physical equivalence is NOT established, and collapsing on that basis would make the authority assert something nothing proved -- so they are recorded as a cross-reference instead.",
+            "items": { "type": "string" }
+          },
+          "reuse_decision_reason": { "type": "string" },
+          "recommendation_only": { "const": true }
+        }
+      }
+    }
+  }
+}
