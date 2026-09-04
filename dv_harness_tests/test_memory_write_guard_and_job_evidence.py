@@ -20,13 +20,17 @@ The three gaps these close, as found by the audit that preceded them:
 """
 
 import json
+import socket
+import sys
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from dv_harness import lsf_client, memory_security, regression_reporter
-from dv_harness.memory import CornerCaseLibrary, MemoryStore
+from dv_harness.knowledge_center import RESULT_MARKER
+from dv_harness.memory import CornerCaseLibrary, MemoryStore, OrganizationalMemoryStore
 from dv_harness.memory_artifact_policy import (
     EmbeddedArtifactError,
     MAX_RECORD_FIELD_CHARS,
@@ -34,6 +38,7 @@ from dv_harness.memory_artifact_policy import (
     build_evidence_reference,
     enforce_record_artifact_policy,
 )
+from dv_harness.memory_router import route_and_store
 
 VC_PASSWORD_LINE = "run it with VCPW=Sup3rSecret!pw on vchost-a"
 SSH_KEY_BLOCK = (
@@ -49,6 +54,218 @@ def _record_on_disk(root: Path, level: str, memory_id: str) -> dict:
     only the returned copy would still fail here."""
     return json.loads((root / ".dv-harness" / "memory" / level / f"{memory_id}.json")
                       .read_text(encoding="utf-8"))
+
+
+KC_CFG = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                "vchost": "vchost-b", "vchop": "host-c"}}
+
+
+class _FakeKnowledgeCenterRelay:
+    """A real local relay server standing in for the Linux-server Knowledge
+    Center broker, so the assertions below are about the payload that
+    genuinely went ONTO THE WIRE -- not about what a mocked
+    `KnowledgeCenterClient.add()` was handed.
+
+    That distinction is the whole point for Phase 19: the audited gap was
+    that a raw record reached `KnowledgeCenterClient.add()` and from there
+    the shared, cross-user broker. Asserting on the serialized `put` payload
+    the transport actually uploaded is the only assertion that proves the
+    record crossing the machine boundary is the redacted one.
+
+    Same transport-level pattern already used by
+    test_memory_tier_completion.py and test_knowledge_center.py -- reused
+    rather than re-invented so all three exercise one transport.
+    """
+
+    def __init__(self, monkeypatch, localappdata: Path):
+        monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+        remote_dir = str(Path(__file__).resolve().parents[1] / "tools" / "remote")
+        if remote_dir not in sys.path:
+            sys.path.insert(0, remote_dir)
+        self.received = []
+        self._sock = None
+        self._thread = None
+
+    def start(self, responses):
+        from remote_relay import info_path
+
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(len(responses))
+        port = self._sock.getsockname()[1]
+
+        def _serve():
+            for resp in responses:
+                conn, _ = self._sock.accept()
+                buf = b""
+                while b"\n" not in buf:
+                    buf += conn.recv(65536)
+                req = json.loads(buf.decode("utf-8"))
+                if req.get("op") == "put":
+                    try:
+                        req["_local_content"] = Path(req["local"]).read_text(encoding="utf-8")
+                    except OSError:
+                        req["_local_content"] = None
+                self.received.append(req)
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                conn.close()
+
+        self._thread = threading.Thread(target=_serve)
+        self._thread.start()
+
+        p = info_path("vchost-b", "host-c")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"host": "127.0.0.1", "port": port, "token": "tok",
+                                  "pid": 1, "started": "2026-09-01T00:00:00"}), encoding="utf-8")
+        return self
+
+    def stop(self):
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        if self._sock is not None:
+            self._sock.close()
+
+    @property
+    def pushed_record(self) -> dict:
+        """The `record` block of the add payload the transport uploaded."""
+        put = next(r for r in self.received if r.get("op") == "put")
+        return json.loads(put["_local_content"])["record"]
+
+    @staticmethod
+    def ok_add_responses(memory_id: str = "KC-1"):
+        return [
+            {"ok": True, "exit_code": 0, "stdout": "", "error": ""},  # put
+            {"ok": True, "exit_code": 0,
+             "stdout": f'{RESULT_MARKER}{{"memory_id": "{memory_id}"}}\n', "error": ""},  # run
+        ]
+
+
+ORGANIZATIONAL_RECORD = {
+    "kind": "methodology", "verified": True, "protocol": "USB3",
+    "title": "Reconcile every LSF job's sim.log epilogue before calling a batch clean",
+}
+
+
+class TestPhase19OrganizationalMemoryIsGuardedBeforeTheSharedPush:
+    """The audited Phase 19 gap (2026-09-04): ORGANIZATIONAL_MEMORY -- the
+    ONE tier whose only backing store is the shared, cross-user Knowledge
+    Center on the Linux server -- bypassed both write-time guards.
+    `route_and_store()`'s ORGANIZATIONAL_MEMORY branch called
+    `OrganizationalMemoryStore.add()`, which forwarded the caller's record
+    verbatim to `KnowledgeCenterClient.add()`; nothing on that path called
+    `redact_record()` or `enforce_record_artifact_policy()`. So the most
+    exposed destination in the system was the least protected one, and it is
+    reachable directly: `route_memory()` sends any
+    methodology/best_practice/cross_project_lesson record with
+    `verified: True` straight there.
+    """
+
+    def test_a_secret_never_reaches_the_shared_broker_over_the_wire(self, tmp_path, monkeypatch):
+        relay = _FakeKnowledgeCenterRelay(monkeypatch, tmp_path / "localappdata")
+        relay.start(_FakeKnowledgeCenterRelay.ok_add_responses())
+        try:
+            result = route_and_store(
+                tmp_path,
+                {**ORGANIZATIONAL_RECORD, "lesson": VC_PASSWORD_LINE,
+                 "evidence": {"how": SSH_KEY_BLOCK}},
+                cfg=KC_CFG)
+        finally:
+            relay.stop()
+
+        assert result["destination"] == "ORGANIZATIONAL_MEMORY"
+        pushed = relay.pushed_record
+        # The payload that crossed the machine boundary carries neither
+        # secret, at either nesting depth.
+        serialized = json.dumps(pushed)
+        assert "Sup3rSecret!pw" not in serialized
+        assert "LEAKEDKEYMATERIAL" not in serialized
+        assert "***REDACTED-VC_PASSWORD***" in pushed["lesson"]
+        assert "***REDACTED-SSH_PRIVATE_KEY***" in pushed["evidence"]["how"]
+        # ...and says so, rather than silently mutating the record.
+        assert pushed["secrets_redacted"] is True
+        assert set(pushed["secrets_redacted_types"]) == {"vc_password", "ssh_private_key"}
+
+    def test_a_giant_log_is_truncated_with_disclosure_before_the_shared_push(
+            self, tmp_path, monkeypatch):
+        """CLAUDE.md: never store giant logs in a memory record. Enforced on
+        this path too now, not only on the local JSON tiers."""
+        blob = "\n".join(f"UVM_INFO sim.log line {i}" for i in range(MAX_RECORD_FIELD_LINES * 3))
+        blob += "\nUVM_FATAL = 1, UVM_ERROR = 12"
+
+        relay = _FakeKnowledgeCenterRelay(monkeypatch, tmp_path / "localappdata")
+        relay.start(_FakeKnowledgeCenterRelay.ok_add_responses())
+        try:
+            route_and_store(tmp_path, {**ORGANIZATIONAL_RECORD, "lesson": blob}, cfg=KC_CFG)
+        finally:
+            relay.stop()
+
+        pushed = relay.pushed_record
+        assert len(pushed["lesson"].splitlines()) < MAX_RECORD_FIELD_LINES
+        assert len(pushed["lesson"]) <= MAX_RECORD_FIELD_CHARS
+        assert "lines removed by the Phase 12 large-artifact policy" in pushed["lesson"]
+        # the sim.log epilogue (the tail) survives -- head-only truncation
+        # would throw away the PASS/FAIL verdict
+        assert "UVM_FATAL = 1, UVM_ERROR = 12" in pushed["lesson"]
+        assert pushed["large_artifact_truncated"]
+
+    def test_embedded_waveform_content_hard_rejects_and_nothing_is_pushed(self, tmp_path):
+        """A HARD REJECT, not a repair: the push must never happen at all,
+        so no transport contact is made and no partial record lands on the
+        shared server."""
+        vcd = "$enddefinitions $end\n#0\n$dumpvars\n1!\n0\"\n"
+        with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add") as kc_add:
+            with pytest.raises(EmbeddedArtifactError):
+                route_and_store(tmp_path, {**ORGANIZATIONAL_RECORD, "lesson": vcd}, cfg=KC_CFG)
+        kc_add.assert_not_called()
+
+    def test_the_store_guards_even_when_called_directly_not_through_the_router(self, tmp_path):
+        """`OrganizationalMemoryStore.add()` is the chokepoint, so a caller
+        that constructs the store itself (as cli.py/dashboard.py-style call
+        sites do for every other KnowledgeCenterClient consumer) is covered
+        too -- the guard is not a router-branch-only patch."""
+        with patch("dv_harness.knowledge_center.KnowledgeCenterClient.add",
+                    return_value={"ok": True, "memory_id": "KC-9"}) as kc_add:
+            OrganizationalMemoryStore(tmp_path, cfg=KC_CFG).add(
+                {**ORGANIZATIONAL_RECORD, "lesson": VC_PASSWORD_LINE})
+        _category, _protocol, forwarded = kc_add.call_args[0]
+        assert "Sup3rSecret!pw" not in json.dumps(forwarded)
+        assert forwarded["secrets_redacted_types"] == ["vc_password"]
+        # protocol routing still comes off the record, unchanged by guarding
+        assert _protocol == "USB3"
+
+    def test_the_vault_mirror_carries_the_same_guarded_content_that_was_pushed(
+            self, tmp_path, monkeypatch):
+        """Every other vault-write-through destination mirrors the guarded
+        record `MemoryStore.add()` returns. This one had no local store to
+        return one, so before the fix its Markdown note was rendered from the
+        RAW record -- a giant log truncated out of the shared push would have
+        survived in full inside the vault note."""
+        blob = "\n".join(f"UVM_INFO sim.log line {i}" for i in range(MAX_RECORD_FIELD_LINES * 3))
+        cfg = {**KC_CFG, "memory": {"vault_root": str(tmp_path / "vault"), "git_enabled": False}}
+
+        relay = _FakeKnowledgeCenterRelay(monkeypatch, tmp_path / "localappdata")
+        relay.start(_FakeKnowledgeCenterRelay.ok_add_responses())
+        try:
+            with patch("dv_harness.memory_router._maybe_write_vault_note") as vault_note:
+                vault_note.return_value = {"ok": True}
+                route_and_store(tmp_path, {**ORGANIZATIONAL_RECORD, "lesson": blob}, cfg=cfg)
+        finally:
+            relay.stop()
+
+        mirrored = vault_note.call_args[0][3]
+        assert mirrored["lesson"] == relay.pushed_record["lesson"]
+        assert mirrored["large_artifact_truncated"]
+
+    def test_guarding_an_already_guarded_record_changes_nothing(self, tmp_path):
+        """The router rebinds `record` to the guarded form and the store
+        guards again -- this must be a no-op, never a double-redaction that
+        wraps `***REDACTED-VC_PASSWORD***` inside another marker."""
+        from dv_harness.memory import _guard_record_before_write
+
+        once = _guard_record_before_write({**ORGANIZATIONAL_RECORD, "lesson": VC_PASSWORD_LINE})
+        twice = _guard_record_before_write(dict(once))
+        assert twice == once
+        assert once["lesson"].count("***REDACTED-") == 1
 
 
 class TestPhase19SecretRedactionAtTheJsonStore:

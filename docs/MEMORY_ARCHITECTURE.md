@@ -87,9 +87,9 @@ independently; neither depends on the other.
 | Organizational | `OrganizationalMemoryStore` (no local JSON file — see below) | `kind` in `cross_project_lesson`/`methodology`/`best_practice`, **and only ever reached via `promote_to_organizational()`** | **yes**, plus 3-gate promotion (see below) |
 
 Routing itself is `dv_harness.memory_router.route_memory(record) -> str`
-(`memory_router.py:571`) — a pure function, kind/verified/scope in,
+(`memory_router.py:594`) — a pure function, kind/verified/scope in,
 destination string out. `route_and_store(root, record, cfg)`
-(`memory_router.py:91`) is the real entry point: routes, persists, and
+(`memory_router.py:92`) is the real entry point: routes, persists, and
 (for shareable destinations) pushes to the Knowledge Center and/or Vault.
 
 A `kind` of `credential`/`password`/`token`/`secret` is hard-`REJECT`ed
@@ -102,11 +102,26 @@ rules in `CLAUDE.md`.
 cannot see a secret-shaped string embedded in a legitimate record's free-text
 field, and it says nothing about artifact size. Both of those are enforced one
 layer down, inside `memory._guard_record_before_write()`, which every
-`MemoryStore.add()` and `CornerCaseLibrary.add()` call passes through before
-anything reaches disk — including `WORKING_MEMORY`, the tier that is
-deliberately never mirrored into the Vault
+`MemoryStore.add()`, `CornerCaseLibrary.add()` and
+`OrganizationalMemoryStore.add()` call passes through before anything reaches
+disk — including `WORKING_MEMORY`, the tier that is deliberately never
+mirrored into the Vault
 (`memory_router._VAULT_WRITE_THROUGH_DESTINATIONS`) and therefore has no other
 scanner.
+
+`OrganizationalMemoryStore.add()` joined that list on 2026-09-04 and was the
+last write path outside it. It matters more than the others, not less: that
+tier has no local file store at all (see below), so its guard is the only
+thing between a record and the **shared, cross-user** Knowledge Center on the
+Linux server — an unredacted secret there reaches every other user's harness,
+not just this project's `.dv-harness/memory/`. `route_memory()` sends any
+`methodology`/`best_practice`/`cross_project_lesson` record with
+`verified: true` straight to it, so that path is reachable from a plain
+`route_and_store()` call and not only from `promote_to_organizational()`.
+`route_and_store()`'s `ORGANIZATIONAL_MEMORY` branch guards the record before
+the branch runs, so the Vault note mirrors byte-identical content to what was
+pushed — the other destinations get that for free by mirroring the guarded
+record `MemoryStore.add()` returns.
 
 1. **Secret redaction** — `memory_security.redact_record()` walks the record
    recursively (nested dicts, lists of dicts) and redacts every match of the
@@ -186,7 +201,7 @@ python -m dv_harness.memory_cli --project-root . reindex
 ### Organizational Memory has no local file store, by design
 
 Unlike the other 4 tiers, `OrganizationalMemoryStore.add()` writes straight
-to the shared Knowledge Center (`memory.py:783-789`) — there is no
+to the shared Knowledge Center (`memory.py:840-873`) — there is no
 `.dv-harness/memory/organizational/*.json`. The Vault write-through still
 happens locally (a human-browsable copy), but the tier's actual backing
 store IS the cross-user Knowledge Center, because organizational knowledge
@@ -196,7 +211,7 @@ the one project that happened to promote it.
 ### The promotion boundary: Engineering → Organizational
 
 `memory_router.promote_to_organizational(root, memory_id, confidence_inputs,
-cfg, kind)` (`memory_router.py:445`) is the ONLY code path allowed to move
+cfg, kind)` (`memory_router.py:461`) is the ONLY code path allowed to move
 a record across this boundary. Three independent, all-required gates:
 
 1. **Qualitative**: `_verification_is_gate_validated(mem)` recognizes

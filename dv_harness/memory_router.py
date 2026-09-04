@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 from .memory import (
     MemoryStore, MemoryGC, CornerCaseLibrary, CornerCaseLibraryConsolidator,
     JobMemoryStore, ProjectMemoryStore, WorkingMemoryStore, OrganizationalMemoryStore,
+    _guard_record_before_write,
 )
 from .blackboard import Blackboard
 
@@ -154,6 +155,21 @@ def route_and_store(root: Path, record: Dict[str, Any], cfg: Dict[str, Any] = No
         # MemoryStore(root).add("organizational", record) dispatch below,
         # which used to write a local file that nothing else ever read and
         # that duplicated/contradicted this exact design decision.
+        #
+        # `record` is rebound to the guarded form (2026-09-04, gap-close-
+        # obsidian-memory phase 19) so the vault mirror below carries exactly
+        # what was pushed. OrganizationalMemoryStore.add() is the real
+        # chokepoint and guards on its own -- the guard is idempotent by
+        # construction (memory_security's _ALREADY_REDACTED_VALUE_RE, and an
+        # already-truncated field is under the size cap), so calling it here
+        # costs nothing. Without this line, this destination would be the
+        # only one whose vault note is built from an UNguarded record: every
+        # other vault-write-through branch passes `mem`, i.e. the guarded
+        # record MemoryStore.add() returns, so a giant log truncated out of
+        # the pushed record would have survived in full inside the Markdown
+        # note -- the exact thing CLAUDE.md forbids "in a memory record or
+        # vault note".
+        record = _guard_record_before_write(record)
         push = OrganizationalMemoryStore(root, cfg=cfg).add(record)
         result = {"destination": destination, **push}
         # Vault write-through (obsidian-memory-core, 2026-09-03): additive

@@ -842,8 +842,34 @@ class OrganizationalMemoryStore:
         # same destination: category fixed to "_general" (organizational
         # lessons aren't protocol-family-scoped the way engineering/corner-case
         # records are), protocol taken from the record when present.
-        protocol = memory.get("protocol") or "_general"
-        return self.client.add("_general", protocol, memory)
+        #
+        # THE GAP THIS CLOSES (2026-09-04, gap-close-obsidian-memory phase
+        # 19, confirmed by full-repo grep before it was written): this was
+        # the ONE write path in this module that reached durable storage
+        # without passing _guard_record_before_write(). MemoryStore.add()
+        # and CornerCaseLibrary.add() both guard; this one forwarded the
+        # caller's record verbatim to KnowledgeCenterClient.add(), and
+        # nothing in knowledge_center.py redacts or bounds anything. That
+        # made the single most exposed destination the least protected one:
+        # unlike the four local tiers, organizational memory's only backing
+        # store is the SHARED, CROSS-USER Knowledge Center on the Linux
+        # server, so an unredacted secret here leaks to every other user's
+        # harness rather than staying in this project's own
+        # `.dv-harness/memory/`. route_memory() sends any
+        # cross_project_lesson/methodology/best_practice record with
+        # verified=True straight here, so a direct route_and_store() call
+        # reached this line with no upstream guard at all --
+        # promote_to_organizational() happened to be safe only because it
+        # copies fields off an already-guarded engineering-tier record,
+        # which is a property of that one caller, not of this path.
+        #
+        # Guarding BEFORE the push (not after) is the point: an
+        # EmbeddedArtifactError raised here aborts the push, exactly as it
+        # already aborts a local MemoryStore write, rather than shipping raw
+        # waveform/VCD content to a shared server and repairing it afterwards.
+        guarded = _guard_record_before_write(memory)
+        protocol = guarded.get("protocol") or "_general"
+        return self.client.add("_general", protocol, guarded)
 
     def search(self, query: Optional[Dict[str, Any]] = None, limit: int = 8) -> Dict[str, Any]:
         query = query or {}
