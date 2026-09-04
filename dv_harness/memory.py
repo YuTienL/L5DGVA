@@ -182,7 +182,55 @@ class MemoryStore:
             "last_used_at":mem.get("last_used_at"),"reuse_count":mem.get("reuse_count",0)
         }
 
-    def add(self, level: str, memory: Dict[str,Any]):
+    # Fields that record INDEPENDENT RE-CONFIRMATION of a record, and which
+    # therefore may never be set by whoever supplies the record body. They are
+    # the direct input to memory_router.promote_to_organizational()'s third
+    # gate (confirmation_count >= ORGANIZATIONAL_MIN_CONFIRMATIONS), i.e. to
+    # CLAUDE.md's "a second independent run re-deriving the same
+    # root_cause/protocol -- not the same run reported twice".
+    # `last_confirmation_evidence` deliberately has no entry: it is simply
+    # ABSENT until a confirm() supplies one, which is distinct from present-
+    # and-empty and must stay that way on a record that was never confirmed.
+    _CONFIRMATION_OWNED_DEFAULTS = {"confirmation_count": 0, "last_confirmed_at": None}
+    _CONFIRMATION_OWNED_FIELDS = ("confirmation_count", "last_confirmed_at",
+                                  "last_confirmation_evidence")
+
+    def _apply_confirmation_integrity(self, mid: str, mem: Dict[str,Any]):
+        """Force the confirmation fields to their real on-disk values,
+        discarding whatever the caller put there (2026-09-04, gap-close-
+        obsidian-memory phase 4+5).
+
+        THE GAP THIS CLOSES, reproduced live before it was written: these
+        were plain `setdefault`s, so a caller-supplied value passed through
+        verbatim. A SINGLE route_and_store() creation event carrying
+        {"confirmation_count": 7} was written to the engineering tier with
+        confirmation_count=7 and then promoted straight to ORGANIZATIONAL
+        by promote_to_organizational() -- clearing a gate whose entire
+        purpose is to require a second, independently-derived run. The
+        qualitative and quantitative gates are unforgeable in the same way
+        (one re-derives a verification block's shape, the other is computed
+        from caller inputs at promotion time), but the counter was simply
+        read back from the record body, so the record could assert its own
+        eligibility.
+
+        MemoryGC.confirm() -- the one authorized writer, which increments
+        from the stored value under the caller's own read-modify-write --
+        passes _confirmation_write=True to bypass this. Every other writer
+        (route_and_store()/_add_or_confirm_engineering() creating a record,
+        mark_used()/_write_back_knowledge_commit_sha() round-tripping one,
+        MemoryGC's revalidation paths) keeps whatever is already on disk,
+        so a re-add can neither invent nor silently drop confirmations.
+        """
+        prior=self.get(mid) or {}
+        for field in self._CONFIRMATION_OWNED_FIELDS:
+            if field in prior:
+                mem[field]=prior[field]
+            elif field in self._CONFIRMATION_OWNED_DEFAULTS:
+                mem[field]=self._CONFIRMATION_OWNED_DEFAULTS[field]
+            else:
+                mem.pop(field,None)
+
+    def add(self, level: str, memory: Dict[str,Any], *, _confirmation_write: bool=False):
         if level not in MEMORY_LEVELS:
             raise ValueError(level)
         mem=dict(memory)
@@ -195,8 +243,11 @@ class MemoryStore:
         mem.setdefault("confidence","UNKNOWN")
         mem.setdefault("status","ACTIVE")
         mem.setdefault("provenance",None)
-        mem.setdefault("confirmation_count",0)
-        mem.setdefault("last_confirmed_at",None)
+        if _confirmation_write:
+            for field,default in self._CONFIRMATION_OWNED_DEFAULTS.items():
+                mem.setdefault(field,default)
+        else:
+            self._apply_confirmation_integrity(mid,mem)
         mem=_guard_record_before_write(mem)
         p=self.dir/level/f"{mid}.json"
         p.write_text(json.dumps(mem,ensure_ascii=False,indent=2),encoding="utf-8")
@@ -532,7 +583,13 @@ class MemoryGC:
         the accumulation mechanism that makes repeated independent agreement
         actually count for something, rather than every record being
         trusted equally forever regardless of how many times it has (or
-        hasn't) been re-confirmed."""
+        hasn't) been re-confirmed.
+
+        This is the ONLY authorized writer of the confirmation fields
+        (MemoryStore._CONFIRMATION_OWNED_FIELDS) -- it increments from the
+        value already on disk and passes _confirmation_write=True, which is
+        what MemoryStore.add() requires before it will accept them from a
+        record body at all. See _apply_confirmation_integrity()."""
         mem=self.store.get(memory_id)
         if not mem: return False
         mem["confirmation_count"]=int(mem.get("confirmation_count",0))+1
@@ -541,7 +598,7 @@ class MemoryGC:
             mem["last_confirmation_evidence"]=evidence
         if mem.get("status")=="NEEDS_REVALIDATION":
             mem["status"]="ACTIVE"
-        self.store.add(mem["level"],mem)
+        self.store.add(mem["level"],mem,_confirmation_write=True)
         return True
 
 # Corner-case Library: a cross-project persistent store distinct from

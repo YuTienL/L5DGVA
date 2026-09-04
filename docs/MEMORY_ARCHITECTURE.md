@@ -217,6 +217,24 @@ a record across this boundary. Three independent, all-required gates:
    separate run re-deriving the same conclusion, not the same run reported
    twice.
 
+   `confirmation_count` (with `last_confirmed_at` /
+   `last_confirmation_evidence`) is **integrity-owned**: `MemoryStore.add()`
+   discards whatever the record body carries and restores the on-disk value
+   (`_apply_confirmation_integrity()`, `memory.py:198`), so only
+   `MemoryGC.confirm()` — which passes `_confirmation_write=True` — can
+   advance it. Before 2026-09-04 these were plain `setdefault`s, so a single
+   creation event carrying `{"confirmation_count": 2}` was written through
+   verbatim and promoted straight to Organizational, clearing the one gate
+   that exists to require a second independent run. A non-confirm re-add
+   (`mark_used()`, the `knowledge_commit_sha` write-back, GC revalidation)
+   can therefore neither invent nor silently drop confirmations. Regression
+   coverage: `test_memory_tier_integrity_and_admission.py`, section 4.
+
+A promoted organizational record carries the source record's count as
+`source_confirmation_count` (provenance), never as its own
+`confirmation_count` — a freshly-promoted record has zero confirmations of
+its own.
+
 Any gate miss returns `{"promoted": False, "reason": "..."}` — it never
 raises for an ordinary miss, only for an unknown `memory_id`.
 

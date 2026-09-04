@@ -530,7 +530,14 @@ def promote_to_organizational(root: Path, memory_id: str, confidence_inputs: Dic
         "root_cause": mem.get("root_cause"), "fix": mem.get("fix"),
         "symptoms": mem.get("symptoms", []), "evidence": mem.get("evidence"),
         "verification": mem.get("verification"), "confidence_result": confidence_result,
-        "confirmation_count": confirmation_count,
+        # PROVENANCE of the source engineering record, deliberately NOT named
+        # `confirmation_count`: that field is owned by MemoryGC.confirm() and
+        # counts THIS record's own independent re-confirmations, of which a
+        # freshly-promoted organizational record has zero. Carrying the
+        # source's count under that name would have let a promoted record
+        # look pre-confirmed (and, before MemoryStore._apply_confirmation_
+        # integrity(), would have been written through verbatim).
+        "source_confirmation_count": confirmation_count,
         "source_engineering_memory_id": memory_id,
     }
     result = route_and_store(root, record, cfg=cfg)

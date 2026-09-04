@@ -13,6 +13,9 @@ parse/import smoke test.
   3. (Working/Project) -> Engineering admission gate -- the tier boundary one
      level below promote_to_organizational()'s, previously enforced only by a
      caller-supplied `verified` boolean.
+  4. (2026-09-04 re-audit) confirmation_count integrity -- the organizational
+     gate's third input was itself caller-supplied, so one creation event
+     could self-declare the repeated confirmation the gate exists to require.
 """
 
 from __future__ import annotations
@@ -27,8 +30,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dv_harness import lsf_client, memory_doctor
-from dv_harness.memory import MemoryRetriever, MemoryStore
-from dv_harness.memory_router import engineering_admission_gate, route_and_store
+from dv_harness.memory import MemoryGC, MemoryRetriever, MemoryStore
+from dv_harness.memory_router import (
+    ORGANIZATIONAL_MIN_CONFIRMATIONS, engineering_admission_gate,
+    promote_to_organizational, route_and_store,
+)
 
 
 @pytest.fixture()
@@ -392,3 +398,126 @@ def test_engine_verified_fix_promotion_record_shape_still_clears_the_gate():
                           "target_post_fix_result": "PASS", "replay_equivalent": True},
     })
     assert admitted is True, reasons
+
+
+# ---------------------------------------------------------------------------
+# 4. confirmation_count is not forgeable by the record body (2026-09-04)
+#
+# Re-audit of the Phase 4+5 READY verdict found the organizational gate's
+# third input was self-declarable: MemoryStore.add() used
+# `setdefault("confirmation_count", 0)`, so a value supplied in the record
+# body passed straight through to disk, and promote_to_organizational() read
+# it back as if it had been earned. A SINGLE creation event carrying
+# confirmation_count=2 therefore promoted straight to ORGANIZATIONAL_MEMORY,
+# defeating the one gate whose entire purpose is to require a SECOND,
+# independently-derived run (CLAUDE.md: "not the same run reported twice").
+# The other two gates were never forgeable this way, which is why only this
+# one needed closing.
+# ---------------------------------------------------------------------------
+
+_PROMOTABLE = {
+    "kind": "root_cause", "verified": True, "protocol": "USB2", "scope": "LFPS",
+    "title": "USB2 LFPS polling timeout", "root_cause": "missing sync flop on lfps_detect",
+    "fix": "add 2-flop synchronizer", "confidence": "HIGH",
+    "evidence": ["waveform: lfps_detect glitches across clock domains"],
+    "verification": {"single_sim": "PASS", "regression": "PASS", "reaudit": "CLEAN"},
+}
+_HIGH_CONF = dict(independent_sources_count=3, evidence_refs_verified=True,
+                  counter_evidence_count=0, multi_agent_consensus_count=2)
+
+
+def test_confirmation_count_supplied_in_the_record_body_is_discarded_on_creation(tmp_root):
+    result = route_and_store(tmp_root, dict(_PROMOTABLE, confirmation_count=7), cfg={})
+    assert result["destination"] == "ENGINEERING_MEMORY"
+    stored = MemoryStore(tmp_root).get(result["memory_id"])
+    assert stored["confirmation_count"] == 0
+    # last_confirmed_at is what proves it was never really confirmed: the one
+    # authorized writer always sets the two together.
+    assert stored["last_confirmed_at"] is None
+
+
+def test_a_single_creation_event_cannot_self_declare_its_way_to_organizational(tmp_root):
+    """The regression this whole section exists for: before the fix this
+    promoted, on one creation event, with zero independent re-derivation."""
+    result = route_and_store(
+        tmp_root, dict(_PROMOTABLE, confirmation_count=ORGANIZATIONAL_MIN_CONFIRMATIONS), cfg={})
+    promoted = promote_to_organizational(tmp_root, result["memory_id"], _HIGH_CONF, cfg={})
+    assert promoted["promoted"] is False
+    assert promoted["reason"] == "INSUFFICIENT_CONFIRMATION"
+    assert promoted["confirmation_count"] == 0
+    assert promoted["required"] == ORGANIZATIONAL_MIN_CONFIRMATIONS
+
+
+def test_direct_memorystore_add_cannot_forge_the_counter_either(tmp_root):
+    """route_and_store() is not the only door -- the guard lives in
+    MemoryStore.add() itself, so seeding the store directly is also covered."""
+    seeded = MemoryStore(tmp_root).add("engineering", dict(_PROMOTABLE, confirmation_count=5))
+    assert seeded["confirmation_count"] == 0
+    assert MemoryStore(tmp_root).get(seeded["memory_id"])["confirmation_count"] == 0
+
+
+def test_only_genuine_repeated_confirmation_opens_the_organizational_gate(tmp_root):
+    """The positive half: two real MemoryGC.confirm() calls -- the authorized
+    writer -- still reach ORGANIZATIONAL_MEMORY. The fix must close the forged
+    path without breaking the earned one."""
+    store = MemoryStore(tmp_root)
+    mid = route_and_store(tmp_root, dict(_PROMOTABLE), cfg={})["memory_id"]
+
+    MemoryGC(store).confirm(mid, evidence={"independent_run": 1})
+    assert store.get(mid)["confirmation_count"] == 1
+    assert store.get(mid)["last_confirmed_at"] is not None
+    assert promote_to_organizational(tmp_root, mid, _HIGH_CONF, cfg={})["reason"] == \
+        "INSUFFICIENT_CONFIRMATION"
+
+    MemoryGC(store).confirm(mid, evidence={"independent_run": 2})
+    assert store.get(mid)["confirmation_count"] == ORGANIZATIONAL_MIN_CONFIRMATIONS
+    result = promote_to_organizational(tmp_root, mid, _HIGH_CONF,
+                                        cfg={"knowledge_center": {"enabled": False}})
+    assert result["destination"] == "ORGANIZATIONAL_MEMORY"
+    assert result["promotion_gate"]["confirmation_count"] == ORGANIZATIONAL_MIN_CONFIRMATIONS
+
+
+def test_an_ordinary_re_add_neither_invents_nor_drops_confirmations(tmp_root):
+    """Every non-confirm writer round-trips a record through add()
+    (mark_used(), the knowledge_commit_sha write-back, MemoryGC's
+    revalidation paths). Those must preserve the earned count exactly --
+    zeroing them would silently un-confirm a record."""
+    store = MemoryStore(tmp_root)
+    mid = route_and_store(tmp_root, dict(_PROMOTABLE), cfg={})["memory_id"]
+    MemoryGC(store).confirm(mid)
+    MemoryGC(store).confirm(mid)
+
+    store.mark_used(mid)
+    assert store.get(mid)["confirmation_count"] == 2
+
+    # A re-add that tries to lower the count is refused the same way one that
+    # tries to raise it is: on-disk truth wins in both directions.
+    store.add("engineering", dict(store.get(mid), confirmation_count=0))
+    assert store.get(mid)["confirmation_count"] == 2
+
+
+def test_promoted_organizational_record_carries_source_count_not_its_own(tmp_root):
+    """A freshly-promoted organizational record has zero confirmations OF ITS
+    OWN; the source engineering record's count is provenance and is named as
+    such, so the promoted record can never look pre-confirmed.
+
+    The organizational tier has no local file store by design -- its backing
+    IS the shared Knowledge Center (memory.py's OrganizationalMemoryStore) --
+    so the record is captured at that real push boundary rather than read
+    back off disk."""
+    store = MemoryStore(tmp_root)
+    mid = route_and_store(tmp_root, dict(_PROMOTABLE), cfg={})["memory_id"]
+    MemoryGC(store).confirm(mid)
+    MemoryGC(store).confirm(mid)
+
+    pushed = []
+    with patch("dv_harness.memory_router.OrganizationalMemoryStore") as org_store:
+        org_store.return_value.add.side_effect = lambda rec: pushed.append(rec) or {"ok": True}
+        promote_to_organizational(tmp_root, mid, _HIGH_CONF, cfg={})
+
+    assert len(pushed) == 1
+    assert pushed[0]["source_confirmation_count"] == ORGANIZATIONAL_MIN_CONFIRMATIONS
+    assert pushed[0]["source_engineering_memory_id"] == mid
+    # The promoted record must not carry a `confirmation_count` of its own at
+    # all -- the field name that the gate reads back.
+    assert "confirmation_count" not in pushed[0]

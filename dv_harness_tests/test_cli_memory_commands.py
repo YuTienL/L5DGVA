@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 import dv_harness.cli as cli_mod
-from dv_harness.memory import MemoryStore
+from dv_harness.memory import MemoryGC, MemoryStore
 
 
 def _run_cli(monkeypatch, tmp_path, args, capsys):
@@ -204,12 +204,22 @@ def test_memory_promote_reports_not_found_for_unknown_memory_id(monkeypatch, tmp
 
 
 def test_memory_promote_succeeds_through_all_gates(monkeypatch, tmp_path, capsys):
+    # The confirmations must be EARNED via MemoryGC.confirm(), the one
+    # authorized writer -- seeding "confirmation_count": 2 into the record
+    # body here used to work and no longer does (2026-09-04): MemoryStore.add()
+    # now discards a caller-supplied count, so that shortcut was proving this
+    # CLI happy path against exactly the forged input the gate exists to
+    # reject. See test_memory_tier_integrity_and_admission.py section 4.
     store = MemoryStore(tmp_path)
     rec = store.add("engineering", {
         "kind": "root_cause", "verified": True, "protocol": "USB", "root_cause": "phy sync missing",
-        "status": "ACTIVE", "confirmation_count": 2,
+        "status": "ACTIVE",
         "verification": {"single_sim": "PASS", "regression": "PASS", "reaudit": "CLEAN"},
     })
+    MemoryGC(store).confirm(rec["memory_id"], evidence={"independent_run": 1})
+    MemoryGC(store).confirm(rec["memory_id"], evidence={"independent_run": 2})
+    assert store.get(rec["memory_id"])["confirmation_count"] == 2
+
     rc, out = _run_cli(monkeypatch, tmp_path, [
         "memory", "promote", rec["memory_id"],
         "--independent-sources", "3", "--evidence-refs-verified", "--multi-agent-consensus", "2",

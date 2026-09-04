@@ -9,8 +9,10 @@ wins (Evidence Truth Rule).
 
 ## 1. MemoryStore record (all 5 tiers — `.dv-harness/memory/<level>/<memory_id>.json`)
 
-Fields `add()` (`memory.py:185`) always fills in (via `setdefault`, so a
-caller may override any of them):
+Fields `add()` (`memory.py:233`) always fills in. Most are `setdefault`s, so a
+caller may override them; the three confirmation fields at the bottom of the
+table are the exception — they are integrity-owned and a caller-supplied value
+is discarded (see their Notes):
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -22,8 +24,9 @@ caller may override any of them):
 | `confidence` | str | `"UNKNOWN"` | free-form in practice; `inference.CONFIDENCE_LEVELS = ["HIGH","MEDIUM","LOW"]` is the canonical vocabulary for anything gate-checked |
 | `status` | str | `"ACTIVE"` | `ACTIVE`/`DEPRECATED`/`SUPERSEDED`/`RETRACTED`/`STALE` — see `MemoryGC` |
 | `provenance` | any\|None | `None` | who/where a shared record came from |
-| `confirmation_count` | int | `0` | incremented ONLY by `MemoryGC.confirm()` |
-| `last_confirmed_at` | float\|None | `None` | set by `MemoryGC.confirm()` |
+| `confirmation_count` | int | `0` | incremented ONLY by `MemoryGC.confirm()` — **enforced** since 2026-09-04: `add()` discards a caller-supplied value and restores the on-disk one (`_apply_confirmation_integrity()`); before that this row described an invariant nothing checked |
+| `last_confirmed_at` | float\|None | `None` | set by `MemoryGC.confirm()`, same enforcement |
+| `last_confirmation_evidence` | any | absent | set by `MemoryGC.confirm(evidence=...)`, same enforcement |
 
 Caller-supplied fields commonly present (not enforced by `MemoryStore`
 itself — enforcement is at the router/gate layer):
