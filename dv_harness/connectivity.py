@@ -1136,16 +1136,186 @@ LEGAL_ROLE_PREFIXES = (
     "vip_role=AMBIGUOUS_FROM_DIRECTION_ALONE",
 )
 
+#: The only two legal values of the matrix's `active_passive` column. This
+#: column is not decoration: it is the sole evidence for the ACTIVE-interface
+#: count, which is the dimension Part C's first count-mismatch source is
+#: measured in ("VIP count = ACTIVE interface count, never raw IP instance
+#: count"). An unrecognised value there makes that count silently wrong, so
+#: `assert_active_passive_vocabulary()` hard-rejects one rather than guessing
+#: which side a typo meant.
+ACTIVE_INTERFACE = "active"
+PASSIVE_INTERFACE = "passive"
+ACTIVE_PASSIVE_VALUES = frozenset({ACTIVE_INTERFACE, PASSIVE_INTERFACE})
+
+
+def _row_has_vip(row: dict) -> bool:
+    """Whether one already-normalised matrix row carries a real VIP instance."""
+    return str(row.get("vip_type") or "").strip().upper() not in NO_VIP_MARKERS
+
+
+def _row_active_passive(row: dict) -> str:
+    """The row's `active_passive` value, case/whitespace-normalised. Returns
+    the raw string unchanged when it is not vocabulary, so the caller that
+    reports the violation can quote what was actually written."""
+    raw = str(row.get("active_passive") or "").strip()
+    return raw.lower() if raw.lower() in ACTIVE_PASSIVE_VALUES else raw
+
 
 def count_vip_instances_in_matrix(rows: list) -> int:
     """How many matrix rows actually carry a VIP instance -- the `vip_instance
     _count` term of the self-check identity, read off the real matrix rather
     than supplied by the caller as a separate (and therefore forgeable)
     number."""
-    return sum(
-        1 for r in build_connectivity_matrix(rows)
-        if str(r.get("vip_type") or "").strip().upper() not in NO_VIP_MARKERS
-    )
+    return sum(1 for r in build_connectivity_matrix(rows) if _row_has_vip(r))
+
+
+def assert_active_passive_vocabulary(rows: list) -> None:
+    """Every row's `active_passive` must be exactly `active` or `passive`.
+
+    Until 2026-09-04 this column was free text that nothing ever read for
+    counting -- only `render_hierarchy_diagram()` printed it -- so a matrix
+    could carry `"actve-ish maybe?"` and still write a manifest that looked
+    authoritative. Once the ACTIVE-interface count below is derived from this
+    column, an unvocabulary value is no longer cosmetic: it silently drops a
+    row out of the very count Part C's first mismatch source is defined in."""
+    for i, r in enumerate(build_connectivity_matrix(rows)):
+        value = _row_active_passive(r)
+        if value not in ACTIVE_PASSIVE_VALUES:
+            raise ConnectivityError("ACTIVE_PASSIVE_NOT_IN_VOCABULARY", {
+                "row_index": i, "dut_instance": r.get("dut_instance"),
+                "interface": r.get("interface"), "active_passive": r.get("active_passive"),
+                "legal_values": sorted(ACTIVE_PASSIVE_VALUES),
+            })
+
+
+def count_active_interfaces_in_matrix(rows: list) -> int:
+    """The ACTIVE-interface count, read off the matrix's own `active_passive`
+    column -- the right-hand term of Part C's first count-mismatch source.
+    Assumes the vocabulary assert above has already run."""
+    return sum(1 for r in build_connectivity_matrix(rows)
+               if _row_active_passive(r) == ACTIVE_INTERFACE)
+
+
+def matrix_vip_instance_records(rows: list) -> list:
+    """The matrix's VIP-carrying rows as real `VipInstanceRecord`s, so the
+    matrix can be fed to `check_vip_instance_count_matches_active_interfaces()`
+    -- which had no caller anywhere outside its own test until 2026-09-04."""
+    out = []
+    for r in build_connectivity_matrix(rows):
+        if _row_has_vip(r):
+            out.append(VipInstanceRecord(
+                vip_type=str(r.get("vip_type")),
+                instance_path=f"{r.get('dut_instance')}::{r.get('interface')}",
+                active_passive=_row_active_passive(r),
+            ))
+    return out
+
+
+def reconcile_exemptions_against_matrix(rows: list, exemptions: list) -> list[dict]:
+    """Every exemption must actually name an uncovered no-VIP interface of
+    THIS matrix, and no two may name the same one.
+
+    `verify_self_check_identity()` can only ever count exemptions (`len()`) --
+    it is handed two integers and a list, and has no rows to match against. So
+    an exemption naming an interface that is not in the matrix at all, or one
+    that already HAS a VIP, still closed the identity for a completely
+    different uncovered interface. That defeats the "no unexplained gap" rule
+    with an arbitrary string while leaving the real gap unexplained. This is
+    the matrix-level check that layer could not perform; the scalar identity
+    function keeps its existing signature and contract untouched.
+
+    Returns one record per exemption naming the row it covers and whether that
+    row is `active` -- an exempted ACTIVE interface is the serious kind and is
+    surfaced in the manifest rather than being indistinguishable from an
+    exempted passive one."""
+    matrix = build_connectivity_matrix(rows)
+    uncovered = {}
+    for r in matrix:
+        if not _row_has_vip(r):
+            uncovered.setdefault(str(r.get("interface") or ""), r)
+    known = {str(r.get("interface") or "") for r in matrix}
+
+    records, claimed = [], set()
+    for i, ex in enumerate(exemptions):
+        iface = str((ex or {}).get("interface") or "")
+        if iface not in known:
+            raise ConnectivitySelfCheckError("EXEMPTION_INTERFACE_NOT_IN_MATRIX", {
+                "index": i, "interface": iface, "matrix_interfaces": sorted(known),
+                "hint": "an exemption must name a real interface of this matrix, "
+                        "otherwise it closes the identity for a gap it does not explain",
+            })
+        if iface not in uncovered:
+            raise ConnectivitySelfCheckError("EXEMPTION_COVERS_AN_INTERFACE_THAT_HAS_A_VIP", {
+                "index": i, "interface": iface,
+                "hint": "this interface already carries a VIP, so exempting it double-counts "
+                        "and silently absorbs a different interface's real gap",
+            })
+        if iface in claimed:
+            raise ConnectivitySelfCheckError("DUPLICATE_EXEMPTION", {
+                "index": i, "interface": iface,
+                "hint": "two exemptions naming the same interface count twice in the identity",
+            })
+        claimed.add(iface)
+        records.append({
+            "interface": iface,
+            "reason": (ex or {}).get("reason"),
+            "dut_instance": uncovered[iface].get("dut_instance"),
+            "active_passive": _row_active_passive(uncovered[iface]),
+            "exempts_an_active_interface":
+                _row_active_passive(uncovered[iface]) == ACTIVE_INTERFACE,
+        })
+    return records
+
+
+def verify_matrix_vip_active_interface_count(rows: list,
+                                             exemptions: Optional[list] = None) -> dict:
+    """Part C's FIRST count-mismatch source, run against a real matrix: the
+    VIP count is measured against the ACTIVE-interface count, never the raw
+    row/IP-instance count.
+
+    `check_vip_instance_count_matches_active_interfaces()` existed and was
+    tested but had no caller outside its own test, and its scalar `delta`
+    cannot be used alone on matrix data: a legitimate PASSIVE-monitor VIP
+    (+1) and a genuinely uncovered ACTIVE interface (-1) cancel exactly, so
+    two real findings of opposite sign report `ok: True`. This decomposes the
+    delta into its two independent halves so neither can hide the other, and
+    raises on the half that is a real defect -- an ACTIVE interface with no
+    VIP driving it and no exemption explaining why."""
+    exemptions = list(exemptions or [])
+    matrix = build_connectivity_matrix(rows)
+    exempted = {str((ex or {}).get("interface") or "") for ex in exemptions}
+
+    active_total = count_active_interfaces_in_matrix(rows)
+    vip_records = matrix_vip_instance_records(rows)
+    scalar = check_vip_instance_count_matches_active_interfaces(vip_records, active_total)
+
+    passive_vip = [v.instance_path for v in vip_records
+                   if v.active_passive == PASSIVE_INTERFACE]
+    uncovered_active = [
+        f"{r.get('dut_instance')}::{r.get('interface')}" for r in matrix
+        if _row_active_passive(r) == ACTIVE_INTERFACE and not _row_has_vip(r)
+        and str(r.get("interface") or "") not in exempted
+    ]
+    if uncovered_active:
+        raise ConnectivitySelfCheckError("ACTIVE_INTERFACE_WITHOUT_VIP", {
+            "uncovered_active_interfaces": uncovered_active,
+            "active_interface_count": active_total,
+            "passive_vip_instances": passive_vip,
+            "scalar_delta": scalar["delta"],
+            "hint": "an ACTIVE interface with no VIP is not covered by the scalar "
+                    "delta when a passive-monitor VIP cancels it -- give it a VIP, "
+                    "or an explicit exemption naming this interface with a reason",
+        })
+    return {
+        "active_interface_count": active_total,
+        "passive_interface_count": len(matrix) - active_total,
+        "vip_instance_count": scalar["vip_instance_count"],
+        "passive_vip_instances": passive_vip,
+        "uncovered_active_interfaces": [],
+        "scalar_delta": scalar["delta"],
+        "scalar_ok": scalar["ok"],
+        "delta_fully_explained": True,
+    }
 
 
 def assert_role_provenance(rows: list) -> None:
@@ -1177,8 +1347,30 @@ def verify_matrix_self_check_identity(rows: list, exemptions: Optional[list] = N
     equation existed and was tested, but nothing ever fed a real matrix into
     it, so a matrix containing an uncovered no-VIP interface could still be
     rendered and persisted. Raises `ConnectivitySelfCheckError` (never a
-    bool/warning) exactly as that function does."""
+    bool/warning) exactly as that function does.
+
+    Three things the scalar identity cannot check on its own, because it is
+    handed integers rather than rows, run here FIRST -- and the order is the
+    point, not an implementation detail. The scalar identity's own failure
+    names no interface: an ACTIVE interface with no VIP reports only as
+    `gap: 1`, leaving the reader to find which row it meant. Running the
+    row-aware checks first means the most specific true statement is the one
+    raised, with the arithmetic left as the backstop for what they cannot see:
+      * the `active_passive` vocabulary, without which the ACTIVE-interface
+        count is silently wrong;
+      * that each exemption really names an uncovered no-VIP interface OF
+        THIS MATRIX (`reconcile_exemptions_against_matrix()`) -- the scalar
+        form can only `len()` them, so any string closed any gap;
+      * Part C's ACTIVE-interface count dimension
+        (`verify_matrix_vip_active_interface_count()`), which names the
+        offending interface and whose two halves cancel if compared only as
+        a scalar delta.
+    The scalar identity then still runs, and is what catches an uncovered
+    PASSIVE interface carrying no exemption."""
     exemptions = list(exemptions or [])
+    assert_active_passive_vocabulary(rows)
+    exemption_records = reconcile_exemptions_against_matrix(rows, exemptions)
+    vip_count_check = verify_matrix_vip_active_interface_count(rows, exemptions)
     verified = len(build_connectivity_matrix(rows))
     vip = count_vip_instances_in_matrix(rows)
     verify_self_check_identity(verified, vip, exemptions)
@@ -1187,6 +1379,8 @@ def verify_matrix_self_check_identity(rows: list, exemptions: Optional[list] = N
         "vip_instance_count": vip,
         "exemption_count": len(exemptions),
         "exemptions": exemptions,
+        "exemptions_reconciled": exemption_records,
+        "vip_count_check": vip_count_check,
         "identity_holds": True,
     }
 

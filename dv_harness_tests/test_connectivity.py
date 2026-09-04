@@ -1269,8 +1269,24 @@ def test_verify_matrix_self_check_identity_counts_terms_off_the_real_matrix():
 
 
 def test_matrix_with_an_uncovered_no_vip_interface_fails_loudly():
+    """An uncovered ACTIVE interface names ITSELF rather than reporting a bare
+    arithmetic gap. The scalar identity would say only `gap: 1`, leaving the
+    reader to work out which row it meant."""
     no_vip = _sample_row()
     no_vip.vip_type = "NONE"
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.verify_matrix_self_check_identity([_sample_row(), no_vip])
+    assert exc.value.reason == "ACTIVE_INTERFACE_WITHOUT_VIP"
+    assert exc.value.detail["uncovered_active_interfaces"] == ["chip.core.usb0::usb3_if"]
+
+
+def test_an_uncovered_passive_interface_still_falls_to_the_scalar_identity():
+    """The row-aware checks run first, but they do not REPLACE the arithmetic
+    backstop -- an uncovered PASSIVE interface is invisible to the
+    active-dimension check and must still fail the identity loudly."""
+    no_vip = _sample_row()
+    no_vip.vip_type = "NONE"
+    no_vip.active_passive = "passive"
     with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
         conn.verify_matrix_self_check_identity([_sample_row(), no_vip])
     assert exc.value.reason == "SELF_CHECK_IDENTITY_MISMATCH"
@@ -1302,6 +1318,155 @@ def test_write_connectivity_manifest_records_the_self_check_it_ran(tmp_path):
     loaded = json.loads(out_path.read_text(encoding="utf-8"))
     assert loaded["self_check"]["identity_holds"] is True
     assert loaded["self_check"]["verified_interface_count"] == 1
+
+
+# ===========================================================================
+# Count-mismatch source 1 wired to a REAL matrix: the ACTIVE-interface count
+# dimension, the `active_passive` vocabulary it is read from, and exemptions
+# actually matched to the row they claim to exempt (2026-09-04).
+#
+# Before this, `check_vip_instance_count_matches_active_interfaces()` had no
+# caller outside its own test; `active_passive` was free text nothing read for
+# counting; and `verify_self_check_identity()` could only `len()` exemptions,
+# so any string closed any gap.
+# ===========================================================================
+
+def _row(**over):
+    r = _sample_row()
+    for k, v in over.items():
+        setattr(r, k, v)
+    return r
+
+
+def test_active_passive_vocabulary_rejects_a_value_that_is_neither(tmp_path):
+    """A typo in this column silently drops a row out of the ACTIVE-interface
+    count, so it is rejected rather than guessed at."""
+    with pytest.raises(conn.ConnectivityError) as exc:
+        conn.assert_active_passive_vocabulary([_row(active_passive="actve-ish maybe?")])
+    assert exc.value.reason == "ACTIVE_PASSIVE_NOT_IN_VOCABULARY"
+    assert exc.value.detail["active_passive"] == "actve-ish maybe?"
+    out = tmp_path / "m.json"
+    with pytest.raises(conn.ConnectivityError):
+        conn.write_connectivity_manifest(out, [_row(active_passive="ACTIVE-ish")])
+    assert not out.exists()
+
+
+def test_active_passive_vocabulary_is_case_and_whitespace_tolerant():
+    conn.assert_active_passive_vocabulary([_row(active_passive="  Active "),
+                                           _row(interface="apb_if", vip_type="APB",
+                                                active_passive="PASSIVE")])
+
+
+def test_active_interface_count_is_read_off_the_real_matrix_column():
+    rows = [_row(), _row(interface="apb_if", vip_type="APB", active_passive="passive"),
+            _row(interface="axi_if", vip_type="AXI")]
+    assert conn.count_active_interfaces_in_matrix(rows) == 2
+    assert conn.count_vip_instances_in_matrix(rows) == 3
+
+
+def test_matrix_vip_records_feed_the_real_source_1_function():
+    """The matrix is convertible into the exact `VipInstanceRecord` list
+    `check_vip_instance_count_matches_active_interfaces()` takes -- which is
+    what it never had a caller supplying."""
+    rows = [_row(), _row(interface="apb_if", vip_type="APB", active_passive="passive")]
+    records = conn.matrix_vip_instance_records(rows)
+    assert [r.active_passive for r in records] == ["active", "passive"]
+    scalar = conn.check_vip_instance_count_matches_active_interfaces(
+        records, conn.count_active_interfaces_in_matrix(rows))
+    assert scalar["vip_instance_count"] == 2 and scalar["active_interface_count"] == 1
+
+
+def test_a_passive_monitor_vip_does_not_cancel_an_uncovered_active_interface():
+    """The regression this decomposition exists for: 1 passive-monitor VIP
+    (+1) and 1 uncovered ACTIVE interface (-1) cancel to a scalar delta of 0,
+    which the scalar form reports as ok=True. Two real findings of opposite
+    sign must not hide each other."""
+    rows = [_row(interface="apb_if", vip_type="APB", active_passive="passive"),
+            _row(interface="usb3_if", vip_type="NONE", active_passive="active")]
+    scalar = conn.check_vip_instance_count_matches_active_interfaces(
+        conn.matrix_vip_instance_records(rows), conn.count_active_interfaces_in_matrix(rows))
+    assert scalar["delta"] == 0 and scalar["ok"] is True  # the cancellation, still true of the scalar
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.verify_matrix_vip_active_interface_count(rows)
+    assert exc.value.reason == "ACTIVE_INTERFACE_WITHOUT_VIP"
+    assert exc.value.detail["uncovered_active_interfaces"] == ["chip.core.usb0::usb3_if"]
+    assert exc.value.detail["scalar_delta"] == 0
+
+
+def test_a_legitimate_passive_monitor_is_recorded_not_blocked():
+    """A passive monitor genuinely makes the scalar delta non-zero. That must
+    be explained in the record, never treated as a failure."""
+    rows = [_row(), _row(interface="apb_if", vip_type="APB", active_passive="passive")]
+    result = conn.verify_matrix_vip_active_interface_count(rows)
+    assert result["scalar_ok"] is False and result["scalar_delta"] == 1
+    assert result["delta_fully_explained"] is True
+    assert result["passive_vip_instances"] == ["chip.core.usb0::apb_if"]
+    assert result["uncovered_active_interfaces"] == []
+
+
+def test_an_exemption_naming_an_interface_not_in_the_matrix_is_refused(tmp_path):
+    """The scalar identity can only count exemptions, so a stray string used
+    to close a gap it did not explain."""
+    rows = [_row(), _row(interface="axi_if", vip_type="NONE")]
+    out = tmp_path / "m.json"
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.write_connectivity_manifest(
+            out, rows, exemptions=[{"interface": "a_totally_unrelated_if", "reason": "handwave"}])
+    assert exc.value.reason == "EXEMPTION_INTERFACE_NOT_IN_MATRIX"
+    assert not out.exists()
+
+
+def test_an_exemption_for_an_interface_that_already_has_a_vip_is_refused():
+    rows = [_row(), _row(interface="axi_if", vip_type="NONE")]
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.verify_matrix_self_check_identity(
+            rows, exemptions=[{"interface": "usb3_if", "reason": "this row already has a VIP"}])
+    assert exc.value.reason == "EXEMPTION_COVERS_AN_INTERFACE_THAT_HAS_A_VIP"
+
+
+def test_two_exemptions_naming_the_same_interface_are_refused():
+    rows = [_row(), _row(interface="axi_if", vip_type="NONE"),
+            _row(interface="apb_if", vip_type="NONE")]
+    with pytest.raises(conn.ConnectivitySelfCheckError) as exc:
+        conn.verify_matrix_self_check_identity(rows, exemptions=[
+            {"interface": "axi_if", "reason": "a"}, {"interface": "axi_if", "reason": "b"}])
+    assert exc.value.reason == "DUPLICATE_EXEMPTION"
+
+
+def test_a_real_exemption_reconciles_and_marks_an_exempted_active_interface():
+    """An exempted ACTIVE interface is the serious kind and is surfaced as
+    such, not left indistinguishable from an exempted passive one."""
+    rows = [_row(), _row(interface="axi_if", vip_type="NONE", active_passive="active")]
+    result = conn.verify_matrix_self_check_identity(
+        rows, exemptions=[{"interface": "axi_if", "reason": "driven by the DUT's internal checker"}])
+    assert result["identity_holds"] is True
+    rec = result["exemptions_reconciled"]
+    assert len(rec) == 1
+    assert rec[0]["interface"] == "axi_if"
+    assert rec[0]["exempts_an_active_interface"] is True
+    assert rec[0]["reason"] == "driven by the DUT's internal checker"
+
+
+def test_the_manifest_on_disk_carries_the_active_dimension_check(tmp_path):
+    """End-to-end: the dimension Part C's first mismatch source is defined in
+    reaches the artifact a human actually reads."""
+    out = tmp_path / "manifest.json"
+    conn.write_connectivity_manifest(
+        out, [_row(), _row(interface="apb_if", vip_type="APB", active_passive="passive")])
+    check = json.loads(out.read_text(encoding="utf-8"))["self_check"]["vip_count_check"]
+    assert check["active_interface_count"] == 1
+    assert check["passive_interface_count"] == 1
+    assert check["vip_instance_count"] == 2
+    assert check["passive_vip_instances"] == ["chip.core.usb0::apb_if"]
+
+
+def test_emit_connectivity_artifacts_refuses_an_unreconciled_matrix(tmp_path):
+    """The three-artifact emitter must leave nothing behind either."""
+    out = tmp_path / "artifacts"
+    with pytest.raises(conn.ConnectivitySelfCheckError):
+        conn.emit_connectivity_artifacts(
+            out, [_row(), _row(interface="axi_if", vip_type="NONE", active_passive="active")])
+    assert list(out.iterdir()) == []
 
 
 # ===========================================================================
