@@ -402,6 +402,307 @@ def test_restore_session_never_touches_artifact_reference_directories():
         shutil.rmtree(tmp)
 
 
+# --- session_snapshot.py RULING 3: the evidence store (.dv-harness/evidence/,
+# evidence_db.py's real evidence_id-keyed DuckDB) is captured and restored
+# (2026-09-04). The gap these close: `evidence` was in NONE of the four
+# capture lists, so every save silently dropped the one field the user's
+# required list names as "Evidence IDs" -- confirmed by deleting the live
+# directory, calling the real restore_session(), and watching it stay gone.
+# ------------------------------------------------------------------------
+
+def _evidence_row(evidence_id: str) -> dict:
+    """One real vip_distill-shaped Normalized Evidence envelope -- the exact
+    dict shape evidence_db.insert_normalized_evidence() ingests in
+    production (regression_reporter.py), not an invented test record."""
+    return {
+        "schema_version": "1.0", "evidence_id": evidence_id,
+        "source_kind": "sim_log", "job_id": 4242, "pattern": "usb2_hs_basic",
+        "protocol": "usb", "run_dir": "/proj/run/usb2_hs_basic",
+        "verdict": "FAIL", "distilled_at": 1788269755.0, "distiller": "vip_distill",
+        "counts": {"uvm_error": 3, "uvm_fatal": 0},
+        "detail": {"first_error": "APB write timeout"},
+        "provenance": {"source_path": "/proj/run/usb2_hs_basic/sim.log"},
+    }
+
+
+def _duckdb_or_skip():
+    try:
+        import duckdb  # noqa: F401
+    except ImportError:
+        import pytest
+        pytest.skip("duckdb not installed in this environment")
+
+
+def test_evidence_db_survives_save_delete_restore_round_trip_by_evidence_id():
+    # The exact reproduction that proved the gap, now asserting the fix: write
+    # a REAL evidence_id row through the real EvidenceStore, save, DELETE the
+    # live evidence directory, restore, and read the same evidence_id back
+    # through a real read-only EvidenceStore.
+    _duckdb_or_skip()
+    from dv_harness import evidence_db
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        db_path = evidence_db.default_db_path(tmp)
+        with evidence_db.EvidenceStore(db_path) as store:
+            store.insert_normalized_evidence(_evidence_row("EV-ROUNDTRIP-1"))
+
+        manifest = save_session(tmp, name="c1")
+        assert "evidence" in manifest["dirs"]
+        assert manifest["dirs_copy_skipped"] == {}
+        assert (tmp / ".dv-harness" / "sessions" / "c1" / "evidence" / "evidence.duckdb").exists()
+
+        # Destroy the live store outright -- restore must bring it back, not
+        # merely re-read something that was never gone.
+        shutil.rmtree(tmp / ".dv-harness" / "evidence")
+        assert not db_path.exists()
+
+        result = restore_session(tmp, "c1")
+        assert result["dirs_restore_skipped"] == {}
+        assert db_path.exists()
+        with evidence_db.EvidenceStore(db_path, read_only=True) as store:
+            rows = store.query(
+                "SELECT evidence_id, pattern, verdict FROM normalized_evidence "
+                "WHERE evidence_id = ?", ["EV-ROUNDTRIP-1"])
+        assert rows == [("EV-ROUNDTRIP-1", "usb2_hs_basic", "FAIL")]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_overwrites_a_diverged_evidence_db_rather_than_merging_it():
+    # Restore is a rollback, not a merge: a row written AFTER the checkpoint
+    # is gone afterwards, and the checkpoint's own row is back. (The newer
+    # store is not lost -- the _pre_restore_ auto-backup below holds it,
+    # which is what makes this rewind reversible.)
+    _duckdb_or_skip()
+    from dv_harness import evidence_db
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        db_path = evidence_db.default_db_path(tmp)
+        with evidence_db.EvidenceStore(db_path) as store:
+            store.insert_normalized_evidence(_evidence_row("EV-AT-CHECKPOINT"))
+        save_session(tmp, name="c1")
+
+        with evidence_db.EvidenceStore(db_path) as store:
+            store.insert_normalized_evidence(_evidence_row("EV-AFTER-CHECKPOINT"))
+
+        result = restore_session(tmp, "c1")
+        with evidence_db.EvidenceStore(db_path, read_only=True) as store:
+            ids = {r[0] for r in store.query("SELECT evidence_id FROM normalized_evidence")}
+        assert ids == {"EV-AT-CHECKPOINT"}
+
+        # The discarded row is recoverable from the automatic pre-restore backup.
+        backup_db = (tmp / ".dv-harness" / "sessions" / result["auto_backup"]
+                     / "evidence" / "evidence.duckdb")
+        with evidence_db.EvidenceStore(backup_db, read_only=True) as store:
+            backup_ids = {r[0] for r in store.query("SELECT evidence_id FROM normalized_evidence")}
+        assert backup_ids == {"EV-AT-CHECKPOINT", "EV-AFTER-CHECKPOINT"}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_auto_checkpoint_the_engine_actually_calls_captures_the_evidence_db():
+    # The production path is engine.run_stage() -> _auto_checkpoint() ->
+    # save_auto_checkpoint(), NOT a hand-typed `dv-harness save-session`. The
+    # fix has to reach THAT entry point, so assert it there rather than only
+    # through save_session().
+    _duckdb_or_skip()
+    from dv_harness import evidence_db
+    from dv_harness.session_snapshot import save_auto_checkpoint
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        with evidence_db.EvidenceStore(evidence_db.default_db_path(tmp)) as store:
+            store.insert_normalized_evidence(_evidence_row("EV-AUTOCHECKPOINT"))
+
+        manifest = save_auto_checkpoint(tmp, stage="VERIFY", attempt=1)
+        assert "evidence" in manifest["dirs"]
+        snap_db = (tmp / ".dv-harness" / "sessions" / manifest["name"]
+                   / "evidence" / "evidence.duckdb")
+        with evidence_db.EvidenceStore(snap_db, read_only=True) as store:
+            rows = store.query("SELECT evidence_id FROM normalized_evidence")
+        assert rows == [("EV-AUTOCHECKPOINT",)]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_evidence_is_a_plain_session_dir_captured_like_blackboard_and_lsf():
+    # Same coverage lsf/blackboard already get: whenever .dv-harness/evidence/
+    # exists it appears in a fresh manifest's "dirs" list. Uses plain files so
+    # this assertion holds with or without duckdb installed.
+    from dv_harness.session_snapshot import SESSION_DIRS
+    assert "evidence" in SESSION_DIRS
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        (tmp / ".dv-harness" / "evidence").mkdir(parents=True, exist_ok=True)
+        (tmp / ".dv-harness" / "evidence" / "evidence.duckdb").write_bytes(b"not-a-real-db")
+
+        manifest = save_session(tmp, name="c1")
+        assert "evidence" in manifest["dirs"]
+        assert (tmp / ".dv-harness" / "sessions" / "c1" / "evidence"
+                / "evidence.duckdb").read_bytes() == b"not-a-real-db"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_with_no_evidence_dir_reports_it_absent_not_skipped():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert "evidence" not in manifest["dirs"]
+        assert manifest["dirs_copy_skipped"] == {}
+        assert "evidence" not in manifest["artifact_references"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_oversized_evidence_dir_is_referenced_with_a_real_hash_not_copied():
+    # RULING 3's size guard: save_auto_checkpoint() fires on every stage
+    # transition, so a pathologically large evidence store must not turn a
+    # cheap checkpoint into a disk-doubling one -- it is recorded as a real
+    # path+size+sha256 reference (Ruling 2's shape) with the reason stated.
+    import hashlib
+    from dv_harness import session_snapshot as _snap
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        ev = tmp / ".dv-harness" / "evidence"
+        ev.mkdir(parents=True, exist_ok=True)
+        payload = b"E" * 4096
+        (ev / "evidence.duckdb").write_bytes(payload)
+
+        original = _snap.EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES
+        _snap.EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES = 1024
+        try:
+            manifest = save_session(tmp, name="c1")
+        finally:
+            _snap.EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES = original
+
+        assert "evidence" not in manifest["dirs"]
+        assert "copy limit" in manifest["dirs_copy_skipped"]["evidence"]
+        assert not (tmp / ".dv-harness" / "sessions" / "c1" / "evidence").exists()
+
+        refs = manifest["artifact_references"]["evidence"]
+        assert [r["path"] for r in refs] == [".dv-harness/evidence/evidence.duckdb"]
+        assert refs[0]["size"] == 4096
+        assert refs[0]["sha256"] == hashlib.sha256(payload).hexdigest()
+
+        # Nothing to restore for a reference -- the live store stays untouched.
+        (ev / "evidence.duckdb").write_bytes(b"newer-bytes")
+        restore_session(tmp, "c1")
+        assert (ev / "evidence.duckdb").read_bytes() == b"newer-bytes"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_locked_evidence_db_records_why_and_never_fails_the_whole_save():
+    # The write-safety case: evidence.duckdb is a LIVE file real callers
+    # (regression_reporter.py) hold open, unlike every other plain-JSON
+    # SESSION_DIRS entry. A copy failure must cost that one directory, not
+    # the entire snapshot -- and must say why, rather than dropping the field
+    # a second, quieter way.
+    from dv_harness import session_snapshot as _snap
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        (tmp / ".dv-harness" / "evidence").mkdir(parents=True, exist_ok=True)
+        (tmp / ".dv-harness" / "evidence" / "evidence.duckdb").write_bytes(b"locked-db")
+        (tmp / ".dv-harness" / "blackboard").mkdir(parents=True, exist_ok=True)
+        (tmp / ".dv-harness" / "blackboard" / "t.json").write_text("{}", encoding="utf-8")
+
+        real_copytree = shutil.copytree
+
+        def _fail_on_evidence(src, dst, *a, **kw):
+            if Path(src).name == "evidence":
+                raise PermissionError("[WinError 32] file is in use by another process")
+            return real_copytree(src, dst, *a, **kw)
+
+        with patch.object(_snap.shutil, "copytree", _fail_on_evidence):
+            manifest = save_session(tmp, name="c1")
+
+        assert "evidence" not in manifest["dirs"]
+        assert "PermissionError" in manifest["dirs_copy_skipped"]["evidence"]
+        assert not (tmp / ".dv-harness" / "sessions" / "c1" / "evidence").exists()
+        # Everything else was still captured, and the skipped bytes identified.
+        assert "blackboard" in manifest["dirs"]
+        assert "state.json" in manifest["files"]
+        assert manifest["artifact_references"]["evidence"][0]["size"] == len(b"locked-db")
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_plain_json_session_dir_copy_failure_still_raises():
+    # The best-effort behaviour above is scoped to SESSION_BEST_EFFORT_DIRS
+    # ONLY. A snapshot silently missing blackboard would be worse than no
+    # snapshot, so that failure must still be loud.
+    from dv_harness import session_snapshot as _snap
+    assert _snap.SESSION_BEST_EFFORT_DIRS == {"evidence"}
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        (tmp / ".dv-harness" / "blackboard").mkdir(parents=True, exist_ok=True)
+        (tmp / ".dv-harness" / "blackboard" / "t.json").write_text("{}", encoding="utf-8")
+
+        def _always_fail(src, dst, *a, **kw):
+            raise PermissionError("boom")
+
+        with patch.object(_snap.shutil, "copytree", _always_fail):
+            try:
+                save_session(tmp, name="c1")
+            except PermissionError:
+                pass
+            else:
+                raise AssertionError("a blackboard copy failure must not be swallowed")
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_locked_evidence_db_never_aborts_a_restore_midway():
+    # Symmetric to the save case, and the reason matters more here: aborting
+    # partway through restore_session() would leave state.json/blackboard
+    # already overwritten and the rest not -- a partial rollback.
+    from dv_harness import session_snapshot as _snap
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        ev = tmp / ".dv-harness" / "evidence"
+        ev.mkdir(parents=True, exist_ok=True)
+        (ev / "evidence.duckdb").write_bytes(b"checkpoint-db")
+        bb = tmp / ".dv-harness" / "blackboard"
+        bb.mkdir(parents=True, exist_ok=True)
+        (bb / "t.json").write_text('{"v": "checkpoint"}', encoding="utf-8")
+
+        save_session(tmp, name="c1")
+        (bb / "t.json").write_text('{"v": "diverged"}', encoding="utf-8")
+
+        real_rmtree = shutil.rmtree
+
+        def _fail_on_evidence(path, *a, **kw):
+            if Path(path).name == "evidence" and ".dv-harness" in str(path):
+                raise PermissionError("[WinError 32] evidence.duckdb is in use")
+            return real_rmtree(path, *a, **kw)
+
+        with patch.object(_snap.shutil, "rmtree", _fail_on_evidence):
+            result = restore_session(tmp, "c1", backup_current=False)
+
+        assert "PermissionError" in result["dirs_restore_skipped"]["evidence"]
+        # The rest of the restore still completed.
+        assert json.loads((bb / "t.json").read_text(encoding="utf-8"))["v"] == "checkpoint"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_delete_session():
     tmp = _tmp()
     try:

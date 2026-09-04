@@ -33,7 +33,57 @@ from typing import Any, Dict, List, Optional
 # level/title), consistent with this module's own "never the durable
 # knowledge layer" design above -- it points at Memory, it does not copy it.
 SESSION_FILES = ["state.json", "control.json", "project_meta.json", "config.json", "events.jsonl"]
-SESSION_DIRS = ["blackboard", "plans", "react", "agents", "telemetry", "lsf"]
+SESSION_DIRS = ["blackboard", "plans", "react", "agents", "telemetry", "lsf", "evidence"]
+
+# RULING 3 ("evidence", added 2026-09-04 by a re-audit of this mechanism
+# against the user's own required-field list): `.dv-harness/evidence/` holds
+# `evidence.duckdb` (`evidence_db.DB_PATH_PARTS`), whose `normalized_evidence`
+# table is keyed by the `evidence_id` the user's list names explicitly. It was
+# absent from all four capture lists above -- by omission, exactly like the
+# 2026-09-01 command.txt/FSDB/coverage gap -- so every save silently dropped
+# it. The round-trip proof: delete `.dv-harness/evidence/`, restore, and the
+# directory used to stay gone because the snapshot never held it.
+# react/'s own per-attempt `evidence` blocks are NOT a substitute: those are
+# adapter-attempt gate reasons, a different and narrower corpus than the
+# queryable evidence_id records the reconciliation cycle writes
+# (`regression_reporter.py`) and MCP reads (`mcp/regression_queries.py`).
+#
+# It is a plain SESSION_DIRS entry -- same CURRENT-RUN tier as lsf/react, so
+# the generic copytree/rmtree+copytree loops below handle it with no special
+# case -- but it is the ONE entry that is not plain JSON, so it carries two
+# protections the others do not need (SESSION_BEST_EFFORT_DIRS below):
+#   - A live DuckDB file is held open by real production callers
+#     (`regression_reporter.py`'s `with EvidenceStore(db_path) as store:`,
+#     `mcp/runtime.py`). A copy can therefore fail for a reason no JSON dir
+#     can -- an exclusive file lock, or a snapshot landing mid-transaction.
+#     Losing the WHOLE save_session() to that would take every other
+#     captured field down with it, so this entry's copy/restore is
+#     best-effort and the manifest records WHY it was skipped, rather than
+#     dropping the field a second, quieter way.
+#   - Size. Every other SESSION_DIRS entry is small JSON; an evidence store
+#     for a large regression is not, and save_auto_checkpoint() fires on
+#     every stage transition with DEFAULT_AUTO_CHECKPOINT_KEEP retained.
+#     Past EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES the directory is recorded as a
+#     REFERENCE (path+size+sha256, via the same _hash_file() Ruling 2 uses)
+#     instead of copied -- the same "a lightweight checkpoint never turns
+#     into a disk-doubling one" doctrine, applied to the one control-plane
+#     directory that can grow like an artifact.
+#
+# Restore rewinds this directory wholesale, like blackboard/plans/react/lsf
+# and unlike events.jsonl. That does destructively rewind the deliberately
+# append-only `regression_verdict_history` table (see evidence_db.py) back to
+# save time -- accepted, because restore_session()'s own `_pre_restore_`
+# auto-backup captures the newer store first, so the discarded history is
+# always one restore away, which is exactly the safety net every other
+# destructive directory restore here already relies on.
+SESSION_BEST_EFFORT_DIRS = {"evidence"}
+
+# 64 MB: at DEFAULT_AUTO_CHECKPOINT_KEEP=10 retained auto-checkpoints this
+# bounds the evidence store's worst-case contribution to ~640 MB. It is a
+# ceiling for a pathological store, not a routine path -- this repo's own
+# real `.dv-harness/evidence/evidence.duckdb` is ~2 MB, the same order as the
+# JSON directories beside it.
+EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
 
 # SESSION_EXTRA_DIRS / SESSION_ARTIFACT_REFERENCE_DIRS (session-snapshot-
 # extension, 2026-09-01): a 2026-09-01 AI-mechanism architecture audit found
@@ -206,6 +256,62 @@ def _hash_file(path: Path, limit_bytes: int) -> Dict[str, Any]:
     return entry
 
 
+def _dir_size_bytes(d: Path) -> int:
+    """Total bytes of every regular file under `d`. Unreadable entries are
+    skipped rather than raising -- this only feeds the
+    EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES decision, and a directory we cannot
+    fully stat is one the copy attempt below will report on honestly anyway."""
+    total = 0
+    for p in d.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _dir_file_references(d: Path, root: Path) -> List[Dict[str, Any]]:
+    """path+size(+sha256) for every file under `d`, the same reference shape
+    _collect_artifact_references() produces for FSDB/coverage -- reused here
+    for an evidence store too large to copy (Ruling 3), so an over-limit
+    snapshot still records exactly which bytes existed at save time instead
+    of recording nothing."""
+    entries = []
+    for p in sorted(d.rglob("*")):
+        if not p.is_file():
+            continue
+        info = _hash_file(p, ARTIFACT_REFERENCE_HASH_SIZE_LIMIT_BYTES)
+        info["path"] = str(p.relative_to(root)).replace(os.sep, "/")
+        entries.append(info)
+    return entries
+
+
+def _copy_session_dir(src: Path, dest: Path, name: str) -> Optional[str]:
+    """Copy one SESSION_DIRS entry. Returns None when it was copied, or a
+    plain-language reason string when it was deliberately skipped.
+
+    Only a name in SESSION_BEST_EFFORT_DIRS can be skipped: for every other
+    entry a copy failure propagates, because a snapshot silently missing
+    blackboard/plans/react/lsf would be worse than no snapshot at all. See
+    Ruling 3 above for why the evidence store is the one exception."""
+    if name in SESSION_BEST_EFFORT_DIRS:
+        size = _dir_size_bytes(src)
+        if size > EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES:
+            return (f"directory is {size} bytes, over the "
+                    f"{EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES}-byte copy limit -- "
+                    f"recorded as an artifact reference instead")
+    try:
+        shutil.copytree(src, dest)
+    except Exception as e:
+        if name not in SESSION_BEST_EFFORT_DIRS:
+            raise
+        # Never leave a half-copied directory behind claiming to be a snapshot.
+        shutil.rmtree(dest, ignore_errors=True)
+        return f"copy failed: {type(e).__name__}: {e}"
+    return None
+
+
 def _read_latest_react_iteration(dvh: Path, stage: Optional[str]) -> Optional[Dict[str, Any]]:
     """Session-snapshot extension (Phase 14, 2026-09-03, obsidian-memory-
     debugflow task): the real hypothesis/evidence/confidence/next_action
@@ -373,10 +479,15 @@ def save_session(project_root: Path, name: Optional[str] = None, note: str = "")
             copied_files.append(fn)
         else:
             missing.append(fn)
+    dirs_copy_skipped: Dict[str, str] = {}
     for dn in SESSION_DIRS:
         src = dvh / dn
-        if src.exists() and src.is_dir():
-            shutil.copytree(src, dest / dn)
+        if not (src.exists() and src.is_dir()):
+            continue
+        reason = _copy_session_dir(src, dest / dn, dn)
+        if reason:
+            dirs_copy_skipped[dn] = reason
+        else:
             copied_dirs.append(dn)
 
     # SESSION_EXTRA_DIRS: project_root-relative (NOT .dv-harness-relative,
@@ -395,6 +506,14 @@ def save_session(project_root: Path, name: Optional[str] = None, note: str = "")
             copied_extra_dirs.append(rel)
 
     artifact_references = _collect_artifact_references(root)
+    # Ruling 3: a SESSION_BEST_EFFORT_DIRS entry that was skipped still gets
+    # its bytes RECORDED (path+size+sha256), so an over-limit or locked
+    # evidence store is a known, identified absence in the manifest rather
+    # than an unexplained one.
+    for dn in dirs_copy_skipped:
+        entries = _dir_file_references(dvh / dn, root)
+        if entries:
+            artifact_references[dn] = entries
 
     state = _read_json(dest / "state.json", {}) or {}
     current_stage = state.get("current_stage")
@@ -438,6 +557,11 @@ def save_session(project_root: Path, name: Optional[str] = None, note: str = "")
         "files": copied_files,
         "dirs": copied_dirs,
         "missing": missing,
+        # dirs_copy_skipped (Ruling 3, 2026-09-04): {dir_name: why}, only ever
+        # populated for a SESSION_BEST_EFFORT_DIRS entry. Empty dict is the
+        # normal case; a non-empty one is the honest record of a captured
+        # field that this particular save could not take, never a silent drop.
+        "dirs_copy_skipped": dirs_copy_skipped,
         # extra_dirs/artifact_references (session-snapshot-extension,
         # 2026-09-01): see SESSION_EXTRA_DIRS/SESSION_ARTIFACT_REFERENCE_DIRS
         # comments above for the two rulings these implement.
@@ -595,14 +719,26 @@ def restore_session(project_root: Path, name: str, backup_current: bool = True,
         s = src / fn
         if s.exists():
             shutil.copy2(s, dvh / fn)
+    # A SESSION_BEST_EFFORT_DIRS entry can fail to be rewound for the same
+    # reason it can fail to be copied (a live DuckDB file held open by a
+    # production caller -- Ruling 3). Aborting here would leave a PARTIAL
+    # restore: state.json/blackboard already overwritten, the rest not. So
+    # that one entry's failure is reported in the return value instead, and
+    # every other directory still raises.
+    dirs_restore_skipped: Dict[str, str] = {}
     for dn in manifest.get("dirs", []):
         s = src / dn
         d = dvh / dn
         if not s.exists():
             continue
-        if d.exists():
-            shutil.rmtree(d)
-        shutil.copytree(s, d)
+        try:
+            if d.exists():
+                shutil.rmtree(d)
+            shutil.copytree(s, d)
+        except Exception as e:
+            if dn not in SESSION_BEST_EFFORT_DIRS:
+                raise
+            dirs_restore_skipped[dn] = f"restore failed: {type(e).__name__}: {e}"
 
     # SESSION_EXTRA_DIRS restore (session-snapshot-extension, 2026-09-01):
     # symmetric with the SESSION_DIRS loop above, but rooted at project_root
@@ -622,6 +758,12 @@ def restore_session(project_root: Path, name: str, backup_current: bool = True,
 
     return {"restored": name, "auto_backup": backup_name, "manifest": manifest,
             "saved_sha": saved_sha, "current_sha": current_sha, "sha_match": sha_match,
+            # dirs_restore_skipped (Ruling 3, 2026-09-04): {dir_name: why} for
+            # any best-effort directory this restore could not rewind. Empty
+            # dict is the normal case; a caller/dashboard that reports
+            # "restored" without checking it is reporting an incomplete
+            # restore as a complete one.
+            "dirs_restore_skipped": dirs_restore_skipped,
             # resume_summary (Phase 14, 2026-09-03): a ready-to-read plain-
             # language answer to "where we stopped / what was proven / what
             # remains unknown / what action should execute next" -- see
