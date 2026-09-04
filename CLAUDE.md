@@ -69,7 +69,20 @@ promotion:
   skill), a HIGH `inference.score_confidence()` result, and
   `confirmation_count >= ORGANIZATIONAL_MIN_CONFIRMATIONS` (2, i.e. a second
   independent run re-deriving the same root_cause/protocol -- not the same
-  run reported twice). Since 2026-09-04 "ONLY through" is enforced at the
+  run reported twice). That third gate became reachable from the REAL
+  writers only on 2026-09-04: the confirm-on-re-derivation dedup keys on
+  (protocol, root_cause), but no gate's `JUDGMENT_FIELDS` ever judged
+  `protocol`, so engine.py's two Engineering-tier writers wrote it as None
+  on 30 of 31 real records and every re-derivation minted a fresh record
+  instead of a confirmation -- the tier was unreachable by its own intended
+  organic route, and only a test calling `MemoryGC.confirm()` directly had
+  ever cleared it. Both writers now key on this run's canonical
+  `protocol_router.resolve_protocol()` value, and
+  `MemoryConsolidator.from_closed_finding()` confirms rather than duplicates
+  on a re-derived closed finding. See `docs/MEMORY_ARCHITECTURE.md` and
+  `dv_harness_tests/test_engineering_confirmation_accumulation.py`, which
+  proves it end-to-end through real `run_stage()` gate-verified PASSes.
+  Since 2026-09-04 "ONLY through" is enforced at the
   write boundary rather than trusted from callers:
   `memory_router.organizational_admission_gate()` re-reads the promotion
   provenance (`source_engineering_memory_id`) off the durable store -- the

@@ -87,9 +87,9 @@ independently; neither depends on the other.
 | Organizational | `OrganizationalMemoryStore` (no local JSON file — see below) | `kind` in `cross_project_lesson`/`methodology`/`best_practice`, **and only ever reached via `promote_to_organizational()`** | **yes**, plus 3-gate promotion (see below) |
 
 Routing itself is `dv_harness.memory_router.route_memory(record) -> str`
-(`memory_router.py:702`) — a pure function, kind/verified/scope in,
+(`memory_router.py:920`) — a pure function, kind/verified/scope in,
 destination string out. `route_and_store(root, record, cfg)`
-(`memory_router.py:92`) is the real entry point: routes, persists, and
+(`memory_router.py:140`) is the real entry point: routes, persists, and
 (for shareable destinations) pushes to the Knowledge Center and/or Vault.
 
 A `kind` of `credential`/`password`/`token`/`secret` is hard-`REJECT`ed
@@ -204,7 +204,7 @@ python -m dv_harness.memory_cli --project-root . reindex
 ### Organizational Memory has no local file store, by design
 
 Unlike the other 4 tiers, `OrganizationalMemoryStore.add()` writes straight
-to the shared Knowledge Center (`memory.py:884-917`) — there is no
+to the shared Knowledge Center (`memory.py:942-975`) — there is no
 `.dv-harness/memory/organizational/*.json`. The Vault write-through still
 happens locally (a human-browsable copy), but the tier's actual backing
 store IS the cross-user Knowledge Center, because organizational knowledge
@@ -214,7 +214,7 @@ the one project that happened to promote it.
 ### The promotion boundary: Engineering → Organizational
 
 `memory_router.promote_to_organizational(root, memory_id, confidence_inputs,
-cfg, kind)` (`memory_router.py:566`) is the ONLY code path allowed to move
+cfg, kind)` (`memory_router.py:784`) is the ONLY code path allowed to move
 a record across this boundary. Three independent, all-required gates:
 
 1. **Qualitative**: `_verification_is_gate_validated(mem)` recognizes
@@ -228,12 +228,32 @@ a record across this boundary. Three independent, all-required gates:
    multi_agent_consensus_count)` must return `level == "HIGH"`.
 3. **Repeated confirmation**: `confirmation_count >=
    ORGANIZATIONAL_MIN_CONFIRMATIONS` (2, hardcoded — not a per-project
-   config knob). `confirmation_count` is incremented by
-   `_add_or_confirm_engineering()` when a LATER, independent
-   `route_and_store()` call lands on the same ACTIVE engineering record
-   (same `protocol` + `root_cause`, exact-string match) — i.e. a genuinely
+   config knob). `confirmation_count` is incremented when a LATER,
+   independent write lands on the same ACTIVE engineering record (same
+   `protocol` + `root_cause`, exact-string match via the shared
+   `memory.find_confirming_engineering_match()`) — i.e. a genuinely
    separate run re-deriving the same conclusion, not the same run reported
-   twice.
+   twice. Both Engineering-tier write paths do this:
+   `_add_or_confirm_engineering()` (route_and_store's) and
+   `MemoryConsolidator.from_closed_finding()` (memory-consolidation's).
+
+   **Reachable from the real writers only since 2026-09-04.** The mechanism
+   above was real and tested from the start, but engine.py's two
+   Engineering-tier writers took the record's `protocol` off the gate's
+   evidence block, and neither `experience_knowledge_gate`'s nor
+   `root_cause_evidence_gate`'s `JUDGMENT_FIELDS` (gates.py) includes
+   `protocol` — no gate ever required or judged it, so it landed `None` on
+   30 of 31 real engineering records, every match returned `None`, and this
+   gate could only ever be cleared by a test calling `MemoryGC.confirm()`
+   directly. Both writers now key the record on this run's CANONICAL
+   `protocol_router.resolve_protocol()` value
+   (`DVHarness._engineering_record_protocol()`), which is stable across
+   independent runs in a way agent-typed free text is not; the block's value
+   remains the fallback when a run's protocol genuinely does not resolve,
+   and a record with neither still carries `None` and simply does not
+   participate in dedup. Proven end-to-end — real `run_stage()`, real gate
+   subprocesses, real store, no direct `confirm()` call — by
+   `dv_harness_tests/test_engineering_confirmation_accumulation.py`.
 
    `confirmation_count` (with `last_confirmed_at` /
    `last_confirmation_evidence`) is **integrity-owned**: `MemoryStore.add()`

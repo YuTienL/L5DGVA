@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 from .memory import (
     MemoryStore, MemoryGC, CornerCaseLibrary, CornerCaseLibraryConsolidator,
     JobMemoryStore, ProjectMemoryStore, WorkingMemoryStore, OrganizationalMemoryStore,
-    _guard_record_before_write,
+    _guard_record_before_write, find_confirming_engineering_match,
 )
 from .blackboard import Blackboard
 
@@ -661,46 +661,28 @@ def _add_or_confirm_engineering(root: Path, record: Dict[str, Any]):
     ACTIVE engineering-tier record with the same protocol and root_cause: as
     designed, that is not a new finding, it is the same one being
     reconfirmed. When no such match exists (including every record that
-    simply doesn't carry both `protocol` and `root_cause`, e.g. today's real
-    engine.py verified_fix records -- see this function's own limitation
-    note below), behavior is byte-for-byte identical to before this change:
-    a fresh MemoryStore.add("engineering", record) every time.
+    simply doesn't carry both `protocol` and `root_cause`), behavior is
+    byte-for-byte identical to before this change: a fresh
+    MemoryStore.add("engineering", record) every time.
 
-    KNOWN LIMITATION (honestly scoped, not silently glossed over): matching
-    requires both fields present and is exact-string (case-insensitive on
-    root_cause only), by design -- no fuzzy matching, consistent with this
-    codebase's existing text-matching conventions (memory.py's `_tok`
-    comment). engine.py's `_promote_verified_fix_knowledge()` does not
-    currently populate `protocol` on its record, so this dedup path is real
-    and tested but not yet reachable from that specific production call
-    site -- a real, separately-scoped follow-up (adding `protocol` to that
-    record), not something this module can fix without touching engine.py's
-    own promotion-record construction.
+    The match itself is memory.find_confirming_engineering_match(), shared
+    with MemoryConsolidator.from_closed_finding() so both Engineering-tier
+    write paths agree on what "the same finding again" means -- see that
+    function for the exact-match rule and why it lives in memory.py.
+
+    Reachable from the real production writers since 2026-09-04: engine.py's
+    _promote_experience_knowledge() / _promote_verified_fix_knowledge() now
+    key their record's `protocol` on this run's canonical
+    protocol_router.resolve_protocol() value (see
+    DVHarness._engineering_record_protocol()), rather than on a field no gate
+    ever judged and which landed None in practice.
     """
     store = MemoryStore(root)
-    match_id = _find_confirming_engineering_match(store, record)
+    match_id = find_confirming_engineering_match(store, record)
     if match_id is not None:
         MemoryGC(store).confirm(match_id, evidence=record.get("evidence"))
         return store.get(match_id), True
     return store.add("engineering", record), False
-
-
-def _find_confirming_engineering_match(store: MemoryStore, record: Dict[str, Any]) -> Optional[str]:
-    protocol = record.get("protocol")
-    root_cause = record.get("root_cause")
-    if not protocol or not root_cause:
-        return None
-    norm_rc = str(root_cause).strip().lower()
-    norm_protocol = str(protocol).strip()
-    for row in store._index():
-        if row.get("level") != "engineering" or row.get("status") != "ACTIVE":
-            continue
-        if str(row.get("protocol") or "").strip() != norm_protocol:
-            continue
-        if str(row.get("root_cause") or "").strip().lower() != norm_rc:
-            continue
-        return row.get("memory_id")
-    return None
 
 
 # Phase 13 -- Git Integration commit-message policy: `memory(<protocol>):

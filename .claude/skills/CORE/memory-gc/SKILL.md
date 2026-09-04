@@ -30,7 +30,10 @@ an action: `deprecate` / `supersede` / `retract` / `flag_stale` / `confirm`.
   RTL that the record's fix depended on has since changed.
 - `confirm(memory_id, evidence=None)` -> increments `confirmation_count`,
   sets `last_confirmed_at` -- the ONLY code path that increments these
-  fields (via `memory_router._add_or_confirm_engineering()`'s dedup match).
+  fields. Both Engineering-tier write paths fire it on a re-derivation,
+  through the shared `memory.find_confirming_engineering_match()` dedup:
+  `memory_router._add_or_confirm_engineering()` (route_and_store's path) and
+  `MemoryConsolidator.from_closed_finding()` (memory-consolidation's).
 
 **Preconditions**: the `memory_id` must already exist
 (`MemoryStore.get(memory_id)` returns non-None).

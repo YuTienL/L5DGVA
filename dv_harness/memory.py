@@ -541,9 +541,61 @@ class MemoryRetriever:
             if mem: out.append({"score":score,"memory":mem})
         return out
 
+def find_confirming_engineering_match(store: MemoryStore, record: Dict[str,Any]) -> Optional[str]:
+    """The memory_id of the ACTIVE engineering-tier record `record` is a
+    RE-DERIVATION of, or None when it is a genuinely new finding.
+
+    "Same finding" is (protocol, root_cause) equality against the real index
+    -- both fields are persisted by MemoryStore._index_row(), so this reads
+    the durable store, never a caller's claim. Matching is exact (case-
+    insensitive on root_cause only), by design: no fuzzy matching, consistent
+    with this module's existing text-matching conventions (see _tok). A record
+    missing either field never matches, so a None-protocol record simply does
+    not participate -- it is minted fresh, exactly as before this existed.
+
+    Lives here rather than in memory_router so BOTH Engineering-tier write
+    paths can share one definition of "the same finding again": the router's
+    _add_or_confirm_engineering() (route_and_store's path) and
+    MemoryConsolidator.from_closed_finding() below (the memory-consolidation
+    skill's path, which cannot import the router -- the router imports this
+    module). Two definitions would be two things that can disagree about
+    whether promote_to_organizational()'s confirmation gate was earned."""
+    protocol = record.get("protocol")
+    root_cause = record.get("root_cause")
+    if not protocol or not root_cause:
+        return None
+    norm_rc = str(root_cause).strip().lower()
+    norm_protocol = str(protocol).strip()
+    for row in store._index():
+        if row.get("level") != "engineering" or row.get("status") != "ACTIVE":
+            continue
+        if str(row.get("protocol") or "").strip() != norm_protocol:
+            continue
+        if str(row.get("root_cause") or "").strip().lower() != norm_rc:
+            continue
+        return row.get("memory_id")
+    return None
+
 class MemoryConsolidator:
     def __init__(self, store: MemoryStore): self.store=store
     def from_closed_finding(self, finding: Dict[str,Any], verification: Dict[str,Any]):
+        """The memory-consolidation skill's Engineering Memory write path, for
+        a finding that already cleared the stricter single_sim + regression +
+        reaudit bar below.
+
+        A SECOND closed finding whose (protocol, root_cause) matches an ACTIVE
+        engineering record is an independent re-derivation of the same
+        conclusion -- it had to clear that same bar again, on its own
+        evidence -- so it CONFIRMS that record (MemoryGC.confirm, the only
+        authorized writer of confirmation_count) instead of minting a second,
+        competing copy of one finding (2026-09-04, gap-close-obsidian-memory
+        Phase 4+5). Before this, calling it twice produced two records and
+        zero confirmations, so this path could never contribute to
+        memory_router.promote_to_organizational()'s confirmation gate --
+        exactly the "second independent run" that gate is written around.
+        Returns the confirmed record in that case, the newly added one
+        otherwise; a finding carrying no protocol or no root_cause never
+        matches and is added as before."""
         if finding.get("status") not in ("CLOSED","VERIFIED"):
             raise ValueError("finding not closed")
         if verification.get("single_sim")!="PASS":
@@ -552,6 +604,12 @@ class MemoryConsolidator:
             raise ValueError("regression PASS/NOT_REQUIRED required")
         if verification.get("reaudit")!="CLEAN":
             raise ValueError("reaudit CLEAN required")
+        match_id = find_confirming_engineering_match(self.store, {
+            "protocol": finding.get("protocol"), "root_cause": finding.get("root_cause"),
+        })
+        if match_id is not None:
+            MemoryGC(self.store).confirm(match_id, evidence=finding.get("evidence"))
+            return self.store.get(match_id)
         return self.store.add("engineering",{
             "title":finding.get("title") or finding.get("description","Verified finding"),
             "protocol":finding.get("protocol"),

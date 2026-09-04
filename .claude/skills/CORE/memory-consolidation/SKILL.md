@@ -46,6 +46,14 @@ even attempted -- an open or disputed finding never reaches this gate.
    for the initial Engineering Memory write, OR let
    `promote_to_organizational()` re-check an existing record's
    `verification` field for the Engineering->Organizational boundary.
+   Calling it AGAIN for a finding whose `protocol` + `root_cause` match an
+   ACTIVE engineering record CONFIRMS that record
+   (`MemoryGC.confirm()`) instead of minting a second copy of one finding
+   (2026-09-04) -- the second closed finding cleared this same bar on its
+   own evidence, which is exactly the "second independent run" the
+   Engineering->Organizational confirmation gate counts. Supply the
+   finding's own real `protocol`: a finding carrying none has no dedup key
+   and is always added fresh.
 3. On `NEITHER_KNOWN_VERIFICATION_SHAPE_SATISFIED`, do not invent a third
    shape or partially satisfy one -- gather the missing PASS/CLEAN evidence
    first.

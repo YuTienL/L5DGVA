@@ -949,7 +949,53 @@ class DVHarness:
         })
         return target_stage
 
-    def _promote_experience_knowledge(self, stage: str, evidence_blocks: dict) -> None:
+    @staticmethod
+    def _engineering_record_protocol(resolved_protocol: Optional[str],
+                                     block_protocol: Optional[str]) -> Optional[str]:
+        """The `protocol` an Engineering-Memory-tier record is written with --
+        the dedup/confirmation KEY, not a decorative label (2026-09-04,
+        gap-close-obsidian-memory Phase 4+5).
+
+        memory.find_confirming_engineering_match() keys "an
+        independent later run re-derived the SAME conclusion" on
+        (protocol, root_cause), and MemoryGC.confirm() -- the only authorized
+        writer of confirmation_count, i.e. the only way
+        promote_to_organizational()'s third gate can ever be cleared -- fires
+        only on a match. Both of this class's Engineering-tier writers used to
+        take `protocol` straight off the gate's evidence block, but neither
+        experience_knowledge_gate's nor root_cause_evidence_gate's
+        JUDGMENT_FIELDS list (gates.py) includes `protocol`, so no gate ever
+        required or judged it: in the real on-disk store it landed None on 30
+        of 31 engineering records, the match returned None every time, and
+        every re-derivation minted a fresh record instead of a confirmation.
+        The Organizational tier was therefore unreachable by its own intended
+        organic route.
+
+        resolve_protocol()'s value wins because it is the only one that is
+        both real and STABLE: it is a canonical, normalized name
+        (protocol_router.PRIMARY_ROUTES' key, e.g. "usb") derived from this
+        run's own evidence, so two independent runs of the same investigation
+        produce the same key. The evidence block's value is unjudged agent
+        free text whose casing/spelling can drift between runs, which is
+        exactly what an equality-matched dedup key must not do -- it stays
+        only as the fallback for a run whose protocol genuinely did not
+        resolve (resolve_protocol -> UNRESOLVED_NEEDS_ROUTING_QUESTION, or no
+        graph node at all). Never a fabricated placeholder: both sources
+        absent still yields None, and a None-protocol record simply does not
+        participate in dedup, exactly as before.
+
+        Keying on the canonical protocol cannot over-confirm unrelated
+        findings: the match additionally requires an exact (case-insensitive)
+        `root_cause` equality, so a hit means the same root cause was
+        re-derived within the same protocol -- which is the definition of a
+        confirmation."""
+        for candidate in (resolved_protocol, block_protocol):
+            if str(candidate or "").strip():
+                return str(candidate).strip()
+        return None
+
+    def _promote_experience_knowledge(self, stage: str, evidence_blocks: dict,
+                                      resolved_protocol: Optional[str] = None) -> None:
         """Closed-loop wiring (2026-08-28, w4qxjh0iq design + adversarial
         verify): a PASS verdict on a stage whose STAGE_GATES include
         experience_knowledge_gate means that gate script already confirmed
@@ -960,7 +1006,16 @@ class DVHarness:
         script) may import dv_harness.memory_router. Takes the SAME
         evidence_blocks dict run_stage() already computed via
         extract_evidence_blocks(result.text) -- does not re-parse the text a
-        second time (must-fix #1 from adversarial verify)."""
+        second time (must-fix #1 from adversarial verify).
+
+        `resolved_protocol` (2026-09-04, gap-close-obsidian-memory Phase 4+5)
+        is THIS run's canonical protocol from
+        protocol_router.resolve_protocol() -- the same value run_stage()
+        already threads into InnerReactLoop -- and it takes precedence over
+        the evidence block's own `protocol` when building the record. See
+        _engineering_record_protocol() for why that precedence is what makes
+        the Engineering -> Organizational confirmation path reachable at
+        all."""
         gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
         if "experience_knowledge_gate" not in gate_ids:
             return
@@ -1001,7 +1056,8 @@ class DVHarness:
                                    # MemoryConsolidator.from_closed_finding's
                                    # stricter single_sim+regression+reaudit bar
             "source_knowledge_id": block.get("knowledge_id"),
-            "protocol": block.get("protocol"),
+            "protocol": self._engineering_record_protocol(resolved_protocol,
+                                                          block.get("protocol")),
         }
         # Deliberately do NOT set record["memory_id"] from knowledge_id:
         # MemoryStore.add() uses it verbatim as a filename component with no
@@ -1755,7 +1811,8 @@ class DVHarness:
             "promotion": promotion,
         })
 
-    def _promote_verified_fix_knowledge(self, stage: str, evidence_blocks: dict) -> None:
+    def _promote_verified_fix_knowledge(self, stage: str, evidence_blocks: dict,
+                                        resolved_protocol: Optional[str] = None) -> None:
         """Closed-loop wiring (verified-fix-auto-promotion gap-closing pass,
         2026-09-02): DEBUG_WORKFLOW_GUIDE.md's Knowledge Center push
         previously only ever happened two ways -- _promote_experience_knowledge
@@ -1871,7 +1928,12 @@ class DVHarness:
             "note": f"Auto-promoted from RE_AUDIT stage evidence (fix_effectiveness_gate + "
                     f"fix_regression_non_regression_gate both PASSed).",
             "provenance": f"RE_AUDIT auto-promotion, root_cause_id={root_cause_id}",
-            "protocol": rc_block.get("protocol"),
+            # Dedup/confirmation key, not a label -- see
+            # _engineering_record_protocol()'s docstring for why this run's
+            # canonical resolve_protocol() value takes precedence over the
+            # gate block's unjudged one.
+            "protocol": self._engineering_record_protocol(resolved_protocol,
+                                                          rc_block.get("protocol")),
             # Phase 10 (2026-09-03, obsidian-memory-debugflow task): "record
             # symptom/root_cause/evidence/fix/verification/confidence/git
             # SHA/test/result" -- symptom/root_cause/fix/verification/
@@ -3261,7 +3323,15 @@ class DVHarness:
                 #          persistence failure must never downgrade an
                 #          already-earned stage PASS. ----------------------
                 if verdict == "PASS":
-                    self._promote_experience_knowledge(stage, evidence_blocks)
+                    # This attempt's own canonical protocol decision, the same
+                    # value already threaded into InnerReactLoop below. Both
+                    # Engineering-tier writers need it as their record's dedup
+                    # key -- see _engineering_record_protocol().
+                    _promotion_protocol = (
+                        ((route_info or {}).get("protocol_decision") or {}).get("protocol")
+                    )
+                    self._promote_experience_knowledge(stage, evidence_blocks,
+                                                       resolved_protocol=_promotion_protocol)
                     self._persist_subsystem_registry_entry(stage, evidence_blocks)
                     self._export_signoff_bundle(stage)
                     self._compose_soc_environment_files(stage, evidence_blocks)
@@ -3269,7 +3339,8 @@ class DVHarness:
                     self._append_coverage_history_sample(stage, evidence_blocks)
                     self._promote_project_topology_knowledge(stage, evidence_blocks)
                     self._promote_vplan_summary_knowledge(stage, evidence_blocks)
-                    self._promote_verified_fix_knowledge(stage, evidence_blocks)
+                    self._promote_verified_fix_knowledge(stage, evidence_blocks,
+                                                         resolved_protocol=_promotion_protocol)
                     self._arm_rca_evidence_fanout(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness
