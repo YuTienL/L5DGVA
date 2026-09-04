@@ -1,0 +1,461 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-harness.local/schemas/system_topology_analysis.schema.json",
+  "title": "System Topology Analysis and Scenario Model Plan (SYS-28..SYS-30)",
+  "description": "The Phase-1 planning deliverable for SYS-28 (cross-subsystem address map / interrupt mapping analysis), SYS-29 (cross-subsystem clock and reset comparison) and SYS-30 (system-level scenario model). This document DESCRIBES a System-Level topology; it never builds one. Every scenario's body status is pinned to NOT_GENERATED_SYS40_REQUIRES_HUMAN_APPROVAL, every clock/reset ownership proposal's status is pinned to PLANNED_NOT_IMPLEMENTED, and the counters for generated scenario bodies, written System command.txt files, relocated address regions, modified address/interrupt maps and modified clocks/resets are all pinned to 0. A document that had emitted a scenario body, written a System command.txt, moved an address region or created a clock could not validate against this schema at all. Building any of them is SYS-40 and requires a separate explicit human approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "selected_subsystems",
+    "address_map_reconciliation",
+    "interrupt_map_reconciliation",
+    "clock_reset_comparison",
+    "clock_reset_compatibility_input",
+    "system_scenario_model",
+    "composer_boundary",
+    "summary",
+    "artifacts_generated",
+    "phase_boundary"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "selected_subsystems": { "type": "array", "items": { "type": "string" } },
+    "artifacts_generated": {
+      "type": "array",
+      "maxItems": 0,
+      "description": "Always empty. SYS-28..30 is discovery/analysis/planning/reporting; generating a System command.txt, a scenario body, a parallel block, an address decoder or a clock/reset generator is SYS-40."
+    },
+    "phase_boundary": { "type": "string", "minLength": 1 },
+    "composer_boundary": { "type": "object" },
+
+    "address_map_reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "classes", "precedence", "range_kinds",
+                   "per_subsystem", "overlaps", "summary", "escalations"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "classes": {
+          "type": "array",
+          "description": "SYS-28's four-value vocabulary, verbatim and in its own order.",
+          "items": { "type": "string" },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "precedence": { "type": "array", "items": { "type": "string" }, "minItems": 4, "maxItems": 4 },
+        "range_kinds": { "type": "array", "items": { "type": "string" }, "minItems": 6, "maxItems": 6 },
+        "per_subsystem": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subsystem_id", "evidence_status", "evidence_source",
+                         "evidence_reason", "regions", "region_count",
+                         "unparseable_count", "by_range_kind", "self_consistency",
+                         "declared_disagreement_count"],
+            "properties": {
+              "subsystem_id": { "type": "string" },
+              "evidence_status": { "type": "string" },
+              "evidence_source": { "type": "string" },
+              "evidence_reason": { "type": "string" },
+              "regions": { "type": "array", "items": { "type": "object" } },
+              "region_count": { "type": "integer", "minimum": 0 },
+              "unparseable_count": { "type": "integer", "minimum": 0 },
+              "by_range_kind": { "type": "object" },
+              "self_consistency": { "type": "object" },
+              "declared_disagreement_count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "overlaps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pair_id", "subsystem_a", "region_a", "subsystem_b", "region_b",
+                         "range_kind_a", "range_kind_b", "verdict", "basis", "from_field",
+                         "also_matched", "signals", "intersection_start",
+                         "intersection_end", "probe_reason", "escalation_required",
+                         "evidence"],
+            "properties": {
+              "pair_id": { "type": "string", "minLength": 1 },
+              "subsystem_a": { "type": "string", "minLength": 1 },
+              "region_a": { "type": "string" },
+              "subsystem_b": { "type": "string", "minLength": 1 },
+              "region_b": { "type": "string" },
+              "range_kind_a": { "type": "string" },
+              "range_kind_b": { "type": "string" },
+              "verdict": {
+                "enum": ["ADDRESS_OVERLAP_VALID", "ADDRESS_OVERLAP_CONFLICT",
+                         "SHARED_MEMORY", "UNKNOWN"]
+              },
+              "basis": { "type": "string", "minLength": 1 },
+              "from_field": { "type": "string" },
+              "also_matched": { "type": "array", "items": { "type": "string" } },
+              "signals": { "type": "array", "items": { "type": "object" } },
+              "intersection_start": { "type": "string" },
+              "intersection_end": { "type": "string" },
+              "probe_reason": { "type": "string" },
+              "escalation_required": { "type": "boolean" },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "escalations": { "type": "array", "items": { "type": "object" } },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subsystem_count", "region_count", "cross_subsystem_pairs_examined",
+                       "overlapping_pairs", "disjoint_pairs", "by_verdict", "conflicts",
+                       "subsystems_with_self_overlap", "escalations_filed",
+                       "regions_relocated", "address_maps_modified"],
+          "properties": {
+            "subsystem_count": { "type": "integer", "minimum": 0 },
+            "region_count": { "type": "integer", "minimum": 0 },
+            "cross_subsystem_pairs_examined": { "type": "integer", "minimum": 0 },
+            "overlapping_pairs": { "type": "integer", "minimum": 0 },
+            "disjoint_pairs": { "type": "integer", "minimum": 0 },
+            "by_verdict": { "type": "object" },
+            "conflicts": { "type": "integer", "minimum": 0 },
+            "subsystems_with_self_overlap": { "type": "array", "items": { "type": "string" } },
+            "escalations_filed": { "type": "integer", "minimum": 0 },
+            "regions_relocated": {
+              "const": 0,
+              "description": "SYS-28 detects; it never relocates a region."
+            },
+            "address_maps_modified": {
+              "const": 0,
+              "description": "SYS-28 reads every subsystem's own address map and modifies none."
+            }
+          }
+        }
+      }
+    },
+
+    "interrupt_map_reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "verdicts", "lines", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "verdicts": { "type": "array", "items": { "type": "string" }, "minItems": 3, "maxItems": 3 },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["line", "normalized_line", "verdict", "reason", "subsystems",
+                         "evidence_axes", "evidence"],
+            "properties": {
+              "line": { "type": "string" },
+              "normalized_line": { "type": "string" },
+              "verdict": {
+                "enum": ["INTERRUPT_LINE_SHARED_ACROSS_SUBSYSTEMS",
+                         "INTERRUPT_LINE_SUBSYSTEM_LOCAL", "UNKNOWN"]
+              },
+              "reason": { "type": "string", "minLength": 1 },
+              "subsystems": { "type": "array", "items": { "type": "string" } },
+              "evidence_axes": { "type": "array", "items": { "type": "string" } },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["line_count", "by_verdict", "shared_lines",
+                       "subsystems_without_interrupt_evidence", "interrupt_maps_modified"],
+          "properties": {
+            "line_count": { "type": "integer", "minimum": 0 },
+            "by_verdict": { "type": "object" },
+            "shared_lines": { "type": "array", "items": { "type": "string" } },
+            "subsystems_without_interrupt_evidence": { "type": "array", "items": { "type": "string" } },
+            "interrupt_maps_modified": { "const": 0 }
+          }
+        }
+      }
+    },
+
+    "clock_reset_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "verdicts", "clock_precedence", "reset_precedence",
+                   "per_subsystem", "clock_comparisons", "reset_comparisons",
+                   "clock_reset_agents", "ownership_proposals", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "verdicts": {
+          "type": "array",
+          "description": "SYS-29 keeps clock source, clock frequency, reset polarity and reset sequencing as separate verdicts; folding them into one CONFLICTING value would name the pair without naming the fix, and those four fixes differ.",
+          "items": { "type": "string" },
+          "minItems": 10,
+          "maxItems": 10
+        },
+        "clock_precedence": { "type": "array", "items": { "type": "string" } },
+        "reset_precedence": { "type": "array", "items": { "type": "string" } },
+        "per_subsystem": { "type": "object" },
+        "clock_comparisons": { "$ref": "#/$defs/cr_rows" },
+        "reset_comparisons": { "$ref": "#/$defs/cr_rows" },
+        "clock_reset_agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["registry_entry_id", "consumer_subsystems", "duplicate",
+                         "conflict_status", "reuse_decision", "active_passive",
+                         "system_owner", "source", "evidence"],
+            "properties": {
+              "registry_entry_id": { "type": "string" },
+              "consumer_subsystems": { "type": "array", "items": { "type": "string" } },
+              "duplicate": { "type": "boolean" },
+              "conflict_status": { "type": "string" },
+              "reuse_decision": { "type": "string" },
+              "active_passive": { "type": "string" },
+              "system_owner": { "type": "string" },
+              "source": { "type": "string" },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "ownership_proposals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "name", "subsystems", "proposal", "reason", "status"],
+            "properties": {
+              "kind": { "enum": ["CLOCK", "RESET"] },
+              "name": { "type": "string" },
+              "subsystems": { "type": "array", "items": { "type": "string" } },
+              "proposal": {
+                "enum": ["SYSTEM_GLOBAL_OWNERSHIP_CANDIDATE", "REMAINS_SUBSYSTEM_LOCAL"]
+              },
+              "reason": { "type": "string", "minLength": 1 },
+              "status": {
+                "const": "PLANNED_NOT_IMPLEMENTED",
+                "description": "SYS-29 may PROPOSE that System level own a global clock or reset. Promoting one is a change to a real environment, which is SYS-40."
+              }
+            }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subsystem_count", "clock_pairs", "reset_pairs", "by_verdict",
+                       "conflicts", "conflicting_pairs", "cdc_boundaries",
+                       "duplicate_clock_reset_agents", "conflicting_clock_reset_agents",
+                       "system_global_ownership_candidates", "clocks_or_resets_modified"],
+          "properties": {
+            "subsystem_count": { "type": "integer", "minimum": 0 },
+            "clock_pairs": { "type": "integer", "minimum": 0 },
+            "reset_pairs": { "type": "integer", "minimum": 0 },
+            "by_verdict": { "type": "object" },
+            "conflicts": { "type": "integer", "minimum": 0 },
+            "conflicting_pairs": { "type": "array", "items": { "type": "string" } },
+            "cdc_boundaries": { "type": "integer", "minimum": 0 },
+            "duplicate_clock_reset_agents": { "type": "integer", "minimum": 0 },
+            "conflicting_clock_reset_agents": { "type": "integer", "minimum": 0 },
+            "system_global_ownership_candidates": { "type": "integer", "minimum": 0 },
+            "clocks_or_resets_modified": { "const": 0 }
+          }
+        }
+      }
+    },
+
+    "clock_reset_compatibility_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "computed_value", "reason", "cdc_boundaries", "gate_wired",
+                   "gate_wiring_note"],
+      "properties": {
+        "field": { "const": "clock_reset_compatibility" },
+        "computed_value": {
+          "enum": ["PASS", "FAIL", "UNKNOWN"],
+          "description": "Three-valued on purpose. The gates that read this field today accept a caller-supplied PASS/FAIL string; UNKNOWN is the state that two-valued field cannot express and that a caller must never report as PASS."
+        },
+        "reason": { "type": "string", "minLength": 1 },
+        "cdc_boundaries": { "type": "integer", "minimum": 0 },
+        "gate_wired": {
+          "const": false,
+          "description": "Computed for a caller to supply. Rewiring a hard gate to read a new input is a behaviour change, outside SYS-28..30's analysis-only scope."
+        },
+        "gate_wiring_note": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "system_scenario_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "block_kinds", "scenarios", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "block_kinds": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scenario_id", "derived_from", "description",
+                         "participating_subsystems", "cross_subsystem",
+                         "composition_gate_note", "command_count", "block_plan",
+                         "parallel_block_count", "sequential_block_count",
+                         "syntax_derivation", "scenario_body_status"],
+            "properties": {
+              "scenario_id": { "type": "string", "minLength": 1 },
+              "derived_from": { "type": "string", "minLength": 1 },
+              "description": { "type": "string" },
+              "participating_subsystems": { "type": "array", "items": { "type": "string" } },
+              "cross_subsystem": { "type": "boolean" },
+              "composition_gate_note": { "type": "string" },
+              "command_count": { "type": "integer", "minimum": 0 },
+              "block_plan": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["block_index", "block_kind", "members",
+                               "participating_subsystems", "basis"],
+                  "properties": {
+                    "block_index": { "type": "integer", "minimum": 0 },
+                    "block_kind": { "enum": ["PARALLEL_BLOCK", "SEQUENTIAL_BLOCK"] },
+                    "members": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["system_command_id", "subsystem", "source_command",
+                                     "command_category"],
+                        "properties": {
+                          "system_command_id": { "type": "string" },
+                          "subsystem": { "type": "string" },
+                          "source_command": { "type": "string" },
+                          "command_category": { "type": "string" }
+                        }
+                      }
+                    },
+                    "participating_subsystems": { "type": "array", "items": { "type": "string" } },
+                    "basis": { "type": "string", "minLength": 1 }
+                  }
+                }
+              },
+              "parallel_block_count": { "type": "integer", "minimum": 0 },
+              "sequential_block_count": { "type": "integer", "minimum": 0 },
+              "syntax_derivation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["derived_from_existing_subsystem_semantics",
+                             "reused_command_categories", "reused_commands_by_subsystem",
+                             "invented_command_count", "proposed_keywords",
+                             "new_language_introduced"],
+                "properties": {
+                  "derived_from_existing_subsystem_semantics": { "const": true },
+                  "reused_command_categories": { "type": "array", "items": { "type": "string" } },
+                  "reused_commands_by_subsystem": { "type": "object" },
+                  "invented_command_count": {
+                    "const": 0,
+                    "description": "SYS-30's own rule: derive syntax from existing subsystem semantics rather than forcing a new language. Every command in a block plan is one a real subsystem contract already carries."
+                  },
+                  "proposed_keywords": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["keyword", "status", "reason"],
+                      "properties": {
+                        "keyword": { "type": "string" },
+                        "status": { "const": "PROPOSED_NOT_IMPLEMENTED" },
+                        "reason": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  },
+                  "new_language_introduced": { "const": false }
+                }
+              },
+              "scenario_body_status": {
+                "const": "NOT_GENERATED_SYS40_REQUIRES_HUMAN_APPROVAL",
+                "description": "A scenario BODY is real System command.txt content. Writing one is SYS-40 and requires a separate explicit human approval this workflow does not obtain."
+              }
+            }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scenario_count", "cross_subsystem_scenarios",
+                       "parallel_blocks_planned", "scenario_bodies_generated",
+                       "system_command_txt_written", "new_language_introduced"],
+          "properties": {
+            "scenario_count": { "type": "integer", "minimum": 0 },
+            "cross_subsystem_scenarios": { "type": "integer", "minimum": 0 },
+            "parallel_blocks_planned": { "type": "integer", "minimum": 0 },
+            "scenario_bodies_generated": { "const": 0 },
+            "system_command_txt_written": { "const": 0 },
+            "new_language_introduced": { "const": false }
+          }
+        }
+      }
+    },
+
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selected_subsystems", "address_regions", "address_overlaps",
+                   "address_conflicts", "shared_memory_windows", "interrupt_lines",
+                   "shared_interrupt_lines", "clock_reset_conflicts", "cdc_boundaries",
+                   "duplicate_clock_reset_agents", "scenarios_planned",
+                   "scenario_bodies_generated", "system_command_txt_written",
+                   "topology_clean"],
+      "properties": {
+        "selected_subsystems": { "type": "array", "items": { "type": "string" } },
+        "address_regions": { "type": "integer", "minimum": 0 },
+        "address_overlaps": { "type": "integer", "minimum": 0 },
+        "address_conflicts": { "type": "integer", "minimum": 0 },
+        "shared_memory_windows": { "type": "integer", "minimum": 0 },
+        "interrupt_lines": { "type": "integer", "minimum": 0 },
+        "shared_interrupt_lines": { "type": "integer", "minimum": 0 },
+        "clock_reset_conflicts": { "type": "integer", "minimum": 0 },
+        "cdc_boundaries": { "type": "integer", "minimum": 0 },
+        "duplicate_clock_reset_agents": { "type": "integer", "minimum": 0 },
+        "scenarios_planned": { "type": "integer", "minimum": 0 },
+        "scenario_bodies_generated": { "const": 0 },
+        "system_command_txt_written": { "const": 0 },
+        "topology_clean": { "type": "boolean" }
+      }
+    }
+  },
+
+  "$defs": {
+    "cr_rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pair_id", "kind", "subsystem_a", "name_a", "subsystem_b", "name_b",
+                     "verdict", "basis", "from_field", "also_matched",
+                     "shared_address_pairs", "evidence"],
+        "properties": {
+          "pair_id": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["CLOCK", "RESET"] },
+          "subsystem_a": { "type": "string", "minLength": 1 },
+          "name_a": { "type": "string" },
+          "subsystem_b": { "type": "string", "minLength": 1 },
+          "name_b": { "type": "string" },
+          "verdict": {
+            "enum": ["SAME_CLOCK_DOMAIN", "INDEPENDENT_CLOCK_DOMAIN",
+                     "CONFLICTING_CLOCK_SOURCE", "CONFLICTING_CLOCK_FREQUENCY",
+                     "CDC_BOUNDARY", "SAME_RESET_DOMAIN", "INDEPENDENT_RESET_DOMAIN",
+                     "CONFLICTING_RESET_POLARITY", "CONFLICTING_RESET_SEQUENCING",
+                     "UNKNOWN"]
+          },
+          "basis": { "type": "string", "minLength": 1 },
+          "from_field": { "type": "string" },
+          "also_matched": { "type": "array", "items": { "type": "string" } },
+          "shared_address_pairs": { "type": "array", "items": { "type": "string" } },
+          "evidence": { "type": "array", "items": { "type": "string" } },
+          "signals": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    }
+  }
+}

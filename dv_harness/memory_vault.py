@@ -1557,7 +1557,9 @@ def build_failure_signature(*, protocol: Optional[str] = None, pattern: Optional
                              uvm_error_count: int = 0, uvm_fatal_count: int = 0,
                              assertion_failure: bool = False, simulator_crash: bool = False,
                              terminal_signature: Optional[str] = None, lsf_status: Optional[str] = None,
-                             extra_text: Optional[str] = None) -> Dict[str, Any]:
+                             extra_text: Optional[str] = None,
+                             vip_agent: Optional[str] = None,
+                             resource: Optional[str] = None) -> Dict[str, Any]:
     """Canonical "what does this failure look like" fact (Phase 10/11): the
     ONE structured shape every real caller builds identically, so
     `search_related_memory_for_debug()` below has one stable input rather
@@ -1575,12 +1577,29 @@ def build_failure_signature(*, protocol: Optional[str] = None, pattern: Optional
     kill_on_uvm_fatal/kill_on_fatal_assertion/kill_on_simulator_crash
     triggers already treat as terminal, plus a live EXIT status or any
     terminal_signature marker -- one true/false fact, not a second
-    definition of "abnormal" for this module to drift from that one."""
+    definition of "abnormal" for this module to drift from that one.
+
+    `vip_agent` / `resource` (2026-09-05, SYS-31) are OPTIONAL and are OMITTED
+    from the returned dict when not supplied -- deliberately, and this is the
+    one design detail worth stating here rather than in a commit message.
+    `evidence_db.signature_key()` hashes the WHOLE dict
+    (`json.dumps(..., sort_keys=True)`), so a key that were always present
+    would change every signature this repo has ever computed and orphan the
+    accumulated `occurrence_count`/`first_seen`/`last_seen` history on the
+    `failure_signatures` table -- silently, since nothing would error. Omitted
+    when absent, a caller that supplies neither gets a byte-identical dict and
+    an identical key, while a caller that DOES name a VIP agent gets a
+    genuinely different signature, which is correct: the same UVM_ERROR from
+    two different agents is two failure shapes, not one. This follows the same
+    convention `lsf_client.py`'s job record already uses ("a key is OMITTED
+    when its source genuinely captured nothing, never written as a null
+    placeholder that would look like the schema captured this data when it did
+    not")."""
     abnormal_termination = bool(
         uvm_fatal_count > 0 or assertion_failure or simulator_crash
         or lsf_status == "EXIT" or bool(terminal_signature)
     )
-    return {
+    signature = {
         "protocol": protocol, "pattern": pattern, "symptom": symptom,
         "root_cause_hint": root_cause_hint, "uvm_error_count": uvm_error_count,
         "uvm_fatal_count": uvm_fatal_count, "assertion_failure": assertion_failure,
@@ -1588,6 +1607,11 @@ def build_failure_signature(*, protocol: Optional[str] = None, pattern: Optional
         "lsf_status": lsf_status, "abnormal_termination": abnormal_termination,
         "extra_text": extra_text,
     }
+    if vip_agent:
+        signature["vip_agent"] = vip_agent
+    if resource:
+        signature["resource"] = resource
+    return signature
 
 
 _EVIDENCE_DB_SIGNATURE_COLUMNS = [

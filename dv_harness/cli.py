@@ -1060,6 +1060,33 @@ def main():
     pssp.add_argument("--json", action="store_true",
                       help="Print raw JSON instead of the human-readable SYS-23..27 report.")
 
+    psta = sub.add_parser("system-topology-analysis",
+                          help="SYS-28..30: reconcile the selected subsystems' address maps "
+                               "and interrupt maps across subsystems (ADDRESS_OVERLAP_VALID / "
+                               "ADDRESS_OVERLAP_CONFLICT / SHARED_MEMORY / UNKNOWN), compare "
+                               "their clock sources/frequencies and reset "
+                               "sources/polarities/sequencing including CDC boundaries, and "
+                               "plan the SHAPE of a multi-subsystem scenario. Reads only; "
+                               "relocates no address region, creates no clock or reset, and "
+                               "writes no System command.txt or scenario body.")
+    psta.add_argument("--select", action="append", default=None, metavar="SUBSYSTEM",
+                      help="Name one subsystem to include. Repeatable. Required -- SYS-1's "
+                           "explicit-selection refusal is not bypassed by this command.")
+    psta.add_argument("--knowledge-center", action="store_true", dest="topology_kc",
+                      help="Also query the shared Knowledge Center during the SYS-1 "
+                           "discovery this command runs first. Off by default (real "
+                           "remote call).")
+    psta.add_argument("--command-inventory", default=None, metavar="CSV",
+                      help="Path to a command_inventory.csv to read as a DECLARED overlay "
+                           "for the SYS-8 contract set. Read-only; never rewritten.")
+    psta.add_argument("--escalate", action="store_true", dest="topology_escalate",
+                      help="Also file every cross-subsystem address conflict into the REAL "
+                           "question queue through source_authority.escalate_conflict(). "
+                           "Idempotent: a re-run over unchanged address maps re-mints the "
+                           "same Q-IDs.")
+    psta.add_argument("--json", action="store_true",
+                      help="Print raw JSON instead of the human-readable SYS-28..30 report.")
+
     # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
     # ordering as an executable, queryable rule rather than prose an agent is
     # trusted to have read. NOT the same list as tools/verification_flow/
@@ -2347,6 +2374,41 @@ def main():
         raise SystemExit(
             0 if (result["selection"]["selection_admissible"]
                   and document["summary"]["scheduling_plan_clean"]) else 2)
+    elif args.cmd == "system-topology-analysis":
+        from . import system_topology_analysis as sta
+        kc_client = None
+        if args.topology_kc:
+            from .config import load_config
+            from .knowledge_center import KnowledgeCenterClient
+            kc_client = KnowledgeCenterClient(load_config(h.root), h.root)
+        question_store = None
+        if args.topology_escalate:
+            from . import question_queue
+            question_store = question_queue.QuestionQueueStore(h.root)
+        result = sta.analyze_system_topology(
+            h.root, args.select or [], knowledge_center_client=kc_client,
+            inventory_overlay_path=args.command_inventory,
+            question_store=question_store)
+        document = result["topology_analysis"]
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        else:
+            if not result["selection"]["selection_admissible"]:
+                from . import subsystem_discovery as sd
+                print(sd.format_report(result["selection"]))
+                print()
+            print(sta.format_system_topology_report(document))
+            filed = document["address_map_reconciliation"]["summary"]["escalations_filed"]
+            if filed:
+                print(f"\n{filed} cross-subsystem address question(s) filed into the real "
+                      "question queue.")
+        # Exit 2 while any cross-subsystem address range conflicts, any clock or
+        # reset disagrees, or a subsystem's own address map overlaps itself. A
+        # System-Level environment must not be composed over any of those, so a
+        # CI step must not read it as a clean run.
+        raise SystemExit(
+            0 if (result["selection"]["selection_admissible"]
+                  and document["summary"]["topology_clean"]) else 2)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
         result = reference_pattern_audit.audit_directory(
