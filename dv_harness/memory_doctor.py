@@ -10,8 +10,9 @@ verdicts:
     this module never re-derives that probe)
   - filesystem fallback active (memory_vault.FileSystemMarkdownAdapter's own
     detect())
-  - schema validity across every real Memory Note (validate_note_frontmatter()
-    run over the actual 06_Agent_Memory/** notes, never a synthetic sample)
+  - schema validity across every real Memory Note (memory_vault.validate_note()
+    -- required frontmatter fields AND the 11-section body shape -- run over
+    the actual 06_Agent_Memory/** notes, never a synthetic sample)
   - broken wiki-links, duplicate note IDs, invalid/unparsable YAML
     frontmatter, missing required metadata
   - large/forbidden-artifact files, against Phase 12's own policy definition
@@ -150,19 +151,38 @@ def check_filesystem_fallback(vault_path: Path) -> Dict[str, Any]:
 
 
 def check_schema(notes: List[Dict[str, Any]]) -> Dict[str, Any]:
-    complete: List[Dict[str, Any]] = []
+    """Phase 7 schema validity over every real note on disk -- BOTH halves.
+
+    `mv.validate_note()` checks the frontmatter's required fields and the
+    body's 11-section shape. The body half matters specifically here: the
+    write path builds that shape by construction, so the only way a note can
+    lose a `## Fix` header or reorder its sections is an edit made OUTSIDE
+    the adapter (an Obsidian GUI edit, another tool), which is exactly what
+    a read-side doctor check exists to catch.
+
+    `missing_recommended` is reported in its OWN list, spanning complete and
+    partial notes alike, and never contributes to `status` -- see
+    `mv.MEMORY_NOTE_SPEC_RECOMMENDED_FIELDS` for why those nine spec-listed
+    fields are checked but not gated on."""
+    complete_count = 0
     partial: List[Dict[str, Any]] = []
+    missing_recommended: List[Dict[str, Any]] = []
     for n in notes:
         if not n.get("parsed_ok"):
             continue  # counted by check_invalid_yaml() instead
-        v = mv.validate_note_frontmatter(n["frontmatter"])
+        v = mv.validate_note(n["frontmatter"], n.get("body"))
         entry = {"note_id": n["frontmatter"].get("id") or n["path"].stem, "path": str(n["path"])}
-        if v["schema_status"] == "COMPLETE":
-            complete.append(entry)
+        if v["missing_recommended"]:
+            missing_recommended.append({**entry, "missing_recommended": v["missing_recommended"]})
+        if v["note_status"] == "COMPLETE":
+            complete_count += 1
         else:
             entry["missing_required"] = v["missing_required"]
+            entry["missing_sections"] = v["missing_sections"]
+            entry["body_out_of_order"] = v["out_of_order"]
             partial.append(entry)
-    return {"status": "PARTIAL" if partial else "READY", "complete_count": len(complete), "partial": partial}
+    return {"status": "PARTIAL" if partial else "READY", "complete_count": complete_count,
+            "partial": partial, "notes_missing_recommended": missing_recommended}
 
 
 def check_duplicate_ids(notes: List[Dict[str, Any]]) -> Dict[str, Any]:

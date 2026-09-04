@@ -105,6 +105,59 @@ def test_doctor_flags_a_schema_partial_note_without_blocking():
         _rmtree(tmp)
 
 
+def test_doctor_flags_a_note_whose_body_section_was_hand_deleted():
+    """The read-side half of Phase 7. The adapter builds the 11-section body
+    by construction, so this state is only reachable by an edit made outside
+    it (Obsidian GUI, another tool) -- simulated here by editing the real
+    on-disk file the real adapter just wrote."""
+    tmp = _tmp()
+    try:
+        fs = _provider(tmp)
+        created = fs.create({"memory_level": "engineering", "protocol": "USB",
+                             "status": "ACTIVE", "confidence": "HIGH"},
+                            sections={"Fix": "raise the branch_b0 fifo threshold"})
+        assert created["validation"]["schema_status"] == "COMPLETE"
+
+        note_path = _vault_path(tmp) / created["path"]
+        text = note_path.read_text(encoding="utf-8")
+        assert "## Fix" in text
+        note_path.write_text(
+            "\n".join(l for l in text.splitlines()
+                      if l not in ("## Fix", "raise the branch_b0 fifo threshold")),
+            encoding="utf-8")
+
+        report = doctor.run_doctor(tmp, cfg={})
+        assert report["overall"] != "BLOCKED", "a reshaped body is repairable, never fatal"
+        assert "schema" in report["partial_reasons"]
+        entry = report["checks"]["schema"]["partial"][0]
+        assert entry["note_id"] == created["note_id"]
+        assert entry["missing_sections"] == ["Fix"]
+        assert entry["missing_required"] == [], "frontmatter itself is still complete"
+    finally:
+        _rmtree(tmp)
+
+
+def test_doctor_reports_missing_recommended_fields_without_marking_the_note_partial():
+    """A note carrying every GATING field but none of the spec's enrichment
+    fields is READY, and the absent enrichment fields are still named."""
+    tmp = _tmp()
+    try:
+        fs = _provider(tmp)
+        created = fs.create({"memory_level": "engineering", "protocol": "USB",
+                             "status": "ACTIVE", "confidence": "HIGH"})
+        schema = doctor.run_validate(tmp, cfg={})["checks"]["schema"]
+
+        assert schema["status"] == "READY"
+        assert schema["partial"] == []
+        assert schema["complete_count"] == 1
+
+        reported = schema["notes_missing_recommended"]
+        assert [e["note_id"] for e in reported] == [created["note_id"]]
+        assert set(reported[0]["missing_recommended"]) == set(mv.MEMORY_NOTE_SPEC_RECOMMENDED_FIELDS)
+    finally:
+        _rmtree(tmp)
+
+
 # --- run_doctor(): duplicate IDs (BLOCKED) ----------------------------------
 
 def test_doctor_blocks_on_duplicate_note_ids():

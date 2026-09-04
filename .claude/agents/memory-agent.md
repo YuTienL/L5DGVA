@@ -73,8 +73,12 @@ all of which only run inside the real functions.
 - **Demote / Archive**: `MemoryGC.deprecate()` / `.supersede()` /
   `.retract()` / `.flag_stale()` (`memory-gc` skill) -- status changes
   only, audit history is never deleted.
-- **Validate**: `validate_note_frontmatter()` for any vault note (schema
-  completeness -- COMPLETE vs. PARTIAL, baked into the note itself);
+- **Validate**: `validate_note()` for any vault note -- both halves of the
+  Phase 7 schema: `validate_note_frontmatter()` (required fields, COMPLETE
+  vs. PARTIAL, baked into the note itself, plus report-only
+  `missing_recommended`) and `validate_note_body_sections()` (the 11-section
+  body shape re-checked on READ, which is what catches an Obsidian-GUI edit
+  that deleted or reordered a section);
   `_verification_is_gate_validated()` (via `memory-consolidation`) for
   whether a record's `verification` block actually satisfies one of the
   two real gate shapes before treating it as promotion-eligible.

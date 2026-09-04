@@ -945,7 +945,8 @@ def main():
     pmem_graph.add_argument("note_id")
     pmem_graph.add_argument("--depth", type=int, default=2)
 
-    pmem_sub.add_parser("validate", help="Note-correctness subset of `doctor` (schema/duplicate-ID/"
+    pmem_sub.add_parser("validate", help="Note-correctness subset of `doctor` (schema -- required frontmatter "
+                                          "fields AND the 11-section body shape -- plus duplicate-ID/"
                                           "invalid-YAML/broken-link/secret checks) over real "
                                           "06_Agent_Memory/** notes. See dv_harness/memory_doctor.run_validate().")
 
@@ -954,7 +955,8 @@ def main():
     pmem_sync.add_argument("--message", default=None)
 
     pmem_sub.add_parser("doctor", help="Phase 21 full health check: vault writable, git status, Obsidian CLI, "
-                                        "filesystem fallback, schema, broken links, duplicate IDs, invalid YAML, "
+                                        "filesystem fallback, schema (frontmatter fields + body-section shape), "
+                                        "broken links, duplicate IDs, invalid YAML, "
                                         "large/forbidden-artifact files, secret leakage -> READY/PARTIAL/BLOCKED. "
                                         "See dv_harness/memory_doctor.run_doctor().")
 

@@ -27,11 +27,17 @@ What lives here, matching the 4 phases this workstream owns:
     absolute path this module invents on its own).
 
   Phase 7 -- Memory note schema: `MEMORY_NOTE_REQUIRED_FIELDS` /
-    `MEMORY_NOTE_OPTIONAL_FIELDS` / `MEMORY_NOTE_BODY_SECTIONS`,
-    `validate_note_frontmatter()`, `render_note_markdown()` /
-    `parse_note_markdown()`. A note missing a required field is written with
-    `schema_status: PARTIAL` baked into its own frontmatter -- never
-    silently written as if it were complete.
+    `MEMORY_NOTE_OPTIONAL_FIELDS` / `MEMORY_NOTE_SPEC_RECOMMENDED_FIELDS` /
+    `MEMORY_NOTE_BODY_SECTIONS`, `validate_note_frontmatter()`,
+    `validate_note_body_sections()`, `validate_note()`,
+    `render_note_markdown()` / `parse_note_markdown()`. A note missing a
+    required field is written with `schema_status: PARTIAL` baked into its
+    own frontmatter -- never silently written as if it were complete. The
+    body's 11-section shape is guaranteed by construction on WRITE
+    (`render_note_markdown()`) and independently re-checked on READ
+    (`validate_note_body_sections()`, run by `memory_doctor.check_schema()`),
+    so a note hand-edited in Obsidian that loses a `## Fix` header is caught
+    rather than trusted.
 
   Phase 8 -- Obsidian CLI Adapter: the `MemoryProvider` interface plus
     `ObsidianAdapter` (thin, honest capability probing, every operational
@@ -144,6 +150,23 @@ MEMORY_NOTE_OPTIONAL_FIELDS = [
 
 MEMORY_NOTE_ALL_FIELDS = MEMORY_NOTE_REQUIRED_FIELDS + MEMORY_NOTE_OPTIONAL_FIELDS
 
+# The user's Phase 7 spec text lists these nine as "required"; this module
+# deliberately keeps them OPTIONAL for gating purposes (see
+# MEMORY_NOTE_REQUIRED_FIELDS' comment above -- only the identity/trust
+# fields decide whether a note is reusable knowledge at all, and a real
+# debug lesson with no `rtl_sha` is still reusable knowledge). They are
+# nonetheless REPORTED as absent by validate_note_frontmatter()'s
+# `missing_recommended`, so the spec's fuller list is genuinely checked and
+# surfaced (`dv-harness memory doctor`/`validate`) rather than unvalidated --
+# it just never flips schema_status on its own.
+# `tags` and `knowledge_commit_sha` are excluded on purpose: `tags` is
+# derived by the router rather than sourced from the record, and
+# `knowledge_commit_sha` only exists AFTER a real vault commit, so reporting
+# either as "absent" would be noise on every correctly-written note.
+MEMORY_NOTE_SPEC_RECOMMENDED_FIELDS = [
+    f for f in MEMORY_NOTE_OPTIONAL_FIELDS if f not in ("tags", "knowledge_commit_sha")
+]
+
 # Field order used only for rendering — required first, then optional, then
 # the adapter-computed bookkeeping fields (schema_status is always written
 # by the adapter itself, never supplied by a caller: see
@@ -184,9 +207,16 @@ def validate_note_frontmatter(frontmatter: Dict[str, Any]) -> Dict[str, Any]:
     the caller (FileSystemMarkdownAdapter.create()/update()) bakes this
     result's `schema_status` directly into the written note's own
     frontmatter, so the incompleteness is visible on the note itself, not
-    merely returned once and forgotten."""
+    merely returned once and forgotten.
+
+    `missing_recommended` reports the MEMORY_NOTE_SPEC_RECOMMENDED_FIELDS the
+    note does not carry. It is REPORT-ONLY and never affects `schema_status`
+    -- see that constant's own comment for why those nine fields are checked
+    but not gated on."""
     missing = [f for f in MEMORY_NOTE_REQUIRED_FIELDS if frontmatter.get(f) in (None, "")]
-    return {"schema_status": "PARTIAL" if missing else "COMPLETE", "missing_required": missing}
+    missing_recommended = [f for f in MEMORY_NOTE_SPEC_RECOMMENDED_FIELDS if frontmatter.get(f) in (None, "")]
+    return {"schema_status": "PARTIAL" if missing else "COMPLETE", "missing_required": missing,
+            "missing_recommended": missing_recommended}
 
 
 # --- Minimal, intentionally-scoped YAML-frontmatter subset -----------------
@@ -346,6 +376,56 @@ def _body_to_sections(body: str) -> Dict[str, str]:
     if current is not None:
         sections[current] = "\n".join(buf).strip()
     return sections
+
+
+def validate_note_body_sections(body: Optional[str]) -> Dict[str, Any]:
+    """Phase 7's OTHER half of the schema contract, checked on READ.
+
+    `render_note_markdown()` guarantees the 11 MEMORY_NOTE_BODY_SECTIONS in
+    the right order by construction, so every note this adapter writes is
+    correct the moment it is written. That guarantee covers exactly one code
+    path: a note hand-edited afterwards in the Obsidian GUI (or by any other
+    tool) can lose a `## Fix` header, reorder sections, or arrive as a bare
+    frontmatter block with no body at all, and nothing would notice. This
+    function is what notices -- `memory_doctor.check_schema()` runs it over
+    every real note on disk, exactly as it already runs
+    `validate_note_frontmatter()` over every note's frontmatter.
+
+    `body_status` is PARTIAL when a required section header is missing OR
+    the required headers appear out of the canonical order (order matters:
+    the sections are a reasoning sequence -- Symptom before Hypothesis
+    before Root Cause before Fix before Verification -- not an unordered
+    bag). EXTRA `##` headers a human added are reported in
+    `unexpected_sections` but never downgrade the status: adding a section
+    is not a schema violation, deleting or reshuffling one is."""
+    present_order = list(_body_to_sections(body or ""))  # dict preserves the body's own header order
+    present = set(present_order)
+    missing = [name for name in MEMORY_NOTE_BODY_SECTIONS if name not in present]
+    unexpected = [name for name in present_order if name not in MEMORY_NOTE_BODY_SECTIONS]
+    required_in_body_order = [name for name in present_order if name in MEMORY_NOTE_BODY_SECTIONS]
+    canonical_order = [name for name in MEMORY_NOTE_BODY_SECTIONS if name in present]
+    out_of_order = required_in_body_order != canonical_order
+    return {
+        "body_status": "PARTIAL" if (missing or out_of_order) else "COMPLETE",
+        "missing_sections": missing,
+        "unexpected_sections": unexpected,
+        "out_of_order": out_of_order,
+    }
+
+
+def validate_note(frontmatter: Dict[str, Any], body: Optional[str] = None) -> Dict[str, Any]:
+    """Whole-note Phase 7 validation: frontmatter fields AND body shape.
+
+    `note_status` is COMPLETE only when BOTH halves are -- this is the single
+    verdict a reader should act on. The two halves stay separately reported
+    (`schema_status` / `body_status`) because they fail for different reasons
+    and have different fixes: a missing required field is repaired by
+    re-writing the note from its source record, a missing/reordered section
+    is repaired by editing the note's body."""
+    fm_result = validate_note_frontmatter(frontmatter)
+    body_result = validate_note_body_sections(body)
+    complete = fm_result["schema_status"] == "COMPLETE" and body_result["body_status"] == "COMPLETE"
+    return {"note_status": "COMPLETE" if complete else "PARTIAL", **fm_result, **body_result}
 
 
 # ---------------------------------------------------------------------------

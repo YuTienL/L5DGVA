@@ -91,8 +91,25 @@ id, memory_level, protocol, status, confidence, created, updated
 the schema shape is always visible):
 ```
 subsystem, category, failure, project, rtl_sha, tb_sha,
-vip_vendor, vip_version, simulator, tags
+vip_vendor, vip_version, simulator, tags, knowledge_commit_sha
 ```
+
+`MEMORY_NOTE_SPEC_RECOMMENDED_FIELDS` — the nine of those the Phase 7 spec
+text calls "required", which this module deliberately does **not** gate on
+(only the identity/trust fields decide whether a note is reusable knowledge
+at all; a real debug lesson with no `rtl_sha` is still reusable knowledge):
+```
+subsystem, category, failure, project, rtl_sha, tb_sha,
+vip_vendor, vip_version, simulator
+```
+They are still **checked and reported** —
+`validate_note_frontmatter()["missing_recommended"]`, surfaced per note by
+`dv-harness memory doctor`/`validate` under
+`checks.schema.notes_missing_recommended` — so the difference between the
+spec's list and the gating list is visible rather than silent. It never
+flips `schema_status`. `tags` (router-derived) and `knowledge_commit_sha`
+(only exists after a real vault commit) are excluded from this report on
+purpose: naming them absent would be noise on every correct note.
 
 Bookkeeping fields the adapter always adds itself (never caller-supplied):
 `schema_status` (`COMPLETE`/`PARTIAL`), plus carried-through
@@ -120,6 +137,25 @@ An empty section renders as `_Not yet documented._`. A partial
 every other section's existing content is preserved (`_body_to_sections()`).
 `Related Knowledge` is where `[[WikiLink]]`-style cross-references live —
 see MEMORY_OPERATIONS.md and the `memory-link` skill.
+
+The order is part of the contract, not cosmetic: the sections are a
+reasoning sequence (Symptom → Hypothesis → Root Cause → Fix →
+Verification). `render_note_markdown()` guarantees the shape by
+construction on write, and `validate_note_body_sections()` re-checks it on
+**read** (run over every real note by `memory_doctor.check_schema()`),
+returning `body_status: PARTIAL` with the `missing_sections` named when a
+header has been deleted or the required headers reordered. That read-side
+check exists specifically for a note hand-edited in the Obsidian GUI or by
+another tool — the only way a note can lose a `## Fix` header, since the
+adapter itself cannot produce one. An EXTRA `##` section a human added is
+listed in `unexpected_sections` but never downgrades the status: adding a
+section is not a violation, deleting or reshuffling one is.
+
+`validate_note(frontmatter, body)` runs both halves and returns the single
+`note_status` verdict (`COMPLETE` only when `schema_status` **and**
+`body_status` are), keeping the two reported separately because they have
+different repairs: a missing required field is fixed by re-writing the note
+from its source record, a missing section by editing the note's body.
 
 ### Example rendered note
 

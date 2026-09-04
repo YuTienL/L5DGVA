@@ -144,7 +144,9 @@ def test_resolve_vault_path_honors_explicit_absolute_configuration():
 
 def test_validate_note_frontmatter_flags_missing_required_fields_as_partial():
     complete = {f: "x" for f in mv.MEMORY_NOTE_REQUIRED_FIELDS}
-    assert mv.validate_note_frontmatter(complete) == {"schema_status": "COMPLETE", "missing_required": []}
+    result = mv.validate_note_frontmatter(complete)
+    assert result["schema_status"] == "COMPLETE"
+    assert result["missing_required"] == []
 
     incomplete = dict(complete)
     del incomplete["protocol"]
@@ -152,6 +154,91 @@ def test_validate_note_frontmatter_flags_missing_required_fields_as_partial():
     result = mv.validate_note_frontmatter(incomplete)
     assert result["schema_status"] == "PARTIAL"
     assert set(result["missing_required"]) == {"protocol", "confidence"}
+
+
+def test_missing_recommended_reports_spec_fields_without_gating_schema_status():
+    """The spec text calls subsystem/category/failure/project/rtl_sha/tb_sha/
+    vip_vendor/vip_version/simulator required; this module gates only on the
+    identity/trust fields. The difference must be REPORTED, not invisible --
+    and must not flip schema_status on its own."""
+    only_required = {f: "x" for f in mv.MEMORY_NOTE_REQUIRED_FIELDS}
+    result = mv.validate_note_frontmatter(only_required)
+    assert result["schema_status"] == "COMPLETE", "recommended fields must never gate schema_status"
+    assert set(result["missing_recommended"]) == set(mv.MEMORY_NOTE_SPEC_RECOMMENDED_FIELDS)
+
+    # `tags`/`knowledge_commit_sha` are deliberately NOT reported as absent.
+    assert "tags" not in result["missing_recommended"]
+    assert "knowledge_commit_sha" not in result["missing_recommended"]
+
+    fully_populated = {f: "x" for f in mv.MEMORY_NOTE_ALL_FIELDS}
+    assert mv.validate_note_frontmatter(fully_populated)["missing_recommended"] == []
+
+
+def test_validate_note_body_sections_accepts_a_rendered_note():
+    fm = {f: "x" for f in mv.MEMORY_NOTE_REQUIRED_FIELDS}
+    _, body = mv.parse_note_markdown(mv.render_note_markdown(fm))
+    assert mv.validate_note_body_sections(body) == {
+        "body_status": "COMPLETE", "missing_sections": [], "unexpected_sections": [], "out_of_order": False,
+    }
+
+
+def test_validate_note_body_sections_flags_a_hand_deleted_section():
+    """The real gap this closes: a note hand-edited in the Obsidian GUI that
+    drops a `## Fix` header. The write path can never produce this, so only a
+    read-side check can catch it."""
+    fm = {f: "x" for f in mv.MEMORY_NOTE_REQUIRED_FIELDS}
+    _, body = mv.parse_note_markdown(mv.render_note_markdown(fm, {"Fix": "raise the fifo threshold"}))
+    assert "## Fix" in body
+
+    edited = "\n".join(l for l in body.splitlines()
+                       if l not in ("## Fix", "raise the fifo threshold"))
+    result = mv.validate_note_body_sections(edited)
+    assert result["body_status"] == "PARTIAL"
+    assert result["missing_sections"] == ["Fix"]
+    assert result["out_of_order"] is False
+
+
+def test_validate_note_body_sections_flags_reordered_sections():
+    reordered = list(mv.MEMORY_NOTE_BODY_SECTIONS)
+    reordered[4], reordered[5] = reordered[5], reordered[4]  # Fix before Root Cause
+    body = "\n\n".join(f"## {name}\n_x_" for name in reordered)
+    result = mv.validate_note_body_sections(body)
+    assert result["body_status"] == "PARTIAL"
+    assert result["missing_sections"] == []
+    assert result["out_of_order"] is True
+
+
+def test_validate_note_body_sections_tolerates_an_extra_human_section():
+    fm = {f: "x" for f in mv.MEMORY_NOTE_REQUIRED_FIELDS}
+    _, body = mv.parse_note_markdown(mv.render_note_markdown(fm))
+    result = mv.validate_note_body_sections(body + "\n\n## Operator Notes\nrerun with WAVE=1\n")
+    assert result["body_status"] == "COMPLETE", "adding a section is not a schema violation"
+    assert result["unexpected_sections"] == ["Operator Notes"]
+
+
+def test_validate_note_body_sections_flags_a_frontmatter_only_note():
+    result = mv.validate_note_body_sections("")
+    assert result["body_status"] == "PARTIAL"
+    assert result["missing_sections"] == mv.MEMORY_NOTE_BODY_SECTIONS
+
+
+def test_validate_note_requires_both_halves_complete():
+    fm = {f: "x" for f in mv.MEMORY_NOTE_REQUIRED_FIELDS}
+    _, body = mv.parse_note_markdown(mv.render_note_markdown(fm))
+
+    assert mv.validate_note(fm, body)["note_status"] == "COMPLETE"
+
+    good_fm_bad_body = mv.validate_note(fm, "## Symptom\nx")
+    assert good_fm_bad_body["note_status"] == "PARTIAL"
+    assert good_fm_bad_body["schema_status"] == "COMPLETE"
+    assert good_fm_bad_body["body_status"] == "PARTIAL"
+
+    bad_fm = dict(fm)
+    del bad_fm["protocol"]
+    bad_fm_good_body = mv.validate_note(bad_fm, body)
+    assert bad_fm_good_body["note_status"] == "PARTIAL"
+    assert bad_fm_good_body["schema_status"] == "PARTIAL"
+    assert bad_fm_good_body["body_status"] == "COMPLETE"
 
 
 def test_render_and_parse_note_markdown_round_trip():
