@@ -68,6 +68,7 @@ main{padding:24px;max-width:1200px;margin:auto}
 .protoTile{cursor:pointer}.protoTile:hover{border-color:#2457a6}.protoTile.selected{border-color:#2457a6;background:#eaf1fb}
 .modeTile.mode-selected{border-color:#2457a6;background:#eaf1fb}
 .tier-reached{border-color:#25845b;background:#e3f7ea}.tier-unreached{opacity:.5}
+.cap-generic-only{color:#b8843a}.cap-model{color:#2457a6}.cap-dut-proven{color:#25845b;font-weight:600}
 code{background:#eef2f7;padding:3px 5px}
 .note{color:#8a97b3;font-size:12px}
 .err{color:#b84444}
@@ -208,10 +209,16 @@ level render <code>tier-reached</code>, tiers above it render <code>tier-unreach
 </div>
 
 <div class="card" id="protocolCard"><h3>Protocols</h3>
-<div class="note">Real registered protocols and their qualification_status (read from
-<code>qualification/protocol_capability_registry.json</code>) -- click a tile to fill the Goal field
-below with a start-run goal scoped to that protocol (the exact <code>goal</code> field
-POST /api/start already reads).</div>
+<div class="note">Real registered protocols (read from
+<code>qualification/protocol_capability_registry.json</code>), each showing TWO independent facts.
+First line: <code>capability_status</code> -- what generation code exists, derived in
+<code>dv_harness/protocol_capability.py</code> from modules verified to import.
+<code>GENERIC_SKELETON_ONLY</code> means only the protocol-agnostic skeleton, nothing
+protocol-specific; hover a tile for the module name. Second line:
+<code>qualification_status</code> -- how far a generated environment has been PROVEN, on
+<code>qualification.py</code>'s 8-tier ladder. Only USB is <code>DUT_PROVEN</code>; no other
+protocol has been bound to real RTL. Click a tile to fill the Goal field below with a start-run
+goal scoped to that protocol (the exact <code>goal</code> field POST /api/start already reads).</div>
 <div id="protocoltiles" class="tiles" style="margin-top:8px"></div>
 </div>
 <div class="card" id="envModeCard"><h3>Environment Mode Router</h3>
@@ -937,13 +944,22 @@ async function load(){
    tile(qc.hypothesis || '-', 'Hypothesis'),
  ].join('') : tile('-', 'No qualified conclusion yet (RE_AUDIT has not produced one)');
 
- // Protocols: real registered protocols + qualification_status, each tile a
- // real click target (selectProtocol()) that fills the Goal field POST
- // /api/start actually reads -- not a static reference-only div.
+ // Protocols: real registered protocols, each tile a real click target
+ // (selectProtocol()) that fills the Goal field POST /api/start actually
+ // reads -- not a static reference-only div. Each tile carries BOTH statuses:
+ // capability_status (what protocol-specific generation code exists, classed
+ // cap-generic-only when it is only the protocol-agnostic skeleton) and
+ // qualification_status (how far it has been proven). Showing one without the
+ // other is what let 11 identical BUILDER_AVAILABLE tiles read as equal
+ // readiness -- see protocol_capability.py.
  document.getElementById('protocoltiles').innerHTML = (s.protocol_registry||[]).length
-   ? s.protocol_registry.map(p=>
-       `<div class="tile protoTile" onclick="selectProtocol(this,'${String(p.name).replace(/'/g,"\\'")}')"><div class="n">${p.name}</div><div class="l">${p.qualification_status}</div></div>`
-     ).join('')
+   ? s.protocol_registry.map(p=>{
+       let cap = p.capability_status||'-';
+       let capCls = cap==='GENERIC_SKELETON_ONLY' ? 'cap-generic-only'
+                  : (cap==='DUT_PROVEN' ? 'cap-dut-proven' : 'cap-model');
+       let model = p.protocol_model_generator||'NONE';
+       return `<div class="tile protoTile" title="protocol model generator: ${model}" onclick="selectProtocol(this,'${String(p.name).replace(/'/g,"\\'")}')"><div class="n">${p.name}</div><div class="l ${capCls}">${cap}</div><div class="l">${p.qualification_status}</div></div>`;
+     }).join('')
    : tile('-','No protocols registered');
 
  // Environment Mode Router: highlights whichever mode key matches
@@ -1298,7 +1314,16 @@ def _protocol_registry(root: Path):
     """Reads the real qualification/protocol_capability_registry.json this
     project's protocol builders are actually tracked in (never a hardcoded
     protocol list) -- returns [] if the file is missing rather than
-    fabricating protocols."""
+    fabricating protocols.
+
+    Carries capability_status/protocol_model_generator alongside
+    qualification_status (2026-09-04). A tile showing only qualification_status
+    said BUILDER_AVAILABLE for all 11 protocols, which reads as "a builder
+    exists, equally, for every one of these" -- true only of the
+    protocol-agnostic skeleton. capability_status is the separate question of
+    whether any protocol-SPECIFIC generation code exists, derived in
+    protocol_capability.py from modules verified to import; see that module for
+    why one field could not answer both."""
     path = root / ".dv-harness" / "qualification" / "protocol_capability_registry.json"
     data = _read_json_file(path, default=None)
     if not isinstance(data, dict):
@@ -1308,7 +1333,12 @@ def _protocol_registry(root: Path):
     for name, rec in protocols.items():
         if not isinstance(rec, dict):
             continue
-        out.append({"name": name, "qualification_status": rec.get("qualification_status") or rec.get("status") or "-"})
+        out.append({
+            "name": name,
+            "qualification_status": rec.get("qualification_status") or rec.get("status") or "-",
+            "capability_status": rec.get("capability_status") or "-",
+            "protocol_model_generator": rec.get("protocol_model_generator") or "NONE",
+        })
     out.sort(key=lambda p: p["name"])
     return out
 

@@ -1055,3 +1055,64 @@ were real, the queue was real, the wire between them did not exist:
 Both escalations are idempotent: the Q-ID is derived from the finding, so re-running a detector
 over unchanged sources re-mints the same id instead of growing the queue. Proven end to end
 against a real `QuestionQueueStore` (never a mock) by `dv_harness_tests/test_source_authority.py`.
+
+
+## Per-Protocol Capability: Two Questions, Never One Label (2026-09-04)
+
+"Which protocols can this harness generate for" and "which protocols has it ever PROVEN" are
+different questions, and until 2026-09-04 one field answered both wrongly.
+`.dv-harness/qualification/protocol_capability_registry.json` carried
+`"status": "REAL_GENERATION_READY"` plus `"generation_capability": "REAL_CODE_GENERATOR_AVAILABLE"`
+for all 11 protocols. For Ethernet, eDP and UCIe there is no protocol-specific Python module at
+all behind that claim -- only the flat protocol-agnostic skeleton every protocol gets, plus a
+`builder_profile.json` under `.dv-harness/universal-protocol-platform/builders/` that no code
+reads (`grep -rln "builder_profile" --include=*.py .` returns nothing; the whole builders tree is
+inert metadata). This was not inert prose either: `dashboard.py`'s `_protocol_registry()` renders
+that registry as the project's real protocol readiness and `_qualification_tier_reached()` derives
+the Qualification-Tiers card from it, so the overstatement reached a production surface.
+
+`dv_harness/protocol_capability.py` splits the collapsed label into three separately-checkable
+facts and derives every one from code rather than from a typed-in string:
+
+- **generic skeleton** -- `uvm_generator/protocol_env_generator.py`, real for every protocol. That
+  half of the old claim was true and stays true.
+- **protocol model generator** -- a module that computes something protocol-SPECIFIC. There are
+  five, covering eight protocol keys: `pcie_ltssm_generator` (PCIe), `mipi_dphy_generator`
+  (MIPI_CSI2/MIPI_DSI -- the D-PHY electrical layer only, both packet layers unmodelled),
+  `canfd_arbitration_generator` (CAN_FD), `amba_fabric_generator` (AMBA4, the only one imported by
+  production-adjacent code, via `address_map_verifier.py`), `emmc_cmdq_generator` (eMMC/SD_SDIO,
+  the protocol-agnostic tag lifecycle). Every entry is verified to resolve through the import
+  system and to have its standalone tool on disk before it is reported; anything else reports
+  `NONE`. Each partial model names its own unmodelled layers in `does_not_model` (e.g. AMBA's
+  `ace_lite_coherency`/`axi_stream`, PCIe's `tlp_layer`/`config_space`), so partial-ness is data,
+  not a footnote.
+- **DUT proof** -- `dut_proof` paths that must EXIST. Only USB has any, and USB is therefore the
+  only `DUT_PROVEN` protocol. Point the field at a path that is not there and the status drops.
+
+`capability_status` (what generation code EXISTS: `GENERIC_SKELETON_ONLY` /
+`PROTOCOL_MODEL_PARTIAL` / `PROTOCOL_MODEL_COMPLETE` / `DUT_PROVEN`) is deliberately a **separate
+vocabulary from `qualification.py`'s 8-tier ladder** (how far a generated environment has been
+PROVEN), sharing no token with it -- PCIe having the deepest protocol model in the repo while
+sitting at `BUILDER_AVAILABLE` is exactly why one field could not carry both.
+
+The registry is generated, not hand-maintained: edit the module, then
+`python -m dv_harness.protocol_capability --sync`. `--check` exits 2 on any disagreement and is
+called by `tools/universal_protocol/protocol_status.py`, which now **refuses to print at all**
+rather than report a readiness the code does not back -- a status command that can print a stale
+overstatement is how this one survived. `dashboard.py`'s Protocols card carries both statuses per
+tile with the module name on hover. The same split was applied to
+`.dv-harness/semantic-models/*.json`, which asserted the identical collapsed value in ten more
+files nothing reads.
+
+**Scope boundary, stated so it is not read as more**: this closes the CLAIM, not the capability.
+No non-USB protocol is proven against a real DUT by any of this, and the "Non-USB topology
+variants" above remain UNTESTED. The recommended bounded first non-USB pilot is still PCIe -- its
+Root-Complex/Endpoint asymmetry reuses the proven `block/branch_a*/branch_fw/branch_b*`
+architecture directly (no new untested topology doc needed first, unlike AMBA-as-primary-DUT or
+CSI-2/DSI simplex streaming), it is the only protocol with a generated example artifact
+(`examples/generated_pcie_uvm_env/`, which `examples/NOTICE_SCAFFOLDING_ONLY.md` correctly labels
+an unconnected never-compiled skeleton), and its remaining gap is narrow and named: bind one real
+PCIe RTL DUT, run the 3 machine gates against it, and extend past LTSSM into TLP/config-space.
+
+Proven -- including that the two real consumers carry the split claim and that a re-overstated
+registry is refused rather than reported -- by `dv_harness_tests/test_protocol_capability.py`.

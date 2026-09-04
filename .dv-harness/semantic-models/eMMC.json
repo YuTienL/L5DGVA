@@ -10,8 +10,10 @@
     "read",
     "write"
   ],
-  "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
   "vip_binding": "MUST_DISCOVER_FROM_CURRENT_VIP",
   "native_uvc_fallback": true,
-  "production_qualified": false
+  "production_qualified": false,
+  "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+  "protocol_model_generator": "dv_harness.uvm_generator.emmc_cmdq_generator",
+  "capability_status": "PROTOCOL_MODEL_PARTIAL"
 }

@@ -1,109 +1,229 @@
 {
-  "note": "Initial status is intentionally conservative until real qualification evidence is recorded.",
+  "note": "Generated from dv_harness/protocol_capability.py -- edit that module, then run `python -m dv_harness.protocol_capability --sync`. Every capability field here is derived from code that was verified to exist; `--check` (also run by tools/universal_protocol/protocol_status.py and by dv_harness_tests/test_protocol_capability.py) fails if this file claims more than the repo supports. capability_status answers what generation code EXISTS; the separate qualification_status answers how far a generated environment has been PROVEN, on qualification.py's 8-tier ladder.",
   "protocols": {
     "USB_2_3x": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/USB/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/USB.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "NONE",
+      "protocol_model_tool": "NONE",
+      "models": [],
+      "does_not_model": [],
+      "dut_proof": [
+        "examples/generated_usb_real_evidence_v12/environment_manifest.json",
+        "examples/generated_usb_real_evidence_v1/manifest_inputs/usb_bind_topology.json"
+      ],
+      "capability_status": "DUT_PROVEN",
+      "capability_note": "The only protocol ever grounded against real external RTL. Its proof is generated evidence artifacts, not a protocol-model module -- USB behaviour lives in the main uvm_generator path, so protocol_model_generator is legitimately NONE here and the DUT_PROVEN status comes from dut_proof."
     },
     "PCIe": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/PCIe/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/PCIe.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "dv_harness.uvm_generator.pcie_ltssm_generator",
+      "protocol_model_tool": "tools/generate_pcie_ltssm_environment.py",
+      "models": [
+        "ltssm_top_level_state_graph",
+        "ltssm_transition_validator",
+        "link_width_encoding"
+      ],
+      "does_not_model": [
+        "ltssm_sub_states",
+        "ltssm_timeout_constants",
+        "tlp_layer",
+        "config_space"
+      ],
+      "dut_proof": [],
+      "capability_status": "PROTOCOL_MODEL_PARTIAL",
+      "capability_note": "examples/generated_pcie_uvm_env/ proves the generation path executes end to end shape-wise, but examples/NOTICE_SCAFFOLDING_ONLY.md states it is an unconnected skeleton with no DUT ever bound and it has never been compiled. Reachable only via the standalone tool, not from engine.py/cli.py."
     },
     "Ethernet": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/Ethernet/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/Ethernet.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "NONE",
+      "protocol_model_tool": "NONE",
+      "models": [],
+      "does_not_model": [],
+      "dut_proof": [],
+      "capability_status": "GENERIC_SKELETON_ONLY",
+      "capability_note": "No ethernet_*.py exists anywhere in dv_harness/. The builders/Ethernet/builder_profile.json under universal-protocol-platform is doc-only metadata no Python file reads."
     },
     "MIPI_CSI2": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/MIPI_CSI2/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/MIPI_CSI2.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "dv_harness.uvm_generator.mipi_dphy_generator",
+      "protocol_model_tool": "tools/generate_mipi_dphy_environment.py",
+      "models": [
+        "dphy_lane_lp_hs_state_transitions",
+        "escape_mode_and_ulps_entry"
+      ],
+      "does_not_model": [
+        "csi2_short_and_long_packet_layer",
+        "virtual_channels",
+        "packet_ecc_and_crc",
+        "cphy",
+        "dphy_timing_constants"
+      ],
+      "dut_proof": [],
+      "capability_status": "PROTOCOL_MODEL_PARTIAL",
+      "capability_note": "The D-PHY electrical lane layer only -- shared with MIPI_DSI. The CSI-2 packet layer has no generator code. connectivity.PROTOCOL_FINGERPRINTS['CSI2'] is flagged illustrative and unverified, and the simplex-streaming branch_fw topology variant is documented UNTESTED."
     },
     "MIPI_DSI": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/MIPI_DSI/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/MIPI_DSI.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "dv_harness.uvm_generator.mipi_dphy_generator",
+      "protocol_model_tool": "tools/generate_mipi_dphy_environment.py",
+      "models": [
+        "dphy_lane_lp_hs_state_transitions",
+        "escape_mode_and_ulps_entry"
+      ],
+      "does_not_model": [
+        "dsi_command_and_video_packet_layer",
+        "virtual_channels",
+        "packet_ecc_and_crc",
+        "cphy",
+        "dphy_timing_constants"
+      ],
+      "dut_proof": [],
+      "capability_status": "PROTOCOL_MODEL_PARTIAL",
+      "capability_note": "Same shared D-PHY electrical layer as MIPI_CSI2; the DSI packet layer is unmodeled."
     },
     "CAN_FD": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "dv_harness.uvm_generator.canfd_arbitration_generator",
+      "protocol_model_tool": "tools/generate_canfd_arbitration_environment.py",
+      "models": [
+        "bitwise_dominant_recessive_arbitration",
+        "tec_rec_error_state_machine",
+        "crc15_crc17_crc21"
+      ],
+      "does_not_model": [
+        "bit_timing_segments_and_resynchronisation",
+        "fd_bit_rate_switching",
+        "transceiver_delay_compensation"
+      ],
+      "dut_proof": [],
+      "capability_status": "PROTOCOL_MODEL_PARTIAL",
+      "capability_note": "Genuinely protocol-specific math, unit-tested. Unlike PCIe it has produced no examples/generated_canfd_* artifact -- never even a full skeleton, let alone a DUT bind."
     },
     "AMBA4_MULTI_MASTER_MULTI_SLAVE": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/AMBA4_MMxMS/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/AMBA4_MMxMS.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "dv_harness.uvm_generator.amba_fabric_generator",
+      "protocol_model_tool": "tools/generate_amba_fabric_environment.py",
+      "models": [
+        "mxn_address_decode_overlap_gap_coverage",
+        "id_width_resolution",
+        "per_master_slave_pair_scoreboard_pairing"
+      ],
+      "does_not_model": [
+        "axi_ahb_apb_handshake_signals",
+        "burst_wrap_exclusive_qos",
+        "ace_lite_coherency",
+        "axi_stream"
+      ],
+      "dut_proof": [],
+      "capability_status": "PROTOCOL_MODEL_PARTIAL",
+      "capability_note": "The only protocol model imported by production-adjacent code: uvm_generator/address_map_verifier.py does `from .amba_fabric_generator import parse_addr`, and that verifier is called from connectivity.py, agent_checkpoint_check.py and bind_verification_lint.py. ACE-Lite and AXI-Stream return zero hits in the module and are structurally out of reach of an address-decode fabric model."
     },
     "eMMC": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/eMMC/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/eMMC.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "dv_harness.uvm_generator.emmc_cmdq_generator",
+      "protocol_model_tool": "tools/generate_emmc_cmdq_environment.py",
+      "models": [
+        "cmdq_tag_lifecycle",
+        "outstanding_tag_drain_check",
+        "hs200_tuning_search_shape"
+      ],
+      "does_not_model": [
+        "emmc_command_set_and_response_types",
+        "boot_and_rpmb_partitions",
+        "bus_timing_constants"
+      ],
+      "dut_proof": [],
+      "capability_status": "PROTOCOL_MODEL_PARTIAL",
+      "capability_note": "JEDEC-shaped command-queue tag lifecycle only; the eMMC command set is unmodeled."
     },
     "SD_SDIO": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/SD_SDIO/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/SD_SDIO.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "dv_harness.uvm_generator.emmc_cmdq_generator",
+      "protocol_model_tool": "tools/generate_emmc_cmdq_environment.py",
+      "models": [
+        "cmdq_tag_lifecycle",
+        "outstanding_tag_drain_check",
+        "hs200_tuning_search_shape"
+      ],
+      "does_not_model": [
+        "sd_command_set_and_response_types",
+        "sdio_cmd52_cmd53_io_functions",
+        "card_identification_and_initialisation",
+        "bus_timing_constants"
+      ],
+      "dut_proof": [],
+      "capability_status": "PROTOCOL_MODEL_PARTIAL",
+      "capability_note": "Reuses the same protocol-agnostic tag-lifecycle model as eMMC -- real, but it is the command-queue bookkeeping, not anything SD/SDIO-specific."
     },
     "eDP_DisplayPort": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/eDP/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/eDP.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "NONE",
+      "protocol_model_tool": "NONE",
+      "models": [],
+      "does_not_model": [],
+      "dut_proof": [],
+      "capability_status": "GENERIC_SKELETON_ONLY",
+      "capability_note": "No eDP/DisplayPort module in dv_harness/; AUX, link training and video are unmodeled."
     },
     "UCIe": {
-      "status": "REAL_GENERATION_READY",
       "qualification_status": "BUILDER_AVAILABLE",
       "builder_profile": ".dv-harness/universal-protocol-platform/builders/UCIe/builder_profile.json",
       "qualification_suite": ".dv-harness/universal-protocol-platform/qualification_suites/UCIe.json",
       "qualification_note": "Requires real DUT/spec/VIP-or-native-UVC execution evidence.",
-      "generation_capability": "REAL_CODE_GENERATOR_AVAILABLE",
-      "note": "Real generation machinery present; project qualification pending actual DUT/VIP/tool execution."
+      "generic_skeleton_generator": "dv_harness.uvm_generator.protocol_env_generator",
+      "protocol_model_generator": "NONE",
+      "protocol_model_tool": "NONE",
+      "models": [],
+      "does_not_model": [],
+      "dut_proof": [],
+      "capability_status": "GENERIC_SKELETON_ONLY",
+      "capability_note": "No UCIe module in dv_harness/; adapter/PHY link bring-up is unmodeled."
     }
   },
   "new_interface_framework": {
-    "status": "REAL_GENERATION_READY",
+    "status": "GENERIC_SKELETON_ONLY",
     "paths": [
       "VIP_ADAPTER",
       "NATIVE_UVC"
     ],
-    "qualification_status": "BUILDER_AVAILABLE"
+    "qualification_status": "BUILDER_AVAILABLE",
+    "capability_note": "VIP_ADAPTER and NATIVE_UVC are named paths with no implementing Python module in this repo; only the protocol-agnostic skeleton generator is real for them."
   }
 }
