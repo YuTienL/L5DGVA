@@ -238,6 +238,28 @@ ORGANIZATIONAL_MEMORY, which has no local JSON file to patch.
 Both are thin wrappers around `python -m dv_harness.memory_cli` — see
 their source at the repo root for the exact argument mapping.
 
+## Checking the whole chain end to end
+
+```
+python -m pytest dv_harness_tests/test_e2e_memory_chain_usb3_lfps.py -q
+python .work/e2e_usb3_lfps_demo.py
+```
+Both drive the same real chain against a throwaway project directory with
+real git integration — a synthetic USB3 Polling.LFPS failure through memory
+search, hypothesis, evidence, `score_confidence()`, root cause, verified fix,
+a Job Memory write, a FAILED-attempt Job Memory write, an Engineering Memory
+write, `promote_to_organizational()`, `[[WikiLink]]` forward/back traversal,
+a real `knowledge_commit_sha`, and session save/restore. The pytest module is
+the regression net (15 tests, one per link, run by CI and the pre-push hook);
+the `.work/` script narrates the same run step by step for a human. The chain
+itself lives in `dv_harness_tests/e2e_memory_chain_usb3_lfps.py`, so the two
+can never describe different chains.
+
+Only the INPUT is synthetic. The verified-fix step's real-execution half stays
+`PARTIAL_NOT_PERFORMED`: a genuine PASS/FAIL verdict needs a real LSF job and
+a real VCS run on the Linux server, which this LOCAL_ANALYSIS path does not
+perform and does not pretend to.
+
 ## Checking these docs' own file:line citations
 
 ```

@@ -743,9 +743,9 @@ def test_vault_note_frontmatter_carries_the_records_measured_confidence():
     engineering_admission_gate()'s gate-validated-`verification` path carries
     no `confidence` key of its own, and the note says UNKNOWN rather than
     inventing a level the record never asserted. That is why the USB3 LFPS
-    end-to-end demo now puts score_confidence()'s real result ON the record
-    (.work/e2e_usb3_lfps_demo.py STEP 10) instead of the note's builder
-    guessing one.
+    end-to-end chain now puts score_confidence()'s real result ON the record
+    (dv_harness_tests/e2e_memory_chain_usb3_lfps.py, STEP 10) instead of the
+    note's builder guessing one.
     """
     tmp = _tmp()
     try:

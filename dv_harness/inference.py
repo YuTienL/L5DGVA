@@ -219,8 +219,8 @@ def next_best_action(protocol, gaps, root, *, gap_action_catalog=None):
     protocol builder registry, without duplicating this function's matching
     logic in a second module. Omit it and behavior is byte-identical to before
     -- every existing caller (engine.py's `_react_step_inference` and
-    `_score_root_cause_confidence`, .work/e2e_usb3_lfps_demo.py) passes the
-    same three positional arguments and is unaffected.
+    `_score_root_cause_confidence`, dv_harness_tests/e2e_memory_chain_usb3_lfps.py)
+    passes the same three positional arguments and is unaffected.
 
     It exists because the two DV-specific halves of this function are wrong for
     a non-simulation gap, and only those two: the registry it reads, and the
