@@ -124,6 +124,360 @@ def test_match_protocol_fingerprint_unknown_protocol_is_honest():
 
 
 # ===========================================================================
+# AMBA-4: protocol classification from RTL evidence
+#
+# Synthetic fixtures only -- these build port-name sets in the shape
+# verible_parser really produces for a fabric wrapper, so the classifier is
+# exercised through its real inputs. Nothing here writes, emits, or plans a
+# `bind` statement: AMBA-30/AMBA-31 keep implementation behind a human review
+# gate, and this step is discovery machinery only.
+# ===========================================================================
+
+def _axi_mm_ports(prefix="s00_axi", *, burst=True, ids=True, wid=False,
+                  coherency=False, lite=False, qos=False, omit=()):
+    """Port names for one AXI memory-mapped interface, spelled the way a real
+    fabric wrapper spells them (`s00_axi_awvalid`), so the classifier is
+    tested against prefixed names rather than bare spec tokens."""
+    sigs = ["awvalid", "awready", "awaddr", "wvalid", "wready", "wdata",
+            "bvalid", "bready", "bresp", "arvalid", "arready", "araddr",
+            "rvalid", "rready", "rdata", "rresp"]
+    if burst:
+        sigs += ["awlen", "awsize", "awburst", "arlen", "arsize", "arburst", "wlast", "rlast"]
+    if ids:
+        sigs += ["awid", "arid", "bid", "rid"]
+    if wid:
+        sigs += ["wid"]
+    if coherency:
+        sigs += ["awsnoop", "arsnoop", "awdomain", "ardomain", "awbar", "arbar"]
+    if lite:
+        sigs += ["awprot", "arprot", "wstrb"]
+    if qos:
+        sigs += ["awqos", "arqos", "awregion", "arregion"]
+    return {f"{prefix}_{s}".upper() for s in sigs if s not in omit}
+
+
+def _ahb_ports(prefix="m02_ahb", *, multi_master=False, mastlock=False, omit=()):
+    sigs = ["haddr", "htrans", "hwrite", "hwdata", "hrdata", "hready",
+            "hsize", "hburst", "hprot", "hresp"]
+    if multi_master:
+        sigs += ["hmaster", "hsplit", "hbusreq", "hgrant", "hlock"]
+    if mastlock:
+        sigs += ["hmastlock"]
+    return {f"{prefix}_{s}".upper() for s in sigs if s not in omit}
+
+
+def _apb_ports(prefix="m01_apb", *, apb3=False, apb4=False):
+    sigs = ["paddr", "psel", "penable", "pwrite", "pwdata", "prdata"]
+    if apb3 or apb4:
+        sigs += ["pready", "pslverr"]
+    if apb4:
+        sigs += ["pstrb", "pprot"]
+    return {f"{prefix}_{s}".upper() for s in sigs}
+
+
+def _axis_ports(prefix="m_axis"):
+    sigs = ["tvalid", "tready", "tdata", "tstrb", "tkeep", "tlast", "tid", "tdest", "tuser"]
+    return {f"{prefix}_{s}".upper() for s in sigs}
+
+
+def test_all_ten_amba4_classifications_have_a_real_fingerprint_and_display_name():
+    """AMBA-3 mandates exactly these ten classifications."""
+    assert set(conn.AMBA4_PROTOCOLS) == {
+        "AHB", "AHB_LITE", "APB", "APB3", "APB4",
+        "AXI3", "AXI4", "AXI4_LITE", "ACE_LITE", "AXI4_STREAM"}
+    for proto in conn.AMBA4_PROTOCOLS:
+        assert proto in conn.PROTOCOL_FINGERPRINTS, proto
+        assert conn.PROTOCOL_FINGERPRINTS[proto], proto
+        assert proto in conn.AMBA4_DISPLAY_NAMES, proto
+    # The doc's own spellings, so a report never invents one.
+    assert conn.AMBA4_DISPLAY_NAMES["AXI4_LITE"] == "AXI4-Lite"
+    assert conn.AMBA4_DISPLAY_NAMES["ACE_LITE"] == "ACE-Lite"
+    assert conn.AMBA4_DISPLAY_NAMES["AHB_LITE"] == "AHB-Lite"
+    assert conn.AMBA4_DISPLAY_NAMES["AXI4_STREAM"] == "AXI4-Stream"
+
+
+@pytest.mark.parametrize("proto", conn.AMBA4_PROTOCOLS)
+def test_fingerprint_table_and_classifier_never_disagree(proto):
+    """A port set that IS a table entry must classify to that same protocol.
+    The table answers "does this fully exhibit X's signature", the classifier
+    answers "which ONE protocol is this" -- they may not contradict."""
+    ports = set(conn.PROTOCOL_FINGERPRINTS[proto])
+    assert conn.match_protocol_fingerprint(ports, proto)["matched"] is True
+    result = conn.classify_amba_protocol(ports)
+    assert result.status == conn.AmbaClassificationStatus.RESOLVED.value, result.discriminators
+    assert result.protocol == proto, result.discriminators
+
+
+def test_axi4_is_not_misread_as_axi3_because_awid_contains_wid():
+    """The core AMBA-4 discriminator, and the exact reason token matching
+    replaced substring matching: `"WID" in "AWID"` is True."""
+    axi4 = _axi_mm_ports("s00_axi")           # has AWID/ARID/BID/RID, no WID
+    assert any("AWID" in p for p in axi4)
+    result = conn.classify_amba_protocol(axi4)
+    assert result.status == conn.AmbaClassificationStatus.RESOLVED.value
+    assert result.protocol == "AXI4"
+    # ...and a real AXI3 port list, which additionally carries WID, resolves to AXI3.
+    axi3 = _axi_mm_ports("s00_axi", wid=True)
+    assert conn.classify_amba_protocol(axi3).protocol == "AXI3"
+    # The token set proves the mechanism, not just the verdict.
+    assert "AWID" in conn.amba_signal_tokens(axi4)
+    assert "WID" not in conn.amba_signal_tokens(axi4)
+    assert "WID" in conn.amba_signal_tokens(axi3)
+
+
+def test_hreadyout_does_not_satisfy_hready_under_token_matching():
+    """"HREADY" is a substring of "HREADYOUT". An AHB slave port list that
+    exposes only HREADYOUT is genuinely missing HREADY and must be reported
+    incomplete, not silently completed by a substring hit."""
+    ports = _ahb_ports(omit=("hready",)) | {"M02_AHB_HREADYOUT"}
+    result = conn.classify_amba_protocol(ports)
+    assert result.status == conn.AmbaClassificationStatus.UNRESOLVED_PARTIAL_EVIDENCE.value
+    assert result.family == "AHB"
+    assert "HREADY" in result.missing_signals
+
+
+def test_ahb_lite_vs_full_ahb_uses_arbitration_signals_not_hmastlock():
+    """AHB-Lite carries HMASTLOCK too, so HMASTLOCK must never promote an
+    interface to full multi-master AHB."""
+    lite = conn.classify_amba_protocol(_ahb_ports(mastlock=True))
+    assert lite.status == conn.AmbaClassificationStatus.RESOLVED.value
+    assert lite.protocol == "AHB_LITE", lite.discriminators
+    full = conn.classify_amba_protocol(_ahb_ports(multi_master=True, mastlock=True))
+    assert full.protocol == "AHB"
+    assert "HMASTER" in full.evidence_signals
+
+
+def test_apb_tiers_base_vs_apb3_vs_apb4():
+    assert conn.classify_amba_protocol(_apb_ports()).protocol == "APB"
+    assert conn.classify_amba_protocol(_apb_ports(apb3=True)).protocol == "APB3"
+    assert conn.classify_amba_protocol(_apb_ports(apb4=True)).protocol == "APB4"
+    # The corrected base-APB entry: it must no longer REQUIRE PREADY (APB3
+    # evidence) and must include the address/data signals it used to omit.
+    assert "PREADY" not in conn.PROTOCOL_FINGERPRINTS["APB"]
+    assert {"PADDR", "PWDATA", "PRDATA"} <= conn.PROTOCOL_FINGERPRINTS["APB"]
+    assert conn.match_protocol_fingerprint(_apb_ports(), "APB")["matched"] is True
+
+
+def test_axi4_lite_is_never_reported_as_full_axi4():
+    lite = conn.classify_amba_protocol(_axi_mm_ports("s01_axi", burst=False, ids=False, lite=True))
+    assert lite.status == conn.AmbaClassificationStatus.RESOLVED.value
+    assert lite.protocol == "AXI4_LITE"
+    assert lite.display_name == "AXI4-Lite"
+
+
+def test_ace_lite_reports_the_coherency_signals_it_found():
+    ace = conn.classify_amba_protocol(_axi_mm_ports("s02_axi", coherency=True))
+    assert ace.protocol == "ACE_LITE"
+    assert {"ARSNOOP", "AWSNOOP", "ARDOMAIN", "AWDOMAIN"} <= set(ace.evidence_signals)
+
+
+def test_axi4_stream_is_classified_separately_from_memory_mapped_axi():
+    stream = conn.classify_amba_protocol(_axis_ports())
+    assert stream.protocol == "AXI4_STREAM"
+    assert stream.family == "AXI_STREAM"
+    mm = conn.classify_amba_protocol(_axi_mm_ports())
+    assert mm.family == "AXI_MM"
+    assert stream.family != mm.family
+
+
+# --- the unresolved / ambiguous half (never a happy-path-only tracer) ------
+
+def test_bridge_module_spanning_two_families_is_ambiguous_not_guessed():
+    """A real AHB-to-APB bridge's port list contains BOTH families in full.
+    Answering with one protocol at module granularity would invent a fact."""
+    bridge = _ahb_ports("ahb_s") | _apb_ports("apb_m", apb3=True)
+    result = conn.classify_amba_protocol(bridge)
+    assert result.status == conn.AmbaClassificationStatus.AMBIGUOUS_MULTIPLE_PROTOCOLS.value
+    assert result.protocol == conn.AMBA_PROTOCOL_UNRESOLVED
+    assert sorted(result.candidates) == ["AHB", "APB"]
+    assert result.requires_human_confirmation is True
+
+
+def test_ace_lite_coherency_plus_axi3_wid_is_contradictory_not_resolved():
+    """ACE-Lite is defined on AXI4, which removed WID. Both cannot hold."""
+    contradictory = _axi_mm_ports("s00_axi", coherency=True, wid=True)
+    result = conn.classify_amba_protocol(contradictory)
+    assert result.status == conn.AmbaClassificationStatus.AMBIGUOUS_CONTRADICTORY_EVIDENCE.value
+    assert result.protocol == conn.AMBA_PROTOCOL_UNRESOLVED
+    assert sorted(result.candidates) == ["ACE_LITE", "AXI3"]
+    assert result.family == "AXI_MM"
+    assert result.requires_human_confirmation is True
+
+
+def test_axi4_only_qos_on_a_burstless_idless_interface_is_contradictory():
+    weird = _axi_mm_ports("s00_axi", burst=False, ids=False, qos=True)
+    result = conn.classify_amba_protocol(weird)
+    assert result.status == conn.AmbaClassificationStatus.AMBIGUOUS_CONTRADICTORY_EVIDENCE.value
+    assert sorted(result.candidates) == ["AXI4", "AXI4_LITE"]
+
+
+def test_incomplete_interface_is_reported_with_its_missing_signals():
+    """AMBA-3: "Do not silently omit partial/incomplete interfaces"."""
+    no_read_channel = _axi_mm_ports("s00_axi", omit=("rvalid", "rready", "rdata", "rresp"))
+    result = conn.classify_amba_protocol(no_read_channel)
+    assert result.status == conn.AmbaClassificationStatus.UNRESOLVED_PARTIAL_EVIDENCE.value
+    assert result.family == "AXI_MM"
+    assert set(result.missing_signals) == {"RVALID", "RREADY", "RDATA", "RRESP"}
+    assert result.requires_human_confirmation is True
+
+
+def test_non_amba_ports_are_not_amba_and_an_interface_port_is_not_guessed():
+    usb = {"CLK", "RESET_N", "DP", "DM", "VBUS"}
+    assert conn.classify_amba_protocol(usb).status == \
+        conn.AmbaClassificationStatus.NOT_AMBA.value
+    # A SystemVerilog interface port (`AXI4 s_axi`) exposes no individual
+    # signals. It must land in NOT_AMBA rather than be classified from the
+    # interface TYPE name -- that is exactly what AMBA-4 forbids.
+    iface_port = {"s_axi", "axi4_lite_if", "ace_lite_if"}
+    result = conn.classify_amba_protocol(iface_port)
+    assert result.status == conn.AmbaClassificationStatus.NOT_AMBA.value
+    assert result.protocol == conn.AMBA_PROTOCOL_UNRESOLVED
+
+
+def test_classification_cannot_consult_a_module_or_file_name_at_all():
+    """AMBA-4: "Never classify protocol solely by filename, module name, or
+    port prefix." Enforced structurally -- the function takes no name."""
+    assert list(inspect.signature(conn.classify_amba_protocol).parameters) == ["port_names"]
+    ports = _apb_ports("u_axi4_master_bridge", apb4=True)   # deliberately lying prefix
+    result = conn.classify_amba_protocol(ports)
+    assert result.protocol == "APB4"
+
+
+# --- integration with the existing 4-tier bind classifier -----------------
+
+def test_amba_structural_match_feeds_the_existing_tier_classifier():
+    """Reuses classify_bind_tier() rather than introducing a second notion of
+    "matched": RESOLVED -> T2; anything unresolved can never be auto-accepted."""
+    resolved = conn.amba_structural_match(_axi_mm_ports("s00_axi"))
+    assert resolved["matched"] is True
+    assert resolved["protocol"] == "AXI4"
+    t2 = conn.classify_bind_tier(structural_match=resolved)
+    assert t2.tier == conn.BindTier.T2_STRUCTURAL_MATCH
+
+    ambiguous = conn.amba_structural_match(_ahb_ports("ahb_s") | _apb_ports("apb_m", apb3=True))
+    assert ambiguous["matched"] is False
+    assert ambiguous["amba_classification"]["status"] == \
+        conn.AmbaClassificationStatus.AMBIGUOUS_MULTIPLE_PROTOCOLS.value
+    t3 = conn.classify_bind_tier(structural_match=ambiguous, naming_match="u_amba_bridge")
+    assert t3.tier == conn.BindTier.T3_NAMING_HEURISTIC
+    assert t3.auto_acceptable is False
+    conn.assert_t3_never_auto_accepted(t3)
+    t4 = conn.classify_bind_tier(structural_match=ambiguous)
+    assert t4.tier == conn.BindTier.T4_UNDECIDABLE
+    assert t4.requires_question_queue_entry is True
+
+
+def test_legacy_non_amba4_fingerprints_keep_substring_matching_unchanged():
+    """The pre-existing coarse "AXI"/"AXI_LITE" buckets and the illustrative
+    non-AMBA sets must behave exactly as before this change."""
+    legacy = conn.match_protocol_fingerprint({"AWVALID", "AWREADY", "WLAST", "BRESP"}, "AXI")
+    assert legacy["matched"] is True
+    assert legacy["match_method"] == "SUBSTRING"
+    assert conn.PROTOCOL_FINGERPRINTS["AXI"] == {"AWVALID", "AWREADY", "WLAST", "BRESP"}
+    assert conn.PROTOCOL_FINGERPRINTS["AXI_LITE"] == {"AWVALID", "AWREADY", "WVALID", "BVALID"}
+    assert conn.match_protocol_fingerprint({"S_AXI_AWVALID"}, "AXI4")["match_method"] == "TOKEN"
+
+
+# --- the synthetic multi-master / multi-slave fabric fixture ---------------
+
+#: A 2-master / 4-slave AMBA4 fabric, one module per fabric-facing interface
+#: (the shape a real interconnect wrapper generates), plus one whole-fabric
+#: wrapper whose port list spans two families. Deliberately mixes protocols so
+#: the AMBA-6 count is not a single-protocol degenerate case, and deliberately
+#: includes one genuinely unresolvable port list.
+_SYNTHETIC_FABRIC_INTERFACES = {
+    # Fabric SLAVE interfaces (external MASTER endpoints drive them)
+    "soc_fabric_s00_axi": _axi_mm_ports("s00_axi"),                                # CPU, AXI4
+    "soc_fabric_s01_axi": _axi_mm_ports("s01_axi", wid=True),                      # legacy DMA, AXI3
+    # Fabric MASTER interfaces (external SLAVE endpoints are driven)
+    "soc_fabric_m00_axi": _axi_mm_ports("m00_axi", coherency=True),                # DDR, ACE-Lite
+    "soc_fabric_m01_apb": _apb_ports("m01_apb", apb4=True),                        # periph, APB4
+    "soc_fabric_m02_ahb": _ahb_ports("m02_ahb"),                                   # SRAM, AHB-Lite
+    "soc_fabric_m03_axis": _axis_ports("m03_axis"),                                # video, AXI4-Stream
+}
+
+
+def _fabric_modules():
+    """Builds the fixture through the REAL verible_parser dataclasses and the
+    REAL build_interface_fingerprints(), so the classifier is exercised on the
+    same objects a live parse produces -- not on hand-made port sets."""
+    mods = []
+    for name, ports in _SYNTHETIC_FABRIC_INTERFACES.items():
+        mods.append(conn.verible_parser.ModuleInfo(
+            name=name,
+            ports=[conn.verible_parser.PortInfo(name=p.lower(), direction="input",
+                                                data_type="logic")
+                   for p in sorted(ports)],
+        ))
+    return mods
+
+
+def test_synthetic_multi_master_multi_slave_fabric_classifies_every_interface():
+    fps = conn.build_interface_fingerprints(_fabric_modules())
+    assert set(fps) == set(_SYNTHETIC_FABRIC_INTERFACES)
+    results = conn.classify_amba_interfaces(fps)
+    resolved = {name: r.protocol for name, r in results.items()}
+    assert resolved == {
+        "soc_fabric_s00_axi": "AXI4",
+        "soc_fabric_s01_axi": "AXI3",
+        "soc_fabric_m00_axi": "ACE_LITE",
+        "soc_fabric_m01_apb": "APB4",
+        "soc_fabric_m02_ahb": "AHB_LITE",
+        "soc_fabric_m03_axis": "AXI4_STREAM",
+    }
+    for name, r in results.items():
+        assert r.status == conn.AmbaClassificationStatus.RESOLVED.value, (name, r.discriminators)
+        assert r.requires_human_confirmation is False
+        assert r.discriminators, name          # every verdict cites its own evidence
+        assert r.evidence_signals, name
+
+
+def test_synthetic_fabric_supports_an_amba6_shaped_per_protocol_count():
+    """AMBA-6's mandatory summary counts per protocol. This proves the
+    classification output is countable in that shape -- it does not build the
+    table itself (AMBA-6 is a later step)."""
+    results = conn.classify_amba_interfaces(
+        conn.build_interface_fingerprints(_fabric_modules()))
+    counts = {p: 0 for p in conn.AMBA4_PROTOCOLS}
+    for r in results.values():
+        if r.status == conn.AmbaClassificationStatus.RESOLVED.value:
+            counts[r.protocol] += 1
+    assert sum(counts.values()) == len(_SYNTHETIC_FABRIC_INTERFACES)
+    assert counts["AXI4"] == 1 and counts["AXI3"] == 1 and counts["ACE_LITE"] == 1
+    assert counts["APB4"] == 1 and counts["AHB_LITE"] == 1 and counts["AXI4_STREAM"] == 1
+    assert counts["AXI4_LITE"] == 0 and counts["AHB"] == 0
+
+
+def test_synthetic_fabric_with_an_unresolvable_wrapper_does_not_degrade_the_rest():
+    """The whole-fabric wrapper module spans two families and cannot be
+    classified as one protocol -- and that must not contaminate the six
+    interfaces that ARE resolvable."""
+    mods = _fabric_modules()
+    mods.append(conn.verible_parser.ModuleInfo(
+        name="soc_fabric_top",
+        ports=[conn.verible_parser.PortInfo(name=p.lower(), direction="input", data_type="logic")
+               for p in sorted(_ahb_ports("ahb_s") | _apb_ports("apb_m", apb3=True))],
+    ))
+    results = conn.classify_amba_interfaces(conn.build_interface_fingerprints(mods))
+    top = results["soc_fabric_top"]
+    assert top.status == conn.AmbaClassificationStatus.AMBIGUOUS_MULTIPLE_PROTOCOLS.value
+    assert top.requires_human_confirmation is True
+    still_resolved = [n for n, r in results.items()
+                      if r.status == conn.AmbaClassificationStatus.RESOLVED.value]
+    assert sorted(still_resolved) == sorted(_SYNTHETIC_FABRIC_INTERFACES)
+
+
+def test_classification_is_json_serializable_for_a_downstream_topology_artifact():
+    r = conn.classify_amba_protocol(_axi_mm_ports("s00_axi"))
+    blob = json.loads(json.dumps(r.to_dict()))
+    assert blob["protocol"] == "AXI4"
+    assert blob["display_name"] == "AXI4"
+    assert blob["status"] == "RESOLVED"
+    assert blob["family"] == "AXI_MM"
+    assert blob["requires_human_confirmation"] is False
+
+
+# ===========================================================================
 # Existing binds (grep/parse)
 # ===========================================================================
 

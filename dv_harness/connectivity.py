@@ -656,6 +656,103 @@ def capture_dut_instance_tree(
 # verible_parser.py -- never re-implements RTL parsing)
 # ===========================================================================
 
+# ---------------------------------------------------------------------------
+# AMBA-4 spec-fixed signal sets (AMBA4 SoC bus-fabric discovery, 2026-09-04)
+#
+# One source of truth for every AMBA signal name this module knows: the
+# `PROTOCOL_FINGERPRINTS` entries below are BUILT from these constants, and
+# `classify_amba_protocol()` discriminates between sub-protocols using the
+# same constants. There is deliberately no second AMBA signal table anywhere.
+#
+# Every name here is spec-fixed (AMBA AHB/AHB-Lite, APB2/APB3/APB4,
+# AXI3/AXI4/AXI4-Lite, ACE-Lite, AXI4-Stream) -- unlike the ILLUSTRATIVE
+# CSI2/DSI/USB3/PCIE/SDIO sets below, these do NOT carry that honesty caveat.
+# ---------------------------------------------------------------------------
+
+#: Signals every AHB-family interface (full AHB and AHB-Lite alike) carries.
+AHB_CORE_SIGNALS = frozenset({"HADDR", "HTRANS", "HWRITE", "HWDATA", "HRDATA", "HREADY"})
+
+#: Arbitration / split-transaction signals that exist ONLY in full multi-master
+#: AHB and are absent from AHB-Lite. This is the real AHB-vs-AHB-Lite
+#: discriminator. NOTE `HMASTLOCK` is deliberately NOT in this set: AHB-Lite
+#: carries HMASTLOCK too, so using it as a discriminator would misclassify
+#: every AHB-Lite interface as full AHB. `HLOCK` (master->arbiter) IS
+#: multi-master-only and is distinct from `HMASTLOCK` under token matching.
+AHB_MULTI_MASTER_ONLY_SIGNALS = frozenset({"HMASTER", "HSPLIT", "HBUSREQ", "HGRANT", "HLOCK"})
+
+#: Additional AHB evidence the doc lists as "may include" -- reported when
+#: found, never required for a match.
+AHB_OPTIONAL_EVIDENCE_SIGNALS = frozenset(
+    {"HSIZE", "HBURST", "HPROT", "HRESP", "HREADYOUT", "HSEL", "HMASTLOCK"})
+
+#: APB base (APB2). Present in APB3 and APB4 as well.
+APB_CORE_SIGNALS = frozenset({"PADDR", "PSEL", "PENABLE", "PWRITE", "PWDATA", "PRDATA"})
+#: APB3 additions -- their presence is what separates APB3 from base APB.
+APB3_EVIDENCE_SIGNALS = frozenset({"PREADY", "PSLVERR"})
+#: APB4 additions -- their presence is what separates APB4 from APB3.
+APB4_EVIDENCE_SIGNALS = frozenset({"PSTRB", "PPROT"})
+
+#: The five AXI memory-mapped channels (AW/W/B/AR/R), handshake + payload.
+#: Shared by AXI3, AXI4, AXI4-Lite and ACE-Lite -- i.e. this set alone can
+#: never decide WHICH of them an interface is; the evidence sets below do.
+AXI_MM_CORE_SIGNALS = frozenset({
+    "AWVALID", "AWREADY", "AWADDR",
+    "WVALID", "WREADY", "WDATA",
+    "BVALID", "BREADY", "BRESP",
+    "ARVALID", "ARREADY", "ARADDR",
+    "RVALID", "RREADY", "RDATA", "RRESP",
+})
+#: Burst signalling. Absent from AXI4-Lite by definition (single-beat only).
+AXI_BURST_EVIDENCE_SIGNALS = frozenset({
+    "AWLEN", "ARLEN", "AWSIZE", "ARSIZE", "AWBURST", "ARBURST", "WLAST", "RLAST"})
+#: Transaction IDs. Absent from AXI4-Lite by definition.
+AXI_ID_EVIDENCE_SIGNALS = frozenset({"AWID", "ARID", "BID", "RID"})
+#: AXI3-ONLY: the write-data-channel ID. AXI4 removed WID (write interleaving
+#: was dropped), so its presence is the doc's own AXI3-vs-AXI4 discriminator.
+#: Requires TOKEN matching, not substring matching -- "AWID" CONTAINS "WID",
+#: so a substring test would read every AXI4 interface as AXI3.
+AXI3_ONLY_EVIDENCE_SIGNALS = frozenset({"WID"})
+#: AXI4 additions over AXI3 -- corroborating evidence, reported when found.
+AXI4_ONLY_EVIDENCE_SIGNALS = frozenset({"AWQOS", "ARQOS", "AWREGION", "ARREGION"})
+#: AXI4-Lite's mandatory protection/strobe signals.
+AXI4_LITE_EVIDENCE_SIGNALS = frozenset({"AWPROT", "ARPROT", "WSTRB"})
+#: ACE-Lite coherency signalling layered on top of an AXI4 interface. The doc
+#: requires reporting WHICH of these were actually found, not just the verdict.
+ACE_LITE_COHERENCY_SIGNALS = frozenset({
+    "AWSNOOP", "ARSNOOP", "AWDOMAIN", "ARDOMAIN", "AWBAR", "ARBAR"})
+
+#: AXI4-Stream: NOT memory-mapped, and reported as its own class per the doc
+#: ("Report AXI4-Stream separately from memory-mapped AXI").
+AXI4_STREAM_CORE_SIGNALS = frozenset({"TVALID", "TREADY", "TDATA"})
+AXI4_STREAM_OPTIONAL_EVIDENCE_SIGNALS = frozenset(
+    {"TSTRB", "TKEEP", "TLAST", "TID", "TDEST", "TUSER"})
+
+#: The ten classifications AMBA-3/AMBA-4 mandate, in the doc's own order.
+#: These are `PROTOCOL_FINGERPRINTS` keys; `AMBA4_DISPLAY_NAMES` maps each to
+#: the doc's exact label for the AMBA-6 counting table and any downstream
+#: topology JSON, so a report never invents a spelling ("AXI4_LITE" is the
+#: key, "AXI4-Lite" is what a human-facing table must print).
+AMBA4_PROTOCOLS: tuple = (
+    "AHB", "AHB_LITE", "APB", "APB3", "APB4",
+    "AXI3", "AXI4", "AXI4_LITE", "ACE_LITE", "AXI4_STREAM",
+)
+AMBA4_DISPLAY_NAMES: dict = {
+    "AHB": "AHB", "AHB_LITE": "AHB-Lite", "APB": "APB", "APB3": "APB3",
+    "APB4": "APB4", "AXI3": "AXI3", "AXI4": "AXI4", "AXI4_LITE": "AXI4-Lite",
+    "ACE_LITE": "ACE-Lite", "AXI4_STREAM": "AXI4-Stream",
+}
+
+#: Family -> the core signal set that decides "is this interface of that
+#: family at all". Sub-protocol resolution WITHIN a family is a separate,
+#: evidence-based step (see `classify_amba_protocol()`); two families both
+#: matching at once is an ambiguity, not a ranking problem.
+AMBA_FAMILY_CORE_SIGNALS: dict = {
+    "AHB": AHB_CORE_SIGNALS,
+    "APB": APB_CORE_SIGNALS,
+    "AXI_MM": AXI_MM_CORE_SIGNALS,
+    "AXI_STREAM": AXI4_STREAM_CORE_SIGNALS,
+}
+
 #: Structural signal-name fingerprints, from Part C's own worked examples
 #: ("AXI needs AWVALID/AWREADY/WLAST/BRESP present; CSI-2 needs D-PHY +
 #: clock lanes present"). Matching is case-insensitive substring matching
@@ -680,11 +777,60 @@ def capture_dut_instance_tree(
 #: unverified data into a false-PASS path. Verify a given protocol's real
 #: signal names against that VIP's own example/interface before relying on
 #: its T2 result as evidence.
+#:
+#: AMBA-4 addendum (2026-09-04): the ten AMBA sub-protocol entries below are
+#: built from the spec-fixed constants above, and are matched with TOKEN
+#: matching rather than the legacy substring matching (see
+#: `match_protocol_fingerprint`'s `strict_tokens`) -- substring matching would
+#: find "WID" inside "AWID" and read every AXI4 port list as AXI3. Several of
+#: them are strict supersets of each other by construction (APB c APB3 c APB4;
+#: AXI4_LITE c AXI4 c ACE_LITE), which is correct for this table's own
+#: question ("does this port set FULLY exhibit protocol X's signature?") but
+#: means the table alone cannot answer "which ONE protocol is this interface?".
+#: That second question is `classify_amba_protocol()`'s, which resolves the
+#: family first and then applies the real spec discriminators.
+#:
+#: The pre-existing "AXI"/"AXI_LITE" keys are kept BYTE-UNCHANGED as coarse
+#: FAMILY-level buckets for the callers/tests that already use them; they are
+#: not among `AMBA4_PROTOCOLS` and must not be used to answer an AMBA-3/AMBA-4
+#: classification question.
+#:
+#: "AHB" and "APB", however, ARE AMBA-4 classification labels, so they could
+#: not stay as coarse buckets meaning something else under the same key --
+#: two meanings for one key is how a report ends up printing a mandated label
+#: it did not actually establish. Both were CORRECTED on 2026-09-04:
+#:   - "APB" was {PSEL,PENABLE,PWRITE,PREADY}: it omitted PADDR/PWDATA/PRDATA
+#:     and REQUIRED PREADY, which is APB3 evidence -- i.e. the old "APB" entry
+#:     could not match a base APB2 interface at all, and matched APB3 while
+#:     reporting "APB". It is now the doc's base set exactly.
+#:   - "AHB" was {HTRANS,HADDR,HWRITE,HREADY}, which matches AHB-Lite just as
+#:     well as full AHB. It now additionally requires HMASTER -- the
+#:     multi-master indicator every full-AHB slave interface carries, chosen
+#:     over HSPLIT/HBUSREQ/HGRANT because those appear only on split-capable
+#:     slaves and on master-side arbitration ports respectively.
+#: No caller in this repo read either entry (verified by grep before the
+#: change); their only consumers are this module's own matcher and classifier.
 PROTOCOL_FINGERPRINTS: dict[str, set[str]] = {
     "AXI": {"AWVALID", "AWREADY", "WLAST", "BRESP"},
     "AXI_LITE": {"AWVALID", "AWREADY", "WVALID", "BVALID"},
-    "APB": {"PSEL", "PENABLE", "PWRITE", "PREADY"},
-    "AHB": {"HTRANS", "HADDR", "HWRITE", "HREADY"},
+    # --- AMBA-4 sub-protocol classifications (the ten AMBA4_PROTOCOLS) ---
+    "AHB": set(AHB_CORE_SIGNALS | {"HMASTER"}),
+    # AHB_LITE is AHB's core set with NO multi-master/arbitration signal. The
+    # variant decision itself belongs to classify_amba_protocol(), which
+    # applies the full AHB_MULTI_MASTER_ONLY_SIGNALS any-of test rather than
+    # this table's single required discriminator.
+    "AHB_LITE": set(AHB_CORE_SIGNALS),
+    "APB": set(APB_CORE_SIGNALS),
+    "APB3": set(APB_CORE_SIGNALS | APB3_EVIDENCE_SIGNALS),
+    "APB4": set(APB_CORE_SIGNALS | APB3_EVIDENCE_SIGNALS | APB4_EVIDENCE_SIGNALS),
+    "AXI3": set(AXI_MM_CORE_SIGNALS | AXI_BURST_EVIDENCE_SIGNALS
+                | AXI_ID_EVIDENCE_SIGNALS | AXI3_ONLY_EVIDENCE_SIGNALS),
+    "AXI4": set(AXI_MM_CORE_SIGNALS | AXI_BURST_EVIDENCE_SIGNALS
+                | AXI_ID_EVIDENCE_SIGNALS),
+    "AXI4_LITE": set(AXI_MM_CORE_SIGNALS | AXI4_LITE_EVIDENCE_SIGNALS),
+    "ACE_LITE": set(AXI_MM_CORE_SIGNALS | AXI_BURST_EVIDENCE_SIGNALS
+                    | AXI_ID_EVIDENCE_SIGNALS | ACE_LITE_COHERENCY_SIGNALS),
+    "AXI4_STREAM": set(AXI4_STREAM_CORE_SIGNALS),
     "CSI2": {"CLK_LANE_HS", "CLK_LANE_LP", "DATA_LANE0_HS"},
     "DSI": {"CLK_LANE_HS", "DATA_LANE0_HS", "TE"},
     "USB": {"DP", "DM"},
@@ -718,23 +864,380 @@ def build_interface_fingerprints(modules: list) -> dict[str, set[str]]:
     return out
 
 
-def match_protocol_fingerprint(port_names: set[str], protocol: str) -> dict:
+#: Splits a port name into alphanumeric tokens: "S00_AXI_AWVALID" ->
+#: {S00, AXI, AWVALID}. Case is normalized by the caller.
+_AMBA_TOKEN_SPLIT_RE = re.compile(r"[^A-Z0-9]+")
+#: A trailing index on an otherwise-spec-named token ("HADDR0" -> "HADDR").
+_AMBA_TOKEN_INDEX_RE = re.compile(r"([A-Z]+)(\d+)")
+
+
+def amba_signal_tokens(port_names) -> set:
+    """Token set for a module's real port names, used for AMBA signal presence
+    instead of the legacy substring test.
+
+    Substring matching cannot answer AMBA-4's own questions: "WID" is a
+    substring of "AWID", so `"WID" in "AWID"` reports AXI3's discriminator
+    present on every AXI4 interface; "HREADY" is a substring of "HREADYOUT";
+    "TID" would be found inside a port merely spelled `..._TIDLE`. Tokenizing
+    on non-alphanumeric boundaries makes `S_AXI_AWID` contribute AWID and NOT
+    WID, while still matching the common real spellings (`haddr`, `HADDR`,
+    `s00_axi_awvalid`, `m_axis_tvalid`). A trailing index is also folded in
+    ("HADDR0" contributes HADDR), because per-port index suffixes are common
+    in fabric wrappers.
+
+    Known limitation, stated rather than implied away: a port declared as a
+    SystemVerilog INTERFACE (`AXI4 s_axi`) exposes no individual signals, so
+    it tokenizes to nothing AMBA-shaped and classifies as NOT_AMBA/partial.
+    `verible_parser` does not model modports (AMBA-2's own gap), so this
+    module cannot see through an interface port. That is reported honestly by
+    the classifier rather than guessed at from the port's type name -- which
+    would be exactly the name-based classification AMBA-4 forbids."""
+    toks: set = set()
+    for p in port_names or ():
+        upper = str(p).upper()
+        for tok in _AMBA_TOKEN_SPLIT_RE.split(upper):
+            if not tok:
+                continue
+            toks.add(tok)
+            m = _AMBA_TOKEN_INDEX_RE.fullmatch(tok)
+            if m:
+                toks.add(m.group(1))
+    return toks
+
+
+def match_protocol_fingerprint(port_names: set[str], protocol: str,
+                               strict_tokens: Optional[bool] = None) -> dict:
     """Structural T2 match check for one (module port-set, protocol) pair.
     `matched=True` only when the FULL required signature subset is present
     (a partial hit is reported as `matched=False` with `missing_signals`
-    listed, never rounded up to a match)."""
-    required = PROTOCOL_FINGERPRINTS.get(protocol.upper())
+    listed, never rounded up to a match).
+
+    `strict_tokens` selects the presence test. `None` (the default) means
+    "decide from the protocol": the ten `AMBA4_PROTOCOLS` use TOKEN matching,
+    because their discriminators are substrings of each other (`WID` inside
+    `AWID`, `HREADY` inside `HREADYOUT`) and substring matching would silently
+    invert the AXI3/AXI4 verdict. Every other protocol keeps the original
+    substring behavior byte-for-byte, so no existing caller changes meaning.
+    Pass True/False to force one explicitly."""
+    proto = protocol.upper()
+    required = PROTOCOL_FINGERPRINTS.get(proto)
     if required is None:
         return {"matched": False, "protocol": protocol, "reason": "UNKNOWN_PROTOCOL_FINGERPRINT",
-                "matched_signals": [], "missing_signals": sorted(required or [])}
-    present = {sig for sig in required if any(sig in p for p in port_names)}
+                "matched_signals": [], "missing_signals": []}
+    use_tokens = (proto in AMBA4_PROTOCOLS) if strict_tokens is None else bool(strict_tokens)
+    if use_tokens:
+        toks = amba_signal_tokens(port_names)
+        present = {sig for sig in required if sig in toks}
+    else:
+        present = {sig for sig in required if any(sig in p for p in port_names)}
     missing = required - present
     return {
         "matched": not missing,
-        "protocol": protocol.upper(),
+        "protocol": proto,
+        "match_method": "TOKEN" if use_tokens else "SUBSTRING",
         "matched_signals": sorted(present),
         "missing_signals": sorted(missing),
     }
+
+
+# ===========================================================================
+# AMBA-4: protocol classification from RTL evidence
+#
+# AMBA-3 requires every fabric-facing interface to be resolved into ONE of
+# ten classifications; AMBA-4 dictates that the resolution come from actual
+# signal evidence and states the prohibition outright: "Never classify
+# protocol solely by filename, module name, or port prefix."
+#
+# `classify_amba_protocol()` therefore takes a PORT-NAME SET and nothing
+# else. There is deliberately no module-name parameter to accidentally
+# consult, which is the structural version of that prohibition -- the
+# alternative already in this repo is `protocol_router._ALIASES`, which maps
+# free-text tokens like "axi3"/"ahb-lite" onto the single "amba" profile and
+# is explicitly documented there as informational routing, never an RTL
+# classification. This function does not call it and does not duplicate it:
+# the two answer different questions (which profile handles this request vs.
+# which protocol is this interface).
+#
+# The result is single-valued ONLY when the evidence supports a single value.
+# Two families matching at once, contradictory sub-protocol evidence, and a
+# partially-wired interface each get their own status rather than being
+# rounded to a best guess -- AMBA-3's "do not silently omit partial/incomplete
+# interfaces" and this project's own hard-won rule that an unresolved trace
+# state must be reportable, not collapsed into the happy path.
+# ===========================================================================
+
+class AmbaClassificationStatus(str, Enum):
+    RESOLVED = "RESOLVED"                                            # exactly one of AMBA4_PROTOCOLS
+    AMBIGUOUS_MULTIPLE_PROTOCOLS = "AMBIGUOUS_MULTIPLE_PROTOCOLS"    # >1 AMBA family fully present
+    AMBIGUOUS_CONTRADICTORY_EVIDENCE = "AMBIGUOUS_CONTRADICTORY_EVIDENCE"  # one family, mutually exclusive sub-protocol evidence
+    UNRESOLVED_PARTIAL_EVIDENCE = "UNRESOLVED_PARTIAL_EVIDENCE"      # AMBA-shaped but incomplete -- reported, never dropped
+    NOT_AMBA = "NOT_AMBA"                                            # no AMBA evidence at all
+
+
+#: `protocol` value carried by every non-RESOLVED classification. A real,
+#: greppable string rather than `None`, for the same reason
+#: REQUIRED_HUMAN_INPUT is: an unresolved protocol must be visible in a JSON
+#: dump, never read as a missing/defaulted field.
+AMBA_PROTOCOL_UNRESOLVED = "AMBA_PROTOCOL_UNRESOLVED"
+
+#: A family is considered "partially present" (worth reporting as an
+#: incomplete interface rather than as NOT_AMBA) once at least this many of
+#: its core signals are found. 2, not 1: a lone `TDATA` or `HADDR` token on
+#: an otherwise non-AMBA module is coincidence, two co-occurring spec names
+#: is evidence of a wired-but-incomplete interface.
+AMBA_PARTIAL_EVIDENCE_MIN_SIGNALS = 2
+
+
+@dataclass
+class AmbaProtocolClassification:
+    """One interface's AMBA-4 verdict plus the real evidence behind it."""
+    protocol: str                       # an AMBA4_PROTOCOLS key, or AMBA_PROTOCOL_UNRESOLVED
+    status: str                         # an AmbaClassificationStatus value
+    family: Optional[str] = None        # AHB / APB / AXI_MM / AXI_STREAM, when one was established
+    candidates: list = field(default_factory=list)   # what it could be, when not RESOLVED
+    evidence_signals: list = field(default_factory=list)   # AMBA signals actually found
+    missing_signals: list = field(default_factory=list)    # required-but-absent, for a partial
+    discriminators: list = field(default_factory=list)     # why this verdict, in words
+    requires_human_confirmation: bool = False
+
+    @property
+    def display_name(self) -> str:
+        """The doc's own spelling ("AXI4-Lite", not "AXI4_LITE") for the
+        AMBA-6 counting table and any human-facing report."""
+        return AMBA4_DISPLAY_NAMES.get(self.protocol, self.protocol)
+
+    def to_dict(self) -> dict:
+        return {
+            "protocol": self.protocol,
+            "display_name": self.display_name,
+            "status": self.status,
+            "family": self.family,
+            "candidates": list(self.candidates),
+            "evidence_signals": list(self.evidence_signals),
+            "missing_signals": list(self.missing_signals),
+            "discriminators": list(self.discriminators),
+            "requires_human_confirmation": self.requires_human_confirmation,
+        }
+
+
+#: Every AMBA signal name this module knows, for evidence reporting.
+_ALL_AMBA_SIGNALS = frozenset().union(
+    AHB_CORE_SIGNALS, AHB_MULTI_MASTER_ONLY_SIGNALS, AHB_OPTIONAL_EVIDENCE_SIGNALS,
+    APB_CORE_SIGNALS, APB3_EVIDENCE_SIGNALS, APB4_EVIDENCE_SIGNALS,
+    AXI_MM_CORE_SIGNALS, AXI_BURST_EVIDENCE_SIGNALS, AXI_ID_EVIDENCE_SIGNALS,
+    AXI3_ONLY_EVIDENCE_SIGNALS, AXI4_ONLY_EVIDENCE_SIGNALS, AXI4_LITE_EVIDENCE_SIGNALS,
+    ACE_LITE_COHERENCY_SIGNALS,
+    AXI4_STREAM_CORE_SIGNALS, AXI4_STREAM_OPTIONAL_EVIDENCE_SIGNALS,
+)
+
+
+def _resolve_ahb_variant(toks: set) -> tuple:
+    """AHB vs AHB-Lite. The discriminator is the PRESENCE of arbitration /
+    split-transaction signalling, which AHB-Lite (single master, no split)
+    does not have. HMASTLOCK is not consulted -- AHB-Lite carries it too."""
+    multi = sorted(AHB_MULTI_MASTER_ONLY_SIGNALS & toks)
+    if multi:
+        return "AHB", [f"multi-master/split-transaction signalling present ({multi}) -- "
+                       f"full AHB, not AHB-Lite"]
+    return "AHB_LITE", ["no arbitration/split signalling "
+                        f"({sorted(AHB_MULTI_MASTER_ONLY_SIGNALS)}) present -- AHB-Lite. "
+                        "HMASTLOCK deliberately not used as a discriminator: AHB-Lite has it too."]
+
+
+def _resolve_apb_variant(toks: set) -> tuple:
+    """APB2 vs APB3 vs APB4, by the doc's own evidence tiers."""
+    apb4 = sorted(APB4_EVIDENCE_SIGNALS & toks)
+    apb3 = sorted(APB3_EVIDENCE_SIGNALS & toks)
+    if apb4:
+        return "APB4", [f"APB4 evidence present ({apb4})"]
+    if apb3:
+        return "APB3", [f"APB3 evidence present ({apb3}), no APB4 evidence "
+                        f"({sorted(APB4_EVIDENCE_SIGNALS)}) found"]
+    return "APB", ["base APB: neither APB3 evidence "
+                   f"({sorted(APB3_EVIDENCE_SIGNALS)}) nor APB4 evidence "
+                   f"({sorted(APB4_EVIDENCE_SIGNALS)}) found"]
+
+
+def _resolve_axi_mm_variant(toks: set) -> tuple:
+    """ACE-Lite vs AXI3 vs AXI4 vs AXI4-Lite, all sharing the AW/W/B/AR/R
+    channels. Returns (protocol_or_None, discriminators, candidates); a None
+    protocol means the evidence contradicts itself and must not be resolved."""
+    coherency = sorted(ACE_LITE_COHERENCY_SIGNALS & toks)
+    wid = sorted(AXI3_ONLY_EVIDENCE_SIGNALS & toks)
+    burst = sorted(AXI_BURST_EVIDENCE_SIGNALS & toks)
+    ids = sorted(AXI_ID_EVIDENCE_SIGNALS & toks)
+    axi4_only = sorted(AXI4_ONLY_EVIDENCE_SIGNALS & toks)
+
+    if coherency and wid:
+        # ACE-Lite extends AXI4, and AXI4 removed WID. Both cannot be true of
+        # one real interface; resolving it either way would invent a fact.
+        return None, [
+            f"contradictory: ACE-Lite coherency signals {coherency} imply an AXI4 base, "
+            f"but AXI3-only {wid} is also present. ACE-Lite is defined on AXI4, which "
+            f"removed WID -- these cannot both hold."], ["ACE_LITE", "AXI3"]
+    if coherency:
+        return "ACE_LITE", [f"AXI memory-mapped channels plus coherency signals {coherency}"], []
+    if wid:
+        return "AXI3", [f"{wid} present -- AXI3 (AXI4 removed the write-data-channel ID). "
+                        "Established by token match, not substring: AWID contains WID."], []
+    if axi4_only and not burst and not ids:
+        # AXI4-only QoS/REGION signals on an otherwise burst-less, ID-less
+        # interface: neither a clean AXI4 nor a clean AXI4-Lite.
+        return None, [
+            f"contradictory: AXI4-only signals {axi4_only} present, but no burst "
+            f"({sorted(AXI_BURST_EVIDENCE_SIGNALS)}) and no ID "
+            f"({sorted(AXI_ID_EVIDENCE_SIGNALS)}) signalling, which AXI4-Lite forbids "
+            "carrying QoS/REGION on."], ["AXI4", "AXI4_LITE"]
+    if burst or ids:
+        why = [f"AXI memory-mapped channels with burst {burst} / ID {ids} signalling, and no "
+               f"{sorted(AXI3_ONLY_EVIDENCE_SIGNALS)} -- AXI4, not AXI3"]
+        if axi4_only:
+            why.append(f"corroborated by AXI4-only signals {axi4_only}")
+        return "AXI4", why, []
+    return "AXI4_LITE", [
+        "reduced memory-mapped subset: AW/W/B/AR/R present with no burst "
+        f"({sorted(AXI_BURST_EVIDENCE_SIGNALS)}) and no ID "
+        f"({sorted(AXI_ID_EVIDENCE_SIGNALS)}) signalling -- AXI4-Lite, "
+        "deliberately NOT reported as full AXI4"], []
+
+
+def classify_amba_protocol(port_names) -> AmbaProtocolClassification:
+    """AMBA-4: resolve one interface's port-name set into ONE of the ten
+    `AMBA4_PROTOCOLS`, from signal evidence only.
+
+    `port_names` is a real port-name collection -- typically one value out of
+    `build_interface_fingerprints()`, i.e. verible-extracted RTL ports, never
+    a hand-typed list. The module/instance/file name is not a parameter here
+    by design (AMBA-4: "Never classify protocol solely by filename, module
+    name, or port prefix").
+
+    Four non-RESOLVED outcomes, each distinct and each reportable:
+      * AMBIGUOUS_MULTIPLE_PROTOCOLS -- more than one AMBA family is fully
+        present. The common real case is a protocol BRIDGE module (an
+        AHB-to-APB bridge's port list contains both), where answering with a
+        single protocol would be wrong at module granularity.
+      * AMBIGUOUS_CONTRADICTORY_EVIDENCE -- one family, but sub-protocol
+        evidence that cannot simultaneously hold.
+      * UNRESOLVED_PARTIAL_EVIDENCE -- AMBA-shaped but incomplete; the
+        missing required signals are named.
+      * NOT_AMBA -- no AMBA evidence.
+    Every one of them sets `requires_human_confirmation=True` and carries
+    `AMBA_PROTOCOL_UNRESOLVED` as its `protocol`."""
+    toks = amba_signal_tokens(port_names)
+    evidence = sorted(_ALL_AMBA_SIGNALS & toks)
+
+    full_families = []
+    partial_families = {}
+    for family, core in AMBA_FAMILY_CORE_SIGNALS.items():
+        present = core & toks
+        if present == core:
+            full_families.append(family)
+        elif len(present) >= AMBA_PARTIAL_EVIDENCE_MIN_SIGNALS:
+            partial_families[family] = sorted(core - present)
+
+    if len(full_families) > 1:
+        return AmbaProtocolClassification(
+            protocol=AMBA_PROTOCOL_UNRESOLVED,
+            status=AmbaClassificationStatus.AMBIGUOUS_MULTIPLE_PROTOCOLS.value,
+            family=None,
+            candidates=sorted(full_families),
+            evidence_signals=evidence,
+            discriminators=[
+                f"{len(full_families)} AMBA families are fully present at once "
+                f"({sorted(full_families)}). Typical of a bridge/wrapper module whose port "
+                "list spans both sides; a single protocol verdict at this granularity would "
+                "be an invented fact. Split the port set per interface and re-classify."],
+            requires_human_confirmation=True,
+        )
+
+    if len(full_families) == 1:
+        family = full_families[0]
+        if family == "AHB":
+            proto, why = _resolve_ahb_variant(toks)
+            candidates = []
+        elif family == "APB":
+            proto, why = _resolve_apb_variant(toks)
+            candidates = []
+        elif family == "AXI_STREAM":
+            optional = sorted(AXI4_STREAM_OPTIONAL_EVIDENCE_SIGNALS & toks)
+            proto, candidates = "AXI4_STREAM", []
+            why = [f"TVALID/TREADY/TDATA present with optional evidence {optional} -- "
+                   "AXI4-Stream, reported separately from memory-mapped AXI per AMBA-4."]
+        else:
+            proto, why, candidates = _resolve_axi_mm_variant(toks)
+
+        if proto is None:
+            return AmbaProtocolClassification(
+                protocol=AMBA_PROTOCOL_UNRESOLVED,
+                status=AmbaClassificationStatus.AMBIGUOUS_CONTRADICTORY_EVIDENCE.value,
+                family=family, candidates=candidates, evidence_signals=evidence,
+                discriminators=why, requires_human_confirmation=True,
+            )
+        return AmbaProtocolClassification(
+            protocol=proto,
+            status=AmbaClassificationStatus.RESOLVED.value,
+            family=family, candidates=[], evidence_signals=evidence,
+            discriminators=why, requires_human_confirmation=False,
+        )
+
+    if partial_families:
+        best = sorted(partial_families.items(), key=lambda kv: (len(kv[1]), kv[0]))[0]
+        family, missing = best
+        return AmbaProtocolClassification(
+            protocol=AMBA_PROTOCOL_UNRESOLVED,
+            status=AmbaClassificationStatus.UNRESOLVED_PARTIAL_EVIDENCE.value,
+            family=family, candidates=sorted(partial_families),
+            evidence_signals=evidence, missing_signals=missing,
+            discriminators=[
+                f"{family} evidence found but the interface is incomplete: required signals "
+                f"{missing} are absent from the port list. Reported rather than dropped, per "
+                "AMBA-3 ('Do not silently omit partial/incomplete interfaces')."],
+            requires_human_confirmation=True,
+        )
+
+    return AmbaProtocolClassification(
+        protocol=AMBA_PROTOCOL_UNRESOLVED,
+        status=AmbaClassificationStatus.NOT_AMBA.value,
+        family=None, candidates=[], evidence_signals=evidence,
+        discriminators=["no AMBA family core signal set reached the "
+                        f"{AMBA_PARTIAL_EVIDENCE_MIN_SIGNALS}-signal evidence floor. Note a "
+                        "SystemVerilog interface port exposes no individual signals, so an "
+                        "interface-typed fabric port lands here rather than being guessed at "
+                        "from its type name."],
+        requires_human_confirmation=True,
+    )
+
+
+def amba_structural_match(port_names) -> dict:
+    """Bridges `classify_amba_protocol()` into the existing 4-tier classifier
+    without a second notion of "matched": returns a dict in exactly
+    `match_protocol_fingerprint()`'s shape, so it can be handed straight to
+    `classify_bind_tier(structural_match=...)`.
+
+    A RESOLVED classification yields `matched=True` -> T2_STRUCTURAL_MATCH.
+    Every ambiguous/partial/non-AMBA outcome yields `matched=False`, so it
+    falls through to T3 (human confirmation) or T4 (question queue) and can
+    never be auto-accepted -- the same fail-safe direction the fingerprint
+    table's own docstring commits to."""
+    result = classify_amba_protocol(port_names)
+    resolved = result.status == AmbaClassificationStatus.RESOLVED.value
+    return {
+        "matched": resolved,
+        "protocol": result.protocol,
+        "match_method": "TOKEN",
+        "matched_signals": list(result.evidence_signals),
+        "missing_signals": list(result.missing_signals),
+        "amba_classification": result.to_dict(),
+    }
+
+
+def classify_amba_interfaces(interface_fingerprints: dict) -> dict:
+    """Runs `classify_amba_protocol()` over the whole
+    `build_interface_fingerprints()` result -- {module_name: port_name_set} ->
+    {module_name: AmbaProtocolClassification}. A convenience over the real
+    per-interface function, deliberately not a second classifier."""
+    return {name: classify_amba_protocol(ports)
+            for name, ports in (interface_fingerprints or {}).items()}
 
 
 # ===========================================================================
