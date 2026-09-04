@@ -412,3 +412,12 @@ memory-promote *args:
 # project's own `memory(<protocol>): <description>` convention.
 memory-sync message="":
     {{python}} {{dv_harness_cli}} memory sync {{ if message == "" { "" } else { '--message "' + message + '"' } }}
+
+# Re-render vault notes from the durable MemoryStore records they mirror,
+# repairing a note an older mapper left schema-PARTIAL. Invents nothing: a
+# note whose source record is gone is reported skipped. Exits 2 if any note
+# is still PARTIAL afterwards, so it is usable as a repair-then-check step.
+# `--note-id` is repeatable, so this forwards arguments rather than taking a
+# single fixed parameter: `just memory-resync-notes --note-id MEM-0953BEC4D8`.
+memory-resync-notes *args:
+    {{python}} {{dv_harness_cli}} memory resync-notes "$@"

@@ -8,14 +8,17 @@ Three things:
      subprocess that renders the exact shell command a real run would
      execute, but never spawns it (see `just --help`: --dry-run "Print
      what just would do without doing it").
-  3. The `memory-*` recipes (2026-09-04) are additionally EXECUTED for
+  3. Some `memory-*` recipes (2026-09-04) are additionally EXECUTED for
      real, via `_just_real()`. They are the only recipes here that can be:
-     every one of them is a local, read-only-by-default
-     `dv-harness memory <sub>` invocation against this project's own vault
-     -- no remote server, no LSF job, no license. That matters because
-     their argument FORWARDING (`"$@"` under `set positional-arguments`)
-     is invisible to --dry-run, which renders the literal `"$@"` rather
-     than what the shell will expand it to.
+     every one of them is a local `dv-harness memory <sub>` invocation
+     against this project's own vault -- no remote server, no LSF job, no
+     license. That matters because their argument FORWARDING (`"$@"` under
+     `set positional-arguments`) is invisible to --dry-run, which renders
+     the literal `"$@"` rather than what the shell will expand it to.
+     Only invocations that WRITE NOTHING to the real vault are run for
+     real: `memory-search`/`memory-doctor` are read-only outright, and
+     `memory-resync-notes` is run with a `--note-id` that matches no note,
+     which exercises the whole forwarding path while re-rendering nothing.
 
 No test here reaches a real remote server, submits a real LSF job, or
 invokes tools/remote/remote_exec.py's own network code -- every
@@ -321,7 +324,7 @@ class TestGeneratedCommandStrings:
 MEMORY_RECIPES = (
     "memory-status", "memory-search", "memory-show", "memory-add",
     "memory-promote", "memory-graph", "memory-validate", "memory-sync",
-    "memory-doctor",
+    "memory-doctor", "memory-resync-notes",
 )
 
 
@@ -402,7 +405,8 @@ class TestMemoryRecipes:
         --dry-run renders literally -- which is exactly why the real-run
         test below exists as well."""
         for recipe, sub in (("memory-search", "search"), ("memory-add", "add"),
-                            ("memory-promote", "promote")):
+                            ("memory-promote", "promote"),
+                            ("memory-resync-notes", "resync-notes")):
             rc, out, err = _just("--dry-run", recipe)
             assert rc == 0, f"stderr={err!r}"
             assert f'memory {sub} "$@"' in out, (
@@ -432,6 +436,23 @@ class TestMemoryRecipes:
         )
         assert proc.returncode != 0
         assert "unrecognized arguments: training" in proc.stderr
+
+    def test_real_run_memory_resync_notes_forwards_a_repeatable_flag(self):
+        """REALLY RUNS the recipe with `--note-id`, the repeatable flag that
+        is the whole reason this recipe forwards `"$@"` instead of taking a
+        fixed parameter. The id deliberately matches no note on disk, so the
+        real vault is not re-rendered by a test -- an empty `resynced`/
+        `skipped` result is itself the proof the flag arrived as ONE token
+        and was applied as a filter (a dropped/split flag would have
+        re-rendered every note instead, i.e. a non-empty `resynced`)."""
+        rc, out = _just_real("memory-resync-notes", "--note-id", "MEM-DOESNOTEXIST0")
+        assert rc == 0, f"`just memory-resync-notes` exited {rc}:\n{out}"
+        payload = json.loads(out)
+        assert payload["ok"] is True
+        assert payload["resynced"] == [] and payload["skipped"] == [], (
+            f"the --note-id filter did not reach the CLI as one token:\n{out}"
+        )
+        assert payload["still_partial"] == []
 
     def test_real_run_memory_doctor_reports_a_real_verdict(self):
         """REALLY RUNS the Phase-21 health check through the recipe. Exit 0
