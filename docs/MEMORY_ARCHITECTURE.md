@@ -87,7 +87,7 @@ independently; neither depends on the other.
 | Organizational | `OrganizationalMemoryStore` (no local JSON file — see below) | `kind` in `cross_project_lesson`/`methodology`/`best_practice`, **and only ever reached via `promote_to_organizational()`** | **yes**, plus 3-gate promotion (see below) |
 
 Routing itself is `dv_harness.memory_router.route_memory(record) -> str`
-(`memory_router.py:1098`) — a pure function, kind/verified/scope in,
+(`memory_router.py:1124`) — a pure function, kind/verified/scope in,
 destination string out. `route_and_store(root, record, cfg)`
 (`memory_router.py:140`) is the real entry point: routes, persists, and
 (for shareable destinations) pushes to the Knowledge Center and/or Vault.
@@ -214,7 +214,7 @@ the one project that happened to promote it.
 ### The promotion boundary: Engineering → Organizational
 
 `memory_router.promote_to_organizational(root, memory_id, confidence_inputs,
-cfg, kind)` (`memory_router.py:962`) is the ONLY code path allowed to move
+cfg, kind)` (`memory_router.py:988`) is the ONLY code path allowed to move
 a record across this boundary. Three independent, all-required gates:
 
 1. **Qualitative**: `_verification_is_gate_validated(mem)` recognizes
@@ -420,3 +420,28 @@ cleanup in tests whose teardown never anticipated a `.git` tree appearing
 inside them (git's read-only object files raise `PermissionError` on
 `shutil.rmtree`) — a project that wants real git history for its vault
 opts in explicitly.
+
+### Vault commit outcomes (`knowledge_commit_status`)
+
+With `git_enabled` on, every vault write reports WHICH of four outcomes its
+commit had, not just an optional SHA
+(`memory_vault._commit_vault_change_detailed()` /
+`apply_commit_outcome()`):
+
+| status | meaning |
+|---|---|
+| `COMMITTED` | a real commit landed; `knowledge_commit_sha` carries its real `git rev-parse HEAD` |
+| `NOTHING_TO_COMMIT` | the write changed no bytes (e.g. a re-write of an identical note) — expected, never retried |
+| `COMMITTED_SHA_UNRESOLVED` | the commit really landed but reading its SHA back failed — reported separately, because calling this a failed commit would be a false claim about the repo |
+| `COMMIT_FAILED` | the commit was expected and did not happen; `knowledge_commit_error` carries git's own reason |
+
+A `COMMIT_FAILED` is retried (`_GIT_COMMIT_ATTEMPTS`, short backoff) before it
+is reported, because the failures this guards against are transient — a
+held `index.lock`, the subprocess timeout under machine load. It is
+surfaced on `route_and_store()`'s `vault_write` result AND written back onto
+the durable JSON record as `knowledge_commit_status`/`knowledge_commit_error`
+(`memory_router._write_back_knowledge_commit_sha()`), so a verified promotion
+that silently lost its traceability pointer is findable afterwards instead
+of merely absent. A record with `git_enabled` off carries none of these keys
+at all — "git is not configured" is not a commit failure
+(`memory_doctor.check_git()` makes the same distinction).

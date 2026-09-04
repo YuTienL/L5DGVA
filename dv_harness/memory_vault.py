@@ -73,7 +73,13 @@ contract above --
       write back onto the underlying JSON MemoryStore record for
       traceability alongside `rtl_sha`/`tb_sha` (see `MEMORY_NOTE_OPTIONAL_
       FIELDS`' own comment, and `memory_router._write_back_knowledge_commit_
-      sha()`).
+      sha()`). Since 2026-09-04 that commit is RETRIED on a transient git
+      failure and its outcome is REPORTED
+      (`_commit_vault_change_detailed()` / `apply_commit_outcome()` ->
+      `knowledge_commit_status`), because an absent `knowledge_commit_sha`
+      used to mean "git off", "nothing changed" and "the commit failed"
+      indistinguishably -- and only the last of those is a real
+      traceability defect.
   (b) `build_failure_signature()`/`search_related_memory_for_debug()` (Phase
       10/11, bottom of this file): the shared "search prior knowledge for a
       failure" interface engine.py's debug flow and lsf_client.py's
@@ -105,6 +111,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -524,11 +531,31 @@ def bootstrap_vault(vault_path: Path) -> Dict[str, Any]:
 
 # --- optional git integration (config's memory.git_enabled) ----------------
 
-def _run_git(vault_path: Path, args: List[str], timeout: int = 10) -> Optional[subprocess.CompletedProcess]:
+def _run_git_ex(vault_path: Path, args: List[str],
+                timeout: int = 10) -> Tuple[Optional[subprocess.CompletedProcess], Optional[str]]:
+    """`_run_git()` plus the REASON the invocation produced no process at all.
+
+    A git invocation must never break a memory write, so the exception is
+    still swallowed -- but swallowing it without keeping the reason is what
+    made a transient failure (a `subprocess.TimeoutExpired` at the 10s cap
+    under machine load, an antivirus-held `index.lock`, git missing from
+    PATH mid-run) indistinguishable from the ordinary, expected "there was
+    nothing to commit". `_commit_vault_change_detailed()` below needs that
+    distinction to decide whether retrying is worth anything and whether the
+    caller should be told a commit it expected did not happen."""
     try:
-        return subprocess.run(["git"] + args, cwd=str(vault_path), capture_output=True, text=True, timeout=timeout)
-    except Exception:  # pragma: no cover - git invocation must never break a memory write
-        return None
+        return subprocess.run(["git"] + args, cwd=str(vault_path), capture_output=True,
+                              text=True, timeout=timeout), None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _run_git(vault_path: Path, args: List[str], timeout: int = 10) -> Optional[subprocess.CompletedProcess]:
+    """The process-only form every non-commit caller uses (`_ensure_git_repo()`
+    here, `memory_doctor.check_git()`, `cli.py`'s `memory vault-commit`) --
+    unchanged Optional[CompletedProcess] contract."""
+    proc, _reason = _run_git_ex(vault_path, args, timeout=timeout)
+    return proc
 
 
 def _ensure_git_repo(vault_path: Path) -> bool:
@@ -545,22 +572,122 @@ def _ensure_git_repo(vault_path: Path) -> bool:
     return True
 
 
+# Commit outcomes (Phase 13 traceability, 2026-09-04). Four distinct states,
+# never collapsed into "we got no SHA": a missing `knowledge_commit_sha` used
+# to mean any of "git is off", "nothing changed", and "the commit really
+# failed", and only the last of those is a traceability defect a caller needs
+# to see or act on.
+COMMIT_STATUS_COMMITTED = "COMMITTED"
+COMMIT_STATUS_NOTHING_TO_COMMIT = "NOTHING_TO_COMMIT"
+COMMIT_STATUS_SHA_UNRESOLVED = "COMMITTED_SHA_UNRESOLVED"
+COMMIT_STATUS_FAILED = "COMMIT_FAILED"
+
+# `git commit` exits non-zero for "nothing to commit" exactly as it does for a
+# real error, so the expected/benign case is told apart by git's own message.
+_NOTHING_TO_COMMIT_RE = re.compile(
+    r"nothing to commit|nothing added to commit|no changes added to commit", re.IGNORECASE)
+
+# The failures this retry exists for are transient by nature (an index.lock
+# another process holds for a moment, the 10s subprocess cap under machine
+# load). Three attempts with a short backoff costs a fraction of a second on
+# the failure path and nothing at all on the success path or the
+# NOTHING_TO_COMMIT path, both of which return before ever sleeping.
+_GIT_COMMIT_ATTEMPTS = 3
+_GIT_RETRY_BACKOFF_SECONDS = 0.2
+
+# git's stderr on a real failure is short, but it is machine output going into
+# a memory-write result dict -- bounded for the same reason CLAUDE.md forbids
+# giant logs in a memory record.
+_GIT_ERROR_DETAIL_MAX_CHARS = 400
+
+
+def _git_failure_detail(what: str, proc: Optional[subprocess.CompletedProcess]) -> str:
+    if proc is None:
+        return f"{what}: no process"
+    text = ((proc.stderr or "") + " " + (proc.stdout or "")).strip()
+    return f"{what} exited {proc.returncode}: {text}"[:_GIT_ERROR_DETAIL_MAX_CHARS]
+
+
+def _commit_vault_change_detailed(vault_path: Path, message: str,
+                                  attempts: int = _GIT_COMMIT_ATTEMPTS) -> Dict[str, Any]:
+    """Real commit (Phase 13 -- Git Integration), reporting WHICH of the four
+    outcomes above happened instead of only handing back an Optional SHA.
+
+    This exists because the Phase 13 requirement is traceability: a verified
+    promotion whose vault commit silently did not happen leaves a durable
+    memory record with no `knowledge_commit_sha` and nothing anywhere saying
+    why. That was observed for real (2026-09-04) -- a full-suite run under
+    load produced a `knowledge_commit_sha: None` on a promotion whose note
+    was genuinely new, i.e. a case where `NOTHING_TO_COMMIT` was impossible,
+    while the same test passed in isolation. So a transient git failure is
+    now (a) retried, and (b) reported as `COMMIT_FAILED` with git's own error
+    text rather than being indistinguishable from "nothing changed".
+
+    Never fabricates a SHA. `NOTHING_TO_COMMIT` returns immediately and is
+    never retried -- it is the ordinary outcome of an update() that changed
+    nothing, not a failure. `COMMITTED_SHA_UNRESOLVED` is its own state
+    because the commit in that case really DID land; only reading its SHA
+    back failed, and reporting that as a failed commit would be a false
+    claim about the repository."""
+    detail: Optional[str] = None
+    for attempt in range(1, max(1, attempts) + 1):
+        add_proc, add_reason = _run_git_ex(vault_path, ["add", "-A"])
+        if add_proc is None or add_proc.returncode != 0:
+            detail = add_reason or _git_failure_detail("git add -A", add_proc)
+        else:
+            commit_proc, commit_reason = _run_git_ex(vault_path, ["commit", "-m", message])
+            if commit_proc is not None and commit_proc.returncode == 0:
+                sha_proc, sha_reason = _run_git_ex(vault_path, ["rev-parse", "HEAD"])
+                sha = ((sha_proc.stdout or "").strip()
+                       if sha_proc is not None and sha_proc.returncode == 0 else "")
+                if sha:
+                    return {"status": COMMIT_STATUS_COMMITTED,
+                            "knowledge_commit_sha": sha, "attempts": attempt}
+                return {"status": COMMIT_STATUS_SHA_UNRESOLVED, "attempts": attempt,
+                        "error": sha_reason or _git_failure_detail("git rev-parse HEAD", sha_proc)}
+            if commit_proc is not None and _NOTHING_TO_COMMIT_RE.search(
+                    (commit_proc.stdout or "") + (commit_proc.stderr or "")):
+                return {"status": COMMIT_STATUS_NOTHING_TO_COMMIT, "attempts": attempt}
+            detail = commit_reason or _git_failure_detail("git commit", commit_proc)
+        if attempt < max(1, attempts):
+            time.sleep(_GIT_RETRY_BACKOFF_SECONDS)
+    return {"status": COMMIT_STATUS_FAILED, "attempts": max(1, attempts),
+            "error": (detail or "git commit produced no result")[:_GIT_ERROR_DETAIL_MAX_CHARS]}
+
+
 def _commit_vault_change(vault_path: Path, message: str) -> Optional[str]:
-    """Real commit (Phase 13 -- Git Integration, 2026-09-03): stages and
-    commits, then returns the resulting commit's real SHA (via `git
-    rev-parse HEAD`) so a caller can cross-reference it -- see
-    memory_router.py's `_write_back_knowledge_commit_sha()`. Returns None,
-    never a fabricated SHA, whenever there was nothing to commit (e.g. an
-    update() that changed nothing -- `git commit` itself exits non-zero) or
-    git is unavailable/erroring (see `_run_git`'s own try/except)."""
-    _run_git(vault_path, ["add", "-A"])
-    r = _run_git(vault_path, ["commit", "-m", message])
-    if r is None or r.returncode != 0:
-        return None
-    sha = _run_git(vault_path, ["rev-parse", "HEAD"])
-    if sha is None or sha.returncode != 0:
-        return None
-    return (sha.stdout or "").strip() or None
+    """The SHA-only form, for callers that only need "did we get a commit"
+    (`cli.py`'s `memory vault-commit`). Returns None -- never a fabricated
+    SHA -- for every non-COMMITTED outcome; use
+    `_commit_vault_change_detailed()` when the difference between "nothing
+    to commit" and "the commit failed" matters."""
+    return _commit_vault_change_detailed(vault_path, message).get("knowledge_commit_sha")
+
+
+def apply_commit_outcome(result: Dict[str, Any], commit: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge a `_commit_vault_change_detailed()` outcome into a provider
+    result dict. Public, unlike the git helpers above, because it defines the
+    commit-reporting half of the MemoryProvider result contract: any future
+    provider that gains real git integration (an ObsidianAdapter that one day
+    commits for itself) reports it through this one function rather than
+    inventing a second set of key names for the same four outcomes.
+
+    `knowledge_commit_sha` keeps its exact prior meaning and is
+    still present only on a real commit; `knowledge_commit_status` is what
+    makes an EXPECTED-but-missing commit visible to `memory_router.py` (and
+    therefore to `route_and_store()`'s own returned result) rather than
+    silent. An empty `commit` -- git integration off -- adds nothing, so a
+    git-disabled result is byte-identical to what it was before."""
+    if not commit:
+        return result
+    if commit.get("knowledge_commit_sha"):
+        result["knowledge_commit_sha"] = commit["knowledge_commit_sha"]
+    result["knowledge_commit_status"] = commit["status"]
+    if commit.get("error"):
+        result["knowledge_commit_error"] = commit["error"]
+    if int(commit.get("attempts") or 1) > 1:
+        result["knowledge_commit_attempts"] = commit["attempts"]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -937,11 +1064,10 @@ class FileSystemMarkdownAdapter(MemoryProvider):
         # the user's spec requires; omitting it (every pre-existing direct
         # caller, e.g. this class's own Workstream-1 tests) reproduces the
         # exact prior generic message unchanged.
-        commit_sha = self._maybe_git_commit(commit_message or f"memory-vault: create {note_id}")
+        commit = self._maybe_git_commit(commit_message or f"memory-vault: create {note_id}")
         result = {"ok": True, "note_id": note_id, "path": str(path.relative_to(self.vault_path)),
                   "validation": validation}
-        if commit_sha:
-            result["knowledge_commit_sha"] = commit_sha
+        apply_commit_outcome(result, commit)
         if secret_findings:
             result["secrets_redacted"] = [{"type": f["type"], "field": f["field"]} for f in secret_findings]
         return result
@@ -974,10 +1100,9 @@ class FileSystemMarkdownAdapter(MemoryProvider):
         validation = validate_note_frontmatter(fm)
         fm["schema_status"] = validation["schema_status"]
         p.write_text(render_note_markdown(fm, sections), encoding="utf-8")
-        commit_sha = self._maybe_git_commit(commit_message or f"memory-vault: update {note_id}")
+        commit = self._maybe_git_commit(commit_message or f"memory-vault: update {note_id}")
         result = {"ok": True, "note_id": note_id, "path": str(p.relative_to(self.vault_path)), "validation": validation}
-        if commit_sha:
-            result["knowledge_commit_sha"] = commit_sha
+        apply_commit_outcome(result, commit)
         if secret_findings:
             result["secrets_redacted"] = [{"type": f["type"], "field": f["field"]} for f in secret_findings]
         return result
@@ -987,10 +1112,9 @@ class FileSystemMarkdownAdapter(MemoryProvider):
         if p is None:
             return {"ok": False, "error": "NOT_FOUND"}
         p.unlink()
-        commit_sha = self._maybe_git_commit(commit_message or f"memory-vault: delete {note_id}")
+        commit = self._maybe_git_commit(commit_message or f"memory-vault: delete {note_id}")
         result = {"ok": True, "note_id": note_id}
-        if commit_sha:
-            result["knowledge_commit_sha"] = commit_sha
+        apply_commit_outcome(result, commit)
         return result
 
     def list_tags(self) -> Dict[str, Any]:
@@ -1099,10 +1223,13 @@ class FileSystemMarkdownAdapter(MemoryProvider):
         except Exception:  # pragma: no cover - rg must never be a hard dependency for correctness
             return self._iter_notes()
 
-    def _maybe_git_commit(self, message: str) -> Optional[str]:
+    def _maybe_git_commit(self, message: str) -> Dict[str, Any]:
+        """The full `_commit_vault_change_detailed()` outcome, or an empty
+        dict when git integration is off -- `apply_commit_outcome()` turns
+        either into result-dict keys."""
         if self.git_enabled:
-            return _commit_vault_change(self.vault_path, message)
-        return None
+            return _commit_vault_change_detailed(self.vault_path, message)
+        return {}
 
 
 def _sanitize_note_id(note_id: str) -> str:

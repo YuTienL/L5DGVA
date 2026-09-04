@@ -445,3 +445,198 @@ def test_terminal_reconcile_memory_search_failure_never_blocks_the_job_memory_wr
         assert rec["kind"] == "job_failure"
     finally:
         _rmtree(tmp)
+
+
+# ---------------------------------------------------------------------------
+# Phase 13 traceability: a vault commit that was EXPECTED but silently did not
+# happen (2026-09-04 gap close). Observed for real: a full-suite run under
+# machine load produced `knowledge_commit_sha: None` on a promotion whose note
+# was genuinely new -- i.e. NOTHING_TO_COMMIT was impossible -- while the same
+# test passed in isolation. `_run_git()`'s blanket except made a transient git
+# failure indistinguishable from "nothing changed", with no retry and no
+# signal, so a verified promotion could lose its traceability pointer silently.
+# ---------------------------------------------------------------------------
+
+def _git_repo(tmp: Path) -> Path:
+    vault = tmp / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    assert mv._ensure_git_repo(vault) is True
+    return vault
+
+
+def _commit_fails_n_times(n: int):
+    """Fails only `git commit`, only the first `n` times, exactly the way a
+    real transient failure presents (`_run_git_ex` returning no process at
+    all). Every other git invocation runs for real, so the retry that follows
+    is a REAL commit against a REAL repo, not a mocked success."""
+    real = mv._run_git_ex
+    state = {"left": n, "commit_calls": 0}
+
+    def fake(vault_path, args, timeout=10):
+        if args and args[0] == "commit":
+            state["commit_calls"] += 1
+            if state["left"] > 0:
+                state["left"] -= 1
+                return None, "TimeoutExpired: git commit timed out after 10 seconds"
+        return real(vault_path, args, timeout=timeout)
+
+    return fake, state
+
+
+def test_a_transient_git_failure_is_retried_and_the_retry_really_commits():
+    if shutil.which("git") is None:
+        pytest.skip("git not installed on this machine")
+    tmp = _tmp()
+    try:
+        vault = _git_repo(tmp)
+        (vault / "note.md").write_text("real content", encoding="utf-8")
+        fake, state = _commit_fails_n_times(1)
+        with patch.object(mv, "_run_git_ex", fake):
+            out = mv._commit_vault_change_detailed(vault, "memory(USB2): transient retry")
+        assert out["status"] == mv.COMMIT_STATUS_COMMITTED
+        assert out["attempts"] == 2, "the first attempt must really have failed"
+        assert state["commit_calls"] == 2
+
+        # The retry produced a REAL commit in the REAL repo, not just a dict.
+        import subprocess
+        log = subprocess.run(["git", "log", "--oneline"], cwd=str(vault),
+                              capture_output=True, text=True)
+        assert "memory(USB2): transient retry" in log.stdout
+        rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(vault),
+                              capture_output=True, text=True)
+        assert out["knowledge_commit_sha"] == rev.stdout.strip()
+    finally:
+        _rmtree(tmp)
+
+
+def test_a_persistent_git_failure_is_reported_as_COMMIT_FAILED_with_the_real_reason():
+    if shutil.which("git") is None:
+        pytest.skip("git not installed on this machine")
+    tmp = _tmp()
+    try:
+        vault = _git_repo(tmp)
+        (vault / "note.md").write_text("real content", encoding="utf-8")
+        fake, state = _commit_fails_n_times(99)
+        with patch.object(mv, "_run_git_ex", fake):
+            out = mv._commit_vault_change_detailed(vault, "memory(USB2): never lands")
+        assert out["status"] == mv.COMMIT_STATUS_FAILED
+        assert out.get("knowledge_commit_sha") is None, "never fabricate a SHA"
+        assert "TimeoutExpired" in out["error"], "git's own reason must survive, not be swallowed"
+        assert state["commit_calls"] == mv._GIT_COMMIT_ATTEMPTS
+
+        # The whole point of this gap close: FAILED is now distinguishable
+        # from the ordinary, benign "there was nothing to commit".
+        assert out["status"] != mv.COMMIT_STATUS_NOTHING_TO_COMMIT
+    finally:
+        _rmtree(tmp)
+
+
+def test_nothing_to_commit_is_its_own_status_and_is_never_retried():
+    if shutil.which("git") is None:
+        pytest.skip("git not installed on this machine")
+    tmp = _tmp()
+    try:
+        vault = _git_repo(tmp)
+        (vault / "note.md").write_text("real content", encoding="utf-8")
+        first = mv._commit_vault_change_detailed(vault, "memory(USB2): first")
+        assert first["status"] == mv.COMMIT_STATUS_COMMITTED
+
+        second = mv._commit_vault_change_detailed(vault, "memory(USB2): nothing changed")
+        assert second["status"] == mv.COMMIT_STATUS_NOTHING_TO_COMMIT
+        assert second["attempts"] == 1, "an expected outcome must not burn the retry budget"
+        assert second.get("error") is None
+    finally:
+        _rmtree(tmp)
+
+
+def test_a_silently_failed_vault_commit_now_reaches_route_and_store_and_the_durable_record():
+    """The real payoff: an ENGINEERING_MEMORY promotion whose vault commit
+    genuinely fails must say so, both in route_and_store()'s own result and on
+    the durable JSON record -- previously it produced a record with no SHA and
+    no explanation, indistinguishable from one written before git was on."""
+    if shutil.which("git") is None:
+        pytest.skip("git not installed on this machine")
+    tmp = _tmp()
+    try:
+        cfg = {**_NO_SHARE_CFG, "memory": {"vault_path": str(tmp / "vault"),
+                                            "obsidian_cli": "disabled", "git_enabled": True}}
+        fake, _state = _commit_fails_n_times(99)
+        with patch.object(mv, "_run_git_ex", fake):
+            result = route_and_store(tmp, {
+                "kind": "verified_fix", "verified": True, "protocol": "USB2",
+                "title": "Verified fix: ep0 underrun", "root_cause": "missing prefetch guard",
+                "confidence": "HIGH", "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun"],
+            }, cfg=cfg)
+
+        # The note itself still landed -- a git failure must never cost the write.
+        assert result["vault_write"]["ok"] is True
+        assert result["vault_write"].get("knowledge_commit_sha") is None
+        assert result["vault_write"]["knowledge_commit_status"] == mv.COMMIT_STATUS_FAILED
+        assert "TimeoutExpired" in result["vault_write"]["knowledge_commit_error"]
+
+        rec = MemoryStore(tmp).get(result["memory_id"])
+        assert rec.get("knowledge_commit_sha") is None
+        assert rec["knowledge_commit_status"] == mv.COMMIT_STATUS_FAILED
+        assert "TimeoutExpired" in rec["knowledge_commit_error"]
+    finally:
+        _rmtree(tmp)
+
+
+def test_a_successful_promotion_records_the_sha_and_no_failure_status():
+    if shutil.which("git") is None:
+        pytest.skip("git not installed on this machine")
+    tmp = _tmp()
+    try:
+        cfg = {**_NO_SHARE_CFG, "memory": {"vault_path": str(tmp / "vault"),
+                                            "obsidian_cli": "disabled", "git_enabled": True}}
+        result = route_and_store(tmp, {
+            "kind": "verified_fix", "verified": True, "protocol": "USB2",
+            "title": "Verified fix: ep0 underrun", "root_cause": "missing prefetch guard",
+            "confidence": "HIGH", "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun"],
+        }, cfg=cfg)
+        assert result["vault_write"]["knowledge_commit_status"] == mv.COMMIT_STATUS_COMMITTED
+        rec = MemoryStore(tmp).get(result["memory_id"])
+        assert rec["knowledge_commit_sha"] == result["vault_write"]["knowledge_commit_sha"]
+        # A healthy record carries the SHA and is not polluted with a status.
+        assert "knowledge_commit_status" not in rec
+        assert "knowledge_commit_error" not in rec
+    finally:
+        _rmtree(tmp)
+
+
+def test_a_git_disabled_vault_write_carries_no_commit_keys_at_all():
+    """git_enabled=False is this project's documented default, not a defect
+    (memory_doctor.check_git()) -- it must stay byte-identical to before, with
+    no COMMIT_FAILED-shaped noise implying something broke."""
+    tmp = _tmp()
+    try:
+        fs = mv.FileSystemMarkdownAdapter(tmp / "vault", git_enabled=False)
+        created = fs.create({"id": "MEM-NOGIT", "memory_level": "engineering", "protocol": "USB2",
+                             "status": "ACTIVE", "confidence": "HIGH", "failure": "ep0 underrun",
+                             "created": "2026-09-04T00:00:00+00:00",
+                             "updated": "2026-09-04T00:00:00+00:00"})
+        assert created["ok"] is True
+        for key in ("knowledge_commit_sha", "knowledge_commit_status",
+                    "knowledge_commit_error", "knowledge_commit_attempts"):
+            assert key not in created
+        assert "knowledge_commit_status" not in fs.update("MEM-NOGIT", {"confidence": "CONFIRMED"})
+        assert "knowledge_commit_status" not in fs.delete("MEM-NOGIT")
+    finally:
+        _rmtree(tmp)
+
+
+def test_the_sha_only_helper_keeps_its_prior_optional_str_contract():
+    """`cli.py`'s `memory vault-commit` calls `_commit_vault_change()` and
+    stores the result directly -- it must still be a SHA string or None, never
+    the new outcome dict."""
+    if shutil.which("git") is None:
+        pytest.skip("git not installed on this machine")
+    tmp = _tmp()
+    try:
+        vault = _git_repo(tmp)
+        (vault / "note.md").write_text("real content", encoding="utf-8")
+        sha = mv._commit_vault_change(vault, "memory(USB2): sha only")
+        assert isinstance(sha, str) and len(sha) == 40
+        assert mv._commit_vault_change(vault, "memory(USB2): nothing changed") is None
+    finally:
+        _rmtree(tmp)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -313,3 +314,40 @@ def test_protocol_filters_rather_than_only_ranking_alongside_another_filter(proj
     assert ids(r.search({"level": "engineering"})) == ["MEM-NONE", "MEM-PCIE", "MEM-USB3"]
     # A record with no protocol is not reachable by the literal string "none".
     assert r.search({"protocol": "None", "level": "engineering"}) == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 13 traceability on the FOLD path (2026-09-04): a fold writes no new
+# note, so it is the one vault write whose commit outcome could most easily
+# go unreported -- it must carry COMMIT_FAILED like every other write.
+# ---------------------------------------------------------------------------
+
+def test_a_folded_write_reports_a_failed_commit_instead_of_swallowing_it(project):
+    if shutil.which("git") is None:
+        pytest.skip("git not installed on this machine")
+    cfg = {**_cfg(project), "memory": {"vault_path": str(project / "vault"),
+                                        "obsidian_cli": "disabled", "git_enabled": True}}
+    first = route_and_store(project, _engineering_record(), cfg=cfg)
+    assert first["vault_write"]["knowledge_commit_status"] == mv.COMMIT_STATUS_COMMITTED
+
+    real = mv._run_git_ex
+
+    def commit_always_fails(vault_path, args, timeout=10):
+        if args and args[0] == "commit":
+            return None, "TimeoutExpired: git commit timed out after 10 seconds"
+        return real(vault_path, args, timeout=timeout)
+
+    with patch.object(mv, "_run_git_ex", commit_always_fails):
+        second = route_and_store(project, _engineering_record(
+            root_cause="on the lfps detect synchronizer a missing prefetch guard"), cfg=cfg)
+
+    vault = second["vault_write"]
+    assert vault["dedup_classification"] == "DUPLICATE"
+    assert vault["folded_into"] == first["memory_id"], "this must really be the fold path"
+    assert vault.get("knowledge_commit_sha") is None
+    assert vault["knowledge_commit_status"] == mv.COMMIT_STATUS_FAILED
+    assert "TimeoutExpired" in vault["knowledge_commit_error"]
+
+    # The recurrence line still landed on disk -- a git failure never costs
+    # the knowledge, it only has to stop being silent about itself.
+    assert f"`{second['memory_id']}`" in _related_knowledge(_engineering_notes(project)[0])

@@ -820,8 +820,13 @@ def _fold_into_matched_note(provider, decision: Dict[str, Any], mem: Dict[str, A
     if not update.get("ok"):
         return None
     result["path"] = update.get("path") or result["path"]
-    if update.get("knowledge_commit_sha"):
-        result["knowledge_commit_sha"] = update["knowledge_commit_sha"]
+    # A fold is a real vault write like any other, so it reports its commit
+    # outcome like any other -- carrying only the SHA would make a FAILED
+    # commit silent on exactly the path that writes no new note of its own.
+    for key in ("knowledge_commit_sha", "knowledge_commit_status",
+                "knowledge_commit_error", "knowledge_commit_attempts"):
+        if update.get(key):
+            result[key] = update[key]
     return result
 
 
@@ -949,12 +954,33 @@ def _write_back_knowledge_commit_sha(root: Path, mem: Dict[str, Any], vault_resu
     branch): it has no local `.dv-harness/memory/organizational/` file store
     to patch (memory.py's OrganizationalMemoryStore design), only the shared
     Knowledge Center push. Best-effort: a failure here must never affect the
-    already-completed local write or vault write."""
-    sha = vault_result.get("knowledge_commit_sha") if isinstance(vault_result, dict) else None
-    if not sha or not mem.get("memory_id") or not mem.get("level"):
+    already-completed local write or vault write.
+
+    2026-09-04: a COMMIT_FAILED outcome is written back too, as
+    `knowledge_commit_status` with git's own error text. Traceability is the
+    whole point of this function, and a record left with neither a SHA nor
+    any statement of why was previously indistinguishable from a record
+    written before git integration was ever enabled -- so a silently dropped
+    commit could not be found afterwards, only guessed at. NOTHING_TO_COMMIT
+    and COMMITTED are not written back as a status: the first is the ordinary
+    outcome of a re-write that changed nothing, and the second is already
+    fully carried by `knowledge_commit_sha` itself."""
+    if not isinstance(vault_result, dict) or not mem.get("memory_id") or not mem.get("level"):
+        return
+    from . import memory_vault as mv
+
+    sha = vault_result.get("knowledge_commit_sha")
+    patch: Dict[str, Any] = {}
+    if sha:
+        patch["knowledge_commit_sha"] = sha
+    elif vault_result.get("knowledge_commit_status") == mv.COMMIT_STATUS_FAILED:
+        patch["knowledge_commit_status"] = vault_result["knowledge_commit_status"]
+        if vault_result.get("knowledge_commit_error"):
+            patch["knowledge_commit_error"] = vault_result["knowledge_commit_error"]
+    if not patch:
         return
     try:
-        MemoryStore(root).add(mem["level"], {**mem, "knowledge_commit_sha": sha})
+        MemoryStore(root).add(mem["level"], {**mem, **patch})
     except Exception:
         pass
 
