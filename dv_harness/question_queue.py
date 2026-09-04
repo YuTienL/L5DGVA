@@ -54,6 +54,18 @@ Four pieces, matching Part B 1:1:
   - build_digest() / compute_metrics(): daily/end-of-run batching (never a
     real-time ping -- see build_digest()'s own docstring for the three
     trigger windows) and the 4 tracking metrics from Part B.
+
+Exemptions read path (2026-09-04) -- not a fifth Part-B piece, an
+integration this module hosts. find_exemption() consults the project's real
+exemptions.yaml on every add_question() carrying a context `check_id` (an
+ACTIVE entry self-resolves the ask at Tier 1); escalate_expired_exemptions()
+turns a lapsed exemption into a real Tier-3 blocking question. It lives here
+because dv_harness/exemptions.py's own docstring named this module as the
+consumer its review-queue output was shaped for, and until 2026-09-04 no
+consumer existed: that store was write-plus-manual-CLI-read only, so "an
+agent never re-litigates a deliberately-disabled check" was a guarantee
+nothing enforced on any automatic path. See classify_tier()'s step 3 for
+why an exemption deliberately does NOT override a Tier-3 hard trigger.
 """
 from __future__ import annotations
 
@@ -62,9 +74,11 @@ import json
 import os
 import tempfile
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from . import exemptions as _exemptions
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "question.schema.json"
 SCHEMA_VERSION = "1.0"
@@ -130,6 +144,22 @@ _SAFE_BLAST_RADII = frozenset({"single_regression"})
 # escalation with its own earlier guess. See classify_tier().
 HUMAN_DECISION_SOURCE = "human_answer"
 
+#: classify_tier()'s reason string when an ACTIVE exemptions.yaml entry
+#: resolved the ask. Deliberately NOT "decisions_store_hit": a consumer
+#: auditing why a question never reached a human must be able to tell an
+#: exemption-backed self-resolve (expires on its own valid_until, lives in
+#: exemptions.yaml, owned by the exemption's owner) apart from a persisted
+#: human answer (never expires, lives in decisions.json).
+EXEMPTION_TIER1_REASON = "active_exemption"
+
+#: question_key prefix for the Tier-3 question escalate_expired_exemptions()
+#: files when an exemption's valid_until has passed. Derived from the
+#: exemption id alone so re-running the escalation over an unchanged
+#: exemptions.yaml re-mints the SAME key (and therefore the same Q-ID) and
+#: is skipped, rather than growing the queue by one entry per run -- the
+#: same idempotence discipline source_authority.escalate_conflict() uses.
+EXEMPTION_EXPIRY_KEY_PREFIX = "exemption-expiry"
+
 #: Blackboard topic this module's decisions store mirrors itself into -- see
 #: the module docstring's "Blackboard mirror" note and
 #: QuestionQueueStore._sync_decisions_to_blackboard().
@@ -160,7 +190,8 @@ def hard_triggers(context: Dict[str, Any]) -> List[str]:
     return names
 
 
-def classify_tier(context: Dict[str, Any], *, prior_decision: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def classify_tier(context: Dict[str, Any], *, prior_decision: Optional[Dict[str, Any]] = None,
+                    exemption: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Decide which of the 3 tiers applies to one question.
 
     `context` fields (all optional, default falsy/low-risk):
@@ -176,6 +207,16 @@ def classify_tier(context: Dict[str, Any], *, prior_decision: Optional[Dict[str,
 
     `prior_decision`: a decisions-store hit for this question's
     `question_key` (see QuestionQueueStore.find_decision), if any.
+
+    `exemption`: the ACTIVE exemptions.yaml entry covering this question's
+    `context["check_id"]`, if any (see QuestionQueueStore.find_exemption).
+    An exemption is a human-authored, cited, owned, EXPIRING record that
+    says "this check is deliberately off, and here is the document that
+    says why" -- the exact knowledge dv_harness/exemptions.py was built to
+    stop an agent re-litigating every run. Consulting it here is what makes
+    that store READ on the real ask path instead of write-and-manual-CLI-
+    read only. Its placement in the order below is deliberately NOT at the
+    top; see step 3.
 
     EVALUATION ORDER (fixed, and the order itself is the security property --
     2026-09-03 review defects F3-a/F3-b, both proven reachable through
@@ -199,7 +240,35 @@ def classify_tier(context: Dict[str, Any], *, prior_decision: Optional[Dict[str,
          surfaced in a digest (build_digest only batches OPEN/ASSUMED, and
          this resolved as SELF_RESOLVED) and, before `revoke`, not
          reversible either (F3-a).
-      3. The manifest shortcut is additionally gated on
+      3. An ACTIVE exemption covering context["check_id"] resolves the ask
+         at Tier 1 -- but it is placed BELOW the hard triggers, not beside
+         the human-answer shortcut in step 2, and the difference is not
+         timidity. A decisions-store hit is keyed on `question_key`, a
+         digest of the exact question text plus context_path, so it is a
+         precise match: the human answered THIS question. An exemption is
+         matched on `check_id` alone, which says only that the question is
+         ABOUT that check -- it cannot establish that "this check is off
+         because of an IP restriction" answers "should this failing
+         assertion be treated as a real DUT bug". Letting a coarse key
+         resolve a hard-trigger ask is precisely review defect F3-b, and it
+         is not made safe by the record having a nicer provenance.
+
+         What DOES happen when a hard trigger fires and an exemption is on
+         file is step 1's `;covered_by_active_exemption:<id>` annotation:
+         the escalation still goes to a human, but it goes carrying the
+         exemption's identity, so the human is not re-deriving from scratch
+         what an owner already decided and cited. add_question() attaches
+         the full citation to the question record either way. That is the
+         "never re-litigate" guarantee at Tier 3 -- carry the prior
+         decision into the escalation -- as distinct from suppressing the
+         escalation, which only a precise-key human answer may do.
+
+         An EXPIRED exemption never reaches this function: find_exemption()
+         returns only active entries, so a lapsed exemption stops
+         suppressing anything the day it lapses, which is what valid_until
+         is for.
+
+      4. The manifest shortcut is additionally gated on
          is_cannot_assume(context) == False -- belt and braces on top of the
          ordering above: if the question's own context trips a hard trigger,
          no manifest lookup may resolve it regardless of what it returns.
@@ -213,7 +282,7 @@ def classify_tier(context: Dict[str, Any], *, prior_decision: Optional[Dict[str,
     triggers = hard_triggers(context)
     human_prior = _is_human_decision(prior_decision)
 
-    # 1. Hard triggers first -- before either Tier-1 shortcut.
+    # 1. Hard triggers first -- before every Tier-1 shortcut.
     if triggers:
         if human_prior:
             return {"tier": TIER1_SELF_RESOLVE, "reason": "decisions_store_hit", "matched_triggers": []}
@@ -222,13 +291,24 @@ def classify_tier(context: Dict[str, Any], *, prior_decision: Optional[Dict[str,
             # Audit signal: this ask escalates for real DESPITE an existing
             # machine-authored decision on file for the same question_key.
             reason += ";overrides_prior_non_human_decision"
+        if exemption is not None:
+            # Cited, not honoured: the human answering this escalation gets
+            # told which exemption already covers this check_id (step 3).
+            reason += ";covered_by_active_exemption:%s" % (exemption.get("id"),)
         return {"tier": TIER3_CANNOT_ASSUME, "reason": reason, "matched_triggers": triggers}
 
     # 2. Prior-decision shortcut -- human answers only.
     if human_prior:
         return {"tier": TIER1_SELF_RESOLVE, "reason": "decisions_store_hit", "matched_triggers": []}
 
-    # 3. Manifest shortcut -- never for a question whose own context is
+    # 3. Active-exemption shortcut -- ahead of the manifest because an
+    #    exemption carries a named owner, a cited basis_document and an
+    #    expiry, where a manifest lookup carries only a value found at a
+    #    context_path; never for a cannot-assume question (see above).
+    if exemption is not None and not is_cannot_assume(context):
+        return {"tier": TIER1_SELF_RESOLVE, "reason": EXEMPTION_TIER1_REASON, "matched_triggers": []}
+
+    # 4. Manifest shortcut -- never for a question whose own context is
     #    cannot-assume (unreachable given step 1, kept explicit so the
     #    guarantee survives any future reordering).
     if (not is_cannot_assume(context)
@@ -415,7 +495,7 @@ class QuestionQueueStore:
     root the same way) rather than inventing a new location convention."""
 
     def __init__(self, root: Path, *, manifest_lookup: Optional[Callable[[str], Any]] = None,
-                   blackboard: Optional[Any] = None):
+                   blackboard: Optional[Any] = None, exemptions_path: Optional[Path] = None):
         self.root = Path(root)
         self.dir = self.root / ".dv-harness" / "question_queue"
         self.questions_path = self.dir / "questions.json"
@@ -438,6 +518,56 @@ class QuestionQueueStore:
         # constructed lazily in _sync_decisions_to_blackboard() so merely
         # constructing a store creates no directories.
         self.blackboard = blackboard
+        # The structured exemptions store this queue consults before asking
+        # anyone anything -- see find_exemption(). Defaulted ON to the
+        # project's real exemptions.yaml for the same reason the blackboard
+        # mirror above is: dv_harness/exemptions.py's own docstring named
+        # this module as the intended consumer of its review-queue output
+        # and, until 2026-09-04, no consumer existed at all, so the store
+        # was write-plus-manual-CLI-read only. An integration every
+        # construction site has to remember to switch on would have
+        # reproduced exactly that gap. A project with no exemptions.yaml on
+        # disk costs nothing: load_exemptions_document() treats a missing
+        # file as an empty, valid document.
+        self.exemptions_path = (Path(exemptions_path) if exemptions_path is not None
+                                 else _exemptions.default_exemptions_path(self.root))
+
+    # -- exemptions -------------------------------------------------------
+
+    def find_exemption(self, check_id: str, *, as_of: Optional[date] = None) -> Optional[dict]:
+        """The ACTIVE exemption covering `check_id`, or None -- the real read
+        of exemptions.yaml on the ask path.
+
+        Never raises on a store problem. A missing file is already an empty
+        document; a file that is present but schema-invalid or carries a
+        hand-edited unparseable valid_until raises ExemptionValidationError
+        inside exemptions.py, and that must NOT take down an unrelated
+        question. Swallowing it here fails toward asking the human, which
+        is the safe direction: the worst case is one question that could
+        have been suppressed getting asked, never a suppression granted by
+        a store nobody could read. `dv-harness exemptions check` is where a
+        broken store is meant to be surfaced loudly."""
+        if not check_id:
+            return None
+        try:
+            return _exemptions.find_active_exemption(self.exemptions_path, str(check_id), as_of)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _exemption_citation(entry: dict) -> dict:
+        """The subset of an exemption a question record carries: enough for
+        a reader to act on it (why, where that reasoning is grounded, who
+        owns it, when it lapses) without opening exemptions.yaml, and
+        nothing that would make the record a second copy of the store."""
+        return {
+            "id": entry.get("id"),
+            "check_id": entry.get("check_id"),
+            "reason": entry.get("reason"),
+            "basis_document": entry.get("basis_document"),
+            "owner": entry.get("owner"),
+            "valid_until": entry.get("valid_until"),
+        }
 
     # -- raw storage ------------------------------------------------------
 
@@ -689,8 +819,18 @@ class QuestionQueueStore:
                 context["resolvable_from_manifest"] = True
                 context["manifest_value"] = looked_up
 
+        # Exemptions consult. A caller sets context["check_id"] to assert
+        # "this question is about that exact check" -- the same honest-flag
+        # discipline the 3 Tier-3 hard triggers already run on. No check_id,
+        # no lookup: this must never guess which check a question concerns
+        # from its free text. Always evaluated as of TODAY, with no as-of
+        # override: "is this check exempt right now" is the only question
+        # the ask path can be asking. find_exemption()'s own `as_of` exists
+        # for tests and for reporting, not for backdating a live decision.
+        exemption = self.find_exemption(context.get("check_id"))
+
         prior = self.find_decision(question_key)
-        classification = classify_tier(context, prior_decision=prior)
+        classification = classify_tier(context, prior_decision=prior, exemption=exemption)
         tier = classification["tier"]
 
         record: Dict[str, Any] = {
@@ -714,6 +854,13 @@ class QuestionQueueStore:
             "digest_batch_id": None, "digest_emitted_at": None,
         }
 
+        # Attached on EVERY tier when one exists, not only when it resolved
+        # the ask: a Tier-3 escalation about an exempted check must reach
+        # the human carrying the exemption an owner already cited, so
+        # nobody re-derives it. See classify_tier()'s step 3.
+        if exemption is not None:
+            record["exemption"] = self._exemption_citation(exemption)
+
         if tier == TIER1_SELF_RESOLVE:
             # Which Tier-1 rule fired decides where the answer comes from --
             # never "prior is not None", which since the F3-a fix no longer
@@ -727,6 +874,26 @@ class QuestionQueueStore:
                 record["decided_by"] = cur.get("decided_by")
                 record["answered_at"] = cur.get("decided_at")
                 record["resolved_from_decision_id"] = cur.get("question_id_of_answer")
+            elif classification["reason"] == EXEMPTION_TIER1_REASON:
+                record["answer"] = (
+                    "Deliberately exempt (%s): %s"
+                    % (exemption.get("id"), exemption.get("reason"))
+                )
+                record["basis"] = (
+                    "exemption:%s basis_document=%s valid_until=%s"
+                    % (exemption.get("id"), exemption.get("basis_document"),
+                        exemption.get("valid_until"))
+                )
+                record["decided_by"] = str(exemption.get("owner"))
+                record["answered_at"] = record["created_at"]
+                # Deliberately NOT persisted into the decisions store. A
+                # decision there is permanent until revoked; this exemption
+                # expires on its own valid_until. Minting a decision from it
+                # would outlive the exemption and go on suppressing this
+                # question after the day the owner set for re-review --
+                # converting the temporary workaround into the permanent,
+                # never-revisited fact valid_until exists to prevent.
+                # exemptions.yaml stays the single source for this answer.
             else:
                 record["answer"] = str(context.get("manifest_value"))
                 record["basis"] = f"resolved_from_manifest:{context_path}"
@@ -811,6 +978,97 @@ class QuestionQueueStore:
         target["overturned"] = overturned
         self._save_questions(data)
         return target
+
+    # -- expired exemptions -> real blocking questions -----------------------
+
+    def escalate_expired_exemptions(self, *, as_of: Optional[date] = None,
+                                      now: Optional[datetime] = None,
+                                      write_review_queue: bool = True) -> List[dict]:
+        """Turn every EXPIRED exemption into a real Tier-3 blocking question
+        in this queue, and return the questions newly filed (empty when
+        nothing expired, or when everything expired was already filed).
+
+        This is the second half of the exemptions read path, and it closes
+        the other end of the same gap find_exemption() closes. An expired
+        exemption already produced a review-queue record
+        (exemptions.build_review_queue()), and exemptions.py's own docstring
+        named THIS module as the consumer that record was shaped for -- but
+        the consumer never existed, so `review_queue.json` was a file with
+        no reader and an expiry was a fact only a human running
+        `dv-harness exemptions expire-report` by hand would ever see. An
+        expired exemption is now a question with an owner, a Q-ID and a
+        blocking tier, exactly like any other thing the harness cannot
+        assume its way past.
+
+        Tier 3 is not a choice made here: an expired exemption means a check
+        is currently disabled with no live sanction, which is
+        `affects_pass_fail_verdict` in the literal sense of that flag, so
+        classify_tier() reaches Tier 3 on its own rules. The exemption is
+        expired, so find_exemption() returns None for its check_id and
+        nothing suppresses the escalation it just triggered.
+
+        Idempotent: the question_key is derived from the exemption id, so a
+        second run over an unchanged exemptions.yaml re-mints the same key,
+        finds the existing question and files nothing. Renewing the
+        exemption (a new valid_until) stops it being expired at all, which
+        is the intended way for this question to stop recurring; answering
+        the question does not by itself renew the exemption, and the answer
+        text says so.
+
+        Routed to domain "env" (owner DV-owner) because route_owner()'s
+        table is a literal 3-domain routing rule, not a free-text owner
+        field -- the exemption's own `owner` is carried in the question text
+        and in the attached citation instead of being smuggled into a
+        `owner` field the schema pins per domain."""
+        as_of = as_of or date.today()
+        queue = _exemptions.build_review_queue(self.exemptions_path, as_of=as_of)
+        if write_review_queue:
+            _exemptions.write_review_queue(
+                queue, _exemptions.default_review_queue_path(self.root))
+
+        existing_keys = {q["question_key"] for q in self._load_questions().get("questions", [])}
+        filed: List[dict] = []
+        for rec in queue:
+            key = "%s:%s" % (EXEMPTION_EXPIRY_KEY_PREFIX, rec["exemption_id"])
+            if key in existing_keys:
+                continue
+            filed.append(self.add_question(
+                domain="env",
+                question=(
+                    "Exemption %s on check %r expired on %s (%s day(s) ago). Its owner is %s "
+                    "and its stated reason is %r, grounded in %s. Is this check still "
+                    "deliberately exempt?"
+                    % (rec["exemption_id"], rec["check_id"], rec["valid_until"],
+                        rec["days_expired"], rec["owner"], rec["reason"], rec["basis_document"])
+                ),
+                context_path="%s#%s" % (self.exemptions_path, rec["exemption_id"]),
+                options=[
+                    {"label": "renew",
+                      "rationale": "The cited basis still holds; re-confirm with a new valid_until "
+                                    "via `dv-harness exemptions add`. Answering here does not renew "
+                                    "it -- the exemptions.yaml entry must actually be updated."},
+                    {"label": "retire",
+                      "rationale": "The restriction is gone or the check no longer exists; set "
+                                    "status: retired so the entry survives as history without "
+                                    "exempting anything."},
+                    {"label": "re-enable-the-check",
+                      "rationale": "The exemption was a temporary workaround that has outlived its "
+                                    "reason; turn the check back on and delete nothing silently."},
+                ],
+                recommendation="renew",
+                assumption_if_unanswered=(
+                    "None -- an expired exemption is never auto-renewed. The check stays "
+                    "unsanctioned until %s answers." % (rec["owner"],)
+                ),
+                question_key=key,
+                context={
+                    "check_id": rec["check_id"],
+                    "affects_pass_fail_verdict": True,
+                    "expired_exemption_id": rec["exemption_id"],
+                },
+                now=now,
+            ))
+        return filed
 
     # -- digest -------------------------------------------------------------
 

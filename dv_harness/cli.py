@@ -793,14 +793,30 @@ def main():
     pexempt_check.add_argument("--as-of", default=None, dest="as_of")
 
     pexempt_report = pexempt_sub.add_parser("expire-report", help="Write .dv-harness/exemptions/review_queue.json "
-                                                                     "listing every currently-expired entry -- the "
-                                                                     "documented hand-off point a future "
-                                                                     "question-queue system should read from (see "
-                                                                     "dv_harness/exemptions.py's module docstring). "
-                                                                     "Exits 1 if any entry expired (CI-friendly).")
+                                                                     "listing every currently-expired entry. Reports "
+                                                                     "only; use `escalate` to also file each one as a "
+                                                                     "real blocking question. Exits 1 if any entry "
+                                                                     "expired (CI-friendly).")
     pexempt_report.add_argument("--path", default=None)
     pexempt_report.add_argument("--out", default=None, help="Override review_queue.json output path.")
     pexempt_report.add_argument("--as-of", default=None, dest="as_of")
+
+    # 2026-09-04 (vplan-single-source-of-truth gap-close): `expire-report`
+    # above writes review_queue.json and stops. That file was the documented
+    # hand-off point for a consumer that did not exist, so an expired
+    # exemption reached a human only if someone ran this command by hand.
+    # `escalate` files each expired entry as a real Tier-3 blocking question
+    # in the real QuestionQueueStore -- with a Q-ID, an owner and a digest
+    # slot, like anything else the harness cannot assume its way past.
+    pexempt_escalate = pexempt_sub.add_parser(
+        "escalate",
+        help="File every currently-expired exemption as a real Tier-3 blocking question in the "
+              "question queue (and refresh review_queue.json). Idempotent: the question_key is "
+              "derived from the exemption id, so re-running files nothing new. Exits 1 if any "
+              "expired entry exists, whether or not it was newly filed (CI-friendly, same "
+              "convention as `check`/`expire-report`).")
+    pexempt_escalate.add_argument("--path", default=None)
+    pexempt_escalate.add_argument("--as-of", default=None, dest="as_of")
 
     # Reference-pattern coverage audit (2026-09-03, gap-close-reference-audit
     # workstream): closes the confirmed gap that reference/bfm_patterns/*.txt
@@ -1837,6 +1853,24 @@ def main():
                 print(json.dumps({"review_queue_path": str(out_path), "expired_count": len(queue),
                                    "entries": queue}, ensure_ascii=False, indent=2))
                 raise SystemExit(0 if not queue else 1)
+            elif args.exemptions_cmd == "escalate":
+                from .question_queue import QuestionQueueStore
+                as_of = exemptions_mod.parse_as_of(args.as_of)
+                store = QuestionQueueStore(h.root, exemptions_path=ex_path)
+                filed = store.escalate_expired_exemptions(as_of=as_of)
+                expired = exemptions_mod.find_expired(exemptions_mod.list_exemptions(ex_path), as_of)
+                print(json.dumps({
+                    "expired_count": len(expired),
+                    "newly_filed_count": len(filed),
+                    "questions": [{"id": q["id"], "question_key": q["question_key"],
+                                    "tier": q["tier"], "blocking": q["blocking"]} for q in filed],
+                    "review_queue_path": str(exemptions_mod.default_review_queue_path(h.root)),
+                }, ensure_ascii=False, indent=2))
+                # Exit on EXPIRED, not on newly-filed: a second run of this
+                # command files nothing (idempotent) but the exemption is
+                # still expired and still unanswered, so a CI step must not
+                # start passing just because the question already exists.
+                raise SystemExit(0 if not expired else 1)
         except ExemptionValidationError as exc:
             # BUG FIX (2026-09-03): before this, a schema-invalid write (add)
             # or a hand-edited bad file on disk (list/check/expire-report,

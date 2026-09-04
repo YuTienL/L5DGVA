@@ -807,6 +807,46 @@ _SHEET_BUILDERS: Dict[str, Callable[[Workbook, _SheetContext], None]] = {
 
 
 # ---------------------------------------------------------------------------
+# Public query entry point (no file written)
+# ---------------------------------------------------------------------------
+
+def summarize_coverage_gaps(items: List[dict]) -> Dict[str, Any]:
+    """The per-item gap answer -- "which verification items have no test, and
+    why" -- computed without writing an .xlsx.
+
+    write_vplan_workbook() has always computed exactly this (_rank_gaps() /
+    _deferred_rows(), returned on VPlanWriteResult.gaps_ranked), but only as
+    a side effect of producing a workbook, so the only way to obtain it was
+    to run `dv-harness vplan-export` and write a file. That left the VPLAN
+    stage gate -- the thing an agent actually runs at a stage transition --
+    able to report a PASS and an aggregate coverage_percent and nothing
+    else, which is the "answer a number of unhit bins, never which feature
+    has zero tests" shape this vPlan work exists to replace. This function
+    is the same computation with no file involved, so a gate can surface it.
+
+    `items` must already have passed validate_items(); this reads
+    covered_by/blocked_on/feature_area/req_id and does no validation of its
+    own. covered_by is the caller's asserted state -- deriving it from real
+    regression results is a separate, unbuilt chain, and this function does
+    not pretend otherwise.
+
+    Returns {"total_items", "coverage_percent", "counts_by_state",
+    "gap_count", "gaps_ranked", "deferred"} -- gaps_ranked in close-first
+    order, each entry carrying rank/req_id/feature_area/verification_item/
+    covered_by/blocked_on/why."""
+    feature_order = _feature_area_order(items)
+    gaps = _rank_gaps(items, feature_order)
+    return {
+        "total_items": len(items),
+        "coverage_percent": _coverage_percent(items),
+        "counts_by_state": _counts_by_state(items),
+        "gap_count": len(gaps),
+        "gaps_ranked": gaps,
+        "deferred": _deferred_rows(items, feature_order),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public write entry point
 # ---------------------------------------------------------------------------
 

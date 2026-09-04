@@ -284,3 +284,199 @@ def test_wired_into_vplan_stage_gates():
     gate_ids = [g[0] for g in STAGE_GATES["VPLAN"]]
     assert "vplan_writer_validation_gate" in gate_ids
     assert "spec_coverage_audit" in gate_ids
+
+
+# --- The per-item gap list this gate surfaces (2026-09-04) -------------------
+#
+# Added with the coverage_gaps payload. Before it, this gate answered only
+# "is the plan well-formed" (status/item_count) and its VPLAN stage sibling
+# spec_coverage_audit.py answered only an aggregate coverage_percent over a
+# different schema -- so the gate pipeline an agent runs at a stage
+# transition could never answer "which verification item has no test", even
+# though write_vplan_workbook() had always computed exactly that list. These
+# drive the REAL gate script as a REAL subprocess, the same way every test
+# above does, and assert the list arrives in the JSON gates.py parses into
+# GateResult.detail.
+
+def test_gate_reports_which_items_have_no_test_not_only_a_number():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        rc, out = _run({
+            "items": [
+                _base_item(),
+                _base_item(req_id="USB2-BULK-002", feature_area="Bulk Transfers",
+                            verification_item="Bulk IN babble error", covered_by="NOT COVERED",
+                            blocked_on="EFFORT", blocked_reason="no error-injection hook yet"),
+                _base_item(req_id="USB2-ISO-001", feature_area="Isochronous",
+                            verification_item="ISO underrun handling", covered_by="NOT COVERED",
+                            blocked_on="INFORMATION", blocked_reason="PHY underrun behavior undocumented"),
+                _base_item(req_id="USB2-CTRL-001", feature_area="Control Transfers",
+                            verification_item="SETUP stage retry", covered_by="PARTIAL",
+                            notes="only the happy path runs today"),
+            ],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+        })
+        assert rc == 0, out
+        assert out["status"] == "PASS"
+        gaps = out["coverage_gaps"]
+
+        # Not just a number: every uncovered item is named, individually.
+        assert gaps["gap_count"] == 3
+        assert [g["req_id"] for g in gaps["gaps_ranked"]] == [
+            "USB2-CTRL-001",  # tier 0: PARTIAL
+            "USB2-BULK-002",  # tier 1: NOT COVERED / EFFORT
+            "USB2-ISO-001",   # tier 2: NOT COVERED / INFORMATION
+        ]
+        # Each carries the feature it belongs to and a reason a human can act on.
+        by_id = {g["req_id"]: g for g in gaps["gaps_ranked"]}
+        assert by_id["USB2-ISO-001"]["feature_area"] == "Isochronous"
+        assert "PHY underrun behavior undocumented" in by_id["USB2-ISO-001"]["why"]
+        assert "no error-injection hook yet" in by_id["USB2-BULK-002"]["why"]
+        assert by_id["USB2-CTRL-001"]["blocked_on"] is None
+
+        # The aggregate is still there -- it is now the summary of a list,
+        # not the only thing reported.
+        assert gaps["total_items"] == 4
+        assert gaps["coverage_percent"] == 25.0
+        assert gaps["counts_by_state"]["NOT COVERED"] == 2
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_gate_reports_an_empty_gap_list_when_every_item_is_covered():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        rc, out = _run({
+            "items": [_base_item()],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+        })
+        assert rc == 0, out
+        assert out["coverage_gaps"]["gap_count"] == 0
+        assert out["coverage_gaps"]["gaps_ranked"] == []
+        assert out["coverage_gaps"]["coverage_percent"] == 100.0
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_open_gaps_do_not_fail_the_gate():
+    """An unclosed vPlan item mid-project is a fact to report, not a
+    validation failure -- failing here would only teach people to mark
+    items covered to get past the stage."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        rc, out = _run({
+            "items": [_base_item(covered_by="NOT COVERED", blocked_on="EFFORT",
+                                  blocked_reason="not started")],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+        })
+        assert rc == 0
+        assert out["status"] == "PASS"
+        assert out["coverage_gaps"]["gap_count"] == 1
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_deferred_items_are_listed_separately_from_open_gaps():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        rc, out = _run({
+            "items": [
+                _base_item(),
+                _base_item(req_id="USB2-LPM-001", feature_area="Link Power",
+                            verification_item="L1 entry/exit", covered_by="DEFERRED",
+                            notes="out of scope for this tapeout"),
+            ],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+        })
+        assert rc == 0, out
+        gaps = out["coverage_gaps"]
+        assert gaps["gap_count"] == 0
+        assert [d["req_id"] for d in gaps["deferred"]] == ["USB2-LPM-001"]
+        assert gaps["deferred"][0]["notes"] == "out of scope for this tapeout"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_summarize_coverage_gaps_matches_what_the_workbook_writer_computes():
+    """The gate must not be reporting a second, parallel computation -- it is
+    the same _rank_gaps() the .xlsx's "Table B -- Gaps ranked" is built from,
+    which is what makes the gate's answer and the exported vPlan's answer
+    incapable of disagreeing."""
+    import openpyxl
+    from dv_harness.vplan_writer import (
+        build_evidence_context, summarize_coverage_gaps, write_vplan_workbook,
+    )
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        items = [
+            _base_item(),
+            _base_item(req_id="USB2-BULK-002", verification_item="Bulk IN babble error",
+                        covered_by="NOT COVERED", blocked_on="EFFORT",
+                        blocked_reason="no error-injection hook yet"),
+        ]
+        evidence = build_evidence_context(
+            pattern_dir=str(pattern_dir), dispatcher_file=str(dispatcher_file),
+            task_declaration_sources=[str(tests_dir / "*.sv")],
+        )
+        out_xlsx = tmp / "vplan.xlsx"
+        result = write_vplan_workbook(items, output_path=out_xlsx, evidence=evidence,
+                                       protocol="USB2")
+        assert summarize_coverage_gaps(items)["gaps_ranked"] == result.gaps_ranked
+
+        # And it is really the list rendered into the workbook a human opens.
+        wb = openpyxl.load_workbook(out_xlsx)
+        rendered = {str(c.value) for row in wb["coverage_summary"].iter_rows() for c in row}
+        assert "USB2-BULK-002" in rendered
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_gap_list_survives_the_real_gates_run_gate_wrapper():
+    """The gap list must reach GateResult.detail, not just the script's own
+    stdout -- gates.py json-parses that stdout, and detail is what an agent
+    at a VPLAN stage transition actually sees."""
+    from dv_harness.gates import STAGE_GATES, run_gate
+
+    entry = next(g for g in STAGE_GATES["VPLAN"] if g[0] == "vplan_writer_validation_gate")
+    _, script_name, cli_flag = entry
+
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        pattern_dir, dispatcher_file, tests_dir = _make_fake_env(tmp)
+        result = run_gate(ROOT, script_name, cli_flag, {
+            "items": [
+                _base_item(),
+                _base_item(req_id="USB2-ISO-001", feature_area="Isochronous",
+                            verification_item="ISO underrun handling", covered_by="NOT COVERED",
+                            blocked_on="INFORMATION", blocked_reason="PHY behavior undocumented"),
+            ],
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+        })
+        assert result.ok is True, result.detail
+        gaps = result.detail["coverage_gaps"]
+        assert gaps["gap_count"] == 1
+        assert gaps["gaps_ranked"][0]["req_id"] == "USB2-ISO-001"
+        assert "PHY behavior undocumented" in gaps["gaps_ranked"][0]["why"]
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)

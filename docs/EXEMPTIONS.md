@@ -111,6 +111,7 @@ dv-harness exemptions add   --check-id ID --reason R --basis-document B --owner 
                              [--id ID] [--protocol P] [--notes N] [--path P]
 dv-harness exemptions check [--path P] [--as-of YYYY-MM-DD]
 dv-harness exemptions expire-report [--path P] [--out P] [--as-of YYYY-MM-DD]
+dv-harness exemptions escalate      [--path P] [--as-of YYYY-MM-DD]
 ```
 
 - `add` schema-validates the whole document (not just the new entry) before
@@ -123,7 +124,16 @@ dv-harness exemptions expire-report [--path P] [--out P] [--as-of YYYY-MM-DD]
   already uses (`dv_harness/uvm_generator/templates/sim_scripts/`).
 - `expire-report` does the same expiry evaluation as `check`, additionally
   writes the review-queue file (see below), and also exits 1 if anything
-  expired.
+  expired. It REPORTS only.
+- `escalate` (2026-09-04) goes one step further: it files each expired entry
+  as a real Tier-3 blocking question in the real `QuestionQueueStore`, with
+  a Q-ID and an owner, so an expiry reaches a human through the same queue
+  as anything else the harness cannot assume its way past -- rather than
+  waiting in a JSON file for someone to run `expire-report` by hand. It is
+  idempotent (the question_key is derived from the exemption id, so a rerun
+  files nothing new) but still **exits 1 while any entry is expired**, not
+  just when it filed something: the exemption is still lapsed and still
+  unanswered, so a CI step must not start passing on the second run.
 
 ## The expiry check function
 
@@ -160,17 +170,53 @@ timestamp), **always writing the file even when the queue is empty** -- an
 empty file is itself a meaningful, current fact ("nothing is expired as of
 the last check"), not an absence a downstream reader has to special-case.
 
-**This module does not build a review-queue UI, ticketing system, or agent
-workflow.** `dv_harness/question_queue.py` now exists in this repo (a
-sibling, concurrently-developed 3-tier ask-a-human workstream), but as of
-this writing it does **not** consume this module's review-queue output --
-`grep -n "review_queue\|exemption" dv_harness/question_queue.py` returns no
-matches. This module does not depend on question_queue.py and does not
-invent its integration. What it provides is a standalone, documented
-hand-off: a JSON file at a stable, known path with a tested shape. **This
-is the integration point `question_queue.py` (or any other consumer)
-should read from** -- wiring the still-unconsumed integration up should be
-"read this file", not "go figure out where exemption data lives".
+## Who reads this store (2026-09-04)
+
+This section used to say the review queue had no consumer -- that
+`grep -n "review_queue\|exemption" dv_harness/question_queue.py` returned
+no matches, and that wiring one up was left as future work. That was true
+when written and is no longer. Until 2026-09-04 the only readers were the
+`exemptions list/check/expire-report` CLI handlers, i.e. a human typing a
+command, so neither of this store's two guarantees ("an agent never
+re-litigates an exemption", "a temporary workaround never becomes
+permanent") actually held on any automatic path.
+
+`dv_harness/question_queue.py` is now the real automated consumer, on both
+halves:
+
+| when | what reads the store | effect |
+|---|---|---|
+| every `add_question()` whose `context` carries a `check_id` | `QuestionQueueStore.find_exemption()` -> `exemptions.find_active_exemption()` | an **active** exemption self-resolves the question at Tier 1, answering with its own reason/basis_document/owner. Nobody is asked. |
+| `dv-harness exemptions escalate` | `QuestionQueueStore.escalate_expired_exemptions()` -> `build_review_queue()` | each **expired** exemption becomes a real Tier-3 blocking question with a Q-ID, idempotently (question_key derived from the exemption id). |
+
+Two boundaries are deliberate:
+
+- **An expired exemption suppresses nothing.** `find_active_exemption()`
+  filters by expiry, so the day an exemption lapses the questions it was
+  answering come back on their own. That is what `valid_until` is for.
+- **An exemption does not override a Tier-3 hard trigger.** It is matched on
+  `check_id` alone, which establishes that a question is *about* the check,
+  not that this exemption *answers* it -- "the check is off due to an IP
+  restriction" does not answer "is this PASS real". Such a question still
+  escalates, but it arrives carrying the exemption's citation
+  (`tier_reason` gains `;covered_by_active_exemption:<id>`, and the
+  question record carries an `exemption` block), so the human is not
+  re-deriving what an owner already decided and cited.
+
+The exemption-backed answer is **not** persisted into the decisions store.
+A decision there is permanent until revoked; this exemption expires. Minting
+one from the other would outlive the exemption and keep suppressing the
+question past its owner's own re-review date -- exactly the permanent,
+never-revisited fact `valid_until` exists to prevent. `exemptions.yaml`
+stays the single source for that answer.
+
+`review_queue.json`'s shape is unchanged and still written, so any further
+consumer still integrates by reading one file at a stable path.
+
+Proven end-to-end (real store, real exemptions.yaml, real CLI subprocess,
+never a mock) by `dv_harness_tests/test_exemptions_read_path.py`.
+
+**This module still does not build a review-queue UI or ticketing system.**
 
 ## Relationship to `dv_harness/waiver_store.py`
 

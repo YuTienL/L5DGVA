@@ -88,6 +88,20 @@
       "type": ["string", "null"],
       "description": "For a SELF_RESOLVED (tier 1) question: the id of the prior question whose persisted decision supplied this answer."
     },
+    "exemption": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "check_id", "reason", "basis_document", "owner", "valid_until"],
+      "description": "The ACTIVE exemptions.yaml entry covering this question's context.check_id at ask time (dv_harness/exemptions.py find_active_exemption()), copied in as a citation. Present on EVERY tier when one exists, not only when it resolved the ask: at tier 1 (tier_reason 'active_exemption') it IS the answer's source, and at tier 3 it rides along so the human receiving the escalation is not re-deriving what this exemption's owner already decided and cited. Absent when no active exemption covers the check, or when the question carries no check_id. An EXPIRED exemption never appears here -- that is what valid_until is for, and it surfaces as its own blocking question via escalate_expired_exemptions() instead.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "check_id": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "basis_document": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "valid_until": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "format": "date" }
+      }
+    },
     "digest_batch_id": { "type": ["string", "null"] },
     "digest_emitted_at": { "type": ["string", "null"], "format": "date-time" }
   },

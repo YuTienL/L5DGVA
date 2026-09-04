@@ -26,23 +26,43 @@ of entries a human needs to look at again, rather than a date nobody ever
 checks -- but a deliberately far-future date will simply never reach that
 list.
 
-Review-queue integration point -- READ THIS BEFORE WIRING A CONSUMER:
-`dv_harness/question_queue.py` now exists in this repo (a sibling,
-concurrently-developed 3-tier ask-a-human workstream), but as of this
-writing it does NOT consume this module's review-queue output --
-`grep -n "review_queue|exemption" dv_harness/question_queue.py` returns no
-matches. This module does not depend on question_queue.py and does not
-invent its integration. What this module DOES provide is a standalone,
-well-documented output: build_review_queue() returns a plain list of
-{"exemption_id", "check_id", "expired_since", "days_expired", "reason",
-"owner", "basis_document", "valid_until"} dicts, and write_review_queue()
-persists that list as JSON to a known path
+Who READS this store (2026-09-04 -- this section previously said nothing
+did, which was true when written and is no longer): until 2026-09-04 the
+only readers were cli.py's own `exemptions list/check/expire-report`
+handlers, i.e. a human typing a command. That made this a write-plus-
+manual-read store, and neither guarantee above actually held on any
+automatic path -- an agent could re-litigate an exempted check every run,
+because nothing on the ask path ever opened this file. `dv_harness/
+question_queue.py` is now the real automated consumer, through two entry
+points:
+
+  - find_active_exemption() (below) is called by QuestionQueueStore.
+    find_exemption() on EVERY add_question() whose context carries a
+    `check_id`. An ACTIVE entry self-resolves that question at Tier 1 with
+    this entry's reason/basis_document/owner as the answer, so the question
+    never reaches a human. An EXPIRED entry resolves nothing -- which is the
+    entire point of valid_until, and is why the lookup filters rather than
+    returning everything on file.
+  - build_review_queue()'s output is consumed by QuestionQueueStore.
+    escalate_expired_exemptions(), which files each expired entry as a real
+    Tier-3 blocking question (`dv-harness exemptions escalate`). The
+    review_queue.json hand-off shape below is unchanged and still written;
+    it now has a reader as well as a writer.
+
+An exemption deliberately does NOT suppress a question whose own context
+trips one of question_queue's Tier-3 hard triggers. It is matched on
+check_id alone, which establishes that the question is ABOUT the check, not
+that this exemption answers it; see classify_tier()'s step 3 for the full
+reasoning. Such a question still escalates, carrying this entry's citation
+so the human is not re-deriving what its owner already decided.
+
+The standalone hand-off shape is unchanged: build_review_queue() returns a
+plain list of {"exemption_id", "check_id", "expired_since", "days_expired",
+"reason", "owner", "basis_document", "valid_until"} dicts, and
+write_review_queue() persists it as JSON to a known path
 (`.dv-harness/exemptions/review_queue.json` by default, see
-default_review_queue_path()). THIS is the integration point
-`dv_harness/question_queue.py` (or any other consumer) should read from --
-a JSON file at a stable path with a documented, tested shape -- so that
-wiring the still-unconsumed integration up is "read this file", not "go
-figure out where exemption data lives".
+default_review_queue_path()) -- so any FURTHER consumer still integrates by
+reading one file at a stable path.
 
 Storage format: a single YAML file (default
 `.dv-harness/exemptions/exemptions.yaml` under a project root, see
@@ -294,6 +314,39 @@ def find_expired(entries: List[Dict[str, Any]], as_of: Optional[date] = None) ->
 def find_active(entries: List[Dict[str, Any]], as_of: Optional[date] = None) -> List[Dict[str, Any]]:
     as_of = as_of or date.today()
     return [e for e in entries if not is_expired(e, as_of) and e.get("status") != "retired"]
+
+
+def find_active_exemption(path: Path, check_id: str, as_of: Optional[date] = None) -> Optional[Dict[str, Any]]:
+    """The single ACTIVE (not expired, not retired) exemption covering
+    `check_id` in the document at `path`, or None.
+
+    This is the READ verb an automated consumer needs and the module
+    previously did not have: find_active() returns every active entry and
+    leaves the caller to do its own check_id matching, which is exactly the
+    per-caller re-implementation this module exists to prevent. Matching is
+    a literal, case-sensitive equality against the `check_id` field -- never
+    a prefix/substring/fuzzy match, because check_id is defined by
+    exemptions.schema.json as "the concrete real check, never a vague
+    category", and a fuzzy match here would let one exemption silently
+    cover checks nobody exempted.
+
+    An EXPIRED entry is deliberately not returned even though it is still on
+    file: that is the whole point of valid_until. A consumer asking "is this
+    check exempt right now" must get None once the exemption lapsed, so the
+    question it was suppressing comes back. build_review_queue() is where an
+    expired entry surfaces instead.
+
+    When more than one active entry names the same check_id (the schema
+    allows it -- see the `id` field's own "superseded/re-approved" note), the
+    one with the LATEST valid_until wins: that is the most recently
+    re-confirmed approval, and it is the one whose expiry a consumer should
+    be measured against. Ties break on `id` so the result is deterministic.
+    """
+    candidates = [e for e in find_active(list_exemptions(path), as_of)
+                   if e.get("check_id") == check_id]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda e: (str(e.get("valid_until") or ""), str(e.get("id") or "")))
 
 
 def check_expiry(path: Path, as_of: Optional[date] = None) -> Dict[str, Any]:

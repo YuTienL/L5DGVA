@@ -52,6 +52,7 @@ sys.path.insert(0, str(_ROOT))
 from dv_harness.vplan_writer import (  # noqa: E402
     build_evidence_context,
     validate_items,
+    summarize_coverage_gaps,
     EvidenceSourceEmptyError,
     VPlanSchemaError,
     UnresolvedPatternFileError,
@@ -126,7 +127,34 @@ def main() -> int:
         print(json.dumps({"status": "FAIL", "reason": e.reason, "detail": e.detail}))
         return 3
 
-    print(json.dumps({"status": "PASS", "item_count": len(items)}))
+    # UPDATED (2026-09-04, vplan-single-source-of-truth gap-close): the gate
+    # used to print {"status": "PASS", "item_count": N} and nothing else, so
+    # the VPLAN stage transition an agent actually runs could report that the
+    # plan was well-formed while saying nothing about which verification
+    # items have no test. The other VPLAN gate, spec_coverage_audit.py, only
+    # ever emits an aggregate coverage_percent over a different schema. That
+    # left the whole pipeline answering "a number of unhit bins" and never
+    # "which feature has zero tests" -- the exact failure mode this vPlan
+    # work exists to replace, and the reason the per-item gap list computed
+    # inside write_vplan_workbook() was reachable only by writing an .xlsx.
+    #
+    # summarize_coverage_gaps() is that same computation with no file
+    # involved, so its output rides along in this gate's JSON (which
+    # gates.py parses straight into GateResult.detail). It does NOT change
+    # the gate's verdict: an open gap mid-project is a normal, reportable
+    # fact, not a validation failure, and failing here would only teach
+    # people to mark items covered to get past it. What it changes is that
+    # the gap list is now in front of whoever reads the gate result.
+    #
+    # Honest limit, unchanged by this: covered_by is a caller-asserted field.
+    # Nothing in this repo yet derives it from real regression/testlist
+    # results, so this reports the gaps the vPlan ITSELF admits to, not gaps
+    # discovered by comparing the plan against what actually ran.
+    print(json.dumps({
+        "status": "PASS",
+        "item_count": len(items),
+        "coverage_gaps": summarize_coverage_gaps(items),
+    }, ensure_ascii=False))
     return 0
 
 
