@@ -863,6 +863,15 @@ def build_system_command_ir(contract_set: Mapping[str, Any],
                     contract.get("shared_resource_dependency") or []),
                 "reset_dependency": dict(contract.get("reset_dependency") or {}),
                 "interrupt_dependency": dict(contract.get("interrupt_dependency") or {}),
+                # Carried for SYS-25's CLOCK_DOMAIN_DEPENDENT relationship,
+                # which needs both sides' resolved domain to compare and has no
+                # other source: the 17 mandated IR fields have no clock field,
+                # and re-resolving the domain in the SYS-25 layer would be a
+                # second answer to a question `_clock_domain()` answers once.
+                # Copied verbatim, including its own UNRESOLVED/NOT_APPLICABLE
+                # status, so an unresolved domain stays unresolved rather than
+                # becoming an empty-looking agreement.
+                "clock_domain": dict(contract.get("clock_domain") or {}),
             },
         }
         entries.append(entry)

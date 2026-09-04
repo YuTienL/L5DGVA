@@ -1032,6 +1032,34 @@ def main():
     pscp.add_argument("--json", action="store_true",
                       help="Print raw JSON instead of the human-readable SYS-18..22 report.")
 
+    # SYS-23..27, the SCHEDULING layer on top of SYS-18..22's command layer:
+    # what may run once vs. repeatedly, which shared physical agent every user
+    # routes through, which command pairs may overlap, which subsystem
+    # scoreboards are reused under a correlation layer, and which of SYS-27's
+    # own six candidate flows the selected architecture actually supports.
+    # Planning only: no command is removed, no sequencer/driver/queue is built,
+    # no scoreboard is modified or replaced, and no check content is emitted.
+    pssp = sub.add_parser("system-scheduling-plan",
+                          help="SYS-23..27: classify each System command's initialization "
+                               "scope, plan shared-resource scheduling through a single "
+                               "named access point, classify cross-subsystem command-pair "
+                               "parallelism, plan subsystem-scoreboard REUSE under a "
+                               "correlation layer, and evaluate SYS-27's six candidate "
+                               "flows for architectural support. Reads only; removes no "
+                               "command and generates no sequencer, scoreboard or check.")
+    pssp.add_argument("--select", action="append", default=None, metavar="SUBSYSTEM",
+                      help="Name one subsystem to include. Repeatable. Required -- SYS-1's "
+                           "explicit-selection refusal is not bypassed by this command.")
+    pssp.add_argument("--knowledge-center", action="store_true", dest="schedplan_kc",
+                      help="Also query the shared Knowledge Center during the SYS-1 "
+                           "discovery this command runs first. Off by default (real "
+                           "remote call).")
+    pssp.add_argument("--command-inventory", default=None, metavar="CSV",
+                      help="Path to a command_inventory.csv to read as a DECLARED overlay "
+                           "for the SYS-8 contract set. Read-only; never rewritten.")
+    pssp.add_argument("--json", action="store_true",
+                      help="Print raw JSON instead of the human-readable SYS-23..27 report.")
+
     # The 9-level source authority order (2026-09-04): docs/RUN_PROFILE.md's
     # ordering as an executable, queryable rule rather than prose an agent is
     # trusted to have read. NOT the same list as tools/verification_flow/
@@ -2292,6 +2320,33 @@ def main():
         raise SystemExit(
             0 if (result["selection"]["selection_admissible"]
                   and document["summary"]["command_plan_clean"]) else 2)
+    elif args.cmd == "system-scheduling-plan":
+        from . import system_scheduling_plan as ssp
+        kc_client = None
+        if args.schedplan_kc:
+            from .config import load_config
+            from .knowledge_center import KnowledgeCenterClient
+            kc_client = KnowledgeCenterClient(load_config(h.root), h.root)
+        result = ssp.plan_system_scheduling(
+            h.root, args.select or [], knowledge_center_client=kc_client,
+            inventory_overlay_path=args.command_inventory)
+        document = result["scheduling_plan"]
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        else:
+            if not result["selection"]["selection_admissible"]:
+                from . import subsystem_discovery as sd
+                print(sd.format_report(result["selection"]))
+                print()
+            print(ssp.format_system_scheduling_plan_report(document))
+        # Exit 2 while independent subsystems would be globally serialized, any
+        # shared resource is unschedulable pending ownership, or the composer's
+        # cross-subsystem stubs have stopped raising. A System-Level schedule
+        # must not be built on any of those, so a CI step must not read it as a
+        # clean run.
+        raise SystemExit(
+            0 if (result["selection"]["selection_admissible"]
+                  and document["summary"]["scheduling_plan_clean"]) else 2)
     elif args.cmd == "reference-audit":
         from . import reference_pattern_audit
         result = reference_pattern_audit.audit_directory(
