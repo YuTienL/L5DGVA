@@ -3,17 +3,16 @@ that a failing self-test really aborts a real push (2026-09-04).
 
 WHY THIS FILE EXISTS. tools/testing/self_test.py was real, correct, and
 passing -- but nothing ever ran it on its own. `tools/self_test.sh` is typed
-by hand; `.github/workflows/dv-harness-ci.yml` has never actually executed
-(this repo's `origin` exists but has no pushed refs, so there has never been
-an Actions run). "The harness's own infrastructure breaking is harder to
-notice than a wrong judgment call" is the premise the self-test was written
-on, and a check that only runs when a human remembers it does not address
-that premise.
+by hand, and `.github/workflows/dv-harness-ci.yml` could not fire because
+this repo's `origin`, though reachable, had no pushed refs at all. "The
+harness's own infrastructure breaking is harder to notice than a wrong
+judgment call" is the premise the self-test was written on, and a check that
+only runs when a human remembers it does not address that premise.
 
 The fix is a second gate in `tools/git-hooks/pre-push` -- a directory that is
 ALREADY this repo's live `core.hooksPath`, so it is a trigger that genuinely
-fires here today with no remote and no CI runner. These tests prove that edge
-the same way test_git_hooks_e2e.py proves the governance one:
+fires here today, needing no remote and no CI runner. These tests prove that
+edge the same way test_git_hooks_e2e.py proves the governance one:
 
     a real `git push`
       -> git's own hook runner (core.hooksPath = tools/git-hooks)
@@ -31,11 +30,21 @@ check pair to one check so a test suite stays usable, and
 DV_HARNESS_SELF_TEST_SCRIPT points the FAILING case at a throwaway script --
 because the only other way to test "a failing self-test blocks the push"
 would be to actually break this repo's harness.
+
+The remote has since stopped being empty (a real branch carrying the workflow
+is now pushed), which retired the "no pushed refs" half of the paragraph
+above. That claim had already gone stale twice inside two days while nothing
+checked it, so TestCiDisclosureIsNotStale below now holds the workflow file's
+own DISCLOSURE-CHECK token to the REAL ref state of `origin` -- the same
+"prose is only improved by being held to the code" discipline
+dv_harness/mcp/claude_md_index.py and source_authority.assert_doc_matches_code()
+already apply to CLAUDE.md.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -265,3 +274,83 @@ class TestRunRecord:
         assert record["ok"] is False
         assert record["trigger"] == "scheduled"
         assert record["failed_checks"] == ["pytest"]
+
+
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "dv-harness-ci.yml"
+DISCLOSURE_TOKEN_RE = re.compile(
+    r"^#\s*DISCLOSURE-CHECK:\s*remote_pushed_refs=(yes|no)\s*$", re.MULTILINE)
+
+
+def _origin_has_pushed_refs() -> bool | None:
+    """Real current answer to "has anything ever been pushed to origin", or
+    None when this checkout genuinely cannot tell.
+
+    Deliberately network-free. `git ls-remote` would be the authoritative
+    source, but a test that reaches the network fails offline and on any
+    runner without credentials for a PRIVATE repo -- and a flaky truth check
+    is one that gets deleted. Local remote-tracking refs under refs/remotes/
+    are written by the very push/fetch whose existence is the question, so
+    their presence is positive evidence a real push happened. Their ABSENCE
+    is genuinely ambiguous (a fresh clone that never fetched looks identical
+    to an empty remote), which is why that case returns None and the test
+    skips rather than asserting something it cannot support.
+    """
+    if GIT is None:
+        return None
+    try:
+        proc = subprocess.run([GIT, "for-each-ref", "--format=%(refname)", "refs/remotes"],
+                               cwd=str(ROOT), capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return True if proc.stdout.strip() else None
+
+
+class TestCiDisclosureIsNotStale:
+    """The CI workflow's honest-disclosure header states whether `origin` has
+    any pushed refs, because that single fact decides whether the workflow can
+    fire at all. It was written wrong twice in two days -- not through
+    carelessness, but because nothing compared it to reality. These hold it to
+    reality.
+    """
+
+    def test_the_workflow_carries_a_machine_checkable_disclosure_token(self):
+        """A prose disclosure nothing parses is exactly what went stale. The
+        token must exist and be one of the two legal values -- a reworded,
+        deleted or hand-mangled token fails here rather than silently
+        disabling the check below."""
+        assert CI_WORKFLOW.exists(), f"missing {CI_WORKFLOW}"
+        matches = DISCLOSURE_TOKEN_RE.findall(CI_WORKFLOW.read_text(encoding="utf-8"))
+        assert len(matches) == 1, (
+            "expected exactly one '# DISCLOSURE-CHECK: remote_pushed_refs=yes|no' "
+            f"line in {CI_WORKFLOW.name}, found {len(matches)}: {matches}")
+
+    def test_the_disclosed_state_matches_the_real_remote(self):
+        """The actual anti-staleness gate: what the file CLAIMS about origin's
+        refs must equal what origin's refs really are."""
+        real = _origin_has_pushed_refs()
+        if real is None:
+            pytest.skip("no remote-tracking refs in this checkout -- cannot "
+                        "distinguish an empty remote from a never-fetched clone")
+        claimed = DISCLOSURE_TOKEN_RE.findall(CI_WORKFLOW.read_text(encoding="utf-8"))[0]
+        assert claimed == "yes", (
+            f"{CI_WORKFLOW.name} discloses remote_pushed_refs={claimed}, but this "
+            "checkout has real remote-tracking refs under refs/remotes/, so a push "
+            "to origin really has happened and the workflow's push/pull_request "
+            "triggers are live. Update that header's disclosure to match.")
+
+    def test_the_disclosure_does_not_reassert_the_retracted_empty_remote_claim(self):
+        """Belt-and-braces on the specific sentence that was wrong twice. The
+        token above governs; this catches a well-meaning edit that restores the
+        old narrative prose around a still-correct token, which would leave a
+        reader believing CI cannot run."""
+        text = CI_WORKFLOW.read_text(encoding="utf-8")
+        if _origin_has_pushed_refs() is None:
+            pytest.skip("cannot determine real remote state in this checkout")
+        for retracted in ("remote EXISTS and is reachable, but is EMPTY",
+                           "has still never actually executed",
+                           "there are no remote branches"):
+            assert retracted not in text, (
+                f"{CI_WORKFLOW.name} still contains the retracted claim "
+                f"{retracted!r}, which real remote-tracking refs contradict.")

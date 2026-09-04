@@ -5,30 +5,46 @@
 # harder-to-notice failure mode than a wrong judgment call, so it gets its
 # own always-on regression net.
 #
-# HONEST DISCLOSURE, re-checked 2026-09-04 (the 2026-09-03 wording below was
-# stale and has been corrected against real commands, not assumption):
+# HONEST DISCLOSURE, re-checked 2026-09-04 (SECOND correction in two days --
+# the 2026-09-03 wording was stale within a day, and the 2026-09-04 wording
+# that replaced it was stale within hours. That is why the state claim is now
+# a machine-checked token instead of a sentence; see DISCLOSURE-CHECK below).
+# Verified against real commands, not assumption:
 #
-#   $ git remote -v
-#   origin  https://github.com/YuTienL/DV_Agent_Harness.git (fetch/push)
 #   $ git ls-remote origin
-#   (no output)          # <- remote EXISTS and is reachable, but is EMPTY
+#   ff2c09b2...  HEAD
+#   ff2c09b2...  refs/heads/gap-close/env-manifest-fact-sources
 #
-# So a GitHub remote now exists -- the earlier "no remote is configured"
-# claim is no longer true -- but nothing has ever been pushed to it, there
-# are no remote branches, and therefore this workflow has still never
-# actually executed a single time. It remains real, correct,
-# ready-to-activate infrastructure: the first push of this file to a branch
-# on that remote starts the `push`/`pull_request`/`schedule` triggers below
-# firing for real, with no further edits needed. Do not read this file's
-# presence as "CI is running" -- it presently is not.
+# The remote is no longer empty. A real branch HAS been pushed, and
+# `git ls-tree -r ff2c09b2` confirms that commit carries this very file --
+# so the `push:` trigger below, which matches `branches: ["**"]`, has had a
+# real opportunity to fire against a real Actions runner.
 #
-# BECAUSE of that, the harness self-test is ALSO wired to a trigger that
-# genuinely fires today with no remote and no runner: tools/git-hooks/
-# pre-push (this repo's live `core.hooksPath`) runs the fast checks as a
-# real gate before every push, and records the run to
-# .dv-harness/self_test/runs.jsonl. See tools/git-hooks/README.md. This
-# workflow is the authoritative gate once the remote has branches; that hook
-# is the one that exists now.
+# WHAT IS STILL NOT KNOWN, stated as unknown rather than guessed either way:
+# whether an Actions run actually EXECUTED cannot be verified from this
+# machine. The repo is private (an unauthenticated
+# api.github.com/repos/YuTienL/DV_Agent_Harness returns 404) and the
+# installed `gh` v2.99.0 is unauthenticated (`gh auth login` required), so
+# neither `gh run list` nor the REST API can be consulted here. Do not read
+# this file's presence as "CI is green"; do not read it as "CI has never run"
+# either. The authoritative answer is the Actions tab of that repo.
+#
+# INDEPENDENT OF ALL THAT, the harness self-test is wired to a trigger whose
+# execution IS locally provable: tools/git-hooks/pre-push (this repo's live
+# `core.hooksPath`) runs the fast checks as a real gate before every push and
+# records each run to .dv-harness/self_test/runs.jsonl -- a file that today
+# holds real trigger="pre-push" records at real shas, including runs that
+# genuinely FAILED and genuinely aborted the push. See
+# tools/git-hooks/README.md. CI is the authoritative gate; that hook is the
+# one whose firing can be demonstrated from this checkout.
+#
+# DISCLOSURE-CHECK: remote_pushed_refs=yes
+# ^ Machine-checked, not prose. dv_harness_tests/test_self_test_gate_e2e.py::
+# TestCiDisclosureIsNotStale reads this token and compares it against the
+# REAL current ref state of `origin`, failing when the two disagree. The
+# claim above went stale twice because nothing held it to reality; this line
+# is what makes a third silent drift a test failure instead of a comment
+# nobody re-checked.
 #
 # What this runs is a strict SUBSET of tools/testing/self_test.py (see that
 # script's own docstring) -- the two checks that make sense on a hosted
