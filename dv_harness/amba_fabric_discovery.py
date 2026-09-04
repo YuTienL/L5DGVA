@@ -2209,6 +2209,12 @@ def build_fabric_vip_bind_matrix(netlist: FabricNetlist, traces) -> list:
                     "parent_row_id": trace.interface_id,
                     "fabric_port": f"{trace.interface_id} [branch {idx}]",
                     "endpoint": _endpoint_cell(trace, branch),
+                    # The bare hierarchy, alongside the rendered `endpoint`
+                    # cell: AMBA-22's `endpoint_hierarchy` column is a path a
+                    # downstream consumer resolves, not display text, and
+                    # re-parsing it back out of "path (module)" in another
+                    # module would be a second place to get it wrong.
+                    "endpoint_instance_path": branch.endpoint_instance_path or "",
                     "trace_path": " -> ".join(h.instance_path for h in branch.hops) or "-",
                     "trace_status": branch.status,
                 })
@@ -2218,6 +2224,7 @@ def build_fabric_vip_bind_matrix(netlist: FabricNetlist, traces) -> list:
             parent.update({
                 "endpoint": f"{len(children)} branches enumerated below "
                             f"({trace.status})",
+                "endpoint_instance_path": MULTIPLE_BRANCH_PARENT_BIND,
                 "trace_path": "-",
                 "proposed_vip_bind_hierarchy": MULTIPLE_BRANCH_PARENT_BIND,
                 "vip_role": REQUIRED_HUMAN_INPUT,
@@ -2241,6 +2248,7 @@ def build_fabric_vip_bind_matrix(netlist: FabricNetlist, traces) -> list:
         row = dict(base)
         row.update({
             "endpoint": _endpoint_cell(trace, branch),
+            "endpoint_instance_path": (branch.endpoint_instance_path or "") if branch else "",
             "trace_path": (" -> ".join(h.instance_path for h in branch.hops)
                            if branch else "-") or "-",
         })
@@ -2286,6 +2294,7 @@ def _bridge_second_side_rows(netlist: FabricNetlist, trace: FabricPortTrace,
             "external_endpoint_role": _external_endpoint_role(bundle),
             "endpoint": f"{bridge.bridge_instance_path} ({bridge.bridge_module}) "
                         "downstream side -- what lies beyond it is a separate trace",
+            "endpoint_instance_path": bridge.bridge_instance_path,
             "trace_path": f"{trace.fabric_instance_path} -> "
                           f"{bridge.bridge_instance_path}",
             "trace_status": TraceTerminationStatus.PROTOCOL_BRIDGE_FOUND.value,

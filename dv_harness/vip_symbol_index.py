@@ -73,9 +73,49 @@ _FIELD_RE = re.compile(
     r"(?:\s*\[[^\]]*\])*\s+"
     r"(?P<name>[A-Za-z_]\w*)\s*(?:=[^;]*)?;"
 )
+# Class-scope TLM analysis-connection declarations -- an analysis port/export/
+# imp/fifo. Split out from `_FIELD_RE` rather than folded into it because
+# `_FIELD_RE`'s dtype alternation cannot express a parameterized type at all
+# (`uvm_analysis_port#(txn) ap;` matches nothing there), and because these are
+# not config knobs: they are the CONNECTION POINTS of a UVM environment, which
+# is what makes a scoreboard's real ingress discoverable without reading a
+# single method body. Restricted to the analysis family on purpose -- a general
+# "any parameterized declaration" regex would sweep queues, associative arrays
+# and typedef'd handles into the same list and make the connection points
+# unfindable again.
+_ANALYSIS_PORT_RE = re.compile(
+    r"^\s*(?P<port_type>uvm_(?:analysis_port|analysis_export|analysis_imp\w*|"
+    r"tlm_analysis_fifo|analysis_fifo))\s*"
+    r"(?:#\s*\((?P<params>[^)]*)\)\s*)?"
+    r"(?P<name>[A-Za-z_]\w*)\s*"
+    r"(?P<dim>(?:\[[^\]]*\])*)\s*;"
+)
+
+#: `port_type` prefix -> the connection DIRECTION the UVM class library gives
+#: it. An export/imp/fifo RECEIVES transactions (it is an ingress a monitor can
+#: be connected to); a port SENDS them. Nothing here is inferred from the
+#: declared name, only from the UVM base type actually written in the source.
+_ANALYSIS_KIND_BY_PREFIX: tuple = (
+    ("uvm_analysis_port", ("ANALYSIS_PORT", "OUTGOING")),
+    ("uvm_analysis_export", ("ANALYSIS_EXPORT", "INGRESS")),
+    ("uvm_analysis_imp", ("ANALYSIS_IMP", "INGRESS")),
+    ("uvm_tlm_analysis_fifo", ("ANALYSIS_FIFO", "INGRESS")),
+    ("uvm_analysis_fifo", ("ANALYSIS_FIFO", "INGRESS")),
+)
+
 _COMMENT_RE = re.compile(r"//.*$")
 # A line that opens or continues a body -- used only to SKIP, never to store.
 _PROTECTED_RE = re.compile(r"^\s*`p(?:rotect|rotected)\b|^\s*`pragma\s+protect", re.IGNORECASE)
+
+
+def analysis_port_kind(port_type: str) -> tuple:
+    """`(kind, direction)` for one UVM analysis base type. Longest prefix wins
+    so `uvm_analysis_imp_master` (a `uvm_analysis_imp_decl` product) is an IMP
+    rather than falling through to a bare port match."""
+    for prefix, kinds in sorted(_ANALYSIS_KIND_BY_PREFIX, key=lambda x: -len(x[0])):
+        if port_type.startswith(prefix):
+            return kinds
+    return ("ANALYSIS_UNKNOWN", "UNKNOWN")
 
 
 class VipSymbolIndexError(ValueError):
@@ -134,6 +174,7 @@ def index_source_text(text: str, file_label: str) -> list:
                 "line": lineno,
                 "methods": [],
                 "config_fields": [],
+                "analysis_ports": [],
             }
             classes.append(current)
             continue
@@ -158,6 +199,25 @@ def index_source_text(text: str, file_label: str) -> list:
                 # body: the regex's own `[^;]*` inside parentheses cannot span
                 # past the signature.
                 "arguments": args.strip() if args else None,
+                "file": file_label,
+                "line": lineno,
+            })
+            continue
+
+        m = _ANALYSIS_PORT_RE.match(line)
+        if m:
+            params = (m.group("params") or "").strip()
+            # Only the FIRST type parameter: for `uvm_analysis_imp#(T, IMP)`
+            # the second is the implementing class, not the transaction.
+            txn = params.split(",")[0].strip() if params else None
+            kind, direction = analysis_port_kind(m.group("port_type"))
+            current["analysis_ports"].append({
+                "name": m.group("name"),
+                "port_type": m.group("port_type"),
+                "kind": kind,
+                "direction": direction,
+                "transaction_type": txn or None,
+                "array_dimension": (m.group("dim") or "").strip() or None,
                 "file": file_label,
                 "line": lineno,
             })
@@ -273,6 +333,20 @@ def assert_no_bodies_retained(doc: dict) -> None:
                         "which can only come from a statement body. The index must hold "
                         "declarations and locations only."
                     )
+        for port in cls.get("analysis_ports", []):
+            # The two free-text fields an analysis-port entry carries. Held to
+            # the same invariant as a method signature: a `#(...)` parameter
+            # list and an array dimension are declarations, and nothing that
+            # could only come from a statement may appear in either.
+            for value in (port.get("transaction_type") or "", port.get("array_dimension") or ""):
+                for token in _BODY_TOKENS:
+                    if token in value:
+                        raise VipSymbolIndexError(
+                            f"VIP_SYMBOL_INDEX_BODY_LEAK: analysis port "
+                            f"{cls['name']}.{port['name']} at {port['file']}:{port['line']} "
+                            f"stored text containing {token!r}, which can only come from a "
+                            "statement body. The index must hold declarations and locations only."
+                        )
 
 
 def save_symbol_index(doc: dict, path) -> None:
@@ -313,6 +387,12 @@ def find_symbol(doc: dict, name: str) -> list:
                 hits.append({"kind": "field", "name": f"{cls['name']}.{field['name']}",
                              "data_type": field.get("data_type"),
                              "file": field["file"], "line": field["line"]})
+        for port in cls.get("analysis_ports", []):
+            if needle in port["name"].lower():
+                hits.append({"kind": "analysis_port",
+                             "name": f"{cls['name']}.{port['name']}",
+                             "data_type": port.get("port_type"),
+                             "file": port["file"], "line": port["line"]})
     return hits
 
 
