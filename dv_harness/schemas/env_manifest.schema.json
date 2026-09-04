@@ -268,6 +268,54 @@
                               "unpacked_dims": { "type": ["string", "null"] }
                             }
                           }
+                        },
+                        "instances": {
+                          "type": "array",
+                          "description": "Module instantiations inside this module's body, with their port connections. Added 2026-09-04 alongside verible_parser.py's instantiation extraction: this is the structural wiring a port-level connectivity graph is built from (dv_harness/amba_fabric_discovery.py's AMBA-7..14 endpoint tracing), which a declaration-only view cannot express. NOT in `required`, so a manifest written before that extraction existed still validates rather than being forced through a version bump for an additive fact.",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["instance_name", "module_name", "connections"],
+                            "properties": {
+                              "instance_name": { "type": ["string", "null"] },
+                              "module_name": { "type": ["string", "null"] },
+                              "connections": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object", "additionalProperties": false,
+                                  "required": ["port_name", "position", "expr_text", "nets"],
+                                  "properties": {
+                                    "port_name": {
+                                      "type": ["string", "null"],
+                                      "description": "null for a POSITIONAL connection -- resolving which formal port that slot names needs the instantiated module's own port list, which is a different file's fact."
+                                    },
+                                    "position": {
+                                      "type": "integer",
+                                      "description": "0-based slot in the port-actual list, counted from the comma separators (verible elides an omitted positional slot entirely)."
+                                    },
+                                    "expr_text": { "type": ["string", "null"] },
+                                    "nets": {
+                                      "type": "array", "items": { "type": "string" },
+                                      "description": "Base identifiers the connected expression references -- what a net-level graph joins on. Empty for an explicitly-unconnected port or a constant."
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "continuous_assigns": {
+                          "type": "array",
+                          "description": "Continuous `assign` statements in this module's body. AMBA-7 requires a trace to cross wire assignments and aliases; a 1:1 lhs/rhs pair is exactly such an alias. Added 2026-09-04, non-required for the same backward-compatibility reason as `instances`.",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["lhs_text", "rhs_text", "lhs_nets", "rhs_nets"],
+                            "properties": {
+                              "lhs_text": { "type": ["string", "null"] },
+                              "rhs_text": { "type": ["string", "null"] },
+                              "lhs_nets": { "type": "array", "items": { "type": "string" } },
+                              "rhs_nets": { "type": "array", "items": { "type": "string" } }
+                            }
+                          }
                         }
                       }
                     }

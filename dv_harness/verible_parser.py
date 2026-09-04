@@ -31,7 +31,31 @@ declarations (name/data-type-text/unpacked-dimension-text, e.g. a memory
 array's `[0:DEPTH-1]`). Signals declared inside a procedural block
 (always_ff/always_comb/initial) are deliberately NOT surfaced -- this walks
 `kModuleItemList`'s own DIRECT children only, which is exactly the
-module-level declaration scope "signal hierarchy" means here. Expression
+module-level declaration scope "signal hierarchy" means here.
+
+Since 2026-09-04 it ALSO extracts, per module, the STRUCTURAL WIRING that a
+declaration-only view cannot express: every module instantiation (instance
+name + instantiated module name), each instantiation's port connections
+(named `.p(net)` and positional alike, with the connected expression's base
+identifiers), and every continuous `assign` (its lhs/rhs base identifiers).
+That is the raw data a port-level connectivity graph is built from -- "this
+instance's port P connects to net N, which also connects to that instance's
+port Q" -- and it was the single missing prerequisite for AMBA-7..14's
+endpoint tracing (`dv_harness/amba_fabric_discovery.py`), which consumes it.
+verible's tree already carried these nodes (`kInstantiationBase` /
+`kGateInstance` / `kPortActualList` / `kActualNamedPort` /
+`kActualPositionalPort` / `kContinuousAssignmentStatement`, every tag
+confirmed live against this install, not read from documentation); nothing
+walked them.
+
+Instantiations are collected from anywhere inside the module body,
+generate blocks included (AMBA-7 lists "generate blocks" among the
+structures a trace must cross), stopping only at a NESTED module
+declaration so its contents are not mis-scoped into the enclosing module.
+Generate-block CONDITIONS are not evaluated -- this is a parser, not an
+elaborator -- so a generate-conditional instance is reported as present;
+a consumer that needs elaboration-time truth must say so rather than
+assume this settled it. Expression
 text (parameter defaults, packed/unpacked dimension bounds) is recovered by
 slicing the ORIGINAL SOURCE TEXT at a subtree's own min-start/max-end span,
 never by re-deriving it from the parse tree's operator/operand structure --
@@ -95,11 +119,50 @@ class SignalInfo:
 
 
 @dataclass
+class PortConnectionInfo:
+    """One `.port(expr)` or positional connection on one instantiation.
+
+    `port_name` is None for a POSITIONAL connection -- resolving which formal
+    port that position names requires the instantiated module's own port list,
+    which is a different file's fact and therefore a consumer's job, not this
+    per-file parser's. `position` is the 0-based slot in the port-actual list
+    for exactly that resolution. `nets` holds the BASE identifiers the
+    connected expression references (e.g. `bus[7:0]` -> ["bus"], `{a, b}` ->
+    ["a", "b"], `1'b0` -> []), which is what a net-level graph joins on;
+    `expr_text` keeps the original source slice so nothing is lost."""
+    port_name: Optional[str]
+    position: int
+    expr_text: Optional[str]
+    nets: list = field(default_factory=list)
+
+
+@dataclass
+class InstanceInfo:
+    """One module instantiation inside a module body."""
+    instance_name: Optional[str]
+    module_name: Optional[str]
+    connections: list = field(default_factory=list)   # list[PortConnectionInfo]
+
+
+@dataclass
+class ContinuousAssignInfo:
+    """One continuous `assign lhs = rhs;`. AMBA-7 requires a trace to cross
+    "wire assignments / aliases", and a net renamed by an assign is exactly
+    that: `lhs_nets`/`rhs_nets` are the base identifiers on each side."""
+    lhs_text: Optional[str]
+    rhs_text: Optional[str]
+    lhs_nets: list = field(default_factory=list)
+    rhs_nets: list = field(default_factory=list)
+
+
+@dataclass
 class ModuleInfo:
     name: Optional[str]
     parameters: list = field(default_factory=list)   # list[ParamInfo]
     ports: list = field(default_factory=list)         # list[PortInfo]
     signals: list = field(default_factory=list)       # list[SignalInfo]
+    instances: list = field(default_factory=list)     # list[InstanceInfo]
+    continuous_assigns: list = field(default_factory=list)  # list[ContinuousAssignInfo]
 
 
 @dataclass
@@ -299,6 +362,132 @@ def _extract_signals(module_node, source: str) -> list:
     return out
 
 
+def _collect_in_module_body(module_node, tag: str) -> list:
+    """Every node with `tag` anywhere inside this module's body, INCLUDING
+    inside generate blocks, but never descending into a nested
+    `kModuleDeclaration` (whose contents belong to that inner module, not
+    this one -- the same mis-scoping `_find_all_nonoverlapping()` guards
+    against for module declarations themselves)."""
+    results: list = []
+
+    def _rec(n, is_root: bool):
+        if n is None or not isinstance(n, dict):
+            return
+        if not is_root and n.get("tag") == "kModuleDeclaration":
+            return
+        if n.get("tag") == tag and "children" in n:
+            results.append(n)
+            return
+        for c in n.get("children", []) or []:
+            _rec(c, False)
+
+    _rec(module_node, True)
+    return results
+
+
+def _reference_base_names(node) -> list:
+    """The BASE identifier of every reference in an expression subtree, in
+    source order and de-duplicated.
+
+    Uses `_find_all_nonoverlapping(..., "kReference")` deliberately: it stops
+    at each outermost reference, so an INDEX expression nested inside one
+    (`bus[IDX]`, whose `IDX` is its own inner `kReference`) does not leak in
+    as if it were a second connected net. `{a, b}` still yields both, because
+    a concatenation's elements are sibling references, not nested ones."""
+    out: list = []
+    for ref in _find_all_nonoverlapping(node, "kReference"):
+        name = _first_leaf_text(ref, "SymbolIdentifier")
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def _extract_port_connections(gate_instance, source: str) -> list:
+    """The port-actual list of one `kGateInstance`. Named and positional
+    connections are both real and both kept; an explicitly-unconnected port
+    (`.p()`) yields an entry with no nets rather than being dropped, since
+    "this port is deliberately left open" is itself a connectivity fact.
+
+    `position` is counted from the COMMA SEPARATORS, not from how many port
+    nodes have been seen (confirmed against live verible output, 2026-09-04):
+    an OMITTED positional slot -- `leaf u (a, , c)`, meaning "leave port 1
+    open" -- is elided from the tree entirely, only its commas survive. A
+    node-counting index would therefore call `c` position 1 and silently wire
+    it to the wrong formal port of every module instantiated that way."""
+    actual_list = _find_first(gate_instance, "kPortActualList")
+    if actual_list is None:
+        return []
+    out: list = []
+    position = 0
+    for child in actual_list.get("children", []) or []:
+        if not isinstance(child, dict):
+            continue
+        tag = child.get("tag")
+        if tag == ",":
+            position += 1
+            continue
+        if tag == "kActualNamedPort":
+            port_name = _first_leaf_text(child, "SymbolIdentifier")
+            paren = _direct_child_tagged(child, "kParenGroup")
+            expr = _find_first(paren, "kExpression") if paren is not None else None
+            out.append(PortConnectionInfo(
+                port_name=port_name,
+                position=position,
+                expr_text=_text_of(expr, source) if expr is not None else None,
+                nets=_reference_base_names(expr) if expr is not None else [],
+            ))
+        elif tag == "kActualPositionalPort":
+            expr = _find_first(child, "kExpression")
+            out.append(PortConnectionInfo(
+                port_name=None,
+                position=position,
+                expr_text=_text_of(expr, source) if expr is not None else None,
+                nets=_reference_base_names(expr) if expr is not None else [],
+            ))
+    return out
+
+
+def _extract_instances(module_node, source: str) -> list:
+    """Every module instantiation in this module's body.
+
+    verible reuses `kDataDeclaration` for both a signal declaration and an
+    instantiation; the discriminator is the `kInstantiationBase` child, which
+    only an instantiation has. One declaration may instantiate several
+    instances (`sub u0(...), u1(...);`), so every `kGateInstance` under it is
+    emitted separately."""
+    out: list = []
+    for decl in _collect_in_module_body(module_node, "kDataDeclaration"):
+        base = _find_first(decl, "kInstantiationBase")
+        if base is None:
+            continue
+        inst_type = _direct_child_tagged(base, "kInstantiationType")
+        module_name = _first_leaf_text(inst_type, "SymbolIdentifier")
+        for gate in _find_all_nonoverlapping(base, "kGateInstance"):
+            out.append(InstanceInfo(
+                instance_name=_first_leaf_text(gate, "SymbolIdentifier"),
+                module_name=module_name,
+                connections=_extract_port_connections(gate, source),
+            ))
+    return out
+
+
+def _extract_continuous_assigns(module_node, source: str) -> list:
+    """Every continuous `assign` in this module's body, one entry per
+    assignment (`assign a = b, c = d;` is two)."""
+    out: list = []
+    for stmt in _collect_in_module_body(module_node, "kContinuousAssignmentStatement"):
+        for nva in _find_all_nonoverlapping(stmt, "kNetVariableAssignment"):
+            lhs = _direct_child_tagged(nva, "kLPValue")
+            rhs = _direct_child_tagged(nva, "kExpression")
+            out.append(ContinuousAssignInfo(
+                lhs_text=_text_of(lhs, source) if lhs is not None else None,
+                rhs_text=_text_of(rhs, source) if rhs is not None else None,
+                lhs_nets=_reference_base_names(lhs) if lhs is not None else [],
+                rhs_nets=_reference_base_names(rhs) if rhs is not None else [],
+            ))
+    return out
+
+
 def extract_modules(tree: dict, source: str) -> list:
     """The real module/port/signal extraction over an already-parsed
     verible syntax tree (see run_export_json()) plus the ORIGINAL source
@@ -315,6 +504,8 @@ def extract_modules(tree: dict, source: str) -> list:
             parameters=_extract_params(header, source) if header is not None else [],
             ports=_extract_ports(header, source) if header is not None else [],
             signals=_extract_signals(m, source),
+            instances=_extract_instances(m, source),
+            continuous_assigns=_extract_continuous_assigns(m, source),
         ))
     return modules
 
@@ -363,6 +554,15 @@ def to_dict(result: FileParseResult) -> dict:
                 "parameters": [vars(p) for p in mod.parameters],
                 "ports": [vars(p) for p in mod.ports],
                 "signals": [vars(s) for s in mod.signals],
+                "instances": [
+                    {
+                        "instance_name": inst.instance_name,
+                        "module_name": inst.module_name,
+                        "connections": [vars(c) for c in inst.connections],
+                    }
+                    for inst in mod.instances
+                ],
+                "continuous_assigns": [vars(a) for a in mod.continuous_assigns],
             }
             for mod in result.modules
         ],

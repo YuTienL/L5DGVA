@@ -1031,6 +1031,13 @@ _ALL_AMBA_SIGNALS = frozenset().union(
 )
 
 
+#: The public name for that same set. `amba_fabric_discovery.py` needs to ask
+#: "is this port-name token an AMBA signal at all" when grouping a module's
+#: ports into interfaces; it reads THIS union rather than rebuilding one, so
+#: there stays exactly one AMBA signal vocabulary in the codebase.
+ALL_AMBA_SIGNAL_NAMES = _ALL_AMBA_SIGNALS
+
+
 def _resolve_ahb_variant(toks: set) -> tuple:
     """AHB vs AHB-Lite. The discriminator is the PRESENCE of arbitration /
     split-transaction signalling, which AHB-Lite (single master, no split)
