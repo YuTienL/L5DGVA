@@ -307,3 +307,71 @@ suites were running, including `c2ed261` which committed the Job-Memory
 — `dv_harness/trend_analysis.py`, `dv_harness_tests/test_trend_analysis.py`, plus
 scoped extensions to `evidence_db.py`, `lsf_client.py`, `regression_reporter.py`,
 `dashboard.py`, `cli.py` and `job_state_schema.json`.
+
+---
+
+## 8. Independent re-verification pass (2026-09-04)
+
+This section was added by a **later, separate** gap-closing agent that received the
+SAME Section 2 audit finding again (the audit text it was handed still described
+2a as PARTIAL and 2b/2c as BLOCKED). That audit was **stale**: it predates commit
+`3ad311c` and does not cite `dv_harness/trend_analysis.py` at all. Re-checked
+against current code, every gap it names is already closed.
+
+**Verdict: NO_ACTION_NEEDED — no file was modified in this pass.** The three items
+were re-verified as READY rather than rebuilt.
+
+### Why each of the audit's five "what's missing" bullets is already closed
+
+| Audit's missing piece | Current real evidence |
+| --- | --- |
+| (1) stop overwriting `regression_verdicts`; keep pass/fail history | `evidence_db.py:472-478` appends to `regression_verdict_history` on the **same call** as the snapshot upsert, so no call site can grow a history that disagrees with it. |
+| (2) wire `insert_coverage_sample` into a real call site | `dashboard.py:1534` `_ingest_coverage_summary_to_evidence_db()`, invoked at `dashboard.py:1606` off the real coverage path. The audit's "zero production call sites" no longer holds. |
+| (3) add a runtime column to `jobs`, populate from real LSF times | Column: `evidence_db.py:142` + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` at `:113`. Populated at `lsf_client.py:858-861` from the `RUN_TIME` column `_run_bjobs()` already requested, recorded **monotonically** so a forgotten-job poll cannot shrink a real duration. |
+| (4) define and populate a license-hours metric | `trend_analysis.py:57-61` `LICENSE_HOURS_MODEL` + `daily_rollup()` at `:173`. Labelled in the CLI output as a derived **ESTIMATE**, not a license-manager reading — the honest framing, not a fabricated measurement. |
+| (5) an actual daily-rollup / day-over-day query | `daily_rollup()` (`trend_analysis.py:93-175`, three `strftime(...) GROUP BY` queries) and `day_over_day()` (`:184-206`). |
+
+2b's "zero matches for bisect" and 2c's "no runtime-baseline code" are likewise
+superseded: `bisect_regression_to_rtl_commit()` (`trend_analysis.py:321-415`) and
+`detect_runtime_anomalies()` (`:439-510`).
+
+### Independent end-to-end proof (not the committed tests)
+
+A fresh verification script was written from scratch — deliberately **not** reusing
+`test_trend_analysis.py`'s helpers — driving a real temp git repo (real commits), a
+real DuckDB store through the real production insert APIs and the real
+`JobState` dataclass, then the real `trend_report()`. All 12 checks passed,
+including the discriminating negatives that a naive implementation would fail:
+
+- pass-rate 66.67% computed from **append-only history** (2 of 3 verdicts).
+- coverage 50.0% **bins-weighted** across two categories (100/200 bins), not a mean of percents.
+- runtime + license-hour curves from 7 real `runtime_seconds` rows.
+- `day_over_day` honestly `None` on a single day of evidence — no fabricated zero baseline.
+- bisect narrowed to the **one** real RTL commit; the docs-only commit in the same
+  range was correctly excluded (`IDENTIFIED_COMMIT`, `range=2`, `rtl_files=['dut.sv']`).
+- a still-green pattern produced **no** regression.
+- the 900s PASS flagged at 8.96x; the six ~100s baseline runs were not, and the
+  baseline (`median=100.5`, `n=6`) **excluded the outlier itself**.
+- the same regression against an unrelated repo returned `SHA_NOT_IN_REPO`, not a
+  silent empty range that would read as "no RTL commit is responsible".
+
+The real CLI was also run against this repo: `python -m dv_harness trend` exits 0
+and prints empty curves with "fewer than 2 days of evidence" — correct, since this
+harness repo has no real regression jobs of its own.
+
+### Test suites re-run this pass (all pass, nothing modified)
+
+| Suite | Result |
+| --- | --- |
+| `test_trend_analysis.py` | 51 passed (544s) |
+| trend + evidence_db + evidence_db_wiring + lsf_client + regression_reporter + mcp_query_regression + mcp_read_only_boundary + coverage_analysis | **262 passed** (826s) |
+| `test_evidence_db.py` + `test_evidence_db_wiring.py` + both MCP suites | 84 passed (227s) |
+| `test_dashboard_cli_checklist_rendering.py` + `test_dashboard_interactive.py` | 65 passed (109s) |
+
+### Note for future audits of this section
+
+The stale finding was reproducible because a grep for `bisect|daily|rollup|
+license_hour` scoped to the modules the audit expected (`evidence_db.py`,
+`regression_reporter.py`) misses the answer: this capability deliberately lives in
+a **separate read-only module**, `trend_analysis.py`, which never inserts or
+migrates. Any re-audit of Section 2 should read that module first.
