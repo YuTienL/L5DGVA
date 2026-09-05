@@ -3227,7 +3227,7 @@ shared `execute_verb()`. `plan` exits 2 when any contender is held back and
 `capacity` exits 2 when nothing was measured -- a CI-visible "someone is waiting
 on capacity", never an approval signal in either direction.
 
-Proven by `dv_harness_tests/test_resource_orchestrator.py` (50 tests) against
+Proven by `dv_harness_tests/test_resource_orchestrator.py` (52 tests) against
 this project's OWN real captured `lmutil lmstat` / `bqueues` transcripts,
 imported from `test_preflight.py` rather than re-typed and mutated only in the
 numbers that carry the meaning under test. The multi-job LSF state is a
@@ -3240,9 +3240,10 @@ alone grants all five contenders where the orchestrator grants two, the grant
 set shrinks with the measured capacity, an unmeasured capacity grants
 everything, a small request cannot jump a blocked head-of-line one, a project
 holding three farm slots loses to a newcomer that asked two hours later while
-the SAME pair reverts to FIFO once the live listing is withheld, and both
-ranking claims were mutation-checked (removing the anti-monopoly term, and
-removing head-of-line blocking, each fail exactly one test and nothing else).
+the SAME pair reverts to FIFO once the live listing is withheld, and all three
+ranking claims were mutation-checked (removing the anti-monopoly term,
+removing head-of-line blocking, and letting an unmeasured held-slot count read
+as zero -- each fails exactly one test and nothing else).
 
 **Disclosed residual.** (1) Like `cross_project_mining.py`,
 `confidence_calibration.py` and `verification_strategy.py` before it, this is

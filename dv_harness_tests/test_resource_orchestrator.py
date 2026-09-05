@@ -426,6 +426,33 @@ class TestRanking:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_a_partially_measured_fairness_signal_ranks_nothing(self):
+        """One project measurable, one not (its request names no root). Reading
+        the unknown as 0 would let a project nobody measured beat one measured
+        at three; sorting it last would penalise it for a measurement this
+        harness failed to take. Neither happens -- the term goes inert for
+        everyone and FIFO decides."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            hog = tmp / "hog"
+            d = hog / ".dv-harness" / "lsf" / "jobs"
+            d.mkdir(parents=True)
+            for jid in (101, 102, 103):
+                (d / f"{jid}.json").write_text(json.dumps({"job_id": jid}), encoding="utf-8")
+            live = _bjobs_records((101, "RUN"), (102, "RUN"), (103, "RUN"))
+            reqs = [_req("hog", "BUILD_DEBUG", root=str(hog), at="2026-09-06T08:00:00"),
+                    _req("rootless", "BUILD_DEBUG", at="2026-09-06T10:00:00")]
+            plan = ro.orchestrate(reqs, checks=_checks_with_seats(1), queue="vcs",
+                                  live_jobs=live)
+            by_pid = {a.project_id: a for a in plan.allocations}
+            assert by_pid["hog"].held_slots == 3
+            assert by_pid["rootless"].held_slots is None
+            # FIFO, not the half-measured fairness term.
+            assert by_pid["hog"].decision == ro.ALLOCATION_GRANTED
+            assert by_pid["rootless"].decision == ro.ALLOCATION_QUEUED
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_a_request_declaring_no_arrival_time_cannot_jump_ahead_of_one_that_does(self):
         reqs = [_req("undated", "BUILD_DEBUG"),
                 _req("dated", "BUILD_DEBUG", at="2026-09-06T23:59:00")]
@@ -728,6 +755,33 @@ class TestBoundaries:
         plan = ro.orchestrate([_req("a", "BUILD_DEBUG")], checks=None)
         assert plan.pressure["level"] == loop_budget.PRESSURE_UNKNOWN
         assert plan.capacity["measured"] is False
+
+    def test_an_injected_runner_reaches_preflights_own_checks_via_degradation(self):
+        """The one probing path, exercised: an explicitly injected transport
+        goes through `degradation.probe_resources()`, i.e. `check_license()` /
+        `check_queue_health()` themselves. Asserted by the REAL command strings
+        the injected runner was asked to run -- if this module ever grew a
+        probe of its own, those commands would not be preflight's."""
+        runner = _ScriptedRunner([_res(stdout=_lmstat_with(20, 18)),
+                                  _res(stdout=_bqueues_with(20, 15))])
+        plan = ro.orchestrate([_req("a", "BUILD_DEBUG", at="2026-09-06T08:00:00"),
+                               _req("b", "BUILD_DEBUG", at="2026-09-06T09:00:00"),
+                               _req("c", "BUILD_DEBUG", at="2026-09-06T10:00:00")],
+                              cfg={"preflight": {"license_server": "2900@host-a",
+                                                 "queue": "vcs",
+                                                 "license_features": ["VCSRuntime"]}},
+                              runner=runner, queue="vcs")
+        issued = [cmd for cmd, _timeout in runner.calls]
+        assert any("lmstat" in c and "2900@host-a" in c for c in issued), issued
+        assert any(c.startswith("bqueues") for c in issued), issued
+        # 20 licenses with 18 out is 2 free at 10% headroom (NOT below the
+        # 0.10 pressure fraction, so nothing is deferred); the queue has 5.
+        # The license is the binding constraint and exactly two are granted.
+        assert plan.pressure["level"] == loop_budget.PRESSURE_NONE
+        assert plan.capacity["binding_constraint"] == "license_free_seats"
+        assert plan.capacity["slots_available"] == 2
+        assert len(plan.by_decision(ro.ALLOCATION_GRANTED)) == 2
+        assert len(plan.by_decision(ro.ALLOCATION_QUEUED)) == 1
 
     def test_a_failing_job_lister_is_not_observed_rather_than_an_empty_farm(self):
         def boom(_vcuser):

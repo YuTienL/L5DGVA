@@ -2,9 +2,9 @@
 
 WHAT WAS MISSING, AND WHAT WAS ALREADY REAL
 -------------------------------------------
-Re-verified by direct search on 2026-09-06 before any of this was written. Two
-real per-job mechanisms already existed and neither was, or could be, a
-cross-job arbiter:
+Re-verified by direct search on 2026-09-06 before any of this was written.
+Three real mechanisms already existed, and none of them was -- or structurally
+could be -- a cross-job arbiter:
 
   * `preflight.check_license()` / `check_queue_health()` are real probes (a
     real `lmutil lmstat -a -c <server>` parse and a real `bqueues <queue>`
@@ -21,7 +21,8 @@ cross-job arbiter:
 A repo-wide grep for `cross_job` / `arbitrat` / `global_resource` /
 `resource_orchestr` / `multi_job` / `concurrent_jobs` over `dv_harness/` and
 `tools/` returned only AMBA bus-arbitration text, SoC shared-VIP ownership
-(`system_resource_*.py`, a different domain entirely -- VIP/agent/BFM
+(`system_resource_inventory.py` / `system_resource_registry.py` /
+`system_scheduling_plan.py` -- a different domain entirely: VIP/agent/BFM
 composition, not license seats or farm slots) and gate names. Nothing ranked
 two jobs against one measured pool.
 
@@ -502,10 +503,22 @@ RANKING_RULE = (
 )
 
 
-def _sort_key(alloc_input: Tuple[ResourceRequest, Any, Optional[int]]):
+def _sort_key(alloc_input: Tuple[ResourceRequest, Any, Optional[int]],
+              *, use_held: bool):
+    """Rule 1 -> 4 of `RANKING_RULE`, as one comparable tuple.
+
+    `use_held` is False whenever ANY contender's held-slot count is unknown.
+    The fairness term is then inert for EVERYONE and rule 3 (FIFO) decides.
+    The two alternatives are both wrong: reading an unknown as 0 would let a
+    project nobody measured beat one measured at three, and sorting an unknown
+    last would penalise a project for a measurement this harness failed to
+    take. A partially-measured signal cannot rank fairly, so it ranks nothing.
+    """
     req, decision, held = alloc_input
     tier = _TIER_BY_PRIORITY.get(decision.decision, 2)
-    held_key = (1, 0) if held is None else (0, held)
+    held_key = (held or 0) if use_held else 0
+    # A request that declares no arrival time sorts last within its tier rather
+    # than being given a fabricated one.
     at_key = (1, "") if not req.requested_at else (0, req.requested_at)
     return (tier, held_key, at_key, req.project_id, req.stage)
 
@@ -549,7 +562,8 @@ def arbitrate(requests: Sequence[Any],
             critical_stages=crit)
         scored.append((r, decision, held.get(r.project_id)))
 
-    scored.sort(key=_sort_key)
+    use_held = bool(scored) and all(h is not None for _r, _d, h in scored)
+    scored.sort(key=lambda item: _sort_key(item, use_held=use_held))
 
     allocations: List[Allocation] = []
     remaining = capacity.slots_available
