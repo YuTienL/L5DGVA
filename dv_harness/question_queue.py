@@ -1138,12 +1138,16 @@ class QuestionQueueStore:
           - trigger="stage_boundary": pass the stage that just completed;
             emits only when `stage` is one of DIGEST_BOUNDARY_STAGES (end of
             a regression run / coverage closure / re-audit cycle / signoff).
-            A caller wires this in by calling build_digest(store,
-            trigger="stage_boundary", stage=new_stage) right after its own
-            stage-transition code runs (not wired into engine.py itself in
-            this change -- engine.py's stage-transition path is owned by a
-            concurrent workstream this session; see this module's own
-            report for the exact call site a future integration should use).
+            WIRED on the real autonomous path since 2026-09-05:
+            engine.DVHarness._emit_question_digest_at_stage_boundary() calls
+            this (and compute_metrics()) from advance(), the single canonical
+            "the current stage completed successfully, move on" transition --
+            which loop() delegates to on every PASS and `dv-harness next`
+            calls directly. Every boundary crossing lands as one
+            QUESTION_QUEUE_DIGEST event in .dv-harness/events.jsonl, emitted
+            or not. Any OTHER caller wires in the same way: call this right
+            after its own stage-transition code runs, passing the stage that
+            just completed.
           - trigger="scheduled": emits only once >= min_hours_since_last
             has elapsed since the last real emission -- the "daily" cadence
             for a caller that polls without knowing the exact stage.

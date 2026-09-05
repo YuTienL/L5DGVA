@@ -4153,7 +4153,73 @@ class DVHarness:
                            "branches": sorted(branches), "armed_by": armed})
         return branches
 
+    def _emit_question_digest_at_stage_boundary(self, completed_stage: str) -> Optional[dict]:
+        """Fire question_queue's batched digest + the 4 tracking metrics at a
+        real regression-cycle boundary.
+
+        `question_queue.build_digest()`'s own docstring named this exact call
+        site and left it open: "A caller wires this in by calling
+        build_digest(store, trigger='stage_boundary', stage=new_stage) right
+        after its own stage-transition code runs (not wired into engine.py
+        itself in this change -- engine.py's stage-transition path is owned by
+        a concurrent workstream this session)". That workstream landed; this
+        is the wiring. Until it existed, `build_digest()` and
+        `compute_metrics()` each had exactly ONE caller in the whole repo --
+        the hand-typed `dv-harness question-queue digest` / `... status` CLI
+        verbs -- so an unattended `loop()` run batched nothing for a human to
+        answer and recorded none of the 4 metrics, exactly the DORMANT shape
+        the Methodology Consolidation Rule warns about.
+
+        advance() is the single canonical "the current stage finished
+        successfully, move on" path: loop() delegates to it on every PASS, and
+        commands.cmd_advance() (`dv-harness next`) calls it directly. Hooking
+        it here rather than in set_stage() is deliberate -- set_stage() and
+        human_redirect() also fire on human reroutes and on loop()'s
+        FAIL-edge routing, which are not "a stage completed" boundaries and
+        would emit a digest in the middle of a failure recovery.
+
+        Only DIGEST_BOUNDARY_STAGES (end of a regression run / coverage
+        closure / re-audit cycle / signoff) do any work -- build_digest()
+        enforces that itself, and it is re-checked here so an ordinary stage
+        transition does not pay for loading the queue at all. Never
+        real-time: an ordinary stage boundary emits nothing.
+
+        Best-effort by design, mirroring _file_waveform_dump_scope_question():
+        a question-queue failure must never turn a completed stage transition
+        into a crash. Returns None when nothing was emitted.
+        """
+        try:
+            from .question_queue import DIGEST_BOUNDARY_STAGES, QuestionQueueStore
+            if completed_stage not in DIGEST_BOUNDARY_STAGES:
+                return None
+            store = QuestionQueueStore(self.root, blackboard=self.blackboard)
+            digest = store.build_digest(trigger="stage_boundary", stage=completed_stage)
+            metrics = store.compute_metrics()
+        except Exception as exc:
+            self.store.event({"ts": now(), "stage": completed_stage,
+                               "event": "QUESTION_QUEUE_DIGEST_FAILED", "error": str(exc)})
+            return None
+        # Recorded on EVERY boundary crossing, including emitted=False. A
+        # metrics series with datapoints only on the cycles that happened to
+        # have pending questions is not a series -- and "this cycle had
+        # nothing to escalate" is itself citable evidence.
+        self.store.event({
+            "ts": now(), "stage": completed_stage,
+            "event": "QUESTION_QUEUE_DIGEST", "trigger": "stage_boundary",
+            "emitted": digest["emitted"], "batch_id": digest["batch_id"],
+            "question_count": len(digest["questions"]),
+            "by_owner": {owner: len(qs) for owner, qs in digest["by_owner"].items()},
+            "metrics": metrics,
+        })
+        return {"digest": digest, "metrics": metrics}
+
     def advance(self, user_goal: str = ""):
+        # QUESTION-QUEUE DIGEST BOUNDARY (2026-09-05): the stage being advanced
+        # PAST is the one that just completed, so it is captured here before
+        # any of the fan-out/graph resolution below can move current_stage. A
+        # no-op for every stage outside DIGEST_BOUNDARY_STAGES, and fail-soft.
+        self._emit_question_digest_at_stage_boundary(self.state.current_stage)
+
         # Graph-level parallel fan-out/join (2026-08-29): main_graph.json's
         # parallel_group/join_group metadata (ANALYSIS_G1: REQUIREMENTS_
         # TRACEABILITY/SOC_SCENARIO_PLANNER/INFRASTRUCTURE_AUDIT fanning out

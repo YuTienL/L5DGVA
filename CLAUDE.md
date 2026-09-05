@@ -1382,3 +1382,58 @@ independent-reading rule), `research/current_harness_baseline.md` (the Stage-0
 audit of what L5 already had, and what Stage 1 reused rather than rebuilt),
 `.claude/skills/research-ingestion/SKILL.md`, `.claude/agents/research-architect.md`,
 and `dv_harness/capability_evolution.py`.
+
+
+## Question-Queue Digest: Auto-Fired at Regression-Cycle Boundaries (2026-09-05)
+
+The 3-tier ask-a-human queue (`dv_harness/question_queue.py`) batches every
+never-yet-digested OPEN/ASSUMED question into one digest, and computes the 4
+tracking metrics (self-resolve rate against its 90% target,
+blocking-questions/week, repeat-question-rate, assumption-overturn-rate). Both
+`build_digest()` and `compute_metrics()` were real, correct and individually
+tested — and DORMANT. A repo-wide grep found each had exactly ONE caller: the
+hand-typed `dv-harness question-queue digest` / `dv-harness question-queue
+status` verbs. `engine.py` called neither, no CI job or cron named either, and
+`build_digest()`'s own docstring said so ("not wired into engine.py itself in
+this change"). So an unattended `loop()` run batched nothing for a human to
+answer and recorded none of the 4 metrics — the same PARTIALLY_WIRED shape the
+Methodology Consolidation Rule warns about.
+
+`engine.DVHarness._emit_question_digest_at_stage_boundary()` closes it from
+`advance()` — the single canonical "the current stage completed successfully,
+move on" transition, which `loop()` delegates to on every PASS and
+`commands.cmd_advance()` (`dv-harness next`) calls directly. Deliberately NOT
+`set_stage()`/`human_redirect()`: those also fire on human reroutes and on
+`loop()`'s FAIL-edge routing, which are not "a stage completed" boundaries and
+would emit a digest in the middle of a failure recovery.
+
+- Still never real-time. Only `question_queue.DIGEST_BOUNDARY_STAGES`
+  (`REGRESSION_MONITOR`, `COVERAGE_CLOSURE`, `RE_AUDIT`, `SIGNOFF`) do any work;
+  every ordinary stage transition leaves the queue completely untouched and
+  does not even load it. Part B's "batched into a daily/end-of-run digest,
+  never real-time pings" is unchanged — what changed is that the batch now
+  happens without a human remembering to type the verb.
+- One `QUESTION_QUEUE_DIGEST` event per boundary crossing in
+  `.dv-harness/events.jsonl`, carrying `emitted`/`batch_id`/`question_count`/
+  per-owner counts AND the full metrics dict. It is recorded on EVERY crossing,
+  including `emitted: false` — a metrics series with datapoints only on the
+  cycles that happened to have pending questions is not a series, and "this
+  cycle had nothing to escalate" is itself citable evidence.
+- Best-effort, mirroring `_file_waveform_dump_scope_question()`: an unreadable
+  queue records `QUESTION_QUEUE_DIGEST_FAILED` and never turns a completed
+  stage transition into a crash.
+- It files and batches; it never ANSWERS. Only `answer_question()`, i.e. a
+  human, writes a decision — the human checkpoint is unchanged.
+
+Proven against a real `QuestionQueueStore` on disk and the real shipped
+`main_graph.json` (never a mock of either), including a real gate-verified
+`run_stage()` PASS followed by the same `advance()` the loop calls, by
+`dv_harness_tests/test_question_queue_digest_auto_trigger.py`.
+
+**Disclosed residual**: this is the `stage_boundary` trigger only. The
+`scheduled` trigger (a daily cadence for a caller that polls without knowing
+the stage) still has no scheduler in this repo — no cron, systemd timer or
+Windows scheduled task names it, and the CI workflow deliberately does not,
+since a fresh CI checkout carries no question store and would only ever record
+an empty no-op. A project wanting the daily cadence runs `dv-harness
+question-queue digest --trigger scheduled` from its own scheduler.
