@@ -156,3 +156,14 @@ byte-level proof that reading writes nothing, and both CLI exit codes as real su
 - `dv_harness/dashboard.py`, `dv_harness/prompts.py`
 - `dv_harness_tests/test_waiver_store_gate_wiring.py` (new, 41 tests)
 - `CLAUDE.md` (new section: "Waiver Ledger Is the Source of Truth for the Waiver Gates")
+
+## 7. Commit note (shared-worktree race, recorded honestly)
+
+This work's content landed in commit `4b51502`, whose message reads
+"SPEC-6: add REMOVE_DUPLICATE, SYS-17's eighth decision (spec section 198)". That is not a
+mis-scoped commit by this pass: a concurrently-running close-pass in the SAME worktree ran its own
+`git commit` against the shared index in the window between this pass staging its hand-scoped patch
+and running its own pathspec commit, so its commit swept in every TH-7 file. Nothing was lost and
+nothing of that pass's work was disturbed; the history was deliberately NOT rewritten (another agent
+is actively working on this branch and an amend/rebase there is destructive). This section is the
+attribution record: `4b51502` carries TH-7 as listed in section 6 above.
