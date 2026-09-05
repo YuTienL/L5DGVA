@@ -40,7 +40,17 @@ DEFAULT_CONFIG = {
     },
     "dashboard": {
         "host": "127.0.0.1",
-        "port": 8765
+        "port": 8765,
+        # GUI-19 (2026-09-05): every MUTATING dashboard request (all POST --
+        # control-plane APPROVE/COSIGN/TAKEOVER, waiver authoring,
+        # signoff-export, policy writes, uploads, harness start) requires the
+        # per-session token dashboard_auth.py mints at serve() startup.
+        # Read-only GETs stay open. Binding to 127.0.0.1 above limits NETWORK
+        # exposure but is not access control -- any local process could
+        # otherwise mint a real APPROVAL event in this project's audit trail.
+        # Set false only for a deliberately open kiosk/demo; serve() prints a
+        # warning naming exactly what that opens.
+        "require_auth": True
     },
     "knowledge_center": {
         # Cross-user shared knowledge center (Engineering/Organizational Memory

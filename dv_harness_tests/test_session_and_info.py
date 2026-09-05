@@ -1323,8 +1323,18 @@ def _mk_dashboard_project(port: int) -> Path:
     return tmp
 
 
+# GUI-19: every POST is gated on the per-session token dashboard_auth.py mints
+# inside serve(), so these tests present a real one -- read back out of
+# .dv-harness/dashboard_session.json exactly as a real caller does. Keyed by
+# PORT, not by a "most recently started" global: this module leaves every
+# dashboard it starts running (daemon threads on serve_forever).
+_PROJECT_ROOT_BY_PORT: dict[int, Path] = {}
+
+
 def _start_dashboard(tmp: Path) -> threading.Thread:
     from dv_harness import dashboard
+    cfg = json.loads((tmp / ".dv-harness" / "config.json").read_text(encoding="utf-8"))
+    _PROJECT_ROOT_BY_PORT[int(cfg["dashboard"]["port"])] = tmp
     t = threading.Thread(target=dashboard.serve, args=(tmp,), daemon=True)
     t.start()
     return t
@@ -1356,9 +1366,14 @@ def _get(base: str, path: str):
 
 
 def _post(base: str, path: str, body):
+    from dv_harness import dashboard_auth
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(base + path, data=data,
-                                  headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    root = _PROJECT_ROOT_BY_PORT.get(int(base.rsplit(":", 1)[1]))
+    tok = dashboard_auth.read_session_token(root) if root else None
+    if tok:
+        headers[dashboard_auth.TOKEN_HEADER] = tok
+    req = urllib.request.Request(base + path, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))

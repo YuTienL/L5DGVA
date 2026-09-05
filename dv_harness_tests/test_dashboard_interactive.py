@@ -46,7 +46,8 @@ def _free_port() -> int:
     return port
 
 
-def _mk_dashboard_project(port: int, policy_overrides: dict | None = None) -> Path:
+def _mk_dashboard_project(port: int, policy_overrides: dict | None = None,
+                          dashboard_overrides: dict | None = None) -> Path:
     """A temp project with just enough on disk for DVHarness()/dashboard.serve()
     to run: a .dv-harness/config.json pinning the dashboard to a free local
     port and (by default) turning off the require_stage_gate_evidence hard
@@ -61,17 +62,38 @@ def _mk_dashboard_project(port: int, policy_overrides: dict | None = None) -> Pa
     policy = {"require_stage_gate_evidence": False, "max_stage_retries": 0}
     if policy_overrides:
         policy.update(policy_overrides)
-    cfg = {"dashboard": {"host": "127.0.0.1", "port": port}, "policy": policy}
+    dash = {"host": "127.0.0.1", "port": port}
+    if dashboard_overrides:
+        dash.update(dashboard_overrides)
+    cfg = {"dashboard": dash, "policy": policy}
     (tmp / ".dv-harness" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
     return tmp
 
 
+# GUI-19: every POST this dashboard serves is now gated on the per-session
+# token dashboard_auth.py mints inside serve(). These tests therefore have to
+# present a real one, exactly as a real caller does -- read back out of
+# .dv-harness/dashboard_session.json, the same file the startup banner points
+# a human at. Keyed by PORT, not by a "most recently started" global: this
+# module leaves every dashboard it starts running (daemon threads on
+# serve_forever), so several are alive at once and each has its own token.
+_PROJECT_ROOT_BY_PORT: dict[int, Path] = {}
+
+
 def _start_dashboard(tmp: Path, adapter_factory=None) -> threading.Thread:
     from dv_harness import dashboard
+    cfg = json.loads((tmp / ".dv-harness" / "config.json").read_text(encoding="utf-8"))
+    _PROJECT_ROOT_BY_PORT[int(cfg["dashboard"]["port"])] = tmp
     t = threading.Thread(target=dashboard.serve, args=(tmp,),
                           kwargs={"adapter_factory": adapter_factory}, daemon=True)
     t.start()
     return t
+
+
+def _token_for(base: str) -> str:
+    from dv_harness import dashboard_auth
+    root = _PROJECT_ROOT_BY_PORT.get(int(base.rsplit(":", 1)[1]))
+    return dashboard_auth.read_session_token(root) if root else ""
 
 
 def _wait_ready(base: str, timeout: float = 10) -> None:
@@ -102,10 +124,18 @@ def _get(base: str, path: str):
             return e.code, {"raw": raw}
 
 
-def _post(base: str, path: str, body, content_type: str = "application/json"):
+def _post(base: str, path: str, body, content_type: str = "application/json",
+          token: str | None = None):
+    """token=None means "act as the legitimate operator" -- read this server's
+    real session token off disk. Pass token="" to send NO credential (what an
+    unauthenticated local process does); pass a string to send a wrong one."""
+    from dv_harness import dashboard_auth
     data = body if isinstance(body, (bytes, bytearray)) else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(base + path, data=data,
-                                  headers={"Content-Type": content_type}, method="POST")
+    headers = {"Content-Type": content_type}
+    tok = _token_for(base) if token is None else token
+    if tok:
+        headers[dashboard_auth.TOKEN_HEADER] = tok
+    req = urllib.request.Request(base + path, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))

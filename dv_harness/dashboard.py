@@ -9,6 +9,7 @@ from .gates import extract_evidence_blocks, JUDGMENT_FIELDS, CCL_SKIPPABLE, REVI
 from .models import Stage
 from .storage import _atomic_replace
 from .control_plane import ControlPlane, describe_stage, describe_stages
+from . import dashboard_auth
 
 
 def _access_user() -> str:
@@ -110,6 +111,7 @@ input,select{font-size:13px}
 </style></head>
 <body><header><h2>DV Agent Harness L5</h2></header>
 <main>
+<div id="authBanner" style="display:none;background:#fdecea;border:1px solid #f5c2bd;color:#8a1c10;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:13px"></div>
 <div class="transitionBanner status-none" id="lastTransitionBanner"><span class="label">Last transition</span><span id="lastTransitionText">no stage has completed yet this run</span></div>
 <div class="card" id="setupCard" style="display:none">
 <h3>Setup</h3>
@@ -629,12 +631,46 @@ function selectProtocol(el, name){
   if(el) el.classList.add('selected');
 }
 
+// GUI-19 session token. The server NEVER embeds it in this page -- it
+// arrives once, as ?token=... on the URL the dashboard printed at startup.
+// It is moved into sessionStorage (per-tab, gone when the tab closes) and
+// stripped from the address bar immediately, so it does not sit in browser
+// history on every later navigation. A tab opened without it can still READ
+// everything (GET is not gated); every mutating action returns 403 with the
+// banner below telling the operator where the real token is.
+const DV_TOKEN_HEADER = 'X-DV-Harness-Token';
+function _captureToken(){
+  try{
+    let u = new URL(window.location.href);
+    let t = u.searchParams.get('token');
+    if(t){
+      sessionStorage.setItem('dvHarnessToken', t);
+      u.searchParams.delete('token');
+      history.replaceState(null, '', u.pathname + (u.search||'') + (u.hash||''));
+    }
+  }catch(e){ /* sessionStorage blocked / non-URL context -- fall through to no token */ }
+}
+function _token(){
+  try { return sessionStorage.getItem('dvHarnessToken') || ''; } catch(e) { return ''; }
+}
+function _showAuthBanner(data){
+  let el = document.getElementById('authBanner');
+  if(!el) return;
+  el.textContent = 'ACCESS DENIED (' + (data.reason||'AUTH_REQUIRED') + '): ' + (data.message||'');
+  el.style.display = 'block';
+}
+_captureToken();
+
 async function postJSON(url, body){
   let resp, text, data;
   try{
-    resp = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+    let headers = {'Content-Type':'application/json'};
+    let t = _token();
+    if(t) headers[DV_TOKEN_HEADER] = t;
+    resp = await fetch(url, {method:'POST', headers: headers, body: JSON.stringify(body||{})});
     text = await resp.text();
     try { data = JSON.parse(text); } catch(e) { data = {raw:text}; }
+    if(resp.status === 403 && data && data.error === 'AUTH_REQUIRED') _showAuthBanner(data);
   } catch(e) {
     data = {error:'NETWORK_ERROR', message:String(e)};
     resp = {ok:false};
@@ -2693,6 +2729,15 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
     cfg = load_config(project_root)
     state_file = project_root / ".dv-harness" / "state.json"
 
+    # GUI-19: mint this process's session token BEFORE the server can accept
+    # a single request, so there is no window in which a mutating POST is
+    # reachable with no credential in existence. See dashboard_auth.py for
+    # the threat model and its two disclosed residuals.
+    _require_auth = bool(cfg["dashboard"].get("require_auth", True))
+    _session_token = dashboard_auth.issue_session_token(
+        project_root, port=int(cfg["dashboard"]["port"]),
+        host=cfg["dashboard"]["host"])["token"]
+
     class Handler(BaseHTTPRequestHandler):
         def _send(self, data: bytes, content_type: str, status: int = 200):
             self.send_response(status)
@@ -2964,28 +3009,62 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
             else:
                 self._send(b"not found", "text/plain", status=404)
 
+        # GUI-19: the single access-control choke point. Deliberately here,
+        # in front of the path dispatch below, rather than as a per-handler
+        # decorator -- a POST endpoint added later is gated by EXISTING, not
+        # by whoever adds it remembering to opt it in. Every branch below
+        # mutates real state (control-plane APPROVE/COSIGN/TAKEOVER, waiver
+        # authoring, signoff export, policy writes, uploads, harness start),
+        # so there is no read-only POST to carve out.
+        def _authorized(self) -> bool:
+            allowed, reason = dashboard_auth.authorize(
+                _session_token, self.headers, self.path, method="POST",
+                require_auth=_require_auth)
+            if allowed:
+                return True
+            # Recorded on the same real audit trail every other dashboard
+            # action lands on -- a refused approval attempt is exactly the
+            # kind of event `dv-harness audit` exists to be able to show.
+            try:
+                from .storage import StateStore
+                StateStore(project_root).event(
+                    {"ts": time.time(), "event": "DASHBOARD_AUTH_DENIED",
+                     "path": self.path.split("?", 1)[0], "reason": reason,
+                     "user": _access_user(), "host": _access_host()})
+            except Exception:
+                pass  # an audit-write failure must never turn a denial into a 500
+            self._send_json(dashboard_auth.denial_response(reason), status=403)
+            return False
+
         # ---- Human Control Plane / setup / start ---------------------------
         def do_POST(self):
-            if self.path == "/api/setup":
+            if not self._authorized():
+                return
+            # Dispatch on the path WITHOUT its query string: the session token
+            # may legitimately arrive as ?token=... (the form dashboard_auth's
+            # startup URL carries), and every branch below takes its real
+            # arguments from the JSON body, never from the query.
+            path = self.path.split("?", 1)[0]
+            if path == "/api/setup":
                 self._handle_setup()
-            elif self.path == "/api/start":
+            elif path == "/api/start":
                 self._handle_start()
-            elif self.path == "/api/control":
+            elif path == "/api/control":
                 self._handle_control()
-            elif self.path == "/api/config":
+            elif path == "/api/config":
                 self._handle_config()
-            elif self.path == "/api/session/save":
+            elif path == "/api/session/save":
                 self._handle_session_save()
-            elif self.path == "/api/session/restore":
+            elif path == "/api/session/restore":
                 self._handle_session_restore()
-            elif self.path == "/api/upload":
+            elif path == "/api/upload":
                 self._handle_upload()
-            elif self.path == "/api/signoff-export":
+            elif path == "/api/signoff-export":
                 self._handle_signoff_export()
-            elif self.path == "/api/waiver":
+            elif path == "/api/waiver":
                 self._handle_waiver_submit()
             else:
-                self._send_json({"error": "NOT_FOUND", "message": f"no such POST endpoint: {self.path}"},
+                self._send_json({"error": "NOT_FOUND", "message": f"no such POST endpoint: {path}"},
                                  status=404)
 
         def _handle_session_save(self):
@@ -3231,7 +3310,7 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
 
     host = cfg["dashboard"]["host"]
     port = int(cfg["dashboard"]["port"])
-    print(f"DV Harness Dashboard: http://{host}:{port}")
+    print(dashboard_auth.startup_banner(host, port, _session_token, _require_auth))
     ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
