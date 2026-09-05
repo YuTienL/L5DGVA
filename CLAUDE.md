@@ -651,6 +651,68 @@ this project's own generator really produced — report no ERROR findings, becau
 on genuine generator output would be unusable no matter how many synthetic defects it catches.
 
 
+## Power Intent / Low-Power Evidence (2026-09-06)
+
+Power intent is READ from real UPF and turned into a structured model; no low-power BEHAVIOR is
+verified here, and the difference is stated rather than blurred. Spec section 224 ("LOW-POWER
+INTEGRATION") ends with two rules this obeys literally: absent low-power evidence is
+`UNSUPPORTED / UNKNOWN`, and "do not fabricate a low-power verification flow."
+
+The gap was total. Grepping for `upf`/`power_domain`/`set_isolation`/`set_retention`/
+`create_supply` matched nothing executable in `dv_harness/` or `tools/`. The only power-shaped
+thing in the repo was `"power_domains": []` — a field
+`tools/dut_architecture/build_architecture_model.py` hardcoded as an empty list and
+`.dv-harness/dut-architecture/architecture_model.schema.json` declared with no item shape, i.e. a
+field nothing had ever populated. `tools/verification_flow/reset_clock_power_sequence_gate.py` and
+`reset_power_cdc_corner_gate.py` are self-attested reset/CDC evidence-block checks; neither reads a
+power-intent file.
+
+`dv_harness/power_intent.py` is the reader. It is a real Tcl-subset UPF parser (comments, `;`
+separation, backslash continuation, nested braces, quoting, and `set`/`$var` substitution
+*including* the Tcl rule that braces suppress substitution — getting that backwards would invent
+signal names the design does not have), modelling `upf_version`/`set_design_top`/`set_scope`/`set`,
+`create_power_domain`, `create_supply_port`/`create_supply_net`/`create_supply_set`,
+`connect_supply_net`/`set_domain_supply_net`, `create_power_switch`, and
+`set_isolation`/`set_isolation_control`/`set_retention`/`set_retention_control`. UPF-1.0 style (a
+separate `*_control` command) and UPF-2.x style (control options folded into the strategy) merge
+into ONE strategy record, so "does this strategy have a control signal" has one answer.
+`analyze_power_intent()` then checks that intent against ITSELF — a strategy naming an undeclared
+domain, a supply referenced but never created, a **switchable domain with no isolation strategy**
+(the rule that carries real low-power meaning: outputs floating into always-on logic), a retention
+strategy with no save/restore sequencing. `dv-harness power-intent --upf <file> [--json]
+[--fail-on-error]`, or `python -m dv_harness.power_intent`.
+
+Where it lands: `build_architecture_model.py --upf <file>` populates `power_domains` from
+`power_domains_for_architecture_model()` (name, elements, primary supplies, `switchable`, its
+isolation/retention strategy names, and a real `<upf file>:<line>` evidence string), and records a
+`UPF_POWER_INTENT` evidence row. Without `--upf` the field stays `[]` and `unknowns` says
+"UNSUPPORTED/UNKNOWN" — an absent power intent must not look like a design that simply has no
+power domains.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) NOTHING here is checked
+against RTL, a netlist, or a simulation. This project owns no low-power DUT and no real UPF of its
+own; a "check" against nothing would be exactly the fabricated low-power flow section 224 forbids.
+Isolation/retention/clock-gating/wake-up BEHAVIOR, power-aware simulation, and UPF-to-simulator
+handoff are NOT implemented and need a real low-power DUT plus a power-aware simulator. There is
+deliberately no stage gate: a gate that passes on power intent nobody cross-checked would be worse
+than none. (2) It is a Tcl SUBSET parser, not an interpreter — command substitution `[...]`,
+`if`/`foreach`/`proc`, `expr` and `source`/`load_upf` inclusion are not executed. (3) Power-state
+tables (`add_power_state`, `create_pst`, `add_pst_state`) are recorded as unmodelled rather than
+modelled, because their supply-expression mini-language does not fit the flat option/value shape
+the modelled commands share. Any command this parser does not model is never silently dropped: it
+is reported with its file and line as an INFO finding saying it was NOT analysed. (4) An empty
+model is `NOT_AVAILABLE` (CLI exit 2), never PASS, with or without `--fail-on-error`.
+
+Proven by `dv_harness_tests/test_power_intent.py` (42 tests) against
+`dv_harness_tests/fixtures/power_intent/synthetic_lp_soc.upf` — a fixture whose own header states
+it is a test fixture and not any real DUT's power intent: the clean fixture extracts a
+fully-asserted model (including `$ISO_CTRL` substitution and real source line numbers) and reports
+ZERO findings, then every analysis rule is driven by MUTATING that same clean source one defect at
+a time, so each assertion proves that rule caught that specific injected defect. The integration is
+exercised through the REAL `build_architecture_model.py` and `dv-harness power-intent` subprocesses,
+both with and without power intent present.
+
+
 ## Methodology Consolidation Rule
 
 A process/method/workflow used in a session is not "done" once it produces a result once.

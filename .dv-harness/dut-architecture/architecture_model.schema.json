@@ -39,7 +39,22 @@
       "consumers": []
     }
   ],
-  "power_domains": [],
+  "power_domains": [
+    {
+      "name": "string",
+      "scope": "string|null",
+      "elements": [],
+      "include_scope": "bool",
+      "primary_power_net": "string|null",
+      "primary_ground_net": "string|null",
+      "supply_sets": [],
+      "switchable": "bool",
+      "isolation_strategies": [],
+      "retention_strategies": [],
+      "source": "UPF",
+      "evidence": "<upf file>:<line>"
+    }
+  ],
   "interrupt_topology": [],
   "dma_paths": [],
   "data_paths": [],

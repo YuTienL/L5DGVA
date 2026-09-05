@@ -1,0 +1,61 @@
+# ==========================================================================
+# SYNTHETIC TEST FIXTURE -- NOT A REAL DUT'S POWER INTENT.
+#
+# This file exists solely to exercise dv_harness/power_intent.py's UPF
+# parser and self-consistency analysis. There is no `synthetic_lp_soc` RTL
+# module anywhere in this repository, and this project owns no low-power
+# DUT: nothing here describes real silicon, and it must never be cited as
+# evidence about any real design.
+#
+# It is written in ordinary IEEE-1801 UPF style, including the constructs a
+# reader has to get right to parse real UPF at all -- `set`/`$var`
+# substitution, backslash line continuation, nested braces, `;`-separated
+# commands and end-of-line comments.
+# ==========================================================================
+upf_version 2.1
+set_design_top synthetic_lp_soc
+
+set ISO_CTRL     pmu_iso_en
+set SAVE_CTRL    pmu_save
+set RESTORE_CTRL pmu_restore
+
+# ---- power domains -------------------------------------------------------
+create_power_domain PD_TOP -include_scope
+create_power_domain PD_PERIPH -elements {u_periph}
+
+# ---- supply topology -----------------------------------------------------
+create_supply_port VDD -domain PD_TOP -direction in
+create_supply_port VSS -domain PD_TOP -direction in
+
+create_supply_net VDD    -domain PD_TOP
+create_supply_net VSS    -domain PD_TOP
+create_supply_net VDD_SW -domain PD_PERIPH
+
+connect_supply_net VDD -ports {VDD}
+connect_supply_net VSS -ports {VSS}
+
+set_domain_supply_net PD_TOP    -primary_power_net VDD    -primary_ground_net VSS
+set_domain_supply_net PD_PERIPH -primary_power_net VDD_SW -primary_ground_net VSS
+
+# ---- power switch (this is what makes PD_PERIPH switchable) --------------
+create_power_switch sw_periph \
+    -domain             PD_PERIPH \
+    -input_supply_port  {vin  VDD} \
+    -output_supply_port {vout VDD_SW} \
+    -control_port       {sleep pmu_periph_sleep} \
+    -on_state           {on_state vin {!sleep}} \
+    -off_state          {off_state {sleep}}
+
+# ---- isolation (UPF-1.0 style: strategy, then a separate control) --------
+set_isolation iso_periph -domain PD_PERIPH \
+    -isolation_power_net VDD -isolation_ground_net VSS \
+    -clamp_value 0 -applies_to outputs
+set_isolation_control iso_periph -domain PD_PERIPH \
+    -isolation_signal $ISO_CTRL -isolation_sense high -location parent
+
+# ---- retention -----------------------------------------------------------
+set_retention ret_periph -domain PD_PERIPH \
+    -retention_power_net VDD -retention_ground_net VSS
+set_retention_control ret_periph -domain PD_PERIPH \
+    -save_signal    {pmu_save posedge} \
+    -restore_signal {pmu_restore posedge}

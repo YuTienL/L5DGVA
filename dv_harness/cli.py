@@ -647,6 +647,27 @@ def main():
                             "the report is printed and the exit code stays 0.")
     pusl.add_argument("--verible-bin", default=None, help="Override the verible-verilog-syntax binary name.")
 
+    ppi = sub.add_parser("power-intent", help="Parse REAL UPF (IEEE 1801) power intent into a structured "
+                                                 "model (power domains, supply topology, power switches, "
+                                                 "isolation and retention strategies) and check that intent "
+                                                 "against ITSELF -- undeclared domains/supplies, a "
+                                                 "switchable domain with no isolation, a retention strategy "
+                                                 "with no save/restore. Reads files only: nothing is checked "
+                                                 "against RTL or simulation and no low-power BEHAVIOR is "
+                                                 "verified. Sources with no power intent report "
+                                                 "NOT_AVAILABLE (exit 2), never PASS -- spec section 224's "
+                                                 "UNSUPPORTED/UNKNOWN outcome. See dv_harness/power_intent.py "
+                                                 "for the modelled UPF subset and its stated limits.")
+    ppi.add_argument("--upf", action="append", required=True, dest="upf_paths",
+                      help="A UPF file to parse (repeatable; parsed in the order given, which is the order "
+                           "UPF itself depends on -- a set_isolation_control must follow its set_isolation).")
+    ppi.add_argument("--json", action="store_true",
+                      help="Emit the full machine-readable report (findings plus the extracted power-intent "
+                           "model) instead of the human-readable summary.")
+    ppi.add_argument("--fail-on-error", action="store_true",
+                      help="Exit 1 when the analysis reports ERROR findings. Without it the report is "
+                           "printed and an analysis FAIL still exits 0; NOT_AVAILABLE always exits 2.")
+
     penvm = sub.add_parser("env-manifest", help="env.manifest.json: generated, diffable, git-tracked fact file "
                                                    "with three layers -- vip_config (a real UVM simv's own "
                                                    "already-resolved VIP config dump), dut_facts (verible-parsed "
@@ -2266,6 +2287,20 @@ def main():
         # make an absent verible look like broken UVM.
         if args.fail_on_error and report.status == "FAIL":
             raise SystemExit(1)
+    elif args.cmd == "power-intent":
+        # One shared implementation with `python -m dv_harness.power_intent`
+        # (power_intent.execute_verb), same convention as verification-strategy
+        # and loop-contract. NOT_AVAILABLE exits 2 unconditionally: "this project
+        # has no power intent" is spec section 224's UNSUPPORTED/UNKNOWN answer
+        # and must never be reportable as a clean PASS, with or without
+        # --fail-on-error.
+        from . import power_intent as _pi
+        _pi_text, _pi_code = _pi.execute_verb(args.upf_paths, as_json=args.json)
+        print(_pi_text)
+        if _pi_code == 1 and not args.fail_on_error:
+            _pi_code = 0
+        if _pi_code:
+            raise SystemExit(_pi_code)
     elif args.cmd == "env-manifest":
         from . import env_manifest
         from .env_manifest import (EnvManifestValidationError, RegisterMapValidationError,
