@@ -94,6 +94,13 @@ refusal with the real authorizing command in the message, not a 500.
 
 ## Test summary
 
-`test_dashboard_research_card.py` 14 passed; full re-run of
-`test_dashboard_*.py` + all `test_research*` / `test_capability_evolution_*`
-suites: **262 passed**, 0 failed.
+`test_dashboard_research_card.py` 14 passed; `test_dashboard_*.py` + all
+`test_research*` / `test_capability_evolution_*` suites **262 passed**; the nine
+control-plane/commands-adjacent suites (`test_engine_gates_and_routing.py`,
+`test_fix_risk_approval_gate.py`, `test_signoff_stage_gate_e2e.py`,
+`test_harness_reliability.py`, `test_session_and_info.py`,
+`test_cli_blackboard.py`, `test_active_stages_read_sites.py`,
+`test_stage_scoped_completion_percent.py`,
+`test_stage_transition_visual_markers.py`) **387 passed** -- including
+`test_clear_approval_archives_instead_of_deleting_with_no_trace`, the regression
+covering the `clear_approval()` signature change. 0 failed anywhere.
