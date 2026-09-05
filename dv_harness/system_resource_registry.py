@@ -123,21 +123,29 @@ SYS17_COLUMNS: tuple = (
 )
 
 #: SYS-17's Decision vocabulary, verbatim and closed:
-#: "REUSE_SHARED / KEEP_INDEPENDENT / PASSIVE_ONLY / RECONFIGURE /
-#:  MERGE_ACCESS_PATH / BLOCKED / UNKNOWN."
+#: "REUSE_SHARED / KEEP_INDEPENDENT / PASSIVE_ONLY / REMOVE_DUPLICATE /
+#:  RECONFIGURE / MERGE_ACCESS_PATH / BLOCKED / UNKNOWN."
 #: SYS-15's `reuse_decision` field is THIS vocabulary -- one decision function
 #: (`decide_reuse()`) feeds both, so a registry entry and its row in the
 #: deduplication matrix can never disagree about what was decided.
+#:
+#: PASSIVE_ONLY and REMOVE_DUPLICATE are two DIFFERENT decisions about the same
+#: relationship class (MONITOR_ONLY_DUPLICATE) and must not be collapsed:
+#: PASSIVE_ONLY keeps both monitors because the second one may still observe
+#: something the first does not, REMOVE_DUPLICATE deletes one because it
+#: provably cannot. `classify_duplicate_observability()` is what decides which,
+#: and it only ever reaches REMOVE_DUPLICATE on positive evidence.
 REUSE_SHARED = "REUSE_SHARED"
 KEEP_INDEPENDENT = "KEEP_INDEPENDENT"
 PASSIVE_ONLY = "PASSIVE_ONLY"
+REMOVE_DUPLICATE = "REMOVE_DUPLICATE"
 RECONFIGURE = "RECONFIGURE"
 MERGE_ACCESS_PATH = "MERGE_ACCESS_PATH"
 BLOCKED = "BLOCKED"
 DECISION_UNKNOWN = "UNKNOWN"
 
 SYS17_DECISIONS: tuple = (
-    REUSE_SHARED, KEEP_INDEPENDENT, PASSIVE_ONLY, RECONFIGURE,
+    REUSE_SHARED, KEEP_INDEPENDENT, PASSIVE_ONLY, REMOVE_DUPLICATE, RECONFIGURE,
     MERGE_ACCESS_PATH, BLOCKED, DECISION_UNKNOWN,
 )
 
@@ -146,17 +154,46 @@ SYS17_DECISIONS: tuple = (
 #: first. An entry that is BLOCKED for one pair is blocked, full stop -- the
 #: opposite fold (most permissive) would let one clean pair launder a stopped
 #: resource into REUSE_SHARED, which is exactly the SYS-12 stop being stepped
-#: past. UNKNOWN outranks the three actionable decisions for the same reason:
+#: past. UNKNOWN outranks the four actionable decisions for the same reason:
 #: "we do not know" must not be overwritten by "reuse it".
+#:
+#: PASSIVE_ONLY outranks REMOVE_DUPLICATE deliberately. In a group of three or
+#: more members, one pair proving redundancy says nothing about a third member
+#: that is only PASSIVE_ONLY, and deleting an agent is the less reversible of
+#: the two acts -- so the KEEP answer wins the fold and the redundant pair is
+#: still visible as its own SYS-17 row.
 DECISION_SEVERITY: Dict[str, int] = {
     BLOCKED: 0,
     RECONFIGURE: 1,
     DECISION_UNKNOWN: 2,
     PASSIVE_ONLY: 3,
-    MERGE_ACCESS_PATH: 4,
-    REUSE_SHARED: 5,
-    KEEP_INDEPENDENT: 6,
+    REMOVE_DUPLICATE: 4,
+    MERGE_ACCESS_PATH: 5,
+    REUSE_SHARED: 6,
+    KEEP_INDEPENDENT: 7,
 }
+
+#: `classify_duplicate_observability()`'s two verdicts. Both are statements
+#: about EVIDENCE, not about intent: REDUNDANT is reached only when every
+#: observability-bearing signal was positively compared and matched, and
+#: UNIQUE_POSSIBLE covers both "they really differ" and "we could not tell" --
+#: because the safe action is identical in those two cases (keep both) and
+#: pretending to distinguish them would be a claim the evidence does not make.
+#: Which of the two copies a human retains is NOT decided here; see
+#: `RETENTION_NOT_ARBITRATED`.
+DUP_REDUNDANT = "REDUNDANT_ZERO_UNIQUE_OBSERVABILITY"
+DUP_UNIQUE_POSSIBLE = "UNIQUE_OBSERVABILITY_POSSIBLE"
+DUPLICATE_OBSERVABILITY_VERDICTS: tuple = (DUP_REDUNDANT, DUP_UNIQUE_POSSIBLE)
+
+#: A REMOVE_DUPLICATE decision names the two interchangeable copies and stops.
+#: The two monitors were proven equivalent on every compared signal, so which
+#: one survives carries no engineering content and this module states that
+#: rather than picking -- the same boundary SYS-12's driver-ownership
+#: ARBITRATION keeps, applied to a far smaller decision.
+RETENTION_NOT_ARBITRATED = (
+    "WHICH copy is retained is not decided here: the two were proven equivalent on "
+    "every compared signal, so the choice carries no engineering content and belongs "
+    "to the human who reviews this recommendation.")
 
 #: SYS-17's "Active Driver Conflict" column. Three-valued, and the third value
 #: is load-bearing: "two active agents proven to drive one interface" and "two
@@ -261,13 +298,130 @@ def active_driver_conflict_verdict(relationship: Mapping[str, Any]) -> str:
     return ADC_NO
 
 
+def classify_duplicate_observability(relationship: Mapping[str, Any],
+                                     a: Mapping[str, Any],
+                                     b: Mapping[str, Any],
+                                     ) -> Dict[str, Any]:
+    """Decide, for ONE MONITOR_ONLY_DUPLICATE pair, whether the second monitor
+    can still observe something the first cannot.
+
+    This is the question that separates SYS-17's PASSIVE_ONLY from its
+    REMOVE_DUPLICATE, and the two answers are genuinely different acts: keep
+    both passive monitors, or delete one. Getting it wrong in the REMOVE
+    direction destroys real observability -- a checker, a covergroup or a
+    protocol view that only the deleted monitor had -- and a simulation that
+    stops observing something does not announce it. So REDUNDANT is reached
+    ONLY on positive, complete evidence, and every other state, including
+    "nothing was captured", is UNIQUE_OBSERVABILITY_POSSIBLE.
+
+    What a passive monitor's observability actually depends on, and therefore
+    what all three checks below are:
+
+      1. Both sides carry a REAL captured configuration
+         (`configuration.config_field_count > 0`, i.e. a live vip_config dump
+         reached `env_manifest.build_vip_config()` for that instance). A
+         monitor's enabled checks, its coverage groups and its analysis depth
+         are configuration; with no configuration captured, "these two observe
+         the same things" is an assumption, not a finding. This is the check
+         that keeps an absence of evidence from reading as evidence of
+         redundancy.
+      2. The two `configuration_hash` values are EQUAL. That hash is over the
+         whole field map, so equality means identical field SETS and identical
+         values -- strictly stronger than SYS-10's `configuration` signal,
+         which compares only the keys both sides happen to share and therefore
+         reports AGREE for a monitor that has an extra `coverage_enable` field
+         the other one does not.
+      3. SYS-10's `protocol` signal AGREES. Two monitors decoding different
+         protocols off one interface see different transactions however alike
+         their configuration looks, and an unclassified protocol on either side
+         is not an agreement.
+
+    `intended_function` is deliberately NOT one of the checks. SYS-10 lists it
+    as name-derived and forbids deciding a duplicate on class names alone; it
+    is reported in the basis for the human, never used to reach REDUNDANT.
+    """
+    signals = (relationship.get("comparison") or {}).get("signals") or {}
+    ca = a.get("configuration") or {}
+    cb = b.get("configuration") or {}
+    count_a, count_b = int(ca.get("config_field_count") or 0), int(cb.get("config_field_count") or 0)
+    hash_a, hash_b = str(ca.get("configuration_hash") or ""), str(cb.get("configuration_hash") or "")
+    protocol_verdict = str((signals.get("protocol") or {}).get("verdict") or sri.SIGNAL_UNKNOWN)
+
+    basis = {
+        "config_field_count_a": count_a,
+        "config_field_count_b": count_b,
+        "configuration_hash_a": hash_a,
+        "configuration_hash_b": hash_b,
+        "configuration_signal": str((signals.get("configuration") or {}).get("verdict")
+                                    or sri.SIGNAL_UNKNOWN),
+        "protocol_signal": protocol_verdict,
+        "intended_function_signal": str((signals.get("intended_function") or {}).get("verdict")
+                                        or sri.SIGNAL_UNKNOWN),
+        "physical_identity_evidence": list(relationship.get("physical_identity_evidence") or []),
+    }
+
+    if not (count_a and count_b):
+        return {
+            "verdict": DUP_UNIQUE_POSSIBLE,
+            "reason": (
+                "no live vip_config capture on "
+                + ("both sides" if not (count_a or count_b)
+                   else ("side A" if not count_a else "side B"))
+                + f" (config_field_count {count_a}/{count_b}), so what each monitor "
+                "actually checks, covers and decodes was never compared. An absent "
+                "capture is not evidence of redundancy -- generate env.manifest.json "
+                "from a real vip_config dump on both subsystems to settle it"),
+            "basis": basis,
+        }
+    if hash_a != hash_b:
+        differing = [d["field"] for d in
+                     ((signals.get("configuration") or {}).get("differing") or [])]
+        return {
+            "verdict": DUP_UNIQUE_POSSIBLE,
+            "reason": (
+                "both monitors are configured, but not identically: their whole-field "
+                f"configuration hashes differ ({hash_a} vs {hash_b})"
+                + (f"; SYS-10 saw {differing} differ on shared fields" if differing else
+                   "; every field they SHARE agrees, so the difference is a field one "
+                   "side carries and the other does not -- exactly the shape of an extra "
+                   "check or covergroup that only one monitor has")
+                + ". A monitor with configuration the other lacks may observe something "
+                "the other cannot, so both are kept"),
+            "basis": basis,
+        }
+    if protocol_verdict != sri.AGREE:
+        return {
+            "verdict": DUP_UNIQUE_POSSIBLE,
+            "reason": (
+                f"SYS-10's protocol signal is {protocol_verdict}, not AGREE, so it is not "
+                "established that the two monitors decode the same protocol off this "
+                "interface; identical configuration of two different decoders is not "
+                "identical observability"),
+            "basis": basis,
+        }
+    return {
+        "verdict": DUP_REDUNDANT,
+        "reason": (
+            f"both monitors are PASSIVE on one physical interface "
+            f"({relationship.get('physical_identity_evidence')}), both carry a real "
+            f"captured configuration ({count_a} and {count_b} fields), those "
+            f"configurations are identical field-for-field (configuration_hash "
+            f"{hash_a}), and SYS-10's protocol signal AGREES -- so the second monitor "
+            "decodes the same protocol, with the same checks and the same coverage, on "
+            "the same signals. It contributes no observation the first does not, and "
+            "no control at all, because a PASSIVE monitor drives nothing. "
+            + RETENTION_NOT_ARBITRATED),
+        "basis": basis,
+    }
+
+
 def decide_reuse(relationship: Mapping[str, Any],
                  promotion: Optional[Mapping[str, Any]],
                  conflict_rule: Mapping[str, Any],
                  resources_by_id: Mapping[str, Mapping[str, Any]],
                  ) -> Dict[str, Any]:
     """Map ONE SYS-11 relationship (plus its SYS-12 status and SYS-13
-    promotion verdict) onto SYS-17's closed seven-value Decision vocabulary.
+    promotion verdict) onto SYS-17's closed eight-value Decision vocabulary.
 
     SYS-13's vocabulary and SYS-17's are NOT the same list -- SYS-13 answers
     "may this be promoted to System-Level ownership", SYS-17 answers "what do
@@ -294,8 +448,14 @@ def decide_reuse(relationship: Mapping[str, Any],
          through the 9-level source authority order and got
          UNDECIDABLE_SAME_AUTHORITY -- two live vip_config dumps are two
          tier-1 claims, and a human breaks that tie.
-      5. MONITOR_ONLY_DUPLICATE -> PASSIVE_ONLY. Two monitors on one
-         interface: keep both, both passive, no driver is created.
+      5. MONITOR_ONLY_DUPLICATE -> PASSIVE_ONLY, or REMOVE_DUPLICATE when
+         `classify_duplicate_observability()` PROVES the second monitor
+         observes nothing the first does not. Two monitors on one interface
+         are always safe to keep (neither drives), so PASSIVE_ONLY is the
+         default and REMOVE_DUPLICATE needs positive evidence: a real captured
+         configuration on both sides, identical field-for-field, and an agreed
+         protocol. "Keep it as a monitor" and "delete it" are different acts
+         and this branch is where they part.
       6. SAME_PHYSICAL_RESOURCE, SYS-13 says promotable -> REUSE_SHARED.
       6b. SAME_PHYSICAL_RESOURCE, not promotable, exactly one side ACTIVE ->
          PASSIVE_ONLY, owned by the driving subsystem. The interface is one
@@ -331,6 +491,11 @@ def decide_reuse(relationship: Mapping[str, Any],
         rtype = a.get("resource_type") or b.get("resource_type") or sri.RT_UNCLASSIFIED
         return f"{OWNER_PROPOSED_SYSTEM_PREFIX}::{rtype}"
 
+    # Only the MONITOR_ONLY_DUPLICATE branch asks this question; every other
+    # relationship class reports None rather than a verdict about a duplicate
+    # that was never classified as one.
+    duplicate_observability: Optional[Dict[str, Any]] = None
+
     if rel == sri.REL_DRIVER_CONFLICT:
         decision, owner, reason = BLOCKED, OWNER_UNRESOLVED, (
             "SYS-12: two ACTIVE agents would independently drive one physical "
@@ -354,9 +519,19 @@ def decide_reuse(relationship: Mapping[str, Any],
             "dumps -- a human chooses the surviving configuration. "
             + str(relationship.get("reason", "")))
     elif rel == sri.REL_MONITOR_ONLY_DUPLICATE:
-        decision, owner, reason = PASSIVE_ONLY, NO_SYSTEM_OWNER, (
-            "both sides are PASSIVE monitors of one physical interface -- a duplicate "
-            "but not a driver hazard; both may observe and neither drives")
+        duplicate_observability = classify_duplicate_observability(relationship, a, b)
+        if duplicate_observability["verdict"] == DUP_REDUNDANT:
+            decision, owner, reason = REMOVE_DUPLICATE, NO_SYSTEM_OWNER, (
+                "both sides are PASSIVE monitors of one physical interface and the "
+                "second one is provably redundant: " + duplicate_observability["reason"]
+                + " RECOMMENDATION ONLY -- removing an agent from a subsystem "
+                "environment is SYS-40 and no environment is modified here")
+        else:
+            decision, owner, reason = PASSIVE_ONLY, NO_SYSTEM_OWNER, (
+                "both sides are PASSIVE monitors of one physical interface -- a duplicate "
+                "but not a driver hazard; both may observe and neither drives. Kept rather "
+                "than removed because unique observability could not be ruled out: "
+                + duplicate_observability["reason"])
     elif rel == sri.REL_SAME_PHYSICAL:
         if promo_decision == sri.PROMOTE_TO_SYSTEM_SHARED:
             decision, owner, reason = REUSE_SHARED, _system_shared_owner(), (
@@ -421,6 +596,14 @@ def decide_reuse(relationship: Mapping[str, Any],
         "sys12_stopped": is_stopped,
         "sys12_held": is_held,
         "overridden_by_sys12_stop": overridden_by_stop,
+        # The PASSIVE_ONLY / REMOVE_DUPLICATE evidence, so a reader can see WHY
+        # a duplicate was kept or called redundant without re-deriving it.
+        # None for every relationship class that is not a monitor duplicate.
+        "duplicate_observability": duplicate_observability,
+        "interchangeable_copies": (sorted([rid_a, rid_b])
+                                   if decision == REMOVE_DUPLICATE else []),
+        "retention_choice": (RETENTION_NOT_ARBITRATED
+                             if decision == REMOVE_DUPLICATE else ""),
         "recommendation_only": True,
         "implementation_phase": "SYS-40 (requires separate explicit human approval)",
     }
@@ -1047,7 +1230,7 @@ def _physical_interface_cell(relationship: Mapping[str, Any],
 def build_vip_deduplication_matrix(analysis: Mapping[str, Any],
                                    registry: Mapping[str, Any]) -> Dict[str, Any]:
     """SYS-17's mandatory table: one row per apparent duplicate, eight columns,
-    a Decision from the closed seven-value vocabulary.
+    a Decision from the closed eight-value vocabulary.
 
     Two row sources, because SYS-12's rule is about two ACTIVE AGENTS and not
     about two subsystems:
@@ -1096,6 +1279,9 @@ def build_vip_deduplication_matrix(analysis: Mapping[str, Any],
                 "decision_reason": decision.get("reason", ""),
                 "sys13_promotion_decision": decision.get("sys13_promotion_decision"),
                 "overridden_by_sys12_stop": decision.get("overridden_by_sys12_stop", False),
+                "duplicate_observability": decision.get("duplicate_observability"),
+                "interchangeable_copies": decision.get("interchangeable_copies") or [],
+                "retention_choice": decision.get("retention_choice", ""),
                 "recommendation_only": True,
             },
         })

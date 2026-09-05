@@ -166,12 +166,13 @@
               "REUSE_SHARED",
               "KEEP_INDEPENDENT",
               "PASSIVE_ONLY",
+              "REMOVE_DUPLICATE",
               "RECONFIGURE",
               "MERGE_ACCESS_PATH",
               "BLOCKED",
               "UNKNOWN"
             ],
-            "description": "SYS-17's own closed Decision vocabulary, verbatim. SYS-15's reuse_decision and SYS-17's Decision column are produced by the ONE function decide_reuse(), so an entry and its row in the deduplication matrix cannot disagree."
+            "description": "SYS-17's own closed Decision vocabulary, verbatim. SYS-15's reuse_decision and SYS-17's Decision column are produced by the ONE function decide_reuse(), so an entry and its row in the deduplication matrix cannot disagree. PASSIVE_ONLY and REMOVE_DUPLICATE are two DIFFERENT decisions about a MONITOR_ONLY_DUPLICATE pair and are never collapsed: PASSIVE_ONLY keeps both monitors because the second may still observe something the first does not, REMOVE_DUPLICATE deletes one because classify_duplicate_observability() proved it cannot (a real captured configuration on both sides, identical field-for-field, and an agreed protocol). REMOVE_DUPLICATE names both interchangeable copies and deliberately does NOT decide which one is retained."
           },
           "evidence": {
             "type": "array",

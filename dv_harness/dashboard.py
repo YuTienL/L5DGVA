@@ -540,14 +540,20 @@ records present/absent honestly, never a fabricated placeholder. Leave out_dir b
 
 <div class="card" id="waiverCard"><h3>Waiver Authoring</h3>
 <div class="note">Human-authored waivers, persisted to <code>.dv-harness/waivers/waivers.json</code>
-(POST /api/waiver, <code>waiver_store.append_waiver()</code>) -- the real form counterpart to an AI
-agent's own fenced <code>dv-harness-evidence:&lt;gate_id&gt;</code> waiver block. This store is not
-wired into any gate script's own <code>--waivers</code>/<code>--holes</code>/<code>--coverage</code>
-input today (each gate's payload is assembled ad hoc from the agent's evidence block at stage-run
-time, per gate's own bespoke schema -- see <code>waiver_store.py</code>'s module docstring); use this
-as the durable record of what a human actually approved, and copy its fields into the relevant
-evidence block's waiver entry when authoring one. Both <code>approved</code> and non-empty
-<code>evidence</code> are required -- a submission missing either is rejected with a 400.</div>
+(POST /api/waiver, <code>waiver_store.append_waiver()</code>). Since 2026-09-06 this store is the
+SOURCE OF TRUTH the three waiver gate scripts read from: whenever this file exists,
+<code>waiver_scope_consistency_gate</code>, <code>waiver_revision_freshness_gate</code> and
+<code>waiver_revalidation_gate</code> judge THESE records rather than the agent's own fenced
+<code>dv-harness-evidence:&lt;gate_id&gt;</code> block, and a waiver_id the agent cites that is not
+recorded here FAILs <code>WAIVER_NOT_IN_STORE</code>. A recorded waiver is therefore re-evaluated on
+every run -- when it expires or its revalidation trigger fires, the requirement it was waiving is
+re-flagged whether or not anyone mentions it (spec section 237).
+<b>Fill in Waiver ID and the section 237 fields below</b> to record a real waiver: a submission
+carrying only Gate/Item/Evidence is still accepted (the original 4-field shape) but cannot be shown
+to still be valid, so the gates report it <code>WAIVER_STATUS_UNKNOWN</code>. Status
+(VALID / REVALIDATION_REQUIRED / EXPIRED / REVOKED / UNKNOWN) is always DERIVED from the record's own
+content -- it is never stored, and a submission that tries to store one is rejected with a 400.
+Inspect what is recorded with <code>python -m dv_harness.waiver_store status</code>.</div>
 <div class="ctrlrow">
   <label>Gate <select id="waiverGateId">
     <option value="waiver_scope_consistency_gate">waiver_scope_consistency_gate</option>
@@ -561,6 +567,29 @@ evidence block's waiver entry when authoring one. Both <code>approved</code> and
 </div>
 <div class="ctrlrow"><label style="align-items:flex-start">Evidence
   <textarea id="waiverEvidence" rows="3" cols="60" placeholder="why this item is genuinely waived (reviewer, spec section, rationale)"></textarea></label></div>
+<div class="ctrlrow">
+  <label>Waiver ID <input id="waiverId" size="18" placeholder="e.g. W-USB-001"></label>
+  <label>Approver <input id="waiverApprover" size="16" placeholder="who approved it"></label>
+  <label>Risk <select id="waiverRisk">
+    <option value="LOW">LOW</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option>
+  </select></label>
+  <label>Expires at <input id="waiverExpiresAt" size="26" placeholder="2026-12-31T00:00:00+00:00"></label>
+</div>
+<div class="ctrlrow">
+  <label>Reason <input id="waiverReason" size="40" placeholder="why the DUT cannot satisfy this requirement"></label>
+  <label>Requirement IDs <input id="waiverRequirementIds" size="24" placeholder="REQ-1,REQ-2"></label>
+  <label>Subsystem <input id="waiverSubsystem" size="14"></label>
+</div>
+<div class="ctrlrow">
+  <label>Spec revision <input id="waiverSpecRevision" size="12"></label>
+  <label>RTL hash <input id="waiverRtlHash" size="14"></label>
+  <label>Revision <input id="waiverRevision" size="10"></label>
+  <label>Approval ID <input id="waiverApprovalId" size="12"></label>
+</div>
+<div class="ctrlrow">
+  <label>Design evidence hash <input id="waiverDesignEvidenceHash" size="22"></label>
+  <label>Scope hash <input id="waiverScopeHash" size="22"></label>
+</div>
 <div class="ctrlrow"><label><input type="checkbox" id="waiverApproved" checked> Approved</label>
   <button onclick="doWaiverSubmit()">Submit Waiver</button></div>
 <div id="waiverResult" style="font-size:12px;margin-top:4px"></div>
@@ -778,9 +807,44 @@ async function doSignoffExport(){
   await load();
 }
 async function doWaiverSubmit(){
-  let body = {gate_id: val('waiverGateId'), item_id: val('waiverItemId'),
-              approved: document.getElementById('waiverApproved').checked,
-              evidence: val('waiverEvidence')};
+  // A Waiver ID present means the human is recording a real section 237
+  // waiver -- server-side waiver_store.record_waiver() then validates every
+  // field. Absent, this posts the original 4-field record unchanged, so an
+  // existing caller/bookmark is never broken.
+  let body;
+  if(val('waiverId')){
+    let reqIds = val('waiverRequirementIds').split(',').map(s=>s.trim()).filter(s=>s);
+    // No gate_id: a section 237 record applies to all three waiver gates
+    // (they check the same record from three angles). The Gate selector above
+    // belongs to the legacy 4-field shape.
+    body = {waiver_id: val('waiverId'), item: val('waiverItemId'),
+            reason: val('waiverReason'), evidence: val('waiverEvidence'),
+            approver: val('waiverApprover'), risk: val('waiverRisk'),
+            created_at: new Date().toISOString(),
+            scope: {requirement_ids: reqIds, subsystem: val('waiverSubsystem'),
+                    spec_revision: val('waiverSpecRevision'),
+                    design_evidence_hash: val('waiverDesignEvidenceHash'),
+                    approval_id: val('waiverApprovalId'),
+                    scope_hash: val('waiverScopeHash'),
+                    applied_requirement_ids: reqIds},
+            affected_version: {spec_revision: val('waiverSpecRevision'),
+                               rtl_hash: val('waiverRtlHash'),
+                               revision: val('waiverRevision')},
+            revalidation_trigger: {}};
+    // A blank field is a fact nobody recorded, never a trigger value of "" --
+    // an empty trigger would compare unequal to every real revision and read
+    // REVALIDATION_REQUIRED forever.
+    for(const [k,id] of [['spec_revision','waiverSpecRevision'],
+                         ['rtl_hash','waiverRtlHash'],
+                         ['revision','waiverRevision']]){
+      if(val(id)){ body.revalidation_trigger[k] = val(id); }
+    }
+    if(val('waiverExpiresAt')){ body.expires_at = val('waiverExpiresAt'); }
+  } else {
+    body = {gate_id: val('waiverGateId'), item_id: val('waiverItemId'),
+            approved: document.getElementById('waiverApproved').checked,
+            evidence: val('waiverEvidence')};
+  }
   let r = await postJSON('/api/waiver', body);
   showIn('waiverResult', r.ok, r.data);
 }
@@ -3383,16 +3447,18 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
             result = signoff_export.collect_signoff_bundle(project_root, out_dir)
             self._send_json(result)
 
-        # POST /api/waiver: {"gate_id": ..., "item_id": ..., "approved": true,
-        # "evidence": "..."} -- the real human-facing counterpart to an AI
-        # agent's own fenced ```dv-harness-evidence:<gate_id>``` waiver block
-        # (see waiver_store.py's module docstring for why this store is a
-        # separate, durably-written source of truth rather than a forced
-        # integration into gates.run_gate()'s per-invocation tempfile
-        # assembly). Calls waiver_store.append_waiver() directly, in this
-        # same process -- no subprocess -- same pattern as
-        # _handle_signoff_export calling signoff_export.collect_signoff_bundle()
-        # directly above.
+        # POST /api/waiver -- the human-facing writer of the durable waiver
+        # ledger the three waiver gate scripts now read as their source of
+        # truth (see waiver_store.py's module docstring). Two accepted bodies,
+        # dispatched by append_waiver(): a full section 237 record (carries
+        # "waiver_id"; validated by record_waiver(), which refuses a stored
+        # "status", an unmeasured revalidation trigger, an incomplete scope or
+        # a duplicate id) and the original 4-field {"gate_id", "item_id",
+        # "approved", "evidence"} shape. WaiverStoreError subclasses
+        # ValueError, so every refusal reaches the caller as a 400 with its
+        # real reason. Calls waiver_store directly, in this same process -- no
+        # subprocess -- same pattern as _handle_signoff_export calling
+        # signoff_export.collect_signoff_bundle() directly above.
         def _handle_waiver_submit(self):
             from . import waiver_store
             try:

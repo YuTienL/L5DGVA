@@ -31,6 +31,28 @@ import dv_harness as _dv_harness_pkg
 DV_HARNESS_PACKAGE_ROOT = str(Path(_dv_harness_pkg.__file__).resolve().parent.parent)
 
 
+def _gate_env(root: Path) -> dict:
+    """The environment every gate subprocess runs with.
+
+    DV_HARNESS_PACKAGE_ROOT tells a gate script where the real dv_harness
+    ENGINE package is (see the comment above). DV_HARNESS_PROJECT_ROOT
+    (2026-09-06, waiver-store wiring) tells it which PROJECT it is judging --
+    a harness-supplied fact with the same trust property as a ContextFlag: it
+    is never read from the agent's evidence text, so a gate that consults a
+    durable per-project store (waiver_scope_consistency_gate,
+    waiver_revision_freshness_gate, waiver_revalidation_gate reading
+    dv_harness/waiver_store.py) cannot be pointed at a fabricated root to dodge
+    it. Supplied as env rather than as a ContextFlag because two of those three
+    scripts take a single whole-payload flag, and converting them to the
+    multi-flag form would change the evidence-block shape every existing
+    project's prompt already emits."""
+    return {
+        **os.environ,
+        "DV_HARNESS_PACKAGE_ROOT": DV_HARNESS_PACKAGE_ROOT,
+        "DV_HARNESS_PROJECT_ROOT": str(Path(root).resolve()),
+    }
+
+
 # --- multi-flag gate support -------------------------------------------------
 # A STAGE_GATES tuple's third element is either a bare str (the original,
 # unchanged one-flag contract: cli_flag names the single CLI arg, payload is
@@ -1150,7 +1172,7 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
                 return GateResult(gate_id, False, missing_detail)
             proc = subprocess.run(
                 args, cwd=str(root), capture_output=True, text=True, timeout=30,
-                env={**os.environ, "DV_HARNESS_PACKAGE_ROOT": DV_HARNESS_PACKAGE_ROOT},
+                env=_gate_env(root),
             )
         else:
             # --- unchanged one-flag path: byte-identical behavior/temp-file
@@ -1165,7 +1187,7 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
             proc = subprocess.run(
                 [sys.executable, str(script), cli_flag, tmp.name],
                 cwd=str(root), capture_output=True, text=True, timeout=30,
-                env={**os.environ, "DV_HARNESS_PACKAGE_ROOT": DV_HARNESS_PACKAGE_ROOT},
+                env=_gate_env(root),
             )
     finally:
         for p in tmp_paths:

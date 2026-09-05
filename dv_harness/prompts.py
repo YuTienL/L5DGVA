@@ -478,6 +478,22 @@ spec/RTL revision 字串）兩個欄位——真正的目前時間（--now）由
 WAIVER_EXPIRED。revision 跟 current_revision 不同、且沒有 revalidated_for_revision
 時會 FAIL WAIVER_REVISION_STALE；expires_at 早於目前時間會 FAIL WAIVER_EXPIRED；
 trigger_conditions_changed 為 true 會 FAIL WAIVER_REVALIDATION_REQUIRED。）
+
+Waiver 的真正來源是 waiver ledger，不是你寫的 evidence block（2026-09-06，spec section 237）：
+只要專案有 `.dv-harness/waivers/waivers.json`（dv_harness/waiver_store.py，由真人透過 dashboard
+的 Waiver Authoring 表單或 `waiver_store.record_waiver()` 寫入），上面三個 waiver gate 判定的
+就是 ledger 裡的紀錄，不是你在 block 裡列出的 waiver。因此：
+- 你在 block 裡引用一個 ledger 沒有的 waiver_id，會 FAIL WAIVER_NOT_IN_STORE——沒有人核准過的
+  waiver 不豁免任何東西，不要自己編一筆出來。
+- ledger 裡的 waiver 每次都會被重新判定；過期（EXPIRED）、被撤銷（REVOKED）、或 revalidation
+  trigger（spec_revision/rtl_hash/revision）跟現在對不上（REVALIDATION_REQUIRED），都會讓它原本
+  豁免的 requirement 重新被 flag 出來，不論你有沒有提到它。狀態是從紀錄內容推導出來的，不是
+  存在檔案裡的欄位，你也無法覆寫。
+- 用 `python -m dv_harness.waiver_store status` 看目前每一筆 waiver 的真實狀態。
+- 專案還沒有 ledger 檔案時，行為完全跟以前一樣（以你的 evidence block 為準）。
+- 這三個 block 裡的 "current"／"current_revision" 仍然必須照實填：那是這次執行的真實
+  spec_revision/rtl_hash/revision，ledger 不會知道，也正是 ledger 的 revalidation trigger 要
+  拿來比對的對象。
 """,
 Stage.SOC_SCENARIO_PLANNER.value: """
 若 scope >= subsystem，建立 cross-subsystem/cross-protocol/shared-resource/concurrency/E2E/reset/error/performance scenarios。

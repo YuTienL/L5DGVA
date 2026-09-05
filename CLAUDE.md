@@ -3915,3 +3915,93 @@ trigger outranks an older passing preflight run and clearing it really returns t
 evidence; back-dating the whole verdict set past the window really drops the SLO to
 INSUFFICIENT_EVIDENCE while asking as-of the back-dated day finds it again; and adding an uptime SLO
 to the catalog really trips both guards.
+
+
+## Waiver Ledger Is the Source of Truth for the Waiver Gates (2026-09-06, TH-7)
+
+Spec section 237 (WAIVER EXPIRATION / REVALIDATION) names a waiver record and a five-value status
+vocabulary (VALID / REVALIDATION_REQUIRED / EXPIRED / REVOKED / UNKNOWN), and rules that "relevant
+Spec/RTL/config/tool changes can invalidate or require revalidation of a waiver". Both halves of
+that existed here and were not connected, which `dv_harness/waiver_store.py`'s own docstring and
+`dashboard.py`'s own Waiver Authoring note both disclosed in as many words: "there is no fixed
+harness code path today that reads a waivers store from a known location before invoking a gate",
+and "this store is not wired into any gate script's own `--waivers` input today".
+
+The consequence was that a waiver was SELF-ATTESTED end to end. `gates.run_gate()` assembled every
+waiver gate's payload from the agent's own fenced ```dv-harness-evidence:<gate_id>``` block, so the
+same agent wrote both the waiver and the evidence that the waiver was still valid — and an expired
+waiver did not get re-flagged, it simply stopped being mentioned. The store, meanwhile, had a
+4-field schema (`gate_id`/`item_id`/`approved`/`evidence`) that shared not one field name with what
+the three gates read and carried no status concept at all.
+
+**The three real gates now read the ledger.** `waiver_scope_consistency_gate`,
+`waiver_revision_freshness_gate` and `waiver_revalidation_gate` import `dv_harness.waiver_store`
+through the DV_HARNESS_PACKAGE_ROOT env var `run_gate()` already supplied for exactly this, plus a
+new `DV_HARNESS_PROJECT_ROOT` (`gates._gate_env()`) naming which project they are judging. That is
+harness-supplied with the same trust property as a `ContextFlag` — never read from agent text, so a
+gate cannot be pointed at a fabricated root to dodge it. It is an env var rather than a
+`ContextFlag` because two of the three scripts take a single whole-payload flag and converting them
+to the multi-flag form would change the evidence-block shape every existing project's prompt emits.
+
+Whenever `.dv-harness/waivers/waivers.json` EXISTS it is authoritative: the records evaluated are
+the ledger's, projected into each script's own field names by the single `_projection()` that knows
+how the three spell the same waiver, and an agent-cited `waiver_id` the ledger has no record of
+FAILs `WAIVER_NOT_IN_STORE` — nobody approved it, so it exempts nothing. A ledger waiver is
+re-evaluated on EVERY run, which is the whole point: when it expires the requirement it was waiving
+is re-flagged whether or not anyone mentions it. The three gates' own pre-existing checks
+(`INCOMPLETE_WAIVER_SCOPE`, `WAIVER_ATTEMPTS_TO_HIDE_ACTIVE_FAILURE`, `WAIVER_APPLIED_OUTSIDE_SCOPE`,
+`WAIVER_REVISION_STALE`, `STALE_WAIVER_AFTER_REVISION_CHANGE`) are untouched and still run over
+those records — the store supplies the records, it does not replace the checks.
+
+**`status` is DERIVED on every read and REFUSED as a stored field**, the same reason
+`golden_scenario.evaluate_freshness()` computes freshness rather than storing it: a stored status is
+wrong the instant the expiry passes or the revision moves. `derive_status()` decides worst-first
+(REVOKED → UNKNOWN → EXPIRED → REVALIDATION_REQUIRED → VALID), so a human's revocation outranks the
+clock. EXPIRED and REVALIDATION_REQUIRED map onto `waiver_revalidation_gate.py`'s OWN pre-existing
+reason tokens rather than synonyms for them.
+
+**"We could not check" is never VALID.** A record missing section 237's fields is UNKNOWN naming
+them; so is one declaring neither an expiry nor a revalidation trigger (nothing about it can go
+stale, so nothing can show it is still good), and so is an unparseable timestamp. The original
+4-field record the dashboard form used to write is still accepted and never dropped — it is real
+human intent — but it reads UNKNOWN for exactly that reason, and the form now offers the section 237
+fields so a human can record a checkable waiver.
+
+**A trigger nothing measures cannot be declared.** `SUPPORTED_TRIGGER_KEYS` is
+`spec_revision`/`rtl_hash`/`revision` and `record_waiver()` refuses anything else by name, because
+`GATE_STATUS_CONTEXT` records which gate really measures what — expiry only in
+`waiver_revalidation_gate` (the only one `run_gate()` hands a harness-clock `--now` ContextFlag),
+spec_revision/rtl_hash only in `waiver_revision_freshness_gate`. All three run in the same
+REQUIREMENTS_TRACEABILITY stage, so between them every declared trigger and the expiry really are
+checked; `assert_trigger_coverage()` runs at import so adding a trigger key without a gate that
+measures it fails a test rather than producing a waiver that reads VALID forever. A gate is never
+handed a fact it did not observe, so it can never decide a status on one.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) A project with NO ledger keeps
+the original agent-attested behaviour and the original exit codes byte-identically — adopting the
+store is a project's decision and an un-migrated project is never retroactively failed. This
+repository itself has never recorded a waiver, asserted by a test so that adopting one here cannot
+silently change the pre-existing gate test's meaning. (2) It ARBITRATES nothing: it revokes no
+waiver, revalidates none, grants no approval and picks no winner. Recording and revoking are human
+acts (`revoke_waiver()` requires both a named human and a reason, the discipline
+`loop_budget.reset()` applies to clearing a spend). (3) The other three waiver-consuming gates
+(`coverage_hole_regeneration_gate`, `coverage_hole_to_test_generation_gate`,
+`sequence_coverage_closure_gate`) are NOT wired: they read coverage-hole and sequence payloads whose
+shapes are a different domain, and section 237 is about the waiver record itself. (4) There is no
+`dv-harness` CLI verb — `cli.py` was being modified by concurrent work in the same session — so the
+front door is `python -m dv_harness.waiver_store statuses|list|status` (exit 0 clear, 1 a waiver is
+not VALID, 2 no ledger) plus the dashboard form.
+
+Proven by `dv_harness_tests/test_waiver_store_gate_wiring.py` (41 tests), which drives the REAL
+`gates.evaluate_stage_evidence()` over the REAL shipped `STAGE_GATES["REQUIREMENTS_TRACEABILITY"]`
+entries, running the REAL gate scripts as subprocesses against a REAL ledger on disk — nothing
+mocked. The central test records a waiver that has EXPIRED and has the agent declare NO waivers at
+all (exactly what a self-attested flow produces once a waiver becomes inconvenient); the stage FAILs
+`WAIVER_EXPIRED` naming that waiver, and the ledger names the requirement that is no longer waived.
+Its negative control is the identical ledger, agent text and gates with only the expiry moved,
+reaching a real PASS. The rest carry the same shape: a fabricated citation is refused while citing a
+real ledger waiver is not, a revoked waiver is refused, a moved rtl_hash requires revalidation and
+real revalidation evidence clears it, each of the five statuses is derived from real content, an
+un-migrated project's original PASS and `WAIVER_REVISION_STALE` paths are asserted unchanged, and a
+byte-level snapshot proves reading writes nothing. Nothing in it runs a build, a regression or an
+LSF submission, and no human-approval gate is touched.

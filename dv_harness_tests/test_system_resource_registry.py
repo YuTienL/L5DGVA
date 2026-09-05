@@ -28,6 +28,11 @@ the cases that carry this suite are the conflicting and ambiguous ones:
   * a THIRD subsystem joining the same physical resource -> still one entry
     (identity is transitive), three consumers;
   * two PASSIVE monitors -> PASSIVE_ONLY, never REUSE_SHARED;
+  * two PASSIVE monitors whose captured configurations are identical
+    field-for-field on an agreed protocol -> REMOVE_DUPLICATE, against three
+    negatives that stay PASSIVE_ONLY (a config field only one side carries, a
+    missing capture on one side, an unclassified protocol) -- the pair of
+    decisions section 198 distinguishes and a single PASSIVE_ONLY cannot;
   * two subsystems whose SoC address ranges genuinely overlap;
   * a subsystem-specific PCIe VIP pair -> KEEP_INDEPENDENT, never promoted;
   * two ACTIVE rows inside ONE subsystem's own matrix -> a BLOCKED row in
@@ -97,10 +102,11 @@ SYS17_REQUIREMENT_TEXT = (
     "Resource | Subsystem A | Subsystem B | Physical Interface | Relationship | "
     "Active Driver Conflict | Decision | System Owner")
 
-# Copied verbatim from SYS-17's "Decision:" sentence.
+# Copied verbatim from SYS-17's "Decisions:" block (section 198), one value per
+# line in the document, in the document's own order.
 SYS17_DECISION_TEXT = (
-    "REUSE_SHARED / KEEP_INDEPENDENT / PASSIVE_ONLY / RECONFIGURE / "
-    "MERGE_ACCESS_PATH / BLOCKED / UNKNOWN")
+    "REUSE_SHARED / KEEP_INDEPENDENT / PASSIVE_ONLY / REMOVE_DUPLICATE / "
+    "RECONFIGURE / MERGE_ACCESS_PATH / BLOCKED / UNKNOWN")
 
 
 def test_sys15_fields_match_the_requirements_own_list_one_to_one():
@@ -126,10 +132,22 @@ def test_sys17_columns_are_exactly_the_requirements_own_eight():
 def test_sys17_decision_vocabulary_is_closed_and_verbatim():
     items = tuple(d.strip() for d in SYS17_DECISION_TEXT.split("/"))
     assert items == srr.SYS17_DECISIONS
+    assert len(items) == 8
     # Every decision has a severity, and every severity is a decision -- the
     # entry-level fold cannot silently ignore a value.
     assert set(srr.DECISION_SEVERITY) == set(srr.SYS17_DECISIONS)
     assert len(set(srr.DECISION_SEVERITY.values())) == len(srr.SYS17_DECISIONS)
+
+
+def test_keeping_a_monitor_outranks_removing_it_in_the_entry_level_fold():
+    """A three-member group where one pair proved redundancy and another did
+    not must fold to PASSIVE_ONLY, not REMOVE_DUPLICATE: the redundancy proof
+    covers the pair it was computed on and nothing else, and deleting an agent
+    is the less reversible act."""
+    assert srr.DECISION_SEVERITY[srr.PASSIVE_ONLY] < srr.DECISION_SEVERITY[srr.REMOVE_DUPLICATE]
+    # ...and both still lose to every stop/ambiguity value.
+    for restrictive in (srr.BLOCKED, srr.RECONFIGURE, srr.DECISION_UNKNOWN):
+        assert srr.DECISION_SEVERITY[restrictive] < srr.DECISION_SEVERITY[srr.REMOVE_DUPLICATE]
 
 
 def test_sys15_fields_match_the_json_schema_required_list():
@@ -301,6 +319,185 @@ def test_two_passive_monitors_are_passive_only_and_never_reuse_shared(tmp_path):
     row = plan["vip_agent_deduplication_matrix"]["rows"][0]
     assert row["Active Driver Conflict"] == srr.ADC_NO
     assert row["Decision"] == srr.PASSIVE_ONLY
+    # ...and the reason is the one that separates it from REMOVE_DUPLICATE:
+    # neither side carried a real captured configuration, so nothing about
+    # what these two monitors observe was ever compared.
+    dup = row["detail"]["duplicate_observability"]
+    assert dup["verdict"] == srr.DUP_UNIQUE_POSSIBLE
+    assert dup["basis"]["config_field_count_a"] == 0
+    assert dup["basis"]["config_field_count_b"] == 0
+    assert "no live vip_config capture" in dup["reason"]
+
+
+# ============================================================================
+# SYS-17 REMOVE_DUPLICATE vs PASSIVE_ONLY (section 198's eighth decision)
+#
+# Both decisions apply to the SAME relationship class (MONITOR_ONLY_DUPLICATE)
+# and they are different acts -- keep the second monitor, or delete it. These
+# tests drive the real SYS-9..SYS-17 stack over synthetic subsystems that
+# differ ONLY in the evidence the classifier reads, so each assertion proves
+# that evidence is what moved the decision.
+# ============================================================================
+
+_MONITOR_CONFIG = {"data_width": "64", "protocol_checks_enable": "1",
+                   "coverage_enable": "1"}
+
+
+def _two_passive_monitors(tmp_path, *, a_config=None, b_config=None,
+                          protocol="AXI4"):
+    """Two subsystems, each with exactly ONE PASSIVE monitor bound to the SAME
+    absolute SoC hierarchy path. `*_config` is that monitor's captured
+    vip_config field map, or None for "no live dump was taken"."""
+    def _side(name, config):
+        return _subsystem_sources(
+            tmp_path, name,
+            rows=[_matrix_row(dut_instance="chip.soc.cpu_axi_m", interface="axi_m",
+                              vip_type="svt_axi_monitor", active_passive="passive",
+                              bind_target=SHARED_CPU_BIND, protocol=protocol,
+                              role=MASTER_ROLE,
+                              fabric_side_role=conn.FABRIC_SIDE_MASTER_INTERFACE)],
+            vip_instances=([(SHARED_CPU_BIND, "svt_axi_monitor", config)]
+                           if config is not None else ()))
+    return _side("SUBSYS_A", a_config), _side("SUBSYS_B", b_config)
+
+
+def test_two_identically_configured_monitors_are_remove_duplicate(tmp_path):
+    """The positive case: two PASSIVE monitors on one physical interface, both
+    with a real captured configuration, identical field-for-field, on an agreed
+    protocol. The second observes nothing the first does not and drives
+    nothing, so it is genuinely redundant -- REMOVE_DUPLICATE, which is a
+    different decision from PASSIVE_ONLY's "keep it as a monitor"."""
+    a, b = _two_passive_monitors(tmp_path, a_config=dict(_MONITOR_CONFIG),
+                                 b_config=dict(_MONITOR_CONFIG))
+    analysis, plan = _plan([a, b])
+    assert analysis["relationships"][0]["relationship"] == sri.REL_MONITOR_ONLY_DUPLICATE
+
+    entry = _only_entry(plan)
+    assert entry["reuse_decision"] == srr.REMOVE_DUPLICATE
+    # A redundant monitor is not a conflict and is not a shared-agent proposal.
+    assert entry["conflict_status"] == srr.CONFLICT_NONE
+    assert not entry["reuse_decision"].startswith("REUSE")
+
+    row = plan["vip_agent_deduplication_matrix"]["rows"][0]
+    assert row["Decision"] == srr.REMOVE_DUPLICATE
+    assert row["Active Driver Conflict"] == srr.ADC_NO
+    dup = row["detail"]["duplicate_observability"]
+    assert dup["verdict"] == srr.DUP_REDUNDANT
+    # The evidence is real, not asserted: two captured configurations whose
+    # whole-field hashes are equal, on an AGREEing protocol signal.
+    assert dup["basis"]["config_field_count_a"] == dup["basis"]["config_field_count_b"] == 3
+    assert (dup["basis"]["configuration_hash_a"]
+            == dup["basis"]["configuration_hash_b"] != "")
+    assert dup["basis"]["protocol_signal"] == sri.AGREE
+
+    # ARBITRATION BOUNDARY: it names both interchangeable copies and refuses to
+    # pick one. Deciding which agent a project deletes is a human's call.
+    assert row["detail"]["interchangeable_copies"] == sorted(
+        [analysis["relationships"][0]["resource_a"],
+         analysis["relationships"][0]["resource_b"]])
+    assert srr.RETENTION_NOT_ARBITRATED in row["detail"]["retention_choice"]
+    assert row["detail"]["recommendation_only"] is True
+    assert plan["artifacts_modified"] is False
+
+
+def test_a_monitor_with_a_config_field_the_other_lacks_stays_passive_only(tmp_path):
+    """The discriminating negative, and the whole reason PASSIVE_ONLY could not
+    already carry section 198's REMOVE_DUPLICATE meaning.
+
+    SYS-10's `configuration` signal compares only the fields both sides SHARE,
+    so a monitor carrying an extra `coverage_enable` still reports AGREE --
+    every shared field really does match. But that extra field is exactly the
+    shape of a covergroup or a protocol check only ONE monitor has, i.e. real
+    unique observability. The pair is still a duplicate; it is not a redundant
+    one, and deleting it would silently stop observing something."""
+    a_config = dict(_MONITOR_CONFIG)
+    b_config = {k: v for k, v in _MONITOR_CONFIG.items() if k != "coverage_enable"}
+    a, b = _two_passive_monitors(tmp_path, a_config=a_config, b_config=b_config)
+    analysis, plan = _plan([a, b])
+
+    rel = analysis["relationships"][0]
+    assert rel["relationship"] == sri.REL_MONITOR_ONLY_DUPLICATE
+    # Every field they share agrees -- so the SYS-10 signal alone would not
+    # have separated this case from the redundant one.
+    assert rel["comparison"]["signals"]["configuration"]["verdict"] == sri.AGREE
+
+    entry = _only_entry(plan)
+    assert entry["reuse_decision"] == srr.PASSIVE_ONLY
+    row = plan["vip_agent_deduplication_matrix"]["rows"][0]
+    assert row["Decision"] == srr.PASSIVE_ONLY
+    dup = row["detail"]["duplicate_observability"]
+    assert dup["verdict"] == srr.DUP_UNIQUE_POSSIBLE
+    assert dup["basis"]["configuration_hash_a"] != dup["basis"]["configuration_hash_b"]
+    assert dup["basis"]["config_field_count_a"] == 3
+    assert dup["basis"]["config_field_count_b"] == 2
+    # Nothing is proposed for removal when removal was not proven.
+    assert row["detail"]["interchangeable_copies"] == []
+    assert row["detail"]["retention_choice"] == ""
+
+
+def test_one_side_with_no_captured_config_cannot_prove_redundancy(tmp_path):
+    """Half the evidence is not the evidence. One live vip_config dump says
+    nothing about what the OTHER monitor checks or covers, and an absent
+    capture must never read as agreement."""
+    a, b = _two_passive_monitors(tmp_path, a_config=dict(_MONITOR_CONFIG), b_config=None)
+    _, plan = _plan([a, b])
+    row = plan["vip_agent_deduplication_matrix"]["rows"][0]
+    assert row["Decision"] == srr.PASSIVE_ONLY
+    dup = row["detail"]["duplicate_observability"]
+    assert dup["verdict"] == srr.DUP_UNIQUE_POSSIBLE
+    assert dup["basis"]["config_field_count_a"] == 3
+    assert dup["basis"]["config_field_count_b"] == 0
+    assert "side B" in dup["reason"]
+
+
+def test_identical_config_on_an_unclassified_protocol_stays_passive_only(tmp_path):
+    """Identical configuration of two decoders nobody established decode the
+    same protocol is not identical observability. The protocol signal is
+    UNKNOWN here (no row went through classify_amba_protocol successfully), and
+    UNKNOWN is not AGREE."""
+    a, b = _two_passive_monitors(tmp_path, a_config=dict(_MONITOR_CONFIG),
+                                 b_config=dict(_MONITOR_CONFIG),
+                                 protocol=conn.PROTOCOL_NOT_CLASSIFIED)
+    analysis, plan = _plan([a, b])
+    assert analysis["relationships"][0]["relationship"] == sri.REL_MONITOR_ONLY_DUPLICATE
+    row = plan["vip_agent_deduplication_matrix"]["rows"][0]
+    assert row["Decision"] == srr.PASSIVE_ONLY
+    dup = row["detail"]["duplicate_observability"]
+    assert dup["verdict"] == srr.DUP_UNIQUE_POSSIBLE
+    # The configuration half really did match; it is the protocol half that
+    # withheld the decision.
+    assert dup["basis"]["configuration_hash_a"] == dup["basis"]["configuration_hash_b"]
+    assert dup["basis"]["protocol_signal"] == sri.SIGNAL_UNKNOWN
+
+
+def test_a_redundant_monitor_pair_needs_no_shared_access_point(tmp_path):
+    """SYS-24 wiring: a REMOVE_DUPLICATE resource must land in the same
+    PASSIVE_NO_ARBITRATION disposition PASSIVE_ONLY does. Falling through would
+    propose a shared System sequencer/driver/queue for a resource on which
+    nobody drives anything."""
+    from dv_harness import system_scheduling_plan as ssp
+
+    assert srr.REMOVE_DUPLICATE in ssp.PASSIVE_NO_ARBITRATION_DECISIONS
+    assert srr.PASSIVE_ONLY in ssp.PASSIVE_NO_ARBITRATION_DECISIONS
+    # A removal is never treated as a routing decision either.
+    assert srr.REMOVE_DUPLICATE not in ssp.UNSCHEDULABLE_DECISIONS
+
+    a, b = _two_passive_monitors(tmp_path, a_config=dict(_MONITOR_CONFIG),
+                                 b_config=dict(_MONITOR_CONFIG))
+    analysis, plan = _plan([a, b])
+    entry = _only_entry(plan)
+    assert entry["reuse_decision"] == srr.REMOVE_DUPLICATE
+    scheduling = ssp.build_system_scheduling_plan(
+        plan, {"system_command_ir": {"entries": []}},
+        resource_analysis=analysis)
+    rows = [r for r in scheduling["shared_resource_scheduling"]["entries"]
+            if r["shared_resource_key"] == entry["resource_id"]]
+    assert rows, [r["shared_resource_key"]
+                  for r in scheduling["shared_resource_scheduling"]["entries"]]
+    assert rows[0]["scheduling_disposition"] == ssp.SCHED_PASSIVE_NO_ARBITRATION
+    assert rows[0]["registry_reuse_decision"] == srr.REMOVE_DUPLICATE
+    assert rows[0]["shared_access_point"] == ssp.NO_ACCESS_POINT
+    assert rows[0]["arbitration_policy_required"] is False
 
 
 def test_identity_is_transitive_so_three_subsystems_make_one_entry(tmp_path):

@@ -208,6 +208,16 @@ GLOBAL_SERIALIZATION_DETECTED = "GLOBAL_SERIALIZATION_DETECTED"
 #: stepped past at the scheduling layer.
 UNSCHEDULABLE_DECISIONS: frozenset = frozenset({srr.BLOCKED, srr.DECISION_UNKNOWN})
 
+#: Registry `reuse_decision` values whose consumers are ALL passive observers,
+#: so there is nothing to arbitrate between them. Both of SYS-17's monitor
+#: -duplicate decisions belong here: PASSIVE_ONLY keeps two monitors and
+#: REMOVE_DUPLICATE keeps one, and neither outcome puts a driver on the
+#: interface. Leaving REMOVE_DUPLICATE out would fall through to
+#: SCHED_SINGLE_SHARED_ACCESS_POINT and propose a shared sequencer/driver/queue
+#: for a resource nobody drives.
+PASSIVE_NO_ARBITRATION_DECISIONS: frozenset = frozenset({
+    srr.PASSIVE_ONLY, srr.REMOVE_DUPLICATE})
+
 
 # ===========================================================================
 # SYS-25 vocabulary
@@ -879,11 +889,14 @@ def plan_shared_resource_scheduling(ir: Mapping[str, Any],
                       "sentence forbids serializing independent subsystems, and hoisting "
                       "an unshared resource into a System access point is that same "
                       "mistake made structurally")
-        elif decision == srr.PASSIVE_ONLY:
+        elif decision in PASSIVE_NO_ARBITRATION_DECISIONS:
             disposition = SCHED_PASSIVE_NO_ARBITRATION
             reason = ("every consumer of this resource is a passive observer; passive "
                       "monitors do not drive it, so they need no shared driver or queue "
-                      "between them")
+                      "between them"
+                      + (" (the registry additionally judged one of them redundant, which "
+                         "removes an observer and never adds a driver)"
+                         if decision == srr.REMOVE_DUPLICATE else ""))
         elif not constraints["derived"]:
             disposition = SCHED_UNKNOWN
             reason = constraints["reason"]
