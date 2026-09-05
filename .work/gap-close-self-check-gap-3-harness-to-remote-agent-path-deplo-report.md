@@ -181,24 +181,80 @@ incremental behavior is real, not asserted.
 ## Test summary
 
 `python -m pytest dv_harness_tests/test_harness_deploy.py -q` → **49 passed**.
-Full `dv_harness_tests` suite (5258 tests) re-run after the change: only the 11
-known pre-existing environmental failures remain (5 × `test_cli_pueue.py` +
-6 × `test_pueue_client.py` errors — the `pueued` daemon does not start on this
-machine, reproduced and attributed in `.work/gap-close-3loop-gap-1-report.md:168`,
-`.work/gap-close-capability-evolution-acceptance-tests-report.md:298` and two
-other prior session reports). Nothing in this change touches pueue.
 
-## Commit scoping
+The full 5258-test suite was run serially in two halves (the first background
+run was killed at 65% by the harness, so the remaining 80 files were run as a
+second process — noted because cross-file ordering effects *between* the halves
+are therefore not reproduced):
 
-`dv_harness/capability_evolution.py` and
-`dv_harness/schemas/capability_evolution_candidate.schema.json` appeared as
-modified in the working tree partway through this pass — another concurrent
-session's work, not mine. They are deliberately **not staged**. My two shared
-files were verified to carry only my own hunks before staging:
-`git diff -U0 dv_harness/cli.py` → exactly 2 hunks, both pure insertions
-(`@@ -1382,0 +1383,51 @@` and `@@ -2812,0 +2864,20 @@`);
-`git diff -U0 CLAUDE.md` → one hunk, `@@ -1544,0 +1545,103 @@`, appended at the
-end of file. Zero deletions in either.
+| segment | result |
+|---|---|
+| files up to `test_qualification.py` (~3418 tests) | 8 failed, 6 errors |
+| remaining 80 files (`test_pueue_preflight_gate.py` → `test_workflow_rca_multi_agent_fusion.py`) | **1935 passed, 0 failed** |
+
+Every one of the 14 is accounted for, and none is attributable to this change:
+
+- **5 F `test_cli_pueue.py` + 6 E `test_pueue_client.py`** — the known
+  environmental baseline: `pueued` does not start on this machine. Reproduced
+  and attributed in four prior session reports
+  (`gap-close-3loop-gap-1-report.md:168`,
+  `gap-close-capability-evolution-acceptance-tests-report.md:298`,
+  `gap-close-asset-table-9-level-conflict-authority-order-mismatc-report.md:35`,
+  `gap-close-governance-arch-preflight-...-report.md:121`). Nothing here touches
+  pueue.
+- **1 F `test_capability_evolution_controlled_experiment.py::test_a_hand_written_benchmark_result_is_refused`**
+  — a concurrent session's mid-edit state (`capability_evolution.py` and its
+  schema were `M` in the shared tree at that moment). **Re-run after they
+  committed: passes.**
+- **2 F `test_dashboard_interactive.py` coverage tests** — cross-file order
+  dependence, pre-existing. **Verified: both pass in isolation, and the whole
+  file passes 54/54 standalone.** They also run alphabetically *before*
+  `test_harness_deploy.py`, so this change cannot be their cause, and the only
+  `CLAUDE.md` reference in that file is a comment on line 1177.
+
+## Commit: what actually happened (read this before assuming a scoped commit)
+
+**This work is committed, but NOT as its own scoped commit, and not by me.**
+While the full suite was running, a *concurrent session* in this same working
+tree ran a broad `git add` and swept all five of my files into **its** commit,
+`e0a3002 "capability_evolution: real controlled-experiment execution +
+harness-deploy mechanism"`, alongside its own unrelated capability_evolution
+work. That commit contains, at their final content:
+
+```
+dv_harness/harness_deploy.py             | 860 +
+dv_harness/harness_deploy.manifest.json  |  83 +
+dv_harness_tests/test_harness_deploy.py  | 684 +
+dv_harness/cli.py                        |  71 +   (mixed: my 2 hunks + theirs)
+CLAUDE.md                                | 208 +   (mixed: my 103 lines + theirs)
+```
+
+Verified after the fact: `git diff dv_harness/harness_deploy.py
+dv_harness/harness_deploy.manifest.json dv_harness_tests/test_harness_deploy.py`
+is **empty** against HEAD — the committed content is my final version, not a
+mid-edit snapshot — and `git show HEAD:CLAUDE.md | grep -c
+"Harness-to-Remote-Agent-Path Deployment"` returns 1. Nothing of mine is left
+uncommitted; the remaining working-tree delta in `CLAUDE.md`/`cli.py` is that
+other session's `loop_convergence` work (`@@ -1865,0 +1866,108 @@` and
+`@@ -1461,0 +1462,9 @@`), which I have not touched.
+
+**I did not rewrite history to re-scope it.** The content is already in a
+pushed-branch ancestor; splitting it out would mean rewriting shared history,
+which is not sanctioned and is far worse than a mixed commit message. Recorded
+here instead so `git log` alone does not mislead a future reader about which
+change this report describes.
+
+**Before that happened**, my two shared files were verified to carry only my own
+hunks: `git diff -U0 dv_harness/cli.py` → exactly 2 hunks, both pure insertions
+(`@@ -1382,0 +1383,51 @@`, `@@ -2812,0 +2864,20 @@`); `git diff -U0 CLAUDE.md`
+→ one hunk, `@@ -1544,0 +1545,103 @@`, appended at end of file. Zero deletions
+in either. The concurrent session's own in-flight files were deliberately never
+staged by me.
+
+**Process lesson worth keeping**: two agents sharing one working tree means a
+broad `git add` by either one captures the other's in-progress edits. Scoped
+`git add <explicit paths>` is not merely tidier here — it is the only thing that
+keeps commits attributable at all.
 
 ## Method note: the suite was NOT run under pytest-xdist
 
