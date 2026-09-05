@@ -65,6 +65,10 @@ main{padding:24px;max-width:1200px;margin:auto}
 .icon{font-weight:bold}
 .PASS,.CLOSED,.SCRIPT_SMOKE_PASS{color:#25845b}.FAIL,.BLOCKED,.SCRIPT_SMOKE_FAIL{color:#b84444}
 .RUNNING,.RETRY{color:#2457a6}.PARTIAL,.WAIT_USER,.NO_SOURCE_DATA,.GATE_TOOL_MISSING{color:#b36a00}.NOT_STARTED{color:#9aa6bd}
+/* amba_fabric_discovery.BIND_READINESS_VALUES: READY/PARTIAL/BLOCKED/UNKNOWN.
+   PARTIAL and BLOCKED already have a color above (same words, same meaning);
+   these two are the readiness-only values. */
+.READY{color:#25845b}.UNKNOWN{color:#9aa6bd}
 .protoTile{cursor:pointer}.protoTile:hover{border-color:#2457a6}.protoTile.selected{border-color:#2457a6;background:#eaf1fb}
 .modeTile.mode-selected{border-color:#2457a6;background:#eaf1fb}
 .tier-reached{border-color:#25845b;background:#e3f7ea}.tier-unreached{opacity:.5}
@@ -158,6 +162,32 @@ honest empty state below, never a fabricated percent.</div>
 <div class="note" id="coverageTrendNote" style="margin-top:8px"></div>
 <div id="coverageTrendChart" style="margin-top:6px"></div>
 </div>
+<div class="card" id="ambaFabricCard"><h3>AMBA Fabric / VIP Bind / Scoreboard</h3>
+<div class="note">Real AMBA-22 <code>AMBA_PORT_REGISTRY</code> rows (GET /api/amba, reading
+<code>.dv-harness/amba/amba_port_registry.json</code> through
+<code>amba_port_registry.load_amba_port_registry()</code>): one row per discovered fabric port, every
+column read off the AMBA-16 matrix / AMBA-15 width checklist / AMBA-20 VIP plan / AMBA-21 scoreboard
+ingress map those modules already produced -- never re-derived here. Traced masters/slaves and the
+unresolved list come from the same module's <code>registry_endpoints()</code>. No registry file yet
+shows an honest empty state below, never a fabricated port; a registry failing that module's own
+<code>assert_registry_complete()</code> reports its real reason/detail instead.
+<b>Discovery and planning only</b> (AMBA-30 / AMBA-31): every <code>vip_bind_hierarchy</code> below is
+a PROPOSED location a human reviews -- this card is read-only and neither shows nor emits any
+SystemVerilog <code>bind</code> statement.</div>
+<div id="ambaTiles" class="tiles" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><label>Filter by port / hierarchy
+  <input id="ambaPortFilter" size="26" oninput="renderAmbaTable()" placeholder="substring filter"></label></div>
+<div style="overflow-x:auto"><table id="ambaTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Port</th><th style="padding:4px">Protocol</th><th style="padding:4px">Fabric Role</th>
+<th style="padding:4px">Endpoint (traced)</th><th style="padding:4px">Proposed VIP Bind</th>
+<th style="padding:4px">VIP Mode</th><th style="padding:4px">Scoreboard Channel</th>
+<th style="padding:4px">Trace Status</th><th style="padding:4px">Readiness</th>
+<th style="padding:4px">Confidence</th></tr></thead>
+<tbody id="ambaTableBody"></tbody></table></div>
+<div class="note" id="ambaUnresolvedNote" style="margin-top:8px"></div>
+</div>
+
 <div class="card" id="blackboardEvidenceCard"><h3>Blackboard Evidence</h3>
 <div class="note" id="blackboardEvidenceNote"></div>
 <div class="note" style="margin-top:6px">Current blackboard topics (real, from <code>.dv-harness/blackboard/</code>): <span id="blackboardTopicsList"></span></div>
@@ -673,6 +703,68 @@ async function loadCoverageAnalysis(){
   chart.innerHTML = r.trend_svg || '';
 }
 
+// AMBA Fabric / VIP Bind / Scoreboard card (GUI-09). Fetch-once + filter
+// client-side, same shape as the FSDB card above -- typing in the filter must
+// not re-read the registry file on every keystroke.
+let _ambaData = null;
+async function loadAmbaFabric(){
+  _ambaData = await (await fetch('/api/amba')).json();
+  renderAmbaTable();
+}
+function renderAmbaTable(){
+  let r = _ambaData;
+  let tiles = document.getElementById('ambaTiles');
+  let tbody = document.getElementById('ambaTableBody');
+  let note = document.getElementById('ambaUnresolvedNote');
+  if(!r) return;
+  if(!r.available){
+    tiles.innerHTML = tile('-','No AMBA port registry yet');
+    tbody.innerHTML = '<tr><td style="padding:4px" colspan="10">No AMBA_PORT_REGISTRY yet (looked for '+r.registry_path+').</td></tr>';
+    note.textContent = '';
+    return;
+  }
+  if(r.error){
+    tiles.innerHTML = tile('ERROR','AMBA_PORT_REGISTRY');
+    tbody.innerHTML = '<tr><td style="padding:4px" colspan="10" class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</td></tr>';
+    note.textContent = '';
+    return;
+  }
+  let s = r.summary || {}, rc = s.readiness_counts || {};
+  tiles.innerHTML = [
+    tile(s.fabric_port_count||0,'Fabric Ports'), tile(s.row_count||0,'Registry Rows'),
+    tile(rc.READY||0,'Bind READY'), tile(rc.PARTIAL||0,'Bind PARTIAL'),
+    tile(rc.BLOCKED||0,'Bind BLOCKED'), tile(rc.UNKNOWN||0,'Bind UNKNOWN'),
+    tile(s.vip_planned||0,'VIP Planned'), tile(s.vip_not_planned||0,'No VIP Planned'),
+    tile(s.scoreboard_channel_mapped||0,'Scoreboard Channel Mapped'),
+    tile(s.traced_master_count||0,'Traced Masters'), tile(s.traced_slave_count||0,'Traced Slaves'),
+    tile(s.unresolved_count||0,'Unresolved Endpoints')
+  ].join('');
+  let f = (val('ambaPortFilter')||'').toLowerCase();
+  let all = r.rows||[];
+  let rows = f ? all.filter(row=>[row.port_id,row.fabric_port,row.endpoint_hierarchy,row.vip_bind_hierarchy]
+                                   .some(v=>String(v||'').toLowerCase().includes(f))) : all;
+  tbody.innerHTML = rows.map(row=>{
+    // The AMBA-15 widths and the row's citable source_evidence go on the row's
+    // title rather than into ten more columns -- they are the drill-down a
+    // reviewer wants on one specific port, not a scan-the-table fact.
+    let hover = `clock: ${row.clock} | reset: ${row.reset} | address_width: ${row.address_width}`
+      + ` | data_width: ${row.data_width} | id_width: ${row.id_width} | user_widths: ${row.user_widths}`
+      + ` | evidence: ${(row.source_evidence||[]).join(' ; ')}`;
+    return `<tr style="border-bottom:1px solid #edf1f5" title="${hover.replace(/"/g,'&quot;')}">`+
+      `<td style="padding:4px"><code>${row.port_id}</code></td><td style="padding:4px">${row.protocol}</td>`+
+      `<td style="padding:4px">${row.fabric_role}</td><td style="padding:4px">${row.endpoint_hierarchy}</td>`+
+      `<td style="padding:4px">${row.vip_bind_hierarchy}</td><td style="padding:4px">${row.vip_mode}</td>`+
+      `<td style="padding:4px">${row.scoreboard_channel}</td><td style="padding:4px">${row.trace_status}</td>`+
+      `<td style="padding:4px" class="${row.readiness}">${row.readiness}</td>`+
+      `<td style="padding:4px">${row.confidence}</td></tr>`;
+  }).join('') || `<tr><td style="padding:4px" colspan="10">${all.length? 'No rows match the current filter.' : 'Registry file present but no fabric port was discovered.'}</td></tr>`;
+  let unresolved = (r.endpoints && r.endpoints.unresolved) || [];
+  note.innerHTML = unresolved.length
+    ? 'Ports with no established endpoint (AMBA-14 never invents one): '
+      + unresolved.map(u=>`<code>${u.port_id}</code> (${u.trace_status})`).join(', ')
+    : 'Every registry row established a real transaction endpoint.';
+}
+
 async function loadKnowledgeStatus(){
   let r = await (await fetch('/api/knowledge/status')).json();
   document.getElementById('knowledgeStatusResult').textContent = JSON.stringify(r, null, 2);
@@ -1020,6 +1112,7 @@ async function load(){
  await loadJobs();
  await loadAudit();
  await loadCoverageAnalysis();
+ await loadAmbaFabric();
  await showExplain(activeIds);
 }
 async function showExplain(stage){
@@ -1482,6 +1575,103 @@ def _read_coverage_state(root: Path, summary_path: Optional[Path] = None,
         "history": history,
         "trend": trend,
         "trend_svg": trend_svg,
+        "error": None,
+    }
+
+
+# --- AMBA fabric / VIP bind / scoreboard registry (GET /api/amba) ----------
+# GUI-09 (2026-09-05 GUI completeness audit): dashboard.py contained zero
+# references to the AMBA discovery pipeline, even though
+# amba_fabric_discovery.py -> amba_port_registry.py -> amba_scoreboard_env.py
+# already produce the one artifact that joins every fact a fabric reviewer
+# needs -- AMBA-22's AMBA_PORT_REGISTRY, one row per discovered fabric port
+# carrying protocol, fabric/endpoint role, the traced endpoint hierarchy, the
+# AMBA-15 widths, the AMBA-20 vip_mode, and the AMBA-21 scoreboard_channel that
+# port's proposed VIP monitor would feed.
+#
+# This reads that registry off disk through the REAL
+# amba_port_registry.load_amba_port_registry() (which runs the module's own
+# assert_registry_complete() on the way in, so a row with a silently-absent
+# column is reported as an error rather than rendered as a blank cell) and
+# derives the master/slave/unresolved split through the REAL
+# registry_endpoints() -- never a second, dashboard-local re-derivation of
+# either. Same read-real-file-honest-empty-state contract as
+# _read_coverage_state() above: no registry on disk yet is {"available": False},
+# never a fabricated port.
+#
+# DISCOVERY AND PLANNING ONLY (AMBA-30 / AMBA-31): every `vip_bind_hierarchy`
+# this surfaces is a PROPOSED location a human reviews, not a bind statement.
+# That is why this endpoint is GET-only and the card is read-only -- approving
+# a fabric bind plan from a browser form would be exactly the auto-acceptance
+# amba_port_registry.py's own module docstring refuses.
+def _default_amba_registry_path(root: Path) -> Path:
+    return root / ".dv-harness" / "amba" / "amba_port_registry.json"
+
+
+def _read_amba_registry_state(root: Path,
+                               registry_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Real AMBA_PORT_REGISTRY rows + the derived endpoint/readiness/scoreboard
+    summary for GET /api/amba.
+
+    `registry_path` is overridable (like _read_coverage_state()'s summary/history
+    paths) so a project whose AMBA discovery pass wrote its registry elsewhere
+    can point at it without this module guessing a second location.
+
+    A registry that fails amba_port_registry.assert_registry_complete() reports
+    that module's own PortRegistryError reason/detail rather than a generic 500:
+    this is a read of an artifact another pipeline produced, not a client request
+    body, and "which column is missing on which port_id" is exactly what the
+    reviewer needs to see."""
+    from . import amba_port_registry as apr
+    from .amba_fabric_discovery import FabricDiscoveryError, parent_matrix_rows
+    from .connectivity import REQUIRED_HUMAN_INPUT
+
+    path = Path(registry_path) if registry_path else _default_amba_registry_path(root)
+    empty = {"available": False, "registry_path": str(path), "rows": [],
+             "endpoints": None, "summary": None, "error": None}
+    if not path.exists():
+        return empty
+
+    try:
+        rows = apr.load_amba_port_registry(path)
+    except FabricDiscoveryError as e:
+        return {**empty, "available": True,
+                "error": {"reason": e.reason, "detail": e.detail}}
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": "MALFORMED_REGISTRY_FILE", "detail": {"message": str(e)}}}
+
+    endpoints = apr.registry_endpoints(rows)
+    readiness_counts: Dict[str, int] = {}
+    for r in rows:
+        key = str(r.get("readiness") or "UNKNOWN")
+        readiness_counts[key] = readiness_counts.get(key, 0) + 1
+    vip_planned = sum(1 for r in rows if r.get("vip_mode") != apr.VIP_MODE_NOT_PLANNED)
+    # A scoreboard_channel of REQUIRED_HUMAN_INPUT is amba_scoreboard_env's own
+    # sentinel for "nothing established where this monitor would feed" -- counted
+    # separately rather than folded in, because a blank cell reads as an
+    # oversight and a mapped channel is a materially different review state.
+    sb_mapped = sum(1 for r in rows
+                    if r.get("scoreboard_channel") not in (None, "", REQUIRED_HUMAN_INPUT))
+    return {
+        "available": True,
+        "registry_path": str(path),
+        "rows": rows,
+        "endpoints": endpoints,
+        "summary": {
+            # parent_matrix_rows(): counting the raw row list would count a
+            # multiple-destination port once per traced branch.
+            "fabric_port_count": len(parent_matrix_rows(rows)),
+            "row_count": len(rows),
+            "readiness_counts": readiness_counts,
+            "vip_planned": vip_planned,
+            "vip_not_planned": len(rows) - vip_planned,
+            "scoreboard_channel_mapped": sb_mapped,
+            "scoreboard_channel_required_human_input": len(rows) - sb_mapped,
+            "traced_master_count": len(endpoints["masters"]),
+            "traced_slave_count": len(endpoints["slaves"]),
+            "unresolved_count": len(endpoints["unresolved"]),
+        },
         "error": None,
     }
 
@@ -2101,6 +2291,18 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                     project_root,
                     Path(summary_override) if summary_override else None,
                     Path(history_override) if history_override else None,
+                ))
+            elif self.path == "/api/amba" or self.path.startswith("/api/amba?"):
+                # Read-only by design -- see _read_amba_registry_state()'s
+                # "DISCOVERY AND PLANNING ONLY" comment: a proposed
+                # vip_bind_hierarchy is approved by a human at AMBA-30/AMBA-31,
+                # never through a browser POST.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                registry_override = urllib.parse.unquote(params["registry"]) if "registry" in params else None
+                self._send_json(_read_amba_registry_state(
+                    project_root,
+                    Path(registry_override) if registry_override else None,
                 ))
             elif self.path == "/api/user-info" or self.path.startswith("/api/user-info?"):
                 from . import user_info
