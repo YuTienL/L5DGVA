@@ -720,6 +720,49 @@ def main():
                       help="record-tuning-use: what the case was used to tune.")
     pbd.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
 
+    psbp = sub.add_parser("system-smoke-proof",
+                           help="Spec section 206 SYSTEM BUILD & PROOF: the static system MERGE "
+                                "COLLISION check (duplicate package/class/interface/module, UVM "
+                                "factory type-name collision, overlapping GLOBAL uvm_config_db "
+                                "set, virtual-interface conflict) over the REGISTERED subsystem "
+                                "environments analysed TOGETHER, plus the smoke-proof ladder "
+                                "(Build -> Elaborate -> Boot/Reset/Init -> Shared-Resource-Access "
+                                "-> One-Subsystem -> Two-Subsystem-Interaction -> "
+                                "End-to-End-Scenario -> WAVE=1/fsdbreport -> "
+                                "Scoreboard/Assertion -> SYSTEM_READY). Each rung calls an "
+                                "EXISTING real mechanism (connectivity.py's machine gates, the "
+                                "Track-B cross-subsystem analysis, fsdb_report.py, evidence_db) "
+                                "or reports NOT_AVAILABLE with its real reason -- never a "
+                                "fabricated PASS. Generates nothing, submits nothing, enables no "
+                                "waveform dump, and arbitrates no driver conflict. Exit 0 "
+                                "SYSTEM_READY, 1 SMOKE_FAIL, 2 SMOKE_NOT_PROVEN. See "
+                                "dv_harness/system_build_proof.py.")
+    psbp.add_argument("--subsystem", action="append", default=None, dest="sbp_subsystems",
+                       help="Limit to these REGISTERED subsystems (repeatable). Default: every "
+                            "subsystem in the real subsystem_environment_registry.json.")
+    psbp.add_argument("--composed-dir", default=None,
+                       help="The composed system environment directory (Track A's soc_tb_top.sv "
+                            "/ soc_virtual_sequencer.sv), merged into the analysed set under the "
+                            "key __system__.")
+    psbp.add_argument("--filelist", action="append", default=None, dest="sbp_filelists",
+                       help="A system-level filelist for the ELABORATE rung (repeatable). "
+                            "Without one that rung is NOT_AVAILABLE: writing a system filelist "
+                            "is SYS-40, which stops for human approval.")
+    psbp.add_argument("--top-module", default="soc_tb_top")
+    psbp.add_argument("--merge-only", action="store_true",
+                       help="Run only the static merge-collision check (the BUILD rung), which "
+                            "needs no simulator at all.")
+    psbp.add_argument("--db", default=None,
+                       help="Evidence database path for the SCOREBOARD_ASSERTION rung.")
+    psbp.add_argument("--system-job-id", type=int, default=None,
+                       help="The system run's job id, whose normalized_evidence rows the "
+                            "SCOREBOARD_ASSERTION rung reads.")
+    psbp.add_argument("--fsdb", default=None,
+                       help="An EXISTING system-level FSDB for the WAVE_FSDBREPORT rung. This "
+                            "verb reads a dump; it never enables one.")
+    psbp.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+    psbp.add_argument("--verible-bin", default=None, help="Override the verible binary name.")
+
     penvm = sub.add_parser("env-manifest", help="env.manifest.json: generated, diffable, git-tracked fact file "
                                                    "with three layers -- vip_config (a real UVM simv's own "
                                                    "already-resolved VIP config dump), dut_facts (verible-parsed "
@@ -2400,6 +2443,23 @@ def main():
         print(_bd_text)
         if _bd_code:
             raise SystemExit(_bd_code)
+    elif args.cmd == "system-smoke-proof":
+        # One shared implementation with `python -m dv_harness.system_build_proof`
+        # (system_build_proof.execute_verb), same convention as power-intent /
+        # golden-scenario / benchmark-dataset above. Exit codes: 0 SYSTEM_READY,
+        # 1 SMOKE_FAIL, 2 SMOKE_NOT_PROVEN or a merge check that could not run --
+        # anything short of proven never exits 0 (GF-AT-28).
+        from . import system_build_proof as _sbp
+        from .verible_parser import DEFAULT_VERIBLE_BIN as _SBP_VERIBLE
+        _sbp_text, _sbp_code = _sbp.execute_verb(
+            h.root, subsystems=args.sbp_subsystems, composed_dir=args.composed_dir,
+            filelist_paths=args.sbp_filelists, top_module=args.top_module,
+            merge_only=args.merge_only, evidence_db_path=args.db,
+            system_job_id=args.system_job_id, fsdb_path=args.fsdb,
+            as_json=args.json, verible_bin=args.verible_bin or _SBP_VERIBLE)
+        print(_sbp_text)
+        if _sbp_code:
+            raise SystemExit(_sbp_code)
     elif args.cmd == "env-manifest":
         from . import env_manifest
         from .env_manifest import (EnvManifestValidationError, RegisterMapValidationError,

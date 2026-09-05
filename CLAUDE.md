@@ -770,6 +770,91 @@ stored row untouched, because freshness is derived. Both CLI entry points are dr
 subprocesses and their exit codes asserted.
 
 
+## System Build & Smoke Proof (2026-09-06)
+
+Spec section 206's smoke-proof ladder is now DRIVEN, and the system MERGE COLLISION check it
+opens with is real. The gap was total: `grep -rn "smoke_proof\|SMOKE_PROOF\|system_smoke"
+--include=*.py .` matched NOTHING, so no code anywhere executed
+Build → Elaborate → Boot/Reset/Init → Shared-Resource-Access → One-Subsystem →
+Two-Subsystem-Interaction → One-End-to-End-Scenario → WAVE=1/fsdbreport → Scoreboard/Assertion →
+SYSTEM_READY. Two nearby mechanisms are deliberately NOT this and were not extended into it:
+`system_readiness.derive_system_readiness()` is a static metadata ROLLUP and says so in its own
+docstring ("Build integration at Phase 1 is a question about INPUTS, not about a build: no
+System-Level filelist exists to compile"), and `uvm_structural_lint.py` lints ONE environment —
+a duplicate class or an identically-named package across TWO subsystem environments is invisible
+to a per-environment lint by construction, which is why its own docstring lists "duplicate
+definitions" as not implemented.
+
+`dv_harness/system_build_proof.py` is both halves.
+
+**The merge check (`analyze_system_merge()`) is REAL here and needs no simulator.** It parses the
+merged source set with the SAME verible front end via `uvm_structural_lint.parse_uvm_file()` —
+there is no second SystemVerilog parser — and decides five things section 206 names:
+`DUPLICATE_PACKAGE_DECLARATION`, `DUPLICATE_TYPE_DEFINITION` (class/interface/module),
+`FACTORY_TYPE_NAME_COLLISION` (the UVM factory keys on the registered STRING, so two differently
+-named classes registering one name collide with no duplicate definition anywhere),
+`CONFIG_DB_SET_SCOPE_COLLISION` and `VIRTUAL_INTERFACE_CONFLICT`. Two additions were made to
+`uvm_structural_lint.py` to serve it rather than duplicate it: `UvmFileInfo.top_declarations`
+(package/interface/module names off the same parse) and the now-public
+`config_db_call_sites()`, which `_config_db_sites()` was refactored to use, so there is one place
+that knows how a `uvm_config_db` call is shaped. Sources come from the REAL registry through
+`subsystem_source_sets()` → `environment_mode_router.read_registered_subsystem_entries()`.
+
+**Deliberately bounded, and stated rather than implied closed.** A config_db collision is reported
+ONLY when both `set`s are rooted in the GLOBAL context (`null`/`uvm_root::get()`/`uvm_top`) and
+their `inst_name` globs overlap. A `set(this, ...)` resolves to wherever that component is
+instantiated, which a parse cannot know, so it is never reported — ERROR stays reserved for what
+the sources prove. A run-time-built scope is an INFO finding saying it was excluded, never
+silently dropped. Two colliding `set`s inside ONE subsystem are not reported: that environment
+already worked standalone and this check is about what the MERGE breaks. Duplicate VIP and address
+conflicts are NOT re-implemented here — they are SYS-9..SYS-14 / SYS-28 and already have real
+mechanisms.
+
+**The ladder (`run_system_smoke_proof()`) calls existing mechanisms, or says NOT_AVAILABLE.**
+ELABORATE is `connectivity.run_gate1_elaboration_check()`; BOOT_RESET_INIT is
+`connectivity.evaluate_zero_time_connectivity()` (or `run_gate2_against_live_simv()`'s honest
+NOT_AVAILABLE); SHARED_RESOURCE_ACCESS is `system_resource_inventory.real_cross_subsystem_findings()`
+— the same Track-B front door the two real gate scripts and the SoC composer already cross-check
+against, and it really runs here; ONE_SUBSYSTEM / TWO_SUBSYSTEM_INTERACTION are
+`connectivity.evaluate_transaction_activity_status()` (PENDING until a real pattern completes,
+never FAIL-by-absence), the second additionally requiring live monitors in ≥2 subsystems;
+WAVE_FSDBREPORT is `fsdb_report.run_fsdbreport()` + `parse_fsdbreport_output()` over an fsdb the
+caller ALREADY HAS — it never enables dumping, which would need the Waveform Dump User Gate;
+SCOREBOARD_ASSERTION reads the REAL `evidence_db` `normalized_evidence` rows with
+`golden_scenario.PASS_VERDICTS`, not a second notion of "clean". END_TO_END_SCENARIO is
+NOT_AVAILABLE by default naming the real boundary: `cross_subsystem_scenarios()` raises
+NotImplementedError on purpose (No Golden-Reference Content Mining) and SYS-40 stops for human
+approval, so this harness cannot generate one to run.
+
+`SYSTEM_READY` requires EVERY rung PASS; anything NOT_AVAILABLE/PENDING is `SMOKE_NOT_PROVEN`
+(GF-AT-28: UNKNOWN never becomes READY automatically), and a FAIL is `SMOKE_FAIL` which HALTS the
+ladder — the rungs after it are NOT_YET_RUN, section 209's `SMOKE_FAIL → TRIAGE` edge. A
+composition with fewer than two source sets, or none on disk, is NOT_AVAILABLE, never a clean
+merge of nothing (this repo's own subsystem registry is legitimately EMPTY).
+`dv-harness system-smoke-proof [--merge-only] [--json]` and
+`python -m dv_harness.system_build_proof` share one `execute_verb`; exit 0 SYSTEM_READY,
+1 SMOKE_FAIL, 2 SMOKE_NOT_PROVEN.
+
+**It generates nothing and arbitrates nothing**, and both are held by AST tests over the module
+itself rather than by prose: it calls no composer generation entry point, writes no file, submits
+no job, and picks no winner between two ACTIVE drivers — a DRIVER_CONFLICT FAILS the rung carrying
+`human_arbitration_required` and SYS-12's preferred model as text for the human who must decide.
+
+Proven by `dv_harness_tests/test_system_build_proof.py` (43 tests): a synthetic REGISTERED
+two-subsystem project with real parseable UVM sources merges clean, then every rule is driven by
+MUTATING that clean fixture ONE defect at a time (including a real injected duplicate global
+config_db path whose two virtual interface types differ, which the check catches); the REAL
+Track-B analysis really finds an injected active-driver conflict and STOPS the ladder; the full
+ladder is driven to a real SYSTEM_READY through a real elaboration subprocess, a real
+`fsdbreport` binary on disk, and a real DuckDB EvidenceStore row, and withdrawing exactly one
+rung's evidence drops it back out of SYSTEM_READY. It is also run over the environments this
+project's generator really produced (`examples/generated_pcie_uvm_env`,
+`examples/generated_usb_real_evidence_v12`), where it finds exactly one collision — both
+generators emit `module tb_top` — which is a genuine system-merge defect, and reports the
+composition Track A actually performs (each subsystem's env/tests plus ONE composed system top)
+as clean.
+
+
 ## Agent Benchmark Dataset Governance (2026-09-06)
 
 An agent/skill is scored against a VERSIONED corpus, and the corpus says whether it was scored on

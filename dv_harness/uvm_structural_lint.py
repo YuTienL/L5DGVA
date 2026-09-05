@@ -225,10 +225,26 @@ class UvmClassInfo:
 
 
 @dataclass
+class TopDeclInfo:
+    """One FILE-SCOPE declaration verible found: a package, an interface or a
+    module. Recorded (2026-09-06) because a SYSTEM-level merge of N subsystem
+    environments has to answer "does this name exist twice across the merged
+    set", and a class list alone cannot: `package usb_env_pkg;` colliding with
+    another subsystem's identically-named package is a compile-time merge
+    failure that no per-class check sees. Nothing in this module's own five
+    checks reads it -- it is parsed here so `system_build_proof.py` has ONE
+    parse of a file, not a second one of its own."""
+    kind: str                       # "package" | "interface" | "module"
+    name: Optional[str]
+    line: int = 0
+
+
+@dataclass
 class UvmFileInfo:
     file_path: str
     source_sha256: str
     classes: List[UvmClassInfo] = field(default_factory=list)
+    top_declarations: List[TopDeclInfo] = field(default_factory=list)
 
 
 @dataclass
@@ -554,7 +570,80 @@ def parse_uvm_file(file_path, verible_bin: str = DEFAULT_VERIBLE_BIN) -> UvmFile
         file_path=str(path),
         source_sha256=hashlib.sha256(source.encode("utf-8")).hexdigest(),
         classes=classes,
+        top_declarations=_extract_top_declarations(tree, starts),
     )
+
+
+def _extract_top_declarations(tree: dict, starts: Sequence[int]) -> List[TopDeclInfo]:
+    """package/interface/module names from the SAME already-parsed tree.
+
+    A kPackageDeclaration carries its name as a direct SymbolIdentifier child;
+    an interface and a module both parse as a header node (verible tags an
+    interface's header kModuleHeader too) whose first SymbolIdentifier leaf is
+    the name -- the same extraction `verible_parser.extract_modules()` already
+    performs, reused rather than re-derived."""
+    decls: List[TopDeclInfo] = []
+    for node in find_all_nonoverlapping(tree, "kPackageDeclaration"):
+        ident = direct_child_tagged(node, "SymbolIdentifier")
+        span = node_span(node)
+        decls.append(TopDeclInfo(
+            kind="package",
+            name=(ident or {}).get("text"),
+            line=_line_of(starts, span[0] if span else None)))
+    for kind, tag in (("interface", "kInterfaceDeclaration"),
+                      ("module", "kModuleDeclaration")):
+        for node in find_all_nonoverlapping(tree, tag):
+            header = find_first_tagged(node, "kModuleHeader")
+            span = node_span(node)
+            decls.append(TopDeclInfo(
+                kind=kind,
+                name=first_leaf_text(header, "SymbolIdentifier") if header is not None else None,
+                line=_line_of(starts, span[0] if span else None)))
+    return decls
+
+
+def config_db_call_sites(classes: Sequence[UvmClassInfo]) -> List[Dict[str, Any]]:
+    """Every parsed `uvm_config_db#(T)::set/get` call in the analysed classes,
+    with its four real argument slots split out.
+
+    Public (2026-09-06) because `system_build_proof.analyze_system_merge()`
+    needs the SCOPE arguments (`cntxt`, `inst_name`) and the type parameter,
+    not just the field key `_config_db_sites()` below buckets by -- two
+    subsystems each doing `set(null, "*", "vif", ...)` with a DIFFERENT virtual
+    interface type is a system-merge conflict that a per-environment key match
+    cannot see. It exists here rather than in that module so there is one place
+    that knows how a uvm_config_db call is shaped."""
+    sites: List[Dict[str, Any]] = []
+    for cls in classes:
+        calls = list(cls.calls)
+        for meth in cls.methods:
+            calls.extend(meth.calls)
+        seen = set()
+        for call in calls:
+            key = (call.file_path, call.line, call.callee, tuple(call.args))
+            if key in seen:
+                continue
+            seen.add(key)
+            m = _CONFIG_DB_CALL_RE.match(call.callee)
+            if not m:
+                continue
+            args = [a.strip() for a in call.args]
+            field_arg = args[2] if len(args) >= 3 else None
+            lit = _STRING_LITERAL_RE.match(field_arg) if field_arg else None
+            inst_lit = _STRING_LITERAL_RE.match(args[1]) if len(args) >= 2 else None
+            sites.append({
+                "op": m.group("op"),
+                "type_text": " ".join(m.group("type").split()),
+                "cntxt": args[0] if args else None,
+                "inst_name": inst_lit.group("body") if inst_lit else None,
+                "inst_name_text": args[1] if len(args) >= 2 else None,
+                "field": lit.group("body") if lit else None,
+                "field_text": field_arg,
+                "value_text": args[3] if len(args) >= 4 else None,
+                "class_name": cls.name,
+                "call": call,
+            })
+    return sites
 
 
 # --- checks -----------------------------------------------------------------
@@ -690,28 +779,14 @@ def _config_db_sites(classes: Sequence[UvmClassInfo]):
     sets: Dict[str, List[CallSite]] = {}
     gets: Dict[str, List[CallSite]] = {}
     unresolved: List[tuple] = []   # (op, CallSite)
-    for cls in classes:
-        calls = list(cls.calls)
-        for meth in cls.methods:
-            calls.extend(meth.calls)
-        seen = set()
-        for call in calls:
-            key = (call.file_path, call.line, call.callee, tuple(call.args))
-            if key in seen:
-                continue
-            seen.add(key)
-            m = _CONFIG_DB_CALL_RE.match(call.callee)
-            if not m:
-                continue
-            op = m.group("op")
-            # uvm_config_db#(T)::set(cntxt, inst_name, field_name, value)
-            # uvm_config_db#(T)::get(cntxt, inst_name, field_name, value)
-            field_arg = call.args[2] if len(call.args) >= 3 else None
-            lit = _STRING_LITERAL_RE.match(field_arg.strip()) if field_arg else None
-            if lit is None:
-                unresolved.append((op, call))
-                continue
-            (sets if op == "set" else gets).setdefault(lit.group("body"), []).append(call)
+    # uvm_config_db#(T)::set(cntxt, inst_name, field_name, value)
+    # uvm_config_db#(T)::get(cntxt, inst_name, field_name, value)
+    for site in config_db_call_sites(classes):
+        if site["field"] is None:
+            unresolved.append((site["op"], site["call"]))
+            continue
+        (sets if site["op"] == "set" else gets).setdefault(
+            site["field"], []).append(site["call"])
     return sets, gets, unresolved
 
 
