@@ -81,6 +81,12 @@ violate the Evidence Truth Rule below.
 Both the CLI and the dashboard read/write the same on-disk state under
 `.dv-harness/` — there is no separate GUI-only state.
 
+Every mutating POST (`/api/control`, `/api/setup`, `/api/config`, `/api/waiver`,
+etc.) requires the per-session token `dashboard_auth.issue_session_token()`
+mints on startup into `.dv-harness/dashboard_session.json` (never committed —
+send it as `Authorization: Bearer <token>` or `?token=<token>`); GET endpoints
+stay open. The page's own `#authBanner` shows the token for local copy-paste.
+
 **Install into a target project:** `.\INSTALL.ps1 -ProjectRoot <target>`
 (copies `.claude/` in, backs up any existing one, runs preflight + workflow
 init). Known issue: on Windows PowerShell 5.1 this currently fails with a

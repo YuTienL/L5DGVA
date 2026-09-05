@@ -130,3 +130,21 @@ reference/USB_UVM_Handoff/
 # -- a commit pointing at a SHA no clone can resolve. Browse its history
 # with `git -C .dv-harness/vault log --oneline`.
 .dv-harness/vault/
+
+# GUI-19 (2026-09-05): dashboard_session.json carries a live, per-session
+# auth token minted by dashboard_auth.issue_session_token() -- the same
+# class of secret the Engineering Memory Policy above forbids persisting
+# into any tracked artifact. Every sibling runtime-state file (state.json,
+# events.jsonl, blackboard/, lsf/) is already ignored; this one was missed,
+# and this session's own gap-close pass showed loose untracked files get
+# swept into unrelated commits (e0a3002) -- exactly the failure mode this
+# line prevents.
+.dv-harness/dashboard_session.json
+
+# NTFS alternate-data-stream artifacts from Windows-illegal `:` filenames
+# an agent attempted this session (gap-close-gui-gui-09:-report.md etc.) --
+# the colon was stripped for the real report, but a stray zero-byte file
+# using the original name remains on disk and is not covered by the
+# .work/_* scratch rule above.
+.work/gap-close-gui-gui-09
+.work/gap-close-gui-gui-19
