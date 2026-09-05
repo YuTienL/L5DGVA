@@ -1469,6 +1469,23 @@ def main():
                              "stimulus-gap) investigation, and report both oscillation "
                              "fingerprints. Exit 2 when no usable series exists.")
 
+    # Section 47's GOLDEN FLOW READINESS MATRIX (dv_harness/golden_flow_readiness.py).
+    # Read-only aggregation over sources that are ALREADY real -- state.json,
+    # gates.effective_stage_gates(), dashboard.py's coverage/LSF/memory/protocol
+    # readers, signoff_export, env.manifest.json's testplan_correspondence,
+    # memory_doctor -- rendered into the document's own five-column row shape.
+    # It runs no stage, invokes no gate script and writes no governance state.
+    pgfr = sub.add_parser("golden-flow-readiness",
+                          help="Section 47's twenty-row Golden Flow Readiness Matrix "
+                               "(Golden Flow Stage | Status | Evidence | Gap | "
+                               "Next-Best-Action) for this project, aggregated from the "
+                               "real per-domain sources that already exist. Read-only: "
+                               "runs no stage and writes no state. Exit 2 unless every "
+                               "row is READY.")
+    pgfr.add_argument("--json", action="store_true",
+                      help="Print the raw matrix JSON (row_id, harness_stages, "
+                           "fact_source and basis per row) instead of the report.")
+
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
     # Per-invocation override of the DEGRADED-mode probe transport, applied
@@ -2935,6 +2952,17 @@ def main():
         else:
             print(json.dumps(_lc_payload, ensure_ascii=False, indent=2))
         raise SystemExit(_lc_code)
+    elif args.cmd == "golden-flow-readiness":
+        # One shared implementation with `python -m dv_harness.golden_flow_readiness`
+        # (golden_flow_readiness.execute), same convention as loop-contract above.
+        # h.cfg is this session's already-loaded config, so the rows that consult
+        # policy read what THIS project enforces rather than the defaults.
+        from . import golden_flow_readiness as _gfr
+        _gfr_code, _gfr_matrix, _gfr_text = _gfr.execute(
+            h.root, cfg=h.cfg, as_json=args.json)
+        print(json.dumps(_gfr_matrix, ensure_ascii=False, indent=2)
+              if args.json else _gfr_text)
+        raise SystemExit(_gfr_code)
     elif args.cmd == "question-queue":
         from .question_queue import QuestionQueueStore
         # Every decision written or revoked through this command refreshes the

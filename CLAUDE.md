@@ -1972,3 +1972,88 @@ one. The series is the coverage curve only; `stage_completion_percent` and
 `findings_open` are named in the contract's `convergence.metrics` but have no
 cross-run producer to build a series from.
 
+
+
+## Golden Flow Readiness Matrix: `dv-harness golden-flow-readiness` (2026-09-05)
+
+Section 47 mandates that a complete L5 audit report a twenty-row table --
+`Golden Flow Stage | Status | Evidence | Gap | Next-Best-Action` -- and rules
+that "the Golden Flow is READY only when required stages are connected
+end-to-end with evidence". Every per-domain fact that table aggregates was
+already real and queryable; nothing rendered them into the document's row
+shape, so the matrix existed only as prose an auditing session assembled by
+hand and two audits of the same project could disagree about the same facts.
+`dv_harness/golden_flow_readiness.py` is that renderer and nothing else.
+
+**It derives nothing an existing reader already supplies.** Each row records
+the reader it consulted in its own `fact_source`, and
+`assert_fact_sources_resolvable()` resolves every one through the import
+system -- a row claiming to read `dashboard._coverage_credit` after that
+function was renamed away is a row whose provenance is fiction. The readers
+are the ones already in production: `state.json` via
+`dashboard._read_json_file()`, `gates.effective_stage_gates()`,
+`dashboard._read_coverage_state()` / `_lsf_summary()` / `_failure_attribution()`
+/ `_coverage_credit()` / `_qualified_conclusion()` / `_protocol_registry()` /
+`_read_memory_center_state()`, `coverage_analysis.identify_holes()` /
+`classify_coverage_hole()`, `signoff_export.read_signoff_stage_status()`,
+`env.manifest.json`'s `testplan_correspondence`, `loop_contract.observe_all()`,
+`memory_doctor.check_obsidian()` and `ClaudeCLIAdapter._resolve_command()`.
+
+**The vocabulary is borrowed, not minted.** Status is
+`subsystem_discovery`'s READY/PARTIAL/BLOCKED/UNKNOWN -- the same four words
+`system_readiness.py` already reused one level up -- and
+`STATUS_TO_READINESS`'s totality over `models.Status` is asserted at import,
+so a new Status member fails loudly instead of silently rendering UNKNOWN.
+`ACCEPTED_RISK` floors to PARTIAL: a human accepting residual risk is a real
+decision, not evidence the stage is connected end-to-end. The
+Next-Best-Action column is produced by the REAL
+`inference.next_best_action()` through its `gap_action_catalog` parameter --
+the same domain-neutral engine `capability_evolution.py` already drives with
+its own catalog, and the one section 10 forbids re-implementing.
+
+**Every row is always printed, including its absences.** Twenty rows are
+mandatory, so a project with nothing on disk reports twenty UNKNOWNs with a
+real reason each -- "this row is unknown" and "this row was omitted" must not
+look alike once the table is printed. `_assert_rows_match_section_47()`
+compares the declarations against a transcription of the specification's own
+list rather than against themselves.
+
+**Reading is not a mutating act.** No stage runs, no gate script is invoked,
+no state/control/approval file is written. `state.json` is read through
+`_read_json_file()` rather than `StateStore.load()` (which would MINT one),
+`config.load_config()` is skipped for a project with no `config.json` (it
+would materialize a default), and `loop_contract.observe_all()` -- which does
+go through `StateStore` -- is called only when a real `state.json` already
+exists. Disclosed precisely: the CLI WRAPPER still constructs a `DVHarness`
+and appends the usual `CLI_ACCESS` audit event before dispatch, exactly as
+`status`/`explain` do; `python -m dv_harness.golden_flow_readiness` carries
+the untouched-tree guarantee.
+
+**No human-approval gate moved.** The verdict authorizes nothing and the
+module has no write path to any approval record: `ControlPlane.approve()`,
+`policy.can_signoff()`, `assert_human_approval()` and the PR-only
+main/master governance are untouched and uncalled from it. Exit 2 unless
+every row is READY -- a CI signal, not an approval signal in either
+direction.
+
+Front door: `dv-harness golden-flow-readiness [--json]`, and the identical
+`python -m dv_harness.golden_flow_readiness`, one shared `execute()`. Proven
+against REAL artifacts written by their REAL writers -- a real `StateStore`
+state.json, real `.dv-harness/lsf/jobs/*.json`, a real coverage
+`summary.json`, a real `MemoryStore` record, a real capability registry --
+and with the CLI driven as a real subprocess, by
+`dv_harness_tests/test_golden_flow_readiness.py` (38 tests). Its negative
+controls are what give it detection power: an LSF job at DONE with no DV
+analysis does NOT read as passing, a stage PASS with no spec on disk does NOT
+close Spec In, a PROJECT_MODEL PASS with no IR evidence block does NOT close
+Verification IR, a malformed coverage summary is BLOCKED rather than "no
+coverage yet", and dropping a row from `ROWS` fails the section-47 check.
+
+**Disclosed residual**: section 55's SELF-LEARNING READINESS MATRIX (22 rows
+over the research/capability-evolution and five-tier-memory surfaces) is NOT
+built by this module -- it is a different row set over different sources, and
+producing a half-sourced version of it would be the fabrication this module
+exists to prevent. It is also not engine-fired and not exposed on the
+dashboard: no `run_stage()`/`advance()` call site invokes it and no graph node
+declares it, so this is a REACHED capability (a real CLI caller exists), not a
+WIRED one.
