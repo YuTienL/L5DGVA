@@ -1,6 +1,6 @@
 # TH-9 -- Self-attested vs. independently-derived gate evidence
 
-**Status: DONE**
+**Status: DONE** (committed as `d7d05b5`)
 
 **Test summary:** `dv_harness_tests/test_evidence_provenance.py` -- 42 passed
 (real gate subprocesses, real `evaluate_stage_evidence()`, real dashboard over real HTTP,
