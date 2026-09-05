@@ -85,6 +85,162 @@ def render(project_root='.') -> str:
         lines.append(SDK_ADAPTER_TOKEN_NOTE)
     return '\n'.join(lines)
 
+
+# --- per-stage time/token summary, INCLUDING every sub-agent run -------------
+# (2026-09-04, stage-progress-display gap-close.) render() above is a
+# whole-workflow table with one row per stage; the stage-DONE display needs
+# the opposite cut -- ONE stage, broken down by the individual agent runs
+# inside it, because the user's requirement is "總執行時間（含各個 Agents）"
+# and a single collapsed per-stage row cannot answer "including each agent".
+#
+# The data was already being collected and is NOT re-collected here:
+# StageExecutionProfiler.add_agent_run() appends one entry to the stage
+# record's `agents` list per REAL adapter.run() invocation, and there are two
+# real call sites -- engine.run_stage()'s own main stage dispatch, and
+# react_loop._record_agent_run() for every sub-agent dispatch the inner ReAct
+# loop makes (a reflection call, its hallucination re-ask, a
+# RETRY_TARGETED/REQUEST_EVIDENCE targeted retry). rec['input_tokens'] /
+# ['output_tokens'] / ['total_tokens'] / ['aggregate_agent_runtime_sec'] are
+# already sums across that whole list, so the stage totals below DO include
+# sub-agents. What was genuinely missing is any way to SEE that: nothing
+# anywhere rendered the per-agent rows, so "does this number include the
+# sub-agents" was unanswerable without opening the raw telemetry JSON. These
+# two functions are that missing surface, plus cache-token columns render()
+# never showed (cache_read/cache_write are real recorded fields and are real
+# tokens consumed).
+def stage_time_and_token_summary(project_root, stage_name) -> dict:
+    """Real wall-clock/runtime/token numbers for ONE stage, read back from the
+    StageExecutionProfiler records that stage's own runs wrote.
+
+    Returns `attempts` (every STAGE-*.json record for this stage), `latest`
+    (the most recent attempt, with one `agents` row per real agent/sub-agent
+    dispatch), `stage_totals` (summed across every attempt of this stage), and
+    `workflow_totals` (the whole run, straight out of workflow_profile.json).
+
+    `token_data_available` is False when NO agent run anywhere in this stage
+    reported usage -- kept as an explicit flag rather than inferred from a
+    zero, because zero tokens and "this adapter never reports tokens" are
+    different facts (see SDK_ADAPTER_TOKEN_NOTE above)."""
+    root = Path(project_root)
+    p = StageExecutionProfiler(root)
+    try:
+        records = [r for r in p.all_stages()
+                   if r.get('stage_id') == stage_name or r.get('stage_name') == stage_name]
+    except Exception:
+        records = []
+
+    def _sum(key, recs):
+        vals = [r.get(key) for r in recs if isinstance(r.get(key), (int, float))]
+        return sum(vals) if vals else None
+
+    agents = list((records[-1].get('agents') or [])) if records else []
+    all_agents = [a for r in records for a in (r.get('agents') or [])]
+    latest = records[-1] if records else None
+    workflow = {}
+    if p.workflow_file.exists():
+        try:
+            workflow = json.loads(p.workflow_file.read_text(encoding='utf-8'))
+        except Exception:
+            workflow = {}
+    return {
+        'stage_name': stage_name,
+        'attempts': len(records),
+        'latest': None if latest is None else {
+            'profile_id': latest.get('profile_id'),
+            'status': latest.get('status'),
+            'stage_wall_clock_sec': latest.get('stage_wall_clock_sec'),
+            'aggregate_agent_runtime_sec': latest.get('aggregate_agent_runtime_sec'),
+            'parallel_saving_sec': latest.get('parallel_saving_sec'),
+            'input_tokens': latest.get('input_tokens'),
+            'output_tokens': latest.get('output_tokens'),
+            'cache_read_tokens': latest.get('cache_read_tokens'),
+            'cache_write_tokens': latest.get('cache_write_tokens'),
+            'total_tokens': latest.get('total_tokens'),
+            'tool_calls': latest.get('tool_calls'),
+            'retries': latest.get('retries'),
+            'agents': agents,
+            'agent_run_count': len(agents),
+        },
+        'stage_totals': {
+            'stage_wall_clock_sec': _sum('stage_wall_clock_sec', records) or 0.0,
+            'aggregate_agent_runtime_sec': _sum('aggregate_agent_runtime_sec', records) or 0.0,
+            'input_tokens': _sum('input_tokens', records),
+            'output_tokens': _sum('output_tokens', records),
+            'cache_read_tokens': _sum('cache_read_tokens', records),
+            'cache_write_tokens': _sum('cache_write_tokens', records),
+            'total_tokens': _sum('total_tokens', records),
+            'agent_run_count': len(all_agents),
+            'tool_calls': sum(r.get('tool_calls') or 0 for r in records),
+            'retries': sum(r.get('retries') or 0 for r in records),
+        },
+        'workflow_totals': {
+            'stage_count': workflow.get('stage_count'),
+            'total_stage_wall_clock_sec': workflow.get('total_stage_wall_clock_sec'),
+            'total_aggregate_agent_runtime_sec': workflow.get('total_aggregate_agent_runtime_sec'),
+            'total_tokens': workflow.get('total_tokens'),
+            'tool_calls': workflow.get('tool_calls'),
+            'retries': workflow.get('retries'),
+        },
+        'token_data_available': any(
+            isinstance(a.get('total_tokens'), (int, float)) for a in all_agents),
+        'adapter_note': (SDK_ADAPTER_TOKEN_NOTE
+                         if _configured_adapter_name(project_root) == 'sdk' else None),
+    }
+
+
+def render_stage_time_and_tokens(summary: dict) -> str:
+    """The stage-DONE time/token block, rendered from stage_time_and_token_summary()
+    output. Takes the already-computed dict (not a project root) so the
+    persisted stage report and the terminal render the SAME numbers from the
+    SAME single read -- re-reading telemetry for the report could otherwise
+    pick up a concurrent branch's write and disagree with what was printed."""
+    # Imported lazily and by name from the display module so this block's rule
+    # is the SAME width as the checklist rules it is printed beneath. The
+    # import is function-local because stage_progress_display imports this
+    # module (also lazily) for exactly this renderer -- keeping both sides
+    # lazy means neither module can be made unimportable by the other.
+    from .stage_progress_display import section_rule
+    avail = bool(summary.get('token_data_available'))
+    lines = [section_rule('EXECUTION TIME AND TOKENS')]
+    latest = summary.get('latest')
+    if latest is None:
+        lines.append(f"  no telemetry record for stage {summary.get('stage_name')} yet")
+        return '\n'.join(lines)
+    lines.append(f"  {'AGENT (this attempt)':<38} {'Runtime':>9} {'Input':>8} "
+                 f"{'Output':>8} {'Total':>8} {'Status':>7}")
+    for a in latest.get('agents') or []:
+        it, ot, tt = a.get('input_tokens'), a.get('output_tokens'), a.get('total_tokens')
+        lines.append(f"  {str(a.get('agent', ''))[:38]:<38} {sec(a.get('runtime_sec')):>9} "
+                     f"{tok(it, it is not None):>8} {tok(ot, ot is not None):>8} "
+                     f"{tok(tt, tt is not None):>8} {str(a.get('status', '')):>7}")
+    if not (latest.get('agents') or []):
+        lines.append('  (no agent run recorded for this attempt)')
+    lines.append('  ' + '-' * 78)
+    lines.append(f"  {'STAGE WALL CLOCK':<38} {sec(latest.get('stage_wall_clock_sec')):>9}")
+    lines.append(f"  {'ALL AGENTS RUNTIME (incl. sub-agents)':<38} "
+                 f"{sec(latest.get('aggregate_agent_runtime_sec')):>9}   "
+                 f"across {latest.get('agent_run_count', 0)} agent run(s)")
+    st = summary.get('stage_totals') or {}
+    lines.append(f"  {'STAGE TOTAL (all ' + str(summary.get('attempts', 0)) + ' attempt(s))':<38} "
+                 f"{sec(st.get('stage_wall_clock_sec')):>9}   "
+                 f"agent runtime {sec(st.get('aggregate_agent_runtime_sec'))}, "
+                 f"{st.get('agent_run_count', 0)} agent run(s)")
+    lines.append(f"  {'STAGE TOKENS (in/out/cache/total)':<38} "
+                 f"{tok(st.get('input_tokens'), avail)} / {tok(st.get('output_tokens'), avail)} / "
+                 f"{tok((st.get('cache_read_tokens') or 0) + (st.get('cache_write_tokens') or 0), avail)} / "
+                 f"{tok(st.get('total_tokens'), avail)}")
+    wf = summary.get('workflow_totals') or {}
+    lines.append(f"  {'WORKFLOW TOTAL SO FAR':<38} "
+                 f"{sec(wf.get('total_stage_wall_clock_sec')):>9}   "
+                 f"agent runtime {sec(wf.get('total_aggregate_agent_runtime_sec'))}, "
+                 f"tokens {tok(wf.get('total_tokens'), wf.get('total_tokens') is not None)}, "
+                 f"tool calls {wf.get('tool_calls') or 0}, retries {wf.get('retries') or 0}")
+    if summary.get('adapter_note'):
+        lines.append('')
+        lines.append('  ' + summary['adapter_note'])
+    return '\n'.join(lines)
+
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('--project-root',default='.'); a=ap.parse_args()
     print(render(a.project_root))
