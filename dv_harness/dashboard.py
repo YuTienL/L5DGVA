@@ -6,7 +6,6 @@ from typing import Any, Callable, Dict, List, Optional
 from .config import load_config, save_config
 from .regression_reporter import load_jobs, get_job
 from .gates import extract_evidence_blocks, JUDGMENT_FIELDS, CCL_SKIPPABLE, REVIEWER_CONFIDENCE_LEVELS, _iter_judgment_targets
-from .models import Stage
 from .storage import _atomic_replace
 from .control_plane import ControlPlane, describe_stage, describe_stages
 from . import dashboard_auth
@@ -85,6 +84,10 @@ code{background:#eef2f7;padding:3px 5px}
 .note{color:#8a97b3;font-size:12px}
 .err{color:#b84444}
 .ok{color:#25845b}
+/* A third severity, distinct from .err: the Loop Engineering Center's
+   LOOP_BUDGET_WARNING is "the next failure exhausts this budget", which is not
+   yet a failure and must not read as one. */
+.warn{color:#b8862f}
 .ctrlrow{margin:8px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px}
 .ctrlrow input[type=text],.ctrlrow input:not([type]),.ctrlrow select{padding:4px 6px;border:1px solid #d9e1ec;border-radius:5px}
 .ctrlrow label{display:flex;align-items:center;gap:4px}
@@ -404,6 +407,37 @@ fsdbreport's -csv output actually declares -- never a hardcoded/guessed schema.<
 <div style="overflow-x:auto"><table id="fsdbReportTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
 <thead id="fsdbReportTableHead"><tr style="text-align:left;border-bottom:1px solid #d9e1ec"></tr></thead>
 <tbody id="fsdbReportTableBody"></tbody></table></div>
+</div>
+
+<div class="card" id="loopCenterCard"><h3>Loop Engineering Center</h3>
+<div class="note">Section 107's <code>Loop | State | Iteration | Verified Gain | Budget | Plateau |
+Oscillation | Next Action</code> table, folded out of the REAL section-108 loop telemetry events
+<code>engine.DVHarness.loop()</code> writes to <code>.dv-harness/events.jsonl</code> -- the same
+append-only audit trail the Audit card on this page reads, not a second log
+(GET /api/loops). One row per loop SESSION, newest first.
+<br><b>Nothing on this card is derived here.</b> The State is
+<code>loop_contract.derive_loop_state()</code>'s, the Plateau/Oscillation verdict is
+<code>loop_convergence.classify_loop_convergence()</code>'s over the project's own evidence
+database, the Budget is <code>policy.max_stage_retries</code> plus
+<code>loop_budget</code>'s unified ledger, the Verified Gain counts stages whose gates really
+accepted their evidence, and the Next Action comes from the real
+<code>inference.next_best_action()</code>. Each number reached this page as the payload of an
+event the mechanism that owns it emitted.
+<br><b>Two different progress metrics, never conflated.</b>
+<code>gate_verified_stages</code> is per-iteration (this engine's only per-iteration verified
+signal); <code>coverage_percent</code> is the cross-run series plateau is measured on, classified
+once per retry exhaustion. Every event carries which one produced it.
+<br>Read-only: this card starts, stops and approves nothing -- the run controls are at the top of
+the page and every human gate stays exactly where it was. A project whose loops have never emitted
+an event shows an honest empty state naming the file it read and the command that would populate
+it, never a fabricated row.</div>
+<div class="ctrlrow" style="margin-top:6px"><button onclick="loadLoopCenter()">Refresh</button>
+  <span class="note" id="loopCenterScan"></span></div>
+<div class="note" id="loopCenterNote" style="margin-top:6px"></div>
+<div style="overflow-x:auto"><table id="loopCenterTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead id="loopCenterTableHead"><tr style="text-align:left;border-bottom:1px solid #d9e1ec"></tr></thead>
+<tbody id="loopCenterTableBody"></tbody></table></div>
+<pre id="loopCenterDetail" style="display:none;white-space:pre-wrap;font-size:12px;background:#f7f9fc;border:1px solid #e3e9f2;border-radius:6px;padding:8px;margin-top:8px;max-height:420px;overflow:auto"></pre>
 </div>
 
 <div class="card" id="memoryCenterCard"><h3>Memory + Obsidian Knowledge Center</h3>
@@ -971,6 +1005,82 @@ async function doResearchAction(command, candidateId){
   await loadResearch();
 }
 
+// Loop Engineering Center card (LOOP-4, section 107). Joined to load()'s 3s
+// poll, unlike the Memory card below and like the AMBA/Research cards: a
+// running loop changes state on every iteration, and "why is this loop still
+// running" is the one question this card exists to answer -- an answer three
+// seconds stale is the whole point of a live control plane. Reading it is a
+// plain tail of events.jsonl plus one catalog lookup: no gate runs, no
+// subprocess, no database is opened by the read itself.
+let _loopData = null;
+async function loadLoopCenter(){
+  _loopData = await (await fetch('/api/loops')).json();
+  renderLoopCenter();
+}
+function renderLoopCenter(){
+  let r = _loopData;
+  if(!r) return;
+  let head = document.getElementById('loopCenterTableHead');
+  let tbody = document.getElementById('loopCenterTableBody');
+  let note = document.getElementById('loopCenterNote');
+  let scan = document.getElementById('loopCenterScan');
+  // The eight column labels come from section 107 over the wire
+  // (loop_telemetry.SECTION_107_COLUMNS), never a hardcoded copy in this page.
+  head.innerHTML = '<tr style="text-align:left;border-bottom:1px solid #d9e1ec">'
+    + (r.columns||[]).map(c=>'<th style="padding:4px">'+c.label+'</th>').join('') + '</tr>';
+  let s = r.scan||{};
+  scan.textContent = s.lines_scanned==null ? '' :
+    (s.loop_events+' loop event(s) in the last '+s.lines_scanned+' audit line(s)'
+     + (s.scan_truncated ? ' -- scan capped at '+s.scan_limit+', older sessions not shown' : ''));
+  if(!r.available){
+    note.innerHTML = 'No loop telemetry yet. <code>'+(r.reason||'')+'</code>';
+    tbody.innerHTML = '<tr><td style="padding:4px" colspan="'+((r.columns||[]).length||8)
+      + '">Nothing to show yet.</td></tr>';
+    document.getElementById('loopCenterDetail').style.display = 'none';
+    return;
+  }
+  note.innerHTML = 'Click a row for the section-107 drill-down (Goal, Trigger, Iteration '
+    + 'History, Evidence, Verifier, Progress Delta, Budget Remaining, Retry/Backoff, '
+    + 'Next-Best-Action, Human Gate, Stop Reason, Resume Condition).';
+  tbody.innerHTML = (r.rows||[]).map(row=>{
+    let vg = row.verified_gain||null;
+    let gain = !vg ? '-' : (vg.value+'/'+vg.total+' '+vg.metric
+      + (vg.delta===null||vg.delta===undefined ? '' : ' ('+(vg.delta>=0?'+':'')+vg.delta+')'));
+    let b = row.budget||null;
+    let budget = !b ? '-' : (b.attempts+'/'+b.max_stage_retries+' attempts'
+      + (b.event==='LOOP_BUDGET_EXHAUSTED' ? ' <span class="err">EXHAUSTED</span>'
+         : (b.event==='LOOP_BUDGET_WARNING' ? ' <span class="warn">last retry</span>' : '')));
+    let stateCls = (row.state==='SUCCESS'||row.state==='CONVERGING') ? 'ok'
+      : ((row.state==='FAILED'||row.state==='BLOCKED'||row.state==='BUDGET_EXHAUSTED'
+          ||row.state==='PLATEAU'||row.state==='OSCILLATING') ? 'err' : '');
+    return '<tr style="border-bottom:1px solid #edf1f5;cursor:pointer" '
+      + 'onclick="showLoopDetail(\''+row.run_id+'\')" title="run_id: '+row.run_id+'">'
+      + '<td style="padding:4px">'+row.loop+'</td>'
+      + '<td style="padding:4px"><span class="'+stateCls+'">'+row.state+'</span></td>'
+      + '<td style="padding:4px">'+row.iteration+'</td>'
+      + '<td style="padding:4px">'+gain+'</td>'
+      + '<td style="padding:4px">'+budget+'</td>'
+      + '<td style="padding:4px">'+row.plateau+'</td>'
+      + '<td style="padding:4px">'+row.oscillation+'</td>'
+      + '<td style="padding:4px">'+(row.next_action||'-')+'</td></tr>';
+  }).join('') || ('<tr><td style="padding:4px" colspan="'+(r.columns||[]).length
+      + '">No loop session in the scanned window.</td></tr>');
+}
+function showLoopDetail(runId){
+  let el = document.getElementById('loopCenterDetail');
+  let d = ((_loopData||{}).sessions||{})[runId];
+  el.style.display = 'block';
+  if(!d){ el.textContent = 'No drill-down recorded for '+runId; return; }
+  // Rendered in section 107's own field ORDER, straight off the wire -- this
+  // page invents no field and reorders none.
+  let fields = (_loopData.drilldown_fields||[]);
+  el.textContent = fields.map(f=>{
+    let v = d[f.key];
+    if(v===null||v===undefined||v==='') return f.label+': -';
+    return f.label+': ' + (typeof v==='string' ? v : JSON.stringify(v, null, 1));
+  }).join('\\n\\n');
+}
+
 // Memory + Obsidian Knowledge Center card (GUI-11). Fetched once on page load
 // and again on an explicit Search -- deliberately NOT joined to load()'s 3s
 // poll, unlike the AMBA/Research cards above: durable knowledge tiers change
@@ -1435,6 +1545,7 @@ async function load(){
  await loadCoverageAnalysis();
  await loadAmbaFabric();
  await loadResearch();
+ await loadLoopCenter();
  await showExplain(activeIds);
 }
 async function showExplain(stage){
@@ -1534,12 +1645,17 @@ def _audit_trail(root: Path, limit: int = 50) -> Dict[str, Any]:
 
 
 def _overall_progress(state: dict) -> int:
-    """Percent of the 35 canonical stages (len(Stage), NOT len(state['stages'])
+    """Percent of the canonical stages (len(Stage), NOT len(state['stages'])
     -- an on-disk state.json can predate later Stage enum additions and would
-    silently understate the true denominator) that have reached PASS/CLOSED."""
-    stages = state.get("stages") or {}
-    done = sum(1 for s in Stage if (stages.get(s.value) or {}).get("status") in ("PASS", "CLOSED"))
-    total = len(Stage)
+    silently understate the true denominator) that have reached PASS/CLOSED.
+
+    The count itself is `loop_telemetry.gate_verified_stage_count()`, which is
+    also what the Loop Engineering Center's Verified Gain column reports
+    (LOOP-4, 2026-09-05). Delegating rather than keeping a second copy of the
+    predicate is what stops the progress bar at the top of this page and that
+    card's gain figure from ever disagreeing about which stages count."""
+    from .loop_telemetry import gate_verified_stage_count
+    done, total = gate_verified_stage_count(state.get("stages") or {})
     return round(100 * done / total) if total else 0
 
 
@@ -2101,6 +2217,45 @@ def _read_research_state(root: Path) -> Dict[str, Any]:
     return {**empty, "available": True, "candidates": rows,
             "counts": {**counts, "by_recommendation": by_recommendation},
             "audit_records": audit}
+
+
+# --- Loop Engineering Center (LOOP-4, sections 107 + 108) -------------------
+# Before this, dashboard.py's ONLY "loop" surface was the single-run/
+# continuous-run Start toggle -- a control, not observability. Section 107
+# requires the GUI to expose WHY a loop is running: its state, iteration,
+# verified gain, budget, plateau/oscillation verdict and next action, with a
+# drill-down. Nothing on this page could answer any of those.
+#
+# This function derives NONE of it. Every figure was computed by the mechanism
+# that owns it -- loop_contract.derive_loop_state(),
+# loop_convergence.classify_loop_convergence(), loop_budget's ledger, gates.py
+# through the persisted stage status -- and reached the audit trail as the
+# payload of one real section-108 event emitted by engine.DVHarness.loop().
+# `loop_telemetry.read_loop_telemetry()` folds those events back into section
+# 107's own eight columns and fourteen drill-down fields; this wrapper exists
+# only so the endpoint reads like every other read-only GET on this server.
+def _read_loop_engineering_state(root: Path, *, run_id: str = "") -> Dict[str, Any]:
+    """Section 107's table for GET /api/loops, read-only.
+
+    A project whose loops have never emitted a section-108 event reports the
+    honest empty state `loop_telemetry` produces -- naming the events.jsonl it
+    read and the real `dv-harness start --loop` that would populate it -- the
+    same contract GET /api/coverage, /api/amba, /api/research and /api/memory
+    already hold to. It never starts a loop, runs a stage, evaluates a gate,
+    writes a file or mints an approval; polling it is a tail of an append-only
+    log."""
+    from . import loop_telemetry
+    try:
+        return loop_telemetry.read_loop_telemetry(root, run_id=run_id or None)
+    except Exception as e:  # an unreadable audit trail is a real reason, not a 500
+        return {"available": False, "rows": [], "sessions": {},
+                "columns": [{"key": k, "label": l}
+                            for k, l in loop_telemetry.SECTION_107_COLUMNS],
+                "drilldown_fields": [{"key": k, "label": l}
+                                     for k, l in loop_telemetry.SECTION_107_DRILLDOWN_FIELDS],
+                "event_names": list(loop_telemetry.LOOP_TELEMETRY_EVENTS),
+                "scan": {},
+                "reason": f"LOOP_TELEMETRY_UNREADABLE: {type(e).__name__}: {e}"}
 
 
 # --- Memory Hierarchy + Obsidian Knowledge Vault (GUI-11) -------------------
@@ -2966,6 +3121,19 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 # RESEARCH_REJECT / RESEARCH_HOLD), never through a
                 # research-specific write endpoint -- see _read_research_state().
                 self._send_json(_read_research_state(project_root))
+            elif self.path == "/api/loops" or self.path.startswith("/api/loops?"):
+                # Read-only by design. This card OBSERVES loops; starting or
+                # stopping one stays with the existing POST /api/start and the
+                # existing control-plane verbs (pause/resume/takeover), which
+                # already carry GUI-19's per-session token gate. Adding a
+                # loop-specific write endpoint would be a second way to do
+                # something that already has one.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                self._send_json(_read_loop_engineering_state(
+                    project_root,
+                    run_id=urllib.parse.unquote(params.get("run_id", "")),
+                ))
             elif self.path == "/api/memory" or self.path.startswith("/api/memory?"):
                 # Read-only. Authoring a memory record or a vault note stays
                 # CLI-only (`dv-harness memory add`, and the engine's own

@@ -2317,3 +2317,130 @@ stage's retries never touches the ledger, and `FailureType.VIP` is reachable
 only from the declared Synopsys `svt_` component prefix -- a project using
 another VIP vendor must declare its own `loop_budget.vip_component_prefixes`,
 because guessing one would be fabrication.
+
+
+## Loop Telemetry Events + the GUI Loop Engineering Center (2026-09-05)
+
+LOOP_ENGINEERING section 108 names nineteen loop telemetry event types
+(`LOOP_CREATED`, `LOOP_STARTED`, `LOOP_ITERATION_STARTED`,
+`LOOP_ACTION_SELECTED`, `LOOP_VERIFY_COMPLETED`, `LOOP_PROGRESS_UPDATED`,
+`LOOP_CONVERGING`, `LOOP_PLATEAU_DETECTED`, `LOOP_OSCILLATION_DETECTED`,
+`LOOP_NO_PROGRESS`, `LOOP_RETRY_SCHEDULED`, `LOOP_BUDGET_WARNING`,
+`LOOP_BUDGET_EXHAUSTED`, `LOOP_BLOCKED`, `LOOP_HUMAN_GATE_REQUIRED`,
+`LOOP_RESUMED`, `LOOP_SUCCESS`, `LOOP_FAILED`, `LOOP_STOPPED`), and section 107
+requires a GUI Loop Engineering Center -- a `Loop | State | Iteration | Verified
+Gain | Budget | Plateau | Oscillation | Next Action` table with a fourteen-field
+drill-down -- because "GUI must expose why a loop is running". A repo-wide grep
+for each of the nineteen names on 2026-09-05 returned **0 hits for all
+nineteen**; LOOP-1's own disclosed residual said so in as many words ("the other
+nineteen names have no producer"). `dashboard.py`'s only `loop` hits were the
+pre-existing single-run/continuous-run Start toggle -- a CONTROL, not
+observability.
+
+`dv_harness/loop_telemetry.py` is the vocabulary and the reader;
+`engine.DVHarness.loop()` is the producer; `GET /api/loops` plus the Loop
+Engineering Center card is the surface.
+
+**Same event file, same writer, no second audit trail.** Every event goes
+through `storage.StateStore.event()` into the one `.dv-harness/events.jsonl`
+`_record_debug_loop_round()`, `_record_loop_state_observation()`,
+`_spend_retry_exhaustion_budget()` and `dv-harness audit` already use.
+`emit()` REFUSES a name outside section 108's nineteen: an unrecognized name
+would be dropped silently by the reader while the emitter looked like it had
+reported something.
+
+**Every event is emitted at a transition `loop()` really makes**, and each is
+one line from the decision it records -- LOOP_ITERATION_STARTED at the top of
+the `while True` body, LOOP_ACTION_SELECTED before `run_stage()` carrying the
+graph node's own `route`/`skills`, LOOP_VERIFY_COMPLETED after it carrying
+`gates.effective_stage_gates()`'s real gate ids (section 87's verifier
+separation, recorded rather than assumed), LOOP_RETRY_SCHEDULED at the one
+`ss["status"] = RETRY` branch, LOOP_BUDGET_EXHAUSTED beside LOOP-3's ledger
+spend. **Exactly one terminal event per loop session**
+(`TERMINAL_LOOP_EVENTS`: SUCCESS / FAILED / BLOCKED / STOPPED) on every one of
+`loop()`'s return paths -- two would be two contradictory answers to "how did
+this end", and a test drives all of them (real takeover, real pause, a real
+LOOP-3 circuit-breaker trip, real retry exhaustion, a real run-out-of-graph
+close).
+
+**Nothing is derived twice.** The state is `loop_contract.derive_loop_state()`'s
+(`LOOP_STATE_TO_EVENT` is the one bridge, held total by
+`assert_loop_state_mapping_total()`, and the four states that name no
+section-108 event carry a real reason rather than a silent `None`); the budget
+numbers are `policy.max_stage_retries` and LOOP-3's ledger payload; the
+plateau/oscillation verdict is `loop_convergence.classify_loop_convergence()`'s;
+the Next Action column is the REAL `inference.next_best_action()` through its
+`gap_action_catalog` parameter, the domain-neutral engine section 10 forbids
+re-implementing. `dashboard._overall_progress()` now DELEGATES to
+`loop_telemetry.gate_verified_stage_count()`, so the progress bar and the
+Verified Gain column cannot disagree about which stages count.
+
+**LOOP-2's classifier is now engine-fired, which is what gives PLATEAU a
+producer.** `loop_convergence` was REACHED but never run by the engine, so every
+`LOOP_STATE_OBSERVED` carried `PLATEAU_NOT_EVALUATED` forever.
+`engine._classify_loop_convergence_for_telemetry()` runs it at the one
+low-frequency point where "is this a plateau, an oscillation, or just a hard
+stage" is genuinely being asked -- the retry-exhaustion branch, once per
+exhaustion, never per iteration -- and passes the report into the existing
+`observe_verification_closure_loop(convergence=...)` parameter LOOP-2 already
+built for it. The evidence database is opened READ-ONLY or not at all.
+
+**Two progress metrics, never conflated.** `gate_verified_stages` is
+per-iteration and is this engine's only per-iteration machine-verified signal
+(an iteration that ran a stage and moved it by zero is LOOP_NO_PROGRESS --
+section 110's LOOP-AT-26, artifact churn without verified gain);
+`coverage_percent` is the cross-run series plateau is measured on. Every event
+carries `metric`, so one can never be read as a statement about the other. An
+UNKNOWN convergence verdict emits NOTHING: the classifier ran and could not
+conclude, and recording that as a finding is the unearned claim
+`PLATEAU_NOT_EVALUATED` exists to prevent. A `REGRESSION` verdict is reported as
+LOOP_NO_PROGRESS -- the nearest true statement, since section 108 names no
+regression event -- with the real verdict on the payload.
+
+**Honest empty state, never a fabricated row.** A project whose loops have never
+emitted an event reports `available: false` naming the `events.jsonl` it read
+and the real `dv-harness start --loop "<goal>"` that would populate it. A
+one-shot `dv-harness run-stage` and a `--dry-run` loop open no session at all
+and emit nothing, because neither iterates.
+
+**No human-approval gate moved, and observing authorizes nothing.**
+LOOP_HUMAN_GATE_REQUIRED records that a human decision is OWED; it is not, and
+cannot become, the decision. `loop_telemetry.py` does not reference
+`ControlPlane`, `can_signoff`, `assert_human_approval`,
+`HumanApprovalRequiredError` or `ProductionWriteNotAuthorizedError` at all --
+asserted against its own source by a test. `GET /api/loops` is read-only; there
+is deliberately no loop-specific write endpoint, because starting/stopping a
+loop already has one (`POST /api/start` and the control-plane verbs, both behind
+GUI-19's per-session token gate). Every emitter is best-effort: a telemetry
+failure records `LOOP_TELEMETRY_EMIT_FAILED` and never turns a real routing
+decision into a crash.
+
+Proven by `dv_harness_tests/test_loop_telemetry.py` (37 tests) and
+`dv_harness_tests/test_dashboard_loop_card.py` (8 tests) -- every event driven
+out of a REAL `DVHarness.loop()` over the REAL shipped `main_graph.json` with
+the REAL `command_migration_integrity_gate.py` subprocess, never by writing an
+events.jsonl line by hand, and the card driven over real HTTP against the real
+dashboard server. The negative controls are what give them power: a real gate
+PASS is the positive control for LOOP_CONVERGING against the failing fixture's
+LOOP_NO_PROGRESS; a real four-day flat coverage curve (written by the REAL
+`dashboard.append_coverage_history_sample()` into a REAL DuckDB evidence store)
+produces LOOP_PLATEAU_DETECTED while a real rising curve produces none; a
+project with no evidence database emits no plateau verdict at all; and a loop
+that really CLOSED is not reported as resumed by the next session. The
+`LOOP_SUCCESS` test reaches a real `overall_status == CLOSED` through a real
+SIGNOFF whose human-approval requirement is SATISFIED through the real
+`ControlPlane.approve()` -- and the approval's per-PASS consumption is asserted,
+not worked around. Nothing in either file runs a build, a regression or an LSF
+submission.
+
+**Disclosed residual**: this is the VERIFICATION CLOSURE loop's telemetry only.
+The Project Learning and Capability Evolution loops emit no section-108 event --
+`loop_contract.observe_all()` already reports the first `NOT_OBSERVABLE` (it is
+observed per record, not per project) and the second is driven by human
+`dv-harness research` / governance transitions rather than by an iterating
+driver, so a `run_id`-scoped session does not exist for either. `CANCELLED` and
+`STALE` have no producer and say so (`LOOP_STATE_WITHOUT_EVENT_REASON`), because
+`derive_loop_state()` never returns them and section 97's stale detection is not
+built. There is also no `dv-harness` CLI verb: the front doors are
+`GET /api/loops` (the card) and `python -m dv_harness.loop_telemetry
+names|events|rows|show`, both through one shared `execute_verb()`.

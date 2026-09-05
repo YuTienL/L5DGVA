@@ -664,6 +664,13 @@ class DVHarness:
         # run_stage()->preflight edge through a pure mock.
         self.execution_preflight_runner = None
 
+        # LOOP-4 (section 108): the CURRENT loop session's telemetry context,
+        # or None when no loop() is in flight. `run_stage()` on its own is not
+        # a loop, so a one-shot `dv-harness run-stage` leaves this None and
+        # emits no loop telemetry at all -- which is why the Loop Engineering
+        # Center never shows a row for a run that never iterated.
+        self._loop_run: Optional[Dict[str, Any]] = None
+
         # Plan-and-Execute / Multi-Agent / Blackboard / ReAct (see module
         # docstring above): constructed unconditionally -- all four are
         # cheap, file-based, and create their own directories lazily.
@@ -810,7 +817,9 @@ class DVHarness:
         }
         return self.blackboard.append_debug_loop_round(entry, source=failing_stage)
 
-    def _record_loop_state_observation(self, stage: str, occasion: str) -> Optional[Dict[str, Any]]:
+    def _record_loop_state_observation(self, stage: str, occasion: str, *,
+                                       convergence: Optional[Dict[str, Any]] = None
+                                       ) -> Optional[Dict[str, Any]]:
         """Records ONE real `LOOP_STATE_OBSERVED` event naming this run's
         current `loop_contract.LoopState` (LOOP_ENGINEERING section 86).
 
@@ -827,6 +836,17 @@ class DVHarness:
         policy.max_stage_retries, `control.json`, the Blackboard
         `debug_loop_history` topic) -- never from agent prose, per section 86.
 
+        `convergence` is one `loop_convergence.classify_loop_convergence()`
+        report (LOOP-4 wiring, 2026-09-05). LOOP-2 built that classifier and
+        disclosed that nothing in the engine fired it -- so PLATEAU and the
+        cross-run OSCILLATING verdict were REACHED but never produced on the
+        real path, and every observation this method wrote carried
+        `PLATEAU_NOT_EVALUATED` forever. Passing a real report here is what
+        gives section 108's LOOP_PLATEAU_DETECTED / LOOP_OSCILLATION_DETECTED a
+        real producer. Absent (a project with no evidence database), the
+        observation still reports PLATEAU_NOT_EVALUATED with its reason: a
+        detector that could not run must never read as "no plateau".
+
         Best-effort, mirroring every sibling `_record_*`/`_promote_*` method:
         an observability failure must never turn an already-computed routing
         decision into a crash."""
@@ -836,7 +856,8 @@ class DVHarness:
             obs = _lc.observe_verification_closure_loop(
                 self.state, self.cfg, stage=stage,
                 control_plane_state=ControlPlane(self.root).load(),
-                debug_loop_entries=history.get("entries") or [])
+                debug_loop_entries=history.get("entries") or [],
+                convergence=convergence)
             payload = obs.to_dict()
             self.store.event({"ts": now(), "event": "LOOP_STATE_OBSERVED",
                               "occasion": occasion, **payload})
@@ -849,6 +870,302 @@ class DVHarness:
             except Exception:
                 pass
             return None
+
+    # ---- LOOP-4: section 108's loop telemetry events -----------------------
+    #
+    # (LOOP_ENGINEERING section 108 -- see dv_harness/loop_telemetry.py's module
+    # docstring for the pre-build verification that all nineteen names had zero
+    # producers.) Everything below is BEST-EFFORT and OBSERVE-ONLY: not one of
+    # these methods changes a status, a route, an attempt count or a gate
+    # verdict, and none of them can fail a stage. They record what the loop
+    # already decided, through the SAME `StateStore.event()` and the SAME
+    # `.dv-harness/events.jsonl` `_record_debug_loop_round()`,
+    # `_record_loop_state_observation()` and `_spend_retry_exhaustion_budget()`
+    # write to -- no second audit file, no second serializer.
+    #
+    # The session dict lives on the harness for the duration of ONE `loop()`
+    # invocation (`self._loop_run`), which is what makes a `run_id` mean "one
+    # loop session" rather than "one process". It is deliberately absent
+    # outside a loop: `run_stage()` on its own is not a loop, so a one-shot
+    # `dv-harness run-stage` emits nothing and `_emit_loop_event()` is a no-op.
+
+    def _emit_loop_event(self, event: str, **payload: Any) -> None:
+        """One section-108 event for the CURRENT loop session, or nothing.
+
+        Best-effort by construction: a telemetry failure records
+        `LOOP_TELEMETRY_EMIT_FAILED` (deliberately NOT a section-108 name --
+        `loop_telemetry.emit()` refuses anything outside the nineteen, and a
+        failure to observe is not one of the things being observed) and never
+        propagates."""
+        sess = getattr(self, "_loop_run", None)
+        if not sess:
+            return
+        try:
+            from . import loop_telemetry as _lt
+            _lt.emit(self.store, event, loop_id=sess["loop_id"],
+                     run_id=sess["run_id"], iteration=sess["iteration"], **payload)
+            if event in _lt.TERMINAL_LOOP_EVENTS:
+                sess["terminated"] = event
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "event": "LOOP_TELEMETRY_EMIT_FAILED",
+                                  "attempted_event": event,
+                                  "run_id": sess.get("run_id"),
+                                  "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+
+    def _begin_loop_telemetry(self, user_goal: str) -> None:
+        """Open one loop session: LOOP_CREATED (only the first time this loop
+        has ever run in this project), then LOOP_RESUMED (only when a prior
+        session really ended in something other than LOOP_SUCCESS), then
+        LOOP_STARTED.
+
+        Both the CREATED/RESUMED decisions are READ out of the append-only
+        event log by `loop_telemetry.previous_session_summary()` -- they are
+        facts about what this project has already recorded, never a flag
+        anybody sets. `goal` and `machine_checkable_done` come off the REAL
+        `loop_contract.verification_closure_contract(self.cfg)`, so the
+        drill-down's Goal field cannot drift from the contract that defines it."""
+        from . import loop_telemetry as _lt
+        from . import loop_contract as _lc
+        try:
+            prior = _lt.previous_session_summary(self.root)
+        except Exception:
+            prior = {}
+        done, _total = _lt.gate_verified_stage_count(self.state.stages)
+        self._loop_run = {
+            "loop_id": _lt.VERIFICATION_CLOSURE_LOOP,
+            "run_id": _lt.new_run_id(),
+            "iteration": 0,
+            "gain": done,
+            "terminated": None,
+        }
+        contract_goal = ""
+        machine_done = ""
+        try:
+            contract = _lc.verification_closure_contract(self.cfg)
+            contract_goal = contract.goal
+            machine_done = contract.machine_checkable_done
+        except Exception:
+            pass
+        if not prior.get("ever_created"):
+            self._emit_loop_event(
+                "LOOP_CREATED", loop_state=_lc.LoopState.CREATED.value,
+                goal=contract_goal, machine_checkable_done=machine_done,
+                driver="dv_harness.engine.DVHarness.loop")
+        if (prior.get("prior_session_count")
+                and prior.get("last_terminal_event") != "LOOP_SUCCESS"):
+            self._emit_loop_event(
+                "LOOP_RESUMED", loop_state=_lc.LoopState.RESUMING.value,
+                prior_session_count=prior.get("prior_session_count"),
+                last_terminal_event=prior.get("last_terminal_event"),
+                last_terminal_reason=prior.get("last_terminal_reason"),
+                resume_condition=("this loop session continues a prior one that did not "
+                                  "reach LOOP_SUCCESS; its state.json is the durable state "
+                                  "it resumes from"))
+        self._emit_loop_event(
+            "LOOP_STARTED", loop_state=_lc.LoopState.RUNNING.value,
+            stage=self.state.current_stage,
+            goal=(user_goal or "")[:1000],
+            contract_goal=contract_goal,
+            machine_checkable_done=machine_done,
+            trigger="dv_harness.engine.DVHarness.loop()",
+            verified_gain_at_start=done)
+
+    def _end_loop_telemetry(self, event: str, **payload: Any) -> None:
+        """Close the session with EXACTLY ONE terminal event
+        (`loop_telemetry.TERMINAL_LOOP_EVENTS`) and forget it, so a second
+        `loop()` on the same harness object is a second session with its own
+        `run_id` rather than more rows on the first one."""
+        self._emit_loop_event(event, **payload)
+        self._loop_run = None
+
+    def _emit_loop_iteration_started(self, stage: str) -> None:
+        sess = getattr(self, "_loop_run", None)
+        if not sess:
+            return
+        sess["iteration"] = int(sess.get("iteration") or 0) + 1
+        from . import loop_contract as _lc
+        ss = self.state.stages.get(stage, {}) or {}
+        self._emit_loop_event(
+            "LOOP_ITERATION_STARTED", stage=stage,
+            loop_state=_lc.LoopState.RUNNING.value,
+            attempts=ss.get("attempts"),
+            status_before=ss.get("status"))
+
+    def _emit_loop_action_selected(self, stage: str) -> None:
+        """Which action this iteration selected: run THIS graph node.
+
+        `route` and `skills` are read off the real `GraphDefinition` node --
+        the same object `_record_debug_loop_round()` reads `node.route` from --
+        so the recorded action is the graph's, never a description of it."""
+        node = None
+        try:
+            node = self.graph.nodes.get(stage) if self.graph is not None else None
+        except Exception:
+            node = None
+        ss = self.state.stages.get(stage, {}) or {}
+        self._emit_loop_event(
+            "LOOP_ACTION_SELECTED", stage=stage,
+            action="run_stage",
+            route=getattr(node, "route", None),
+            skills=list(getattr(node, "skills", None) or []),
+            attempts=ss.get("attempts"))
+
+    def _emit_loop_verify_completed(self, stage: str) -> None:
+        """Section 87's verifier separation, recorded: WHICH gates judged this
+        stage and what they concluded.
+
+        The gate ids come from the real `gates.effective_stage_gates()` (the
+        self-tuning overlay included, so the recorded verifier is the one that
+        actually ran), and the verdict from the status `run_stage()` just
+        persisted -- never from the agent's own text."""
+        from .gates import effective_stage_gates
+        ss = self.state.stages.get(stage, {}) or {}
+        try:
+            gate_ids = [g[0] for g in (effective_stage_gates(stage, self.root) or [])]
+        except Exception:
+            gate_ids = []
+        self._emit_loop_event(
+            "LOOP_VERIFY_COMPLETED", stage=stage,
+            status=ss.get("status"),
+            verdict=ss.get("status"),
+            gate_ids=gate_ids, gate_count=len(gate_ids),
+            verifier=("dv_harness.gates.evaluate_stage_evidence() over "
+                      "effective_stage_gates(); the producing agent does not judge "
+                      "its own output"),
+            blocking_reason=(ss.get("blocking_reason") or "")[:600],
+            attempts=ss.get("attempts"))
+
+    def _emit_loop_progress(self, stage: str) -> None:
+        """Section 107's Verified Gain column, and section 110's LOOP-AT-26.
+
+        The metric is `loop_telemetry.GATE_VERIFIED_STAGE_METRIC` -- stages
+        whose gates accepted their evidence -- which is the only per-iteration
+        progress signal this engine really verifies. An iteration that ran a
+        stage and moved it by zero is LOOP_NO_PROGRESS: artifact churn without
+        verified gain. The delta is against the previous iteration of THIS
+        session, whose baseline was read at `_begin_loop_telemetry()`."""
+        sess = getattr(self, "_loop_run", None)
+        if not sess:
+            return
+        from . import loop_telemetry as _lt
+        from . import loop_contract as _lc
+        gain = _lt.verified_gain(self.state.stages, previous=sess.get("gain"))
+        sess["gain"] = gain["value"]
+        self._emit_loop_event("LOOP_PROGRESS_UPDATED", stage=stage, **gain)
+        delta = gain.get("delta")
+        if delta is None:
+            return
+        if delta > 0:
+            self._emit_loop_event(
+                "LOOP_CONVERGING", stage=stage,
+                loop_state=_lc.LoopState.CONVERGING.value,
+                metric=gain["metric"], delta=delta, value=gain["value"],
+                total=gain["total"])
+        elif delta == 0:
+            self._emit_loop_event(
+                "LOOP_NO_PROGRESS", stage=stage,
+                metric=gain["metric"], delta=delta, value=gain["value"],
+                reason=("this iteration ran a stage and no additional stage reached a "
+                        "gate-verified status -- artifact churn without verified gain "
+                        "(section 110, LOOP-AT-26)"))
+
+    def _emit_loop_retry_scheduled(self, stage: str, max_retry: int,
+                                   classification: Optional[Dict[str, Any]]) -> None:
+        """LOOP_RETRY_SCHEDULED at the one place `loop()` schedules a retry,
+        plus LOOP_BUDGET_WARNING when this is the LAST one the per-node budget
+        allows -- the warning has to precede exhaustion to be worth anything,
+        and `attempts_remaining == 0` is the real, checkable condition for it
+        (the next failure takes the `attempts > max_retry` branch)."""
+        ss = self.state.stages.get(stage, {}) or {}
+        attempts = int(ss.get("attempts") or 0)
+        remaining = int(max_retry) - attempts
+        from . import loop_contract as _lc
+        self._emit_loop_event(
+            "LOOP_RETRY_SCHEDULED", stage=stage,
+            loop_state=_lc.LoopState.RETRY_WAIT.value,
+            attempts=attempts, max_stage_retries=max_retry,
+            attempts_remaining=max(remaining, 0),
+            failure_type=(classification or {}).get("failure_type"),
+            failure_signature=(classification or {}).get("signature"),
+            failure_signature_repeats=(classification or {}).get("repeats"),
+            backoff=("none -- engine.loop() retries immediately; "
+                     "policy.max_stage_retries is the only bound"))
+        if remaining <= 0:
+            self._emit_loop_event(
+                "LOOP_BUDGET_WARNING", stage=stage,
+                attempts=attempts, max_stage_retries=max_retry,
+                attempts_remaining=0,
+                reason=(f"stage {stage} has spent {attempts} of "
+                        f"{max_retry} allowed retries: the next failure exhausts "
+                        f"policy.max_stage_retries and routes onto the graph's FAIL edge"))
+
+    def _classify_loop_convergence_for_telemetry(self, stage: str) -> Optional[Dict[str, Any]]:
+        """Fire LOOP-2's convergence/plateau/oscillation classifier on the real
+        engine path, at the one low-frequency point where it is worth the read.
+
+        LOOP-2 built `loop_convergence.classify_loop_convergence()` and
+        disclosed that no `run_stage()`/`advance()` call site invoked it. Called
+        HERE -- once per retry exhaustion, not once per iteration -- because
+        that is where the loop has just failed to make progress and where the
+        question "is this a plateau, or an oscillation, or just a hard stage"
+        is actually being asked. It opens the evidence database READ-ONLY (or
+        not at all, when none exists) exactly as `trend_report()` does, writes
+        nothing, escalates nothing, and returns None rather than a fabricated
+        verdict on any failure."""
+        try:
+            from . import loop_convergence as _lcv
+            history = (self.blackboard.read_debug_loop_history() or {}).get("entries") or []
+            report = _lcv.classify_loop_convergence(
+                self.root, cfg=self.cfg, debug_loop_entries=history)
+            return report.to_dict()
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "stage": stage,
+                                  "event": "LOOP_CONVERGENCE_CLASSIFY_FAILED",
+                                  "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+            return None
+
+    def _emit_loop_convergence_events(self, stage: str,
+                                      report: Optional[Dict[str, Any]]) -> None:
+        """Turn ONE real convergence report into its section-108 event.
+
+        Every event carries `metric: coverage_percent`, which is what separates
+        it from `_emit_loop_progress()`'s per-iteration gate-verified-stage
+        verdict: two different real metrics, never one pretending to be the
+        other. An UNKNOWN verdict emits NOTHING -- the classifier ran and could
+        not conclude, and recording that as a finding is the unearned claim
+        `PLATEAU_NOT_EVALUATED` exists to prevent."""
+        if not report:
+            return
+        from . import loop_convergence as _lcv
+        from . import loop_contract as _lc
+        verdict = report.get("verdict")
+        common = {"stage": stage, "metric": _lcv.COVERAGE_PERCENT_METRIC,
+                  "verdict": verdict, "convergence": report}
+        if verdict == _lcv.PLATEAU:
+            self._emit_loop_event("LOOP_PLATEAU_DETECTED",
+                                  loop_state=_lc.LoopState.PLATEAU.value, **common)
+        elif verdict == _lcv.OSCILLATING:
+            self._emit_loop_event("LOOP_OSCILLATION_DETECTED",
+                                  loop_state=_lc.LoopState.OSCILLATING.value,
+                                  oscillation=report.get("oscillation"), **common)
+        elif verdict in (_lcv.NO_PROGRESS, _lcv.REGRESSION):
+            # Section 108 names no regression event. A DECLINING series is
+            # reported as LOOP_NO_PROGRESS rather than as LOOP_CONVERGING --
+            # the nearest true statement of the two -- and the real verdict
+            # travels on the payload, so nothing is collapsed or hidden.
+            self._emit_loop_event(
+                "LOOP_NO_PROGRESS",
+                reason=("the cross-run coverage series did not advance over this window "
+                        f"(loop_convergence verdict: {verdict})"),
+                **common)
+        elif verdict in (_lcv.CONVERGING, _lcv.SLOW_CONVERGENCE):
+            self._emit_loop_event("LOOP_CONVERGING", **common)
 
     # ---- LOOP-3: unified loop budget + failure taxonomy + circuit breaker --
     #
@@ -4893,8 +5210,17 @@ class DVHarness:
         """
         if dry_run or bool(self._dry_run_cfg().get("enabled", False)):
             return self.run_stage(user_goal, stage=self.state.current_stage, dry_run=True)
+        # LOOP-4, section 108: open this loop SESSION's telemetry. Deliberately
+        # after the dry-run early return -- a dry run dispatches one stage and
+        # iterates nothing, so calling it a loop session would put a row in the
+        # Loop Engineering Center for a loop that never ran. `_ls` is section
+        # 86's state vocabulary, imported (never restated) so a telemetry event
+        # can never name a state loop_contract does not have.
+        from .loop_contract import LoopState as _ls
+        self._begin_loop_telemetry(user_goal)
         while True:
             stage = self.state.current_stage
+            self._emit_loop_iteration_started(stage)
 
             # Human Override principle: checked FIRST, before anything else
             # in the loop body (before the SIGNOFF gate check, before
@@ -4921,12 +5247,29 @@ class DVHarness:
                 self.store.save(self.state)
                 print(f"[dv-harness] TAKEOVER active on stage {stage} -- loop stopped "
                       f"cleanly. Run `dv-harness release-takeover` to return control.")
+                # LOOP-4: a takeover is BOTH "a human decision is owed" and
+                # "this session ended", so both events are real and both are
+                # emitted -- the human-gate one first, then exactly one
+                # terminal event, which is the invariant a test holds loop() to.
+                self._emit_loop_event(
+                    "LOOP_HUMAN_GATE_REQUIRED", stage=stage,
+                    loop_state=_ls.HUMAN_GATE.value, reason="TAKEOVER_ACTIVE",
+                    blocking_reason=ss.get("blocking_reason", "")[:600],
+                    resume_condition="dv-harness release-takeover")
+                self._end_loop_telemetry(
+                    "LOOP_STOPPED", stage=stage, loop_state=_ls.HUMAN_GATE.value,
+                    reason="TAKEOVER_ACTIVE",
+                    resume_condition="dv-harness release-takeover, then dv-harness start --loop")
                 return
             if cp_state.get("paused"):
                 reason = cp_state.get("paused_reason", "")
                 print(f"[dv-harness] PAUSED" + (f" ({reason})" if reason else "")
                       + " -- loop stopped cleanly before running the next stage. "
                         "Run `dv-harness resume` to continue.")
+                self._end_loop_telemetry(
+                    "LOOP_STOPPED", stage=stage, loop_state=_ls.STOPPED.value,
+                    reason=f"PAUSED: {reason}" if reason else "PAUSED",
+                    resume_condition="dv-harness resume, then dv-harness start --loop")
                 return
 
             # Section 93's circuit breaker (LOOP-3). Deliberately checked AFTER
@@ -4938,6 +5281,13 @@ class DVHarness:
             # configuration never reaches it. It authorizes nothing -- see
             # _circuit_breaker_gate()'s docstring.
             if self._circuit_breaker_gate(stage):
+                self._end_loop_telemetry(
+                    "LOOP_BLOCKED", stage=stage, loop_state=_ls.BLOCKED.value,
+                    reason="CIRCUIT_BREAKER_OPEN",
+                    blocking_reason=(self.state.stages[stage].get("blocking_reason")
+                                     or "")[:600],
+                    resume_condition=("dv-harness loop-budget breaker-reset "
+                                      "--reason ... --by ..."))
                 return
 
             if stage == Stage.SIGNOFF.value:
@@ -4958,13 +5308,46 @@ class DVHarness:
                         self.store.save(self.state)
                         continue
                     self.mark(Status.BLOCKED.value, why)
+                    self._end_loop_telemetry(
+                        "LOOP_BLOCKED", stage=stage, loop_state=_ls.BLOCKED.value,
+                        reason="SIGNOFF_GATE_REFUSED", blocking_reason=str(why)[:600],
+                        resume_condition=("close what policy.can_signoff() named, then "
+                                          "dv-harness start --loop"))
                     return
 
+            self._emit_loop_action_selected(stage)
             result = self.run_stage(user_goal)
             ss = self.state.stages[stage]
             status = ss["status"]
+            # Section 87: the verifier is separate from the producer, and which
+            # gates judged this stage is recorded rather than assumed. Emitted
+            # for EVERY outcome, PASS included -- telemetry that only appeared
+            # on failures could not answer "did this iteration achieve anything".
+            self._emit_loop_verify_completed(stage)
+            self._emit_loop_progress(stage)
 
             if status in (Status.BLOCKED.value, Status.WAIT_USER.value):
+                if status == Status.WAIT_USER.value:
+                    self._emit_loop_event(
+                        "LOOP_HUMAN_GATE_REQUIRED", stage=stage,
+                        loop_state=_ls.HUMAN_GATE.value, reason="STAGE_NEEDS_USER_INPUT",
+                        blocking_reason=(ss.get("blocking_reason") or "")[:600],
+                        resume_condition=("answer the real blocking question "
+                                          "(dv-harness question-queue answer <Q-ID> ...), "
+                                          "then dv-harness start --loop"))
+                    self._end_loop_telemetry(
+                        "LOOP_STOPPED", stage=stage, loop_state=_ls.HUMAN_GATE.value,
+                        reason="HUMAN_GATE_REQUIRED",
+                        blocking_reason=(ss.get("blocking_reason") or "")[:600],
+                        resume_condition=("answer the blocking question, then "
+                                          "dv-harness start --loop"))
+                else:
+                    self._end_loop_telemetry(
+                        "LOOP_BLOCKED", stage=stage, loop_state=_ls.BLOCKED.value,
+                        reason="STAGE_BLOCKED",
+                        blocking_reason=(ss.get("blocking_reason") or "")[:600],
+                        resume_condition=("clear the blocking_reason on this stage, then "
+                                          "dv-harness start --loop"))
                 return
             if status in (Status.FAIL.value, Status.PARTIAL.value):
                 # BUG FIX (2026-08-28, confirmed by architecture audit): this
@@ -4993,6 +5376,7 @@ class DVHarness:
                 if retry_refusal is None and ss["attempts"] <= max_retry:
                     ss["status"] = Status.RETRY.value
                     self.store.save(self.state)
+                    self._emit_loop_retry_scheduled(stage, max_retry, classification)
                     continue
                 if retry_refusal is not None:
                     # The refusal is recorded on the stage itself, not only in
@@ -5040,14 +5424,47 @@ class DVHarness:
                 # (policy.max_stage_retries) has just been spent, and therefore
                 # the one point Status cannot describe -- BUDGET_EXHAUSTED has
                 # no Status equivalent. Best-effort; see the method's docstring.
-                self._record_loop_state_observation(stage, occasion="RETRY_BUDGET_EXHAUSTED")
+                #
+                # LOOP-4 wires LOOP-2's classifier in HERE, at the one
+                # low-frequency point where "is this a plateau, an oscillation,
+                # or just a hard stage" is genuinely being asked -- so the
+                # observation's `plateau` field carries a real verdict instead
+                # of PLATEAU_NOT_EVALUATED forever, and section 108's
+                # LOOP_PLATEAU_DETECTED / LOOP_OSCILLATION_DETECTED get a real
+                # producer. A project with no evidence database still reports
+                # PLATEAU_NOT_EVALUATED and emits neither event.
+                convergence = self._classify_loop_convergence_for_telemetry(stage)
+                self._record_loop_state_observation(stage, occasion="RETRY_BUDGET_EXHAUSTED",
+                                                    convergence=convergence)
+                self._emit_loop_convergence_events(stage, convergence)
 
                 # LOOP-3, section 91: the same spend, recorded against the ONE
                 # unified ledger, so "what has this run spent on which
                 # dimension against which limit" is answerable run-wide instead
                 # of only per node. Trips the circuit breaker when a DECLARED
                 # budget has genuinely run out. Best-effort; see the method.
-                self._spend_retry_exhaustion_budget(stage, classification)
+                spend = self._spend_retry_exhaustion_budget(stage, classification)
+
+                # LOOP-4, section 108: the budget that just ran out, named.
+                # `_spend_retry_exhaustion_budget()`'s own LOOP_BUDGET_SPENT
+                # event is the LEDGER record (which unified dimensions moved);
+                # this is the section-108 LOOP event the Loop Engineering Center
+                # reads, and it carries the ledger payload rather than
+                # recomputing any of it.
+                self._emit_loop_event(
+                    "LOOP_BUDGET_EXHAUSTED", stage=stage,
+                    loop_state=_ls.BUDGET_EXHAUSTED.value,
+                    attempts=ss.get("attempts"), max_stage_retries=max_retry,
+                    attempts_remaining=0,
+                    failure_type=(classification or {}).get("failure_type"),
+                    failure_signature_repeats=(classification or {}).get("repeats"),
+                    dimensions=(spend or {}).get("dimensions"),
+                    exhausted=(spend or {}).get("exhausted"),
+                    reason=(f"stage {stage} spent policy.max_stage_retries "
+                            f"({ss.get('attempts')} attempts, limit {max_retry}); routing "
+                            f"onto the graph's FAIL edge"),
+                    resume_condition=("fix what the stage's blocking_reason names, or raise "
+                                      "policy.max_stage_retries, then dv-harness start --loop"))
 
                 # Content-driven reroute hint (2026-08-29, inner ReAct loop):
                 # ss["react_reroute_target"] is set only by run_stage()'s
@@ -5066,10 +5483,29 @@ class DVHarness:
                     self.state.current_stage = n
                     self.store.save(self.state)
                     continue
+                # No FAIL edge and no reroute hint: the loop has nowhere to go
+                # and stops here. That is section 86's FAILED, and it is this
+                # session's one terminal event.
+                self._end_loop_telemetry(
+                    "LOOP_FAILED", stage=stage, loop_state=_ls.FAILED.value,
+                    reason="RETRIES_EXHAUSTED_AND_NO_FAIL_EDGE",
+                    blocking_reason=(ss.get("blocking_reason") or "")[:600],
+                    attempts=ss.get("attempts"), max_stage_retries=max_retry,
+                    resume_condition=("give this stage a real FAIL edge in main_graph.json, "
+                                      "or fix what its blocking_reason names, then "
+                                      "dv-harness start --loop"))
                 return
 
             n = self.advance(user_goal)
             if not n:
                 self.state.overall_status = Status.CLOSED.value
                 self.store.save(self.state)
+                # The loop's own machine-checkable done: it ran out of graph
+                # and closed. This is the ONLY place LOOP_SUCCESS is emitted --
+                # a per-stage PASS is CONVERGING, never SUCCESS (see
+                # loop_contract.STATUS_TO_LOOP_STATE's own reasoning).
+                self._end_loop_telemetry(
+                    "LOOP_SUCCESS", stage=stage, loop_state=_ls.SUCCESS.value,
+                    reason="OVERALL_STATUS_CLOSED",
+                    machine_checkable_done="state.overall_status == CLOSED")
                 return
