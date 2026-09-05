@@ -1223,6 +1223,36 @@ def main():
     # `dv_harness/memory_cli.py` standalone script (memory.py's JSON
     # MemoryStore/CornerCaseLibrary) -- this one is specifically the
     # Markdown/YAML Vault's own surface, matching this module's own scope.
+    # Cross-project pattern mining (VI-2, dv_harness/cross_project_mining.py):
+    # the tier ABOVE the per-project memory stores -- "the same root cause
+    # keeps recurring across our projects, and one of them already fixed it".
+    # A pure read of N registered project roots; it writes no memory record of
+    # any tier and promotes nothing (promote_to_organizational() remains the
+    # only route into the organizational tier).
+    pxproj = sub.add_parser("cross-project",
+                             help="Mine recurring root-cause/fix patterns ACROSS registered projects' "
+                                  "memory stores. Pure read -- promotes nothing. "
+                                  "See dv_harness/cross_project_mining.py.")
+    pxproj_sub = pxproj.add_subparsers(dest="xproj_cmd", required=True)
+    pxproj_reg = pxproj_sub.add_parser("register", help="Register another project root as mineable. Refused if it "
+                                                          "has no memory store, or if its store shares memory_ids "
+                                                          "with an already-registered one (one store under two "
+                                                          "names is one project, not two).")
+    pxproj_reg.add_argument("root", help="Path to the other project's root (the directory holding its .dv-harness/).")
+    pxproj_reg.add_argument("--id", dest="xproj_id", default=None,
+                             help="Project id to register it under (default: the directory name).")
+    pxproj_unreg = pxproj_sub.add_parser("unregister", help="Remove one project id from the registry.")
+    pxproj_unreg.add_argument("project_id")
+    pxproj_sub.add_parser("list", help="Every registered project root.")
+    pxproj_sub.add_parser("status", help="Whether this installation can produce a real cross-project result yet "
+                                           "-- computed from the registry, not claimed.")
+    pxproj_mine = pxproj_sub.add_parser("mine", help="Mine every registered project and report cross-project "
+                                                       "patterns, including any fix verified in one project for a "
+                                                       "failure another still has open.")
+    pxproj_mine.add_argument("--min-projects", type=int, default=None, dest="xproj_min_projects",
+                              help="Distinct projects required before a signature is reported as cross-project "
+                                   "(default and minimum 2).")
+
     pmem = sub.add_parser("memory", help="DV-Knowledge Vault (Obsidian+Git/Markdown Hybrid Engineering "
                                           "Memory) status/search/show/add/promote/graph/validate/sync/doctor. "
                                           "See dv_harness/memory_vault.py, memory_dedup.py, memory_doctor.py.")
@@ -2845,6 +2875,45 @@ def main():
             record["status"] = "REVERTED"
             store.add("project", record)
             print(json.dumps({"ok": True, "memory_id": args.memory_id}))
+            return 0
+    elif args.cmd == "cross-project":
+        from . import cross_project_mining as cpm
+
+        if args.xproj_cmd == "register":
+            try:
+                entry = cpm.ProjectRegistry(h.root).register(args.root, project_id=args.xproj_id)
+            except cpm.CrossProjectRegistryError as exc:
+                # Including ProjectIdentityCollisionError -- refusing a second
+                # "project" that is really one store under two names is a
+                # normal, expected outcome to report, not a crash.
+                print(json.dumps({"ok": False, "error": type(exc).__name__, "message": str(exc)},
+                                 ensure_ascii=False, indent=2))
+                return 1
+            print(json.dumps({"ok": True, "registered": entry}, ensure_ascii=False, indent=2))
+            return 0
+        if args.xproj_cmd == "unregister":
+            removed = cpm.ProjectRegistry(h.root).unregister(args.project_id)
+            print(json.dumps({"ok": removed, "project_id": args.project_id}, ensure_ascii=False, indent=2))
+            return 0 if removed else 1
+        if args.xproj_cmd == "list":
+            print(json.dumps({"projects": cpm.ProjectRegistry(h.root).entries()},
+                             ensure_ascii=False, indent=2))
+            return 0
+        if args.xproj_cmd == "status":
+            print(json.dumps(cpm.production_status(h.root), ensure_ascii=False, indent=2))
+            return 0
+        if args.xproj_cmd == "mine":
+            kwargs = ({} if args.xproj_min_projects is None
+                      else {"min_projects": args.xproj_min_projects})
+            try:
+                report = cpm.mine_registered_projects(h.root, **kwargs)
+            except (ValueError, cpm.CrossProjectRegistryError) as exc:
+                print(json.dumps({"ok": False, "error": type(exc).__name__, "message": str(exc)},
+                                 ensure_ascii=False, indent=2))
+                return 1
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            # Exit 0 for a completed pass whatever it found: INSUFFICIENT_PROJECTS
+            # is an honest answer about the sample, not a failure of the command.
             return 0
     elif args.cmd == "memory":
         from . import memory_vault as mv

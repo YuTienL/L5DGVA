@@ -2578,3 +2578,105 @@ than a MemoryStore record, and that topic keeps no history of what later happene
 to the conclusion, so conclusions that never became a memory record are outside
 the corpus. Closing that would need an outcome recorded against the conclusion
 itself, which nothing writes today.
+
+## Cross-Project Pattern Mining: What Recurs Across Projects (2026-09-05, VI-2)
+
+`capability_evolution.repeated_unresolved_failure_patterns()` already mines ONE
+project's Job Memory for a failure signature several INDEPENDENT RUNS recorded
+and no `verified_fix` closes. A repo-wide grep confirmed nothing did the same
+one level up: nothing enumerated more than one project root, nothing grouped
+evidence BY project, and the only cross-project surface in the codebase --
+`knowledge_center.py`'s remote broker -- is an add/search RPC against a shared
+Linux DB path, not a miner (it never groups, never counts distinct projects,
+and cannot run without a real remote server). So "the same root cause keeps
+recurring across our projects, and one of them already fixed it" was a fact
+nothing in this harness could compute. `dv_harness/cross_project_mining.py` is
+that miner, and only that.
+
+- **Reuse, not a parallel mechanism.** Failure identity is
+  `evidence_db.signature_key()` -- the same hash the evidence store accumulates
+  `occurrence_count` on and `repeated_unresolved_failure_patterns()` groups by,
+  never a second definition of "the same failure". Evidence is read through the
+  shared `MemoryStore.find()`. The Job/Engineering kinds are
+  `capability_evolution.REPEAT_FAILURE_JOB_MEMORY_KIND` /
+  `RESOLVING_ENGINEERING_MEMORY_KIND`, IMPORTED, so "only a gate-verified
+  `verified_fix` closes a failure" stays one decision in one place; closure
+  claim texts come from that module's own `failure_resolution_claims()` /
+  `resolved_failure_claim_texts()`, so the join is the same exact-equality one.
+  Within a project, independent observations are still counted by
+  `_run_identity()`. The registry write goes through
+  `storage._atomic_replace()` and the audit trail is `StateStore.event()`.
+- **The unit of independence is the PROJECT.** `_run_identity()`'s discipline
+  lifted one level: a project that recorded the same signature on forty runs is
+  ONE cross-project observation, because forty runs of one environment are
+  forty reports of one project's circumstances.
+  `CROSS_PROJECT_MIN_PROJECTS = 2` distinct projects, for the same reason
+  `memory_router.ORGANIZATIONAL_MIN_CONFIRMATIONS` and
+  `REPEAT_FAILURE_MIN_OCCURRENCES` are 2.
+- **That bar is enforced against fabrication, not merely stated.**
+  `ProjectRegistry.register()` refuses a root whose memory store shares ANY
+  `memory_id` with an already-registered one
+  (`ProjectIdentityCollisionError`), and `mine_cross_project_patterns()`
+  re-checks the same thing on the roots actually handed to it -- the registry
+  file is editable text, so the guard cannot live only on the write path.
+  Pointing the registry at one store twice under two names cannot manufacture a
+  two-project consensus out of one project's audit trail.
+- **The finding that only exists at this level** is `transferable_fix`: a
+  gate-verified fix in project A for a signature project B still has open,
+  carrying A's real `verified_fix` `memory_id` so the finding is citable rather
+  than a summary. A bare `root_cause`/`debug_lesson` is an explanation, not a
+  closure, and does not qualify.
+- **A single-project pattern is REPORTED, never silently dropped** -- hiding it
+  would make an empty cross-project result read as an absence of failures. So
+  is the sample itself: fewer than two contributing stores returns
+  `INSUFFICIENT_PROJECTS`, whose disclosure says the answer is about the SAMPLE,
+  not about the projects.
+- **It mints nothing.** Mining is a pure read: it writes no memory record of
+  any tier, files no capability candidate, and creates no store in a root that
+  has none (checked before a `MemoryStore` is ever constructed, since that
+  constructor would bring one into existence). `promotion_readiness()` reports
+  what an Organizational promotion would still need and performs none; the only
+  route into that tier remains `memory_router.promote_to_organizational()`'s
+  three gates plus `organizational_admission_gate()`, untouched here. The one
+  write in the whole module is the registry file plus one `events.jsonl` event
+  per registry change and per mining pass -- including a pass on which nothing
+  qualified, which is itself citable evidence.
+
+Reachable as `dv-harness cross-project register|unregister|list|status|mine`.
+A refusal (including `ProjectIdentityCollisionError`) is printed as data and
+exits 1 rather than raising; a completed `mine` exits 0 whatever it found,
+because `INSUFFICIENT_PROJECTS` is an honest answer about the sample, not a
+failure of the command.
+
+Proven by `dv_harness_tests/test_cross_project_mining.py` (22 tests) against
+MULTIPLE separately constructed real memory stores -- each project a real
+`MemoryStore` populated through the real `memory_router.route_and_store()` with
+the exact record shapes `engine._record_debug_attempt_job_memory()` and
+`_promote_verified_fix_knowledge()` write, and real
+`memory_vault.build_failure_signature()` signatures. Negative controls carry the
+detection power: forty runs in one project are still not a cross-project
+pattern, three retries against one commit are one run, an explanation is not a
+closure, a byte-for-byte copy of a project is refused at registration AND
+excluded at mine time, a bare directory neither gains a store nor pads the
+count, and a byte-level snapshot proves no mined store was mutated. Nothing in
+it runs a build, a regression or an LSF submission.
+
+**Disclosed residual -- no production cross-project result exists, honestly.**
+This repository is ONE project with ONE memory store; there is no second real
+project here to mine, the same disclosure Environment Generation Mode already
+makes about this repo having no RTL tree of its own. `production_status()`
+computes that answer rather than claiming it, and
+`test_this_repository_honestly_reports_no_production_cross_project_result`
+asserts it against the real repo root. Synthesising a second "project" out of
+this repo's own audit trail to manufacture a production-looking result is
+exactly what `ProjectIdentityCollisionError` refuses.
+
+**Second disclosed residual**: this has a CLI verb but no AUTOMATIC trigger --
+no `run_stage()`/`advance()` call site invokes it, no graph node declares it,
+and it is not on the dashboard. That is deliberate for now rather than
+unfinished: auto-mining on a stage boundary would fire against a registry that
+is empty in every real installation today and emit nothing but no-op events, and
+registration is deliberately a human act so that "which projects agree" never
+depends on where the harness happened to be run from. Federating the mine across
+`knowledge_center.py`'s shared broker (rather than local roots) is likewise
+deferred -- it needs a real remote server and could not be honestly tested here.
