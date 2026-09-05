@@ -270,10 +270,21 @@ class ControlPlane:
         alone cannot provide once an approval is no longer current."""
         return self.load().get("approval_history", {}).get(stage, [])
 
-    def clear_approval(self, stage: str) -> None:
+    def clear_approval(self, stage: str, outcome: str = "CONSUMED_BY_PASS") -> None:
+        """Retire the active approval for `stage`, archiving it first.
+
+        `outcome` names WHY it stopped being active and defaults to the
+        original single caller's reason (a PASS consumed it). A second real
+        reason exists since 2026-09-05: commands.cmd_research_hold() withdraws
+        the RESEARCH_CAPABILITY_EVOLUTION approval as WITHDRAWN_BY_HUMAN_HOLD.
+        The two must stay distinguishable in approval_history -- "a human took
+        this authorization back" and "the stage it authorized passed" are
+        different facts about the same record, and collapsing them into one
+        label would make the audit trail say something untrue.
+        """
         data = self.load()
         if stage in data.get("approvals", {}):
-            self._archive_approval(data, stage, "CONSUMED_BY_PASS")
+            self._archive_approval(data, stage, outcome)
             del data["approvals"][stage]
             self.save(data)
 

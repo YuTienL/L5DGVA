@@ -126,6 +126,123 @@ def cmd_approve(h, stage: str, note: str = "", reviewer_id: Optional[str] = None
     return {"stage": stage, **entry}
 
 
+# ---- RESEARCH / CAPABILITY EVOLUTION (Approve / Reject / Hold) -----------
+# The Human Approval Gate of CLAUDE.md's "Research Stage Boundaries" as three
+# Control-Plane verbs, so the dashboard's Research card and a terminal reach
+# the SAME implementation -- the whole reason this module exists (see the
+# header comment). None of the three is a new approval mechanism:
+#
+#   APPROVE  cmd_approve(RESEARCH_CAPABILITY_EVOLUTION) writes the real
+#            ControlPlane approval -- byte-identical to what
+#            `dv-harness approve RESEARCH_CAPABILITY_EVOLUTION` writes -- and
+#            capability_evolution.transition() then consumes it, re-reading it
+#            off disk through that module's own assert_human_approval() and
+#            copying the record into the candidate's status_history.
+#   REJECT   capability_evolution.transition(..., "REJECTED"). No approval is
+#            involved: declining a proposal about the harness is not a
+#            production write and needs no Level-C authorization.
+#   HOLD     ControlPlane.clear_approval(), i.e. withdraw/withhold the standing
+#            stage approval, which really does block the next HUMAN_APPROVED
+#            transition (assert_human_approval() raises without one).
+#
+# HOLD IS STAGE-SCOPED, NOT CAPABILITY-SCOPED, and that is a disclosed limit
+# rather than an oversight: the gate ControlPlane owns is keyed on the stage
+# string, and PROMOTION_STATES carries no HOLD state. Minting one would
+# fabricate a governance state master prompt section 70 defines verbatim, and
+# keying a second approval store per candidate would be the parallel mechanism
+# this project forbids. A hold therefore withholds approval for EVERY candidate
+# at once; the candidate_id it names is recorded as the reason it was raised.
+def _research_candidate(h, candidate_id: str) -> Dict[str, Any]:
+    from . import capability_evolution as ce
+    if not candidate_id:
+        raise ValueError("candidate_id is required")
+    candidate = ce.read_candidate(h.root, candidate_id)
+    if candidate is None:
+        raise ValueError(
+            f"unknown capability-evolution candidate: {candidate_id!r} "
+            f"(no such id on Blackboard topic {ce.BLACKBOARD_TOPIC})")
+    return candidate
+
+
+def cmd_research_approve(h, candidate_id: str, note: str, reviewer_id: Optional[str] = None,
+                         reviewer_confidence: str = "HIGH") -> Dict[str, Any]:
+    """Approve one CapabilityEvolutionCandidate into HUMAN_APPROVED.
+
+    The legality check runs BEFORE the approval is written, deliberately: a
+    candidate that is not at PROMOTION_CANDIDATE cannot cross this gate, and
+    approving first would leave a standing production-write authorization on
+    disk that no transition consumed.
+    """
+    from . import capability_evolution as ce
+    if not note:
+        raise ValueError("note is required for RESEARCH_APPROVE -- an approval with no "
+                         "stated reason is not an audit record")
+    candidate = _research_candidate(h, candidate_id)
+    ce.assert_legal_transition(candidate.get("current_status"), "HUMAN_APPROVED", candidate)
+    approval = cmd_approve(h, _RESEARCH_APPROVAL_STAGE, note, reviewer_id, reviewer_confidence)
+    updated = ce.transition(h.root, candidate, "HUMAN_APPROVED",
+                            by=approval["reviewer_id"], reason=note)
+    h.store.event({"ts": cp_now(), "cmd": "research_approve", "candidate_id": candidate_id,
+                    "stage": _RESEARCH_APPROVAL_STAGE, "reviewer_id": approval["reviewer_id"],
+                    "reviewer_confidence": approval["reviewer_confidence"], "note": note,
+                    "from_status": candidate.get("current_status"),
+                    "to_status": updated["current_status"]})
+    return {"candidate_id": candidate_id, "from_status": candidate.get("current_status"),
+            "current_status": updated["current_status"], "approval": approval}
+
+
+def cmd_research_reject(h, candidate_id: str, reason: str,
+                        reviewer_id: Optional[str] = None) -> Dict[str, Any]:
+    """Reject one CapabilityEvolutionCandidate (terminal state REJECTED)."""
+    from . import capability_evolution as ce
+    from .control_plane import _default_user
+    if not reason:
+        raise ValueError("reason is required for RESEARCH_REJECT")
+    candidate = _research_candidate(h, candidate_id)
+    by = reviewer_id or _default_user()
+    updated = ce.transition(h.root, candidate, "REJECTED", by=by, reason=reason)
+    h.store.event({"ts": cp_now(), "cmd": "research_reject", "candidate_id": candidate_id,
+                    "reviewer_id": by, "reason": reason,
+                    "from_status": candidate.get("current_status"),
+                    "to_status": updated["current_status"]})
+    return {"candidate_id": candidate_id, "from_status": candidate.get("current_status"),
+            "current_status": updated["current_status"]}
+
+
+def cmd_research_hold(h, reason: str, candidate_id: Optional[str] = None,
+                      reviewer_id: Optional[str] = None) -> Dict[str, Any]:
+    """Hold the Research Human Approval Gate: withdraw/withhold the standing
+    approval for RESEARCH_CAPABILITY_EVOLUTION so no candidate can transition
+    into HUMAN_APPROVED until a human approves again.
+
+    A withdrawn approval is archived into approval_history with a real
+    WITHDRAWN_BY_HUMAN_HOLD outcome, never deleted -- ControlPlane._archive_approval's
+    own rule that a human-authored record must never vanish without a trace.
+
+    A candidate ALREADY at HUMAN_APPROVED keeps that status -- a hold withholds
+    authorization, it does not rewind a decision a human already made (reversing
+    that is REJECTED, a legal transition from HUMAN_APPROVED, not a silently
+    rewritten status). It is still a real block for that candidate:
+    capability_evolution.assert_no_production_write_authorized() calls
+    assert_human_approval(), so with no approval standing, a Stage-3 production
+    write on an already-HUMAN_APPROVED candidate is refused.
+    """
+    from .control_plane import _default_user
+    if not reason:
+        raise ValueError("reason is required for RESEARCH_HOLD")
+    cp = ControlPlane(h.root)
+    prior = cp.get_approval(_RESEARCH_APPROVAL_STAGE)
+    cp.clear_approval(_RESEARCH_APPROVAL_STAGE, outcome="WITHDRAWN_BY_HUMAN_HOLD")
+    by = reviewer_id or _default_user()
+    h.store.event({"ts": cp_now(), "cmd": "research_hold", "stage": _RESEARCH_APPROVAL_STAGE,
+                    "candidate_id": candidate_id, "reviewer_id": by, "reason": reason,
+                    "withdrew_standing_approval": prior is not None})
+    return {"held": True, "stage": _RESEARCH_APPROVAL_STAGE, "candidate_id": candidate_id,
+            "reason": reason, "reviewer_id": by,
+            "withdrew_standing_approval": prior is not None,
+            "withdrawn_approval": prior}
+
+
 # ---- CORRECT ------------------------------------------------------------
 def cmd_correct(h, stage: str, note: str, reset_attempts: bool = False) -> Dict[str, Any]:
     _check_stage(stage)

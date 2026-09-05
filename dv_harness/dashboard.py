@@ -69,6 +69,13 @@ main{padding:24px;max-width:1200px;margin:auto}
    PARTIAL and BLOCKED already have a color above (same words, same meaning);
    these two are the readiness-only values. */
 .READY{color:#25845b}.UNKNOWN{color:#9aa6bd}
+/* capability_evolution.PROMOTION_STATES / RECOMMENDATIONS. Deliberately share
+   no token with models.Status (assert_no_verification_verdict_vocabulary()),
+   so these are their own classes and can never be styled as a DUT verdict. */
+.HUMAN_APPROVED,.PRODUCTION,.KEEP{color:#25845b}
+.REJECTED,.ROLLED_BACK{color:#b84444}
+.PROMOTION_CANDIDATE,.BENCHMARKED,.ADD{color:#2457a6}
+.DISCOVERED,.EVIDENCE_GATHERING,.PROPOSED,.EXPERIMENT_APPROVED,.EXPERIMENTING,.ENHANCE,.EXPERIMENT{color:#b36a00}
 .protoTile{cursor:pointer}.protoTile:hover{border-color:#2457a6}.protoTile.selected{border-color:#2457a6;background:#eaf1fb}
 .modeTile.mode-selected{border-color:#2457a6;background:#eaf1fb}
 .tier-reached{border-color:#25845b;background:#e3f7ea}.tier-unreached{opacity:.5}
@@ -84,7 +91,7 @@ button{background:#2457a6;color:white;border:none;border-radius:6px;padding:6px 
 button:disabled{background:#b7c3d9;cursor:not-allowed}
 button.secondary{background:#5a6b8c}
 input,select{font-size:13px}
-#controlResult,#setupResult,#runResult{background:#f7f9fc;border:1px solid #e3e9f2;border-radius:6px;padding:8px;white-space:pre-wrap;font-size:12px;margin-top:8px;min-height:14px}
+#controlResult,#setupResult,#runResult,#researchResult{background:#f7f9fc;border:1px solid #e3e9f2;border-radius:6px;padding:8px;white-space:pre-wrap;font-size:12px;margin-top:8px;min-height:14px}
 /* "Just transitioned" banner (2026-09-01, runtime-progress-visibility pass):
    a real, always-visible "Last transition: <stage> -> <status> at <time>"
    line sourced from state.json's last_transition (set by engine.run_stage()
@@ -186,6 +193,52 @@ SystemVerilog <code>bind</code> statement.</div>
 <th style="padding:4px">Confidence</th></tr></thead>
 <tbody id="ambaTableBody"></tbody></table></div>
 <div class="note" id="ambaUnresolvedNote" style="margin-top:8px"></div>
+</div>
+
+<div class="card" id="researchCard"><h3>Research / Capability Evolution</h3>
+<div class="note">Real <code>CapabilityEvolutionCandidate</code> records -- the harness reasoning about
+changes to ITSELF (GET /api/research, reading <code>capability_evolution.read_candidates()</code> off
+the one Blackboard topic <code>capability_evolution_candidates</code>). Every column is read from
+<code>dv_harness/capability_evolution.py</code>: the KEEP/ENHANCE/ADD/EXPERIMENT/REJECT recommendation
+and the EXISTS/PARTIAL_MATCH/MISSING overlap are that module's own
+<code>decide_recommendation()</code> output (derived from the candidate's six repository searches,
+never accepted from a caller), the promotion state is its section-70 state machine, and
+<b>Legal next</b> is <code>LEGAL_TRANSITIONS</code> itself -- so a button the state machine would
+refuse is never offered as if it worked. No candidate filed yet shows an honest empty state, never a
+fabricated proposal.
+<br><b>Approve / Reject / Hold are the real Human Approval Gate</b>, posted through the SAME
+<code>POST /api/control</code> dispatch every other Human Control Plane verb on this page uses:
+<b>Approve</b> writes the real <code>ControlPlane</code> approval for stage
+<code>RESEARCH_CAPABILITY_EVOLUTION</code> (byte-identical to
+<code>dv-harness approve RESEARCH_CAPABILITY_EVOLUTION</code>) and then runs the real
+<code>transition()</code>, which re-reads that approval off disk through
+<code>assert_human_approval()</code> and copies it into the candidate's own
+<code>status_history</code>; <b>Reject</b> is <code>transition(..., "REJECTED")</code>;
+<b>Hold</b> withdraws the standing approval (archived as <code>WITHDRAWN_BY_HUMAN_HOLD</code>, never
+deleted), which really blocks two things: no candidate can transition into HUMAN_APPROVED, and
+<code>assert_no_production_write_authorized()</code> then refuses a Stage-3 production write even on
+a candidate that already reached HUMAN_APPROVED. There is no second approval store anywhere.
+<br><b>Two disclosed limits.</b> (1) Hold is STAGE-scoped, not candidate-scoped -- the gate
+<code>ControlPlane</code> owns is keyed on the stage string and <code>PROMOTION_STATES</code> has no
+HOLD state, so a hold withholds authorization for every candidate at once and the candidate it names
+is recorded as the reason. (2) Approving here is Stage 3 authorization only: it authorizes a human to
+implement the change, it does not implement anything, and reaching <code>main</code>/<code>master</code>
+still goes through the PR-only governance gate.</div>
+<div id="researchTiles" class="tiles" style="margin-top:8px"></div>
+<div class="note" id="researchApprovalNote" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><label>Note / reason (required)
+  <input id="researchNote" size="34" placeholder="what you are approving / rejecting / holding"></label>
+  <label>Reviewer <input id="researchReviewer" size="12" placeholder="reviewer id"></label>
+  <label>Confidence <select id="researchConfidence"><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></label>
+  <button class="secondary" onclick="doResearchAction('RESEARCH_HOLD',null)">Hold Gate (withdraw standing approval)</button></div>
+<div style="overflow-x:auto"><table id="researchTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Candidate</th><th style="padding:4px">Affected Capability</th>
+<th style="padding:4px">Recommendation</th><th style="padding:4px">Overlap</th>
+<th style="padding:4px">Promotion State</th><th style="padding:4px">Confidence</th>
+<th style="padding:4px">Legal next</th><th style="padding:4px">Actions</th></tr></thead>
+<tbody id="researchTableBody"></tbody></table></div>
+<div id="researchResult"></div>
 </div>
 
 <div class="card" id="blackboardEvidenceCard"><h3>Blackboard Evidence</h3>
@@ -765,6 +818,83 @@ function renderAmbaTable(){
     : 'Every registry row established a real transaction endpoint.';
 }
 
+// Research / Capability Evolution card (GUI-10). Same fetch-then-render shape
+// as the AMBA card above; the three action buttons go through /api/control,
+// never a research-specific POST endpoint.
+let _researchData = null;
+async function loadResearch(){
+  _researchData = await (await fetch('/api/research')).json();
+  renderResearchTable();
+}
+function renderResearchTable(){
+  let r = _researchData;
+  if(!r) return;
+  let tiles = document.getElementById('researchTiles');
+  let tbody = document.getElementById('researchTableBody');
+  let note = document.getElementById('researchApprovalNote');
+  let a = r.approval || {};
+  // The gate's own state is rendered whether or not any candidate exists: "no
+  // standing approval" is itself the fact a reviewer came here to check.
+  note.innerHTML = 'Human Approval Gate <code>'+(a.stage||'')+'</code>: '
+    + (a.approved
+        ? '<b class="ok">APPROVAL STANDING</b> by '+(a.approval&&a.approval.reviewer_id)
+          +' ('+(a.approval&&a.approval.reviewer_confidence)+') at '+(a.approval&&a.approval.approved_at)
+          +' -- note: '+(a.approval&&a.approval.note||'')
+        : '<b>no standing approval</b> -- nothing may transition to HUMAN_APPROVED until one exists')
+    + '. Prior approvals archived: '+((a.history||[]).length)
+    + '. Equivalent CLI: <code>'+(a.approve_command||'')+'</code>';
+  if(r.error){
+    tiles.innerHTML = tile('ERROR','Capability Evolution');
+    tbody.innerHTML = '<tr><td style="padding:4px" colspan="8" class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</td></tr>';
+    return;
+  }
+  if(!r.available){
+    tiles.innerHTML = tile(0,'Candidates');
+    tbody.innerHTML = '<tr><td style="padding:4px" colspan="8">No CapabilityEvolutionCandidate filed yet on Blackboard topic <code>'+r.blackboard_topic+'</code>. A candidate is raised by the research route (<code>dv-harness research &lt;document&gt;</code>), never by this page.</td></tr>';
+    return;
+  }
+  let c = r.counts || {}, bs = c.by_status || {}, br = c.by_recommendation || {};
+  tiles.innerHTML = [tile(c.total||0,'Candidates')]
+    .concat((r.recommendations||[]).filter(k=>br[k]).map(k=>tile(br[k],'Rec: '+k)))
+    .concat((r.promotion_states||[]).filter(k=>bs[k]).map(k=>tile(bs[k],k)))
+    .join('');
+  tbody.innerHTML = (r.candidates||[]).map(row=>{
+    let legal = row.legal_transitions||[];
+    let btns = '';
+    if(legal.indexOf('HUMAN_APPROVED')>=0)
+      btns += `<button onclick="doResearchAction('RESEARCH_APPROVE','${row.candidate_id}')">Approve</button> `;
+    if(legal.indexOf('REJECTED')>=0)
+      btns += `<button class="secondary" onclick="doResearchAction('RESEARCH_REJECT','${row.candidate_id}')">Reject</button> `;
+    if(!btns) btns = '<span class="note">terminal state -- no transition available</span>';
+    let hover = `hypothesis: ${row.hypothesis} | proposed_action: ${row.proposed_action}`
+      + ` | exact_gap: ${row.exact_gap} | why: ${row.decision_rationale}`
+      + ` | experiment_required: ${row.experiment_required}`
+      + ` | unanswered L5 checks: ${(row.unanswered_l5_questions||[]).join(', ') || 'none'}`
+      + ` | evidence: ${(row.evidence_refs||[]).join(' ; ')}`;
+    return `<tr style="border-bottom:1px solid #edf1f5" title="${String(hover).replace(/"/g,'&quot;')}">`+
+      `<td style="padding:4px"><code>${row.candidate_id}</code></td>`+
+      `<td style="padding:4px">${row.affected_capability}</td>`+
+      `<td style="padding:4px" class="${row.recommendation}">${row.recommendation}</td>`+
+      `<td style="padding:4px">${row.overlap_status}</td>`+
+      `<td style="padding:4px" class="${row.current_status}">${row.current_status}</td>`+
+      `<td style="padding:4px">${row.confidence}</td>`+
+      `<td style="padding:4px">${legal.join(', ')||'-'}</td>`+
+      `<td style="padding:4px">${btns}</td></tr>`;
+  }).join('');
+}
+async function doResearchAction(command, candidateId){
+  // One "note / reason" input feeds both field names: RESEARCH_APPROVE reads
+  // `note` (it becomes the ControlPlane approval's note), RESEARCH_REJECT and
+  // RESEARCH_HOLD read `reason`. Both are required server-side -- an
+  // unexplained governance action is not an audit record.
+  let text = val('researchNote');
+  let body = {command: command, candidate_id: candidateId, note: text, reason: text,
+              reviewer_id: val('researchReviewer'), reviewer_confidence: val('researchConfidence')};
+  let r = await postJSON('/api/control', body);
+  showIn('researchResult', r.ok, r.data);
+  await loadResearch();
+}
+
 async function loadKnowledgeStatus(){
   let r = await (await fetch('/api/knowledge/status')).json();
   document.getElementById('knowledgeStatusResult').textContent = JSON.stringify(r, null, 2);
@@ -1113,6 +1243,7 @@ async function load(){
  await loadAudit();
  await loadCoverageAnalysis();
  await loadAmbaFabric();
+ await loadResearch();
  await showExplain(activeIds);
 }
 async function showExplain(stage){
@@ -1676,6 +1807,111 @@ def _read_amba_registry_state(root: Path,
     }
 
 
+# --- Research / Continuous Capability Evolution center (GUI-10) -------------
+# dashboard.py had zero references to the research/capability-evolution path
+# even though CLAUDE.md's "Research Front Door" / "Research Stage Boundaries"
+# sections describe it as installed and permanent: capability_evolution.py owns
+# the CapabilityEvolutionCandidate state machine, its candidates already live on
+# the ONE Blackboard topic capability_evolution.BLACKBOARD_TOPIC, and its Human
+# Approval Gate is already the real ControlPlane keyed on
+# capability_evolution.HUMAN_APPROVAL_STAGE.
+#
+# Every value below is READ from that module -- the candidates through
+# read_candidates(), the per-promotion-state totals through the Blackboard's own
+# capability_evolution_counts(), the approval state through
+# human_approval_status(), and which actions a candidate may legally take next
+# through LEGAL_TRANSITIONS. Nothing is re-derived here, so this card cannot
+# show a recommendation, a state or an approval that disagrees with what the
+# real gate enforces.
+#
+# The three buttons are Stage-3 governance actions and go out through
+# POST /api/control -> _dispatch_control() -> commands.cmd_research_* --
+# the SAME dispatch every other Human Control Plane verb on this page uses.
+# There is deliberately no research-specific POST endpoint and no second
+# approval store: `dv-harness approve RESEARCH_CAPABILITY_EVOLUTION` from a
+# terminal and the Approve button here write the identical control.json record.
+RESEARCH_AUDIT_RECORD_LIMIT = 25
+
+
+def _read_research_state(root: Path) -> Dict[str, Any]:
+    """Real CapabilityEvolutionCandidate records + the real Human Approval Gate
+    state for GET /api/research.
+
+    An empty Blackboard topic is an honest empty state (`available: false`),
+    never an invented candidate -- the same contract GET /api/coverage and
+    GET /api/amba hold to. A topic that exists but cannot be interpreted
+    reports its real reason rather than a 500, because "which candidate is
+    malformed" is what the reviewer needs.
+    """
+    from . import capability_evolution as ce
+    from .blackboard import Blackboard
+
+    empty = {"available": False, "blackboard_topic": ce.BLACKBOARD_TOPIC,
+             "candidates": [], "counts": None, "approval": None,
+             "promotion_states": list(ce.PROMOTION_STATES),
+             "recommendations": list(ce.RECOMMENDATIONS),
+             "audit_records": [], "error": None}
+    try:
+        approval = ce.human_approval_status(root)
+    except Exception as e:
+        return {**empty, "error": {"reason": "APPROVAL_STATE_UNREADABLE",
+                                   "detail": {"message": str(e)}}}
+    empty["approval"] = approval
+
+    try:
+        items = ce.read_candidates(root)
+        counts = Blackboard(root).capability_evolution_counts()
+    except Exception as e:
+        return {**empty, "error": {"reason": "CANDIDATE_TOPIC_UNREADABLE",
+                                   "detail": {"message": str(e)}}}
+    if not items:
+        return empty
+
+    by_recommendation: Dict[str, int] = {}
+    rows: List[Dict[str, Any]] = []
+    for candidate_id in sorted(items):
+        c = items[candidate_id] if isinstance(items[candidate_id], dict) else {}
+        status = c.get("current_status")
+        recommendation = str(c.get("recommendation") or "UNKNOWN")
+        by_recommendation[recommendation] = by_recommendation.get(recommendation, 0) + 1
+        try:
+            unanswered = ce.unanswered_l5_check_questions(c)
+        except Exception as e:
+            # A candidate the real module cannot interpret is reported AS that,
+            # per-row -- one bad record must not blank the whole card.
+            unanswered = [f"UNREADABLE: {e}"]
+        rows.append({
+            "candidate_id": candidate_id,
+            "affected_capability": c.get("affected_capability"),
+            "recommendation": recommendation,
+            "overlap_status": c.get("overlap_status"),
+            "current_status": status,
+            "final_decision": c.get("final_decision"),
+            "confidence": (c.get("confidence") or {}).get("level"),
+            "experiment_required": c.get("experiment_required"),
+            "hypothesis": c.get("hypothesis"),
+            "proposed_action": c.get("proposed_action"),
+            "exact_gap": c.get("exact_gap"),
+            "decision_rationale": c.get("decision_rationale"),
+            "evidence_refs": list(c.get("evidence_refs") or []),
+            "unanswered_l5_questions": unanswered,
+            # Which governance states this candidate may legally reach next,
+            # straight off capability_evolution.LEGAL_TRANSITIONS -- so a button
+            # the state machine would refuse is never offered as if it worked.
+            "legal_transitions": list(ce.LEGAL_TRANSITIONS.get(status, ())),
+            "status_history": list(c.get("status_history") or []),
+        })
+
+    try:
+        audit = ce.candidate_audit_records(root)[:RESEARCH_AUDIT_RECORD_LIMIT]
+    except Exception as e:
+        audit = [{"kind": "AUDIT_TRAIL_UNREADABLE", "message": str(e)}]
+
+    return {**empty, "available": True, "candidates": rows,
+            "counts": {**counts, "by_recommendation": by_recommendation},
+            "audit_records": audit}
+
+
 # --- FSDB structured evidence panel (fsdbreport -csv) ----------------------
 # Poster-compliance audit (2026-08-29): fsdb_report.py's run_fsdbreport()/
 # parse_fsdbreport_output() had zero dashboard/GUI callers -- GET
@@ -2068,6 +2304,33 @@ def _dispatch_control(root: Path, body: Dict[str, Any]) -> Any:
             raise ValueError("value is required for COSIGN")
         return commands.cmd_cosign(h, stage, field_path, body.get("value"), body.get("reviewer_id"),
                                     body.get("reviewer_confidence", "HIGH") or "HIGH")
+    # Research / Capability Evolution (GUI-10). Routed through this same
+    # dispatch on purpose: the Research card's Approve button and
+    # `dv-harness approve RESEARCH_CAPABILITY_EVOLUTION` must reach one
+    # implementation, not two that can drift.
+    if cmd == "RESEARCH_APPROVE":
+        candidate_id = body.get("candidate_id")
+        note = body.get("note")
+        if not candidate_id:
+            raise ValueError("candidate_id is required for RESEARCH_APPROVE")
+        if not note:
+            raise ValueError("note is required for RESEARCH_APPROVE")
+        return commands.cmd_research_approve(h, candidate_id, note, body.get("reviewer_id"),
+                                              body.get("reviewer_confidence", "HIGH") or "HIGH")
+    if cmd == "RESEARCH_REJECT":
+        candidate_id = body.get("candidate_id")
+        reason = body.get("reason")
+        if not candidate_id:
+            raise ValueError("candidate_id is required for RESEARCH_REJECT")
+        if not reason:
+            raise ValueError("reason is required for RESEARCH_REJECT")
+        return commands.cmd_research_reject(h, candidate_id, reason, body.get("reviewer_id"))
+    if cmd == "RESEARCH_HOLD":
+        reason = body.get("reason")
+        if not reason:
+            raise ValueError("reason is required for RESEARCH_HOLD")
+        return commands.cmd_research_hold(h, reason, body.get("candidate_id"),
+                                           body.get("reviewer_id"))
     raise ValueError(f"Unknown command: {cmd}")
 
 
@@ -2304,6 +2567,12 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                     project_root,
                     Path(registry_override) if registry_override else None,
                 ))
+            elif self.path == "/api/research":
+                # Read-only. The three governance ACTIONS this card offers go
+                # out through POST /api/control (RESEARCH_APPROVE /
+                # RESEARCH_REJECT / RESEARCH_HOLD), never through a
+                # research-specific write endpoint -- see _read_research_state().
+                self._send_json(_read_research_state(project_root))
             elif self.path == "/api/user-info" or self.path.startswith("/api/user-info?"):
                 from . import user_info
                 qs = self.path.split("?", 1)[1] if "?" in self.path else ""
@@ -2572,6 +2841,14 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 result = _dispatch_control(project_root, body)
             except ValueError as e:
                 self._send_json({"error": "BAD_REQUEST", "message": str(e)}, status=400)
+                return
+            except PermissionError as e:
+                # capability_evolution.HumanApprovalRequiredError /
+                # ProductionWriteNotAuthorizedError, the Level B -> Level C
+                # refusals. A gate saying "a human has not authorized this" is
+                # a 403 answer, not a 500 crash -- and its message names the
+                # real command that would authorize it.
+                self._send_json({"error": "FORBIDDEN", "message": str(e)}, status=403)
                 return
             except RuntimeError as e:
                 self._send_json({"error": "CONFLICT", "message": str(e)}, status=409)
