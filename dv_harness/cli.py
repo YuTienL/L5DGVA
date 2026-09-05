@@ -1431,6 +1431,35 @@ def main():
                                    "session that has completed CLAUDE.md's SSH/Remote Transport "
                                    "Connection Intake -- omitted, nothing touches the network.")
 
+    # LOOP_ENGINEERING sections 85/86: the LoopContract schema and the canonical
+    # loop state machine. Every contract is DERIVED from its driver module's own
+    # constants (dv_harness/loop_contract.py), never hand-maintained, so this is
+    # a read-only front door -- there is no `sync`/`set` verb precisely because a
+    # second, editable copy of a contract would be the parallel mechanism this
+    # project forbids.
+    plc = sub.add_parser("loop-contract",
+                          help="The LoopContract (section 85) and LoopState machine (section 86) "
+                               "for this harness's three real loops: verification_closure, "
+                               "project_learning, capability_evolution. Read-only; contracts are "
+                               "derived from the driver modules' own constants.")
+    plc_sub = plc.add_subparsers(dest="lc_verb", required=True)
+    plc_sub.add_parser("states", help="Print the LoopState vocabulary, the legal transition "
+                                       "table, and the total models.Status -> LoopState mapping.")
+    plc_sub.add_parser("list", help="One line per loop: id, type, owner, driver entry point, "
+                                     "machine-checkable done condition.")
+    _plc_show = plc_sub.add_parser("show", help="One loop's full section-85 contract. Schema-"
+                                                 "validated and its driver entry point resolved "
+                                                 "through the import system before printing.")
+    _plc_show.add_argument("loop_id", help="verification_closure | project_learning | "
+                                            "capability_evolution")
+    _plc_show.add_argument("--format", default="json", choices=["json", "yaml"], dest="lc_format",
+                            help="yaml renders section 85's own YAML shape.")
+    plc_sub.add_parser("observe", help="Each loop's CURRENT LoopState, derived from real state "
+                                        "on disk (state.json, control.json, the Blackboard "
+                                        "debug_loop_history and capability_evolution_candidates "
+                                        "topics). A loop with no persisted state reports "
+                                        "NOT_OBSERVABLE with its reason, never a guess.")
+
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
     # Per-invocation override of the DEGRADED-mode probe transport, applied
@@ -2881,6 +2910,22 @@ def main():
             store=h.store)
         print(json.dumps(_hd_payload, ensure_ascii=False, indent=2))
         raise SystemExit(_hd_code)
+    elif args.cmd == "loop-contract":
+        # One shared implementation with `python -m dv_harness.loop_contract`
+        # (loop_contract.execute_verb), same convention as harness-deploy above.
+        # h.cfg is this session's already-loaded config, so the contract's
+        # budgets report what THIS project actually enforces, not the defaults.
+        from . import loop_contract as _lc
+        _lc_code, _lc_payload = _lc.execute_verb(
+            h.root, args.lc_verb,
+            loop_id=getattr(args, "loop_id", None),
+            cfg=h.cfg,
+            fmt=getattr(args, "lc_format", "json"))
+        if getattr(args, "lc_format", "json") == "yaml" and "yaml" in _lc_payload:
+            print(_lc_payload["yaml"])
+        else:
+            print(json.dumps(_lc_payload, ensure_ascii=False, indent=2))
+        raise SystemExit(_lc_code)
     elif args.cmd == "question-queue":
         from .question_queue import QuestionQueueStore
         # Every decision written or revoked through this command refreshes the

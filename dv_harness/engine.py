@@ -810,6 +810,46 @@ class DVHarness:
         }
         return self.blackboard.append_debug_loop_round(entry, source=failing_stage)
 
+    def _record_loop_state_observation(self, stage: str, occasion: str) -> Optional[Dict[str, Any]]:
+        """Records ONE real `LOOP_STATE_OBSERVED` event naming this run's
+        current `loop_contract.LoopState` (LOOP_ENGINEERING section 86).
+
+        WHY HERE AND ONLY HERE. `models.Status` is a stage-gate VERDICT
+        vocabulary and genuinely covers HUMAN_GATE (WAIT_USER) and BLOCKED, so
+        most transitions say nothing new. Retry exhaustion is the exception:
+        `loop()`'s `ss["attempts"] <= max_retry` branch is the one place this
+        engine spends a real budget, and before this a repo-wide grep for
+        `BUDGET_EXHAUSTED` returned zero hits anywhere -- the audit trail
+        recorded the ROUTING decision (`_record_debug_loop_round()`, one line
+        away) but never the fact that a budget was what ran out. The
+        observation is derived entirely from state already on disk
+        (`state.json`'s status/attempts, `config.json`'s
+        policy.max_stage_retries, `control.json`, the Blackboard
+        `debug_loop_history` topic) -- never from agent prose, per section 86.
+
+        Best-effort, mirroring every sibling `_record_*`/`_promote_*` method:
+        an observability failure must never turn an already-computed routing
+        decision into a crash."""
+        try:
+            from . import loop_contract as _lc
+            history = self.blackboard.read_debug_loop_history() or {}
+            obs = _lc.observe_verification_closure_loop(
+                self.state, self.cfg, stage=stage,
+                control_plane_state=ControlPlane(self.root).load(),
+                debug_loop_entries=history.get("entries") or [])
+            payload = obs.to_dict()
+            self.store.event({"ts": now(), "event": "LOOP_STATE_OBSERVED",
+                              "occasion": occasion, **payload})
+            return payload
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "event": "LOOP_STATE_OBSERVE_FAILED",
+                                  "occasion": occasion, "stage": stage,
+                                  "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+            return None
+
     def _project_blackboard_value(self) -> Dict[str, Any]:
         """Reads the real "project" Blackboard topic (written by INTAKE's
         _bb_intake -- mode/target_name/protocols/selected_subsystems/
@@ -4457,6 +4497,7 @@ class DVHarness:
                 return b
             n = graph_next(b, Status.FAIL.value, self.root)
             self._record_debug_loop_round(b, n)
+            self._record_loop_state_observation(b, occasion="FANOUT_BRANCH_FAILED")
             if n and n != b:
                 self.state.current_stage = n
             else:
@@ -4650,6 +4691,13 @@ class DVHarness:
                 # remains the workflow authority), not a content-driven
                 # override. See _record_debug_loop_round()'s own docstring.
                 self._record_debug_loop_round(stage, n)
+
+                # Loop-state observation (2026-09-05, LoopContract/LoopState
+                # gap close): the one point in this engine where a real budget
+                # (policy.max_stage_retries) has just been spent, and therefore
+                # the one point Status cannot describe -- BUDGET_EXHAUSTED has
+                # no Status equivalent. Best-effort; see the method's docstring.
+                self._record_loop_state_observation(stage, occasion="RETRY_BUDGET_EXHAUSTED")
 
                 # Content-driven reroute hint (2026-08-29, inner ReAct loop):
                 # ss["react_reroute_target"] is set only by run_stage()'s

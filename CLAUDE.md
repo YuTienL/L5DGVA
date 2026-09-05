@@ -1750,3 +1750,116 @@ derives a candidate's bounded change from its own `proposed_action` text, so
 `benchmark_plan` used to be one for the benchmark. What is closed is that the
 BENCHMARKED state can no longer be reached without a real, isolated, re-readable
 before/after run.
+
+
+## LoopContract + the Canonical Loop State Machine (2026-09-05)
+
+LOOP_ENGINEERING sections 85/86 require every important loop to carry a
+`LoopContract` (budgets, convergence, plateau, oscillation, termination,
+escalation, human gate, rollback, resume, audit) and to name its state in the
+canonical vocabulary `CREATED -> READY -> RUNNING -> VERIFYING -> CONVERGING /
+PLATEAU / OSCILLATING / RETRY_WAIT / BLOCKED / HUMAN_GATE -> SUCCESS / FAILED /
+BUDGET_EXHAUSTED / STOPPED / CANCELLED`, plus `RESUMING`/`STALE`. A repo-wide
+grep on 2026-09-05 returned ZERO hits for `LoopContract`, `loop_contract`,
+`LoopState`, `BUDGET_EXHAUSTED` and `PLATEAU`. Three real loops were running the
+whole time -- `engine.DVHarness.loop()`/`run_stage()` (Verification Closure),
+`memory_router.route_and_store()`/`promote_to_organizational()` (Project
+Learning) and `capability_evolution.py`'s 11 promotion states (Capability
+Evolution) -- and not one could state its own budgets or name its own state.
+
+`dv_harness/loop_contract.py` is that schema and that state machine.
+
+**A SECOND enum, with ONE bridge -- not an extended `Status`.**
+`models.Status` (models.py:74) is a stage-gate VERDICT vocabulary: it is
+persisted in every `state.json`, it is what `policy.graph_next()` routes on, and
+`gates.py`/`engine.py`/`dashboard.py`/`commands.py` all branch on its exact
+members. Nine of section 86's states (CREATED, VERIFYING, PLATEAU, OSCILLATING,
+FAILED, BUDGET_EXHAUSTED, CANCELLED, RESUMING, STALE) are not verdicts at all and
+would be values every existing `if status in (...)` chain silently falls through
+-- the same shape as `engine.loop()`'s own 2026-08-28 PARTIAL routing bug. So
+`LoopState` is separate, and `STATUS_TO_LOOP_STATE` is the one real bridge, held
+TOTAL in both directions by `assert_status_mapping_total()` (and
+`assert_capability_state_mapping_total()` for the 11 promotion states) -- adding
+a `Status` member without deciding its loop meaning fails a test rather than
+falling through. Two mappings carry their reasoning: a stage `PASS` is
+CONVERGING, not SUCCESS (SUCCESS is the LOOP's own machine-checkable done,
+`overall_status == CLOSED`, or a run would claim a closed project once per
+stage), and `ACCEPTED_RISK` is STOPPED, not SUCCESS (a human accepted residual
+risk; the machine-checkable done was not met).
+
+**Contracts are DERIVED from the drivers, never hand-maintained**, the same
+policy `protocol_capability.py`'s registry follows. `max_stage_retries` is read
+off the loaded config, `PROMOTION_STATES`/`TERMINAL_STATES`/
+`HUMAN_APPROVAL_STAGE` and `ORGANIZATIONAL_MIN_CONFIRMATIONS` are imported from
+their own modules, and `assert_driver_resolvable()` imports each contract's
+`driver_module` and resolves its `driver_entry_point` -- so a contract cannot
+outlive or misname the loop it documents. There is deliberately no `sync`/`set`
+verb: a second, editable copy of a contract on disk would be the parallel
+mechanism this project forbids.
+
+**Absent budgets are stated, never implied.** Section 85 lists eight budgets;
+this harness really enforces two (`max_failed_attempts` =
+`policy.max_stage_retries`, and capability evolution's `max_change_scope` =
+`run_controlled_experiment()`'s mutation containment check). Every other field is
+`None` AND carries a real reason in `budget_sources` -- `validate_contract()`
+refuses a contract with a budget key missing from it, because a `None` with no
+reason reads to a human as a bound that exists. `loop()` really is an unbounded
+`while True` over the graph with no wall-clock deadline, and the contract says so.
+
+**BUDGET_EXHAUSTED is produced on the real engine path, not merely defined.**
+`engine.DVHarness._record_loop_state_observation()` writes one
+`LOOP_STATE_OBSERVED` event to `.dv-harness/events.jsonl` at the two places this
+engine actually spends the retry budget -- `loop()`'s retry-exhaustion branch and
+`_advance_with_fanout()`'s branch-failure branch, both one line after
+`_record_debug_loop_round()`. Those recorded the ROUTING decision but never the
+fact that a BUDGET was what ran out. Every field of the observation is read off
+disk (`state.json` status/attempts, `config.json` `policy.max_stage_retries`,
+`control.json` paused/takeover, the Blackboard `debug_loop_history` topic) --
+never agent prose, per section 86's own rule. Best-effort, mirroring every
+sibling `_record_*`: a failure records `LOOP_STATE_OBSERVE_FAILED` and never
+turns an already-computed routing decision into a crash.
+
+**Oscillation is computed from evidence the engine already persists.**
+`detect_oscillation_from_debug_loop_history()` counts repeated
+`(failing_stage, target_fail_edge)` pairs in the Blackboard `debug_loop_history`
+topic `engine._record_debug_loop_round()` has been writing since 2026-09-01 --
+exact-tuple matching on graph node ids the engine itself wrote, at the same
+"2 INDEPENDENT observations" threshold `REPEAT_FAILURE_MIN_OCCURRENCES` and
+`ORGANIZATIONAL_MIN_CONFIRMATIONS` already use.
+
+**Plateau is honestly NOT evaluated.** Every observation carries
+`plateau: PLATEAU_NOT_EVALUATED` plus the reason: plateau needs a
+progress-metric series over iterations, whose real producers are
+`trend_analysis.py` / `coverage_analysis.py`, and reporting "no plateau" without
+one would be an unearned claim. A detector that never ran and a detector that
+found nothing are different facts.
+
+**No human-approval gate moved.** `HUMAN_GATE` is an OBSERVATION that a human
+decision is owed and authorizes nothing: `ControlPlane.approve()`,
+`policy.can_signoff()`, `assert_human_approval()`,
+`assert_no_production_write_authorized()` and the PR-only main/master governance
+are untouched and uncalled from this module.
+
+Front door: `dv-harness loop-contract states|list|show <loop_id> [--format yaml]|observe`
+(and the identical `python -m dv_harness.loop_contract`, one shared
+`execute_verb()`). Proven -- including a REAL `DVHarness.loop()` over the REAL
+shipped `main_graph.json` with the REAL `command_migration_integrity_gate.py`
+subprocess reaching a real BUDGET_EXHAUSTED, its positive control (the same
+fixture with the manifest present, observing CONVERGING), a real `ControlPlane`
+pause/takeover, and a real `memory_router.route_and_store()` result -- by
+`dv_harness_tests/test_loop_contract.py` (50 tests). The fixture is
+`dv_harness_tests/controlled_experiment_fixture.py`, reused rather than
+duplicated; COMMAND_PATTERN is an `implementation-route` node with no FAIL edge,
+so a retry-exhausted loop stops deterministically and nothing here can reach a
+build, a regression or an LSF submission.
+
+**Disclosed residual**: this is the CONTRACT and the VOCABULARY, not the
+convergence engine. Sections 88-90's PLATEAU/no-progress classification and
+their `STOP BLIND RETRY -> reassess -> materially different strategy` response
+are not built here -- `observe_*` reports PLATEAU_NOT_EVALUATED and the engine
+still routes a retry-exhausted stage onto its graph FAIL edge exactly as before.
+Section 91's `LOOP_*` event taxonomy is also only partly emitted (`LOOP_STATE_
+OBSERVED` / `LOOP_STATE_OBSERVE_FAILED`; the other nineteen names have no
+producer). The Project Learning Loop is observed PER RECORD at a
+`route_and_store()` result, so `observe_all()` honestly reports it
+`NOT_OBSERVABLE` rather than inventing a project-wide aggregate nothing computes.
