@@ -1620,6 +1620,45 @@ def main():
                       help="Print the raw matrix JSON (row_id, harness_stages, "
                            "fact_source and basis per row) instead of the report.")
 
+    # VI-4's VERIFICATION STRATEGY OPTIMIZER (dv_harness/verification_strategy.py).
+    # Read-only, and deliberately loud about its own boundary: this harness can
+    # EXECUTE simulation only, so `capabilities` exists as a first-class verb --
+    # a caller must be able to ask "which of these can you actually run" without
+    # first asking for a recommendation. Every executability value is derived
+    # from the import system at report time, never declared.
+    pvs = sub.add_parser("verification-strategy",
+                         help="VI-4: which verification strategy (simulation / formal / PSS / "
+                              "emulation / FPGA prototype) the REAL signals indicate for a "
+                              "goal -- coverage-closure difficulty, failure density, protocol "
+                              "capability and declared scope. Names honestly which strategies "
+                              "this harness can EXECUTE (simulation) vs. only RECOMMEND. "
+                              "Read-only: runs nothing and writes nothing. Exit 2 when the "
+                              "recommendation names a strategy this harness cannot execute.")
+    pvs_sub = pvs.add_subparsers(dest="vs_verb", required=True)
+    pvs_sub.add_parser("capabilities",
+                       help="Per strategy: EXECUTABLE_HERE (with the real entry points it "
+                            "goes through) or RECOMMEND_ONLY_NO_BACKEND (with the reason no "
+                            "backend exists). Derived by resolving each declared backend "
+                            "through the import system.")
+    _pvs_rec = pvs_sub.add_parser("recommend",
+                                  help="The full five-row recommendation for one goal, each row "
+                                       "carrying its verdict, its executability and the real "
+                                       "signal that decided it.")
+    _pvs_rec.add_argument("--goal", default="",
+                          help="The verification goal. RECORDED VERBATIM and never parsed into "
+                               "a verdict (goal_text_machine_evaluated is always false).")
+    _pvs_rec.add_argument("--scope", default="UNDECLARED",
+                          choices=["BLOCK", "SUBSYSTEM", "SYSTEM", "UNDECLARED"],
+                          help="Declared verification scope -- a caller fact, never inferred "
+                               "from --goal. SYSTEM is what opens the PSS rule.")
+    _pvs_rec.add_argument("--protocol", default=None,
+                          help="Protocol key, resolved through protocol_capability.")
+    _pvs_rec.add_argument("--holes", default=None,
+                          help="JSON file of real coverage holes (a list, or {\"holes\": [...]}) "
+                               "-- the same shape loop_convergence.investigate_plateau() takes.")
+    _pvs_rec.add_argument("--json", action="store_true",
+                          help="Print the raw report JSON instead of the rendered report.")
+
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
     # Per-invocation override of the DEGRADED-mode probe transport, applied
@@ -3188,6 +3227,21 @@ def main():
         print(json.dumps(_gfr_matrix, ensure_ascii=False, indent=2)
               if args.json else _gfr_text)
         raise SystemExit(_gfr_code)
+    elif args.cmd == "verification-strategy":
+        # One shared implementation with `python -m dv_harness.verification_strategy`
+        # (verification_strategy.execute_verb), same convention as loop-contract
+        # above. h.cfg is this session's already-loaded config, so the throughput
+        # and multi-subsystem thresholds are what THIS project set, not defaults.
+        from . import verification_strategy as _vs
+        _vs_code, _vs_payload, _vs_text = _vs.execute_verb(
+            h.root, args.vs_verb, cfg=h.cfg,
+            goal=getattr(args, "goal", "") or "",
+            scope=getattr(args, "scope", "UNDECLARED") or "UNDECLARED",
+            protocol=getattr(args, "protocol", None),
+            holes_path=getattr(args, "holes", None))
+        print(json.dumps(_vs_payload, ensure_ascii=False, indent=2)
+              if (getattr(args, "json", False) or not _vs_text) else _vs_text)
+        raise SystemExit(_vs_code)
     elif args.cmd == "question-queue":
         from .question_queue import QuestionQueueStore
         # Every decision written or revoked through this command refreshes the

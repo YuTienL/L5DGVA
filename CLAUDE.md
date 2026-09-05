@@ -2888,3 +2888,112 @@ rollback manifest is produced, never applied. (4) Like
 no CLI verb and no engine call site, the caller is the `research-architect` path
 and these tests, and the mutation is still authored by whoever runs the
 experiment rather than derived from the candidate's own `proposed_action`.
+
+
+## Verification Strategy Optimizer: Recommend Honestly, Execute Only What Exists (2026-09-06, VI-4)
+
+VERIFICATION_INTELLIGENCE's completeness audit flagged the Verification
+Strategy Optimizer NEVER_BUILT. Re-verified on 2026-09-06 before building: a
+repo-wide grep for `strategy_optimizer` / `verification_strategy` /
+`strategy_recommend` returned nothing, and a grep for
+`formal|emulation|zebu|haps|PSS|jasper|vc_formal|veloce|palladium|breker` over
+`dv_harness/**.py` returned only Verilog FORMAL PORTS (`verible_parser.py`,
+`amba_fabric_discovery.py`), `router.py`'s `RESEARCH_FOCUS_DOMAINS` listing
+`'pss'` as a reading-list topic, and ONE line naming `05_Tools/ZeBu` /
+`05_Tools/HAPS` as `memory_vault.py` vault FOLDER NAMES. **This harness's real
+execution capability is simulation and nothing else**: a VCS regression
+submitted to LSF through `lsf_client.bsub_submit_with_preflight()` behind
+`preflight.run_preflight()`. So the gap is real, and so is the trap in it -- a
+recommender that emitted "run formal on this" would read as a capability this
+harness does not have.
+
+`dv_harness/verification_strategy.py` answers the question on **two separate
+axes that are never merged**, the same discipline `protocol_capability.py`
+applies to "can generate" vs. "has proven":
+
+- **executability is DERIVED, never typed in.** Each strategy declares the
+  backend entry points it would need (`STRATEGY_BACKENDS`, e.g. FORMAL's
+  `dv_harness.formal_client:prove_property`), and `derive_executability()`
+  resolves them with real import + getattr -- the same resolution
+  `protocol_capability.resolve_generator_class()` does, for the same reason a
+  string check would keep passing after the thing it names is gone. SIMULATION
+  resolves (`EXECUTABLE_HERE`); FORMAL/PSS/EMULATION/FPGA_PROTOTYPE do not
+  (`RECOMMEND_ONLY_NO_BACKEND`) and name no `execution_path`, because naming a
+  hypothetical one is how a recommendation becomes a claim. Build a real module
+  at the declared name and the row flips on its own;
+  `assert_executability_matches_code()` then FAILS, forcing docs and tests to
+  be updated together with the new capability instead of drifting.
+- **the verdict is what the SIGNALS say** -- `RECOMMENDED` /`NOT_INDICATED` /
+  `NO_SIGNAL` / `SUPPRESSED`. Every strategy always gets a row: an omitted
+  strategy reads as "not applicable", a NO_SIGNAL one as "we have no evidence",
+  and `R9` guarantees no row is ever returned with an empty basis.
+
+**It measures nothing new.** Every signal is another module's existing output,
+imported: coverage-closure difficulty from `loop_convergence.
+classify_loop_convergence()` (whose plateau investigation is
+`coverage_analysis.classify_coverage_hole()`'s per-bin verdicts over the real
+series `trend_analysis.daily_rollup()` produces); failure density from
+`capability_evolution.repeated_unresolved_failure_patterns()` plus the
+`failure_signatures` table read READ-ONLY out of `evidence_db` -- identity is
+`evidence_db.signature_key()` in both, never a second definition of "the same
+failure"; per-protocol reach from `protocol_capability.capability_for()` /
+`derive_status()`; multi-subsystem scope from `environment_mode_router.
+read_registered_subsystem_entries()`, the registry `engine.py` writes on a real
+SIGNOFF PASS.
+
+**The precedence is `investigate_plateau()`'s, lifted one level.** While ANY
+under-sampled bin exists, FORMAL is `SUPPRESSED`, not merely unrecommended: a
+bin randomization has not fairly attempted cannot support a structural
+unreachability claim, and recommending an engine this harness cannot even run
+on the strength of bins nobody has run yet is the most expensive possible wrong
+answer. The same bin after 20+ real distinct seeds flips the answer to FORMAL --
+that pair of tests is where the detection power lives.
+
+**A RECOMMENDED strategy this harness cannot execute always carries an
+`executable_next_action`**, enforced by
+`assert_no_unexecutable_strategy_claimed_executable()` on the way out of every
+report: "use formal" with no act this harness can perform reads as a capability
+and is not one. Those acts are `coverage_analysis.escalate_unreachable_holes()`,
+`capability_evolution.file_repeated_failure_candidate()` and
+`question_queue.QuestionQueueStore.add_question()` -- **NAMED and taken for
+none of them**, exactly the contract `loop_convergence.PlateauInvestigation.
+escalator` has, and `assert_named_escalators_resolve()` checks each one still
+exists so a renamed function cannot leave a dead name in advice a human is
+being asked to act on.
+
+Reachable as `dv-harness verification-strategy capabilities|recommend`
+(`--goal`, `--scope`, `--protocol`, `--holes`, `--json`), sharing one
+`execute_verb()` with `python -m dv_harness.verification_strategy`. `recommend`
+exits **2 when it names a strategy this harness cannot execute** -- a
+CI-visible "a human has to decide something", never an approval in either
+direction. `goal_text` is recorded verbatim with
+`goal_text_machine_evaluated: false`; scope is a caller fact and is never
+inferred from prose.
+
+Proven by `dv_harness_tests/test_verification_strategy.py` against real
+evidence written through the real production write paths
+(`regression_reporter._write_reconciliation_evidence_if_configured()`,
+`dashboard.append_coverage_history_sample()`, `memory_router.route_and_store()`,
+`memory_vault.build_failure_signature()`). The negative controls carry the
+detection power: under-sampled bins SUPPRESS formal rather than recommending it,
+three retries against one commit are one run, a failure closed by a gate-verified
+`verified_fix` recommends nothing, one busy day is not a throughput signal, a
+climbing coverage curve is told to change nothing, a goal containing the word
+"formal" buys FORMAL nothing, a forged executable row is refused, and a
+synthesised real module at FORMAL's declared backend name flips the row with no
+source edit. A byte-level snapshot of the whole project root proves recommending
+writes nothing. Nothing in it runs a build, a regression or an LSF submission,
+and no approval gate is touched.
+
+**Disclosed residual, and it is the honest boundary.** (1) This module can only
+RECOMMEND four of the five strategies, forever, until someone integrates a real
+backend -- it dispatches to none of them and the report says so on every render
+(`REPORT_DISCLOSURE`). (2) The throughput threshold
+(`DEFAULT_THROUGHPUT_BOUND_RUNTIME_HOURS_PER_DAY = 24.0`) is a project-overridable
+HEURISTIC with a stated justification, not a measurement: this harness reads no
+farm capacity, no license-pool size and no schedule, so no universal number
+exists and inventing one would be fabricated precision. (3) Like
+`cross_project_mining.py` and `run_controlled_experiment()` before it, this is
+REACHED, not WIRED -- it has a CLI verb but no `run_stage()`/`advance()` call
+site, no graph node and no dashboard card. (4) It does not score a strategy's
+expected coverage gain or cost; that needs ground truth this repo does not have.
