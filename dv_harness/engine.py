@@ -850,6 +850,304 @@ class DVHarness:
                 pass
             return None
 
+    # ---- LOOP-3: unified loop budget + failure taxonomy + circuit breaker --
+    #
+    # (LOOP_ENGINEERING sections 91/92/93 -- see dv_harness/loop_budget.py's
+    # module docstring for what was verified missing and why these three are
+    # one mechanism.) Everything below is deliberately BEST-EFFORT and
+    # RECORD-FIRST: the classification, the budget spend and the breaker trip
+    # are computed and written on every real retry-exhaustion this engine
+    # already reaches, while the two things that would CHANGE this engine's
+    # existing behaviour -- refusing a retry the classifier calls useless, and
+    # deferring low-value work under license pressure -- are opt-in config
+    # (`loop_budget.enforce_retry_policy` / `.defer_low_value_under_pressure`),
+    # for the same reason `require_tier` and `probe_resources` default off:
+    # either would otherwise silently shorten every existing project's
+    # policy.max_stage_retries on the strength of a classifier nobody asked for.
+
+    def _loop_budget_engine(self):
+        """The run's one `loop_budget.BudgetEngine`, built from THIS project's
+        real config, so every limit and every "nothing bounds this, because..."
+        reason is read from the keys that really decide them rather than
+        retyped. Re-read from disk each time rather than cached: `dv-harness
+        loop-budget reset` and `... breaker-reset` are real out-of-process
+        actions, and a cached ledger would keep spending against a budget -- or
+        keep blocking on a breaker -- a human already cleared."""
+        from . import loop_budget as _lb
+        return _lb.BudgetEngine(self.root, self.cfg)
+
+    def _classify_stage_failure(self, stage: str) -> Optional[Dict[str, Any]]:
+        """Classify THIS stage's current failure into section 93's taxonomy
+        from evidence already on disk, and record the consecutive-repeat count
+        of its normalized signature on the stage state.
+
+        Reads `state.json`'s own `blocking_reason` (which run_stage() fills
+        with either `"<verdict>: <gate reasons>"` or the adapter's stderr) plus
+        the FAILURE_RECOVERY `failure_attribution` boundary trace when one
+        exists -- never agent prose about what went wrong, only the fields the
+        gates and the adapter themselves produced.
+
+        `failure_signature_repeats` is what turns "this failed" into "this
+        failed IDENTICALLY again", which is section 93's own example of a
+        useless retry and the circuit breaker's REPEATED_IDENTICAL_FAILURE
+        trigger."""
+        from . import loop_budget as _lb
+        ss = self.state.stages.get(stage, {})
+        boundary_trace = None
+        try:
+            fr = self.state.stages.get(Stage.FAILURE_RECOVERY.value, {}) or {}
+            blocks = extract_evidence_blocks(fr.get("last_message") or "")
+            boundary_trace = (blocks.get("failure_attribution") or {}).get("boundary_trace")
+        except Exception:
+            boundary_trace = None
+        conf = _lb.resolve_config(self.cfg)
+        prefixes = tuple(conf.get("vip_component_prefixes")
+                         or _lb.DEFAULT_VIP_COMPONENT_PREFIXES)
+        cls = _lb.classify_failure(
+            ss.get("blocking_reason") or "",
+            adapter_ok=(ss.get("status") != Status.FAIL.value),
+            boundary_trace=boundary_trace,
+            vip_component_prefixes=prefixes)
+        previous = ss.get("failure_signature")
+        repeats = int(ss.get("failure_signature_repeats") or 0)
+        repeats = repeats + 1 if previous == cls.signature else 1
+        ss["failure_signature"] = cls.signature
+        ss["failure_signature_repeats"] = repeats
+        ss["failure_type"] = cls.failure_type
+        payload = cls.to_dict()
+        payload["repeats"] = repeats
+        return payload
+
+    def _spend_retry_exhaustion_budget(self, stage: str,
+                                       classification: Optional[Dict[str, Any]]
+                                       ) -> Optional[Dict[str, Any]]:
+        """Record this retry exhaustion against the UNIFIED ledger and, when a
+        declared budget has actually run out, trip section 93's circuit
+        breaker.
+
+        The per-node retry budget itself is unchanged: `policy.max_stage_retries`
+        is still spent by loop()'s own `ss["attempts"] <= max_retry` test and
+        still routes onto the graph's FAIL edge. What this adds is the RUN-WIDE
+        view section 91 asks for -- `max_retries` and `max_iterations` are
+        spent here so "what has this run spent, against which limit" becomes
+        answerable -- plus the breaker, which can only trip on a limit a project
+        DECLARED (`loop_budget.limits.*`, empty by default) or on an identical
+        repeat past a threshold it declared. Nothing here fires on a default
+        configuration, which is exactly why turning it on is a project's
+        decision rather than this engine's.
+
+        Best-effort, mirroring every sibling `_record_*`: a budget-bookkeeping
+        failure must never turn an already-computed routing decision into a
+        crash."""
+        from . import loop_budget as _lb
+        try:
+            engine = self._loop_budget_engine()
+            ss = self.state.stages.get(stage, {})
+            engine.spend("max_retries", float(ss.get("attempts") or 1),
+                         note=f"stage {stage} retry budget spent", save=False)
+            engine.spend("max_iterations", 1.0, note=f"stage {stage}", save=False)
+            engine.save()
+            exhausted = engine.exhausted_dimensions()
+            payload: Dict[str, Any] = {
+                "exhausted": exhausted,
+                "loop_state": engine.loop_state(),
+                "dimensions": {n: s.to_dict() for n, s in engine.states.items()
+                               if s.enforced},
+            }
+            conf = _lb.resolve_config(self.cfg)
+            if exhausted:
+                engine.trip_breaker(
+                    "BUDGET_EXHAUSTION",
+                    f"declared loop budget(s) exhausted at stage {stage}: {exhausted}",
+                    evidence={"stage": stage, "dimensions": payload["dimensions"]})
+                payload["breaker"] = engine.breaker_state()
+            threshold = conf.get("repeated_identical_failure_threshold")
+            repeats = int((classification or {}).get("repeats") or 0)
+            if threshold is not None and repeats >= int(threshold):
+                engine.trip_breaker(
+                    "REPEATED_IDENTICAL_FAILURE",
+                    f"stage {stage} produced the same normalized failure signature on "
+                    f"{repeats} consecutive attempts (threshold {threshold})",
+                    evidence={"stage": stage, "classification": classification})
+                payload["breaker"] = engine.breaker_state()
+            # OSCILLATION, computed by loop_contract's OWN detector over the
+            # `debug_loop_history` entries _record_debug_loop_round() wrote one
+            # line before this call -- CALLED, never re-derived, so there is one
+            # definition of an oscillation fingerprint in this codebase.
+            # Opt-in with a real reason: loop() currently routes an oscillating
+            # stage onto its graph FAIL edge, and sections 88-90's RESPONSE half
+            # is explicitly not built, so tripping here by default would change
+            # routing this harness has not decided to change.
+            if conf.get("trip_on_oscillation"):
+                from . import loop_contract as _lc
+                history = (self.blackboard.read_debug_loop_history() or {}).get("entries") or []
+                verdict = _lc.detect_oscillation_from_debug_loop_history(history)
+                payload["oscillation"] = verdict
+                if verdict.get("oscillating"):
+                    engine.trip_breaker(
+                        "OSCILLATION",
+                        f"repeated (failing_stage, target_fail_edge) fingerprint(s) in the "
+                        f"Blackboard debug_loop_history: "
+                        f"{sorted(verdict.get('repeated_fingerprints') or {})}",
+                        evidence={"stage": stage, "oscillation": verdict})
+                    payload["breaker"] = engine.breaker_state()
+            self.store.event({"ts": now(), "stage": stage, "event": "LOOP_BUDGET_SPENT",
+                              "classification": classification, **payload})
+            return payload
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "stage": stage,
+                                  "event": "LOOP_BUDGET_SPEND_FAILED",
+                                  "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+            return None
+
+    def _retry_refused_by_failure_evidence(self, stage: str,
+                                           classification: Optional[Dict[str, Any]]
+                                           ) -> Optional[Dict[str, Any]]:
+        """Section 93's "Retry only when evidence supports it".
+
+        Returns the refusing `RetryDecision` payload when another attempt must
+        NOT be spent, or None to leave loop()'s existing
+        `ss["attempts"] <= max_retry` test as the only thing deciding -- which
+        is what happens on every default configuration. It can only ever REFUSE
+        an attempt, never grant one past the existing budget."""
+        from . import loop_budget as _lb
+        if not classification:
+            return None
+        try:
+            cls = _lb.FailureClassification(
+                failure_type=classification.get("failure_type", _lb.FailureType.UNKNOWN.value),
+                retryable=bool(classification.get("retryable", True)),
+                rule=classification.get("rule", ""),
+                signature=classification.get("signature", ""),
+                evidence=classification.get("evidence") or {})
+            decision = _lb.decide_retry(cls,
+                                        repeats=int(classification.get("repeats") or 1),
+                                        cfg=self.cfg)
+            if decision.retry:
+                return None
+            payload = decision.to_dict()
+            self.store.event({"ts": now(), "stage": stage, "event": "LOOP_RETRY_REFUSED",
+                              **payload})
+            return payload
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "stage": stage,
+                                  "event": "LOOP_RETRY_DECISION_FAILED",
+                                  "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+            return None
+
+    def _circuit_breaker_gate(self, stage: str) -> bool:
+        """Section 93's BLOCK half, checked at the top of every loop() cycle
+        beside the Human Override checks.
+
+        Returns True when the breaker is OPEN and this project has left
+        `loop_budget.breaker_blocks_loop` on (the default), meaning no NEW loop
+        action may be attempted. The stage is marked BLOCKED with the real trip
+        evidence in `blocking_reason`, so the stop is never unexplained, and the
+        only way back is a recorded recovery condition
+        (`dv-harness loop-budget breaker-reset --reason ... --by ...`).
+
+        It authorizes nothing and weakens nothing: a breaker can only STOP
+        work. Every approval gate that stood before it still stands.
+        Best-effort -- an unreadable ledger leaves the loop running normally
+        rather than stranding it in a state it cannot get out of."""
+        from . import loop_budget as _lb
+        try:
+            conf = _lb.resolve_config(self.cfg)
+            if not conf.get("breaker_blocks_loop", True):
+                return False
+            engine = self._loop_budget_engine()
+            if not engine.breaker_open():
+                return False
+            reason = engine.blocking_reason()
+            ss = self.state.stages[stage]
+            ss["status"] = Status.BLOCKED.value
+            ss["blocking_reason"] = reason[:2000]
+            self.state.overall_status = Status.BLOCKED.value
+            self.store.save(self.state)
+            self.store.event({"ts": now(), "stage": stage,
+                              "event": "CIRCUIT_BREAKER_BLOCKED",
+                              "breaker": engine.breaker_state(),
+                              "exhausted": engine.exhausted_dimensions()})
+            print(f"[dv-harness] {reason}")
+            return True
+        except Exception as e:
+            print(f"[dv-harness] circuit-breaker check failed (continuing normally): {e}")
+            return False
+
+    def _resource_priority_decision(self, stage: str, skills: List[str],
+                                    checks: List[Any]) -> Optional[Dict[str, Any]]:
+        """Section 92's PROCEED / PROCEED_CRITICAL / DEFER decision for one
+        stage, measured from the preflight `CheckOutcome`s this run just
+        produced.
+
+        `consumes_scarce_resource` is `bool(skills)` -- the execution-layer
+        skills THIS stage's own graph node declares, the same
+        `EXECUTION_PREFLIGHT_SKILLS` discriminator that armed this gate in the
+        first place. A stage that consumes none of the scarce resource is never
+        deferred for it, because deferring it would delay the project and free
+        nothing.
+
+        Returns None (never a fabricated decision) if anything goes wrong;
+        measuring must never break a stage that already preflighted clean."""
+        from . import loop_budget as _lb
+        try:
+            conf = _lb.resolve_config(self.cfg)
+            pressure = _lb.measure_resource_pressure(self.cfg, checks=list(checks or []))
+            decision = _lb.prioritize_stage(
+                stage, pressure, consumes_scarce_resource=bool(skills),
+                critical_stages=tuple(conf.get("critical_stages")
+                                      or _lb.DEFAULT_CRITICAL_STAGES))
+            payload = decision.to_dict()
+            payload["pressure_detail"] = pressure.to_dict()
+            return payload
+        except Exception:
+            return None
+
+    def _defer_stage_under_resource_pressure(self, stage: str, skills: List[str],
+                                             priority: Optional[Dict[str, Any]]
+                                             ) -> Optional[AgentResult]:
+        """Act on a DEFER decision, when and only when this project opted in.
+
+        Parks on WAIT_USER for _degraded_gate()'s and
+        _execution_preflight_gate()'s own stated reason: loop() reads
+        ss["status"] and its fallthrough is an unconditional advance(), so a
+        deferred stage must park on a status loop() already stops cleanly on
+        rather than be advanced as though it had passed. The real measured
+        pressure is carried in blocking_reason, so the park is never
+        unexplained."""
+        from . import loop_budget as _lb
+        try:
+            if not priority or priority.get("decision") != _lb.PRIORITY_DEFER:
+                return None
+            conf = _lb.resolve_config(self.cfg)
+            if not conf.get("defer_low_value_under_pressure", False):
+                return None
+            reason = (f"EXECUTION_DEFERRED_UNDER_RESOURCE_PRESSURE: {priority.get('reason', '')} "
+                      f"No agent dispatched. Re-run when the measured pressure clears, or set "
+                      f"loop_budget.defer_low_value_under_pressure=false to proceed anyway.")
+            ss = self.state.stages[stage]
+            ss["status"] = Status.WAIT_USER.value
+            ss["blocking_reason"] = reason[:2000]
+            self.state.overall_status = Status.WAIT_USER.value
+            self.store.save(self.state)
+            self.store.event({"ts": now(), "stage": stage,
+                              "event": "EXECUTION_DEFERRED_UNDER_RESOURCE_PRESSURE",
+                              "execution_skills": skills, "resource_priority": priority})
+            print(f"[dv-harness] {reason}")
+            return AgentResult(ok=False, text=reason,
+                               raw={"deferred": True, "stage": stage, **priority},
+                               session_id=None)
+        except Exception as e:
+            print(f"[dv-harness] resource-priority deferral check failed "
+                  f"(continuing normally): {e}")
+            return None
+
     def _project_blackboard_value(self) -> Dict[str, Any]:
         """Reads the real "project" Blackboard topic (written by INTAKE's
         _bb_intake -- mode/target_name/protocols/selected_subsystems/
@@ -3452,10 +3750,27 @@ class DVHarness:
             pf_cfg = _preflight.config_from_dict(self.cfg.get("preflight"))
             result = _preflight.run_preflight(pf_cfg, runner=self.execution_preflight_runner)
             if result.overall == "PASS":
+                # LOOP-3, section 92: the check-before-submit half is what just
+                # PASSed; this is the PRIORITIZATION half. The same real
+                # CheckOutcomes are re-read (never re-probed -- a second lmstat
+                # round trip for a fact this run just measured would be exactly
+                # the parallel mechanism this project forbids) for the band
+                # BETWEEN "plenty" and "fully checked out", which a PASS verdict
+                # alone cannot express and which degradation.py deliberately
+                # says nothing about. The measurement is ALWAYS recorded in this
+                # event; whether a low-value stage is actually deferred for it
+                # is `loop_budget.defer_low_value_under_pressure` (off by
+                # default). It can only ever DEFER -- it never lets a stage
+                # preflight BLOCKED proceed.
+                priority = self._resource_priority_decision(stage, skills, result.checks)
                 self.store.event({"ts": now(), "stage": stage,
                                    "event": "EXECUTION_PREFLIGHT_PASS",
                                    "execution_skills": skills,
+                                   "resource_priority": priority,
                                    "preflight": result.to_dict()})
+                deferral = self._defer_stage_under_resource_pressure(stage, skills, priority)
+                if deferral is not None:
+                    return deferral
                 return None
             reason = (f"EXECUTION_PREFLIGHT_BLOCKED: stage {stage} routes an execution-layer "
                       f"agent (skills={skills}) but dv_harness/preflight.py reports "
@@ -4614,6 +4929,17 @@ class DVHarness:
                         "Run `dv-harness resume` to continue.")
                 return
 
+            # Section 93's circuit breaker (LOOP-3). Deliberately checked AFTER
+            # both Human Override checks above, so a human's takeover/pause
+            # always outranks it, and BEFORE the SIGNOFF gate and run_stage(),
+            # because an OPEN breaker means "STOP NEW ACTIONS". It fires only on
+            # a budget this project DECLARED (`loop_budget.limits.*`, empty by
+            # default) or on a declared identical-repeat threshold, so a default
+            # configuration never reaches it. It authorizes nothing -- see
+            # _circuit_breaker_gate()'s docstring.
+            if self._circuit_breaker_gate(stage):
+                return
+
             if stage == Stage.SIGNOFF.value:
                 # self.blackboard (2026-09-04): can_signoff()'s qualified-
                 # conclusion check needs the REAL Blackboard the RE_AUDIT PASS
@@ -4656,10 +4982,27 @@ class DVHarness:
                 # automatic loop() driver, not just in the one-shot
                 # run_stage()/CLI-return-code path.
                 max_retry = self.cfg["policy"].get("max_stage_retries", 2)
-                if ss["attempts"] <= max_retry:
+                # LOOP-3, section 93: classify WHY this attempt failed before
+                # deciding whether repeating it can help. Always computed and
+                # recorded (on ss["failure_type"]/["failure_signature"]/
+                # ["failure_signature_repeats"], and in the LOOP_BUDGET_SPENT /
+                # LOOP_RETRY_REFUSED events); it only CHANGES the decision when
+                # this project opted in -- see _retry_refused_by_failure_evidence().
+                classification = self._classify_stage_failure(stage)
+                retry_refusal = self._retry_refused_by_failure_evidence(stage, classification)
+                if retry_refusal is None and ss["attempts"] <= max_retry:
                     ss["status"] = Status.RETRY.value
                     self.store.save(self.state)
                     continue
+                if retry_refusal is not None:
+                    # The refusal is recorded on the stage itself, not only in
+                    # the event log: a human reading `dv-harness status` must
+                    # see that the run stopped retrying on EVIDENCE, not on a
+                    # spent attempt count it can compare against max_retry.
+                    ss["blocking_reason"] = (
+                        f"{ss.get('blocking_reason', '')}\n"
+                        f"RETRY_REFUSED: {retry_refusal.get('reason', '')}")[:2000]
+                    self.store.save(self.state)
                 # Retries exhausted: Graph is the workflow authority
                 # (CLAUDE.md) -- route to whatever main_graph.json's FAIL
                 # edge says (e.g. BUILD/VERIFY/REGRESSION_MONITOR ->
@@ -4698,6 +5041,13 @@ class DVHarness:
                 # the one point Status cannot describe -- BUDGET_EXHAUSTED has
                 # no Status equivalent. Best-effort; see the method's docstring.
                 self._record_loop_state_observation(stage, occasion="RETRY_BUDGET_EXHAUSTED")
+
+                # LOOP-3, section 91: the same spend, recorded against the ONE
+                # unified ledger, so "what has this run spent on which
+                # dimension against which limit" is answerable run-wide instead
+                # of only per node. Trips the circuit breaker when a DECLARED
+                # budget has genuinely run out. Best-effort; see the method.
+                self._spend_retry_exhaustion_budget(stage, classification)
 
                 # Content-driven reroute hint (2026-08-29, inner ReAct loop):
                 # ss["react_reroute_target"] is set only by run_stage()'s

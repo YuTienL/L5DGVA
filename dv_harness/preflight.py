@@ -421,6 +421,22 @@ def _parse_lmstat_output(stdout: str, features: List[str]) -> dict:
     return {"server_up": server_up, "features": found, "missing_features": missing}
 
 
+def parse_license_availability(stdout: str, features: Optional[List[str]] = None) -> dict:
+    """Public wrapper over the SAME `_parse_lmstat_output()` `check_license()`
+    itself uses to reach its verdict.
+
+    Exists so a caller that needs the measured issued/in-use COUNTS -- rather
+    than the PASS/FAIL verdict those counts produced -- reads them with the
+    identical parse instead of re-parsing `lmstat` output or scraping the
+    check's formatted `detail` string. `loop_budget.pressure_from_checks()` is
+    the first such caller: section 92's deferral decision lives in the band
+    BETWEEN "plenty" and "fully checked out", which the verdict alone cannot
+    express. `features` defaults to no required-feature list, since a caller
+    asking for headroom is asking about whatever features the server reported,
+    not about a specific one being present."""
+    return _parse_lmstat_output(stdout or "", list(features or []))
+
+
 def check_license(runner: Runner, cfg: PreflightConfig, timeout: int = 60) -> CheckOutcome:
     name = "eda_license"
     if not cfg.license_server:
@@ -456,7 +472,12 @@ def check_license(runner: Runner, cfg: PreflightConfig, timeout: int = 60) -> Ch
     detail = "; ".join(
         f"{f}: {v['issued'] - v['in_use']}/{v['issued']} available"
         for f, v in parsed["features"].items())
-    return CheckOutcome(name, "PASS", detail, command=cmd)
+    # The PASS path carries the raw lmstat output too (the FAIL paths above
+    # always did). A PASS verdict means "not fully checked out", which does not
+    # say HOW MUCH headroom is left -- and section 92's deferral decision lives
+    # exactly in that band. Carrying the real output lets a reader re-derive the
+    # counts through parse_license_availability() instead of scraping `detail`.
+    return CheckOutcome(name, "PASS", detail, command=cmd, evidence=res.stdout[:2000])
 
 
 def _parse_bqueues_output(stdout: str, queue: str) -> Optional[dict]:

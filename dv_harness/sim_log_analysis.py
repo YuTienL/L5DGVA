@@ -182,6 +182,16 @@ def _normalize_signature(line: str) -> str:
     return s
 
 
+#: Public name for the same normalization above, exported for the same reason
+#: `TRIAGE_CATEGORIES` is: a caller that needs to decide "is this the SAME
+#: failure as last time" outside a sim.log (`loop_budget.classify_failure()`'s
+#: signature, which the circuit breaker's REPEATED_IDENTICAL_FAILURE trigger
+#: counts) must use THIS normalization, not a second one -- two different
+#: answers to "is this the same failure" is exactly how a breaker either never
+#: trips or trips on nothing.
+normalize_failure_signature = _normalize_signature
+
+
 def _match_markers(line: str) -> List[str]:
     hits = []
     for name, pattern in _MARKER_PATTERNS:

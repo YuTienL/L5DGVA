@@ -2167,3 +2167,153 @@ exists to prevent. It is also not engine-fired and not exposed on the
 dashboard: no `run_stage()`/`advance()` call site invokes it and no graph node
 declares it, so this is a REACHED capability (a real CLI caller exists), not a
 WIRED one.
+
+
+## Unified Loop Budget + Failure Taxonomy + Circuit Breaker (2026-09-05)
+
+LOOP_ENGINEERING sections 91/92/93 require a unified budget engine over eleven
+dimensions with exhaustion that is explicit and cannot silently reset, a
+ten-class failure taxonomy feeding a retry-vs-stop decision, and a circuit
+breaker. A repo-wide grep on 2026-09-05 returned ZERO hits for
+`circuit_breaker`/`CircuitBreaker` and exactly ONE for `TRANSIENT` -- an
+unrelated sentence in `connectivity.py`'s Gate-3 docstring. Real budgets existed
+and were being spent (`policy.max_stage_retries` in `engine.loop()`,
+`policy.inner_react_max_iterations`/`inner_react_max_adapter_calls` in
+`react_loop.InnerReactLoop`, `context_budget.MAX_PACK_BYTES` for the resident
+pack) but each lived alone: nothing could answer "what has this RUN spent, on
+which dimension, against which limit, and has any of it run out". And nothing
+classified WHY a stage failed, so `loop()`'s retry decision was
+`ss["attempts"] <= max_retry` and nothing else -- a deterministic compile error
+and a dropped API connection were retried identically.
+
+`dv_harness/loop_budget.py` is all three, in one module because they are one
+mechanism: the breaker trips on the budget engine's exhaustion and decides
+retry-vs-stop from the taxonomy, which section 92's resource-pressure signal
+also feeds.
+
+**Every input names its real producer; nothing is re-derived.** The LIMITS are
+read from the budgets this harness already has, never retyped. The exhaustion
+vocabulary is `loop_contract.LoopState.BUDGET_EXHAUSTED`, imported. The triage
+categories map from `sim_log_analysis.TRIAGE_CATEGORIES` -- whose own docstring
+invites exactly this -- and the DUT-vs-testbench call comes from
+`tools/senior_dv/failure_attribution.py`'s boundary-trace rule, recomputed the
+same way `dashboard._failure_attribution()` recomputes it rather than trusting
+an agent-written `classification` field. The resource evidence is
+`preflight.check_license()`/`check_queue_health()`'s own `CheckOutcome`s,
+reached through `degradation.probe_resources()`. The failure SIGNATURE is
+`sim_log_analysis.normalize_failure_signature()` (the existing private
+`_normalize_signature`, made public for this): two different answers to "is
+this the same failure" is exactly how a breaker either never trips or trips on
+nothing.
+
+**No dimension is bounded by default, and every one says why.** That is the
+honest state of this harness: it enforces no run-scoped loop budget today.
+`policy.max_stage_retries` is deliberately NOT reported as a run-wide
+`max_retries` cap -- it is a PER-GRAPH-NODE budget that resets when
+`current_stage` moves on, and treating it as run-wide would report every second
+retry-exhausted stage as an exhausted RUN (confirmed the hard way: the first
+build did exactly that and broke
+`test_loop_contract.py::test_a_second_identical_failure_is_a_real_oscillation_fingerprint`).
+Its per-node spends ARE accumulated into the ledger so the run-wide total is
+visible; a real cap is `loop_budget.limits.max_retries`. Every `None` limit
+carries a real reason, the same honesty contract
+`loop_contract.validate_contract()` enforces on a `LoopContract`.
+
+**Exhaustion cannot silently reset.** `reset()` and `reset_breaker()` both
+REQUIRE a real `reason` AND a real `by`, refuse without them, append an
+append-only record of the spend that was cleared, and leave the
+`exhaustion_log` intact -- there is no code path in the module that zeroes a
+spend without producing that record. Section 91's one hard rule, enforced
+rather than described.
+
+**RECORD-FIRST on the real engine path; the two behaviour-changing halves are
+opt-in.** `engine.loop()`'s retry-exhaustion branch now classifies the failure
+(`_classify_stage_failure()`, reading `state.json`'s own `blocking_reason` and
+the FAILURE_RECOVERY `failure_attribution` boundary trace -- never agent prose)
+and spends the unified ledger (`_spend_retry_exhaustion_budget()`), recording
+`LOOP_BUDGET_SPENT` in `.dv-harness/events.jsonl` and
+`failure_type`/`failure_signature`/`failure_signature_repeats` on the stage
+state, on every default run. What is OPT-IN, for the same disclosed-default
+reason `require_tier` and `probe_resources` are:
+`loop_budget.enforce_retry_policy` (make a non-retryable classification
+actually stop a retry -- turning it on shortens a stage's real retry budget,
+which is a project's decision, not this module's) and
+`loop_budget.repeated_identical_failure_threshold` (section 93's "repeating the
+identical UVM_FATAL is not a useful retry"). UNKNOWN is retryable ON PURPOSE:
+refusing to retry a failure nobody classified would shrink every existing
+project's budget on the strength of this module's ignorance.
+
+**The breaker BLOCKS by default -- it just has nothing to trip on until a
+project declares a budget.** `_circuit_breaker_gate()` runs at the top of every
+`loop()` cycle, AFTER both Human Override checks (a takeover/pause always
+outranks it -- an operator must never have to clear a breaker to take control
+back) and BEFORE the SIGNOFF gate and `run_stage()`. An OPEN breaker marks the
+stage BLOCKED with the real trip evidence and returns: STOP NEW ACTIONS, with
+the recovery condition being a recorded `dv-harness loop-budget breaker-reset
+--reason ... --by ...`. `loop_budget.trip_on_oscillation` is a real, wired
+trigger -- `loop_contract.detect_oscillation_from_debug_loop_history()` CALLED
+over the very `debug_loop_history` entries `_record_debug_loop_round()` wrote
+one line earlier, so there is one definition of an oscillation fingerprint in
+this codebase -- but it stays OFF by default with an honest reason: `loop()`
+currently routes an oscillating stage onto its graph FAIL edge, and sections
+88-90's RESPONSE half is explicitly not built (see that section's own disclosed
+residual), so tripping there by default would change routing this harness has
+not decided to change.
+
+**Section 92's missing half is PRIORITIZATION, and it lives where the real
+measurement already happens.** The check-before-submit half was already real in
+`preflight.py`. `engine._execution_preflight_gate()`'s PASS branch now re-reads
+the SAME `CheckOutcome`s it just produced (never a second lmstat round trip) for
+the band BETWEEN "plenty" and "fully checked out" -- the range `degradation.py`
+deliberately says nothing about, since it only trips at starvation. `preflight`
+gained a public `parse_license_availability()` and now carries the raw lmstat
+output on the PASS path too, so headroom is re-derived through the check's own
+parse instead of scraping its formatted `detail`. `PROCEED` /
+`PROCEED_CRITICAL` / `DEFER` is decided by three rules with reasons a human can
+check: no measured pressure never defers (section 92: do not invent
+availability -- and equally, do not invent scarcity, so UNKNOWN never defers);
+work whose graph node declares no execution-layer skill never defers (deferring
+it would delay the project and free nothing); and critical signoff-family work
+proceeds under pressure by policy. The measurement is ALWAYS recorded in the
+`EXECUTION_PREFLIGHT_PASS` event; acting on it is
+`loop_budget.defer_low_value_under_pressure` (off by default), it can only ever
+DEFER, and it can never let a stage preflight BLOCKED proceed.
+
+**No human-approval gate moved.** `ControlPlane.approve()`,
+`policy.can_signoff()`, `assert_human_approval()`,
+`assert_no_production_write_authorized()`, `HumanApprovalRequiredError`,
+`ProductionWriteNotAuthorizedError` and the PR-only main/master governance are
+untouched and uncalled from this module -- asserted against its own tokenized
+source by a test, so a future edit that reaches for one fails. Everything this
+mechanism can do is STOP work; nothing here authorizes any.
+
+Front door: `dv-harness loop-budget dimensions|status|classify|reset|breaker-reset`
+(and the identical `python -m dv_harness.loop_budget`, one shared
+`execute_verb()`). Proven by `dv_harness_tests/test_loop_budget.py` against a
+REAL `DVHarness.loop()` over the REAL shipped `main_graph.json` with the REAL
+`command_migration_integrity_gate.py` subprocess -- a real declared budget
+exhausting, a real breaker trip, a real second `loop()` refusing to spend an
+attempt, a real recovery releasing it, and a real takeover still outranking it
+-- plus REAL `preflight.check_license()` outcomes over this project's own REAL
+captured `lmstat` transcript. The fixture is
+`dv_harness_tests/controlled_experiment_fixture.py`, reused rather than
+duplicated; nothing in it runs a build, a regression or an LSF submission.
+Every behaviour-changing assertion carries its negative control: the
+retry-refusal test asserts three attempts with the flag off and one with it on
+over the identical fixture, the repeat counter is proven to RESET on a
+genuinely different failure, and the deferral test asserts PROCEED at the real
+captured 99/0 license reading and DEFER only once the reading is genuinely
+scarce.
+
+**Disclosed residual**: this is the BUDGET, the TAXONOMY and the BREAKER, not
+section 94's next-best-action ranking or section 95's utility telemetry -- the
+ledger measures the cost dimensions those would need, and nothing ranks or
+reports them. Section 91's `max_compute` / `max_license_usage` /
+`max_token_cost` / `max_lsf_jobs` / `max_parallel_jobs` have no producer in this
+harness at all, so they are declared and spendable but nothing spends them. The
+only engine call sites are `loop()`'s retry-exhaustion branch and
+`_execution_preflight_gate()`'s PASS branch, so a run that never exhausts a
+stage's retries never touches the ledger, and `FailureType.VIP` is reachable
+only from the declared Synopsys `svt_` component prefix -- a project using
+another VIP vendor must declare its own `loop_budget.vip_component_prefixes`,
+because guessing one would be fabrication.

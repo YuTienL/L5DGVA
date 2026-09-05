@@ -1500,6 +1500,49 @@ def main():
                              "stimulus-gap) investigation, and report both oscillation "
                              "fingerprints. Exit 2 when no usable series exists.")
 
+    # LOOP_ENGINEERING sections 91/92/93: the unified loop budget ledger, the
+    # failure-type taxonomy and the circuit breaker (dv_harness/loop_budget.py).
+    # `reset`/`breaker-reset` are the only two mutating verbs, and both REQUIRE
+    # a real reason and a real actor -- section 91's "budget exhaustion is
+    # explicit and cannot silently reset", enforced at the front door as well as
+    # in the engine. Neither authorizes any work; they only let a stopped loop
+    # try again, and every approval gate that stood before still stands.
+    plb = sub.add_parser("loop-budget",
+                          help="Sections 91/92/93: this run's unified budget ledger (what was "
+                               "spent on each of the eleven dimensions, against which limit, "
+                               "read from the real config keys that enforce them), the "
+                               "failure-type taxonomy, and the circuit breaker.")
+    plb_sub = plb.add_subparsers(dest="lb_verb", required=True)
+    plb_sub.add_parser("dimensions",
+                       help="Section 91's eleven budget dimensions with each one's REAL limit "
+                            "and the real config key that sets it -- or, where nothing bounds "
+                            "it, the honest reason nothing does. Plus the ten failure types "
+                            "and which of them retrying can resolve.")
+    plb_sub.add_parser("status",
+                       help="This project's ledger: spend, remaining, exhaustion history, "
+                            "recorded resets and the circuit-breaker state. Exit 2 while any "
+                            "declared budget is exhausted or the breaker is OPEN.")
+    _plb_cls = plb_sub.add_parser("classify",
+                                  help="Classify one failure text (a stage's blocking_reason, "
+                                       "an adapter stderr, a sim.log excerpt) into section "
+                                       "93's taxonomy, showing the rule that decided it.")
+    _plb_cls.add_argument("--text", required=True, help="The failing attempt's evidence text.")
+    _plb_reset = plb_sub.add_parser("reset",
+                                    help="Clear ONE dimension's spend. Requires --reason and "
+                                         "--by; appends an append-only record of the spend "
+                                         "that was cleared.")
+    _plb_reset.add_argument("--dimension", required=True)
+    _plb_reset.add_argument("--reason", required=True,
+                            help="Why this budget may be reset. Recorded verbatim.")
+    _plb_reset.add_argument("--by", required=True,
+                            help="Who decided. Recorded verbatim.")
+    _plb_br = plb_sub.add_parser("breaker-reset",
+                                 help="Section 93's REQUIRE RECOVERY CONDITION: close an OPEN "
+                                      "circuit breaker. Requires --reason (what recovery "
+                                      "condition was actually met) and --by.")
+    _plb_br.add_argument("--reason", required=True)
+    _plb_br.add_argument("--by", required=True)
+
     # Section 47's GOLDEN FLOW READINESS MATRIX (dv_harness/golden_flow_readiness.py).
     # Read-only aggregation over sources that are ALREADY real -- state.json,
     # gates.effective_stage_gates(), dashboard.py's coverage/LSF/memory/protocol
@@ -2996,6 +3039,20 @@ def main():
         else:
             print(json.dumps(_lc_payload, ensure_ascii=False, indent=2))
         raise SystemExit(_lc_code)
+    elif args.cmd == "loop-budget":
+        # One shared implementation with `python -m dv_harness.loop_budget`
+        # (loop_budget.execute_verb), same convention as loop-contract above.
+        # h.cfg is this session's already-loaded config, so `dimensions`
+        # reports what THIS project's policy really enforces.
+        from . import loop_budget as _lb
+        _lb_code, _lb_payload = _lb.execute_verb(
+            h.root, args.lb_verb, cfg=h.cfg,
+            dimension=getattr(args, "dimension", None),
+            reason=getattr(args, "reason", "") or "",
+            by=getattr(args, "by", "") or "",
+            text=getattr(args, "text", "") or "")
+        print(json.dumps(_lb_payload, ensure_ascii=False, indent=2))
+        raise SystemExit(_lb_code)
     elif args.cmd == "golden-flow-readiness":
         # One shared implementation with `python -m dv_harness.golden_flow_readiness`
         # (golden_flow_readiness.execute), same convention as loop-contract above.
