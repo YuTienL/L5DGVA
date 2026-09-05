@@ -1437,3 +1437,108 @@ Windows scheduled task names it, and the CI workflow deliberately does not,
 since a fresh CI checkout carries no question store and would only ever record
 an empty no-op. A project wanting the daily cadence runs `dv-harness
 question-queue digest --trigger scheduled` from its own scheduler.
+
+
+## Cross-Loop Coupling: Repeated Failure -> Auto-Filed Capability Candidate (2026-09-05)
+
+Three loops in this harness were each individually real and firing — the
+Verification Closure Loop (`engine.run_stage()`'s gates), the Project Learning
+Loop (`memory_router`'s tier promotions) and the Capability Evolution Loop
+(`capability_evolution.py`'s 11-state machine, §70) — and the EDGE between the
+first and the third did not exist. A repo-wide grep confirmed
+`router.resolve_intent()` (the research route added with `dv-harness research`)
+has no caller anywhere in `engine.py`, so the Capability Evolution Loop was
+reachable ONLY by a human typing `dv-harness research <doc>`. The same real
+failure could recur across independent runs forever, be recorded faithfully in
+Job Memory every single time, and never once raise a question about the
+harness's own capability. That is the PARTIALLY_WIRED shape the Methodology
+Consolidation Rule warns about, one level up: not an unwired module, but two
+wired loops with no edge between them.
+
+`engine.DVHarness._file_capability_evolution_candidates_from_repeated_failures()`
+closes the DISCOVERY half. It is called immediately after
+`_record_debug_attempt_job_memory()` — the one place in this engine a real
+`kind="job_failure"` record carrying a real `memory_vault.build_failure_signature()`
+dict reaches Job Memory — so the coupling reads evidence the closure loop wrote
+one line earlier, on the real autonomous path.
+
+- **The threshold is evidence-based and conservative.** `capability_evolution.
+  repeated_unresolved_failure_patterns()` groups Job Memory `job_failure`
+  records by `evidence_db.signature_key()` (the SAME stable hash the evidence
+  store already accumulates `occurrence_count` on — never a second definition of
+  "the same failure") and fires at `REPEAT_FAILURE_MIN_OCCURRENCES = 2`
+  INDEPENDENT runs. Independence is the run (`job_id`, else `git_sha`) and
+  nothing else: three retries of one stage against one commit are ONE
+  observation, matching `ORGANIZATIONAL_MIN_CONFIRMATIONS`'s own "not the same
+  run reported twice". A record carrying neither identity contributes ZERO
+  independent runs rather than one each — otherwise a single bad session could
+  manufacture its own capability proposal.
+- **UNRESOLVED means a gate-verified fix is absent**, not that nobody wrote an
+  explanation. Only `kind="verified_fix"` closes a pattern, because
+  `engine._promote_verified_fix_knowledge()` writes it exactly once, on an
+  RE_AUDIT verdict whose `fix_effectiveness_gate` AND
+  `fix_regression_non_regression_gate` both cleared. A bare `root_cause` or
+  `debug_lesson` record is an explanation, not a closure. The join is exact
+  equality on normalized claim text (the signature's `symptom`/`root_cause_hint`
+  against the fix record's `root_cause`/`symptoms`), never fuzzy — both sides
+  really are sourced from the same Blackboard `findings.last_report` evidence on
+  the real path, and a fuzzy join would silently suppress real candidates, which
+  is the more expensive error of the two.
+- **DISCOVERY is automated. Nothing else is, and the wall is structural.** An
+  auto-filed candidate is filed at DISCOVERED and can reach no further state,
+  for three independent reasons: (1)
+  `file_repeated_failure_candidate()` never calls `transition()` and refuses to
+  persist anything not at DISCOVERED; (2) it performed NO repository search and
+  says so — all six `existing_*` slots carry `search_conclusive: false` with an
+  honest `search_basis` quoting that question's real next-best-action out of the
+  existing `RESEARCH_GAP_ACTION_CATALOG` — so `derive_overlap_status()` returns
+  UNKNOWN, `decide_recommendation()` returns UNKNOWN, and the candidate schema's
+  own `allOf` then PINS `current_status` to
+  DISCOVERED/EVIDENCE_GATHERING/REJECTED. Reaching PROPOSED requires six
+  conclusive searches only a real `research-architect` pass can produce; (3)
+  every gate above that is untouched — `assert_legal_transition()`,
+  `assert_human_approval()`'s real `ControlPlane` check,
+  `HumanApprovalRequiredError`, `ProductionWriteNotAuthorizedError`. Not one
+  line of the human-approval boundary was weakened to build this.
+- **A candidate a human has already moved on is never dragged back.** The
+  content-derived `candidate_id` means a recurrence in a later cycle lands on the
+  SAME record and accumulates evidence; if that record has left DISCOVERED, the
+  auto-filer reports `ALREADY_BEYOND_DISCOVERED` and writes nothing. Unchanged
+  evidence reports `ALREADY_ON_FILE_UNCHANGED` and writes nothing, so a failing
+  stage retrying does not append a duplicate Working Memory audit record per
+  attempt.
+- **Reuse, not parallel infrastructure**: evidence read through the shared
+  `MemoryStore.find()`; the candidate assembled by the existing
+  `build_candidate()` (so the recommendation is DERIVED and the confidence is
+  recomputed through the real `inference.score_confidence()`, never
+  self-reported) and written by the existing `persist_candidate()`, landing on
+  the one `capability_evolution_candidates` Blackboard topic and the one Working
+  Memory audit trail every other candidate uses. `persist_candidate()`'s
+  WORKING_MEMORY assertion still holds: one project's repeated failure is not
+  verified engineering knowledge.
+- Best-effort, mirroring every sibling `_promote_*`/`_record_*` method: a
+  capability-evolution bookkeeping failure records
+  `CAPABILITY_EVOLUTION_AUTO_DISCOVERY_FAILED` and never turns an
+  already-computed stage result into a crash. Every outcome, including "no
+  pattern qualified", is one `CAPABILITY_EVOLUTION_AUTO_DISCOVERY` event in
+  `.dv-harness/events.jsonl` — a run on which nothing qualified is itself
+  citable evidence.
+
+Proven end to end — two real `run_stage()` calls that do not close, against two
+different commits, writing two real Job Memory records through the real router,
+producing a real candidate on the real Blackboard with those two real
+`memory_id`s as its evidence, with no human involved and no approval minted — by
+`dv_harness_tests/test_capability_evolution_auto_discovery.py` (23 tests),
+which also holds the boundary: PROPOSED is refused, every skipped governance
+state is refused, and both `HumanApprovalRequiredError` and
+`ProductionWriteNotAuthorizedError` still fire on an auto-filed candidate.
+
+**Disclosed residual**: this closes the AUTOMATIC-DISCOVERY half of the
+coupling and only that half. The auto-filed candidate parks at DISCOVERED with
+UNKNOWN overlap and UNKNOWN recommendation until a human runs
+`dv-harness research` (or an equivalent `research-architect` pass) to perform
+the six current-L5 searches; nothing in the engine performs them, and
+`.claude/agents/ROSTER.md` correctly still records `research-architect` as
+`NOT_DISPATCHED` — no graph node declares `research-route`. What changed is that
+the loop now RAISES the question from real repeated evidence instead of waiting
+for a human to notice the pattern.

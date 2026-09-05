@@ -1382,3 +1382,459 @@ def persist_prior_research_links(root, summary: Dict[str, Any], *,
             )
         written.append(routed)
     return written
+
+
+# ---------------------------------------------------------------------------
+# CROSS-LOOP COUPLING (2026-09-05): the Verification Closure Loop raising a
+# candidate in the Capability Evolution Loop, automatically.
+#
+# THE GAP THIS CLOSES. All three loops were individually real and firing --
+# verification closure through engine.run_stage()'s gates, project learning
+# through memory_router's tier promotions, capability evolution through this
+# module's state machine -- and the COUPLING between the first and the third
+# was not. A repo-wide grep confirmed router.resolve_intent() (the research
+# route) has no caller in engine.py, so this module was reachable only by a
+# human typing `dv-harness research <doc>`. Repeated verification evidence --
+# the same real failure recurring across independent runs and never being
+# closed -- could accumulate in Job Memory forever without ever raising a
+# question about the harness's own capability. That is the DORMANT shape the
+# Methodology Consolidation Rule warns about, one level up: not an unwired
+# module, but two wired loops with no edge between them.
+#
+# WHAT IS AUTOMATED AND WHAT IS EMPHATICALLY NOT. Only DISCOVERY. This code
+# files a candidate at DISCOVERED and can reach no further state, for three
+# independent reasons, each of which alone would be sufficient:
+#
+#   1. file_repeated_failure_candidate() refuses to persist anything whose
+#      current_status is not DISCOVERED, and never calls transition().
+#   2. An auto-filed candidate has performed NO repository search, and says so
+#      -- all six existing_* slots carry search_conclusive false with an honest
+#      search_basis. derive_overlap_status() therefore returns UNKNOWN and
+#      decide_recommendation() returns UNKNOWN, and the candidate schema's own
+#      allOf then pins current_status to DISCOVERED/EVIDENCE_GATHERING/REJECTED.
+#      Reaching PROPOSED requires six conclusive searches that only a real
+#      research-architect pass can produce. The wall is structural, not a
+#      policy this function is trusted to respect.
+#   3. Every gate above EVIDENCE_GATHERING is untouched: assert_legal_transition()
+#      still forbids skipping states, assert_human_approval() still consults the
+#      real ControlPlane, and HumanApprovalRequiredError /
+#      ProductionWriteNotAuthorizedError are not weakened by one line here.
+#
+# WHY IT REUSES rather than adds. The evidence is read through the SAME
+# MemoryStore.find() the rest of this module already uses; the failure identity
+# is evidence_db.signature_key() -- the stable hash the evidence store already
+# accumulates occurrence_count on, never a second definition of "the same
+# failure"; the candidate is assembled by build_candidate() and written by
+# persist_candidate(), so it lands on the one Blackboard topic and the one
+# Working Memory audit trail every other candidate uses. Nothing here is a
+# parallel mechanism.
+
+# How many INDEPENDENT runs must record the same failure signature before the
+# recurrence is treated as evidence about the harness rather than about one
+# run. Two, matching memory_router.ORGANIZATIONAL_MIN_CONFIRMATIONS' reasoning
+# for the same reason it uses that number: a second independent run re-deriving
+# the same thing is the smallest observation that cannot be one run reported
+# twice.
+REPEAT_FAILURE_MIN_OCCURRENCES = 2
+
+# The Job Memory kind engine._record_debug_attempt_job_memory() and
+# lsf_client._write_job_tier_memory_on_terminal_reconcile() actually write, and
+# the only kind that carries a real build_failure_signature() dict.
+REPEAT_FAILURE_JOB_MEMORY_KIND = "job_failure"
+
+# The Engineering Memory kind that means "this failure was closed". Deliberately
+# only verified_fix: engine._promote_verified_fix_knowledge() writes it exactly
+# once, on a RE_AUDIT verdict whose fix_effectiveness_gate and
+# fix_regression_non_regression_gate both cleared, so its presence is a
+# gate-verified closure rather than an agent's report of one. A bare root_cause
+# or debug_lesson record is an explanation, not a closure, and counting either
+# would let an unfixed failure look resolved.
+RESOLVING_ENGINEERING_MEMORY_KIND = "verified_fix"
+
+# Master prompt section 64's gap-detection source this coupling supplies.
+AUTO_DISCOVERY_TRIGGER_TYPE = "FAILURE_PATTERN"
+
+# Recorded in status_history.by and as the Blackboard write's source, so a
+# human reading the candidate can tell an auto-filed one from a
+# research-architect one without inferring it from the field contents.
+AUTO_DISCOVERY_BY = "verification-closure-loop"
+
+# The bucket a job_failure record with neither job_id nor git_sha falls into.
+# Such records are grouped TOGETHER and contribute ZERO independent runs, never
+# one each: two records that cannot be told apart as separate runs are not
+# evidence of two runs, and treating them as such is exactly how a single bad
+# session would manufacture its own capability proposal.
+UNIDENTIFIED_RUN = "<no-run-identity-recorded>"
+
+# Which of section 14's ten questions each of the six search slots answers,
+# inverted from the existing L5_QUESTION_FIELD map rather than retyped, so the
+# auto-filed search_basis can quote that question's real next-best-action text
+# out of RESEARCH_GAP_ACTION_CATALOG instead of inventing a parallel one.
+_SLOT_QUESTION = {
+    L5_QUESTION_FIELD[q]: q
+    for q in L5_CHECK_QUESTIONS
+    if L5_QUESTION_FIELD[q] in L5_SEARCH_SLOTS
+}
+
+
+def failure_resolution_claims(failure_signature: Optional[Dict[str, Any]]) -> List[str]:
+    """The normalized claim texts a verified_fix record would have to name for
+    this failure signature to count as closed.
+
+    Exactly the signature's own `symptom` and `root_cause_hint`, and matching is
+    exact equality after whitespace/case normalization -- never substring, never
+    scoring. That is not a shortcut: those two fields are sourced by
+    engine._gather_stage_context() from the Blackboard `findings` topic's
+    last_report (`symptom`, and `root_cause` falling back to
+    `failure_signature_before`), and engine._promote_verified_fix_knowledge()
+    sources a verified_fix record's `root_cause`/`symptoms` from the SAME
+    evidence blocks that topic is written from. The two really are the same
+    strings on the real path, so an exact join is a real join. A fuzzy one would
+    quietly mark unrelated failures resolved, which is the more expensive error:
+    it would suppress a candidate rather than raise a spurious one.
+    """
+    claims = []
+    for field in ("symptom", "root_cause_hint"):
+        text = _norm_text((failure_signature or {}).get(field))
+        if text:
+            claims.append(text)
+    return sorted(set(claims))
+
+
+def resolved_failure_claim_texts(root) -> List[str]:
+    """Every normalized claim text an Engineering Memory verified_fix record
+    names, through the shared MemoryStore.find() this module already uses."""
+    from .memory import MemoryStore
+
+    texts = set()
+    for record in MemoryStore(Path(root)).find(
+        "engineering", kind=RESOLVING_ENGINEERING_MEMORY_KIND
+    ):
+        candidates = [record.get("root_cause")] + list(record.get("symptoms") or [])
+        for value in candidates:
+            text = _norm_text(value)
+            if text:
+                texts.add(text)
+    return sorted(texts)
+
+
+def _run_identity(record: Dict[str, Any]) -> str:
+    """What makes two job_failure records INDEPENDENT evidence.
+
+    The run, and only the run -- a real job_id, else the commit the attempt ran
+    against. Deliberately NOT the stage or the attempt number: engine.py writes
+    one of these records per failed attempt, so a single stage retrying three
+    times against one commit would otherwise present itself as three
+    independent confirmations of a harness-level gap. Same discipline
+    memory_router's confirmation counting applies to the Engineering tier.
+    """
+    for field in ("job_id", "git_sha"):
+        value = str(record.get(field) or "").strip()
+        if value:
+            return f"{field}:{value}"
+    return UNIDENTIFIED_RUN
+
+
+def repeated_unresolved_failure_patterns(
+    root, *, min_occurrences: int = REPEAT_FAILURE_MIN_OCCURRENCES
+) -> List[Dict[str, Any]]:
+    """Every failure signature that `min_occurrences` INDEPENDENT runs recorded
+    in Job Memory and that no Engineering Memory verified_fix record closes.
+
+    A pure read: opens no file for writing and files nothing. The returned dicts
+    carry the whole basis of the finding -- the signature itself, the
+    contributing memory_ids, the run identities that made them independent, and
+    the resolution claims that were checked -- so a reader can re-derive the
+    decision by hand rather than trusting the count.
+    """
+    from .evidence_db import signature_key
+    from .memory import MemoryStore
+
+    min_occurrences = int(min_occurrences)
+    if min_occurrences < 2:
+        raise ValueError(
+            f"min_occurrences must be at least 2, got {min_occurrences}: a single "
+            "occurrence is one run's circumstances, not a repeated pattern, and "
+            "filing a capability proposal from it is what section 64 forbids"
+        )
+
+    resolved = set(resolved_failure_claim_texts(root))
+    groups: Dict[str, Dict[str, Any]] = {}
+    for record in MemoryStore(Path(root)).find(
+        "job", kind=REPEAT_FAILURE_JOB_MEMORY_KIND
+    ):
+        signature = record.get("failure_signature")
+        if not isinstance(signature, dict):
+            continue
+        key = signature_key(signature)
+        group = groups.setdefault(key, {
+            "signature_key": key,
+            "failure_signature": signature,
+            "memory_ids": [],
+            "run_identities": [],
+        })
+        memory_id = str(record.get("memory_id") or "").strip()
+        if memory_id and memory_id not in group["memory_ids"]:
+            group["memory_ids"].append(memory_id)
+        run = _run_identity(record)
+        if run != UNIDENTIFIED_RUN and run not in group["run_identities"]:
+            group["run_identities"].append(run)
+
+    patterns: List[Dict[str, Any]] = []
+    for key in sorted(groups):
+        group = groups[key]
+        group["memory_ids"] = sorted(group["memory_ids"])
+        group["run_identities"] = sorted(group["run_identities"])
+        group["occurrence_count"] = len(group["memory_ids"])
+        group["independent_run_count"] = len(group["run_identities"])
+        group["resolution_claims"] = failure_resolution_claims(group["failure_signature"])
+        group["resolved_by_verified_fix"] = sorted(
+            set(group["resolution_claims"]) & resolved
+        )
+        group["min_occurrences"] = min_occurrences
+        if group["resolved_by_verified_fix"]:
+            continue
+        if group["independent_run_count"] < min_occurrences:
+            continue
+        patterns.append(group)
+    return patterns
+
+
+def _auto_filed_search_slot(slot: str) -> Dict[str, Any]:
+    """A search slot that honestly records that no search happened.
+
+    `matches` empty with `search_conclusive` FALSE is the whole point: an empty
+    conclusive search would be a claim of absence this code has no basis for,
+    and MISSING is what licenses an ADD. The basis text quotes the real
+    next-best-action RESEARCH_GAP_ACTION_CATALOG already holds for that
+    question, so the slot names the search someone must actually run.
+    """
+    return {
+        "matches": [],
+        "search_basis": (
+            "NOT SEARCHED -- filed automatically by the verification closure loop from "
+            "repeated Job Memory evidence, with no repository search performed, so "
+            "absence is not established and this candidate cannot leave "
+            "EVIDENCE_GATHERING. Run: "
+            + RESEARCH_GAP_ACTION_CATALOG["actions"][_SLOT_QUESTION[slot]]
+        ),
+        "search_conclusive": False,
+    }
+
+
+def _failure_signature_summary(signature: Dict[str, Any]) -> str:
+    """A stable, human-readable digest of a failure signature.
+
+    Stable is the requirement, not pretty: this text is part of `hypothesis`,
+    which is part of candidate_id's hash input, so it must depend only on the
+    signature itself and never on how many times it has been seen. That is what
+    makes a recurrence in a later cycle land on the SAME candidate record and
+    accumulate evidence instead of forking a duplicate.
+    """
+    parts = []
+    for field in ("protocol", "pattern", "symptom", "root_cause_hint",
+                  "terminal_signature", "lsf_status"):
+        value = _norm_text(signature.get(field))
+        if value:
+            parts.append(f"{field}={value}")
+    for flag in ("assertion_failure", "simulator_crash", "abnormal_termination"):
+        if signature.get(flag):
+            parts.append(f"{flag}=true")
+    for counter in ("uvm_error_count", "uvm_fatal_count"):
+        value = signature.get(counter)
+        if isinstance(value, int) and value > 0:
+            parts.append(f"{counter}={value}")
+    return "; ".join(parts)[:400] or "no descriptive field recorded on the signature"
+
+
+def build_repeated_failure_candidate(
+    root, pattern: Dict[str, Any], *,
+    status_history: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Assemble the DISCOVERED candidate for one repeated unresolved failure.
+
+    Goes through the ordinary build_candidate(), so the recommendation is
+    DERIVED (it comes out UNKNOWN, because no search was performed), the
+    confidence is recomputed through the real inference.score_confidence(), and
+    the whole thing is schema-validated before it exists. Nothing here is a
+    second candidate constructor.
+
+    `independent_sources_count` is the INDEPENDENT RUN count, never the record
+    count -- three retries of one stage against one commit are one source.
+    `evidence_refs_verified` is true because every memory_id in evidence_refs
+    was read off disk by repeated_unresolved_failure_patterns() a moment ago,
+    which is what that flag means; it is not a claim about the failure's cause.
+    `evidence_strength` is 2 (a real observation, not a controlled experiment),
+    which by itself keeps ADD unreachable even if every search later came back
+    conclusive and empty.
+    """
+    from .doc_extraction import evidence_ref
+
+    signature = pattern["failure_signature"]
+    key = pattern["signature_key"]
+    summary = _failure_signature_summary(signature)
+    memory_ids = list(pattern["memory_ids"])
+    job_dir = Path(root) / ".dv-harness" / "memory" / "job"
+
+    fields: Dict[str, Any] = {
+        "trigger_source": f"job_memory:failure_signature:{key}",
+        "trigger_type": AUTO_DISCOVERY_TRIGGER_TYPE,
+        "source_provenance": [
+            evidence_ref(
+                document=str(job_dir / f"{memory_id}.json"),
+                version=key[:12],
+                page="",
+                section=f"kind={REPEAT_FAILURE_JOB_MEMORY_KIND} failure_signature",
+                location=memory_id,
+            )
+            for memory_id in memory_ids
+        ],
+        "evidence_refs": memory_ids,
+        "affected_capability": "automated-failure-resolution",
+        "hypothesis": (
+            f"Failure signature {key[:12]} ({summary}) recurs across independent runs "
+            "and the harness's automated failure-resolution loop closes none of them: "
+            "no Engineering Memory verified_fix record names its symptom or its root "
+            "cause. The recurrence is evidence about a capability this harness does "
+            "not have, not about one run's circumstances."
+        ),
+        "proposed_action": (
+            "No production change is proposed. Run the mandatory current-L5 check over "
+            "this failure class -- the six existing_* searches this candidate filed as "
+            "NOT SEARCHED -- and let decide_recommendation() derive KEEP/ENHANCE/ADD/"
+            "EXPERIMENT from the real result. `dv-harness research` is the human entry "
+            "point that operates that machinery."
+        ),
+        "exact_gap": "",
+        "expected_verification_benefit": (
+            "Failures matching this signature stop consuming repeated debug cycles that "
+            "end without a verified fix: triage time per recurrence drops, and the "
+            "recurrence stops being visible only inside one job's memory."
+        ),
+        "evidence_strength": {
+            "scale": 2,
+            "rationale": (
+                f"{pattern['independent_run_count']} independent runs recorded this exact "
+                f"signature ({pattern['occurrence_count']} Job Memory records) and none "
+                "was closed by a gate-verified fix. That is a real repeated observation, "
+                "not a controlled experiment comparing a change against a baseline."
+            ),
+        },
+        "confidence": {
+            "inputs": {
+                "independent_sources_count": int(pattern["independent_run_count"]),
+                "evidence_refs_verified": True,
+                "counter_evidence_count": 0,
+                "multi_agent_consensus_count": 0,
+            }
+        },
+        "implementation_difficulty": "UNKNOWN",
+        "integration_risk": "UNKNOWN",
+        "maintenance_cost": "UNKNOWN",
+        "experiment_required": False,
+        "experiment_plan": "",
+        "benchmark_plan": "",
+        "acceptance_criteria": [
+            "All six existing_* searches are re-run with search_conclusive true, so "
+            "overlap_status stops being UNKNOWN.",
+            f"Either a verified_fix record closing failure signature {key[:12]} exists, "
+            "or a named harness capability is shown to be the thing that is missing.",
+            "The recommendation is derived by decide_recommendation() from those "
+            "searches, never asserted by an agent.",
+        ],
+        "rollback_plan": (
+            f"Filing applies nothing: one Blackboard entry under '{BLACKBOARD_TOPIC}' and "
+            "one Working Memory audit record, no production file touched. The undo is a "
+            "REJECTED transition, which is legal directly from DISCOVERED. Any concrete "
+            "change a later architect proposes must author its own rollback_plan before "
+            "it may leave EVIDENCE_GATHERING."
+        ),
+        "approval_level": "HUMAN_APPROVAL_REQUIRED",
+        "discovered_by": AUTO_DISCOVERY_BY,
+    }
+    for slot in L5_SEARCH_SLOTS:
+        fields[slot] = _auto_filed_search_slot(slot)
+    if status_history is not None:
+        fields["status_history"] = [dict(entry) for entry in status_history]
+
+    candidate = build_candidate(**fields)
+    if candidate["current_status"] != "DISCOVERED":
+        raise IllegalPromotionTransitionError(
+            f"an auto-filed candidate was assembled at {candidate['current_status']!r}; "
+            "the verification closure loop may only ever file at DISCOVERED"
+        )
+    return candidate
+
+
+def file_repeated_failure_candidate(root, pattern: Dict[str, Any], *,
+                                    cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """File (or refresh) ONE candidate for a repeated unresolved failure.
+
+    Never transitions. Three outcomes, and the first two write nothing:
+
+      * ALREADY_BEYOND_DISCOVERED -- a human or a research-architect has already
+        moved this candidate on. Re-filing would drag it backwards and overwrite
+        their work, so this returns instead. This is the one branch that makes
+        "auto-file at DISCOVERED only" true across cycles rather than only on
+        the first one.
+      * ALREADY_ON_FILE_UNCHANGED -- same candidate, same contributing records.
+        Re-persisting would append a duplicate Working Memory audit record on
+        every failed stage attempt for no new information.
+      * filed -- new, or the same candidate with genuinely new contributing
+        records. The existing status_history is carried forward untouched: no
+        state changed, so no transition entry is owed and none is invented.
+    """
+    candidate = build_repeated_failure_candidate(root, pattern)
+    candidate_id = candidate["candidate_id"]
+    existing = read_candidate(root, candidate_id)
+
+    if existing is not None:
+        current = existing.get("current_status")
+        if current != "DISCOVERED":
+            return {
+                "filed": False, "reason": "ALREADY_BEYOND_DISCOVERED",
+                "candidate_id": candidate_id, "current_status": current,
+                "signature_key": pattern["signature_key"],
+            }
+        if list(existing.get("evidence_refs") or []) == candidate["evidence_refs"]:
+            return {
+                "filed": False, "reason": "ALREADY_ON_FILE_UNCHANGED",
+                "candidate_id": candidate_id, "current_status": current,
+                "signature_key": pattern["signature_key"],
+            }
+        candidate = build_repeated_failure_candidate(
+            root, pattern, status_history=list(existing.get("status_history") or [])
+        )
+
+    persisted = persist_candidate(root, candidate, source=AUTO_DISCOVERY_BY, cfg=cfg)
+    return {
+        "filed": True,
+        "reason": "NEW_EVIDENCE" if existing is not None else "DISCOVERED",
+        "candidate_id": candidate_id,
+        "current_status": candidate["current_status"],
+        "signature_key": pattern["signature_key"],
+        "independent_run_count": pattern["independent_run_count"],
+        "evidence_refs": list(candidate["evidence_refs"]),
+        "persisted": persisted,
+    }
+
+
+def file_candidates_for_repeated_failures(
+    root, *, min_occurrences: int = REPEAT_FAILURE_MIN_OCCURRENCES,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """The whole coupling, as one call an engine hook can make.
+
+    Detect every repeated unresolved failure pattern, file a DISCOVERED
+    candidate for each, and report what happened to every one -- including the
+    ones deliberately left alone. Raises nothing it can help; its engine caller
+    treats any failure as best-effort, because a capability-evolution
+    bookkeeping problem must never turn an already-computed stage result into a
+    crash.
+    """
+    return [
+        file_repeated_failure_candidate(root, pattern, cfg=cfg)
+        for pattern in repeated_unresolved_failure_patterns(
+            root, min_occurrences=min_occurrences
+        )
+    ]

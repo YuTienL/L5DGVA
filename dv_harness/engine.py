@@ -2373,6 +2373,78 @@ class DVHarness:
             "promotion": promotion,
         })
 
+    def _file_capability_evolution_candidates_from_repeated_failures(
+            self, stage: str) -> Optional[Dict[str, Any]]:
+        """CROSS-LOOP COUPLING (2026-09-05): the Verification Closure Loop
+        raising a candidate in the Capability Evolution Loop, automatically.
+
+        Called immediately after _record_debug_attempt_job_memory() above,
+        which is the one place a real `kind="job_failure"` record with a real
+        `failure_signature` reaches Job Memory from this engine. That call site
+        is the whole point: the evidence this reads was written one line
+        earlier by the loop that produced it, so the coupling fires on the real
+        autonomous path rather than waiting for a human to notice a pattern.
+
+        THE GAP THIS CLOSES. All three loops were individually real and firing
+        -- verification closure here, project learning through
+        memory_router's tier promotions, capability evolution through
+        capability_evolution.py's state machine -- and the EDGE between the
+        first and the third did not exist. `router.resolve_intent()` (the
+        research route) has no caller in this file, so capability_evolution.py
+        was reachable only by a human typing `dv-harness research <doc>`. The
+        same real failure could recur across independent runs forever, be
+        recorded faithfully in Job Memory every time, and never once raise a
+        question about the harness's own capability.
+
+        WHAT IS AUTOMATED IS DISCOVERY, AND ONLY DISCOVERY. This files a
+        candidate at DISCOVERED and can reach no further state.
+        `file_repeated_failure_candidate()` never calls `transition()` and
+        refuses to persist anything not at DISCOVERED; an auto-filed candidate
+        performed no repository search and says so, which pins its
+        overlap_status at UNKNOWN and (through the candidate schema's own
+        allOf) its status at DISCOVERED/EVIDENCE_GATHERING/REJECTED; and every
+        gate above that -- assert_legal_transition, assert_human_approval's
+        real ControlPlane check, HumanApprovalRequiredError,
+        ProductionWriteNotAuthorizedError -- is untouched. Nothing here can
+        approve, experiment, or write a production file.
+
+        Best-effort, exactly like the sibling _promote_*/_record_* methods and
+        _emit_question_digest_at_stage_boundary(): a capability-evolution
+        bookkeeping failure must never turn an already-computed stage result
+        into a crash. Every outcome, including "no pattern qualified", is one
+        CAPABILITY_EVOLUTION_AUTO_DISCOVERY event in .dv-harness/events.jsonl
+        -- a run on which nothing qualified is itself citable evidence, and
+        recording it only when something fired would make the trail unreadable
+        as a series.
+        """
+        try:
+            from .capability_evolution import file_candidates_for_repeated_failures
+            results = file_candidates_for_repeated_failures(self.root, cfg=self.cfg)
+        except Exception as exc:
+            self.store.event({
+                "ts": now(), "stage": stage,
+                "event": "CAPABILITY_EVOLUTION_AUTO_DISCOVERY_FAILED",
+                "error": str(exc),
+            })
+            return None
+        self.store.event({
+            "ts": now(), "stage": stage,
+            "event": "CAPABILITY_EVOLUTION_AUTO_DISCOVERY",
+            "patterns_detected": len(results),
+            "filed": [
+                {"candidate_id": r["candidate_id"],
+                 "current_status": r["current_status"],
+                 "signature_key": r["signature_key"],
+                 "independent_run_count": r["independent_run_count"]}
+                for r in results if r.get("filed")
+            ],
+            "not_filed": [
+                {"candidate_id": r["candidate_id"], "reason": r["reason"]}
+                for r in results if not r.get("filed")
+            ],
+        })
+        return {"results": results}
+
     def _maybe_run_self_tuning_review(self) -> None:
         """Best-effort autonomous gate self-tuning review -- see
         docs/superpowers/specs/2026-09-02-autonomous-gate-self-tuning-design.md.
@@ -3905,6 +3977,15 @@ class DVHarness:
         if (stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value)
                 and ss["status"] in (Status.FAIL.value, Status.PARTIAL.value)):
             self._record_debug_attempt_job_memory(stage, ss, debug_failure_signature)
+            # ---- 3d. CROSS-LOOP COUPLING (2026-09-05): the record just
+            #          written is the newest piece of the evidence this reads.
+            #          Files a CapabilityEvolutionCandidate at DISCOVERED when
+            #          >= 2 INDEPENDENT runs share one failure_signature that
+            #          no gate-verified verified_fix record closes -- and can
+            #          reach no state past DISCOVERED. See the method's own
+            #          docstring for why every human-approval gate is
+            #          untouched by it.
+            self._file_capability_evolution_candidates_from_repeated_failures(stage)
 
         # ---- 4. ReAct record: this call itself is one Reason/Act/Observe
         #         record per run_stage() attempt (iteration number is this
