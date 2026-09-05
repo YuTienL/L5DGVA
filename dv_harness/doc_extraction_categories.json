@@ -1,0 +1,129 @@
+{
+  "categories_version": "1.0",
+  "checklist_reference": "self_check_list.md item #40, sub-items (a)-(k)",
+  "_comment": [
+    "Declares the ELEVEN document categories a VIP-based verification",
+    "environment is built out of, and which real extractor in this repo",
+    "converts each one. Data, not scattered hardcoded logic -- same",
+    "policy-as-data shape as dv_harness/context_budget.policy.json and",
+    "dv_harness/harness_deploy.manifest.json. Extend THIS file for a",
+    "project's own document categories, never doc_extraction_fanout.py.",
+    "",
+    "`extractor` names the real module.callable that HANDLES the category.",
+    "How to invoke it lives in doc_extraction_fanout.CATEGORY_EXTRACTORS,",
+    "because the eleven extractors have eleven genuinely different",
+    "signatures and a JSON-encoded call convention would be a second,",
+    "wrong-by-construction description of code that already exists. The two",
+    "are held together by assert_extractor_table_matches_categories(), so a",
+    "category added here without an adapter -- or an adapter naming a",
+    "callable that no longer resolves -- fails a test rather than silently",
+    "dropping a category out of the fan-out.",
+    "",
+    "`extractor: null` is a REAL, DELIBERATE answer, not a placeholder. Two",
+    "of item #40's categories genuinely have no extractor in this codebase,",
+    "and each says why in `no_extractor_reason`. Reporting NO_EXTRACTOR is",
+    "the honest result for those; inventing a stub that produced an empty",
+    "artifact would make an absent capability look present."
+  ],
+  "categories": [
+    {
+      "category_id": "vip_user_guide",
+      "checklist_item": "40a",
+      "title": "VIP document / user guide",
+      "extractor": "dv_harness.vip_user_guide_distill.distill_user_guide",
+      "input_keys": ["documents"],
+      "artifacts": ["<stem>.fulltext.txt", "<stem>.reference.json", "<stem>.reference.md"],
+      "notes": "Real pypdf text extraction for .pdf; .txt/.md read directly. Output is consumed by env_manifest.build_user_guide_refs()."
+    },
+    {
+      "category_id": "vip_source",
+      "checklist_item": "40b",
+      "title": "VIP source code / reference class library",
+      "extractor": "dv_harness.vip_symbol_index.build_symbol_index",
+      "input_keys": ["roots", "protocol"],
+      "artifacts": ["vip_symbol_index.json", "vip_ref/<protocol>.md"],
+      "notes": "Declarations and file:line locations ONLY -- never method bodies, which is what makes indexing a context-budget tier-1 tree legitimate at all (assert_no_bodies_retained())."
+    },
+    {
+      "category_id": "vip_examples",
+      "checklist_item": "40c",
+      "title": "VIP examples (env / config / interface / scoreboard / sequence / seq_item / test / constraint / coverage / callback)",
+      "extractor": null,
+      "no_extractor_reason": "No distiller exists in this repo. context_budget.policy.json leaves VIP `Examples/` directly READABLE as a deliberate tier-1 carve-out (denying the sanctioned reference material is the false positive that gets a gate switched off). A read permission is not extraction into a structured artifact, and no code turns an Examples/ tree into one.",
+      "input_keys": [],
+      "artifacts": []
+    },
+    {
+      "category_id": "dut_document_registers",
+      "checklist_item": "40d",
+      "title": "DUT document / register description (doc, excel)",
+      "extractor": "dv_harness.design_intent.write_intent",
+      "input_keys": ["intent_path", "sys_regmap_path"],
+      "artifacts": ["docs/intent.md", "sys_regmap.mode_bits.json"],
+      "notes": "An input-CONTRACT transcription/validation pipeline, not an autonomous .doc/.xlsx parser: design_intent.py's own docstring says it transcribes and validates, never authors. The .doc/.xlsx -> structured-source step is performed by a human or an agent reading the document."
+    },
+    {
+      "category_id": "ip_document",
+      "checklist_item": "40e",
+      "title": "IP document / user guide",
+      "extractor": "dv_harness.design_intent.write_constraints",
+      "input_keys": ["constraints_path"],
+      "artifacts": ["docs/constraints.md"],
+      "notes": "Same input-contract caveat as 40d. Every legal-drop/backpressure condition REQUIRES a document+section citation, so an uncited (i.e. possibly invented) condition cannot validate."
+    },
+    {
+      "category_id": "programming_guide",
+      "checklist_item": "40f",
+      "title": "Programming guide (register write order / wait conditions)",
+      "extractor": "dv_harness.init_seq.directed_test_steps",
+      "input_keys": ["init_seq_path", "sys_regmap_path"],
+      "artifacts": ["init_seq.directed_steps.json"],
+      "notes": "Same input-contract caveat as 40d. Supplies the Gate-2 mode-bit precondition connectivity.py never had."
+    },
+    {
+      "category_id": "dut_rtl",
+      "checklist_item": "40g",
+      "title": "DUT RTL / source / interrupts / registers",
+      "extractor": "dv_harness.env_manifest.generate_and_write",
+      "input_keys": ["rtl_files", "register_map_path", "soc_arch_map_path", "testplan_sources_path", "verible_bin"],
+      "artifacts": ["env.manifest.json"],
+      "notes": "Real `verible --export_json` RTL parsing via verible_parser.py. Every layer reports its own honest status, so a missing verible binary yields NOT_AVAILABLE with a reason rather than an empty port list. Interrupts specifically remain agent-skill-driven (interrupt-event-dispatch), not a coded extractor."
+    },
+    {
+      "category_id": "ip_source",
+      "checklist_item": "40h",
+      "title": "IP source code / behavioural model",
+      "extractor": null,
+      "no_extractor_reason": "No module in this repo is named or scoped for IP source distinct from VIP source. vip_symbol_index.py indexes a VIP class library (svt_*-shaped reference classes); pointing it at an arbitrary IP RTL/model tree would produce a symbol index labelled as a VIP reference, which is a wrong artifact rather than a partial one.",
+      "input_keys": [],
+      "artifacts": []
+    },
+    {
+      "category_id": "top_testbench_runscript",
+      "checklist_item": "40i",
+      "title": "Top testbench / running script / filelist",
+      "extractor": "dv_harness.uvm_generator.makefile_to_run_profile.extract_and_write",
+      "input_keys": ["makefile", "target_ip", "ip_prefix"],
+      "artifacts": ["run_profile.json"],
+      "notes": "Covers the running-script/filelist half. The top-testbench HIERARCHY half (hierarchy.json) has a declared producer -- the CORE/hierarchy-discovery skill -- but no non-agent extractor, per CLAUDE.md's Context Budget section. That half is therefore NOT produced here and is not claimed to be."
+    },
+    {
+      "category_id": "reference_command_txt",
+      "checklist_item": "40j",
+      "title": "Reference command.txt / BFM pattern files",
+      "extractor": "dv_harness.reference_pattern_audit.audit_directory",
+      "input_keys": ["pattern_dir", "glob"],
+      "artifacts": ["reference_pattern_audit.json"],
+      "notes": "Mechanical register-write macro extraction plus host/DUT paired-block symmetry analysis. Escalation into the question queue is deliberately NOT performed from the fan-out -- see doc_extraction_fanout.py's 'reading is never a mutating act' note."
+    },
+    {
+      "category_id": "standard_spec",
+      "checklist_item": "40k",
+      "title": "Standard protocol specs (AMBA / USB / PCIe / MIPI-CSI2 / MIPI-DSI / eMMC / SD-SDIO / CAN-FD / Ethernet)",
+      "extractor": "dv_harness.vip_user_guide_distill.distill_user_guide",
+      "input_keys": ["documents"],
+      "artifacts": ["<stem>.fulltext.txt", "<stem>.reference.json", "<stem>.reference.md"],
+      "notes": "Deliberately the SAME mechanism as 40a, not a second one: vip_user_guide_distill.py's own CLI help says 'OFFLINE distillation of a VIP user guide (or any protocol spec document)'. Only doc_kind differs (protocol_spec vs vip_user_guide), so a later reader is never left guessing which kind of document a reference points at."
+    }
+  ]
+}

@@ -1973,6 +1973,116 @@ one. The series is the coverage curve only; `stage_completion_percent` and
 cross-run producer to build a series from.
 
 
+## Parallel Document-Extraction Fan-Out: `dv-harness doc-extract` (2026-09-05)
+
+`self_check_list.md` item #40 asks for multiple extraction workers launched
+SIMULTANEOUSLY to convert the eleven document categories a VIP-based
+verification environment is built out of (VIP doc/source/examples, DUT
+doc/registers, IP doc, programming guide, DUT RTL, IP source, top TB,
+command.txt, standard specs). The INDIVIDUAL extractors were already real;
+the DISPATCH layer did not exist anywhere, confirmed by direct search on
+2026-09-05: `.dv-harness/graph/main_graph.json` has exactly two non-null
+`parallel_group`s (`ANALYSIS_G1`, `RCA_G1`) and neither is document
+extraction; `.claude/workflows/` holds exactly two scripts, both for
+RCA/evidence consensus, and neither references any extractor module; and a
+repo-wide grep for the extractor module names inside `dv_harness/*.py` found
+only sequential single-purpose imports, one downstream consumer at a time.
+So each extractor was only ever invoked individually, on its own CLI verb or
+by a direct import. `dv_harness/doc_extraction_fanout.py` is that missing
+layer and nothing else.
+
+**No new concurrency primitive, and no new graph node.** The pattern is
+`subsystem_architecture_analysis.run_per_subsystem_analyses()`'s, deliberately:
+one `ThreadPoolExecutor` over independent read-only units of work, results
+sorted back into DECLARED category order so a fan-out's output never depends
+on which worker finished first. A `parallel_group` node was NOT added --
+these extractors are not graph stages, and inventing one would put document
+conversion on the verification closure path. Every category's work is done by
+the same real module its own single-purpose verb already calls; no adapter
+contains extraction logic of its own.
+
+**What counts as a category is DATA**: `dv_harness/doc_extraction_categories.json`
+(same policy-as-data shape as `context_budget.policy.json` and
+`harness_deploy.manifest.json`) declares all eleven with their checklist
+letter, the real `module.callable` that handles each, and its input keys. HOW
+to invoke lives in `doc_extraction_fanout.CATEGORY_EXTRACTORS`, because eleven
+extractors have eleven genuinely different signatures and a JSON-encoded call
+convention would be a second, wrong-by-construction description of code that
+already exists. `assert_extractor_table_matches_categories()` holds the two
+together in BOTH directions -- a category with no adapter, an adapter for no
+category, or a declared callable that no longer resolves through the import
+system each fail a test rather than silently dropping a category.
+
+**Two of the eleven genuinely have no extractor, and say so.** 40c (VIP
+examples) and 40h (IP source) report `NO_EXTRACTOR` carrying the real reason:
+`context_budget.policy.json` leaves VIP `Examples/` directly READABLE as a
+tier-1 carve-out, and a read permission is not extraction into a structured
+artifact; and no module here is scoped for IP source distinct from VIP source,
+so pointing `vip_symbol_index` at an IP model tree would produce a wrong
+artifact rather than a partial one. A category with an extractor but no inputs
+reports `INPUT_NOT_SUPPLIED`. Those are three distinct facts -- "nobody built
+this", "you gave me nothing", "it ran" -- and collapsing any two would let an
+empty fan-out read as a complete one. Two further honesty carries: `dut_rtl`
+reports each `env.manifest.json` layer's OWN status verbatim (a NOT_AVAILABLE
+rtl layer is never summarized away), and `top_testbench_runscript` records
+`hierarchy_json: NOT_PRODUCED_NO_NON_AGENT_EXTRACTOR`, since category 40i's
+hierarchy half has a declared producer (`CORE/hierarchy-discovery`) but no
+coded extractor.
+
+**`doc_extraction.py` finally has its pipeline caller.** That module's NOTICE
+has said since 2026-08-28 that "no stage in `dv_harness/engine.py` and no
+`.claude/agents/*.md` profile invokes `DocumentIndex`, `needs_extract()`,
+`register()`". The fan-out registers every SOURCE document it consumes into
+that same shared index with `kind` = `doc_extraction:<category_id>`, so
+provenance is recorded in the one index this repo already has, and
+`--incremental` asks `needs_extract()` whether a source really changed instead
+of re-converting a 200-page PDF every run.
+
+**Four properties, each enforced in code and each tested:** (1) an absent
+extractor is reported, never faked; (2) one failing category never sinks the
+fan-out -- a raising extractor is that category's `FAILED` with its real
+exception text while the other ten still run; (3) concurrent writes cannot
+collide -- each category writes into its own `<out_root>/<category_id>/`,
+asserted distinct before any worker starts, and the one genuinely shared
+mutable resource, `DocumentIndex.register()`'s read-modify-write over a single
+JSON file, is serialized behind `_INDEX_LOCK`; (4) reading is never a mutating
+act -- no adapter escalates to the question queue, writes a Blackboard topic,
+mints an approval or touches memory, even where the underlying extractor
+supports it (`audit_directory()` takes a `question_store=`; the fan-out never
+passes one).
+
+Verbs: `dv-harness doc-extract categories` (the eleven, with the real
+extractor or why none exists), `... plan` (dry run; opens no document and
+writes nothing), `... run --inputs <json> --out <dir> [--only ...]
+[--max-workers N] [--incremental] [--no-register]`, exit 1 if any category
+FAILED. The identical `python -m dv_harness.doc_extraction_fanout` shares one
+`execute_verb()`.
+
+Proven by `dv_harness_tests/test_doc_extraction_fanout.py` (39 tests) against
+REAL extractors and REAL inputs -- the committed `examples/asset_processing/
+inputs/` worked examples, this repo's own
+`dv_harness/uvm_generator/templates/sim_scripts/Makefile`, and this repo's own
+`docs/*.pdf` for the pypdf branch. Nothing is mocked, because a fan-out that
+only ever dispatched stubs would prove the fan-out and nothing about whether
+the eleven categories actually convert. Both concurrency claims carry negative
+controls that give them detection power: the overlap test blocks all four
+workers on one `threading.Barrier(4)` that a SEQUENTIAL dispatcher provably
+cannot satisfy (verified: `max_workers=1` yields four `FAILED` results and one
+thread), and removing `_INDEX_LOCK` provably makes the no-lost-rows test fail
+with a torn read. A real run over all eleven categories measured 0.74s wall
+clock against 4.46s of summed worker time across 8 threads.
+
+**Disclosed residual**: this is the DISPATCH layer, not new extraction
+capability. Categories 40c and 40h still have no extractor and the fan-out
+does not invent one; 40d/40e/40f remain input-CONTRACT transcription pipelines
+(`design_intent.py`'s own docstring: "transcribes and validates; never
+authors"), so the .doc/.xlsx -> structured-source step is still performed by a
+human or an agent reading the document; 40g's interrupts remain
+agent-skill-driven (`interrupt-event-dispatch`); and 40i's `hierarchy.json`
+half is still agent-produced. It is also not engine-fired -- no `run_stage()`
+or `advance()` call site invokes it and no graph node declares it, so this is
+a REACHED capability (a real CLI caller exists), not a WIRED one.
+
 
 ## Golden Flow Readiness Matrix: `dv-harness golden-flow-readiness` (2026-09-05)
 

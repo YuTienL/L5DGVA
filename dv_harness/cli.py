@@ -685,6 +685,37 @@ def main():
                          help="What the document actually is: vip_user_guide (default), protocol_spec, "
                               "programming_guide, ...")
 
+    pdx = sub.add_parser("doc-extract", help="Fan out this repo's real document extractors CONCURRENTLY "
+                                               "across self_check_list.md item #40's eleven document "
+                                               "categories (VIP doc/source/examples, DUT doc/registers, IP "
+                                               "doc, programming guide, DUT RTL, IP source, top TB, "
+                                               "command.txt, standard specs). See "
+                                               "dv_harness/doc_extraction_fanout.py.")
+    pdx_sub = pdx.add_subparsers(dest="dx_cmd", required=True)
+    pdx_sub.add_parser("categories", help="Print the eleven declared categories, each with the real "
+                                           "extractor that handles it -- or, for the two that genuinely "
+                                           "have none, why none exists.")
+    pdx_plan = pdx_sub.add_parser("plan", help="Dry run: what a `run` WOULD dispatch. Opens no document "
+                                                "and writes nothing.")
+    pdx_run = pdx_sub.add_parser("run", help="Dispatch every selected category's extractor concurrently; "
+                                              "each writes into <out>/<category_id>/. Exit 1 if any "
+                                              "category FAILED.")
+    for _p in (pdx_plan, pdx_run):
+        _p.add_argument("--inputs", help="JSON file keyed by category_id (see `doc-extract categories` "
+                                          "for each category's input_keys).")
+        _p.add_argument("--only", nargs="+", help="Restrict the fan-out to these category ids.")
+    pdx_run.add_argument("--out", required=True, help="Output root; each category writes into "
+                                                       "<out>/<category_id>/.")
+    pdx_run.add_argument("--project-root", help="Project root owning the DocumentIndex that records every "
+                                                 "consumed source document (default: --out).")
+    pdx_run.add_argument("--max-workers", type=int, help="ThreadPoolExecutor width (default: min(8, "
+                                                          "selected categories)).")
+    pdx_run.add_argument("--incremental", action="store_true",
+                          help="Skip a category whose declared sources are all already registered in the "
+                               "DocumentIndex with a matching sha256 and whose artifacts are on disk.")
+    pdx_run.add_argument("--no-register", action="store_true",
+                          help="Do not record consumed source documents in the DocumentIndex.")
+
     pfsdb = sub.add_parser("fsdb-report", help="Run the real `fsdbreport` CLI tool against an FSDB file and "
                                                  "parse/emit its text report. See dv_harness/fsdb_report.py.")
     pfsdb.add_argument("--fsdb", required=True, help="Path to the .fsdb file.")
@@ -2129,6 +2160,19 @@ def main():
                 print(f"vip-user-guide distill FAILED: {exc}", file=sys.stderr)
                 raise SystemExit(1)
             print(json.dumps(record, ensure_ascii=False, indent=2))
+    elif args.cmd == "doc-extract":
+        # The DISPATCH layer over the individual extractors above, not a
+        # replacement for any of them: every category's work is done by the
+        # same real module its own single-purpose verb calls.
+        from . import doc_extraction_fanout
+        from .doc_extraction_fanout import DocExtractionFanoutError
+        try:
+            code = doc_extraction_fanout.execute_verb(args)
+        except DocExtractionFanoutError as exc:
+            print(f"doc-extract {args.dx_cmd} FAILED: {exc}", file=sys.stderr)
+            raise SystemExit(2)
+        if code:
+            raise SystemExit(code)
     elif args.cmd == "fsdb-report":
         from . import fsdb_report
         result = fsdb_report.run_fsdbreport(args.fsdb, fsdbreport_bin=args.fsdbreport_bin, timeout=args.timeout)
