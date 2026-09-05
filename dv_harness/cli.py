@@ -339,7 +339,15 @@ def main():
              "2026-09-01 sim-output-layout spec) if not already running.")
     plsf_watch_start.add_argument("--vcuser", required=True)
     plsf_watch_start.add_argument("--uvm-root-path", default=None)
-    plsf_watch_start.add_argument("--interval-minutes", type=int, default=5)
+    # Default kept as a literal (importing regression_reporter here would drag
+    # lsf_client + sim_log_analysis into EVERY `dv-harness` invocation just to
+    # build the parser). dv_harness_tests/test_watch_cadence_spec.py pins it
+    # equal to regression_reporter.DEFAULT_INTERVAL_MINUTES so the two cannot
+    # drift apart, and asserts it stays within self_check_list #41's 10-minute
+    # ceiling.
+    plsf_watch_start.add_argument("--interval-minutes", type=int, default=5,
+        help="watch-loop cadence in minutes (default 5; self_check_list #41 "
+             "requires the monitor to re-confirm at least every 10 minutes)")
 
     sub.add_parser("lsf-watch-stop", help="Stop the background job/log monitor.")
     sub.add_parser("lsf-watch-status", help="Report whether the background job/log monitor is running.")
@@ -1855,6 +1863,13 @@ def main():
     elif args.cmd == "lsf-watch-start":
         from . import regression_reporter
         uvm_root = args.uvm_root_path or str(h.root / "uvm")
+        # self_check_list #41 caps how long the harness may go without
+        # re-confirming job/sim-log state. A slower interval is still allowed
+        # (the operator asked for it explicitly), but never silently: the
+        # warning goes to stderr so stdout stays pure JSON for callers.
+        compliance = regression_reporter.interval_compliance(args.interval_minutes)
+        if not compliance["compliant"]:
+            print(f"[warn] {compliance['message']}", file=sys.stderr)
         result = regression_reporter.ensure_watcher_running(
             h.root, args.vcuser, uvm_root, interval_minutes=args.interval_minutes)
         print(json.dumps(result, ensure_ascii=False))

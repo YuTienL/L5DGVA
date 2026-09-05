@@ -9,6 +9,59 @@ from dv_harness import lsf_client
 from dv_harness.sim_log_analysis import parse_sim_log_file, detect_underreporting
 from dv_harness.uvm_generator.regression_list_manager import apply_verdict_to_file
 
+# --- Background job/log monitor cadence (self_check_list.md #41) ----------
+#
+# #41 asks for a background mechanism that watches every job and simulation
+# log and "每隔10分鐘自動確認" -- auto-confirms every 10 minutes. Read as a
+# CEILING on the cycle period, not an exact value: checking more often than
+# every 10 minutes still satisfies "the operator is never blind for longer
+# than 10 minutes", checking less often does not.
+#
+# The shipped default stays 5 minutes, the cadence the 2026-09-01
+# sim-output-layout/background-job-monitor design doc committed to
+# (docs/superpowers/specs/2026-09-01-sim-output-layout-and-background-job-
+# monitor-design.md:164) -- that is a deliberate choice, inside the ceiling,
+# and is left alone.
+#
+# What was actually broken (gap-close pass, 2026-09-05): the two OTHER real
+# entry points into this same watch loop -- `python -m
+# dv_harness.regression_reporter --watch` (this module's own argparse) and
+# `DV_REGRESSION_SNAPSHOT.ps1 -Watch` -- both defaulted to 30 minutes, three
+# times slower than the #41 ceiling, so an operator using either of them got
+# a monitor that silently violated the spec. Every default now comes from
+# DEFAULT_INTERVAL_MINUTES, and any explicitly-requested interval slower than
+# SPEC_MAX_INTERVAL_MINUTES is reported out loud rather than accepted
+# silently (see interval_compliance() and its two callers).
+DEFAULT_INTERVAL_MINUTES = 5
+SPEC_MAX_INTERVAL_MINUTES = 10
+
+
+def interval_compliance(interval_minutes: int) -> dict:
+    """Is this watch cadence fast enough for self_check_list.md #41?
+
+    Returns {"interval_minutes", "spec_max_interval_minutes", "compliant",
+    "message"}. `compliant` is True when the loop re-confirms job/sim-log
+    state at least once every SPEC_MAX_INTERVAL_MINUTES minutes.
+
+    Deliberately advisory, not a clamp: an operator who really wants a
+    slow watcher (a long overnight soak on a shared LSF cluster, say) keeps
+    that control -- they just cannot get it by accident or in silence."""
+    interval = max(1, int(interval_minutes))
+    compliant = interval <= SPEC_MAX_INTERVAL_MINUTES
+    if compliant:
+        message = (f"background job/log monitor cadence {interval}min is within "
+                   f"the {SPEC_MAX_INTERVAL_MINUTES}min self_check_list #41 ceiling")
+    else:
+        message = (f"background job/log monitor cadence {interval}min is SLOWER than "
+                   f"the {SPEC_MAX_INTERVAL_MINUTES}min self_check_list #41 ceiling: "
+                   f"jobs and simulation logs can go unconfirmed for up to "
+                   f"{interval} minutes")
+    return {"interval_minutes": interval,
+            "spec_max_interval_minutes": SPEC_MAX_INTERVAL_MINUTES,
+            "compliant": compliant,
+            "message": message}
+
+
 def load_jobs(project_root: Path):
     d=project_root/'.dv-harness'/'lsf'/'jobs'
     jobs=[]
@@ -680,7 +733,7 @@ def _pid_is_running(pid: int) -> bool:
 
 
 def ensure_watcher_running(root: Path, vcuser: str, uvm_root_path,
-                            interval_minutes: int = 5) -> dict:
+                            interval_minutes: int = DEFAULT_INTERVAL_MINUTES) -> dict:
     """Start the --watch loop as a detached background process if one is
     not already running for this project, tracked via a PID file. A stale
     PID file (process no longer alive) is detected and cleaned up
@@ -764,7 +817,8 @@ def watcher_status(root: Path) -> dict:
     return {"running": _pid_is_running(pid), "pid": pid if _pid_is_running(pid) else None}
 
 
-def main(project_root='.', once=True, interval_minutes=30, vcuser=None, uvm_root_path=None):
+def main(project_root='.', once=True, interval_minutes=DEFAULT_INTERVAL_MINUTES,
+         vcuser=None, uvm_root_path=None):
     """Last-resort exception guard around each cycle (2026-09-01
     whole-branch review): run_reconciliation_cycle() isolates only
     discover_live_jobs()'s LsfUnavailableError and the per-job analysis
@@ -778,6 +832,13 @@ def main(project_root='.', once=True, interval_minutes=30, vcuser=None, uvm_root
     the next time.sleep(), while a single-shot (`once=True`) caller still
     gets its exception surfaced by the re-raise below."""
     root = Path(project_root).resolve()
+    if not once:
+        # One honest cadence line at the top of the watcher's own log
+        # (ensure_watcher_running() redirects this child's stdout to
+        # .dv-harness/lsf/watcher.log), so the cadence a running watcher is
+        # actually on is discoverable without re-deriving it from argv.
+        print(f"[watch loop] {interval_compliance(interval_minutes)['message']}",
+              flush=True)
     while True:
         try:
             _run_one_cycle(root, vcuser, uvm_root_path)
@@ -806,7 +867,10 @@ if __name__=='__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--project-root', default='.')
     ap.add_argument('--watch', action='store_true')
-    ap.add_argument('--interval-minutes', type=int, default=30)
+    ap.add_argument('--interval-minutes', type=int, default=DEFAULT_INTERVAL_MINUTES,
+                     help=f'watch-loop cadence in minutes (default '
+                          f'{DEFAULT_INTERVAL_MINUTES}; self_check_list #41 '
+                          f'requires <= {SPEC_MAX_INTERVAL_MINUTES})')
     ap.add_argument('--vcuser', default=None,
                      help='LSF account to discover live jobs under; omit for legacy local-only mode')
     ap.add_argument('--uvm-root-path', default=None,

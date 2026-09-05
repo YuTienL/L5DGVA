@@ -1,6 +1,8 @@
 {
   "enabled": true,
-  "default_interval_minutes": 30,
+  "default_interval_minutes": 5,
+  "spec_max_interval_minutes": 10,
+  "_cadence_note": "self_check_list.md #41 requires job/simulation-log state to be re-confirmed at least every 10 minutes. default_interval_minutes must stay <= spec_max_interval_minutes and matches regression_reporter.DEFAULT_INTERVAL_MINUTES (was 30, outside the ceiling). .claude/agents/regression-agent.md line 165 makes the Regression Agent report on this cadence.",
   "report_even_if_no_change": true,
   "immediate_alerts": true,
   "separate_lsf_and_dv_status": true,
