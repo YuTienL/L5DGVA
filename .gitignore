@@ -84,8 +84,16 @@ reference/USB_UVM_Handoff/
 # throwaway dirs (see .work/_p25_probe*, .work/_e2e_demo_usb3_lfps,
 # .work/_review_amba_e2e, .work/audit_tmp_project, .work/rp_cli_check).
 .work/_*/
+.work/_*
 .work/audit_tmp_project/
 .work/rp_cli_check/
+
+# Raw scratch dumps this session -- journal-style intermediate logs kept
+# only to unblock a specific in-progress audit/gap-close step, never a
+# deliverable in their own right (the actual finding lands in a real
+# gap-close-*.md report instead). Underscore-prefixed ones are already
+# covered by `.work/_*` above.
+.work/*_journal_*.txt
 
 # More per-machine runtime state (2026-09-05), same reasoning as the
 # .dv-harness/lsf|blackboard|state.json|events.jsonl block above: rewritten
