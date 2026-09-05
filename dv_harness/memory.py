@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from .memory_artifact_policy import enforce_record_artifact_policy
 from .memory_security import redact_record
+from .storage import _atomic_replace
 
 MEMORY_LEVELS=["working","job","project","engineering","organizational"]
 
@@ -108,9 +109,20 @@ class MemoryStore:
         # JSON document and raises JSONDecodeError. os.replace() is atomic on
         # both POSIX and Windows, so a reader always sees either the whole
         # previous index or the whole new one.
+        #
+        # Through storage._atomic_replace() rather than a bare os.replace()
+        # since 2026-09-05 (VI-1): on Windows MoveFileEx raises PermissionError
+        # (WinError 5) when any reader has the destination open at the instant
+        # of the rename, and this index really is read concurrently -- every
+        # MemoryRetriever.search() and every MemoryStore.find() opens it, and
+        # index_integrity()/reindex() walk it while writes continue. Reproduced
+        # here, not theorised: writing ~200 records in a row surfaced it on
+        # roughly one run in three. Reusing storage.py's existing retry (the
+        # same one blackboard.py's atomic write already goes through) rather
+        # than adding a second definition of "replace this file safely".
         tmp=self.index_file.with_name(f"index.json.tmp-{os.getpid()}")
         tmp.write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding="utf-8")
-        os.replace(str(tmp),str(self.index_file))
+        _atomic_replace(str(tmp),self.index_file)
 
     # Cross-process lock guarding index.json's read-modify-write (2026-09-03,
     # gap-close-obsidian-memory phase 4+5). REAL, MEASURED DEFECT this closes:

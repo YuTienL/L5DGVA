@@ -284,6 +284,17 @@ a no-op if a watcher is already running for this project (tracked via a PID
 file). Stop it with `dv-harness lsf-watch-stop` on a clean session end, or
 when execution mode transitions back to `PURE_LOCAL_READ_ANALYSIS`.
 
+**Cadence.** The watcher is a fixed-interval polling loop, not event-driven:
+`regression_reporter.main()` runs one reconciliation cycle then sleeps
+`--interval-minutes`. The default is **5 minutes**
+(`regression_reporter.DEFAULT_INTERVAL_MINUTES`, the cadence the 2026-09-01
+sim-output-layout design doc committed to). `self_check_list.md` #41 requires
+job/simulation-log state to be re-confirmed at least every **10 minutes**
+(`regression_reporter.SPEC_MAX_INTERVAL_MINUTES`), so 5 is inside the ceiling.
+A slower `--interval-minutes` is still permitted but never silent:
+`interval_compliance()` makes `lsf-watch-start` print a stderr warning and the
+watcher log its real cadence on the first line.
+
 
 ## Waveform Dump User Gate
 
@@ -2444,3 +2455,126 @@ driver, so a `run_id`-scoped session does not exist for either. `CANCELLED` and
 built. There is also no `dv-harness` CLI verb: the front doors are
 `GET /api/loops` (the card) and `python -m dv_harness.loop_telemetry
 names|events|rows|show`, both through one shared `execute_verb()`.
+
+
+## Confidence Calibration: a Tier's Track Record vs. What It Buys (2026-09-05)
+
+VERIFICATION_INTELLIGENCE's completeness audit flagged a Confidence Calibration
+Engine NEVER_BUILT, and a full-repo `grep -ril calibrat` on 2026-09-05 confirmed
+it: every hit was `architecture_calibration_gate` (an ARCHITECTURE-snapshot delta
+gate) or a test fixture naming it. Nothing anywhere asked whether a CONFIDENCE
+TIER's real track record matches what this harness treats that tier as being
+worth -- and the two halves of that question had both been real and in production
+for days.
+
+`inference.score_confidence()` PRODUCES a tier (HIGH/MEDIUM/LOW) and
+`MemoryConsolidator.from_closed_finding()` mints the fourth, CONFIRMED. Those
+tiers are then SPENT as if their reliability were known:
+`inference.promote_if_high_confidence()` pushes a HIGH finding into the shared
+cross-user Knowledge Center, `memory_router.ENGINEERING_ADMISSION_CONFIDENCE_LEVELS`
+admits only HIGH/CONFIRMED to the Engineering tier, and
+`qualified_conclusion.build_qualified_conclusion()` refuses to qualify a LOW
+conclusion at all. Meanwhile `memory.py` was RECORDING what later happened to
+each of those conclusions the whole time -- `MemoryGC.confirm()` (the single
+authorized writer of `confirmation_count`: "an independent, later run re-derived
+the SAME conclusion with fresh evidence"), `MemoryGC.retract()` ("found to be
+wrong outright") and `MemoryGC.supersede()` ("a newer, CORRECTED record replaces
+this one"). The evidence to check a tier against its own history was on disk and
+nothing read it back.
+
+`dv_harness/confidence_calibration.py` reads it back and does nothing else. It
+never re-scores a conclusion, never runs a gate, never writes a record.
+
+**No stated reliability is invented, because this harness declares none.** No
+number anywhere says "HIGH means 90%" -- every tier's meaning is a PROCEDURAL bar
+(how much corroboration; which gates cleared), and fabricating a success rate to
+measure a project against would be exactly the unearned claim the Evidence Truth
+Rule forbids. What IS checkable without inventing anything is the ORDERING this
+harness already acts on (CONFIRMED > HIGH > MEDIUM > LOW): a history in which a
+higher tier holds up materially LESS often than a lower one contradicts that
+ordering using only the project's own records. Every pair is compared, not just
+adjacent ones. A project that wants an absolute bar declares one itself
+(`confidence_calibration.tier_reliability_floor`); every tier's floor is None by
+default and carries the real reason why, the same honesty contract
+`loop_budget.py` applies to its eleven budget dimensions and
+`loop_contract.validate_contract()` enforces on a `LoopContract`.
+
+**Nothing is derived twice.** The tier vocabulary is `inference.CONFIDENCE_LEVELS`
+plus `memory_router.ENGINEERING_ADMISSION_CONFIDENCE_LEVELS`, held equal in BOTH
+directions by `assert_tiers_cover_inference_levels()` at import -- an uncalibrated
+tier would be silently absent from every report. The corpus is read through the
+real `MemoryStore.find()`, deliberately the same index-driven view
+`MemoryRetriever.search()` has, with `index_integrity()` reported alongside so an
+under-counted corpus is visible rather than silently smaller. The gap list is
+`inference.identify_gap()` and every suggested action is produced by the REAL
+`inference.next_best_action()` through its `gap_action_catalog` parameter -- the
+domain-neutral engine `capability_evolution.py` and `golden_flow_readiness.py`
+already drive the same way, and the one section 10 forbids re-implementing. Both
+thresholds are derived from one another rather than chosen independently:
+`MIN_DETERMINATE_OUTCOMES_PER_TIER = 10` is the smallest N at which `1/N <= 0.1`,
+so a rate below it moves by more than the band it is read to, and
+`INVERSION_TOLERANCE` is that same band.
+
+**ACTIVE-and-never-re-checked is not evidence, and that is the whole point.** Most
+records in any real store sit ACTIVE with zero confirmations; counting them as
+verified would manufacture a 100% reliability for every tier out of records
+nothing ever re-tested. They are INDETERMINATE with a named reason, as are
+DEPRECATED (retired, not refuted) and NEEDS_REVALIDATION (nobody re-checked yet).
+Rejection is checked BEFORE confirmation, so a record confirmed once and later
+retracted is a REJECTED outcome -- the retraction is the last word about whether
+the claim held.
+
+**This harness's own answer today is INSUFFICIENT_HISTORY, and it is reported as
+such.** Measured against this project's real store: 92 records scanned, 46
+carrying a tier, and exactly ONE determinate outcome in the entire history (one
+CONFIRMED record with a real confirmation; zero retractions). No tier can be
+calibrated from that, so the report says so and names, per tier, the real outcome
+this project would have to start recording. `NOT_AVAILABLE` (no store, or no
+record carries a tier) stays distinct from `INSUFFICIENT_HISTORY` (records and
+tiers exist, outcomes do not) -- different operator problems with different
+fixes.
+
+**Reading is never a mutating act.** A project with no memory store is reported
+NOT_AVAILABLE WITHOUT constructing a `MemoryStore`, whose constructor would
+`mkdir` the tree and write an empty `index.json` -- asking whether a project is
+calibrated must not create the store it asked about. No human-approval gate is
+referenced, let alone weakened: `ControlPlane.approve()`, `policy.can_signoff()`,
+`assert_human_approval()`, `HumanApprovalRequiredError`,
+`ProductionWriteNotAuthorizedError` and the PR-only main/master governance are
+untouched and uncalled from this module, asserted against its own source and AST
+by tests. Exit 2 means "not calibrated" -- a reporting signal, never an approval
+signal in either direction.
+
+Front door: `python -m dv_harness.confidence_calibration tiers|report|show`
+(`execute_verb()`, the same shared convention `loop_contract`/`loop_budget`/
+`loop_telemetry` follow). Proven by
+`dv_harness_tests/test_confidence_calibration.py` (35 tests) against records
+written by the REAL `MemoryStore.add()` / `MemoryGC.confirm()` / `retract()` /
+`supersede()` / `deprecate()` / `flag_stale()`, never by hand-writing a record
+file with the fields this module reads. The negative controls are what give it
+detection power: nine determinate outcomes is still INSUFFICIENT_HISTORY and ten
+is not, a sub-tolerance 80%-under-90% difference is NOT an inversion while one
+more record's separation is, ten DEPRECATED records do NOT make a tier
+calibratable at 0%, a one-outcome tier can never drag a well-evidenced one into a
+finding, and the same machinery reports CALIBRATED over a store whose ordering
+genuinely holds. Nothing in it runs a build, a regression or an LSF submission.
+
+**One pre-existing defect was fixed to make this testable**:
+`MemoryStore._save_index()` used a bare `os.replace()`, which on Windows raises
+PermissionError (WinError 5) whenever a reader has `index.json` open at the
+instant of the rename -- and that index really is read concurrently by every
+`search()`/`find()`/`index_integrity()`. Writing ~200 records in a row surfaced
+it on roughly one run in three. It now goes through the EXISTING
+`storage._atomic_replace()` retry (the same one `blackboard.py` already uses),
+not a second definition of "replace this file safely".
+
+**Disclosed residual**: this is REACHED, not WIRED. There is no `dv-harness` CLI
+verb (`cli.py` was being modified by concurrent work in the same session and
+adding a verb there would have collided), no `run_stage()`/`advance()` call site
+invokes it, no graph node declares it, and it is not on the dashboard. It also
+calibrates the MEMORY-RECORD tier only: a `QualifiedConclusion`'s
+`inference_confidence` reaches the Blackboard `qualified_conclusion` topic rather
+than a MemoryStore record, and that topic keeps no history of what later happened
+to the conclusion, so conclusions that never became a memory record are outside
+the corpus. Closing that would need an outcome recorded against the conclusion
+itself, which nothing writes today.
