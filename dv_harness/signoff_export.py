@@ -94,14 +94,39 @@ like a gate-verified one, not that pre-gate bundles are forbidden.
 `engine.py:_export_signoff_bundle()` is the real production-path caller that
 produces the `SIGNOFF_GATE_VERIFIED` bundle, on an actual gate-verified
 SIGNOFF PASS.
+
+SIGNOFF FREEZE / BASELINE (2026-09-06, spec section 238): the bundle above
+packages ARTIFACTS. Section 238 asks for something the bundle did not carry:
+a frozen, reproducible BASELINE naming fifteen identity fields (spec version,
+requirement/vPlan version, DUT SHA, TB SHA, agent/skill versions, VIP/tool
+versions, schema/policy versions, configuration, test list, coverage
+databases, assertion status, waivers, evidence hashes/references, dashboard
+snapshot, reproducibility capsules), plus the rule that "post-freeze material
+changes trigger impact analysis and invalidate/revalidate affected signoff
+evidence". Neither existed: `compute_bundle_hash()` hashes only
+`artifact:present:bundled_path` -- artifact PRESENCE, never artifact CONTENT
+-- so a bundled file could be replaced wholesale without moving the hash, and
+nothing anywhere recorded a baseline that a later run could be compared
+against. `grep -rn "freeze|frozen"` over `dv_harness/`/`tools/` matched only
+`frozenset`.
+
+`capture_baseline()` derives all fifteen fields from REAL producers this
+project already has, or reports NOT_AVAILABLE with the real reason -- never a
+fabricated version string. `freeze_signoff_baseline()` records one immutable
+freeze record; `evaluate_freeze_invalidation()` re-derives the same baseline
+NOW and reports VALID / INVALIDATED / UNKNOWN, running the same
+`change_impact.changed_files()` + `classify_risk()` post-freeze impact
+analysis `golden_scenario.evaluate_freshness()` already uses, so "did the
+design move" has one answer in this codebase.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import self_audit
 
@@ -326,8 +351,628 @@ def read_signoff_stage_status(root: Path) -> Dict[str, Any]:
     }
 
 
+# ===========================================================================
+# SIGNOFF FREEZE / BASELINE -- spec section 238 (2026-09-06)
+# ===========================================================================
+
+FREEZE_SCHEMA_VERSION = "1.0"
+
+#: Per-field capture outcome. CAPTURED means a REAL producer answered;
+#: NOT_AVAILABLE means nothing in this project can answer it and says why.
+#: A NOT_AVAILABLE field is never collapsed into a captured-but-empty one --
+#: "this project records no coverage database" and "this project's coverage
+#: database is empty" are different facts about a signoff baseline.
+CAPTURED = "CAPTURED"
+NOT_AVAILABLE = "NOT_AVAILABLE"
+
+#: Invalidation verdict for a frozen baseline. VALID/UNKNOWN are spelled the
+#: same way `waiver_store.derive_status()` already spells them (one project
+#: vocabulary for "still good" / "we could not check"); INVALIDATED is
+#: section 238's own word. None of the three is a member of
+#: `models.Status` -- a freeze verdict is not a stage-gate verdict.
+FREEZE_VALID = "VALID"
+FREEZE_INVALIDATED = "INVALIDATED"
+FREEZE_UNKNOWN = "UNKNOWN"
+
+#: Worst-wins, and UNKNOWN outranks VALID for the same reason
+#: `platform_health.HEALTH_SEVERITY` puts UNKNOWN above HEALTHY: an
+#: unmeasurable field must never be reported as a still-good one.
+_FREEZE_SEVERITY = {FREEZE_VALID: 0, FREEZE_UNKNOWN: 1, FREEZE_INVALIDATED: 2}
+
+#: A finding either invalidates the freeze or leaves it indeterminate.
+SEV_INVALIDATING = "INVALIDATING"
+SEV_INDETERMINATE = "INDETERMINATE"
+
+#: Spec section 238's own baseline list, verbatim and in its own order,
+#: normalized only into identifier form. `assert_baseline_covers_section_238()`
+#: holds this tuple and the capture table equal in BOTH directions at import,
+#: so a field can never be silently dropped from a freeze record and a capture
+#: function can never quietly add a sixteenth field section 238 does not name.
+SECTION_238_FIELDS: Tuple[str, ...] = (
+    "spec_version",
+    "requirement_vplan_version",
+    "dut_sha",
+    "tb_sha",
+    "agent_skill_versions",
+    "vip_tool_versions",
+    "schema_policy_versions",
+    "configuration",
+    "test_list",
+    "coverage_databases",
+    "assertion_status",
+    "waivers",
+    "evidence_hashes",
+    "dashboard_snapshot",
+    "reproducibility_capsules",
+)
+
+#: The harness's own root (the directory holding `dv_harness/`, `tools/` and
+#: `.claude/`) -- the agent/skill/schema/policy identity fields describe the
+#: HARNESS that produced a signoff, which is not necessarily the project being
+#: signed off (a deployed project runs its own copy from elsewhere).
+_HARNESS_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+
+
+def _tree_manifest(base: Path) -> Dict[str, str]:
+    """{relative posix path: sha256} for every real file under `base`, so a
+    directory has a content identity that is independent of filesystem
+    enumeration order (`_aggregate` sorts)."""
+    base = Path(base)
+    out: Dict[str, str] = {}
+    if not base.is_dir():
+        return out
+    for p in sorted(base.rglob("*")):
+        if p.is_file():
+            try:
+                out[p.relative_to(base).as_posix()] = _sha256_file(p)
+            except OSError:
+                continue
+    return out
+
+
+def _aggregate(manifest: Dict[str, str]) -> str:
+    """Collapse a {name: digest} manifest into one token, through the real,
+    already-tested `tools/remote/source_identity.aggregate_source_id()` --
+    the same primitive `harness_deploy.py` uses to compute a SOURCE_ID and
+    `server_sync_identity_gate.py` uses to verify one. There is no second
+    aggregation rule in this codebase."""
+    from .harness_deploy import aggregate_source_id
+    return aggregate_source_id(manifest)
+
+
+def _artifact_content_digest(path: Path) -> Optional[str]:
+    p = Path(path)
+    try:
+        if p.is_dir():
+            return _aggregate(_tree_manifest(p))
+        if p.is_file():
+            return _sha256_file(p)
+    except OSError:
+        return None
+    return None
+
+
+def _baseline_field(name: str, status: str, *, reason: str,
+                    source: Optional[str] = None,
+                    digest: Optional[str] = None,
+                    detail: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "field": name,
+        "status": status,
+        "reason": reason,
+        "source": source,
+        "digest": digest,
+        "detail": detail or {},
+    }
+
+
+def _files_field(name: str, root: Path, rel_paths: Sequence[str], *,
+                 absent_reason: str) -> Dict[str, Any]:
+    """A baseline field whose identity is the content of a fixed set of real
+    files. Absent files are named as absent rather than skipped, so a field
+    that loses a file after the freeze diverges instead of quietly matching."""
+    present: Dict[str, str] = {}
+    missing: List[str] = []
+    for rel in rel_paths:
+        p = Path(root) / rel
+        if p.is_file():
+            present[rel] = _sha256_file(p)
+        elif p.is_dir():
+            for sub, digest in _tree_manifest(p).items():
+                present[f"{rel}/{sub}"] = digest
+        else:
+            missing.append(rel)
+    if not present:
+        return _baseline_field(name, NOT_AVAILABLE, reason=absent_reason,
+                               detail={"looked_for": list(rel_paths)})
+    return _baseline_field(name, CAPTURED, reason="REAL_ARTIFACT_CONTENT",
+                           source=", ".join(rel_paths),
+                           digest=_aggregate(present),
+                           detail={"files": present, "absent": missing})
+
+
+# --- the fifteen capture functions ----------------------------------------
+# Each takes (project_root, declared) and returns one baseline field. Each
+# reads a REAL producer or reports NOT_AVAILABLE naming the missing one --
+# nothing here invents a version, a SHA or a status.
+
+
+def _capture_spec_version(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    value = (declared or {}).get("spec_version")
+    if value:
+        return _baseline_field(
+            "spec_version", CAPTURED, reason="DECLARED_BY_FREEZING_HUMAN",
+            source="caller-declared", digest=_sha256_text(value),
+            detail={"value": str(value), "attested": True,
+                    "machine_verified": False})
+    return _baseline_field(
+        "spec_version", NOT_AVAILABLE, reason="NO_SPEC_VERSION_PRODUCER",
+        detail={"explanation":
+                "the only `spec_revision` anywhere in this codebase is "
+                "agent-attested evidence-block text (dv_harness/prompts.py); "
+                "no artifact producer writes a spec version, and freezing an "
+                "agent's own claim as a baseline FACT would break the Evidence "
+                "Truth Rule. A human may declare one explicitly, which is then "
+                "recorded as attested rather than derived."})
+
+
+def _capture_requirement_vplan_version(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    return _files_field(
+        "requirement_vplan_version", root,
+        [".dv-harness/vplan", ".dv-harness/requirements.csv"],
+        absent_reason="NO_VPLAN_OR_TRACEABILITY_REGISTRY")
+
+
+def _capture_dut_sha(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """The DUT identity is the real CONTENT fingerprint of the RTL this
+    project declares, computed by `connectivity_check.compute_rtl_fingerprint()`
+    -- the same function the standing `just connectivity-check` recipe uses to
+    decide whether the RTL moved. Never a git SHA standing in for RTL content
+    (a git SHA moves when a README moves), and never a guess: a project with no
+    `.dv-harness/connectivity_check.json` has not declared what its RTL IS, and
+    that is reported rather than approximated."""
+    from . import connectivity_check as cc
+    cfg_path = Path(root) / cc.DEFAULT_CONFIG_RELPATH
+    if not cfg_path.is_file():
+        return _baseline_field(
+            "dut_sha", NOT_AVAILABLE, reason="CONNECTIVITY_CHECK_NOT_CONFIGURED",
+            detail={"expected_config": str(cfg_path),
+                    "explanation": "this project has not declared its RTL source "
+                                   "globs, so there is no declared DUT to fingerprint"})
+    try:
+        cfg = cc.load_config(cfg_path)
+        fp = cc.compute_rtl_fingerprint(root, cfg.rtl_sources)
+    except Exception as exc:  # config error / unreadable RTL
+        return _baseline_field(
+            "dut_sha", NOT_AVAILABLE, reason="RTL_FINGERPRINT_FAILED",
+            source=str(cfg_path), detail={"error": f"{type(exc).__name__}: {exc}"})
+    if not fp.get("file_count"):
+        return _baseline_field(
+            "dut_sha", NOT_AVAILABLE, reason="RTL_SOURCES_MATCH_NO_FILES",
+            source=str(cfg_path),
+            detail={"rtl_sources": list(cfg.rtl_sources)})
+    return _baseline_field(
+        "dut_sha", CAPTURED, reason="REAL_RTL_CONTENT_FINGERPRINT",
+        source=f"{cc.DEFAULT_CONFIG_RELPATH} -> connectivity_check.compute_rtl_fingerprint()",
+        digest=fp["fingerprint"],
+        detail={"file_count": fp["file_count"], "files": fp["files"]})
+
+
+def _capture_tb_sha(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """Content identity of the real generated testbench source -- discovered
+    by the SAME `_find_tb_source_dir()` the bundle itself uses, so the frozen
+    TB SHA and the bundled `tb_source/` can never describe different trees."""
+    tb_dir = _find_tb_source_dir(Path(root))
+    if tb_dir is None:
+        return _baseline_field(
+            "tb_sha", NOT_AVAILABLE, reason="NO_GENERATED_TB_SOURCE",
+            detail={"explanation":
+                    "no ENV_GENERATED environment_manifest.json beside a real tb/ "
+                    "directory was found under this project root (see "
+                    "_find_tb_source_dir)"})
+    files = _tree_manifest(tb_dir)
+    return _baseline_field(
+        "tb_sha", CAPTURED, reason="REAL_TB_SOURCE_CONTENT",
+        source=str(tb_dir), digest=_aggregate(files),
+        detail={"file_count": len(files),
+                "tb_source_dir": str(tb_dir)})
+
+
+def _capture_agent_skill_versions(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """Which agent/skill assets produced this signoff, as one aggregate
+    identity over the REAL `.claude/skills` + `.claude/agents` trees resolved
+    through `harness_deploy.load_manifest()`/`collect_local_files()` -- the
+    module that already owns "what the harness IS". No skill declares a
+    version string anywhere in this repo, so content identity is the only
+    honest answer; a version field would have to be invented."""
+    try:
+        from . import harness_deploy as hd
+        manifest = hd.load_manifest()
+        files = [f for f in hd.collect_local_files(_HARNESS_ROOT, manifest)
+                 if f.startswith(".claude/skills/") or f.startswith(".claude/agents/")]
+    except Exception as exc:
+        return _baseline_field(
+            "agent_skill_versions", NOT_AVAILABLE,
+            reason="HARNESS_ASSET_SCAN_FAILED",
+            detail={"error": f"{type(exc).__name__}: {exc}"})
+    if not files:
+        return _baseline_field(
+            "agent_skill_versions", NOT_AVAILABLE,
+            reason="NO_AGENT_OR_SKILL_ASSETS",
+            source=str(_HARNESS_ROOT),
+            detail={"explanation": "no .claude/skills or .claude/agents files "
+                                   "under the harness root"})
+    per_file = hd.compute_local_manifest(_HARNESS_ROOT, files)
+    return _baseline_field(
+        "agent_skill_versions", CAPTURED, reason="REAL_HARNESS_ASSET_CONTENT",
+        source=f"{_HARNESS_ROOT} :: .claude/skills + .claude/agents",
+        digest=_aggregate(per_file),
+        detail={"harness_root": str(_HARNESS_ROOT),
+                "skill_file_count": sum(1 for f in files if f.startswith(".claude/skills/")),
+                "agent_file_count": sum(1 for f in files if f.startswith(".claude/agents/"))})
+
+
+def _capture_vip_tool_versions(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """`env.manifest.json`'s `vip_config.vip_release` -- the real filesystem
+    scan of `$DESIGNWARE_HOME` `env_manifest.scan_designware_home()` performs.
+    Its OWN status/reason is carried verbatim: a NOT_AVAILABLE VIP release
+    stays NOT_AVAILABLE here rather than being summarized away."""
+    mpath = Path(root) / ".dv-harness" / "env.manifest.json"
+    if not mpath.is_file():
+        return _baseline_field(
+            "vip_tool_versions", NOT_AVAILABLE, reason="NO_ENV_MANIFEST",
+            detail={"expected": str(mpath),
+                    "producer": "dv-harness env-manifest generate"})
+    try:
+        doc = json.loads(mpath.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return _baseline_field(
+            "vip_tool_versions", NOT_AVAILABLE, reason="ENV_MANIFEST_MALFORMED",
+            source=str(mpath), detail={"error": str(exc)})
+    release = ((doc.get("vip_config") or {}).get("vip_release")
+               if isinstance(doc, dict) else None)
+    if not isinstance(release, dict):
+        return _baseline_field(
+            "vip_tool_versions", NOT_AVAILABLE,
+            reason="ENV_MANIFEST_HAS_NO_VIP_RELEASE_LAYER", source=str(mpath))
+    packages = release.get("packages")
+    if release.get("status") != "AVAILABLE" or not packages:
+        return _baseline_field(
+            "vip_tool_versions", NOT_AVAILABLE,
+            reason=f"VIP_RELEASE_{release.get('status') or 'UNKNOWN'}",
+            source=str(mpath),
+            detail={"layer_status": release.get("status"),
+                    "layer_reason": release.get("reason")})
+    pinned = {}
+    for pkg in packages if isinstance(packages, list) else []:
+        if isinstance(pkg, dict) and pkg.get("name"):
+            pinned[str(pkg["name"])] = str(pkg.get("version") or "UNKNOWN")
+    return _baseline_field(
+        "vip_tool_versions", CAPTURED, reason="REAL_VIP_INSTALL_SCAN",
+        source=f"{mpath} :: vip_config.vip_release",
+        digest=_aggregate(pinned), detail={"packages": pinned})
+
+
+def _capture_schema_policy_versions(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """The harness-owned schema + policy-as-data files a signoff was produced
+    under. Content identity, not a declared version: these files carry no
+    version field, and the whole point of freezing them is that an edit to a
+    schema or a policy JSON after signoff is exactly a 'schema/policy version'
+    change section 238 wants surfaced."""
+    per_file: Dict[str, str] = {}
+    schemas = _HARNESS_ROOT / "dv_harness" / "schemas"
+    for rel, digest in _tree_manifest(schemas).items():
+        per_file[f"dv_harness/schemas/{rel}"] = digest
+    for rel in ("dv_harness/context_budget.policy.json",
+                "dv_harness/harness_deploy.manifest.json",
+                "dv_harness/doc_extraction_categories.json"):
+        p = _HARNESS_ROOT / rel
+        if p.is_file():
+            per_file[rel] = _sha256_file(p)
+    graph = Path(root) / ".dv-harness" / "graph" / "main_graph.json"
+    if graph.is_file():
+        per_file[".dv-harness/graph/main_graph.json"] = _sha256_file(graph)
+    if not per_file:
+        return _baseline_field(
+            "schema_policy_versions", NOT_AVAILABLE,
+            reason="NO_SCHEMA_OR_POLICY_FILES_FOUND",
+            detail={"harness_root": str(_HARNESS_ROOT)})
+    return _baseline_field(
+        "schema_policy_versions", CAPTURED, reason="REAL_SCHEMA_AND_POLICY_CONTENT",
+        source=f"{_HARNESS_ROOT} :: dv_harness/schemas + policy JSONs; "
+               f"{root} :: .dv-harness/graph/main_graph.json",
+        digest=_aggregate(per_file), detail={"file_count": len(per_file)})
+
+
+def _capture_configuration(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    return _files_field("configuration", root, [".dv-harness/config.json"],
+                        absent_reason="NO_PROJECT_CONFIG")
+
+
+def _capture_test_list(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """The regression/test-suite identity: the `regression.list` PASS-list
+    `regression_list_manager.py` maintains, plus the REGRESSION_SELECT-computed
+    selection `change_impact.compute_and_write()` writes."""
+    return _files_field(
+        "test_list", root,
+        [".dv-harness/regression.list",
+         ".dv-harness/regression/computed_selection.json"],
+        absent_reason="NO_REGRESSION_LIST_OR_COMPUTED_SELECTION")
+
+
+def _capture_coverage_databases(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """The real coverage artifacts `dashboard._read_coverage_state()` reads --
+    the coverage tool's own summary plus the sample history
+    `dashboard.append_coverage_history_sample()` accumulates."""
+    return _files_field(
+        "coverage_databases", root,
+        [".dv-harness/coverage/summary.json", ".dv-harness/coverage/history.json"],
+        absent_reason="NO_COVERAGE_SUMMARY_OR_HISTORY")
+
+
+def _capture_assertion_status(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """Assertion outcome per real recorded job. `lsf_client.JobState` carries
+    `assertion_failure` (set by the real sim-log reconciliation, not by an
+    agent), so the frozen assertion status is the set of
+    (job, assertion_failure, uvm_fatal_count, uvm_error_count) tuples across
+    every job this project actually recorded."""
+    jobs_dir = Path(root) / ".dv-harness" / "lsf" / "jobs"
+    if not jobs_dir.is_dir():
+        return _baseline_field(
+            "assertion_status", NOT_AVAILABLE, reason="NO_RECORDED_JOBS",
+            detail={"expected": str(jobs_dir),
+                    "producer": "lsf_client.save_job_state()"})
+    job_files = sorted(jobs_dir.glob("*.json"))
+    if not job_files:
+        # A jobs/ directory holding only a README (this repo's own real
+        # shape) is "no job was ever recorded", not "the records are
+        # unreadable" -- two different operator problems.
+        return _baseline_field(
+            "assertion_status", NOT_AVAILABLE, reason="NO_RECORDED_JOBS",
+            source=str(jobs_dir),
+            detail={"producer": "lsf_client.save_job_state()"})
+    per_job: Dict[str, str] = {}
+    failing = 0
+    for p in job_files:
+        try:
+            st = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(st, dict):
+            continue
+        jid = str(st.get("job_id") or p.stem)
+        assertion_failure = bool(st.get("assertion_failure"))
+        if assertion_failure:
+            failing += 1
+        per_job[jid] = _sha256_text(
+            f"{assertion_failure}|{st.get('uvm_fatal_count')}|"
+            f"{st.get('uvm_error_count')}|{st.get('sim_status')}")
+    if not per_job:
+        return _baseline_field(
+            "assertion_status", NOT_AVAILABLE, reason="NO_READABLE_JOB_RECORDS",
+            source=str(jobs_dir))
+    return _baseline_field(
+        "assertion_status", CAPTURED, reason="REAL_RECORDED_JOB_STATE",
+        source=str(jobs_dir), digest=_aggregate(per_job),
+        detail={"job_count": len(per_job), "jobs_with_assertion_failure": failing})
+
+
+def _capture_waivers(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """Every recorded waiver with the status `waiver_store.derive_status()`
+    DERIVES for it right now -- the same ledger the three real waiver gates
+    read (TH-7). Freezing the derived status is what makes a waiver that
+    EXPIRES after signoff show up as a post-freeze material change."""
+    from . import waiver_store
+    report = waiver_store.status_report(Path(root))
+    if report.get("status") == "NOT_AVAILABLE":
+        return _baseline_field(
+            "waivers", NOT_AVAILABLE, reason=report.get("reason") or "NO_WAIVER_STORE",
+            detail={"path": report.get("path")})
+    rows = {str(r.get("waiver_id")): f"{r.get('status')}" for r in report.get("waivers") or []}
+    if not rows:
+        return _baseline_field(
+            "waivers", NOT_AVAILABLE, reason="WAIVER_LEDGER_EMPTY",
+            detail={"path": report.get("path")})
+    return _baseline_field(
+        "waivers", CAPTURED, reason="REAL_WAIVER_LEDGER_DERIVED_STATUS",
+        source=".dv-harness/waivers/waivers.json -> waiver_store.status_report()",
+        digest=_aggregate(rows),
+        detail={"waiver_count": len(rows), "not_valid": report.get("not_valid"),
+                "statuses": rows})
+
+
+def _capture_evidence_hashes(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """`normalized_evidence.evidence_id` is `vip_distill`'s OWN deterministic
+    content hash of the real evidence, so the set of evidence ids in the
+    evidence store IS section 238's "evidence hashes/references". Read-only:
+    a store that does not exist is never created to answer this."""
+    from .evidence_db import default_db_path
+    db = default_db_path(Path(root))
+    if not Path(db).exists():
+        return _baseline_field(
+            "evidence_hashes", NOT_AVAILABLE, reason="NO_EVIDENCE_DATABASE",
+            detail={"expected": str(db)})
+    try:
+        from .evidence_db import EvidenceStore
+        store = EvidenceStore(db, read_only=True)
+    except Exception as exc:
+        return _baseline_field(
+            "evidence_hashes", NOT_AVAILABLE, reason="EVIDENCE_DATABASE_UNREADABLE",
+            source=str(db), detail={"error": f"{type(exc).__name__}: {exc}"})
+    try:
+        rows = store.query(
+            "SELECT evidence_id, verdict FROM normalized_evidence ORDER BY evidence_id")
+    except Exception as exc:
+        return _baseline_field(
+            "evidence_hashes", NOT_AVAILABLE, reason="NORMALIZED_EVIDENCE_UNREADABLE",
+            source=str(db), detail={"error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+    ids = {str(r["evidence_id"]): str(r.get("verdict")) for r in rows}
+    if not ids:
+        return _baseline_field(
+            "evidence_hashes", NOT_AVAILABLE, reason="NO_NORMALIZED_EVIDENCE_ROWS",
+            source=str(db))
+    return _baseline_field(
+        "evidence_hashes", CAPTURED, reason="REAL_NORMALIZED_EVIDENCE_IDS",
+        source=f"{db} :: normalized_evidence", digest=_aggregate(ids),
+        detail={"evidence_count": len(ids)})
+
+
+def _capture_dashboard_snapshot(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    return _baseline_field(
+        "dashboard_snapshot", NOT_AVAILABLE, reason="NO_DASHBOARD_SNAPSHOT_PRODUCER",
+        detail={"explanation":
+                "dv_harness/dashboard.py renders live from state.json, the "
+                "blackboard topic files, the coverage summary and the LSF job "
+                "records on every request; it persists no snapshot artifact. "
+                "Every source it renders from is frozen by another field of this "
+                "baseline (configuration / coverage_databases / assertion_status / "
+                "evidence_hashes), so re-deriving a 'snapshot' here would be a "
+                "rendering of already-frozen inputs presented as an independent "
+                "one, not new evidence."})
+
+
+def _capture_reproducibility_capsules(root: Path, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """`golden_scenario.py`'s capsules ARE section 238's reproducibility
+    capsules: test + seed + configuration + the real `verified_sha` the PASS
+    was recorded against. Read-only, and never re-evaluated for freshness
+    here -- that is `golden_scenario.evaluate_freshness()`'s job."""
+    from .evidence_db import default_db_path
+    db = default_db_path(Path(root))
+    if not Path(db).exists():
+        return _baseline_field(
+            "reproducibility_capsules", NOT_AVAILABLE,
+            reason="NO_EVIDENCE_DATABASE", detail={"expected": str(db)})
+    try:
+        from . import golden_scenario
+        store = golden_scenario._open_store(Path(root), None, read_only=True)
+        if store is None:
+            return _baseline_field(
+                "reproducibility_capsules", NOT_AVAILABLE,
+                reason="NO_EVIDENCE_DATABASE", detail={"expected": str(db)})
+        try:
+            capsules = golden_scenario.load_golden_scenarios(store)
+        finally:
+            store.close()
+    except Exception as exc:
+        return _baseline_field(
+            "reproducibility_capsules", NOT_AVAILABLE,
+            reason="GOLDEN_SCENARIO_STORE_UNREADABLE", source=str(db),
+            detail={"error": f"{type(exc).__name__}: {exc}"})
+    if not capsules:
+        return _baseline_field(
+            "reproducibility_capsules", NOT_AVAILABLE,
+            reason="NO_GOLDEN_SCENARIO_CAPSULES_RECORDED", source=str(db))
+    rows = {c.capsule_id: f"{c.test_name}|{c.seed}|{c.verified_sha}"
+            for c in capsules}
+    return _baseline_field(
+        "reproducibility_capsules", CAPTURED,
+        reason="REAL_GOLDEN_SCENARIO_CAPSULES",
+        source=f"{db} :: golden_scenarios", digest=_aggregate(rows),
+        detail={"capsule_count": len(rows), "capsule_ids": sorted(rows)})
+
+
+#: field -> capture function. Held equal to SECTION_238_FIELDS in both
+#: directions at import time.
+BASELINE_CAPTURES = {
+    "spec_version": _capture_spec_version,
+    "requirement_vplan_version": _capture_requirement_vplan_version,
+    "dut_sha": _capture_dut_sha,
+    "tb_sha": _capture_tb_sha,
+    "agent_skill_versions": _capture_agent_skill_versions,
+    "vip_tool_versions": _capture_vip_tool_versions,
+    "schema_policy_versions": _capture_schema_policy_versions,
+    "configuration": _capture_configuration,
+    "test_list": _capture_test_list,
+    "coverage_databases": _capture_coverage_databases,
+    "assertion_status": _capture_assertion_status,
+    "waivers": _capture_waivers,
+    "evidence_hashes": _capture_evidence_hashes,
+    "dashboard_snapshot": _capture_dashboard_snapshot,
+    "reproducibility_capsules": _capture_reproducibility_capsules,
+}
+
+
+def assert_baseline_covers_section_238() -> None:
+    """Both directions: a section 238 field with no capture function would be
+    silently absent from every freeze record, and a capture function for a
+    field section 238 does not name would widen the baseline without anyone
+    deciding to. Runs at import, so either failure is a test failure rather
+    than a quietly shorter freeze."""
+    declared = set(SECTION_238_FIELDS)
+    implemented = set(BASELINE_CAPTURES)
+    missing = sorted(declared - implemented)
+    extra = sorted(implemented - declared)
+    if missing or extra:
+        raise AssertionError(
+            f"signoff baseline drifted from spec section 238: "
+            f"no capture for {missing}; capture for undeclared field {extra}")
+
+
+assert_baseline_covers_section_238()
+
+
+def _repo_head_sha(root: Path) -> Tuple[Optional[str], str]:
+    """The project's real git HEAD, used ONLY to anchor the post-freeze impact
+    analysis (`change_impact.changed_files()` needs a base commit). It is not
+    a DUT SHA and is never reported as one -- `dut_sha` above is RTL content."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root),
+                             capture_output=True, text=True, timeout=15)
+    except Exception as exc:
+        return None, f"GIT_UNAVAILABLE: {type(exc).__name__}: {exc}"
+    if out.returncode != 0:
+        return None, "NOT_A_GIT_REPOSITORY_OR_NO_COMMITS"
+    sha = (out.stdout or "").strip()
+    return (sha, "REAL_GIT_HEAD") if sha else (None, "GIT_REPORTED_NO_HEAD")
+
+
+def capture_baseline(root: Path, declared: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """All fifteen of spec section 238's baseline fields, each from a REAL
+    producer or NOT_AVAILABLE with the reason. Reading is not a mutating act:
+    no store, state file or `.dv-harness/` tree is created to answer any
+    field, and nothing here runs a build, a regression or an LSF submission."""
+    root = Path(root).resolve()
+    fields = {name: BASELINE_CAPTURES[name](root, declared or {})
+              for name in SECTION_238_FIELDS}
+    head_sha, head_reason = _repo_head_sha(root)
+    captured = sum(1 for f in fields.values() if f["status"] == CAPTURED)
+    return {
+        "schema_version": FREEZE_SCHEMA_VERSION,
+        "captured_at": _now_iso(),
+        "project_root": str(root),
+        "harness_root": str(_HARNESS_ROOT),
+        "repo_head_sha": head_sha,
+        "repo_head_sha_reason": head_reason,
+        "fields": fields,
+        "captured_field_count": captured,
+        "not_available_field_count": len(SECTION_238_FIELDS) - captured,
+    }
+
+
 def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None,
-                           require_signoff_pass: bool = False) -> Dict[str, Any]:
+                           require_signoff_pass: bool = False,
+                           freeze: Optional[bool] = None,
+                           frozen_by: Optional[str] = None,
+                           declared: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """`notifier` (2026-09-03, dv_harness/escalation_notify.py): an
     optional EscalationNotifier. Omitted (the default) means no
     notification is ever attempted, keeping this function pure for the
@@ -344,7 +989,20 @@ def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None,
     SIGNOFF gate battery consumes a bundle as input, so it must be
     producible before SIGNOFF passes). Refusal writes nothing at all, not
     even an empty out_dir, so a refused export cannot leave behind a
-    directory a later reader mistakes for a partial bundle."""
+    directory a later reader mistakes for a partial bundle.
+
+    `freeze` (2026-09-06, spec section 238): capture and record the frozen
+    baseline for this bundle. `None` -- the default -- means AUTO: freeze
+    exactly when the bundle is `SIGNOFF_GATE_VERIFIED`, i.e. when the 9 real
+    SIGNOFF gates really passed. That makes `engine._export_signoff_bundle()`
+    -- the one production caller that produces a gate-verified bundle -- the
+    real, wired producer of section 238's "at signoff, capture a frozen
+    reproducible baseline", with no engine change and no second entry point.
+    A `PRE_SIGNOFF_GATE_INPUT` bundle is deliberately NOT frozen: freezing a
+    baseline the gates never accepted would mint exactly the
+    indistinguishable-from-verified artifact `bundle_kind` exists to prevent.
+    `True`/`False` force it either way (a human may freeze a pre-gate
+    baseline deliberately; the record still carries the real `bundle_kind`)."""
     root = Path(root).resolve()
     out_dir = Path(out_dir).resolve()
 
@@ -376,10 +1034,23 @@ def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None,
     manifest: List[Dict[str, Any]] = []
 
     def record(artifact: str, present: bool, bundled_rel: Optional[Path]) -> None:
+        # `content_sha256` (2026-09-06, section 238 "evidence hashes/
+        # references"): compute_bundle_hash() below reads ONLY
+        # artifact/present/bundled_path, so a bundled file could be replaced
+        # wholesale without moving bundle_hash. This is the content half.
+        # Deliberately a FOURTH key rather than material for
+        # compute_bundle_hash: that function's contract is the artifact list,
+        # and signoff_bundle_completeness_gate.py recomputes it independently
+        # off manifest.json -- widening it would change every previously
+        # computed bundle_hash and break that gate for existing bundles.
+        content = None
+        if present and bundled_rel is not None:
+            content = _artifact_content_digest(out_dir / bundled_rel)
         manifest.append({
             "artifact": artifact,
             "present": present,
             "bundled_path": bundled_rel.as_posix() if bundled_rel is not None else None,
+            "content_sha256": content,
         })
 
     # 1-4: blackboard state files (.dv-harness/blackboard/<topic>.json).
@@ -498,6 +1169,14 @@ def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None,
     bundled_count = sum(1 for m in manifest if m["present"])
     missing_count = sum(1 for m in manifest if not m["present"])
 
+    should_freeze = (bundle_kind == "SIGNOFF_GATE_VERIFIED") if freeze is None else bool(freeze)
+    freeze_record = None
+    if should_freeze:
+        freeze_record = freeze_signoff_baseline(
+            root, out_dir, frozen_by=frozen_by, declared=declared,
+            bundle_hash=bundle_hash, bundle_kind=bundle_kind,
+            signoff_stage=signoff_stage)
+
     return {
         "status": "OK",
         "out_dir": str(out_dir),
@@ -510,4 +1189,449 @@ def collect_signoff_bundle(root: Path, out_dir: Path, notifier=None,
         # the 9 real SIGNOFF gates have not passed for this project.
         "bundle_kind": bundle_kind,
         "signoff_stage": signoff_stage,
+        "freeze": freeze_record,
     }
+
+
+# --- freeze record: write, load, list --------------------------------------
+
+#: Where a project's freeze records live. Under the project's own
+#: `.dv-harness/` (the same state directory `state.json`/`events.jsonl`/
+#: `waivers/` already live in), never a new parallel state root, and NOT only
+#: inside the bundle -- a bundle directory can be moved or deleted, and a
+#: baseline that disappears with it could never invalidate anything.
+FREEZE_DIR_PARTS = (".dv-harness", "signoff", "freezes")
+
+#: The one events.jsonl event name this subsystem writes, so "was a signoff
+#: baseline frozen, when, by whom, over what bundle" is answerable from the
+#: real audit trail `dv-harness audit` already surfaces.
+FREEZE_EVENT = "SIGNOFF_BASELINE_FROZEN"
+
+
+def freeze_dir(root: Path) -> Path:
+    return Path(root).joinpath(*FREEZE_DIR_PARTS)
+
+
+def _freeze_id(baseline: Dict[str, Any], bundle_hash: Optional[str],
+               frozen_at: str) -> str:
+    material = [f"frozen_at:{frozen_at}", f"bundle_hash:{bundle_hash}"]
+    material += [f"{name}:{baseline['fields'][name]['status']}:"
+                 f"{baseline['fields'][name]['digest']}"
+                 for name in SECTION_238_FIELDS]
+    return hashlib.sha256("\n".join(material).encode("utf-8")).hexdigest()[:16]
+
+
+def freeze_signoff_baseline(root: Path, bundle_dir: Optional[Path] = None, *,
+                            frozen_by: Optional[str] = None,
+                            declared: Optional[Dict[str, Any]] = None,
+                            bundle_hash: Optional[str] = None,
+                            bundle_kind: Optional[str] = None,
+                            signoff_stage: Optional[Dict[str, Any]] = None,
+                            note: str = "") -> Dict[str, Any]:
+    """Record one immutable frozen baseline for the project at `root`.
+
+    Every identity field comes from `capture_baseline()`, i.e. from a real
+    producer; `bundle_hash`/`bundle_kind`/`signoff_stage` are passed in by
+    `collect_signoff_bundle()` (which just computed them) or RECOMPUTED off
+    the bundle's own `manifest.json` when this is called standalone -- never
+    accepted as a caller's claim about a bundle nobody looked at.
+
+    Writes the record to `.dv-harness/signoff/freezes/<freeze_id>.json` and,
+    when a bundle directory was given, a copy to
+    `<bundle_dir>/signoff_freeze.json`, plus one real
+    `SIGNOFF_BASELINE_FROZEN` event. It approves nothing, runs no stage and
+    grants no gate: a freeze is a RECORD of what a signoff was produced
+    against.
+    """
+    root = Path(root).resolve()
+    bundle_dir = Path(bundle_dir).resolve() if bundle_dir is not None else None
+
+    if bundle_dir is not None and (bundle_hash is None or bundle_kind is None):
+        mpath = bundle_dir / "manifest.json"
+        if mpath.is_file():
+            try:
+                doc = json.loads(mpath.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                doc = {}
+            if isinstance(doc, dict):
+                mlist = doc.get("manifest")
+                # RECOMPUTED, never read off the file: a manifest.json whose
+                # stored bundle_hash was edited must not be frozen as if it
+                # were what the artifact list really hashes to.
+                if isinstance(mlist, list) and bundle_hash is None:
+                    bundle_hash = compute_bundle_hash(mlist)
+                if bundle_kind is None:
+                    bundle_kind = doc.get("bundle_kind")
+                if signoff_stage is None:
+                    signoff_stage = doc.get("signoff_stage")
+
+    if signoff_stage is None:
+        signoff_stage = read_signoff_stage_status(root)
+
+    baseline = capture_baseline(root, declared)
+    frozen_at = _now_iso()
+    fid = _freeze_id(baseline, bundle_hash, frozen_at)
+    record = {
+        "schema_version": FREEZE_SCHEMA_VERSION,
+        "freeze_id": fid,
+        "frozen_at": frozen_at,
+        "frozen_by": frozen_by,
+        "note": note,
+        "project_root": str(root),
+        "bundle_dir": str(bundle_dir) if bundle_dir is not None else None,
+        "bundle_hash": bundle_hash,
+        "bundle_kind": bundle_kind,
+        "signoff_stage": signoff_stage,
+        "baseline": baseline,
+    }
+
+    fdir = freeze_dir(root)
+    fdir.mkdir(parents=True, exist_ok=True)
+    (fdir / (fid + ".json")).write_text(
+        json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    if bundle_dir is not None and bundle_dir.is_dir():
+        (bundle_dir / "signoff_freeze.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Best-effort audit trail -- a bookkeeping failure must never turn an
+    # already-written freeze record into a failed export.
+    try:
+        from .storage import StateStore
+        StateStore(root).event({
+            "ts": frozen_at, "event": FREEZE_EVENT, "stage": "SIGNOFF",
+            "freeze_id": fid, "frozen_by": frozen_by,
+            "bundle_kind": bundle_kind, "bundle_hash": bundle_hash,
+            "captured_fields": baseline["captured_field_count"],
+            "not_available_fields": baseline["not_available_field_count"],
+            "repo_head_sha": baseline["repo_head_sha"],
+        })
+    except Exception:
+        pass
+    return record
+
+
+def list_freezes(root: Path) -> List[Dict[str, Any]]:
+    fdir = freeze_dir(root)
+    out: List[Dict[str, Any]] = []
+    if not fdir.is_dir():
+        return out
+    for p in sorted(fdir.glob("*.json")):
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict) and doc.get("freeze_id"):
+            out.append(doc)
+    out.sort(key=lambda r: str(r.get("frozen_at") or ""))
+    return out
+
+
+def load_freeze(root: Path, freeze_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """One freeze record. With no `freeze_id`, the most recently frozen one --
+    `frozen_at` order, not filesystem mtime, so copying the freeze tree does
+    not reorder history."""
+    records = list_freezes(root)
+    if not records:
+        return None
+    if freeze_id is None:
+        return records[-1]
+    for r in records:
+        if r.get("freeze_id") == freeze_id:
+            return r
+    return None
+
+
+# --- post-freeze invalidation ---------------------------------------------
+
+#: Changed-file risks that make a post-freeze change MATERIAL. The same
+#: intent as `golden_scenario.STALENESS_RISKS`, decided by the same
+#: `change_impact.classify_risk()` -- HIGH is design RTL, MEDIUM is
+#: testbench/sequence/command.txt/config, LOW is docs and
+#: `.dv-harness`/`.claude` bookkeeping, which must not invalidate a signoff
+#: (a signoff export writes into `.dv-harness/` itself).
+MATERIAL_CHANGE_RISKS = ("HIGH", "MEDIUM")
+
+
+def _finding(code: str, severity: str, field: Optional[str],
+             detail: Dict[str, Any]) -> Dict[str, Any]:
+    return {"code": code, "severity": severity, "field": field, "detail": detail}
+
+
+def evaluate_freeze_invalidation(root: Path, frozen: Dict[str, Any], *,
+                                 head: str = "HEAD",
+                                 diff: Optional[Dict[str, Any]] = None,
+                                 declared: Optional[Dict[str, Any]] = None,
+                                 current_baseline: Optional[Dict[str, Any]] = None
+                                 ) -> Dict[str, Any]:
+    """VALID / INVALIDATED / UNKNOWN for one frozen baseline, from real
+    evidence only -- section 238's "post-freeze material changes trigger
+    impact analysis and invalidate/revalidate affected signoff evidence", as
+    a check rather than a sentence.
+
+    Three independent comparisons, worst-wins:
+
+    1. **Baseline field divergence.** All fifteen fields are re-derived NOW by
+       the same capture functions and compared by digest. A field CAPTURED at
+       freeze that no longer matches, or that can no longer be captured at
+       all, INVALIDATES. A field that was NOT_AVAILABLE at freeze and is
+       CAPTURED now is INDETERMINATE, not invalidating -- evidence appearing
+       after a signoff is a real change, but it is not proof the frozen
+       evidence went wrong.
+    2. **Post-freeze impact analysis.** The REAL
+       `change_impact.changed_files()` + `classify_risk()` over the freeze's
+       recorded git HEAD, exactly as `golden_scenario.evaluate_freshness()`
+       runs it, so "did the design move" has ONE answer in this codebase.
+       HIGH/MEDIUM changed files INVALIDATE and are named; LOW do not.
+    3. **Bundle integrity.** The frozen bundle's `manifest.json` is re-read
+       and `compute_bundle_hash()` recomputed independently; a bundle that
+       moved since the freeze INVALIDATES, one that is gone is INDETERMINATE.
+
+    `diff` and `current_baseline` are injectable for the same reason
+    `evaluate_freshness()`'s `diff` is: one recomputation can serve many
+    freezes, and a test can drive the UNKNOWN branches without breaking a
+    repository. Nothing here writes, approves, revalidates or re-runs
+    anything -- REVALIDATION is a human act, and this reports what would have
+    to be revalidated.
+    """
+    root = Path(root).resolve()
+    frozen_baseline = (frozen or {}).get("baseline") or {}
+    frozen_fields = frozen_baseline.get("fields") or {}
+    current = (current_baseline if current_baseline is not None
+               else capture_baseline(root, declared))
+    findings: List[Dict[str, Any]] = []
+
+    # 1. field-by-field divergence
+    for name in SECTION_238_FIELDS:
+        was = frozen_fields.get(name)
+        now = current["fields"][name]
+        if not isinstance(was, dict):
+            findings.append(_finding(
+                "FIELD_NOT_IN_FROZEN_BASELINE", SEV_INDETERMINATE, name,
+                {"explanation": "the frozen record predates this baseline field, "
+                                "so nothing about it can be compared",
+                 "current_status": now["status"]}))
+            continue
+        if was.get("status") == CAPTURED and now["status"] == CAPTURED:
+            if was.get("digest") != now.get("digest"):
+                findings.append(_finding(
+                    "BASELINE_FIELD_CHANGED", SEV_INVALIDATING, name,
+                    {"frozen_digest": was.get("digest"),
+                     "current_digest": now.get("digest"),
+                     "source": now.get("source")}))
+        elif was.get("status") == CAPTURED and now["status"] == NOT_AVAILABLE:
+            findings.append(_finding(
+                "BASELINE_EVIDENCE_DISAPPEARED", SEV_INVALIDATING, name,
+                {"frozen_digest": was.get("digest"),
+                 "frozen_source": was.get("source"),
+                 "current_reason": now.get("reason")}))
+        elif was.get("status") == NOT_AVAILABLE and now["status"] == CAPTURED:
+            findings.append(_finding(
+                "NEW_EVIDENCE_AFTER_FREEZE", SEV_INDETERMINATE, name,
+                {"frozen_reason": was.get("reason"),
+                 "current_digest": now.get("digest"),
+                 "current_source": now.get("source")}))
+
+    # 2. post-freeze impact analysis over the real git history
+    base_sha = frozen_baseline.get("repo_head_sha")
+    impact: Dict[str, Any] = {"status": None, "changed_files": [],
+                              "material_changes": [], "base_sha": base_sha,
+                              "head": head}
+    if not base_sha:
+        impact["status"] = "NO_RECORDED_HEAD_SHA"
+        findings.append(_finding(
+            "POST_FREEZE_IMPACT_ANALYSIS_UNAVAILABLE", SEV_INDETERMINATE, None,
+            {"reason": frozen_baseline.get("repo_head_sha_reason")
+                       or "the freeze recorded no git HEAD, so no change since it "
+                          "can be computed"}))
+    else:
+        from . import change_impact
+        d = diff if diff is not None else change_impact.changed_files(root, base_sha, head)
+        impact["status"] = d.get("status")
+        impact["detail"] = d.get("detail")
+        impact["head_sha"] = d.get("head_sha")
+        if d.get("status") != "REAL_DIFF":
+            findings.append(_finding(
+                "POST_FREEZE_IMPACT_ANALYSIS_UNAVAILABLE", SEV_INDETERMINATE, None,
+                {"reason": "GIT_HISTORY_UNAVAILABLE: " + str(d.get("status")),
+                 "detail": d.get("detail"), "base_sha": base_sha}))
+        else:
+            files = list(d.get("files") or [])
+            impact["changed_files"] = files
+            material = [{"path": f, "risk": change_impact.classify_risk(f)}
+                        for f in files
+                        if change_impact.classify_risk(f) in MATERIAL_CHANGE_RISKS]
+            impact["material_changes"] = material
+            if material:
+                findings.append(_finding(
+                    "POST_FREEZE_MATERIAL_CHANGE", SEV_INVALIDATING, None,
+                    {"base_sha": base_sha, "head": head,
+                     "changed_file_count": len(files),
+                     "material_changes": material}))
+
+    # 3. bundle integrity
+    bundle_dir = (frozen or {}).get("bundle_dir")
+    bundle: Dict[str, Any] = {"bundle_dir": bundle_dir,
+                              "frozen_bundle_hash": (frozen or {}).get("bundle_hash")}
+    if bundle_dir:
+        mpath = Path(bundle_dir) / "manifest.json"
+        if not mpath.is_file():
+            bundle["status"] = "BUNDLE_NOT_FOUND"
+            findings.append(_finding(
+                "FROZEN_BUNDLE_NOT_FOUND", SEV_INDETERMINATE, None,
+                {"bundle_dir": bundle_dir,
+                 "explanation": "the frozen bundle is gone, so its contents cannot "
+                                "be checked against the freeze"}))
+        else:
+            try:
+                doc = json.loads(mpath.read_text(encoding="utf-8"))
+                mlist = doc.get("manifest") if isinstance(doc, dict) else None
+                recomputed = compute_bundle_hash(mlist) if isinstance(mlist, list) else None
+            except (OSError, ValueError):
+                recomputed = None
+            bundle["recomputed_bundle_hash"] = recomputed
+            if recomputed is None:
+                bundle["status"] = "BUNDLE_MANIFEST_MALFORMED"
+                findings.append(_finding(
+                    "FROZEN_BUNDLE_MANIFEST_MALFORMED", SEV_INDETERMINATE, None,
+                    {"bundle_dir": bundle_dir}))
+            elif frozen.get("bundle_hash") and recomputed != frozen["bundle_hash"]:
+                bundle["status"] = "BUNDLE_CHANGED"
+                findings.append(_finding(
+                    "FROZEN_BUNDLE_CHANGED", SEV_INVALIDATING, None,
+                    {"bundle_dir": bundle_dir,
+                     "frozen": frozen.get("bundle_hash"), "recomputed": recomputed}))
+            else:
+                bundle["status"] = "BUNDLE_UNCHANGED"
+
+    if any(f["severity"] == SEV_INVALIDATING for f in findings):
+        status = FREEZE_INVALIDATED
+    elif findings:
+        status = FREEZE_UNKNOWN
+    else:
+        status = FREEZE_VALID
+
+    return {
+        "schema_version": FREEZE_SCHEMA_VERSION,
+        "status": status,
+        "freeze_id": (frozen or {}).get("freeze_id"),
+        "frozen_at": (frozen or {}).get("frozen_at"),
+        "frozen_by": (frozen or {}).get("frozen_by"),
+        "bundle_kind": (frozen or {}).get("bundle_kind"),
+        "evaluated_at": _now_iso(),
+        "findings": findings,
+        "invalidating_count": sum(1 for f in findings if f["severity"] == SEV_INVALIDATING),
+        "indeterminate_count": sum(1 for f in findings if f["severity"] == SEV_INDETERMINATE),
+        "impact_analysis": impact,
+        "bundle": bundle,
+        "current_baseline": current,
+    }
+
+
+def evaluate_all_freezes(root: Path, *, head: str = "HEAD",
+                         declared: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Every recorded freeze, evaluated against ONE re-derived current
+    baseline. The report's own status is the WORST present -- one invalidated
+    freeze makes the report INVALIDATED, because a caller asking "is my
+    signoff still good" must not read a mostly-valid set as an all-clear."""
+    root = Path(root).resolve()
+    frozen = list_freezes(root)
+    if not frozen:
+        return {"schema_version": FREEZE_SCHEMA_VERSION,
+                "status": "NOT_AVAILABLE", "reason": "NO_FROZEN_SIGNOFF_BASELINE",
+                "freeze_dir": str(freeze_dir(root)), "freezes": []}
+    current = capture_baseline(root, declared)
+    results = [evaluate_freeze_invalidation(root, f, head=head,
+                                            current_baseline=current)
+               for f in frozen]
+    worst = max(results, key=lambda r: _FREEZE_SEVERITY[r["status"]])["status"]
+    return {"schema_version": FREEZE_SCHEMA_VERSION, "status": worst,
+            "freeze_count": len(results),
+            "counts": {s: sum(1 for r in results if r["status"] == s)
+                       for s in (FREEZE_VALID, FREEZE_UNKNOWN, FREEZE_INVALIDATED)},
+            "freezes": results, "evaluated_at": _now_iso()}
+
+
+# --- front door ------------------------------------------------------------
+
+def execute_verb(argv: Sequence[str]) -> int:
+    """Shared implementation for `python -m dv_harness.signoff_export <verb>`.
+    Exit 0 clear, 1 a real finding (a freeze is INVALIDATED), 2 nothing to
+    report / usage refusal. A reporting signal, never an approval signal in
+    either direction: no verb here approves, revalidates or runs anything."""
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="signoff-export",
+        description="Signoff freeze / baseline (spec section 238).")
+    ap.add_argument("verb", choices=["fields", "baseline", "freeze", "list", "status"])
+    ap.add_argument("--root", default=".")
+    ap.add_argument("--bundle-dir", default=None)
+    ap.add_argument("--freeze-id", default=None)
+    ap.add_argument("--frozen-by", default=None)
+    ap.add_argument("--spec-version", default=None,
+                    help="declare the spec version this signoff is against "
+                         "(recorded as attested, never as derived)")
+    ap.add_argument("--head", default="HEAD")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args(list(argv))
+    root = Path(args.root).resolve()
+    declared = {"spec_version": args.spec_version} if args.spec_version else None
+
+    if args.verb == "fields":
+        print(json.dumps({"section_238_fields": list(SECTION_238_FIELDS),
+                          "field_statuses": [CAPTURED, NOT_AVAILABLE],
+                          "freeze_statuses": [FREEZE_VALID, FREEZE_UNKNOWN,
+                                              FREEZE_INVALIDATED]}, indent=2))
+        return 0
+
+    if args.verb == "baseline":
+        b = capture_baseline(root, declared)
+        print(json.dumps(b, ensure_ascii=False, indent=2))
+        return 0 if b["captured_field_count"] else 2
+
+    if args.verb == "freeze":
+        if not args.frozen_by:
+            print(json.dumps({"status": "REFUSED", "reason": "FROZEN_BY_REQUIRED",
+                              "detail": "a freeze records who froze it; an "
+                                        "unattributable baseline is not a signoff "
+                                        "baseline"}, indent=2))
+            return 2
+        rec = freeze_signoff_baseline(root, args.bundle_dir,
+                                      frozen_by=args.frozen_by, declared=declared)
+        print(json.dumps(rec, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.verb == "list":
+        rows = list_freezes(root)
+        print(json.dumps([{k: r.get(k) for k in
+                           ("freeze_id", "frozen_at", "frozen_by", "bundle_kind",
+                            "bundle_hash")} for r in rows], indent=2))
+        return 0 if rows else 2
+
+    # status
+    if args.freeze_id:
+        rec = load_freeze(root, args.freeze_id)
+        if rec is None:
+            print(json.dumps({"status": "NOT_AVAILABLE",
+                              "reason": "FREEZE_ID_NOT_FOUND",
+                              "freeze_id": args.freeze_id}, indent=2))
+            return 2
+        report = evaluate_freeze_invalidation(root, rec, head=args.head,
+                                              declared=declared)
+    else:
+        report = evaluate_all_freezes(root, head=args.head, declared=declared)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if report["status"] == FREEZE_INVALIDATED:
+        return 1
+    if report["status"] in ("NOT_AVAILABLE", FREEZE_UNKNOWN):
+        return 2
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import sys
+    return execute_verb(list(sys.argv[1:] if argv is None else argv))
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
