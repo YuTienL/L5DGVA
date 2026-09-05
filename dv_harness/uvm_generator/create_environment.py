@@ -83,6 +83,14 @@ from ..environment_mode_router import (
     read_registered_subsystem_entries,
 )
 from ..uvm_structural_lint import format_report, lint_uvm_environment
+from ..vip_api_card import (
+    VIP_API_CARDS_REPORT_NAME,
+    VipApiValidationError,
+    format_report as format_vip_api_report,
+    load_index as load_vip_symbol_index,
+    validate_vip_api_usage,
+    write_vip_api_cards,
+)
 from .generator import sv_id
 from .protocol_env_generator import ProtocolEnvGenerator
 from .protocol_model_layer import (
@@ -156,6 +164,26 @@ class StructuralLintFailedError(ValueError):
         self.detail = detail
 
 
+class VipApiUnprovableError(ValueError):
+    """Raised only when the request opted in with `strict_vip_api: true` AND the
+    post-generation VIP API validation found BLOCKED citations -- a generated
+    sequence calling a VIP class/method the real `vip_symbol_index` cannot prove
+    exists. Section 187's own stop condition ("If API cannot be proven:
+    UNKNOWN / BLOCKED") as a raised error rather than prose.
+
+    Default behaviour is non-blocking, for the same reason
+    StructuralLintFailedError's is, plus one specific to this check: its single
+    false-positive risk is an incomplete
+    `vip_api_card.BASE_LIBRARY_METHODS` allowlist, and a new check must not turn
+    a previously-working generation into a hard failure without the caller
+    asking for that. Carries the full report on `.detail`."""
+
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
 STRUCTURAL_LINT_REPORT_NAME = "uvm_structural_lint.json"
 
 
@@ -188,6 +216,54 @@ def _run_structural_lint(out_dir: Path, request: Dict[str, Any]) -> Dict[str, An
             "out_dir": str(out_dir),
             "report": payload,
             "summary": format_report(report),
+        })
+    return payload
+
+
+def _run_vip_api_validation(out_dir: Path, request: Dict[str, Any]) -> Dict[str, Any]:
+    """Spec section 187's `Validate Signature -> VIPApiCard` step, run over the
+    sequences THIS call just generated and the REAL VIP symbol index the
+    request names.
+
+    Runs only when the request carries `vip_symbol_index: <path>`. That is a
+    deliberate opt-in rather than a discovered default: the index must be an
+    index of the VIP this environment actually binds, and validating an
+    environment against some other VIP's index would report every real call as
+    unprovable. Absent that path the result is NOT_AVAILABLE with a real reason
+    -- never PROVEN, because "we could not check" must not read as "checked and
+    clean".
+
+    The VIPApiCard artifact is always written to <out_dir>/vip_api_cards.json
+    so the evidence survives the process, and always returned. Set
+    `strict_vip_api: true` to make BLOCKED citations raise
+    VipApiUnprovableError instead of being recorded and returned."""
+    index_path = request.get("vip_symbol_index")
+    if not index_path:
+        return {
+            "status": "NOT_AVAILABLE",
+            "reason": "NO_VIP_SYMBOL_INDEX_DECLARED_IN_REQUEST",
+            "detail": ("set `vip_symbol_index: <path to a vip_symbol_index.json>` in the "
+                       "generation manifest to have every generated VIP API call checked "
+                       "against the real indexed VIP source (spec section 187)"),
+        }
+    try:
+        index = load_vip_symbol_index(index_path)
+    except VipApiValidationError as exc:
+        # A mistyped index path must not silently disable the check.
+        return {"status": "NOT_AVAILABLE", "reason": "VIP_SYMBOL_INDEX_UNREADABLE",
+                "detail": str(exc)}
+
+    report = validate_vip_api_usage([out_dir], index, relative_to=out_dir)
+    payload = report.to_dict()
+    try:
+        write_vip_api_cards(report, out_dir)
+    except OSError as exc:
+        payload["report_write_error"] = str(exc)
+    if request.get("strict_vip_api") and payload["status"] == "BLOCKED":
+        raise VipApiUnprovableError("VIP_API_UNPROVABLE_BLOCKED", {
+            "out_dir": str(out_dir),
+            "report": payload,
+            "summary": format_vip_api_report(report),
         })
     return payload
 
@@ -239,10 +315,14 @@ def create_environment(root: Path, request: Dict[str, Any],
     generated environment_manifest.json) and `protocol_model_files`;
     SYSTEM_LEVEL_MODE additionally carries `composed_subsystems`. BOTH modes
     carry `structural_lint`, the deterministic pre-simulation lint of the UVM
-    code just generated (see _run_structural_lint()).
+    code just generated (see _run_structural_lint()), and
+    `vip_api_validation`, spec section 187's VIPApiCard check of every VIP API
+    call in that code against the real VIP symbol index (see
+    _run_vip_api_validation()).
 
     Raises EnvironmentModeUnresolvedError / MissingOutputDirectoryError /
-    SubsystemModeRequiredError / StructuralLintFailedError (see their docstrings),
+    SubsystemModeRequiredError / StructuralLintFailedError /
+    VipApiUnprovableError (see their docstrings),
     protocol_model_layer.ProtocolModelLayerError when a supplied
     protocol_model_topology is refused by that protocol's own model, or
     propagates compose_soc_environment()'s own
@@ -304,6 +384,7 @@ def create_environment(root: Path, request: Dict[str, Any],
             "protocol_model": protocol_model,
             "protocol_model_files": model_files,
             "structural_lint": _run_structural_lint(out_dir, request),
+            "vip_api_validation": _run_vip_api_validation(Path(out_dir), request),
         }
 
     # --- SYSTEM_LEVEL_MODE ---
@@ -341,4 +422,5 @@ def create_environment(root: Path, request: Dict[str, Any],
         "composed_subsystems": [s["name"] for s in subsystems],
         "soc_name": sv_id(request.get("soc_name") or "soc"),
         "structural_lint": _run_structural_lint(target, request),
+        "vip_api_validation": _run_vip_api_validation(target, request),
     }

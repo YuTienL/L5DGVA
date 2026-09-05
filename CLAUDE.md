@@ -3605,3 +3605,76 @@ a bug rather than praised. The verifier is separately proven non-vacuous (drop o
 names exactly the pairs the independent recount says went missing), the unreachable-pair,
 illegal-row, undeclared-value, uncompletable-critical and contradictory-declaration paths each
 have their own test, and both real CLI entry points are driven as real subprocesses.
+
+
+## VIP API Card / Unprovable-API BLOCKED (2026-09-06)
+
+Spec section 187's VIP API flow ends with a stop condition -- "If API cannot be proven:
+UNKNOWN / BLOCKED" -- and before this it existed in this repo ONLY as prose instruction to an
+LLM. `.claude/skills/CORE/vip-scenario-branch/SKILL.md` says 禁止憑猜測 invent VIP
+API/class/sequence and lists the same example -> manual -> source -> class-reference ladder;
+`pcie-environment-builder` repeats it. Grepping the tree for `VIPApiCard`, `vip_api_card`,
+`validate_vip_api_usage` or `UNPROVABLE` matched NOTHING executable: no artifact, and no code
+path anywhere rejected or even flagged a VIP API call the harness could not prove exists. A
+generated sequence citing a hallucinated `svt_usb_agent.reconfigur()` left the generator
+byte-identically to one citing the real method, and the first thing that would notice was a
+VCS compile.
+
+`dv_harness/vip_api_card.py` is that check, and it reuses `vip_symbol_index.py` rather than
+rebuilding it -- there is no second SystemVerilog scanner here. That module already indexes a
+VIP source tree into real class/method DECLARATIONS with a real `file:line` each, but by its
+own docstring's insistence it is a NAVIGATION aid: `find_symbol()` answers "where do I read
+about this name", and nothing had ever asked it the validation question. `index_source_text()`
+is imported for both halves: reading the VIP index, and discovering the classes the validated
+sources declare THEMSELVES (so a generated `usb_base_vseq` under a `usb_`-prefixed VIP index is
+never mistaken for a fabricated VIP class).
+
+A **VIPApiCard** is one record per VIP API citation: which VIP class/method was cited, where
+the generated code cites it, the real `file:line` the index resolved it to, which class in the
+inheritance chain actually declares it, and a status. Four statuses, and **BLOCKED is narrow on
+purpose**: it requires the receiver's declared type to be a class the index really contains,
+the member to be absent from that class's entire indexed inheritance chain, every non-indexed
+base in that chain to be a declared base-library class (`uvm_*`) so the world is CLOSED, and
+the member not to be one of the documented SystemVerilog/UVM base-library methods. A fabricated
+VIP CLASS name (in the index's own naming scope, absent from it, not declared locally) is
+likewise BLOCKED. A chain that leaves the index into an unknown non-library base yields
+UNPROVABLE -- section 187's "UNKNOWN", which is not a pass and is never silently dropped.
+The VIP naming scope is DERIVED from the real index (`derive_vip_scope_prefixes()`), never
+hardcoded: nothing in this module knows the string "svt".
+
+Where it runs: `create_environment()` -- the one real CREATE ENVIRONMENT entry point -- validates
+what it just generated whenever the manifest names `vip_symbol_index: <path>`, returns the report
+as `vip_api_validation` and writes the artifact to `<out_dir>/vip_api_cards.json`. Non-blocking by
+default (same reason `uvm_structural_lint` is); `"strict_vip_api": true` makes BLOCKED citations
+raise `VipApiUnprovableError`. Ad hoc: `dv-harness vip-api-check --source <dir> --index <index.json>`
+or `python -m dv_harness.vip_api_card` (exit 0 PROVEN, 1 BLOCKED, 2 NOT_AVAILABLE, 3 UNPROVABLE --
+the last non-fatal unless `--strict-unprovable`).
+
+**Deliberately bounded, and stated rather than implied closed.** (1) PROPERTY access
+(`cfg.some_field`) is NOT decided: `vip_symbol_index._FIELD_RE` indexes only a restricted set of
+data types, so a field's absence from the index does not prove the field does not exist. Only
+method CALLS, class TYPE citations and `Class::` scope citations are judged, and a `Class::MEMBER`
+citation decides the CLASS half only (the index models no enum constants, parameters or typedefs).
+(2) A call whose receiver type this scan cannot resolve mints no card at all -- unresolved is our
+ignorance, not the generator's error. (3) The single false-positive risk is an incomplete
+`BASE_LIBRARY_METHODS` allowlist; that list can only DOWNGRADE a finding, so an omission produces a
+false BLOCKED and never a false PROVEN, which is why the generation-path wiring is non-blocking
+unless opted in. (4) The index must be an index of the VIP the environment actually binds --
+validating against some other VIP's index correctly reports every real call as unprovable, which is
+why the wiring is an explicit manifest opt-in and not a discovered default. (5) It is a
+declaration-level line scan, the same graceful-degradation technique and for the same reason
+`vip_symbol_index` uses one; a construct it cannot understand contributes no citation, never a guess.
+(6) It DECIDES nothing beyond reporting: no build, no job, no approval, no stage gate.
+
+Proven by `dv_harness_tests/test_vip_api_card.py` (26 tests) against a REAL index built by the REAL
+indexer over `examples/asset_processing/inputs/vip_src/svt_demo_pkg.sv` (this repo's existing
+synthetic VIP source) and `dv_harness_tests/fixtures/vip_api/demo_env_seq.sv`, a clean generated
+sequence whose every citation is really declared there: the clean baseline is all-PROVEN with each
+card's `resolved_line` asserted to be a line that really declares it, then every rule is driven by
+MUTATING that same clean source one fabrication at a time. The false-positive directions are tested
+separately -- a locally-declared class, a base-library method, an unresolvable receiver, fabricated
+names inside comments/strings, an open inheritance chain (UNPROVABLE, not BLOCKED, with the SAME
+index blocking the same fabrication on a closed-chain class), and `examples/generated_pcie_uvm_env/`
+(an environment this project's own generator really produced) reporting zero findings against an
+unrelated VIP's index. The real `create_environment()` dispatch and both real CLI entry points are
+driven end to end, including the `strict_vip_api` raise.

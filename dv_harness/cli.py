@@ -713,6 +713,28 @@ def main():
                            "longer matches makes the capsule STALE with no git change at all.")
     pgs.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
 
+    pva = sub.add_parser("vip-api-check",
+                          help="Spec section 187 VIPApiCard: validate every VIP API call a "
+                               "generated sequence makes against a REAL vip_symbol_index over "
+                               "real VIP source, and emit the VIPApiCard artifact. A call to a "
+                               "VIP class/method the index cannot prove exists is BLOCKED "
+                               "(section 187's own 'If API cannot be proven: UNKNOWN / "
+                               "BLOCKED'), never silently generated. A citation the index "
+                               "cannot DECIDE is UNPROVABLE, never a silent pass. Reports "
+                               "only: runs nothing, builds nothing, approves nothing. See "
+                               "dv_harness/vip_api_card.py.")
+    pva.add_argument("--source", action="append", required=True, dest="va_sources",
+                      help="Generated .sv/.svh file or directory to validate (repeatable).")
+    pva.add_argument("--index", required=True, dest="va_index",
+                      help="vip_symbol_index JSON document (dv_harness.vip_symbol_index).")
+    pva.add_argument("--relative-to", default=None, dest="va_relative_to",
+                      help="Root for the reported generated-source paths.")
+    pva.add_argument("--out-dir", default=None, dest="va_out_dir",
+                      help="Also write the VIPApiCard artifact (vip_api_cards.json) here.")
+    pva.add_argument("--strict-unprovable", action="store_true", dest="va_strict",
+                      help="Exit non-zero on UNPROVABLE citations too, not just BLOCKED ones.")
+    pva.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
     pcv = sub.add_parser("config-variants", help="Spec section 232 configuration variant explosion "
                                                     "control: generate a REDUCED t-way (default pairwise) "
                                                     "covering set of CONFIGURATIONS from a declared config "
@@ -2482,6 +2504,27 @@ def main():
         print(_gs_text)
         if _gs_code:
             raise SystemExit(_gs_code)
+    elif args.cmd == "vip-api-check":
+        # One shared implementation with `python -m dv_harness.vip_api_card`
+        # (vip_api_card.execute_verb), same convention as power-intent /
+        # golden-scenario above. Exit codes: 0 every VIP API citation PROVEN at
+        # a real file:line, 1 at least one BLOCKED (unprovable API the
+        # generator must not emit), 2 nothing real to check (NOT_AVAILABLE --
+        # never a pass), 3 UNPROVABLE citations only, which is reported but
+        # non-fatal unless --strict-unprovable is given.
+        from . import vip_api_card as _vac
+        try:
+            _va_text, _va_code = _vac.execute_verb(
+                args.va_sources, args.va_index, relative_to=args.va_relative_to,
+                as_json=args.json, out_dir=args.va_out_dir)
+        except _vac.VipApiValidationError as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_va_text)
+        if _va_code == 3 and not args.va_strict:
+            _va_code = 0
+        if _va_code:
+            raise SystemExit(_va_code)
     elif args.cmd == "config-variants":
         # One shared implementation with
         # `python -m dv_harness.config_variant_coverage`

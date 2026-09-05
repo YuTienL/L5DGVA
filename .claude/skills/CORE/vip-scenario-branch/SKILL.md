@@ -37,6 +37,25 @@ existing project usage
 
 禁止憑猜測 invent VIP API/class/sequence。
 
+這條規則現在有真實的 coded enforcement，不再只靠 LLM 自律（2026-09-06，spec section 187
+的 `Need Operation -> ... -> Validate Signature -> VIPApiCard -> Generate Sequence`，以及它
+自己的停止條件 `If API cannot be proven: UNKNOWN / BLOCKED`）：
+
+- `dv_harness/vip_api_card.py` 針對「已產生的 sequence 原始碼」逐一抽出 VIP API citation
+  （handle 宣告的 class type、handle 上的 method call、`Class::` scope citation），拿去比對
+  `dv_harness/vip_symbol_index.py` 對「真實 VIP source」建立的真實 index。
+- 每一筆 citation 產生一張 **VIPApiCard**：cited class/method、產生的程式碼位置、index 解析
+  到的真實 `file:line`、實際宣告它的 base class、以及 status。
+- status 為 `BLOCKED` 表示 index 可以證明它不存在（fabricated class 或 fabricated method），
+  `UNPROVABLE` 表示 index 無法判定（section 187 的 UNKNOWN），兩者都不是 pass。
+- 執行方式：`dv-harness vip-api-check --source <generated dir> --index <vip_symbol_index.json>`，
+  或在 generation manifest 內設 `vip_symbol_index: <path>`（`create_environment()` 會自動跑並
+  寫出 `vip_api_cards.json`；加上 `strict_vip_api: true` 則 BLOCKED 直接讓 generation 失敗）。
+
+VIPApiCard 是證據 artifact，不是免除本節查證流程的替代品：它只能證明「這個 class/method 真的
+宣告在 index 過的 VIP source 裡」，不能證明「這個 API 的語意/用法正確」。語意仍必須依上面的
+example -> manual -> source -> class/API reference 順序查證。
+
 ## VIP Parallel Tasks（branch_b0/1/2/3...）
 
 對稱於 `interrupt-event-dispatch` 的 FW Service Loop：每個 branch_b0/branch_b1/branch_b2... 是獨立的
