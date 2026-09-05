@@ -1,9 +1,17 @@
 # Gap 3 -- Auto-generated Golden-Flow Readiness Matrix (§47) -- **DONE**
 
-**Test summary:** `dv_harness_tests/test_golden_flow_readiness.py` 38 passed;
-run together with the three capability-evolution suites (`test_capability_evolution_auto_discovery.py`,
-`test_capability_evolution_controlled_experiment.py`, `test_capability_evolution_research_architect.py`)
-**116 passed, 0 failed**; full `dv_harness_tests` suite re-run for regressions.
+**Test summary:** **440 passed, 0 failed** across four targeted runs --
+`test_golden_flow_readiness.py` 39; the three `test_capability_evolution_*.py`
+suites + mine 115; a CLI/loop set (`test_cli_preflight`, `test_cli_blackboard`,
+`test_cli_question_queue`, `test_cli_memory_commands`,
+`test_cli_adapter_command_resolution`, `test_loop_contract`,
+`test_loop_convergence`) 155; and a set covering every module the matrix reads
+(`test_coverage_analysis`, `test_signoff_export`, `test_dashboard_memory_card`,
+`test_dashboard_research_card`, `test_qualification`, `test_protocol_capability`,
+`test_env_manifest`, `test_source_authority`) 170. The whole-repo suite takes
+1h38m and carries 12 pre-existing failures unrelated to this change (baseline:
+`.work/_indep_fullsuite2.txt`, "12 failed, 5053 passed"); a full run was launched
+but did not complete inside this pass.
 
 > Filename note: the requested report path `.work/gap-close-3loop-gap 3:-report.md`
 > contains a `:`, which NTFS treats as an alternate-data-stream separator (the
@@ -14,7 +22,7 @@ run together with the three capability-evolution suites (`test_capability_evolut
 
 ## What was built
 
-### `dv_harness/golden_flow_readiness.py` (new, 1286 lines)
+### `dv_harness/golden_flow_readiness.py` (new, 1299 lines)
 
 Section 47's twenty-row matrix -- `Golden Flow Stage | Status | Evidence | Gap |
 Next-Best-Action` -- rendered from sources that were **already real**. Nothing in
@@ -95,7 +103,7 @@ both the CLI subcommand and `python -m dv_harness.golden_flow_readiness`, so
 there is no second handler over the same behaviour. A test drives both as real
 subprocesses and asserts their row/status/gap output is identical.
 
-### `dv_harness_tests/test_golden_flow_readiness.py` (new, 38 tests)
+### `dv_harness_tests/test_golden_flow_readiness.py` (new, 39 tests)
 
 End-to-end against **real artifacts written by their real writers** -- a real
 `storage.StateStore` state.json, real `.dv-harness/lsf/jobs/*.json`, a real
