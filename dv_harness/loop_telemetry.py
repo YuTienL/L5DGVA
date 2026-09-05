@@ -432,6 +432,14 @@ def _read_events(root: Path, *, scan_lines: int = DEFAULT_EVENT_SCAN_LINES
     return out, len(lines), truncated
 
 
+#: Public name for the reader above, so a module that needs the SAME trailing
+#: window of `.dv-harness/events.jsonl` -- `platform_health.py` reads it for the
+#: real EXECUTION_PREFLIGHT_PASS/BLOCKED events and this harness's own `*_FAILED`
+#: side-channel failures -- reuses this one parser instead of adding a third
+#: events.jsonl reader beside it and `dashboard._tail_events()`.
+read_events = _read_events
+
+
 def loop_events(root: Path, *, scan_lines: int = DEFAULT_EVENT_SCAN_LINES
                 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Only the section-108 entries, oldest first, plus the scan's own stats."""

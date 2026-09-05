@@ -312,6 +312,29 @@ DEFAULT_CONFIG = {
     "evidence_db": {
         "enabled": True,
     },
+    # PC-2's platform health + error budgets (2026-09-06, see dv_harness/
+    # platform_health.py). Read-only observability: this block retunes the
+    # rolling window and the two SLO objectives, and can turn none of them into
+    # a gate -- `dv-harness platform-health` runs no stage and blocks nothing.
+    # Only the ids in platform_health.SLO_CATALOG are honoured; a new id here
+    # would name an SLI with no producer, which that module refuses by design
+    # (see its UNMEASURABLE_SLIS list for what this harness deliberately does
+    # NOT claim to measure). `min_events` is the honesty floor: a window holding
+    # fewer real recorded events than this reports INSUFFICIENT_EVIDENCE rather
+    # than a rate computed from a handful of samples.
+    "platform_health": {
+        "window_days": 14,
+        "slos": {
+            "regression_verdict_pass_rate": {
+                "target_percent": 95.0,
+                "min_events": 10,
+            },
+            "execution_preflight_pass_rate": {
+                "target_percent": 90.0,
+                "min_events": 5,
+            },
+        },
+    },
 }
 
 def load_config(project_root: Path) -> Dict[str, Any]:

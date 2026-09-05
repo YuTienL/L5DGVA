@@ -1040,6 +1040,30 @@ def main():
                          help="Flag a passing job at or above this many standard deviations over its "
                               "pattern's baseline mean runtime (default 3.0).")
 
+    # PC-2's platform observability (2026-09-06, dv_harness/platform_health.py).
+    # Deliberately beside `trend` above: `trend` answers "what changed between
+    # runs" from the evidence DB alone; this answers "is each subsystem healthy
+    # right now, and are we meeting the objectives we declared" by aggregating
+    # the degradation state, the recorded execution-preflight events, the
+    # connectivity gate state file and `trend`'s own detectors. Read-only --
+    # runs no stage, starts no build, submits no job, grants no approval.
+    pph = sub.add_parser("platform-health",
+                         help="Per-subsystem platform health (HEALTHY/DEGRADED/CRITICAL/"
+                              "UNKNOWN) aggregated from the degradation state, the recorded "
+                              "EXECUTION_PREFLIGHT events, the connectivity gate state and "
+                              "trend_analysis's detectors, plus error budgets for the two "
+                              "SLOs this harness can honestly measure. UNKNOWN is never "
+                              "reported as a pass. Exit 2 only on DEGRADED/CRITICAL. See "
+                              "dv_harness/platform_health.py.")
+    pph.add_argument("--json", action="store_true",
+                     help="Print the raw report dict (per-subsystem state/reason/detail/"
+                          "fact_source/observations, every error budget, and the "
+                          "unmeasurable-SLI refusal list) instead of the text report.")
+    pph.add_argument("--window-days", type=int, default=None,
+                     help="Rolling window both SLOs and the self-reporting subsystem are "
+                          "measured over (default: config.json platform_health.window_days, "
+                          "else 14).")
+
     prt = sub.add_parser("regression-tier", help="Tiered regression cadence (SMOKE/NIGHTLY/WEEKLY): which "
                                                     "tests, what time budget, which UVM_FATAL escalation "
                                                     "threshold. See dv_harness/regression_tiers.py.")
@@ -2881,6 +2905,18 @@ def main():
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
             print(trend_analysis.render_trend_report_text(report))
+    elif args.cmd == "platform-health":
+        # One shared implementation with `python -m dv_harness.platform_health`
+        # (platform_health.execute), same convention as trend/loop-contract
+        # above. h.cfg is this session's already-loaded config, so a project's
+        # own SLO targets in config.json's `platform_health` block are honoured
+        # without this reading config a second time.
+        from . import platform_health as _ph
+        _ph_code, _ph_report, _ph_text = _ph.execute(
+            h.root, cfg=h.cfg, as_json=args.json, window_days=args.window_days)
+        print(json.dumps(_ph_report, ensure_ascii=False, indent=2)
+              if args.json else _ph_text)
+        raise SystemExit(_ph_code)
     elif args.cmd == "sim-log-analyze":
         from . import sim_log_analysis
         if args.log:

@@ -3842,3 +3842,76 @@ REAL registry flips the Single-Test Proof row, that env.manifest.json layers sur
 GENERATOR's own NOT_AVAILABLE reason text, that an unresolvable `fact_source` renders BLOCKED naming
 it, that a raising probe still yields its mandatory row, and that both entry points run as real
 subprocesses.
+
+
+## Platform Health + Error Budgets: the observability aggregator (2026-09-06, PC-2)
+
+This harness already PRODUCED plenty of real operational signal, but each piece lived behind a
+different verb, so nothing could answer "is this platform healthy right now, and against what
+objective". A repo-wide grep on 2026-09-06 returned **zero hits for `SLO`, `error_budget` and
+`health_state`**: `degradation.py` had the only health-ish state, and it is one GLOBAL
+NORMAL/DEGRADED mode driven by three triggers, not a per-subsystem picture.
+
+`dv_harness/platform_health.py` is the aggregator, and it READS ONLY. Every number comes from a
+mechanism that already existed; nothing in it measures anything itself:
+`degradation.describe()` (the three real triggers + adapter failure streak); the real
+`EXECUTION_PREFLIGHT_PASS` / `EXECUTION_PREFLIGHT_BLOCKED` events `engine._execution_preflight_gate()`
+already writes, each carrying the full `preflight.PreflightResult.to_dict()`;
+`connectivity_check.load_state()` + its own `evaluate_staleness()` against the RTL on disk NOW;
+`trend_analysis.trend_report()`'s three detectors; and `trend_analysis.daily_rollup()`'s per-day
+verdict counts. Eight subsystems (`agent_adapter`, `eda_license`, `lsf_queue`,
+`execution_environment`, `connectivity_gates`, `regression_quality`, `harness_self_reporting`,
+`slo_compliance`), each carrying the `fact_source` it was derived from so a reader can go check it.
+`dv-harness platform-health [--json] [--window-days N]`, or `python -m dv_harness.platform_health`;
+exit 2 only on DEGRADED/CRITICAL.
+
+**UNKNOWN outranks HEALTHY.** `HEALTH_SEVERITY` puts UNKNOWN above HEALTHY, so one unmeasured
+subsystem stops the platform being reported healthy — the same rule `connectivity.py` already
+enforces for NOT_AVAILABLE ("never conflated with FAILED"), applied to the other side too: an absent
+measurement is never conflated with a good one — nor with a bad one. A preflight check that SKIPped
+makes its subsystem UNKNOWN even when its siblings PASSed: not HEALTHY (which would claim a disk was
+checked) and not DEGRADED (which would alert on this repo's own shipped config, whose
+`preflight.workdir` is deliberately empty). A connectivity gate that is PENDING/NOT_AVAILABLE is
+likewise UNKNOWN, never PASS or FAIL; a
+stale-but-passing gate run is DEGRADED, because `evaluate_staleness()` already says those verdicts
+may not be cited once the RTL moved. This repo itself honestly reports OVERALL: UNKNOWN.
+
+**Two SLOs, both counting real recorded events, and an explicit refusal list for everything else.**
+`regression_verdict_pass_rate` (good = a real `regression_verdict_history` PASS row, target 95%) and
+`execution_preflight_pass_rate` (good = a real `EXECUTION_PREFLIGHT_PASS` event, target 90%).
+`UNMEASURABLE_SLIS` names the five SLIs a normal SRE platform would carry — uptime, request latency,
+service availability, simulator-farm uptime, data durability — each with the missing producer stated,
+and `assert_no_unmeasurable_slo()` FAILS if one of those ids ever appears in `SLO_CATALOG`. That is
+the "do not fabricate an SLO for telemetry you do not have" rule made structural rather than
+aspirational. A window holding fewer than `min_events` real events reports INSUFFICIENT_EVIDENCE with
+`achieved_percent=None` — a 100% computed from two samples is not a measurement of a 95% objective.
+
+**Two clocks, never mixed.** `events.jsonl` carries `engine.now()`'s explicit UTC stamp;
+evidence.duckdb's `recorded_at`/`ingested_at` default to DuckDB's `now()`, which is the machine's
+LOCAL wall clock. Each SLI's rolling window is therefore anchored in the clock its own source uses
+(`CLOCK_UTC_EVENT` / `CLOCK_LOCAL_STORE`), and every error budget carries `window_clock` saying
+which — mixing them would silently drop or double-count a day's evidence around either midnight.
+The clock is a property of where evidence is stamped and is deliberately NOT overridable in
+config.json's `platform_health` block (which may retune `target_percent`/`window_days`/`min_events`,
+and may not add an SLO id).
+
+**Observing authorizes nothing.** No approval machinery is imported, no write is performed (a test
+snapshots every file under the project root and asserts two full reports change none of them), the
+evidence DB is opened READ-ONLY through `trend_analysis`, and a BREACHED error budget is a REPORT —
+it blocks no stage and lets none through. `assert_authorizes_nothing()` asserts that against this
+module's own source, with `control_plane.py` as the negative control that really trips it. No second
+events.jsonl parser was added either: `loop_telemetry._read_events` gained a public
+`read_events` alias and `platform_health` reuses it, asserted by function identity.
+
+Proven by `dv_harness_tests/test_platform_health.py` (37 tests). Every signal comes from the real
+producer: the preflight events out of REAL `DVHarness.run_stage()` passes over the REAL shipped
+`main_graph.json` (only preflight.py's own injected-Runner seam mocked, so no test contacts a live
+license server or scheduler); the verdicts out of the REAL
+`regression_reporter._write_reconciliation_evidence_if_configured()` into a real DuckDB; the gate
+statuses out of a REAL `run_connectivity_check()` with all three gates genuinely PASSing over a real
+trace file and real monitor counts. The negative controls are what give them power — a healthy farm
+and a starved one produce HEALTHY vs CRITICAL from the SAME code path; a live `eda_license_full`
+trigger outranks an older passing preflight run and clearing it really returns the subsystem to that
+evidence; back-dating the whole verdict set past the window really drops the SLO to
+INSUFFICIENT_EVIDENCE while asking as-of the back-dated day finds it again; and adding an uptime SLO
+to the catalog really trips both guards.
