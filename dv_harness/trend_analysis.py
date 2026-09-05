@@ -12,6 +12,10 @@ the only place that asks what changed BETWEEN runs:
      against another, narrowed to the RTL commits actually in that range.
   3. `detect_runtime_anomalies()` -- a job that PASSED but ran far slower than
      that same pattern's own historical baseline.
+  4. `detect_verdict_oscillation()` -- a pattern that has been round the
+     FAIL -> PASS -> FAIL cycle more than once (2026-09-05). The cross-run
+     evidence behind section 90's repeat-fix-revert fingerprint;
+     `dv_harness/loop_convergence.py` turns it into a loop verdict.
 
 Everything here READS. This module never inserts, never migrates, and never
 mutates the working tree or git state -- the only subprocess it ever runs is
@@ -280,6 +284,136 @@ def detect_pattern_regressions(store) -> list:
     return regressions
 
 
+# --------------------------------------------------------------------------
+# Repeat-fix-revert: a pattern the loop keeps fixing and re-breaking
+# --------------------------------------------------------------------------
+
+#: How many completed FAIL -> PASS -> FAIL cycles a pattern must show before
+#: "the loop keeps undoing its own work" is a claim rather than a coincidence.
+#: The same "2 INDEPENDENT observations" bar `loop_contract.
+#: DEFAULT_OSCILLATION_REPEAT_THRESHOLD`, `capability_evolution.
+#: REPEAT_FAILURE_MIN_OCCURRENCES` and `memory_router.
+#: ORGANIZATIONAL_MIN_CONFIRMATIONS` already use -- `loop_convergence.py`
+#: passes that constant in explicitly so the loop layer has ONE source of truth.
+DEFAULT_FIX_REVERT_MIN_CYCLES = 2
+
+#: `classification` values `detect_verdict_oscillation()` can return.
+FIX_REVERT = "FIX_REVERT"                       # distinct SHAs -> the source really changed
+FLAKY_SAME_SHA = "FLAKY_SAME_SHA"               # one commit both passed and failed
+UNDETERMINED_NO_SHA = "UNDETERMINED_NO_SHA"     # no SHA recorded; cannot tell the two apart
+
+
+@dataclass
+class VerdictOscillation:
+    """One pattern that went FAIL -> PASS -> FAIL at least once in its own
+    `regression_verdict_history`."""
+    pattern: str
+    fix_revert_cycles: int
+    collapsed_verdicts: list
+    distinct_shas: list
+    classification: str
+    oscillating: bool
+    min_cycles: int
+    first_recorded_at: Optional[str]
+    last_recorded_at: Optional[str]
+    reason: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def detect_verdict_oscillation(store, *,
+                               min_cycles: int = DEFAULT_FIX_REVERT_MIN_CYCLES) -> list:
+    """Patterns whose verdict history contains completed FAIL -> PASS -> FAIL
+    cycles: the loop produced a fix, the fix held for at least one recorded
+    verdict, and then the same pattern broke again.
+
+    This is section 90's "repeat-fix-revert" fingerprint, and it is a genuinely
+    different question from `detect_pattern_regressions()` above -- that one
+    reports the CURRENT breakage's commit range (a single PASS -> FAIL edge);
+    this one reports that the pattern has been round the fix/break cycle more
+    than once, which no single edge can express.
+
+    **Consecutive duplicate verdicts are COLLAPSED first.** A pattern passing on
+    five consecutive nightlies is one PASS state, not five, and counting raw
+    rows would make a long green streak inflate nothing while a chatty
+    per-job verdict writer inflated everything. Cycles are counted over the
+    collapsed sequence only.
+
+    **`oscillating` is not simply `cycles >= min_cycles`**, because the SHAs
+    decide what the flapping means -- the same reasoning
+    `detect_pattern_regressions()` applies to its own `SAME_GIT_SHA_PASSED_AND_
+    FAILED` case:
+      - `FIX_REVERT` (>= 2 distinct SHAs across the cycles): the source really
+        changed between the PASS and the re-break, so a real fix really did not
+        hold. This is loop oscillation and sets `oscillating`.
+      - `FLAKY_SAME_SHA` (every recorded SHA identical): one commit both passed
+        and failed, so the LOOP is not the thing oscillating -- the test is
+        intermittent. Reported, never counted as loop oscillation, because
+        answering an intermittent test with "stop retrying and change strategy"
+        would point the loop at the wrong problem.
+      - `UNDETERMINED_NO_SHA` (no SHA on the rows): the two cannot be told
+        apart, but "this pattern's verdict is not stable across the loop's own
+        iterations" is still true and still a no-progress signal, so it sets
+        `oscillating` at the same threshold and says in `reason` that the cause
+        is undetermined.
+
+    Every pattern with at least ONE cycle is returned (carrying its real count),
+    so a caller can see a first fix-revert forming before it reaches the
+    threshold. Only `oscillating` is the verdict."""
+    rows = store.query("""
+        SELECT pattern, verdict_passed, git_sha, recorded_at
+        FROM regression_verdict_history
+        ORDER BY pattern, recorded_at, id
+    """)
+    by_pattern: dict = {}
+    for pattern, passed, git_sha, recorded_at in rows:
+        by_pattern.setdefault(pattern, []).append((bool(passed), git_sha, recorded_at))
+
+    out = []
+    for pattern, history in sorted(by_pattern.items()):
+        collapsed = []
+        for passed, git_sha, recorded_at in history:
+            if collapsed and collapsed[-1][0] == passed:
+                collapsed[-1] = (passed, git_sha or collapsed[-1][1], recorded_at)
+                continue
+            collapsed.append((passed, git_sha, recorded_at))
+        verdicts = [p for p, _, _ in collapsed]
+        cycles = sum(1 for i in range(len(verdicts) - 2)
+                     if (verdicts[i], verdicts[i + 1], verdicts[i + 2]) == (False, True, False))
+        if cycles < 1:
+            continue
+        shas = [s for _, s, _ in collapsed if s]
+        distinct = sorted(set(shas))
+        if not shas:
+            classification = UNDETERMINED_NO_SHA
+            reason = ("NO_GIT_SHA_RECORDED: a real fix-revert and an intermittent test are "
+                      "indistinguishable here, but the verdict is provably unstable across "
+                      "the loop's own iterations")
+        elif len(distinct) < 2:
+            classification = FLAKY_SAME_SHA
+            reason = (f"SAME_GIT_SHA_PASSED_AND_FAILED ({distinct[0]}): the source did not "
+                      f"change between the PASS and the re-break, so this is an intermittent "
+                      f"test, not the loop undoing its own work")
+        else:
+            classification = FIX_REVERT
+            reason = (f"FIX_REVERT_ACROSS_{len(distinct)}_DISTINCT_SHAS: a fix held for at "
+                      f"least one recorded verdict and then the same pattern broke again")
+        out.append(VerdictOscillation(
+            pattern=pattern,
+            fix_revert_cycles=cycles,
+            collapsed_verdicts=["PASS" if v else "FAIL" for v in verdicts],
+            distinct_shas=distinct,
+            classification=classification,
+            oscillating=(cycles >= min_cycles and classification != FLAKY_SAME_SHA),
+            min_cycles=min_cycles,
+            first_recorded_at=str(collapsed[0][2]) if collapsed else None,
+            last_recorded_at=str(collapsed[-1][2]) if collapsed else None,
+            reason=reason,
+        ))
+    return out
+
+
 def _git(root, args: list, timeout: int = 30) -> tuple:
     """Read-only git invocation. Returns (returncode, stdout, stderr); a
     missing git binary is (127, "", msg) rather than an exception, so a
@@ -542,6 +676,7 @@ def trend_report(root, *, seats_per_job: float = DEFAULT_SEATS_PER_JOB,
     try:
         points = daily_rollup(store, seats_per_job=seats_per_job)
         regressions = detect_pattern_regressions(store)
+        fix_reverts = detect_verdict_oscillation(store)
         anomalies = detect_runtime_anomalies(store, min_samples=min_samples,
                                              ratio_threshold=ratio_threshold,
                                              z_threshold=z_threshold)
@@ -559,6 +694,7 @@ def trend_report(root, *, seats_per_job: float = DEFAULT_SEATS_PER_JOB,
         "day_over_day": day_over_day(points),
         "regressions": [r.to_dict() for r in regressions],
         "bisects": bisects,
+        "fix_reverts": [o.to_dict() for o in fix_reverts],
         "runtime_anomalies": [a.to_dict() for a in anomalies],
     }
 
@@ -605,6 +741,14 @@ def render_trend_report_text(report: dict) -> str:
                 lines.append(f"      {c['sha'][:12]} {c['subject']}")
             for step in b.get("bisect_plan", []):
                 lines.append(f"      $ {step}")
+    lines += ["", "REPEAT-FIX-REVERT (fixed, then broke again)"]
+    if not report.get("fix_reverts"):
+        lines.append("- none")
+    for o in report.get("fix_reverts") or []:
+        lines.append(f"- {o['pattern']}: {o['fix_revert_cycles']} cycle(s) "
+                     f"{' -> '.join(o['collapsed_verdicts'])} "
+                     f"[{o['classification']}, oscillating={o['oscillating']}]")
+        lines.append(f"    {o['reason']}")
     lines += ["", "RUNTIME ANOMALIES (passed, abnormally slow)"]
     if not report["runtime_anomalies"]:
         lines.append("- none")

@@ -1854,12 +1854,121 @@ so a retry-exhausted loop stops deterministically and nothing here can reach a
 build, a regression or an LSF submission.
 
 **Disclosed residual**: this is the CONTRACT and the VOCABULARY, not the
-convergence engine. Sections 88-90's PLATEAU/no-progress classification and
-their `STOP BLIND RETRY -> reassess -> materially different strategy` response
-are not built here -- `observe_*` reports PLATEAU_NOT_EVALUATED and the engine
-still routes a retry-exhausted stage onto its graph FAIL edge exactly as before.
-Section 91's `LOOP_*` event taxonomy is also only partly emitted (`LOOP_STATE_
-OBSERVED` / `LOOP_STATE_OBSERVE_FAILED`; the other nineteen names have no
-producer). The Project Learning Loop is observed PER RECORD at a
+convergence engine. Sections 88-90's PLATEAU/no-progress CLASSIFICATION was
+closed the same day by `loop_convergence.py` (next section); their
+`STOP BLIND RETRY -> reassess -> materially different strategy` RESPONSE is
+still not built -- the engine routes a retry-exhausted stage onto its graph FAIL
+edge exactly as before. Section 91's `LOOP_*` event taxonomy is also only partly
+emitted (`LOOP_STATE_OBSERVED` / `LOOP_STATE_OBSERVE_FAILED`; the other nineteen
+names have no producer). The Project Learning Loop is observed PER RECORD at a
 `route_and_store()` result, so `observe_all()` honestly reports it
 `NOT_OBSERVABLE` rather than inventing a project-wide aggregate nothing computes.
+
+
+## Convergence, Plateau and Oscillation Detection (2026-09-05)
+
+LOOP_ENGINEERING sections 88-90 require three classifiers the harness did not
+have: a coverage-convergence verdict (`CONVERGING`/`SLOW_CONVERGENCE`/
+`NO_PROGRESS`/`PLATEAU`/`REGRESSION`/`OSCILLATING`/`UNKNOWN`), plateau detection
+with an unreachable-bin / stimulus-gap investigation, and fingerprint-based
+oscillation / no-progress detection (repeat-failure and repeat-fix-revert). The
+section above is where the gap was DECLARED, in its own disclosed residual:
+`observe_*` reported `PLATEAU_NOT_EVALUATED`, and `LoopPlateau.detection_window`
+/ `minimum_gain` and `LoopConvergence.minimum_progress` / `window` were all
+`None` on the verification-closure contract because nothing computed them.
+
+`dv_harness/loop_convergence.py` is the DETECTOR half; `loop_contract.py` stays
+the vocabulary half. Front door: `dv-harness loop-contract convergence` (exit 2
+when no usable series exists), and `... observe` now carries the report.
+
+**Every number is read from a producer this project already has.** Not one is
+re-derived: the series is `trend_analysis.daily_rollup()`'s own bins-weighted
+`coverage_percent` curve; the repeat-FAILURE fingerprint is
+`loop_contract.detect_oscillation_from_debug_loop_history()`, CALLED not copied,
+so there is exactly one definition of it; the "flat" band is
+`coverage_analysis.FLAT_TREND_TOLERANCE_PERCENT` (an inline `0.5` until this
+change), so this classifier and `compute_coverage_trend()` cannot disagree about
+the identical series; and every threshold is derived from a number this codebase
+already defends -- `min_gain` is 2x the noise floor (so a series sitting on the
+tolerance band's edge reports SLOW_CONVERGENCE rather than being promoted), and
+`plateau_window` is 3 samples = 2 consecutive no-movement INTERVALS, the same
+"2 INDEPENDENT observations" bar `REPEAT_FAILURE_MIN_OCCURRENCES` and
+`ORGANIZATIONAL_MIN_CONFIRMATIONS` use. `capability_evolution.
+repeated_unresolved_failure_patterns()` is adjacent and deliberately NOT called:
+its thresholds are purpose-built for filing a capability candidate, and a loop
+verdict must not depend on whether one was filed.
+
+**The one genuinely new detector is `trend_analysis.detect_verdict_oscillation()`**
+-- section 90's repeat-fix-revert, added beside `detect_pattern_regressions()`
+because that is the module that reads `regression_verdict_history`. It counts
+completed FAIL -> PASS -> FAIL cycles after COLLAPSING consecutive duplicate
+verdicts (five green nightlies are one PASS state, not five), and the SHAs
+decide what the flapping MEANS, the same way `detect_pattern_regressions()`
+already reasons about `SAME_GIT_SHA_PASSED_AND_FAILED`: `FIX_REVERT` (>= 2
+distinct SHAs) is real loop oscillation; `FLAKY_SAME_SHA` (one commit that both
+passed and failed) is an intermittent test and is reported but never counted as
+loop oscillation, because answering a flake with "change strategy" points the
+loop at the wrong problem; `UNDETERMINED_NO_SHA` cannot tell the two apart and
+says so while still reporting the instability.
+
+**Plateau detection reuses the existing per-bin classifier and escalates
+nothing.** `investigate_plateau()` runs `coverage_analysis.
+classify_coverage_hole()` -- which already measures distinct seed attempts
+against real `jobs` rows and refuses an "unreachable" claim on an under-sampled
+bin -- and adds only the LOOP-level next action, applying that same precedence
+one level up: any under-sampled bin makes the plateau PREMATURE and routes to
+ADD_SEEDS; otherwise a stimulus gap routes to generate/adjust; otherwise an
+adequately-sampled unreachable bin requires a human. It NAMES
+`escalate_unreachable_holes()` as the real escalator and does not take that
+path -- reading a loop's state must never be a mutating act, and nothing here
+writes a question, an approval or a file.
+
+**PLATEAU and OSCILLATING now reach a real `LoopObservation`.**
+`derive_loop_state()` gained `plateau` / `progress_oscillating`, which apply
+only over CONVERGING and only while the loop is not done. They apply exactly
+where the existing `oscillating` argument does not, and the difference is which
+evidence each reads: `oscillating` is the `debug_loop_history` repeat-FAILURE
+record, so it says nothing about a stage that has since passed and stays
+confined to the retry family; these two read CURRENT cross-run evidence, and a
+loop whose stages keep PASSING while its own progress metric has stopped moving
+is exactly what PLATEAU is for. `progress_oscillating` wins over `plateau` (the
+more specific fact, pointing at a different remedy), and Human Override still
+outranks both. The verification-closure contract's convergence/plateau blocks
+are now read from this module's constants rather than being `None`.
+
+**`PLATEAU_NOT_EVALUATED` survives, deliberately.** A project with no evidence
+database, or one whose days carry no coverage sample, still reports it -- with
+the real distinct reason (`NO_EVIDENCE_DATABASE` vs `NO_COVERAGE_SAMPLES`,
+different operator problems with different fixes). A detector that never ran and
+a detector that ran and found nothing are different facts; the arrival of a real
+detector must not turn the first into a cheerful "no plateau".
+
+**No human-approval gate moved.** `ControlPlane.approve()`,
+`policy.can_signoff()`, `assert_human_approval()`,
+`assert_no_production_write_authorized()`, `HumanApprovalRequiredError`,
+`ProductionWriteNotAuthorizedError` and the PR-only main/master governance are
+untouched and uncalled from this module, and the evidence database is opened
+READ-ONLY exactly as `trend_report()` opens it.
+
+Proven by `dv_harness_tests/test_loop_convergence.py` (53 tests) against REAL
+evidence rows written through the REAL production write paths
+(`regression_reporter._write_reconciliation_evidence_if_configured()` and
+`dashboard.append_coverage_history_sample()`, the exact functions `lsf_client`
+and `engine.py` call) -- including all seven verdicts driven out of real series,
+and the negative controls that give the detectors their power: a spike-and-crash
+whose net is flat is NOT a plateau, a same-SHA flip-flop is NOT loop
+oscillation, sub-threshold jitter has no direction to reverse, and a long green
+streak does not inflate the cycle count. Nothing in it runs a build, a
+regression or an LSF submission.
+
+**Disclosed residual**: this is the CLASSIFIER, not the RESPONSE.
+Sections 88-90's `STOP BLIND RETRY -> reassess -> materially different strategy`
+is still not built -- `engine.loop()` routes a retry-exhausted stage onto its
+graph FAIL edge exactly as before, and nothing terminates or re-plans a run on a
+PLATEAU verdict. It is also not engine-fired: `classify_loop_convergence()` is
+reached from the CLI verb and from `observe_all()`, and no `run_stage()` /
+`advance()` call site invokes it, so this is a REACHED capability, not a WIRED
+one. The series is the coverage curve only; `stage_completion_percent` and
+`findings_open` are named in the contract's `convergence.metrics` but have no
+cross-run producer to build a series from.
+

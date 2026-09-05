@@ -279,7 +279,9 @@ def derive_loop_state(status: str, *,
                       paused: bool = False,
                       takeover_active: bool = False,
                       loop_done: bool = False,
-                      oscillating: bool = False) -> LoopState:
+                      oscillating: bool = False,
+                      plateau: bool = False,
+                      progress_oscillating: bool = False) -> LoopState:
     """The one function that turns real backend facts into a LoopState.
 
     Section 86: "State transitions must derive from backend evidence, not
@@ -299,7 +301,27 @@ def derive_loop_state(status: str, *,
       4. `oscillating` -> OSCILLATING, but only over a retry-family status: an
          oscillation fingerprint says nothing about a stage that passed.
       5. `loop_done` -> SUCCESS.
-      6. Otherwise the STATUS_TO_LOOP_STATE table.
+      6. `progress_oscillating` / `plateau` -> OSCILLATING / PLATEAU, but only
+         over CONVERGING and only when the loop is NOT done. Both are computed
+         by `loop_convergence.classify_loop_convergence()`; nothing here
+         re-derives either.
+
+         They apply over CONVERGING precisely where `oscillating` above does
+         not, and the difference is which evidence each reads. `oscillating` is
+         the Blackboard `debug_loop_history` repeat-FAILURE fingerprint -- a
+         record of retry exhaustions -- so it says nothing about a stage that
+         has since passed, and stays confined to the retry family. These two
+         read CURRENT cross-run evidence (the coverage series, and
+         `regression_verdict_history`'s repeat-fix-revert cycles), and a loop
+         whose stages keep PASSING while its own progress metric has stopped
+         moving, or keeps being undone, is exactly what PLATEAU and OSCILLATING
+         are for. A failing stage is already better described by RETRY_WAIT /
+         BUDGET_EXHAUSTED, and a CLOSED project is finished, not stalled.
+
+         `progress_oscillating` wins over `plateau`: "the loop is undoing its
+         own work" is the more specific fact, and it points at a different
+         remedy than "this stimulus has reached its ceiling".
+      7. Otherwise the STATUS_TO_LOOP_STATE table.
     """
     if takeover_active:
         return LoopState.HUMAN_GATE
@@ -319,6 +341,11 @@ def derive_loop_state(status: str, *,
         return base
     if loop_done and base in (LoopState.CONVERGING, LoopState.SUCCESS):
         return LoopState.SUCCESS
+    if base is LoopState.CONVERGING:
+        if progress_oscillating:
+            return LoopState.OSCILLATING
+        if plateau:
+            return LoopState.PLATEAU
     return base
 
 
@@ -536,6 +563,12 @@ def verification_closure_contract(cfg: Optional[Dict[str, Any]] = None) -> LoopC
     (`config.DEFAULT_CONFIG` merged with the project's `config.json`), never
     retyped here -- change `policy.max_stage_retries` and this contract
     changes with it."""
+    # Lazily imported: loop_convergence imports LoopState from THIS module, so a
+    # module-level import here would be circular. The convergence/plateau
+    # thresholds below are read from it rather than retyped, exactly as
+    # max_stage_retries is read from the config -- change the detector's
+    # thresholds and this contract changes with them.
+    from . import loop_convergence as _lcv
     if cfg is None:
         from .config import DEFAULT_CONFIG
         cfg = DEFAULT_CONFIG
@@ -613,16 +646,22 @@ def verification_closure_contract(cfg: Optional[Dict[str, Any]] = None) -> LoopC
                                     "NEEDS_USER_INPUT"],
         ),
         convergence=LoopConvergence(
-            metrics=["stage_completion_percent", "findings_open"],
-            minimum_progress=None,
-            window=None,
+            metrics=["stage_completion_percent", "findings_open",
+                     f"{_lcv.COVERAGE_PERCENT_METRIC} (trend_analysis.daily_rollup(), "
+                     f"classified by loop_convergence.classify_convergence())"],
+            minimum_progress=_lcv.DEFAULT_MIN_GAIN_PERCENT,
+            window=_lcv.DEFAULT_CONVERGENCE_WINDOW,
         ),
-        plateau=LoopPlateau(detection_window=None, minimum_gain=None),
+        plateau=LoopPlateau(detection_window=_lcv.DEFAULT_PLATEAU_WINDOW,
+                            minimum_gain=_lcv.DEFAULT_PLATEAU_MIN_GAIN_PERCENT),
         oscillation=LoopOscillation(
-            fingerprint_fields=["failing_stage", "target_fail_edge"],
+            fingerprint_fields=["failing_stage", "target_fail_edge", "pattern"],
             repeat_threshold=DEFAULT_OSCILLATION_REPEAT_THRESHOLD,
             evidence_source="Blackboard topic 'debug_loop_history' "
-                            "(engine._record_debug_loop_round())",
+                            "(engine._record_debug_loop_round()) for the repeat-failure "
+                            "fingerprint, plus the evidence DB's regression_verdict_history "
+                            "(trend_analysis.detect_verdict_oscillation()) for the "
+                            "repeat-fix-revert one",
         ),
         termination=LoopTermination(
             success="advance() returns no next node -> overall_status = CLOSED.",
@@ -630,8 +669,12 @@ def verification_closure_contract(cfg: Optional[Dict[str, Any]] = None) -> LoopC
                     "loop() returns.",
             budget="ss['attempts'] > policy.max_stage_retries -> the node's FAIL edge is "
                     "taken (a node-scoped budget, not the run's).",
-            no_progress="NOT DETECTED by the loop today; Blackboard.debug_loop_round_count() "
-                        "records the rounds but nothing terminates on them.",
+            no_progress=("DETECTED, not terminated on: loop_convergence."
+                         "classify_loop_convergence() classifies the real coverage series as "
+                         "CONVERGING/SLOW_CONVERGENCE/NO_PROGRESS/PLATEAU/REGRESSION/"
+                         "OSCILLATING/UNKNOWN and PLATEAU/OSCILLATING reach the observation's "
+                         "own LoopState. engine.loop() still routes a retry-exhausted stage "
+                         "onto its graph FAIL edge; nothing terminates the run on a plateau."),
             human_stop="ControlPlane pause/takeover, checked FIRST in loop()'s body; "
                         "Status.WAIT_USER/BLOCKED also return.",
         ),
@@ -959,14 +1002,23 @@ def detect_oscillation_from_debug_loop_history(entries: List[Dict[str, Any]], *,
 def observe_verification_closure_loop(state, cfg: Dict[str, Any], *,
                                       control_plane_state: Optional[Dict[str, Any]] = None,
                                       debug_loop_entries: Optional[List[Dict[str, Any]]] = None,
-                                      stage: Optional[str] = None) -> LoopObservation:
+                                      stage: Optional[str] = None,
+                                      convergence: Optional[Dict[str, Any]] = None
+                                      ) -> LoopObservation:
     """Derive the Verification Closure Loop's state from a REAL
     `models.HarnessState` plus the real ControlPlane payload and the real
     Blackboard `debug_loop_history` entries.
 
     Nothing here is asked of an agent: `state` comes off `state.json`,
     `control_plane_state` off `control.json`, `debug_loop_entries` off the
-    Blackboard topic."""
+    Blackboard topic.
+
+    `convergence` is one `loop_convergence.LoopConvergenceReport.to_dict()`,
+    computed from the project's own evidence database (sections 88-90). When it
+    is absent -- a project with no evidence database, or a caller that did not
+    ask for one -- `plateau` stays `PLATEAU_NOT_EVALUATED`: a detector that
+    never ran and a detector that ran and found nothing are different facts,
+    and this is the one place that distinction is recorded."""
     cp = control_plane_state or {}
     stage = stage or getattr(state, "current_stage", "")
     stages = getattr(state, "stages", {}) or {}
@@ -978,14 +1030,42 @@ def observe_verification_closure_loop(state, cfg: Dict[str, Any], *,
     paused = bool(cp.get("paused"))
     osc = detect_oscillation_from_debug_loop_history(debug_loop_entries or [])
     loop_done = getattr(state, "overall_status", None) == Status.CLOSED.value
+
+    # Sections 88-90's verdict, when a real one was computed for this project.
+    conv = convergence if isinstance(convergence, dict) else None
+    conv_verdict = (conv or {}).get("verdict")
+    plateau_field = PLATEAU_NOT_EVALUATED
+    note = ("plateau is NOT evaluated here: it needs a progress-metric series over "
+            "iterations, whose real producers are trend_analysis.py / coverage_analysis.py. "
+            "Reporting 'no plateau' without one would be an unearned claim.")
+    # A verdict of UNKNOWN is NOT a plateau result: the classifier ran and
+    # could not conclude (no database, no coverage sample, a single sample).
+    # Recording it as the plateau field would present "we could not tell" as a
+    # finding, which is the same unearned claim PLATEAU_NOT_EVALUATED prevents.
+    if conv and conv_verdict and conv_verdict != "UNKNOWN":
+        plateau_field = conv_verdict
+        note = (f"plateau/convergence evaluated by loop_convergence."
+                f"classify_loop_convergence() over "
+                f"{(conv.get('sources') or {}).get('series_points')} real "
+                f"{conv.get('metric')} samples: "
+                f"{(conv.get('convergence') or {}).get('reason')}")
+    elif conv:
+        note = (f"plateau is NOT evaluated: {conv.get('reason')} -- "
+                f"trend_analysis.py / coverage_analysis.py produced no usable series for "
+                f"this project, and 'no plateau' without one would be an unearned claim.")
+
     loop_state = derive_loop_state(
         status, attempts=attempts, max_attempts=max_attempts,
         paused=paused, takeover_active=takeover, loop_done=loop_done,
-        oscillating=osc["oscillating"])
+        oscillating=bool(osc["oscillating"]),
+        plateau=(conv_verdict == LoopState.PLATEAU.value),
+        progress_oscillating=(conv_verdict == LoopState.OSCILLATING.value))
     return LoopObservation(
         loop_id=VERIFICATION_CLOSURE_LOOP,
         state=loop_state.value,
-        derived_from="models.HarnessState + ControlPlane state + Blackboard debug_loop_history",
+        derived_from=("models.HarnessState + ControlPlane state + Blackboard "
+                      "debug_loop_history"
+                      + (" + loop_convergence over the evidence database" if conv else "")),
         evidence={
             "stage": stage,
             "stage_status": status,
@@ -995,11 +1075,10 @@ def observe_verification_closure_loop(state, cfg: Dict[str, Any], *,
             "paused": paused,
             "takeover_active": takeover,
             "oscillation": osc,
+            "convergence": conv,
         },
-        plateau=PLATEAU_NOT_EVALUATED,
-        note=("plateau is NOT evaluated here: it needs a progress-metric series over "
-              "iterations, whose real producers are trend_analysis.py / coverage_analysis.py. "
-              "Reporting 'no plateau' without one would be an unearned claim."),
+        plateau=plateau_field,
+        note=note,
     )
 
 
@@ -1185,8 +1264,24 @@ def execute_verb(root: Path, verb: str, *,
         payload = observe_all(root, cfg)
         return 0, payload
 
+    if verb == "convergence":
+        # Sections 88-90 on their own, for a caller that wants the series
+        # verdict and the plateau investigation without the whole observation.
+        from . import loop_convergence as _lcv
+        from .blackboard import Blackboard
+        try:
+            history = (Blackboard(root).read_debug_loop_history() or {}).get("entries") or []
+        except Exception:
+            history = []
+        report = _lcv.classify_loop_convergence(root, cfg=cfg,
+                                                debug_loop_entries=history).to_dict()
+        # Exit 2 on UNKNOWN, not merely on an absent series: a one-sample
+        # project reached the classifier and still has no usable verdict, and
+        # exiting 0 there would report "we could not tell" as a result.
+        return (2 if report.get("verdict") == _lcv.UNKNOWN else 0), report
+
     return 1, {"ok": False, "error": "UNKNOWN_VERB", "verb": verb,
-               "known": ["states", "list", "show", "observe"]}
+               "known": ["states", "list", "show", "observe", "convergence"]}
 
 
 def observe_all(root: Path, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1205,6 +1300,22 @@ def observe_all(root: Path, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, A
         cfg = load_config(root)
     out: Dict[str, Any] = {"root": str(root), "observations": {}}
 
+    # Sections 88-90, best-effort and READ-ONLY: a project with no evidence
+    # database simply has no series, which observe_verification_closure_loop()
+    # then reports as PLATEAU_NOT_EVALUATED rather than as "no plateau".
+    convergence = None
+    try:
+        from . import loop_convergence as _lcv
+        bb_for_conv = Blackboard(root)
+        conv_history = bb_for_conv.read_debug_loop_history() or {}
+        convergence = _lcv.classify_loop_convergence(
+            root, cfg=cfg,
+            debug_loop_entries=conv_history.get("entries") or []).to_dict()
+        out["convergence"] = convergence
+    except Exception as exc:
+        out["convergence"] = {"available": False,
+                              "reason": f"{type(exc).__name__}: {exc}"}
+
     try:
         state = StateStore(root).load()
         bb = Blackboard(root)
@@ -1212,7 +1323,8 @@ def observe_all(root: Path, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, A
         obs = observe_verification_closure_loop(
             state, cfg,
             control_plane_state=ControlPlane(root).load(),
-            debug_loop_entries=history.get("entries") or [])
+            debug_loop_entries=history.get("entries") or [],
+            convergence=convergence)
         out["observations"][VERIFICATION_CLOSURE_LOOP] = obs.to_dict()
     except Exception as exc:  # observability must never crash a caller
         out["observations"][VERIFICATION_CLOSURE_LOOP] = {
@@ -1250,7 +1362,7 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - thin CL
     import argparse
     ap = argparse.ArgumentParser(prog="python -m dv_harness.loop_contract",
                                  description=__doc__.split("\n")[0])
-    ap.add_argument("verb", choices=["states", "list", "show", "observe"])
+    ap.add_argument("verb", choices=["states", "list", "show", "observe", "convergence"])
     ap.add_argument("--loop-id", default=None)
     ap.add_argument("--project-root", default=".")
     ap.add_argument("--format", default="json", choices=["json", "yaml"], dest="fmt")

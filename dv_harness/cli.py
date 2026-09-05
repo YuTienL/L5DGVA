@@ -1459,6 +1459,15 @@ def main():
                                         "debug_loop_history and capability_evolution_candidates "
                                         "topics). A loop with no persisted state reports "
                                         "NOT_OBSERVABLE with its reason, never a guess.")
+    # Sections 88-90 (dv_harness/loop_convergence.py). Read-only like the rest
+    # of this front door: it classifies the real coverage series and reports
+    # which coverage bins would need escalation -- it escalates none of them.
+    plc_sub.add_parser("convergence",
+                        help="Sections 88-90: classify this project's real coverage series as "
+                             "CONVERGING/SLOW_CONVERGENCE/NO_PROGRESS/PLATEAU/REGRESSION/"
+                             "OSCILLATING/UNKNOWN, run the plateau (unreachable-bin / "
+                             "stimulus-gap) investigation, and report both oscillation "
+                             "fingerprints. Exit 2 when no usable series exists.")
 
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))

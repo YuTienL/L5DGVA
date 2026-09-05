@@ -94,13 +94,22 @@ def identify_holes(parsed: dict, threshold_percent: float = 100.0) -> list:
     return holes
 
 
+#: The percent band inside which a coverage delta is NOISE, not a trend. Named
+#: (it was an inline `0.5` until 2026-09-05) because `loop_convergence.py`'s
+#: section-88 classifier needs the SAME tolerance: two modules disagreeing about
+#: what counts as "flat" would let one report PLATEAU while the other reports
+#: IMPROVING over the identical series.
+FLAT_TREND_TOLERANCE_PERCENT = 0.5
+
+
 def compute_coverage_trend(history: list) -> dict:
     """Pure function over [{"timestamp": str|number, "percent": float}, ...]
     in any order. Sorts by timestamp first, then reports delta =
-    last_percent - first_percent. FLAT tolerance is |delta| < 0.5 (a small,
-    deliberately fixed tolerance so trivial run-to-run noise doesn't get
-    reported as an IMPROVING/DECLINING trend). Requires at least 2 entries --
-    never guesses a trend from a single data point."""
+    last_percent - first_percent. FLAT tolerance is
+    |delta| < FLAT_TREND_TOLERANCE_PERCENT (a small, deliberately fixed
+    tolerance so trivial run-to-run noise doesn't get reported as an
+    IMPROVING/DECLINING trend). Requires at least 2 entries -- never guesses a
+    trend from a single data point."""
     if len(history) < 2:
         raise CoverageAnalysisError(
             "INSUFFICIENT_HISTORY",
@@ -112,7 +121,7 @@ def compute_coverage_trend(history: list) -> dict:
     last_percent = ordered[-1]["percent"]
     delta = last_percent - first_percent
 
-    if abs(delta) < 0.5:
+    if abs(delta) < FLAT_TREND_TOLERANCE_PERCENT:
         trend = "FLAT"
     elif delta > 0:
         trend = "IMPROVING"
