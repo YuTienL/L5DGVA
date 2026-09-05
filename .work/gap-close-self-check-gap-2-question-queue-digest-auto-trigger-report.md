@@ -16,8 +16,12 @@ now additionally auto-recorded on the same boundary.
 `test_graph_parallel_dispatch.py`, `test_rca_multi_agent_fanout.py`,
 `test_active_stages_read_sites.py`,
 `test_waveform_dump_scope_human_confirmation.py`,
-`test_blackboard_subsystem_wiring.py`) → **341 passed in 701s**; full
-`dv_harness_tests/` suite → see "Full suite" below.
+`test_blackboard_subsystem_wiring.py`) → **341 passed in 701s**;
+`dv-harness self-audit` → exit 0. The full `dv_harness_tests/` run reached
+3782/5210 before its background-task lifetime expired, with 11 non-passing
+markers, all of them the live-`pueued`-daemon tests ("real pueued did not come
+up") reproduced in isolation and unrelated to this change — see "Full suite"
+below.
 
 ---
 
@@ -181,7 +185,54 @@ $ python -m pytest dv_harness_tests/test_question_queue.py \
 341 passed in 701.47s (0:11:41)
 ```
 
-Full suite: see the "Full suite" line appended below.
+Post-commit re-run of the two queue suites together:
+`test_question_queue_digest_auto_trigger.py` + `test_question_queue.py` →
+**54 passed in 5.77s**.
+
+`python -m dv_harness.cli --project-root . self-audit` → **exit 0** (the same
+gate `.github/workflows/dv-harness-ci.yml` runs).
+
+### Full suite — reported honestly, not rounded up to "green"
+
+`python -m pytest dv_harness_tests/ -q --tb=no -rEf` was started twice. Both
+runs were killed by the session's background-task lifetime before printing a
+summary line; the second reached **3782 of 5210 collected tests (~72%)**. Its
+progress stream carried exactly **11 non-passing markers (6 E, 5 F)** and
+nothing else. Mapping each marker's index against
+`pytest --collect-only -q`'s deterministic order (no `pytest-randomly` is
+installed, so collection order is stable) identified all 11 as
+`dv_harness_tests/test_pueue_client.py::TestRealPueueIntegration::*` and
+`dv_harness_tests/test_cli_pueue.py::TestPueue*`.
+
+Re-run in isolation to confirm the attribution:
+
+```
+$ python -m pytest dv_harness_tests/test_pueue_client.py dv_harness_tests/test_cli_pueue.py -q --tb=line -rEf
+ERROR ...TestRealPueueIntegration::test_real_version - AssertionError: real pueued did not come up
+  (and 5 more, all the same assertion)
+FAILED ...TestPueueAddAndStatus::test_add_then_status_shows_the_task - assert 1 == 0
+  (and 4 more)
+5 failed, 31 passed, 6 errors in 238.72s
+```
+
+These are the live-`pueued`-daemon integration tests. The daemon will not come
+up on this machine right now — several sibling gap-close workstreams were
+running their own heavy suites against the same single local daemon
+concurrently with this one. **Pre-existing and environmental, not caused by
+this change**: nothing in this change touches `pueue_client.py`, `cli.py`'s
+pueue verbs, or any process/daemon path — it adds one method to
+`engine.DVHarness` and edits one docstring. Every suite that does exercise the
+code paths this change touches (engine routing/gates, graph fan-out, the
+question queue, the blackboard subsystem wiring, the waveform-dump gate) is in
+the 341-passing run above.
+
+**Concurrency caveat, stated rather than hidden**: three other gap-close
+workstreams committed to this branch and had uncommitted edits to
+`dv_harness/engine.py`, `dv_harness/capability_evolution.py` and `CLAUDE.md` in
+the working tree during these runs. This commit was therefore staged with the
+hand-scoped-patch technique (`git diff > patch`, trimmed to this workstream's
+single hunk, `git apply --cached --check` then `--cached`), so the committed
+`engine.py` delta is exactly the +66 lines of this change and none of theirs.
 
 ---
 
