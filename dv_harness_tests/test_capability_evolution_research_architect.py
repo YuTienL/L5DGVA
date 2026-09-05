@@ -476,7 +476,8 @@ def test_a_successful_experiment_does_not_imply_human_approved(tmp_path):
     fixture and is refused without the record it produces, so 'a successful
     experiment' here is a measured one rather than the words 'before/after
     measured' typed into a reason field."""
-    from .controlled_experiment_fixture import make_fixture_project, run_demo_experiment
+    from .controlled_experiment_fixture import (
+        make_fixture_project, run_demo_experiment, run_demo_replication)
 
     candidate = ce.build_candidate(**_semantic_change_impact_fields())
     for to_status, reason in (
@@ -492,7 +493,10 @@ def test_a_successful_experiment_does_not_imply_human_approved(tmp_path):
     assert measured["current_status"] == "BENCHMARKED"
     assert measured["benchmark_result"]["outcome"] == "IMPROVED"
 
-    candidate = ce.transition(tmp_path, measured, "PROMOTION_CANDIDATE",
+    # Section 134's stability window: one successful shadow run is not enough to
+    # reach PROMOTION_CANDIDATE, so a second REAL run is measured.
+    replicated = run_demo_replication(tmp_path, measured, fixture)["candidate"]
+    candidate = ce.transition(tmp_path, replicated, "PROMOTION_CANDIDATE",
                               by="research-architect", reason="acceptance criteria met")
 
     with pytest.raises(ce.HumanApprovalRequiredError) as exc:

@@ -36,9 +36,11 @@ from .controlled_experiment_fixture import (
     FIXTURE_STAGE,
     MIGRATION_FILE,
     MIGRATION_MUTATION,
+    benchmarked_with_stability_window,
     harness_factory,
     make_fixture_project,
     run_demo_experiment,
+    run_demo_replication,
 )
 from .test_capability_evolution_research_architect import _semantic_change_impact_fields
 
@@ -215,7 +217,10 @@ def test_an_experiment_never_advances_past_benchmarked(root, fixture_project):
 
     # PROMOTION_CANDIDATE is a state a human moves it to; HUMAN_APPROVED still
     # requires a real ControlPlane approval on disk however the benchmark came out.
-    promoted = ce.transition(root, measured, "PROMOTION_CANDIDATE", by="dv-manager",
+    # Since 2026-09-05 that edge also needs section 134's stability window, so a
+    # second REAL shadow run is measured here rather than the requirement relaxed.
+    replicated = run_demo_replication(root, measured, fixture_project)["candidate"]
+    promoted = ce.transition(root, replicated, "PROMOTION_CANDIDATE", by="dv-manager",
                              reason="reviewed the measured result")
     with pytest.raises(ce.HumanApprovalRequiredError):
         ce.transition(root, promoted, "HUMAN_APPROVED", by="tester",
@@ -504,8 +509,9 @@ def test_no_verdict_token_reaches_the_candidate_or_the_record(root, fixture_proj
 def test_a_human_approval_still_unblocks_the_last_edge(root, fixture_project):
     """Nothing about the new evidence requirement changed what a real human
     approval does -- the gate above BENCHMARKED is untouched."""
-    result = run_demo_experiment(root, _approved_candidate(root), fixture_project)
-    promoted = ce.transition(root, result["candidate"], "PROMOTION_CANDIDATE",
+    windowed = benchmarked_with_stability_window(
+        root, _approved_candidate(root), fixture_project)
+    promoted = ce.transition(root, windowed, "PROMOTION_CANDIDATE",
                              by="dv-manager", reason="measured result reviewed")
 
     ControlPlane(root).approve(ce.HUMAN_APPROVAL_STAGE, note="reviewed the real benchmark",

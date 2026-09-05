@@ -851,6 +851,17 @@ def build_candidate(**fields: Any) -> Dict[str, Any]:
             "caller assembling a candidate"
         )
     candidate["benchmark_result"] = None
+    # Same reasoning one step further along: a replication re-measures a
+    # BENCHMARKED candidate, which is six governance states away from where a
+    # candidate is born, so shadow_runs arriving here pins runs nothing ran.
+    # Only run_shadow_replication() ever writes this field.
+    if candidate.get("shadow_runs"):
+        raise CapabilityEvolutionCandidateValidationError(
+            "shadow_runs was supplied to build_candidate(); it is written only by "
+            f"{SHADOW_REPLICATION_PRODUCER}() from a real isolated shadow run, never by a "
+            "caller assembling a candidate"
+        )
+    candidate.pop("shadow_runs", None)
 
     if "candidate_id" not in candidate:
         candidate["candidate_id"] = mint_candidate_id(
@@ -985,9 +996,9 @@ def transition(root, candidate: Dict[str, Any], to_status: str, *, by: str, reas
                cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Advance a candidate one governance state and persist the result.
 
-    Returns the NEW candidate dict; the input is not mutated. Two edges carry an
-    additional evidence requirement beyond the legality table, and both re-read
-    the evidence off disk rather than trusting a field:
+    Returns the NEW candidate dict; the input is not mutated. Three edges carry
+    an additional evidence requirement beyond the legality table, and all three
+    re-read the evidence off disk rather than trusting a field:
 
       * -> HUMAN_APPROVED requires a real ControlPlane approval, copied into the
         status_history entry so the candidate carries its own evidence that a
@@ -997,6 +1008,12 @@ def transition(root, candidate: Dict[str, Any], to_status: str, *, by: str, reas
         check existed, this edge was reachable with an agent-typed
         benchmark_plan string and nothing else -- "before/after measured" as a
         reason field, with no before and no after anywhere on disk.
+      * BENCHMARKED -> PROMOTION_CANDIDATE requires section 134's stability
+        window: at least STABILITY_WINDOW_MIN_RUNS pinned, re-readable, agreeing,
+        regression-free shadow runs over the same stages. Only from BENCHMARKED
+        -- the PROPOSED -> PROMOTION_CANDIDATE edge belongs to a candidate whose
+        own experiment_required is False, which ran no experiment and therefore
+        has no window to establish.
     """
     assert_legal_transition(candidate.get("current_status"), to_status, candidate)
 
@@ -1011,6 +1028,9 @@ def transition(root, candidate: Dict[str, Any], to_status: str, *, by: str, reas
         entry["approval_ref"] = dict(assert_human_approval(root, candidate))
     elif to_status == BENCHMARKED_STATE:
         assert_benchmark_measured(root, candidate)
+    elif (to_status == PROMOTION_CANDIDATE_STATE
+            and candidate.get("current_status") == BENCHMARKED_STATE):
+        entry["stability_window"] = dict(assert_stability_window(root, candidate))
 
     updated = dict(candidate)
     updated["current_status"] = to_status
@@ -1932,6 +1952,72 @@ EXPERIMENT_ARMS = ("baseline", "treatment")
 # the experiment.
 EXPERIMENT_MAX_FIXTURE_FILES = 5000
 
+# ---------------------------------------------------------------------------
+# SHADOW / DIGITAL-TWIN VALIDATION (master prompt sections 133/134)
+#
+# Section 133's canonical picture -- one input, two arms (current production
+# behavior vs. the candidate), compare the results, and the candidate's output
+# alters nothing until it is promoted -- is what run_controlled_experiment()
+# above already IS. What section 134 adds, and what did not exist, is that ONE
+# such run is not enough:
+#
+#     Candidate -> Shadow Runs -> Benchmark -> Regression Safety
+#               -> Stability Window -> Promotion Candidate -> Human Gate
+#
+# and, in its own words, "a single successful shadow run is not sufficient
+# proof". Three things follow, and all three are built here:
+#
+#   * REPLICATION. run_shadow_replication() re-measures an ALREADY-BENCHMARKED
+#     candidate over the same arms and the same stages. It deliberately makes NO
+#     governance transition -- the state machine at PROMOTION_STATES is section
+#     70's and gains no edge -- because a replication is more evidence for a
+#     state the candidate is already in, not a step toward the next one.
+#   * REGRESSION SAFETY. compare_experiment_arms()'s `outcome` is a NET verdict:
+#     a treatment arm that satisfies two more gates and one fewer reads
+#     IMPROVED, and the gate it broke is invisible in the total. regression_
+#     safety() is the per-stage view, computed from each run's own before/after
+#     rather than stored, so it holds for records written before it existed and
+#     cannot be forged by editing a field.
+#   * STABILITY WINDOW. assert_stability_window() is a NEW PRECONDITION on
+#     BENCHMARKED -> PROMOTION_CANDIDATE. It weakens nothing: PROMOTION_CANDIDATE
+#     was and remains a human's move, HUMAN_APPROVED still requires a real
+#     ControlPlane approval, and this only adds a requirement in front of an edge
+#     that previously had none.
+#
+# Anti-forgery is the same pattern assert_benchmark_measured() established and
+# is the reason a replication persists the candidate at all: each run is PINNED
+# by digest on the candidate (benchmark_result for the first, shadow_runs for
+# every replication), and the window counts pinned runs ONLY. A hand-written
+# experiment.json dropped into the experiments directory contributes nothing,
+# and an edited one is refused rather than counted.
+
+SHADOW_REPLICATION_PRODUCER = "capability_evolution.run_shadow_replication"
+SHADOW_RUN_PRODUCERS = (BENCHMARK_PRODUCER, SHADOW_REPLICATION_PRODUCER)
+
+#: Which producer wrote a run. Lowercase on purpose: these are record
+#: provenance, not a decision vocabulary, and they must never read like one.
+SHADOW_RUN_KIND_BENCHMARK = "benchmark"
+SHADOW_RUN_KIND_REPLICATION = "replication"
+SHADOW_RUN_KINDS = (SHADOW_RUN_KIND_BENCHMARK, SHADOW_RUN_KIND_REPLICATION)
+
+#: "A single successful shadow run is not sufficient proof" (section 134), as a
+#: number. Two, for the same reason REPEAT_FAILURE_MIN_OCCURRENCES and
+#: memory_router.ORGANIZATIONAL_MIN_CONFIRMATIONS are two: one measurement is one
+#: run's circumstances, and a second INDEPENDENT one is the smallest evidence
+#: that the first was not a fluke of its own workspace.
+STABILITY_WINDOW_MIN_RUNS = 2
+
+#: A window may close over a consistently IMPROVED candidate or a consistently
+#: UNCHANGED one. DEGRADED and INCONCLUSIVE are refused, and so is a window whose
+#: runs disagree -- that is what "unstable" means. Whether an UNCHANGED result
+#: MEETS the candidate's acceptance criteria is deliberately not judged here:
+#: the criteria are free text and that decision stays with the human at the
+#: approval gate, exactly as the experiment record's own
+#: acceptance_criteria_machine_evaluated: false already states.
+STABILITY_WINDOW_ADMISSIBLE_OUTCOMES = ("IMPROVED", "UNCHANGED")
+
+PROMOTION_CANDIDATE_STATE = "PROMOTION_CANDIDATE"
+
 
 class ExperimentNotAuthorizedError(PermissionError):
     """A controlled experiment was requested for a candidate that is not at
@@ -1952,6 +2038,16 @@ class BenchmarkEvidenceRequiredError(ValueError):
     """EXPERIMENTING -> BENCHMARKED was attempted without a real experiment
     record on disk backing it. This is the check that turns benchmark_plan from
     the only benchmark artifact into what it always claimed to be -- a plan."""
+
+
+class StabilityWindowNotEstablishedError(ValueError):
+    """BENCHMARKED -> PROMOTION_CANDIDATE was attempted without section 134's
+    stability window behind it: too few real runs, runs that measured different
+    stages, runs that disagree, a run that regressed a stage the baseline had
+    satisfied, or a pinned record that no longer exists or no longer hashes to
+    what the candidate carries. Distinct from HumanApprovalRequiredError on
+    purpose -- this is missing EVIDENCE, and clearing it never substitutes for
+    the human decision the next edge still requires."""
 
 
 def experiments_dir(root) -> Path:
@@ -2154,6 +2250,147 @@ def _apply_mutation(treatment_root: Path, mutation) -> List[str]:
     return sorted(set(changed))
 
 
+def _prepare_shadow_run(root, candidate: Dict[str, Any], *, fixture_project,
+                        stages, run_id: Optional[str]):
+    """Validate one shadow run's inputs and CLAIM its workspace, writing nothing.
+
+    Shared verbatim by run_controlled_experiment() (the first, state-advancing
+    run) and run_shadow_replication() (every later one), so the four isolation
+    preconditions -- at least one stage, a real fixture, a fixture that does not
+    contain the live project root, and a workspace under this project's own
+    experiments directory that no earlier run already claimed -- are one
+    implementation rather than two that could drift apart.
+
+    Returns (fixture, stages, workspace, run_id). The workspace does not exist
+    yet: the caller may still need to make a governance transition between
+    claiming it and filling it.
+    """
+    root = Path(root).resolve()
+    stages = [str(s) for s in (stages or [])]
+    if not stages:
+        raise ExperimentIsolationError(
+            "a controlled experiment needs at least one stage to run; an experiment that "
+            "runs nothing measures nothing"
+        )
+
+    fixture = Path(fixture_project).resolve()
+    if not fixture.is_dir():
+        raise ExperimentIsolationError(
+            f"fixture project {fixture} does not exist; a controlled experiment runs "
+            "against an isolated fixture, never against a live project tree"
+        )
+    if fixture == root or _within(root, fixture):
+        raise ExperimentIsolationError(
+            f"fixture project {fixture} contains this project root {root}; copying it "
+            "would copy the live project into its own experiment workspace"
+        )
+
+    candidate_id = candidate["candidate_id"]
+    # The suffix folds in a microsecond-resolution timestamp as well as the run's
+    # inputs, because a replication runs the SAME candidate over the SAME fixture
+    # and stages as the run it replicates -- an inputs-only digest would make two
+    # runs in one second collide on the workspace-already-exists check.
+    now = datetime.now(timezone.utc)
+    run_id = run_id or "EXP-{}-{}".format(
+        now.strftime("%Y%m%dT%H%M%S"),
+        _sha256_text(f"{candidate_id}|{fixture}|{stages}|{now.isoformat()}")[:8],
+    )
+    workspace = (experiments_dir(root) / candidate_id / run_id).resolve()
+    if not _within(workspace, experiments_dir(root)):
+        raise ExperimentIsolationError(
+            f"experiment workspace {workspace} is not under {experiments_dir(root)}"
+        )
+    if workspace.exists():
+        raise ExperimentIsolationError(
+            f"experiment workspace {workspace} already exists; a run id is used once"
+        )
+    return fixture, stages, workspace, run_id
+
+
+def _execute_shadow_run(root, candidate: Dict[str, Any], *, fixture, stages, workspace,
+                        run_id: str, run_kind: str, produced_by: str, mutation,
+                        user_goal: str, harness_factory, allow_execution_stages: bool,
+                        started_at: str):
+    """Run ONE two-arm shadow measurement and write its record.
+
+    This is section 133's canonical diagram as executable code -- the same input
+    fixture copied twice, the untouched copy standing for current production
+    behavior, the mutated copy standing for the candidate, both driven through
+    the SAME real engine stage runner, and the two results compared -- and it is
+    the whole of what a shadow run does. It makes no governance transition and
+    persists no candidate: which of those a run implies is its caller's business,
+    which is exactly what lets a replication reuse it without gaining an edge in
+    the promotion state machine.
+
+    Returns (record, record_path, comparison, changed_files).
+    """
+    import shutil
+
+    fixture_before = _tree_digest(fixture)
+    workspace.mkdir(parents=True)
+    arm_roots = {}
+    for arm in EXPERIMENT_ARMS:
+        arm_root = workspace / arm
+        shutil.copytree(fixture, arm_root)
+        arm_roots[arm] = arm_root
+
+    before = _run_arm("baseline", arm_roots["baseline"], stages, user_goal=user_goal,
+                      harness_factory=harness_factory,
+                      allow_execution_stages=allow_execution_stages)
+    changed_files = _apply_mutation(arm_roots["treatment"], mutation)
+    after = _run_arm("treatment", arm_roots["treatment"], stages, user_goal=user_goal,
+                     harness_factory=harness_factory,
+                     allow_execution_stages=allow_execution_stages)
+
+    fixture_after = _tree_digest(fixture)
+    if fixture_after["digest"] != fixture_before["digest"]:
+        raise ExperimentIsolationError(
+            f"the source fixture {fixture} changed while the experiment ran "
+            f"({fixture_before['digest'][:12]} -> {fixture_after['digest'][:12]}); the run "
+            "was not isolated and its measurement is discarded"
+        )
+
+    comparison = compare_experiment_arms(before, after)
+    record = {
+        "record_version": "1.0",
+        "produced_by": produced_by,
+        "run_kind": run_kind,
+        "run_id": run_id,
+        "candidate_id": candidate["candidate_id"],
+        "affected_capability": candidate.get("affected_capability"),
+        "benchmark_plan": candidate.get("benchmark_plan", ""),
+        "experiment_plan": candidate.get("experiment_plan", ""),
+        "acceptance_criteria": list(candidate.get("acceptance_criteria") or []),
+        "acceptance_criteria_machine_evaluated": False,
+        "started_at": started_at,
+        "measured_at": _now(),
+        "workspace": str(workspace),
+        "stages": stages,
+        "changed_files": changed_files,
+        "isolation": {
+            "experiments_dir": str(experiments_dir(root)),
+            "fixture_project": str(fixture),
+            "fixture_digest_before": fixture_before,
+            "fixture_digest_after": fixture_after,
+            "fixture_unmodified": True,
+            "execution_stages_allowed": bool(allow_execution_stages),
+        },
+        "before": before,
+        "after": after,
+        "delta": comparison["delta"],
+        "outcome": comparison["outcome"],
+        # Section 134's REGRESSION SAFETY node, recorded for a reader. Never READ
+        # back from here: stability_window_status() recomputes it from this
+        # record's own before/after, so a record written before this field
+        # existed still answers, and editing the field changes nothing.
+        "regression_safety": regression_safety(before, after),
+    }
+    record_path = workspace / EXPERIMENT_RECORD_NAME
+    record_path.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return record, record_path, comparison, changed_files
+
+
 def compare_experiment_arms(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
     """The before/after comparison, as a pure function over two measured arms.
 
@@ -2193,6 +2430,57 @@ def compare_experiment_arms(before: Dict[str, Any], after: Dict[str, Any]) -> Di
             "changed_outcome_stages": changed,
         },
         "outcome": outcome,
+    }
+
+
+def regression_safety(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    """Section 134's REGRESSION SAFETY node: the PER-STAGE view of one shadow run.
+
+    compare_experiment_arms()'s `outcome` is a NET verdict over the arm totals,
+    and a net verdict cannot see a trade. A treatment arm that satisfies two more
+    gates on one stage and one fewer on another totals +1 and reads IMPROVED,
+    while the gate it broke does not appear anywhere in the result. That is
+    precisely the case section 134 puts a REGRESSION SAFETY node in front of the
+    stability window for, so it is computed separately rather than folded into
+    the outcome -- collapsing them would leave a promotion decision resting on a
+    number that had already averaged the regression away.
+
+    A pure function over two measured arms, deliberately, so it can be recomputed
+    from any run record on disk instead of read back out of a stored field.
+
+    Ordering matches compare_experiment_arms(): gate satisfaction is checked
+    first and stage completion only where gate satisfaction is level, because a
+    gate that stopped being satisfied is categorically the stronger signal and
+    reporting both for the same stage would double-count one regression.
+    """
+    before_stages = before.get("stages") or {}
+    after_stages = after.get("stages") or {}
+    regressed: List[Dict[str, Any]] = []
+    for stage in sorted(set(before_stages) & set(after_stages)):
+        b, a = before_stages[stage], after_stages[stage]
+        if a["gates_satisfied"] < b["gates_satisfied"]:
+            regressed.append({
+                "stage": stage,
+                "metric": "gates_satisfied",
+                "baseline": b["gates_satisfied"],
+                "treatment": a["gates_satisfied"],
+            })
+        elif a["stage_completion_percent"] < b["stage_completion_percent"]:
+            regressed.append({
+                "stage": stage,
+                "metric": "stage_completion_percent",
+                "baseline": b["stage_completion_percent"],
+                "treatment": a["stage_completion_percent"],
+            })
+
+    # A stage the baseline measured and the treatment did not is not a neutral
+    # result: the comparison simply stopped looking at it, which is the one way a
+    # regression can hide from a per-stage check that only walks the intersection.
+    unmeasured = sorted(set(before_stages) - set(after_stages))
+    return {
+        "safe": not regressed and not unmeasured,
+        "regressed_stages": regressed,
+        "unmeasured_in_treatment": unmeasured,
     }
 
 
@@ -2299,102 +2587,21 @@ def run_controlled_experiment(root, candidate: Dict[str, Any], *,
             f"experiment may only run from {EXPERIMENT_AUTHORIZED_STATE}"
         )
 
-    stages = [str(s) for s in (stages or [])]
-    if not stages:
-        raise ExperimentIsolationError(
-            "a controlled experiment needs at least one stage to run; an experiment that "
-            "runs nothing measures nothing"
-        )
-
-    fixture = Path(fixture_project).resolve()
-    if not fixture.is_dir():
-        raise ExperimentIsolationError(
-            f"fixture project {fixture} does not exist; a controlled experiment runs "
-            "against an isolated fixture, never against a live project tree"
-        )
-    if fixture == root or _within(root, fixture):
-        raise ExperimentIsolationError(
-            f"fixture project {fixture} contains this project root {root}; copying it "
-            "would copy the live project into its own experiment workspace"
-        )
-
+    fixture, stages, workspace, run_id = _prepare_shadow_run(
+        root, candidate, fixture_project=fixture_project, stages=stages, run_id=run_id)
     candidate_id = candidate["candidate_id"]
-    run_id = run_id or "EXP-{}-{}".format(
-        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"),
-        _sha256_text(f"{candidate_id}|{fixture}|{stages}")[:8],
-    )
-    workspace = (experiments_dir(root) / candidate_id / run_id).resolve()
-    if not _within(workspace, experiments_dir(root)):
-        raise ExperimentIsolationError(
-            f"experiment workspace {workspace} is not under {experiments_dir(root)}"
-        )
-    if workspace.exists():
-        raise ExperimentIsolationError(
-            f"experiment workspace {workspace} already exists; a run id is used once"
-        )
-
-    import shutil
 
     started_at = _now()
     candidate = transition(root, candidate, EXPERIMENTING_STATE, by=by,
                            reason=f"controlled experiment {run_id} started", cfg=cfg)
 
-    fixture_before = _tree_digest(fixture)
-    workspace.mkdir(parents=True)
-    arm_roots = {}
-    for arm in EXPERIMENT_ARMS:
-        arm_root = workspace / arm
-        shutil.copytree(fixture, arm_root)
-        arm_roots[arm] = arm_root
-
-    before = _run_arm("baseline", arm_roots["baseline"], stages, user_goal=user_goal,
-                      harness_factory=harness_factory,
-                      allow_execution_stages=allow_execution_stages)
-    changed_files = _apply_mutation(arm_roots["treatment"], mutation)
-    after = _run_arm("treatment", arm_roots["treatment"], stages, user_goal=user_goal,
-                     harness_factory=harness_factory,
-                     allow_execution_stages=allow_execution_stages)
-
-    fixture_after = _tree_digest(fixture)
-    if fixture_after["digest"] != fixture_before["digest"]:
-        raise ExperimentIsolationError(
-            f"the source fixture {fixture} changed while the experiment ran "
-            f"({fixture_before['digest'][:12]} -> {fixture_after['digest'][:12]}); the run "
-            "was not isolated and its measurement is discarded"
-        )
-
-    comparison = compare_experiment_arms(before, after)
-    record = {
-        "record_version": "1.0",
-        "produced_by": BENCHMARK_PRODUCER,
-        "run_id": run_id,
-        "candidate_id": candidate_id,
-        "affected_capability": candidate.get("affected_capability"),
-        "benchmark_plan": candidate.get("benchmark_plan", ""),
-        "experiment_plan": candidate.get("experiment_plan", ""),
-        "acceptance_criteria": list(candidate.get("acceptance_criteria") or []),
-        "acceptance_criteria_machine_evaluated": False,
-        "started_at": started_at,
-        "measured_at": _now(),
-        "workspace": str(workspace),
-        "stages": stages,
-        "changed_files": changed_files,
-        "isolation": {
-            "experiments_dir": str(experiments_dir(root)),
-            "fixture_project": str(fixture),
-            "fixture_digest_before": fixture_before,
-            "fixture_digest_after": fixture_after,
-            "fixture_unmodified": True,
-            "execution_stages_allowed": bool(allow_execution_stages),
-        },
-        "before": before,
-        "after": after,
-        "delta": comparison["delta"],
-        "outcome": comparison["outcome"],
-    }
-    record_path = workspace / EXPERIMENT_RECORD_NAME
-    record_text = json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True)
-    record_path.write_text(record_text, encoding="utf-8")
+    record, record_path, comparison, changed_files = _execute_shadow_run(
+        root, candidate,
+        fixture=fixture, stages=stages, workspace=workspace, run_id=run_id,
+        run_kind=SHADOW_RUN_KIND_BENCHMARK, produced_by=BENCHMARK_PRODUCER,
+        mutation=mutation, user_goal=user_goal, harness_factory=harness_factory,
+        allow_execution_stages=allow_execution_stages, started_at=started_at)
+    record_text = record_path.read_text(encoding="utf-8")
 
     measured = dict(candidate)
     measured["benchmark_result"] = {
@@ -2404,8 +2611,8 @@ def run_controlled_experiment(root, candidate: Dict[str, Any], *,
         "record_digest": _sha256_text(record_text),
         "workspace": str(workspace),
         "stages": stages,
-        "before": before,
-        "after": after,
+        "before": record["before"],
+        "after": record["after"],
         "delta": comparison["delta"],
         "outcome": comparison["outcome"],
         "measured_at": record["measured_at"],
@@ -2430,3 +2637,369 @@ def run_controlled_experiment(root, candidate: Dict[str, Any], *,
         )
 
     return {"candidate": measured, "experiment": record, "record_path": record_path}
+
+
+# ---------------------------------------------------------------------------
+# The stability window itself (master prompt section 134).
+
+
+def _pinned_shadow_runs(candidate: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every run this candidate PINS by digest, oldest first.
+
+    The pin is what makes a run count. `benchmark_result` pins the first run and
+    `shadow_runs` pins each replication; both are written by code in this module
+    and neither may be supplied by a caller assembling a candidate. A record
+    sitting in the experiments directory that no pin names is deliberately
+    invisible to the window -- otherwise establishing one would be a matter of
+    writing a JSON file into a directory.
+    """
+    pinned: List[Dict[str, Any]] = []
+    benchmark = candidate.get("benchmark_result")
+    if isinstance(benchmark, dict):
+        pinned.append({
+            "run_kind": SHADOW_RUN_KIND_BENCHMARK,
+            "produced_by": benchmark.get("produced_by"),
+            "run_id": benchmark.get("run_id"),
+            "record_path": benchmark.get("record_path"),
+            "record_digest": benchmark.get("record_digest"),
+            "stages": list(benchmark.get("stages") or []),
+            "outcome": benchmark.get("outcome"),
+            "measured_at": benchmark.get("measured_at"),
+        })
+    for entry in list(candidate.get("shadow_runs") or []):
+        if not isinstance(entry, dict):
+            continue
+        pinned.append({
+            "run_kind": entry.get("run_kind"),
+            "produced_by": entry.get("produced_by"),
+            "run_id": entry.get("run_id"),
+            "record_path": entry.get("record_path"),
+            "record_digest": entry.get("record_digest"),
+            "stages": list(entry.get("stages") or []),
+            "outcome": entry.get("outcome"),
+            "measured_at": entry.get("measured_at"),
+        })
+    return pinned
+
+
+def _read_pinned_run(root, candidate_id: str, pin: Dict[str, Any]) -> Dict[str, Any]:
+    """Re-read ONE pinned run off disk and judge whether it may be counted.
+
+    Every check re-reads something. A pin's own copy of the outcome is never
+    trusted: the record on disk decides, and the pin only decides WHICH record
+    is being asked about. Returns the pin plus `admissible`, its `reason` when
+    not, and -- when it is -- the record and the regression-safety verdict
+    recomputed from that record's own arms.
+    """
+    def rejected(reason: str) -> Dict[str, Any]:
+        return {**pin, "admissible": False, "reason": reason}
+
+    if pin.get("produced_by") not in SHADOW_RUN_PRODUCERS:
+        return rejected(f"produced_by={pin.get('produced_by')!r} is not a shadow-run producer")
+
+    record_path = Path(str(pin.get("record_path") or ""))
+    if not _within(record_path, experiments_dir(root)):
+        return rejected(f"record {record_path} is not under {experiments_dir(root)}")
+    if not record_path.is_file():
+        return rejected(f"record {record_path} does not exist")
+
+    text = record_path.read_text(encoding="utf-8")
+    if _sha256_text(text) != pin.get("record_digest"):
+        return rejected(
+            f"record {record_path} no longer matches the digest the candidate carries")
+
+    try:
+        record = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return rejected(f"record {record_path} is not readable JSON ({exc})")
+
+    if record.get("candidate_id") != candidate_id:
+        return rejected(f"record was produced for candidate {record.get('candidate_id')!r}")
+    if record.get("run_id") != pin.get("run_id"):
+        return rejected(
+            f"pin names run {pin.get('run_id')!r} but the record on disk is "
+            f"run {record.get('run_id')!r}")
+
+    # A shadow run's evidence is the two arms it really ran, so the arm
+    # workspaces the record points at must still be there with real harness state
+    # in them. This is what separates a measurement from a JSON file describing
+    # one; the digest check above proves the record was not edited, not that it
+    # was ever produced by running anything.
+    workspace = Path(str(record.get("workspace") or ""))
+    if not workspace.is_dir() or workspace.resolve() != record_path.parent.resolve():
+        return rejected(f"record claims workspace {workspace}, not its own directory")
+    for arm in EXPERIMENT_ARMS:
+        if not (workspace / arm / ".dv-harness").is_dir():
+            return rejected(f"the {arm} arm workspace under {workspace} holds no harness state")
+
+    return {
+        **pin,
+        "admissible": True,
+        "reason": None,
+        "outcome": record.get("outcome"),
+        "stages": list(record.get("stages") or []),
+        "measured_at": record.get("measured_at"),
+        "record": record,
+        "regression_safety": regression_safety(
+            record.get("before") or {}, record.get("after") or {}),
+    }
+
+
+def shadow_run_history(root, candidate: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every run this candidate pins, re-read off disk, oldest first.
+
+    The one read path behind stability_window_status() and
+    shadow_rollback_manifest(), so "which runs does this candidate really have"
+    has a single answer rather than one per caller.
+    """
+    candidate_id = candidate.get("candidate_id", "")
+    runs = [_read_pinned_run(root, candidate_id, pin)
+            for pin in _pinned_shadow_runs(candidate)]
+    return sorted(runs, key=lambda r: str(r.get("measured_at") or ""))
+
+
+def stability_window_status(root, candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """Section 134's stability window, reported rather than raised.
+
+    Reports every blocker at once instead of stopping at the first, because the
+    caller acting on this is deciding whether to run another replication or to
+    stop and fix something, and one blocker at a time makes that several rounds.
+    """
+    runs = shadow_run_history(root, candidate)
+    admissible = [r for r in runs if r.get("admissible")]
+    rejected = [r for r in runs if not r.get("admissible")]
+
+    blockers: List[str] = []
+    for run in rejected:
+        blockers.append(f"run {run.get('run_id')!r} cannot be counted: {run.get('reason')}")
+
+    if not isinstance(candidate.get("benchmark_result"), dict):
+        blockers.append(
+            "the candidate carries no benchmark_result, so no shadow run has been measured")
+
+    if len(admissible) < STABILITY_WINDOW_MIN_RUNS:
+        blockers.append(
+            f"{len(admissible)} countable shadow run(s); section 134 requires at least "
+            f"{STABILITY_WINDOW_MIN_RUNS} because a single successful shadow run is not "
+            "sufficient proof. Run capability_evolution.run_shadow_replication() again."
+        )
+
+    stage_sets = sorted({tuple(sorted(r.get("stages") or [])) for r in admissible})
+    if len(stage_sets) > 1:
+        blockers.append(
+            "the runs measured different stage sets "
+            f"({[list(s) for s in stage_sets]}); replication means re-measuring the "
+            "same thing, not measuring something else")
+
+    outcomes = [r.get("outcome") for r in admissible]
+    off_vocabulary = sorted(
+        {str(o) for o in outcomes if o not in STABILITY_WINDOW_ADMISSIBLE_OUTCOMES})
+    if off_vocabulary:
+        blockers.append(
+            f"a run came out {off_vocabulary}; a stability window admits only "
+            f"{list(STABILITY_WINDOW_ADMISSIBLE_OUTCOMES)}")
+    elif len(set(outcomes)) > 1:
+        blockers.append(
+            f"the runs disagree ({sorted(set(outcomes))}); that is what unstable means")
+
+    unsafe = [r for r in admissible if not (r.get("regression_safety") or {}).get("safe")]
+    for run in unsafe:
+        detail = run.get("regression_safety") or {}
+        blockers.append(
+            f"run {run.get('run_id')!r} regressed "
+            f"{detail.get('regressed_stages') or detail.get('unmeasured_in_treatment')}; "
+            "a net-positive total does not make a regressed stage safe")
+
+    # Section 134 closes with "Provide rollback." The plan is already a required
+    # schema field, so this only refuses one that is present and empty rather
+    # than inventing a new requirement.
+    if not str(candidate.get("rollback_plan") or "").strip():
+        blockers.append("rollback_plan is empty; section 134 requires a rollback")
+
+    return {
+        "candidate_id": candidate.get("candidate_id"),
+        "min_runs": STABILITY_WINDOW_MIN_RUNS,
+        "countable_runs": len(admissible),
+        "run_ids": [r.get("run_id") for r in admissible],
+        "outcomes": outcomes,
+        "stages": list(stage_sets[0]) if len(stage_sets) == 1 else [],
+        "regression_safe": not unsafe,
+        "uncountable_runs": [
+            {"run_id": r.get("run_id"), "reason": r.get("reason")} for r in rejected],
+        "established": not blockers,
+        "blockers": blockers,
+    }
+
+
+def assert_stability_window(root, candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """Refuse BENCHMARKED -> PROMOTION_CANDIDATE without a real stability window.
+
+    A PRECONDITION added in front of an edge that previously had none. It moves
+    no gate: PROMOTION_CANDIDATE was and remains a state a human puts a candidate
+    into, HUMAN_APPROVED still requires a real ControlPlane approval through
+    assert_human_approval(), and a cleared window authorizes exactly nothing on
+    its own. What it stops is the specific thing section 134 names -- one good
+    run being read as proof.
+
+    Returns the compact evidence copied onto the status_history entry.
+    """
+    status = stability_window_status(root, candidate)
+    if not status["established"]:
+        raise StabilityWindowNotEstablishedError(
+            f"{candidate.get('candidate_id', '<candidate>')}: "
+            f"{BENCHMARKED_STATE} -> {PROMOTION_CANDIDATE_STATE} requires section 134's "
+            "stability window, and it is not established: " + "; ".join(status["blockers"])
+        )
+    return {
+        "min_runs": status["min_runs"],
+        "countable_runs": status["countable_runs"],
+        "run_ids": status["run_ids"],
+        "outcome": status["outcomes"][0] if status["outcomes"] else None,
+        "stages": status["stages"],
+        "regression_safe": status["regression_safe"],
+        "acceptance_criteria_machine_evaluated": False,
+    }
+
+
+def run_shadow_replication(root, candidate: Dict[str, Any], *,
+                           fixture_project,
+                           stages: List[str],
+                           mutation,
+                           user_goal: str = "capability evolution shadow replication",
+                           by: str = "capability-evolution",
+                           cfg: Optional[Dict[str, Any]] = None,
+                           harness_factory=None,
+                           run_id: Optional[str] = None,
+                           allow_execution_stages: bool = False) -> Dict[str, Any]:
+    """Re-measure an already-BENCHMARKED candidate: one more shadow run, no new state.
+
+    Section 134's "Shadow Runs", plural. It reuses _prepare_shadow_run() and
+    _execute_shadow_run() -- the same isolation checks, the same two arms, the
+    same real engine stage runner, the same record shape -- and differs from
+    run_controlled_experiment() in exactly one way that matters: it makes NO
+    governance transition. PROMOTION_STATES is section 70's table and gains no
+    edge for replication, because a replication is more evidence for the state
+    the candidate is already in, not a step toward the next one.
+
+    Two entry conditions, both re-read rather than trusted:
+      * the candidate is at BENCHMARKED -- a replication replicates a
+        measurement, so there must be one;
+      * assert_benchmark_measured() still clears -- a replication must never be
+        the thing that lends weight to a benchmark record that has since been
+        edited, deleted or replaced.
+
+    The candidate IS persisted, with the new run appended to `shadow_runs` and
+    pinned by digest. That pin is the whole anti-forgery story for the stability
+    window: a run counts because the candidate names it and its record still
+    hashes to what the candidate carries, never because a file appeared in the
+    experiments directory.
+
+    Returns {"candidate", "experiment", "record_path"}.
+    """
+    root = Path(root).resolve()
+    candidate_id = candidate.get("candidate_id", "<candidate>")
+    current = candidate.get("current_status")
+    if current != BENCHMARKED_STATE:
+        raise ExperimentNotAuthorizedError(
+            f"{candidate_id} is {current}; a shadow replication re-measures a candidate "
+            f"already at {BENCHMARKED_STATE}"
+        )
+    assert_benchmark_measured(root, candidate)
+
+    fixture, stages, workspace, run_id = _prepare_shadow_run(
+        root, candidate, fixture_project=fixture_project, stages=stages, run_id=run_id)
+
+    record, record_path, comparison, changed_files = _execute_shadow_run(
+        root, candidate,
+        fixture=fixture, stages=stages, workspace=workspace, run_id=run_id,
+        run_kind=SHADOW_RUN_KIND_REPLICATION, produced_by=SHADOW_REPLICATION_PRODUCER,
+        mutation=mutation, user_goal=user_goal, harness_factory=harness_factory,
+        allow_execution_stages=allow_execution_stages, started_at=_now())
+    record_text = record_path.read_text(encoding="utf-8")
+
+    replicated = dict(candidate)
+    replicated["shadow_runs"] = [
+        entry for entry in list(candidate.get("shadow_runs") or [])
+        if isinstance(entry, dict) and entry.get("run_id") != run_id
+    ] + [{
+        "produced_by": SHADOW_REPLICATION_PRODUCER,
+        "run_kind": SHADOW_RUN_KIND_REPLICATION,
+        "run_id": run_id,
+        "record_path": str(record_path),
+        "record_digest": _sha256_text(record_text),
+        "workspace": str(workspace),
+        "stages": stages,
+        "outcome": comparison["outcome"],
+        "regression_safe": bool(record["regression_safety"]["safe"]),
+        "measured_at": record["measured_at"],
+        "changed_files": changed_files,
+    }]
+    persist_candidate(root, replicated, cfg=cfg)
+
+    # Asserted rather than trusted from the absence of a transition() call above,
+    # for the same reason run_controlled_experiment() asserts its terminal state:
+    # a second confirming measurement is exactly the circumstance under which
+    # someone would be tempted to carry the candidate one more step.
+    if replicated["current_status"] != BENCHMARKED_STATE:
+        raise IllegalPromotionTransitionError(
+            f"a shadow replication left {candidate_id} at "
+            f"{replicated['current_status']!r}; it may only re-measure a candidate at "
+            f"{BENCHMARKED_STATE}"
+        )
+    return {"candidate": replicated, "experiment": record, "record_path": record_path}
+
+
+def shadow_rollback_manifest(root, candidate: Dict[str, Any], *,
+                             run_id: Optional[str] = None) -> Dict[str, Any]:
+    """Section 134's "Provide rollback", as the concrete restore set for one run.
+
+    `rollback_plan` is prose authored before anything ran. This is the other
+    half: for every file the run's mutation actually wrote, what the UNTOUCHED
+    baseline arm holds at that same path -- so the undo is derived from the
+    experiment's own control copy rather than reconstructed from a sentence. A
+    path the baseline does not have restores by DELETE; one it has restores by
+    content, and the baseline digest is carried so a later restore can be checked.
+
+    Reads only. It writes nothing, restores nothing, and touches no production
+    file: producing the manifest is the mechanism, applying it is a Level C act
+    that stays behind the human-approval gate like every other production write.
+    """
+    runs = [r for r in shadow_run_history(root, candidate) if r.get("admissible")]
+    if run_id is not None:
+        runs = [r for r in runs if r.get("run_id") == run_id]
+    if not runs:
+        raise BenchmarkEvidenceRequiredError(
+            f"{candidate.get('candidate_id', '<candidate>')}: no countable shadow run"
+            + (f" {run_id!r}" if run_id else "")
+            + " to build a rollback manifest from"
+        )
+    run = runs[-1]
+    record = run["record"]
+    baseline_root = Path(record["workspace"]) / "baseline"
+    treatment_root = Path(record["workspace"]) / "treatment"
+
+    entries = []
+    for rel in list(record.get("changed_files") or []):
+        baseline_file = baseline_root / rel
+        treatment_file = treatment_root / rel
+        existed = baseline_file.is_file()
+        entries.append({
+            "path": rel,
+            "restore_action": "restore_content" if existed else "delete",
+            "existed_in_baseline": existed,
+            "baseline_digest": (
+                hashlib.sha256(baseline_file.read_bytes()).hexdigest() if existed else None),
+            "baseline_source": str(baseline_file) if existed else None,
+            "treatment_digest": (
+                hashlib.sha256(treatment_file.read_bytes()).hexdigest()
+                if treatment_file.is_file() else None),
+        })
+    return {
+        "candidate_id": candidate.get("candidate_id"),
+        "run_id": run.get("run_id"),
+        "run_kind": run.get("run_kind"),
+        "rollback_plan": candidate.get("rollback_plan", ""),
+        "workspace": record.get("workspace"),
+        "entries": entries,
+        "applied": False,
+    }

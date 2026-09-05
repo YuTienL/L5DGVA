@@ -115,3 +115,30 @@ def run_demo_experiment(root: Path, candidate: dict, fixture: Path, **kwargs) ->
         harness_factory=harness_factory,
         **kwargs,
     )
+
+
+def run_demo_replication(root: Path, candidate: dict, fixture: Path, **kwargs) -> dict:
+    """One more REAL shadow run of the same experiment, for tests that need a
+    candidate to genuinely satisfy section 134's stability window before
+    BENCHMARKED -> PROMOTION_CANDIDATE will let it through.
+
+    Deliberately the same fixture, arms, stages and mutation as
+    run_demo_experiment(): a replication that measured something else would not
+    replicate anything, and `stability_window_status()` refuses that case."""
+    from dv_harness import capability_evolution as ce
+
+    return ce.run_shadow_replication(
+        root, candidate,
+        fixture_project=fixture,
+        stages=[FIXTURE_STAGE],
+        mutation=MIGRATION_MUTATION,
+        harness_factory=harness_factory,
+        **kwargs,
+    )
+
+
+def benchmarked_with_stability_window(root: Path, candidate: dict, fixture: Path) -> dict:
+    """A candidate at BENCHMARKED carrying a real, established stability window:
+    the controlled experiment plus one real replication, both measured."""
+    measured = run_demo_experiment(root, candidate, fixture)["candidate"]
+    return run_demo_replication(root, measured, fixture)["candidate"]

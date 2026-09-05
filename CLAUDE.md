@@ -2680,3 +2680,122 @@ registration is deliberately a human act so that "which projects agree" never
 depends on where the harness happened to be run from. Federating the mine across
 `knowledge_center.py`'s shared broker (rather than local roots) is likewise
 deferred -- it needs a real remote server and could not be honestly tested here.
+
+
+## Shadow / Digital-Twin Validation: One Good Run Is Not Proof (2026-09-05, VI-3)
+
+VERIFICATION_INTELLIGENCE's completeness audit flagged Shadow / Digital-Twin
+Validation NEVER_BUILT. A repo-wide grep on 2026-09-05 for
+`shadow`/`digital_twin`/`digital twin` returned only unrelated hits (Python
+variable shadowing, W1C shadow registers, a coverpoint's `cp_*` shadow member),
+so the NAME was genuinely absent -- but half the MECHANISM was not. Section
+133's canonical picture is one input evidence set, two arms (current L5
+production behavior vs. the candidate), a comparison of the two results, and a
+candidate whose output alters nothing until it is promoted. That is what
+`capability_evolution.run_controlled_experiment()` already IS: two copies of an
+isolated fixture, the untouched one standing for production, the mutated one
+carrying the candidate's bounded change, both driven through the REAL
+`DVHarness.run_stage()` and measured through the REAL
+`control_plane.describe_stage()`. So section 133 was closed under another name,
+and building a second "shadow runner" beside it would have been exactly the
+parallel mechanism the Methodology Consolidation Rule forbids.
+
+**What was genuinely missing is section 134's promotion flow around it** --
+`Candidate -> Shadow Runs -> Benchmark -> Regression Safety -> Stability Window
+-> Promotion Candidate -> Human Gate`, and its own closing lines "provide
+rollback" and "a single successful shadow run is not sufficient proof". Before
+this change ONE run reached BENCHMARKED and `BENCHMARKED ->
+PROMOTION_CANDIDATE` carried no evidence requirement at all. Four additions,
+all in `capability_evolution.py` beside the machinery they extend:
+
+- **`run_shadow_replication()` -- shadow runs, PLURAL.** It re-measures an
+  already-BENCHMARKED candidate over the same fixture, arms and stages, reusing
+  `_prepare_shadow_run()` / `_execute_shadow_run()` (extracted from
+  `run_controlled_experiment()`, so both paths share one set of isolation
+  checks, one record shape and one stage runner). It makes **no governance
+  transition**: `PROMOTION_STATES` is section 70's table and gains no edge,
+  because a replication is more evidence for the state the candidate is already
+  in, not a step toward the next one. That is asserted on the way out, the same
+  way `run_controlled_experiment()` asserts its terminal state.
+- **`regression_safety()` -- the per-stage view a net verdict cannot give.**
+  `compare_experiment_arms()`'s `outcome` is a NET verdict over arm totals, so a
+  treatment arm that satisfies two more gates on one stage and one fewer on
+  another totals +1 and reads IMPROVED with the broken gate invisible. It is
+  computed from each run's own `before`/`after` at read time rather than trusted
+  from a stored field, so it holds for records written before it existed and
+  cannot be forged by editing one. A stage the treatment stopped measuring
+  entirely is unsafe too -- that is the one way a regression hides from a check
+  that walks only the intersection.
+- **`assert_stability_window()` -- a NEW PRECONDITION on `BENCHMARKED ->
+  PROMOTION_CANDIDATE`**, wired in `transition()` beside the existing
+  `-> HUMAN_APPROVED` and `-> BENCHMARKED` evidence checks, and only from
+  BENCHMARKED (the `PROPOSED -> PROMOTION_CANDIDATE` edge belongs to a candidate
+  whose own `experiment_required` is False, which ran no experiment and has no
+  window to establish). It requires `STABILITY_WINDOW_MIN_RUNS = 2` countable
+  runs -- two for the same reason `REPEAT_FAILURE_MIN_OCCURRENCES` and
+  `memory_router.ORGANIZATIONAL_MIN_CONFIRMATIONS` are two -- measuring the same
+  stage set, agreeing on an outcome that is IMPROVED or UNCHANGED, none
+  regressed, and a non-empty `rollback_plan`. `stability_window_status()`
+  reports every blocker at once rather than one per round, because the caller is
+  deciding whether to run another replication or to stop and fix something.
+- **`shadow_rollback_manifest()` -- "provide rollback" as data.**
+  `rollback_plan` is prose authored before anything ran; the manifest is the
+  other half, derived from the experiment's OWN untouched baseline arm: for
+  every path the mutation wrote, what the control copy holds there, so the undo
+  is `delete` or `restore_content` with a baseline digest to check against. It
+  reads only -- producing it is the mechanism, applying it is a Level C act that
+  stays behind the human-approval gate like every other production write.
+
+**A run counts because the CANDIDATE pins it, never because a file appeared in a
+directory.** This is the same anti-forgery pattern `assert_benchmark_measured()`
+established, extended to every later run: `benchmark_result` pins the first and
+the new `shadow_runs` schema field pins each replication, each by
+`record_path` + `record_digest`, and the window counts pinned runs ONLY. Every
+check re-reads disk -- the record must exist, still hash to what the candidate
+carries, name this candidate and this run, sit under this project's own
+experiments directory, and be its own directory's record. The pin's own copy of
+the outcome is never trusted; the record on disk decides. And because a digest
+proves a record was not EDITED rather than that anything ever RAN, both arm
+workspaces must still be on disk carrying real harness state.
+`build_candidate()` refuses a caller-supplied `shadow_runs`, mirroring its
+`benchmark_result` guard.
+
+**No human-approval gate moved, and the window buys no authority.** Adding a
+precondition in front of an edge that had none can only tighten it:
+PROMOTION_CANDIDATE was and remains a state a human puts a candidate into,
+`assert_human_approval()`'s real `ControlPlane` check is untouched,
+`assert_no_production_write_authorized()` still refuses a promoted candidate,
+and the PR-only main/master governance is unchanged. Whether a measurement MEETS
+the candidate's free-text acceptance criteria is still not judged in code --
+`acceptance_criteria_machine_evaluated: false` is carried on the window evidence
+too, exactly as the experiment record already carried it.
+
+Proven by `dv_harness_tests/test_capability_evolution_shadow_validation.py`
+(24 tests) against the same synthetic fixture the controlled experiment uses --
+real `run_stage()` in both arms of every run, the real
+`command_migration_integrity_gate.py` subprocess judging both, and real
+replications measured on disk rather than records written by hand. The negative
+controls are what give it detection power: a genuinely-improving real run is NOT
+reported as a regression, an unpinned record dropped into the experiments
+directory counts for nothing, a `+2/-1` trade that totals IMPROVED is caught by
+the per-stage view while its stored verdict still says IMPROVED, a pin whose
+stage list was edited does NOT change the verdict (the record decides), and the
+`experiment_required: false` edge still walks. Three existing tests that
+promoted on one run now measure a second real one instead of the requirement
+being relaxed. Nothing in it runs a build, a regression or an LSF submission.
+
+**Disclosed residual, and it is the honest boundary of what this repo can
+stand up.** (1) Section 133's compare list names accuracy, false
+positives/negatives, coverage gain, runtime, resource cost and human-review
+burden. What is compared here is what this harness can measure without ground
+truth it does not have: gate satisfaction, stage completion, a per-stage
+regression check and a gate-outcome digest. Scoring a candidate's false-positive
+rate needs a labeled corpus of known-correct verdicts that does not exist in
+this repo, and inventing one would be the fabrication this module exists to
+prevent. (2) Section 134's `Limited Rollout` and `Revalidation` nodes are not
+built: both are acts on production, and Level C stays human-governed. (3) The
+rollback manifest is produced, never applied. (4) Like
+`run_controlled_experiment()` before it, this is REACHED, not WIRED -- there is
+no CLI verb and no engine call site, the caller is the `research-architect` path
+and these tests, and the mutation is still authored by whoever runs the
+experiment rather than derived from the candidate's own `proposed_action`.

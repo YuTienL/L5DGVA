@@ -71,12 +71,13 @@ def _walk_to(tmp: Path, candidate: dict, target: str) -> dict:
     point of a governance-state test is that the state was reached the way the
     state machine allows.
 
-    EXPERIMENTING -> BENCHMARKED is the one edge that cannot be walked by
-    transition() alone since 2026-09-05: it demands a real experiment record on
-    disk, so this runs the real controlled experiment against the synthetic
-    fixture rather than weakening the check to keep a dashboard test cheap."""
+    Two edges cannot be walked by transition() alone since 2026-09-05, and both
+    are satisfied here with real runs rather than by weakening the check to keep
+    a dashboard test cheap: EXPERIMENTING -> BENCHMARKED demands a real
+    experiment record on disk, and BENCHMARKED -> PROMOTION_CANDIDATE demands
+    section 134's stability window, i.e. a second real shadow run."""
     from dv_harness_tests.controlled_experiment_fixture import (
-        make_fixture_project, run_demo_experiment,
+        make_fixture_project, run_demo_experiment, run_demo_replication,
     )
 
     for state in ("EVIDENCE_GATHERING", "PROPOSED", "EXPERIMENT_APPROVED"):
@@ -90,6 +91,7 @@ def _walk_to(tmp: Path, candidate: dict, target: str) -> dict:
     if target in ("EXPERIMENTING", "BENCHMARKED"):
         return candidate
 
+    candidate = run_demo_replication(tmp, candidate, fixture)["candidate"]
     return ce.transition(tmp, candidate, "PROMOTION_CANDIDATE", by="tester",
                          reason="advance to PROMOTION_CANDIDATE")
 
