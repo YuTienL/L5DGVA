@@ -69,15 +69,29 @@ def _walk_to(tmp: Path, candidate: dict, target: str) -> dict:
     """Advance a candidate through the REAL transition() one legal state at a
     time until it reaches `target`. No shortcut write to the Blackboard: the
     point of a governance-state test is that the state was reached the way the
-    state machine allows."""
-    path = ["EVIDENCE_GATHERING", "PROPOSED", "EXPERIMENT_APPROVED",
-            "EXPERIMENTING", "BENCHMARKED", "PROMOTION_CANDIDATE"]
-    for state in path:
+    state machine allows.
+
+    EXPERIMENTING -> BENCHMARKED is the one edge that cannot be walked by
+    transition() alone since 2026-09-05: it demands a real experiment record on
+    disk, so this runs the real controlled experiment against the synthetic
+    fixture rather than weakening the check to keep a dashboard test cheap."""
+    from dv_harness_tests.controlled_experiment_fixture import (
+        make_fixture_project, run_demo_experiment,
+    )
+
+    for state in ("EVIDENCE_GATHERING", "PROPOSED", "EXPERIMENT_APPROVED"):
         candidate = ce.transition(tmp, candidate, state, by="tester",
                                    reason=f"advance to {state}")
         if state == target:
             return candidate
-    return candidate
+
+    fixture = make_fixture_project(tmp / "experiment_fixture")
+    candidate = run_demo_experiment(tmp, candidate, fixture)["candidate"]
+    if target in ("EXPERIMENTING", "BENCHMARKED"):
+        return candidate
+
+    return ce.transition(tmp, candidate, "PROMOTION_CANDIDATE", by="tester",
+                         reason="advance to PROMOTION_CANDIDATE")
 
 
 def test_research_reports_honest_empty_state_when_no_candidate_filed():

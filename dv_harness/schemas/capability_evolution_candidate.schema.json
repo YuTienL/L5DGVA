@@ -121,7 +121,15 @@
 
     "benchmark_plan": {
       "type": "string",
-      "description": "What is measured BEFORE and AFTER, and on what workload, so 'it helped' is a number rather than an impression. Required non-empty when experiment_required is true."
+      "description": "What is measured BEFORE and AFTER, and on what workload, so 'it helped' is a number rather than an impression. Required non-empty when experiment_required is true. This is the PLAN, authored before the experiment runs -- it is a written intention and nothing more. What was actually MEASURED lives in benchmark_result below, which no agent may type: capability_evolution.transition() refuses EXPERIMENTING -> BENCHMARKED unless benchmark_result names a real on-disk experiment record whose digest matches."
+    },
+
+    "benchmark_result": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/benchmark_result" }
+      ],
+      "description": "The MEASURED counterpart of benchmark_plan, produced only by capability_evolution.run_controlled_experiment() from a real isolated before/after run of the existing engine stage runner. null until an experiment has actually run. Not in `required` so a candidate minted before this field existed still validates -- but a candidate that has REACHED the BENCHMARKED state without one cannot exist, because transition() re-reads the referenced record off disk and compares its digest before allowing that edge."
     },
 
     "acceptance_criteria": {
@@ -307,6 +315,85 @@
       "type": "object",
       "properties": { "search_conclusive": { "const": true } },
       "required": ["search_conclusive"]
+    },
+
+    "benchmark_stage_measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "gates_total", "gates_satisfied", "stage_completion_percent",
+                   "gate_reason_count", "gate_outcome_digest", "attempts"],
+      "description": "One stage's measurement in one arm, taken from control_plane.describe_stage() after a REAL engine stage run in the isolated workspace. Deliberately carries no verdict TOKEN: gate_outcome_digest is a hash of the verdict string, so before/after can be compared for CHANGE without this module ever storing a member of dv_harness.models.Status. The unhashed verdict stays where it was produced -- in the arm workspace's own harness state -- and the arm's project_root points at it.",
+      "properties": {
+        "stage": { "type": "string", "minLength": 1 },
+        "gates_total": { "type": "integer", "minimum": 0 },
+        "gates_satisfied": { "type": "integer", "minimum": 0 },
+        "stage_completion_percent": { "type": "number" },
+        "gate_reason_count": { "type": "integer", "minimum": 0 },
+        "gate_outcome_digest": { "type": "string", "minLength": 1 },
+        "attempts": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "benchmark_arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arm", "project_root", "stages", "totals"],
+      "description": "One side of the controlled experiment. `baseline` is the untouched copy of the fixture project; `treatment` is the copy the candidate's bounded change was applied to. Both ran the SAME stages through the SAME engine stage runner.",
+      "properties": {
+        "arm": { "enum": ["baseline", "treatment"] },
+        "project_root": { "type": "string", "minLength": 1 },
+        "stages": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/benchmark_stage_measurement" }
+        },
+        "totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gates_total", "gates_satisfied", "stage_completion_percent"],
+          "properties": {
+            "gates_total": { "type": "integer", "minimum": 0 },
+            "gates_satisfied": { "type": "integer", "minimum": 0 },
+            "stage_completion_percent": { "type": "number" }
+          }
+        }
+      }
+    },
+
+    "benchmark_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["produced_by", "run_id", "record_path", "record_digest", "workspace",
+                   "stages", "before", "after", "delta", "outcome", "measured_at",
+                   "changed_files", "acceptance_criteria_machine_evaluated"],
+      "description": "A real before/after measurement, never an assertion. produced_by is a const so a hand-written value cannot claim this provenance, and record_path/record_digest bind it to an experiment record on disk that capability_evolution.assert_benchmark_measured() re-reads and re-hashes before EXPERIMENTING -> BENCHMARKED is allowed. outcome is deliberately its own vocabulary, disjoint from dv_harness.models.Status: an experiment that improved a number is not a verification verdict, and reaching BENCHMARKED still authorizes nothing (master prompt section 70: a successful experiment does not imply HUMAN_APPROVED).",
+      "properties": {
+        "produced_by": { "const": "capability_evolution.run_controlled_experiment" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "record_path": { "type": "string", "minLength": 1 },
+        "record_digest": { "type": "string", "minLength": 1 },
+        "workspace": { "type": "string", "minLength": 1 },
+        "stages": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "before": { "$ref": "#/$defs/benchmark_arm" },
+        "after": { "$ref": "#/$defs/benchmark_arm" },
+        "delta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gates_satisfied", "stage_completion_percent", "changed_outcome_stages"],
+          "properties": {
+            "gates_satisfied": { "type": "integer" },
+            "stage_completion_percent": { "type": "number" },
+            "changed_outcome_stages": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "outcome": { "enum": ["IMPROVED", "UNCHANGED", "DEGRADED", "INCONCLUSIVE"] },
+        "measured_at": { "type": "string", "format": "date-time" },
+        "changed_files": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "acceptance_criteria_machine_evaluated": {
+          "const": false,
+          "description": "Stated explicitly rather than left to be assumed: acceptance_criteria are free text and this code does not judge them. The measurement is machine-produced; deciding whether it MEETS the criteria stays with the human at the PROMOTION_CANDIDATE -> HUMAN_APPROVED gate."
+        }
+      }
     },
 
     "status_transition": {

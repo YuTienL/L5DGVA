@@ -6,6 +6,8 @@
   "overall_status": "PASS",
   "git_sha": null,
   "server_sha": null,
+  "dut_version": null,
+  "tb_version": null,
   "closure_iteration": 0,
   "findings_total": 0,
   "findings_closed": 0,
@@ -397,7 +399,61 @@
       "last_message": "",
       "evidence": [],
       "blocking_reason": ""
+    },
+    "RCA_RTL_EVIDENCE": {
+      "stage": "RCA_RTL_EVIDENCE",
+      "status": "NOT_STARTED",
+      "attempts": 0,
+      "session_id": null,
+      "started_at": null,
+      "finished_at": null,
+      "last_message": "",
+      "evidence": [],
+      "blocking_reason": "",
+      "react_reroute_target": null,
+      "last_evidence_blocks": {}
+    },
+    "RCA_LOG_EVIDENCE": {
+      "stage": "RCA_LOG_EVIDENCE",
+      "status": "NOT_STARTED",
+      "attempts": 0,
+      "session_id": null,
+      "started_at": null,
+      "finished_at": null,
+      "last_message": "",
+      "evidence": [],
+      "blocking_reason": "",
+      "react_reroute_target": null,
+      "last_evidence_blocks": {}
+    },
+    "RCA_VIP_SPEC_EVIDENCE": {
+      "stage": "RCA_VIP_SPEC_EVIDENCE",
+      "status": "NOT_STARTED",
+      "attempts": 0,
+      "session_id": null,
+      "started_at": null,
+      "finished_at": null,
+      "last_message": "",
+      "evidence": [],
+      "blocking_reason": "",
+      "react_reroute_target": null,
+      "last_evidence_blocks": {}
+    },
+    "RCA_JOIN": {
+      "stage": "RCA_JOIN",
+      "status": "NOT_STARTED",
+      "attempts": 0,
+      "session_id": null,
+      "started_at": null,
+      "finished_at": null,
+      "last_message": "",
+      "evidence": [],
+      "blocking_reason": "",
+      "react_reroute_target": null,
+      "last_evidence_blocks": {}
     }
   },
-  "active_stages": []
+  "active_stages": [],
+  "last_transition": null,
+  "rca_evidence_fanout_armed": null
 }

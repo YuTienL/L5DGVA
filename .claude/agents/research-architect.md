@@ -190,6 +190,40 @@ A successful experiment does not imply approval (section 70), and
 production write from a candidate that is not HUMAN_APPROVED with that record
 backing it.
 
+## Running the controlled experiment (section 53.3 / section 61 LEVEL B)
+
+`benchmark_plan` is a PLAN. Since 2026-09-05 it is no longer also the evidence:
+`EXPERIMENTING -> BENCHMARKED` is refused unless the candidate carries a
+`benchmark_result` naming a real experiment record on disk whose digest still
+matches. Writing "before/after measured" into a transition reason does nothing.
+
+Run the experiment with the one function that produces one:
+
+```python
+from dv_harness import capability_evolution as ce
+
+result = ce.run_controlled_experiment(
+    root, candidate,                      # candidate must be at EXPERIMENT_APPROVED
+    fixture_project=<an isolated fixture project>,
+    stages=["CHANGE_IMPACT"],             # non-execution-layer stages only
+    mutation=[{"path": "...", "content": "..."}],   # the bounded change, as data
+)
+```
+
+It copies the fixture twice, drives the REAL `DVHarness.run_stage()` over the
+same stages in each copy, applies the change to the treatment copy only, and
+reads both arms back through the same `control_plane.describe_stage()` the CLI
+and the dashboard use. It writes only under
+`<root>/.dv-harness/experiments/<candidate_id>/<run_id>/`, re-fingerprints the
+source fixture to prove it was never written to, and REFUSES a stage whose graph
+node declares an execution-layer skill — a capability experiment must never be
+the thing that submits a real build or regression.
+
+It stops at BENCHMARKED and asserts that it did. It does not decide whether the
+measurement MEETS `acceptance_criteria`: those are free text, the record says
+`acceptance_criteria_machine_evaluated: false`, and judging them stays with the
+human at the `PROMOTION_CANDIDATE -> HUMAN_APPROVED` gate above.
+
 When all nine of section 43's preconditions are complete,
 `capability_evolution.render_stop_report(checklist)` prints exactly:
 

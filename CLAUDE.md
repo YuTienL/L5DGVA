@@ -1542,3 +1542,211 @@ the six current-L5 searches; nothing in the engine performs them, and
 `NOT_DISPATCHED` — no graph node declares `research-route`. What changed is that
 the loop now RAISES the question from real repeated evidence instead of waiting
 for a human to notice the pattern.
+
+
+## Harness-to-Remote-Agent-Path Deployment: `dv-harness harness-deploy` (2026-09-05)
+
+`USAGE_MULTI_USER_SAFETY.md:16-19` records as 固化 standing policy that "every
+harness update must sync to `/home/svcacct/AI/Agent`, and every confirmed
+gap/lesson must be distilled into a permanent skill/capability and written back
+to `/home/svcacct/AI/DB`." The Knowledge Center half has been real and wired
+since `dv_harness/knowledge_center.py`. The CODEBASE half was policy with no
+mechanism, confirmed by direct search on 2026-09-05: `cli.py` had no
+`deploy`/`harness-sync`/`push-remote` verb (only `memory sync`, a different
+subsystem); repo-wide search for `deploy_harness`/`harness_deploy`/
+`push_harness`/`sync_harness` returned zero hits; `justfile:27` flags "whether
+dv_harness itself is deployed on the Linux server" as explicitly UNCONFIRMED;
+and every `.work/*.md` report describing a sync narrates a manual, ad hoc
+file-by-file copy an agent performed by hand that session, sometimes explicitly
+skipped. `dv_harness/harness_deploy.py` is that mechanism.
+
+**What "the harness" is, is DATA**: `dv_harness/harness_deploy.manifest.json`
+(same policy-as-data shape as `context_budget.policy.json`) declares `include`
+(`dv_harness/`, `dv_harness_tests/`, `tools/`, `.claude/skills`, `.claude/agents`,
+`.claude/workflows`, `.claude/hooks`, `CLAUDE.md`, `pyproject.toml`, `justfile`),
+`exclude` (`.dv-harness/` per-project RUNTIME state above all — one user's
+`state.json`/`events.jsonl`/memory/evidence DB pushed over the shared tree would
+clobber everyone else's, which is `USAGE_MULTI_USER_SAFETY.md`'s own "never share
+a `--project-root`" rule applied to the sync direction) and `never_sync`. Extend
+the JSON for a project's own layout, never the Python.
+
+**Nothing here re-derives hash math or transport.** The diff engine is the real,
+tested `tools/remote/source_identity.py` (`three_way_diff()`/
+`aggregate_source_id()`) — the same primitive `server_sync_identity_gate.py`
+already uses to VERIFY PC-vs-server identity, used here to COMPUTE A PUSH DELTA.
+The remote manifest arrives through the same real-captured-transcript convention
+that gate established (`_remote_transcript.py`'s REMOTE_HOST=/EXIT_CODE=/STATUS=
+markers over a real `remote_exec.py "md5sum ..."` stdout). Transport is
+`remote_hop.py`'s already-documented tar → `--put` → `tar xzf` pattern, narrowed
+to the diff set instead of the whole tree. The audit record is
+`StateStore.event()` — one `HARNESS_DEPLOY_SYNC` entry in the same
+`.dv-harness/events.jsonl` `dv-harness audit` already reads, never a second
+parallel audit file.
+
+**Three safety properties, each enforced in code and each tested:**
+1. **Never blind-overwrite.** The push set is `local_only | different` ONLY.
+   `remote_only` files are surfaced as a required human decision (exit code 3)
+   and never deleted — server-side drift could be a legitimate hotfix somebody
+   made under deadline or an accidental leftover, and this tool has no evidence
+   to tell which.
+2. **Never ship a credential.** `never_sync` RAISES (`SecretPathRefusedError`)
+   rather than silently skipping. Not hypothetical: `replay.ps1` — the real,
+   gitignored (`.gitignore:11`), untracked local credential script the Remote
+   Linux Execution amendment above describes — sits in this checkout's root, and
+   the destination is a SHARED multi-user path. A quietly-dropped file teaches
+   the operator nothing and leaves the bad include glob in place.
+3. **Never reach the network by accident.** `plan` makes ZERO network calls by
+   construction: the remote side is either a local `--target-root` directory or
+   an already-captured transcript file. `apply --target-root` performs real
+   copies into a local/staging directory. The relay path builds the tarball and
+   PRINTS the `remote_exec.py` sequence unless `--execute` is passed, and only
+   ever names `remote_exec.py` — never `remote_relay.py`, per the standing rule
+   above. That default is why the whole tool was built, wired and tested under a
+   LOCAL_ANALYSIS declaration without ever touching the live server.
+
+**CRLF vs LF is handled, and it is load-bearing, not cosmetic.** This checkout's
+`core.autocrlf` is `true`, so the Windows working copy holds CRLF while a
+`git clone`-populated `/home/svcacct/AI/Agent` holds LF — verified on this
+checkout: `dv_harness/engine.py` hashes to `020fb26f...` as CRLF and
+`a14df5e9...` as LF. A naive md5 diff would therefore report EVERY text file as
+drifted on every plan, forever, re-push the whole harness each run, and never
+once reach `in_sync` — a diff that is always maximal is not a diff. Measured
+against the real 993-file tree: 204 files of phantom drift.
+`classify_line_ending_only_differences()` compares the remote md5 (all a
+transcript carries) against BOTH line-ending renderings of the local bytes, so
+it needs no remote content and works on the transcript path that matters against
+the real server. A genuine content change that ALSO crosses a line-ending
+boundary matches neither rendering and stays in `push`; a binary file (NUL-byte
+detected, the same heuristic git uses) is never normalized. `--strict-line-endings`
+asks for the raw byte diff. The two SOURCE_IDs stay honestly UNEQUAL in this case
+— they aggregate the raw md5s and the raw bytes really do differ — so
+`in_sync: true` beside two differing SOURCE_IDs is the correct reading, and
+`line_ending_only_count` in the same payload is why.
+
+An absent `--target-root` is a refusal, not an empty remote: a typo'd path must
+never read as "the target has nothing" and push the whole harness somewhere
+wrong. A first-ever deployment is DECLARED with `--assume-remote-empty`, never
+inferred. A nonzero-exit or marker-less remote transcript is likewise a refusal
+rather than a short manifest that would read as "the server is missing
+everything".
+
+Verbs: `dv-harness harness-deploy manifest [--print-md5sum-command]` (resolved
+file set + local SOURCE_ID, no remote side needed), `... plan` (exit 0 in sync /
+1 work to push / 3 server-only files need a human), `... apply`. Proven against
+this real checkout — 993 real files applied to a synthetic target, re-plan
+reporting `in_sync` with matching SOURCE_IDs, an incremental single-file delta,
+and the real 3-command transport sequence produced with `executed: false` — by
+`dv_harness_tests/test_harness_deploy.py`.
+
+**Disclosed residual**: this closes the MECHANISM, not an executed deployment.
+No sync to the live `/home/svcacct/AI/Agent` has been performed by this tool;
+doing so is REMOTE_EXECUTION and requires a fresh SSH/Remote Transport Connection
+Intake confirmation per the gate above. Nothing calls `harness-deploy`
+automatically either — there is no post-commit hook or CI step invoking it, so
+"every harness update must sync" is still a human-run verb, not an engine-fired
+one. It is a REACHED capability (a real CLI caller exists), not a WIRED one.
+
+
+## Controlled Experiments Are Executed, Not Attested (2026-09-05)
+
+Master prompt section 53.3 requires a controlled experiment behind a
+`BENCHMARKED` candidate. What existed was `benchmark_plan` — a schema string —
+and `STOP_REPORT_PRECONDITIONS`' `benchmark_plan_complete` — a boolean an agent
+sets. Both describe what WOULD be measured. A repo-wide search for a
+benchmark-execution function found none, so `EXPERIMENTING -> BENCHMARKED` was
+an edge crossed by writing `reason="before/after measured"` into
+`transition()`: no before, no after, no artifact, and section 63's
+post-experiment PROMOTE/REVISE/HOLD/REJECT decision resting on a sentence.
+
+`capability_evolution.run_controlled_experiment()` is the execution. It reuses
+the existing machinery end to end rather than standing up a benchmark harness:
+
+- **The stage runner is `engine.DVHarness.run_stage()`**, driven twice over the
+  SAME stages against two copies of an isolated fixture project — `baseline`
+  untouched, `treatment` carrying the candidate's bounded change. There is no
+  second stage runner and no second gate evaluator.
+- **The measurement is `control_plane.describe_stage()`**, already the one
+  shared read path `dv-harness explain` and the dashboard both use for a
+  stage's gate outcome, so an experiment can never disagree with what an
+  operator reading the same project would see. `compare_experiment_arms()`
+  orders on gate satisfaction first and stage completion second, and reserves
+  INCONCLUSIVE for "neither arm had a gate to measure" so that case can never
+  read as a real UNCHANGED.
+- **The change is data, not narration.** `mutation` is either a list of
+  `{"path", "content"}` writes (the auditable form, carried into the experiment
+  record) or a callable returning the paths it wrote. Every path is resolved
+  and checked to be inside the treatment copy before and after; a mutation that
+  changes nothing is refused, because comparing a copy against an identical
+  copy would report UNCHANGED and look like a real negative result.
+
+**Four isolation properties, each enforced in code and each tested:**
+1. **Everything written lives under
+   `<root>/.dv-harness/experiments/<candidate_id>/<run_id>/`.** Every harness is
+   constructed rooted inside an arm of that workspace, and that is re-checked
+   against the harness object actually returned — an injected `harness_factory`
+   returning one rooted at the live project is refused before any stage runs.
+2. **The source fixture is content-fingerprinted before and after.** A changed
+   digest means the run was not isolated and its measurement is discarded, so
+   "the experiment never wrote to the project it was copied from" is a checked
+   fact rather than a design intention.
+3. **An execution-layer stage is refused by default**, keyed on the same
+   `vcs-build`/`devops-pipeline` node-skill discriminator
+   `engine._execution_preflight_gate()` already uses. A capability experiment
+   must never be the thing that quietly submits a farm build or a regression
+   batch; `allow_execution_stages=True` is the explicit opt-in.
+4. **A fixture that contains the live project root is refused**, so pointing the
+   experiment at a parent directory cannot copy the live project into its own
+   workspace.
+
+**The evidence cannot be forged, and that is what actually closes the gap.**
+`transition()` now refuses `-> BENCHMARKED` unless
+`assert_benchmark_measured()` clears, and every check there re-reads disk: the
+`benchmark_result` must carry the `produced_by` const, name a record under THIS
+project's own experiments directory, that record must still exist, still hash to
+the digest the candidate carries, and name this candidate and this run.
+`build_candidate()` additionally refuses a caller-supplied `benchmark_result` —
+a candidate is born four governance states before any experiment may run, so one
+arriving there measured nothing. `benchmark_plan` is unchanged and still
+required: it is the plan, and it is now only the plan.
+
+**Nothing about the human-approval boundary moved.** Section 61's LEVEL B ends
+at BENCHMARKED and `run_controlled_experiment()` asserts its own terminal state
+before returning — a real, IMPROVED measurement is exactly the circumstance
+under which someone would be tempted to carry the candidate one more step.
+`PROMOTION_CANDIDATE` stays a human's move, `assert_human_approval()`'s real
+`ControlPlane` check is untouched, and `assert_no_production_write_authorized()`
+still refuses a BENCHMARKED candidate. The record states
+`acceptance_criteria_machine_evaluated: false` explicitly rather than leaving it
+to be assumed: the criteria are free text, this code does not judge them, and
+deciding whether the measurement MEETS them stays with the human at the
+approval gate.
+
+**No verification verdict token reaches the candidate or the record.** The arms
+really do produce gate verdicts; what is stored is the numeric gate counts plus
+a HASH of the verdict string, so a before/after CHANGE is detectable while this
+module keeps its "nothing here persists a member of `models.Status`" guarantee
+(`BENCHMARK_OUTCOMES` — IMPROVED/UNCHANGED/DEGRADED/INCONCLUSIVE — is checked
+for collision by `assert_no_verification_verdict_vocabulary()` alongside the
+other three vocabularies). The unhashed verdicts stay in each arm workspace's
+own harness state, which the record points at by path.
+
+Proven end to end — two copies of a synthetic fixture, the REAL `run_stage()` in
+each, the REAL `command_migration_integrity_gate.py` subprocess judging both
+arms, a measured 0/1 -> 1/1 gate movement, and a candidate reaching BENCHMARKED
+carrying numbers nobody typed — by
+`dv_harness_tests/test_capability_evolution_controlled_experiment.py` (24 tests),
+which also holds every boundary above and proves an edited, deleted, foreign or
+hand-written experiment record is refused. The fixture is
+`dv_harness_tests/controlled_experiment_fixture.py`; the only stub anywhere is
+the agent adapter, because the real one dispatches a `claude -p` subprocess.
+
+**Disclosed residual**: there is no CLI verb for this yet, and none of it is
+engine-fired. `run_controlled_experiment()` is called by the `research-architect`
+path (see `.claude/agents/research-architect.md`'s "Running the controlled
+experiment" section) and by its tests — a REACHED capability, not a WIRED one.
+The mutation is also still authored by whoever runs the experiment: nothing
+derives a candidate's bounded change from its own `proposed_action` text, so
+`experiment_plan` remains a plan a human or an agent enacts, in the same sense
+`benchmark_plan` used to be one for the benchmark. What is closed is that the
+BENCHMARKED state can no longer be reached without a real, isolated, re-readable
+before/after run.

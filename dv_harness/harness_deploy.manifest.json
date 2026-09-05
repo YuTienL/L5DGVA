@@ -1,0 +1,83 @@
+{
+  "manifest_version": "1.0",
+  "_comment": [
+    "Declares exactly what constitutes 'the harness' for the purpose of",
+    "syncing this checkout to the shared Linux deployment path named in",
+    "USAGE_MULTI_USER_SAFETY.md ('every harness update must sync to",
+    "/home/svcacct/AI/Agent'). Data, not scattered hardcoded logic -- same",
+    "pattern as dv_harness/context_budget.policy.json. Extend THIS file for a",
+    "project's own additions, never harness_deploy.py.",
+    "",
+    "include/exclude are resolved with pathlib glob semantics against the",
+    "project root. never_sync is a separate, stronger deny list: a file it",
+    "matches raises rather than being quietly skipped, because a credential",
+    "reaching a SHARED multi-user server is not a file to silently drop -- it",
+    "is a reason to refuse the whole sync and tell the operator why."
+  ],
+  "remote_deployment_root": "/home/svcacct/AI/Agent",
+  "include": [
+    "CLAUDE.md",
+    "pyproject.toml",
+    "requirements-harness.txt",
+    "justfile",
+    "dv_harness/**/*.py",
+    "dv_harness/**/*.json",
+    "dv_harness/**/*.md",
+    "dv_harness/**/*.yaml",
+    "dv_harness/**/*.sv",
+    "dv_harness/**/*.svh",
+    "dv_harness/**/*.f",
+    "dv_harness/**/*.sh",
+    "dv_harness/**/Makefile",
+    "dv_harness_tests/**/*.py",
+    "tools/**/*.py",
+    ".claude/skills/**/*.md",
+    ".claude/skills/**/*.json",
+    ".claude/agents/**/*.md",
+    ".claude/workflows/**/*.md",
+    ".claude/workflows/**/*.js",
+    ".claude/hooks/**/*.ps1",
+    ".claude/settings.json"
+  ],
+  "exclude": [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/*.pyo",
+    ".dv-harness/**",
+    ".git/**",
+    ".pytest_cache/**",
+    ".work/**",
+    ".worktrees/**",
+    ".claude/worktrees/**",
+    ".claude/settings.local.json",
+    "**/.ipynb_checkpoints/**"
+  ],
+  "never_sync": [
+    "replay.ps1",
+    "replay.csh",
+    "replay.sh",
+    "**/replay.ps1",
+    "**/replay.csh",
+    "**/.env",
+    "**/.env.*",
+    "**/*credential*",
+    "**/*credentials*",
+    "**/id_rsa",
+    "**/id_rsa.*",
+    "**/id_ed25519",
+    "**/id_ed25519.*",
+    "**/*.pem",
+    "**/*.key",
+    "**/settings.local.json"
+  ],
+  "_never_sync_rationale": {
+    "replay.ps1": "CLAUDE.md's Remote Linux Execution amendment describes a local, never-committed credential script (replay.csh/replay.ps1) that supplies VCPW. It is real and present in this checkout's root, gitignored (.gitignore:11) and untracked. A root-level glob that reached it would ship one person's server password onto a SHARED multi-user deployment path.",
+    "settings.local.json": "Per-user Claude Code settings, deliberately local; USAGE_MULTI_USER_SAFETY.md's 'never share a --project-root' reasoning applies to per-user config the same way. The split follows the repo's OWN sharing decision rather than a guess: `git ls-files .claude/settings.json .claude/settings.local.json` shows settings.json tracked (shared, committed) and settings.local.json untracked (per-user), which is why one is included and the other is refused.",
+    "keys_and_pems": "Standing rule from CLAUDE.md's Remote Control Mode section: never expose SSH private keys or credentials."
+  },
+  "_exclude_rationale": {
+    ".dv-harness/**": "Per-project RUNTIME state (state.json, events.jsonl, memory, blackboard, evidence DB). USAGE_MULTI_USER_SAFETY.md's own rule is that each user needs their own --project-root; pushing one user's run state over the shared tree would overwrite everyone else's.",
+    ".work/**": "Session scratch reports, not harness code.",
+    "__pycache__": "Build output; a stale .pyc on the server is worse than absent."
+  }
+}

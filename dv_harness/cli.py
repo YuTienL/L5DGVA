@@ -1380,6 +1380,57 @@ def main():
                              help="Cross-check that this name matches the human who actually answered. "
                                   "Omit to check against whoever did.")
 
+    # USAGE_MULTI_USER_SAFETY.md:16-19 records as standing policy that "every
+    # harness update must sync to /home/svcacct/AI/Agent". The Knowledge
+    # Center half of that policy has been real since knowledge_center.py; the
+    # CODEBASE half had no verb here at all (2026-09-05 audit), so every sync
+    # in this repo's history was a hand-performed file-by-file copy narrated
+    # in a .work report. dv_harness/harness_deploy.py is that mechanism; this
+    # is its front door.
+    phd = sub.add_parser("harness-deploy",
+                          help="Sync THIS harness checkout (dv_harness/, .claude/skills, .claude/agents, "
+                               "tools/, CLAUDE.md -- declared in harness_deploy.manifest.json) to the shared "
+                               "Linux Agent deployment path. Diffs by md5 and pushes only what differs; "
+                               "server-side-only files are surfaced as a human decision, never deleted.")
+    phd_sub = phd.add_subparsers(dest="hd_verb", required=True)
+    phd_man = phd_sub.add_parser("manifest", help="Print the resolved file set + local SOURCE_ID. "
+                                                   "Needs no remote side and makes no network call.")
+    phd_man.add_argument("--print-md5sum-command", action="store_true", dest="print_md5sum_command",
+                          help="Also print the real `remote_exec.py \"md5sum ...\"` command that captures "
+                               "the remote side for `plan --remote-md5sum-transcript`.")
+    phd_man.add_argument("--remote-root", default=None, dest="remote_root")
+    for _hd_name, _hd_help in (
+        ("plan", "Compute the push delta. ZERO network calls: the remote side comes from a local "
+                 "--target-root directory or an already-captured transcript. Exits 1 when there is "
+                 "work to push, 3 when server-only files need a human decision."),
+        ("apply", "Push the delta. --target-root copies into a local/staging directory for real; the "
+                  "relay path builds the tarball and PRINTS the remote_exec.py sequence unless "
+                  "--execute is given."),
+    ):
+        _hd = phd_sub.add_parser(_hd_name, help=_hd_help)
+        _hd.add_argument("--target-root", default=None, dest="target_root",
+                          help="A local directory standing in for the remote deployment path.")
+        _hd.add_argument("--remote-md5sum-transcript", default=None, dest="remote_md5sum_transcript",
+                          help="A real captured `remote_exec.py \"md5sum ...\"` stdout transcript "
+                               "(REMOTE_HOST=/EXIT_CODE=/STATUS= markers required, same convention "
+                               "server_sync_identity_gate.py already uses).")
+        _hd.add_argument("--assume-remote-empty", action="store_true", dest="assume_remote_empty",
+                          help="Declare a first-ever deployment explicitly. Never inferred from a "
+                               "missing/unreadable transcript.")
+        _hd.add_argument("--remote-root", default=None, dest="remote_root")
+        # core.autocrlf is true on this checkout, so the Windows working copy
+        # holds CRLF while a git-cloned Linux deployment holds LF -- the raw
+        # byte diff would be every text file, forever. Tolerant by default;
+        # this flag asks for the raw diff.
+        _hd.add_argument("--strict-line-endings", action="store_true", dest="strict_line_endings",
+                          help="Report the raw byte diff, without treating a CRLF-vs-LF-only "
+                               "difference as unchanged.")
+        if _hd_name == "apply":
+            _hd.add_argument("--execute", action="store_true",
+                              help="Actually run the remote_exec.py transport sequence. Only from a "
+                                   "session that has completed CLAUDE.md's SSH/Remote Transport "
+                                   "Connection Intake -- omitted, nothing touches the network.")
+
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
     # Per-invocation override of the DEGRADED-mode probe transport, applied
@@ -2810,6 +2861,26 @@ def main():
             result = memory_doctor.run_doctor(h.root, h.cfg)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(0 if result["overall"] != "BLOCKED" else 1)
+    elif args.cmd == "harness-deploy":
+        # One shared implementation with `python -m dv_harness.harness_deploy`
+        # (harness_deploy.execute_verb) -- two CLI handlers orchestrating the
+        # same behavior is the parallel-mechanism defect this project forbids,
+        # just at CLI scale. `store=h.store` reuses this session's already-open
+        # StateStore so the HARNESS_DEPLOY_SYNC event lands in the same
+        # events.jsonl `dv-harness audit` reads.
+        from . import harness_deploy as _hd
+        _hd_code, _hd_payload = _hd.execute_verb(
+            h.root, args.hd_verb,
+            target_root=getattr(args, "target_root", None),
+            remote_md5sum_transcript=getattr(args, "remote_md5sum_transcript", None),
+            assume_remote_empty=getattr(args, "assume_remote_empty", False),
+            remote_root=args.remote_root,
+            execute=getattr(args, "execute", False),
+            print_md5sum_command=getattr(args, "print_md5sum_command", False),
+            strict_line_endings=getattr(args, "strict_line_endings", False),
+            store=h.store)
+        print(json.dumps(_hd_payload, ensure_ascii=False, indent=2))
+        raise SystemExit(_hd_code)
     elif args.cmd == "question-queue":
         from .question_queue import QuestionQueueStore
         # Every decision written or revoked through this command refreshes the

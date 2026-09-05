@@ -322,6 +322,11 @@ def assert_no_verification_verdict_vocabulary() -> None:
         ("RECOMMENDATIONS", RECOMMENDATIONS),
         ("PROMOTION_STATES", PROMOTION_STATES),
         ("OVERLAP_STATUSES", OVERLAP_STATUSES),
+        # The fourth vocabulary, added with run_controlled_experiment(): an
+        # experiment's before/after comparison outcome. It is the vocabulary
+        # most at risk of drifting into verdict shape, because it is the one
+        # produced by actually running the harness's own stage runner.
+        ("BENCHMARK_OUTCOMES", BENCHMARK_OUTCOMES),
     ):
         collision = verdicts.intersection(vocabulary)
         if collision:
@@ -835,6 +840,17 @@ def build_candidate(**fields: Any) -> Dict[str, Any]:
     candidate.setdefault("exact_gap", "")
     candidate.setdefault("experiment_plan", "")
     candidate.setdefault("benchmark_plan", "")
+    # The measured counterpart of benchmark_plan. A candidate is BORN at
+    # DISCOVERED, four governance states before any experiment may run, so a
+    # caller handing one in here is handing over a measurement that nothing
+    # measured. Only run_controlled_experiment() ever writes this field.
+    if candidate.get("benchmark_result") is not None:
+        raise CapabilityEvolutionCandidateValidationError(
+            "benchmark_result was supplied to build_candidate(); it is written only by "
+            f"{BENCHMARK_PRODUCER}() from a real isolated before/after run, never by a "
+            "caller assembling a candidate"
+        )
+    candidate["benchmark_result"] = None
 
     if "candidate_id" not in candidate:
         candidate["candidate_id"] = mint_candidate_id(
@@ -969,10 +985,18 @@ def transition(root, candidate: Dict[str, Any], to_status: str, *, by: str, reas
                cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Advance a candidate one governance state and persist the result.
 
-    Returns the NEW candidate dict; the input is not mutated. A transition into
-    HUMAN_APPROVED additionally requires a real ControlPlane approval on disk
-    and copies that approval record into the status_history entry, so the
-    candidate carries its own evidence that a human acted.
+    Returns the NEW candidate dict; the input is not mutated. Two edges carry an
+    additional evidence requirement beyond the legality table, and both re-read
+    the evidence off disk rather than trusting a field:
+
+      * -> HUMAN_APPROVED requires a real ControlPlane approval, copied into the
+        status_history entry so the candidate carries its own evidence that a
+        human acted.
+      * -> BENCHMARKED requires a real experiment record produced by
+        run_controlled_experiment(), whose digest still matches. Before that
+        check existed, this edge was reachable with an agent-typed
+        benchmark_plan string and nothing else -- "before/after measured" as a
+        reason field, with no before and no after anywhere on disk.
     """
     assert_legal_transition(candidate.get("current_status"), to_status, candidate)
 
@@ -985,6 +1009,8 @@ def transition(root, candidate: Dict[str, Any], to_status: str, *, by: str, reas
     }
     if to_status == "HUMAN_APPROVED":
         entry["approval_ref"] = dict(assert_human_approval(root, candidate))
+    elif to_status == BENCHMARKED_STATE:
+        assert_benchmark_measured(root, candidate)
 
     updated = dict(candidate)
     updated["current_status"] = to_status
@@ -1838,3 +1864,569 @@ def file_candidates_for_repeated_failures(
             root, min_occurrences=min_occurrences
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# CONTROLLED EXPERIMENT EXECUTION (master prompt section 53.3; section 61's
+# LEVEL B, and nothing above it)
+#
+# WHAT WAS MISSING. `benchmark_plan` and STOP_REPORT_PRECONDITIONS'
+# `benchmark_plan_complete` are both TEXT. They say what would be measured.
+# Nothing in this repo measured it: a repo-wide search for a benchmark-execution
+# function found none, so EXPERIMENTING -> BENCHMARKED was an edge an agent
+# crossed by writing the words "before/after measured" into a `reason` string.
+# Section 63's own post-experiment decision then rested on a sentence.
+#
+# WHAT THIS ADDS. run_controlled_experiment() drives the EXISTING engine stage
+# runner (dv_harness/engine.py's DVHarness.run_stage) twice over the SAME
+# stages, against two copies of an isolated fixture project -- one untouched
+# (baseline), one carrying the candidate's bounded change (treatment) -- and
+# reads each arm's result back through the EXISTING
+# control_plane.describe_stage(), which is already the one shared read path the
+# CLI and the dashboard both use for a stage's gate outcome. No second stage
+# runner, no second gate evaluator, no second measurement definition.
+#
+# WHAT IT DELIBERATELY DOES NOT DO.
+#   * It never advances a candidate past BENCHMARKED. Section 70's "a successful
+#     experiment does not automatically imply HUMAN_APPROVED" is not softened by
+#     the experiment now being real -- if anything a real measurement makes the
+#     temptation worse, which is why EXPERIMENT_TERMINAL_STATE is asserted on
+#     the way out rather than left to callers.
+#   * It never writes outside <root>/.dv-harness/experiments/<candidate>/<run>/.
+#     Every harness it constructs is rooted INSIDE that workspace, and that is
+#     re-checked against the harness object it actually got back, not assumed
+#     from the path it passed in.
+#   * It refuses a stage whose real graph node declares an execution-layer skill
+#     (the same discriminator engine._execution_preflight_gate() already keys
+#     on) unless a caller explicitly opts in. A capability experiment must not
+#     be the thing that quietly submits a farm build or a regression batch.
+#   * It stores no verification verdict token. describe_stage() returns one; the
+#     per-stage projection kept here carries the numeric gate counts and a HASH
+#     of that string, so a before/after CHANGE is detectable while this module
+#     still holds to "nothing here persists a member of models.Status". The
+#     unhashed original stays in the arm workspace's own harness state, which
+#     the record points at by path.
+
+EXPERIMENTS_SUBDIR = "experiments"
+EXPERIMENT_RECORD_NAME = "experiment.json"
+
+# The producer stamp. A `const` in the schema, and re-checked here, so a
+# hand-written benchmark_result cannot claim to have been measured.
+BENCHMARK_PRODUCER = "capability_evolution.run_controlled_experiment"
+
+BENCHMARK_OUTCOMES = ("IMPROVED", "UNCHANGED", "DEGRADED", "INCONCLUSIVE")
+
+# The three governance states this function moves between, named rather than
+# spelled inline so the "never past BENCHMARKED" rule is one constant a reader
+# can grep for.
+EXPERIMENT_AUTHORIZED_STATE = "EXPERIMENT_APPROVED"
+EXPERIMENTING_STATE = "EXPERIMENTING"
+BENCHMARKED_STATE = "BENCHMARKED"
+EXPERIMENT_TERMINAL_STATE = BENCHMARKED_STATE
+
+EXPERIMENT_ARMS = ("baseline", "treatment")
+
+# A fixture whose tree is larger than this is refused rather than digested. The
+# digest exists to prove the SOURCE fixture was not written to; paying an
+# unbounded hashing cost to prove it would make the guard the expensive part of
+# the experiment.
+EXPERIMENT_MAX_FIXTURE_FILES = 5000
+
+
+class ExperimentNotAuthorizedError(PermissionError):
+    """A controlled experiment was requested for a candidate that is not at
+    EXPERIMENT_APPROVED. The experiment states exist to be entered from a
+    reviewed proposal, not to be the way a proposal gets reviewed."""
+
+
+class ExperimentIsolationError(PermissionError):
+    """The experiment could not be kept inside its own workspace: a workspace
+    outside <root>/.dv-harness/experiments/, a harness rooted somewhere else, a
+    mutation writing outside the treatment copy, a source fixture that changed
+    while the experiment ran, or a stage that would have reached the execution
+    layer. Raised rather than reported, because an experiment whose isolation is
+    in question produces a measurement nobody should read."""
+
+
+class BenchmarkEvidenceRequiredError(ValueError):
+    """EXPERIMENTING -> BENCHMARKED was attempted without a real experiment
+    record on disk backing it. This is the check that turns benchmark_plan from
+    the only benchmark artifact into what it always claimed to be -- a plan."""
+
+
+def experiments_dir(root) -> Path:
+    """The one directory any experiment workspace may live under."""
+    return Path(root) / ".dv-harness" / EXPERIMENTS_SUBDIR
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _within(child, parent) -> bool:
+    try:
+        Path(child).resolve().relative_to(Path(parent).resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _tree_digest(path, *, max_files: int = EXPERIMENT_MAX_FIXTURE_FILES) -> Dict[str, Any]:
+    """A content digest over a directory tree: every relative path, plus every
+    file's own content hash, folded in sorted order.
+
+    Used for exactly one thing -- taking the source fixture's fingerprint before
+    the experiment and again after it, so "the experiment never wrote to the
+    project it was copied from" is a checked fact rather than a design
+    intention. __pycache__ is skipped because importing the fixture's own tools
+    legitimately creates it, and that is not the experiment writing to the
+    fixture.
+    """
+    base = Path(path).resolve()
+    digest = hashlib.sha256()
+    counted = 0
+    for entry in sorted(base.rglob("*"), key=lambda p: str(p).replace("\\", "/").lower()):
+        rel = entry.relative_to(base).as_posix()
+        if "__pycache__" in rel.split("/"):
+            continue
+        counted += 1
+        if counted > max_files:
+            raise ExperimentIsolationError(
+                f"fixture project {base} holds more than {max_files} files; a controlled "
+                "experiment copies and fingerprints it twice, so point it at a real "
+                "fixture rather than a whole workspace"
+            )
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\0")
+        if entry.is_file():
+            digest.update(hashlib.sha256(entry.read_bytes()).digest())
+    return {"digest": digest.hexdigest(), "file_count": counted}
+
+
+def _default_harness_factory(project_root):
+    from .engine import DVHarness
+
+    return DVHarness(Path(project_root))
+
+
+def _measure_stage(harness, stage: str) -> Dict[str, Any]:
+    """One stage's measurement in one arm, off the shared read path.
+
+    control_plane.describe_stage() is already what `dv-harness explain` and the
+    dashboard both call to answer "how did this stage's gates come out"; it is
+    reused verbatim so an experiment can never disagree with what an operator
+    reading the same project would see.
+    """
+    from .control_plane import describe_stage
+
+    detail = describe_stage(Path(harness.root), harness.state, stage)
+    # describe_stage()'s own verdict string is a models.Status-adjacent token
+    # this module must not persist (see the block header). Hashing it keeps
+    # "did the outcome change between the arms" answerable without storing it.
+    outcome_digest = _sha256_text(str(detail.get("gate_verdict")))[:16]
+    return {
+        "stage": stage,
+        "gates_total": int(detail.get("gates_total") or 0),
+        "gates_satisfied": int(detail.get("gates_passed") or 0),
+        "stage_completion_percent": float(detail.get("stage_completion_percent") or 0.0),
+        "gate_reason_count": len(detail.get("gate_reasons") or []),
+        "gate_outcome_digest": outcome_digest,
+        "attempts": int(detail.get("attempts") or 0),
+    }
+
+
+def _arm_totals(measurements: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    values = list(measurements.values())
+    percent = sum(m["stage_completion_percent"] for m in values) / len(values) if values else 0.0
+    return {
+        "gates_total": sum(m["gates_total"] for m in values),
+        "gates_satisfied": sum(m["gates_satisfied"] for m in values),
+        "stage_completion_percent": round(percent, 4),
+    }
+
+
+def _run_arm(arm: str, arm_root: Path, stages: List[str], *, user_goal: str,
+             harness_factory, allow_execution_stages: bool) -> Dict[str, Any]:
+    """Drive the REAL engine stage runner over `stages` in one arm's workspace."""
+    harness = (harness_factory or _default_harness_factory)(arm_root)
+    resolved = Path(getattr(harness, "root", arm_root)).resolve()
+    if resolved != Path(arm_root).resolve():
+        raise ExperimentIsolationError(
+            f"the {arm} harness is rooted at {resolved}, not at its own experiment "
+            f"workspace {arm_root}; a controlled experiment may never drive a stage "
+            "against a project it did not create"
+        )
+
+    for stage in stages:
+        # engine._execution_preflight_gate()'s own discriminator, reused: a node
+        # declaring vcs-build/devops-pipeline is an execution-layer stage, and
+        # running one here would spend real farm resources on a capability
+        # experiment.
+        declared = []
+        probe = getattr(harness, "_execution_preflight_skills", None)
+        if callable(probe):
+            try:
+                declared = list(probe(stage) or [])
+            except Exception:
+                declared = []
+        if declared and not allow_execution_stages:
+            raise ExperimentIsolationError(
+                f"stage {stage} declares execution-layer skills {declared}; a controlled "
+                "experiment refuses it by default because it would drive a real build or "
+                "regression submission. Pass allow_execution_stages=True only with the "
+                "farm resources and the human decision that implies."
+            )
+
+    measurements: Dict[str, Dict[str, Any]] = {}
+    for stage in stages:
+        harness.set_stage(stage)
+        harness.run_stage(user_goal, stage=stage)
+        measurements[stage] = _measure_stage(harness, stage)
+
+    return {
+        "arm": arm,
+        "project_root": str(Path(arm_root).resolve()),
+        "stages": measurements,
+        "totals": _arm_totals(measurements),
+    }
+
+
+def _apply_mutation(treatment_root: Path, mutation) -> List[str]:
+    """Apply the candidate's bounded change to the treatment copy only.
+
+    Two accepted forms, and both are verified rather than trusted:
+
+      * a sequence of {"path": <relative>, "content": <text>} writes -- the
+        auditable form, because the change itself is then data the experiment
+        record can carry;
+      * a callable taking the treatment root and returning the paths it wrote --
+        the form a test or an advanced caller needs, still held to the same
+        containment check on every path it names.
+
+    A mutation that changes nothing is an error, not an empty treatment: an
+    experiment comparing a copy against an identical copy would report UNCHANGED
+    and look like a real negative result.
+    """
+    treatment_root = Path(treatment_root).resolve()
+    written: List[Path] = []
+
+    if callable(mutation):
+        declared = mutation(treatment_root) or []
+        written = [Path(p) for p in declared]
+    else:
+        for spec in list(mutation or []):
+            if not isinstance(spec, dict) or "path" not in spec or "content" not in spec:
+                raise ExperimentIsolationError(
+                    "a declarative mutation entry must be "
+                    "{'path': <relative path>, 'content': <text>}; got " + repr(spec)
+                )
+            target = (treatment_root / str(spec["path"])).resolve()
+            if not _within(target, treatment_root):
+                raise ExperimentIsolationError(
+                    f"mutation path {spec['path']!r} resolves to {target}, outside the "
+                    f"treatment workspace {treatment_root}"
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(str(spec["content"]), encoding="utf-8")
+            written.append(target)
+
+    changed: List[str] = []
+    for path in written:
+        path = Path(path)
+        path = path if path.is_absolute() else (treatment_root / path)
+        path = path.resolve()
+        if not _within(path, treatment_root):
+            raise ExperimentIsolationError(
+                f"the mutation wrote {path}, outside the treatment workspace "
+                f"{treatment_root}; a Level B experiment stays inside its own copy"
+            )
+        if not path.exists():
+            raise ExperimentIsolationError(
+                f"the mutation declared it wrote {path}, and nothing is there"
+            )
+        changed.append(path.relative_to(treatment_root).as_posix())
+
+    if not changed:
+        raise ExperimentIsolationError(
+            "the mutation changed nothing, so the treatment arm is a byte-identical copy "
+            "of the baseline; there is no controlled experiment to run"
+        )
+    return sorted(set(changed))
+
+
+def compare_experiment_arms(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    """The before/after comparison, as a pure function over two measured arms.
+
+    Ordered on gate satisfaction first and stage completion second, because a
+    gate that went from unsatisfied to satisfied is a categorically stronger
+    result than a completion percentage that drifted. INCONCLUSIVE is reserved
+    for the case that must never read as UNCHANGED: neither arm had a single
+    gate to measure, so the experiment measured nothing at all.
+    """
+    gate_delta = after["totals"]["gates_satisfied"] - before["totals"]["gates_satisfied"]
+    percent_delta = round(
+        after["totals"]["stage_completion_percent"]
+        - before["totals"]["stage_completion_percent"], 4)
+    changed = sorted(
+        stage for stage, m in after["stages"].items()
+        if stage in before["stages"]
+        and before["stages"][stage]["gate_outcome_digest"] != m["gate_outcome_digest"]
+    )
+
+    if before["totals"]["gates_total"] == 0 and after["totals"]["gates_total"] == 0:
+        outcome = "INCONCLUSIVE"
+    elif gate_delta > 0:
+        outcome = "IMPROVED"
+    elif gate_delta < 0:
+        outcome = "DEGRADED"
+    elif percent_delta > 0:
+        outcome = "IMPROVED"
+    elif percent_delta < 0:
+        outcome = "DEGRADED"
+    else:
+        outcome = "UNCHANGED"
+
+    return {
+        "delta": {
+            "gates_satisfied": gate_delta,
+            "stage_completion_percent": percent_delta,
+            "changed_outcome_stages": changed,
+        },
+        "outcome": outcome,
+    }
+
+
+def assert_benchmark_measured(root, candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """Refuse EXPERIMENTING -> BENCHMARKED unless a real experiment record backs it.
+
+    Every check here re-reads something off disk. A candidate field cannot
+    satisfy this on its own, which is the whole point: the state that used to be
+    reachable by typing a sentence now requires an experiment record that exists,
+    lives under this project's own experiments directory, still hashes to what
+    the candidate claims, and names this candidate and this run.
+    """
+    result = candidate.get("benchmark_result")
+    cid = candidate.get("candidate_id", "<candidate>")
+    if not isinstance(result, dict):
+        raise BenchmarkEvidenceRequiredError(
+            f"{cid}: {BENCHMARKED_STATE} requires a benchmark_result produced by "
+            f"{BENCHMARK_PRODUCER}(); benchmark_plan is a plan, not a measurement"
+        )
+    if result.get("produced_by") != BENCHMARK_PRODUCER:
+        raise BenchmarkEvidenceRequiredError(
+            f"{cid}: benchmark_result claims produced_by={result.get('produced_by')!r}; "
+            f"only {BENCHMARK_PRODUCER} may produce one"
+        )
+
+    record_path = Path(str(result.get("record_path") or ""))
+    if not _within(record_path, experiments_dir(root)):
+        raise BenchmarkEvidenceRequiredError(
+            f"{cid}: benchmark_result points at {record_path}, which is not under this "
+            f"project's own {experiments_dir(root)}"
+        )
+    if not record_path.is_file():
+        raise BenchmarkEvidenceRequiredError(
+            f"{cid}: the experiment record {record_path} does not exist; nothing was measured"
+        )
+
+    text = record_path.read_text(encoding="utf-8")
+    if _sha256_text(text) != result.get("record_digest"):
+        raise BenchmarkEvidenceRequiredError(
+            f"{cid}: the experiment record at {record_path} no longer matches the digest "
+            "the candidate carries; it was edited after it was produced"
+        )
+
+    record = json.loads(text)
+    if record.get("candidate_id") != candidate.get("candidate_id"):
+        raise BenchmarkEvidenceRequiredError(
+            f"{cid}: the experiment record was produced for candidate "
+            f"{record.get('candidate_id')!r}"
+        )
+    if record.get("run_id") != result.get("run_id"):
+        raise BenchmarkEvidenceRequiredError(
+            f"{cid}: benchmark_result names run {result.get('run_id')!r} but the record "
+            f"on disk is run {record.get('run_id')!r}"
+        )
+    return record
+
+
+def run_controlled_experiment(root, candidate: Dict[str, Any], *,
+                              fixture_project,
+                              stages: List[str],
+                              mutation,
+                              user_goal: str = "capability evolution controlled experiment",
+                              by: str = "capability-evolution",
+                              cfg: Optional[Dict[str, Any]] = None,
+                              harness_factory=None,
+                              run_id: Optional[str] = None,
+                              allow_execution_stages: bool = False) -> Dict[str, Any]:
+    """Run ONE bounded, isolated before/after experiment for an approved candidate.
+
+    Walks the candidate EXPERIMENT_APPROVED -> EXPERIMENTING -> BENCHMARKED and
+    stops there, permanently: this function contains no path to
+    PROMOTION_CANDIDATE and asserts its own terminal state before returning.
+
+    What actually happens, in order:
+      1. refuse unless the candidate is at EXPERIMENT_APPROVED;
+      2. claim a workspace under <root>/.dv-harness/experiments/<candidate>/<run>/,
+         checked to really be under it;
+      3. transition to EXPERIMENTING, so an interrupted experiment leaves a
+         candidate that honestly says an experiment was started;
+      4. fingerprint the source fixture, then copy it twice;
+      5. run `stages` in the baseline copy through the real engine stage runner
+         and measure each one through control_plane.describe_stage();
+      6. apply the candidate's bounded change to the treatment copy only;
+      7. run the SAME stages in the treatment copy and measure them the same way;
+      8. re-fingerprint the source fixture -- a change means the experiment was
+         not isolated and the measurement is discarded;
+      9. write the experiment record, attach a benchmark_result naming and
+         hashing it, and transition to BENCHMARKED, which re-reads that record.
+
+    `mutation` is the candidate's change in the only two forms that can be
+    verified (see _apply_mutation). `harness_factory` is the injected-transport
+    seam engine.py already uses for its own runners -- it takes an arm's project
+    root and returns the harness to drive it with, defaulting to a real
+    DVHarness. A test injects one carrying a stub agent adapter so no subprocess
+    is dispatched; a real caller passes nothing.
+
+    Returns {"candidate", "experiment", "record_path"}.
+    """
+    root = Path(root).resolve()
+    current = candidate.get("current_status")
+    if current != EXPERIMENT_AUTHORIZED_STATE:
+        raise ExperimentNotAuthorizedError(
+            f"{candidate.get('candidate_id', '<candidate>')} is {current}; a controlled "
+            f"experiment may only run from {EXPERIMENT_AUTHORIZED_STATE}"
+        )
+
+    stages = [str(s) for s in (stages or [])]
+    if not stages:
+        raise ExperimentIsolationError(
+            "a controlled experiment needs at least one stage to run; an experiment that "
+            "runs nothing measures nothing"
+        )
+
+    fixture = Path(fixture_project).resolve()
+    if not fixture.is_dir():
+        raise ExperimentIsolationError(
+            f"fixture project {fixture} does not exist; a controlled experiment runs "
+            "against an isolated fixture, never against a live project tree"
+        )
+    if fixture == root or _within(root, fixture):
+        raise ExperimentIsolationError(
+            f"fixture project {fixture} contains this project root {root}; copying it "
+            "would copy the live project into its own experiment workspace"
+        )
+
+    candidate_id = candidate["candidate_id"]
+    run_id = run_id or "EXP-{}-{}".format(
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"),
+        _sha256_text(f"{candidate_id}|{fixture}|{stages}")[:8],
+    )
+    workspace = (experiments_dir(root) / candidate_id / run_id).resolve()
+    if not _within(workspace, experiments_dir(root)):
+        raise ExperimentIsolationError(
+            f"experiment workspace {workspace} is not under {experiments_dir(root)}"
+        )
+    if workspace.exists():
+        raise ExperimentIsolationError(
+            f"experiment workspace {workspace} already exists; a run id is used once"
+        )
+
+    import shutil
+
+    started_at = _now()
+    candidate = transition(root, candidate, EXPERIMENTING_STATE, by=by,
+                           reason=f"controlled experiment {run_id} started", cfg=cfg)
+
+    fixture_before = _tree_digest(fixture)
+    workspace.mkdir(parents=True)
+    arm_roots = {}
+    for arm in EXPERIMENT_ARMS:
+        arm_root = workspace / arm
+        shutil.copytree(fixture, arm_root)
+        arm_roots[arm] = arm_root
+
+    before = _run_arm("baseline", arm_roots["baseline"], stages, user_goal=user_goal,
+                      harness_factory=harness_factory,
+                      allow_execution_stages=allow_execution_stages)
+    changed_files = _apply_mutation(arm_roots["treatment"], mutation)
+    after = _run_arm("treatment", arm_roots["treatment"], stages, user_goal=user_goal,
+                     harness_factory=harness_factory,
+                     allow_execution_stages=allow_execution_stages)
+
+    fixture_after = _tree_digest(fixture)
+    if fixture_after["digest"] != fixture_before["digest"]:
+        raise ExperimentIsolationError(
+            f"the source fixture {fixture} changed while the experiment ran "
+            f"({fixture_before['digest'][:12]} -> {fixture_after['digest'][:12]}); the run "
+            "was not isolated and its measurement is discarded"
+        )
+
+    comparison = compare_experiment_arms(before, after)
+    record = {
+        "record_version": "1.0",
+        "produced_by": BENCHMARK_PRODUCER,
+        "run_id": run_id,
+        "candidate_id": candidate_id,
+        "affected_capability": candidate.get("affected_capability"),
+        "benchmark_plan": candidate.get("benchmark_plan", ""),
+        "experiment_plan": candidate.get("experiment_plan", ""),
+        "acceptance_criteria": list(candidate.get("acceptance_criteria") or []),
+        "acceptance_criteria_machine_evaluated": False,
+        "started_at": started_at,
+        "measured_at": _now(),
+        "workspace": str(workspace),
+        "stages": stages,
+        "changed_files": changed_files,
+        "isolation": {
+            "experiments_dir": str(experiments_dir(root)),
+            "fixture_project": str(fixture),
+            "fixture_digest_before": fixture_before,
+            "fixture_digest_after": fixture_after,
+            "fixture_unmodified": True,
+            "execution_stages_allowed": bool(allow_execution_stages),
+        },
+        "before": before,
+        "after": after,
+        "delta": comparison["delta"],
+        "outcome": comparison["outcome"],
+    }
+    record_path = workspace / EXPERIMENT_RECORD_NAME
+    record_text = json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True)
+    record_path.write_text(record_text, encoding="utf-8")
+
+    measured = dict(candidate)
+    measured["benchmark_result"] = {
+        "produced_by": BENCHMARK_PRODUCER,
+        "run_id": run_id,
+        "record_path": str(record_path),
+        "record_digest": _sha256_text(record_text),
+        "workspace": str(workspace),
+        "stages": stages,
+        "before": before,
+        "after": after,
+        "delta": comparison["delta"],
+        "outcome": comparison["outcome"],
+        "measured_at": record["measured_at"],
+        "changed_files": changed_files,
+        "acceptance_criteria_machine_evaluated": False,
+    }
+    measured = transition(
+        root, measured, BENCHMARKED_STATE, by=by,
+        reason=(f"controlled experiment {run_id}: {comparison['outcome']} over stages "
+                f"{stages} ({comparison['delta']['gates_satisfied']:+d} gates satisfied, "
+                f"{comparison['delta']['stage_completion_percent']:+.4g}% stage completion)"),
+        cfg=cfg)
+
+    # Section 61 LEVEL B ends here, and this asserts it rather than trusting the
+    # absence of a call above: a real measurement is exactly the circumstance
+    # under which someone would be tempted to carry the candidate one more step.
+    if measured["current_status"] != EXPERIMENT_TERMINAL_STATE:
+        raise IllegalPromotionTransitionError(
+            f"a controlled experiment left {candidate_id} at "
+            f"{measured['current_status']!r}; it may never advance past "
+            f"{EXPERIMENT_TERMINAL_STATE}"
+        )
+
+    return {"candidate": measured, "experiment": record, "record_path": record_path}

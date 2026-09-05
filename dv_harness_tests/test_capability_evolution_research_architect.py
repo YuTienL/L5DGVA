@@ -469,18 +469,31 @@ def test_governance_states_cannot_be_skipped():
 def test_a_successful_experiment_does_not_imply_human_approved(tmp_path):
     """Section 70, stated verbatim: 'A successful experiment does not
     automatically imply HUMAN_APPROVED.' The gate is a real ControlPlane
-    approval on disk, not a state the agent can write for itself."""
+    approval on disk, not a state the agent can write for itself.
+
+    The experiment half of this path is REAL as of 2026-09-05: EXPERIMENTING ->
+    BENCHMARKED runs run_controlled_experiment() against an isolated synthetic
+    fixture and is refused without the record it produces, so 'a successful
+    experiment' here is a measured one rather than the words 'before/after
+    measured' typed into a reason field."""
+    from .controlled_experiment_fixture import make_fixture_project, run_demo_experiment
+
     candidate = ce.build_candidate(**_semantic_change_impact_fields())
     for to_status, reason in (
         ("EVIDENCE_GATHERING", "gathering replay evidence"),
         ("PROPOSED", "evidence gathered"),
         ("EXPERIMENT_APPROVED", "experiment approved by the review"),
-        ("EXPERIMENTING", "replay running"),
-        ("BENCHMARKED", "before/after measured"),
-        ("PROMOTION_CANDIDATE", "acceptance criteria met"),
     ):
         candidate = ce.transition(tmp_path, candidate, to_status,
                                   by="research-architect", reason=reason)
+
+    fixture = make_fixture_project(tmp_path / "experiment_fixture")
+    measured = run_demo_experiment(tmp_path, candidate, fixture)["candidate"]
+    assert measured["current_status"] == "BENCHMARKED"
+    assert measured["benchmark_result"]["outcome"] == "IMPROVED"
+
+    candidate = ce.transition(tmp_path, measured, "PROMOTION_CANDIDATE",
+                              by="research-architect", reason="acceptance criteria met")
 
     with pytest.raises(ce.HumanApprovalRequiredError) as exc:
         ce.transition(tmp_path, candidate, "HUMAN_APPROVED",
