@@ -27,7 +27,8 @@ sys.path.insert(0, str(ROOT))
 # protocol" / "no topology supplied" happened, so a skeleton is never mistaken
 # for a modelled environment.
 from dv_harness.uvm_generator.create_environment import (
-    create_environment, EnvironmentModeUnresolvedError, SubsystemModeRequiredError,
+    create_environment, EnvironmentModeUnresolvedError, StructuralLintFailedError,
+    SubsystemModeRequiredError,
 )
 from dv_harness.uvm_generator.protocol_model_layer import ProtocolModelLayerError
 
@@ -56,6 +57,16 @@ except EnvironmentModeUnresolvedError as exc:
     print(json.dumps({"status": "ENVIRONMENT_MODE_UNRESOLVED", "reason": exc.reason,
                       "detail": exc.detail}))
     sys.exit(3)
+except StructuralLintFailedError as exc:
+    # Only reachable when the manifest itself set "strict_structural_lint":
+    # true. The environment WAS written (the lint runs on the generated files,
+    # so it cannot run before them); this exit code says the generated UVM has
+    # ERROR-severity structural defects that must be fixed before a compile is
+    # worth spending -- section 220's "structural lint runs before expensive
+    # simulation". Without that opt-in the report is recorded and generation
+    # succeeds, exactly as before this check existed.
+    print(json.dumps({"status": exc.reason, "detail": exc.detail}))
+    sys.exit(5)
 except ProtocolModelLayerError as exc:
     # The manifest asked for a protocol model and that model's own validator
     # refused the topology. A refusal, not a partial environment reported as
@@ -68,4 +79,10 @@ out = {"status": "OK", "environment_mode": result["environment_mode"],
 if "protocol_model" in result:
     out["protocol_model"] = result["protocol_model"]
     out["protocol_model_files"] = result["protocol_model_files"]
+# The deterministic pre-simulation structural lint of the UVM just generated
+# (dv_harness/uvm_structural_lint.py), also written to
+# <out>/uvm_structural_lint.json. Reported always, including when verible is
+# unavailable (status NOT_AVAILABLE with a real reason) -- a caller must be
+# able to tell "checked and clean" from "could not be checked".
+out["structural_lint"] = result["structural_lint"]
 print(json.dumps(out))

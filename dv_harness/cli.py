@@ -625,6 +625,28 @@ def main():
     prp_justfile.add_argument("--profile", required=True, help="Path to run_profile.json.")
     prp_justfile.add_argument("--out", required=True, help="Where to write the justfile.")
 
+    pusl = sub.add_parser("uvm-lint", help="Deterministic PRE-SIMULATION structural lint of GENERATED UVM "
+                                              "source (factory registration, UVM phase-method signatures, "
+                                              "config_db set/get matching, TLM port/export connection "
+                                              "completeness, objection raise/drop balance). Parses the real "
+                                              "code with verible (same front end as `env-manifest`'s RTL "
+                                              "parsing), never regex over raw file text. See "
+                                              "dv_harness/uvm_structural_lint.py for the checked subset and "
+                                              "its stated limits.")
+    pusl_target = pusl.add_mutually_exclusive_group(required=True)
+    pusl_target.add_argument("--env-dir", default=None,
+                              help="A generated environment directory; every .sv/.svh under it is analysed "
+                                   "TOGETHER (config_db, TLM connect and base-class resolution are "
+                                   "whole-environment properties).")
+    pusl_target.add_argument("--file", action="append", default=None, dest="lint_files",
+                              help="An explicit source file to analyse (repeatable), instead of --env-dir.")
+    pusl.add_argument("--json", action="store_true", help="Emit the full machine-readable report instead of "
+                                                             "the human-readable summary.")
+    pusl.add_argument("--fail-on-error", action="store_true",
+                       help="Exit 1 when the lint reports ERROR-severity findings (status FAIL). Without it "
+                            "the report is printed and the exit code stays 0.")
+    pusl.add_argument("--verible-bin", default=None, help="Override the verible-verilog-syntax binary name.")
+
     penvm = sub.add_parser("env-manifest", help="env.manifest.json: generated, diffable, git-tracked fact file "
                                                    "with three layers -- vip_config (a real UVM simv's own "
                                                    "already-resolved VIP config dump), dut_facts (verible-parsed "
@@ -2186,6 +2208,24 @@ def main():
                 print(text)
         except RunProfileValidationError as exc:
             print(f"run-profile {args.rp_cmd} FAILED: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+    elif args.cmd == "uvm-lint":
+        from . import uvm_structural_lint
+        from .verible_parser import DEFAULT_VERIBLE_BIN
+        vbin = args.verible_bin or DEFAULT_VERIBLE_BIN
+        if args.env_dir:
+            report = uvm_structural_lint.lint_uvm_environment(args.env_dir, verible_bin=vbin)
+        else:
+            report = uvm_structural_lint.lint_uvm_sources(args.lint_files, verible_bin=vbin)
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(uvm_structural_lint.format_report(report))
+        # NOT_AVAILABLE is deliberately not an exit-1 even under
+        # --fail-on-error: "verible could not be run" is a missing tool, not a
+        # defect in the generated environment, and conflating the two would
+        # make an absent verible look like broken UVM.
+        if args.fail_on_error and report.status == "FAIL":
             raise SystemExit(1)
     elif args.cmd == "env-manifest":
         from . import env_manifest

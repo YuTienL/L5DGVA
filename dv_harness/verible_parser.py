@@ -541,6 +541,26 @@ def parse_file(file_path, verible_bin: str = DEFAULT_VERIBLE_BIN) -> FileParseRe
     )
 
 
+# ---- public aliases for the tree-walk helpers above ------------------------
+# The helpers above are named with a leading underscore because they were
+# private to this module's own RTL extraction. dv_harness/uvm_structural_lint.py
+# walks the SAME verible `--export_json --printtree` tree shape for CLASS-based
+# UVM source, and the alternative to reusing them is a second SystemVerilog
+# tree walker in this package -- exactly what CLAUDE.md's Methodology
+# Consolidation Rule forbids. These aliases make that reuse a supported,
+# named contract instead of a cross-module private import. They are aliases,
+# not wrappers: there is one implementation, and it is the one this module's
+# own extraction already exercises.
+walk_tree = _walk
+find_first_tagged = _find_first
+find_all_nonoverlapping = _find_all_nonoverlapping
+direct_children_tagged = _direct_children_tagged
+direct_child_tagged = _direct_child_tagged
+node_span = _span
+node_text = _text_of
+first_leaf_text = _first_leaf_text
+
+
 def to_dict(result: FileParseResult) -> dict:
     """Plain-dict form of a FileParseResult, suitable for JSON serialization
     or direct hand-off to evidence_db.insert_rtl_parse()."""

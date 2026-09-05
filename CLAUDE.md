@@ -562,6 +562,56 @@ proven to fire when a real project supplies real registered subsystems; it was n
 fired" here by writing fabricated registry entries into this project's real audit trail.
 
 
+## UVM Structural Lint (2026-09-06)
+
+Generated UVM is checked STRUCTURALLY, by a real parser, before it costs a compile. The gap this
+closed was total, not partial: `dv_harness/verible_parser.py` parses RTL only (its extraction is
+kModuleDeclaration/kPortDeclaration shaped), and `uvm_generator/bind_verification_lint.py` lints
+elaboration/simulation REPORT TEXT. Grepping the repo for `uvm_component_utils`/`uvm_object_utils`
+returned only generator EMIT sites — nothing ever read a generated `.sv` back. A generated
+environment's first structural feedback was a VCS compile, i.e. exactly the expensive path spec
+section 220 exists to run in front of.
+
+`dv_harness/uvm_structural_lint.py` is that check. It reuses the REAL verible front end already in
+this repo (`verible_parser.run_export_json()` plus that module's now-public tree-walk helpers) —
+there is no second SystemVerilog parser in this package. Every call site's BOUNDARY comes from
+verible's tree; only an already-isolated callee identifier path (`uvm_config_db#(T)::set`,
+`phase.raise_objection`, `env.mon.ap.connect`) is matched as a string. Five checks, chosen because
+a parse can DECIDE them without elaboration: factory registration (present, right family, naming
+itself), UVM phase-method signatures (void function vs. task, exactly one `uvm_phase` argument),
+config_db set/get key matching, TLM `*_port` connection completeness, and objection raise/drop
+balance.
+
+Where it runs: `create_environment()` — the one real CREATE ENVIRONMENT entry point — lints what it
+just generated, returns the report as `structural_lint` and writes it to
+`<out_dir>/uvm_structural_lint.json`. Non-blocking by default (a new check must not turn a
+previously-working generation into a hard failure); a manifest may set `"strict_structural_lint":
+true` to make ERROR findings raise `StructuralLintFailedError`, which
+`tools/generate_protocol_uvm_environment.py` surfaces as exit 5. Ad hoc:
+`dv-harness uvm-lint --env-dir <dir> [--json] [--fail-on-error]`.
+
+**Deliberately bounded, and stated rather than implied closed.** It is a parser, not an
+elaborator: generate/`ifdef conditions are not evaluated, parameters are not resolved, and a class
+extending a base this parse never saw (a VIP class such as `svt_usb_agent`) is recorded
+UNCLASSIFIED and NOT flagged — an unknown base cannot prove a missing registration. Both config_db
+findings are WARNING, never ERROR, because an unmatched key is an absence this analysis cannot
+prove (the missing half may live in VIP code, a project's own top test, or behind a run-time-built
+key); ERROR is reserved for defects provable from the analysed sources alone. A `.svh` that does
+not parse standalone is a WARNING (`bind_mechanism_generator.py` legitimately emits
+top-module-scope `dv_uvm_hook.svh`), a `.sv` that does not is an ERROR. When verible cannot be run
+the status is NOT_AVAILABLE with a real reason — never PASS. The other seven concerns section 220
+lists (analysis-port semantics, sequencer/driver linkage, virtual-interface binding, package/import
+dependencies, duplicate definitions, duplicate active drivers, illegal hierarchy assumptions) are
+NOT implemented; several need elaboration-time truth this parse does not have.
+
+Proven by `dv_harness_tests/test_uvm_structural_lint.py`: a clean synthetic environment reports
+zero findings, every rule is then driven by MUTATING that same clean source one defect at a time
+(so each assertion proves the lint caught that specific injected defect), and the real
+`examples/generated_pcie_uvm_env/` and `examples/generated_usb_real_evidence_v12/` — environments
+this project's own generator really produced — report no ERROR findings, because a lint that fires
+on genuine generator output would be unusable no matter how many synthetic defects it catches.
+
+
 ## Methodology Consolidation Rule
 
 A process/method/workflow used in a session is not "done" once it produces a result once.

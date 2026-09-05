@@ -76,10 +76,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import json
+
 from ..environment_mode_router import (
     resolve_environment_mode,
     read_registered_subsystem_entries,
 )
+from ..uvm_structural_lint import format_report, lint_uvm_environment
 from .generator import sv_id
 from .protocol_env_generator import ProtocolEnvGenerator
 from .protocol_model_layer import (
@@ -139,6 +142,56 @@ class SubsystemModeRequiredError(ValueError):
         self.detail = detail
 
 
+class StructuralLintFailedError(ValueError):
+    """Raised only when the request opted in with `strict_structural_lint:
+    true` AND the post-generation structural lint found ERROR-severity
+    defects. Default behaviour is non-blocking: the environment is still
+    written and the report is still recorded, because this lint is new and
+    must not turn a previously-working generation into a hard failure without
+    the caller asking for that. Carries the full report dict on `.detail`."""
+
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+STRUCTURAL_LINT_REPORT_NAME = "uvm_structural_lint.json"
+
+
+def _run_structural_lint(out_dir: Path, request: Dict[str, Any]) -> Dict[str, Any]:
+    """Deterministic structural lint of the UVM code THIS call just generated,
+    run here because this is the last point before the environment leaves for a
+    compile/simulation -- section 220's "Structural lint runs before expensive
+    simulation where possible".
+
+    The report is always written to <out_dir>/uvm_structural_lint.json so the
+    evidence survives the process, and always returned so the caller can print
+    it. A verible that cannot be run yields status NOT_AVAILABLE with a real
+    reason (uvm_structural_lint never fabricates a PASS it could not check),
+    and that is not a generation failure -- verible is not a build dependency
+    of this generator.
+
+    Set `strict_structural_lint: true` in the request to make ERROR-severity
+    findings raise StructuralLintFailedError instead."""
+    report = lint_uvm_environment(out_dir)
+    payload = report.to_dict()
+    try:
+        (Path(out_dir) / STRUCTURAL_LINT_REPORT_NAME).write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        # Recording the report must never destroy an otherwise-good
+        # generation; the report is still returned in-process.
+        payload["report_write_error"] = str(exc)
+    if request.get("strict_structural_lint") and payload["status"] == "FAIL":
+        raise StructuralLintFailedError("UVM_STRUCTURAL_LINT_FAILED", {
+            "out_dir": str(out_dir),
+            "report": payload,
+            "summary": format_report(report),
+        })
+    return payload
+
+
 def _requested_subsystems(request: Dict[str, Any]) -> List[str]:
     """What this CREATE ENVIRONMENT request is asking to build, as
     resolve_environment_mode()'s `requested_subsystems` input.
@@ -184,10 +237,12 @@ def create_environment(root: Path, request: Dict[str, Any],
     `out_dir` written to, and `generated_files`. SUBSYSTEM_MODE additionally
     carries `protocol_model` (the layering record, also written into the
     generated environment_manifest.json) and `protocol_model_files`;
-    SYSTEM_LEVEL_MODE additionally carries `composed_subsystems`.
+    SYSTEM_LEVEL_MODE additionally carries `composed_subsystems`. BOTH modes
+    carry `structural_lint`, the deterministic pre-simulation lint of the UVM
+    code just generated (see _run_structural_lint()).
 
     Raises EnvironmentModeUnresolvedError / MissingOutputDirectoryError /
-    SubsystemModeRequiredError (see their docstrings),
+    SubsystemModeRequiredError / StructuralLintFailedError (see their docstrings),
     protocol_model_layer.ProtocolModelLayerError when a supplied
     protocol_model_topology is refused by that protocol's own model, or
     propagates compose_soc_environment()'s own
@@ -248,6 +303,7 @@ def create_environment(root: Path, request: Dict[str, Any],
             "generated_files": generated,
             "protocol_model": protocol_model,
             "protocol_model_files": model_files,
+            "structural_lint": _run_structural_lint(out_dir, request),
         }
 
     # --- SYSTEM_LEVEL_MODE ---
@@ -279,4 +335,5 @@ def create_environment(root: Path, request: Dict[str, Any],
         "generated_files": sorted(files.keys()),
         "composed_subsystems": [s["name"] for s in subsystems],
         "soc_name": sv_id(request.get("soc_name") or "soc"),
+        "structural_lint": _run_structural_lint(target, request),
     }
