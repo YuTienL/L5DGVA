@@ -2,7 +2,7 @@
 
 **Status: DONE**
 
-**Test summary:** `dv_harness_tests/test_resource_orchestrator.py` 52 passed;
+**Test summary:** `dv_harness_tests/test_resource_orchestrator.py` 53 passed;
 the nine directly-affected modules (this file plus `test_preflight`,
 `test_loop_budget`, `test_harness_reliability`, `test_cli_preflight`,
 `test_execution_preflight_wiring`, `test_escalation_notify`, `test_lsf_client`,
@@ -106,7 +106,7 @@ already set in this same file for LOOP-3:
   *accepts* work, not how much room is left, and the arbitration decision lives
   in that band.
 
-### 2.3 `dv_harness_tests/test_resource_orchestrator.py` (new, 52 tests)
+### 2.3 `dv_harness_tests/test_resource_orchestrator.py` (new, 53 tests)
 
 Against this project's **own real captured** `lmutil lmstat` / `bqueues`
 transcripts, imported from `test_preflight.py` rather than re-typed (the same
@@ -137,6 +137,10 @@ Negative controls (this is where the detection power is):
   is asserted to have been asked to run preflight's OWN `lmutil lmstat -a -c
   2900@host-a` and `bqueues vcs` (through `degradation.probe_resources()`), so
   a probe of this module's own would show up as different command strings.
+- A contender the plan GRANTED still cannot submit when its own preflight
+  blocks: the REAL `lsf_client.bsub_submit_with_preflight()` raises
+  `PreflightBlockedError` over a starved-license transcript before `bsub` is
+  ever reached. The grant demonstrably confers no permission.
 - With no checks and no runner, `orchestrate()` probes nothing and reports
   `PRESSURE_UNKNOWN` + unmeasured capacity -- never a missing binary read as a
   full farm.

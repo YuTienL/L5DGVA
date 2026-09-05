@@ -802,6 +802,35 @@ class TestBoundaries:
         assert "discover_live_jobs" in src
         assert callable(lsf_client.discover_live_jobs)
 
+    def test_a_granted_contender_whose_own_preflight_blocks_still_cannot_submit(self):
+        """The safety claim this module's disclosure makes, tested against the
+        REAL gate rather than asserted.
+
+        The plan GRANTS the contender (the license reads healthy at the moment
+        of arbitration). The submission gate then runs its own real preflight,
+        which BLOCKS, and `bsub_submit_with_preflight()` raises before
+        `bsub_submit()` is reached -- so a grant demonstrably confers no
+        permission. `bsub` is never invoked: the preflight runner is scripted
+        and the block happens before any submission call."""
+        from dv_harness import lsf_client
+
+        plan = ro.orchestrate([_req("p", "BUILD_DEBUG", at="2026-09-06T09:00:00")],
+                              checks=_checks_with_seats(5), queue="vcs")
+        assert plan.allocations[0].decision == ro.ALLOCATION_GRANTED
+
+        # The same farm, moments later: the license pool is fully checked out.
+        gate_cfg = preflight.PreflightConfig(license_server="2900@host-a", queue="vcs",
+                                             license_features=["VCSRuntime"],
+                                             workdir="", host=None,
+                                             required_env_vars=[])
+        blocked_runner = _ScriptedRunner([_res(stdout=_lmstat_with(99, 99))]
+                                         + [_res(ok=False, exit_code=1,
+                                                 error="not reached in this test")] * 8)
+        with pytest.raises(lsf_client.PreflightBlockedError):
+            lsf_client.bsub_submit_with_preflight(
+                "echo never-runs", queue="vcs",
+                preflight_cfg=gate_cfg, preflight_runner=blocked_runner)
+
     def test_allocation_vocabulary_does_not_collide_with_status_or_priority(self):
         from dv_harness.models import Status
         statuses = {s.value for s in Status}

@@ -3227,7 +3227,7 @@ shared `execute_verb()`. `plan` exits 2 when any contender is held back and
 `capacity` exits 2 when nothing was measured -- a CI-visible "someone is waiting
 on capacity", never an approval signal in either direction.
 
-Proven by `dv_harness_tests/test_resource_orchestrator.py` (52 tests) against
+Proven by `dv_harness_tests/test_resource_orchestrator.py` (53 tests) against
 this project's OWN real captured `lmutil lmstat` / `bqueues` transcripts,
 imported from `test_preflight.py` rather than re-typed and mutated only in the
 numbers that carry the meaning under test. The multi-job LSF state is a

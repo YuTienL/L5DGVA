@@ -702,12 +702,16 @@ def _default_job_lister(vcuser: str) -> List[Dict[str, Any]]:
 # ==========================================================================
 # Cross-PROJECT contenders, from the registry this codebase already has
 # ==========================================================================
-#: The skills that make a graph node execution-layer work, i.e. work that
-#: really consumes a license seat and a farm slot. IMPORTED semantics, not a
-#: second list: `engine.DVHarness.EXECUTION_PREFLIGHT_SKILLS` is the
-#: discriminator that arms the execution preflight gate, and
-#: `loop_budget.prioritize_stage()`'s own caller already uses it.
 def execution_preflight_skills() -> Tuple[str, ...]:
+    """The skills that make a graph node execution-layer work, i.e. work that
+    really consumes a license seat and a farm slot.
+
+    IMPORTED, not a second list: `engine.DVHarness.EXECUTION_PREFLIGHT_SKILLS`
+    is the discriminator that arms the execution preflight gate, and it is what
+    `loop_budget.prioritize_stage()`'s own caller already uses to decide
+    `consumes_scarce_resource`. A copy here would be a second answer to "does
+    this stage cost a license".
+    """
     from .engine import DVHarness
     return tuple(DVHarness.EXECUTION_PREFLIGHT_SKILLS)
 
