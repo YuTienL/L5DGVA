@@ -227,8 +227,35 @@ Staging was hand-scoped: `dv_harness/cli.py` and the non-mine hunks of
   (an environment that is not really on disk makes the cross-check report
   UNAVAILABLE rather than a false clear).
 
-## 7. Test summary
+## 7. Commits
 
-19/19 new cross-check tests pass; 255/255 pass across the six directly-related
-existing suites; the composer/engine suites and the full `dv_harness_tests/`
-run are reported in the commit message.
+- `95d7181` system-level: wire the real cross-subsystem analysis into the gates
+  and composer
+- `3cbd75c` system-level: name the gate cross-check's import-failure reason
+  concretely
+
+Both hand-scoped. `CLAUDE.md`'s other 70 lines (another pass), `dv_harness/cli.py`,
+`tools/dut_architecture/build_architecture_model.py` and
+`.dv-harness/dut-architecture/architecture_model.schema.json` were left
+unstaged, using `git diff > patch` → trim to my hunk →
+`git apply --cached --check` → `git apply --cached`.
+
+## 8. Test summary
+
+21/21 new cross-check tests pass; 255/255 across the six directly-related
+suites; 132/132 across five adjacent suites (signoff e2e, gate package-root
+env, protocol/environment-mode wiring, scheduling plan, regression readiness);
+2/2 stage-instruction completeness; 255/256 on
+`test_soc_environment_composer.py` + `test_engine_gates_and_routing.py` with
+the single failure being an unrelated `vplan_writer_validation_gate.py`
+30s-timeout flake under concurrent load that passes in isolation.
+
+A whole-repo `dv_harness_tests/` run (5887 tests) reached 67% before being cut
+short by the session's background-task limit. Its progress stream carried
+**zero `F` markers and exactly 6 `E`s**, all in one contiguous block around
+65%. Those six were tracked down rather than waved off: re-running the
+alphabetical band they fall in gives **224 passed, 6 errors**, and the six are
+`test_pueue_client.py::TestRealPueueIntegration::*` failing at setup with
+`AssertionError: real pueued did not come up` — the external `pueued` daemon is
+not running on this machine. Environmental, pre-existing, and unrelated to
+anything this pass touched. No `F` anywhere in the 3900+ tests that did run.

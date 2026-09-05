@@ -480,15 +480,72 @@ def check_license(runner: Runner, cfg: PreflightConfig, timeout: int = 60) -> Ch
     return CheckOutcome(name, "PASS", detail, command=cmd, evidence=res.stdout[:2000])
 
 
+#: The bqueues columns a CROSS-JOB caller needs beyond the Open:Active status
+#: `check_queue_health()` judges on. Column POSITION is resolved from the
+#: header row rather than hardcoded, because `bqueues -o` lets a site reorder
+#: or drop columns and a fixed index would then silently read PEND as MAX.
+_QUEUE_CAPACITY_COLUMNS = ("MAX", "JL/U", "NJOBS", "PEND", "RUN")
+
+
+def _bqueues_number(header: Optional[List[str]], parts: List[str],
+                    column: str) -> Optional[int]:
+    """One numeric bqueues cell, or None.
+
+    LSF prints `-` for "no limit". That is reported as None and NEVER as 0 --
+    reading an unlimited queue as a full one would defer every job on the farm.
+    An absent header, an absent column and an unparseable cell are all None for
+    the same reason: an unmeasured capacity must not become a measured zero."""
+    if not header or column not in header:
+        return None
+    idx = header.index(column)
+    if idx >= len(parts):
+        return None
+    tok = parts[idx]
+    if tok == "-":
+        return None
+    try:
+        return int(tok)
+    except ValueError:
+        return None
+
+
 def _parse_bqueues_output(stdout: str, queue: str) -> Optional[dict]:
+    """The queue's own bqueues row.
+
+    `status` is the field `check_queue_health()` judges Open:Active on. The
+    `_QUEUE_CAPACITY_COLUMNS` entries beside it are the CROSS-JOB facts a
+    single-job Open:Active verdict structurally cannot express -- how many jobs
+    this queue admits at once, how many are already on it, and the per-user
+    limit -- read by `resource_orchestrator.capacity_from_checks()`."""
+    header: Optional[List[str]] = None
     for line in stdout.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("QUEUE_NAME"):
+        if not stripped:
             continue
         parts = stripped.split()
+        if parts[0] == "QUEUE_NAME":
+            header = parts
+            continue
         if len(parts) >= 3 and parts[0] == queue:
-            return {"queue": parts[0], "status": parts[2]}
+            row: Dict[str, object] = {"queue": parts[0], "status": parts[2]}
+            for col in _QUEUE_CAPACITY_COLUMNS:
+                row[col] = _bqueues_number(header, parts, col)
+            return row
     return None
+
+
+def parse_queue_capacity(stdout: str, queue: str) -> Optional[dict]:
+    """Public wrapper over the SAME `_parse_bqueues_output()` `check_queue_health()`
+    itself uses to reach its verdict.
+
+    Exists for the same reason `parse_license_availability()` does: a caller
+    that needs the measured CAPACITY -- rather than the PASS/FAIL verdict those
+    columns sit beside -- reads it with the identical parse instead of
+    re-parsing `bqueues` output or scraping the check's formatted `detail`
+    string. `resource_orchestrator.capacity_from_checks()` is the first such
+    caller: arbitrating N concurrent jobs against ONE queue needs to know how
+    many slots that queue has, which "Open:Active" does not say."""
+    return _parse_bqueues_output(stdout or "", queue)
 
 
 def check_queue_health(runner: Runner, cfg: PreflightConfig, timeout: int = 60) -> CheckOutcome:
@@ -510,7 +567,15 @@ def check_queue_health(runner: Runner, cfg: PreflightConfig, timeout: int = 60) 
                              command=cmd, evidence=res.stdout[:2000])
     status = row["status"]
     if "Open" in status and "Active" in status:
-        return CheckOutcome(name, "PASS", f"queue '{cfg.queue}' status={status}", command=cmd)
+        # The PASS path carries the raw bqueues output too (the FAIL paths
+        # already did), for the same reason check_license()'s PASS path carries
+        # its lmstat text: "Open:Active" says the queue ACCEPTS work, not how
+        # much room is left on it, and a cross-job arbitration decision lives
+        # exactly in that band. Carrying the real output lets a reader
+        # re-derive MAX/NJOBS/PEND/RUN through parse_queue_capacity() instead
+        # of scraping `detail`.
+        return CheckOutcome(name, "PASS", f"queue '{cfg.queue}' status={status}",
+                            command=cmd, evidence=res.stdout[:2000])
     return CheckOutcome(name, "FAIL",
                          f"queue '{cfg.queue}' not Open:Active (status={status})",
                          command=cmd, evidence=res.stdout[:500])

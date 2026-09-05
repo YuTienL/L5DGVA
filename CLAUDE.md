@@ -3059,3 +3059,151 @@ exists and inventing one would be fabricated precision. (3) Like
 REACHED, not WIRED -- it has a CLI verb but no `run_stage()`/`advance()` call
 site, no graph node and no dashboard card. (4) It does not score a strategy's
 expected coverage gain or cost; that needs ground truth this repo does not have.
+
+## Global Cross-Job Resource Orchestration (2026-09-06, VI-5)
+
+VERIFICATION_INTELLIGENCE's completeness audit flagged a Global Resource /
+License Orchestrator NEVER_BUILT. Re-verified by direct search before building:
+a repo-wide grep for `cross_job` / `arbitrat` / `global_resource` /
+`resource_orchestr` / `multi_job` / `concurrent_jobs` over `dv_harness/` and
+`tools/` returned only AMBA bus-arbitration text, the SoC shared-VIP ownership
+family (`system_resource_inventory.py` / `system_resource_registry.py` /
+`system_scheduling_plan.py` -- a different domain entirely: VIP/agent/BFM
+composition, not license seats or farm slots) and gate names. Nothing ranked
+two jobs against one measured pool. The gap is real, and so is the trap in it:
+three real mechanisms sit right next to it and none of them is a cross-job
+arbiter.
+
+- `preflight.check_license()` / `check_queue_health()` are real probes (a real
+  `lmutil lmstat -a -c <server>` parse, a real `bqueues <queue>` parse). They
+  answer "may THIS submission proceed" and say nothing about who else is asking.
+- `lsf_client.bsub_submit_with_preflight()` runs those checks in front of ONE
+  `bsub` and blocks that one submission on a FAIL.
+- **LOOP-3's `loop_budget.prioritize_stage()` is the overlapping half, and it
+  is genuinely single-loop.** It takes one stage and one pressure reading and
+  has no argument through which a second job could ever be visible to it. Under
+  `PRESSURE_NONE` it returns PROCEED for every contender -- so ten jobs and two
+  free seats is ten PROCEEDs. That is asserted as a test
+  (`test_negative_control_loop_budget_alone_grants_all_five`), not described.
+
+`dv_harness/resource_orchestrator.py` adds exactly the missing decision:
+turning ONE measured capacity into a BOUNDED grant set over N contenders.
+
+**Nothing is measured twice, and no probe is added.** Every resource fact
+arrives as a real `preflight.CheckOutcome` -- supplied by the caller, or
+obtained through `degradation.probe_resources()` when a transport is explicitly
+injected. Pressure is `loop_budget.pressure_from_checks()`, CALLED, so this
+module and the engine's own section-92 deferral can never disagree about
+whether the farm is under pressure. The per-contender verdict is
+`prioritize_stage()`, CALLED once per contender and carried through verbatim
+with its reason: a DEFER is never overturned into a GRANT, and a PROCEED is
+never turned into a DEFER. The one new fact is `slots_available`, and it comes
+from public wrappers over `preflight`'s OWN parses -- `parse_license_availability()`
+(already public, LOOP-3's precedent) plus the new `parse_queue_capacity()` over
+the SAME `_parse_bqueues_output()` `check_queue_health()` uses to reach its
+verdict. `check_queue_health()`'s PASS path now carries its raw bqueues text
+for the same reason `check_license()`'s already did: "Open:Active" says the
+queue ACCEPTS work, not how much room is left on it, and the arbitration
+decision lives exactly in that band.
+
+**Three decisions, and the middle one exists only at this level.** GRANTED /
+QUEUED / DEFERRED, deliberately distinct tokens from `models.Status` and from
+`loop_budget.PRIORITY_*`. QUEUED is the value no per-job check can produce,
+because it is a statement about the OTHER contenders.
+
+**The ranking rule is data, printed on every plan** (`RANKING_RULE`), so a
+reader sees the rule that was applied rather than trusting a docstring:
+(1) `prioritize_stage()`'s tier, PROCEED_CRITICAL before PROCEED -- and that
+tier separates them only under measured pressure, because that is the only
+circumstance section 92 escalates in, and inventing a permanent priority for
+SIGNOFF would be a rule section 92 does not state; (2) fewest farm slots the
+asking project ALREADY holds, from the real `bjobs` listing intersected with
+that project's own registered job ids -- the anti-monopoly signal that exists
+only here, since no per-job check can see how much of the farm the asker
+already has; (3) oldest `requested_at` first (FIFO, starvation-free), a request
+declaring no arrival time sorting last rather than being given a fabricated
+one; (4) project_id then stage, purely so two runs over the same inputs produce
+the same plan.
+
+**Scarcity is never invented, in either direction.** An unmeasured capacity is
+`slots_available: None` and every eligible contender is GRANTED with the reason
+saying so -- deferring real work because nothing was measured would be section
+92's "do not invent availability" rule broken from the other side. LSF's `-`
+(no limit) is None and never 0; reading an unlimited queue as a full one would
+defer every job on the farm. A FAILing license or queue check contributes NO
+capacity number either: a starved pool is `PRESSURE_CRITICAL`, which every
+contender already reads through `prioritize_stage()`, and restating it as a
+capacity of 0 would double-count one fact. Live jobs are OBSERVED and never
+subtracted, because lmstat's `in_use` and bqueues' `NJOBS` already count them.
+"Nobody looked" and "this project holds nothing" stay distinct: with no live
+listing every `held_slots` is None and the fairness term is inert rather than
+silently reordering on a fact nobody measured.
+
+**A grant authorizes nothing and reserves nothing.** It says only "of the
+contenders asking, this one is next". Every existing gate still stands in front
+of any real work -- `preflight.run_preflight()`, `bsub_submit_with_preflight()`'s
+`PreflightBlockedError`, `policy.can_signoff()`, `ControlPlane.approve()`, the
+PR-only main/master governance -- and a GRANTED contender whose own preflight is
+BLOCKED stays blocked. This module submits nothing, kills nothing, holds no lock
+and writes no state, control, approval or memory record; it constructs no
+`MemoryStore`/`StateStore`, so a project with no `state.json` is reported as
+having none rather than having one minted for it. Both boundaries are asserted
+against the module's own CODE tokens (comments and docstrings stripped by the
+same `tokenize` approach `test_loop_budget.py` established, since this module's
+prose deliberately names the gates and submission verbs it stays away from).
+
+**Cross-PROJECT contenders come from the registry this codebase already has.**
+`contenders_from_registry()` reads `cross_project_mining.ProjectRegistry`,
+including its `ProjectIdentityCollisionError` guard, so one memory store
+registered twice cannot appear as two contenders and manufacture a contention
+out of one project's audit trail. Each project's stage is read from its own
+`state.json` with a plain `read_text()`; whether that stage consumes the scarce
+resource is derived from the project's OWN graph node skills against
+`engine.DVHarness.EXECUTION_PREFLIGHT_SKILLS`, never from the stage name. A
+project whose state or graph cannot be read contributes a real skipped-reason
+and no contender -- inventing one would put a project into an arbitration it
+never asked to join.
+
+Front door: `python -m dv_harness.resource_orchestrator
+ranking-rule|contenders|capacity|plan [--requests <json>] [--queue <q>]`, one
+shared `execute_verb()`. `plan` exits 2 when any contender is held back and
+`capacity` exits 2 when nothing was measured -- a CI-visible "someone is waiting
+on capacity", never an approval signal in either direction.
+
+Proven by `dv_harness_tests/test_resource_orchestrator.py` (50 tests) against
+this project's OWN real captured `lmutil lmstat` / `bqueues` transcripts,
+imported from `test_preflight.py` rather than re-typed and mutated only in the
+numbers that carry the meaning under test. The multi-job LSF state is a
+clearly-labelled FIXTURE (`_bjobs_records()` builds records in
+`discover_live_jobs()`'s exact real shape) because this project has no
+multi-job farm to measure; nothing in the suite contacts a live license server,
+scheduler or farm, and nothing runs a build, a regression or an LSF submission.
+The negative controls are what give it detection power: `prioritize_stage()`
+alone grants all five contenders where the orchestrator grants two, the grant
+set shrinks with the measured capacity, an unmeasured capacity grants
+everything, a small request cannot jump a blocked head-of-line one, a project
+holding three farm slots loses to a newcomer that asked two hours later while
+the SAME pair reverts to FIFO once the live listing is withheld, and both
+ranking claims were mutation-checked (removing the anti-monopoly term, and
+removing head-of-line blocking, each fail exactly one test and nothing else).
+
+**Disclosed residual.** (1) Like `cross_project_mining.py`,
+`confidence_calibration.py` and `verification_strategy.py` before it, this is
+REACHED, not WIRED: there is no `dv-harness` CLI verb (`cli.py` was being
+modified by concurrent work in the same session and adding a verb there would
+have collided), no `run_stage()`/`advance()` call site invokes it, no graph node
+declares it, and it is not on the dashboard. Nothing consults a plan before a
+real submission today. (2) It arbitrates an ADVISORY ranking, not a
+reservation: it holds no lock and keeps no ledger of outstanding grants, so two
+callers arbitrating the same instant against the same pool both see the same
+capacity. A real reservation needs shared durable cross-project state that does
+not exist here. (3) The capacity model is license free seats and queue slots
+only -- compute, memory, disk and per-host limits have no producer this module
+could read, and `JL/U` is parsed and reported but not yet enforced as a bound
+(it is a PER-USER limit, and this module arbitrates per PROJECT). (4) No
+production cross-job result exists, honestly: this repository is ONE project
+with no multi-job farm, the same disclosure `cross_project_mining.py` already
+makes about having no second project to mine. The mechanism is proven against
+real preflight transcripts and a labelled farm fixture; it was not made to
+"have fired" here by writing fabricated jobs into this project's real audit
+trail.
