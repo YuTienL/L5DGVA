@@ -3678,3 +3678,93 @@ index blocking the same fabrication on a closed-chain class), and `examples/gene
 (an environment this project's own generator really produced) reporting zero findings against an
 unrelated VIP's index. The real `create_environment()` dispatch and both real CLI entry points are
 driven end to end, including the `strict_vip_api` raise.
+
+
+## Multi-User Coordination Conflict Detection (2026-09-06, section 239)
+
+Spec section 239 ("MULTI-USER COLLABORATION") closes with two rules: "Do not use chat history as
+the coordination mechanism" and "Concurrency conflicts remain explicit." The TRANSPORT and
+AUTHORIZATION half of its list was already real and is deliberately untouched here --
+`USAGE_MULTI_USER_SAFETY.md`'s standing policy (including the "never share a `--project-root`" rule),
+`dashboard_auth.py`'s GUI-19 token gate, `user_info.summarize_user_access()`'s per-root access trail,
+and `remote_relay.RelayServer.handle_request()`'s serialization lock. The DETECTION half was
+NEVER BUILT: a repo-wide grep for `stale_sha` / `duplicate_regression` / `edit_conflict` /
+`reservation_conflict` / `cross_session` / `peer_session` / `coordination_conflict` over
+`dv_harness/` and `tools/` returned only an unrelated subsystem-registry `release_sha` test fixture.
+Nothing anywhere compared TWO users' concurrent work, so two people's only way to discover that they
+were rebuilding the same regression against different SHAs, or both driving the same VIP instance,
+was to tell each other in chat -- exactly what section 239 forbids.
+
+`dv_harness/multi_user_coordination.py` is that detection. Because each user has their OWN
+`.dv-harness/` (that is the multi-user safety rule, not an accident), detection is necessarily a
+cross-ROOT comparison: `scan([(user, project_root), ...])` reads N peer roots and compares every pair
+of distinct-user sessions. **No new coordination store is introduced** -- every fact is read off a
+real per-project artifact an existing mechanism already writes:
+
+- **STALE_SHA_CONFLICT** -- two sessions on DIFFERENT base SHAs whose changed-file sets INTERSECT.
+  Both halves come from `change_impact.read_computed_selection()`
+  (`.dv-harness/regression/computed_selection.json`), i.e. a real `git diff --name-only <base>..<head>`
+  written by REGRESSION_SELECT, never a claim a user typed. Severity is the REAL
+  `change_impact.classify_risk()` over the overlapping files, so "how much does this file matter" has
+  ONE answer in this codebase. Same base SHA is not a conflict (both work from one baseline);
+  different SHAs with disjoint files is not a conflict either.
+- **DUPLICATE_REGRESSION_SUBMISSION** -- the same pattern against the same commit, claimed twice.
+  SUBMITTED claims are real `lsf_client.JobState` records in `.dv-harness/lsf/jobs/*.json`
+  (`pattern` + `git_sha`, in-flight = LSF `PEND`/`RUN`); PLANNED claims are the same
+  `computed_selection.json`'s four selected test sets against its `head_sha`. Submitted-vs-anything
+  is HIGH (farm time is already burning); planned-vs-planned is MEDIUM. A terminal (`DONE`/`EXIT`/
+  `KILLED`) job is history, not a collision, and the same pattern against two DIFFERENT commits is two
+  legitimately different results.
+- **SHARED_RESOURCE_RESERVATION_CONFLICT** -- two users holding a claim on one genuinely-shared
+  resource (AMBA fabric port, VIP instance, license feature, regression slot, shared path). The
+  ledger is the EXISTING `AgentTaskStore.acquire()` mechanism `engine.py`'s `_advance_with_fanout()`
+  already uses, extended with a recorded `scope`. That scope is load-bearing rather than cosmetic:
+  `acquire()`'s only production caller claims blackboard TOPIC names ("findings",
+  "verification_state", ...) which are identical in every project by construction, so a scope-blind
+  cross-root comparison would report a conflict on every pair of sessions that ever ran a fan-out.
+  `SCOPE_LOCAL` (the pre-existing meaning, and what a record with no `scope` key reads as) is never
+  compared across sessions; only `SCOPE_SHARED` claims are, and a SHARED claim MUST name a kind from
+  the closed `SHARED_RESOURCE_KINDS` set -- two users typing "AXI_M0" under two free-text kinds would
+  silently never collide. Two READ claims are not a conflict; any WRITE claim against another is.
+  `release()` was added alongside, because a SHARED reservation persists on disk and with no release
+  verb every finished reservation would collide with the next user forever; a non-holder cannot
+  release someone else's claim.
+
+`dv-harness coord detect|reserve|release|list` and `python -m dv_harness.multi_user_coordination`
+share one implementation (`execute_verb`, the same convention `power-intent`/`golden-scenario`/
+`system-smoke-proof` use). Exit 0 CLEAR / reservation made, 1 CONFLICTS_DETECTED / reservation
+refused, 2 UNKNOWN or malformed. One `MULTI_USER_COORDINATION_SCAN` event lands in the SCANNING
+project's own `.dv-harness/events.jsonl` through the same `StateStore.event()` `dv-harness audit`
+already reads -- never a second audit file, and never a write into a peer's root. A CLEAR scan is
+recorded too: "we checked and found nothing" is itself citable evidence.
+
+**DETECTION is what was wired; ARBITRATION is untouched -- stated rather than implied closed.**
+(1) It takes no lock, cancels no job, revokes no claim, rewrites no peer's state, picks no winner
+and decides whose SHA is authoritative for nobody. A conflict is REPORTED with both sides' evidence
+and a `next_best_action` naming the decision two humans must make; `claimed_first` is stated as
+information, never applied as a rule. Every existing human-approval gate stands exactly as before.
+(2) There is deliberately NO stage gate and no `STAGE_GATES` entry -- a gate that passed because a
+scan could not see the other user's project root would be worse than no gate. (3) It is not an auth
+layer: it reads no token and authorizes nothing, and user identity is either DECLARED or read off
+that root's own real `CLI_ACCESS`/`GUI_ACCESS` trail; a root with no trail is reported
+`USER_IDENTITY_UNKNOWN` and its pair `PAIR_USER_IDENTITY_UNKNOWN`, compared anyway but never quietly
+assumed to be a second person. (4) "We could not check" is UNKNOWN with a real reason, never CLEAR:
+one session only, no `.dv-harness/`, no computed selection, an in-flight job with no recorded SHA,
+or an unrecognised LSF status each produce a named UNKNOWN. (5) Of section 239's nine listed
+concerns, three are implemented; ownership/authorized-role, generic edit conflict, conflicting Human
+Gates, simultaneous memory promotion and simultaneous capability changes are NOT -- the last two in
+particular would need cross-root visibility into `memory_router.promote_to_organizational()` and
+`capability_evolution`'s approval state that no shared artifact carries today.
+
+Proven by `dv_harness_tests/test_multi_user_coordination.py` (32 tests). Every test builds TWO (or
+three) REAL, SEPARATE project roots in the layout `USAGE_MULTI_USER_SAFETY.md` prescribes, each
+populated by the REAL producing mechanism: a REAL throwaway git repo with three real commits whose
+diffs are computed by the REAL `change_impact.compute_and_write()`, a REAL `requirements.csv`
+traceability registry so the PLANNED sets are what the real `select_regression()` selects, REAL
+`save_job_state()` records, REAL `AgentTaskStore.acquire(scope=SHARED)` claims, and REAL `CLI_ACCESS`
+events for identity. Each of the three detectors has a central two-concurrent-session positive proof
+AND matching negatives (same base SHA, disjoint files, different commits, terminal jobs, two READ
+claims), plus the false-positive guard that drives the REAL default `acquire()` signature
+`engine.py` uses on both roots and asserts no cross-user conflict is reported. `dv-harness coord`
+and `python -m dv_harness.multi_user_coordination` are both driven as real subprocesses, a scan is
+asserted to write NOTHING into a peer root, and a test asserts no stage gate was introduced.

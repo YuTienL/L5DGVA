@@ -713,6 +713,39 @@ def main():
                            "longer matches makes the capsule STALE with no git change at all.")
     pgs.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
 
+    pmuc = sub.add_parser("coord", help="Spec section 239 multi-user coordination CONFLICT "
+                                          "DETECTION between two or more concurrent users' "
+                                          "project roots: stale-SHA conflict (different base "
+                                          "SHAs touching the same file, off the real "
+                                          "change_impact computation), duplicate regression "
+                                          "submission (same pattern + same commit, off real "
+                                          "JobState records and the real computed selection), "
+                                          "and shared-resource reservation conflict (off the "
+                                          "same AgentTaskStore.acquire() claim ledger the "
+                                          "parallel_group fan-out already uses). Reports and "
+                                          "arbitrates nothing: it takes no lock, cancels no "
+                                          "job, revokes no claim and touches no approval "
+                                          "gate. See dv_harness/multi_user_coordination.py.")
+    pmuc.add_argument("coord_verb", choices=("detect", "reserve", "release", "list"))
+    pmuc.add_argument("--session", action="append", default=None, dest="coord_sessions",
+                       metavar="[USER=]PROJECT_ROOT",
+                       help="detect: one concurrent session (repeatable, at least twice). "
+                            "USER may be omitted, in which case it is read off that root's "
+                            "own real CLI_ACCESS/GUI_ACCESS trail.")
+    pmuc.add_argument("--resource", default=None, help="reserve/release: the resource id.")
+    pmuc.add_argument("--kind", default=None, dest="coord_kind",
+                       help="reserve/release: amba_fabric_port | vip_instance | "
+                            "license_feature | regression_slot | shared_path.")
+    pmuc.add_argument("--agent", default=None, dest="coord_agent",
+                       help="reserve: who is claiming it.")
+    pmuc.add_argument("--task", default=None, dest="coord_task",
+                       help="reserve/release: the claiming task id (a release must come "
+                            "from the holding task).")
+    pmuc.add_argument("--mode", default="WRITE", choices=("WRITE", "READ"),
+                       dest="coord_mode",
+                       help="reserve: WRITE (exclusive intent) or READ.")
+    pmuc.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
     pva = sub.add_parser("vip-api-check",
                           help="Spec section 187 VIPApiCard: validate every VIP API call a "
                                "generated sequence makes against a REAL vip_symbol_index over "
@@ -2582,6 +2615,23 @@ def main():
         print(_sbp_text)
         if _sbp_code:
             raise SystemExit(_sbp_code)
+    elif args.cmd == "coord":
+        # One shared implementation with
+        # `python -m dv_harness.multi_user_coordination`
+        # (multi_user_coordination.execute_verb), same convention as
+        # power-intent / golden-scenario / system-smoke-proof above. Exit codes:
+        # 0 CLEAR (or reservation made), 1 CONFLICTS_DETECTED (or a refused
+        # reservation), 2 UNKNOWN / malformed request -- "we could not check"
+        # never exits 0. DETECTION ONLY: no lock is taken, no job is cancelled,
+        # no claim is revoked and no approval gate is consulted or weakened.
+        from . import multi_user_coordination as _muc
+        _muc_text, _muc_code = _muc.execute_verb(
+            args.coord_verb, root=h.root, sessions=args.coord_sessions,
+            resource=args.resource, kind=args.coord_kind, agent=args.coord_agent,
+            task_id=args.coord_task, mode=args.coord_mode, as_json=args.json)
+        print(_muc_text)
+        if _muc_code:
+            raise SystemExit(_muc_code)
     elif args.cmd == "env-manifest":
         from . import env_manifest
         from .env_manifest import (EnvManifestValidationError, RegisterMapValidationError,
