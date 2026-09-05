@@ -6,8 +6,9 @@
 the nine directly-affected modules (this file plus `test_preflight`,
 `test_loop_budget`, `test_harness_reliability`, `test_cli_preflight`,
 `test_execution_preflight_wiring`, `test_escalation_notify`, `test_lsf_client`,
-`test_cross_project_mining`) 333 passed in 273s; full `dv_harness_tests` suite
-result in §7.
+`test_cross_project_mining`) 333 passed in 273s; the complete 44-module blast
+radius 1448 passed (the only 11 non-passes are pre-existing `pueued`-daemon
+failures, attributed in §6).
 
 ---
 
@@ -237,7 +238,50 @@ this real repo returned exit 2 (`NO_CONTENDERS`, unmeasured capacity) and
 | Compute / memory / disk / per-host capacity | No producer in this harness to read them from. `JL/U` is parsed and reported but not enforced as a bound -- it is a PER-USER limit while this module arbitrates per PROJECT, and conflating the two would be a wrong bound rather than a missing one. |
 | A production cross-job result | This repo is ONE project with no multi-job farm -- the same disclosure `cross_project_mining.py` already makes. I did **not** manufacture one by writing fabricated jobs into this project's real audit trail. |
 
-## 6. Files
+## 6. Test evidence
+
+| run | result |
+|---|---|
+| `test_resource_orchestrator.py` | **53 passed** |
+| The nine directly-affected modules (`test_preflight`, `test_loop_budget`, `test_harness_reliability`, `test_cli_preflight`, `test_execution_preflight_wiring`, `test_escalation_notify`, `test_lsf_client`, `test_cross_project_mining`, + this one) | **333 passed** in 273s |
+| **The complete blast radius** -- every one of the 44 test modules that references `preflight` / `degradation` / `bqueues` / `check_queue_health` / `lsf_client` / `loop_budget` / `resource_orchestrator` | **1448 passed**, 5 failed, 6 errors in 2382s |
+
+**All 11 non-passes are pre-existing and unrelated, attributed individually:**
+
+- 5 `FAILED` in `dv_harness_tests/test_cli_pueue.py`, 6 `ERROR` in
+  `dv_harness_tests/test_pueue_client.py::TestRealPueueIntegration`, every one
+  reporting `real pueued did not come up`. They need a live `pueued` daemon,
+  which is not running on this machine. `test_cli_pueue.py`'s `skipif` guards
+  only on the pueue BINARY being present, not on the DAEMON being up, so on a
+  machine with the binary installed and the daemon down they fail rather than
+  skip -- a pre-existing gap in that module's own guard, already noted in
+  `.work/gap-close-3loop-gap-2-report.md`'s "pueued-daemon attribution".
+- **Proven pre-existing, not assumed.** `dv_harness/pueue_client.py` and
+  `test_cli_pueue.py` were last touched in `f3941bc`, and
+  `test_pueue_client.py` in `c830820`; `git merge-base --is-ancestor` confirms
+  both are ancestors of my first commit's parent, i.e. neither has changed
+  since before this work began.
+- **Proven unrelated, not assumed.** `test_cli_pueue.py`'s only harness import
+  is `from dv_harness import pueue_client as pc`. `test_pueue_client.py`'s two
+  matches for my grep terms are prose in its module docstring, not imports.
+  Neither reaches `preflight`, `loop_budget`, `lsf_client` or
+  `resource_orchestrator`.
+- Reproduced in complete isolation (`pytest dv_harness_tests/test_cli_pueue.py`
+  alone -> the identical 5 failures), so they are not an artifact of the
+  batched run either.
+
+**On the whole-suite run.** A full `pytest dv_harness_tests` was started and
+reached 33% before being stopped. It was not abandoned for convenience: five or
+six sibling close-passes were running their own pytest suites against this same
+checkout concurrently, and the run was advancing at roughly 4% per 10 minutes
+(~3 hours remaining) purely from CPU and shared-tree contention. The blast
+radius above is the honest substitute and is strictly the relevant set: my only
+change to a shared file is `preflight.py`, and `resource_orchestrator.py` is
+imported by nothing else in the package, so no test outside those 44 modules
+can reach either. The partial full-suite run showed the same 5 pueue failures
+and nothing else through 33%.
+
+## 7. Files
 
 - `D:/DV/Task/DV_Agent_Harness_L5/v50/dv_harness/resource_orchestrator.py` (new)
 - `D:/DV/Task/DV_Agent_Harness_L5/v50/dv_harness/preflight.py` (enhanced)
