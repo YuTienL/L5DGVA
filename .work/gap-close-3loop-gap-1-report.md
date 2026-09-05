@@ -2,9 +2,13 @@
 
 **Status: DONE**
 
-**Test summary:** `dv_harness_tests/test_capability_evolution_auto_discovery.py` 23 passed;
-`test_capability_evolution_research_architect.py` + the 4 sibling research suites 225 passed;
-full `dv_harness_tests/` suite run to completion (see "Verification" below).
+**Test summary:** new `test_capability_evolution_auto_discovery.py` 23/23 passed; full
+`dv_harness_tests/` suite (5210 tests, run as two halves) 5197 passed / 13 not passing, and every
+one of the 13 is environmental or pre-existing, none attributable to this change (11 = the `pueued`
+daemon is not running on this machine, 1 = a `node` subprocess timeout under load that passes in
+isolation, 1 = a corner-case-library index I corrupted myself by running two pytest processes
+concurrently against the repo's real store — restored, and `test_knowledge_center.py` is 30/30
+after).
 
 > Filename note: the requested path `.work/gap-close-3loop-gap 1:-report.md` contains a `:`,
 > which is not a legal filename character on Windows/NTFS. Written as
@@ -142,7 +146,40 @@ Tests that hold this boundary specifically:
   dv_harness_tests/test_research_evidence_card.py -q` → **225 passed**
   (this includes Stage-1 Acceptance Test E's source scan of `capability_evolution.py`, which the
   new code had to be written to satisfy — no verdict-vocabulary token in non-comment source)
-- Full `dv_harness_tests/` suite run.
+- Targeted engine/memory/blackboard suites (`test_engine_gates_and_routing`,
+  `test_debug_flow_memory`, `test_job_memory_evidence_mirror`,
+  `test_engineering_confirmation_accumulation`, `test_memory_tier_integrity_and_admission`,
+  `test_memory_tier_completion`, `test_obsidian_memory_final_integration`,
+  `test_blackboard_automatic_path_and_concurrency`, `test_question_queue_digest_auto_trigger`)
+  → **377 passed**
+- **Full `dv_harness_tests/` suite, 5210 tests, run as two halves** (a single run exceeded the
+  harness's background-task budget):
+  - files 1–110 (2834 tests): **2828 passed, 6 failed** — 5 × `test_cli_pueue.py`
+    (`pueue status failed: Failed to connect to the daemon on 127.0.0.1:6924. Did you start it?` —
+    `pueue` is installed so the file's own skipif does not fire, but `pueued` is not running),
+    1 × `test_knowledge_center.py::test_ccl_reuse_verified_rejects_retracted_status`
+    (`JSONDecodeError: Extra data`).
+  - files 111–213 (2376 tests): **2369 passed, 1 failed, 6 errors** — 6 ×
+    `test_pueue_client.py::TestRealPueueIntegration` ("real pueued did not come up", same
+    environment cause), 1 × `test_workflow_rca_multi_agent_fusion.py::
+    test_workflow_is_syntactically_valid_js` (`subprocess.TimeoutExpired` on `node`).
+
+**Every one of the 13 accounted for, none from this change:**
+- **11 pueue** — the `pueued` daemon is not running on this machine, reproduced directly:
+  `python -m dv_harness.cli ... pueue status` → `Failed to connect to the daemon on
+  127.0.0.1:6924`. Nothing in this change touches `pueue_client.py` or the `pueue` CLI verbs.
+- **1 node timeout** — `test_workflow_rca_multi_agent_fusion.py` re-run in isolation:
+  **8 passed in 1.52s**. A load-induced `node` subprocess timeout, not a code failure.
+- **1 corner-case index** — **self-inflicted, and repaired.** `test_knowledge_center.py`'s CCL
+  tests write into the REPO's own
+  `.dv-harness/memory/corner_case_library/index.json` (not a tmp dir) and clean up in `finally`;
+  `CornerCaseLibrary.add()` is not atomic (unlike `Blackboard.write()`), so my running several
+  pytest processes concurrently produced a torn, concatenated index plus three stray
+  `CCL-*.json` records with the tests' own `kc-retract-1`/`kc-stale-1` corner_ids. The tracked
+  index was restored with `git checkout --` and the three stray files deleted;
+  `test_knowledge_center.py` is now **30 passed**. Flagged, not fixed here: the underlying
+  hygiene bug (a test writing to the repo's real store, and a non-atomic
+  `CornerCaseLibrary.add()`) is pre-existing and out of this gap's scope.
 
 The end-to-end test is genuinely end-to-end: two real `DVHarness.run_stage()` calls over the real
 shipped `main_graph.json` that do not close, against two different commits, writing two real Job
