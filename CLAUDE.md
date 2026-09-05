@@ -3424,3 +3424,107 @@ makes about having no second project to mine. The mechanism is proven against
 real preflight transcripts and a labelled farm fixture; it was not made to
 "have fired" here by writing fabricated jobs into this project's real audit
 trail.
+
+
+## Canonical Requirement Contract + Status Vocabulary (2026-09-06, SPEC-3)
+
+Spec section 184's CANONICAL REQUIREMENT CONTRACT is now a real schema, and its
+five-value status vocabulary (COMPLETE / PARTIAL / AMBIGUOUS / CONTRADICTORY /
+UNKNOWN) is enforced against the requirement's own content rather than trusted
+from the field. The gap was total: `grep -rn "Canonical Requirement Contract"`
+matched NOTHING repo-wide, and no module or schema named
+`requirement_contract`/`RequirementContract` existed.
+
+The closest pre-existing mechanism,
+`tools/verification_flow/spec_to_vplan_requirement_quality_gate.py`, checks FIVE
+fields (`spec_ref`/`feature`/`expected_behavior`/`verification_method`/
+`coverage_goal`) plus an ambiguity rule and an UNSUPPORTED_BY_DUT rule. Section
+184 names FIFTEEN, and the eight it adds -- Protocol, Configuration,
+Precondition, Observability, Checker, Coverage Intent, Priority, Criticality --
+are exactly the ones a downstream generator needs and would otherwise re-derive
+from prose. That gate had no status vocabulary at all, so "this requirement is
+CONTRADICTORY and a human must arbitrate" was not expressible: a requirement was
+implicitly either complete or a gate failure.
+
+`dv_harness/requirement_contract.py` + `dv_harness/schemas/
+requirement_contract.schema.json` are the contract, following `env_manifest.py`'s
+schema-versioning convention (module-level `SCHEMA_VERSION`, sibling schema file,
+fail-closed `RequirementContractValidationError` rather than a False/None
+return). Vocabularies are IMPORTED, not re-typed: `priority` is
+`memory.CORNER_CASE_RISK_TIERS` (P0..P3), `confidence` is
+`inference.CONFIDENCE_LEVELS` plus UNKNOWN. `criticality`
+(BLOCKER/MAJOR/MINOR/UNKNOWN) is genuinely new -- nothing here had a
+consequence-of-failure axis -- and is deliberately a DIFFERENT axis from
+priority's scheduling one.
+
+**What makes it more than a shape check.** `status` is a field an agent fills in
+about its own extraction work, so by the Evidence Truth Rule it is a judgment,
+not evidence. `derive_status()` RE-DERIVES it from the record's own content
+(worst-first: unresolved contradiction -> unresolved ambiguity -> untrusted
+confidence or nothing verifiable -> unresolved field -> COMPLETE), and
+`analyze_requirement_contract()` rejects a status the content does not support.
+Two rules carry the weight:
+- `STATUS_OVERCLAIMED` -- COMPLETE declared while a field is still absent,
+  empty, or a placeholder (`UNKNOWN`/`TBD`/`N/A`/`?`/lowercase `none`). Uppercase
+  `NONE` is RESOLVED, but only for `configuration`/`precondition`, where "there
+  genuinely is no dependency" is a decision rather than an evasion.
+- `UNRESOLVED_BLOCKER_HIDDEN` -- an ambiguity or contradiction the record FILED
+  ITSELF, stepped over by a status that is neither AMBIGUOUS nor CONTRADICTORY.
+  Section 32's "unresolved requirements remain visible as gaps" as code. Filing a
+  question does NOT close an ambiguity; only explicit `resolved: true` alongside
+  real resolution text does.
+Declaring a status WEAKER than the content supports stays legal (honest
+conservatism) and is reported as a WARNING, never an error.
+`downstream_consumable()` is the decision the contract exists to make: only
+COMPLETE with zero ERROR findings may feed a generator.
+
+**ARBITRATION IS NOT HERE.** A CONTRADICTORY requirement STOPS at CONTRADICTORY.
+The contract requires a contradiction to name at least TWO conflicting sources
+and refuses to let the requirement feed a generator; nothing picks which source
+wins. Same boundary `system_resource_inventory`'s driver-conflict DETECTION
+keeps against ownership ARBITRATION, for the same reason.
+
+Where it runs: `spec_to_vplan_requirement_quality_gate.py` is EXTENDED, not
+replaced. A record declaring `contract_schema_version` gets the contract check
+(new exit 6 `REQUIREMENT_CONTRACT_VIOLATION`); every record without it stays on
+the original code path with its original exit codes 2/3/4/5 byte-identical, so a
+project that has not migrated is never retroactively failed. A contract record is
+validated by the new layer INSTEAD of the old five-field one, because the two
+shapes spell the same content differently (`req_id`/`expected_behavior` vs
+`requirement_id`/`expected_result`) and the old layer would fail it for fields the
+contract deliberately renamed. The new layer is FAIL-CLOSED on its own
+unavailability (exit 7) -- unlike the opportunistic cross-checks in the
+`system_level_*` gates, because the record EXPLICITLY asked to be held to the
+richer contract and silently skipping would turn a stricter declaration into a
+weaker gate. Ad hoc: `dv-harness requirement-contract --requirements <file>
+[--json] [--fail-on-error]`, or `python -m dv_harness.requirement_contract`
+(0 clean, 1 ERROR findings, 2 NOT_AVAILABLE -- nothing in the contract shape is
+never a clean PASS).
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It reads a
+requirement RECORD. It does not parse specifications, does not extract
+requirements from prose, and does not check a requirement against RTL, a register
+map, or a simulation -- it answers "is this requirement internally coherent,
+honestly statused, and safe to generate from". Section 184's spec-parser /
+requirement-normalizer / register-parser responsibilities are NOT implemented
+here. (2) The contract is not yet PRODUCED by anything: no generator in this repo
+emits contract-shaped records, so the gate layer is dormant until a project
+supplies them. That is deliberate -- minting fabricated contract records to make
+the mechanism "have fired" is exactly what the registry-entry disclosure above
+refuses. (3) `gates.py`'s `JUDGMENT_FIELDS` was NOT extended with the contract's
+`status`: that opt-in DV-review-cosign mechanism is off by default and three
+concurrent close-passes were editing `gates.py`, so it is left for a pass that
+owns that file.
+
+Proven by `dv_harness_tests/test_requirement_contract.py` (96 tests): ONE clean,
+fully-populated synthetic requirement is asserted COMPLETE and finding-free, then
+every rule is driven by MUTATING that same clean record ONE defect at a time, so
+each assertion proves that rule caught that specific injected defect. All five
+status values are each derived from real content and asserted self-consistent and
+correctly (non-)consumable; every one of the fifteen fields is deleted in turn and
+asserted rejected by the schema AND named by the analysis. The gate half is driven
+as a REAL subprocess over REAL files -- including the headline case: a record that
+would have PASSED the pre-2026-09-06 gate (it carries all five old fields) is
+REJECTED for claiming COMPLETE with `checker: "TBD"` -- plus the older shape's
+four original exit codes, a mixed document, and the fail-closed
+validator-unavailable path.
