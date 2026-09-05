@@ -2,19 +2,59 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dv-agent-harness-l5/schemas/env_manifest.schema.json",
   "title": "env_manifest",
-  "description": "Machine-readable, git-tracked fact file for a generated verification environment: env.manifest.json. It has exactly three top-level layers -- vip_config (the VIP's own already-resolved config object, dumped by a zero-time UVM callback at end_of_elaboration_phase -- more reliable than a user guide because it reflects actually-applied values), dut_facts (ports/params reverse-derived from real verible --export_json RTL parsing, plus registers from a structured RAL/IP-XACT-style source), and env_topology (component hierarchy + config_db set/get pairing captured from a real uvm_top.print_topology() + +UVM_CONFIG_DB_TRACE run). Generated only -- dv_harness/env_manifest.py is the sole writer; this file is never hand-edited. Every layer that requires a real captured artifact (a VIP config dump, a topology dump, a config_db trace log) reports status=NOT_AVAILABLE with a `reason` when that artifact does not yet exist, rather than fabricating example content -- an agent reading this file must be able to tell 'genuinely captured from a real run' apart from 'not yet captured' at a glance. Deterministic key ordering and no timestamp/nondeterministic fields are baked into the content itself, so re-running the generator against unchanged real inputs produces a byte-identical file (a real diff means a real underlying change) -- this is why the schema deliberately has no 'generated_at'-style field.",
+  "description": "Machine-readable, git-tracked fact file for a generated verification environment: env.manifest.json. It has exactly three top-level layers -- vip_config (the VIP's own already-resolved config object, dumped by a zero-time UVM callback at end_of_elaboration_phase -- more reliable than a user guide because it reflects actually-applied values), dut_facts (ports/params reverse-derived from real verible --export_json RTL parsing, plus registers from a structured RAL/IP-XACT-style source), and env_topology (component hierarchy + config_db set/get pairing captured from a real uvm_top.print_topology() + +UVM_CONFIG_DB_TRACE run). Generated only -- dv_harness/env_manifest.py is the sole writer; this file is never hand-edited. Every layer that requires a real captured artifact (a VIP config dump, a topology dump, a config_db trace log) reports status=NOT_AVAILABLE with a `reason` when that artifact does not yet exist, rather than fabricating example content -- an agent reading this file must be able to tell 'genuinely captured from a real run' apart from 'not yet captured' at a glance. Deterministic key ordering and no timestamp/nondeterministic fields are baked into the content itself, so re-running the generator against unchanged real inputs produces a byte-identical file (a real diff means a real underlying change) -- this is why the schema deliberately has no 'generated_at'-style field. Schema 1.2 (2026-09-06) narrows that contract deliberately and honestly: `generator` now carries spec section 210's per-artifact generation provenance tuple, including the real harness git SHA, so a manifest regenerated after the HARNESS ITSELF moved to a new commit differs in generator.repository_sha.harness -- which is a real underlying change (a different generator produced the artifact), not clock noise. Unchanged inputs AND an unchanged harness commit still produce a byte-identical file.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "generator", "vip_config", "dut_facts", "env_topology"],
   "properties": {
-    "schema_version": { "const": "1.1" },
+    "schema_version": { "const": "1.2" },
     "generator": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tool", "version"],
+      "required": ["tool", "version", "tool_version", "agent", "input_ir", "repository_sha"],
+      "description": "Spec section 210's per-artifact GENERATION PROVENANCE TUPLE: which TOOL, at which TOOL VERSION and SCHEMA VERSION, driven by WHICH INPUT, produced by WHICH AGENT/SKILL, from WHICH COMMIT. Added in schema 1.2 (2026-09-06) INSIDE this existing block rather than as a second provenance record beside it. Every sub-object always carries every key with an explicit status, so 'this was not declared' and 'this key was omitted' can never look alike. Nothing here is ever fabricated: an undeclared agent is NOT_DECLARED, a declared identifier matching no real profile is DECLARED with resolution NOT_FOUND, and an unresolvable git HEAD is NOT_AVAILABLE with its real reason.",
       "properties": {
         "tool": { "const": "dv_harness.env_manifest" },
-        "version": { "type": "string", "description": "env_manifest.py's own SCHEMA_VERSION at generation time, not a build timestamp -- kept diffable." }
+        "version": { "type": "string", "description": "env_manifest.py's own SCHEMA_VERSION at generation time, not a build timestamp -- kept diffable. This is the SCHEMA's version; the harness build that produced the file is tool_version below. Before schema 1.2 there was no such field, so 'which harness produced this' was answerable only by misreading this one." },
+        "tool_version": { "type": "string", "description": "The real dv_harness package version (dv_harness.__version__) at generation time, e.g. '15.0.0'. Deliberately distinct from `version` above." },
+        "agent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "identifier", "resolution", "reason"],
+          "description": "Which agent or skill produced this artifact, in the convention the profiles themselves use to self-identify: the YAML front-matter `name:` of a .claude/agents/*.md profile or a .claude/skills/**/SKILL.md skill. A declared identifier is CHECKED against the real profiles on disk by env_manifest.known_generation_identifiers().",
+          "properties": {
+            "status": { "enum": ["DECLARED", "NOT_DECLARED"], "description": "DECLARED: the caller named a producing agent/skill. NOT_DECLARED: nobody claimed authorship -- recorded honestly rather than attributed to a default." },
+            "identifier": { "type": ["string", "null"], "description": "The declared profile name verbatim; null when NOT_DECLARED. Never invented." },
+            "resolution": { "enum": ["AGENT_PROFILE", "SKILL", "NOT_FOUND", "PROFILE_TREE_NOT_AVAILABLE", "NOT_DECLARED"], "description": "AGENT_PROFILE/SKILL: a real profile in this checkout really declares this name. NOT_FOUND: a name was declared and no profile carries it -- recorded as declared, never accepted as verified. PROFILE_TREE_NOT_AVAILABLE: no .claude tree beside this harness, so nobody could check -- deliberately distinct from NOT_FOUND." },
+            "reason": { "type": ["string", "null"] }
+          }
+        },
+        "input_ir": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "kind", "reference", "source", "contract_schema_version", "requirement_status", "downstream_consumable", "reason"],
+          "description": "What drove this generation. Two declared forms: a section 184 requirement CONTRACT (kind=requirement_contract), located in a real requirements document and cross-checked through requirement_contract.validate_requirement_contract() and downstream_consumable() -- so a manifest that cites a requirement also records whether that requirement was actually fit to generate from, rather than merely naming it; or a plain input FILE (kind=file) recorded as path + real sha256 + byte size, never content.",
+          "properties": {
+            "status": { "enum": ["NOT_DECLARED", "RESOLVED", "NOT_FOUND", "INVALID"], "description": "RESOLVED: the declared input really exists and (for a contract) really validates. NOT_FOUND: declared but absent or unlocatable. INVALID: located but not a schema-valid requirement contract. NOT_DECLARED: nobody named an input." },
+            "kind": { "enum": ["requirement_contract", "file", null], "description": "null only when NOT_DECLARED." },
+            "reference": { "type": ["string", "null"], "description": "The requirement_id (contract form) or the declared file path (file form)." },
+            "source": { "$ref": "#/$defs/doc_file_ref" },
+            "contract_schema_version": { "type": ["string", "null"], "description": "The cited requirement record's own contract_schema_version; null for the file form." },
+            "requirement_status": { "type": ["string", "null"], "description": "The cited requirement's own five-value status (COMPLETE/PARTIAL/AMBIGUOUS/CONTRADICTORY/UNKNOWN); null for the file form." },
+            "downstream_consumable": { "type": ["boolean", "null"], "description": "requirement_contract.downstream_consumable()'s real verdict on the cited requirement -- whether a generator was entitled to build from it at all. Null for the file form and whenever the record did not validate." },
+            "reason": { "type": ["string", "null"] }
+          }
+        },
+        "repository_sha": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["harness", "project"],
+          "description": "The real current git SHA(s) this artifact was generated at, read by the EXISTING change_impact.resolve_sha() (a real `git rev-parse --verify HEAD^{commit}`) -- there is no second git reader in this package. No absolute repository path is recorded, so the manifest stays diffable across machines.",
+          "properties": {
+            "harness": { "$ref": "#/$defs/repository_sha_ref", "description": "HEAD of the checkout containing dv_harness/env_manifest.py -- the GENERATOR's own identity. Always attempted, and always read from this file's own location rather than from a caller-supplied path, so it cannot be pointed at a different repository." },
+            "project": { "$ref": "#/$defs/repository_sha_ref", "description": "HEAD of the project root this manifest belongs to. NOT_DECLARED unless the caller named one." }
+          }
+        }
       }
     },
     "vip_config": {
@@ -488,6 +528,17 @@
     }
   },
   "$defs": {
+    "repository_sha_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "sha", "reason"],
+      "description": "One repository's real HEAD commit, or an honest reason it could not be read. 'We could not check' (NOT_AVAILABLE) and 'nobody asked us to check' (NOT_DECLARED) stay distinct, because they are different operator problems with different fixes.",
+      "properties": {
+        "status": { "enum": ["RESOLVED", "NOT_AVAILABLE", "NOT_DECLARED"] },
+        "sha": { "type": ["string", "null"], "description": "Full commit hash exactly as git reported it; null unless RESOLVED. Never truncated and never invented." },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
     "doc_file_ref": {
       "type": "object",
       "additionalProperties": false,

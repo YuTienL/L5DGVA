@@ -1378,7 +1378,7 @@ that edge now exist:
   gate-passing state, and `loop()` never dispatching SIGNOFF while it holds — by
   `dv_harness_tests/test_qualified_conclusion_closure_gate.py`.
 
-## env.manifest.json Fact Sources: schema 1.1 (2026-09-04)
+## env.manifest.json Fact Sources: schema 1.1 (2026-09-04), provenance 1.2 (2026-09-06)
 
 `env.manifest.json` keeps exactly three top-level layers (`vip_config` / `dut_facts` /
 `env_topology`) and `dv_harness/env_manifest.py` remains its sole writer. A 2026-09-04 re-audit
@@ -1415,6 +1415,66 @@ is now real, wired and tested (`dv_harness_tests/test_env_manifest_fact_sources.
 manifest fails `load_env_manifest()` loudly rather than silently presenting an environment as having
 no address map and no testplan correspondence — a claim about the environment it cannot support.
 env_manifest.py is the sole writer, so the fix is to regenerate, never to migrate.
+
+**Schema 1.2 adds spec section 210's PER-ARTIFACT GENERATION PROVENANCE TUPLE, inside the existing
+`generator` block (2026-09-06, SPEC-7).** The gap was confirmed by direct search before building:
+`generator` was `{"tool", "version"}` and `version` is env_manifest.py's own `SCHEMA_VERSION`, so
+"which harness build produced this artifact" was answerable only by misreading the schema version
+as one; a repo-wide grep found no agent/skill identifier, no input reference and no
+`repository_sha`/`git_sha` field anywhere in the module or its schema, and `git_governance.py`
+carries only push/merge branch protection -- it has no per-artifact SHA-stamping function. Four
+answers now sit in that same block rather than in a second, parallel provenance record beside it:
+- `tool_version` -- the real `dv_harness.__version__`, deliberately distinct from `version`.
+- `agent` -- which agent/skill produced the artifact, in the convention the profiles themselves
+  use to self-identify: the YAML front-matter `name:` of a `.claude/agents/*.md` profile or a
+  `.claude/skills/**/SKILL.md` skill. A declared identifier is CHECKED against the real profiles on
+  disk (`known_generation_identifiers()`), and the four `resolution` values never collapse:
+  AGENT_PROFILE/SKILL (a real profile declares this name), NOT_FOUND (declared and no profile
+  carries it -- recorded as declared, never accepted as verified), PROFILE_TREE_NOT_AVAILABLE
+  (a deployed copy with no `.claude` tree; nobody could check), NOT_DECLARED.
+- `input_ir` -- what drove the generation. The SPEC-3 form cites a section 184 requirement contract
+  by `requirement_id`, and the record is really located in the named document, validated against
+  `requirement_contract.schema.json` and run through `requirement_contract.downstream_consumable()`
+  -- so a manifest that cites a requirement also records whether a generator was ENTITLED to build
+  from it, rather than merely naming it. The fallback form is a real input file recorded as
+  path + sha256 + bytes, never content.
+- `repository_sha` -- the real current git SHA, read by the EXISTING `change_impact.resolve_sha()`
+  (a real `git rev-parse --verify HEAD^{commit}`), the same reader `benchmark_dataset.py` already
+  stamps an experiment record with; there is no second git reader in this package. `harness` is
+  always read from THIS FILE's own checkout, so a caller cannot reroute the generator's identity;
+  `project` is NOT_DECLARED unless a project root is named. No absolute path is recorded.
+
+**This narrows the diffability contract deliberately, and says so rather than leaving it to be
+discovered.** A manifest regenerated after the HARNESS ITSELF moved to a new commit now differs in
+`generator.repository_sha.harness`. That is not the clock noise the no-`generated_at` rule exists
+to exclude -- a different generator really did produce the artifact, which is the fact section 210
+exists to record. Unchanged inputs AND an unchanged harness commit still produce a byte-identical
+file. 1.1 -> 1.2 is a BREAKING bump for the same reason 1.0 -> 1.1 was: the keys are REQUIRED, so a
+stale 1.1 manifest fails `load_env_manifest()` loudly instead of presenting an untraceable artifact
+as a traceable one, and the fix is to regenerate.
+
+**Deliberately bounded.** (1) Nothing is fabricated and nothing is defaulted: an undeclared agent,
+an undeclared input and an undeclared project root are each recorded as NOT_DECLARED with the real
+flag that would answer them, and provenance NEVER fails generation by default -- a project that has
+not adopted it is not retroactively broken. `--require-provenance` (`assert_generation_provenance_
+complete()`) is the strict opt-in, the same disclosed-default shape as `require_tier` /
+`require_phy_boundary`. (2) It records and CHECKS; it arbitrates nothing, approves nothing, and has
+no stage gate. (3) It covers `env.manifest.json` only -- `create_environment()`'s own
+`environment_manifest.json` and the generated `.sv` files carry no provenance tuple yet.
+(4) The flattened tuple reaches the `env_manifest` Blackboard topic as `generation_provenance`, so
+a reading stage can see which agent, which input and which commit produced the facts it is about to
+reason over without opening the file.
+
+Proven by `dv_harness_tests/test_env_manifest_generation_provenance.py` (38 tests), whose detection
+power comes from asserting against sources OUTSIDE the code under test: the harness SHA is compared
+against an INDEPENDENT `git rev-parse HEAD` the test runs itself, the project SHA against a REAL
+throwaway git repository with a REAL commit, `tool_version` against the real
+`dv_harness.__version__`, the agent identifier against the REAL `.claude` profiles in this checkout
+(with a fabricated identifier as the negative control), and the input digest against an
+independently computed hashlib hash. Reuse is held as a property rather than a claim -- patching
+`change_impact.resolve_sha()` must change what the manifest records, which a second hand-rolled
+`git rev-parse` would not respond to. Both the real CLI front door and the breaking-bump refusal of
+a 1.1-shaped manifest are driven end to end.
 
 ## Context Budget: 3 Tiers + MCP-First Routing (2026-09-03)
 
@@ -4005,3 +4065,132 @@ real revalidation evidence clears it, each of the five statuses is derived from 
 un-migrated project's original PASS and `WAIVER_REVISION_STALE` paths are asserted unchanged, and a
 byte-level snapshot proves reading writes nothing. Nothing in it runs a build, a regression or an
 LSF submission, and no human-approval gate is touched.
+
+
+## Signoff Freeze / Baseline + Post-Freeze Invalidation (2026-09-06, TH-8)
+
+Spec section 238 asks for two things at signoff, and `dv_harness/signoff_export.py` had
+neither. It packaged ARTIFACTS -- eleven candidate files copied into a bundle, gate-aware
+since 2026-09-04 -- but carried none of section 238's fifteen named BASELINE fields (spec
+version, requirement/vPlan version, DUT SHA, TB SHA, agent/skill versions, VIP/tool
+versions, schema/policy versions, configuration, test list, coverage databases, assertion
+status, waivers, evidence hashes/references, dashboard snapshot, reproducibility capsules),
+and nothing anywhere implemented its closing rule that "post-freeze material changes trigger
+impact analysis and invalidate/revalidate affected signoff evidence". Re-verified by direct
+search before building: `grep -rn "freeze|frozen" --include=*.py dv_harness/ tools/` matched
+only `frozenset`. Worse, `compute_bundle_hash()` hashes `artifact:present:bundled_path` --
+artifact PRESENCE, never CONTENT -- so a bundled file could be replaced wholesale without
+moving the bundle hash.
+
+Three additions, all inside `signoff_export.py`; there is no second exporter and no second
+freeze store.
+
+**`capture_baseline()` derives all fifteen fields from REAL producers, or says why not.**
+Nothing is a typed-in version string. `dut_sha` is `connectivity_check.compute_rtl_fingerprint()`
+over the project's own declared `rtl_sources` -- the SAME content fingerprint the standing
+`just connectivity-check` recipe uses to decide the RTL moved, never a git SHA standing in for
+RTL content (a git SHA moves when a README moves). `tb_sha` is the content of whatever
+`_find_tb_source_dir()` -- the bundle's own discovery function -- located, so the frozen TB SHA
+and the bundled `tb_source/` can never describe different trees. `waivers` is
+`waiver_store.status_report()`'s DERIVED per-waiver status (TH-7's ledger), which is what makes
+a waiver EXPIRING after signoff a detectable post-freeze change. `reproducibility_capsules` is
+`golden_scenario.load_golden_scenarios()`; `evidence_hashes` is the `normalized_evidence`
+`evidence_id` set, i.e. `vip_distill`'s own deterministic content hashes; `assertion_status` is
+the real `assertion_failure`/`uvm_fatal_count` on each recorded `lsf_client.JobState`;
+`vip_tool_versions` is `env.manifest.json`'s `vip_config.vip_release` with its OWN status/reason
+carried verbatim; `agent_skill_versions` and `schema_policy_versions` are content identities over
+the real `.claude/skills` + `.claude/agents` trees and `dv_harness/schemas` + the policy JSONs,
+resolved through `harness_deploy.collect_local_files()`. Every aggregate goes through
+`source_identity.aggregate_source_id()` -- the same primitive `harness_deploy` and
+`server_sync_identity_gate` already use; there is no second aggregation rule here.
+`SECTION_238_FIELDS` and `BASELINE_CAPTURES` are held equal in BOTH directions by
+`assert_baseline_covers_section_238()` at import, so a field can never be silently dropped from a
+freeze record and a sixteenth can never be quietly added.
+
+**Two fields are honestly NOT_AVAILABLE by construction, and say why.** `spec_version` has no
+artifact producer in this codebase at all -- the only `spec_revision` anywhere is agent-attested
+evidence-block text in `prompts.py`, and freezing an agent's own claim as a baseline FACT is what
+the Evidence Truth Rule forbids; a human may declare one, which is recorded as `attested: true`,
+`machine_verified: false`. `dashboard_snapshot` has no snapshot artifact: `dashboard.py` renders
+live from state.json, the blackboard topics, the coverage summary and the LSF job records on every
+request, and every one of those is already frozen by another field, so re-deriving a "snapshot"
+would present a rendering of already-frozen inputs as independent evidence.
+
+**`evaluate_freeze_invalidation()` is the check, and it is three independent comparisons,
+worst-wins.** (1) All fifteen fields are re-derived NOW by the same capture functions and compared
+by digest; a CAPTURED field that moved, or that can no longer be captured at all, INVALIDATES,
+while a field that was NOT_AVAILABLE at freeze and is CAPTURED now is INDETERMINATE -- evidence
+appearing after a signoff is a real change but not proof the frozen evidence went wrong.
+(2) Post-freeze impact analysis is the REAL `change_impact.changed_files()` +
+`classify_risk()` over the freeze's recorded git HEAD, run exactly as
+`golden_scenario.evaluate_freshness()` runs it, so "did the design move" has ONE answer in this
+codebase: HIGH/MEDIUM changed files INVALIDATE and are named with their risk, LOW (docs,
+`.dv-harness`/`.claude` bookkeeping) do not -- which matters because a signoff export writes into
+`.dv-harness/` itself. (3) The frozen bundle's `manifest.json` is re-read and
+`compute_bundle_hash()` recomputed INDEPENDENTLY; a bundle that moved INVALIDATES, one that is
+gone is INDETERMINATE. The verdict is DERIVED on every read and never stored -- a stored verdict
+is wrong the instant someone commits, the same reason `golden_scenario` computes freshness and
+`waiver_store` derives status. "We could not check" is never VALID: no git, no recorded HEAD, an
+unavailable diff or a missing bundle each produce a named finding and UNKNOWN.
+
+**The bundle gained a content half without breaking the gate that reads it.** Each manifest entry
+now carries `content_sha256` (a file's sha256, a directory's aggregate). It is deliberately a
+FOURTH key and NOT material for `compute_bundle_hash()`: that function's contract is the artifact
+list, `signoff_bundle_completeness_gate.py` recomputes it independently off `manifest.json`, and
+widening it would change every previously-computed bundle_hash and break that gate for existing
+bundles.
+
+**Where it fires.** `collect_signoff_bundle(freeze=None)` -- the default -- freezes exactly when
+the bundle is `SIGNOFF_GATE_VERIFIED`, i.e. when the 9 real `STAGE_GATES["SIGNOFF"]` gates really
+passed. That makes `engine._export_signoff_bundle()`, the one production caller that produces a
+gate-verified bundle, the real WIRED producer of section 238's "at signoff, capture a frozen
+reproducible baseline" -- with no engine change and no second entry point. A
+`PRE_SIGNOFF_GATE_INPUT` bundle is deliberately NOT frozen: freezing a baseline the gates never
+accepted would mint exactly the indistinguishable-from-verified artifact `bundle_kind` exists to
+prevent. Records land in `.dv-harness/signoff/freezes/<freeze_id>.json` (the project's own state
+directory, never a new parallel state root, and never only inside a bundle that can be deleted),
+with a copy in the bundle and one real `SIGNOFF_BASELINE_FROZEN` event in the same
+`.dv-harness/events.jsonl` `dv-harness audit` already reads.
+
+**It RECORDS and REPORTS; it arbitrates and authorizes nothing.** No stage runs, no gate is
+invoked, no build/regression/LSF submission is started, and there is deliberately no stage gate --
+a gate that passed because a freeze had not been recorded, or failed because one had, would be
+worse than none. REVALIDATION is a human act: an INVALIDATED report names exactly what diverged
+and what would have to be revalidated, and revalidates nothing itself. `ControlPlane.approve()`,
+`policy.can_signoff()`, `assert_human_approval()` and the PR-only main/master governance are
+untouched and unreferenced, asserted against the module's own source by a test. A standalone
+freeze RECOMPUTES a bundle's hash off its manifest rather than trusting the value written in the
+file.
+
+Front door: `python -m dv_harness.signoff_export fields|baseline|freeze|list|status`
+(`execute_verb()`, the same convention `power-intent`/`golden-scenario`/`waiver-store` use);
+exit 0 clear, 1 a freeze is INVALIDATED, 2 nothing to report or a refusal. `freeze` REQUIRES
+`--frozen-by`: an unattributable baseline is not a signoff baseline.
+
+Proven by `dv_harness_tests/test_signoff_freeze_baseline.py`, whose fixtures are REAL throwaway
+git repositories with real commits, a real RTL tree the REAL `compute_rtl_fingerprint()`
+fingerprints, a real waiver ledger written through the REAL `waiver_store.record_waiver()`, real
+job records, and real bundles produced by the REAL `collect_signoff_bundle()` -- nothing mocked.
+The central test freezes a bundle, asserts VALID, then changes the fixture's RTL and commits it,
+and asserts the SAME frozen record now reads INVALIDATED naming `dut_sha` AND
+`rtl/usb3_link_ctrl.v` at its real HIGH risk, with the record byte-identical on disk. The negative
+controls are what give it detection power: an unchanged fixture is VALID, a committed
+documentation-only change does NOT invalidate, revoking a waiver invalidates with no git change at
+all, evidence that disappears invalidates while evidence that APPEARS is UNKNOWN rather than
+INVALIDATED, a bundle that is gone is UNKNOWN while one that was edited is INVALIDATED, a project
+with no git history is UNKNOWN rather than VALID, stripping `content_sha256` reproduces the
+identical `bundle_hash` (so the completeness gate is provably unaffected), a PRE_SIGNOFF bundle
+mints no freeze while a gate-verified one does, and a byte-level snapshot proves evaluating a
+freeze writes nothing.
+
+**Disclosed residual.** (1) There is no `dv-harness` CLI verb -- `cli.py` was being modified by
+concurrent work in the same session -- so the ad-hoc door is `python -m dv_harness.signoff_export`
+plus the auto-freeze on the real gate-verified path. (2) `spec_version` and `dashboard_snapshot`
+are structurally NOT_AVAILABLE for the reasons above; closing either needs a producer this repo
+does not have. (3) This repository's own baseline honestly captures 4 of 15 fields today (it has
+no RTL tree, no generated TB, no VIP install, no waiver ledger and no coverage database of its
+own) -- the mechanism is proven against real fixtures, not made to look complete by writing
+fabricated artifacts into this project's real audit trail. (4) It detects; it does not
+re-baseline: there is no "revalidate" verb, because deciding that an invalidated signoff is
+acceptable is a human judgment, and minting a fresh freeze over a changed project is just
+`freeze` again with a human named on it.

@@ -23,8 +23,30 @@ from __future__ import annotations
 import copy
 
 _FIXTURE_MANIFEST = {
-    "schema_version": "1.1",
-    "generator": {"tool": "dv_harness.env_manifest", "version": "1.1"},
+    "schema_version": "1.2",
+    # Schema 1.2's `generator` block is spec section 210's per-artifact
+    # generation provenance tuple. This fixture is hand-authored, so it
+    # honestly declares no producing agent and no input IR -- exactly what a
+    # generation run that declared neither really records.
+    "generator": {
+        "tool": "dv_harness.env_manifest",
+        "version": "1.2",
+        "tool_version": "15.0.0",
+        "agent": {"status": "NOT_DECLARED", "identifier": None,
+                  "resolution": "NOT_DECLARED",
+                  "reason": "hand-authored MCP test fixture; no generating agent was declared"},
+        "input_ir": {"status": "NOT_DECLARED", "kind": None, "reference": None,
+                     "source": {"path": None, "sha256": None, "bytes": None},
+                     "contract_schema_version": None, "requirement_status": None,
+                     "downstream_consumable": None,
+                     "reason": "hand-authored MCP test fixture; no input IR was declared"},
+        "repository_sha": {
+            "harness": {"status": "NOT_AVAILABLE", "sha": None,
+                        "reason": "hand-authored MCP test fixture; no real generation run produced it"},
+            "project": {"status": "NOT_DECLARED", "sha": None,
+                        "reason": "hand-authored MCP test fixture; no project root was declared"},
+        },
+    },
 
     "vip_config": {
         "status": "CAPTURED",

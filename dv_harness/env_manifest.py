@@ -75,6 +75,40 @@ JSON with a trailing newline. There is deliberately no "generated_at"
 timestamp field anywhere in the schema -- regenerating this file from
 unchanged real inputs must produce a byte-identical file, so a real diff
 always means a real underlying change, never clock noise.
+
+GENERATION PROVENANCE (schema 1.2, 2026-09-06 -- spec section 210's
+per-artifact provenance tuple). `generator` used to carry two fields, and
+one of them was a conflation: `version` is env_manifest.py's SCHEMA_VERSION,
+so "which harness produced this" had no answer at all, "which agent/skill
+produced this" had no field, "which input drove the generation" had no
+field, and no git SHA appeared anywhere in the schema. The same `generator`
+block now carries all four -- `tool_version` (the real dv_harness package
+version, distinct from the schema version it used to be read as), `agent`,
+`input_ir` and `repository_sha` -- rather than a second, parallel
+provenance record beside it.
+
+The git SHA is read by the EXISTING `change_impact.resolve_sha()` (a real
+`git rev-parse --verify HEAD^{commit}`), the same reader
+`benchmark_dataset.py` already uses to stamp `harness_git_sha` on an
+experiment record; there is no second git reader in this package.
+
+This narrows the diffability contract above, deliberately and honestly: a
+manifest regenerated after the HARNESS ITSELF moved to a new commit now
+differs in `generator.repository_sha.harness`. That is not clock noise --
+the generator that produced the artifact really is a different generator,
+which is exactly the fact section 210 exists to record. Unchanged inputs
+AND an unchanged harness commit still produce a byte-identical file.
+
+Nothing here is ever fabricated, the same discipline every layer above
+follows: an undeclared agent is NOT_DECLARED, a declared identifier that
+matches no real `.claude/agents/*.md` or `.claude/skills/**/SKILL.md`
+profile in this checkout is recorded DECLARED with resolution NOT_FOUND
+(recorded, never accepted as verified), an undeclared input is
+NOT_DECLARED, and a git SHA that does not resolve is NOT_AVAILABLE with
+the real reason. Provenance never fails generation by default;
+`assert_generation_provenance_complete()` (CLI `--require-provenance`) is
+the opt-in strict contract, following the same disclosed-default shape as
+bind_mechanism_generator's `require_tier`/`require_phy_boundary`.
 """
 from __future__ import annotations
 
@@ -84,8 +118,14 @@ from typing import Any, Optional
 
 from . import verible_parser
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "env_manifest.schema.json"
+
+#: The repository whose HEAD identifies the GENERATOR that produced a
+#: manifest: the checkout containing this file. Resolved from __file__ so a
+#: deployed copy under /home/svcacct/AI/Agent stamps its own SHA, not the
+#: SHA of whatever project root the caller happened to pass.
+HARNESS_REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 REGISTER_MAP_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "register_map.schema.json"
 SOC_ARCH_MAP_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "soc_arch_map.schema.json"
 TESTPLAN_SOURCES_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "testplan_sources.schema.json"
@@ -120,6 +160,26 @@ class TestplanSourcesValidationError(ValueError):
     its "missing"/"orphan" lists are trustworthy -- one silently dropped
     malformed entry turns a real link into a fabricated break, or vice
     versa."""
+
+
+class GenerationProvenanceIncompleteError(ValueError):
+    """A manifest's section-210 provenance tuple is not fully answered and the
+    caller asked for the strict contract (`--require-provenance`). Raised
+    rather than returning False so a strict caller cannot accidentally ship an
+    artifact nobody can trace back to an agent, an input and a commit.
+
+    Deliberately NOT raised by default: an undeclared agent is a recorded
+    NOT_DECLARED, never a generation failure, so a project that has not adopted
+    provenance is never retroactively broken -- the same disclosed-default
+    shape as bind_mechanism_generator's require_tier/require_phy_boundary."""
+
+
+class InputIrDeclarationError(ValueError):
+    """The caller declared an input-IR reference this module cannot act on --
+    a requirement id with no requirements document (or the reverse), or both
+    the requirement-contract form and the plain-file form at once. A caller
+    usage error, raised loudly rather than silently recording NOT_DECLARED,
+    which would report "nobody declared an input" for a caller who did."""
 
 
 def _load_json_schema(path: Path) -> dict:
@@ -1072,6 +1132,367 @@ def build_env_topology(hierarchy_dump_path=None, config_db_trace_log_path=None,
 
 
 # ---------------------------------------------------------------------------
+# generation provenance -- spec section 210's per-artifact provenance tuple
+# ---------------------------------------------------------------------------
+#
+# Four questions, answered in the EXISTING `generator` block rather than in a
+# second provenance record beside it:
+#
+#   schema_version  -- already present (top level), unchanged.
+#   tool_version    -- NEW. `generator.version` is env_manifest.py's own
+#                      SCHEMA_VERSION and was the only version-shaped field,
+#                      so "which harness build produced this" was answerable
+#                      only by misreading the schema version as one. The real
+#                      dv_harness package version now has its own field.
+#   agent           -- NEW. Which agent/skill produced the artifact, in the
+#                      convention the profiles themselves use to
+#                      self-identify: the YAML front-matter `name:` of a
+#                      .claude/agents/*.md profile or a .claude/skills/**/
+#                      SKILL.md skill. A declared identifier is CHECKED
+#                      against the real profiles on disk -- an identifier that
+#                      matches none is recorded, never accepted as verified.
+#   input_ir        -- NEW. What drove the generation: a SPEC-3 requirement
+#                      contract (requirement_id, cross-checked against the
+#                      real requirements document through
+#                      requirement_contract.validate_requirement_contract() /
+#                      downstream_consumable(), so a manifest cannot cite a
+#                      requirement that is not actually consumable), or a
+#                      plain input file recorded as path + real sha256.
+#   repository_sha  -- NEW. The real current git SHA, read by the EXISTING
+#                      change_impact.resolve_sha().
+
+#: Where a profile declares its own identity. Both files carry YAML front
+#: matter whose `name:` is the identifier every roster/dispatch site already
+#: uses (e.g. `.claude/agents/debug-agent.md` -> "debug-agent").
+_PROFILE_FRONT_MATTER_FENCE = "---"
+
+
+def _front_matter_name(path: Path) -> Optional[str]:
+    """The `name:` declared in a profile's own YAML front matter, or None.
+
+    A deliberately narrow line scan rather than a YAML dependency: only the
+    front-matter block is read, and only its `name:` key, so a profile whose
+    body happens to contain a `name:` line cannot contribute an identifier."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != _PROFILE_FRONT_MATTER_FENCE:
+        return None
+    for line in lines[1:]:
+        if line.strip() == _PROFILE_FRONT_MATTER_FENCE:
+            return None
+        if line.startswith("name:"):
+            value = line[len("name:"):].strip().strip("\"'")
+            return value or None
+    return None
+
+
+def known_generation_identifiers(profile_root=None) -> Optional[dict]:
+    """Every identifier an agent or skill in this checkout may honestly claim.
+
+    Returns {"agents": [...], "skills": [...]} (both sorted) read from the real
+    `.claude/agents/*.md` and `.claude/skills/**/SKILL.md` profiles, or None
+    when there is no `.claude` tree to check against -- "we could not check"
+    stays distinct from "we checked and it is not there", because a deployed
+    harness copy without the profile tree must not report every real agent as
+    fabricated."""
+    root = Path(profile_root) if profile_root is not None else HARNESS_REPOSITORY_ROOT
+    claude = root / ".claude"
+    if not claude.is_dir():
+        return None
+    agents, skills = set(), set()
+    agents_dir = claude / "agents"
+    if agents_dir.is_dir():
+        for p in sorted(agents_dir.glob("*.md")):
+            name = _front_matter_name(p)
+            if name:
+                agents.add(name)
+    skills_dir = claude / "skills"
+    if skills_dir.is_dir():
+        for p in sorted(skills_dir.glob("**/SKILL.md")):
+            name = _front_matter_name(p)
+            if name:
+                skills.add(name)
+    return {"agents": sorted(agents), "skills": sorted(skills)}
+
+
+def build_generation_agent(generated_by=None, *, profile_root=None) -> dict:
+    """Which agent/skill produced this artifact, and whether that identifier
+    resolves to a real profile.
+
+    `resolution` is the honesty axis and has four values that must never
+    collapse into each other: AGENT_PROFILE / SKILL (a real profile really
+    declares this name), NOT_FOUND (a name was declared and no profile
+    carries it -- recorded as declared, never accepted as verified),
+    PROFILE_TREE_NOT_AVAILABLE (nobody could check), NOT_DECLARED (nobody
+    claimed authorship)."""
+    if generated_by is None or not str(generated_by).strip():
+        return {
+            "status": "NOT_DECLARED",
+            "identifier": None,
+            "resolution": "NOT_DECLARED",
+            "reason": ("no generating agent/skill was declared by the caller; pass "
+                       "--generated-by <profile name> (the `name:` of a .claude/agents/*.md "
+                       "or .claude/skills/**/SKILL.md profile)"),
+        }
+    identifier = str(generated_by).strip()
+    known = known_generation_identifiers(profile_root)
+    if known is None:
+        return {
+            "status": "DECLARED",
+            "identifier": identifier,
+            "resolution": "PROFILE_TREE_NOT_AVAILABLE",
+            "reason": ("no .claude profile tree is present beside this harness, so the declared "
+                       "identifier could not be checked against a real profile"),
+        }
+    if identifier in known["agents"]:
+        return {"status": "DECLARED", "identifier": identifier,
+                "resolution": "AGENT_PROFILE", "reason": None}
+    if identifier in known["skills"]:
+        return {"status": "DECLARED", "identifier": identifier,
+                "resolution": "SKILL", "reason": None}
+    return {
+        "status": "DECLARED",
+        "identifier": identifier,
+        "resolution": "NOT_FOUND",
+        "reason": (f"declared identifier {identifier!r} matches no .claude/agents/*.md and no "
+                   ".claude/skills/**/SKILL.md profile in this checkout; recorded as declared, "
+                   "never accepted as verified"),
+    }
+
+
+def _repository_sha(root, described_as: str) -> dict:
+    """One repository's real HEAD, through change_impact.resolve_sha() -- the
+    same `git rev-parse --verify HEAD^{commit}` benchmark_dataset.py already
+    stamps an experiment record with. There is no second git reader here."""
+    from .change_impact import resolve_sha
+    try:
+        sha = resolve_sha(Path(root), "HEAD")
+    except Exception as exc:  # pragma: no cover - resolve_sha already swallows its own
+        return {"status": "NOT_AVAILABLE", "sha": None,
+                "reason": f"git HEAD could not be read for {described_as}: {exc}"}
+    if sha:
+        return {"status": "RESOLVED", "sha": sha, "reason": None}
+    return {"status": "NOT_AVAILABLE", "sha": None,
+            "reason": (f"git HEAD does not resolve for {described_as} (no git repository, no "
+                       "commits yet, or git unavailable)")}
+
+
+def build_repository_sha(*, project_root=None) -> dict:
+    """The two repositories whose commit identifies this artifact.
+
+    `harness` is always attempted -- it identifies the GENERATOR, and is read
+    from the checkout containing this file rather than from any caller-supplied
+    path, so it cannot be pointed at a different repository. `project` is
+    NOT_DECLARED unless the caller names the project root this manifest belongs
+    to; no absolute path is recorded for either, keeping the manifest diffable
+    across machines."""
+    return {
+        "harness": _repository_sha(HARNESS_REPOSITORY_ROOT,
+                                   "the repository containing dv_harness/env_manifest.py"),
+        "project": (
+            _repository_sha(project_root, "the declared project root")
+            if project_root is not None else
+            {"status": "NOT_DECLARED", "sha": None,
+             "reason": "no project root was declared for this generation run"}
+        ),
+    }
+
+
+def _null_file_ref() -> dict:
+    return {"path": None, "sha256": None, "bytes": None}
+
+
+def _empty_input_ir(status: str, reason: str, *, kind=None, reference=None,
+                    source=None, contract_schema_version=None,
+                    requirement_status=None, downstream_consumable=None) -> dict:
+    """One fixed shape for every input_ir outcome. Every key is always
+    present, so "this input was not resolvable" and "this key was omitted"
+    can never look alike to a consumer."""
+    return {
+        "status": status,
+        "kind": kind,
+        "reference": reference,
+        "source": source if source is not None else _null_file_ref(),
+        "contract_schema_version": contract_schema_version,
+        "requirement_status": requirement_status,
+        "downstream_consumable": downstream_consumable,
+        "reason": reason,
+    }
+
+
+def build_input_ir(*, requirements_path=None, requirement_id=None,
+                   input_file_path=None) -> dict:
+    """What drove this generation, in one of two declared forms.
+
+    REQUIREMENT CONTRACT (the SPEC-3 form): a `requirement_id` plus the real
+    requirements document it lives in. The record is located, validated
+    against requirement_contract.schema.json, and run through
+    `downstream_consumable()` -- the decision that module exists to make -- so
+    a manifest that cites a requirement records whether that requirement was
+    actually fit to generate from, rather than merely naming it.
+
+    FILE (the fallback form, for a project with no contract-shaped IR): a real
+    path recorded as path + sha256 + byte size, never content.
+
+    Statuses: NOT_DECLARED / RESOLVED / NOT_FOUND / INVALID."""
+    contract_form = requirements_path is not None or requirement_id is not None
+    if contract_form and input_file_path is not None:
+        raise InputIrDeclarationError(
+            "declare either the requirement-contract input form (requirements_path + "
+            "requirement_id) or the plain-file form (input_file_path), never both")
+    if contract_form and (requirements_path is None or requirement_id is None):
+        raise InputIrDeclarationError(
+            "the requirement-contract input form needs BOTH a requirements document and a "
+            "requirement_id; a requirement id with no document cannot be checked, and a "
+            "document with no id does not identify the input that drove generation")
+
+    if not contract_form and input_file_path is None:
+        return _empty_input_ir(
+            "NOT_DECLARED",
+            ("no input IR was declared for this generation run; pass either "
+             "--input-requirements/--input-requirement-id (a section 184 requirement "
+             "contract) or --input-file (a real driving input file)"))
+
+    if input_file_path is not None:
+        p = Path(input_file_path)
+        if not p.is_file():
+            return _empty_input_ir(
+                "NOT_FOUND", f"declared input file does not exist: {p}",
+                kind="file", reference=str(p),
+                source={"path": str(p), "sha256": None, "bytes": None})
+        return _empty_input_ir(
+            "RESOLVED", None, kind="file", reference=str(p), source=_file_ref(p))
+
+    doc_path = Path(requirements_path)
+    ref = str(requirement_id)
+    try:
+        doc = json.loads(doc_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return _empty_input_ir(
+            "NOT_FOUND", f"declared requirements document could not be read: {exc}",
+            kind="requirement_contract", reference=ref,
+            source={"path": str(doc_path), "sha256": None, "bytes": None})
+
+    from . import requirement_contract as _rc
+    records = doc.get("requirements", []) if isinstance(doc, dict) else doc
+    match = None
+    for record in records if isinstance(records, list) else []:
+        if _rc.declares_contract_shape(record) and str(record.get("requirement_id")) == ref:
+            match = record
+            break
+    source = _file_ref(doc_path)
+    if match is None:
+        return _empty_input_ir(
+            "NOT_FOUND",
+            (f"{doc_path} contains no contract-shaped record with requirement_id {ref!r} "
+             "(a record must declare contract_schema_version to be one)"),
+            kind="requirement_contract", reference=ref, source=source)
+    try:
+        _rc.validate_requirement_contract(match)
+    except Exception as exc:
+        return _empty_input_ir(
+            "INVALID", f"requirement {ref!r} is not a schema-valid requirement contract: {exc}",
+            kind="requirement_contract", reference=ref, source=source,
+            contract_schema_version=match.get("contract_schema_version"),
+            requirement_status=match.get("status"))
+    consumable, why = _rc.downstream_consumable(match)
+    return _empty_input_ir(
+        "RESOLVED", why, kind="requirement_contract", reference=ref, source=source,
+        contract_schema_version=match.get("contract_schema_version"),
+        requirement_status=match.get("status"),
+        downstream_consumable=bool(consumable))
+
+
+def tool_version() -> str:
+    """The real dv_harness package version -- distinct from SCHEMA_VERSION,
+    which `generator.version` carries and which was previously the only
+    version-shaped field in the block."""
+    try:
+        from . import __version__ as package_version
+    except ImportError:  # pragma: no cover - the package always defines it
+        return "UNKNOWN"
+    return str(package_version)
+
+
+def build_generator_block(*, generated_by=None, profile_root=None, project_root=None,
+                          requirements_path=None, requirement_id=None,
+                          input_file_path=None) -> dict:
+    """The `generator` block: the existing tool/version pair plus section
+    210's three previously-absent provenance answers."""
+    return {
+        "tool": "dv_harness.env_manifest",
+        "version": SCHEMA_VERSION,
+        "tool_version": tool_version(),
+        "agent": build_generation_agent(generated_by, profile_root=profile_root),
+        "input_ir": build_input_ir(requirements_path=requirements_path,
+                                   requirement_id=requirement_id,
+                                   input_file_path=input_file_path),
+        "repository_sha": build_repository_sha(project_root=project_root),
+    }
+
+
+def generation_provenance(manifest: dict) -> dict:
+    """The section-210 tuple, flattened for a consumer that wants to answer
+    "who/what/which commit produced this artifact" without walking the block."""
+    generator = (manifest or {}).get("generator") or {}
+    agent = generator.get("agent") or {}
+    input_ir = generator.get("input_ir") or {}
+    repo = generator.get("repository_sha") or {}
+    harness = repo.get("harness") or {}
+    project = repo.get("project") or {}
+    return {
+        "schema_version": (manifest or {}).get("schema_version"),
+        "tool": generator.get("tool"),
+        "tool_version": generator.get("tool_version"),
+        "agent_identifier": agent.get("identifier"),
+        "agent_resolution": agent.get("resolution"),
+        "input_ir_kind": input_ir.get("kind"),
+        "input_ir_reference": input_ir.get("reference"),
+        "input_ir_status": input_ir.get("status"),
+        "harness_sha": harness.get("sha"),
+        "project_sha": project.get("sha"),
+    }
+
+
+def provenance_gaps(manifest: dict) -> list:
+    """Which parts of the provenance tuple this manifest does NOT answer, as
+    concrete reasons. Empty means every part is answered by real content."""
+    generator = (manifest or {}).get("generator") or {}
+    agent = generator.get("agent") or {}
+    input_ir = generator.get("input_ir") or {}
+    harness = (generator.get("repository_sha") or {}).get("harness") or {}
+    gaps = []
+    if not (manifest or {}).get("schema_version"):
+        gaps.append("schema_version is absent")
+    if not generator.get("tool_version"):
+        gaps.append("generator.tool_version is absent")
+    if agent.get("status") != "DECLARED":
+        gaps.append("generator.agent: " + (agent.get("reason") or "no agent declared"))
+    elif agent.get("resolution") not in ("AGENT_PROFILE", "SKILL"):
+        gaps.append("generator.agent: " + (agent.get("reason") or "declared agent did not resolve"))
+    if input_ir.get("status") != "RESOLVED":
+        gaps.append("generator.input_ir: " + (input_ir.get("reason") or "no input IR declared"))
+    if harness.get("status") != "RESOLVED":
+        gaps.append("generator.repository_sha.harness: "
+                    + (harness.get("reason") or "harness git SHA not resolved"))
+    return gaps
+
+
+def assert_generation_provenance_complete(manifest: dict) -> None:
+    """Strict, opt-in section-210 contract: every part of the tuple is
+    answered by real content. Raises GenerationProvenanceIncompleteError
+    naming every gap at once, because a caller fixing provenance wants the
+    whole list rather than one item per run."""
+    gaps = provenance_gaps(manifest)
+    if gaps:
+        raise GenerationProvenanceIncompleteError(
+            "generation provenance is incomplete:\n  - " + "\n  - ".join(gaps))
+
+
+# ---------------------------------------------------------------------------
 # top-level assembly
 # ---------------------------------------------------------------------------
 
@@ -1080,7 +1501,10 @@ def generate_env_manifest(*, rtl_files=None, register_map_path=None,
                            topology_dump_path=None, config_db_trace_log_path=None,
                            verible_bin: str = verible_parser.DEFAULT_VERIBLE_BIN,
                            designware_home=None, user_guide_reference_paths=None,
-                           soc_arch_map_path=None, testplan_sources_path=None) -> dict:
+                           soc_arch_map_path=None, testplan_sources_path=None,
+                           generated_by=None, profile_root=None, project_root=None,
+                           input_requirements_path=None, input_requirement_id=None,
+                           input_file_path=None, require_provenance: bool = False) -> dict:
     """Builds a complete, schema-valid env.manifest.json dict from whatever
     real inputs are supplied. Every parameter is optional -- omitting one
     reports that layer (or sub-layer) as NOT_AVAILABLE with an honest
@@ -1093,10 +1517,21 @@ def generate_env_manifest(*, rtl_files=None, register_map_path=None,
     available": it falls back to the real $DESIGNWARE_HOME environment
     variable, because the install tree this run would actually compile
     against is a fact about the environment, not a choice the caller makes.
-    Pass an explicit path to scan a different install."""
+    Pass an explicit path to scan a different install.
+
+    The provenance parameters (`generated_by`, the two input-IR forms,
+    `project_root`) follow the same rule: omitting one records an honest
+    NOT_DECLARED and never fails generation. `require_provenance=True` is the
+    opt-in strict contract and raises GenerationProvenanceIncompleteError."""
     manifest = {
         "schema_version": SCHEMA_VERSION,
-        "generator": {"tool": "dv_harness.env_manifest", "version": SCHEMA_VERSION},
+        "generator": build_generator_block(
+            generated_by=generated_by, profile_root=profile_root,
+            project_root=project_root,
+            requirements_path=input_requirements_path,
+            requirement_id=input_requirement_id,
+            input_file_path=input_file_path,
+        ),
         "vip_config": build_vip_config_layer(
             vip_config_dump_path,
             designware_home=designware_home,
@@ -1114,6 +1549,8 @@ def generate_env_manifest(*, rtl_files=None, register_map_path=None,
     # loaded into runtime context" is a property this file is held to rather
     # than a claim its docstring makes.
     assert_no_user_guide_body_in_manifest(manifest)
+    if require_provenance:
+        assert_generation_provenance_complete(manifest)
     return manifest
 
 
@@ -1122,7 +1559,10 @@ def generate_and_write(out_path, *, rtl_files=None, register_map_path=None,
                         topology_dump_path=None, config_db_trace_log_path=None,
                         verible_bin: str = verible_parser.DEFAULT_VERIBLE_BIN,
                         designware_home=None, user_guide_reference_paths=None,
-                        soc_arch_map_path=None, testplan_sources_path=None) -> dict:
+                        soc_arch_map_path=None, testplan_sources_path=None,
+                        generated_by=None, profile_root=None, project_root=None,
+                        input_requirements_path=None, input_requirement_id=None,
+                        input_file_path=None, require_provenance: bool = False) -> dict:
     manifest = generate_env_manifest(
         rtl_files=rtl_files, register_map_path=register_map_path,
         vip_config_dump_path=vip_config_dump_path,
@@ -1133,6 +1573,11 @@ def generate_and_write(out_path, *, rtl_files=None, register_map_path=None,
         user_guide_reference_paths=user_guide_reference_paths,
         soc_arch_map_path=soc_arch_map_path,
         testplan_sources_path=testplan_sources_path,
+        generated_by=generated_by, profile_root=profile_root, project_root=project_root,
+        input_requirements_path=input_requirements_path,
+        input_requirement_id=input_requirement_id,
+        input_file_path=input_file_path,
+        require_provenance=require_provenance,
     )
     save_env_manifest(manifest, out_path)
     return manifest
@@ -1284,6 +1729,11 @@ def summarize_for_blackboard(manifest: dict, *, manifest_path=None) -> dict:
     return {
         "manifest_path": str(manifest_path) if manifest_path is not None else None,
         "schema_version": manifest.get("schema_version"),
+        # Section 210's provenance tuple, flattened. A stage reading this
+        # topic must be able to tell WHICH agent, WHICH input and WHICH
+        # harness commit produced the facts it is about to reason over
+        # without opening the manifest file.
+        "generation_provenance": generation_provenance(manifest),
         "vip_config": {
             "status": vip.get("status"),
             "reason": vip.get("reason"),

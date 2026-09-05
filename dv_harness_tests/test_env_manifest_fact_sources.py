@@ -545,9 +545,9 @@ def test_full_manifest_carries_all_four_new_fact_sources(
         soc_arch_map_path=soc_arch_map_file,
         testplan_sources_path=testplan_sources_file,
     )
-    # generate_env_manifest() validates against schema 1.1 internally; these
+    # generate_env_manifest() validates against schema 1.2 internally; these
     # assert the layers really carry real content, not just that it validated.
-    assert manifest["schema_version"] == "1.1"
+    assert manifest["schema_version"] == "1.2"
     assert manifest["vip_config"]["vip_release"]["status"] == "SCANNED"
     assert len(manifest["vip_config"]["vip_release"]["packages"]) == 2
     assert manifest["vip_config"]["user_guide_refs"]["status"] == "INDEXED"
