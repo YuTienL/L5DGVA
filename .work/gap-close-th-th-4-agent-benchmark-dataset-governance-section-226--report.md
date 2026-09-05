@@ -2,9 +2,12 @@
 
 **Status: DONE**
 
-**Test summary:** `pytest dv_harness_tests/test_benchmark_dataset_governance.py
-dv_harness_tests/test_capability_evolution_controlled_experiment.py` → **47 passed**
-(23 new + the 24 pre-existing controlled-experiment tests, unchanged), 193s.
+**Test summary:** 24 new tests pass, and every suite around what I touched passes with
+them: `test_benchmark_dataset_governance.py` + `test_capability_evolution_controlled_experiment.py`
++ `test_capability_evolution_shadow_validation.py` → **71 passed** (559s), and
+`test_cli_blackboard/question_queue/preflight.py` + `test_golden_scenario.py` →
+**43 passed** (218s), covering the `cli.py` subparser addition and the adjacent
+`execute_verb` convention it copies.
 
 ---
 
@@ -92,7 +95,7 @@ derived from no real project. v2 = v1's three cases plus one harder held-back ca
   `capability_evolution`'s). `MATCHED` is not a DV `PASS`.
 - Nothing ran against production: everything is temp-dir fixtures and local subprocesses.
 
-## 4. Tests (23 new, all real)
+## 4. Tests (24 new, all real)
 
 Central test — `test_two_dataset_versions_produce_two_distinguishable_results`: ONE
 subject, evaluated against v1 then v2 through **7 real two-arm shadow runs** (real engine
@@ -108,7 +111,9 @@ refusals; leakage across versions incl. rename-does-not-launder and
 rewritten-does-not-inherit; related-version use; FULLY_LEAKED → INADMISSIBLE though every
 case matched; drifted corpus refuses to be evaluated; unresolvable fixture → ERRORED (not
 matched) with the reason recorded; the two governance-boundary tests above; and both CLI
-entry points driven as **real subprocesses** with exit codes asserted.
+entry points driven as **real subprocesses** with exit codes asserted. One latent bug was found and
+fixed while testing (`list_datasets()` raised IndexError on a dataset directory left behind
+by an interrupted register) — committed separately with its own test.
 
 ## 5. Deliberately NOT built (deferred, stated not implied closed)
 
@@ -128,7 +133,7 @@ entry points driven as **real subprocesses** with exit codes asserted.
 ## 6. Files
 
 - `dv_harness/benchmark_dataset.py` (new)
-- `dv_harness_tests/test_benchmark_dataset_governance.py` (new, 23 tests)
+- `dv_harness_tests/test_benchmark_dataset_governance.py` (new, 24 tests)
 - `dv_harness_tests/fixtures/benchmark_datasets/command_pattern_evidence_v1.json` (new)
 - `dv_harness_tests/fixtures/benchmark_datasets/command_pattern_evidence_v2.json` (new)
 - `dv_harness/cli.py` (+49 lines — hand-scoped patch; a concurrent pass was adding
