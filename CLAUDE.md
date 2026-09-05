@@ -4222,3 +4222,94 @@ fabricated artifacts into this project's real audit trail. (4) It detects; it do
 re-baseline: there is no "revalidate" verb, because deciding that an invalidated signoff is
 acceptable is a human judgment, and minting a fresh freeze over a changed project is just
 `freeze` again with a human named on it.
+
+
+## Evidence Provenance: Self-Attested vs. Independently Derived (2026-09-06, TH-9)
+
+`gates.run_gate()` assembles every stage gate's payload from the ONE fenced evidence block
+(`dv-harness-evidence:<gate_id>`) the AGENT typed. For most gates that is fine -- the
+script re-derives something, or cross-checks the claim against a harness-owned artifact
+(`ContextFlag`, `DV_HARNESS_PROJECT_ROOT`, the waiver ledger, the subsystem registry, a real
+remote transcript). Six gates were not like that, and a completeness audit named this the most
+consequential gap type it found. Re-verified by direct search before building:
+`grep -rn "evidence_provenance|AGENT_SELF_ATTESTED|TOOL_DERIVED|SIMULATION_DERIVED"
+--include=*.py --include=*.json .` matched exactly one unrelated string in a reference-base
+manifest, and no gate anywhere asked who produced its input.
+
+Each of those six gates' PASS is a statement about **dynamic system BEHAVIOUR** -- deadlock and
+livelock freedom (`system_level_deadlock_livelock_gate`), shared-resource contention
+(`system_level_resource_contention_gate`), per-port forward progress
+(`per_port_queue_starvation_gate`), fairness/QoS (`multi_port_fairness_qos_gate`), interrupt
+acknowledgement latency (`interrupt_storm_latency_gate`) and scoreboard transaction liveness
+(`scoreboard_transaction_liveness_gate`) -- a property nothing can establish without RUNNING
+something. Their scripts are pure shape checks over numbers the agent typed:
+`system_level_deadlock_livelock_gate.py` is nine lines and PASSes on
+`{"deadlock_detected": false, ...}`. So "the composed system is deadlock-free" could be produced
+by an agent writing that line, and the resulting PASS was rendered on the dashboard and in the
+signoff bundle **identically** to a PASS backed by a real tool run. That indistinguishability --
+not the absence of a formal checker -- is the defect.
+
+`dv_harness/evidence_provenance.py` closes exactly that, and **nothing more**. It does not verify
+deadlock freedom; a real deadlock checker needs a formal tool this project does not have, and
+building a fake one is the fabrication the Evidence Truth Rule forbids.
+
+- **`evidence_provenance` is a REQUIRED field on those six gates' evidence blocks**, enforced in
+  `run_gate()` BEFORE the script is invoked -- because this is a question about the payload's
+  SOURCE, not its content. Absent -> `EVIDENCE_PROVENANCE_MISSING`; unrecognised ->
+  `EVIDENCE_PROVENANCE_INVALID`. There is deliberately no default: defaulting would decide the
+  very question the field exists to record. The refusal names the field, the accepted values and
+  the claim the gate would otherwise have made, so it is actionable rather than a bare rejection.
+- **The asymmetry is the whole design: the honest answer is the cheap one.**
+  `AGENT_SELF_ATTESTED` is always accepted and needs nothing else -- an agent must never be pushed
+  toward a stronger claim to get a stage moving. `TOOL_DERIVED`/`SIMULATION_DERIVED` cost a real
+  `evidence_derivation` naming a producing tool AND an `artifact_path` that must EXIST under the
+  project root (`EVIDENCE_PROVENANCE_DERIVATION_MISSING` / `EVIDENCE_PROVENANCE_ARTIFACT_NOT_FOUND`).
+  The path is resolved against the project being judged, not the CWD.
+- **Every consumer renders the caveat, from ONE computation.**
+  `control_plane.describe_stage()` -- the single shared read path the dashboard's "Why (current
+  stage)" card and the CLI's `explain`/`evidence`/`checklist` verbs both already go through --
+  carries `summarize_evidence_blocks()`, so a self-attested deadlock-freedom claim cannot be
+  caveated in one surface and presented bare in the other. `dashboard.py`'s `provenanceBlock()`
+  renders a self-attested claim with the existing bold+red `.err` treatment a missing checklist
+  item gets, not a grey note. `signoff_export.read_signoff_stage_status()` carries
+  `summarize_project_provenance()` -- signoff is exactly where a headline claim gets believed --
+  reading `state.json` with the same plain `read_text`/`json.loads` that function already uses,
+  never `StateStore` (which would MINT one). `run_gate()` also stamps the provenance and its
+  caveat onto the gate DETAIL, so `react_loop`'s signature menu and stage telemetry carry it too.
+- **Absence is never read as derived.** `caveat_for(None)` is the self-attested caveat: on any
+  surface, "nobody said" is at best as strong as "the agent said so".
+
+**Deliberately bounded, and stated rather than implied closed.** (1) The artifact check proves a
+FILE EXISTS at a path the agent named; it does not parse it and cannot prove the file contains the
+claim. It is a real COST, not a proof -- it stops a free upgrade from AGENT_SELF_ATTESTED to
+TOOL_DERIVED, it does not make TOOL_DERIVED mean "verified", and `DERIVED_CAVEAT` says so on
+every surface that renders one. (2) It cannot detect a FALSE declaration: an agent that types
+`TOOL_DERIVED` and cites a real unrelated file passes. What is closed is the SILENT case --
+evidence carrying no provenance at all, rendered exactly like tool-derived evidence.
+(3) Only those six gates are enforced. That set is not "the gates we got to"; it is the gates
+whose PASS asserts a measured dynamic-behaviour property over agent-typed numbers, stated with
+each gate's own headline claim in `PROVENANCE_REQUIRED_GATES` so a reader can check the rule was
+applied rather than trust that it was. Every other gate is byte-for-byte unaffected and carries
+no provenance annotation -- stamping one would present a field nobody supplied and nobody checked
+as if it had been decided. (4) It ARBITRATES and AUTHORIZES nothing: no stage runs, no build /
+regression / LSF submission starts, no approval is minted, and there is deliberately no stage
+gate of its own. An AGENT_SELF_ATTESTED PASS is still a PASS -- it is a PASS a human is now told
+the provenance of. (5) `dv_harness/prompts.py` was updated so a real agent emits the field; the
+two pre-existing test fixtures that hand-typed these blocks now declare `AGENT_SELF_ATTESTED`,
+which is the honest value for a hand-written fixture and exactly what a real agent typing those
+numbers must declare.
+
+Proven by `dv_harness_tests/test_evidence_provenance.py` (42 tests) against the REAL
+`gates.evaluate_stage_evidence()` over the REAL shipped `STAGE_GATES`, running the REAL gate
+scripts as subprocesses, and the REAL consumers -- `describe_stage()`, the REAL dashboard server
+driven over REAL HTTP through the same `_start_dashboard`/`_wait_ready`/`_get` harness every
+other dashboard card test uses, and `read_signoff_stage_status()`. Nothing is mocked and no test
+writes a gate detail by hand. The negative controls carry the detection power: every one of the
+six clean payloads is first proven to PASS on the merits (so a provenance FAIL can never be a
+shape failure wearing its name), the deadlock-freedom refusal is paired with the same payload
+ACCEPTED once it honestly declares who wrote it, the two independence refusals are paired with
+the same claim accepted once the cited artifact really exists on disk, an artifact under a
+DIFFERENT root is still refused, a genuinely bad payload still fails on the SCRIPT's own reason
+with provenance declared, an unenforced gate reaches its script unchanged and carries no
+annotation, a derived claim is proven NOT to be caveated, and a byte-level snapshot proves
+summarizing provenance writes nothing.

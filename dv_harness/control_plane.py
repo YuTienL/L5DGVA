@@ -390,6 +390,7 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
     evidence/checklist all already go through, so both UIs render it
     identically and neither has to re-read telemetry itself."""
     from .gates import extract_evidence_blocks, evaluate_stage_evidence_with_completion
+    from .evidence_provenance import summarize_evidence_blocks
 
     root = Path(root)
     ss = (state.stages or {}).get(stage, {}) if hasattr(state, "stages") else (state.get("stages", {}).get(stage, {}))
@@ -397,6 +398,7 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
     verdict, reasons, completion = evaluate_stage_evidence_with_completion(root, stage, last_message)
     cp = ControlPlane(root).load()
     checklists = _latest_stage_checklists(root, stage)
+    evidence_blocks = extract_evidence_blocks(last_message)
     return {
         "stage": stage,
         "status": ss.get("status"),
@@ -410,7 +412,16 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
         "stage_completion_note": completion["stage_completion_note"],
         "entry_checklist": checklists["entry_checklist"],
         "exit_checklist": checklists["exit_checklist"],
-        "evidence_blocks": extract_evidence_blocks(last_message),
+        "evidence_blocks": evidence_blocks,
+        # EVIDENCE PROVENANCE (2026-09-06, TH-9): who actually produced the
+        # headline dynamic-behaviour claims this stage's evidence carries
+        # (dv_harness/evidence_provenance.py). Computed here rather than in
+        # each UI because this is the ONE shared read path the dashboard's
+        # "Why (current stage)" card and the CLI's explain/evidence/checklist
+        # verbs both already go through -- two renderers, one answer, so a
+        # self-attested deadlock-freedom claim cannot be caveated in one
+        # surface and presented bare in the other.
+        "evidence_provenance": summarize_evidence_blocks(evidence_blocks),
         "human_correction": cp.get("corrections", {}).get(stage),
         "human_approval": cp.get("approvals", {}).get(stage),
         "takeover": cp.get("takeover") if cp.get("takeover", {}).get("stage") == stage else None,

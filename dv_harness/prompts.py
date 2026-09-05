@@ -1333,10 +1333,12 @@ true，都會 FAIL NON_INDEPENDENT_TEST_ORACLE——代表這個 oracle 跟 DUT 
 UNPINNED_EXPECTED_SOURCE / NO_PREDICTION_METHOD。）
 
 ```dv-harness-evidence:scoreboard_transaction_liveness_gate
-{"missing_expected_transactions": 0, "missing_actual_transactions": 0,
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "missing_expected_transactions": 0, "missing_actual_transactions": 0,
  "duplicate_transactions": 0, "max_transaction_latency": 500,
  "observed_max_transaction_latency": 120}
 ```
+（`evidence_provenance` 為必填，規則見下一組說明。）
 （`missing_expected_transactions`/`missing_actual_transactions`/`duplicate_transactions` 三者只要
 有任何一個大於 0，就分別 FAIL MISSING_EXPECTED_TRANSACTIONS / MISSING_ACTUAL_TRANSACTIONS /
 DUPLICATE_TRANSACTIONS；`max_transaction_latency` 不得缺省，否則 FAIL
@@ -1346,8 +1348,24 @@ NO_TRANSACTION_LATENCY_BOUND；`observed_max_transaction_latency` 超過 `max_tr
 第四組：多 port 場景下的 interrupt/fairness/starvation（單 port 或本輪未涉及多 port 行為時，
 對應清單可以誠實地留空陣列，gate 對空清單會直接通過，不需要硬湊資料）：
 
+這一組（連同下面的 scoreboard_transaction_liveness_gate）以及 SYSTEM_LEVEL 的
+deadlock/livelock 與 shared-resource contention gate，宣告的都是「系統動態行為」——
+沒有真的跑過東西就無法成立的性質。所以這些 evidence block 一律必須額外帶一個
+`evidence_provenance` 欄位，說明這些數字是誰產生的（缺欄位會 FAIL
+EVIDENCE_PROVENANCE_MISSING，值不在清單內會 FAIL EVIDENCE_PROVENANCE_INVALID）：
+- `"AGENT_SELF_ATTESTED"`：由你自己填寫、沒有經過任何工具或模擬獨立推導。這是誠實的
+  預設值，永遠會被接受，不需要附任何其他東西——不要為了讓 stage 過關而謊報更強的來源。
+- `"TOOL_DERIVED"` / `"SIMULATION_DERIVED"`：真的有工具／模擬跑出這些數字。此時必須同時附
+  `"evidence_derivation": {"tool": "<真實工具名>", "artifact_path": "<真實存在的檔案路徑>"}`，
+  且該路徑在 project root 底下必須真的存在，否則 FAIL EVIDENCE_PROVENANCE_DERIVATION_MISSING
+  / EVIDENCE_PROVENANCE_ARTIFACT_NOT_FOUND。
+（harness 只檢查該 artifact 檔案存在，不會去解析內容——所以這是「來源宣告」而不是
+「claim 已被驗證」。宣告為 AGENT_SELF_ATTESTED 的結論會在 dashboard 與 signoff 匯出上
+被明確標示為未經獨立推導。）
+
 ```dv-harness-evidence:interrupt_storm_latency_gate
-{"sources": [{"source_id": "...", "max_ack_latency_cycles": 64,
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "sources": [{"source_id": "...", "max_ack_latency_cycles": 64,
   "observed_max_ack_latency_cycles": 20, "storm_rate": null,
   "storm_test_evidence": null, "lost_interrupts": 0}]}
 ```
@@ -1358,7 +1376,8 @@ FAIL LOST_INTERRUPTS。本輪測項未涉及任何 interrupt source 時，`{"sou
 預設值。）
 
 ```dv-harness-evidence:multi_port_fairness_qos_gate
-{"ports": [{"port_id": "...", "min_service_share_percent": 20,
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "ports": [{"port_id": "...", "min_service_share_percent": 20,
   "observed_service_share_percent": 25, "qos_enabled": false,
   "qos_policy_verified": false}]}
 ```
@@ -1367,7 +1386,8 @@ FAIL LOST_INTERRUPTS。本輪測項未涉及任何 interrupt source 時，`{"sou
 `qos_policy_verified` 不是 true 會 FAIL QOS_NOT_VERIFIED。非多 port 測項可同樣附 `{"ports": []}`。）
 
 ```dv-harness-evidence:per_port_queue_starvation_gate
-{"ports": [{"port_id": "...", "independent_queue": true, "max_wait_cycles": 256,
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "ports": [{"port_id": "...", "independent_queue": true, "max_wait_cycles": 256,
   "observed_wait_cycles": 40, "forward_progress_evidence": "..."}]}
 ```
 （`independent_queue` 必須為 true，否則 FAIL PORT_NOT_INDEPENDENT_QUEUE；`max_wait_cycles` 不得
@@ -2417,9 +2437,16 @@ DEPENDENCY_UNKNOWN_SUBSYSTEM；整張圖不能有環（例如 A→B→A），有
 Deadlock / Livelock 分析：
 
 ```dv-harness-evidence:system_level_deadlock_livelock_gate
-{"deadlock_detected": false, "livelock_detected": false,
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "deadlock_detected": false, "livelock_detected": false,
  "forward_progress_assertions": ["..."], "stress_scenario_evidence": ["..."]}
 ```
+（`evidence_provenance` 為必填欄位：`"AGENT_SELF_ATTESTED"`（你自己填的，永遠被接受、不需附
+其他東西）／`"TOOL_DERIVED"`／`"SIMULATION_DERIVED"`。後兩者必須同時附
+`"evidence_derivation": {"tool": "...", "artifact_path": "..."}`，且該路徑在 project root 底下
+必須真的存在。缺欄位 FAIL EVIDENCE_PROVENANCE_MISSING。「system 沒有 deadlock」是動態行為結論，
+沒跑過任何東西就宣稱是不成立的——誠實標記為 AGENT_SELF_ATTESTED 不會擋住 stage，但會在
+dashboard 與 signoff 匯出上明確標示為未經獨立推導。）
 （deadlock_detected 或 livelock_detected 為 true 會直接 FAIL（分別是
 SYSTEM_DEADLOCK_DETECTED，會附上 deadlock_cycle；SYSTEM_LIVELOCK_DETECTED）——這兩個欄位必須
 反映真實分析結果，不是預設隨便填 false；forward_progress_assertions 與 stress_scenario_evidence
@@ -2430,7 +2457,8 @@ NO_STRESS_SCENARIO_EVIDENCE，代表沒有真的用 forward-progress assertion �
 共享資源競爭：
 
 ```dv-harness-evidence:system_level_resource_contention_gate
-{"shared_resources": ["DDR", "APB_BUS"],
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "shared_resources": ["DDR", "APB_BUS"],
  "scenarios": [{"scenario_id": "SC1", "resources": ["DDR"],
    "arbitration_or_contention_policy": "...", "contention_testcase_ids": ["..."]}]}
 ```

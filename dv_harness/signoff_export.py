@@ -340,6 +340,15 @@ def read_signoff_stage_status(root: Path) -> Dict[str, Any]:
     from .gates import STAGE_GATES
     required_gates = [gid for gid, _, _ in STAGE_GATES.get("SIGNOFF", [])]
 
+    # EVIDENCE PROVENANCE (2026-09-06, TH-9). Signoff is exactly where a
+    # headline claim gets believed, so the bundle a human reads before signing
+    # must say which of those claims nothing but the agent stands behind.
+    # `summarize_project_provenance()` reads the same state.json this function
+    # already read, with the same plain read_text/json.loads (never
+    # StateStore, which would MINT one) -- so asking the question still cannot
+    # bring a project's governance state into existence.
+    from .evidence_provenance import summarize_project_provenance
+
     return {
         "state_file_present": state_present,
         "current_stage": current_stage,
@@ -348,6 +357,7 @@ def read_signoff_stage_status(root: Path) -> Dict[str, Any]:
         "signoff_event_count": signoff_event_count,
         "subsystem_registry_present": registry_path.is_file(),
         "required_signoff_gates": required_gates,
+        "evidence_provenance": summarize_project_provenance(root),
     }
 
 

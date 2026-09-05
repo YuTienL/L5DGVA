@@ -148,7 +148,9 @@ category gets a numeric suffix -- never a silent overwrite.</div>
 <div class="note">Real per-run blocking_reason/gate_verdict for the current stage -- not the static explainer below.
 Stage completion percent and the entry/exit evidence checklist below come from the same
 <code>control_plane.describe_stage()</code> data the CLI's <code>explain</code>/<code>evidence</code>/<code>checklist</code>
-subcommands print.</div>
+subcommands print. The Evidence provenance block names who produced each headline dynamic-behaviour
+claim (deadlock/livelock, starvation, fairness, interrupt latency, scoreboard liveness); an
+<code>AGENT_SELF_ATTESTED</code> claim is shown in red and is NOT independently derived evidence.</div>
 <div id="stageWhy" style="margin-top:8px"></div></div>
 <div class="card"><h3>LSF</h3><div id="lsftiles" class="tiles"></div>
 <div class="note" style="margin-top:8px">Per-job drill-down (GET /api/lsf/jobs[/&lt;job_id&gt;], CLI <code>dv-harness lsf [job_id]</code>). Click a row to expand its full detail. Read-only here: real job submission/kill/reconciliation against LSF (<code>dv-harness lsf-submit</code>/<code>lsf-kill</code>/<code>lsf-reconcile</code>, wrapping real <code>bsub</code>/<code>bkill</code>/<code>bjobs</code>) is CLI-only today.</div>
@@ -671,6 +673,31 @@ function checklistBlock(title, cl){
     <div class="bar" style="margin-top:4px"><div style="width:${pct}%"></div></div>
     ${rows}${missingNote}</div>`;
 }
+// Evidence-provenance caveat block (2026-09-06, TH-9). Six stage gates make
+// claims about dynamic system BEHAVIOUR -- deadlock/livelock freedom, port
+// starvation, fairness/QoS, interrupt latency, scoreboard liveness -- from
+// numbers the agent typed, and their scripts only check the shape of those
+// numbers. control_plane.describe_stage() now carries
+// evidence_provenance.summarize_evidence_blocks() for exactly those gates, so
+// this card can no longer present a self-attested "deadlock-free" identically
+// to a tool-derived one. Rendered with the existing .err class (the same
+// bold+red treatment a missing checklist item gets) precisely so it cannot be
+// skimmed past. An empty/absent summary renders nothing -- a stage carrying
+// none of these six gates has no such claim to caveat.
+function provenanceBlock(p){
+  if(!p || !(p.entries||[]).length) return '';
+  let rows = p.entries.map(e=>{
+    let declared = e.evidence_provenance || 'UNDECLARED';
+    return e.independently_derived
+      ? `<div>${icon('PASS')} <code>${e.gate_id}</code> [${declared}] -- ${e.claim}</div>`
+      : `<div class="err">${icon('FAIL')} <b><code>${e.gate_id}</code> [${declared}]</b> -- ${e.claim}</div>`;
+  }).join('');
+  let banner = p.has_self_attested_claims
+    ? `<div class="err" style="margin-top:4px"><b>${p.caveat}</b></div>`
+    : '';
+  return `<div style="margin-top:8px"><b>Evidence provenance (headline behaviour claims)</b>
+    ${rows}${banner}</div>`;
+}
 function stageWhyHTML(d){
   if(!d) return '(no current stage)';
   let raw = `stage: ${d.stage}\nstatus: ${d.status}\nattempts: ${d.attempts}\nblocking_reason: ${d.blocking_reason||'(none)'}\ngate_verdict: ${d.gate_verdict}\ngate_reasons: ${JSON.stringify(d.gate_reasons)}\nhuman_correction: ${JSON.stringify(d.human_correction)}\nhuman_approval: ${JSON.stringify(d.human_approval)}\ntakeover: ${JSON.stringify(d.takeover)}`;
@@ -680,6 +707,7 @@ function stageWhyHTML(d){
     + `<div style="margin-top:8px"><b>Stage completion:</b> ${pct}% (${gp}/${gt} gates passed)
        <div class="bar" style="margin-top:4px"><div style="width:${pct}%"></div></div>
        ${d.stage_completion_note ? `<div class="note" style="margin-top:2px">${d.stage_completion_note}</div>` : ''}</div>`
+    + provenanceBlock(d.evidence_provenance)
     + checklistBlock('Entry checklist (evidence required before this stage runs)', d.entry_checklist)
     + checklistBlock('Exit checklist (evidence this stage should have produced)', d.exit_checklist);
 }

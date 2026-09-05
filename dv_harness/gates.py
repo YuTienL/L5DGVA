@@ -5,6 +5,7 @@ from typing import Any, Dict
 from .config import load_config
 from .memory import CornerCaseLibrary
 from .control_plane import ControlPlane
+from . import evidence_provenance as _evidence_provenance
 
 TOOLS_DIR = "tools/verification_flow"
 
@@ -1148,6 +1149,20 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
         except Exception:
             pass
 
+    # EVIDENCE PROVENANCE (2026-09-06, TH-9). Runs BEFORE the script, because
+    # this is a question about the payload's SOURCE, not about its content: a
+    # deadlock-freedom claim whose producer is undeclared must not be able to
+    # reach the script, pass its shape check, and be rendered exactly like a
+    # tool-derived one. Scoped to evidence_provenance.PROVENANCE_REQUIRED_GATES
+    # (six gates asserting measured dynamic behaviour over agent-typed
+    # numbers); every other gate returns None here and is byte-for-byte
+    # unaffected. See dv_harness/evidence_provenance.py for the full rationale
+    # and the disclosed bounds.
+    provenance_fail = _evidence_provenance.check_payload(root, gate_id, payload)
+    if provenance_fail is not None:
+        _log_gate_history(False, provenance_fail)
+        return GateResult(gate_id, False, provenance_fail)
+
     tmp_paths = []
     unresolved = []
     try:
@@ -1215,6 +1230,14 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
     # success-status value itself varies across scripts (PASS,
     # READY_FOR_TEST_GENERATION, READY_FOR_CLOSURE, TRUE_PASS-nested, ...).
     script_ok = proc.returncode == 0
+
+    # Carry the declared provenance and its caveat on the RESULT, so every
+    # downstream reader of a gate detail (control_plane.describe_stage() ->
+    # the dashboard's "Why (current stage)" card and the CLI's explain/
+    # evidence verbs, react_loop's GateSignature menu, engine.py's stage
+    # telemetry) sees who produced this claim without re-opening the evidence
+    # block. No-op for any gate outside PROVENANCE_REQUIRED_GATES.
+    detail = _evidence_provenance.annotate_gate_detail(gate_id, payload, detail)
 
     if unresolved:
         # The script already ran above against the unwrapped (bare-value)

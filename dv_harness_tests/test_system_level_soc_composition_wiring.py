@@ -195,12 +195,20 @@ def _system_level_evidence(subsystems, soc_name="demo_soc"):
             "subsystems": names,
             "dependencies": [{"from": a, "to": b}],
         },
+        # evidence_provenance (2026-09-06, TH-9): these two gates assert
+        # dynamic system BEHAVIOUR (deadlock/livelock freedom, contention
+        # arbitration) from numbers written here by hand, so
+        # gates.run_gate() now requires each to declare who produced them.
+        # AGENT_SELF_ATTESTED is the honest value for a hand-written fixture
+        # and is exactly what a real agent typing these numbers must declare.
         "system_level_deadlock_livelock_gate": {
+            "evidence_provenance": "AGENT_SELF_ATTESTED",
             "deadlock_detected": False, "livelock_detected": False,
             "forward_progress_assertions": ["fp_assert_apb_grant"],
             "stress_scenario_evidence": ["stress-run-1"],
         },
         "system_level_resource_contention_gate": {
+            "evidence_provenance": "AGENT_SELF_ATTESTED",
             "shared_resources": ["APB_BUS"],
             "scenarios": [{"scenario_id": "SC1", "resources": ["APB_BUS"],
                            "arbitration_or_contention_policy": "round-robin",
