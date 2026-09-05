@@ -2,11 +2,12 @@
 
 **Status: DONE**
 
-**Test summary:** 919 passed, 0 failed across every suite that touches what this
-change edits — new `test_loop_telemetry.py` 37 and `test_dashboard_loop_card.py`
-8, plus LOOP-1/2/3's own suites 164, all six dashboard suites 109, engine/graph
-263, and the 338-test batch of every other suite referencing `dashboard`,
-`.loop(`, `_overall_progress` or any `loop_*` module.
+**Test summary:** 1080 passed, 0 failed across every suite that touches what
+this change edits — new `test_loop_telemetry.py` 37 and
+`test_dashboard_loop_card.py` 8, plus LOOP-1/2/3's own suites 164, all six
+dashboard suites 109, engine/graph 263, and two batches (338 + 161) covering
+every other suite that references `dashboard`, `.loop(`, `_overall_progress` or
+any `loop_*` module.
 
 ---
 
@@ -245,6 +246,16 @@ them could be swept in.
 | `test_loop_contract.py`, `test_loop_convergence.py`, `test_loop_budget.py` (LOOP-1/2/3, unchanged) | 164 passed |
 | all six `test_dashboard_*.py` | 109 passed |
 | `test_engine_gates_and_routing.py`, `test_graph_parallel_dispatch.py`, `test_graph_runtime_removed.py`, `test_inference_engine_wiring.py` | 263 passed |
-| the 15-suite batch of everything else referencing `dashboard` / `.loop(` / `_overall_progress` / any `loop_*` module | 338 passed |
+| batch 1: the 15-suite set of everything else referencing `dashboard` / `.loop(` / `_overall_progress` / any `loop_*` module | 338 passed |
+| batch 2: `test_blackboard_automatic_path_and_concurrency`, `test_harness_deploy`, `test_memory_write_guard_and_job_evidence`, `test_protocol_and_environment_mode_engine_wiring`, `test_protocol_capability`, `test_qualified_conclusion_closure_gate`, `test_signoff_stage_gate_e2e`, `test_waveform_dump_scope_human_confirmation` | 161 passed |
 
-**919 passed, 0 failed.**
+**1080 passed, 0 failed.**
+
+**One honest note on batch 2.** Its first run reported `1 failed, 160 passed`:
+`test_harness_deploy.py::test_cli_apply_to_a_synthetic_target_then_plan_is_clean`
+reported `different: ['CLAUDE.md']`. That is a race with THIS pass, not a
+regression — that test copies the whole harness tree to a synthetic target and
+then re-plans, and my CLAUDE.md scoping surgery (rewriting the file to
+`HEAD` + my section) landed between its apply and its plan. Re-run against a
+settled tree immediately afterwards: **1 passed**. Nothing in this change
+touches `harness_deploy.py`.
