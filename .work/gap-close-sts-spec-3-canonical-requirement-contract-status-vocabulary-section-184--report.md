@@ -186,3 +186,20 @@ unstaged.
    and does not check a requirement against RTL, a register map, or a simulation.
    Those need a real spec-ingestion pipeline that is a separate, much larger
    effort.
+
+## 6. Commits
+
+- `275e3a6` feat(spec): canonical requirement contract + 5-value status
+  vocabulary (section 184) -- the module, schema, extended gate, tests, CLAUDE.md
+  section, and this report.
+- `88b9e84` feat(spec): expose `dv-harness requirement-contract` verb -- the
+  cli.py hunk, which was lost between staging and commit when the concurrent
+  `config-variants` close-pass restored `dv_harness/cli.py` from HEAD. Detected
+  by re-checking `git show HEAD:dv_harness/cli.py` after committing, re-applied
+  with the same hand-scoped HEAD-blob technique, and verified: the committed
+  cli.py carries my two hunks and **zero** `config-variants` lines, so the other
+  pass's working-tree work was neither committed nor destroyed.
+
+Final state re-verified after both commits:
+`test_requirement_contract.py` 96 passed; working-tree `cli.py` parses and
+carries both passes' changes.
