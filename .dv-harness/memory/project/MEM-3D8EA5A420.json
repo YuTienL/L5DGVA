@@ -1,0 +1,27 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "lan063 DUT real command.txt -- TrustZone-style TOKEN_MISS/TOKEN_HIT register-security smoke test (not a USB scenario)",
+  "summary": "Remote path /home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/command.txt (90 lines, 2762 bytes, read in full). Its own header identifies it as regrw.txt content (2006-vintage, 'GLOAL_INIT & DRAM_INIT & REGISTER R/W defualt test'). command.txt is a SLOT NAME, not fixed content: MODEL/MODEL_ALL.v line 316 has an unconditional `include \"command.txt\" inside the sysn063 top module; whatever file a DE copies to ./command.txt before compile becomes that run's stimulus. This session's resident content is a TrustZone-style secure/non-secure access-permission test, NOT any of the 24 USB BFM pattern scenarios catalogued in .dv-workflow/command_inventory.csv (CMD-001..CMD-024, extreg_rw/USB2_*/USB31_SSP*) -- those are a separate, USB-scenario-scoped family of fillers for the same slot. Real semantics, line by line: sets 14-bit GMODEL.trapvalue[13:0]=14'b...01 (bit0=1: external-CPU+boot-from-internal-ROM; bit1=0: 25MHz crystal+PLL enabled, normal boot) -- CROSS-REF: sibling file extreg_rw.txt (D:/DV/Task/USB/usb31_dev_uvm/reference/bfm_patterns/extreg_rw.txt) sets the SAME logical boot mode via a DIFFERENT mechanism/hierarchy: force `IO.iotrap[9:0]=10'b...01 (10 bits, different path) instead of `GMODEL.trapvalue[13:0] (14 bits) -- a real, unreconciled dual-idiom inconsistency across this DUT's stimulus family. Calls `GMODEL.GLOBAL_INIT (MODEL_ALL.v:870+, read in full): waits for `TOP.xtrap pulse, decodes trap bits, waits for spll0/spll1 mo_rdy_clk lock, then (only if external-CPU boot) programs subsystem clock dividers 0x1000_0800..0x1000_0B0A, gated on ifdef MAXIMUM_FREQ vs default -- the default (non-MAXIMUM_FREQ) branch only writes clock-enable regs for GLOBAL/SS_VIS/SS_VOUT/SS_GCON (0x1000_0310/0340/0350/0360) and leaves SS_MEM/SS_CPU/SS_QDMA (0x1000_0320/0330/0370) COMMENTED OUT -- i.e. this DUT's default global-init does not explicitly enable CPU/mem subsystem clocks, relying on reset defaults. DRAM_INIT call is present but commented out (skipped this test). CPUWRITE/CPUREAD macro family resolves, given vcs.opt's +define+GSIAPB (I2CAPB/EJTAG/CPUMODEL_EN all off), to MODEL.u_gsihostmodel2apb.GSIHOSTWRITE*/GSIHOSTREAD* (MODEL_ALL.v:5395-5420) -- not a real CPU core. TOKEN_MISS half: writes 0x00 to GREG offset 0x0002_0100 ('set GREG to secure'), #100 delay, then forces `GREGTOP.pprot_s_gtop[2:0]=3'b010 (non-secure master) -- `GREGTOP = `GTOP.u_gregtop (MODEL_ALL.v:67); pprot_s_gtop is a real AMBA-PPROT-class chip-top port (declared RTLCAT/TOP_ALL.v:27501, driven :27637, fanned to sub-blocks at :28009/:37263/:37657/:37705). Then probes 0x0002_0000 (1B write 0x07), 0x0002_0004 (2B write 0x1234), 0x0002_0008 (4B write 0x87654321), 0x0002_0078 (4B write 0xABCDEF0), each followed by a 4B readback and $display -- expected TOKEN_MISS (non-secure access should be rejected/flagged), verified only via human-readable $display log inspection, NOT a scoreboard/assertion (legacy DE style, not self-checking). TOKEN_HIT half: forces pprot_s_gtop[2:0]=3'b000 (secure), re-probes the SAME 4 addresses (expected TOKEN_HIT: access now succeeds), PLUS one extra address 0x0003_0105 (1B write 0x0F, 4B read) that is tested ONLY under TOKEN_HIT, never under TOKEN_MISS -- an unresolved asymmetry (register-map ownership not located this session to confirm intent). All 5 addresses use a 4-byte readback regardless of write width (1B/2B/4B), deliberately checking byte-lane visibility through a wider read. wave.txt (included first) sets FULL-CHIP FULL-DEPTH FSDB dump ($fsdbDumpvars(0,sysn063)) plus its own independent 5,000,000-time-unit safety $finish, separate from command.txt's own #(TIMEBASE*100); $finish at end (TIMEBASE=20 non-PATTERN branch) -- this legacy full-depth default directly diverges from this Harness's own Waveform Dump User Gate/Simulation Observability Default (FSDB off by default, minimum scope) and must not be copied verbatim into Harness-generated content.",
+  "source_paths": [
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/command.txt (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/wave.txt (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/MODEL/MODEL_ALL.v (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/RTLCAT/TOP_ALL.v (remote)",
+    "D:\\DV\\Task\\USB\\usb31_dev_uvm\\reference\\bfm_patterns\\extreg_rw.txt",
+    "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\.dv-workflow\\command_inventory.csv",
+    "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\.work\\intake-top_tb_commandtxt-report.md"
+  ],
+  "category": "top_tb_commandtxt",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-3D8EA5A420",
+  "level": "project",
+  "created_at": 1788367702.838149,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

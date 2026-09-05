@@ -44,6 +44,16 @@ replay.ps1
 .dv-harness/state.json
 .dv-harness/events.jsonl
 
+# Stage-boundary progress reports (2026-09-04,
+# dv_harness/stage_progress_display.py -- save_stage_report()). Two markdown
+# files are written per stage ATTEMPT, named by timestamp, so a single real
+# workflow run over the 39-stage order leaves dozens of new files and a
+# retried stage adds two more each time. Same reasoning as the runtime state
+# above: a per-machine record of what this run displayed, not shared history.
+# They are meant to be read where they were produced -- `dv-harness
+# stage-report <stage>` re-renders the latest, `--list` shows them all.
+.dv-harness/stage_reports/
+
 # Harness self-test run records (2026-09-04, tools/testing/self_test.py
 # --record; written by the pre-push hook's self-test gate and by CI). Same
 # reasoning as the runtime state above: an append-only per-machine execution
@@ -65,6 +75,40 @@ replay.ps1
 # handoff -- the same class of data this repo's own history was cleaned of
 # on 2026-09-04. Present on disk, never in version control.
 reference/USB_UVM_Handoff/
+
+# Throwaway scratch/probe trees under .work/ (2026-09-05) -- synthetic
+# projects created by test/E2E-demo scripts this session
+# (.work/e2e_usb3_lfps_demo.py and several ad-hoc CLI probes) to exercise a
+# real code path against a disposable .dv-harness tree, never meant to be
+# committed. A leading underscore is this project's own convention for such
+# throwaway dirs (see .work/_p25_probe*, .work/_e2e_demo_usb3_lfps,
+# .work/_review_amba_e2e, .work/audit_tmp_project, .work/rp_cli_check).
+.work/_*/
+.work/audit_tmp_project/
+.work/rp_cli_check/
+
+# More per-machine runtime state (2026-09-05), same reasoning as the
+# .dv-harness/lsf|blackboard|state.json|events.jsonl block above: rewritten
+# continuously, a record of THIS machine's run, not shared history.
+# - .dv-harness/react/: Working Memory reasoning-step records -- per
+#   CLAUDE.md's own Engineering Memory Policy, Working Memory is short-term
+#   reasoning context, "預設不永久保存" (not permanently stored by default).
+# - .dv-harness/self_tuning/: the autonomous gate self-tuning gate_history.jsonl.
+# - .dv-harness/telemetry/: per-run workflow/stage timing profile.
+# - .dv-harness/sessions/_pre_restore_*/: timestamped pre-restore session
+#   backup snapshots.
+.dv-harness/react/
+.dv-harness/self_tuning/
+.dv-harness/telemetry/
+.dv-harness/sessions/_pre_restore_*/
+
+# Full extracted text of official third-party protocol specifications
+# (2026-09-05: USB 2.0/3.2, UTMI, xHCI -- .work/pdftxt/, produced by a PDF
+# text-extraction pass this session). A copyright concern distinct from the
+# internal-identifier class of data this repo's history was cleaned of:
+# redistributing full official spec text is not this project's call to make.
+# Present on disk for local reference, never in version control.
+.work/pdftxt/
 
 # The DV-Knowledge Vault (dv_harness/memory_vault.py) is its OWN git
 # repository as of 2026-09-04, when this project turned on

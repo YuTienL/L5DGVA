@@ -1,0 +1,29 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "lan063 DUT vcs.opt -- real flag inventory, subsystem compile order, and VCS-vs-ZEBU divergence",
+  "summary": "Remote path /home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/vcs.opt (162 lines, 4689 bytes), the -f filelist consumed by runver_precomp (vcs -lsfint -VERSION V-2023.12-SP2 -R -j4 -partcomp -sverilog -debug_access+all -kdb -lca -full64 +define+MISC_NOCHECK -f vcs.opt -l vcs.log -Xcheck_p1800_2009=char +error+10000). Global switches: +lint=TFIPC-L, +define+FASTRST (skip 1ms reset), +define+RTL (vs SYN), +notimingcheck/+neg_tchk, +v2k, +libext+.v+.vlib. Model-select defines (line 11-32): +define+GSIAPB is the ACTIVE CPU-BFM selector (I2CAPB/CPUMODEL_EN/EJTAG all commented out) -- so every CPUWRITE1B/2B/4B and CPUREAD1B/2B/4B macro in this build resolves to MODEL.u_gsihostmodel2apb.GSIHOSTWRITE*/GSIHOSTREAD* (MODEL_ALL.v:5395-5420 ifdef chain), not a real CPU core, not I2C, not EJTAG. Only +define+SMEMMODEL_EN is enabled among the optional peripheral models (AUD/FM/PERI/CANBUS/PCIE_RP/FRONT/ISP/CQ all disabled this drop). ./RTLCAT/lan063_define.h (225 lines, compiled as a bare top-level source at vcs.opt line 35) fixes chip-wide bus widths/counts: GTOP_APBAW=24, GTOP_TKN=8, GTOP_TRAP=10, CPU_AXIDW=128, CPU_IRQN=512, VIS_AXIDW=256, VIS_NIB=10 (6 MIPI CSI-2 + 4 SLVS-EC), VOUT_ASDW=256, VOUT_TKN=16, GCON_TKN=96, GCON_ION=131, UCIE_D2D_NLANES=2. Real file compile order (lines 37-160): ENV(FAB/DW/GTECH) -> MODEL (MODEL_ALL.v, the ~9000+ line behavioral-model + top harness that includes command.txt) -> MACRO/SRAM (incl. two real analog .vp hard-IP models: M31 PLL and CL12812M8RIP SRAM compiler macro) -> TOP (MISC_ALL.v, TOP_ALL.v -- declares pprot_s_gtop at TOP_ALL.v:27501) -> SS_CPU (+incdir R52_include, but MODEL_ALL.v ifdef CPUTOP_POSTSIM SDF-annotates u_ca55.u_cortexa55 -- an unresolved R52-vs-A55 naming inconsistency in the same file) -> SS_VIS (vision, DesignWare C/D-PHY MIPI-RX IP) -> SS_QDMA -> SS_VOUT compiled in USB -> MAC -> PCIe -> MIPI-TX -> PKT sub-order (SS_VOUT_USB_CTRL.v pulls udc_DWC_usb31-undef.svh confirming a Synopsys DesignWare usb31 UDC; SS_VOUT_MAC_CTRL.v pulls DWC_25gmac-undef.vh, a DesignWare 25G MAC) -> SS_GCON -> SS_MEM -> UCIE (STUBBED: DUMMY_TOP/ucie_dummy.v compiled instead of RTLCAT/UCIE_ALL.v, even though lan063_define.h and MODEL_ALL.v still size/declare full UCIE_* params and xucie0_* top IO) -> SETOP (three vendor-encrypted .v.e IP files: SE_pscc/psxip/pufrt_core_enc). Real anomaly: vcs.opt line 160 (the last non-blank line) is a bare, incomplete \"./RTLCAT/\" filelist entry with no filename -- confirmed via sed+wc -c (byte count matches exactly, not a transfer truncation) -- an abandoned edit that the build apparently tolerates (simv binary and a 5MB vcs.log with 0-byte vcs_e.log both exist for this snapshot). Confirmed drift: vcs.opt~ (editor backup) still references -v ./MACRO/CL12812M8RIP_r103.vp vs the live file's -v ./MACRO/CL12812M8RIP.vp (macro version rollback). ZEBU sibling vcs_z.opt (used by runver_precomp_z) differs at exactly 2 points: SMEMMODEL_EN disabled, and MACRO_ROM_SYN.v/MACRO_SRAM_SYN.v (gate views) replace MACRO_ROM.v/MACRO_SRAM.v (behavioral) -- ZEBU emulation needs synthesizable memory macros and skips the RTLSIM-only SMEM behavioral model. runver_precomp_z also applies a permissive error filter runver_precomp lacks: grep Error vcs.log | grep -v \"VOUT_PCIE.*time 0 fs\" > vcs_e.log (a known benign time-0 false positive suppressed only under the ZEBU flow).",
+  "source_paths": [
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/vcs.opt (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/vcs.opt~ (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/vcs_z.opt (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/runver_precomp (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/runver_precomp_z (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/RTLCAT/lan063_define.h (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/env.sh (remote)",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/topcfg.v (remote)",
+    "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\.work\\intake-top_tb_commandtxt-report.md"
+  ],
+  "category": "top_tb_commandtxt",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-8B866732BE",
+  "level": "project",
+  "created_at": 1788367702.8275173,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

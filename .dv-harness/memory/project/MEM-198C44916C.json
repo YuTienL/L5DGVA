@@ -1,0 +1,25 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB VIP example tb_usb_svt_uvm_basic_sys -- virtual sequence collection, ISOC MULT constraint subclass, payload hand-off callback pair, error demotion catcher",
+  "summary": "tb_usb_svt_uvm_basic_sys has a near-identical env/ file inventory to tb_usb_svt_uvm_basic_program_sys, differing mainly in that top.sv uses a plain `module` testbench (not a SystemVerilog `program` block), and it uniquely adds usb_transfer_system_virtual_sequence_collection.sv.\n\nSEQUENCE: usb_bulk_random_endpoint_stream_system_virtual_sequence is a virtual sequence spanning BOTH host and device virtual sequencers at once, declared via `uvm_declare_p_sequencer(svt_usb_system_virtual_sequencer)` (the SYSTEM sequencer, not a single agent's). It looks up both agents via p_sequencer.{host,dev}_virt_sequencer.find_first_agent(this), waits for both sides' shared_status.ltssm_state==U0, then for each of svt_usb_no_of_bulk_{out,in}_stream_xfers transfers: (1) randomizes an svt_usb_transfer with explicit ustream_id==(i+1) (SuperSpeed bulk-stream attribute for out-of-order pipes), (2) issues a USB_TRANSFER_AVAILABLE svt_usb_protocol_service command on the DEVICE's prot_service_sequencer FIRST (telling the device 'buffer ready for this stream') via direct execute_item() -- NOT `uvm_send -- BEFORE the host transfer is sent, (3) publishes payload size to a wildcard config_db path (uvm_config_db#(int unsigned)::set(null,'*','svt_usb_bulk_out_payload_size',...)), (4) THEN executes the host transfer via host_agent.xfer_sequencer.execute_item(usb_xfer) (again execute_item, not uvm_send -- a lower-level direct-execute bypassing normal uvm_do/response-queue machinery) and blocks on usb_xfer.end_event.wait_on(). This is the reference pattern for USB 3.x bulk-stream (ustream_id) sequencing requiring explicit device-buffer-ready coordination via the protocol_service channel.\n\nSEQUENCE_ITEM/CONSTRAINT: cust_svt_isoc_transfer extends cust_svt_usb_transfer (see the tb_usb_svt_uvm_20_phy record for the base class) adding 6 ISOC-MULT weight fields and a payload cap (payload_intended_byte_count_isoc_out<=1024) plus an isoc_mult_distribution constraint that dist-selects SPECIFIC endpoint NUMBERS (2=no-MULT, 4=MULT=2, 5=MULT=1) conditionally on xfer_type==ISOCHRONOUS_{IN,OUT}_TRANSFER -- i.e. picking endpoint_number is how a sys-level sequence targets pre-configured endpoint MULT behaviors rather than randomizing endpoint choice freely. Constructor also sets ISOC_DATA_TRANSFER_wt=100/ISOC_PING_TRANSFER_wt=0 to suppress ISOC PING transactions.\n\nCALLBACK pair for cross-agent ISOC payload consistency: host_expected_payload_callbacks.sv (svt_usb_protocol_callbacks, overrides post_transfer_in_port_get) pushes the host's own just-randomized ISOC transfer into env.iso_{out,in}_xfer_q; device_expected_payload_callbacks.sv (overrides pre_transfer_out_port_put with `ref svt_usb_transfer transfer`) pops that stashed host transfer and COPIES payload_intended_byte_count, aligned_transfer_ends_with_zero_length, first_isoc_transaction, last_isoc_transaction fields across onto the device's independently-generated transfer for the SAME endpoint -- this is how two independently-randomizing agents stay isochronous-transfer-size-consistent without sharing a sequence. By-ref transfer arg on device side (mutates) vs by-value on host side (inspects only) precisely reflects producer/consumer roles.\n\nCALLBACK for negative-test message handling: base_test_error_and_warning_catcher.sv extends svt_err_catcher, holds 5 message-pattern queues (warning_msg/error_msg/error_warning_msg/fatal_msg/info_msg), a hand-rolled substring pattern_match() (no regex), and a catch() override that DEMOTES matched WARNING/ERROR/FATAL to UVM_INFO while still returning THROW (message still printed, just at lower severity) -- except matched INFO messages which return CAUGHT (fully suppressed). This is the standard 'expected error/warning demotion' idiom for directed negative tests.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_sys\\env\\usb_transfer_system_virtual_sequence_collection.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_sys\\env\\cust_svt_isoc_transfer.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_sys\\env\\device_expected_payload_callbacks.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_sys\\env\\host_expected_payload_callbacks.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_sys\\env\\base_test_error_and_warning_catcher.sv"
+  ],
+  "category": "vip_examples",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-198C44916C",
+  "level": "project",
+  "created_at": 1788366914.0025268,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

@@ -1,0 +1,23 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB VIP configuration object hierarchy -- svt_usb_configuration family (real field/class inventory)",
+  "summary": "Real class hierarchy (UVM user guide Sec 4.2.3.1 lines 1874-1948; HDL user guide Sec 4.4/4.4.2 lines 2517-2682; both confirm the SAME object graph, HDL reached via get_data_prop handles instead of dot-access): svt_configuration (extends uvm_sequence_item) -> svt_usb_configuration (speed, usb_ss_signal_interface, usb_20_signal_interface, usb_capability, usb_ss_initial_ltssm_state) -> svt_usb_agent_configuration (top-level cfg pushed via uvm_config_db to svt_usb_agent; adds tracing/exception enable flags; carries host+device sub-cfgs) -> svt_usb_host_configuration and svt_usb_device_configuration (collapses USB Device/Config/Interface descriptors) -> svt_usb_endpoint_configuration[] (ep_number, direction, ep_type, max_burst_size, max_packet_size, supports_ustreams) -> svt_usb_ustream_resource_configuration (SS bulk-stream resource, only if endpoint supports_ustreams). EXACT topology config for THIS project (VIP=Host, DUT=Device, serial interface, matches UVM guide Sec 5.4 'USB VIP Host and DUT Device', lines 4715-4762): component_type=HOST; for 2.0-only (HS/FS/LS device): speed=HS(or FS/LS), usb_20_signal_interface=USB_20_SERIAL_IF, usb_capability=USB_20_ONLY, remote_device_cfg[$] (queue, size>=1), endpoint_cfg[$], num_endpoints=1; for SS-only: speed=SS, usb_ss_signal_interface=USB_SS_SERIAL_IF, usb_capability=USB_SS_ONLY, same queue fields. CRITICAL: 'The USB host configuration must include the configuration of a USB device that the host is communicated with. Hence, the remote_device_cfg is constructed' (UVM guide line 438) -- remote_device_cfg[$] on the HOST cfg is not optional, it describes the DUT's endpoints. Getting-Started guide (Sec 2.1.2, lines 350-431) gives a complete worked usb_shared_cfg example wiring host_cfg.remote_device_cfg[0].endpoint_cfg[0] field by field including SVT_USB_SS_CONTROL_MAX_PACKET_SIZE macro. Reconfiguration: build in test/env build_phase -> uvm_config_db#(svt_usb_agent_configuration)::set -> agent build_phase retrieves it. Static fields settable only pre-run/post-hard-reset; dynamic fields (timeouts) settable anytime. Post-construction: agent.reconfigure(cfg) one-arg method; FAQ Sec 1.5 (lines 393-434) shows canonical pattern: get_cfg() -> $cast after .clone() -> mutate -> reconfigure(); concrete example is updating local_device_cfg[0].device_address inside a transfer_ended callback on SET_ADDRESS control transfer (standard enumeration-address-tracking idiom). Alternative: svt_usb_general_agent_service_sequence with service_type==REFRESH_CFG run on agent_service_sequencer, paired with svt_config_object_db::set (FAQ Sec 1.4, lines 366-388). static_rand_mode(bit on_off) toggles static-field randomization as a block. Config Creator tool (vipcc) produces .cfg files loaded via svt_usb_agent_configuration.load_prop_vals(filename), validated with is_valid(0) (UVM guide Sec 6.3). Plusarg override: set_prop_val_via_plusargs('KEYWORD'), e.g. +DEV_CFG=\"enable_prot_xml_gen:1,inject_idle_cnt:1\" (FAQ Sec 1.3, lines 301-321).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\VIP\\doc\\usb_svt_uvm_user_guide.txt",
+    "D:\\DV\\Task\\USB\\VIP\\doc\\usb_svt_hdl_user_guide.txt",
+    "D:\\DV\\Task\\USB\\VIP\\doc\\usb_svt_uvm_getting_started.txt"
+  ],
+  "category": "vip_docs",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-181A55933A",
+  "level": "project",
+  "created_at": 1788366874.5339162,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

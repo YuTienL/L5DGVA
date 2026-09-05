@@ -1,0 +1,25 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB VIP example tb_usb_svt_uvm_cfg_validator -- the configuration-only example: load_prop_vals(), full property-file field inventory, plusarg-driven validation test",
+  "summary": "tb_usb_svt_uvm_cfg_validator is the smallest example (17 files, no hdl_interconnect/, no real sequences) and its entire purpose IS the configuration aspect: validating a svt_usb_agent_configuration object loaded from a text property file, with NO protocol traffic run at all.\n\nTEST: tests/ts.cfg_validate.sv (cfg_validate extends uvm_test) build_phase does: `cfg=new(); if ($value$plusargs('validation_cfg_filename=%s', filename)) { if (cfg.load_prop_vals(filename)) { if (cfg.is_valid(0)) uvm_info(...'is valid'...); else uvm_error(...'is NOT valid'...); } else uvm_error(...'Failed attempting to load'...); } else uvm_error(...'Filename not provided'...);` -- this is the ONLY place in the entire 8-example set demonstrating svt_usb_agent_configuration::load_prop_vals(filename), the VIP's built-in mechanism to deserialize a config object from a flat key=value text file at runtime. Driven by `+validation_cfg_filename=<path>` set in sim_run_options: `+UVM_TESTNAME=$scenario +validation_cfg_filename=${tbench_dir}/tests/usb_agent.cfg`. No env/scoreboard/sequence is built; top.sv just imports svt_usb_uvm_pkg and calls run_test() directly against cfg_validate -- the canonical 'config sanity check without a full testbench' pattern.\n\nCONFIGURATION: tests/usb_agent.cfg is a real ~470-line property file (key=value, one per line, `//` comments, grouped by originating class with `// ====` headers) -- the single richest raw field inventory of svt_usb_agent_configuration found across the example set. Format notes: array/sub-object indexing uses `field@array_path[index]` (e.g. route_string_port[0]@local_device_cfg[0]=0) for single nesting and `field@array_path[i]:nested_array[j]` (colon separator) for double nesting (e.g. ep_number@local_device_cfg[0]:endpoint_cfg[0]=0). Enum values are written as bare name strings, not integers (component_type=DEVICE, usb_capability=USB_SS_ONLY, speed=SS, usb_ss_signal_interface=USB_SS_TLM, usb_ss_initial_ltssm_state=U0). Confirms a SEPARATE existence flag is needed per array slot beyond the size field: local_device_cfg_size=1 at top plus local_device_cfg_exists[0]=1 later -- load_prop_vals allocates from _size but only populates/validates slots flagged _exists[i]=1. remote_host_cfg_exists=1 with a full nested @remote_host_cfg block confirms a DEVICE-role config still carries a full remote HOST config block for validation even with no host agent built. File enumerates EVERY SS LTSSM sub-state timeout (polling_lfps_timeout=360us, polling_active_timeout=12us, hot_reset_active_timeout=12us, recovery_configuration_timeout=6us, u1/u3_no_lfps_response_timeout) as a superset cross-check against the narrower hand-tuned subset in tb_usb_svt_uvm_intermediate_sys's usb_ess_pipe4_base_test.sv, plus full USB2.0 electrical timing (tdcnn/tdrst/tfilt/twtrev/tl1residency for LPM L1, ta_srp_rspns/tb_srp_fail for OTG SRP) and a full HSIC electrical timing block (usb_20_hsic_strobe_period, auto_enabled_delay, connect_time etc) -- confirming HSIC electrical timing is a first-class configurable block even though no example builds an HSIC-speed test end-to-end (only top.usb_20_hsic.sv/usb_20_hsic_dut* exist as topology stubs elsewhere).\n\nenv/usb_svt_shared_cfg.sv (used by non-validator tests in this dir) is structurally the same host_cfg/dev_cfg shared-cfg pattern as tb_usb_svt_uvm_20_phy's usb_shared_cfg.sv but adds setup_usb_ss_otg_defaults() (SS+OTG: capability=OTG, micro_ab_plug_type=A/B, otg_capability=OTG_SS_CAPABLE, ss_otg_issue_warm_reset=SS_OTG_IMMEDIATELY, t_reset_timeout=160us) and PARAMETERIZED setup_usb_{20,20_otg}_defaults(host_speed, dev_speed) taking explicit per-side speed args (default FS/FS and HS/HS) -- supporting ASYMMETRIC host/device speed setups (e.g. HS host vs FS device) that the plainer usb_shared_cfg.sv in the phy-only examples does not parameterize. Uses simulation-fast but spec-legal OTG/ADP timing constants (ta_adp_prb=1.75us, tadp_rise=175ns, ta_vbus_rise=500ns).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_cfg_validator\\tests\\ts.cfg_validate.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_cfg_validator\\tests\\usb_agent.cfg",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_cfg_validator\\sim_run_options",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_cfg_validator\\env\\usb_svt_shared_cfg.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_cfg_validator\\top.sv"
+  ],
+  "category": "vip_examples",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-FD3BDF9359",
+  "level": "project",
+  "created_at": 1788366914.6266212,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

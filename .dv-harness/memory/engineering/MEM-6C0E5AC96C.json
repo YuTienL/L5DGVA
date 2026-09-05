@@ -1,0 +1,29 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "A global file/macro rename (usb31_ -> usb_, to match a reference naming convention) silently corrupted 13 real DUT-owned hierarchical paths -- caught by luck, not by the static checker, because hierarchy references only resolve at elaboration",
+  "scope": "engine",
+  "symptoms": [
+    "During the live USB VIP build (2026-09-03), a controller-directed rename (align this environment's file/macro naming with USB_UVM_Handoff's convention: usb31_<role> -> usb_<role>) was performed as a search-and-replace",
+    "The static checker (usb_static_check.py, 0 errors/19 files) reported clean both before and after -- the corruption was invisible to it",
+    "13 real DUT-owned hierarchical paths were corrupted: e.g. u_udc_usb31_top.u_udc_usb31_phy... (real, correct) became u_udc_usb_top.u_udc_usb_phy... (fabricated, does not exist in the DUT)"
+  ],
+  "root_cause": "A blanket 'usb31_' -> 'usb_' string replacement does not distinguish between the namespace the renaming agent OWNS (its own file names, macro names, class names -- e.g. usb31_reg_arb.sv, `USB31_PORT_TCA_DEVICE_MODE) and namespaces it does NOT own that happen to share the same substring (the DUT's own real RTL instance names, e.g. u_udc_usb31_top, which literally contains 'usb31' as part of the DUT vendor's own module/instance naming, not this environment's naming). Hierarchical path references (`sysn063.u_lan063.u_udc_usb31_top....`) are plain strings to any text-based rename tool and to SystemVerilog's own lexer -- they are only checked against the real design hierarchy at ELABORATION time, not at parse/lint time, so a static checker that only validates syntax (balanced braces, macro self-containment, include order, etc.) cannot catch a corrupted hierarchical path at all. This would have shipped a build that fails only once a real elaboration is attempted, with an error pointing at the wrong-looking symptom (an unresolvable hierarchical reference) rather than the actual cause (an over-broad rename).",
+  "fix": "Caught only incidentally (the implementer happened to read the affected file while investigating an unrelated hang). Fixed the 13 corrupted paths, then built a real, negative-tested guard: a new static-check category harvests the real DUT path component vocabulary from the UNTOUCHED original reference files (reference/bfm_patterns/*.txt -- files never edited by this environment, so their content is authoritative DUT vocabulary by construction) and flags any occurrence of a digit-stripped/renamed variant of those components elsewhere in the tree. Negative-tested by deliberately re-injecting the exact same corruption, confirming the new check fires, then restoring and confirming clean again -- verifying the guard actually catches the failure mode it was built for, not just plausible-sounding coverage.",
+  "verification": {
+    "single_sim": "N/A (build-process/tooling defect, not a simulation fix)",
+    "regression": "Static check clean (0 errors/19 files) after the fix, with the new guard category added (now 13 static-check categories total). Guard's own detection verified via deliberate re-injection of the original bug.",
+    "reaudit": "Self-caught and self-fixed by the same agent within the same work session, 2026-09-03."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON (catalogued in this project's own build as trap T-27): a rename is only safe over a namespace you actually own. Before any global search-and-replace rename (aligning naming with a reference convention, migrating a prefix, etc.), explicitly identify what namespace boundary the tool operates within -- own files/macros/classes vs. any external, unowned vocabulary (DUT RTL instance names, vendor IP names, third-party VIP class names) that might share a matching substring by coincidence. A syntax-only static checker cannot protect against this class of bug because the corruption is only meaningful relative to a REAL external structure (the DUT's actual hierarchy) that the checker has no model of -- the only reliable guard is comparing against an untouched, authoritative source of that external vocabulary (here: reference files never edited by the tool doing the rename), plus negative-testing the guard against the exact original bug before trusting it.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, live USB VIP build (IP_UVM_DV_Gen agent), self-caught and self-fixed.",
+  "memory_id": "MEM-6C0E5AC96C",
+  "level": "engineering",
+  "created_at": 1788401464.0815809,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

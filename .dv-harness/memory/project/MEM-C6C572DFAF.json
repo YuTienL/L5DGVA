@@ -1,0 +1,21 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "register__ssvout_0806.xlsx SS_VOUT subsystem register set (usb0/usb1 fabric-level view)",
+  "summary": "D:\\DV\\Task\\USB\\DOC\\register__ssvout_0806.xlsx documents the SS_VOUT ('VideoOut') subsystem's own control-plane registers (interrupt aggregation, ring-buffer/stream-buffer management, AXI bus-matrix arbitration, per-sub-module clock+reset) -- a DIFFERENT register domain from USB_Reg_260727.docx's per-instance USB CSR pages: this doc sits 'around' usb0/usb1, USB_Reg_260727.docx documents what's 'inside' them. Do not conflate the two. 6 sheets, base addresses: ss_vout_reg00=0x1200_0000 (interrupt/CQ-INT/reset/clock/probe/date, 70 rows), ss_vout_reg01=0x1200_0100 (AXI arbiter + device bus-matrix, 35 rows), ss_vout_reg02=0x1200_0200 (ring-buffer level-detect, 67 rows), ss_vout_reg03=0x1200_0300 (67 rows, same family as reg02), ss_vout_reg_str (per-stream config, base 0x1200_02/4/5/600 per its 'duplicate Address' column, X=4/5/6 for stream0/1/2, 64 rows), ss_vout_reg_trb=0x1201_0000 (TRB engine incl. trb_axid_mask, 512-byte page, 58 rows). Key registers: ss_vout_intevt (0x0000~8, RWC, 73-bit) with bit layout [3:0]/[7:4]/[11:8]=str0/1/2 input-stream {SOF,SOL,EOF,EOL}, [15:12]/[19:16]/[23:20]=str0/1/2 output-stream same, [39:24]=ring-buffer-0..15 read-half-level event, [55:40]=write-half-level event, [56]=top register-guard violation, [57]/[58]=AXI read/write arbiter error, [59]-[70]=various stream-buffer error/timeout classes (3 distinct timeout types: Grant-No-Valid, Backpressure, Busy), [72]=ring-oscillator done; matching ss_vout_irqen/fiqen. ss_vout_esmen (0x0030, [6:0]) drives ctl_esmerr, consumed by PAISB_Global_Reg's ssvout_esmerr/esmen at 0x02_0221x. 16x cqintNNsel (0x0040-004F, [6:0], default 0x7F) select 1-of-73 events per CQ. 16x cqintNNen (0x0050~1...006E~F, [11:0], default 0x0) is the per-CQ enable mask with explicit bit assignment [0]=ss_vout-int [1]=pkt [2]=trb [4]=mac0 [5]=mac1 [8]=pcie [9]=usb0 [10]=usb1 [11]=mipitx -- this is the concrete evidence that usb0/usb1 are peer sub-modules alongside mac0/mac1(Ethernet)/pcie/mipitx inside this subsystem. mswrst (0x0080, [5:0], default 0x0): [0]mac0 [1]mac1 [2]pcie [3]usb0 [4]usb1 [5]mipitx -- per-submodule software reset. pclken/aclken (0x0090/91, [5:0], default 0x3F) same 6-bit map. usb0_clken (0x0097, [2:0], default 0x7) and usb1_clken (0x0098, [2:0], default 0x7) are independent per-instance clock enables. ss_vout_reg01 (0x1200_0100) has AXI write/read arbiter reset/pause/priority/busy/error per-master (n=0..3) plus a device bus-matrix block (devbm_rst, pause_dev[4:0] for 5 devices, idle_dev/busy_dev [9:0]) and 3-stream buffer control (str_swrst[3:0] incl. a 4th stream-wrapper bit, str_rout_sel: 0=AXI-slave-in-bus-matrix / 1=AXI-stream-master-to-MIPITX).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\register__ssvout_0806.xlsx"
+  ],
+  "category": "dut_registers",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-C6C572DFAF",
+  "level": "project",
+  "created_at": 1788367805.455953,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

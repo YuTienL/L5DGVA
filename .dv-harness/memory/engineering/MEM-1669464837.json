@@ -1,0 +1,29 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "Makefile/sim-scripts consolidation from USB_UVM_Handoff is real but incomplete -- 5 files never migrated, and mature real capabilities in the already-consolidated template (regression.list, TEST=, -W, lsf_regress.sh, incremental build, coverage/UNR) went unused by the same-day live USB build because nothing pointed the dispatched agent at them",
+  "scope": "engine",
+  "symptoms": [
+    "dv_harness/uvm_generator/templates/sim_scripts/ (Makefile, check/*, gen_pattern_pool.py, lsf_run.sh, lsf_regress.sh, lsf_wait.sh, waves.tcl, ip_run.sh) is a real, byte-identical-origin, now chip-specific-configured copy of USB_UVM_Handoff/sim/scripts/ -- but 5 files present in the original (analyze_sim.sh, apb_timing_report.sh, dpdm_report.sh, irq_report.sh, check/gen_scaledown.py) were never carried over, with no documented rationale anywhere in the codebase",
+    "The same-day live USB VIP build (IP_UVM_DV_Gen agent) hand-built its own sim/scripts/Makefile independently, never consulting the already-consolidated, already-chip-configured template -- and its own honest reconciliation report catalogued the real capability gap this caused: no TEST=/+UVM_TESTNAME= test-selection knob at all, full rebuild every time instead of incremental stamp-file builds, no coverage/UNR, no regression.list verdict bookkeeping, and a fire-and-forget bsub instead of the template's real 753-line lsf_regress.sh (concurrency groups, -W timeout, stall detection, stale-log guard)"
+  ],
+  "root_cause": "Two independent, compounding gaps. (1) The migration itself is incomplete -- 5 files with no callers found within the original scripts directory itself (so their omission didn't break anything internally) but with unverified importance to a real user-facing workflow (waveform/timing/power-domain/IRQ analysis reports), silently dropped with zero record of the decision. (2) Even the PART that IS consolidated (Makefile, LSF scripts) went completely unused by a same-day real build task, because CLAUDE.md pointed the dispatched agent at exactly one sibling file (regression_list_manager.py) rather than the directory as a whole -- see the companion confirmed-consolidation record for the full analysis of that miss.",
+  "fix": "Not yet fixed -- this record captures the concrete gap list per the user's explicit instruction. Two real, separately-scoped follow-ups: (a) migrate the 5 missing scripts into dv_harness/uvm_generator/templates/sim_scripts/ (or explicitly document per-file why each is out of scope, if that turns out to be the right call after inspecting them), and (b) retrofit the live USB build's sim/scripts/Makefile to adopt the template's regression.list/TEST=/-W/lsf_regress.sh mechanics rather than its own thinner reimplementation -- the build agent's own report already recommended this as next-step work.",
+  "verification": {
+    "single_sim": "N/A (knowledge-consolidation gap, not a simulation fix)",
+    "regression": "N/A",
+    "reaudit": "Confirmed via find/diff comparison of dv_harness/uvm_generator/templates/sim_scripts/ against USB_UVM_Handoff/sim/scripts/, plus the live build agent's own same-day reconciliation report, 2026-09-02."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: a partial migration (most files moved, a few silently dropped with no record) is nearly as dangerous as no migration -- a future reader sees the template directory, reasonably assumes it is the complete, current source of truth, and has no way to know 5 real files are missing without an explicit diff against the origin. Any 'consolidate X into the Harness' task should end with an explicit, recorded file-count/diff check against the source, not just 'copied the important-looking files over'.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-02, USB_UVM_Handoff distillation audit directed by the user.",
+  "memory_id": "MEM-1669464837",
+  "level": "engineering",
+  "created_at": 1788364561.8222158,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

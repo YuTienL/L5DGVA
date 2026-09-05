@@ -1,0 +1,22 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB31 DEPCFG/DEPSTARTCFG/DEPXFERCFG endpoint-command parameter fields and ordering rules",
+  "summary": "DWC_usb31_programming.txt Sec 3.2.2 'Device Physical Endpoint-Specific Command Structure' (p.540-550). DEPCFG = Command 1 'Set Endpoint Configuration' (Sec 3.2.2.1, p.541-544, txt:27332-27503, Table 3-3). Key fields: Parameter1 bits[29:25] USB Endpoint Number (bits[29:26]=number, bit[25]=direction 0=OUT/1=IN) with hard rule 'Physical endpoint 0 (EP0) must be allocated for control endpoint 0 OUT. Physical endpoint 1 (EP1) must be allocated for control endpoint 0 IN.' (txt:27372-27373). Parameter0 bits[13:8] DEPEVTEN per-endpoint event enables: bit13 StreamEvtEn, bit10 XferNRdyEn, bit9 XferInProgEn, bit8 XferCmplEn (txt:27401-27408). Parameter0 IntrNum field: event-buffer/interrupter number for this endpoint, 'If multiple Interrupter configuration is not selected, this must be 0' (txt:27412-27415). Parameter0 Config Action (2 bits, txt:27417-27430): 0=Initialize (first config, resets seq number + flow control, DEPCMDPAR2 ignored), 1=Restore (post-hibernation, restores seq/flow-control from DEPCMDPAR2), 2=Modify (change event enables/IntrNum/MPS without resetting seq/flow-control, DEPCMDPAR2 ignored). Parameter0 also: BrstSiz (burst length, 0=len1..15=len16), FIFONum ('For control endpoints, the FIFONum value in the OUT direction must be programmed to the same value as the IN direction'), MPS (max packet size, up to 1024B for USB3.1), EPType (00=Control,01=Isoch,10=Bulk,11=Interrupt). Every DEPCMDn command shares caveats (repeated per-command, e.g. txt:27335-27345): if at USB2.0 speeds and GUSB2PHYCFG[6] or [8] set, clear before issuing the command (may re-set after); command timeout should be >1ms; software must keep servicing event interrupts while polling CmdAct (bit10 of DEPCMDn) to avoid deadlock, or use CmdIOC (bit8) for a completion interrupt instead. DEPSTARTCFG = Command 9 'Start New Configuration' (Sec 3.2.2.8, p.549-550, txt:27818-27835): issued to DEPCMD0 always; 'After power-on-reset with XferRscIdx=0 before starting to configure Endpoints 0 and 1. CmdIOC must be set to 0 and software must poll the CmdAct bit... because Endpoint 0 is not yet configured with a valid interrupt number.' Also reused 'With XferRscIdx=2 when it receives SetConfiguration before starting to configure Endpoints > 1. CmdIOC may be 0 or 1.' This confirms DEPSTARTCFG(XferRscIdx=0) on DEPCMD0 must precede any DEPCFG for EP0/EP1 in the power-on flow. DEPXFERCFG = Command 2 'Set Endpoint Transfer Resource Configuration' (Sec 3.2.2.2, p.544, txt:27507-27545, Table 3-4): 'There must be only one transfer resource allocated per endpoint... If software attempts to allocate more transfer resources than have been configured in the hardware, this command will return an error.' Parameter0 bits[15:0] NumXferRes 'must be set to 1'. Ordering rule stated twice in Table 4-1: 'The command has to be issued for EP0 first, followed by EP1' -- applies separately to the DEPCFG pair (txt:28337) and the DEPXFERCFG pair (txt:28341).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_programming.txt",
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_programming.pdf"
+  ],
+  "category": "programming_guide",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-6B5F0751E6",
+  "level": "project",
+  "created_at": 1788366812.0277562,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

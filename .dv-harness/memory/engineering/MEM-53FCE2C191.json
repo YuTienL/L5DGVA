@@ -1,0 +1,29 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "command.txt/pattern content architecture (block/branch_a/branch_fw/branch_b task composition, arbitration and ordering traps) was NEVER distilled beyond a thin 23-line generic skill -- captured here with real evidence, closing part of the gap",
+  "scope": "engine",
+  "symptoms": [
+    "grep across dv_harness/uvm_generator/*.py for 'command.txt'/'command_txt': ZERO hits -- the actual generator code has no encoded knowledge of how to construct a pattern file's content, only command_semantic_expectation_parser.py (a VERIFICATION-side parser under tools/verification_flow/, used to check an existing pattern against the DUT's real command.txt during VERIFY, not to author a new one)",
+    ".claude/skills/CORE/command-generator/SKILL.md is only 23 lines, entirely generic (vPlan-gap-driven command_mapping.csv maintenance), with zero citations of USB_UVM_Handoff, zero mention of the real block/branch_a/branch_fw/branch_b task-composition pattern"
+  ],
+  "root_cause": "The real, rich architectural knowledge lives only in USB_UVM_Handoff's own pattern .txt files and their own in-repo README.md/soc_run.svh -- e.g. uvm/tb/patterns/enumeration/usb20_enumeration.txt's real content demonstrates: `include soc_int.svh (blocking, SoC-level, once) -> `include soc_run.svh (branch_a0/branch_a1: ss_vout_init_flow then each port's controller bring-up, launched into the background, non-blocking) -> `USB_FORK_FW_SERVICE (branch_fw: per-port firmware service, never returns, raises usb_fw_port_running[p]) -> fork/join (NOT join_any -- explicitly documented as unsafe once firmware is its own branch, with a real job number and timestamp showing a false-positive-reading early exit) of branch_b0/branch_b1 (per-port USB traffic macros: USB_WAIT_CTRL_READY -> USB_STAGE_LINKUP -> USB_ENUMERATE -> USB_TRAFFIC_CTRL) -> FINAL_CHECK. Named traps embedded in the pattern comments: trap 51 (APB_* VIP sequences and `CPUWRITE hold different locks on the SAME sequencer -- UVM arbitration can interleave them and silently overwrite a USB register write; 'NO SoC REGISTER CONTENT MAY BE ADDED TO A HOST SCRIPT'), trap 98 (LINKUP must precede ENUMERATE -- enumeration cannot start before DSTS.CONNECTSPD reports the port's built speed). None of this was ever pulled out into a reusable, general Harness asset -- every future pattern author has to re-discover it by reading USB_UVM_Handoff's raw files directly, which is exactly the kind of one-off tribal knowledge the Methodology Consolidation Rule exists to prevent.",
+  "fix": "Not yet fixed in code/skill -- this record captures the real architecture as Knowledge Center content per the user's explicit instruction, as a first step. Recommended real fix (not yet built): either (a) expand command-generator/SKILL.md substantially with this real block/branch_a/branch_fw/branch_b pattern, the fork/join-not-join_any rule, and the trap catalogue, generalized beyond USB-specific macro names to the protocol-agnostic shape, or (b) add real generation logic to dv_harness/uvm_generator/ (a pattern_content_generator.py sibling to pattern_registry_generator.py) that can emit a real branch_a/branch_fw/branch_b skeleton from a protocol profile, the way generator.py already does for env composition.",
+  "verification": {
+    "single_sim": "N/A (knowledge-consolidation gap, not a simulation fix)",
+    "regression": "N/A",
+    "reaudit": "Confirmed via direct grep of dv_harness/uvm_generator/*.py (0 hits) and direct read of both command-generator/SKILL.md (23 lines, generic) and USB_UVM_Handoff/uvm/tb/patterns/enumeration/usb20_enumeration.txt (114 lines, real architecture), 2026-09-02."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: a skill file existing with a plausible-sounding name (command-generator) is not evidence that the real architectural knowledge behind a class of artifact has actually been captured -- this one was 23 generic lines while the real, hard-won knowledge (fork/join semantics, arbitration locks, ordering traps) sat entirely in the reference project's own files, never pulled out. When auditing 'has X been consolidated', check the actual CONTENT/DEPTH of the skill or code that claims to cover it, not just whether a plausibly-named file exists.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-02, USB_UVM_Handoff distillation audit directed by the user.",
+  "memory_id": "MEM-53FCE2C191",
+  "level": "engineering",
+  "created_at": 1788364561.3423393,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

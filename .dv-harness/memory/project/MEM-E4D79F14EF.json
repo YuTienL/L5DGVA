@@ -1,0 +1,22 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "DWC_usb31 User Guide -- coreConsultant config flow, Prime Profiles (new 2.10a), and PVE testbench structure",
+  "summary": "DWC_usb31_user.txt (v2.10a Jan 2024, 9379 lines) is the process/tooling document, distinct from the Databook's parameter definitions -- it explicitly defers parameter definitions to 'the Parameter Descriptions chapter of the Databook' (line 942-944). Chapter 2 'Configuring the Controller' describes the coreConsultant flow: Specify Configuration activity (sets features/memory sizes/CSR power-on defaults, with live interdependency enforcement e.g. selecting Device mode auto-disables Host-only params) -> Generate RTL (Apply button, RTL lands in workspace/src/) -> view/generate configuration reports and optional Activity-Specific Reports/Views. workspace/src/DWC_usb31_params.v holds parameter values not exposed in the coreConsultant GUI itself. PRIME PROFILES (SS2.2.1, line 995-1109) -- a NEW-IN-2.10a feature per the Revision History: a Prime Profile is a pre-defined, application-focused parameter bundle that LOCKS most parameters to known-good pre-verified combinations, explicitly to avoid 'inadvertent selection of a non-verified crossing of configuration parameters'. Table 2-1 lists 3 commonly-available profiles (availability depends on purchased licenses): PP_DRD_VTIO_EXTCGTU0_ISOCINQPT (USB31 DRD, VTIO, Hibernation+AsyncPMU, External Clock Gating U0, ISOC IN QPT); PP_HST_EXTCGTU0_ISOCINQPT_SINGLEPORT (single-port Host, Hibernation+AsyncPMU, ExtCGT-U0, ISOC-IN-QPT); PP_HST_VTIO_EXTCGTU0_ISOCINQPT_SINGLEPORT (adds VTIO to the previous). Analysis Mode unlocks a profile's locked params for inspection but 'RTL generation is not allowed in Analysis Mode' -- only emits a batch script (to workspace/export) meant for Synopsys Support, not for a real build. External Prime Profiles (.pp.gz files, <custom> option) exist for special support engagements. PRACTICAL IMPLICATION for a config-generation agent: if a target config matches one of these 3 categories, the Synopsys-recommended path is selecting the Prime Profile rather than hand-picking every Basic/PHY/Device/Host/Advanced parameter, since non-Prime-Profile crossings are by Synopsys's own description less verified. PVE TESTBENCH (SS3.1, line ~1700-2400+): UVM-based SoC-integration-example testbench coreConsultant drives. Uses DW AMBA VIP (AHB Requester/Completer, AXI Requester/Completer) plus two PHY models -- Synopsys USB3.1 PHY (drives pipe_clk, PIPE3/PIPE4, custom filelist ess_phy.f swappable via coreConsultant 'Setup and Run Simulation -> Testbench' tab) and Synopsys USB2.0 GTECH PHY (drives utmi_clk, UTMI+/ULPI via adapter, custom filelist dwc_usb20_phy_1p_ms_otg0_ns_inst.f). Testbench files live under Workspace/sim/Soc_sim/utb/{com,device,device/tests,host,host/tests} (Table 3-1 enumerates ~25 files: test_top.v, DWC_usb31_SOC_wrapper.v, DWC_usb31_clocks.v/_resets.v, runsim_vcs, DWC_usb31_app_if.v [UVM<->HDL bridge, app side], DWC_usb31_vip_interconnect.v [feed-through UVM<->USB side], usb31_tca_apb_sequence_collection.sv [Type-C Assist APB sequence], utb_iip_dut_dwc_usb31_test_suite_configuration.sv [flexible-endpoint test-suite config], DWC_usb31_utb_ctrl_phy.upf/DWC_usb31.upf [UPF power intent]). Test naming convention (Table 3-2): device-mode tests = usb_20_na_31_ssp_<transfer-type>[_<qualifier>], e.g. usb_20_na_31_ssp_bulk_in, ..._iso_in/out, ..._ltssm_u0_to_u3_to_u0, ..._control_read/write. Separate parallel sub-testbenches exist for EUSB2 (SS3.1.5-3.1.7) and ROUTERIF (SS3.1.8-3.1.10) configs, each with own file/test lists -- matches Release Notes' 'Multi-port and Router configurations do not support eusb2 tests' limitation. coreConsultant right-click on a test in the GUI shows its enabling condition against the chosen config params.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_user.txt",
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_user.pdf"
+  ],
+  "category": "ip_docs",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-E4D79F14EF",
+  "level": "project",
+  "created_at": 1788367138.0326724,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

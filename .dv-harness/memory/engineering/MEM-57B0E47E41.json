@@ -1,0 +1,29 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "Git Bash/MSYS silently mangles Unix path arguments -- chased 2 phantom bugs before finding it",
+  "scope": "engine",
+  "symptoms": [
+    "python tools/remote/remote_exec.py --put <local> /home/<real-path> fails with ERROR=MD5_MISMATCH -- 100% reproducible, including for a single isolated --put with nothing preceding it",
+    "Manually re-decoding the leftover /tmp/.put.NNNNN.b64 staging file on the remote server ALWAYS produces the exact expected md5 -- proving the transferred bytes are correct and the bug is not in the transfer itself"
+  ],
+  "root_cause": "The command was being invoked through Git Bash on Windows, whose MSYS layer auto-rewrites a bare /home/... argument into a Windows path (e.g. 'D:/Program Files/Git/home/svcacct/AI/Agent/...') BEFORE Python ever sees it in sys.argv -- so the compound remote decode command actually executed against a nonsense path on the real Linux shell, producing a real shell error ('D:/Program: No such file or directory.') that a bare MD5 comparison surfaced only as MISMATCH. tools/remote/remote_hop.py's OWN module docstring already documented this exact gotcha and its MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' workaround -- it was simply not applied when invoking the tool. Two rounds of unrelated (if still real) remote_hop.py put() hardening were chased across 3 separate relay restarts before temporary diagnostic logging captured the raw shell error and revealed the actual cause in under a minute.",
+  "fix": "Applied MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' when invoking remote_exec.py/remote_relay.py from a Git Bash shell -- immediate fix, zero code changes needed for the actual bug. Additionally hardened the harness itself so this class of mistake fails loudly instead of silently: tools/remote/remote_relay.py now exposes is_msys_mangled_path() (detects a Unix-style path argument that arrived looking like a Windows drive path, e.g. matches ^[A-Za-z]:[/\\\\]), applied to remote_exec.py's --put/--get/--cwd/DVWORKDIR and remote_relay.py's VCWORKDIR -- each now exits with a clear MSYS_NO_PATHCONV instruction instead of sending a corrupted path to the relay and producing a confusing MD5_MISMATCH or remote shell error with no clue why.",
+  "verification": {
+    "single_sim": "N/A",
+    "regression": "dv_harness_tests/test_remote_relay.py::test_is_msys_mangled_path_* and dv_harness_tests/test_remote_exec.py's MSYS guard tests",
+    "reaudit": "CONFIRMED live: MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' python tools/remote/remote_exec.py --put ... immediately succeeded (EXIT_CODE=0) on the exact same command that had failed 20+ times without it"
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE PROCESS LESSON, arguably more valuable than the technical fix: when a bug is 100% reproducible even in a maximally-isolated single-call test, and manual replay of the SAME underlying operation always succeeds, suspect the ARGUMENTS reaching the code under test before suspecting the code's own logic -- especially on Windows with Git Bash in the loop, where MSYS path conversion is a known, previously-documented (right there in remote_hop.py's own docstring) but easy-to-forget gotcha for ANY Unix-path-shaped CLI argument. Check documented gotchas in the file you are debugging BEFORE hypothesizing a novel bug in it.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-02, live remote-transport debugging",
+  "memory_id": "MEM-57B0E47E41",
+  "level": "engineering",
+  "created_at": 1788284616.7146742,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

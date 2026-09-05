@@ -1,0 +1,26 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB VIP example tb_usb_svt_uvm_basic_program_sys -- 10 DUT topology variants selected via prescript, OTG/SSIC sequences",
+  "summary": "tb_usb_svt_uvm_basic_program_sys demonstrates a DUT-INTEGRATION environment (vs. the phy-only examples above) with 10 alternate top.<variant>.sv topology files: top.usb_20_eusb2{,_device_repeater,_host_repeater}.sv, top.usb_20_eusb2v2.sv, top.usb_20_hsic.sv, top.usb_20_serial.sv, top.usb_20_ulpi_{device,host}.sv, top.usb_20_utmi.sv, top.usb_ss_pipe3.sv, top.usb_ss_serial.sv. The shared 'prescript' csh script (present in every sys-family example) copies the ONE matching top.<variant>.sv to test_top.sv at build time based on which scenario/test is invoked -- i.e. DUT TOPOLOGY IS SELECTED AT BUILD/PRESCRIPT TIME, NOT AT UVM RUN TIME. Matching hdl_interconnect/ wrapper Verilog files exist per DUT flavor: usb_20_eusb2_dut{,_sv_wrapper}.v/.sv, usb_20_hsic_dut{,_sv_wrapper}, usb_20_serial_dut{,_sv_wrapper}, usb_20_utmi_dut_sv_wrapper, usb_ss_pipe3_dut{,_sv_wrapper}, usb_ss_serial_dut{,_sv_wrapper}, usb_ssic_serial_dut{,_sv_wrapper}, utmi_dut.v -- confirming env classes stay DUT-topology-agnostic, only knowing svt_usb_if handles bound via uvm_config_db, while the DUT model choice is compiled in per test via prescript.\n\nSEQUENCE/CALLBACK: OTG and SSIC-specific material found nowhere else: usb_20_otg_sequence.sv, usb_ss_otg_rsp_with_warm_rst_aft_curr_xfer_virt_sequence.sv paired with usb_ss_otg_rsp_with_warm_rst_aft_curr_xfer_testcase_protocol_callbacks.sv (a virtual-sequence + matched-callback pair for an OTG role-swap + warm-reset-after-pending-transfer scenario -- the callback intercepts the protocol-service response to trigger the warm reset at the right point). A 7-member usb_ssic_* sequence family (concurrent_u1_u2, dsp_disconnect_reconnect, hot_reset, inactivity_u1_u2_entry, lgo_ux_response, mphy_test_mode_tx_compliance_mode, no_wait_u2_entry_exit, rrap_disable_lup_ldn), each with a matching _virtual_sequence.sv wrapper plus a shared usb_ssic_startup_sequence.sv/usb_ssic_startup_virtual_sequence.sv bring-up sequence -- SSIC (SuperSpeed Inter-Chip) LTSSM/link-power-state scenarios layered as virtual sequences over sys_virt_sequencer.\n\nTEST: usb_base_test.sv follows the universal base-test shape (cfg.setup_usb_ss_defaults(); register cfg via uvm_config_db; set default_sequence to usb_random_transfer_sequence; set_inst_override_by_type(svt_usb_transfer::get_type(), cust_svt_usb_transfer::get_type()); create env; standard pass/fail final_phase epilogue from uvm_report_server severity counts). ALSO has usb_inline_base_test.sv + usb_basic_inline_env.sv -- an alternate, lighter-weight 'inline' env architecture (distinct class from usb_basic_serial_env.sv) with its own objection-management callback pair (usb_inline_env_{host,device}_objection_management_callbacks.sv), suggesting agents may be instantiated directly under the test rather than through a dedicated env class layer.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_program_sys\\top.usb_20_eusb2.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_program_sys\\prescript",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_program_sys\\env\\usb_20_otg_sequence.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_program_sys\\env\\usb_ssic_startup_sequence.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_program_sys\\env\\usb_inline_base_test.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_basic_program_sys\\env\\usb_basic_inline_env.sv"
+  ],
+  "category": "vip_examples",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-DF757A3471",
+  "level": "project",
+  "created_at": 1788366913.9818814,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

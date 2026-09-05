@@ -1,0 +1,43 @@
+{
+  "memory_id": "WM-REACT-DISCOVERY-002",
+  "kind": "react_reasoning_step",
+  "node": "DISCOVERY",
+  "iteration": 2,
+  "hypothesis": "Resolved via RouteResolver to agent=analysis-agent on route=analysis-route; executing plan PLAN-4B40F961 rev 2 (2 step(s)); blackboard priors read: ['project']",
+  "evidence": {
+    "evidence_source_priority_gate": {
+      "attempted_sources": [
+        "EXISTING_PROJECT_FILES",
+        "RTL_PARAMETERS_DEFINES",
+        "EXISTING_UVM_VIP_CONFIG",
+        "EXISTING_TESTS_SEQUENCES",
+        "DESIGN_DOCS",
+        "VPLAN_TEST_TABLE",
+        "BUILD_REGRESSION_SCRIPTS"
+      ],
+      "higher_priority_sources_exhausted": true
+    },
+    "input_source_contract_gate": {
+      "provided_source_classes": [
+        "SPEC",
+        "COMMAND_TXT",
+        "PRIMARY_PROTOCOL_REFERENCE",
+        "RTL_SOURCE",
+        "DE_LOCAL_SIM"
+      ],
+      "protocol_input_kind": "PUBLIC_STANDARD_SPEC",
+      "forbidden_user_prerequisites": []
+    }
+  },
+  "next_action": "advance",
+  "confidence": "HIGH",
+  "level": "working",
+  "created_at": 1788275551.4972222,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

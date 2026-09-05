@@ -1,0 +1,28 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "A mature, polished reference environment's clean appearance is evidence that extensive past debugging already happened and was cleaned up -- NOT evidence that a comparable build effort needs less debugging; USB_UVM_Handoff contains 670 real-incident citations across 73% of its files with no surviving trap-catalogue-equivalent, meaning its own messy build history was real but is now invisible",
+  "scope": "process",
+  "symptoms": [
+    "User compared the actively-in-progress, fully-visible usb31_dev_uvm build (31-entry trap catalogue, every wrong turn documented) against the finished USB_UVM_Handoff reference and asked why the former has so many more visible problems",
+    "Grep of USB_UVM_Handoff for real-incident language ('trap N', 'Job NNNN', 'measured', 'previously found/caused/cost') found 670 occurrences across 136 of ~186 files (73% of the tree) -- e.g. the already-known 'Job 98669' hang, 'trap 50/95' -- but no CLAUDE.md/dut-request.md-equivalent document survives inside it; every incident is fossilized as an inline code comment with the discovery PROCESS itself discarded"
+  ],
+  "root_cause": "This is a structural, not a process, finding: a finished reference environment's visible artifact is, by definition, the post-cleanup state. Comparing a build's visible in-progress messiness against a different build's already-cleaned final state is not an apples-to-apples efficiency comparison unless the reference's own historical build cost is also accounted for.",
+  "fix": "N/A -- this is an analytical/communication finding, not a code defect. The actionable consequence is: when reporting build progress or efficiency comparisons to a stakeholder, explicitly distinguish 'this build is less mature than that reference' from 'this build's PROCESS is less efficient than whatever produced that reference' -- the two are easy to conflate and the second claim requires evidence the first does not.",
+  "verification": {
+    "single_sim": "N/A",
+    "regression": "N/A",
+    "reaudit": "Independently investigated via a dedicated fork's direct grep of USB_UVM_Handoff's own file tree for incident-language, not assumed."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: this is itself the argument FOR the Harness's own trap-catalogue/dut-request.md documentation discipline -- USB_UVM_Handoff's 670 fossilized incident-comments prove exactly the kind of knowledge a structured, surviving trap catalogue preserves in reusable form, that inline-comment-only documentation loses (the comment survives, but the reasoning process, the false starts, and the reusable methodology do not). When asked 'why does the new build look messier', the honest answer includes 'because you can see its real debugging process, which the reference also had and discarded' -- not as an excuse, but as a genuinely relevant fact about what is and isn't a fair comparison.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, deep comparative analysis (fork a1745a6171cc312a9).",
+  "memory_id": "MEM-FBE07D023A",
+  "level": "engineering",
+  "created_at": 1788437476.1430187,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

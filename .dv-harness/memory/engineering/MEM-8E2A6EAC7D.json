@@ -1,0 +1,27 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "A long-running background build/investigation agent's session transcript can become permanently unresumable mid-investigation (confirmed real this session: 'No transcript found for agent ID' on a SendMessage attempt) with no formal Harness convention requiring such an agent to maintain a structured, continuously-updated resume-state file that a fresh agent could use to pick up cold",
+  "scope": "engine",
+  "symptoms": [
+    "The IP_UVM_DV_Gen build agent investigating the TCA NC->USB hang became unresumable via SendMessage after having accumulated many hours and a 31-entry trap catalogue's worth of investigation context; a fresh agent had to be launched and re-briefed entirely from on-disk artifacts (CLAUDE.md, dut-request.md, in-code retraction comments) rather than simply continuing the conversation"
+  ],
+  "root_cause": "No formal requirement exists for a long-running build/investigation agent to maintain a structured resume-state file (current hypothesis, evidence gathered so far, next planned step, decisions pending user confirmation) as a first-class, continuously-updated deliverable -- this build happened to survive the loss reasonably well because its own documentation discipline (CLAUDE.md trap catalogue, dut-request.md, in-code retraction comments) was already thorough, but that thoroughness was a side effect of general good practice, not a guaranteed, checked convention.",
+  "fix": "Not yet fixed at the time of this record -- multi-agent implementation work to formalize a required 'long-running agent checkpoint' convention (a defined-schema resume-state file, required to exist and be current for any agent expected to run more than N rounds) is being launched immediately following this analysis.",
+  "verification": {
+    "single_sim": "N/A -- infrastructure/process finding",
+    "regression": "N/A",
+    "reaudit": "N/A -- directly observed and confirmed via the actual failed SendMessage attempt in this session, not inferred."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: this build's recovery worked because its documentation discipline was already good, by habit rather than by a checked requirement -- a less disciplined build agent losing its session would have no formal fallback at all. This is the same category of harness-reliability gap the session's own earlier 'checkpoint/rollback/degradation' work addressed for DVHarness's own stage-loop engine (dv_harness/session_snapshot.py, auto-checkpoint at stage transitions) -- but that mechanism is specific to DVHarness's own run_stage()/loop(), and does NOT cover a separately-dispatched, long-running background build/investigation agent's own accumulated context, which is a distinct persistence gap that needs its own, separate convention.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, USB build agent session loss (SendMessage failure on agent a970eda03b300ab8f) + deep comparative analysis (fork a1745a6171cc312a9).",
+  "memory_id": "MEM-8E2A6EAC7D",
+  "level": "engineering",
+  "created_at": 1788437521.9861474,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

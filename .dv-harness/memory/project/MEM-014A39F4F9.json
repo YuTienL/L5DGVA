@@ -1,0 +1,23 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB_Reg_260727.docx usbtop wrapper register map (regclk/axiclk/controller/sram/usb3phy/usb2phy)",
+  "summary": "USB_Reg_260727.docx (D:\\DV\\Task\\USB\\DOC\\USB_Reg_260727.docx; cover printed 'JUN. 08, 2026' Version 0.0 despite filename date 260727=Jul27 -- stale cover date) documents the SoC integration ('usbtop') wrapper registers around the licensed DWC_usb31 controller + its PHYs, for TWO instances usbtop[0]/usbtop[1] (see the separate address-map-formula memory record for the port-1 base ambiguity). Six register pages, all base 0x1270_0000 + page offset: regclk page (0x1270_0000-00FF): usbintsts/usbinten (24-bit, [19:0]=DWC_usb31 core int, [20]=pslverr_usb31, [21]=reg-guard, [22]=tca_int, [23]=apb_s_pty_err), 16x cqNintsel (5-bit CQ event-select, default 5'h1F), pipeclken/utmiclken/phyclksel/ramclksel at 0x0030, pipeclk_phase/utmiclk_phase at 0x0031/0x0032, paraclkdiv at 0x0033, usbswrst at 0x0034 (see other memory record), probe/debug regs, date-code at 0x00FC-FF. axiclk page (0x1270_0100-01FF): usb_m_aruser/awuser (9-bit, TZC400 ID + 16-ring-buffer-select + bypass/ring-buffer-mode bit), QoS (arqos_s_ups/awqos_s_ups), low-power handshake (csysack_s/m, cactive_s/m), AXI up-sizer block (rupsen/wupsen family, all default 1). controller page (0x1270_0200-0231): logic-analyzer trace, pme_en, star_fix_disable_ctl_inp (32-bit Synopsys STAR-fix disable), bus_filter_bypass (default 4'h3), fladj_30mhz_reg (default 6'h20), devspd_ovrd at 0x1270_022A (4-bit, overrides DCFG.DEVSPD externally -- only place any document names a DWC_usb31 core register field), startrxdetu3rxdet, ltssm_clk_state, pme_generation, pipe_phy_mode/compliance/txmargin/txswing, pipe4_pclk_rate/rxstandby(status). sram ctrl page (0x1270_0300-0367): sramsd/sramds/sramslp (6-bit shutdown/deep-sleep/light-sleep, one bit per macro: DESC/TXFIFO/RXFIFO/UPHY/WUPZ/RUPZ RAM), SRAM BIST (bistmode/bistfinish/bistfail/errmap), gated-clock disables (disreggatedclk/disgatedsmcken both default 1), per-bank column-repair fields. usb3phy page (0x1270_0400+, largest, ~230 fields): u3phyrst (default 1'h1, active by default), full MPLLA/MPLLB control set (force-enable, SSC-enable, div/multiplier/bandwidth/fracn-ctrl/ssc-freq-cnt-init+peak/clk-sel/range/tx-clk-div), reference-clock divider/range select (phy_ext_ref_range 3-bit code table 19.2MHz-200MHz), power-gating handshake, RX adaptation/DFE enables, resistor-tune handshake, boundary-scan controls -- matches DWC USB3.1 SS PHY raw-PCS signal names 1:1 (this is the PHY-side CSR wrapper, not the controller). usb2phy page (0x1270_0500+): standard UTMI+-level femtoPHY surface -- u2phyrst, atereset, fsel (ref-clock-freq select, default 3'h1=20MHz), refclksel, commononn, vregbypass (default 1), dppulldown/dmpulldown, txbitstuffen(h), hostdisconnect (RO), vbusvalid0 (RO), FS/LS transceiver bits, siddq, testburnin, PLL tune fields (pllitune/pllbtune/pllptune default 4'hC=4x), compdistune (disconnect-threshold, default 3'h3=0%). apb parity check page (0x1270_0600-060F): AXI-master fault-injection register set (usb_m_*_inj, all RW) paired with matching W1C interrupt-status shadow registers -- a design-for-test block for error-injection DV. Cross-reference: PAISB_Global_Reg_260731.doc (D:\\DV\\Task\\USB\\DOC\\PAISB_Global_Reg_260731.doc, base 0x1000_0000, chip-wide) implements a TWO-TIER clock/reset architecture over this same USB block: chip-level swrst_set/clr_ss_vout (0x00_0250/58) and clken_set/clr_ss_vout (0x00_0350~1/58~9, bitmap [00]pcierefclk [01]usbrefclk(PHY) [02]mtxrefclk [03]macptpclk [04]macclk0 [05]macclk1 [06]macaclk [08]pciefwclk [10]usblclk [12]mtxscclk [13]mtxdispclk [14]mtxdsiclk) gate the WHOLE VideoOut/USB/PCIe/MAC/MIPI subsystem, with usbrefclksrc (0x00_0483, 3-bit source select) and usbrefclkdiv/usblclkdiv (divider ratio registers) feeding into it; register__ssvout_0806.xlsx's usb0_clken/usb1_clken (0x0097/0x0098, 3-bit each, default 0x7) then fan the enabled clock out to the two individual instances. Also note swrst_set_ss_qdma (0x00_0270) carries an explicit erratum comment in the same doc: 'Keep 3 APB clocks and auto-recover to 0 to avoid CQ APB dead-lock'.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\USB_Reg_260727.docx",
+    "D:\\DV\\Task\\USB\\DOC\\PAISB_Global_Reg_260731.doc",
+    "D:\\DV\\Task\\USB\\DOC\\register__ssvout_0806.xlsx"
+  ],
+  "category": "dut_registers",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-014A39F4F9",
+  "level": "project",
+  "created_at": 1788367805.4171643,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

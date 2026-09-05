@@ -1,0 +1,26 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "PAISB SoC address-map formula + USB port-1 base and GCTL/DCTL core-register gap",
+  "summary": "Triangulated across 4 independent docs: system_address = 0x1000_0000 | local28, where local28 is the 28-bit 'Address[27:0]' nibble map given at the top of SS_QDMA\\PAISB_CQ_Reg_260810.docx (bits[27:24] select a subsystem directly except when 0, in which case bits[23:20] sub-select Global/CQ/CPU-SS/QDMA-SS/SE). Verified: PAISB_Global_Reg_260731.doc states its own base is 0x1000_0000 (local 0x0000000, bucket 'Global'). SS_QDMA\\PAISB_SS_QDMA_Reg_260605.docx states 'CQ at 0x1010_0000' and 'SS_QDMA at 0x1030_0000, DMA at 0x1031_0000' -- exact matches to local 0x0100000/0x0300000/0x0310000 (bucket 'CQ'=0x01XXXXX, 'QDMA SS'=0x03XXXXX). register__ssvout_0806.xlsx states its own base is 0x1200_0000, matching local 0x2000000 = top-level bucket 'Video Out subsystem' (0x2XXXXXX) from the CQ doc's map. USB_Reg_260727.docx's usbtop[0] register blocks (0x1270_0000-0x1273_FFFF) fall inside that 16MB Video-Out-SS window, confirming the USB controller instances are a sub-region of what PAISB_Global_Reg_260731.doc calls the 'VideoOut Sub-system' (swrst_ss_vout / clken_ss_vout, which explicitly lists usbrefclk and usblclk as member clocks) and what register__ssvout_0806.xlsx's cqint0Nen bit-map and mswrst/usbN_clken registers call 'usb0'/'usb1'. CRITICAL GAP #1 (DUT-007, disputed port-1 base): USB_Reg_260727.docx's table for usbtop[1] (lines 34-51) is byte-for-byte IDENTICAL to usbtop[0]'s (lines 16-32) -- same 0x1270_0000-0x1273_FFFF repeated verbatim, no distinct address given for instance 1. This is either a template/copy-paste artifact or a genuine documentation gap; the 16MB SS_VOUT window has ample unused space (usbtop[0] only occupies 16KB of it) so a second base is architecturally plausible but NOT SOURCED anywhere in the provided doc/excel material. Do not assume port-1's base equals port-0's in the live system, and do not assume any specific alternate offset without an RTL/address-map citation. CRITICAL GAP #2: the 'DWC_usb31 controller register' block (0x1271_0000-0x1271_FFFF) in USB_Reg_260727.docx is documented ONLY as a pointer: 'IP Control register (reference to ...DWC_usb31_programming.pdf CH1)'. That programming-guide PDF is ABSENT from D:\\DV\\Task\\USB\\DOC\\ entirely. The only other candidate PDF present, DWC_usb31_databook_WM-25380.pdf, is a DIFFERENT document and is password-protected against text extraction (pdftotext returns 'Incorrect password'). CONSEQUENCE: none of GCTL/DALEPENA/DCTL/DCFG/DSTS/GEVNTCOUNT/GSTS's addresses, bit-ranges, reset values, or access types can be sourced from this document set. The only two functional cross-references found anywhere: USB_Reg_260727.docx line 352 names 'DCFG.DEVSPD' (as the field its devspd_ovrd wrapper-register at 0x1270_022A can override) without giving DCFG's address; rtl_vip_scaledown_mapping.xls names 'GUCTL.DS_RXDET_MAX_TOUT_CTRL' (USB3.0 ECN20 downstream-port timeout enable) and 'GUSB2PHYCFG.XCVRDLY' (chirp-duration-reduction enable) similarly without addresses. Any register-level claim about GCTL/DCTL/DCFG/DSTS/GEVNTCOUNT/GSTS/DALEPENA must be flagged as unsourced from this doc set and cited from the (currently inaccessible) programming guide instead. usbswrst (DUT-003, now-resolved) IS fully documented: USB_Reg_260727.docx line 168, address 0x1270_0034~0035, bit[15:0], attr RW, reset 16'h0, 'USB top software reset. Write 1 to activate reset. Write 0 to deactivate.' with 10 named per-clock-domain sub-bits: [0]cr_para_clk [1]pclk [2]aclk [3]rupz [4]wupz [5]ram0clk [6]ram1clk [7]ram2clk [8]phyramclk [9]ctrl -- it is a multi-bit per-domain reset register, not a single monolithic reset bit.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\PAISB_Global_Reg_260731.doc",
+    "D:\\DV\\Task\\USB\\DOC\\USB_Reg_260727.docx",
+    "D:\\DV\\Task\\USB\\DOC\\register__ssvout_0806.xlsx",
+    "D:\\DV\\Task\\USB\\DOC\\SS_QDMA\\PAISB_CQ_Reg_260810.docx",
+    "D:\\DV\\Task\\USB\\DOC\\SS_QDMA\\PAISB_SS_QDMA_Reg_260605.docx",
+    "D:\\DV\\Task\\USB\\DOC\\rtl_vip_scaledown_mapping.xls"
+  ],
+  "category": "dut_registers",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-4878B9F66F",
+  "level": "project",
+  "created_at": 1788367805.4023273,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

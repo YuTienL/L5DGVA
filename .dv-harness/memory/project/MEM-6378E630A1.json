@@ -1,0 +1,30 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "Standard-spec material census across all 9 named protocols -- premise correction (AMBA/PCIe/MIPI/eMMC/SD/CAN-FD/Ethernet all have real local specs too)",
+  "summary": "Broad search under D:\\DV\\Task\\ (not just USB\\DOC) found real, genuine standard-spec PDFs for ALL 9 protocols named in the intake task, contradicting the task premise that only USB has real material. AMBA: D:\\DV\\Task\\UVM\\Spec\\AMBA AXI\\IHI0022K_amba_axi_protocol_spec.pdf (ARM AMBA AXI/ACE protocol spec rev K) plus AXI4-Stream IHI0051A/B under 'AMBA AXI stream'. USB: D:\\DV\\Task\\USB\\DOC\\usb_20.pdf, 'USB 3.2 Revision 1.1.pdf', UTMI-PLUS-SPECIFICATION.pdf, extensible-host-controler-interface-usb-xhci.pdf (deep-extracted, see separate records), plus DWC_usb31_databook_WM-25380.pdf and usb3-phy-interface-pci-express-paper.pdf (PIPE spec, not yet deep-extracted). PCIe: D:\\DV\\Task\\UVM\\Spec\\PCIE\\PCIe-gen-4.pdf and PCIe-gen-5.pdf -- NOTE the parallel D:\\DV\\Task\\PCIe\\ directory that mirrors the USB/CAN/MIPI top-level layout is completely EMPTY; real PCIe material lives only under the separate UVM\\Spec\\ tree, not under PCIe\\Spec\\. Same empty-top-level-dir pattern applies to D:\\DV\\Task\\AMBA\\ (only an empty examples\\ subdir) -- AMBA material is likewise only under UVM\\Spec\\. MIPI-CSI2: D:\\DV\\Task\\MIPI_CSI\\Spec\\mipi_CSI-2_specification_v4-0.pdf and mipi_C-PHY_specification_v2-1.pdf (duplicated at top-level D:\\DV\\Task\\Spec\\). MIPI-DSI: D:\\DV\\Task\\MIPI_DSI\\Spec\\mipi_DSI-2_specification_v2-1.pdf and mipi_D-PHY_specification_v3-5.pdf (also duplicated at D:\\DV\\Task\\Spec\\). eMMC/MMC: the real JEDEC standard is D:\\DV\\Task\\UVM\\Spec\\Storage\\eMMC\\emmc-JESD84-B51 2.pdf. IMPORTANT distinct-document-class warning: several VIP-doc trees (MADV\\VIP\\Docs, SCB\\VIP\\Docs, UVM\\VIP\\Docs, VIP\\Docs) each contain emmc_svt_uvm_user_guide.pdf which is a Synopsys VIP USER GUIDE, not the eMMC standard -- do not conflate the two. SD/SDIO: D:\\DV\\Task\\UVM\\Spec\\SDIO\\113311_Part_E1_SDIO_Speciifcation_Ver2.00_Final_070130.pdf, Simplified_SDIO_Card_Spec.pdf, and under a supplementary subfolder: SD_Physical_Layer_Spec.pdf, SD_SDIO_specsv1.pdf. CAN-FD: D:\\DV\\Task\\CAN\\Spec\\can_fd_spec.pdf, can20.pdf, plus the full ISO 11898 series parts 1-5 (ISO 11898-1 2015.12.15.pdf is the CAN FD data-link-layer standard itself, up to 61MB, genuine scanned standard). Ethernet: D:\\DV\\Task\\Ethernet\\Spec\\ieee802.3-2015.pdf (base MAC/PHY), ieee802.3br-2016.pdf (frame preemption), ieee802.1Qbu-2016.pdf, ieee802.1Qbv-2015.pdf (TSN time-aware shaping), ieee1588-2008.pdf (PTP). Actual gap: not a material-availability gap for any protocol -- it is a DEEP-EXTRACTION gap. Only USB (this intake pass) has had section-level deep extraction done; the other 8 protocols have real source PDFs sitting completely unextracted. Anyone building generic 'look under <Protocol>\\Spec\\' tooling must special-case PCIe and AMBA whose real material is under UVM\\Spec\\ instead.",
+  "source_paths": [
+    "D:\\DV\\Task\\UVM\\Spec\\AMBA AXI\\IHI0022K_amba_axi_protocol_spec.pdf",
+    "D:\\DV\\Task\\UVM\\Spec\\PCIE\\PCIe-gen-4.pdf",
+    "D:\\DV\\Task\\UVM\\Spec\\PCIE\\PCIe-gen-5.pdf",
+    "D:\\DV\\Task\\MIPI_CSI\\Spec\\mipi_CSI-2_specification_v4-0.pdf",
+    "D:\\DV\\Task\\MIPI_DSI\\Spec\\mipi_DSI-2_specification_v2-1.pdf",
+    "D:\\DV\\Task\\UVM\\Spec\\Storage\\eMMC\\emmc-JESD84-B51 2.pdf",
+    "D:\\DV\\Task\\UVM\\Spec\\SDIO\\113311_Part_E1_SDIO_Speciifcation_Ver2.00_Final_070130.pdf",
+    "D:\\DV\\Task\\CAN\\Spec\\can_fd_spec.pdf",
+    "D:\\DV\\Task\\CAN\\Spec\\ISO 11898-1 2015.12.15.pdf",
+    "D:\\DV\\Task\\Ethernet\\Spec\\ieee802.3-2015.pdf"
+  ],
+  "category": "standard_specs",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-6378E630A1",
+  "level": "project",
+  "created_at": 1788367476.9280596,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

@@ -1,0 +1,22 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB VIP example tb_usb_svt_uvm_20_ulpi_phy -- ULPI 8-bit link interface bridge and ULPI-specific sequence family",
+  "summary": "tb_usb_svt_uvm_20_ulpi_phy demonstrates the ULPI (UTMI+ Low Pin Interface) physical realization -- distinct from both UTMI-serial (20_phy/b2b_phy) and PIPE3/PIPE4 (intermediate_sys). Its standout artifact is env/usb_ulpi_dut_sv_wrapper.sv, a bridging module wiring THREE things together: (1) a VIP-provided svt_usb_phy_ulpi ULPI PHY BFM instance whose usb_20_ulpi_if port binds to usb_dut_mac_if (the VIP drives the ULPI 8-bit bus directly, as if IT were a PHY talking to a MAC/link-layer DUT: ports DATAOUT/TXREADY/RXACTIVE/RXVALID/RXERROR/LINESTATE/ULPIDATAOUT/ULPICLOCK/ULPIDIR/ULPINXT/ULPISTP etc), (2) an nvs_usb_phy UTMI-level PHY model instance bridging ULPI's FSVPLUS/FSVMINUS/FSLSRCV analog FS/LS signals out to a serial DP/DM pair via `tran dp_xmit/dm_xmit` primitives, and (3) an intermediate svt_usb_if usb_20_phy_dut_intermediate_if carrying UTMI-shaped signals ONLY between the two model instances, never exposed to the outer testbench. This proves the VIP's 'PHY interface' family covers at least 3 distinct physical realizations needing DIFFERENT bridging wrappers -- UTMI-serial, ULPI, PIPE3/PIPE4 -- selected via the config enum fields usb_20_signal_interface (UTMI_IF, ULPI_IF, USB_20_SERIAL_IF, USB_20_TLM) and usb_ss_signal_interface (PIPE3_IF, PIPE4_IF, USB_SS_SERIAL_IF, USB_SS_TLM); a generation agent must check these enum values rather than assume UTMI is the default.\n\nSEQUENCE: ~25 ULPI-protocol-specific sequence files unique to this example (no equivalent in any other example): ulpi_reg_rd_wr_sequence.sv, ulpi_immediate_reg_{rd,wr,set_clr}_*_sequence.sv, ulpi_extended_reg_rd_wr_sequence.sv, ulpi_ext_reg_{rd,wr}_followed_by_usb_receive_sequence.sv, ulpi_usb_receive_interrupted_by_ext_reg_{rd,wr}_sequence.sv, ulpi_usb_receive_aborted_in_same_cycle_as_dir_assertion_sequence.sv, ulpi_txabort_during_tx_packet_transmission_sequence.sv, ulpi_reg_{rd,wr}_interruption_by_rxcmd_and_rx_sequence.sv, ulpi_function_control_opmode_{00,01,10,11}_sequence.sv, ulpi_function_control_{xcvrselect_termselect,disable_ls_fs,disable_ls_on_fs,reset,reset_hs_to_fs}_sequence.sv, ulpi_vendor_product_id_rd_sequence.sv -- these target ULPI-specific link-layer service items (register access via the ULPI 8-bit bus; DIR/NXT/STP handshake races against in-flight USB receive/transmit) that have no UTMI or PIPE equivalent, confirming ULPI register access is a protocol-service concern orthogonal to svt_usb_transfer.\n\nEverything else (env/usb_20_phy_env.sv, usb_shared_cfg.sv, usb_20_phy_base_test.sv, usb_20_phy_test_sequence_collection.sv, all 4 scoreboards, all CRC/bitstuff/sync error-injection callbacks) is PRESENT AND UNCHANGED from tb_usb_svt_uvm_20_phy -- ULPI is a drop-in interface-layer swap under the same env/cfg/test scaffolding, not a different environment architecture.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_ulpi_phy\\env\\usb_ulpi_dut_sv_wrapper.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_ulpi_phy\\env\\usb_20_phy_env.sv"
+  ],
+  "category": "vip_examples",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-C8729132E6",
+  "level": "project",
+  "created_at": 1788366913.9706597,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

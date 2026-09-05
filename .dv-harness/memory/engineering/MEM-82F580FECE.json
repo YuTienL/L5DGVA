@@ -1,0 +1,30 @@
+{
+  "kind": "verified_fix",
+  "verified": true,
+  "title": "Windows dv-harness CLI adapter: 3 real bugs blocking every run-stage call",
+  "scope": "engine",
+  "symptoms": [
+    "run-stage crashes with FileNotFoundError (WinError 2) even though `claude --version` works fine interactively",
+    "run-stage crashes with UnicodeDecodeError / AttributeError('NoneType' object has no attribute 'strip') after the FileNotFoundError is fixed",
+    "run-stage fails with 'Error: Input must be provided either through stdin or as a prompt argument when using --print' after both prior fixes"
+  ],
+  "root_cause": "dv_harness/adapters/cli.py's ClaudeCLIAdapter.run() had 3 independent Windows-specific bugs, each only reachable after fixing the previous one: (1) subprocess.run(['claude', ...], shell=False) calls Win32 CreateProcess directly, which does not do PATHEXT resolution -- it could only ever find the non-executable POSIX shell script `claude` npm installs alongside the real `claude.cmd` launcher. (2) text=True without an explicit encoding decodes the child's stdout/stderr using locale.getpreferredencoding(), which resolves to cp950 on a zh-TW Windows machine, not UTF-8 -- claude's own UTF-8 JSON output crashes the reader thread. (3) claude's own --help confirms `-p`/`--print` is a bare flag and `prompt` is a separate positional argument, but the resolved command is `claude.cmd`, a cmd.exe batch-file shim whose argument forwarding is line-oriented -- a real multi-line stage prompt (build_stage_prompt() output, confirmed live at 6227 chars with embedded \\n) silently truncated/broke when placed on the command line.",
+  "fix": "(1) resolve the configured command via shutil.which() before subprocess.run() (real PATHEXT resolution on Windows, safe no-op on POSIX). (2) pass encoding='utf-8', errors='replace' explicitly to subprocess.run(), plus `(p.stdout or '')`/`(p.stderr or '')` defensive guards. (3) never place `prompt` on the command line -- keep `-p` as a bare flag and pipe the prompt via subprocess.run()'s `input=` parameter instead, which uses a real OS pipe with no batch-file/cmd.exe argument parsing involved at all.",
+  "verification": {
+    "single_sim": "N/A (not a simulation fix)",
+    "regression": "dv_harness_tests/ full suite green throughout (1682+ tests) -- none of these 3 bugs were ever visible to the test suite, only to a real subprocess launch on this real OS",
+    "reaudit": "CONFIRMED: after all 3 fixes, a real `dv-harness run-stage --stage ENV_CHECK` completed end-to-end with a real PASS verdict"
+  },
+  "confidence": "CONFIRMED",
+  "note": "Commits: d46f3c2 (shutil.which), e20034f (UTF-8 encoding), 45ff72b (stdin piping). IMPORTANT for future sessions on this same Windows dev machine: if `dv-harness run-stage` ever fails again with any of the 3 symptoms above, these fixes are already in dv_harness/adapters/cli.py -- check `git log -- dv_harness/adapters/cli.py` first before re-diagnosing from scratch. For a DIFFERENT machine/OS, these are still the first 3 things to check for CLI-adapter failures: command resolution, stdout/stderr encoding, and how the prompt reaches the child process.",
+  "provenance": "dv-agent-harness-l5-7a session, 2026-09-01, live dv-harness run-stage debugging",
+  "memory_id": "MEM-82F580FECE",
+  "level": "engineering",
+  "created_at": 1788276508.3126924,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

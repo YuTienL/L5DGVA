@@ -1,0 +1,24 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB VIP example tb_usb_svt_uvm_20_b2b_phy -- Host<->Device VIP wired directly with no DUT",
+  "summary": "tb_usb_svt_uvm_20_b2b_phy is the 'back-to-back' PHY-only example: two nvs_usb_phy PHY-model instances are wired DIRECTLY to each other's DP/DM through a single shared `wor DP, DM` net in top_test.sv, with NO third DUT instance at all: `nvs_usb_phy SNPS_HOST_PHY_INST(...DP(DP), DM(DM)...); nvs_usb_phy SNPS_DEV_PHY_INST(...DP(DP), DM(DM)...);` -- both driven by the SAME usb_20_serial_if.usb_20_serial_if.clk1x_480Mhz clock generated in top_test.sv via an 8-phase manually-toggled generator (usb_20_simulation_cycle=2083 ps nominal UTMI cycle). top.sv itself is BYTE-IDENTICAL boilerplate to tb_usb_svt_uvm_20_phy/top.sv (just `include top_test.sv`); the entire difference lives in top_test.sv. Each side gets its own UTMI svt_usb_if (usb_20_utmi_host_if, usb_20_utmi_dev_if) registered to uvm_test_top.env via uvm_config_db#(virtual svt_usb_if)::set(...), plus a third usb_20_serial_if used purely for the differential bus monitor / serial clock source. This is the reference pattern for 'loopback'/VIP-to-VIP conformance testbenches with no RTL DUT.\n\nenv/usb_20_phy_env.sv, env/usb_shared_cfg.sv, env/usb_20_phy_base_test.sv mirror the tb_usb_svt_uvm_20_phy versions verbatim (same host_agent/dev_agent/sys_virt_sequencer construction, same objection_management fork/join_none). The env file inventory is a strict SUBSET of 20_phy's -- only ~20 sequence files retained (attach_bulk_xfers_detach_fs/hs, eop_detect_*, rx_random_xfers, suspend_*, host_resume): no lpm_*, no ulpi_*, no vbus_off_*, and NO CRC/bitstuff error-injection sequences/callbacks survive here -- those require a real PHY/DUT electrical boundary to inject errors on, which back-to-back VIP-to-VIP wiring doesn't have. Only response-shaping callbacks remain (usb_device_response_payload_callbacks.sv, in_xfers_payload_callbacks.sv, suspend_resume_callbacks.sv, svt_usb_fs_eop_error_callback.sv) since the device VIP must synthesize IN data with no real DUT function behind it. All 4 scoreboard files (usb_data/packet/transaction/transfer_scoreboard.sv) are present, same shape as 20_phy.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_b2b_phy\\top.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_b2b_phy\\top_test.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_b2b_phy\\env\\usb_20_phy_env.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_b2b_phy\\env\\usb_shared_cfg.sv"
+  ],
+  "category": "vip_examples",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-E0BD46DB8B",
+  "level": "project",
+  "created_at": 1788366913.4115176,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

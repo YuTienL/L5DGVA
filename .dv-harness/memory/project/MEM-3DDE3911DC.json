@@ -1,0 +1,23 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB VIP sequence library organization -- base sequences, naming grammar, HVP naming",
+  "summary": "Base sequence classes (Getting-Started guide Sec 2.1.3, lines 499-516): svt_usb_host_base_sequence for the Host agent, svt_usb_device_base_sequence for the Device agent -- extend these to write test sequences. DOCUMENTED GOTCHA: 'You must set a device response sequence for active devices in the run phase' (line 515) -- an active Device-role agent will NOT auto-respond without an explicit sequence started on its sequencer in run_phase/main_phase; relevant if this project ever adds a Device-role monitor/agent alongside the Host VIP. Wiring pattern via UVM factory default sequence: uvm_config_db#(uvm_object_wrapper)::set(this,'env.host_agent.xfer_sequencer.main_phase','default_sequence', usb_bulk_out_bulk_in_random_sequence::type_id::get()); (GS guide lines 525-526) -- usb_bulk_out_bulk_in_random_sequence is an EXAMPLE-area sequence, not a VIP-shipped base class. Built-in scenario/error sequence naming grammar discovered via FAQ Sec 3.1.4 (lines 1273-1305): svt_usb_<layer-or-scope>_<speed-combo>_<scenario>_system_virtual_sequence. Concrete examples: disparity error = svt_usb_20_na_30_ss_link_errors_received_dpp_10_bit_disparity_error_system_virtual_sequence; CRC-5 = svt_usb_20_hs_fs_30_na_bulk_in_crc5_error_system_virtual_sequence; CRC-16 = svt_usb_20_hs_fs_30_na_bulk_in_crc16_error_system_virtual_sequence; HSEQ# mismatch = svt_usb_20_na_30_ss_link_errors_rx_hp_hseq_and_rx_hdr_seq_num_mismatch_error_system_virtual_sequence; CRC-32 = svt_usb_20_na_30_ss_bulk_in_dpp_crc32_error_system_virtual_sequence; DPP abort = svt_usb_protocol_service_abort_current_transfer_sequence (runs on the PROTOCOL SERVICE sequencer, not a data sequencer); DPP missing = svt_usb_20_na_30_ss_bulk_out_invalid_dpp_due_to_dpp_missing_random_endpoint_system_virtual_sequence. The 20_hs_fs / 20_na_30_ss / 30_na infixes encode which speed grades a scenario targets ('na' = not applicable) -- for a 2.0-only (HS/FS/LS) device-mode DUT like this project's, only the 20_hs_fs_30_na_* / plain 20_* family applies; *_30_ss_*/*_ss_* sequences target SuperSpeed-only link errors not applicable here. Normal-vs-error two-tier split also visible in coverage-pattern sequences (UVM guide Sec 6.5.2.1/6.5.2.2, lines 8063-8075): normal behavior e.g. svt_usb_ack_dp_packet_sequence vs error condition e.g. svt_usb_invalid_ack_no_response_packet_sequence, each independently crossed with packet-field-range coverpoints for functional coverage. High-Level Verification Plan (HVP) naming (UVM guide Sec 6.5.7, lines 8287-8298): top-level = svt_<suite>_<operation_mode>_dut_<protocol_mode>_toplevel_fc_plan; sub-plans = svt_<suite>_<vip_layer>_<protocol_mode>_<transfer_type>; located at $DESIGNWARE_HOME/vip/svt/usb_svt/<version>/doc/VerificationPlans. Example testbenches as sequence source (UVM guide Sec 6.2, lines 5054-5074): tb_usb_svt_uvm_basic_sys (SS-serial, one sequence + two directed tests) and tb_usb_svt_uvm_intermediate_sys (adds coverage+scoreboard); GS guide's own code snippets are all sourced from tb_usb_svt_uvm_basic_sys (line 189).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\VIP\\doc\\usb_svt_uvm_getting_started.txt",
+    "D:\\DV\\Task\\USB\\VIP\\doc\\faq.txt",
+    "D:\\DV\\Task\\USB\\VIP\\doc\\usb_svt_uvm_user_guide.txt"
+  ],
+  "category": "vip_docs",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-3DDE3911DC",
+  "level": "project",
+  "created_at": 1788366874.5611196,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

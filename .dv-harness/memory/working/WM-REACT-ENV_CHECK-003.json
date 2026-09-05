@@ -1,0 +1,19 @@
+{
+  "memory_id": "WM-REACT-ENV_CHECK-003",
+  "kind": "react_reasoning_step",
+  "node": "ENV_CHECK",
+  "iteration": 3,
+  "hypothesis": "Resolved via RouteResolver to agent=dv-lead on route=lead-route; executing plan PLAN-700EECD5 rev 1 (1 step(s)); blackboard priors read: []",
+  "evidence": {},
+  "next_action": "retry_or_reroute",
+  "confidence": "LOW",
+  "level": "working",
+  "created_at": 1788270375.8298056,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

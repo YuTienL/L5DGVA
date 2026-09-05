@@ -1,0 +1,23 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "Two verified USB interrupt-aggregation RTL defects -- FIQ truncation benign, ESMERR AXI-parity-bit drop real",
+  "summary": "Re-verified (not re-cited blind) two previously-flagged RTL issues at SS_VOUT_ALL.v:2256-2269 (/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/RTLCAT/SS_VOUT_ALL.v), with corrected severity assessment for each. DEFECT 1 -- FIQ concatenation width mismatch (SS_VOUT_ALL.v:2261-2264): assign ss_vout_fiq = {8'h0, mipitx_fiq, usb1_fiq, usb0_fiq, pcie_fiq, 1'b0,1'b0, mac1_fiq, mac0_fiq, 1'b0, trb_fiq, pkt_fiq, ctl_fiq}; is a 20-bit RHS (8+12x1) assigned to the 16-bit output wire [16-1:0] ss_vout_fiq (port decl SS_VOUT_ALL.v:77) -- Verilog silently truncates the RHS's most-significant 4 bits. VERIFIED: because those 4 discarded bits are part of the constant 8'h0 padding (i.e. already zero), the resulting 16-bit value is bit-for-bit IDENTICAL to what the correctly-sized IRQ assign produces one line above (line 2256, which correctly uses 4'h0) -- usb0_fiq/usb1_fiq still land at bits 9/10 of ss_vout_fiq exactly as usb0_irq/usb1_irq do in ss_vout_irq. This is a genuine width-mismatch/lint defect (would be flagged by VCS -lca or Spyglass) worth fixing for signoff hygiene, but causes NO functional signal loss or misalignment in the current SoC config -- refines/downgrades the prior finding from 'truncation drops real bits' to 'benign lint-only width mismatch, only latent-risky if the reserved capacity in bits 19:16 is ever populated'. DEFECT 2 -- ESMERR bit drop (SS_VOUT_ALL.v:2266-2269): usb0_esmerr[0]/usb1_esmerr[0] are the ONLY bits of each 8-bit usbN_esmerr bus propagated into the 32-bit ss_vout_esmerr; bits [7:1] of each are dropped -- naively '7 of 8 bits dropped' per prior finding, CONFIRMED textually correct. Cross-referenced against usbtop's own port comment (SS_VOUT_USB.v:14490, 'ESM error Event [1]: axi_chk_err, [0]: apb_chk_err') and driving assign (SS_VOUT_USB.v:14873, usb_esmerr = {6'b0, axi_parity_irq, apb_parity_irq}): bits [7:2] were ALREADY architecturally always-0 at the source (only 2 of 8 bits are ever driven), so 6 of the 'dropped' bits cost nothing. But bit [1] (axi_chk_err/axi_parity_irq, a REAL signal driven by the AXI parity-checker's mstpty_errevt output at SS_VOUT_USB.v:15718 when `ifdef AXI4_PARITY_PORT_EN` is active) IS meaningfully dropped -- only bit [0] (apb_chk_err/apb_parity_irq) survives to ss_vout_esmerr and onward into the chip-wide esmerr bus (TOP_ALL.v:24822, a flat concatenation with no further bit selection). REFINED SEVERITY: this is a real, functionally meaningful gap, but ONLY has teeth when AXI4_PARITY_PORT_EN is defined for this project's build (both bits tie to 0 at the source otherwise, per SS_VOUT_USB.v:15761/16016, making the drop moot). Actionable follow-up: check whether AXI4_PARITY_PORT_EN is defined in this project's vcs.opt/filelist +define set; if so, AXI-master parity-injection tests on USB0/USB1 (usb_m_*_pty/usb_m_*_inj ports) can never be observed to set a bit in the chip-level esmerr bus -- only APB-injection tests can, and even those observe an already-OR-collapsed CTL|DATA fault bit (SS_VOUT_USB.v:16010 comment) rather than a separable one.",
+  "source_paths": [
+    "RTLCAT/SS_VOUT_ALL.v",
+    "RTLCAT/SS_VOUT_USB.v",
+    "RTLCAT/TOP_ALL.v"
+  ],
+  "category": "dut_rtl_model",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-9075F3820E",
+  "level": "project",
+  "created_at": 1788368322.7012339,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

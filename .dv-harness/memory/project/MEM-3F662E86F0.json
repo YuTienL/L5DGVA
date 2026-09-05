@@ -1,0 +1,22 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB31 device-mode key register bit-maps -- DCTL/DCFG/DEVTEN/DALEPENA/GCTL and a documented cross-reference tension",
+  "summary": "Register Descriptions chapter (DWC_usb31_programming.txt), bit-level facts underpinning the device-mode bring-up sequence. DCTL (p.329-331, txt:17800-17958, Table 1-101, offset 0xc704): bit31 RUN_STOP (R/W) -- 'the software writes 1 to this bit to start the device controller operation... does not signal connect to the host until this bit is set', reset 0x0. bit30 CSFTRST (R/W1S, self-clearing) -- 'Resets all the clock domains... clears the interrupts and all the CSRs EXCEPT GSTS, USB31_IP_NAME, GGPIO, GUID, GUSB2PHYCFGn, GUSB3PIPECTLn, DCFG, DCTL, DEVTEN, and DSTS registers... self-clearing... may take several milliseconds depending on PHY clock latency; software can poll at 1ms or more' (txt:17919-17954). IMPORTANT: DEVTEN and DCFG are explicitly NOT cleared by CSftRst, so a checker must not assume they revert to power-on-reset values after a soft reset. Confirmed independently in Debug Capability chapter (txt:31283-31287): 'When the software sets HCRST (host mode) or DCTL[30] (CSftRst) (device mode), it invokes a Chip Hardware Reset... the PHYs are reset.' DCFG (p.325-328, txt:17595-17793, Table 1-100, offset 0xc700): bits[2:0] DEVSPD (0x5=Enhanced SuperSpeed,0x4=SuperSpeed,0x0=High-Speed,0x1=Full-Speed); bits[9:3] DEVADDR ('Program this field after every SetAddress request. Reset this field to zero after USB reset.'); bits[16:12] INTRNUM (interrupter for non-endpoint DEVT events, referenced by 'these events are written to the Event Buffer specified in the DCFG.IntrNum field'). DEVTEN (p.340-342, txt:18464-18615, Table 1-102, offset 0xc708), all bits reset 0: bit0 DISSCONNEVTEN, bit1 USBRSTEVTEN, bit2 CONNECTDONEEVTEN, bit3 ULSTCNGEN, bit4 WKUPEVTEN, bit5 HibernationReqEvtEn, bit6 U3L2L1SuspEn, bit7 SOFTEVTEN, bit8 L1SUSPEN, bit9 ERRTICERREVTEN, bit12 VENDEVTSTRCVDEN, bit14 L1WKUPEVTEN, bit15 LDMEVTEN. Table 4-1's 'at a minimum enable USB Reset, Connection Done, and USB/Link State Change events' concretely = DEVTEN=0x0E (bits 3,2,1). DALEPENA (p.356, txt:19246-19286, Table 1-107, offset 0xc720): bits[31:0] USBACTEP, bit0=EP0-OUT, bit1=EP0-IN, even=OUT/odd=IN thereafter; 'The entity programming this register must set bits 0 and 1 because they enable control endpoints that map to physical endpoints (resources) after USBReset. Hardware clears these bits for all endpoints (other than EP0-OUT and EP0-IN) after detecting a USB reset event.' GCTL.PRTCAPDIR (bits13:12, p.118-119, txt:6776-6816, part of Table 1-23): 2'b10=Device configuration; DRD mode-switch flow explicitly says set this before following the Device Power-On-or-Soft-Reset section. GCTL.RAMCLKSEL (bits7:6, p.121, txt:6915-6928): 'Only a value of 0 should be used for this register field... In both host and device modes, this register field setting should not be modified.' CROSS-REFERENCE TENSION: this directly conflicts in tone with Sec 4.1.3 Table 4-3 (Connect Done, txt:28411-28412) which instructs 'Program the RAMClkSel field to select the correct clock for the RAM clock domain. This field is reset to 0 after USB reset, so it must be reprogrammed each time on Connect Done.' Resolution/guidance for a checker: treat this as reprogramming to the SAME value (0) each time, not an actual value change -- do not flag repeated GCTL writes with value 0 as anomalous for this field. GUCTL.REFCLKPER (bits31:22, p.142, txt:8031-8074): 'needs to be updated during power-on initialization', but the GUCTL register's own top-level description frames it as controlling 'controller behavior in Host mode', and Table 4-1 (device-mode power-on) has NO GUCTL/REFCLKPER row at all -- so a device-mode BFM bring-up checker should NOT require a GUCTL/REFCLKPER write as part of the documented device-mode sequence; clock-domain selection in device mode is limited to GCTL.RAMCLKSEL plus PHY-interface timing fields folded into GUSB2PHYCFG.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_programming.txt",
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_programming.pdf"
+  ],
+  "category": "programming_guide",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-3F662E86F0",
+  "level": "project",
+  "created_at": 1788366812.0440693,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

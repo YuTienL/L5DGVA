@@ -1,0 +1,29 @@
+{
+  "kind": "verified_fix",
+  "verified": true,
+  "title": "Persistent relay: multi-user concurrency hardening (lock, backlog, non-leaking --cwd/DVWORKDIR, put() flush-timing)",
+  "scope": "engine",
+  "symptoms": [
+    "Concern raised live: one relay is one real telnet+ssh session against one shared shell -- multiple people/processes sharing it could make commands 'cut in line' (指令互相插隊)",
+    "A module load python/3.12 issued mid-session silently persisted and broke a later, unrelated pytest invocation through the same relay -- proving shared-shell state leakage is a real, already-observed failure mode, not hypothetical"
+  ],
+  "root_cause": "tools/remote/remote_relay.py's RelayServer.handle_request() had no explicit serialization invariant (correct only by accident of serve()'s current single-threaded accept loop), bind_loopback()'s listen backlog was 1 (refuses concurrent connection attempts instead of queueing them), and there was no way for a caller to make a command self-contained w.r.t. cwd -- every command ran in one continuously-mutating shared shell whose cd/env/module-load state leaks forward into whatever command runs next, from any caller. Separately (found while verifying this fix against the real deployment, not while designing it): remote_hop.py's Session.put() used a generic prompt regex ([>$]\\s*$) to detect when its rapid-fire base64 chunk-upload had finished; a real tcsh redraws its prompt after every single command, so that pattern (and a first-attempt fix reusing a bare marker echo) could match on the mere ECHO of the flush command being sent, before the shell had even executed it -- not on real completion.",
+  "fix": "(1) RelayServer.handle_request() now holds a threading.Lock() for its whole body -- exactly one command executes against the shared session at a time, proven by a test driving 6 concurrent callers against a slowed fake session and asserting zero time-overlap. (2) DEFAULT_LISTEN_BACKLOG raised 1 -> 32. (3) 'run' requests accept an optional cwd, composed server-side into a non-leaking (cd '<dir>' && <cmd>) subshell; exposed client-side as remote_exec.py --cwd, with a DVWORKDIR env var as its default so a caller doesn't have to repeat it every call. (4) DEFAULT_IDLE_TIMEOUT raised 7200 -> 86400 (a shared relay dying from idle forces re-login for every current user, not just whoever triggered the check). (5) Session.put()'s flush step now reuses run() itself (which correctly appends '$status' so its own raw-input-echo cannot satisfy its own digit-suffixed completion pattern) instead of a hand-rolled, weaker version of the same trick.",
+  "verification": {
+    "single_sim": "N/A (transport-layer fix, not a simulation fix)",
+    "regression": "dv_harness_tests/test_remote_relay.py, test_remote_exec.py, test_remote_hop.py (new file) -- concurrency test drives real threads against a slowed fake session; put() fix verified against a real socket-backed fake tcsh server that deliberately echoes a prompt-looking line after every chunk (models the exact race that broke both prior attempts)",
+    "reaudit": "CONFIRMED: full local suite green (1708+ tests) after these changes; changes synced to and import-smoke-tested against the real /home/svcacct/AI/Agent deployment"
+  },
+  "confidence": "CONFIRMED",
+  "note": "VCWORKDIR (relay's own shared shell cwd, set once at relay start) and DVWORKDIR (a caller's per-request --cwd default, read client-side) may safely be set to the same path -- this is the recommended pattern for a relay dedicated to one environment (cd into the directory you're already in is a normal no-op in both bash and tcsh). See REMOTE_LOGIN_GUIDE.md and USAGE_MULTI_USER_SAFETY.md for the full multi-user usage pattern this fix enables: share the code tree and the Knowledge Center, never share a --project-root, prefer one relay per user.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-02, multi-user safety hardening",
+  "memory_id": "MEM-36006EC300",
+  "level": "engineering",
+  "created_at": 1788284616.6972065,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

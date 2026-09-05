@@ -1,0 +1,30 @@
+{
+  "kind": "verified_fix",
+  "verified": true,
+  "title": "test_start_loop_true_advances_through_multiple_stages_in_background: a 'flaky' test's 20s deadline left under 2x headroom over a measured 9.22s baseline -- fixed by measuring, not guessing",
+  "scope": "engine",
+  "symptoms": [
+    "dv_harness_tests/test_dashboard_interactive.py::test_start_loop_true_advances_through_multiple_stages_in_background failed intermittently, with two apparently-different symptoms across separate re-runs: sometimes a clean AssertionError (state['running'] still True at the 20s poll deadline), sometimes an unrelated-looking FileNotFoundError traceback from storage.py's save() printed asynchronously alongside the failure",
+    "Already independently confirmed (2026-09-02, MEM-FE50DF8367) to be unrelated to the I7 gate-packaging change that was under review at the time it was first noticed -- but its own root cause was never investigated until this session, it was just tracked as 'known flaky, someone should look at it later'"
+  ],
+  "root_cause": "A direct, uncontended DVHarness(tmp).loop() call driving all 33 pre-PROMOTION_READINESS stages (145 real tools/verification_flow/*.py gate-script subprocess spawns -- require_stage_gate_evidence=False makes a gate failure non-blocking for stage advancement, it does NOT skip gate evaluation) measured 9.22 seconds wall-clock on this machine with nothing else running. The test's 20-second poll deadline left under 2x headroom over that baseline -- easily consumed by real GIL contention (the dashboard's own HTTP server thread handles an /api/state poll every 0.1s in the SAME process while the background worker thread runs loop(), and Python threads never execute bytecode truly in parallel) plus any concurrent test-suite load. The second, differently-shaped symptom (FileNotFoundError) was not a separate bug: the test never stops or joins its background daemon worker thread, so when the 20s deadline was hit and the test's `finally: shutil.rmtree(tmp)` ran, a still-actively-looping worker thread's next disk write raced the directory deletion and threw -- a downstream, confusing consequence of the SAME timing root cause, not an independent issue.",
+  "fix": "Measured the real baseline FIRST (a standalone script constructing DVHarness+FakeAdapter directly, no HTTP, no dashboard thread, timing loop() end to end) before touching the timeout value -- this is what separated the fix from a guess-and-check 'try doubling it' patch. Bumped the deadline from 20s to 90s (~10x the measured 9.22s baseline, calibrated headroom for GIL contention + parallel-suite load), with a comment documenting the exact measured number and reasoning so a future reader does not have to re-derive it. Added a `_wait_until_not_running()` grace wait in the test's `finally` block before `shutil.rmtree()`, so a still-running leaked worker thread (defense-in-depth: this cannot be prevented outright without a way to join the specific worker thread, which dashboard.py's API does not expose to callers) gets a further chance to finish before its directory is deleted out from under it -- eliminating the secondary, misleading FileNotFoundError trace if the 90s deadline is ever hit again in the future.",
+  "verification": {
+    "single_sim": "N/A (test-infrastructure fix, not a simulation fix)",
+    "regression": "Isolated run: PASS (11.68s-12.50s across repeats). Full dashboard test file, single-worker: 54/54 PASS. Full dashboard test file, -n4: 54/54 PASS. Full suite -n8 (the exact parallel-load condition the original flaky reports referenced): 1864/1865 PASS -- target test passed; the ONE failure was a completely different, already-documented flaky test (test_graph_parallel_dispatch.py's hard real-time `span < SLEEP*1.8` timing assertion, disrupted by -n8 scheduling jitter) in a file this change never touched, confirmed via `git status`/`git diff --stat` showing zero changes to that file.",
+    "reaudit": "CONFIRMED: synced to and passed on the real /home/svcacct/AI/Agent deployment (0.50s there, uncontended remote environment)"
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON for any future 'flaky test' investigation in this harness: before touching a timeout value, MEASURE the real baseline duration of the work the test is waiting on, in isolation, with instrumentation removed (no HTTP, no polling thread, no test framework overhead) -- this session's baseline measurement (9.22s) immediately explained both why 20s was too tight (under 2x headroom) and why the fix's new value (90s, ~10x headroom) is actually well-calibrated rather than an arbitrary larger guess that might still be too tight under worse conditions, or needlessly slow for CI. A flaky test with two different-looking failure symptoms across re-runs is not necessarily two different bugs -- here, the second symptom (a confusing unrelated-looking exception trace) was a direct, mechanical CONSEQUENCE of the first (a timeout combined with a leaked, un-joined background thread racing test cleanup); tracing why the second symptom occurs, rather than treating it as independent noise, is what revealed the full picture and the correct two-part fix (recalibrate the margin, AND make cleanup robust to ever hitting it again).",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-02, systematic-debugging investigation of a known flaky dashboard test first flagged (but not root-caused) during the self-tuning follow-up phase's independent-verification work (see MEM-FE50DF8367). Commit d289589.",
+  "related_memory": "MEM-FE50DF8367",
+  "memory_id": "MEM-F869C96ECB",
+  "level": "engineering",
+  "created_at": 1788342475.3635592,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

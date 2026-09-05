@@ -1,0 +1,29 @@
+{
+  "kind": "verified_fix",
+  "verified": true,
+  "title": "STAGE_INSTRUCTIONS/STAGE_GATES completeness: a systemic, previously-undetected gap class",
+  "scope": "engine",
+  "symptoms": [
+    "A stage's agent produces genuinely thorough, evidence-grounded, correct work, and the stage still fails GATE_FAIL / MISSING_EVIDENCE at 0% or 50% gates satisfied, identically across multiple retries",
+    "dv-harness explain/evidence --stage shows '<gate_id>: no evidence block supplied' for a gate the agent's response never attempted to address at all"
+  ],
+  "root_cause": "dv_harness/gates.py's STAGE_GATES dict can register a real, callable gate script for a stage while dv_harness/prompts.py's STAGE_INSTRUCTIONS text for that same stage never mentions that gate's id string anywhere -- so no agent, however good its actual analysis, can ever know it must supply that gate's evidence block on its own. Confirmed live TWICE (INTAKE, DISCOVERY) before a full audit of all 35 gated stages found this was not a 2-stage anomaly: 20 of 35 stages (100+ individual gate omissions) had at least one such gap.",
+  "fix": "Per-occurrence: read the real gate script's validation logic, add a ```dv-harness-evidence:<gate_id>``` fenced template with field-by-field guidance to that stage's STAGE_INSTRUCTIONS entry. Systemically: added a permanent regression test (dv_harness_tests/test_stage_instructions_gate_completeness.py) that fails if ANY STAGE_GATES gate id is not mentioned in its stage's STAGE_INSTRUCTIONS text -- this is the actual durable fix, since it prevents this exact class of bug from ever silently recurring for any future stage/gate addition, instead of being rediscovered one expensive real run at a time.",
+  "verification": {
+    "single_sim": "N/A",
+    "regression": "test_stage_instructions_gate_completeness.py added; failed listing all 18 remaining gaps at write time, workflow wb7l6q430 dispatched to close all of them -- CLOSED 2026-09-02: the test file existed on disk but was never git-committed (an orphaned artifact from the 2026-09-01 session), discovered via `git status` during unrelated .work/ cleanup. Committed on its own (55d44d6, 'test: add permanent stage-gate/instructions completeness check') and synced to /home/svcacct/AI/Agent; runs 2/2 passed both locally and on the remote deployment.",
+    "reaudit": "CONFIRMED for the 2 real occurrences hit live (INTAKE commit cc5d396, DISCOVERY commit 358565c) -- both reached real PASS on the very next attempt after the fix"
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON for future harness work: when a class of bug is found via real execution, before hand-fixing just the one instance you hit, ask whether the SAME check can be run structurally across every other stage/gate/skill in one pass -- this found 10x more real gaps than the 2 real-execution runs alone would ever have surfaced, at near-zero additional cost (a ~20-line Python script cross-referencing two existing dicts). SECOND LESSON (2026-09-02 closure): a permanent regression test being written and passing locally is not the same as it being consolidated -- this test sat uncommitted for a full day, meaning any fresh session or the remote deployment had zero protection from this bug class recurring, silently contradicting the memory record's own claim that the test was 'the actual durable fix'. After completing any implementation work, verify the artifacts the work's own memory record depends on are actually committed and synced -- `git status` for orphaned untracked files is a cheap, concrete check worth running before considering consolidation done.",
+  "provenance": "dv-agent-harness-l5-7a session, 2026-09-01, live dv-harness run-stage debugging + systemic audit",
+  "memory_id": "MEM-34FD025AD6",
+  "level": "engineering",
+  "created_at": 1788276508.3177001,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 1,
+  "last_confirmed_at": null
+}

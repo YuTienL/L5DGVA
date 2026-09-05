@@ -1,0 +1,28 @@
+{
+  "corner_id": "c1",
+  "protocol": "USB",
+  "category": "reset_power",
+  "risk_tier": "P1",
+  "resolution": {
+    "test_mapping": "usb_reset_seq",
+    "semantic_verdict": "TRUE_PASS",
+    "runtime_evidence_hash": "abc123"
+  },
+  "evidence": {
+    "test_mapping": "usb_reset_seq",
+    "semantic_verdict": "TRUE_PASS",
+    "runtime_evidence_hash": "abc123"
+  },
+  "confidence": "VALIDATED",
+  "current_evidence_required": false,
+  "ccl_id": "CCL-2A1CF19528",
+  "created_at": 1788550760.598814,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "applicability_conditions": [],
+  "revalidate_by": null,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}
