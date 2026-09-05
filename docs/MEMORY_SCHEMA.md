@@ -9,7 +9,7 @@ wins (Evidence Truth Rule).
 
 ## 1. MemoryStore record (all 5 tiers — `.dv-harness/memory/<level>/<memory_id>.json`)
 
-Fields `add()` (`memory.py:233`) always fills in. Most are `setdefault`s, so a
+Fields `add()` (`memory.py:245`) always fills in. Most are `setdefault`s, so a
 caller may override them; the three confirmation fields at the bottom of the
 table are the exception — they are integrity-owned and a caller-supplied value
 is discarded (see their Notes):
@@ -55,7 +55,7 @@ No third shape is recognized — do not invent one.
 
 ## 2. Corner Case Library record (`.dv-harness/memory/corner_case_library/<ccl_id>.json`)
 
-`CornerCaseLibrary.add()` (`memory.py:748`), a separate class/store from
+`CornerCaseLibrary.add()` (`memory.py:760`), a separate class/store from
 the 5 tiers.
 
 | Field | Type | Required / Default |

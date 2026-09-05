@@ -74,7 +74,7 @@ independently; neither depends on the other.
 ## The 5 tiers (`dv_harness/memory.py`)
 
 `MEMORY_LEVELS = ["working", "job", "project", "engineering", "organizational"]`
-(`dv_harness/memory.py:10`). Each tier's records live at
+(`dv_harness/memory.py:11`). Each tier's records live at
 `.dv-harness/memory/<level>/<memory_id>.json`, with a flat
 `.dv-harness/memory/index.json` summary across all tiers.
 
@@ -258,7 +258,7 @@ a record across this boundary. Three independent, all-required gates:
    `confirmation_count` (with `last_confirmed_at` /
    `last_confirmation_evidence`) is **integrity-owned**: `MemoryStore.add()`
    discards whatever the record body carries and restores the on-disk value
-   (`_apply_confirmation_integrity()`, `memory.py:198`), so only
+   (`_apply_confirmation_integrity()`, `memory.py:706`), so only
    `MemoryGC.confirm()` — which passes `_confirmation_write=True` — can
    advance it. Before 2026-09-04 these were plain `setdefault`s, so a single
    creation event carrying `{"confirmation_count": 2}` was written through
