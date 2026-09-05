@@ -668,6 +668,27 @@ def main():
                       help="Exit 1 when the analysis reports ERROR findings. Without it the report is "
                            "printed and an analysis FAIL still exits 0; NOT_AVAILABLE always exits 2.")
 
+    prc = sub.add_parser("requirement-contract", help="Spec section 184 Canonical Requirement Contract: check "
+                                                      "requirement records against the fifteen-field contract "
+                                                      "(ID/Source/Feature/Protocol/Configuration/Precondition/"
+                                                      "Stimulus/Expected Result/Observability/Checker/Coverage "
+                                                      "Intent/Priority/Criticality/Confidence/Status) and its "
+                                                      "COMPLETE/PARTIAL/AMBIGUOUS/CONTRADICTORY/UNKNOWN status "
+                                                      "vocabulary. The status is RE-DERIVED from each record's "
+                                                      "own content, so a record claiming COMPLETE with a field "
+                                                      "still TBD, or stepping over an ambiguity/contradiction it "
+                                                      "filed itself, is rejected. A CONTRADICTORY requirement "
+                                                      "stops for a human -- this never arbitrates between two "
+                                                      "disagreeing sources. Same check the extended "
+                                                      "REQUIREMENTS_TRACEABILITY gate runs.")
+    prc.add_argument("--requirements", required=True,
+                     help="JSON file with a top-level `requirements` list. Records that do not declare "
+                          "`contract_schema_version` are not in this shape and are not analyzed.")
+    prc.add_argument("--json", action="store_true",
+                     help="Emit the full machine-readable report instead of the human-readable summary.")
+    prc.add_argument("--fail-on-error", action="store_true",
+                     help="Also fail on WARNING findings, not only ERROR.")
+
     pgs = sub.add_parser("golden-scenario", help="Spec section 225 golden scenario / reference capsules: "
                                                     "record a proven-good test/scenario against a REAL "
                                                     "evidence_db normalized_evidence PASS row, and derive "
@@ -2396,6 +2417,19 @@ def main():
             _pi_code = 0
         if _pi_code:
             raise SystemExit(_pi_code)
+    elif args.cmd == "requirement-contract":
+        # One shared implementation with
+        # `python -m dv_harness.requirement_contract`
+        # (requirement_contract.execute_verb), same convention as power-intent
+        # above. Exit codes: 0 clean, 1 ERROR findings, 2 NOT_AVAILABLE (no
+        # record declares the contract shape, so there was nothing to check --
+        # an empty analysis must never read as a clean PASS).
+        from . import requirement_contract as _rqc
+        _rqc_text, _rqc_code = _rqc.execute_verb(
+            args.requirements, as_json=args.json, fail_on_error=args.fail_on_error)
+        print(_rqc_text)
+        if _rqc_code:
+            raise SystemExit(_rqc_code)
     elif args.cmd == "golden-scenario":
         # One shared implementation with `python -m dv_harness.golden_scenario`
         # (golden_scenario.execute_verb), same convention as power-intent above.
