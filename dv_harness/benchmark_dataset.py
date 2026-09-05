@@ -421,8 +421,19 @@ def list_datasets(root) -> List[str]:
     base = datasets_dir(root)
     if not base.is_dir():
         return []
-    return sorted(p.name for p in base.iterdir()
-                  if p.is_dir() and (p / VERSIONS_SUBDIR).is_dir())
+    # At least one REGISTERED version, not merely a versions/ directory: an
+    # interrupted register leaves the directory behind, and a dataset with no
+    # version is not a dataset any caller can load.
+    out = []
+    for p in base.iterdir():
+        if not p.is_dir():
+            continue
+        try:
+            if list_versions(root, p.name):
+                out.append(p.name)
+        except DatasetValidationError:
+            continue  # a directory whose name is not a safe dataset id
+    return sorted(out)
 
 
 def load_dataset(root, dataset_id: str, version: Optional[int] = None) -> Dict[str, Any]:

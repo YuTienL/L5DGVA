@@ -131,6 +131,18 @@ def test_registering_a_version_records_a_real_content_digest(root):
     assert bd.list_datasets(root) == [DATASET_ID]
 
 
+def test_listing_ignores_a_dataset_directory_with_no_registered_version(root):
+    """An interrupted register leaves a versions/ directory behind. A dataset
+    with no version is not a dataset any caller can load, so `list` must not
+    offer it (and must not crash reaching for its latest)."""
+    bd.register_dataset_version(root, load_fixture_dataset(1))
+    (bd.datasets_dir(root) / "half-written" / "versions").mkdir(parents=True)
+    (bd.datasets_dir(root) / "not a safe id").mkdir(parents=True)
+    assert bd.list_datasets(root) == [DATASET_ID]
+    text, code = bd.execute_verb("list", root=root)
+    assert code == 0 and "half-written" not in text
+
+
 def test_re_registering_the_same_version_is_idempotent(root):
     first = bd.register_dataset_version(root, load_fixture_dataset(1))
     again = bd.register_dataset_version(root, load_fixture_dataset(1))
