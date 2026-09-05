@@ -1813,6 +1813,262 @@ def analyze_selected_subsystem_resources(root, selected: Sequence[str], *,
 
 
 # ===========================================================================
+# SYSTEM_LEVEL gate / composer cross-check (2026-09-05)
+# ===========================================================================
+#
+# WHY THIS LIVES HERE. Everything above is reachable only from human-typed
+# `dv-harness system-*` CLI verbs. The things that actually DECIDE whether a
+# composed system-level environment is allowed to exist -- the fourteen
+# tools/verification_flow/system_level_*.py gate scripts wired into
+# gates.py's STAGE_GATES["SYSTEM_LEVEL"], and
+# uvm_generator/soc_environment_composer.compose_soc_environment() -- imported
+# none of it: every one of those gates was a pure JSON-shape check over an
+# agent's OWN evidence text, so a hand-typed "shared_resources: []" passed
+# while the real analysis above, run over the same subsystems, found two
+# ACTIVE agents driving one physical interface.
+#
+# These two functions are that missing wire, and nothing more. They add no new
+# analysis: `real_cross_subsystem_findings()` calls
+# `analyze_selected_subsystem_resources()` above (which is itself the SYS-1 ->
+# SYS-5..8 -> SYS-9..14 front door, so SYS-1's refusal to analyze a set the
+# user did not select is not bypassed), and the two `crosscheck_*` functions
+# are pure comparisons of an agent's declaration against what that real
+# analysis found.
+#
+# HUMAN ARBITRATION IS PRESERVED. A DRIVER_CONFLICT still STOPS at BLOCKED and
+# still needs a human to decide which subsystem owns the interface --
+# `apply_active_driver_conflict_rule()`'s SYS12_PREFERRED_MODEL is carried
+# through as text for that human to read. Nothing here picks a winner, resolves
+# a conflict, or promotes a resource: the only thing that changed is that a
+# conflict now blocks a gate instead of being invisible to it.
+
+CROSSCHECK_AVAILABLE = "TRACK_B_ANALYSIS_AVAILABLE"
+CROSSCHECK_UNAVAILABLE = "TRACK_B_ANALYSIS_UNAVAILABLE"
+
+#: Cross-check verdicts. FAIL is reserved for a declaration the real analysis
+#: CONTRADICTS -- never for a declaration it merely cannot corroborate.
+CROSSCHECK_PASS = "PASS"
+CROSSCHECK_FAIL = "FAIL"
+CROSSCHECK_SKIPPED = "SKIPPED_ANALYSIS_UNAVAILABLE"
+
+#: The relationship classes that mean "these two subsystems really do reach the
+#: same resource" -- the ones an agent claiming an empty `shared_resources`
+#: list is contradicting. MONITOR_ONLY_DUPLICATE is deliberately excluded: two
+#: passive monitors on one interface share an observation point, not a
+#: contended resource, and neither needs an arbitration policy.
+SHARED_RELATIONSHIP_CLASSES: tuple = (REL_SAME_PHYSICAL, REL_SHARED_LOGICAL)
+
+
+#: Wall-clock budget a GATE gives this analysis, in seconds. gates.run_gate()
+#: runs every gate script with `timeout=30` and does NOT catch the resulting
+#: subprocess.TimeoutExpired -- an analysis that outran that ceiling would turn
+#: a stage evaluation into a crash. 20 leaves margin for interpreter start,
+#: JSON I/O and the gate's own layer-1 checks. Overrunning it is reported as
+#: ANALYSIS_TIMED_OUT (i.e. "not checked"), never as a clear result.
+GATE_CROSSCHECK_BUDGET_SECONDS = 20.0
+
+
+def real_cross_subsystem_findings(root, selected: Optional[Sequence[str]] = None, *,
+                                  declared: Optional[Mapping[str, Any]] = None,
+                                  budget_seconds: Optional[float] = None,
+                                  ) -> Dict[str, Any]:
+    """Run the REAL SYS-9..SYS-14 cross-subsystem analysis for a project root
+    and flatten it to the handful of facts a gate script or the SoC composer
+    needs to check a declaration against.
+
+    `selected` defaults to the REAL registered subsystem set
+    (`environment_mode_router.read_registered_subsystem_names()`, written only
+    by engine.py's `_persist_subsystem_registry_entry()` on a gate-validated
+    SIGNOFF PASS) -- harness evidence, never the caller's claim.
+
+    `budget_seconds` bounds the analysis's wall clock; the two gate scripts
+    pass GATE_CROSSCHECK_BUDGET_SECONDS because they run under run_gate()'s own
+    30s subprocess timeout. The default None means "no budget", which is what
+    the composer wants: a composition is not on a gate's clock, and silently
+    skipping the check that stops it composing over a driver conflict would be
+    the worse failure.
+
+    Returns `status` CROSSCHECK_UNAVAILABLE, with a concrete `reason`, whenever
+    the analysis could not be run over real evidence: fewer than two subsystems
+    resolve, SYS-1 refuses the selection (typically because a selected
+    subsystem's environment is not on disk to analyze), the analysis raises, or
+    it outran its budget. UNAVAILABLE is an honest "nothing was checked", never
+    a silent "clear" -- the callers below treat it as SKIPPED, not PASS. The
+    broad exception catch is deliberate and bounded: this is a cross-check
+    bolted onto verdicts that already stand on their own, so an unexpected
+    failure inside it must degrade to "not checked" rather than crash a gate
+    subprocess or a composition.
+    """
+    if budget_seconds is None:
+        return _cross_subsystem_findings(root, selected, declared)
+
+    import threading
+    box: List[Dict[str, Any]] = []
+    # A daemon thread: if the analysis outruns the budget it is abandoned
+    # rather than joined, and the interpreter is free to exit around it. It
+    # only ever READS (analyze_selected_subsystem_resources writes nothing
+    # anywhere), so an abandoned one cannot leave a half-written artifact.
+    worker = threading.Thread(
+        target=lambda: box.append(_cross_subsystem_findings(root, selected, declared)),
+        daemon=True)
+    worker.start()
+    worker.join(budget_seconds)
+    if box:
+        return box[0]
+    return {"status": CROSSCHECK_UNAVAILABLE, "reason": "ANALYSIS_TIMED_OUT",
+            "subsystems": [], "budget_seconds": budget_seconds}
+
+
+def _cross_subsystem_findings(root, selected: Optional[Sequence[str]],
+                              declared: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """The analysis itself. Split out only so the budget wrapper above has one
+    callable to run; every behaviour is documented on the public function."""
+    root = Path(root)
+    unavailable = lambda reason, **detail: dict(  # noqa: E731 - one shape, four call sites
+        {"status": CROSSCHECK_UNAVAILABLE, "reason": reason, "subsystems": []}, **detail)
+
+    try:
+        from .environment_mode_router import read_registered_subsystem_names
+        names = [str(s) for s in (selected if selected is not None
+                                  else read_registered_subsystem_names(root)) if str(s).strip()]
+    except Exception as exc:  # pragma: no cover - unreadable/malformed registry
+        return unavailable("REGISTRY_UNREADABLE", detail=f"{type(exc).__name__}: {exc}")
+
+    if len(names) < 2:
+        return unavailable("FEWER_THAN_TWO_SUBSYSTEMS_TO_COMPARE", subsystems=names)
+
+    try:
+        result = analyze_selected_subsystem_resources(root, names, declared=declared)
+    except Exception as exc:
+        return unavailable("ANALYSIS_FAILED", subsystems=names,
+                           detail=f"{type(exc).__name__}: {exc}")
+
+    selection = result["selection"]
+    if not selection.get("selection_admissible"):
+        # An analysis over environments that are not really on disk proves
+        # nothing about them; saying so is the honest verdict.
+        return unavailable(selection.get("refusal_reason") or "SELECTION_NOT_ADMISSIBLE",
+                           subsystems=names,
+                           not_ready=[r["subsystem"] for r in selection.get("not_ready") or []])
+
+    analysis = result["resource_analysis"]
+    rule = analysis["active_driver_conflict_rule"]
+    shared = [rel for rel in analysis["relationships"]
+              if rel["relationship"] in SHARED_RELATIONSHIP_CLASSES]
+    return {
+        "status": CROSSCHECK_AVAILABLE,
+        "subsystems": names,
+        "resource_count": analysis["summary"]["resource_count"],
+        "driver_conflicts": analysis["summary"]["driver_conflicts"],
+        "automatic_integration_allowed": rule["automatic_integration_allowed"],
+        "stopped_resource_ids": list(rule["stopped_resource_ids"]),
+        "held_resource_ids": list(rule["held_resource_ids"]),
+        "blocking_decisions": [d for d in rule["decisions"]
+                               if d["integration_status"] != INTEGRATION_ALLOWED],
+        "shared_resource_ids": sorted({rid for rel in shared
+                                       for rid in (rel["resource_a"], rel["resource_b"])}),
+        "shared_relationships": [
+            {"resource_a": rel["resource_a"], "resource_b": rel["resource_b"],
+             "relationship": rel["relationship"], "reason": rel["reason"]}
+            for rel in shared],
+        "preferred_model": rule["preferred_model"],
+    }
+
+
+def _blocked_detail(findings: Mapping[str, Any]) -> Dict[str, Any]:
+    """The shared FAIL payload for a Track-B integration block. Names the real
+    resources and carries SYS-12's preferred model as the text a HUMAN reads
+    before arbitrating -- this is a stop, not a resolution."""
+    return {
+        "subsystems": findings["subsystems"],
+        "driver_conflicts": findings["driver_conflicts"],
+        "stopped_resource_ids": findings["stopped_resource_ids"],
+        "held_resource_ids": findings["held_resource_ids"],
+        "blocking_decisions": findings["blocking_decisions"],
+        "human_arbitration_required": True,
+        "preferred_model": findings["preferred_model"],
+    }
+
+
+def crosscheck_declared_contention_plan(declared_plan: Mapping[str, Any],
+                                        findings: Mapping[str, Any]) -> Dict[str, Any]:
+    """Hold `system_level_resource_contention_gate`'s agent-supplied plan
+    against `real_cross_subsystem_findings()`.
+
+    Two FAIL conditions, both flat contradictions rather than judgement calls:
+
+      1. `ACTIVE_DRIVER_CONFLICT_UNRESOLVED` -- the real analysis stopped or
+         held automatic integration (two ACTIVE agents on one physical
+         interface, or an unproven-but-both-active pair). No contention policy
+         an agent can type resolves that; it needs a human to decide ownership.
+      2. `SHARED_RESOURCES_CONTRADICTED` -- the plan declares NO shared
+         resources at all while the real analysis found SAME_PHYSICAL_RESOURCE
+         / SHARED_LOGICAL_RESOURCE relationships between the composed
+         subsystems. This is the hand-typed "all clear" case.
+
+    A NON-empty `shared_resources` list whose names do not line up with the
+    real resource ids is reported as `unmatched_shared_resource_ids` and does
+    NOT fail: an agent names resources in project vocabulary ("DDR",
+    "APB_BUS") while a resource id is `SUBSYS::hierarchy::interface`, and
+    failing on that mismatch would be a naming heuristic pretending to be
+    evidence.
+    """
+    if findings.get("status") != CROSSCHECK_AVAILABLE:
+        return {"status": CROSSCHECK_SKIPPED, "reason": findings.get("reason", ""),
+                "subsystems": findings.get("subsystems", [])}
+
+    if not findings["automatic_integration_allowed"]:
+        return {"status": CROSSCHECK_FAIL, "reason": "ACTIVE_DRIVER_CONFLICT_UNRESOLVED",
+                **_blocked_detail(findings)}
+
+    declared_shared = [str(r) for r in (declared_plan.get("shared_resources") or [])]
+    if findings["shared_resource_ids"] and not declared_shared:
+        return {"status": CROSSCHECK_FAIL, "reason": "SHARED_RESOURCES_CONTRADICTED",
+                "subsystems": findings["subsystems"],
+                "declared_shared_resources": declared_shared,
+                "real_shared_resource_ids": findings["shared_resource_ids"],
+                "shared_relationships": findings["shared_relationships"]}
+
+    tokens = [t.lower() for t in declared_shared]
+    unmatched = [rid for rid in findings["shared_resource_ids"]
+                 if not any(t and t in rid.lower() for t in tokens)]
+    return {"status": CROSSCHECK_PASS, "subsystems": findings["subsystems"],
+            "real_shared_resource_ids": findings["shared_resource_ids"],
+            "unmatched_shared_resource_ids": unmatched}
+
+
+def crosscheck_declared_composition(declared_composition: Mapping[str, Any],
+                                    findings: Mapping[str, Any]) -> Dict[str, Any]:
+    """Hold `system_level_composition_gate`'s agent-supplied composition
+    against `real_cross_subsystem_findings()`.
+
+    That gate's per-subsystem `interface_compatibility` / `clock_reset_
+    compatibility` "PASS" strings are the agent's own assertion that these
+    subsystems can be composed. The one thing the real cross-subsystem analysis
+    can flatly contradict is exactly that: an unresolved active-driver
+    ownership conflict between two of the composed subsystems means the set is
+    NOT composable yet, whatever the evidence block says. Fails with
+    `ACTIVE_DRIVER_CONFLICT_UNRESOLVED` and stops at BLOCKED pending human
+    arbitration.
+
+    Only subsystems this composition actually names are analyzed, so a conflict
+    between two registered subsystems that this composition does not include
+    cannot block it.
+    """
+    if findings.get("status") != CROSSCHECK_AVAILABLE:
+        return {"status": CROSSCHECK_SKIPPED, "reason": findings.get("reason", ""),
+                "subsystems": findings.get("subsystems", [])}
+    if not findings["automatic_integration_allowed"]:
+        return {"status": CROSSCHECK_FAIL, "reason": "ACTIVE_DRIVER_CONFLICT_UNRESOLVED",
+                "declared_subsystems": [str(s.get("name")) for s
+                                        in (declared_composition.get("selected_subsystems") or [])
+                                        if isinstance(s, Mapping)],
+                **_blocked_detail(findings)}
+    return {"status": CROSSCHECK_PASS, "subsystems": findings["subsystems"],
+            "real_shared_resource_ids": findings["shared_resource_ids"]}
+
+
+# ===========================================================================
 # Reporting
 # ===========================================================================
 

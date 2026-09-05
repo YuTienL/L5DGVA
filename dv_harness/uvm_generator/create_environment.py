@@ -322,7 +322,12 @@ def create_environment(root: Path, request: Dict[str, Any],
     by_name = {str(e["name"]).lower(): e for e in registered_entries}
     subsystems = [by_name[s.lower()] for s in decision["requested_subsystems"]]
 
-    files = compose_soc_environment(subsystems, request)
+    # `root` is passed so the composition consults the REAL cross-subsystem
+    # analysis (SYS-9..SYS-14) before composing, instead of composing blind to
+    # it -- a CrossSubsystemIntegrationBlockedError propagates to the caller
+    # exactly like SubsystemModeRequiredError above, and needs the same thing:
+    # a human decision, here on which subsystem owns the contended interface.
+    files = compose_soc_environment(subsystems, request, root)
     target = Path(out_dir) if out_dir is not None else soc_composition_out_dir(
         root, request.get("soc_name"))
     target.mkdir(parents=True, exist_ok=True)

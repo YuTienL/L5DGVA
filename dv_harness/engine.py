@@ -65,7 +65,8 @@ from .protocol_router import resolve_protocol
 from .environment_mode_router import resolve_environment_mode, read_registered_subsystem_names
 from .uvm_generator.generator import sv_id
 from .uvm_generator.soc_environment_composer import (
-    compose_soc_environment, EmptySubsystemRegistryError, MissingSubsystemNameEvidenceError,
+    compose_soc_environment, CrossSubsystemIntegrationBlockedError,
+    EmptySubsystemRegistryError, MissingSubsystemNameEvidenceError,
     soc_composition_out_dir,
 )
 
@@ -2077,10 +2078,23 @@ class DVHarness:
         if not subsystems:
             return
         try:
-            files = compose_soc_environment(subsystems, registry)
+            # self.root is passed so the composition consults the REAL
+            # cross-subsystem analysis (SYS-9..SYS-14) over these subsystems
+            # before composing, rather than composing blind to it.
+            files = compose_soc_environment(subsystems, registry, self.root)
         except NotImplementedError as exc:
             self.store.event({"ts": now(), "stage": stage, "event": "SOC_COMPOSITION_NOT_IMPLEMENTED",
                                "error": str(exc)})
+            return
+        except CrossSubsystemIntegrationBlockedError as exc:
+            # A DRIVER_CONFLICT between two composed subsystems stops the
+            # composition at BLOCKED and needs a HUMAN to arbitrate ownership.
+            # Logged and skipped, same as every other composition failure here:
+            # it never downgrades an already-earned SYSTEM_LEVEL stage PASS,
+            # and it never resolves the conflict itself.
+            self.store.event({"ts": now(), "stage": stage,
+                               "event": "SOC_COMPOSITION_BLOCKED_PENDING_HUMAN_ARBITRATION",
+                               "reason": exc.reason, "detail": exc.detail})
             return
         except (EmptySubsystemRegistryError, MissingSubsystemNameEvidenceError) as exc:
             self.store.event({"ts": now(), "stage": stage, "event": "SOC_COMPOSITION_INPUT_INVALID",

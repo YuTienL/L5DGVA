@@ -561,6 +561,45 @@ fired in its production history — it has no multi-subsystem project of its own
 proven to fire when a real project supplies real registered subsystems; it was not made to "have
 fired" here by writing fabricated registry entries into this project's real audit trail.
 
+**The SYSTEM_LEVEL verdict now stands on the REAL cross-subsystem analysis, not only on
+agent-typed evidence (2026-09-05).** Two disconnected tracks had been built for Flow B and never
+joined. Track A (`environment_mode_router` → `create_environment.py` →
+`soc_environment_composer.compose_soc_environment()`) was engine-wired but composed blind: its only
+import was `.generator`. Track B (the `SYS-1..40` family — `subsystem_discovery.py`,
+`system_resource_inventory.py`, `system_readiness.py`, `system_topology_analysis.py`, ...) does the
+real evidence-grounded work — shared-resource conflict detection, active-driver-ownership blocking,
+address/clock-reset reconciliation — but was reachable ONLY from human-typed `dv-harness system-*`
+CLI verbs. Most seriously, `grep -rln dv_harness tools/verification_flow/system_level_*.py` matched
+NOTHING: every one of the gates that actually decides SYSTEM_LEVEL PASS/FAIL was a pure JSON-shape
+check over the agent's own evidence text, so a composed system environment could pass every one of
+them on hand-typed evidence with zero real cross-subsystem verification.
+
+`system_resource_inventory.real_cross_subsystem_findings()` is the wire — it calls the existing
+`analyze_selected_subsystem_resources()` front door (so SYS-1's refusal to analyze an unselected
+set is not bypassed) and flattens the result for a verdict. Three real consumers now use it:
+- `system_level_resource_contention_gate.py` FAILs `ACTIVE_DRIVER_CONFLICT_UNRESOLVED` when the
+  real analysis stopped/held automatic integration, and `SHARED_RESOURCES_CONTRADICTED` when the
+  plan declares no shared resources at all while the real analysis found
+  SAME_PHYSICAL/SHARED_LOGICAL relationships — the hand-typed "all clear" case.
+- `system_level_composition_gate.py` FAILs `ACTIVE_DRIVER_CONFLICT_UNRESOLVED` when the subsystems
+  the composition NAMES carry an unresolved ownership conflict, whatever its per-subsystem
+  `interface_compatibility`/`clock_reset_compatibility` "PASS" strings claim.
+- `compose_soc_environment(entries, manifest, root)` consults the same analysis BEFORE composing
+  and raises `CrossSubsystemIntegrationBlockedError` rather than emitting a `soc_tb_top.sv` that
+  instantiates two subsystems whose ACTIVE agents both drive one SoC port; what the analysis said
+  is recorded in `soc_composition_manifest.json`'s `cross_subsystem_analysis`.
+
+DETECTION is what was wired; ARBITRATION is untouched. A DRIVER_CONFLICT still STOPS at BLOCKED
+and still needs a human to decide which subsystem owns the interface — SYS-12's
+`SYS12_PREFERRED_MODEL` is carried through as text for that human, and nothing added here picks a
+winner, resolves a conflict, or crosses SYS-39/40's approval boundary. Where the real analysis
+cannot run over real evidence (no registry, fewer than two subsystems, environments not on disk)
+every consumer reports an explicit `TRACK_B_ANALYSIS_UNAVAILABLE`/`SKIPPED_ANALYSIS_UNAVAILABLE`
+with its concrete reason and changes no verdict — never a silent "clear". Proven end to end by
+`dv_harness_tests/test_system_level_track_b_gate_crosscheck.py`, which drives the REAL gate scripts
+as subprocesses over REAL synthetic environments and asserts a hand-typed "all clear" block is
+REJECTED when the real analysis over the same subsystems finds two ACTIVE AXI masters on one port.
+
 
 ## UVM Structural Lint (2026-09-06)
 

@@ -2339,7 +2339,14 @@ INVALID_QUALIFICATION_STATE；interface_compatibility 與 clock_reset_compatibil
 "PASS"，否則 FAIL SUBSYSTEM_COMPATIBILITY_FAIL；system_level_scenarios 不能是空陣列（FAIL
 NO_SYSTEM_LEVEL_SCENARIOS），每個 scenario 的 participating_subsystems 必須引用上面
 selected_subsystems 裡真實存在的 name、且至少 2 個，否則分別 FAIL SCENARIO_UNKNOWN_SUBSYSTEM /
-NOT_CROSS_SUBSYSTEM_SCENARIO。）
+NOT_CROSS_SUBSYSTEM_SCENARIO。
+另外（2026-09-05 起）：這個 gate 除了檢查上面欄位形狀，還會對 selected_subsystems 裡的
+subsystem 實際跑一次真的 cross-subsystem 分析（dv_harness/system_resource_inventory.py 的
+SYS-9..SYS-14），如果真實分析發現兩個 ACTIVE agent 同時 drive 同一個 physical interface
+（DRIVER_CONFLICT），就算你把 interface_compatibility / clock_reset_compatibility 都寫成
+"PASS" 也會 FAIL ACTIVE_DRIVER_CONFLICT_UNRESOLVED。這是 BLOCKED，要人類決定哪個 subsystem
+擁有該介面，不是改寫 evidence 就能過。真實分析跑不起來時（沒有 registry、環境不在磁碟上）
+會回報 SKIPPED_ANALYSIS_UNAVAILABLE 並附上原因，不會改變判定。）
 
 ```dv-harness-evidence:system_level_release_pinning_gate
 {"selected_subsystems": [{"name": "USB", "release_sha": "...",
@@ -2415,7 +2422,15 @@ NO_STRESS_SCENARIO_EVIDENCE，代表沒有真的用 forward-progress assertion �
 shared_resources 有交集（代表這個情境真的碰到共享資源），就必須同時附上
 arbitration_or_contention_policy（缺了 FAIL SHARED_RESOURCE_WITHOUT_CONTENTION_POLICY）與非空的
 contention_testcase_ids（缺了 FAIL NO_CONTENTION_TESTS）；沒有碰到共享資源的 scenario 不受此
-限制。）
+限制。
+另外（2026-09-05 起）：shared_resources 不再只跟你自己寫的 scenario 對帳。這個 gate 會對真實
+registry 裡註冊的 subsystem（或你在 payload 加的 selected_subsystems 名單）實跑
+dv_harness/system_resource_inventory.py 的 SYS-9..SYS-14 分析，兩種情況會 FAIL：
+真實分析判定 automatic integration 被 STOP/HOLD（FAIL ACTIVE_DRIVER_CONFLICT_UNRESOLVED，
+要人類仲裁 ownership，寫再完整的 arbitration policy 也不能過）；或你宣告 shared_resources 為
+空陣列但真實分析找到 SAME_PHYSICAL_RESOURCE / SHARED_LOGICAL_RESOURCE 關係
+（FAIL SHARED_RESOURCES_CONTRADICTED）。真實分析跑不起來時回報
+SKIPPED_ANALYSIS_UNAVAILABLE 並附上原因，不改變判定。）
 """,
 Stage.EXPERT_FEEDBACK_LOOP.value: """
 DV Expert Feedback Closed Loop：把本輪 AI Analyze/Generate/Verify 的產出交給人類 DV 專家

@@ -97,6 +97,32 @@ class MissingSubsystemNameEvidenceError(ValueError):
         self.detail = detail
 
 
+class CrossSubsystemIntegrationBlockedError(ValueError):
+    """Raised by compose_soc_environment() when the REAL cross-subsystem
+    analysis (dv_harness.system_resource_inventory's SYS-9..SYS-14 chain,
+    reached through real_cross_subsystem_findings()) says automatic
+    integration of these subsystems is STOPPED or HELD -- two ACTIVE agents
+    independently driving one physical interface, or an unproven-but-both-
+    active pair.
+
+    Before 2026-09-05 this composer imported none of that analysis and
+    composed BLIND to it: a soc_tb_top.sv instantiating two subsystem
+    environments whose CPU AXI masters both drive `chip.soc.cpu_axi_m` was
+    generated without complaint. It now refuses.
+
+    Refusing is the whole behaviour -- this error carries the conflicting
+    resource ids and SYS-12's preferred model as text for a HUMAN to
+    arbitrate ownership from. Nothing here picks a winner between two
+    conflicting drivers; that decision is not a generator's to make (see
+    system_resource_inventory.SYS12_PREFERRED_MODEL, and SYS-39/SYS-40's own
+    approval boundary before any shared driver is generated for real)."""
+
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
 def soc_composition_out_dir(root: Path, soc_name: Any) -> Path:
     """The one on-disk location a composed SoC environment lands in, in one
     place. Both real writers use it: engine.py's
@@ -383,8 +409,26 @@ def system_coverage(manifest: Dict[str, Any]) -> str:
     )
 
 
+def cross_subsystem_findings(root: Any, subsystems: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The REAL SYS-9..SYS-14 cross-subsystem analysis for the subsystems this
+    composition is about to compose, via
+    `system_resource_inventory.real_cross_subsystem_findings()` -- the same
+    function tools/verification_flow/system_level_composition_gate.py and
+    system_level_resource_contention_gate.py cross-check against, so the gate
+    that admits a composition and the composer that performs it are reading
+    ONE analysis, not two.
+
+    Imported lazily: this package is imported by generation paths that have no
+    business pulling in the whole SYS-1..SYS-14 stack, and a composition
+    called without a `root` (every pre-2026-09-05 caller, and every unit
+    fixture) must stay unaffected."""
+    from ..system_resource_inventory import real_cross_subsystem_findings
+    return real_cross_subsystem_findings(root, [s["name"] for s in subsystems])
+
+
 def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
-                             manifest: Dict[str, Any]) -> Dict[str, str]:
+                             manifest: Dict[str, Any],
+                             root: Any = None) -> Dict[str, str]:
     """Composes a Full-SoC/System-Level testbench scaffold from N already
     -registered subsystem environments. Same return shape as
     UVMEnvironmentGenerator.generate(): dict[filename -> generated SV/JSON
@@ -407,6 +451,12 @@ def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
         optional virtual_sequencer_fields override, ...). Every key is
         optional and additive -- an empty {} degrades to structural
         defaults exactly like generator.py's own manifest handling.
+      root: the real project root, when one exists. Supplying it runs the
+        REAL cross-subsystem analysis over these subsystems before composing
+        (see cross_subsystem_findings() and
+        CrossSubsystemIntegrationBlockedError) and records the result in
+        soc_composition_manifest.json's "cross_subsystem_analysis". None
+        skips the consultation and composes exactly as before.
 
     Returns three files on the fully-generic, always-honorable path:
       - soc_tb_top.sv: see _soc_tb_top().
@@ -420,7 +470,9 @@ def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
         generate()'s own environment_manifest.json.
 
     Raises EmptySubsystemRegistryError / MissingSubsystemNameEvidenceError
-    for structurally invalid input, or propagates NotImplementedError from
+    for structurally invalid input, CrossSubsystemIntegrationBlockedError
+    when `root` is supplied and the real analysis found an unresolved
+    active-driver ownership conflict, or propagates NotImplementedError from
     cross_subsystem_scenarios()/end_to_end_scoreboard()/system_coverage()
     when manifest explicitly requests content in those genuinely
     protocol-specific categories (manifest keys of the same name,
@@ -439,6 +491,28 @@ def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
                 "index": i, "entry": entry,
             })
         subsystems.append(entry)
+
+    # Consult the REAL cross-subsystem analysis BEFORE composing anything, so
+    # a refusal leaves no half-written environment behind. `root=None` (every
+    # caller before 2026-09-05, and every unit fixture that has no project on
+    # disk) skips it and composes exactly as before; both real call sites --
+    # engine.py's _compose_soc_environment_files() and create_environment.py's
+    # SYSTEM_LEVEL_MODE dispatch -- now pass their real project root.
+    findings: Dict[str, Any] = {}
+    if root is not None:
+        findings = cross_subsystem_findings(root, subsystems)
+        if (findings.get("status") == "TRACK_B_ANALYSIS_AVAILABLE"
+                and not findings.get("automatic_integration_allowed")):
+            raise CrossSubsystemIntegrationBlockedError(
+                "CROSS_SUBSYSTEM_INTEGRATION_BLOCKED", {
+                    "subsystems": findings["subsystems"],
+                    "driver_conflicts": findings["driver_conflicts"],
+                    "stopped_resource_ids": findings["stopped_resource_ids"],
+                    "held_resource_ids": findings["held_resource_ids"],
+                    "blocking_decisions": findings["blocking_decisions"],
+                    "human_arbitration_required": True,
+                    "preferred_model": findings["preferred_model"],
+                })
 
     files: Dict[str, str] = {}
 
@@ -469,6 +543,13 @@ def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
 
     composed = dict(manifest)
     composed["composed_subsystems"] = [s["name"] for s in subsystems]
+    # The composition is no longer blind to cross-subsystem findings: what the
+    # real analysis said (including an explicit TRACK_B_ANALYSIS_UNAVAILABLE
+    # with its reason, or "NOT_CONSULTED" when no root was supplied) is part
+    # of the composition's own audit record.
+    composed["cross_subsystem_analysis"] = (
+        findings if findings else {"status": "NOT_CONSULTED",
+                                   "reason": "NO_PROJECT_ROOT_SUPPLIED"})
     composed["generated_files"] = sorted(files.keys()) + ["soc_composition_manifest.json"]
     composed["composition_status"] = "SOC_TB_COMPOSED"
     files["soc_composition_manifest.json"] = json.dumps(composed, indent=2)
