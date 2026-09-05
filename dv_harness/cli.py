@@ -668,6 +668,30 @@ def main():
                       help="Exit 1 when the analysis reports ERROR findings. Without it the report is "
                            "printed and an analysis FAIL still exits 0; NOT_AVAILABLE always exits 2.")
 
+    pgs = sub.add_parser("golden-scenario", help="Spec section 225 golden scenario / reference capsules: "
+                                                    "record a proven-good test/scenario against a REAL "
+                                                    "evidence_db normalized_evidence PASS row, and derive "
+                                                    "FRESH/STALE/UNKNOWN from REAL git history (a real "
+                                                    "`git diff <verified_sha>..HEAD` classified by the same "
+                                                    "change_impact risk model the regression-selection chain "
+                                                    "uses). Freshness is computed, never stored. Recording "
+                                                    "REFUSES evidence that is missing, not a PASS, or for a "
+                                                    "different test. Runs, builds, submits and approves "
+                                                    "nothing. See dv_harness/golden_scenario.py.")
+    pgs.add_argument("gs_verb", choices=("record", "list", "status"))
+    pgs.add_argument("--json-file", default=None,
+                      help="record: the capsule JSON file (GoldenScenario fields) to record.")
+    pgs.add_argument("--capsule-id", default=None, help="status: evaluate one capsule only.")
+    pgs.add_argument("--head", default="HEAD",
+                      help="status: the revision to compare the recorded verified_sha against.")
+    pgs.add_argument("--db", default=None,
+                      help="Evidence database path (default: <root>/.dv-harness/evidence/evidence.duckdb).")
+    pgs.add_argument("--vip-version", action="append", default=None, dest="gs_vip_versions",
+                      metavar="TOOL=VERSION",
+                      help="status: a CURRENT VIP/tool version (repeatable). A recorded version that no "
+                           "longer matches makes the capsule STALE with no git change at all.")
+    pgs.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
     penvm = sub.add_parser("env-manifest", help="env.manifest.json: generated, diffable, git-tracked fact file "
                                                    "with three layers -- vip_config (a real UVM simv's own "
                                                    "already-resolved VIP config dump), dut_facts (verible-parsed "
@@ -2301,6 +2325,32 @@ def main():
             _pi_code = 0
         if _pi_code:
             raise SystemExit(_pi_code)
+    elif args.cmd == "golden-scenario":
+        # One shared implementation with `python -m dv_harness.golden_scenario`
+        # (golden_scenario.execute_verb), same convention as power-intent above.
+        # Exit codes: 0 recorded / all FRESH, 1 at least one STALE, 2 UNKNOWN or
+        # nothing recorded -- an uncheckable capsule must never exit 0.
+        from . import golden_scenario as _gsc
+        _gs_versions = None
+        if args.gs_vip_versions:
+            _gs_versions = {}
+            for _item in args.gs_vip_versions:
+                if "=" not in _item:
+                    print(f"--vip-version expects TOOL=VERSION, got {_item!r}")
+                    raise SystemExit(2)
+                _tool, _ver = _item.split("=", 1)
+                _gs_versions[_tool.strip()] = _ver.strip()
+        try:
+            _gs_text, _gs_code = _gsc.execute_verb(
+                args.gs_verb, root=h.root, db_path=args.db, json_file=args.json_file,
+                capsule_id=args.capsule_id, head=args.head, as_json=args.json,
+                current_vip_versions=_gs_versions)
+        except _gsc.GoldenScenarioError as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_gs_text)
+        if _gs_code:
+            raise SystemExit(_gs_code)
     elif args.cmd == "env-manifest":
         from . import env_manifest
         from .env_manifest import (EnvManifestValidationError, RegisterMapValidationError,

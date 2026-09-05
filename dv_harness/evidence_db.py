@@ -255,7 +255,46 @@ _SCHEMA_STATEMENTS = [
         distiller VARCHAR,
         ingested_at TIMESTAMP DEFAULT now()
     )""",
+    """CREATE TABLE IF NOT EXISTS golden_scenarios (
+        capsule_id VARCHAR PRIMARY KEY,
+        project VARCHAR,
+        subsystem VARCHAR,
+        protocol VARCHAR,
+        test_name VARCHAR,
+        sequence_name VARCHAR,
+        seed VARCHAR,
+        expected_result VARCHAR,
+        evidence_id VARCHAR,
+        evidence_verdict VARCHAR,
+        job_id BIGINT,
+        verified_sha VARCHAR,
+        verified_at VARCHAR,
+        requirements_json VARCHAR,
+        vip_versions_json VARCHAR,
+        configuration_json VARCHAR,
+        command_txt_inputs_json VARCHAR,
+        known_limitations_json VARCHAR,
+        watched_paths_json VARCHAR,
+        recorded_at TIMESTAMP DEFAULT now()
+    )""",
 ]
+
+#: `golden_scenarios` columns holding a list/dict serialized as JSON text, and
+#: the `GoldenScenario` field each mirrors. Same convention
+#: `insert_job_memory_record()` already uses for `failure_signature_json`.
+_GOLDEN_SCENARIO_JSON_FIELDS = (
+    ("requirements", "requirements_json"),
+    ("vip_versions", "vip_versions_json"),
+    ("configuration", "configuration_json"),
+    ("command_txt_inputs", "command_txt_inputs_json"),
+    ("known_limitations", "known_limitations_json"),
+    ("watched_paths", "watched_paths_json"),
+)
+
+_GOLDEN_SCENARIO_SCALAR_COLS = (
+    "capsule_id", "project", "subsystem", "protocol", "test_name", "sequence_name",
+    "seed", "expected_result", "evidence_id", "job_id", "verified_sha", "verified_at",
+)
 
 
 def default_db_path(root: Path) -> Path:
@@ -572,6 +611,81 @@ class EvidenceStore:
             f"ON CONFLICT (evidence_id) DO UPDATE SET {assignments}",
             values,
         )
+
+    # ---- golden_scenarios (golden_scenario.GoldenScenario mirror) ---------
+
+    def insert_golden_scenario(self, capsule: dict, *,
+                                evidence_verdict: Optional[str] = None) -> None:
+        """Upserts one row from a real `golden_scenario.GoldenScenario`
+        (spec section 225's reference capsule), keyed on its own
+        `capsule_id` -- re-recording the same capsule after a fresh verified
+        PASS updates that one row (new verified_sha/verified_at/evidence_id)
+        rather than minting a second capsule for the same test, the same
+        idempotent-upsert-by-real-natural-key convention every other table
+        here follows.
+
+        This store deliberately does NOT persist a freshness flag:
+        `golden_scenario.evaluate_freshness()` derives FRESH/STALE/UNKNOWN
+        from real git history at the moment it is asked, and a stored flag
+        would be wrong the instant someone commits.
+
+        `evidence_verdict` is the verdict `record_golden_scenario()` really
+        read off the cited `normalized_evidence` row when it accepted this
+        capsule -- kept here so a later reader can see WHAT was checked
+        without re-joining, never as a substitute for that row itself."""
+        if not capsule.get("capsule_id"):
+            raise ValueError("insert_golden_scenario: capsule['capsule_id'] is required")
+        if not capsule.get("evidence_id"):
+            raise ValueError("insert_golden_scenario: capsule['evidence_id'] is required")
+        cols = list(_GOLDEN_SCENARIO_SCALAR_COLS)
+        values = [capsule.get(c) for c in cols]
+        cols.append("evidence_verdict")
+        values.append(evidence_verdict)
+        for field_name, col in _GOLDEN_SCENARIO_JSON_FIELDS:
+            cols.append(col)
+            values.append(json.dumps(capsule.get(field_name), default=str))
+        assignments = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "capsule_id")
+        placeholders = ", ".join("?" for _ in cols)
+        self._conn.execute(
+            f"INSERT INTO golden_scenarios ({', '.join(cols)}) VALUES ({placeholders}) "
+            f"ON CONFLICT (capsule_id) DO UPDATE SET {assignments}, recorded_at = now()",
+            values,
+        )
+
+    def _golden_scenario_rows(self, where: str = "", params: Optional[list] = None) -> list:
+        # A read_only=True connection skips this class's schema DDL entirely
+        # (see __init__), so an evidence.duckdb created before this table
+        # existed genuinely has no golden_scenarios relation. That is "no
+        # capsules have ever been recorded", which the caller reports as
+        # NOT_AVAILABLE -- not a crash, and never a silent PASS.
+        exists = self._conn.execute(
+            "SELECT 1 FROM duckdb_tables() WHERE table_name = 'golden_scenarios'"
+        ).fetchone()
+        if not exists:
+            return []
+        cols = list(_GOLDEN_SCENARIO_SCALAR_COLS) + ["evidence_verdict"] + \
+            [col for _, col in _GOLDEN_SCENARIO_JSON_FIELDS]
+        sql = f"SELECT {', '.join(cols)} FROM golden_scenarios {where} ORDER BY capsule_id"
+        out = []
+        for row in self._conn.execute(sql, params or []).fetchall():
+            record = dict(zip(cols, row))
+            for field_name, col in _GOLDEN_SCENARIO_JSON_FIELDS:
+                raw = record.pop(col, None)
+                try:
+                    record[field_name] = json.loads(raw) if raw else None
+                except (TypeError, ValueError):
+                    record[field_name] = None
+                if record[field_name] is None:
+                    record[field_name] = {} if field_name in ("vip_versions", "configuration") else []
+            out.append(record)
+        return out
+
+    def get_golden_scenario(self, capsule_id: str) -> Optional[dict]:
+        rows = self._golden_scenario_rows("WHERE capsule_id = ?", [capsule_id])
+        return rows[0] if rows else None
+
+    def list_golden_scenarios(self) -> list:
+        return self._golden_scenario_rows()
 
     # ---- generic read-back (tests / ad-hoc CLI inspection) -----------------
 

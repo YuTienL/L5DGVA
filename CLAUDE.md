@@ -713,6 +713,63 @@ exercised through the REAL `build_architecture_model.py` and `dv-harness power-i
 both with and without power intent present.
 
 
+## Golden Scenario / Reference Capsule (2026-09-06)
+
+A "golden scenario" is a persisted claim that test T, at seed S, in configuration C, was verified
+PASS against a specific commit — and spec section 225's own rule is what makes it worth
+persisting: "Golden does not mean permanent. Relevant RTL/spec/tool/config changes can make a
+capsule STALE." Grepping for `golden_scenario`/`GoldenScenario`/`reference capsule` matched nothing
+executable. Two similarly-shaped mechanisms already existed and are deliberately NOT what this is:
+`golden_flow_readiness.py` (section 47's readiness MATRIX over the harness's own twenty workflow
+STAGES — no per-test record, no recorded SHA, no staleness concept), and
+`system_regression_plan.CAT_KNOWN_GOOD_SUBSYSTEM_TESTS` (SYS-33's per-SUBSYSTEM planning category,
+recomputed from the subsystem registry's qualification_state on every call, never persisted and
+never asked whether the RTL moved since).
+
+`dv_harness/golden_scenario.py` is the capsule store, and it reuses rather than reinvents on both
+sides:
+- BACKING STORE: one new `golden_scenarios` table in the REAL
+  `evidence_db.EvidenceStore`, alongside `jobs`/`normalized_evidence`, keyed on `capsule_id` with
+  the same idempotent-upsert-by-natural-key convention every other table there uses — not a second
+  evidence format. `record_golden_scenario()` REFUSES a capsule whose `evidence_id` is not an
+  existing `normalized_evidence` row (the real `vip_distill.py` envelope), whose recorded verdict is
+  not a real PASS, or whose `test_name` disagrees with that row's own `pattern`. `job_id`/`protocol`
+  are filled in from that row and `verified_sha` from the real `jobs.git_sha` of the job the
+  evidence belongs to, so section 225's "DUT/TB SHA" is read off real evidence rather than typed.
+- FRESHNESS: computed, never stored — a stored flag is wrong the instant someone commits.
+  `evaluate_freshness()` runs the REAL `change_impact.changed_files()` (a real
+  `git diff --name-only <verified_sha>..HEAD`) and the REAL `change_impact.classify_risk()`
+  HIGH/MEDIUM/LOW path model that the regression-selection chain already uses, so "did the design
+  move" has ONE answer in this codebase. HIGH (design RTL) or MEDIUM (testbench/sequence/
+  command.txt/config) inside the capsule's declared `watched_paths` ⇒ STALE naming the files; LOW
+  (docs, `.dv-harness`/`.claude` bookkeeping) does not. A recorded VIP/tool version that no longer
+  matches a caller-supplied current one ⇒ STALE with no git change at all.
+
+`dv-harness golden-scenario record|list|status` and `python -m dv_harness.golden_scenario` share one
+implementation (`execute_verb`, the same convention `power-intent` uses). Exit 0 recorded / all
+FRESH, 1 at least one STALE, 2 UNKNOWN or nothing recorded.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) "We could not check" is
+UNKNOWN, never FRESH: no git, an unresolvable recorded SHA, a failed diff, or no recorded SHA all
+report UNKNOWN with the real reason. (2) An empty `watched_paths` widens the scope to the WHOLE
+repo rather than emptying it (`scope: WHOLE_REPO_NO_WATCHED_PATHS_DECLARED`) — this module's
+failure mode is "calls a still-good capsule stale", never the reverse. (3) It DECIDES nothing: it
+runs no test, submits no job, and there is deliberately no stage gate — a gate that passed on a
+capsule nobody re-ran would be worse than none. FRESH is an input to a human's reuse decision.
+(4) An evidence.duckdb predating this table is opened read-only (which skips schema DDL by design),
+so it reports NOT_AVAILABLE rather than crashing. (5) The capsule is recorded by a deliberate
+`record` call; nothing auto-mints capsules from passing runs, because "which passes are worth
+keeping as golden" is a judgment this module does not make.
+
+Proven by `dv_harness_tests/test_golden_scenario.py` (21 tests) against a REAL throwaway git
+repository with real commits, a REAL DuckDB EvidenceStore, a REAL `vip_distill.distill_sim_log()`
+envelope for a synthetic sim.log in this project's own FINAL CHECK epilogue format, and a REAL
+`JobState` row: the central test records a capsule against a real PASS, asserts FRESH, then makes a
+REAL RTL commit and asserts the SAME capsule is STALE naming that file at HIGH risk — with the
+stored row untouched, because freshness is derived. Both CLI entry points are driven as real
+subprocesses and their exit codes asserted.
+
+
 ## Methodology Consolidation Rule
 
 A process/method/workflow used in a session is not "done" once it produces a result once.
