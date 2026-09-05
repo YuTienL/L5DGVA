@@ -770,6 +770,80 @@ stored row untouched, because freshness is derived. Both CLI entry points are dr
 subprocesses and their exit codes asserted.
 
 
+## Agent Benchmark Dataset Governance (2026-09-06)
+
+An agent/skill is scored against a VERSIONED corpus, and the corpus says whether it was scored on
+the examples it was tuned on. Spec section 226's two rules are what this obeys literally: "do not
+evaluate a capability only on examples used to tune it", and "benchmark results must identify
+Agent/Skill version and environment."
+
+The gap was total. `capability_evolution.run_controlled_experiment()` is per-CANDIDATE execution —
+one proposed change, one fixture, one measurement, answering "did this change help". Its
+`benchmark_plan` is per-candidate free text and its `benchmark_result` is that one measurement;
+neither is a corpus, neither is versioned, and neither can say a case was used for tuning. Grepping
+for `benchmark_dataset`/`eval_corpus`/`dataset_version`/`leakage` matched no executable code
+(`memory_security`'s secret-leakage detector is unrelated).
+
+`dv_harness/benchmark_dataset.py` is the registry, and it reuses rather than reinvents on both
+sides:
+- RUNNER: each case is executed by `capability_evolution`'s OWN isolated machinery —
+  `_prepare_shadow_run()` (workspace containment, fixture validation) and `_execute_shadow_run()`
+  (fingerprint the fixture, copy it twice, drive the REAL `DVHarness.run_stage()` in each arm,
+  measure both through `control_plane.describe_stage()`, re-fingerprint, write the record). There is
+  one shadow-run implementation in this package and this calls it; a case's `expected_result` is one
+  of that module's own `BENCHMARK_OUTCOMES` for the same reason. `allow_execution_stages` is
+  hard-wired False, so a stored corpus can never drive a real build or regression submission.
+- STORE: an immutable JSON version file under
+  `<root>/.dv-harness/benchmark_datasets/<id>/versions/vN.json`. Re-registering a version with
+  different content is REFUSED (bump instead); a bump whose cases are identical to the previous
+  version is refused (a bump that changes no case is not a new dataset); back-dating below the
+  latest version is refused; re-registering OVER a version whose file has drifted is refused rather
+  than blessed as idempotent. `verify_dataset_integrity()` recomputes the digest off disk, so a case
+  edited in place without a bump reads CONTENT_DRIFT, and `diff_dataset_versions()` names what a
+  bump added, removed and modified.
+
+TWO DIGESTS, deliberately. `case_record_digest()` covers every section 226 tracked field, and
+dataset-version integrity is checked against it — editing an owner or a note is still editing the
+corpus. `case_question_digest()` covers only what the case ASKS (`expected_result`, `fixture_ref`,
+`stages`, `mutation`), and LEAKAGE is keyed on that, matched across EVERY version of the dataset via
+an append-only `tuning_ledger.jsonl` that `record_tuning_use()` writes. So renaming or re-owning a
+case cannot launder the fact that a subject was tuned on it, while changing what it asks makes it
+genuinely another case. An eval reports the full score AND the held-out score over the non-leaked
+cases, judges its status on the held-out set, and reports `INADMISSIBLE` when EVERY case was used
+for tuning — section 226's rule as a status rather than a sentence.
+
+`dv-harness benchmark-dataset register|list|verify|diff|record-tuning-use|leakage|runs` and
+`python -m dv_harness.benchmark_dataset` share one implementation (`execute_verb`, the same
+convention `power-intent` and `golden-scenario` use). Exit 0 fine, 1 a real finding (content drift,
+leakage present, a recorded run that was not met), 2 nothing to report.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This module DECIDES nothing
+about promotion. It makes no `transition()`, persists no candidate, and its records carry
+`produced_by = BENCHMARK_EVAL_PRODUCER`, which is NOT in
+`capability_evolution.SHADOW_RUN_PRODUCERS` — so a benchmark record can never be pinned into a
+stability window or satisfy `assert_benchmark_measured()`. Evaluating an AGENT is not evidence for
+promoting a capability CHANGE. Every human-approval gate is untouched; there is deliberately no
+stage gate, for the reason `golden_scenario` and `power_intent` already state. (2) Its case/run/
+leakage/integrity vocabularies share no token with `dv_harness.models.Status`
+(`assert_no_verification_verdict_vocabulary()`, the same rule and the same reason as
+`capability_evolution`'s): MATCHED is not a DV PASS. (3) A case is executed as a two-arm shadow run
+over a fixture project — the shape the reused runner measures. Pure prompt/response agent evals and
+generated-file-diff cases are NOT supported. (4) There is no `eval` CLI verb: an eval must name the
+subject under evaluation via a `harness_factory`, and defaulting it would dispatch real `claude -p`
+subprocesses per case from a typed command line. (5) `difficulty` and `qualification` are declared
+metadata; nothing judges whether a case is as hard as it says.
+
+Proven by `dv_harness_tests/test_benchmark_dataset_governance.py` (22 tests) against the two
+synthetic corpora in `dv_harness_tests/fixtures/benchmark_datasets/`, whose own `notes` state they
+are fixtures derived from no real project. The central test evaluates ONE subject against v1 and
+then v2 through REAL two-arm runs — the real engine stage runner, the real
+`command_migration_integrity_gate.py` subprocess, real arm workspaces on disk — and asserts the two
+results are distinguishable on status (MET vs NOT_MET), on score (3/3 vs 3/4), on which case failed,
+and on the dataset digest each cites, because v2 added a harder held-back case. The converse is
+proven too: two SUBJECT versions score differently on one fixed corpus. Both CLI entry points are
+driven as real subprocesses and their exit codes asserted.
+
+
 ## Methodology Consolidation Rule
 
 A process/method/workflow used in a session is not "done" once it produces a result once.

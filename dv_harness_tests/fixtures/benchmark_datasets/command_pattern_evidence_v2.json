@@ -1,0 +1,107 @@
+{
+  "dataset_id": "command-pattern-evidence",
+  "description": "Whether an agent turns a command-migration manifest into evidence the real command_migration_integrity_gate accepts.",
+  "owner": "dv-harness-maintainers",
+  "source": "synthetic fixture cases authored for spec section 226; no real project data",
+  "provenance": "dv_harness_tests/fixtures/benchmark_datasets/ (this repo)",
+  "notes": "SYNTHETIC TEST FIXTURE. This is not any real project's benchmark corpus and no case here was derived from a customer design. Every case runs against the synthetic command-pattern fixture project built by dv_harness_tests/controlled_experiment_fixture.py, whose only real parts are one real gate script and the real shipped main_graph.json.",
+  "version": 2,
+  "cases": [
+    {
+      "case_id": "manifest-matching-hashes",
+      "source": "dv_harness_tests/controlled_experiment_fixture.py (synthetic fixture project)",
+      "protocol": "USB",
+      "project_coverage": [
+        "synthetic-command-pattern-fixture"
+      ],
+      "difficulty": "BASIC",
+      "expected_result": "IMPROVED",
+      "known_ambiguity": "",
+      "owner": "dv-harness-maintainers",
+      "qualification": "SYNTHETIC_FIXTURE",
+      "provenance": "Hand-authored for this registry. The real command_migration_integrity_gate.py exits 0 on matching source/destination hashes, so a subject that reads the manifest and submits its evidence satisfies a gate the baseline arm cannot.",
+      "fixture_ref": "command_pattern_project",
+      "stages": [
+        "COMMAND_PATTERN"
+      ],
+      "mutation": [
+        {
+          "path": "command_migration.json",
+          "content": "{\n  \"commands\": [\n    {\n      \"command_id\": \"cmd_lfps_polling\",\n      \"source_hash\": \"a1b2c3\",\n      \"destination_hash\": \"a1b2c3\"\n    },\n    {\n      \"command_id\": \"cmd_u1_entry\",\n      \"source_hash\": \"d4e5f6\",\n      \"destination_hash\": \"d4e5f6\"\n    }\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "case_id": "manifest-mismatched-hashes",
+      "source": "dv_harness_tests/controlled_experiment_fixture.py (synthetic fixture project)",
+      "protocol": "USB",
+      "project_coverage": [
+        "synthetic-command-pattern-fixture"
+      ],
+      "difficulty": "INTERMEDIATE",
+      "expected_result": "UNCHANGED",
+      "known_ambiguity": "A subject could legitimately refuse to submit at all, or submit and let the gate refuse. Both produce UNCHANGED here, so this case does not distinguish them.",
+      "owner": "dv-harness-maintainers",
+      "qualification": "SYNTHETIC_FIXTURE",
+      "provenance": "Hand-authored for this registry. The real gate exits 4 (COMMAND_CONTENT_CHANGED) on a hash mismatch with no approved_transform, so neither arm satisfies the gate.",
+      "fixture_ref": "command_pattern_project",
+      "stages": [
+        "COMMAND_PATTERN"
+      ],
+      "mutation": [
+        {
+          "path": "command_migration.json",
+          "content": "{\n  \"commands\": [\n    {\n      \"command_id\": \"cmd_lfps_polling\",\n      \"source_hash\": \"a1b2c3\",\n      \"destination_hash\": \"a1b2c3\"\n    },\n    {\n      \"command_id\": \"cmd_u1_entry\",\n      \"source_hash\": \"d4e5f6\",\n      \"destination_hash\": \"9999ff\"\n    }\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "case_id": "no-manifest-unrelated-file",
+      "source": "dv_harness_tests/controlled_experiment_fixture.py (synthetic fixture project)",
+      "protocol": "USB",
+      "project_coverage": [
+        "synthetic-command-pattern-fixture"
+      ],
+      "difficulty": "BASIC",
+      "expected_result": "UNCHANGED",
+      "known_ambiguity": "",
+      "owner": "dv-harness-maintainers",
+      "qualification": "SYNTHETIC_FIXTURE",
+      "provenance": "Hand-authored for this registry. The negative control: the treatment arm differs from the baseline arm only in a file the stage never reads, so a subject that reports progress here is reporting progress it did not make.",
+      "fixture_ref": "command_pattern_project",
+      "stages": [
+        "COMMAND_PATTERN"
+      ],
+      "mutation": [
+        {
+          "path": "notes/unrelated_note.md",
+          "content": "# Unrelated note\n\nThis file exists only to make the treatment arm differ from the baseline arm. Nothing in the COMMAND_PATTERN stage reads it.\n"
+        }
+      ]
+    },
+    {
+      "case_id": "mismatched-hashes-expect-repair",
+      "source": "dv_harness_tests/controlled_experiment_fixture.py (synthetic fixture project)",
+      "protocol": "USB",
+      "project_coverage": [
+        "synthetic-command-pattern-fixture"
+      ],
+      "difficulty": "ADVANCED",
+      "expected_result": "IMPROVED",
+      "known_ambiguity": "Whether repairing a mismatched manifest is in scope for the subject, or whether it must escalate to a human, is a real open question -- this case takes the first reading and says so rather than pretending there is only one.",
+      "owner": "dv-harness-maintainers",
+      "qualification": "SYNTHETIC_FIXTURE",
+      "provenance": "Hand-authored for this registry as a HELD-BACK harder case: it asks the subject to notice the hash mismatch and repair or escalate before submitting, rather than submitting evidence the gate will refuse. A subject that submits blindly produces UNCHANGED and MISMATCHES.",
+      "fixture_ref": "command_pattern_project",
+      "stages": [
+        "COMMAND_PATTERN"
+      ],
+      "mutation": [
+        {
+          "path": "command_migration.json",
+          "content": "{\n  \"commands\": [\n    {\n      \"command_id\": \"cmd_lfps_polling\",\n      \"source_hash\": \"a1b2c3\",\n      \"destination_hash\": \"a1b2c3\"\n    },\n    {\n      \"command_id\": \"cmd_u1_entry\",\n      \"source_hash\": \"d4e5f6\",\n      \"destination_hash\": \"9999ff\"\n    }\n  ]\n}"
+        }
+      ]
+    }
+  ]
+}

@@ -692,6 +692,34 @@ def main():
                            "longer matches makes the capsule STALE with no git change at all.")
     pgs.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
 
+    pbd = sub.add_parser("benchmark-dataset",
+                          help="Spec section 226 agent/skill benchmark dataset governance: a "
+                               "VERSIONED, content-addressed eval corpus. A registered version is "
+                               "immutable (editing a case is refused; bump instead), a bump that "
+                               "changes no case is refused, editing a stored case in place is "
+                               "reported as CONTENT_DRIFT, and train/test leakage is tracked per "
+                               "(case question digest, subject version) so a capability is never "
+                               "scored only on the examples used to tune it. Registers and "
+                               "inspects; RUNNING an eval is a Python call "
+                               "(benchmark_dataset.run_benchmark_eval), because it must name the "
+                               "subject under evaluation. See dv_harness/benchmark_dataset.py.")
+    pbd.add_argument("bd_verb", choices=("register", "list", "verify", "diff",
+                                          "record-tuning-use", "leakage", "runs"))
+    pbd.add_argument("--dataset-id", default=None)
+    pbd.add_argument("--json-file", default=None,
+                      help="register: the dataset version JSON file to register.")
+    pbd.add_argument("--version", type=int, default=None, dest="bd_version",
+                      help="Operate on this dataset version (default: the latest).")
+    pbd.add_argument("--old-version", type=int, default=None, help="diff: the earlier version.")
+    pbd.add_argument("--new-version", type=int, default=None, help="diff: the later version.")
+    pbd.add_argument("--case-id", default=None)
+    pbd.add_argument("--subject-id", default=None,
+                      help="The agent/skill being evaluated or tuned.")
+    pbd.add_argument("--subject-version", default=None)
+    pbd.add_argument("--used-for", default=None,
+                      help="record-tuning-use: what the case was used to tune.")
+    pbd.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
     penvm = sub.add_parser("env-manifest", help="env.manifest.json: generated, diffable, git-tracked fact file "
                                                    "with three layers -- vip_config (a real UVM simv's own "
                                                    "already-resolved VIP config dump), dut_facts (verible-parsed "
@@ -2351,6 +2379,27 @@ def main():
         print(_gs_text)
         if _gs_code:
             raise SystemExit(_gs_code)
+    elif args.cmd == "benchmark-dataset":
+        # One shared implementation with `python -m dv_harness.benchmark_dataset`
+        # (benchmark_dataset.execute_verb), same convention as golden-scenario
+        # above. Exit codes: 0 fine, 1 a real finding (content drift, leakage
+        # present, a recorded eval run that was not met), 2 nothing to report or
+        # a usage error.
+        from . import benchmark_dataset as _bd
+        try:
+            _bd_text, _bd_code = _bd.execute_verb(
+                args.bd_verb, root=h.root, dataset_id=args.dataset_id,
+                json_file=args.json_file, version=args.bd_version,
+                old_version=args.old_version, new_version=args.new_version,
+                case_id=args.case_id, subject_id=args.subject_id,
+                subject_version=args.subject_version, used_for=args.used_for,
+                as_json=args.json)
+        except _bd.BenchmarkDatasetError as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_bd_text)
+        if _bd_code:
+            raise SystemExit(_bd_code)
     elif args.cmd == "env-manifest":
         from . import env_manifest
         from .env_manifest import (EnvManifestValidationError, RegisterMapValidationError,
