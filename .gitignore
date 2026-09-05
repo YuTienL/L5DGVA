@@ -6,6 +6,12 @@ __pycache__/
 .worktrees/
 .work/put_debug.log
 
+# capability_evolution.run_controlled_experiment() (2026-09-05) writes each
+# isolated baseline/treatment fixture run under here -- ~67 untracked files
+# per real experiment run, per the three-loop gap-close review's own
+# measurement. Per-run scratch, never a deliverable.
+.dv-harness/experiments/
+
 # Local-only credential script for relay auto-reconnect (CLAUDE.md 2026-09-03
 # amendment) -- must never be committed, this machine only.
 replay.ps1
