@@ -404,6 +404,46 @@ fsdbreport's -csv output actually declares -- never a hardcoded/guessed schema.<
 <tbody id="fsdbReportTableBody"></tbody></table></div>
 </div>
 
+<div class="card" id="memoryCenterCard"><h3>Memory + Obsidian Knowledge Center</h3>
+<div class="note">Real record counts for all five Memory Hierarchy tiers
+(<code>memory.MEMORY_LEVELS</code>: Working / Job / Project / Engineering / Organizational) plus a
+real browse/search over the DV-Knowledge Vault notes <code>memory_vault.py</code> mirrors those
+records into (GET /api/memory). Per-tier counts are
+<code>MemoryStore.index_integrity()</code>'s own <code>per_level</code> figures -- the same read-only
+report <code>dv-harness memory doctor</code>'s <code>memory_store_index</code> check reads, so
+<b>record files</b> (what is really on disk) and <b>index rows</b> (what
+<code>MemoryRetriever.search()</code> can actually find) stay two separate numbers: a tier where they
+disagree has records that exist but are invisible to search. Vault notes are read through the real
+<code>memory_vault.get_active_provider()</code> and its own <code>search()</code>/<code>read()</code>
+-- no markdown or YAML frontmatter is parsed in dashboard.py.
+<br><b>Organizational is deliberately not a local file store.</b>
+<code>memory_router.route_and_store()</code> sends ORGANIZATIONAL_MEMORY straight to the shared,
+cross-user Knowledge Center instead of <code>.dv-harness/memory/organizational/</code>, so that
+tile shows the shared store's real configured/not-configured state rather than a local count of 0
+that would read as "no organizational knowledge exists". That shared store's own connectivity is
+the separate <b>Shared Knowledge Center</b> card below; this card is about what THIS project's
+memory tiers hold.
+<br>Read-only: authoring a record or a note stays CLI-only
+(<code>dv-harness memory add</code>) and the engine's own promotion write-through -- what enters a
+durable knowledge tier is gated on real verification evidence, never on a browser form. No memory
+store and no vault yet shows an honest empty state naming both paths looked at, never a fabricated
+count.</div>
+<div id="memoryTiles" class="tiles" style="margin-top:8px"></div>
+<div class="note" id="memoryIntegrityNote" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><label>Search vault notes
+  <input id="memoryNoteQuery" size="26" placeholder="keyword / free text"></label>
+  <label>Tier <select id="memoryLevelFilter"><option value="">(any tier)</option></select></label>
+  <button onclick="loadMemoryCenter()">Search</button></div>
+<div style="overflow-x:auto"><table id="memoryNotesTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Note</th><th style="padding:4px">Failure / root cause</th><th style="padding:4px">Tier</th>
+<th style="padding:4px">Protocol</th><th style="padding:4px">Status</th>
+<th style="padding:4px">Confidence</th><th style="padding:4px">Updated</th>
+<th style="padding:4px">Path</th></tr></thead>
+<tbody id="memoryNotesTableBody"></tbody></table></div>
+<pre id="memoryNoteDetail" style="display:none;white-space:pre-wrap;font-size:12px;background:#f7f9fc;border:1px solid #e3e9f2;border-radius:6px;padding:8px;margin-top:8px;max-height:360px;overflow:auto"></pre>
+</div>
+
 <div class="card"><h3>Shared Knowledge Center</h3>
 <div class="note">Read-only status (GET /api/knowledge/status). Choosing/typing the shared
 Linux-server path is CLI-only by design: <code>dv-harness knowledge setup</code> always
@@ -895,6 +935,121 @@ async function doResearchAction(command, candidateId){
   await loadResearch();
 }
 
+// Memory + Obsidian Knowledge Center card (GUI-11). Fetched once on page load
+// and again on an explicit Search -- deliberately NOT joined to load()'s 3s
+// poll, unlike the AMBA/Research cards above: durable knowledge tiers change
+// on a promotion, not per second, and memory_vault.get_active_provider()
+// runs a real capability probe (detect_obsidian_cli(): PATH lookups plus a
+// `--version` subprocess when a binary is found) that has no business firing
+// every three seconds on an HTTP thread. Same fetch-once convention the
+// Sessions and User Info cards already use.
+let _memoryData = null;
+async function loadMemoryCenter(){
+  let qs = '?q=' + encodeURIComponent(val('memoryNoteQuery'))
+         + '&level=' + encodeURIComponent(val('memoryLevelFilter'));
+  _memoryData = await (await fetch('/api/memory' + qs)).json();
+  renderMemoryCenter();
+}
+function renderMemoryCenter(){
+  let r = _memoryData;
+  if(!r) return;
+  let tiles = document.getElementById('memoryTiles');
+  let note = document.getElementById('memoryIntegrityNote');
+  let tbody = document.getElementById('memoryNotesTableBody');
+  let sel = document.getElementById('memoryLevelFilter');
+  // Tier filter options come from memory.MEMORY_LEVELS over the wire, never a
+  // hardcoded copy of the tier vocabulary in this page.
+  if(sel && sel.options.length <= 1){
+    (r.levels||[]).forEach(lv=>{
+      let o = document.createElement('option'); o.value = lv; o.textContent = lv; sel.appendChild(o);
+    });
+  }
+  if(!r.available){
+    let sd = (r.store&&r.store.store_dir)||'', vp = (r.vault&&r.vault.vault_path)||'';
+    tiles.innerHTML = tile(0,'Memory Records');
+    note.innerHTML = r.error
+      ? '<span class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</span>'
+      : 'No memory record and no knowledge vault in this project yet (looked for <code>'+sd+'</code> and <code>'+vp+'</code>).';
+    tbody.innerHTML = '<tr><td style="padding:4px" colspan="8">Nothing to browse yet.</td></tr>';
+    return;
+  }
+  let s = r.store||{}, v = r.vault||{}, ii = s.index_integrity;
+  tiles.innerHTML = (r.tiers||[]).map(t=>{
+    if(!t.has_local_store){
+      // Organizational: the shared Knowledge Center IS its store, so a local
+      // count would be a lie in either direction. Show the shared store's
+      // real configured state instead.
+      let n = t.knowledge_center_configured===true ? 'shared'
+            : (t.knowledge_center_configured===false ? 'not cfg' : '?');
+      return tile(n, t.level+' (shared KC)');
+    }
+    return tile(t.record_files==null ? '-' : t.record_files, t.level);
+  }).join('') + tile(v.available ? v.note_count : '-', 'Vault Notes');
+
+  let parts = [];
+  if(r.error) parts.push('<span class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</span>');
+  if(!s.available){
+    parts.push('No local memory store yet (looked for <code>'+s.store_dir+'</code>).');
+  } else if(s.error){
+    parts.push('<span class="err">'+s.error.reason+': '+JSON.stringify(s.error.detail)+'</span>');
+  } else if(ii){
+    parts.push('Store <code>'+s.store_dir+'</code>: '+ii.record_file_count+' record file(s), '
+      + ii.index_row_count+' index row(s) -- '
+      + (ii.ok
+          ? '<span class="ok">files and search index agree</span>'
+          : '<span class="err">DRIFT: '+(ii.files_missing_from_index||[]).length
+            + ' record file(s) invisible to MemoryRetriever.search(), '
+            + (ii.index_rows_without_file||[]).length
+            + ' index row(s) with no file. Repair with <code>dv-harness memory doctor</code>.</span>'));
+  }
+  if(!v.available){
+    parts.push('No knowledge vault yet (looked for <code>'+v.vault_path+'</code>).');
+  } else {
+    parts.push('Vault <code>'+v.vault_path+'</code> via <code>'+v.provider+'</code> ('+v.status+'): '
+      + v.note_count+' note(s)'
+      + (v.scan_truncated ? ' -- scan capped at '+v.scan_limit+', so this count is a floor' : ''));
+    if(v.error) parts.push('<span class="err">'+v.error.reason+': '+JSON.stringify(v.error.detail)+'</span>');
+  }
+  note.innerHTML = parts.join('<br>');
+
+  tbody.innerHTML = (r.notes||[]).map(n=>{
+    // `failure` is the note schema's own title-equivalent field
+    // (build_frontmatter_from_memory_record(): the record's title, else its
+    // root_cause). Truncated in the cell with the full value on hover, the
+    // same drill-down-on-hover convention the AMBA card uses.
+    let fm = n.frontmatter||{};
+    let failure = String(fm.failure||'');
+    let hover = `${failure}\\ncategory: ${fm.category||'-'} | subsystem: ${fm.subsystem||'-'}`
+      + ` | tags: ${(fm.tags||[]).join(', ')||'-'} | schema: ${fm.schema_status||'-'}`;
+    return `<tr style="border-bottom:1px solid #edf1f5;cursor:pointer" title="${hover.replace(/"/g,'&quot;')}" onclick="showMemoryNote('${n.note_id}')">`
+      + `<td style="padding:4px"><code>${n.note_id}</code></td>`
+      + `<td style="padding:4px">${failure.length>90 ? failure.slice(0,90)+'...' : failure}</td>`
+      + `<td style="padding:4px">${fm.memory_level||''}</td>`
+      + `<td style="padding:4px">${fm.protocol||''}</td>`
+      + `<td style="padding:4px">${fm.status||''}</td>`
+      + `<td style="padding:4px">${fm.confidence||''}</td>`
+      + `<td style="padding:4px">${fm.updated||''}</td>`
+      + `<td style="padding:4px">${n.path||''}</td></tr>`;
+  }).join('') || ('<tr><td style="padding:4px" colspan="8">'
+      + (v.available ? 'No vault note matches the current search.'
+                     : 'No knowledge vault yet -- nothing to browse.')
+      + '</td></tr>');
+}
+async function showMemoryNote(noteId){
+  // Full note body read through the SAME provider.read() the CLI uses -- this
+  // page never opens a .md file itself.
+  let el = document.getElementById('memoryNoteDetail');
+  let r = await (await fetch('/api/memory?note='+encodeURIComponent(noteId))).json();
+  let d = r.note_detail;
+  el.style.display = 'block';
+  if(!d || d.ok === false){
+    el.textContent = 'Note not readable: '+noteId+' ('+((d&&d.error)||'NOT_FOUND')+')';
+    return;
+  }
+  el.textContent = '['+d.note_id+'] '+d.path+'\\n\\n'
+    + JSON.stringify(d.frontmatter, null, 2) + '\\n\\n' + (d.body||'');
+}
+
 async function loadKnowledgeStatus(){
   let r = await (await fetch('/api/knowledge/status')).json();
   document.getElementById('knowledgeStatusResult').textContent = JSON.stringify(r, null, 2);
@@ -1260,7 +1415,7 @@ async function showExplain(stage){
  }));
  document.getElementById('deexplain').textContent = blocks.join('\\n\\n');
 }
-load(); setInterval(load,3000); loadSessions(); loadUserInfo();
+load(); setInterval(load,3000); loadSessions(); loadUserInfo(); loadMemoryCenter();
 </script></body></html>"""
 
 
@@ -1910,6 +2065,199 @@ def _read_research_state(root: Path) -> Dict[str, Any]:
     return {**empty, "available": True, "candidates": rows,
             "counts": {**counts, "by_recommendation": by_recommendation},
             "audit_records": audit}
+
+
+# --- Memory Hierarchy + Obsidian Knowledge Vault (GUI-11) -------------------
+# dashboard.py had no surface at all for the 5-tier Memory Hierarchy
+# (memory.MEMORY_LEVELS: working/job/project/engineering/organizational) or for
+# the DV-Knowledge Vault memory_vault.py mirrors those records into. The
+# "Shared Knowledge Center" card below is a DIFFERENT thing -- it reports the
+# cross-project broker's config/connectivity, not what this project's own
+# memory tiers hold -- so a reviewer had no way to answer "how much verified
+# knowledge does this project actually carry, at which tier" from the GUI.
+#
+# Every number and every note below is READ from the real modules, never
+# re-derived here:
+#   - per-tier record counts come from MemoryStore.index_integrity(), the
+#     SAME read-only drift report memory_doctor's `memory_store_index` check
+#     uses (it also reports index-vs-file drift, which is exactly the failure
+#     that once hid 18 of 31 engineering records from search -- see
+#     MemoryStore._index_lock()'s comment);
+#   - which tiers even HAVE a local file store is derived from
+#     memory_router's own dispatch tables rather than restated, so
+#     "organizational has no local store by design, its backing store IS the
+#     shared Knowledge Center" cannot drift out of sync with the router;
+#   - vault notes come from the real MemoryProvider (memory_vault.
+#     get_active_provider()) through its own search()/read(). No markdown or
+#     YAML frontmatter is parsed in this module.
+MEMORY_VAULT_NOTE_LIMIT = 25
+# The bucket-by-tier scan is one search() over the vault with an empty query
+# (that adapter's own documented "list everything") rather than one search per
+# tier. Bounded so a very large vault degrades into an honestly-flagged
+# truncated count instead of an unbounded read on an HTTP thread.
+MEMORY_VAULT_SCAN_LIMIT = 500
+
+
+def _memory_store_dir(root: Path) -> Path:
+    return root / ".dv-harness" / "memory"
+
+
+def _locally_stored_memory_levels() -> set:
+    """Which MEMORY_LEVELS tiers really have a `.dv-harness/memory/<level>/`
+    file store, derived from memory_router's OWN destination dispatch tables.
+
+    Deliberately derived rather than hardcoded: `organizational` is absent
+    from both tables because route_and_store() sends ORGANIZATIONAL_MEMORY
+    straight to OrganizationalMemoryStore (the shared, cross-user Knowledge
+    Center) instead of falling into the generic MemoryStore dispatch -- see
+    that branch's comment. Restating that design decision as a literal here
+    would give it a second home that could silently disagree with the router."""
+    from .memory_router import _STORE_LEVEL, _TIER_STORE_CLASSES
+    return {cls.level for cls in _TIER_STORE_CLASSES.values()} | set(_STORE_LEVEL.values())
+
+
+def _read_memory_center_state(root: Path, *, text_query: str = "",
+                              level_filter: str = "",
+                              limit: int = MEMORY_VAULT_NOTE_LIMIT,
+                              note_id: str = "") -> Dict[str, Any]:
+    """Real per-tier Memory Hierarchy counts + real vault note browse/search
+    for GET /api/memory.
+
+    A project that has never written a memory record and has no vault reports
+    an honest empty state (`available: false`) naming both paths it looked at
+    -- the same contract GET /api/coverage, /api/amba and /api/research hold
+    to. A store or vault that exists but cannot be read reports its real
+    reason rather than a 500.
+
+    Read-only in intent: neither half is constructed unless its directory
+    already exists, so polling this endpoint never materializes a memory store
+    or a vault tree in a project that has neither. (Once a vault DOES exist,
+    get_active_provider() runs bootstrap_vault(), which is additive-only
+    mkdir(exist_ok=True) by its own contract and never touches an existing
+    file -- that is the sanctioned factory every real caller uses, and
+    constructing an adapter directly to dodge it would be the parallel
+    mechanism this codebase forbids.)"""
+    from .memory import MEMORY_LEVELS, MemoryStore, OrganizationalMemoryStore
+    from . import memory_vault
+
+    levels = list(MEMORY_LEVELS)
+    query_echo = {"text": text_query, "memory_level": level_filter,
+                  "limit": limit, "note": note_id}
+    base = {"available": False, "levels": levels, "tiers": [],
+            "store": None, "vault": None, "notes": [], "note_detail": None,
+            "query": query_echo, "error": None}
+    if level_filter and level_filter not in levels:
+        return {**base, "error": {"reason": "UNKNOWN_MEMORY_LEVEL",
+                                  "detail": {"memory_level": level_filter,
+                                             "known_levels": levels}}}
+
+    cfg = load_config(root)
+
+    # -- tier half: the real local record stores --------------------------
+    store_dir = _memory_store_dir(root)
+    store: Dict[str, Any] = {"available": store_dir.exists(),
+                             "store_dir": str(store_dir),
+                             "index_integrity": None, "error": None}
+    per_level: Dict[str, Any] = {}
+    if store["available"]:
+        try:
+            integrity = MemoryStore(root).index_integrity()
+        except Exception as e:
+            store["error"] = {"reason": "MEMORY_STORE_UNREADABLE",
+                              "detail": {"message": str(e)}}
+        else:
+            store["index_integrity"] = integrity
+            per_level = integrity.get("per_level") or {}
+
+    # -- vault half: the real Obsidian/filesystem knowledge vault ----------
+    vault_path = memory_vault.resolve_vault_path(root, cfg)
+    vault: Dict[str, Any] = {"available": vault_path.exists(),
+                             "vault_path": str(vault_path),
+                             "provider": None, "status": None, "detail": None,
+                             "note_count": 0, "scan_limit": MEMORY_VAULT_SCAN_LIMIT,
+                             "scan_truncated": False, "error": None}
+    notes: List[Dict[str, Any]] = []
+    note_detail: Optional[Dict[str, Any]] = None
+    notes_by_level: Dict[str, int] = {}
+    if vault["available"]:
+        try:
+            provider = memory_vault.get_active_provider(root, cfg)
+            status = provider.status()
+            vault["provider"] = status.get("provider")
+            vault["status"] = status.get("status")
+            vault["detail"] = status
+            scan = provider.search({}, limit=MEMORY_VAULT_SCAN_LIMIT)
+            if not scan.get("ok"):
+                vault["error"] = {"reason": "VAULT_SEARCH_UNAVAILABLE",
+                                  "detail": scan}
+                scanned: List[Dict[str, Any]] = []
+            else:
+                scanned = list(scan.get("results") or [])
+            vault["note_count"] = len(scanned)
+            vault["scan_truncated"] = len(scanned) >= MEMORY_VAULT_SCAN_LIMIT
+            for n in scanned:
+                lv = str((n.get("frontmatter") or {}).get("memory_level") or "(unset)")
+                notes_by_level[lv] = notes_by_level.get(lv, 0) + 1
+
+            search_query: Dict[str, Any] = {}
+            if text_query:
+                search_query["text"] = text_query
+            if level_filter:
+                search_query["memory_level"] = level_filter
+            if search_query:
+                res = provider.search(search_query, limit=limit)
+                if res.get("ok"):
+                    notes = list(res.get("results") or [])
+                else:
+                    vault["error"] = {"reason": "VAULT_SEARCH_UNAVAILABLE",
+                                      "detail": res}
+            else:
+                notes = scanned[:limit]
+
+            if note_id:
+                read = provider.read(note_id)
+                note_detail = read if read.get("ok") else {
+                    "ok": False, "note_id": note_id,
+                    "error": read.get("error") or read.get("reason") or "NOT_FOUND"}
+        except Exception as e:
+            vault["error"] = {"reason": "VAULT_UNREADABLE",
+                              "detail": {"message": str(e)}}
+
+    # -- one row per tier, both halves joined ------------------------------
+    local_levels = _locally_stored_memory_levels()
+    try:
+        kc_configured: Optional[bool] = OrganizationalMemoryStore(root, cfg=cfg).configured()
+    except Exception as e:
+        kc_configured = None
+        base["error"] = {"reason": "ORGANIZATIONAL_BACKING_STORE_UNREADABLE",
+                         "detail": {"message": str(e)}}
+
+    tiers: List[Dict[str, Any]] = []
+    for lv in levels:
+        counts = per_level.get(lv) or {}
+        row: Dict[str, Any] = {
+            "level": lv,
+            "has_local_store": lv in local_levels,
+            "record_files": counts.get("files"),
+            "index_rows": counts.get("index_rows"),
+            "vault_notes": notes_by_level.get(lv, 0) if vault["available"] else None,
+        }
+        if lv in local_levels:
+            row["backing_store"] = str(store_dir / lv)
+        else:
+            # memory_router.route_and_store()'s ORGANIZATIONAL_MEMORY branch:
+            # no local file store by design, the shared Knowledge Center IS
+            # the store. A local count of 0 here is that design, not "no
+            # organizational knowledge exists" -- the card must not let those
+            # two read the same.
+            row["backing_store"] = "shared Knowledge Center (knowledge_center.KnowledgeCenterClient)"
+            row["knowledge_center_configured"] = kc_configured
+        tiers.append(row)
+
+    return {**base,
+            "available": bool(store["available"] or vault["available"]),
+            "tiers": tiers, "store": store, "vault": vault,
+            "notes": notes, "note_detail": note_detail}
 
 
 # --- FSDB structured evidence panel (fsdbreport -csv) ----------------------
@@ -2573,6 +2921,26 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 # RESEARCH_REJECT / RESEARCH_HOLD), never through a
                 # research-specific write endpoint -- see _read_research_state().
                 self._send_json(_read_research_state(project_root))
+            elif self.path == "/api/memory" or self.path.startswith("/api/memory?"):
+                # Read-only. Authoring a memory record or a vault note stays
+                # CLI-only (`dv-harness memory add`, and the engine's own
+                # promotion write-through), same reasoning as `knowledge
+                # setup` being CLI-only below: what enters a durable
+                # knowledge tier is gated on real verification evidence, not
+                # on a browser form.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                try:
+                    note_limit = int(params.get("limit", MEMORY_VAULT_NOTE_LIMIT))
+                except ValueError:
+                    note_limit = MEMORY_VAULT_NOTE_LIMIT
+                self._send_json(_read_memory_center_state(
+                    project_root,
+                    text_query=urllib.parse.unquote_plus(params.get("q", "")),
+                    level_filter=urllib.parse.unquote(params.get("level", "")),
+                    limit=max(1, min(note_limit, MEMORY_VAULT_SCAN_LIMIT)),
+                    note_id=urllib.parse.unquote(params.get("note", "")),
+                ))
             elif self.path == "/api/user-info" or self.path.startswith("/api/user-info?"):
                 from . import user_info
                 qs = self.path.split("?", 1)[1] if "?" in self.path else ""
