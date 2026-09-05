@@ -53,7 +53,7 @@ def _crosscheck(composition, project_root):
         from dv_harness import system_resource_inventory as sri
     except ImportError as exc:
         return {"status": "SKIPPED_ANALYSIS_UNAVAILABLE",
-                "reason": "CROSSCHECK_UNAVAILABLE", "detail": str(exc)}
+                "reason": "DV_HARNESS_PACKAGE_NOT_IMPORTABLE", "detail": str(exc)}
     names = [str(s.get("name")) for s in (composition.get("selected_subsystems") or [])
              if isinstance(s, dict) and s.get("name")]
     findings = sri.real_cross_subsystem_findings(
