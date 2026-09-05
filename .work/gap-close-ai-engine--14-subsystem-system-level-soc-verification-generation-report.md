@@ -1,129 +1,109 @@
-# Gap close — AI mechanism #14: Subsystem → System-Level/SoC verification generation
+# Gap-close pass: AI mechanism #14 — Subsystem -> System-Level/SoC verification generation
 
-**Status: DONE**
+**Verdict: NEEDS_SEPARATE_EFFORT**
 
-Audit verdict was PARTIALLY_WIRED. Two of the three in-scope items the audit named are closed
-for real; item 4 (the `NotImplementedError` protocol-behavior stubs) is confirmed out of scope and
-stays open by design, and item 1's "fire it in *this* project's own state" is deliberately NOT
-done — see "What was deliberately not done" below.
+**Files modified: none.** No code, test, doc or config file was touched by this pass. This report
+is the only artifact written.
 
-## What the re-check found (before changing anything)
+## Why not DONE, and why not NO_ACTION_NEEDED
 
-Every load-bearing claim in the audit re-verified against the current tree:
+The audit's finding splits cleanly into two independent gaps, and they resolve differently:
 
-- `.dv-harness/state.json` → `current_stage: ENV_CHECK`; `ENV_CHECK` is the only stage not
-  `NOT_STARTED`. `SYSTEM_LEVEL`, `PROJECT_MODEL`, `SIGNOFF` are all `NOT_STARTED`, `attempts: 0`.
-- `.dv-harness/soc-composer/` holds only the four `*_template.json`/policy files. The real
-  `subsystem_environment_registry.json` does not exist.
-- The call sites are real and unconditional: `engine.py` `begin_stage()` calls
-  `resolve_environment_mode(...)`, and `run_stage()`'s PASS branch calls
-  `_compose_soc_environment_files(...)`.
-- One correction to the audit's own numbers: `STAGE_GATES["SYSTEM_LEVEL"]` has **14** gates, not 3.
-  That is what made a genuine `run_stage()`-driven test look prohibitive and is why the existing
-  regression test called the private method instead.
+1. **The code-wiring gap (mode decision computed but nothing branched on it) is genuinely CLOSED.**
+   Re-verified below against the CURRENT tree, not accepted from the audit text. Nothing for this
+   pass to close.
+2. **A second, structural gap remains** — `cross_subsystem_scenarios()` / `end_to_end_scoreboard()` /
+   `system_coverage()` raise `NotImplementedError` because no cross-subsystem topology descriptor
+   exists anywhere in the repo. That is a new capability (schema + gate + generator + fixtures),
+   not a wiring fix, and the task framing explicitly instructs it not be attempted in this pass.
 
-Two more findings the audit did not have, both of which changed the shape of the fix:
+Reporting NO_ACTION_NEEDED would have hidden (2); reporting DONE would have been false. Hence
+NEEDS_SEPARATE_EFFORT, scoped below.
 
-1. **There is no `CREATE ENVIRONMENT` code path to add a dispatch to** — a repo-wide grep for
-   `create_environment` found only a doc reference. The real entry point every
-   `.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` (all ten) invokes is
-   `tools/generate_protocol_uvm_environment.py` → `ProtocolEnvGenerator.generate()`. That script
-   called the generator unconditionally, so the router's decision reached the prompt and nothing
-   else. That is the real location of the gap the audit described as item 2.
-2. `system_level_validator.py`'s harness-supplied `--registered` cross-check means an agent's
-   claimed subsystem list is already verified against the real registry (name **and**
-   `release_sha`) before `_compose_soc_environment_files()` ever runs. So the engine-side composer
-   input needed no hardening — only proof that the chain actually executes.
+## Re-verification of the audit's evidence (the tree moved twice since it ran)
 
-## What changed
+The audit's cited tip commit for `create_environment.py` was `2c0e841`. The tree has since advanced
+through two more commits that touch exactly these files, so the wiring claim was re-checked rather
+than assumed to have survived:
 
-**1. `dv_harness/uvm_generator/create_environment.py` (new) — the missing dispatch.**
-`create_environment(root, request, out_dir)` resolves the mode with the real
-`environment_mode_router.resolve_environment_mode()` and branches:
-- `SUBSYSTEM_MODE` → the same `ProtocolEnvGenerator(out).generate(m)` call as before.
-- `SYSTEM_LEVEL_MODE`, all subsystems registered → `compose_soc_environment()`.
-- `SYSTEM_LEVEL_MODE`, something missing → `SubsystemModeRequiredError` naming the missing
-  subsystems and the router's own `next_action` (CLAUDE.md: build it through SUBSYSTEM_MODE, then
-  return to composition). It never composes the registered subset, and never degrades a
-  two-subsystem request into one subsystem environment.
-- nothing requested → `EnvironmentModeUnresolvedError`, honoring
-  `environment_mode_policy.json`'s `mode_must_be_explicit_before_generation` instead of defaulting.
+- `984d75e` — "signoff: the human-approval hard-stop must govern the subsystem registry too"
+- `79031e7` — "protocol-model-layer: reach the five protocol models from the one CREATE ENVIRONMENT
+  entry point" (gap #13's fix, which edited both `create_environment.py` and
+  `tools/generate_protocol_uvm_environment.py`)
 
-It reuses the three existing real pieces and reimplements none of them. The composed subsystems are
-read from the **real registry**, never from the caller — so this path cannot inject an unregistered
-subsystem into a composition, matching the guarantee the SYSTEM_LEVEL stage path already had.
+Result: **the #14 dispatch survived both intact and was extended, not displaced.**
 
-**2. `tools/generate_protocol_uvm_environment.py` — wired to it.** The one official CREATE
-ENVIRONMENT entry point now routes through the dispatch. Added `--root` (defaults to cwd, never
-this repo's own root) for the registry lookup. A single-protocol manifest — what every builder
-skill passes today — still resolves SUBSYSTEM_MODE and produces byte-identical output with the
-same `status: OK` stdout shape; the pre-existing `test_cli_shim_generates_environment_from_manifest_file`
-passes unchanged.
+| Claim | Status | Evidence re-checked now |
+|---|---|---|
+| Dispatch code is real and branches on the router | CONFIRMED | `dv_harness/uvm_generator/create_environment.py:197-282` — resolves via `resolve_environment_mode()`, branches to `ProtocolEnvGenerator` (line 242) or `compose_soc_environment()` (line 269) |
+| The one official entry point calls it | CONFIRMED | `tools/generate_protocol_uvm_environment.py:29-31,47` imports and calls `create_environment()`; no direct `ProtocolEnvGenerator` call remains |
+| All builder skills invoke that script | CONFIRMED | 11 files under `.claude/skills/PROTOCOL_BUILDERS/` reference `generate_protocol_uvm_environment.py` (audit said 10; one more has since been added — same conclusion) |
+| Composition reads the REAL registry, not the caller | CONFIRMED | `create_environment.py:199,266-267` via `read_registered_subsystem_entries()` (`dv_harness/environment_mode_router.py:64-88`), written only by `engine.py:1234` `_persist_subsystem_registry_entry()`, called at `engine.py:3751` on a gate-validated PASS |
+| Real `SOC_ENVIRONMENT_COMPOSED` emitter on the stage path | CONFIRMED | `dv_harness/engine.py:1451`, reached from `_compose_soc_environment_files()` (`engine.py:1370`, called at `engine.py:3753`) |
+| Three `NotImplementedError` stubs are real | CONFIRMED | `soc_environment_composer.py:333, 354, 374` |
+| The stub boundary is narrow, not a hidden bypass | CONFIRMED | `soc_environment_composer.py:443-474` — `soc_virtual_sequencer.sv`, `soc_tb_top.sv` and `soc_composition_manifest.json` are always produced; the stubs fire only at lines 463-468, i.e. only when the manifest explicitly requests that content |
+| This project's registry is empty | CONFIRMED (with a correction) | The file does not exist at all — `.dv-harness/soc-composer/` holds only the four templates plus the new `system_resource_registry_template.json`. `read_registered_subsystem_entries()` degrades a missing file to `[]` (`environment_mode_router.py:80-83`), so the audit's "empty" and the real "absent" reach the same result: zero registered subsystems, nothing fabricated |
+| Zero real compositions in production history | CONFIRMED | `grep -c SOC_ENVIRONMENT_COMPOSED .dv-harness/events.jsonl` → 0; `find . -type d -name soc_composition` → no match anywhere in the tree |
 
-**3. `dv_harness/environment_mode_router.py`** — added `registry_path()` and
-`read_registered_subsystem_entries()` (full gate-validated entries, the shape
-`compose_soc_environment()` consumes). `read_registered_subsystem_names()` is now derived from it
-rather than parsing the same file a second way, so the two readers cannot disagree.
+### Test suite: passes, with one load-induced flake identified
 
-**4. `dv_harness/uvm_generator/soc_environment_composer.py` + `dv_harness/engine.py`** —
-`soc_composition_out_dir()` is now one shared helper; `engine.py`'s
-`_compose_soc_environment_files()` uses it instead of its own hardcoded path string, and the
-dispatch uses it as its default, so a composition produced by either real path without an explicit
-output directory lands where the other looks for it rather than at two independently hardcoded
-`generated/soc_composition/...` strings. (The tool always passes an explicit `--out`, which wins.)
+`python -m pytest dv_harness_tests/test_system_level_soc_composition_wiring.py`
 
-**5. `dv_harness_tests/test_system_level_soc_composition_wiring.py` (new)** — 8 tests, the point
-of the whole pass.
+- Full-file run under this session's heavy concurrent load: **9 passed, 1 failed in 307s**.
+  `test_real_run_stage_system_level_refuses_unregistered_subsystem` died on
+  `subprocess.TimeoutExpired`.
+- Re-run of that single test in isolation: **1 passed in 60.25s**.
 
-## Tests
+So the failure is **not a regression in #14**. It is `dv_harness/gates.py:1152`'s fixed
+`timeout=30` per gate subprocess: this test drives a real `run_stage("SYSTEM_LEVEL")` through all
+14 real `STAGE_GATES["SYSTEM_LEVEL"]` scripts, and under contention from the other concurrent
+workstreams in this tree one gate subprocess exceeded 30s. The audit saw 10/10 in 133s on a quieter
+machine.
 
-`10 passed` in the new file. Every touched-area suite green, no regressions:
-`test_engine_gates_and_routing` 239 passed, `test_hard_gate_script_smoke` 177 passed,
-`test_soc_environment_composer` + `test_protocol_env_generator` 22 passed,
-`test_generator_wiring_notices` 2 passed. `dv_harness.mcp.claude_md_index` and
-`source_authority.assert_doc_matches_code()` (the two CLAUDE.md-parsing checks) still match after
-the CLAUDE.md edit.
+**Deliberately not fixed here.** `gates.py` is a heavily contended shared file in this pass, and
+raising a global gate timeout is a test-infrastructure change unrelated to mechanism #14 — making
+it from this workstream would be exactly the out-of-scope edit to a shared file the task warns
+about. Flagged for whoever owns test-suite stability: the wall-clock budget for gate-driving tests
+is not load-proof.
 
-The one that closes the audit's item 1/3: **`test_real_run_stage_system_level_pass_composes_soc_environment`**
-drives a genuine `DVHarness.run_stage("SYSTEM_LEVEL")` — not the private method — on a temp project
-carrying the real shipped graph and all 14 real gate scripts, with the registry seeded through the
-real production writer `engine.py::_persist_subsystem_registry_entry()`. Evidence payloads for all
-14 gates are transcribed from `prompts.py`'s own `STAGE_INSTRUCTIONS[SYSTEM_LEVEL]` examples, i.e.
-what a real agent is actually told to produce. It asserts stage PASS, real `soc_tb_top.sv` /
-`soc_virtual_sequencer.sv` / `soc_composition_manifest.json` content, the blackboard write, and a
-real `SOC_ENVIRONMENT_COMPOSED` event in `events.jsonl`. Nothing is mocked — not a gate, not a
-verdict, not the registry.
+## What the follow-up effort should cover
 
-Its negative twin, `test_real_run_stage_system_level_refuses_unregistered_subsystem`, proves the
-registry cross-check is live on that same real path: identical evidence with only USB registered
-fails the stage and composes nothing.
+**Title:** Cross-subsystem topology descriptor, so SoC composition can generate behavior content
+instead of refusing it.
 
-## What was deliberately NOT done
+**Why it is a separate effort, not a wiring fix.** The three stubs are not unwired code — there is
+no code to wire. They refuse because a registry entry carries only identity/qualification metadata
+(name, `environment_manifest`, `release_sha`, `qualification_state`, interface/clock-reset
+compatibility) and never sequence-body semantics, so a generic composer has no primary source for
+cross-subsystem behavior. Fabricating it is precisely what CLAUDE.md's "No Golden-Reference Content
+Mining" forbids. The missing input — an address map, interrupt routing and DMA ownership model
+spanning composed subsystems — does not exist anywhere in the repo in any form.
 
-- **The audit's item 1 asks for a real firing inside *this project's own* `.dv-harness`.** Doing
-  that means writing two subsystem entries into this repo's live
-  `subsystem_environment_registry.json` and driving its live `state.json`/`events.jsonl` to a
-  SYSTEM_LEVEL PASS. This repo has no real subsystem environments — `usb31_dev_uvm` is a remote,
-  single-DUT, single-protocol build worked outside `run_stage()` — so those entries would be
-  fabricated, and the resulting `SOC_ENVIRONMENT_COMPOSED` record would be manufactured verification
-  evidence in the project's real audit trail. CLAUDE.md's Evidence Truth Rule forbids that, and
-  `grep -c SOC_ENVIRONMENT_COMPOSED .dv-harness/events.jsonl ≥ 1` is not worth buying with a fake.
-  The proof is instead a real engine, real gates and real generated content on a real temp project.
-  **This project's own registry is still legitimately empty, and mechanism #14 has still never
-  fired in this project's production history — it now provably fires when a real project supplies
-  real registered subsystems.**
-- **Item 4 — the `cross_subsystem_scenarios()` / `end_to_end_scoreboard()` / `system_coverage()`
-  `NotImplementedError` stubs — remains open and is correctly out of scope.** Closing them needs a
-  real system-level topology descriptor (address/interrupt/DMA maps across subsystems), a
-  cross-subsystem scoreboard-composition strategy, and multi-IP regression orchestration, all
-  sourced from primary per-subsystem VIP/DUT evidence for the specific subsystems composed (No
-  Golden-Reference Content Mining). None of that exists yet beyond the manifest schema. The stubs
-  raising honestly is the correct current behavior, and both real paths handle it: the engine logs
-  `SOC_COMPOSITION_NOT_IMPLEMENTED` and writes nothing; the dispatch propagates it.
+**Scope, four parts:**
 
-## Remaining honest limitation
+1. **Schema** — a `cross_subsystem_topology.json` contract (shared address ranges, interrupt lines,
+   DMA channels per composed subsystem pair) under `dv_harness/schemas/`, following the existing
+   input-contract convention of `soc_arch_map.schema.json` / `register_map.schema.json`: a
+   documented contract this repo consumes, not an extractor, since this repo owns no SoC.
+2. **Gate** — a new script under `tools/verification_flow/` validating that descriptor against each
+   composed subsystem's own real `environment_manifest.json` interface/interrupt declarations.
+   `fabric_topology_completeness_gate.py` (exists, verified on disk) is the right structural
+   precedent — it already does address-decode completeness for AMBA.
+3. **Generator** — extend `compose_soc_environment()` to consume the descriptor when present and
+   generate real `end_to_end_scoreboard()` / `cross_subsystem_scenarios()` / `system_coverage()`
+   content from it. The refusal must remain the behavior when no descriptor is supplied: absence of
+   the topology fact stays an honest `NotImplementedError`, never a degraded placeholder.
+4. **Verification** — a `dv_harness_tests/test_*` fixture with two really-registered subsystems plus
+   a real topology descriptor, asserting the generated scoreboard/scenario content references both
+   subsystems' real interface signals (not their names alone).
 
-`create_environment()` is the dispatch at the *tool* entry point. `ProtocolEnvGenerator` remains
-importable and directly callable, so a caller that bypasses the tool still bypasses the mode
-decision. That is the same disclosed-residual shape as `require_tier`/`require_phy_boundary`: what
-is closed is the documented path every builder skill actually uses, not every conceivable import.
+**Separately, and not code work at all:** mechanism #14 has still never fired in this repo's own
+production history, because this harness repo has never had a second subsystem to register. That
+residual retires only when a real project registers >= 2 subsystems through a real SIGNOFF PASS and
+runs `SYSTEM_LEVEL` for real, producing a genuine `SOC_ENVIRONMENT_COMPOSED` record outside test
+fixtures. It must not be retired by writing fabricated registry entries into this project's real
+audit trail.
+
+## Commit
+
+None. No file other than this report changed, so there is nothing to commit for this mechanism.

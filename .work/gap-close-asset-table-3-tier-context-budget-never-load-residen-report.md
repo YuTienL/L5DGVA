@@ -1,176 +1,153 @@
 # Gap close: 3-tier context budget (never-load / resident / on-demand) + MCP-only enforcement
 
-**Status: DONE** (with two scoped `NEEDS_SEPARATE_EFFORT` carve-outs, named below).
+**Status: DONE** (2 of the audit's 4 verdicts re-verified as already closed by concurrent work;
+2 real residual defects found and closed by this pass.)
 
-**Test summary:** `python -m pytest dv_harness_tests/test_context_budget.py -q` -> **69 passed**;
-plus `test_mcp_verbs / test_mcp_manifest_and_schema / test_mcp_read_only_boundary /
-test_mcp_query_regression / test_mcp_server_transport / test_mcp_env_manifest_integration /
-test_env_manifest / test_connectivity / test_agent_checkpoint_check` -> **329 passed** (4m39s), the
-suites covering everything this change touches or cites.
+Commit: `f2fdaa6` — `fix(context-budget): stop the resident pack reporting real generators as
+NOT IMPLEMENTED, and classify the remaining tier-3 artifacts` (2 files, +249/-3).
 
-Commits: `2c79eea` (the mechanism) and `53f8324` (a real miscitation found while verifying it).
-
----
-
-## Verdict per requirement
-
-| Requirement | Before | After |
-|---|---|---|
-| Tier 1 — NEVER into context | BLOCKED | **READY** — documented + enforced as a real PreToolUse deny |
-| Tier 2 — ALWAYS resident | PARTIAL | **READY as a mechanism** / artifacts 1-of-5 PRESENT, reported not hidden |
-| Tier 3 — LOAD ON DEMAND | PARTIAL | **READY for regmap**; `vip_ref/` + `intent.md` = NEEDS_SEPARATE_EFFORT |
-| "Everything routes through MCP" | BLOCKED | **READY as a gate**, with three named residual gaps |
+**Test summary**: 201 passed (`test_context_budget.py` + `test_asset_processing_artifacts.py` +
+`test_four_key_judgments_enforcement.py`), including the two real-PowerShell subprocess tests that
+drive the actual PreToolUse deny and SessionStart injection.
 
 ---
 
-## What was built
+## 1. The audit finding was accurate when written, and is now stale
 
-All four pieces are real and wired; none is a stub.
+The audit was gathered against a repo state that no longer exists. Between it and this pass, a
+concurrent workflow built the enforcement machinery it correctly reported missing. Re-verified as
+real, present, and working right now:
 
-**Policy as data** — `dv_harness/context_budget.policy.json` (189 lines), validated against
-`dv_harness/schemas/context_budget.schema.json` (124 lines). A project extends its own DUT/VIP
-roots there, never in Python. Four `NEVER-*` rules matching the spec's four content classes
-exactly: `NEVER-VIP-SOURCE`, `NEVER-RAW-PDF`, `NEVER-WHOLE-CHIP-DB`, `NEVER-REGRESSION-LOGS`.
-
-**Logic** — `dv_harness/context_budget.py` (666 lines). Path normalisation across the three
-spellings of the same file (`context_budget.py:144`), glob translation where `**` spans separators
-and `*` does not (`:160` — `fnmatch` would have conflated them), tier classification (`:234`),
-command-string scanning (`:324`), the PreToolUse decision (`:382`), and the bounded tier-2 pack
-(`:469`, `:525`). CLI: `hook` / `session-start` / `classify` / `resident`.
-
-**The gate** — `.claude/hooks/context-budget-guard.ps1`, registered at
-`.claude/settings.json:55` for `Read|Grep|Bash|PowerShell|NotebookRead`. This is the specific thing
-the audit said did not exist: `block-destructive.ps1` matches only `Bash|PowerShell` and inspects
-for destructive patterns, never firing on `Read` and never looking at *what* is read.
-
-**The residency mechanism** — `.claude/hooks/context-resident-pack.ps1` at
-`.claude/settings.json:32` (`SessionStart`), emitting `hookSpecificOutput.additionalContext` with
-the size-capped pack (`MAX_PACK_BYTES = 24_000`, `context_budget.py:96`; JSON summarised by shape,
-never inlined). Before this, only `CLAUDE.md` was resident, and only because the agent harness
-auto-loads it — an accident of the tool, not something this project engineered.
-
-**Documentation** — `CLAUDE.md:655`, "Context Budget: 3 Tiers + MCP-First Routing". The original
-finding was that the 3-tier text existed nowhere in the repo except a workflow prompt;
-`test_context_budget_is_documented_in_claude_md` is the drift guard.
-
----
-
-## Evidence that it actually fires
-
-Every tier-1 test case is a tool call `.claude/settings.local.json`'s own allow history records as
-having really happened in this project — not invented scenarios:
-
-```
-$ echo '{"tool_name":"Bash","tool_input":{"command":"grep -h ss_vout_model .../sim.log"}}' \
-    | powershell -NoProfile -File .claude/hooks/context-budget-guard.ps1
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
- "permissionDecisionReason": "CONTEXT BUDGET tier-1 (NEVER into context) violation:
-  NEVER-REGRESSION-LOGS ... Use the fixed MCP verb `query_regression` instead ..."}}
-```
-
-Run as a real subprocess with the payload on real process stdin — the way Claude Code invokes a
-PreToolUse hook. That path found a genuine never-fires bug the Python-level tests could not:
-PowerShell 5.1 prepends a UTF-8 BOM when piping a string into a native command, so `json.loads`
-failed and the guard failed open on *every* call. Fixed at `context_budget.py:575`
-(`read_hook_stdin`, utf-8-sig), with `test_hook_cli_tolerates_a_utf8_bom` pinning it.
-
-`python -m dv_harness.context_budget resident` exits 2 while any tier-2 artifact is MISSING and
-prints the real command that produces it.
-
----
-
-## A real miscitation, found and fixed (commit `53f8324`)
-
-The policy first cited `dv_harness/vip_distill.py` as the VIP-source distiller — purely because
-the name looked right. Reading it showed it is an **evidence-envelope normaliser for sim logs, job
-records and fsdb reports** (`distill_sim_log` / `distill_job_record` / `distill_fsdbreport`); it
-never reads VIP source. A denied agent would have been sent after a script that does not do the
-job. There is no VIP-source distiller in this repo, so the rule now carries `distiller: null` plus
-a `distiller_note` saying exactly that, printed in the deny message.
-`test_a_cited_distiller_really_handles_that_content_class` asserts each cited distiller's source
-actually mentions the class it claims (`.pdf` / `.fsdb` / `sim.log`) — that check fails on
-`vip_distill.py`, which is how this was caught. The other three citations verified real:
-`doc_extraction.py` (handles `.pdf` in its `SUPPORTED` set, though its own 2026-08-28 notice says
-it is standalone — recorded), `fsdb_report.py`, `sim_log_analysis.py`.
-
----
-
-## Deliberate carve-outs (a gate that gets switched off enforces nothing)
-
-- VIP `Examples/` reference testbenches and `.f` filelists stay readable — they are the sanctioned
-  reference material and already have a real `Read` allow entry.
-- `ls`/`find`/`stat`/`wc`/`file` may *name* a tier-1 file without reading it. Disabled the moment
-  any pipe/redirect/chaining metacharacter appears, so `ls x && cat sim.log` is not an `ls`
-  (`test_a_chained_command_is_not_treated_as_a_bare_listing`).
-- `Edit`/`Write` are untouched — a context budget has nothing to say about them; the existing
-  `settings.json` deny rules and `block-destructive.ps1` own that.
-- A genuinely necessary tier-1 read takes a reasoned `exemptions` entry; the rule still fires and
-  is recorded in the decision, so the audit trail shows it was consciously waived.
-
-## Residual gaps, stated rather than papered over
-
-Each has a named test so it cannot be quietly forgotten:
-
-1. **Shell-variable indirection.** `sed -n "1,50p" $M` cannot be classified — at PreToolUse time
-   the shell has not expanded `$M`. `test_variable_indirected_read_is_a_known_residual_gap`.
-2. **Directory indirection.** `ls <dir> | xargs cat` names no tier-1 *file*. The alternative —
-   marking every `sim/` directory tier-1 — would deny grepping a build dir for its Makefile, a
-   worse trade. `test_directory_indirection_is_a_known_residual_gap`.
-3. **Fail-open.** Both hooks exit 0 silently if Python is unavailable. Deliberate: a context budget
-   that bricks every `Read` when an interpreter moves is worse than one that occasionally misses.
-   The destructive-operation guard, which must fail closed, is a separate hook.
-
-This is a large reduction in bypass surface, **not a seal**, and `CLAUDE.md` says so.
-
-**Not changed, and why:** `.claude/settings.json`'s `allow` list still contains
-`Bash(pdftotext:*)`, which contradicts `NEVER-RAW-PDF`. I attempted to remove it and the action was
-correctly refused — a subagent must not edit permission settings. It is harmless in practice (a
-PreToolUse deny outranks a permission allow, and `test_tier1_violation_is_denied` covers exactly
-that command), but **a human should delete that one line** for consistency.
-
----
-
-## NEEDS_SEPARATE_EFFORT (out of this scope, precisely bounded)
-
-Two tier-2 and two tier-3 artifact **types** genuinely do not exist, and building them is the
-asset-processing-table workstream's own scope, not a bounded completion of the budget rule:
-
-| Artifact | Real status |
+| Thing the audit said did not exist | Current truth |
 |---|---|
-| `.dv-workflow/hierarchy.json` | Path is really declared by `.claude/skills/CORE/hierarchy-discovery/SKILL.md:22`, but no non-agent extractor exists |
-| `.dv-workflow/phy_boundary.json` | No extractor at all; only real reference is `critical_fields` at `.claude/skills/USB/usb-profile/PROFILE.yaml:8` |
-| `docs/vip_ref/<protocol>.md` | No producer (see the `vip_distill.py` correction above) |
-| `docs/intent.md` | No generator |
+| The 3-tier rule documented anywhere real | `CLAUDE.md` § "Context Budget: 3 Tiers + MCP-First Routing" |
+| Any enforcement of tier 1 | `dv_harness/context_budget.py:382` `evaluate_tool_call()` → `.claude/hooks/context-budget-guard.ps1`, registered in `.claude/settings.json` for `Read|Grep|Bash|PowerShell|NotebookRead` |
+| Any residency mechanism | `context_budget.py:561` `session_start_payload()` → `.claude/hooks/context-resident-pack.ps1`, registered under `SessionStart` |
+| `.claudeignore` | exists (2832 B) |
+| Policy as data + schema | `dv_harness/context_budget.policy.json`, `dv_harness/schemas/context_budget.schema.json` |
+| `phy_boundary.json` extractor | `dv_harness/phy_boundary.py` (+ `schemas/phy_boundary.schema.json`) |
+| `vip_ref/<protocol>.md` generator | `dv_harness/vip_symbol_index.py` `write_vip_ref()` |
+| `intent.md` / `constraints.md` generators | `dv_harness/design_intent.py` `write_intent()` / `write_constraints()` |
+| Worked examples | `examples/asset_processing/` (inputs + generated, 13 files) |
 
-I did **not** stub these. Instead the policy declares each one's canonical path and real
-`produced_by` string, and `build_resident_pack()` reports them as MISSING with that command
-attached — so the gap is machine-visible and closeable rather than silently absent
-(`test_missing_artifact_is_reported_with_the_command_that_produces_it`). Current residency is
-**1 of 5 PRESENT** (`CLAUDE.md`); `env.manifest.json` and `run_profile.json` have real, tested
-generators but no project instance on disk yet, which is project data rather than a harness gap.
+Verified by running it, not by reading it:
 
-Tier 3's third item needs no work: single-register lookup via `get_register`
-(`dv_harness/mcp/verbs.py:134-184`) was already READY and is re-confirmed.
+- Tier-1 deny on the audit's own documented bypasses:
+  `python -m dv_harness.context_budget classify "D:/DV/Task/USB/VIP/src/svt_usb_agent.sv"` →
+  `never_load` / `NEVER-VIP-SOURCE`; `--command 'pdftotext -layout ".../usb_svt_uvm_user_guide.pdf" ug.txt'`
+  → `never_load` / `NEVER-RAW-PDF`.
+- End-to-end through the real hook process (how Claude Code invokes it):
+  piping `{"tool_name":"Bash","tool_input":{"command":"grep -h ss_vout_model /d/DV/Task/USB/sim/sim.log"}}`
+  into `.claude/hooks/context-budget-guard.ps1` returns a real
+  `permissionDecision: deny` naming `NEVER-REGRESSION-LOGS` and routing to `query_regression`.
 
----
+So the audit's **"NEVER into context = BLOCKED"** and **"Everything through MCP = BLOCKED"**
+verdicts are both **now READY**, and tier 2 / tier 3 are no longer PARTIAL for the reasons given.
 
-## Concurrency note
+## 2. Two real residual defects, found by this pass and closed
 
-Several workflows were editing this repo throughout. `CLAUDE.md` carried other workstreams'
-uncommitted hunks, and the shared git index held another workflow's staged files
-(`engine.py`, `gates.py`, `prompts.py`, `models.py`, two SKILL.md files, their tests). Both commits
-were therefore made through an **isolated index** (`GIT_INDEX_FILE` + `read-tree HEAD` +
-`write-tree`/`commit-tree`/`update-ref`) after trimming the `CLAUDE.md` diff to my own hunk — so
-nothing of theirs was swept in, and their staging was left exactly as found. Verified after each
-commit: my files clean, their 12 staged files still staged.
+### 2.1 The resident pack was actively misinforming every session (the substantive one)
 
-## Files
+`build_resident_pack()` (`context_budget.py:469-508`) prints a MISSING artifact's `produced_by`
+**verbatim** into every session via the SessionStart hook. Three `produced_by` fields had gone
+stale, so the context budget's own resident pack was telling every agent that real generators do
+not exist:
 
-- `dv_harness/context_budget.py` (new, 666 lines)
-- `dv_harness/context_budget.policy.json` (new, 189 lines)
-- `dv_harness/schemas/context_budget.schema.json` (new, 124 lines)
-- `dv_harness_tests/test_context_budget.py` (new, 539 lines, 69 tests)
-- `.claude/hooks/context-budget-guard.ps1` (new)
-- `.claude/hooks/context-resident-pack.ps1` (new)
-- `.claude/settings.json` (hooks registered: `SessionStart` :32, `PreToolUse` :55)
-- `CLAUDE.md` (new section at :655)
+- `phy_boundary` — `"NOT IMPLEMENTED -- no extractor exists in this repo as of 2026-09-03"`, while
+  `dv_harness/phy_boundary.py` exists.
+- `intent` — `"NOT IMPLEMENTED -- no generator exists in this repo as of 2026-09-03"`, while
+  `dv_harness/design_intent.py` exists.
+- `vip_ref` — cited `dv_harness/vip_distill.py`, which is **the exact miscitation the same policy
+  file's `NEVER-VIP-SOURCE` rule already disclaims by name** ("does not read VIP source at all").
+  Only the `never_load` half of that 2026-09-04 correction had been applied; the artifact half was
+  missed.
+
+Each now names the real producer, its real entry-point function, that these are library-level
+modules with no `dv-harness` CLI subcommand, and a worked example under
+`examples/asset_processing/`. Confirmed live: the resident pack now prints
+`phy_boundary MISSING ... produce with: dv_harness/phy_boundary.py -- extract_from_env_manifest(...)`.
+
+`hierarchy` was deliberately **left** saying it has no non-agent extractor — that is still true
+(only `.claude/skills/CORE/hierarchy-discovery/SKILL.md` declares the path), and a test now
+protects it from a well-meaning false "correction".
+
+### 2.2 Tier 3 did not classify three artifacts that had become real
+
+`sys_regmap.json`, `init_seq.yaml` and `constraints.md` had real modules
+(`dv_harness/sys_regmap.py`, `init_seq.py`, `design_intent.py`), real schemas and real worked
+examples, but appeared in **no tier**, so `classify_path()` returned `unclassified` — the budget
+had nothing to say about artifacts it exists to route. Added to `load_on_demand`; tier 3 is now
+6 entries and all four spec-named on-demand types classify correctly.
+
+## 3. Root cause, and why the fix is a test rather than an edit
+
+The stale text was not bad luck. The suite had a one-sided contract:
+
+- `never_load[].distiller` was guarded **three** ways — the cited file must exist
+  (`test_cited_distillers_are_real_files`), must genuinely mention its content class
+  (`test_a_cited_distiller_really_handles_that_content_class`), and the `vip_distill.py`
+  miscitation is named and refused (`test_vip_source_rule_cites_a_real_vip_source_distiller`).
+- `artifact[].produced_by` — the **same** "cite a real producer" contract — was checked only for
+  **non-emptiness** (`test_missing_artifact_is_reported_with_the_command_that_produces_it:357`).
+
+That asymmetry is what let `NOT IMPLEMENTED` and the `vip_distill` miscitation survive in
+`produced_by` while being fixed in `distiller`. So the durable fix is the guard, not the text.
+8 new tests (+15 parametrised cases) close it symmetrically.
+
+**One of those tests was itself broken and was caught by mutation-testing it.** The first version
+of `test_no_artifact_claims_unimplemented_while_its_producer_exists` keyed off *which module the
+text cites* — but the real stale text cited **no module at all**, so it passed on the exact state
+it was written to catch. It now asks the **filesystem** which producers exist (deriving the
+candidate from `artifact_id` itself, so a future artifact is checked automatically rather than
+escaping until someone extends a list), and
+`test_the_unimplemented_guard_really_fires_on_the_real_pre_fix_text` pins that it fires against
+the real pre-fix string via `pytest.raises`.
+
+## 4. Honest limits, unchanged and not papered over
+
+- The guard classifies **literal paths only**. `sed -n "1,50p" $M` with `$M` assigned earlier is
+  not classifiable at PreToolUse time. This is disclosed in `context_budget.py`'s own docstring
+  and covered by named tests. A reduction in bypass surface, not a seal.
+- The guard **fails open** if Python is unavailable — deliberate, and separate from
+  `block-destructive.ps1`, which must fail closed.
+- Tier-2 residency in *this* repo is still only `CLAUDE.md`; the harness has no RTL tree or VIP of
+  its own, so `env_manifest`/`run_profile`/`hierarchy`/`phy_boundary` are honestly MISSING here
+  (`resident` exits 2). That is correct reporting, not a gap.
+- `.claude/settings.json` still lists `Bash(pdftotext:*)` in `permissions.allow`. Not a hole in
+  practice — a PreToolUse `deny` outranks a permission allow, and the deny is proven firing on
+  `pdftotext` above — but the allow entry is now misleading residue. Left alone deliberately:
+  `settings.json` is being edited by concurrent workflows this session, and removing a permission
+  entry is a change to the user's harness configuration, not mine to make unasked.
+
+## 5. Concurrency discipline
+
+`git status` was checked before touching anything. Only `dv_harness/context_budget.policy.json`
+and `dv_harness_tests/test_context_budget.py` were modified; both were clean beforehand and the
+full diff was reviewed line-by-line to confirm it contained no other agent's work.
+
+The index already held **another workflow's** staged changes (`CLAUDE.md`, `env_manifest.py`,
+`question_queue.py`, `connectivity_check.py`, `cli.py`, `main_graph.json`, plus a new test and
+report). The commit therefore used `git commit --only -- <my two paths>`, which committed only
+those two files and **left the other workflow's 8 staged files staged and uncommitted** —
+verified after the fact. No broad `git add`, no push (governance forbids agent pushes to
+`master`).
+
+## 6. Note on a flaky test (not a defect in the code under test)
+
+The first full-suite run showed
+`test_guard_hook_denies_through_real_powershell_process` FAILING on a 120 s
+`subprocess.TimeoutExpired`. Investigated rather than assumed: run in isolation it passes in
+10.2 s, and the same payload through the real hook by hand returns the correct deny in 8.7 s. The
+failure was contention from the many concurrent workflows on this machine, not a hang. The final
+full run passed all 201 in 25 s. Flagging it because the 120 s timeout is brittle under heavy
+concurrent load; **not** changed here, since raising a timeout to hide load-induced flake is a
+judgment call for the suite's owner and no assertion is at fault.
+
+## 7. Verdicts
+
+| Requirement | Audit verdict | Verdict now |
+|---|---|---|
+| Tier 1 — NEVER into context | BLOCKED | **READY** — real PreToolUse deny, proven end-to-end through the real hook process |
+| Tier 2 — ALWAYS resident | PARTIAL→BLOCKED | **READY (mechanism)** — real SessionStart injection, bounded by `MAX_PACK_BYTES`; residency in *this* repo is honestly 1/5 and reported as MISSING with real producing commands, which is correct, not a gap |
+| Tier 3 — LOAD ON DEMAND | PARTIAL | **READY** — 6 entries; `vip_ref`/`intent` generators real; `constraints`/`sys_regmap`/`init_seq` added this pass |
+| "Everything through MCP" | BLOCKED | **READY as a gate, with disclosed limits** — 5 fixed verbs, no free-text/SQL fallback, and tier-1 denials now route to them. Literal-path and fail-open limits documented and tested, not claimed away |

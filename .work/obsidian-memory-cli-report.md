@@ -287,7 +287,16 @@ just in isolated unit tests.
   **60 tests, all still passing**, confirming this workstream's additions and the concurrent
   Workstream-3 git-integration/debug-flow extensions coexist correctly.
 - Combined memory-adjacent run (all of the above together): **137 passed, 0 failed.**
-- Full repository suite (`pytest` at repo root): **<FULL_SUITE_RESULT>**
+- Full repository suite (`pytest -q` at repo root, kicked off in the background at the start of this
+  workstream and left to run to completion): **1979 passed, 1 failed, 1212.53s (20m12s).** The one
+  failure — `test_stats_snapshot.py::test_agent_count_matches_real_glob` (expects exactly 19 real
+  agent profiles under `.claude/agents/`, found 20) — is **not caused by this workstream**: this
+  workstream never touched `.claude/agents/` or `stats_snapshot.py`. It is the visible effect of a
+  different, concurrent workstream this same session adding a new agent profile file (most plausibly
+  Phase 17's `memory-agent.md`, called out in the Workstream-1 report as "genuinely needs a new file"
+  and explicitly out of this workstream's scope) landing mid-run against a test whose fixture
+  hardcodes the prior count. Re-running just the memory-adjacent suite (137 tests, above) after this
+  workstream's own commit confirms zero regressions attributable to this workstream's changes.
 
 ## Files touched
 
