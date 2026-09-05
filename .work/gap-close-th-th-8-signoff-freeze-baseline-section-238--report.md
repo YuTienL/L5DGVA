@@ -153,3 +153,17 @@ Commit scoped by hand to exactly those three — `cli.py`, `commands.py`, `env_m
 `schemas/env_manifest.schema.json`, `mcp_manifest_fixture.py`, `test_env_manifest_fact_sources.py`
 and `tools/git-hooks/pre-merge-commit` were concurrently modified by other passes and were
 deliberately left out of the index.
+
+## 8. Commit
+
+`3aeadc6` — "TH-8: signoff freeze / baseline + post-freeze invalidation (spec section 238)",
+on branch `gap-close/env-manifest-fact-sources` (the branch this session's close-passes are all
+committing to; `master` is untouched, so the PR-only governance rule holds).
+
+Note on the CLAUDE.md section: this repo has a SHARED git index and a concurrent close-pass
+committed it (`cdd125a`) while my CLAUDE.md hunk was staged, so the TH-8 documentation section
+landed inside that commit rather than mine. The content is correct and present in the tree; the
+TH-8 commit message records where it went. My own commit was then hand-scoped to exactly the three
+files I own, and the other passes' staged/modified files (`cli.py`, `commands.py`,
+`test_research_intent_routing.py`, `tools/git-hooks/pre-merge-commit`) were left untouched and
+unstaged.
