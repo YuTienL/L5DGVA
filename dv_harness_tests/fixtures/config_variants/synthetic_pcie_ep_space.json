@@ -1,0 +1,70 @@
+{
+  "space_id": "synthetic_pcie_ep_space",
+  "description": "TEST FIXTURE ONLY. A synthetic PCIe-endpoint-shaped configuration space written for dv_harness_tests/test_config_variant_coverage.py. It is NOT any real DUT's configuration space, NOT read from any project manifest, and must never be cited as evidence about a real device. Its dimensions are the ones spec section 232 names (protocol generation, speed, lane width, data width, compile defines, feature modes, SKU, clock mode) so the fixture exercises a realistically SHAPED space, not a toy one.",
+  "dimensions": [
+    {
+      "name": "gen_speed",
+      "values": ["gen3", "gen4", "gen5"],
+      "source": "SYNTHETIC FIXTURE: protocol generation / speed dimension"
+    },
+    {
+      "name": "lane_width",
+      "values": [1, 2, 4, 8, 16],
+      "source": "SYNTHETIC FIXTURE: lane width dimension"
+    },
+    {
+      "name": "data_width",
+      "values": [64, 128, 256],
+      "source": "SYNTHETIC FIXTURE: datapath width dimension (equivalence-class representatives chosen by the fixture author, not by the selector)"
+    },
+    {
+      "name": "clock_mode",
+      "values": ["common_ref", "srns", "sris"],
+      "source": "SYNTHETIC FIXTURE: clock mode dimension"
+    },
+    {
+      "name": "feature_mode",
+      "values": ["baseline", "aspm_l1ss", "sriov", "ide"],
+      "source": "SYNTHETIC FIXTURE: feature mode dimension"
+    },
+    {
+      "name": "compile_define",
+      "values": ["NONE", "ASSERT_ON", "COV_ON"],
+      "source": "SYNTHETIC FIXTURE: compile define dimension"
+    },
+    {
+      "name": "sku",
+      "values": ["client", "server"],
+      "source": "SYNTHETIC FIXTURE: SKU dimension"
+    },
+    {
+      "name": "vip_config",
+      "values": ["default", "low_latency"],
+      "source": "SYNTHETIC FIXTURE: VIP configuration dimension"
+    }
+  ],
+  "constraints": [
+    {
+      "forbid": {"gen_speed": "gen5", "lane_width": 1},
+      "reason": "SYNTHETIC FIXTURE CONSTRAINT: this fixture's device does not offer a x1 link at its top generation."
+    },
+    {
+      "forbid": {"feature_mode": "sriov", "sku": "client"},
+      "reason": "SYNTHETIC FIXTURE CONSTRAINT: SR-IOV is a server-SKU-only feature in this fixture."
+    },
+    {
+      "forbid": {"clock_mode": "srns", "gen_speed": "gen3"},
+      "reason": "SYNTHETIC FIXTURE CONSTRAINT: the separate-reference-no-spread clock mode is not offered at gen3 in this fixture."
+    }
+  ],
+  "critical_combinations": [
+    {
+      "assignment": {"gen_speed": "gen5", "lane_width": 16, "sku": "server"},
+      "reason": "SYNTHETIC FIXTURE: the fixture's declared headline configuration; section 232 forbids dropping it to reduce compute."
+    },
+    {
+      "assignment": {"feature_mode": "ide", "gen_speed": "gen5"},
+      "reason": "SYNTHETIC FIXTURE: a partially-pinned critical combination, so the fixture exercises completion of an under-specified critical."
+    }
+  ]
+}

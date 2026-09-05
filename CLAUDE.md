@@ -3528,3 +3528,80 @@ would have PASSED the pre-2026-09-06 gate (it carries all five old fields) is
 REJECTED for claiming COMPLETE with `checker: "TBD"` -- plus the older shape's
 four original exit codes, a mixed document, and the fail-closed
 validator-unavailable path.
+
+
+## Configuration Variant Explosion Control: Pairwise Covering Sets (2026-09-06, TH-5)
+
+Spec section 232 names a real configuration space (protocol generation, speed, lane width,
+data width, compile defines, feature modes, SKU, clock mode, subsystem combinations, VIP
+configuration), says "avoid blind Cartesian-product regression", and lists
+`pairwise/covering combinations` as one of the evidence-grounded selection methods. Nothing
+in this repo answered that. `grep -rn "pairwise\|covering_array\|combinatorial" --include=*.py .`
+matched only unrelated things: `system_topology_analysis._pairwise_overlap()` (do two ADDRESS
+REGIONS intersect), `system_command_plan`'s pairwise ESCALATION QUESTION split, and
+`source_authority`'s pairwise CONFLICT questions.
+
+`change_impact.py` / `regression_tiers.py` were deliberately NOT extended into it, because
+they answer the orthogonal question. They select WHICH TESTS from an enumerated pattern
+universe, driven by a real git diff and the traceability registry; neither has any notion of
+a configuration dimension. `dv_harness/config_variant_coverage.py` selects WHICH
+CONFIGURATIONS out of a combinatorial space that has no enumerated universe, only dimensions
+and legal values. The two answers compose (test set x config set) at the caller, and this
+module deliberately does not perform that composition.
+
+**The algorithm is a real, cited one.** `generate_covering_array()` implements **IPOG**
+(In-Parameter-Order-General) -- Lei, Kacker, Kuhn, Okun, Lawrence, "IPOG: A General Strategy
+for T-Way Software Testing", IEEE ECBS 2007; the strength-t generalisation of Tai & Lei's IPO
+(2002) and the algorithm behind NIST ACTS. Chosen because it is DETERMINISTIC (no random
+restarts, so a plan is diffable and reviewable -- the same property
+`env_manifest.save_env_manifest()` insists on), generalises to any t >= 2 with one
+implementation (so a 3-way subspace needs no second mechanism; the default is t=2 because
+that is what section 232 names), and accepts SEEDED rows, which is exactly what "critical
+configurations must not be removed merely to reduce compute" needs: declared critical
+combinations are seeded before generation, completed to full legal configurations by a real
+backtracking search, and excluded from the redundant-row pruning pass by name.
+
+**Constraints are handled soundly rather than optimistically.** A `forbid` clause is a partial
+assignment no emitted configuration may contain. Validity is checked at every assignment,
+t-tuples that themselves contain a forbidden clause are excluded from the target set and
+REPORTED (never silently absent from the arithmetic), and a final REPAIR pass re-verifies
+independently and runs an exhaustive backtracking search for each remaining miss. Only a
+tuple for which that search PROVES no legal full configuration exists is reported as
+`UNREACHABLE_UNDER_CONSTRAINTS`. The module therefore never reports coverage it did not
+achieve. `verify_coverage()` is a separate first-principles recomputation, not a read-back of
+the generator's bookkeeping, so it can be pointed at a hand-written combination list;
+`build_plan()` runs it as part of producing a plan, so a plan artifact cannot claim coverage
+the verifier did not confirm.
+
+`dv-harness config-variants plan|verify --space <file> [--strength N]`, or
+`python -m dv_harness.config_variant_coverage` -- one shared `execute_verb()`, the same
+convention `power-intent`/`golden-scenario` use. Exit 0 full coverage, 1 a real finding
+(uncovered interaction, illegal/incomplete configuration, missing declared critical
+combination), 2 a broken declaration or usage error.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It SELECTS and decides
+nothing else: no build, no job, no LSF, and deliberately no stage gate -- a gate that passed
+on a config plan nobody ran would be worse than none. (2) Section 232's other listed methods
+(requirement-driven, historical-risk, change-impact combinations) enter ONLY as caller-declared
+`critical_combinations` with a real reason string; this module mines nothing and invents no
+combination. (3) Equivalence-class reduction is the AUTHOR's act -- collapsing 64 legal data
+widths to {8, 32, 512} happens when the dimension's legal values are declared, because
+"these two values are equivalent" is a protocol-behaviour claim needing primary evidence.
+(4) Values must be JSON scalars; a structured value is refused, not stringified.
+(5) `legal_cross_product_size` is exactly enumerated only up to `MAX_EXACT_ENUMERATION`
+(200k); above it the count is `UNCOUNTED` with the real reason, never a guess.
+
+Proven by `dv_harness_tests/test_config_variant_coverage.py` (30 tests) against
+`dv_harness_tests/fixtures/config_variants/synthetic_pcie_ep_space.json` -- a fixture whose own
+description states it is a test fixture and not any real DUT's configuration: 8 dimensions,
+3 constraints, 2 declared critical combinations (one only partially pinned). The central tests
+do NOT ask the module's own verifier whether it succeeded; `_brute_force_uncovered_pairs()` is
+an INDEPENDENT re-derivation written from scratch in the test file that enumerates every legal
+pair by nested loops over the fixture JSON and rescans the emitted rows. On that fixture the
+result is 20 configurations covering all 267 legal pairs, against a 6480-point raw Cartesian
+product / 4662 legal configurations -- and 20 is the information-theoretic floor (5 lane widths
+x 4 feature modes), which the test asserts as a lower bound so a "smaller" answer is caught as
+a bug rather than praised. The verifier is separately proven non-vacuous (drop one row and it
+names exactly the pairs the independent recount says went missing), the unreachable-pair,
+illegal-row, undeclared-value, uncompletable-critical and contradictory-declaration paths each
+have their own test, and both real CLI entry points are driven as real subprocesses.

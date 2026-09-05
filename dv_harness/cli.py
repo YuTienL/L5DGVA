@@ -713,6 +713,32 @@ def main():
                            "longer matches makes the capsule STALE with no git change at all.")
     pgs.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
 
+    pcv = sub.add_parser("config-variants", help="Spec section 232 configuration variant explosion "
+                                                    "control: generate a REDUCED t-way (default pairwise) "
+                                                    "covering set of CONFIGURATIONS from a declared config "
+                                                    "space (dimensions, legal values, forbidden "
+                                                    "combinations, declared critical combinations) instead "
+                                                    "of a blind Cartesian product. Real IPOG (Lei et al., "
+                                                    "ECBS 2007 -- the algorithm behind NIST ACTS), "
+                                                    "deterministic and constraint-aware; a declared "
+                                                    "critical configuration is never dropped to reduce "
+                                                    "compute, and a pair no legal configuration can contain "
+                                                    "is reported UNREACHABLE_UNDER_CONSTRAINTS rather than "
+                                                    "silently missing. `verify` checks any combination list "
+                                                    "(including a hand-written one) by independent "
+                                                    "recount. SELECTS only: runs no build, submits no job, "
+                                                    "gates nothing. See dv_harness/config_variant_coverage.py.")
+    pcv.add_argument("cv_verb", choices=("plan", "verify"))
+    pcv.add_argument("--space", required=True,
+                      help="Configuration space JSON (dimensions/constraints/critical_combinations).")
+    pcv.add_argument("--strength", type=int, default=2,
+                      help="Interaction strength t (default 2 = pairwise).")
+    pcv.add_argument("--combinations", default=None,
+                      help="verify: JSON list of configurations, or a plan file with a "
+                           "'combinations' key, to check against the space.")
+    pcv.add_argument("--out", default=None, help="plan: also write the plan JSON to this path.")
+    pcv.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
     pbd = sub.add_parser("benchmark-dataset",
                           help="Spec section 226 agent/skill benchmark dataset governance: a "
                                "VERSIONED, content-addressed eval corpus. A registered version is "
@@ -2456,6 +2482,25 @@ def main():
         print(_gs_text)
         if _gs_code:
             raise SystemExit(_gs_code)
+    elif args.cmd == "config-variants":
+        # One shared implementation with
+        # `python -m dv_harness.config_variant_coverage`
+        # (config_variant_coverage.execute_verb), same convention as
+        # power-intent / golden-scenario above. Exit codes: 0 full t-way
+        # coverage, 1 a real coverage finding (an uncovered interaction, an
+        # illegal/incomplete configuration, a missing declared critical
+        # combination), 2 a broken config-space declaration or usage error.
+        from . import config_variant_coverage as _cvc
+        try:
+            _cv_text, _cv_code = _cvc.execute_verb(
+                args.cv_verb, root=h.root, space_path=args.space, strength=args.strength,
+                combinations_path=args.combinations, out_path=args.out, as_json=args.json)
+        except _cvc.ConfigSpaceError as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_cv_text)
+        if _cv_code:
+            raise SystemExit(_cv_code)
     elif args.cmd == "benchmark-dataset":
         # One shared implementation with `python -m dv_harness.benchmark_dataset`
         # (benchmark_dataset.execute_verb), same convention as golden-scenario
