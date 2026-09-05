@@ -1861,6 +1861,34 @@ def main():
                       help="Print the raw matrix JSON (row_id, harness_stages, "
                            "fact_source and basis per row) instead of the report.")
 
+    # Section 211's GENERATION READINESS MATRIX (dv_harness/generation_readiness.py).
+    # A SEPARATE matrix from golden-flow-readiness above, not an overload of it:
+    # section 47 asks "did this project's twenty GOLDEN FLOW STAGES connect with
+    # evidence" and reads stage run state; section 211 asks "does this FACTORY
+    # have the generation capability each rung of Flow A (spec -> subsystem UVM)
+    # and Flow B (subsystem UVM -> system-level UVM) needs" and reads GENERATION
+    # ARTIFACTS -- env.manifest.json's layers, the protocol capability registry,
+    # the subsystem environment registry and the real SYS-1..40 cross-subsystem
+    # analysis. Neither table is derivable from the other and neither reads the
+    # other's sources. Read-only: runs no stage, starts no build, arbitrates no
+    # active-driver ownership conflict.
+    pgenr = sub.add_parser("generation-readiness",
+                           help="Section 211's twenty-row Generation Readiness Matrix "
+                                "(Capability | Status | Existing Reuse | Evidence | Gap | "
+                                "Priority | Action) for this project, aggregated from the "
+                                "real generation mechanisms and generation artifacts that "
+                                "already exist. Read-only: runs no stage, starts no build "
+                                "and never arbitrates a driver conflict. Exit 2 unless "
+                                "every row is READY.")
+    pgenr.add_argument("--json", action="store_true",
+                       help="Print the raw matrix JSON (row_id, capability, "
+                            "project_evidence_status, fact_source, priority_basis and "
+                            "basis per row) instead of the report.")
+    pgenr.add_argument("--no-deep", action="store_true",
+                       help="Skip the SYS-1..SYS-30 cross-subsystem topology chain; the "
+                            "Flow-B topology/command rows then report UNKNOWN with that "
+                            "as their recorded reason rather than a guessed status.")
+
     # VI-4's VERIFICATION STRATEGY OPTIMIZER (dv_harness/verification_strategy.py).
     # Read-only, and deliberately loud about its own boundary: this harness can
     # EXECUTE simulation only, so `capabilities` exists as a first-class verb --
@@ -3630,6 +3658,16 @@ def main():
         print(json.dumps(_gfr_matrix, ensure_ascii=False, indent=2)
               if args.json else _gfr_text)
         raise SystemExit(_gfr_code)
+    elif args.cmd == "generation-readiness":
+        # One shared implementation with `python -m dv_harness.generation_readiness`
+        # (generation_readiness.execute), same convention as golden-flow-readiness
+        # above. h.cfg is this session's already-loaded config.
+        from . import generation_readiness as _genr
+        _genr_code, _genr_matrix, _genr_text = _genr.execute(
+            h.root, cfg=h.cfg, as_json=args.json, deep=not args.no_deep)
+        print(json.dumps(_genr_matrix, ensure_ascii=False, indent=2)
+              if args.json else _genr_text)
+        raise SystemExit(_genr_code)
     elif args.cmd == "verification-strategy":
         # One shared implementation with `python -m dv_harness.verification_strategy`
         # (verification_strategy.execute_verb), same convention as loop-contract

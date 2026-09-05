@@ -3768,3 +3768,77 @@ claims), plus the false-positive guard that drives the REAL default `acquire()` 
 `engine.py` uses on both roots and asserts no cross-user conflict is reported. `dv-harness coord`
 and `python -m dv_harness.multi_user_coordination` are both driven as real subprocesses, a scan is
 asserted to write NOTHING into a peer root, and a test asserts no stage gate was introduced.
+
+
+## Generation Readiness Matrix (2026-09-06)
+
+Spec section 211's GENERATION READINESS MATRIX is now a real, auto-generated artifact. The gap was
+total and re-verified by negative grep before anything was written: `grep -rni
+"generation.readiness"` matched only the specification's own text, and `grep -rn "GF-AT-"` matched
+only `system_build_proof.py`'s GF-AT-28 comment. Section 211 prints a twenty-row table
+(`Capability | Status | Existing Reuse | Evidence | Gap | Priority | Action`) with EVERY cell
+empty, so "can this factory generate a subsystem environment from a spec, and a system environment
+from subsystems?" had no machine-produced answer -- only prose an auditing session was trusted to
+assemble by hand, which means two audits of the same project could disagree about the same facts.
+
+`dv_harness/generation_readiness.py` is that artifact, and it is deliberately a SEPARATE module
+from `golden_flow_readiness.py` rather than a second matrix bolted into it. The two answer
+different questions from disjoint sources: section 47 asks "did this project's twenty GOLDEN FLOW
+STAGES connect end-to-end with evidence" and reads stage RUN STATE (state.json, gate counts, LSF
+jobs, coverage summaries, signoff records); section 211 asks "does this FACTORY have the generation
+capability each rung of Flow A (spec -> subsystem UVM) and Flow B (subsystem UVM -> system-level
+UVM) needs" and reads GENERATION ARTIFACTS (env.manifest.json's own layers, the protocol capability
+registry, the subsystem environment registry, the real SYS-1..40 cross-subsystem analysis). Neither
+table is derivable from the other, and a test asserts neither borrows the other's fact sources.
+What IS shared is reused rather than re-minted: `subsystem_discovery`'s READY/PARTIAL/BLOCKED/
+UNKNOWN readiness words AND its PRESENT/ABSENT/BLOCKED/UNKNOWN factor words, the real
+`inference.next_best_action()` Gap -> Action engine, and `connectivity.render_markdown_table()`.
+
+**Every row answers TWO questions, and Status is the STRICT worse of the two.** CAPABILITY -- does
+the mechanism this row names exist and import in this harness? -- is decided by resolving the row's
+own declared `fact_source` dotted paths through the import system (`assert_fact_sources_resolvable()`
+proves all 62 of them), so a row whose backing mechanism has not landed renders BLOCKED naming the
+missing path instead of a fabricated status. PROJECT EVIDENCE is what the row's real reader returned
+over this root. The fold is strict worst-wins, not the softer mixing rule used to summarise many
+rows: a present capability with no project input reads UNKNOWN, never PARTIAL, because GF-AT-28 says
+UNKNOWN never becomes READY automatically and PARTIAL would read as progress that has not happened.
+
+Where the rows land: rows 1-9 (Flow A) read env.manifest.json's OWN per-layer `status`/`reason` --
+`dut_facts.rtl`, `dut_facts.registers`, `vip_config.vip_release`/`user_guide_refs`,
+`env_topology.component_hierarchy`/`config_db_trace`/`testplan_correspondence` -- plus
+`protocol_capability.capability_rows()` and, for Single-Test Proof, the registry's
+`qualification_state` judged by the real `qualification.map_to_system_level_state()`. Rows 10-16 and
+20 (Flow B) read `system_resource_inventory.real_cross_subsystem_findings()` (the same front door
+the two real SYSTEM_LEVEL gates and the SoC composer cross-check against, so this table and those
+verdicts cannot disagree), one `system_topology_analysis.analyze_system_topology()` document run
+ONCE and read four ways, and `system_build_proof.subsystem_source_sets()`. Rows 17-19 sit on the
+composer's deliberately-unimplemented boundary and PROBE it through the already-real
+`system_scheduling_plan.probe_composer_boundary()`, which CALLS the three stubs and records that
+they still raise -- so an implemented stub flips the row to PARTIAL ("boundary has moved") rather
+than going unnoticed. `dv-harness generation-readiness [--json] [--no-deep]`, or `python -m
+dv_harness.generation_readiness`; exit 2 unless every row is READY.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It DECIDES, APPROVES and
+ARBITRATES nothing: no stage is run, no gate script invoked, no build/regression/LSF job started
+(the section 206 ladder is reported as having real sources, never RUN -- a readiness report that
+starts a build is not read-only), and no governance state written. A real DRIVER_CONFLICT renders
+BLOCKED, carries SYS-12's `preferred_model` through as text for a HUMAN, and says in the cell that
+this harness does not pick a winner. SYS-39/40's stop before any real system command.txt, scenario
+body or shared driver code is untouched. Two tests assert the report writes NOTHING into either an
+empty project or a real two-subsystem one. (2) There is deliberately no stage gate: a gate passing
+on a capability nobody exercised would be worse than none. (3) The Spec Parsing / Requirement IR row
+has no canonical persisted artifact path in this repo, so its project axis is honestly UNKNOWN
+rather than inferred from a stage status. (4) `--no-deep` skips the SYS-1..SYS-30 chain and the
+Flow-B topology rows then say so as their recorded reason, never a guessed status.
+
+Proven by `dv_harness_tests/test_generation_readiness.py` (28 tests). The headline test builds a
+REAL two-subsystem project on disk -- reusing (importing, not copying) the fixture
+`test_system_level_track_b_gate_crosscheck.py` already owns, whose `b_active=True` form puts two
+ACTIVE AXI masters on ONE SoC CPU port -- and asserts the ownership row is BLOCKED off the REAL
+SYS-9..SYS-14 analysis with human arbitration named, against a passive-second-driver negative
+control that reads READY. Others assert the topology/command/virtual-sequencer rows match the REAL
+`analyze_system_topology()` document field for field, that a demoted `qualification_state` in the
+REAL registry flips the Single-Test Proof row, that env.manifest.json layers surface the
+GENERATOR's own NOT_AVAILABLE reason text, that an unresolvable `fact_source` renders BLOCKED naming
+it, that a raising probe still yields its mandatory row, and that both entry points run as real
+subprocesses.
