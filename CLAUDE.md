@@ -4313,3 +4313,85 @@ DIFFERENT root is still refused, a genuinely bad payload still fails on the SCRI
 with provenance declared, an unenforced gate reaches its script unchanged and carries no
 annotation, a derived claim is proven NOT to be caveated, and a byte-level snapshot proves
 summarizing provenance writes nothing.
+
+
+## Mutation Testing of This Repo's Own Test Suite (2026-09-06, PC-4)
+
+Every gate in this repository is guarded by a test, and the Evidence Truth Rule rests on those
+tests FAILING when the thing they guard breaks. Nothing measured that. Re-verified by direct
+search before building: `grep -ril "mutation_test|bug_inject|mutant"` over `*.py`/`*.md`/`*.toml`
+matched NOTHING repo-wide -- every `mutation` hit in this file belongs to
+`capability_evolution.run_controlled_experiment()`, which is a per-candidate TREATMENT-ARM edit
+authored by whoever runs the experiment, not a fault injected to test a test.
+
+**SCOPE, stated up front so it is never misread.** `dv_harness/mutation_testing.py` is
+testing-infrastructure-on-this-repo's-own-Python-code. It is NOT DUT/RTL-level fault injection
+(stuck-at / bit-flip / gate-level fault campaigns): that needs a real RTL target and a simulator
+this repository does not contain, and nothing here may ever be cited as evidence about a DUT. The
+subject is this harness's own test suite; the verdict is about that suite's sensitivity and
+nothing else.
+
+**Why not coverage.** Coverage says a line EXECUTED during a test. That is a different claim from
+"a test would have FAILED had that line been wrong" -- a test that imports a module and asserts
+nothing about its boundaries gets full line coverage and kills zero mutants. Mutation score is
+the measurement that separates the two.
+
+**Four standard AST operators**, each a single-token change whose surviving names a specific
+weakness: `COMPARISON_SWAP` (`<`↔`<=`, `>`↔`>=`, `==`↔`!=`, `is`↔`is not`, `in`↔`not in` --
+boundary-SHIFTING rather than inverting, because an inverted comparison breaks so loudly that any
+test kills it and the mutant teaches nothing), `BOUNDARY_SHIFT` (off-by-one on an int literal),
+`BOOL_OP_SWAP` (`and`↔`or`) and `BOOL_CONST_FLIP`. Mutants are produced by `ast.unparse` of the
+whole tree with exactly one site changed, so a mutant is always syntactically valid; a
+`-1` is labelled the way the SOURCE spells it ("-1 -> -2"), not the way the AST stores it.
+
+**The working tree is never written to, and that is structural.** mutmut and cosmic-ray overwrite
+the source file and restore it in a `finally`; a crash mid-run would then leave a deliberately
+broken `dv_harness/*.py` in a tree whose main/master pushes are governed by real gates. Instead
+each mutant runs in a SUBPROCESS carrying a `sys.meta_path` finder that serves the mutated source
+for exactly one module name, from a temp file, before pytest is imported. The real file is opened
+read-only.
+
+**A mutant run cannot reach a real build, regression or LSF submission.** `assert_safe_target()`
+refuses any module outside `dv_harness/` and any test file outside `dv_harness_tests/` -- and the
+tests really run under that suite's `conftest.py`, whose existing session-wide
+`ENV_TRANSPORT_OVERRIDE = "off"` pin is REUSED rather than re-implemented here (a second copy
+would be exactly the parallel mechanism the Methodology Consolidation Rule forbids).
+
+**Baseline first, always.** The run begins by executing the UNMUTATED source through the SAME
+import hook. That proves both that the tests are green and that the hook is transparent; if it
+fails, the report is `BASELINE_FAILED`, every mutant stays `NOT_RUN` and there is no score --
+never a number computed off a red suite. A `TIMEOUT` gets its OWN bucket and is deliberately NOT
+folded into `killed`: a hang is not the tests detecting the fault.
+
+**Real measured result on this repo.** `dv_harness.qualification` scores **1.0** (3/3 killed) and
+`dv_harness.stats_snapshot` scores **0.333** (12 generated, 4 killed, 8 survived) -- the contrast
+is the point, and the survivors are real findings a human can act on (`_iron_rule_count`'s and
+`_graph_counts`'s missing-file `return 0` branches are never exercised; `_is_real_agent_profile`'s
+`OSError` branch is never exercised). SURVIVED is a finding, not necessarily a bug: some are
+EQUIVALENT MUTANTS (`str.find` can return -1 or a non-negative index and never -2, so `-1 -> -2`
+is undetectable by construction). Standard mutation testing has no decision procedure for these;
+they are reviewed by a human, and this module never claims a survivor proves a missing test.
+
+Front door: `dv-harness mutation-test [--module ...] [--test ...] [--operator ...]
+[--max-mutants N] [--lines A:B] [--list] [--min-score F]`. `--module` omitted runs every pair in
+`DEFAULT_TARGETS`, deliberately a SHORT list because one mutant costs one full pytest process.
+`--max-mutants` reports the remainder `NOT_RUN` rather than dropping them, so a partial run can
+never read as a full one.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) Mutation score is a
+MEASUREMENT here, not a gate: there is no stage gate and no default threshold; `--min-score` is
+opt-in. (2) It ARBITRATES and AUTHORIZES nothing -- no approval is minted and no human-approval
+gate is referenced. (3) Equivalent-mutant detection is undecidable in general and is not
+attempted. (4) The operator set is four, not the dozen a mature tool ships; each added operator
+multiplies wall clock by its mutant count.
+
+Proven by `dv_harness_tests/test_mutation_testing.py` (21 tests). The core end-to-end test runs
+the ONE real line `stats_snapshot.py` spells `if end == -1` and asserts its two mutants come back
+DIFFERENTLY -- `==`→`!=` KILLED, `-1`→`-2` SURVIVED -- for reasons provable by inspection rather
+than by hope. That asymmetry is the control: if the import hook were not installing the mutant
+both would survive, and if it were breaking the module both would be killed. The rest carry the
+same shape: the working tree's bytes AND mtime are asserted unchanged across a run, a forced
+baseline failure is asserted to score nothing and run no mutant, both safety refusals are driven,
+every mutant is asserted to compile and to differ, re-generation is asserted byte-identical (a
+missed undo would silently produce compound mutants), and both CLI paths run as real subprocesses
+including a real non-zero exit under `--min-score`.

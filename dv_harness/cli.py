@@ -6,6 +6,10 @@ from .engine import DVHarness
 from .models import Stage, Status
 from .preflight import TRANSPORT_CHOICES
 from .router import RESEARCH_FOCUS_DOMAINS
+from .mutation_testing import (
+    MUTATION_OPERATORS,
+    DEFAULT_TIMEOUT_SECONDS as MUTATION_DEFAULT_TIMEOUT,
+)
 from . import commands as _commands
 
 
@@ -541,6 +545,40 @@ def main():
         help="A natural-language research request, classified by the same "
              "router.resolve_research_intent() an unassisted request goes through. Used only "
              "when no mode flag and at most one document are given.")
+
+    # Mutation testing of THIS repo's own Python test suite. Sits next to
+    # self-audit because it answers the neighbouring question: self-audit asks
+    # "is the repo's declared state self-consistent", this asks "would the
+    # tests guarding a module actually FAIL if that module were wrong".
+    # Explicitly NOT DUT/RTL fault injection -- see dv_harness/mutation_testing.py.
+    pmut = sub.add_parser("mutation-test",
+        help="Inject small AST-level faults (comparison flips, off-by-one boundary constants, "
+             "and/or swaps, True/False flips) into a dv_harness/*.py module and re-run that "
+             "module's real test file against each mutant, reporting mutants killed/survived. "
+             "Measures THIS repo's own test suite -- never a DUT/RTL fault campaign. "
+             "See dv_harness/mutation_testing.py.")
+    pmut.add_argument("--module", action="append", default=None,
+        help="Dotted module to mutate (e.g. dv_harness.qualification); repeatable. "
+             "Omit to run every pair registered in mutation_testing.DEFAULT_TARGETS.")
+    pmut.add_argument("--test", default=None,
+        help="Test file to run against each mutant. Required for a --module with no "
+             "DEFAULT_TARGETS entry; must live under dv_harness_tests/.")
+    pmut.add_argument("--operator", action="append", default=None,
+        choices=list(MUTATION_OPERATORS),
+        help="Restrict to this mutation operator; repeatable. Default: all four.")
+    pmut.add_argument("--max-mutants", type=int, default=None, dest="max_mutants",
+        help="Run at most N mutants (in source order). The rest are reported NOT_RUN, "
+             "never silently dropped from the denominator.")
+    pmut.add_argument("--lines", default=None,
+        help="Only mutate sites on lines A:B of the module.")
+    pmut.add_argument("--timeout", type=int, default=None,
+        help=f"Per-mutant pytest timeout in seconds (default {MUTATION_DEFAULT_TIMEOUT}). "
+             "A mutant that exceeds it is reported TIMEOUT, which is NOT counted as killed.")
+    pmut.add_argument("--list", action="store_true", dest="list_only",
+        help="Generate and print the mutants without running any tests.")
+    pmut.add_argument("--min-score", type=float, default=None, dest="min_score",
+        help="Exit non-zero if the mutation score falls below this. Opt-in only -- "
+             "mutation score is a measurement here, not a gate.")
 
     paudit_self = sub.add_parser("self-audit",
         help="Run the 23 harness self-audit gates (registry/skill/pipeline/protocol-catalog "
@@ -2523,6 +2561,42 @@ def main():
             "confirmation": status,
             "confirmation_command": _cbr.confirmation_command(assessment.digest),
         }, ensure_ascii=False, indent=2))
+    elif args.cmd == "mutation-test":
+        from . import mutation_testing as _mut
+        modules = args.module or list(_mut.DEFAULT_TARGETS)
+        if args.test and len(modules) != 1:
+            raise SystemExit("--test names one test file, so pass exactly one --module with it")
+        line_range = None
+        if args.lines:
+            low, _, high = args.lines.partition(":")
+            line_range = (int(low), int(high or low))
+        operators = args.operator or _mut.MUTATION_OPERATORS
+        payload, failed = [], False
+        for name in modules:
+            module_file, test_file = _mut.resolve_target(h.root, name, args.test)
+            if args.list_only:
+                _mut.assert_safe_target(h.root, module_file, test_file)
+                mutants = _mut.generate_mutants(
+                    module_file.read_text(encoding="utf-8"), str(module_file),
+                    operators=operators, line_range=line_range)
+                payload.append({"module": name, "module_path": str(module_file),
+                                 "test_path": str(test_file),
+                                 "generated": len(mutants),
+                                 "mutants": [m.to_dict() for m in mutants]})
+                continue
+            report = _mut.run_mutation_test(
+                h.root, name, test_path=args.test, operators=operators,
+                max_mutants=args.max_mutants, line_range=line_range,
+                timeout=args.timeout or _mut.DEFAULT_TIMEOUT_SECONDS)
+            payload.append(report.to_dict())
+            if report.baseline != _mut.BASELINE_OK:
+                failed = True
+            elif args.min_score is not None and (report.mutation_score is None
+                                                  or report.mutation_score < args.min_score):
+                failed = True
+        print(json.dumps(payload if len(payload) != 1 else payload[0],
+                         ensure_ascii=False, indent=2))
+        raise SystemExit(1 if failed else 0)
     elif args.cmd == "self-audit":
         from . import self_audit
         result = self_audit.run_self_audit(h.root, args.gate, smoke=args.smoke)
