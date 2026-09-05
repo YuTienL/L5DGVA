@@ -455,14 +455,23 @@ def test_the_advertised_approve_command_actually_runs():
 
 
 def test_approval_only_stages_do_not_leak_into_the_engine_driving_verbs():
-    """The research approval key is approvable, and ONLY approvable. Letting
-    it reach set-stage/redirect/correct would put the engine in a stage the
-    graph does not have."""
-    assert commands.APPROVAL_ONLY_STAGES == frozenset({HUMAN_APPROVAL_STAGE})
-    assert HUMAN_APPROVAL_STAGE not in {s.value for s in Stage}
-    with pytest.raises(ValueError, match="Unknown stage"):
-        commands._check_stage(HUMAN_APPROVAL_STAGE)
-    commands._check_approval_stage(HUMAN_APPROVAL_STAGE)  # must not raise
+    """An approval-only key is approvable, and ONLY approvable. Letting one
+    reach set-stage/redirect/correct would put the engine in a stage the graph
+    does not have.
+
+    Asserted over EVERY member of APPROVAL_ONLY_STAGES rather than against a
+    hardcoded one-element set: the property has to hold for each key, and a
+    second real key (CHANGE_BLAST_RADIUS, the change-budget/blast-radius
+    gate's confirmation point) was added 2026-09-06 -- the equality assertion
+    made the suite fail on the mere ARRIVAL of a new key while never checking
+    that new key for the leak this test is actually about."""
+    assert HUMAN_APPROVAL_STAGE in commands.APPROVAL_ONLY_STAGES
+    graph_stages = {s.value for s in Stage}
+    for stage in commands.APPROVAL_ONLY_STAGES:
+        assert stage not in graph_stages, f"{stage} shadows a real graph stage"
+        with pytest.raises(ValueError, match="Unknown stage"):
+            commands._check_stage(stage)
+        commands._check_approval_stage(stage)  # must not raise
 
     tmp = _fresh_project()
     r = _run_cli(tmp, "set-stage", HUMAN_APPROVAL_STAGE)

@@ -489,6 +489,34 @@ within a day, which is exactly why this paragraph is dated)**:
    section is a tested claim, not a description. Those tests also assert
    this repo's own `core.hooksPath` is still set, so the "INSTALLED AND
    LIVE" statement above cannot silently go stale again.
+3. **Change-budget / blast-radius gate (2026-09-06, ADDITIVE — it never
+   relaxes layers 1-2)**: `dv_harness/change_blast_radius.py`, run by the
+   SAME `dv-harness git-guard` invocation as layer 2, but only on a
+   push/merge layer 2 already ALLOWED — so it can turn an allow into a
+   block and never a block into an allow. Layers 1-2 ask WHERE a change
+   lands; this asks HOW FAR IT REACHES, from three measured (never
+   self-declared) signals: files touched in the real diff (via
+   `change_impact.changed_files()`), the transitive importer closure of the
+   changed `dv_harness/*` modules from a real `ast` parse of the package's
+   own imports, and whether the change edits a file that IS a gate (derived
+   from `autonomy_levels.LEVEL_C_ENFORCEMENT`'s checked `cites` table, plus
+   `tools/git-hooks/`). Over threshold (`WIDE`, or any `GOVERNANCE` file) an
+   AGENT push is blocked until a human records a real approval under
+   `dv-harness approve CHANGE_BLAST_RADIUS` whose note carries that
+   assessment's `digest` — the pin is what stops it degrading into a
+   permanent blanket bypass, since growing the change moves the digest and
+   retires the approval. A human's own push is never gated on change size,
+   same rule as layer 2. No real diff (no git, new branch with no
+   merge-base) ⇒ `NOT_ASSESSABLE` and allowed: an environment problem must
+   not masquerade as a policy finding. Inspect any range without pushing via
+   `dv-harness blast-radius --base <rev> [--head <rev>]`. Decisions land as
+   `BLAST_RADIUS_DECISION` in the same `.dv-harness/events.jsonl` trail.
+   Proven by `dv_harness_tests/test_change_blast_radius.py`, which drives a
+   REAL `git push` of a governance-file change in a throwaway repo, asserts
+   git aborts it and nothing reaches the remote, then records the real
+   approval and asserts the identical push now succeeds — and separately
+   asserts a `CHANGE_BLAST_RADIUS` approval CANNOT unlock a protected-branch
+   push, i.e. that this layer cannot be used to get around layer 2.
 
 Every `git-guard` decision that touched a protected branch is logged as a
 `GIT_GUARD_DECISION` event in `.dv-harness/events.jsonl` -- the same real

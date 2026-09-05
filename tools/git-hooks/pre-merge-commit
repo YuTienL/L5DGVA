@@ -21,5 +21,13 @@ command -v "$PYTHON" >/dev/null 2>&1 || {
     exit 0
 }
 
-"$PYTHON" -m dv_harness.cli --project-root "$REPO_ROOT" git-guard --check pre-merge-commit --branch "$CURRENT_BRANCH"
+# MERGE_HEAD is resolved here for the same reason CURRENT_BRANCH is: git
+# passes pre-merge-commit no arguments and no stdin, so the hook must look up
+# what is being merged itself. It feeds the blast-radius check (gate 2 inside
+# git-guard, see dv_harness/change_blast_radius.py), which scores the commits
+# the merge would actually bring in. An empty value is fine -- that check then
+# reports NOT_ASSESSABLE and allows; the PR-only branch gate is unaffected.
+MERGE_HEAD_SHA=$(git rev-parse --verify --quiet MERGE_HEAD 2>/dev/null)
+
+"$PYTHON" -m dv_harness.cli --project-root "$REPO_ROOT" git-guard --check pre-merge-commit --branch "$CURRENT_BRANCH" --merge-head "$MERGE_HEAD_SHA"
 exit $?

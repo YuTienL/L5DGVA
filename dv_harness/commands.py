@@ -45,8 +45,9 @@ _VALID_STAGES = {s.value for s in Stage}
 # Imported, never re-typed, so this set and the module that owns the key
 # cannot drift apart.
 from .capability_evolution import HUMAN_APPROVAL_STAGE as _RESEARCH_APPROVAL_STAGE
+from .change_blast_radius import BLAST_RADIUS_APPROVAL_STAGE as _BLAST_RADIUS_APPROVAL_STAGE
 
-APPROVAL_ONLY_STAGES = frozenset({_RESEARCH_APPROVAL_STAGE})
+APPROVAL_ONLY_STAGES = frozenset({_RESEARCH_APPROVAL_STAGE, _BLAST_RADIUS_APPROVAL_STAGE})
 
 
 def _check_stage(stage: str) -> None:
