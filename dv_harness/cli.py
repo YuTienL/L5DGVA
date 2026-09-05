@@ -689,6 +689,29 @@ def main():
     prc.add_argument("--fail-on-error", action="store_true",
                      help="Also fail on WARNING findings, not only ERROR.")
 
+    psc = sub.add_parser("schema-compat", help="Classify a JSON Schema change as BACKWARD_COMPATIBLE / "
+                                               "BREAKING / UNKNOWN, where compatible means every document "
+                                               "valid under the old schema is still valid under the new "
+                                               "one -- the direction env_manifest.py's 1.0 -> 1.1 bump "
+                                               "cared about. Every BREAKING verdict is backed by a witness "
+                                               "document this command actually validated with jsonschema "
+                                               "against both schemas; a keyword with no compatibility rule "
+                                               "(pattern, format, oneOf, ...) reports UNKNOWN rather than "
+                                               "being assumed harmless. With --base it also enforces the "
+                                               "env_manifest precedent: a breaking schema edit must bump "
+                                               "the owning module's SCHEMA_VERSION.")
+    psc.add_argument("--old", help="the previous schema file (use with --new)")
+    psc.add_argument("--new", help="the new schema file (use with --old)")
+    psc.add_argument("--base", help="git revision to compare this working tree's "
+                                    "dv_harness/schemas/*.schema.json against")
+    psc.add_argument("--root", default=".", help="repository root for --base")
+    psc.add_argument("--corpus", nargs="*", default=[],
+                     help="real documents to check the verdict against; one that passes the old "
+                          "schema and fails the new one proves the change breaking even when the "
+                          "static rules missed it.")
+    psc.add_argument("--json", action="store_true",
+                     help="Emit the full machine-readable report, witness documents included.")
+
     pgs = sub.add_parser("golden-scenario", help="Spec section 225 golden scenario / reference capsules: "
                                                     "record a proven-good test/scenario against a REAL "
                                                     "evidence_db normalized_evidence PASS row, and derive "
@@ -2511,6 +2534,20 @@ def main():
         print(_rqc_text)
         if _rqc_code:
             raise SystemExit(_rqc_code)
+    elif args.cmd == "schema-compat":
+        # One shared implementation with `python -m dv_harness.schema_compat`
+        # (schema_compat.execute_verb), same convention as power-intent above.
+        # Exit codes: 0 BACKWARD_COMPATIBLE, 1 BREAKING, 2 NOT_AVAILABLE
+        # (nothing comparable / a schema could not be read), 3 UNKNOWN --
+        # "could not decide" gets its own code so it can never be read as a
+        # clean PASS by a caller that only checks for zero.
+        from . import schema_compat as _scc
+        _sc_text, _sc_code = _scc.execute_verb(
+            old=args.old, new=args.new, base=args.base, root=args.root,
+            corpus=args.corpus, as_json=args.json)
+        print(_sc_text)
+        if _sc_code:
+            raise SystemExit(_sc_code)
     elif args.cmd == "golden-scenario":
         # One shared implementation with `python -m dv_harness.golden_scenario`
         # (golden_scenario.execute_verb), same convention as power-intent above.
