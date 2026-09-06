@@ -611,6 +611,14 @@ def _file_ref(path) -> dict:
     return {"path": str(p), "sha256": h.hexdigest(), "bytes": p.stat().st_size}
 
 
+#: Public since 2026-09-06 for dv_harness/dependency_supply_chain.py, which
+#: records the same path+sha256+bytes reference for every dependency manifest
+#: it reads. Exposed rather than copied so a supply-chain report and an
+#: env.manifest.json describe the same file identically -- a second hashing
+#: helper would be two answers to "which file did this artifact read".
+file_ref = _file_ref
+
+
 def _find_doc_in_package(install_path: Path, fragments) -> Optional[Path]:
     """First real file under `install_path` (bounded to
     _VIP_DOC_SCAN_MAX_DEPTH levels) whose lower-cased name contains any of

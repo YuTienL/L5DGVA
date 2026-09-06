@@ -4395,3 +4395,99 @@ baseline failure is asserted to score nothing and run no mutant, both safety ref
 every mutant is asserted to compile and to differ, re-generation is asserted byte-identical (a
 missed undo would silently produce compound mutants), and both CLI paths run as real subprocesses
 including a real non-zero exit under `--min-score`.
+
+
+## Dependency / Supply-Chain Governance (2026-09-06, PC-5)
+
+This harness could not answer a basic question about itself: which third-party components is it
+built on, at which versions, and is any of them unconstrained. The gap was total and re-verified by
+negative grep before anything was written -- `grep -rn "supply_chain|dependency_audit|SBOM|
+pinned.version|vulnerability" -i` over the whole tree matched NOTHING executable. No module read
+`pyproject.toml` or `requirements-harness.txt` as a dependency declaration, nothing compared a
+declared dependency against what is really installed, and nothing anywhere asked whether a version
+was pinned.
+
+`dv_harness/dependency_supply_chain.py` answers it, and REUSES rather than rebuilds on both sides.
+The DesignWare VIP half of the inventory is `env_manifest.build_vip_release()` /
+`scan_designware_home()` -- the real `$DESIGNWARE_HOME` filesystem scan that already answers "which
+VIP release is this environment actually built against", carried through with its three honestly
+distinct NOT_AVAILABLE reasons intact; there is no second VIP scanner here and no VIP version is
+ever read out of a document. File-integrity records go through the now-public
+`env_manifest.file_ref()` (the private `_file_ref` exposed, not copied, the same "made public for
+this" pattern `uvm_structural_lint.config_db_call_sites()` set), so a supply-chain report and an
+env.manifest.json describe the same file identically. Version arithmetic is `packaging`'s
+`SpecifierSet`/`Version` -- hand-rolling PEP 440 comparison is how a supply-chain check silently
+accepts a version it should have refused.
+
+**Three checks, and each one says honestly what it is.**
+- **PINNED_VERSION** -- real, and it runs everywhere. Every declared Python requirement is
+  classified from its own specifier set, and only `==`/`===` without a wildcard is PINNED_EXACT,
+  because it is the only form that names ONE artifact: `==1.2.*` and `~=1.2.3` are BOUNDED_RANGE,
+  `>=4.0` is LOWER_BOUND_ONLY (the next MAJOR release satisfies it), and a bare name is
+  UNCONSTRAINED (any release, including one not yet published, satisfies it) -- ranked HIGH /
+  MEDIUM / LOW by exactly how much room the declaration leaves. An installed VIP package is
+  PINNED_EXACT when the install tree really names a version directory and a finding when it does
+  not, because "which VIP is this" is then unanswerable from the install itself.
+- **DECLARED_VS_INSTALLED** -- real. Each requirement is resolved against the REAL running
+  interpreter through `importlib.metadata` (metadata, not an import, so a package with an
+  import-time side effect is never executed), so a declared dependency nobody installed and an
+  installed version outside its own declared range are both findings rather than assumptions.
+- **VULNERABILITY_ADVISORY -- NOT_AVAILABLE in this environment, and it says so rather than
+  reporting a clean scan.** `pip-audit` and `safety` are probed BY NAME at run time and are not
+  installed here, and the OSV/PyPI advisory APIs are network services a LOCAL_ANALYSIS run must not
+  contact. A project that HAS a real offline advisory database declares it
+  (`.dv-harness/supply_chain/policy.json`, or `--advisory-db`) and the check really runs against
+  it, matching each component's REALLY INSTALLED version -- never the declared range, since an
+  advisory is about an artifact in use -- and reporting that database's own source, as-of date and
+  sha256. A database is refused unless it can state its own source and ISO as-of date, and one
+  older than the policy ceiling (default 30 days) is itself a finding, because an advisory
+  published since then would not appear in the result.
+
+**NOT_FULLY_CHECKED outranks POLICY_CLEAN**, the same rule `platform_health.py` applies when it
+ranks UNKNOWN above HEALTHY: a check that could not run is never conflated with one that ran and
+found nothing, so a fully-pinned, fully-installed project with no advisory source reports
+NOT_FULLY_CHECKED and exits 2 -- never a clean security result. That pair is the headline test.
+A component with no installed version is reported per-component as unmatchable rather than skipped,
+so an inventory of uninstalled declarations can never read as a scanned one.
+
+`dv-harness supply-chain inventory|check|advisory-status` and
+`python -m dv_harness.dependency_supply_chain` share one `execute_verb()`, the same convention
+`power-intent`/`golden-scenario`/`config-variants` use. Exit 0 POLICY_CLEAN, 1 a real policy
+finding, 2 a check that could not run or nothing to inventory.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It is NOT an SBOM: the
+inventory is what this project DECLARES plus what is really installed for those declarations, not
+a transitive dependency graph -- resolving one needs a resolver run against a package index, which
+is a network act, and every report carries that disclosure. A pip directive (`-r`, `--index-url`)
+is RECORDED as unfollowed rather than silently dropped, so an inventory can never quietly omit an
+included file without saying so. (2) It READS ONLY and DECIDES nothing: no file is written, no
+approval minted, no stage run, no build/regression/LSF submission started, and there is
+deliberately no stage gate -- a gate that passed because no advisory database was present would be
+worse than none. (3) An exemption suppresses a finding, never the fact: the component still appears
+in the inventory carrying its exemption, and an exemption without a `reason` is refused, as is a
+misspelled policy key (which would otherwise silently leave the default rule in force).
+(4) It is REACHED, not WIRED -- no `run_stage()`/`advance()` call site invokes it, no graph node
+declares it, and it is not on the dashboard. The CLI wrapper still appends the usual `CLI_ACCESS`
+audit event; `python -m` carries the untouched-tree guarantee.
+
+**This repository's own real answer today**, computed rather than claimed: 4 declared Python
+components (`setuptools>=68`, `claude-code-sdk`, `mcp>=2.1.1,<3`, `jsonschema>=4.0`), of which
+NONE is exact-pinned -- one HIGH (unconstrained), two MEDIUM (lower bound only), one LOW (bounded)
+-- two of them declared but not installed for this interpreter, no VIP install tree, and
+VULNERABILITY_ADVISORY NOT_AVAILABLE. The report is POLICY_FINDINGS and exits 1, and it is not a
+clean security result.
+
+Proven by `dv_harness_tests/test_dependency_supply_chain.py` (65 tests). The fixture is a REAL
+project root whose every declaration is exact-pinned to a version `importlib.metadata` reports
+RIGHT NOW (read at test time, never hardcoded, so the suite tests the module rather than the
+developer's environment), and every rule is driven by MUTATING that one clean project ONE defect at
+a time. The negative controls carry the detection power: the identical clean project WITHOUT an
+advisory database is NOT_FULLY_CHECKED rather than POLICY_CLEAN, an advisory whose affected range
+CONTAINS the really-installed version fires while the same advisory whose range stops AT it does
+not, an advisory for another ecosystem never matches, a stale database is a finding while a
+one-day-old one is not, an empty but well-provenanced database is usable, `==2.1.*` is proven not
+to read as an exact pin, patching `env_manifest.build_vip_release()` really changes what the
+inventory reports (so a second hand-rolled VIP walk would fail the test), the vocabulary guard is
+shown to really trip on an injected `PASS`, and a byte-level snapshot proves two full reports write
+nothing. Both entry points run as real subprocesses with their exit codes asserted. Nothing in it
+contacts a network advisory API, runs a build, submits a job or touches an approval gate.

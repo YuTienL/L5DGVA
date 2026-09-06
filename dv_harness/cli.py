@@ -881,6 +881,32 @@ def main():
     pcv.add_argument("--out", default=None, help="plan: also write the plan JSON to this path.")
     pcv.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
 
+    psc = sub.add_parser("supply-chain",
+                          help="Dependency / supply-chain governance: inventory this project's "
+                               "REAL declared dependencies (pyproject.toml's build-system and "
+                               "project requirements, every root requirements*.txt, and the "
+                               "installed DesignWare VIP packages env_manifest's own "
+                               "$DESIGNWARE_HOME scan finds) and check them against a real "
+                               "policy -- pinned-version enforcement, declared-vs-REALLY-"
+                               "INSTALLED resolution against this interpreter, and a "
+                               "vulnerability-advisory lookup that reports NOT_AVAILABLE rather "
+                               "than a fabricated clean result when no real offline advisory "
+                               "source exists. Reads only: writes nothing and gates nothing. "
+                               "See dv_harness/dependency_supply_chain.py.")
+    psc.add_argument("sc_verb", choices=("inventory", "check", "advisory-status"))
+    psc.add_argument("--designware-home", default=None,
+                      help="Explicit VIP install tree to scan (default: $DESIGNWARE_HOME).")
+    psc.add_argument("--no-vip", action="store_true",
+                      help="Skip the DesignWare VIP install scan entirely.")
+    psc.add_argument("--policy", default=None,
+                      help="Supply-chain policy JSON (default: "
+                           "<root>/.dv-harness/supply_chain/policy.json).")
+    psc.add_argument("--advisory-db", default=None,
+                      help="Offline advisory database JSON to check REALLY INSTALLED versions "
+                           "against. Without one the advisory check is NOT_AVAILABLE, never "
+                           "clean -- no network advisory API is ever contacted.")
+    psc.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
     pbd = sub.add_parser("benchmark-dataset",
                           help="Spec section 226 agent/skill benchmark dataset governance: a "
                                "VERSIONED, content-addressed eval corpus. A registered version is "
@@ -2864,6 +2890,28 @@ def main():
         print(_cv_text)
         if _cv_code:
             raise SystemExit(_cv_code)
+    elif args.cmd == "supply-chain":
+        # One shared implementation with
+        # `python -m dv_harness.dependency_supply_chain`
+        # (dependency_supply_chain.execute_verb), same convention as
+        # config-variants / power-intent above. Exit codes: 0 POLICY_CLEAN,
+        # 1 a real policy finding (unpinned dependency, declared-but-not-
+        # installed, an installed version outside its declared range, a known
+        # advisory hit), 2 a check that could not run -- above all the
+        # vulnerability check with no real offline advisory source, which is
+        # NOT_FULLY_CHECKED and deliberately never exits 0.
+        from . import dependency_supply_chain as _dsc
+        try:
+            _sc_text, _sc_code = _dsc.execute_verb(
+                args.sc_verb, root=h.root, designware_home=args.designware_home,
+                include_vip=not args.no_vip, policy_path=args.policy,
+                advisory_db_path=args.advisory_db, as_json=args.json)
+        except _dsc.SupplyChainError as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_sc_text)
+        if _sc_code:
+            raise SystemExit(_sc_code)
     elif args.cmd == "benchmark-dataset":
         # One shared implementation with `python -m dv_harness.benchmark_dataset`
         # (benchmark_dataset.execute_verb), same convention as golden-scenario
