@@ -194,11 +194,23 @@ def caveat_for(provenance: Optional[str]) -> Optional[str]:
     return SELF_ATTESTED_CAVEAT
 
 
-def _resolve_artifact(root: Path, raw_path: str) -> Path:
+def _resolve_artifact(root: Path, raw_path: str) -> Optional[Path]:
+    """Resolve raw_path under root. Returns None (never a path outside root)
+    when an absolute raw_path escapes the project root -- the artifact-
+    existence check below treats that identically to a missing file, since a
+    resolvable-but-uncontained path is not evidence about this project."""
     p = Path(str(raw_path))
-    if p.is_absolute():
-        return p
-    return Path(root) / p
+    root = Path(root).resolve()
+    candidate = p if p.is_absolute() else root / p
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    return resolved
 
 
 def check_payload(root: Path, gate_id: str, payload: Any) -> Optional[Dict[str, Any]]:
@@ -269,7 +281,7 @@ def check_payload(root: Path, gate_id: str, payload: Any) -> Optional[Dict[str, 
             ),
         }
     resolved = _resolve_artifact(Path(root), str(artifact))
-    if not resolved.exists():
+    if resolved is None or not resolved.exists():
         return {
             "status": "FAIL",
             "reason": REASON_ARTIFACT_NOT_FOUND,
@@ -277,7 +289,7 @@ def check_payload(root: Path, gate_id: str, payload: Any) -> Optional[Dict[str, 
             "declared": provenance,
             "tool": str(tool),
             "artifact_path": str(artifact),
-            "resolved_path": str(resolved),
+            "resolved_path": str(resolved) if resolved is not None else None,
             "detail": (
                 "the artifact this independently-derived claim cites does not "
                 "exist under the project root. A provenance claim nothing on "

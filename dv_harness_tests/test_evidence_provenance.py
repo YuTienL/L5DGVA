@@ -279,6 +279,25 @@ def test_the_artifact_is_resolved_under_the_project_root_not_the_cwd(tmp_path):
     assert _run(SYSTEM_GATE, payload, root=root).ok
 
 
+def test_an_absolute_artifact_path_outside_the_project_root_is_refused(tmp_path):
+    """F1 fix: an ABSOLUTE artifact_path pointing at a real file OUTSIDE the
+    project root must be refused exactly like a missing file -- a resolvable
+    path is not evidence about THIS project unless it lives under its root."""
+    root = _project(tmp_path)
+    outside = tmp_path / "outside_root"
+    outside.mkdir()
+    real_but_foreign = outside / "unrelated_real_file.log"
+    real_but_foreign.write_text("x", encoding="utf-8")
+    payload = dict(
+        _clean_payload(SYSTEM_GATE),
+        **{ep.PROVENANCE_FIELD: ep.TOOL_DERIVED,
+           ep.DERIVATION_FIELD: {"tool": "t", "artifact_path": str(real_but_foreign)}},
+    )
+    result = _run(SYSTEM_GATE, payload, root=root)
+    assert not result.ok
+    assert result.detail["reason"] == ep.REASON_ARTIFACT_NOT_FOUND
+
+
 def test_declaring_the_honest_value_needs_nothing_else():
     """The asymmetry stated as its own assertion: AGENT_SELF_ATTESTED is
     always accepted with no derivation block, so an agent is never pushed
