@@ -725,6 +725,30 @@ def test_recommending_writes_absolutely_nothing(root):
     assert vs.STRATEGY_FORMAL in report["recommended_strategies"]
 
 
+def test_recommend_on_a_bare_root_creates_no_memory_store():
+    """Regression for the independent review's finding: the `root` fixture
+    above pre-constructs a MemoryStore, which is exactly why
+    test_recommending_writes_absolutely_nothing() could not have caught this.
+    On a project with NO memory store at all, recommend_strategies() must not
+    bring one into existence just by asking about failure-density signals --
+    the same guard confidence_calibration.calibrate() and
+    cross_project_mining already apply."""
+    bare = Path(tempfile.mkdtemp())
+    try:
+        assert not (bare / ".dv-harness").exists()
+        before = _snapshot(bare)
+        report = vs.recommend_strategies(bare, holes=[], scope=vs.SCOPE_SYSTEM,
+                                         protocol="USB", goal_text="anything").to_dict()
+        after = _snapshot(bare)
+        assert after == before, "recommend_strategies() created files on a bare root"
+        assert not (bare / ".dv-harness" / "memory").exists(), \
+            "recommend_strategies() constructed a MemoryStore on a bare root"
+        unavailable = (report.get("signals") or {}).get("unavailable") or []
+        assert any("NO_JOB_MEMORY_FAILURE_HISTORY" in u for u in unavailable)
+    finally:
+        shutil.rmtree(bare, ignore_errors=True)
+
+
 def test_no_question_queue_entry_is_created_by_a_formal_recommendation(root):
     """The escalation is NAMED, never taken -- filing a Tier-3 question is a
     human-facing act and stays one."""

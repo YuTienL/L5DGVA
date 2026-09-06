@@ -3347,9 +3347,25 @@ three retries against one commit are one run, a failure closed by a gate-verifie
 climbing coverage curve is told to change nothing, a goal containing the word
 "formal" buys FORMAL nothing, a forged executable row is refused, and a
 synthesised real module at FORMAL's declared backend name flips the row with no
-source edit. A byte-level snapshot of the whole project root proves recommending
-writes nothing. Nothing in it runs a build, a regression or an LSF submission,
-and no approval gate is touched.
+source edit. Nothing in it runs a build, a regression or an LSF submission, and
+no approval gate is touched.
+
+**Correction (2026-09-06, found by this close-pass's own independent review):**
+an earlier version of this section claimed a byte-level snapshot proved
+recommending writes nothing -- false on a project with no memory store yet.
+`gather_signals()`'s failure-density signal called
+`capability_evolution.repeated_unresolved_failure_patterns()`, which
+constructs a `MemoryStore` unconditionally; that constructor `mkdir()`s the
+5-tier tree and writes an empty `index.json`, so a pure `recommend()` on a
+bare root silently created one. The reviewing report's own snapshot test
+missed it because it pre-created a store before snapshotting. Fixed the same
+way `confidence_calibration.calibrate()` and `cross_project_mining` already
+guard this: `gather_signals()` now checks
+`cross_project_mining.has_memory_store(root)` BEFORE calling into
+`capability_evolution`, and reports `NO_JOB_MEMORY_FAILURE_HISTORY` on a bare
+root instead of creating one. Proven on a genuinely empty root by
+`dv_harness_tests/test_verification_strategy.py::
+test_recommend_on_a_bare_root_creates_no_memory_store`.
 
 **Disclosed residual, and it is the honest boundary.** (1) This module can only
 RECOMMEND four of the five strategies, forever, until someone integrates a real
@@ -3839,10 +3855,16 @@ that root's own real `CLI_ACCESS`/`GUI_ACCESS` trail; a root with no trail is re
 assumed to be a second person. (4) "We could not check" is UNKNOWN with a real reason, never CLEAR:
 one session only, no `.dv-harness/`, no computed selection, an in-flight job with no recorded SHA,
 or an unrecognised LSF status each produce a named UNKNOWN. (5) Of section 239's nine listed
-concerns, three are implemented; ownership/authorized-role, generic edit conflict, conflicting Human
-Gates, simultaneous memory promotion and simultaneous capability changes are NOT -- the last two in
-particular would need cross-root visibility into `memory_router.promote_to_organizational()` and
-`capability_evolution`'s approval state that no shared artifact carries today.
+concerns, three are implemented here; generic edit conflict, conflicting Human Gates, simultaneous
+memory promotion and simultaneous capability changes are NOT -- the last two in particular would
+need cross-root visibility into `memory_router.promote_to_organizational()` and
+`capability_evolution`'s approval state that no shared artifact carries today. Ownership/
+authorized-role was NOT implemented by THIS module (it does no cross-root detection of role
+conflicts) but IS separately implemented for the single-project dashboard by
+`dashboard_authorization_matrix.py` (VIEWER/OPERATOR/APPROVER roles enforced on every mutating
+`/api/control` POST, proven by `dv_harness_tests/test_dashboard_authorization_matrix.py`) -- two
+different scopes of the same spec concern, closed in two different places, neither a duplicate of
+the other.
 
 Proven by `dv_harness_tests/test_multi_user_coordination.py` (32 tests). Every test builds TWO (or
 three) REAL, SEPARATE project roots in the layout `USAGE_MULTI_USER_SAFETY.md` prescribes, each

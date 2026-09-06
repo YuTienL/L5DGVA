@@ -564,16 +564,27 @@ def gather_signals(root, *,
     sig.sources["failure_signatures"] = source
     if not available:
         sig.unavailable.append(f"NO_FAILURE_SIGNATURE_EVIDENCE: {source}")
-    try:
-        from . import capability_evolution as _ce
-        patterns = _ce.repeated_unresolved_failure_patterns(root)
-        sig.unresolved_repeated_signatures = [
-            str(p.get("signature_key")) for p in patterns if p.get("signature_key")]
-        sig.sources["unresolved_repeated_signatures"] = (
-            "capability_evolution.repeated_unresolved_failure_patterns()")
-    except Exception as exc:
-        sig.unavailable.append(
-            f"NO_JOB_MEMORY_FAILURE_HISTORY: {type(exc).__name__}: {exc}")
+    from .cross_project_mining import has_memory_store
+    if not has_memory_store(root):
+        # Checked BEFORE calling into capability_evolution, whose
+        # repeated_unresolved_failure_patterns() constructs a MemoryStore
+        # unconditionally -- that constructor mkdir()s the 5-tier tree and
+        # writes an empty index.json. A pure recommend() must never bring a
+        # memory store into existence just by asking whether one exists
+        # (the same guard confidence_calibration.calibrate() and
+        # cross_project_mining already use for exactly this reason).
+        sig.unavailable.append("NO_JOB_MEMORY_FAILURE_HISTORY: no memory store on disk")
+    else:
+        try:
+            from . import capability_evolution as _ce
+            patterns = _ce.repeated_unresolved_failure_patterns(root)
+            sig.unresolved_repeated_signatures = [
+                str(p.get("signature_key")) for p in patterns if p.get("signature_key")]
+            sig.sources["unresolved_repeated_signatures"] = (
+                "capability_evolution.repeated_unresolved_failure_patterns()")
+        except Exception as exc:
+            sig.unavailable.append(
+                f"NO_JOB_MEMORY_FAILURE_HISTORY: {type(exc).__name__}: {exc}")
 
     # ---- throughput -------------------------------------------------------
     if daily is None:
