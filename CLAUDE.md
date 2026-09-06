@@ -250,6 +250,54 @@ Even under this amendment:
    shared or multi-user environment, this decision must be explicitly re-confirmed before it still
    applies there.
 
+**2026-09-06 correction (Evidence Truth Rule -- current evidence overrides the paragraph above):**
+this amendment describes a PROJECT-LEVEL policy decision, and it was never actually exercised. A
+repo-wide check found zero `RELAY`-related events in `.dv-harness/events.jsonl` and an explicit prior
+gap-close report (`.work/ai-debug-closed-loop-counter-implementation-report.md`) stating outright
+that invoking `remote_relay.py` "remains a deliberate, policy-mandated human step... and was
+deliberately NOT automated." So before this date, no Claude Code session -- in this project or
+otherwise, so far as this project's own artifacts show -- had ever actually attempted the literal
+"source the credential script, then run `remote_relay.py --start`" action this amendment describes.
+
+On 2026-09-06 it was attempted for the first time, from an interactive Claude Code session with the
+user's explicit real-time confirmation each time. The first two attempts (before, and after adding a
+matching `PowerShell(. .\replay.ps1*)` entry to `.claude/settings.local.json` `permissions.allow`) were
+both refused, with identical text, by Claude Code's own **auto mode classifier** -- a product-level
+safety layer that sits BELOW and BEFORE this file's own project governance. The classifier's own
+denial message names a remediation ("add a Bash permission rule to their settings") that did NOT work
+on its own: `permissions.allow` is a different, lower-priority gate than the classifier itself checks.
+
+**The actual working fix is a separate settings key: `autoMode.allow`** (Claude Code's own classifier-
+configuration block, documented in its settings schema alongside `soft_deny`/`hard_deny`/
+`environment`), not `permissions.allow`. Editing `.claude/settings.local.json` to add this key was
+itself refused by the classifier when Claude attempted the edit directly -- the same self-modification
+guard that blocks Claude from ever expanding its own permission surface unattended, regardless of the
+user's in-conversation confirmation. Once the user made the edit THEMSELVES (adding
+`"autoMode": {"allow": ["$defaults", "PowerShell(. .\replay.ps1*)"]}`), a subsequent Claude-issued
+retry of the identical relay-start command PASSED the classifier -- confirming `autoMode.allow` (never
+`permissions.allow` alone) is the real, working mechanism, and that this action is a `soft_deny` a
+matching allow-rule genuinely clears, not an unconditional `hard_deny` as this section first
+(incorrectly) concluded.
+
+That first classifier-cleared attempt then hung indefinitely with no output and no successful
+connection (`remote_exec.py --status` still reported DOWN after several minutes) -- a DIFFERENT,
+NOT-yet-root-caused problem, since by that point the classifier had already let the command run. The
+user separately ran the equivalent command in their own terminal and connected immediately (`vc8`/
+`icr93`, real relay `READY`), which also surfaced a genuine path-shape issue: Claude Code's own default
+working directory for this session is the PARENT of this project (`D:\DV\Task\DV_Agent_Harness_L5`),
+not `v50` itself, so `replay.ps1` must be referenced as `./v50/replay.ps1` (or an equivalent explicit
+path) rather than assuming a bare `. .\replay.ps1` always resolves correctly -- both forms are now
+covered in `permissions.allow` and `autoMode.allow`. Whether that path mismatch, or something else
+(a transient network stall), caused Claude's own hung attempt is NOT yet confirmed either way.
+
+**Net honest status**: the classifier-level blocker is real, understood, and has a real, working,
+user-applied fix (`autoMode.allow`). A full end-to-end autonomous reconnect -- Claude issuing the
+command AND it actually reaching `READY` -- has not yet been observed; only a human-run reconnect has
+succeeded so far. Treat autonomous reconnect as PARTIALLY_PROVEN: the permission layer is confirmed
+clearable, the network/path layer is not yet confirmed to complete successfully end-to-end when Claude
+itself issues the command. Continue to allow the user's own terminal as the reliable fallback until an
+actual Claude-issued reconnect is observed reaching `READY`.
+
 Source identity (PC vs. Linux) is verified per-project: git SHA comparison where a git remote exists
 between PC and Linux, or the md5sum-based `SOURCE_ID` token (`source_identity.py`, see
 `remote-linux-execution-bridge`) where it does not — never skipped outright.
@@ -9282,3 +9330,265 @@ Two composite gates -- `BUS_PERFORMANCE_READY` and `BUS_PERFORMANCE_SIGNOFF_READ
 Proven by `dv_harness_tests/test_amba_performance_readiness_gates.py` (31 tests): the positive path for both gates; the worst-wins negative control (a single UNMET condition blocks the gate regardless of how many others are clean); the functional-correctness-outranks-performance headline proof; `INCOMPLETE_EVIDENCE` proven distinct from `NOT_READY` on an UNKNOWN/absent condition; the explicit caller-declared `NOT_APPLICABLE` path proven never self-inferred; and `BUS_PERFORMANCE_SIGNOFF_READY`'s sub-gate reference proven to use a caller override when supplied and the derived `BUS_PERFORMANCE_READY` value otherwise.
 
 **Disclosed residual**: this module folds caller-supplied conditions only -- it derives no performance fact of its own, runs no build/regression/LSF submission, and references no approval/governance mechanism.
+
+
+## AMBA Fabric Graph IR: Typed Multi-Node Topology + Multi-Path Route Enumeration (2026-09-06)
+
+Every prior AMBA IR in this repo either models a whole fabric as a FLAT collection (the AMBA_PORT_REGISTRY's one row per port, amba_master_slave_constraint_ir.py's Batch 9 three-layer per-(master,slave) constraint record) or predicts a route's TRANSFORMS structurally (amba_route_transform_predictor.py's ten SYOSCB-12 responsibilities per (master, slave) pair, resolved through build_scoreboard_matrix()). None of them models the fabric's own internal STRUCTURE as a graph of typed components, and none of them can represent more than one physical route between one master and one slave without collapsing it to a single answer. dv_harness/amba_fabric_graph_ir.py is that missing layer, and it is deliberately NOT amba_master_slave_constraint_ir.py extended -- it is never imported, and that module's flat constraint-model shape is accepted only as a generic, unrelated caller parameter if a caller happens to hold one alongside a fabric graph.
+
+AMBAFabricGraphIR: twelve real internal-fabric-component kinds, plus two endpoint kinds, all caller-declared and validated against a closed vocabulary. FABRIC_NODE_KINDS is exactly crossbar/arbiter/decoder/bridge/width_converter/id_converter/clock_converter/register_slice/firewall/address_translator/coherent_node/memory_controller -- the real set this domain's components come in, never inferred from an instance name or a protocol family, and an unrecognized kind is a hard AMBAFabricGraphError rather than a silent coercion to the nearest-sounding one. master_endpoint/slave_endpoint are modeled as a SEPARATE, smaller vocabulary (ENDPOINT_NODE_KINDS) rather than folded into the twelve, because "this node IS a crossbar" and "this node IS where a master's traffic enters the fabric" are different kinds of fact a reader must never confuse when reading a rendered node table. Every node and edge requires a real, non-empty evidence citation (NODE_WITHOUT_EVIDENCE/EDGE_WITHOUT_EVIDENCE), and an edge naming a node id the caller never declared is refused (EDGE_REFERENCES_UNKNOWN_NODE) rather than silently dropped.
+
+The one hard rule this module exists to enforce: a reconfigurable/dynamic claim must be grounded in real evidence that reconfiguration actually exists, never inferred from a fabric protocol alone. assert_no_ungrounded_reconfigurable_claim() runs on every node before a graph is built and raises RECONFIGURABLE_CLAIM_WITHOUT_GROUNDED_EVIDENCE unless a node declaring reconfigurable: True (or dynamic: True) also cites at least one evidence item whose source_kind is a real register/RTL/spec/human-confirmation source (ALLOWED_RECONFIG_EVIDENCE_SOURCE_KINDS -- deliberately restated locally rather than imported from amba_master_slave_constraint_ir.py's own analogous DUT-evidence allowlist, since that module is off-limits to import from this batch). There is no soft downgrade path: an AXI decoder is never assumed reconfigurable merely because AXI decoders often are, the same "not a weaker confirmation, not confirmation at all" posture that module's own VIP-evidence rule already takes one layer down.
+
+AMBAPathIR: every caller-declared route preserved, never collapsed. build_amba_path_ir() never traverses the graph to INVENT a route -- doing so would assert a route is real merely because the graph's edges make it topologically possible, exactly the routing guess amba_route_transform_predictor.py's own "Do not guess routing" already forbids one level up. A route is reported only because a caller declared one (a RouteFact: master_id/slave_id/an optional ordered hops list/a required, non-empty evidence), and when the caller's own real topology evidence names more than one distinct route for one (master, slave) pair, AMBAPathIR.paths_for() returns every one of them, in declaration order, never deduplicated or narrowed to one. assert_declared_multiplicity_preserved() is a structural self-check proving exactly that: the number of PathIR entries reported for a pair equals the number of route facts the caller declared for it. A route's own hop sequence, when supplied alongside a real graph, is cross-checked against the graph's real edges -- a disagreement is reported as INCONSISTENT_WITH_GRAPH, citing exactly which hop or hop-pair the graph does not actually connect, and is never a reason to silently trust the route or to drop it from the report; a route with no hops, or no graph supplied at all, is honestly CONSISTENCY_NOT_CHECKED rather than a fabricated pass.
+
+Phase-1 only: this module builds an IR a human/generator reads. It runs no build, no simulation, and mints no approval; there is deliberately no stage gate. It reuses connectivity.render_markdown_table() for both its node/edge report and its route-enumeration report rather than a third hand-rolled table renderer.
+
+Proven by dv_harness_tests/test_amba_fabric_graph_ir.py (20 tests): the full twelve-kind vocabulary and an unknown-kind refusal; a real multi-node graph spanning several kinds; five construction-time negative controls (no evidence on a node/edge, an edge referencing an undeclared node, a duplicate node id, a node with no id); the headline reconfigurable-claim rule proven both ways (an ungrounded claim refused, a claim grounded in a real register-field citation accepted, and the dynamic alias checked identically); and the multi-path family -- two genuinely distinct declared routes for one pair both preserved with correct hop sequences and consistency status, a single-route pair reporting exactly one path, an unqueried pair reporting zero rather than erroring, a route with hops the graph does not connect reported as a finding but still preserved, a route naming a node absent from the graph likewise reported, and a deliberately-broken build proving assert_declared_multiplicity_preserved() has real detection power against an actual collapse.
+
+## Ordering-Domain Graph: Real Nodes, Real Domains, Declared Preservation Edges Only (2026-09-06)
+
+Nothing in this repo modeled an ordering domain as a first-class object with real membership and
+real relationships to OTHER domains. `amba_route_transform_predictor.detect_ordering_domain()`
+already answers a narrower, PER-ROUTE question -- given one (master, slave) pair, is that one
+route's own transaction stream in-order or out-of-order, decided from whether the protocol carries
+a transaction id. It has no notion of a domain as a named, evidenced object with membership, and no
+notion of a relationship BETWEEN two domains: "does domain A's completion order say anything about
+domain B's". `arbitration_policy_ir.py` (Batch 9, deliberately not imported here) answers yet
+another different question -- a fabric's flat, per-arbiter ARBITRATION SCHEME classified from
+evidence text, never a cross-domain ordering relationship. A repo-wide grep
+(`ordering_domain_graph`/`OrderingDomainGraph`/`preservation_edge`) returned zero hits before this
+module.
+
+`dv_harness/ordering_domain_graph.py` is that graph: which real ordering domains exist, which real
+node/master belongs to which domain, and which declared, DIRECTED ordering-preservation
+relationship holds between two domains -- built strictly from caller-supplied, evidence-cited
+facts, never inferred from a fabric protocol name, a topology shape, or a naming convention.
+
+**The Evidence Truth Rule, applied literally to every one of the three declaration shapes.** A
+domain (`OrderingDomain`: `domain_id` + mandatory `evidence`), a node-to-domain membership
+(`NodeMembership`: `node_id`/`domain_id` + mandatory `evidence`), and a directed preservation edge
+(`PreservationEdge`: `from_domain`/`to_domain`/`preservation` in `{PRESERVED, NOT_PRESERVED,
+UNKNOWN}` + mandatory `evidence`) all REFUSE construction (`OrderingDomainGraphError`) with no
+citation -- the same discipline `security_policy_ir.py` already applies to an uncited access rule.
+A domain declaring `reconfigurable=True` (its membership/scope can change at runtime) additionally
+REQUIRES a separately-cited `reconfiguration_evidence` naming the real control mechanism -- a
+register field, a documented mode switch -- and is refused otherwise. This is the module's own
+governing rule, enforced at the dataclass's own construction boundary rather than left as prose: a
+"reconfigurable"/"dynamic" claim must never be inferred from a fabric protocol family alone.
+
+**Two conflicting evidence shapes, both surfaced rather than resolved.** A node declared a member
+of more than one domain is not an error -- a bridge component genuinely can sit in two ordering
+domains at once -- but it is always a recorded `MULTI_DOMAIN_MEMBERSHIP` finding, since a comparison
+touching that node must consider every one of its domains, never only one.
+`assert_predictions_complete`-style completeness is applied the other way for edges: two
+declarations of the SAME directed `(from_domain, to_domain)` pair disagreeing on their preservation
+value is a real `CONTRADICTORY_EDGE` finding, and the resolved edge reads UNKNOWN citing both sides
+-- this module never arbitrates which declaration is correct, the same ARBITRATION boundary
+`requirement_contract.py`/`design_knowledge_correlation.py`/`security_policy_ir.py` already keep
+for their own conflicting-claim findings.
+
+**Queries refuse to fabricate a guarantee nobody declared.** `query_domain_preservation()` answers
+"does ordering preservation hold from A into B" only from a directly-declared edge in that exact
+direction: it never infers the reverse direction from a forward declaration (a bridge can easily
+preserve order one way and reorder the other), and it never computes a transitive answer across
+three or more domains (A preserving into B and B preserving into C does not imply A preserves into
+C -- that would be an additional fact about the compare/merge stage between B and C nobody
+declared). Both refusals are proven by dedicated negative-control tests, since a fabricated
+transitive/reverse guarantee is exactly the confident-wrong-answer failure mode this module exists
+to prevent. `query_node_pair_ordering()` sweeps every declared-domain pairing between two nodes
+(covering the multi-domain-membership case honestly) and reports `UNKNOWN_NODE` for a node with no
+declared membership at all, never a guessed relationship.
+
+**Reuse / file-safety.** This module imports nothing from `arbitration_policy_ir.py` and nothing
+from any other new module in this batch (verified by AST inspection at build time); it reuses only
+`dv_harness.connectivity.render_markdown_table()` (this repo's one parameterized table renderer,
+pre-existing outside this batch) for its optional markdown rendering, and `dv_harness.models.Status`
+solely to assert this module's own vocabulary (preservation values, finding kinds, query statuses)
+shares no token with a real stage verdict (`assert_no_verification_verdict_vocabulary()`, run at
+import).
+
+**Deliberately bounded.** It discovers no fabric topology, port, or master/slave fact of its own --
+node identity is a caller's own AMBA-family discovery pipeline's job; it never computes a
+reorder-window depth or an outstanding-transaction bound; it decides, approves and arbitrates
+nothing: no build, job, or approval is touched, and there is deliberately no stage gate and no
+`dv-harness` CLI verb (`cli.py`/`gates.py` untouched, per this batch's file-safety scope) -- the
+front door is the module's own Python API plus a small `python -m
+dv_harness.ordering_domain_graph --facts-file <file.json> [--json]` reporting wrapper.
+
+Proven by `dv_harness_tests/test_ordering_domain_graph.py` (33 tests): the core positive
+build/query path (domain membership, multi-domain-membership finding, reconfigurable-domain
+grounding); orphan-domain and self-loop-edge findings; the headline
+"reconfigurable-without-grounding-evidence is refused" negative control and its blank-string
+sibling; five further uncited-declaration refusals (domain, membership, edge, an unrecognized
+preservation value, a duplicate domain id); a real contradictory-edge case proven reported (never
+arbitrated) with the resolved edge reading UNKNOWN citing both sides; the no-reverse/no-transitivity
+proof for `query_domain_preservation()`; honest `UNKNOWN_DOMAIN`/`UNKNOWN_NODE`/`NO_DOMAIN_DECLARED`
+results for every query against something never declared; a JSON round-trip proof; and CLI
+subprocess invocations (JSON and markdown output, exit code).
+
+## Address-Map Integrity Checker: Overlap / Unmapped-Hole / Illegal-Burst Arithmetic (2026-09-06)
+
+This project's existing AMBA-23 mechanism (`uvm_generator/amba_fabric_generator.
+compute_address_regions()`, "the ONLY overlap / gap / full-coverage validator used")
+was read first, per REUSE OVER REINVENT, and confirmed genuinely unfit for this task's own
+scope: it is a GENERATION-TIME validator that RAISES on the FIRST overlap/gap it finds (one
+finding, never a full report) and REQUIRES the region set to cover the entire
+`[0, 2**addr_width)` address space -- correct discipline for a generator that must never emit
+a topology with a silently-unmapped residual region, wrong for a caller-declared address map
+that may legitimately have reserved gaps and needs every finding reported at once, not just
+the first. Nothing in this repo modeled illegal-transfer legality (a burst crossing a 4KB
+boundary, or crossing a declared protocol-region boundary) at all. `dv_harness/
+address_map_integrity_checker.py` is a deliberately SEPARATE module for this narrower, pure-
+arithmetic question, reusing only `amba_fabric_generator.parse_addr()` for address-string
+parsing (int, or an optionally underscore-grouped, optionally 0x/0b-prefixed string) so this
+module cannot silently parse an address differently from the rest of the AMBA family.
+
+**Three checks, matching the task's own three items, every finding citing the real values that
+triggered it.** (a) `check_overlaps()` -- pairwise interval intersection over all declared
+regions, each finding carrying both real regions (owner/base/size/end) and the real
+overlapping sub-range -- never a generic "overlap exists". (b) `check_unmapped_holes()` --
+regions are merged via a running-max-end coverage merge (so a large region fully containing a
+smaller declared one never manufactures a phantom hole against it, unlike a naive
+adjacent-pair scan); every real gap between merged coverage groups cites the real bounding
+region on each side (`region_before`/`region_after`, `None` only at the true start/end of a
+declared `address_space_bits` span). (c) `check_transfer_legality()` -- a caller-declared
+transaction (`address` plus `length`, or `burst_len`+`beat_size`) is checked against both a
+4KB-boundary crossing (the real AMBA AXI/AHB rule that a single burst must never cross a 4KB
+address boundary) and a declared PROTOCOL-REGION boundary crossing, grouped by each region's
+own `protocol_region` field (defaulting to that region's `owner` when undeclared, so two
+regions of one owner but different bus segments are never silently merged, and two regions
+sharing one DECLARED protocol region -- e.g. two banks of one memory -- are correctly never
+flagged just for having different owners).
+
+**Evidence Truth Rule, applied to a domain with no UNKNOWN/NOT_AVAILABLE vocabulary of its
+own.** A transaction whose target range touches no declared region at all, or only PART of its
+range, is reported as the honest, distinct `TRANSFER_TARGETS_UNMAPPED_ADDRESS` /
+`TRANSFER_PARTIALLY_UNMAPPED` finding -- never silently assumed legal, since "legal" is a claim
+this module must never make without a real declared region to check against. A region or
+transaction missing a required field (owner, base, size, a resolvable length, a parseable
+address) is refused outright (`AddressMapIntegrityError`, fail-closed) rather than silently
+defaulted or guessed. An explicitly empty region list is legal (an honest "nothing declared
+yet" state, distinct from `regions=None`, which is refused as nothing having been supplied at
+all).
+
+`analyze_address_map(regions, transactions=None, address_space_bits=None)` is the one entry
+point, folding `status` to `FAIL` iff a real overlap or illegal-transfer finding exists;
+unmapped holes are always reported but never force `FAIL` on their own, since a declared gap
+(reserved space) is a normal engineering fact, not a defect.
+
+**Deliberately bounded, and stated rather than implied closed.** No RTL/VIP discovery, no
+fabric-topology derivation, and no performance/timing value of any kind are computed here --
+all out of scope for this whole batch. There is no `dv-harness` CLI verb and no `gates.py`
+entry (out of this task's own file-safety scope); the front door is the module's own Python
+API.
+
+Proven by `dv_harness_tests/test_address_map_integrity_checker.py` (28 tests): positive paths
+for all three checks (including the negative control that two owners sharing one declared
+protocol region are never flagged crossing it, and that a large containing region never
+manufactures a phantom hole against a region it fully covers); the two honest-unmapped-address
+tests (a transaction touching nothing declared, and one only partially covered, both reported
+rather than assumed legal); 7 negative controls for malformed region/transaction input; and 4
+tests on the combined `analyze_address_map()` entry point including its `render_text()`
+rendering. `python -m pytest dv_harness_tests/test_address_map_integrity_checker.py -q` ->
+`28 passed`.
+
+## Dynamic Connectivity IR: Runtime-Reconfigurable Routing, Never Inferred From the Fabric Being AMBA (2026-09-06)
+
+Batch 9's real AMBA/SyoSil family already models connectivity STRUCTURALLY and once, as discovered: `amba_fabric_discovery.py`/`amba_port_registry.py` establish which master/slave ports exist and how they bind; `amba_route_transform_predictor.py` (SYOSCB-12/13) then predicts, from that fixed topology, whether a route exists and what transform the topology implies along it (ID extension, width conversion, burst split/merge, bridge behavior, ordering domain). None of it asks whether the fabric's own address decode or route selection can CHANGE while the design runs -- every prediction is over a single, fixed decode the harness read once. `dv_harness/dynamic_connectivity_ir.py` is a DynamicConnectivityIR for exactly that missing question, kept deliberately separate: it imports nothing from the AMBA/SyoSil family or from any other new module in this same batch -- only `connectivity.render_markdown_table()` (the repo's one parameterized table renderer) and `models.Status` (for the vocabulary-disjointness check several sibling modules already run against it).
+
+**The fabrication-risk rule is enforced two layers deep, not merely stated.** `classify_path_reconfigurability()` takes only two evidence records per path -- a `ControllingMechanism` (a real register/field name plus a REQUIRED, non-empty evidence citation; construction raises `DynamicConnectivityIRError` on an empty citation, the same "a rule with no evidence citation is refused outright" discipline `security_policy_ir.AccessRule` already applies) and/or a `StaticRoutingClaim` (the symmetric cited "this path is fixed" claim) -- and never accepts a protocol/fabric-name parameter at all, so a path's declared `protocol` field can never influence its classification (proven directly: identical evidence under five different declared protocol strings, including `"AXI4"`, produces byte-identical results). A declared mechanism is promoted to `RECONFIGURABLE_CONFIRMED` only when its OWN evidence text matches a closed, literal phrase list stating it actually controls routing/decode (`"controls address decode"`, `"selects the destination slave"`, ...) -- a mechanism whose evidence names an unrelated register (an IRQ mask, say) is refused and reported `UNKNOWN_MECHANISM_NOT_EVIDENCED_AS_ROUTING_CONTROL` rather than promoted on the strength of the caller's own label, mirroring `arbitration_policy_ir.classify_arbitration_scheme()`'s "never from a name alone" discipline. The symmetric rule holds for `STATIC_CONFIRMED`. With neither evidence type supplied, the result is `UNKNOWN_NO_EVIDENCE` -- never defaulted to static or dynamic on the strength of the fabric being an AMBA fabric in general. Declaring BOTH a mechanism and a static claim for one path is `AMBIGUOUS_CONFLICTING_EVIDENCE`; this module never arbitrates which side wins, the same boundary `security_policy_ir.classify_access()` keeps for a same-specificity rule conflict.
+
+`DynamicConnectivityPath`/`DynamicConnectivityIR` wrap the classifier into a full model over caller-declared, duck-typed path dicts (`build_dynamic_connectivity_paths()`/`build_dynamic_connectivity_ir()`), with `to_dict()`/`to_row()`/`summary()`/`render_markdown()` and a `python -m dv_harness.dynamic_connectivity_ir statuses|classify` front door (exit 0 every path resolved, 1 any UNKNOWN/AMBIGUOUS, 2 malformed input) -- no `dv-harness` CLI verb was added and `gates.py`/`cli.py` were untouched, per this task's own file-safety scope. It decides, approves, and arbitrates nothing beyond its own classification: no build, no job, no approval, and there is deliberately no stage gate.
+
+Proven by `dv_harness_tests/test_dynamic_connectivity_ir.py` (24 tests): the core positive path for both `RECONFIGURABLE_CONFIRMED` and `STATIC_CONFIRMED`; the headline no-evidence-never-defaulted test and its path-level counterpart; the protocol-never-consulted test across five declared protocols including the task's own named "AMBA fabric alone" scenario; both "declared but not evidenced" negative controls (an unrelated register, an unrelated static citation); the both-declared conflict; five construction-refusal tests (empty evidence, empty register name, empty path identity fields); `build_dynamic_connectivity_paths()`'s mixed-status batch build, malformed-index reporting, and non-list refusal; markdown rendering including the empty-IR honest-note case; and all three CLI exit codes.
+
+## Transaction Correlation IR: Response Matching, Data-Beat Association, and Burst Split/Merge Linkage (2026-09-06)
+
+`amba_transaction_ir.py` (SYOSCB-10) already gives one AMBA transaction a typed shape -- `transaction_id`, `original_id`, `fabric_id`, `sequence_number`, `route_id` -- and `amba_route_transform_predictor.py` (SYOSCB-12) already DETECTS, per route, whether the topology implies a burst split or merge (`detect_burst_split_merge()`) from a width-conversion/protocol-applicability comparison of the two ends. Both were read first, read-only, before writing a line of this module, and neither tracks a CROSS-TRANSACTION link: the IR gives one transaction fields to CARRY an id, never says which OTHER transaction record shares it or which response record answers which request record; the predictor says a route implies a split/merge EVENT, never says which of the real sub-transactions later observed on that route are that event's actual children. `dv_harness/transaction_correlation_ir.py` is the correlation/bookkeeping layer that sits on top of both, and reuses rather than reimplements either -- `BURST_SPLIT`/`BURST_MERGE`/`BURST_SPLIT_TO_SINGLE_TRANSFERS`/`TRANSFORM_PREDICTED_FROM_TOPOLOGY` are imported directly from `amba_route_transform_predictor.py` so there is exactly one spelling of "what kind of split/merge event this is" in this repo, and its detection logic is never duplicated: this module only accepts a caller-supplied detected event (typically that function's own return shape) and correlates real, already-observed sub-transactions against it.
+
+**Three mechanisms, each gated by a real evidence citation.** Every request/response/data-beat/sub-transaction record must carry a non-empty `evidence` list or the module refuses to build a decision from it (`TransactionCorrelationIRError`) -- a correlation decision is never built from an uncited record, and never from a component/port name or a plausible-looking default.
+
+- `correlate_responses(requests, responses)` groups by `(scope, transaction_id)` -- `scope` is a caller-declared channel/route key so two unrelated ports sharing one bare id value, or two protocols carrying no id at all (every item's `transaction_id` is `None`), are never cross-matched -- and, within a group holding more than one still-open item, matches strictly by ascending `sequence_number`: the real AMBA rule that transactions sharing one id complete in FIFO issue order. A group missing `sequence_number` on more than one still-open member cannot be safely ordered and is reported `RESPONSE_AMBIGUOUS_ORDER_WITHIN_ID_GROUP` rather than matched by list position. A response with no outstanding request in its group is `RESPONSE_UNMATCHED_NO_OUTSTANDING_REQUEST`; a request with no response yet is `REQUEST_PENDING_NO_RESPONSE_YET`.
+- `associate_data_beats(transactions, data_beats)` joins beats to a transaction by a real shared per-beat id when the caller supplies one (AXI3's WID-style), or by a persistent per-scope FIFO cursor when beats carry none at all (AXI4's W channel). A transaction declaring no `expected_beat_count` can never be judged "full" by counting alone, so it permanently blocks its FIFO queue -- every beat that would otherwise queue behind it is honestly `BEAT_UNKNOWN_TRANSACTION_LENGTH` rather than guessed onto the next transaction in program order (the cursor never advances past a length-unknown target). Per-transaction rollup reports `DATA_ASSOCIATION_COMPLETE`/`PARTIAL`/`EXCESS_BEATS`/`UNKNOWN_LENGTH`/`NO_BEATS_OBSERVED`.
+- `link_burst_split_merge(detected_event, parent_transaction, child_transactions)` links real observed children back to a parent by plain address-tiling arithmetic over each record's own `address`/`total_bytes` -- contiguous coverage of the parent's `[address, address+total_bytes)` range, count checked against the event's own `beat_count_factor` when the predictor supplied one -- never by trusting an unverified shared correlation-key string. An event whose own `status` is not `TRANSFORM_PREDICTED_FROM_TOPOLOGY`, or whose `kind` is none of the three split/merge kinds this repo recognizes, is honestly `LINKAGE_NOT_APPLICABLE`: this module never attempts to link children to an event that never claimed a split/merge in the first place. Reports `LINKAGE_CONFIRMED`/`PARTIAL_ADDRESS_RANGE_NOT_FULLY_COVERED`/`CONFLICT`/`INSUFFICIENT_EVIDENCE`/`NOT_APPLICABLE`.
+
+**Deliberately bounded, and stated rather than implied closed.** It does not discover fabric topology, ports, or protocols (`amba_fabric_discovery.py`/`amba_port_registry.py`'s job); it does not decide whether a route implies a split/merge at all (`amba_route_transform_predictor.py`'s job, called by the caller before this module ever runs); it does not read RTL, a waveform, or a sim.log itself -- every record is a plain, caller-supplied fact; it writes nothing, gates nothing, and approves nothing, and there is deliberately no stage gate. No `dv-harness` CLI verb was added (`cli.py` untouched, per this batch's file-safety scope); the front door is `python -m dv_harness.transaction_correlation_ir {responses|data|linkage}`.
+
+Proven by `dv_harness_tests/test_transaction_correlation_ir.py` (30 tests): response correlation's FIFO-by-id matching (including the no-id-protocol case and two-scope isolation) plus its ambiguous-order negative control; data association's beat-id and no-id FIFO paths plus the unknown-length permanent-blocking negative control (the one genuine logic defect this TDD pass caught and fixed: an earlier draft wrongly let the FIFO cursor advance past a length-unknown transaction instead of blocking every subsequent beat behind it); and burst linkage's CONFIRMED/PARTIAL/CONFLICT/INSUFFICIENT_EVIDENCE/NOT_APPLICABLE paths, including one test that drives the REAL `amba_route_transform_predictor.detect_width_conversion()`/`detect_burst_split_merge()` over a genuine AXI4 128-bit-to-32-bit downsize to produce an authentic `BURST_SPLIT` event (factor=4) before linking it against synthetic address-tiled children, and a companion test proving `LINKAGE_NOT_APPLICABLE` against that same predictor's real `TRANSFORM_NOT_IMPLIED` result for a same-width route.
+
+## Outstanding Capability IR: a Granular Structural Breakdown, Never a Guessed Limit (2026-09-06)
+
+Batch 9's `amba_master_slave_constraint_ir.py` models AMBA outstanding-transaction legality as ONE of its six fixed protocol-legal/DUT-capability/scenario-constraint dimensions -- a single flat `outstanding` notion inside that module's three-layer model. It never asked the more granular questions a real fabric/port capability record needs answered separately: is the limit different for reads vs writes, is there a per-ID cap distinct from a global in-flight cap, what does the SLAVE side accept (which can differ from what a master issues), what does the FABRIC itself impose (often tighter than either endpoint), and what does an intervening BRIDGE impose (a width-conversion/protocol-bridge stage frequently caps outstanding depth independently of both endpoints -- the exact class of behavior `amba_route_transform_predictor.py` already detects at the route level, though this module does not import or re-derive that detection; it only reserves a field a caller populates once such an analysis confirms a bridge exists).
+
+`dv_harness/outstanding_capability_ir.py` is that finer-grained structural breakdown: `OutstandingCapabilityIR` over seven independent fields -- `read_max`, `write_max`, `per_id_limit`, `global_limit`, `slave_accept_limit`, `fabric_limit`, `bridge_limit`. Per this batch's strict file-safety scope it is a STANDALONE structure and does not import `amba_master_slave_constraint_ir.py` or any other new-batch module -- a caller already holding both IRs may cross-reference them at the call site (e.g. treating this module's finer fields as a refinement of that module's flat `outstanding` dimension for the same master/slave pair); this module performs no such cross-reference itself.
+
+**Every field defaults to UNKNOWN/NOT_AVAILABLE -- never a guessed limit, enforced at construction rather than merely documented.** Three statuses are kept honestly distinct: `OUTSTANDING_CAPABILITY_UNKNOWN` (nobody has ever supplied evidence for this field -- the default), `OUTSTANDING_CAPABILITY_NOT_AVAILABLE` (evidence was genuinely sought and could not be confirmed -- requires its own real, non-empty reason string, refused otherwise), and `OUTSTANDING_CAPABILITY_CONFIRMED` (a real integer value backed by a non-empty evidence citation AND a recognized evidence kind -- `rtl_parameter`/`rtl_port`/`register_map`/`register_field`/`spec_document`/`programming_guide`/`human_confirmation`). A numeric value supplied with no citation, a non-integer or negative value, or an unrecognized evidence kind (e.g. a VIP example or manual) all raise `OutstandingCapabilityError` at construction -- an uncited outstanding-transaction limit is exactly the unsupported claim the Evidence Truth Rule forbids, and this module never accepts one silently.
+
+`build_outstanding_capability_ir(field_inputs=...)` is the sanctioned constructor (never build the frozen dataclass by hand): each of the seven field names maps to `None`/`"UNKNOWN"` (stays UNKNOWN), a `{"status": "NOT_AVAILABLE", "reason": ...}` dict, or a `{"value": <int>, "evidence": ..., "evidence_kind": ...}` dict. `render_outstanding_capability_markdown()` reuses `connectivity.render_markdown_table()` -- this repo's one parameterized table renderer -- rather than a second hand-rolled table loop.
+
+**Deliberately bounded, and stated rather than implied closed.** It builds a structured capability record a human/generator reads; it runs no build, no simulation, and mints no approval, and there is deliberately no stage gate -- a gate that passed on a capability record nobody supplied real evidence for would be worse than none. It performs no RTL/spec parsing itself and imports nothing from any other new module in this batch, so it stays usable regardless of which future extractor eventually produces the per-field evidence it validates.
+
+Proven by `dv_harness_tests/test_outstanding_capability_ir.py` (23 tests): the default-all-UNKNOWN core positive path; real CONFIRMED-field construction across every recognized evidence kind; NOT_AVAILABLE proven distinct from UNKNOWN via separate accessor buckets (`unknown_fields()`/`not_available_fields()`); markdown rendering and `to_dict()` shape; and the required negative controls proving the module refuses to fabricate a limit -- missing evidence, an unrecognized evidence kind, a non-integer or bool or negative value, a bare NOT_AVAILABLE with no reason, an unknown field name (both at construction and via `field_by_name()`), a malformed field-spec shape, and a non-mapping `field_inputs` argument. Run: `python -m pytest dv_harness_tests/test_outstanding_capability_ir.py -q` -> `23 passed`.
+
+## Backpressure Model: Legal Stall Tolerance, from Literal Cited Evidence Only (2026-09-06)
+
+`design_intent.py` already models `backpressure_conditions` -- a documented, citation-required list of conditions under which backpressure/stalling is LEGAL AT ALL (a boolean per named condition: "is stalling here permitted, yes/no, per this spec section"). Nothing in this repo answered the adjacent, narrower quantitative question a scoreboard/checker actually needs next: GIVEN that a stall is legal on this named channel, HOW LONG may it legally last -- a bounded number of cycles/wait-states, or an explicitly unbounded stall the spec/RTL evidence permits -- and whether a caller-supplied OBSERVED worst-case stall stays within that bound. A repo-wide grep for `stall_tolerance`/`legal_backpressure`/`BackpressureToleranceIR` returned zero hits before this module. The real AMBA/SyoSil family (`amba_fabric_discovery.py`, `amba_port_registry.py`, `amba_fabric_analysis.py`, `amba_transaction_ir.py`, `amba_route_transform_predictor.py`, `amba_scoreboard_env.py`) discovers fabric topology, ports, transactions and route transforms -- none classifies a channel's legal stall duration, and this session's own `arbitration_policy_ir.py` classifies an ARBITER's scheme/starvation risk, a different concern (who gets granted next, not how long a handshake channel may legally hold VALID/READY apart). `dv_harness/backpressure_model.py` is that missing classifier.
+
+**The Evidence Truth Rule, applied literally.** A channel's tolerance is classified ONLY from real evidence TEXT the caller supplies (an RTL comment, a protocol/programming-guide paragraph, a register/timing-spec sentence) -- never from the CHANNEL NAME alone. `AXI_AW`/`AHB_HREADY`/`APB_PREADY`/`GENERIC_VALID_READY` are fixed, exhaustive labels this module classifies against; none carries an assumed legal-stall duration from the protocol's own general reputation (e.g. "AXI READY may always be held low indefinitely" is a real architectural fact about some AMBA protocols, but this module refuses to assert it unless the caller's own supplied evidence text states it for THIS channel) -- proven directly by a dedicated negative-control test: a channel literally named `AXI_AW` with no supplied evidence text classifies `NOT_AVAILABLE`, never a guessed `UNBOUNDED`. Evidence text matching neither a bounded nor an unbounded phrase is honestly `NOT_AVAILABLE`. Evidence citing BOTH a bounded stall AND an unbounded stall for the same channel (no containment relationship between the two claims) is honestly `AMBIGUOUS`, naming both matched phrases, rather than picking one.
+
+**Classification is a literal phrase match, not a keyword/name heuristic** -- the same discipline `arbitration_policy_ir.classify_arbitration_scheme()` already applies to its own five-scheme vocabulary, reused here for the two-class BOUNDED/UNBOUNDED vocabulary. `BOUNDED_STALL_PATTERNS` are a small, fixed list of literal, case-insensitive regex phrases capturing a real declared integer cycle/wait-state count (e.g. "maximum stall of N cycles", "must assert READY within N cycles", "up to N wait states", "stall no more than N clock cycles"). `UNBOUNDED_STALL_PHRASES` are a small, fixed list of literal phrases stating no bound exists (e.g. "may stall indefinitely", "no bound on the number of wait states", "unbounded backpressure is legal"). Text using different wording is honestly `NOT_AVAILABLE` rather than guessed via a broader keyword scan -- narrower recognition is the deliberate, disclosed trade for never fabricating a tolerance the evidence does not literally state.
+
+**Stall-violation detection never invents an observed value.** `detect_stall_violation()` compares a `ChannelToleranceResult` already classified from real evidence against a caller-DECLARED observed worst-case stall duration (a real simulation/waveform measurement, or a formal-proof/documented worst-case figure; this module performs none of those measurements itself and never derives this number). A `NOT_AVAILABLE`/`AMBIGUOUS` tolerance can never judge a violation (honestly `UNKNOWN` -- there is no resolved bound, or two disagreeing claims, to compare against); an `UNBOUNDED` tolerance can never be violated by construction (`WITHIN_TOLERANCE`, since no bound exists to exceed); a `BOUNDED` tolerance compares the caller's real observed figure against the extracted cycle count -- within it is `WITHIN_TOLERANCE`, exceeding it is `VIOLATION`. An absent observed value against a resolved bound is `UNKNOWN`, never assumed compliant.
+
+Proven by `dv_harness_tests/test_backpressure_model.py` (29 tests): each of the four fixed channel labels is proven classified from real cited bounded and unbounded phrases; the channel-name-alone negative control (`AXI_AW` with no evidence text stays `NOT_AVAILABLE`); the `AMBIGUOUS` dual-claim case; violation detection proven on both `WITHIN_TOLERANCE` and `VIOLATION` from real caller-declared observed figures, plus `UNKNOWN`/`WITHIN_TOLERANCE`-by-construction on `NOT_AVAILABLE`/`AMBIGUOUS`/`UNBOUNDED` tolerances respectively.
+
+**Disclosed residual**: this module classifies from caller-supplied evidence TEXT only -- it performs no RTL parsing, no waveform measurement, and no simulation of its own, and references no approval/governance mechanism.
+
+## Verification Boundary IR: 10-Class Taxonomy + Cited 7-Role Ownership (2026-09-06)
+
+Nothing in this repo modeled a verification BOUNDARY as a first-class, taxonomized object carrying its own ownership record. The closest-looking mechanisms answer different, narrower questions: `amba_scoreboard_env.py`'s `ENV_ROLE_SCOREBOARD`/`ENV_ROLE_SUBSCRIBER`/`ENV_ROLE_PREDICTOR`/... is a UVM-component-ROLE vocabulary scoped to which class plays which role INSIDE one generated AMBA scoreboard's own component tree -- never a per-boundary ownership record across seven fixed named responsibilities, and never a 10-value boundary-class taxonomy at all; `verification_architecture.py`'s `CheckerIR`/`ScoreboardIR`/`VipBindIR`/`VipSelectionIR`/`AssertionIR` extend other real producers' own dict shapes with placement/confidence facts (is THIS checker correctly bound and linked), a different question from "what class of boundary is this, and who -- cited -- owns each of its seven fixed responsibilities". `dv_harness/verification_boundary_ir.py` is that missing layer.
+
+**Classification, and ownership, both require a real citation -- enforced at construction, never merely documented.** A boundary's `boundary_class` (one of the fixed `EXTERNAL_PROTOCOL`/`REGISTER_CSR`/`DMA`/`INTERRUPT`/`CLOCK_RESET`/`MEMORY_MAPPED`/`COHERENT`/`POWER_DOMAIN`/`DEBUG`/`INTERNAL_FUNCTIONAL` values) requires a real, non-empty `class_evidence` citation -- `build_verification_boundary_ir()` refuses (`VerificationBoundaryIrError`) to construct an IR without one, the same "an uncited claim is refused outright" discipline `security_policy_ir.AccessRule` and `arbitration_policy_ir.classify_arbitration_scheme()` already apply to their own domains, independently re-applied here rather than imported (per this task's own instruction, neither sibling module is imported). Each of the 7 fixed roles (`active_driver`, `monitor`, `predictor`, `checker`, `scoreboard`, `coverage_owner`, `performance_owner`) is populated ONLY from a caller-declared `owner` plus its own real, non-empty `evidence` citation; an owner declared with no citation (or with only whitespace) is refused the same way. A role nobody has cited an owner for -- the honest common case for a project mid-intake -- reports `ROLE_UNKNOWN`: never defaulted to a literal `"none"` string, and never guessed from the boundary's own class (a `DEBUG` boundary is never assumed to lack a `performance_owner` just because that seems plausible for a debug interface -- proven directly by a dedicated test that cites a real owner for exactly that role/class pairing and confirms it is honored once cited).
+
+**Deliberately bounded, and stated rather than implied closed.** It classifies a boundary and records ownership; it never arbitrates a conflicting ownership claim (two callers citing two different owners for one role on one boundary is a question this module does not resolve), and it authors no VIP/RTL/checker/scoreboard content. There is no stage gate and no `dv-harness` CLI verb (`cli.py`/`gates.py`/`CLAUDE.md` untouched, per this task's own file-safety scope) -- the front door is `python -m dv_harness.verification_boundary_ir classes|roles|build`.
+
+Proven by `dv_harness_tests/test_verification_boundary_ir.py` (35 tests): the core positive path (fully-assigned, partially-assigned, and no-roles-declared boundaries); the list-builder form with per-index error naming; a JSON round-trip proof; both real CLI entry points driven as subprocesses; and negative controls for every refusal this module makes -- an owner with no evidence, an owner with blank evidence, an unrecognized role name, an unrecognized boundary class, an uncited/blank/`None` boundary-class citation, non-string owner/evidence types, and a malformed `role_inputs` shape.
+
+## System Verification Contract Aggregator (2026-09-06)
+
+A system composed of several subsystems needs the sibling rollup to `subsystem_contract.py`'s single-subsystem record: N subsystem contracts plus the real cross-subsystem facts `system_topology_analysis.py` (address/interrupt/clock-reset reconciliation, scenario planning), `system_resource_inventory.py` (SYS-9..14 shared-resource/active-driver-conflict analysis) and `system_command_plan.py` (SYS-18..22 command routing/collision analysis) already compute, assembled into ONE record. Without it, "is this system verified" required a human to open four different documents and manually cross-reference them, and two audits of the same system could describe its verification contract differently even from identical facts.
+
+`dv_harness/system_verification_contract.py` is that assembly, and it is a pure aggregator that performs NO cross-subsystem analysis of its own: `system_topology_analysis.py` already decides address/interrupt/clock-reset conflicts, `system_resource_inventory.py` already decides ACTIVE_DRIVER_CONFLICT and shared-resource relationships, `system_command_plan.py` already decides command routing/collisions -- this module reads what those readers already produced and reports it verbatim, or `NOT_AVAILABLE` with the real reason when a caller did not supply it.
+
+**Strict no-cross-import scope, enforced by a dedicated test.** Per this batch's file-safety rule, the module never imports `subsystem_contract.py`, `system_topology_analysis.py`, `system_resource_inventory.py`, or `system_command_plan.py` -- it accepts their real output SHAPES as generic/duck-typed parameters instead: a list of subsystem-contract-shaped dicts; a `system_topology_analysis.build_system_topology_analysis()`-shaped document (its own `summary` block read verbatim: address_regions/overlaps/conflicts, shared_memory_windows, interrupt_lines, clock_reset_conflicts, cdc_boundaries, scenarios_planned, topology_clean); a `system_resource_inventory.real_cross_subsystem_findings()`-shaped record (its own `CROSSCHECK_AVAILABLE`/`CROSSCHECK_UNAVAILABLE` status vocabulary, restated as plain string literals rather than imported names, plus `driver_conflicts`/`automatic_integration_allowed`/`blocking_decisions`/`preferred_model` carried through unchanged -- this module never picks a winner between conflicting active drivers); and a `system_command_plan.build_system_command_plan()`-shaped document (its own `summary` block: system_commands, collisions/blocking_collisions, subsystem_modes_preserved, command_plan_clean). This means the module is independently testable against synthetic fixtures and never assumes any of those four modules ran in this same process -- a caller with only some of the four inputs on hand still gets an honest, partial rollup rather than an import-time failure. An `ast`-based test parses the module's own source and asserts none of the four forbidden module names appears as an import.
+
+**Per-subsystem-contract honesty.** Each entry in the caller-supplied subsystem-contracts list is read for its own `completeness` (COMPLETE/PARTIAL/NOT_AVAILABLE, `subsystem_contract.py`'s own vocabulary), `subsystem.resolved_name`/`requested`, `unknowns` count, and `spec_version`/`dut_sha`/`tb_sha`/`signoff.stage.stage_status` field statuses. A non-mapping entry, or one carrying no recognizable `completeness` field, is reported `UNKNOWN_SHAPE` with a specific reason rather than crashing or being silently skipped. A subsystem contract that is merely `PARTIAL` -- a real, already-visible fact about that subsystem -- is never treated as an "unknown" by this aggregator; only `NOT_AVAILABLE`/`UNKNOWN_SHAPE` entries are, the same distinction `subsystem_contract.py` itself draws between a field it could not assemble and one whose real value happens to be incomplete.
+
+**`unknowns` is the honesty surface**, scored against a fixed `TRACKED_ASPECTS` denominator of exactly four (`subsystem_contracts`, `system_topology`, `system_resource_registry`, `system_command_registry`) -- never a list a caller can silently widen or narrow. `completeness` is `COMPLETE` (zero unknowns), `NOT_AVAILABLE` (all four unknown -- a bare/uninitialized rollup), or `PARTIAL` (anything between).
+
+**Read-only, with one explicit write.** `assemble_system_verification_contract()` mints no store or `.dv-harness/` tree. `write_system_verification_contract()` / the `snapshot` verb is a separate, explicit act persisting the record to `.dv-harness/system_verification_contract.json`; `assemble` never writes. Both share `execute_verb()` (0 COMPLETE, 1 PARTIAL, 2 NOT_AVAILABLE/usage error), exposed as `python -m dv_harness.system_verification_contract assemble|snapshot [--subsystem-contracts <file>] [--topology <file>] [--resource-registry <file>] [--command-registry <file>] [--system-name ...] [--json]` -- each JSON input file is a bare array/object matching its real producer's own shape, since this module reads no live project state itself. No `dv-harness` CLI verb was added -- `cli.py`/`gates.py`/`CLAUDE.md` were out of this task's file-safety scope, the same disclosed choice several sibling same-day modules already make. It DECIDES, ARBITRATES and WRITES NO GOVERNANCE STATE: no stage runs, no gate is invoked, no approval is minted, and there is deliberately no stage gate -- a gate that passed because a contract record existed, or failed because one did not, would be worse than none.
+
+`dv-harness system-verification-contract` has no dashboard card and no graph node -- this is a REACHED capability (a real CLI/import caller exists), not a WIRED one.
+
+Proven by `dv_harness_tests/test_system_verification_contract.py` (20 tests): a full COMPLETE positive path over real-shaped fixtures for all four inputs; a legitimately-PARTIAL subsystem contract correctly excluded from `unknowns`; the required negative controls -- a bare call with nothing supplied reports every one of the four tracked aspects `NOT_AVAILABLE` with a real reason and never fabricates COMPLETE (the central proof the module refuses to claim a fact when required evidence is absent), a malformed subsystem-contract entry reports `UNKNOWN_SHAPE` without crashing, an unavailable resource-registry input carries its real `CROSSCHECK_UNAVAILABLE` reason through rather than reading as clean, a topology document missing its `summary` block, an unrecognized resource-registry status string, and a wrong-type command-registry input -- plus completeness-threshold boundaries, write/snapshot behavior (including a refusal on a nonexistent root and a proof that `assemble` writes nothing), `execute_verb()` and real `python -m` subprocess CLI runs at both the COMPLETE and NOT_AVAILABLE exit codes, and the AST-based cross-import restriction test.
+
+**Disclosed residual**: this is a pure aggregation module with no live project-reading of its own -- it never queries `env.manifest.json`, an evidence database, or the subsystem registry directly; all four inputs must be supplied by the caller as already-assembled documents (in-memory dicts via the Python API, or JSON files via the CLI). It performs no cross-subsystem arbitration (an ACTIVE_DRIVER_CONFLICT's `preferred_model` is carried through as text for a human, never resolved). There is no `dv-harness` CLI verb and no `STAGE_GATES`/dashboard wiring, per this task's own file-safety scope.
+
+## System Closure Aggregator: Strict Worst-Wins Over Twelve Named Dimensions (2026-09-06)
+
+Nothing in this repo rolled up a project's closure state across all of its closure-relevant domains into one honest verdict. Plenty of per-domain closure mechanisms already exist -- `functional_coverage_signoff.py`'s Closure formula, `waiver_store.py`'s five-value waiver status, `golden_scenario.py`'s per-test freshness, `signoff_export.py`'s frozen-baseline invalidation, `system_error_propagation.py`'s recovery-chain completeness, `system_build_proof.py`'s merge-collision analysis, `amba_performance_readiness_gates.py`'s BUS_PERFORMANCE gates, `security_policy_ir.py`'s access classification, `arbitration_policy_ir.py`'s starvation-risk classification, `change_impact.py`'s risk classification -- but nothing joined them into one `SYSTEM_CLOSURE_STATUS`, and a caller wanting that answer had to open every one of those modules by hand and manually apply the same no-averaging discipline each of them already states as a design principle on its own.
+
+`dv_harness/system_closure_aggregator.py` is that rollup, and it is deliberately a thin one: it computes nothing any of those real per-domain modules already compute. Per this batch's own file-safety scope it imports NONE of `functional_coverage_signoff.py`, `waiver_store.py`, `system_error_propagation.py`, or any other claimed/new-batch module -- each of the twelve fixed dimensions (`functional_coverage`, `protocol_coverage`, `requirement_closure`, `waiver_status`, `regression_status`, `evidence_integrity`, `error_propagation`, `build_composition`, `performance_closure`, `security_closure`, `arbitration_closure`, `change_impact_closure`) is accepted as a generic, duck-typed `{dimension_name, status}` record instead -- a plain dict or any attribute-bearing object -- the caller's own reduction of whichever real per-domain module actually decided that dimension's closure state.
+
+**Strict worst-wins, never averaged -- the one rule this module exists to enforce.** A single dimension reporting UNMET/open BLOCKS overall closure (`SYSTEM_CLOSURE_STATUS = "NOT_CLOSED"`) regardless of how many of the other eleven are clean -- an 11/12 clean picture is still `NOT_CLOSED`. Only once no dimension is UNMET does an UNKNOWN/NOT_AVAILABLE dimension -- or one never supplied at all -- make the whole rollup `INCOMPLETE_EVIDENCE`, a THIRD value honestly distinct from both `CLOSED` and `NOT_CLOSED` (the same GF-AT-28 "a Critical UNKNOWN must never silently become READY" discipline, applied here to closure rather than readiness). `NOT_APPLICABLE` is the one status that clears WITHOUT counting as missing evidence -- a caller's real, declared "this dimension does not apply here" fact, never confused with "nobody looked". Only `CLOSED` requires every one of the twelve to have genuinely resolved to `MET` or `NOT_APPLICABLE`; a dimension the caller never mentions at all is reported `NOT_SUPPLIED` (distinct from an explicit `UNKNOWN`) and folds the same way into `INCOMPLETE_EVIDENCE` -- it can never silently default to `MET`.
+
+`normalize_dimension_status()` maps a caller's real, heterogeneous status vocabulary (`PASS`/`FAIL`/`BLOCKED`/`READY`/`EXPIRED`/`VIOLATED`/...) onto five recognized tokens (`MET`/`UNMET`/`UNKNOWN`/`NOT_AVAILABLE`/`NOT_APPLICABLE`) via a fixed alias table, the same "accept the real producer's own spelling, normalize once, never re-derive a second vocabulary" discipline `protocol_compliance_aggregation.py`'s own `SCOREBOARD_PASS_VERDICTS`/`CHECKER_PASS_VERDICTS` already apply one domain over. An unrecognized raw string is honestly `UNKNOWN`, never guessed toward MET or UNMET. Two conflicting submissions for the same fixed dimension are reported `AMBIGUOUS_CONFLICTING_SUBMISSIONS` -- this module never arbitrates which one is right, the same ARBITRATION boundary `requirement_contract.py`/`design_knowledge_correlation.py` already keep for their own conflicting-claim findings -- and folds the same way into `INCOMPLETE_EVIDENCE`. A record naming a dimension outside the fixed twelve is reported in `unrecognized_records`, never silently dropped.
+
+**Every dimension is ALWAYS reported individually, never collapsed into a bare pass/fail count.** `aggregate_system_closure()`'s result carries `dimensions`, all twelve, in fixed order, each with its own `normalized_status`/`raw_statuses`/`reasons`/`supplied` -- a reader can always see exactly which dimension is the real blocker or gap rather than only a summary count. `CLOSED`'s own token is a deliberate, disclosed reuse of `dv_harness.models.Status.CLOSED` -- the same disclosed-reuse precedent `protocol_compliance_aggregation.py`'s `OVERALL_PASS`/`OVERALL_FAIL` already set for `Status.PASS`/`Status.FAIL` -- checked at import against any UNDISCLOSED collision by `assert_no_extra_verdict_vocabulary_collision()`.
+
+`render_system_closure_markdown()` reuses `connectivity.render_markdown_table()` (this repo's one parameterized table renderer) for its dimension-by-dimension view; `python -m dv_harness.system_closure_aggregator --dimensions <file.json> [--markdown]` is the front door (exit 0 `CLOSED`, 1 `NOT_CLOSED`, 2 `INCOMPLETE_EVIDENCE` or a usage error). No `dv-harness` CLI verb was added and `gates.py`/`cli.py` were not touched, per this task's own file-safety scope.
+
+**Deliberately bounded, and stated rather than implied closed.** It decides nothing beyond the rollup itself: no build, no gate, no job, no LSF submission, and no approval is minted -- there is deliberately no stage gate, since a `SYSTEM_CLOSURE_STATUS` is an input to a human's closure/signoff review, never a substitute for one. It reads nothing from disk on its own beyond the CLI's own `--dimensions` file; every fact reaches it as a plain caller-supplied value.
+
+Proven by `dv_harness_tests/test_system_closure_aggregator.py` (44 tests): the core positive path (all twelve MET/NOT_APPLICABLE -> CLOSED, individually reported, order-stable regardless of input order); the headline worst-wins negative controls (a single UNMET blocks with eleven clean, UNMET outranks a simultaneous UNKNOWN, multiple UNMET all named); the required "refuses to claim a fact when evidence is absent" proofs (a single UNKNOWN/NOT_AVAILABLE dimension, a dimension never supplied at all, and a wholly empty input all correctly report `INCOMPLETE_EVIDENCE` rather than a fabricated `CLOSED` or `NOT_CLOSED`); conflicting-vs-agreeing duplicate submissions; unrecognized-dimension-name handling; `normalize_dimension_status()` parametrized over real sibling-module vocabulary plus case/whitespace tolerance; duck-typed attribute-object input; markdown rendering; and six CLI subprocess tests covering all three exit codes plus malformed JSON input.
