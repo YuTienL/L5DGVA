@@ -761,7 +761,10 @@ async function postJSON(url, body){
     resp = await fetch(url, {method:'POST', headers: headers, body: JSON.stringify(body||{})});
     text = await resp.text();
     try { data = JSON.parse(text); } catch(e) { data = {raw:text}; }
-    if(resp.status === 403 && data && data.error === 'AUTH_REQUIRED') _showAuthBanner(data);
+    // PC-6: a ROLE refusal is shown in the same banner. An authenticated
+    // VIEWER whose Approve click silently did nothing would read as a broken
+    // page; the banner tells them which role the action needs.
+    if(resp.status === 403 && data && (data.error === 'AUTH_REQUIRED' || data.error === 'ROLE_NOT_PERMITTED')) _showAuthBanner(data);
   } catch(e) {
     data = {error:'NETWORK_ERROR', message:String(e)};
     resp = {ok:false};
@@ -2981,9 +2984,14 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
     # reachable with no credential in existence. See dashboard_auth.py for
     # the threat model and its two disclosed residuals.
     _require_auth = bool(cfg["dashboard"].get("require_auth", True))
-    _session_token = dashboard_auth.issue_session_token(
+    _session_record = dashboard_auth.issue_session_token(
         project_root, port=int(cfg["dashboard"]["port"]),
-        host=cfg["dashboard"]["host"])["token"]
+        host=cfg["dashboard"]["host"])
+    # PC-6: `token` IS the APPROVER role's token, so the banner URL and every
+    # pre-role caller keep exactly the authority they had; `_role_tokens`
+    # carries the VIEWER/OPERATOR credentials an operator can hand out.
+    _session_token = _session_record["token"]
+    _role_tokens = _session_record[dashboard_auth.ROLE_TOKENS_KEY]
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, data: bytes, content_type: str, status: int = 200):
@@ -2997,15 +3005,49 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
             self._send(json.dumps(obj, ensure_ascii=False).encode("utf-8"),
                         "application/json; charset=utf-8", status=status)
 
+        # PC-6: the request body is read from the socket at most ONCE per
+        # request and cached on the handler instance, because the role gate
+        # has to look at /api/control's `command` BEFORE dispatch while the
+        # handler still needs the same body afterwards. A second rfile.read()
+        # would return nothing and turn every gated control request into an
+        # empty body. BaseHTTPRequestHandler builds one instance per request,
+        # so this cache never outlives the request it belongs to.
+        _body_raw: Optional[bytes] = None
+
+        def _consume_body(self) -> bytes:
+            if self._body_raw is None:
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = 0
+                self._body_raw = self.rfile.read(length) if length > 0 else b""
+            return self._body_raw
+
+        def _control_command(self) -> Optional[str]:
+            """POST /api/control's sub-command, for the role matrix only.
+
+            Returns None when the body is absent/malformed/not an object --
+            which `dashboard_auth.required_role()` treats as an UNMAPPED
+            action requiring APPROVER. Not knowing which command a request
+            carries is a reason to demand MORE authority, never less; the
+            handler still returns its own 400 for the same malformedness once
+            an authorized caller reaches it.
+            """
+            try:
+                raw = self._consume_body()
+                data = json.loads(raw.decode("utf-8")) if raw else {}
+            except Exception:
+                return None
+            if not isinstance(data, dict):
+                return None
+            cmd = data.get("command")
+            return cmd if isinstance(cmd, str) and cmd.strip() else None
+
         def _read_json_body(self) -> Dict[str, Any]:
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
             if ctype != "application/json":
                 raise ValueError(f"Content-Type must be application/json, got {ctype!r}")
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-            except ValueError:
-                length = 0
-            raw = self.rfile.read(length) if length > 0 else b""
+            raw = self._consume_body()
             if not raw:
                 return {}
             try:
@@ -3276,11 +3318,20 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
         # mutates real state (control-plane APPROVE/COSIGN/TAKEOVER, waiver
         # authoring, signoff export, policy writes, uploads, harness start),
         # so there is no read-only POST to carve out.
+        # PC-6 adds the ROLE half in the SAME call: authentication decides
+        # whether the caller holds one of this session's tokens, the matrix
+        # decides whether that token's role reaches THIS action. For
+        # /api/control the action is the sub-command, so it is read here --
+        # one endpoint carries both "pause the run" and "approve SIGNOFF".
         def _authorized(self) -> bool:
-            allowed, reason = dashboard_auth.authorize(
+            path = self.path.split("?", 1)[0]
+            command = (self._control_command()
+                       if path == dashboard_auth.CONTROL_ENDPOINT else None)
+            decision = dashboard_auth.authorize_detail(
                 _session_token, self.headers, self.path, method="POST",
-                require_auth=_require_auth)
-            if allowed:
+                require_auth=_require_auth, role_tokens=_role_tokens,
+                control_command=command)
+            if decision["allowed"]:
                 return True
             # Recorded on the same real audit trail every other dashboard
             # action lands on -- a refused approval attempt is exactly the
@@ -3289,11 +3340,18 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 from .storage import StateStore
                 StateStore(project_root).event(
                     {"ts": time.time(), "event": "DASHBOARD_AUTH_DENIED",
-                     "path": self.path.split("?", 1)[0], "reason": reason,
+                     "path": path, "reason": decision["reason"],
+                     "action": decision["action"], "role": decision["role"],
+                     "required_role": decision["required_role"],
                      "user": _access_user(), "host": _access_host()})
             except Exception:
                 pass  # an audit-write failure must never turn a denial into a 500
-            self._send_json(dashboard_auth.denial_response(reason), status=403)
+            self._send_json(
+                dashboard_auth.denial_response(
+                    decision["reason"], role=decision["role"],
+                    required_role=decision["required_role"],
+                    action=decision["action"]),
+                status=403)
             return False
 
         # ---- Human Control Plane / setup / start ---------------------------
@@ -3572,7 +3630,8 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
 
     host = cfg["dashboard"]["host"]
     port = int(cfg["dashboard"]["port"])
-    print(dashboard_auth.startup_banner(host, port, _session_token, _require_auth))
+    print(dashboard_auth.startup_banner(host, port, _session_token, _require_auth,
+                                        role_tokens=_role_tokens))
     ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
