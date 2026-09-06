@@ -1923,10 +1923,21 @@ wired loops with no edge between them.
 
 `engine.DVHarness._file_capability_evolution_candidates_from_repeated_failures()`
 closes the DISCOVERY half. It is called immediately after
-`_record_debug_attempt_job_memory()` — the one place in this engine a real
+`_record_debug_attempt_job_memory()` — the one place in `engine.py` a real
 `kind="job_failure"` record carrying a real `memory_vault.build_failure_signature()`
 dict reaches Job Memory — so the coupling reads evidence the closure loop wrote
 one line earlier, on the real autonomous path.
+
+**Scope, precisely (three-loop gap-close review, 2026-09-05):** the filing
+call site is `run_stage()`'s FAILURE_RECOVERY/RE_AUDIT FAIL/PARTIAL branch
+only. `lsf_client._write_job_tier_memory_on_terminal_reconcile()` also writes
+real `kind="job_failure"` records (on a real UVM_ERROR/UVM_FATAL/abnormal-
+termination signal reconciled from LSF) — those contribute as EVIDENCE to
+`repeated_unresolved_failure_patterns()`'s pattern-matching once two
+independent runs exist, but do not themselves trigger the auto-file check.
+A project whose failures arrive only via LSF reconcile, with `run_stage()`
+never reaching a FAILURE_RECOVERY/RE_AUDIT FAIL/PARTIAL for the same
+pattern, never fires the coupling on its own.
 
 - **The threshold is evidence-based and conservative.** `capability_evolution.
   repeated_unresolved_failure_patterns()` groups Job Memory `job_failure`
@@ -2146,11 +2157,19 @@ the existing machinery end to end rather than standing up a benchmark harness:
   copy would report UNCHANGED and look like a real negative result.
 
 **Four isolation properties, each enforced in code and each tested:**
-1. **Everything written lives under
+1. **The isolated arm workspaces live under
    `<root>/.dv-harness/experiments/<candidate_id>/<run_id>/`.** Every harness is
    constructed rooted inside an arm of that workspace, and that is re-checked
    against the harness object actually returned — an injected `harness_factory`
    returning one rooted at the live project is refused before any stage runs.
+   **Correction (three-loop gap-close review, 2026-09-05):** the arms are not
+   the ONLY things written — `transition()`/`persist_candidate()` also write
+   2 real Working Memory records plus an update to the Blackboard candidate
+   topic, both outside the experiments directory, since those are the
+   governance audit trail every other candidate uses, not part of the
+   sandboxed experiment. What stays true: no path outside
+   `.dv-harness/{experiments,memory,blackboard}` is touched, and nothing
+   reaches the live project's own tracked source files.
 2. **The source fixture is content-fingerprinted before and after.** A changed
    digest means the run was not isolated and its measurement is discarded, so
    "the experiment never wrote to the project it was copied from" is a checked
@@ -2618,7 +2637,7 @@ against REAL artifacts written by their REAL writers -- a real `StateStore`
 state.json, real `.dv-harness/lsf/jobs/*.json`, a real coverage
 `summary.json`, a real `MemoryStore` record, a real capability registry --
 and with the CLI driven as a real subprocess, by
-`dv_harness_tests/test_golden_flow_readiness.py` (38 tests). Its negative
+`dv_harness_tests/test_golden_flow_readiness.py` (39 tests). Its negative
 controls are what give it detection power: an LSF job at DONE with no DV
 analysis does NOT read as passing, a stage PASS with no spec on disk does NOT
 close Spec In, a PROJECT_MODEL PASS with no IR evidence block does NOT close
