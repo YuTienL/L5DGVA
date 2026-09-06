@@ -228,3 +228,11 @@ implied closed:**
   at HEAD before the change)
 - `dv_harness/env_manifest.py` — public `file_ref` alias (one addition, no behaviour change)
 - `CLAUDE.md` — one new section appended
+
+---
+
+**Commit:** `4e0ac45` — "PC-5: dependency / supply-chain governance over this project's real deps",
+on branch `gap-close/env-manifest-fact-sources` (never main/master; the PR-only governance is
+untouched). Staged by explicit path so the concurrently-modified `.dv-harness/events.jsonl` and
+the other close-passes' reports were not swept in — the staged diff was exactly the 6 files
+listed above, 2242 insertions, 0 deletions.
