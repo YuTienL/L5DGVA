@@ -1286,3 +1286,5 @@
 {"ts": "2026-09-06T09:19:03.664120+00:00", "event": "CLI_ACCESS", "cmd": "doc-extract", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-09-06T11:42:50.306738+00:00", "event": "CLI_ACCESS", "cmd": "config-variants", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-09-06T11:42:50.949474+00:00", "event": "CLI_ACCESS", "cmd": "config-variants", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-06T13:10:18.468471+00:00", "event": "CLI_ACCESS", "cmd": "knowledge", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-06T13:12:47.009002+00:00", "event": "CLI_ACCESS", "cmd": "knowledge", "user": "peter.lin", "host": "PETER-LIN"}
