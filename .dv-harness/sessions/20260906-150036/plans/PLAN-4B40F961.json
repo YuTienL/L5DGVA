@@ -1,0 +1,25 @@
+{
+  "plan_id": "PLAN-4B40F961",
+  "node_id": "DISCOVERY",
+  "goal": "Continue USB gap-closing verification work: ENV_CHECK and INTAKE are PASS. Proceed to DISCOVERY (LOCAL_ANALYSIS only this session, no remote/LSF execution). :: stage=DISCOVERY",
+  "status": "RUNNING",
+  "steps": [
+    {
+      "step_id": "P01",
+      "name": "subsystem-to-soc-verification",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "subsystem-to-soc-verification",
+      "status": "RETRY_PENDING"
+    },
+    {
+      "step_id": "P02",
+      "name": "protocol-router",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "protocol-router",
+      "status": "RETRY_PENDING"
+    }
+  ],
+  "revision": 2
+}

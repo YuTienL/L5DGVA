@@ -440,6 +440,77 @@ def classify_failure(text: str = "",
 
 
 # ==========================================================================
+# Compile-stage failure recognition + fingerprinted NO_PROGRESS stop
+# ==========================================================================
+#: The one `_TEXT_RULES` rule id that means "the toolchain reported a compile
+#: or elaboration error" -- `classify_failure()`'s own compile signature,
+#: named by the rule id it already returns rather than a second pattern
+#: invented here. `sim_log_analysis.TRIAGE_CATEGORIES` (grepped before writing
+#: this) has no compile category at all -- uvm_fatal/uvm_error/bare_error/
+#: scoreboard_mismatch/assertion/timeout/other (`_MARKER_TO_CATEGORY`) are all
+#: POST-compile runtime signatures off a sim.log, and a compile failure never
+#: reaches that log -- so this rule id is the real, and only, compile-stage
+#: signature this harness already produces from text.
+COMPILE_FAILURE_RULE_ID = "compile_or_elaboration_error"
+
+
+def gate1_status_from_report(text: str, *, is_json: bool = False) -> Optional[str]:
+    """The real Gate 1 (elaboration) status out of a build-status report
+    artifact, reusing `uvm_generator/bind_verification_lint.py`'s own
+    report-shape readers -- `extract_status_block_from_markdown()` /
+    `extract_status_block_from_json()`, the exact functions
+    `dv-harness uvm-lint`'s bind-verification-status checkpoint already
+    parses that same report with -- rather than a second parser.
+
+    Returns `None` when the report carries no Gate 1 line/key at all, or
+    cannot be parsed as the requested format: an absent or unreadable report
+    is not evidence of a FAIL. This stays a read, never a raise -- the same
+    graceful-degradation contract `lint_status_report_text()` itself keeps
+    for a broken report.
+    """
+    from .uvm_generator.bind_verification_lint import (
+        extract_status_block_from_json, extract_status_block_from_markdown)
+    try:
+        block = (extract_status_block_from_json(text) if is_json
+                 else extract_status_block_from_markdown(text))
+    except Exception:
+        return None
+    return block.get("gate1_elaboration")
+
+
+def is_compile_stage_failure(classification: FailureClassification, *,
+                             gate1_status: Optional[str] = None) -> bool:
+    """Was THIS classified failure a COMPILE/ELABORATION failure specifically
+    -- the narrower question a compile-retry loop needs, distinct from "is it
+    DETERMINISTIC" in general. `gate_rejected_evidence` -- the OTHER
+    `_TEXT_RULES` rule this taxonomy also files under DETERMINISTIC -- is a
+    rejected gate evidence block (`MISSING_EVIDENCE`/`GATE_FAIL`/
+    `DV_REVIEW_PENDING`/`NEEDS_USER_INPUT`), not a compile error, and must
+    never be recognized as one here.
+
+    Two real signatures, either sufficient, neither guessed:
+      * `classification.rule == COMPILE_FAILURE_RULE_ID` -- `classify_failure()`'s
+        own `_TEXT_RULES` compile/elaboration pattern already fired on the
+        failing text.
+      * `gate1_status` -- the real Gate 1 `GateStatus` value a caller already
+        has, from `connectivity.run_gate1_elaboration_check()` directly or
+        from `gate1_status_from_report()` above reading a build-status
+        report -- equals `GateStatus.FAIL.value`. Imported lazily (this
+        module carries no other dependency on `connectivity.py`), and
+        compared against the real enum value rather than the literal
+        `"FAIL"`, so a future `GateStatus` rename is still recognized
+        correctly here.
+    """
+    if classification.rule == COMPILE_FAILURE_RULE_ID:
+        return True
+    if gate1_status is not None:
+        from .connectivity import GateStatus
+        if gate1_status == GateStatus.FAIL.value:
+            return True
+    return False
+
+
+# ==========================================================================
 # Section 91: the unified budget engine
 # ==========================================================================
 #: Section 91's eleven budget dimensions, verbatim. `unit` exists so a spend is
@@ -969,6 +1040,39 @@ class BudgetEngine:
                 "condition is recorded (`dv-harness loop-budget breaker-reset --reason ... "
                 "--by ...`) -- " + "; ".join(parts))
 
+    # -- the compile-retry call site ---------------------------------------
+    def decide_and_trip_compile_retry(self, classification: FailureClassification, *,
+                                      repeats: int = 1,
+                                      gate1_status: Optional[str] = None,
+                                      save: bool = True) -> RetryDecision:
+        """THE compile-retry call site: decides via `decide_compile_retry()`
+        (module-level, defined below -- resolved at call time, not at class
+        definition time) against THIS engine's own config, and when that
+        decision is a compile-specific NO_PROGRESS stop, trips THIS engine's
+        circuit breaker with the real `NO_PROGRESS` trigger `BREAKER_TRIGGERS`
+        already names, carrying the classification's own evidence -- so a
+        caller retrying a compile stage gets both the retry decision AND the
+        same STOP NEW ACTIONS breaker state every other trigger produces,
+        from one call rather than two.
+
+        Purely ADDITIVE: a non-compile failure, or a compile failure that has
+        not reached the configured repeat threshold, returns
+        `decide_compile_retry()`'s decision unchanged and trips nothing --
+        exactly as calling `decide_retry()` directly always has. Re-tripping
+        an already-OPEN breaker on a further identical compile attempt still
+        only APPENDS to its trigger list, per `trip_breaker()`'s own rule.
+        """
+        decision = decide_compile_retry(classification, repeats=repeats,
+                                        gate1_status=gate1_status, cfg=self.cfg)
+        if not decision.retry and decision.reason.startswith("NO_PROGRESS"):
+            self.trip_breaker(
+                "NO_PROGRESS", decision.reason,
+                evidence={"failure_signature": classification.signature,
+                         "repeats": repeats, "failure_type": classification.failure_type,
+                         "rule": classification.rule, "gate1_status": gate1_status},
+                save=save)
+        return decision
+
 
 BREAKER_CLOSED = "CLOSED"
 BREAKER_OPEN = "OPEN"
@@ -1315,6 +1419,55 @@ def decide_retry(classification: FailureClassification,
         f"classified {classification.failure_type} (rule {classification.rule}); evidence "
         f"supports another attempt within the existing retry budget.",
         classification.failure_type, enforce, repeats, classification.to_dict())
+
+
+def decide_compile_retry(classification: FailureClassification,
+                         *,
+                         repeats: int = 1,
+                         gate1_status: Optional[str] = None,
+                         cfg: Optional[Dict[str, Any]] = None) -> RetryDecision:
+    """The compile-retry call site's own decision, wired onto the EXISTING
+    `repeated_identical_failure_threshold` fingerprint mechanism rather than a
+    second one -- `decide_retry()` is CALLED, unchanged, and this only
+    relabels the one case that matters for a compile-stage failure
+    specifically: a repeated-identical-failure stop is section 93's
+    `REPEATED_IDENTICAL_FAILURE` for ANY failure type, but a compile-retry
+    loop that reruns the SAME compile input against the SAME toolchain and
+    gets back the SAME normalized compile-error signature, N times running,
+    has not merely repeated a failure -- it has made no progress at all
+    (section 108/LOOP-AT-26's own phrase: "artifact churn without verified
+    gain"). Recognizing that specific circumstance as NO_PROGRESS -- the real
+    breaker trigger `BREAKER_TRIGGERS` already names -- rather than blindly
+    retrying is what this function decides.
+
+    ADDITIVE and narrowly scoped, by construction:
+      * A non-compile failure (`is_compile_stage_failure()` is False) returns
+        `decide_retry()`'s decision completely UNCHANGED, `REPEATED_IDENTICAL_
+        FAILURE` label included -- this never touches behaviour for anything
+        that is not a compile-stage failure.
+      * A compile failure that has not (yet) reached the configured
+        `repeated_identical_failure_threshold` -- or a project that never
+        configured one -- returns `decide_retry()`'s decision unchanged too:
+        the threshold and its off-by-default configuration are UNCHANGED,
+        this only relabels the one outcome that threshold already produces.
+      * A compile failure's OTHER stop reasons (`enforce_retry_policy`'s
+        `NON_RETRYABLE_FAILURE_TYPE`) are also left unchanged -- only a
+        `REPEATED_IDENTICAL_FAILURE` stop is a fingerprinted-repeat verdict;
+        the other reason is a different real fact about the SAME attempt.
+    """
+    decision = decide_retry(classification, repeats=repeats, cfg=cfg)
+    if decision.retry or "REPEATED_IDENTICAL_FAILURE" not in decision.reason:
+        return decision
+    if not is_compile_stage_failure(classification, gate1_status=gate1_status):
+        return decision
+    return RetryDecision(
+        False,
+        f"NO_PROGRESS: {repeats} consecutive compile-stage attempts produced the identical "
+        f"normalized compile-error signature -- {decision.reason} Retrying an unchanged "
+        f"compile input against an unchanged toolchain cannot converge; for a compile-stage "
+        f"failure specifically this is section 108/LOOP-AT-26's NO_PROGRESS (artifact churn "
+        f"without verified gain), not merely a repeated failure.",
+        decision.failure_type, decision.enforced, decision.repeats, decision.classification)
 
 
 # ==========================================================================

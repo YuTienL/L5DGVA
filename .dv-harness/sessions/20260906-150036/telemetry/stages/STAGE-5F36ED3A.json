@@ -1,0 +1,57 @@
+{
+  "profile_id": "STAGE-5F36ED3A",
+  "stage_id": "ENV_CHECK",
+  "stage_name": "ENV_CHECK",
+  "graph_node": "ENV_CHECK",
+  "start_time_epoch": 1788272767.0792372,
+  "end_time_epoch": 1788272948.4569829,
+  "stage_wall_clock_sec": 181.37774562835693,
+  "aggregate_agent_runtime_sec": 180.97614121437073,
+  "parallel_saving_sec": 0.0,
+  "parallelism_efficiency": 0.0,
+  "input_tokens": 18,
+  "output_tokens": 11969,
+  "cache_read_tokens": 311989,
+  "cache_write_tokens": 37465,
+  "total_tokens": 11987,
+  "tool_calls": 0,
+  "retries": 0,
+  "finding_count": 0,
+  "closed_finding_count": 0,
+  "status": "PASS",
+  "agents": [
+    {
+      "agent": "dv-lead",
+      "runtime_sec": 180.97614121437073,
+      "model": "",
+      "job_id": "",
+      "input_tokens": 18,
+      "output_tokens": 11969,
+      "cache_read_tokens": 311989,
+      "cache_write_tokens": 37465,
+      "tool_calls": 0,
+      "retries": 0,
+      "status": "PASS",
+      "total_tokens": 11987
+    }
+  ],
+  "metadata": {
+    "git_sha": "45ff72b4f241f17965329aa16c6cf16a0538d473"
+  },
+  "entry_checklist": {
+    "items": [],
+    "present_count": 0,
+    "total_count": 0,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "exit_checklist": {
+    "items": [],
+    "present_count": 0,
+    "total_count": 0,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "tokens_per_finding": null,
+  "tokens_per_closed_finding": null
+}

@@ -4532,3 +4532,4753 @@ inventory reports (so a second hand-rolled VIP walk would fail the test), the vo
 shown to really trip on an injected `PASS`, and a byte-level snapshot proves two full reports write
 nothing. Both entry points run as real subprocesses with their exit codes asserted. Nothing in it
 contacts a network advisory API, runs a build, submits a job or touches an approval gate.
+
+## Subsystem Verification Contract Aggregator (2026-09-06)
+
+A subsystem's verification truth -- which spec/DUT/TB it was verified against, which protocols/interfaces it exercises, what its requirements say, its vPlan/test/coverage correspondence, whether regression passed, whether SIGNOFF happened and against what frozen baseline, which evidence and reproducibility capsules back it, which waivers apply -- already existed as real, separately-queryable facts across `env_manifest.py`, `requirement_contract.py`, `golden_scenario.py`, `signoff_export.py` and `waiver_store.py`. Nothing assembled them into ONE record; two audits of the same project could describe a subsystem's "verification contract" differently even from identical underlying facts.
+
+`dv_harness/subsystem_contract.py` is that assembly, and it is a pure aggregator: every field is read through an already-real function this repo ships, never re-derived. `spec_version`/`dut_sha`/`tb_sha` come from `signoff_export.capture_baseline()` (LIVE, not the frozen copy -- that function is already section 238's tested reader for these three identities). `protocols`/`interfaces`/`vplan_tests_coverage` come from `env_manifest.load_env_manifest()` + `summarize_for_blackboard()` (the same prompt-sized summary the `env_manifest` Blackboard topic already carries): `protocols` is the distinct `vip_type` values off `vip_config.vip_instances`, `interfaces` is those instances' own `instance_path` bindings, and `vplan_tests_coverage` is `env_topology.testplan_correspondence` verbatim with its own COMPUTED/PARTIAL/NOT_AVAILABLE status. `requirements` goes through `requirement_contract.execute_verb()` over a caller-named or conventionally-located requirement-contract JSON file (this repo has no fixed producer path for that artifact yet, the same disclosed boundary `generation_readiness.py`'s Spec Parsing / Requirement IR row already states -- an absent file is reported `NOT_AVAILABLE` naming exactly what was checked). `regression` is `regression_reporter.load_jobs()` + `dashboard._lsf_summary()`, the same real per-job LSF summary `golden_flow_readiness.py`'s LSF Regression row already reads. `signoff` carries the real-time `signoff_export.read_signoff_stage_status()` PLUS -- only when one was ever recorded -- the frozen `signoff_export.load_freeze()` baseline and its `evaluate_freeze_invalidation()` verdict; a project that never froze a baseline reports `NO_SIGNOFF_FREEZE_RECORDED` rather than a live re-capture standing in for "the signoff baseline" section 238 names. `evidence_references`/`reproducibility_capsules` share one `golden_scenario._open_store()`-opened `EvidenceStore`: the former is the real `normalized_evidence` rows (same table/columns `golden_scenario._fetch_normalized_evidence()` reads, unfiltered here), the latter is `golden_scenario.evaluate_store_freshness()` -- the real capsule list AND its real FRESH/STALE/UNKNOWN verdict. `waivers` is `waiver_store.status_report()` EXPLICITLY (not `signoff_export`'s digest-only waiver capture), because this contract wants the full per-waiver DERIVED status (VALID/EXPIRED/REVALIDATION_REQUIRED/REVOKED/UNKNOWN, TH-7).
+
+**Subsystem scope.** Naming `--subsystem` consults `environment_mode_router.read_registered_subsystem_entries()` -- the real registry `engine._persist_subsystem_registry_entry()` writes only on a gate-verified SIGNOFF PASS for that subsystem. A match narrows the manifest lookup to that entry's own `environment_manifest` path; no match records the honest, named `SUBSYSTEM_NOT_REGISTERED` and falls back to the project's own default `env.manifest.json` -- most subsystem-mode/IP-level projects never reach a registered SIGNOFF and still have a real single-environment contract worth assembling. Omitting `--subsystem` assembles the project-scope contract.
+
+**`unknowns` is the honesty surface.** Every field that could not be assembled lands there as `{"field", "reason"}`, never silently dropped or defaulted to an empty-but-present value; `completeness` (`COMPLETE`/`PARTIAL`/`NOT_AVAILABLE`) is scored against the fixed `TRACKED_ASPECTS` denominator, and the subsystem-scope-resolution unknown (a fact about the REQUEST, not about a contract field) deliberately never inflates that count.
+
+**Read-only, with one explicit write.** `assemble_subsystem_contract()` mints no `.dv-harness/` tree, `StateStore`, evidence database, or waiver ledger where none exists -- every reader it calls already honours that contract on its own (`default_manifest_path()` returns `None` rather than generating; `read_signoff_stage_status()` reads state.json with a plain `json.loads`, never `StateStore.load()`; `golden_scenario._open_store()` returns `None` for an absent evidence.duckdb; `waiver_store.status_report()` reports `NO_WAIVER_STORE` rather than minting a ledger). `write_subsystem_contract()` / the `snapshot` verb is a separate, explicit act that persists the record to `.dv-harness/subsystem_contract.json`; `assemble` never writes. Both share `execute_verb()` (0 COMPLETE, 1 PARTIAL, 2 NOT_AVAILABLE/usage error), exposed as `python -m dv_harness.subsystem_contract assemble|snapshot [--subsystem ...] [--manifest ...] [--requirements ...] [--db ...] [--json]`. No `dv-harness` CLI verb was added -- `cli.py` was concurrently in use by other parallel work this session, the same reason several recent modules (`signoff_export`, `waiver_store`, `dependency_supply_chain`) also stay `python -m` only. It DECIDES, ARBITRATES and WRITES NO GOVERNANCE STATE: no stage runs, no gate is invoked, no approval is minted, and there is deliberately no stage gate -- a gate that passed because a contract record existed, or failed because one did not, would be worse than none.
+
+**A real, pre-existing defect was found (and NOT fixed, out of this task's scope) while wiring this in**: `signoff_export._capture_evidence_hashes()` indexes `EvidenceStore.query()`'s plain tuple rows (`fetchall()`) with string keys (`r["evidence_id"]`), which raises `TypeError` the first time a project's `normalized_evidence` table actually holds rows -- apparently never exercised by that function's own test suite, which only covers the empty/absent-database paths. `capture_baseline()` bundles all fifteen section-238 fields into one call, so this contract's use of it for `spec_version`/`dut_sha`/`tb_sha` would otherwise crash the whole assembly whenever real evidence exists. `assemble_subsystem_contract()` now wraps that call and degrades those three fields to a named `NOT_AVAILABLE` (citing the real exception) instead of raising -- proven by `test_capture_baseline_failure_degrades_to_not_available_never_crashes`, which reproduces the trigger with a real evidence row. The underlying `signoff_export.py` defect itself is unfixed and should be closed in a follow-up touching that file.
+
+`dv-harness subsystem-contract` has no dashboard card and no graph node -- this is a REACHED capability (a real CLI/import caller exists), not a WIRED one.
+
+Proven by `dv_harness_tests/test_subsystem_contract.py` (37 tests) against real producers throughout: a real schema-valid `env.manifest.json` (via `env_manifest.generate_and_write()` with a real vip_config dump + testplan_sources file), a real waiver via `waiver_store.record_waiver()`, a real DuckDB `EvidenceStore` carrying a real `vip_distill.distill_sim_log()` envelope and a real `golden_scenario` capsule, a real LSF job JSON, a real `signoff_export.freeze_signoff_baseline()` freeze, and a real `subsystem_environment_registry.json`. Negative controls: a bare/uninitialized root (every tracked aspect honestly `NOT_AVAILABLE`, nothing fabricated, no `.dv-harness/` tree created), a manifest present but schema-invalid, an overclaimed (COMPLETE-with-a-placeholder-field) requirement record surfacing as FAIL rather than being smoothed into PASS, an LSF job with no `dv_analysis_status` (LSF DONE is not DV PASS), an expired waiver reported `WAIVERS_NOT_VALID` rather than collapsed into `NOT_AVAILABLE`, an `evidence.duckdb` that exists but holds zero rows, no signoff freeze recorded, a subsystem name requested but never registered (falls back to the project manifest), and the `capture_baseline()` crash-resilience case above. Both CLI verbs are driven as real subprocesses with their exit codes asserted.
+
+## Functional Coverage Signoff Rollup: Closure = Covered + ApprovedWaiver + ProvenUnreachable (2026-09-06)
+
+"Is functional coverage closed enough to sign off" was answerable today only by a human reading
+three unrelated artifacts by hand: the waiver ledger (`waiver_store.py`), the coverage hole
+classifier (`coverage_analysis.py`), and the testplan/coverage correspondence
+(`env_manifest.py`'s `testplan_correspondence`, cross-checked against the real recorded numbers
+in `evidence_db.EvidenceStore`). Nothing joined the three into one Closure percentage or one
+FUNCTIONAL_COVERAGE_SIGNOFF_READY verdict, so two audits of the same project could disagree about
+the same facts -- the same gap `golden_flow_readiness.py` and `platform_health.py` already closed
+for their own domains. `dv_harness/functional_coverage_signoff.py` is that rollup, following their
+same convention: one `analyze_functional_coverage_signoff()` function, `execute()` returning
+`(exit_code, report, text)`, and `python -m dv_harness.functional_coverage_signoff` as the front
+door (no `cli.py` verb was added -- that file was under concurrent edit by other parallel
+2026-09-06 work, the same reason several sibling additions that day name for skipping CLI wiring).
+
+**Formula, over the coverage bins the project's own testplan declares (`coverage_present` in
+`env_manifest.py`'s `testplan_correspondence`) and that have a real recorded number in
+`evidence_db.EvidenceStore`'s `coverage_samples` table (never the live, possibly stale
+`summary.json` -- the same table `dashboard._ingest_coverage_summary_to_evidence_db()` lands into
+in the first place):**
+
+    Closure % = 100 * (Covered_bins + ApprovedWaiver_bins + ProvenUnreachable_bins)
+                / Total_declared_goal_bins
+
+`Covered_bins` is `sum(bins_hit)` over those declared, recorded categories.
+`ApprovedWaiver_bins` credits a category's `bins_missing` when `waiver_store.status_report()`
+reports at least one waiver whose `item` field literally names that coverage bin (a name join,
+never fuzzy -- the same discipline `env_manifest.py`'s own testplan/coverage join already applies)
+with status `VALID`. `ProvenUnreachable_bins` credits a category classified
+`UNREACHABLE_STIMULUS` by the real `coverage_analysis.classify_coverage_hole()` -- fed the
+project's own recorded `root_cause_classification` claim, read from the real COVERAGE_CLOSURE
+stage's `coverage_hole_regeneration_gate` evidence block through `gates.extract_evidence_blocks()`,
+never invented -- **and only once a real human has ANSWERED the escalation question
+`STRUCTURALLY_UNREACHABLE`** (`question_queue.QuestionQueueStore.answer_question()`, the one path
+that reaches `status == "ANSWERED"`; a Tier-2 auto-assumption or Tier-1 self-resolution is never
+consulted). A later reconsideration overrides an earlier confirmation: only the most recently
+ANSWERED record for that bin's `coverage/<id>` context_path decides. An `INSUFFICIENT_SEED_ATTEMPTS`
+hole (an under-sampled bin, per that same classifier's own seed-attempt floor) NEVER counts here,
+by construction: `classify_coverage_hole()` only reaches `UNREACHABLE_STIMULUS` once the seed floor
+clears, so "not enough seeds yet" and "structurally unreachable" can never be credited through the
+same path. A waiver takes priority when both apply to one category -- credited once, never twice.
+
+`FUNCTIONAL_COVERAGE_SIGNOFF_READY` is true only when: the evidence database and at least one
+declared bin are available; every declared bin carries a real recorded number (a declared bin with
+NO recorded evidence at all reports `INCOMPLETE_EVIDENCE` and refuses readiness -- a percentage
+computed only over the bins somebody happened to measure must never stand in for the whole
+project's closure); Closure reaches 100%; and no waiver matching ANY declared bin -- whether or not
+it is the one being credited -- carries status EXPIRED, REVOKED or UNKNOWN (a bad waiver "in the
+mix" blocks signoff even when the measured Closure already reads 100%, and even when the waiver
+targets an already-fully-covered bin).
+
+**Honest absence, never a silent 0 or 100.** An absent evidence database makes the WHOLE report
+`NOT_AVAILABLE` (Covered/Total both derive from it, so there is nothing left to compute); an
+absent waiver ledger is reported `NOT_AVAILABLE` for that one input but contributes a real,
+disclosed zero credit and zero blocking rather than crashing the computation -- a project that has
+not adopted the waiver ledger is never retroactively failed, the same disclosed-default shape
+`waiver_store.py`'s own gate wiring already uses. An absent `env.manifest.json` widens the declared
+scope to every category the evidence database has ever recorded, with the real reason stated,
+rather than reporting an empty or fabricated scope.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It decides, approves and
+arbitrates nothing: no stage runs, no gate script is invoked, no waiver is recorded or revoked, no
+question is asked or answered, and no approval is minted -- the verdict is an input to a human's
+signoff decision, exactly like `golden_flow_readiness.py`'s matrix and `platform_health.py`'s
+health report. (2) A `REVALIDATION_REQUIRED` waiver neither counts toward closure (only `VALID`
+does) nor blocks signoff (only `EXPIRED`/`REVOKED`/`UNKNOWN` do), per this module's own literally
+stated formula. (3) There is no `cli.py` verb yet -- `python -m
+dv_harness.functional_coverage_signoff` is the only front door.
+
+Proven by `dv_harness_tests/test_functional_coverage_signoff.py` (11 tests), every input produced
+by its real owning module rather than hand-shaped to look like one: `waiver_store.record_waiver()`
+for the ledger, `EvidenceStore.insert_coverage_sample()`/`insert_job_state()` for the recorded
+numbers and seed history, `env_manifest.generate_env_manifest()` over a real schema-valid
+testplan-sources document for the declared scope, and the real `coverage_analysis.
+escalate_unreachable_stimulus()` + `QuestionQueueStore.answer_question()` round trip for a proven
+hole. The negative controls carry the detection power: an EXPIRED waiver blocks signoff even at a
+measured 100% closure; an under-sampled hole (real seed history present, only 3 of the required 20
+distinct seeds) is never credited even when the agent claims it is unreachable; a claimed-unreachable
+hole whose real escalation question was left unanswered is never credited; a design owner's later
+reconsideration (revoke + re-answer the opposite way) correctly overrides an earlier confirmation; a
+testplan-declared bin with zero recorded evidence reports `INCOMPLETE_EVIDENCE` rather than silently
+excluding it from the goal; and a real `python -m dv_harness.functional_coverage_signoff` subprocess
+is driven to exit codes 0 (ready), 1 (a real, non-ready finding) and 2 (essential input
+`NOT_AVAILABLE`).
+
+## Subsystem Practicality Score: a 10-Dimension Maturity Rollup (2026-09-06)
+
+This project has at least four real per-domain readiness/quality readers -- `generation_readiness.py`'s
+twenty capability rows, `golden_flow_readiness.py`'s twenty stage rows, `loop_convergence.py`'s
+convergence/plateau/oscillation classifier, `confidence_calibration.py`'s tier-reliability report, plus
+`coverage_analysis.py`'s hole/percent analysis -- and no single number that answered "how practically
+mature is this subsystem's verification environment, across all of that, right now". Two people reading
+the same project's dashboard could each hand-average a different subset of those signals and report a
+different maturity claim. A repo-wide grep for `practicality_score`/`maturity.*rollup`/
+`subsystem.*maturity` matched nothing before this module.
+
+`dv_harness/subsystem_practicality_score.py` is the rollup, and it is deliberately thin: it computes
+nothing a real producer has not already computed. Every one of its 10 weighted dimensions (spec
+correctness 10%, DUT discovery 10%, VIP mapping 10%, UVM generation quality 10%, single-test proof 10%,
+regression reliability 10%, failure closure 10%, coverage/protocol closure 15%,
+traceability/evidence/reproducibility 10%, usability 5%) reads the ALREADY-DERIVED verdict of one
+existing module -- never raw evidence, never a second parse of a coverage/DUT/VIP file -- and maps that
+verdict onto a 0-100 score through one fixed, documented rule. `spec_correctness`/`dut_discovery`/
+`vip_mapping`/`uvm_generation_quality` read `generation_readiness.py`'s own rows;
+`single_test_proof`/`regression_reliability`/`usability` read `golden_flow_readiness.py`'s rows (usability
+combining its `dashboard` + `claude_cli_integration` rows through that module's own `combine_readiness()`);
+`failure_closure` reads `loop_convergence.classify_loop_convergence()`'s verdict;
+`coverage_protocol_closure` reads coverage state through the SAME `dashboard._read_coverage_state()`
+reader `golden_flow_readiness.py`'s own coverage rows already use; `traceability_evidence_reproducibility`
+reads `confidence_calibration.calibrate()`. Every dimension's `fact_source` names the real reader it
+calls, and `assert_fact_sources_resolvable()` resolves every one through the import system at test time --
+the same anti-drift check `generation_readiness.py`/`golden_flow_readiness.py` already run on their own
+rows.
+
+**The weight=0 rule is the actual point of this module.** A weighted average that silently treats a
+dimension nobody could measure as a 0 (an unearned FAIL) or a 100 (an unearned PASS) is fabricated
+precision -- exactly what the Evidence Truth Rule forbids. A dimension whose real producer reports
+absence (an UNKNOWN row, a plateau classifier with no series, `confidence_calibration`'s
+NOT_AVAILABLE/INSUFFICIENT_HISTORY, an unreadable/absent coverage summary) is marked NOT RESOLVABLE: its
+declared weight drops to 0 for THIS report, its score stays `None` (never defaulted), and the real reason
+the underlying producer gave is carried through verbatim. The overall score is a weighted average over
+only the RESOLVABLE dimensions, renormalized to their own weight -- and `measured_weight_percent` reports,
+next to it and never folded into it, how much of the declared 100% that renormalization actually covers.
+A 100/100 score measured over 10% of the declared weight is not the same claim as one measured over all
+of it, and this report never lets the two look alike.
+
+**It reads only.** No stage runs, no gate is invoked, no build/regression/LSF job starts, and it writes
+no state or governance record of its own -- `derive_subsystem_practicality_score()`, `execute_verb()`, and
+`render_practicality_matrix()` are all reads over reports that are themselves read-only rollups.
+`ControlPlane.approve()`, `policy.can_signoff()`, `assert_human_approval()`,
+`HumanApprovalRequiredError`, `ProductionWriteNotAuthorizedError` and the PR-only main/master governance
+are untouched and uncalled from here. There is deliberately no stage gate: a gate that passed on a
+maturity SCORE nobody reviewed would be worse than none. It deliberately does NOT import
+`subsystem_maturity_gate.py` -- both modules derive their conditions independently from the same
+underlying real sources, so the two files' change histories stay independent.
+
+Front door: `python -m dv_harness.subsystem_practicality_score score|matrix --root <dir> [--json]`. No
+`dv-harness` CLI verb was added -- `cli.py` is a large existing argparse tree and, per this task's own
+guidance, wiring was skipped in favor of the standalone `python -m` front door.
+
+Proven by `dv_harness_tests/test_subsystem_practicality_score.py` (23 tests): every dimension is driven
+through its real owning module (a real `generation_readiness` project state, a real
+`golden_flow_readiness` state.json, a real coverage summary, a real `confidence_calibration` corpus)
+rather than a hand-shaped stand-in, and the weight=0 rule is proven both ways -- an unmeasurable
+dimension never drags the score toward 0 or 100, and `measured_weight_percent` correctly shrinks when a
+dimension is dropped. `assert_fact_sources_resolvable()` is proven to fail on a renamed reader.
+
+**Disclosed residual**, mirroring `subsystem_maturity_gate.py`'s own: one rolled-up producer,
+`golden_flow_readiness.derive_golden_flow_readiness()`, materializes a default
+`.dv-harness/config.json`/`control.json` the first time it runs over a project that already has
+`state.json` but no `config.json` yet -- a pre-existing behavior of that module, inherited rather than
+introduced here, and out of this module's own scope to fix.
+
+## Subsystem Maturity Gates: 9.0 / 9.5 / 10.0 (2026-09-06)
+
+Three named maturity levels are now real composite qualification gates rather than a document a human assembles by hand. `dv_harness/subsystem_maturity_gate.py` derives every condition from an already-real producer this project has; it is a COMPOSITE CHECK, not a new measurement layer, and it deliberately does NOT import `subsystem_practicality_score.py` -- both files derive their conditions independently from the same underlying real sources, so the two items' change histories stay independent.
+
+**Six conditions, each resolved through the import system.** `assert_fact_sources_resolvable()` mirrors `golden_flow_readiness`'s own pattern exactly: a condition citing a renamed/removed function fails a test rather than silently reporting a fabricated MET.
+- `golden_flow_spec_to_uvm_to_pass` -- `golden_flow_readiness.derive_golden_flow_readiness()`'s own `spec_in`/`requirement_extraction`/`vip_uvm_generation`/`single_test_proof` rows, all READY.
+- `system_smoke_proof_ready` -- `system_build_proof.py`'s `SYSTEM_READY` verdict, read from a caller-supplied real `SmokeProofReport.to_dict()` (this module never assembles the ladder's own heavy inputs -- composed sources, filelists, fsdb -- itself).
+- `zero_vip_api_hallucination` -- `vip_api_card.validate_vip_api_usage()`, zero BLOCKED citations, either from an already-written `vip_api_cards.json` artifact or run fresh over supplied sources + a VIP symbol index.
+- `bind_validation_clean` -- `connectivity.assert_bind_entry_tier_allows_emission()`/`BindTierError`: no unresolved T3 (unconfirmed naming-heuristic) or T4 (undecidable) bind entries.
+- `regression_evidence_exists` -- real `evidence_db.EvidenceStore` rows (`jobs`, `normalized_evidence`).
+- `false_pass_count_zero` -- **always `NOT_MEASURABLE`**, honestly. Re-verified by direct search before writing this condition: neither `golden_scenario.py` nor `requirement_contract.py` (the two modules most likely to carry one) persists a COUNT of confirmed false-PASS verdicts over a qualification set; `tools/verification_flow/false_pass_resistance_gate.py` is a per-stage, agent-attested evidence-block shape check, not a count. Inventing a counter would be exactly the fabrication the Evidence Truth Rule forbids -- this condition names the search and reports the honest gap instead.
+
+**The vocabulary is checked disjoint from `models.Status`, not merely chosen carefully.** A condition's outcome (`MET`/`UNMET`/`NOT_AVAILABLE`/`NOT_MEASURABLE`) and the gate's own verdict (`QUALIFIED`/`NOT_QUALIFIED`/`INCOMPLETE_EVIDENCE`) are asserted at import time (`assert_no_verification_verdict_vocabulary()`) to share no token with `models.Status` -- the same guard `capability_evolution.py`/`benchmark_dataset.py`/`dependency_supply_chain.py` already apply to their own domain vocabularies.
+
+**Levels form a strictly monotonic ladder** (`assert_levels_are_monotonic()`): 9.0's required conditions are a real subset of 9.5's, which are a real subset of 10.0's. A `NOT_MEASURABLE` required condition never blocks `QUALIFIED` (there is nothing this project could do today to make `false_pass_count_zero` MET, so blocking on it would make 10.0 permanently unreachable rather than honestly disclosed) but is always carried on the report's `disclosed_caveats` list, so a `QUALIFIED` 10.0 verdict is never silently read as "every dimension was checked and clean". An `UNMET` required condition makes the level `NOT_QUALIFIED`; a `NOT_AVAILABLE` one (evidence genuinely missing/not supplied) makes it `INCOMPLETE_EVIDENCE` instead -- a level this gate could not evaluate is a different fact from one it evaluated and found wanting, and the test suite's headline negative control proves a real gate-shaped FAIL produces `NOT_QUALIFIED`, never the softer `INCOMPLETE_EVIDENCE`.
+
+**It reads only.** No stage runs, no gate script is invoked, no build/regression/LSF job starts, and there is deliberately no stage gate of its own -- a `QUALIFIED` verdict is an input to a human's qualification decision, never a substitute for one.
+
+Front door: `python -m dv_harness.subsystem_maturity_gate conditions|evaluate --level {9.0,9.5,10.0} --root <dir> [--json] [--vip-api-cards ...] [--bind-topology ...] [--evidence-db ...] [--smoke-proof-report ...]`. No `dv-harness` CLI verb was added -- `cli.py` is a large existing argparse tree and, per this task's own guidance, wiring was skipped in favor of the standalone `python -m` front door, the same disclosed choice several very recent same-day additions in this repo have made.
+
+Proven by `dv_harness_tests/test_subsystem_maturity_gate.py` (39 tests) against real evidence throughout: a real `.dv-harness/state.json` (via `storage.StateStore`) plus a real uploaded document for the golden-flow condition; a real DuckDB `EvidenceStore` carrying a real `lsf_client.JobState` row and a real `vip_distill.distill_sim_log()` envelope for the regression-evidence condition; the real shipped VIP symbol index (`examples/asset_processing/inputs/vip_src/svt_demo_pkg.sv`) and the real clean `demo_env_seq.sv` fixture, mutated one fabrication at a time, for the VIP-API condition; the real shipped `examples/generated_usb_real_evidence_v1/manifest_inputs/usb_bind_topology.json` plus real T4/unconfirmed-T3 entries run through `connectivity`'s real tier gate for the bind condition; and a real `system_build_proof.SmokeProofReport` dataclass's own real `.to_dict()` for the smoke-proof condition (that ladder's own mechanics are proven end-to-end elsewhere by `test_system_build_proof.py`; this suite proves only this gate's consumption of that real report shape). Negative controls: a renamed fact_source is refused, a vocabulary collision is refused, a non-monotonic ladder is refused, a real gate-shaped FAIL makes a level `NOT_QUALIFIED` (never merely `INCOMPLETE_EVIDENCE`), no evidence at all is `INCOMPLETE_EVIDENCE` (never `NOT_QUALIFIED`), and `false_pass_count_zero` is asserted to never block a 10.0 `QUALIFIED` verdict while still appearing under `disclosed_caveats`. Both CLI verbs are driven as real subprocesses, including a real exit-2 `INCOMPLETE_EVIDENCE` case. The read-only invariant is held to the exact precedent `test_golden_flow_readiness.py` already established (existing files' content is unchanged; a brand-new `config.json`/`control.json` may still appear, because `derive_golden_flow_readiness()`'s own `five_level_memory` row materializes a default config for any project whose `.dv-harness` tree exists but has no config yet -- a pre-existing side effect of the module being composed, out of this module's own scope to change).
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It never re-runs `system_build_proof`'s heavy ladder itself -- a caller must actually run it and hand this gate the real report. (2) `false_pass_count_zero` can never resolve to `MET` in this codebase today; 10.0 can still be `QUALIFIED`, but always with that gap disclosed, never silently cleared. (3) There is no `dv-harness` CLI verb, by deliberate choice per this task's own escape hatch. (4) It does not import or read `subsystem_practicality_score.py`, by deliberate design, to keep the two files' change histories independent.
+
+## Compile-Fix Loop: Fingerprinted NO_PROGRESS Stop (2026-09-06)
+
+Section 93's rule -- "repeating the identical UVM_FATAL is not a useful retry" -- was already real and
+wired in `loop_budget.py`'s `repeated_identical_failure_threshold` mechanism, but it applies to ANY
+repeated failure signature, and nothing recognized a COMPILE/ELABORATION failure specifically as the
+narrower circumstance a compile-fix retry loop needs: rerunning the SAME compile input against the SAME
+toolchain and getting back the SAME normalized compile-error signature, N times running, is not merely a
+repeated failure -- it is section 108/LOOP-AT-26's "artifact churn without verified gain", the real
+NO_PROGRESS trigger `BREAKER_TRIGGERS` already names.
+
+`COMPILE_FAILURE_RULE_ID` names the one `_TEXT_RULES` rule id `classify_failure()` already returns for a
+compile/elaboration error (`sim_log_analysis.TRIAGE_CATEGORIES` was grepped before writing this and
+confirmed to carry no compile category at all -- its markers are all POST-compile runtime signatures off
+a sim.log, and a compile failure never reaches that log, so this rule id is the real and only
+compile-stage signature this harness already produces from text). `is_compile_stage_failure()` answers
+the narrower question from either of two real signatures, neither guessed: the classification's own rule
+equaling `COMPILE_FAILURE_RULE_ID`, or a caller-supplied real Gate 1 `GateStatus` value (from
+`connectivity.run_gate1_elaboration_check()` directly, or via the new `gate1_status_from_report()`, which
+reuses `uvm_generator/bind_verification_lint.py`'s own `extract_status_block_from_markdown()` /
+`extract_status_block_from_json()` report readers rather than a second parser) equaling
+`GateStatus.FAIL.value`. `gate_rejected_evidence` -- the OTHER `_TEXT_RULES` rule this taxonomy also
+files under DETERMINISTIC -- is a rejected gate-evidence block, not a compile error, and is never
+recognized as one here.
+
+`decide_compile_retry()` is wired onto the EXISTING `repeated_identical_failure_threshold` fingerprint
+mechanism rather than a second one: it calls `decide_retry()` unchanged and only relabels the one case
+that matters for a compile-stage failure specifically -- a `REPEATED_IDENTICAL_FAILURE` stop, if and only
+if the failure is a real compile-stage one, becomes a compile-specific NO_PROGRESS stop. It is additive
+by construction: a non-compile failure, a compile failure below the configured (and still off-by-default)
+threshold, and a compile failure's OTHER stop reasons (`enforce_retry_policy`'s
+`NON_RETRYABLE_FAILURE_TYPE`) all pass through with `decide_retry()`'s decision completely unchanged.
+`BudgetEngine.decide_and_trip_compile_retry()` is the compile-retry call site: it calls
+`decide_compile_retry()` and, when the decision is a compile-specific NO_PROGRESS stop, trips THIS
+engine's real circuit breaker (section 91/`loop_budget.py`'s existing breaker, not a new one) so the
+caller retrying a compile stage gets both the retry decision and the stop-new-actions consequence from one
+call.
+
+**No existing behavior changed.** Every non-compile failure, and every compile failure that has not
+crossed the existing (off-by-default) `repeated_identical_failure_threshold`, produces byte-identical
+decisions to before this change -- the full pre-existing `dv_harness_tests/test_loop_budget.py` suite was
+re-run after this change and still passes in full.
+
+Proven by 14 new tests added to `dv_harness_tests/test_loop_budget.py`: the compile-retry call site is
+shown to trip the breaker as NO_PROGRESS on a real repeated compile signature, and shown to NEVER trip on
+a repeated NON-compile failure or on a repeat that has not yet reached the threshold; `is_compile_stage_failure()`
+is proven against both of its real recognition paths (the rule id and a real Gate 1 FAIL status) and
+against the negative control (a non-compile DETERMINISTIC failure, e.g. `gate_rejected_evidence`, is never
+recognized as a compile failure); `gate1_status_from_report()` is proven to reuse
+`bind_verification_lint.py`'s own reader and to return `None` (never a guessed FAIL) on an absent or
+broken report; and `decide_compile_retry()` is proven to relabel only the compile-repeat stop while
+leaving a non-compile repeat stop, a below-threshold repeat, and a non-retryable-type stop all unchanged.
+
+## Golden Scenario Qualification Set: Test-Category Completeness (2026-09-06)
+
+`golden_scenario.py`'s capsule store answers "is this specific test's PASS still fresh"; it had no
+way to answer the adjacent completeness question a Golden Subsystem Test Set needs: "across the
+whole subsystem, have we ever recorded a golden capsule for each KIND of proven result -- a clean
+pass, a known DUT bug, a known TB bug, a known VIP-side issue, a caught protocol violation, a
+timeout, a coverage hole, a waiver, a register test, a perf test?" Nothing in the module carried a
+category concept at all.
+
+This is deliberately NOT a new store. `GoldenScenario` gained one new optional field,
+`category`, drawn from a fixed 10-value vocabulary (`QUALIFICATION_SET_CATEGORIES`:
+`known_pass`/`known_dut_fail`/`known_tb_fail`/`known_vip_fail`/`protocol_violation`/`timeout`/
+`coverage_hole`/`waiver`/`register`/`perf`), appended after the existing `watched_paths` field so no
+existing capsule field's meaning, shape or position changed. `validate_capsule()` rejects a declared
+category outside that vocabulary; an unset category stays legal, since a capsule MAY declare one,
+never must.
+
+**Persisted without touching `evidence_db.py`.** `category` is not one of that module's own known
+`golden_scenarios` columns, and this gap-closure's file scope was `golden_scenario.py` only. Rather
+than widen `evidence_db.py`'s column list, `golden_scenario.py` persists the new field through
+`EvidenceStore`'s own already-public `query()` method -- the SAME raw-SQL seam
+`_fetch_normalized_evidence()`/`_fetch_job_git_sha()` already use to read through the store.
+`_ensure_category_column()` runs an idempotent `ALTER TABLE golden_scenarios ADD COLUMN category
+VARCHAR`, checked first via `duckdb_columns()` (the identical catalog-introspection convention
+`evidence_db._golden_scenario_rows()` already uses to check for the TABLE itself, applied here to a
+column), and only against a writable store. `record_golden_scenario()` calls it and then UPDATEs the
+row; `_attach_categories()` reads the column back on `load_golden_scenario()`/
+`load_golden_scenarios()`. A store that never gained the column -- one predating this feature, or one
+written to directly through `insert_golden_scenario()` bypassing `record_golden_scenario()` --
+reports every capsule's category as `None` rather than raising: "we could not check" must never look
+like "uncategorized by choice", and it never crashes either.
+
+**The completeness check itself is a pure function over already-loaded capsules, not a second
+query.** `missing_categories(capsules, required=QUALIFICATION_SET_CATEGORIES)` returns which
+required categories have zero capsules declaring them, in `required`'s own order. A capsule with no
+declared category, or one carrying a value outside the fixed vocabulary, counts toward NONE of the
+required categories -- it is never silently credited to one, the same "an uncategorized/out-of-scope
+fact must not be read as a fact" discipline this project applies everywhere else.
+`qualification_set_report(store, required=...)` wraps it into a `COMPLETE`/`INCOMPLETE` report
+(status, per-category present counts, the missing list, total capsule count, and how many capsules
+are uncategorized) over the real store; an empty store is INCOMPLETE with every category missing,
+never a vacuous COMPLETE over nothing. `dv-harness golden-scenario qualification-set` (and the
+identical `python -m dv_harness.golden_scenario qualification-set`) share the module's existing
+`execute_verb()`: exit 0 COMPLETE, 1 INCOMPLETE.
+
+**Deliberately bounded.** (1) This checks what has ALREADY been recorded; it mines no requirement,
+runs no test, and makes no claim about which categories a given subsystem SHOULD have -- exactly the
+same boundary `golden_flow_readiness.py` and `power_intent.py` already draw between "did this
+connect" and "should this exist". (2) There is no stage gate: a gate that passed on a qualification
+set nobody actually populated would be worse than none. (3) Categorization is a deliberate
+`record_golden_scenario()` call's own field, same as everything else in a capsule -- nothing here
+auto-classifies a passing run into a category.
+
+Proven by 15 new tests in `dv_harness_tests/test_golden_scenario.py` (36 total, the original 21
+untouched and still passing): category-vocabulary rejection/acceptance in `validate_capsule()` and
+`capsule_from_json()`; `missing_categories()`'s positive path, its "all present" empty result, and
+two negative controls (an uncategorized capsule credits nothing; an out-of-vocabulary category
+credits nothing); a real round trip of `category` through `record_golden_scenario()` and
+`load_golden_scenario()`/`load_golden_scenarios()` against the real DuckDB store; an uncategorized
+capsule round-tripping as `None`; the negative control proving a store whose `category` column was
+never added still loads cleanly with `None` rather than crashing; `qualification_set_report()` on an
+empty store, a partial real store, and a complete real store (all 10 categories genuinely recorded);
+the `qualification-set` CLI verb driven end to end as a real subprocess (partial -> exit 1 naming the
+real missing categories, then complete -> exit 0); and the CLI `record` verb's real rejection (exit
+2, `CapsuleValidationError` named) of an unrecognized category.
+
+## VIP Learning Gate: One Pre-Generation Checkpoint (2026-09-06)
+
+Four real, independently-built mechanisms each already answered their own question and each was
+already wired into its own generation path: `vip_api_card.py` (PROVEN/BLOCKED/UNPROVABLE/
+NOT_AVAILABLE over generated VIP API citations), `phy_boundary.py` (a real bind-location decision
+from a real RTL port table), `connectivity.enforce_bind_tier_policy()` (T1..T4 bind-confidence
+gate), and `env_manifest.py`'s `vip_config` layer (a real `$DESIGNWARE_HOME`/config-dump-derived
+status). What did not exist anywhere was ONE consolidated checkpoint an agent could run before
+generation and get back a single PASS/BLOCKED verdict naming which of the four is the reason -- a
+repo-wide grep for `vip_learning_gate`/`learning_gate`/`pre_generation_gate` matched nothing
+executable.
+
+`dv_harness/vip_learning_gate.py` is that checkpoint, and it reuses rather than reimplements every
+one of the four: `vip_api_card.validate_vip_api_usage()`, `phy_boundary.
+assert_bind_location_allowed()`, `connectivity.enforce_bind_tier_policy()` and `env_manifest.
+load_env_manifest()`'s own `vip_config.status` are each called and their real status is reported
+verbatim, never re-derived. Per `vip_api_card.py`'s own documented statuses, a BLOCKED finding
+blocks this gate while an UNPROVABLE finding is carried forward as a non-blocking WARNING (section
+187's UNKNOWN is not a pass, but this gate's own task does not escalate it to a block either).
+`phy_boundary.assert_bind_location_allowed()` and `connectivity.enforce_bind_tier_policy()` are
+called for their real raise-or-not behaviour (a not-EXTRACTED/not-bindable boundary; a T4 entry or
+a T3 entry lacking a real `question_queue.HUMAN_DECISION_SOURCE` confirmation), and
+`env_manifest`'s `vip_config.status` is read for `NOT_AVAILABLE` verbatim.
+
+**Absence is never a block, and it is never a fabricated pass either.** A sub-check with nothing
+real to evaluate reports `NOT_APPLICABLE` (the caller declared nothing in scope -- no PHY boundary,
+no bind entries, no VIP source/index pair -- a legitimate answer for an IP-level DUT with no PHY
+sub-block or a run that binds nothing yet) or `NOT_AVAILABLE` (something was supplied but its real
+producer could not decide, or `env.manifest.json` -- always expected -- was not supplied at all).
+The composite is `BLOCKED` iff at least one sub-check is `BLOCKING`, naming exactly which; it is
+`NOT_AVAILABLE` only when every sub-check is `NOT_APPLICABLE`/`NOT_AVAILABLE` (nothing at all could
+be evaluated); otherwise `PASS`, carrying any `WARNING` forward rather than hiding it.
+
+Front door: `python -m dv_harness.vip_learning_gate --vip-source ... --vip-index ... [--phy-boundary
+<doc>] [--bind-entries <file>] [--env-manifest <doc>] [--json]` (`execute_verb()`, the same shared
+convention `vip_api_card.py`/`golden_scenario.py` use); exit 0 PASS, 1 BLOCKED, 2 NOT_AVAILABLE.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It decides and authorizes
+nothing beyond reporting: no build, job, approval, memory write or stage gate; `ControlPlane.
+approve()`, `policy.can_signoff()` and the human-approval machinery are untouched and unreferenced.
+(2) It does not re-implement any of the four sub-checks' own judgment -- a BLOCKED vip_api_card
+finding is BLOCKED for that module's own reasons, never a reason invented here. (3) There is no
+`dv-harness` CLI subcommand: `cli.py`'s argparse tree plus concurrent edits from other parallel
+gap-closure work in this same session made wiring one in cleanly awkward, per this project's own
+allowance to skip CLI wiring and expose only `python -m dv_harness.<module>` when that is the case.
+
+Proven by `dv_harness_tests/test_vip_learning_gate.py` (38 tests): each of the four sub-checks is
+driven CLEAN over a real clean input (a small real synthetic VIP source indexed by the real
+`vip_symbol_index.build_symbol_index()`, this repo's own real generated `phy_boundary.json`/
+`phy_boundary_serial.json` example artifacts, real T1/T2/T3/T4 bind entries, a real generated
+`env.manifest.json`), then every BLOCKING/WARNING/NOT_AVAILABLE/NOT_APPLICABLE path is driven by a
+single real defect or omission (the same `apply_preset` -> `apply_prezet` mutation
+`test_vip_api_card.py` uses, an open-inheritance-chain UNPROVABLE fixture, a real UNDECIDABLE
+`phy_boundary.extract_phy_boundary()` call, an unconfirmed vs. confirmed T3 entry pair, and both
+real `env.manifest.json` `vip_config` states). Composite tests assert that a single offending
+sub-check is named alone and that multiple blocking sub-checks are all named together, and five
+real CLI subprocess invocations assert exit codes 0/1/2.
+
+## Coverage DB Merge Integrity Gate (2026-09-06)
+
+Coverage merge -- rolling several regression runs' coverage databases into one signoff-counted
+total -- had no integrity check anywhere in this repo. A repo-wide grep before building confirmed
+it: nothing named `coverage_merge`/`merge_integrity`/`coverage_db` existed, and
+`coverage_analysis.py`'s own docstring already discloses the boundary this respects -- it trusts a
+coverage summary JSON "that has ALREADY been reduced to plain JSON by whatever real coverage tool
+the project uses", and does not ask whether that file is what it claims to be, or whether the files
+being merged came from compatible tooling.
+
+`dv_harness/coverage_db_integrity.py` is that check, and reuses rather than reinvents on both
+halves:
+
+- **Content fingerprint.** `connectivity_check.py`'s `compute_rtl_fingerprint()` already does this
+  for RTL, but checked first and confirmed RTL-specific by construction (it walks declared
+  `rtl_sources` globs), and its per-file hasher `_hash_file()` is a private module helper never
+  published for reuse. `env_manifest.py`'s `file_ref()` -- public since 2026-09-06 precisely "so a
+  supply-chain report and an env.manifest.json describe the same file identically", and already
+  reused by `dependency_supply_chain.py` -- is the same sha256-of-file primitive, so this module
+  imports it rather than writing a third hasher, and combines per-file digests using
+  `compute_rtl_fingerprint()`'s own scheme (sorted relative path + digest folded into one sha256),
+  generalized to any file or directory. `verify_fingerprint_claim()` recomputes this from real bytes
+  on disk and compares it against whatever the merge request CLAIMS the coverage DB's fingerprint to
+  be -- the same "recompute and compare against a prior claim" shape `connectivity_check.py`'s own
+  staleness trigger uses for RTL, here detecting a coverage DB substituted or altered after it was
+  staged for merge.
+- **Tool/config compatibility.** Checked first whether any real producer records a coverage
+  DATABASE's own tool/version identity: `coverage_analysis.parse_coverage_summary()`'s schema is
+  `{"categories": [{"name","percent","bins_total","bins_hit"}]}` -- no tool/version field, and that
+  function actively DISCARDS any extra key a raw summary might carry, so reading an ad hoc field out
+  of one would be inventing a field this project's own parser throws away. What IS real:
+  `env_manifest.py`'s `generator.tool_version` (schema 1.2's per-artifact provenance, the real
+  `dv_harness.__version__`) and `vip_config.vip_release` (the real `$DESIGNWARE_HOME` filesystem
+  scan). Neither is per-coverage-DB by itself, so a merge request associates each entry with the
+  env.manifest.json its own run produced, and `analyze_tool_config_compatibility()` compares those
+  two real fields across every entry being merged. An entry with no associated manifest contributes
+  `NOT_AVAILABLE` identity, named as such, never a fabricated agreement.
+
+**Three verdicts, never two collapsed into one.** `MERGE_ALLOWED` (every fingerprint claim matched,
+every recorded identity agreed), `MERGE_BLOCKED` (a real finding -- a mismatch or a proven tool/VIP
+disagreement, each named), `MERGE_NOT_VERIFIABLE` (no finding, but something could not be checked --
+no claim to compare a fingerprint against, or an entry with no associated manifest). Collapsing the
+last two would erase the Evidence Truth Rule's "never collapse two different kinds of unknown into
+one value" distinction -- the same INVALIDATED-vs-INDETERMINATE split `signoff_export.py` keeps and
+the EXPIRED-vs-UNKNOWN split `waiver_store.py` keeps. What both share, and the reason neither is a
+silent pass: only `MERGE_ALLOWED` exits 0 (`fingerprint`/`check` verbs: 0 allowed, 1 blocked, 2 not
+verifiable) -- an unverifiable merge is never silently counted toward signoff any more than a proven
+-incompatible one is.
+
+`python -m dv_harness.coverage_db_integrity fingerprint --db-path <path>` (compute one coverage DB's
+real content fingerprint) and `... check --merge-request <file.json>` (`{"entries":
+[{"db_path","claimed_fingerprint"?,"env_manifest_path"?,"label"?}, ...]}`) share one
+`execute_verb()`, the same convention `waiver_store.py`/`signoff_export.py` follow. No `dv-harness`
+CLI verb was added: `cli.py` is a ~4100-line argparse tree under concurrent modification by other
+work in this same session, the identical reason those two modules also stayed ad hoc.
+
+**Deliberately bounded, and stated rather than implied closed.** This module never opens a real
+coverage database (UCIS/urg/vdb) and never parses coverage bins -- that boundary belongs to whatever
+real coverage tool already reduced it to the JSON `coverage_analysis.py` consumes, and reading one
+here would be exactly the "no such parser, do not invent one" limit that module's own docstring
+states. It fingerprints FILE CONTENT and compares already-real recorded facts only. It ARBITRATES
+nothing: no merge is performed, no coverage total is computed, and there is deliberately no stage
+gate -- a gate that passed on a merge nobody actually verified would be worse than none.
+
+Proven by `dv_harness_tests/test_coverage_db_integrity.py` (33 tests) against real coverage-DB
+directories/files on disk and REAL schema-valid env.manifest.json files produced through the real
+`generate_env_manifest()`/`save_env_manifest()` pipeline over synthetic `$DESIGNWARE_HOME` trees
+(the same fixture shape `test_env_manifest_fact_sources.py` already uses) -- nothing hand-typed as a
+manifest stand-in. Every positive path carries a matching negative control: a coverage DB mutated
+after its fingerprint was claimed (MISMATCH, then `MERGE_BLOCKED` naming the entry), two entries
+recording the same VIP package at two different versions (`INCOMPATIBLE`, then `MERGE_BLOCKED`), a
+partial view where only one of two entries recorded identity (`NOT_AVAILABLE`, never a fabricated
+`COMPATIBLE`), no claims/manifests at all (`MERGE_NOT_VERIFIABLE`, never `MERGE_ALLOWED`), a manifest
+failing schema validation, and a malformed merge-request document. One test independently
+recomputes the fingerprint from scratch with plain `hashlib` (never calling back into the module
+under test) to prove the combination scheme is real, and one patches `env_manifest.file_ref` to
+prove it is genuinely called rather than re-implemented. Both CLI verbs are driven as real
+subprocesses with their exit codes asserted for all three verdicts.
+
+## Question Queue: Do-Not-Ask Enforcement + N-Option Question Builder (2026-09-06)
+
+`dv_harness/question_queue.py` gained two additions, both scoped entirely inside that one module.
+
+**(a) Do-not-ask enforcement.** `find_redundant_decision(prior_decision, context)` is the new
+predicate deciding whether a live persisted decision for a `question_key` makes a FRESH ask of it
+genuinely redundant -- and it deliberately mirrors `classify_tier()`'s own step-2 reasoning rather
+than inventing a second rule that could drift from it. A HUMAN answer (`HUMAN_DECISION_SOURCE`) is
+ALWAYS redundant regardless of the new ask's own context, restating `classify_tier()`'s "a human
+answer on file DOES still win over a hard trigger" as a filing-time refusal. A Tier-2
+auto-assumption (the new named constant `TIER2_AUTO_ASSUMPTION_SOURCE`, naming the literal
+`"tier2_auto_assumption"` string `add_question()` already writes in several places) is redundant
+ONLY when the new ask's own context trips NO new Tier-3 hard trigger -- deliberately NOT
+unconditional, because treating a machine's own earlier guess as always-redundant would resurrect
+review defect F3-a under the do-not-ask feature's own name (a tier2 guess permanently suppressing a
+later, genuinely Tier-3-triggering re-ask of the same key).
+
+`add_question()` gained an opt-in `enforce_do_not_ask: bool = False` parameter, the same
+disclosed-default shape `require_tier`/`require_phy_boundary` already use elsewhere in this
+codebase. When True and `find_redundant_decision()` finds a real match, `add_question()` raises the
+new `DoNotAskError` (a `QuestionValidationError` subclass carrying `question_key` and the redundant
+decision itself, so a caller can report exactly which decision made the ask unnecessary) BEFORE
+persisting anything, instead of filing a duplicate. Default False keeps every existing caller's
+behavior byte-identical: `repeat_question_rate` and every pre-existing test depend on a fresh record
+being filed on every ask, and that stays true unless a caller opts in.
+
+**(b) `build_multiple_choice_question()`** is the N >= 2 generalization of
+`source_authority.escalate_conflict()`'s exactly-2-option shape, hosted here because this change's
+scope is `question_queue.py` only (escalate_conflict itself lives in `source_authority.py`, outside
+it -- see the disclosed residual below). It reuses this module's own `add_question()` /
+`make_question_key()` exactly as `escalate_conflict` already does -- there is no second filing
+mechanism -- and generalizes `assert_both_evidence_paths_present()` into
+`assert_all_evidence_paths_present()`: every named candidate's `evidence_path` must appear verbatim
+in the question text or an option's own label/rationale before anything is persisted, or
+`QuestionValidationError` is raised naming exactly which paths are missing. Each candidate's
+evidence path is folded into its own option's `rationale` the same unconditional way
+`source_authority._option_for()` already does for its 2 sides. More candidates than the REAL current
+`question.schema.json` `options.maxItems` (read live via `_schema_options_max_items()`, never a
+second hardcoded "3") is REFUSED rather than truncated -- mirroring `escalate_conflict`'s own
+"conflict with more than 3 sides is refused rather than truncated" rule, for the identical reason:
+silently dropping a candidate would drop its evidence path with it. Filed with
+`context={"affects_spec_intent": True, ...}` (`MULTIPLE_CHOICE_QUESTION_CONTEXT`), so
+`classify_tier()` reaches Tier 3 (blocking) on its own ordinary rules rather than a tier being
+asserted directly, and is idempotent on `question_key` -- an existing record for the same key is
+returned as-is, the same discipline `escalate_conflict` already uses to avoid growing the queue on a
+rerun over unchanged sources.
+
+**Disclosed residual, not an oversight.** This task's scope was fixed to `question_queue.py` alone,
+and a direct search confirmed `escalate_conflict`/`assert_both_evidence_paths_present` actually live
+in `dv_harness/source_authority.py`, not here. So `assert_all_evidence_paths_present()` is a SECOND,
+INDEPENDENT implementation of the identical rule, not a shared call into
+`source_authority.assert_both_evidence_paths_present()` -- unifying the two for real needs an edit to
+`source_authority.py` (either making `escalate_conflict` call this module's N=2 case, or pointing
+both at one shared validator), which is outside this change. What IS checked, rather than merely
+claimed, is that the two enforce the IDENTICAL rule: `test_assert_all_evidence_paths_present_
+matches_source_authority_rule` drives both functions over the same conflict/options fixtures and
+shows they accept and reject in lockstep -- a deliberate, disclosed duplication of one rule, not an
+undisclosed drift into two diverging ones.
+
+Proven by `dv_harness_tests/test_question_queue.py` (67 tests, up from 47 -- every pre-existing test
+untouched and still green): `find_redundant_decision()`'s five cases including the F3-a-preserving
+negative control (a tier2 guess must NOT suppress a later hard-trigger ask even with
+`enforce_do_not_ask=True`); `add_question(enforce_do_not_ask=True)` refusing a duplicate after both a
+human answer and a tier2 auto-assumption while still filing a genuine Tier-3 escalation over an
+existing tier2 guess; `build_multiple_choice_question()`'s positive path (3 candidates, one Tier-3
+blocking question, every evidence path cited), its negative controls (fewer than 2 candidates, a
+candidate missing `label`/`evidence_path`, a recommendation not among the offered candidates, more
+candidates than the real schema cap), its idempotent-refiling guarantee, and the direct proof that
+`assert_all_evidence_paths_present()` itself catches a missing citation when option construction is
+bypassed (unreachable through the public API today, since `build_multiple_choice_question` always
+embeds every candidate's evidence path -- the same true-but-unreachable-through-the-public-API shape
+`source_authority.escalate_conflict()`'s own guard already has).
+
+## Intake Source Priority: a 10-Step DISCOVERY Ladder, Distinct from the Conflict Order (2026-09-06)
+
+`source_authority.py`'s own module docstring already records a real lesson: its 9-level
+`AUTHORITY_ORDER` (which of two already-read, disagreeing sources wins) and
+`tools/verification_flow/evidence_source_priority_gate.py`'s 9-item `ORDER` (which source to
+consult FIRST for a fact not yet known) had already been mis-identified once, purely because both
+lists happened to be the same length. `dv_harness/intake_source_priority.py` is a THIRD list --
+another DISCOVERY order, but a wider, more general 10-step intake ladder (repo files already on
+disk, existing UVM environment already generated, build scripts/Makefile, RTL/PHY source, register
+files, specs/datasheets, VIP examples, regression lists, git history, ask the user) -- built
+deliberately not to repeat that mistake with either existing list.
+
+**The lookup.** `next_sources_to_check(fact_name, available_sources)` takes a fact not yet known
+plus which of the 10 kinds are actually AVAILABLE for the current project, and returns those kinds
+in discovery-priority order, highest first -- never re-deriving a new order per fact (the ladder is
+the same ten steps for every fact, exactly as the reference gate's own `ORDER` applies uniformly).
+It refuses an empty fact name, refuses an empty availability list rather than silently defaulting to
+"ask the user", and refuses an unrecognized source name via `normalize_intake_source()` rather than
+silently dropping it. "Ask the user" can never be returned ahead of an offered higher-priority
+source -- that falls straight out of filtering the ladder by rank.
+
+**The required cross-check, and why it is not "zero shared vocabulary".**
+`assert_distinct_from_known_discovery_and_conflict_orders()` mirrors
+`source_authority.assert_doc_matches_code()`'s "parse the real artifact, never eyeball it" pattern,
+but asserts DIFFERENCE rather than agreement. Three checks: (1) length differs from BOTH
+`source_authority.AUTHORITY_ORDER` (9) and the pre-existing gate script's `ORDER` (9) -- this ladder
+is 10 by design, so it cannot repeat the exact length-coincidence that caused the earlier
+mis-identification; (2) no CANONICAL id of either this table or `source_authority.AUTHORITY_ORDER`
+silently resolves through the OTHER table's own lookup, checked in both directions -- deliberately
+NOT a "zero alias overlap" rule, since the two tables legitimately discuss some of the same real
+artifacts (RTL, register files, VIP examples) and an ordinary synonym like "rtl" or "makefile"
+appearing in both tables' own `aliases` is expected and harmless; only a table's own canonical id
+being silently accepted by the other table's normalize function is the dangerous case that would
+let a shared caller confuse the two; (3) a live re-parse of the gate script's real `ORDER` constant
+confirms this ladder's ten phrases are not that list's nine, word for word. The gate script's module
+is never imported for this comparison: it calls `argparse.parse_args()` at module level with no
+`if __name__ == "__main__":` guard, so importing it outside its own CLI invocation raises/exits
+immediately -- `parse_evidence_source_priority_gate_order()` instead regex-extracts the literal
+`ORDER = [...]` list from that file's real source text on disk, the same "read the real artifact,
+never re-type it" discipline `source_authority.parse_documented_order()` already applies to
+`docs/RUN_PROFILE.md`'s prose paragraph.
+
+A real defect surfaced building this: an early draft's aliases for `rtl_phy_source`/
+`register_files`/`specs_datasheets`/`vip_examples` included `dut_rtl`/`register_file`/
+`controller_doc`/`vip_example` -- literally `source_authority.AUTHORITY_ORDER`'s own canonical ids
+-- which the canonical-id cross-resolution check exists precisely to catch, and did.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This module ORDERS a
+caller-declared availability set; it discovers nothing itself -- no filesystem scan, no RTL parse,
+no git read. Whether a source kind is actually "available" for a project is a fact the caller must
+supply (e.g. from `env_manifest.py`'s own layer statuses, a real directory listing, or a human's own
+knowledge), never inferred here. (2) It ARBITRATES and AUTHORIZES nothing: no stage runs, no gate is
+invoked, and there is deliberately no `dv-harness` CLI subcommand -- `cli.py`'s existing argparse
+tree has no natural home for a small standalone lookup table, so the front door is
+`python -m dv_harness.intake_source_priority order|next|self-check` only, per this project's own
+"skip the CLI wiring when it would be awkward" rule. Exit 0 = a non-`ask_user` source is available
+to check next / self-check passed; 1 = a real finding (`ask_user` is the ONLY available source --
+i.e. a human must be asked); 2 = nothing to report (no sources declared, an unrecognized source, or
+a self-check failure). (3) It is not wired into any stage, gate, or the engine's own discovery flow
+-- no `run_stage()`/`advance()` call site invokes it and no graph node declares it, so this is a
+standalone module a caller imports or shells out to, not an engine-fired one.
+
+Proven by `dv_harness_tests/test_intake_source_priority.py` (30 tests): the positive path (all 10
+steps in the task-specified order, alias resolution, `next_sources_to_check()`'s ordering and its
+"same available set, same order regardless of fact" property), and negative controls including an
+empty fact name, an empty availability list (must refuse rather than default to `ask_user`), an
+unknown available source (must refuse rather than silently drop), a duplicated available source, the
+canonical-id cross-resolution checks against the REAL `source_authority.AUTHORITY_ORDER` in both
+directions, phrase-set disjointness, a real subprocess proof that importing the gate script's module
+really does fail (justifying why this module parses its text instead), and two mutation-style checks
+proving the length/content cross-checks against the gate script's `ORDER` have genuine detection
+power (a fabricated 10-item `ORDER` and a fabricated identical-content `ORDER` each trip their
+intended, distinct error). Both the module functions and the `python -m` CLI (all three exit codes)
+are exercised as real calls/subprocesses. The pre-existing `dv_harness_tests/test_source_authority.py`
+suite (37 tests) was re-run and still passes unchanged.
+
+## IP-Level VIP-vs-Legacy-BFM Ownership Conflict Check (2026-09-06)
+
+`system_resource_inventory.py`'s SYS-11/SYS-12 ACTIVE_DRIVER_CONFLICT machinery is a
+CROSS-SUBSYSTEM mechanism by construction -- its own docstring states the gap it closes is that no
+single-subsystem check has "any rows to match against" a second subsystem, and every entry point
+takes multiple subsystems' evidence at once. That left a narrower, real question unanswered at
+plain IP-level intake (a single subsystem, before any SoC composition exists): does THIS ONE
+subsystem's own environment declare a real VIP agent AND a legacy hand-written BFM/driver BOTH
+ACTIVE on the same interface/port? `connectivity.find_active_bind_target_collisions()` -- the
+already-shipped single-matrix version of SYS-12's rule -- comes close but requires BOTH colliding
+rows to carry a real VIP (`_row_has_vip()`), so a row whose `vip_type` is a `NO_VIP_MARKERS` value
+(exactly what a hand-written, non-VIP driver looks like in that schema) is excluded from the check
+entirely, confirmed by direct reading before building.
+
+`dv_harness/ip_ownership_conflict.py` closes exactly that gap. It reuses vocabulary rather than
+inventing a second spelling for the same concept: a real conflict's finding record carries
+`system_resource_inventory.REL_DRIVER_CONFLICT` / `INTEGRATION_STOPPED` / `SYS12_PREFERRED_MODEL`
+verbatim, and `connectivity.ACTIVE_INTERFACE`/`PASSIVE_INTERFACE`/`NO_VIP_MARKERS`/
+`build_connectivity_matrix()` are the same active/passive vocabulary and matrix normaliser
+`system_resource_inventory.py` itself imports.
+
+**What it reads.** The VIP side is real evidence: `env.manifest.json`'s own
+`vip_config.vip_instances` (the schema `env_manifest.parse_vip_config_dump()` already writes --
+`instance_path`/`vip_type`/`config_fields`), excluding any entry whose `vip_type` is a
+`NO_VIP_MARKERS` value -- the identical exclusion `system_resource_inventory.py`'s own resource
+builder applies ("an interface with no VIP is not a resource"). The legacy BFM/driver side has NO
+real producer anywhere in this codebase (confirmed by direct search before building), so it is
+honestly a caller-declared input, `legacy_bfm_declarations` -- the same status
+`SubsystemResourceSources.declared_physical_interfaces` already carries elsewhere ("a project's own
+explicit statement... a human's decision, never this module's inference"). Each declared entry's
+`port_id` must equal a real `instance_path` EXACTLY -- no fuzzy or name-derived matching, applying
+SYS-10's own "do not decide by names alone" to the match key itself. A VIP instance's own
+active/passive state is not carried by `vip_config.vip_instances` at all; an optional
+`connectivity_rows` input (real rows in `connectivity.build_connectivity_matrix()`'s own shape)
+resolves it, using the SAME match-candidate convention (`bind_target`, then `dut_instance`, then
+`"dut_instance.interface"`) `system_resource_inventory._build_resources_for_subsystem()` already
+uses the other direction. Omitting it never invents an active/passive value -- the affected pair
+reports UNDETERMINED instead.
+
+**Four honest statuses**, deliberately distinct from SYS-11's seven relationship classes (this
+module's `STATUS_CONFLICT` is checked NOT to collide with `REL_DRIVER_CONFLICT`, the token it
+stands beside): `CONFLICT` (a real VIP and a legacy driver both ACTIVE on one port),
+`CLEAR` (legacy driver(s) declared and checked, none collide), `NOT_APPLICABLE` (no legacy
+BFM/driver declared at all -- the honest common case for a subsystem built entirely on VIP), and
+`UNKNOWN` (an active legacy driver shares a real VIP's port but the VIP's own active/passive state
+could not be resolved -- never silently read as CLEAR).
+
+**Detection only, exactly like its cross-subsystem sibling.** It never picks a winner between the
+VIP and the legacy driver, never disables an agent, never edits an environment, and references no
+approval/governance mechanism -- a conflict record names SYS-12's preferred resolution model as
+text for a human, and nothing here acts on it.
+
+No `dv-harness` CLI verb was wired (`cli.py`'s argparse tree is large and this check has no clean
+home in it yet, the same disclosed choice several recent modules made) -- front door is
+`python -m dv_harness.ip_ownership_conflict --env-manifest <path> [--legacy-bfm <path>]
+[--connectivity-rows <path>] [--json]`, one shared `execute_verb()`. Exit 0 CLEAR, 1 CONFLICT,
+2 NOT_APPLICABLE or UNKNOWN.
+
+Proven by `dv_harness_tests/test_ip_ownership_conflict.py` (16 tests): the real conflict path
+(including a multi-entry case where one real conflict outranks an unrelated clear declaration), a
+vocabulary-reuse assertion that the finding cites `system_resource_inventory`'s own tokens
+verbatim, and seven negative controls -- no legacy declared, a passive legacy driver, a passive
+VIP, an unmatched `port_id` (proving no fuzzy matching), a mutate-one-defect control that turns the
+conflicting fixture's real VIP into a `NO_VIP_MARKERS` value and asserts the same port/legacy pair
+no longer conflicts, an undeclared/invalid legacy `active_passive`, and an active legacy driver
+with no `connectivity_rows` supplied (must read UNKNOWN, never a guessed CONFLICT or CLEAR). Three
+tests drive the real CLI as a subprocess and assert its exit codes.
+
+## Configuration Variant Explosion Control: vPlan-Stage Wiring (2026-09-06, TH-5 follow-up)
+
+`config_variant_coverage.py`'s IPOG covering-array generator (see its own CLAUDE.md section
+above) required a caller to hand-build `ConfigDimension`/`ConfigSpace` objects, or a full space
+JSON file, before it could plan anything -- so a vPlan-generation caller sitting on a section 184
+requirement's declared configuration had no direct path in. `plan_from_requirement_configuration()`
+closes exactly that gap, and only that gap: it is a thin adapter, not new algorithm work. It
+shapes a caller-supplied mapping of dimension name -> legal values (plus optional
+`constraints`/`critical_combinations` in the module's own existing raw shapes) into the raw dict
+`config_space_from_dict()` already parses, then calls `build_plan()` -- both pre-existing,
+tested mechanisms, unchanged.
+
+**Checked against the real schema rather than guessed, and the two disagree.**
+`dv_harness/schemas/requirement_contract.schema.json`'s `configuration` field is `contract_text`
+-- a free-text STRING (section 184's "Configuration"; `NONE` is legal for "no dependency"), never
+a structured dict. So this adapter does NOT parse a requirement record's `configuration` string
+field itself: doing so would mean inventing a natural-language parser and guessing at a
+dimension/value split the contract does not encode, which the Evidence Truth Rule forbids. It
+takes the dimension->values mapping as a caller-supplied input instead -- something a vPlan
+generator would already have had to extract from one or more requirements' configuration/
+precondition text by some other, requirement-content-aware mechanism this module does not
+implement or claim to. `requirement_id` is carried through only as PROVENANCE (each dimension's
+`source`, the plan's own `space_id`/`description`), never as something this function reads
+requirement content from.
+
+Every plan it returns is independently re-verified exactly like every other plan this module
+emits, because `build_plan()` (unchanged) is what actually produces it -- there is no second,
+weaker code path for requirement-sourced plans. `ConfigSpaceError` (the module's one real error
+type) is raised, never swallowed, on a missing/malformed configuration mapping or on anything
+`config_space_from_dict()`/`build_plan()` itself would refuse (duplicate dimension, illegal or
+uncompletable critical combination, and so on).
+
+No existing public API in `config_variant_coverage.py` was touched -- this is one new function.
+
+Proven by 7 new tests appended to `dv_harness_tests/test_config_variant_coverage.py` (37 total,
+all passing): an independent brute-force pairwise-coverage recount against a synthetic 3-dimension
+requirement configuration (never trusting the module's own verifier), requirement_id/no-
+requirement_id provenance labelling, constraints/critical_combinations pass-through, three
+malformed-mapping negative controls (empty mapping, `None`, a dimension whose values is a bare
+scalar instead of a list), and a negative control proving the adapter still surfaces rather than
+swallows the existing "no legal completion for a declared critical combination" refusal.
+
+**Deliberately bounded, and stated rather than implied closed.** This is REACHED, not WIRED:
+nothing in `requirement_contract.py` or any generator calls `plan_from_requirement_configuration()`
+yet, and no CLI verb or graph node was added -- a vPlan-generation caller must invoke it
+directly.
+
+## DE Command-Style Learning: CommandStyleIR + DECommandRegistryIR (2026-09-06)
+
+Nothing in this repo learned a DE-provided command.txt's own real FORMATTING convention or built
+a per-command REGISTRY view with a branch-ownership guess before generating from it -- a repo-wide
+grep confirmed reference_pattern_audit.py's real SYS-7 layer (extract_command_statements,
+classify_wait, analyze_command_file) already classifies every statement's kind/category and
+role, but asks nothing about the file's own SEPARATOR/ARGUMENT/COMMENT/PHASE-MARKER/ORDERING style,
+and produces no per-distinct-command view carrying a GLOBAL/DUT/FW/VIP branch-ownership guess.
+
+dv_harness/de_command_style_learning.py is that second layer, and it REUSES rather than
+re-derives statement parsing: it imports reference_pattern_audit.extract_command_statements() (a
+pre-existing, independently-tested module) plus its CommandStatement/kind-category vocabulary and
+its INTERRUPT_NAME_TOKENS/INIT_NAME_TOKENS/MEMORY_MODEL_NAME_TOKENS token sets, rather than
+writing a second statement classifier that could disagree with the first.
+
+CommandStyleIR is pattern-detected directly from a real file's own text -- never assumed --
+covering separator_convention (semicolon-terminated one-per-line vs multi-statement/multi-line,
+from the real ratio of single-semicolon lines), argument_format (paren/comma-separated calls, hex
+literal style with/without underscore grouping), comment_format (line-trailing vs standalone,
+block comments), phase_markers (a real PHASE:/STAGE:/STEP:/SECTION:-shaped token, never a
+plain word like "stage1" that merely contains the substring), and ordering_rules (real
+fork/join keywords, and comment-level ordering language). Every facet with no evidence reports
+NOT_FOUND/NOT_AVAILABLE naming the real search performed, never a guessed convention.
+
+DECommandRegistryIR groups statements into one DECommandEntry per distinct (kind, name)
+command (an unclassifiable line is grouped only with another line carrying IDENTICAL raw text,
+since it has no other real name), each carrying a best-effort semantic_operation, its
+arguments, a branch_owner GUESS in GLOBAL/DUT/FW/VIP/UNKNOWN -- the four real layers
+.claude/skills/CORE/branch-mapper/SKILL.md's "Initialization Task Hierarchy" names (block=
+GLOBAL, branch_a*=DUT, branch_fw=FW, branch_b*=VIP) -- and a status in KNOWN/PARTIAL/
+AMBIGUOUS/UNSUPPORTED/DEPRECATED/UNKNOWN. KNOWN requires a real cited textual feature (e.g. a
+HOSTWRITE*/CPUWRITE* prefix, per reference_pattern_audit's own real HOST-vs-DUT naming
+convention, or an INTERRUPT_NAME_TOKENS match on a wait condition); AMBIGUOUS/PARTIAL mark a
+genuine guess; UNKNOWN is reserved for a line the underlying parser could not classify at all --
+its command_name/raw_text is that line's literal source text, cited verbatim, never
+paraphrased into invented semantics. A comment carrying a real deprecation token
+(deprecated/obsolete/do not use/etc.) flags the whole command DEPRECATED, citing the exact
+comment and matched token -- taking priority over the ordinary mixed-classification-across-
+occurrences downgrade to AMBIGUOUS, since a real deprecation notice is stronger evidence than an
+occurrence disagreement.
+
+Proven by dv_harness_tests/test_de_command_style_learning.py (19 tests) against a small real
+synthetic fixture built inline (never real project content, matching
+test_reference_pattern_audit.py's own precedent), covering KNOWN host/DUT register writes,
+DEPRECATED (a comment-flagged legacy write), a KNOWN FW interrupt wait merged with an AMBIGUOUS
+plain wait into one mixed-classification entry, an UNSUPPORTED bare macro, and an UNKNOWN
+unparseable line, plus dedicated CommandStyleIR tests including a phase-marker true-negative (a
+plain word containing "stage" is not a marker) and true-positive, and an empty-file
+NOT_AVAILABLE/NOT_FOUND-everywhere control.
+
+## Branch Ownership Resolver: block/branch_a*/branch_fw/branch_b* Ownership as Code (2026-09-06)
+
+CLAUDE.md's own Engineering Discipline Rules already state, in prose, which task-composition layer
+owns which kind of operation ("Architecture-conformance audit": `block` = SoC global initial tasks;
+`branch_a*` = DUT+PHY initial tasks per port; `branch_fw` = the FW service loop per port; `branch_b*`
+= VIP-driven parallel tasks) and requires an explicit, RTL-evidence-based arbitration policy for any
+concurrent shared-resource access across `block`/`branch_a*` ("Concurrent bus arbitration"). Neither
+rule was checkable: nothing in this repo classified a proposed action's ownership tier from its
+declared nature, and nothing validated an EXISTING branch assignment against these rules for a
+single proposed action -- `tools/verification_flow/branch_topology_gate.py` (this repo's own
+canonical-naming authority per `amba_discovery_report.py`'s header) checks only that a whole branch
+SET is complete for a declared port count, a different question.
+
+`dv_harness/branch_ownership_resolver.py` closes that. `classify_operation_ownership(operation_kind,
+per_port=, driven_by=, arbitration_policy=)` classifies a proposed action's ownership as
+GLOBAL/DUT/FW/VIP from a fixed, skill-grounded taxonomy of five fixed-tier operation kinds
+(`SOC_GLOBAL_ONE_SHOT_INIT`, `DUT_PHY_PORT_BRINGUP`, `FW_EVENT_SERVICE_LOOP`,
+`VIP_DRIVEN_TEST_BODY`, `VIP_DRIVEN_DATA_TRANSFER`, each cited directly to pattern-architecture
+SKILL.md section 1) plus two CONTEXT-DEPENDENT kinds (`RAW_DUT_REGISTER_WRITE`,
+`SHARED_RESOURCE_ARBITRATED_ACCESS`) whose tier depends on caller-declared `per_port`/`driven_by`/
+`arbitration_policy` facts and resolves to AMBIGUOUS, naming the missing or contradictory fact,
+when those are absent or inconsistent -- never a guessed tier. An operation kind outside the
+taxonomy reports UNKNOWN.
+
+`validate_branch_assignment(branch_label, operation_kind, ...)` then validates an EXISTING
+assignment: it first checks `branch_label` against the canonical naming this repo's own
+`branch_topology_gate.py` already established (`block`/`branch_a{i}`/`branch_fw`/`branch_b{i}`,
+underscore-separated, 0-indexed, reusing `amba_discovery_report.L5_BRANCH_BLOCK`/`L5_BRANCH_FW`/
+`l5_branch_a`/`l5_branch_b` rather than re-deriving it) -- a legacy or malformed label is INVALID
+under `ARCH_CONFORMANCE_NAMING_VIOLATION` regardless of the operation. It then compares the
+operation's classified tier against the tier the branch label implies, reporting INVALID with a
+named rule (e.g. `VIP_DRIVEN_WORK_ASSIGNED_TO_BRANCH_A`, `RAW_DUT_OPERATION_ASSIGNED_TO_BRANCH_B`,
+`FW_SERVICE_LOOP_DUPLICATED_IN_BRANCH_B` -- the task's three headline examples, plus every other
+tier-pair mismatch) whenever they disagree, VALID when they agree, and AMBIGUOUS whenever the
+operation's own classification could not be resolved -- an assignment can never be judged correct
+or incorrect without first knowing what the operation actually is.
+
+**Deliberately bounded, and stated rather than implied closed.** This module reads no RTL, no VIP
+index and no command.txt file: an operation's nature (is it VIP-driven, is it per-port, who issues
+it) is a DECLARED input the caller supplies from its own real evidence, never derived here -- per
+the Evidence Truth Rule, there is no source in this repo that could tell this module, from a bare
+register address or macro name, which task group issues a given write. It DECIDES nothing beyond
+reporting: no build, no job, no approval, and there is deliberately no stage gate. It also does not
+check a branch SET's completeness (that stays `branch_topology_gate.py`'s job) or verify an
+arbitration policy's own RTL grounding (`SHARED_RESOURCE_ARBITRATED_ACCESS` resolves once a policy
+is DECLARED; whether that policy is actually correct against the real arbiter RTL is not checked
+here).
+
+Ad hoc: `python -m dv_harness.branch_ownership_resolver classify|validate --payload <json>` (exit 0
+RESOLVED/VALID, 1 AMBIGUOUS/INVALID, 2 UNKNOWN or a usage error for `classify`; 0 VALID, 1 INVALID,
+2 AMBIGUOUS for `validate`). No `dv-harness` CLI verb is registered -- that integration is out of
+this task's scope.
+
+Proven by `dv_harness_tests/test_branch_ownership_resolver.py` (39 tests) against a real
+command.txt-shaped two-port USB-style pattern fixture and a real legacy-naming sibling fixture in a
+real small directory tree: core positive paths for every fixed-tier and context-dependent kind; all
+7 tier-pair INVALID combinations including the task's three headline examples verbatim; naming
+negatives (the dash-separated legacy label pulled from the real fixture, an uppercase category tag,
+an unrelated string, a missing label); 8 classify-level negative controls (unrecognized/missing
+operation kind, missing per_port, contradictory driven_by, contradictory per_port, missing
+arbitration_policy, unrecognized driven_by) each asserted to land on AMBIGUOUS/UNKNOWN rather than a
+guessed tier; and a real CLI subprocess run asserting its exit code and JSON output.
+
+## Existing-Command Reuse Score: Rank, Never Force a Guess (2026-09-06)
+
+`.claude/skills/CORE/command-inventory/SKILL.md` already treats existing DE `command.txt` as a
+"reusable capability baseline" and requires a `.dv-workflow/command_inventory.csv` inventory, but
+nothing in this repo actually RANKED that inventory against a new vPlan-driven need -- the skill
+says "reuse it" in prose and left the comparison to whoever was authoring the new command.txt.
+`dv_harness/existing_command_reuse_score.py` is that comparison.
+
+It deliberately never imports `de_command_style_learning.py` (a concurrently-built module in this
+same batch that learns DE command-naming style and would emit `DECommandRegistryIR`-shaped
+records) or assumes its exact field names. `existing_commands` is accepted as a plain list of
+dicts, read through an alias-tolerant `_get()` table so it works equally against that module's
+eventual shape, against `subsystem_command_contract.py`'s SYS-8 contract fields
+(`command_name`/`command_category`/`arguments`/`branch_layer`/`source_command_file`), and against
+a literal `.dv-workflow/command_inventory.csv` row turned into a dict
+(`COMMAND`/`PARAMETERS`/`SOURCE`/`HANDLER`/`VIP_SEQUENCE`/`STATUS`/`CONFIDENCE`) -- fields it does
+not recognise are simply not used for scoring, never guessed at.
+
+**Four ranking dimensions, exactly as specified**: (1) semantic-name match -- a deterministic
+LEXICAL Jaccard token-overlap over name/description/category/keywords, explicitly NOT an
+embedding/ML model (none exists in this codebase, and inventing one would be exactly the
+unverifiable machinery the Evidence Truth Rule forbids); (2) argument-shape compatibility --
+position-aligned role comparison when arguments are structured `{position, role}` records (the
+same `role` vocabulary `subsystem_command_contract.schema.json` already uses), degrading to a
+raw-token comparison when only a flat `PARAMETERS` string/list is available, with the two forms
+kept distinguishable in the report; (3) branch-ownership compatibility -- the canonical
+`block`/`branch_a*`/`branch_fw`/`branch_b*` vocabulary from `pattern-architecture/SKILL.md` and
+`branch-mapper/SKILL.md`. These four layers genuinely do different things, so a branch-family
+MISMATCH excludes a candidate from ranking entirely rather than merely scoring it low; a
+non-canonical label (e.g. `BranchA0`) is still resolved to its family but flagged
+`LEGACY_NON_CANONICAL_NAMING`, per the Engineering Discipline Rules' "legacy/pre-v8 naming ...
+must be flagged and corrected, not silently left in place"; (4) real historical PASS evidence --
+read read-only from `evidence_db.py`'s `regression_verdict_history` table (the same table
+`golden_scenario.evaluate_freshness()` and `trend_analysis.detect_pattern_regressions()` already
+read), keyed by whichever of a candidate's declared `pattern` / `command_name` / the stem of
+`source_command_file` actually has recorded rows, tried in that priority order. A candidate with
+no recorded rows reports `NO_RECORDED_HISTORY`, never a fabricated pass rate of 0 or 1, and
+contributes zero to the composite score the same way a genuinely all-failing history does -- the
+numbers can coincide, but the machine-readable `status` and the human-readable reason never do.
+
+**NO_REUSE_CANDIDATE, never a forced low-confidence pick.** A candidate must clear TWO
+independent bars: `composite_score >= MIN_PLAUSIBLE_SCORE` (0.20 of the four weighted
+dimensions), AND real, non-zero evidence on at least one of the two *observable* dimensions
+(semantic-name overlap or argument-shape overlap) -- branch-family agreement alone, or the
+zero-contribution of "no recorded history," can never manufacture a plausible match on their own.
+When nothing clears both bars, `evaluate_reuse()` reports `NO_REUSE_CANDIDATE` with a named
+reason (`NO_EXISTING_COMMANDS_SUPPLIED` / `INSUFFICIENT_NEED_DESCRIPTION` /
+`NO_PLAUSIBLE_MATCH`) instead of returning the least-bad candidate as if it were a finding.
+
+**It decides, approves, builds, and runs nothing** -- no stage gate, no write, no self-attested
+`STATUS`/`CONFIDENCE` field from a candidate is ever treated as PASS evidence (carried through
+verbatim as `declared_status`/`declared_confidence` for a human's information only; the only real
+evidence is a `regression_verdict_history` row). `python -m
+dv_harness.existing_command_reuse_score --need-file ... --commands-file ... [--root ...] [--json]`
+is the ad hoc front door.
+
+Proven by `dv_harness_tests/test_existing_command_reuse_score.py` (37 tests) against a REAL
+`evidence_db.EvidenceStore` with real `insert_regression_verdict()` rows -- never a hand-written
+history dict. Negative controls carry the detection power: branch-family agreement alone (with
+zero name/argument overlap) is refused as a plausible match, an all-mismatched candidate set and
+an empty/malformed candidate set both report `NO_REUSE_CANDIDATE` with the real reason, a failing
+recorded history scores strictly lower than an identical passing one, a missing evidence database
+never invents a pass rate, and both `command_inventory.csv`-style uppercase field dicts and
+`subsystem_command_contract.py`-style lowercase field dicts are scored identically through the
+alias table.
+
+### pattern-ir-assembly: PatternIR assembly from a duck-typed ScenarioIR shape, with ordering-convention validation
+
+`dv_harness/pattern_ir_assembly.py` assembles a `PatternIR` -- the `global`/`dut`/`fw_policy`/`vip`/`check` command lists that back a command.txt-shaped pattern -- from a generic, duck-typed ScenarioIR-shaped input, without importing `verification_intent_ir.py` or `vplan_artifact.py` (both owned by a concurrent batch). The five `PatternIR` layers map 1:1 onto `.claude/skills/CORE/pattern-architecture/SKILL.md`'s real vocabulary: `global` = `block`, `dut` = `branch_a*`, `fw_policy` = `branch_fw`, `vip` = `branch_b*`, `check` = verdict/`FINAL_CHECK`.
+
+**What it will not invent.** `global_commands`/`dut_commands`/`fw_policy_commands` are accepted only as caller-supplied, already-evidenced pass-through content -- per `pattern-architecture/SKILL.md` section 5 point 8, that content must come from real DUT RTL/PHY docs, which this module has none of, so it never synthesizes any. The one derivation this module does make -- routing a ScenarioIR item's `stimulus`/`coverage_intent` fields to `vip` and its `checker` field to `check` by default (overridable per item via `layer_overrides`) -- is documented in the module as a stated structural convention, not a claimed fact read off any RTL/VIP source.
+
+**Honest failure over guessing.** An item with none of `stimulus`/`checker`/`coverage_intent` present, a `layer_overrides` value naming an unrecognized layer, a caller-supplied command entry with no text, or a `declared_order` that names an unknown layer, omits one, or duplicates one, is reported into `PatternIR.unclassified` or as `ORDER_STATUS_AMBIGUOUS` -- never silently dropped or defaulted. A `scenario_ir` argument (or a declared items list inside it) whose shape cannot be iterated at all raises `PatternIrAssemblyError` with a distinct `reason` string, rather than being treated as zero items.
+
+**Ordering validation, cited to the skill.** `validate_layer_ordering()` compares a project-declared alternate layer order against `DEFAULT_LAYER_ORDER = (global, dut, fw_policy, vip, check)` -- `pattern-architecture/SKILL.md` section 4's ordering that 'stays fixed in every real instance' -- and reports named, cited risks for deviations matching that skill's load-bearing rules: `GLOBAL_NOT_FIRST`/`DUT_BEFORE_GLOBAL` (block must complete before anything else starts), `FW_POLICY_AFTER_VIP` (branch_fw must launch before any branch_b* that could need it), `CHECK_BEFORE_VIP` (verdict must follow branch_b*'s join). Any other deviation still gets a named-but-generic `LAYER_ORDER_DEVIATION_UNCLASSIFIED` risk rather than silent acceptance. Independently of ordering, it flags section 2's central trap -- `join_any` on the branch_b* fork being safe only while branch_a* never returns on its own -- as `JOIN_ANY_WITH_BRANCH_FW` when branch_fw is known to exist as its own branch (citing the skill's USB job-98520 false-pass regression), `JOIN_ANY_BRANCH_FW_PRESENCE_UNKNOWN` when that fact is genuinely unknown, and `JOIN_ANY_REQUIRES_JUSTIFICATION` even when branch_fw is confirmed absent. `risks` can be non-empty even when the ordering `status` itself is `PASS`/`DEFAULT_ORDER_ASSUMED` -- callers must check `risks`, not only `status`.
+
+Tested by `dv_harness_tests/test_pattern_ir_assembly.py` (20 tests): the positive path assembling a real 2-item enumeration-style fixture into all five layers with correct counts and preserved objective/port traceability; a `layer_overrides` case routing a field to a non-default layer; five negative controls (no-intent-fields item, unknown-layer override, three unrecognized `scenario_ir` shapes, a non-list `items` value, a command entry missing text); and eleven ordering/join-mode tests covering `PASS`/`AMBIGUOUS_DECLARED_ORDER`/`DEVIATION_RISK`, every named risk, and all three presence states of the join_any trap. Run: `python -m pytest dv_harness_tests/test_pattern_ir_assembly.py -q`.
+
+## VIP Capability Extraction: Config / Transaction / Scenario-Pattern / Checker / Coverage IRs (2026-09-06)
+
+`vip_symbol_index.py` already turns a VIP source tree into real class/method/config-field/
+analysis-port DECLARATIONS with a real `file:line` each, but by its own docstring's insistence it
+is a NAVIGATION aid -- `find_symbol()` answers "where do I read about this name". Nothing in this
+repo ever asked the next question a generator or a gap-analysis actually needs answered: of
+everything a VIP declares, which classes are its CONFIG objects, which are TRANSACTIONS, which are
+reusable SCENARIO PATTERNS, which are CHECKING capability (monitors/scoreboards), and which are
+COVERAGE capability -- and, for each answer, how sure are we, on what real evidence.
+
+`dv_harness/vip_capability_extraction.py` is that classifier, reading a REAL `vip_symbol_index`
+document (via `vip_symbol_index.build_symbol_index()`/`load_symbol_index()`, called read-only --
+never a second indexer) and classifying every indexed class into one of five capability IRs
+(`VIPConfigIR`/`VIPTransactionIR`/`VIPScenarioPatternIR`/`VIPCheckerCapabilityIR`/
+`VIPCoverageCapabilityIR`) using two heuristics computed directly over that index: a NAMING
+heuristic (the class name's final underscore-delimited token against a disjoint suffix table,
+asserted disjoint at import) and an INHERITANCE heuristic (the class's real inheritance chain,
+walked via `vip_api_card.inheritance_chain()` -- reused, not reimplemented -- against a small,
+genuinely unambiguous set of UVM base-class-library markers: `uvm_sequence_item`/`uvm_transaction`
+-> transaction, `uvm_sequence`/`uvm_virtual_sequence` -> scenario pattern -- generalizing "a class
+extending a known svt_*_sequence base is a scenario-pattern candidate" to any chain that terminates
+there, directly or through an intermediate VIP-declared base sequence -- and `uvm_monitor`/
+`uvm_scoreboard` -> checker). Config and coverage are deliberately NAMING-ONLY: `uvm_object` is far
+too generic a base to distinguish a config object from a callback or a transaction some VIPs build
+on `uvm_object` directly, and asserting a marker for it would be exactly the invented specificity
+this module exists to refuse.
+
+**Every classified item carries a qualification tag from a closed 5-level vocabulary, reusing
+`vip_api_card.py`'s confidence discipline rather than inventing a second, incompatible one**:
+`PROJECT_PROVEN` / `VIP_DOCUMENTED` / `VIP_EXAMPLE_MATCHED` / `INFERRED_FROM_NAMING` / `UNKNOWN`.
+Every classified item defaults to `INFERRED_FROM_NAMING` regardless of how strongly naming and
+inheritance agree (`basis: NAME_AND_INHERITANCE_AGREE` / `NAME_ONLY` / `INHERITANCE_ONLY`) --
+promotion to one of the three stronger tags always requires a real cited `file:line` or
+document+heading, never the strength of the heuristic match alone: `PROJECT_PROVEN` needs a real
+citation of the class in caller-supplied project source (via `vip_api_card.extract_api_citations()`,
+reused); `VIP_EXAMPLE_MATCHED` needs the same over caller-supplied VIP `Examples/` source;
+`VIP_DOCUMENTED` needs the class name to appear as a real heading in a `<stem>.reference.md` file
+`vip_user_guide_distill.distill_user_guide()` already produces (its literal "## Section index"
+table only -- never the full-text extract or any prose). Priority when more than one corroborates:
+`PROJECT_PROVEN > VIP_DOCUMENTED > VIP_EXAMPLE_MATCHED`.
+
+**When naming and inheritance heuristics DISAGREE, the item is never guessed into either side.** It
+is reported separately (`report.ambiguous`, `ir_type: AMBIGUOUS_CAPABILITY_CANDIDATE`,
+`qualification: UNKNOWN`) naming both conflicting signals, and it can never be promoted past
+UNKNOWN -- corroborating evidence cannot resolve which of two disagreeing categories is correct. A
+class matching neither heuristic (e.g. a driver or agent class -- neither is one of the five
+tracked capabilities) is counted in `unclassified_class_names`, never forced into one of the five
+IRs.
+
+`classify_vip_source(roots, protocol, ...)` calls the REAL indexer over source roots in one step;
+`load_index_and_classify(index_path, ...)` classifies an already-built index. Ad hoc:
+`python -m dv_harness.vip_capability_extraction --index <index.json> [--project-source ...]
+[--example-source ...] [--user-guide-reference-md ...] [--out-dir ...] [--json]` (exit 0 classified
+cleanly, 1 an ambiguous candidate is present, 2 NOT_AVAILABLE/nothing classified).
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This is a heuristic classifier
+over DECLARATIONS; it proves nothing about behaviour. (2) Coverage classification is naming-only and
+structurally weak: `vip_symbol_index` does not index covergroups at all, so a bare `covergroup` block
+with no enclosing class is invisible here exactly as it is to the indexer it reads. (3) It decides
+nothing beyond classification: no build, no job, no approval, no stage gate, and it weakens no
+human-approval gate anywhere.
+
+Proven by `dv_harness_tests/test_vip_capability_extraction.py` (13 tests) against the REAL synthetic
+VIP fixture `examples/asset_processing/inputs/vip_src/svt_demo_pkg.sv` (the same fixture
+`vip_api_card`'s own tests use): a clean baseline classifies four real classes into their correct IR
+types with the correct `basis`, then asserts NOTHING is promoted past `INFERRED_FROM_NAMING` with no
+corroboration supplied; each promotion path is then proven individually (including a REAL
+`vip_user_guide_distill.distill_user_guide()` run for `VIP_DOCUMENTED`) and combined in one
+priority-ordering test. The negative controls carry the detection power: a class whose name says
+CONFIG but whose inheritance chain says SCENARIO_PATTERN is reported ambiguous with `UNKNOWN`, never
+guessed into either category; a class matching neither heuristic is left unclassified; an empty index
+reports `NOT_AVAILABLE`, never a clean pass. Both real CLI paths are driven as real subprocesses.
+
+## New-Command Creation Gate: command_generation_gate.py (2026-09-06)
+
+An agent free to author a new DE command.txt at any time has no incentive to ever reuse one, and a
+new command assigned to the wrong branch-ownership tier reproduces exactly the drift
+`branch_ownership_resolver.py`'s own header names as a confirmed real incident class. Nothing in
+this repo refused command CREATION itself before this -- `.claude/skills/CORE/command-inventory/
+SKILL.md` and the Engineering Discipline Rules' "command.txt change-impact check" both require an
+EXISTING command change to be checked against the inventory, but neither stopped a brand-new
+command.txt from being authored with no reuse check at all.
+
+`tools/verification_flow/command_generation_gate.py` is that refusal point, and it imports two
+real, just-built modules rather than re-deriving either judgment: `dv_harness.
+existing_command_reuse_score.evaluate_reuse()` (the four-dimension reuse ranking: semantic-name
+match, argument-shape compatibility, branch-ownership compatibility, real `evidence_db.py`
+regression history) and `dv_harness.branch_ownership_resolver.validate_branch_assignment()` (the
+`block`/`branch_a*`/`branch_fw`/`branch_b*` ownership-tier classifier, grounded in
+`.claude/skills/CORE/pattern-architecture/SKILL.md` and `.claude/skills/CORE/branch-mapper/
+SKILL.md`). REUSE OVER REINVENT applies to this gate's own construction, not only to the command it
+judges -- it never re-implements a shred of either module's ranking/classification logic.
+
+**Three conditions, all required, any one failing BLOCKS creation.** (a)
+`existing_command_reuse_score.evaluate_reuse()` must report `NO_REUSE_CANDIDATE` for the proposed
+command's own declared need against the caller-supplied `existing_commands` inventory --
+`REUSE_CANDIDATES_FOUND` BLOCKS naming the exact top candidate that module found, never a ranking
+this gate invents. (b) `branch_ownership_resolver.validate_branch_assignment()` must report
+`VALID` for the proposed command's declared `branch_layer` against its declared `operation_kind`
+(+ `per_port`/`driven_by`/`arbitration_policy`) -- `INVALID` (wrong tier, or non-canonical naming)
+and `AMBIGUOUS` (the operation's nature could not be resolved from what was declared) both BLOCK;
+an unresolved ownership question is not a lesser finding than a wrong one. (c) The task must be
+IMPLEMENTABLE given the evidence actually supplied -- checked by this gate alone, since neither
+imported module asks this question: a non-placeholder `implementation_plan`, at least one real
+`source_citations` entry, and a `grounding_basis` drawn from the primary-source vocabulary the
+Engineering Discipline Rules already name for this command's own RESOLVED ownership tier (VIP
+examples/user manual/source/class reference for a VIP-owned command; DUT RTL/PHY documents/
+programming guide/register documentation for a DUT/FW/GLOBAL-owned one) -- directly
+operationalizing "branch-B / VIP pattern changes: query VIP examples... FIRST" and "branch-A /
+branch_fw changes: query DUT RTL source... FIRST" rather than inventing a fourth vocabulary. A
+grounding basis for the WRONG tier is treated the same as no grounding at all: citing the wrong
+kind of primary source is evidence about a different command, not weaker evidence for this one.
+
+**What it does not do.** It writes no command.txt, picks no reuse candidate, decides no branch
+label, runs no build/regression/LSF job, and does not itself verify that a cited source citation is
+TRUE -- per the Evidence Truth Rule, it can check that real-looking evidence was cited and is
+internally consistent with the declared ownership tier, never that "VIP user guide section 4.2"
+actually says what the agent claims. Fabricating a VIP API/class/sequence, RTL content, or
+command.txt semantics remains this project's #1 defect risk and is not something a shape check over
+agent-typed text can prove or disprove; this gate narrows where an agent is ALLOWED to skip citing
+evidence at all, it does not verify the citations themselves.
+
+Standalone-shaped like `assertion_generation_gate.py`/`scoreboard_generation_gate.py` (one real
+`dv-harness-evidence:command_generation_gate` payload, `--command-request <file>`, one PASS/BLOCKED/
+FAIL verdict, no state written), but registered in `dv_harness/gates.py`'s `STAGE_GATES` under
+`COMMAND_PATTERN` alongside `command_migration_integrity_gate` -- new-command creation and existing-
+command migration are the same stage's two questions ("should this command.txt exist at all" vs.
+"does this command.txt change respect the inventory"). Exit codes: 0 PASS; 3 a malformed/incomplete
+payload (`MALFORMED_PAYLOAD`/`MISSING_PROPOSED_COMMAND`/`MALFORMED_EXISTING_COMMANDS`/
+`MISSING_OWNERSHIP_DECLARATION`/`MALFORMED_REUSE_NEED`); 4 `REUSABLE_COMMAND_EXISTS`; 5
+`BRANCH_OWNERSHIP_NOT_VALID`; 6 `TASK_NOT_IMPLEMENTABLE`; 2 `DEPENDENCY_UNAVAILABLE` (the two
+imported modules failed to import -- fails closed rather than silently passing, the same discipline
+`waiver_revalidation_gate.py` applies when its own dependency is missing).
+
+Proven by `dv_harness_tests/test_command_generation_gate.py` (15 tests), every one driving the real
+script as a subprocess (never an in-process call, never a mock of either imported module): a clean
+PASS with an empty existing-command inventory, a second PASS exercising the REAL reuse-score import
+against a real (branch-incompatible, correctly excluded) existing command; a real reusable command
+found and named as the BLOCKING candidate; a VIP-driven operation wrongly assigned to `branch_a*`
+(INVALID, naming `VIP_DRIVEN_WORK_ASSIGNED_TO_BRANCH_A`); an under-specified shared-resource access
+that must read AMBIGUOUS rather than guess a tier; a legacy non-canonical branch label
+(`ARCH_CONFORMANCE_NAMING_VIOLATION`); missing source citations; a placeholder implementation plan;
+a grounding basis for the wrong ownership tier; an unrecognized grounding basis; and three malformed-
+payload negative controls (missing `proposed_command`, missing `ownership`, `existing_commands` not
+a list). Real output: `python -m pytest dv_harness_tests/test_command_generation_gate.py -q` -> `15
+passed`.
+
+## DE Command Task Trace: Four-Leg Declaration-Level Cross-Reference (2026-09-06)
+
+`command-generator/SKILL.md` already declares the traceability chain this repo is supposed to keep --
+`REQ -> VP_ID -> SCENARIO -> COMMAND_ID -> HANDLER -> VIP_SEQUENCE -> CHECKER -> COVERAGE ->
+TEST/REGRESSION` -- and the CSV shape that is supposed to carry it. Nothing in this repo answered "for
+THIS DE command, where in the real generated files does that chain actually land":
+`command_migration_integrity_gate.py` checks a declared mapping's own JSON shape and command-catalog
+identity, but never opens the generated `.sv`/`.svh`/pattern-text files a HANDLER/CHECKER cell names.
+`dv_harness/command_task_trace.py` does exactly that lookup, for one real generated environment
+(`env_dir`) at a time, and reports what it actually FOUND -- never what the mapping CLAIMS.
+
+**Four legs, matching this project's own real generated shapes** (confirmed against
+`examples/generated_usb_real_evidence_v1/` -- `patterns_registry/dv_uvm_pattern_pool.svh`'s
+case-dispatch, `patterns_registry/pattern_list.txt`'s `NAME SUITE FILE` registry rows, and
+`bind/dv_uvm_hook.svh`'s real `` `define CPUWRITE1B dv_uvm_cpuwrite1b `` bridge-macro redirect -- not
+invented here): **TASK_MACRO** (the command resolves to a real Verilog `task`/`` `define ``, directly,
+through a case-dispatch statement, or through a `patterns_registry`-shaped text mapping); **UVM_BRIDGE**
+(a real UVM API call or this project's own `dv_uvm_*` bridge-task convention, reached directly or
+through one level of `` `define `` redirection); **VIP_API** (a `// VIP:` citation comment -- the real
+convention this project's own hand-converted patterns already use -- or, when the caller declares
+`vip_prefixes`, an identifier carrying that prefix); **CHECKER** (a `` `*CHECK*(...) `` macro citing
+the command or its resolved handler, or a scoreboard/checker/assertion-named file referencing either).
+
+`trace_command()`/`trace_commands()` report a per-command status: `TRACE_COMPLETE` (all four legs
+resolved, unambiguously), `TRACE_PARTIAL` (at least one leg absent, or any leg's textual match was
+AMBIGUOUS), `BLOCKED` (`env_dir`/command name itself unusable), `NOT_FOUND` (leg 1 found nothing at
+all -- there is no command to trace).
+
+**The one rule that matters most: this is a DECLARATION-LEVEL TEXTUAL CROSS-REFERENCE ONLY**, exactly
+the bound `uvm_structural_lint.py` already states for its own parser-level checks -- it cannot prove
+elaboration-time behavior. `` `ifdef ``/generate conditions are not evaluated, a macro redirect is
+followed exactly one level, and two textually-conflicting declarations of the same name (two
+`task <cmd>` in two different files, two case-dispatch entries resolving the same command string to two
+different handler names) are a genuine ambiguity this analysis cannot resolve -- `_overall_status()`
+therefore never reports `TRACE_COMPLETE` while any leg is ambiguous, whatever the other three legs
+found. A leg with no evidence is `NOT_FOUND`, never silently upgraded to a guess.
+
+**Reuse, not reinvention.** The real UVM/VIP-body parsing engine in this repo is `verible_parser.py`'s
+subprocess wrapper around `verible-verilog-syntax`, and this module imports ONLY that (read-only) --
+never `vip_symbol_index.py`, `vip_api_card.py`, or `uvm_structural_lint.py`. Verible is used for exactly
+one thing: OPTIONAL enrichment of a single, unambiguous direct `task <cmd>` citation with its real
+parsed signature; its absence never blocks a trace, it only means that one enrichment is skipped.
+
+Proven by `dv_harness_tests/test_command_task_trace.py` (22 tests) against small real synthetic
+generated-environment fixtures shaped like this project's own real `examples/generated_usb_real_evidence_v1/`
+layout, including the real case-dispatch and `patterns_registry` conventions: each of the four legs is
+proven both on a clean resolved case and on its own negative control (an absent leg, an ambiguous
+double-declaration, a macro redirect followed exactly one level and no further), and `TRACE_COMPLETE` is
+proven to never fire while any leg is ambiguous, whatever the other three legs found.
+
+**Disclosed residual**: this closes command-to-generated-file traceability only. It does not run a
+build, a simulation, or a gate of its own, and it does not participate in the New-Command Creation Gate
+(`command_generation_gate.py`) or any other stage gate -- it is a standalone lookup, callable ad hoc via
+`python -m dv_harness.command_task_trace`.
+
+## Verification Architecture IR: VIP/Checker/Scoreboard/Assertion Placement (2026-09-06)
+
+Nothing in this repo answered "is this VIP/checker/scoreboard/assertion placed
+where the evidence says it should be" as a single typed record with a real
+confidence and a real reason. `env_manifest.py` already captures which VIP is
+configured and which release is installed; `connectivity.py` already
+4-tier-classifies bind confidence and has planning-entry generators for
+protocol checks (`generate_protocol_check_entry()`) and data-integrity
+scoreboards (`generate_scoreboard_entry()`); `phy_boundary.py` already decides
+at which layer one PHY<->controller boundary may bind. What was missing was
+the record that ties a placement decision back to that evidence with an
+honest status/confidence, and a comparator that walks a whole subsystem's
+worth of those records looking for a placement that contradicts the evidence
+it was built from.
+
+`dv_harness/verification_architecture.py` is that layer: 5 typed IRs
+(`VipSelectionIR`, `VipBindIR`, `ScoreboardIR`, `CheckerIR`, `AssertionIR`),
+each an EXTENSION of an existing producer's own dict shape (the original dict
+is kept verbatim as `raw`; new typed fields sit alongside it) plus a common
+`status`/`confidence`/`source_evidence` trio. Confidence is
+`inference.CONFIDENCE_LEVELS` (HIGH/MEDIUM/LOW) plus one honest addition,
+UNKNOWN ("no evidence to grade this record") -- never a second confidence
+vocabulary, per the same discipline `test_confidence_vocabulary_separation.py`
+already holds `connectivity.classify_bind_tier()` and `question_queue.
+classify_tier()` to.
+
+- **VipSelectionIR** extends one `env_manifest.build_vip_config()`
+  `vip_instances` entry with the bind-tier evidence a caller already computed
+  (`connectivity.classify_bind_tier()`, accepted duck-typed so this module
+  never re-derives a tier of its own) and the matching installed-package
+  version from `env_manifest.build_vip_release()`.
+- **VipBindIR** extends the existing bind-entry shape
+  (`target_instance`/`ports`/`reason`/`tier`, the same shape
+  `connectivity.enforce_bind_tier_policy()` already validates) with a
+  `phy_boundary.decide_bind_location()` boundary decision and a NEW
+  wrapper/bridge CHAIN classification: `derive_wrapper_bridge_chain()` walks a
+  caller-declared hop list and classifies each hop WRAPPER (a clean single-kind
+  boundary on both sides -- a passthrough) or BRIDGE (a MIXED boundary --
+  `phy_boundary.classify_boundary()`'s own documented "typical of a
+  bridge/wrapper module" shape) or UNCLASSIFIED (no evidence -- never guessed
+  from a name, extending Bind-Location Rule 5's naming-evidence discipline
+  from one boundary pair to a whole chain).
+- **CheckerIR** extends `connectivity.generate_protocol_check_entry()`'s
+  `protocol_check` shape with a caller-declared link to the bind target it
+  watches and which side of a bridge (if any) it mounts on.
+- **ScoreboardIR** extends `connectivity.generate_scoreboard_entry()`'s
+  `data_integrity_scoreboard` shape (including its real `unfilled_fields` via
+  `unfilled_plan_fields()`) with `assess_scoreboard_comparability()`: `False`
+  ONLY when real `phy_boundary`-derived boundary-kind evidence for the two
+  endpoints actually disagrees; `None`/UNKNOWN with no boundary evidence
+  supplied -- never a guessed `True`.
+- **AssertionIR** has no pre-existing producer to extend, so its `raw` is the
+  caller-supplied candidate itself (this module authors NO assertion content,
+  per No Golden-Reference Content Mining). Its `clock_domain_match`/
+  `reset_domain_match` are checked against the real
+  `env_manifest.build_dut_facts_clock_reset()` clock/domain map; when that
+  layer is not LOADED both are honestly `None`, never a claimed match.
+
+`detect_placement_conflicts()` derives all six required conflicts purely from
+already-computed IR fields: **VIP_AFTER_BRIDGE** (a VIP instance path under a
+bind target whose chain crosses a bridge), **CHECKER_WRONG_SIDE_OF_BRIDGE** (a
+checker declaring `mount_side=PRE_BRIDGE` for a target whose chain already
+shows `BRIDGE_IN_PATH` -- a checker mounted AT the target can only observe the
+POST_BRIDGE side), **ASSERTION_WRONG_CLOCK_DOMAIN** /
+**WRONG_RESET_DOMAIN** (AssertionIR's own real domain-match verdict),
+**SCOREBOARD_INPUTS_NOT_COMPARABLE** (ScoreboardIR's own comparability
+verdict), **DUPLICATE_ACTIVE_VIP** (two selections sharing one instance path
+where neither is affirmatively PASSIVE -- two passive monitors sharing a path
+is not flagged). `detect_intra_subsystem_duplicates()` adds the intra-subsystem
+duplicate check: **VIP_CHECKER_DUPLICATES_SVA** (a checker's own enabled
+built-in check name matches an assertion's declared `checked_property` on the
+same target), **SCOREBOARD_DUPLICATES_CHECKER** (a data-integrity-named
+checker and a scoreboard share an endpoint), **DUPLICATE_SCOREBOARD_PATH** (two
+scoreboards declare the identical endpoint pair).
+
+Five rendering functions produce the required output matrices (VIP Bind,
+Interface-to-Verification, Function-to-Checker, Assertion Placement,
+Scoreboard Architecture), all through `connectivity.render_markdown_table()`
+-- the repo's one parameterized markdown-table renderer; no second one was
+added. `assemble_verification_architecture()` is the one-call entry point
+producing all five IR lists, both comparators, and all five matrices, and
+`validate_verification_architecture()` checks the result against
+`dv_harness/schemas/verification_architecture.schema.json`.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This
+module imports only `inference.py`/`connectivity.py`/`phy_boundary.py` --
+stable modules outside both this task's own 23-agent batch and the
+separately-running 12-agent batch. Several real facts a fuller pipeline would
+supply (hierarchy hops between a DUT top and a bind target, which checker
+mounts on which side of a bridge, which VIP instance is ACTIVE vs PASSIVE) are
+accepted as plain caller-supplied dicts, never pulled from another
+concurrently-built module's output; a future richer hierarchy-walk producer
+(e.g. a `subsystem_contract.py`) could supply `chain_by_target` directly
+without this module importing it. (2) It authors NO VIP API, RTL content, or
+assertion/scoreboard/checker CONTENT -- it only assembles and cross-checks
+PLACEMENT metadata a caller already declared or a real producer already
+computed. (3) `assess_scoreboard_comparability()` and the wrapper/bridge chain
+classifier are conservative by construction: absent evidence is UNKNOWN, never
+guessed comparable/wrapper. (4) There is deliberately no stage gate registered
+in `gates.py` by this task -- the 3 standalone generation gates below are
+independent scripts an integrator wires in.
+
+Three STANDALONE generation gates (not registered in `gates.py`), each
+checking one IR list's completeness before its generation step may proceed:
+`tools/verification_flow/vip_bind_generation_gate.py` (every `vip_bind` record
+`status: RESOLVED` and not named by a `VIP_AFTER_BRIDGE` finding),
+`scoreboard_generation_gate.py` (every `scoreboard` record `status: RESOLVED`,
+no `unfilled_fields`, `comparable` not `false`), `assertion_generation_gate.py`
+(every `assertion` record `status: RESOLVED`, `clock_domain_match`/
+`reset_domain_match` not `false`). Same file shape as
+`assertion_placeholder_closure_gate.py` (argparse, one JSON arg, one JSON
+status line, non-zero exit on FAIL).
+
+Proven by `dv_harness_tests/test_verification_architecture.py` (42 tests)
+against REAL producer output throughout: a real `vip_config_dump.json` parsed
+by `env_manifest.build_vip_config()`, a real synthetic `$DESIGNWARE_HOME` tree
+scanned by `build_vip_release()`, a real `soc_arch_map.json` loaded by
+`build_dut_facts_clock_reset()`, a real synthetic PHY/controller port table
+classified by `phy_boundary.classify_boundary()`/`decide_bind_location()`
+(including a genuine MIXED/bridge boundary), and real
+`connectivity.classify_bind_tier()`/`generate_protocol_check_entry()`/
+`generate_scoreboard_entry()` calls. Every one of the six placement conflicts
+and three intra-subsystem duplicates has both a positive detection test and a
+negative control (wrong VIP location elsewhere, correct bridge side, agreeing
+boundary kinds, PASSIVE-only duplicates, differing checked properties,
+differing endpoints) proving the comparator does not over-fire. The three
+standalone gates are driven as real subprocesses to both PASS and FAIL.
+
+
+## Intake State: One Per-Field Record Joining Manifest + Decisions + Bind Tiers (2026-09-06)
+
+`dv_harness/intake_state.py` answers "what does this project's intake actually know about field X, and from where" as one `IntakeFieldRecord` per field -- `{value, source, confidence, status, last_validated, owner}` -- joining three real sources that previously had to be read separately: env.manifest.json's own per-layer `status`/`reason` (`env_manifest.py`), a real `question_queue.QuestionQueueStore.find_decision()` (read-only; this module never files or answers a question itself), and `connectivity.py`'s `BindTier` vocabulary for per-bind-entry confidence. Status is one of AUTO_RESOLVED / USER_CONFIRMED / PARTIAL / CONTRADICTED / MISSING / BLOCKED / UNKNOWN / NOT_APPLICABLE -- a human answer (`question_queue.HUMAN_DECISION_SOURCE`) always outranks the harness's own Tier-2 auto-assumption, and a Tier-2 guess never downgrades a fact already computed from a real source; a field where a human's filed answer disagrees with an already-computed value reports CONTRADICTED rather than being silently overwritten as if the two agreed.
+
+`evaluate_uvm_generation_ready()` is a hard refusal gate over six named blocking categories -- DUT boundary, VIP unresolved, active-driver conflict, critical bind, build env, known-PASS test -- folded worst-wins per category (`IntakeState.category_status()`); a category with zero fields recorded at all folds to MISSING, never "ready by omission". `already_resolved(intake_state, field_name)` is the do-not-ask helper: a caller should check this BEFORE calling `question_queue.QuestionQueueStore.add_question()` for a field, since this module never files questions itself.
+
+Three of the six blocking categories are deliberately duck-typed rather than imported, each documented with its intended real producer in the module docstring: `dut_boundary` accepts `phy_boundary.py`'s own `{status, bind_decision: {bindable, mount_layer, rationale}}` shape without importing that module; `active_driver_conflicts` accepts a generic `{resource, status, reason}` list standing in for `system_resource_inventory.real_cross_subsystem_findings()`; `known_pass_tests` accepts a generic `{test_name, verdict, reason}` list standing in for `golden_scenario.py`'s recorded capsules -- not imported because `golden_scenario.py` was, at the time this module was built, one of four files a separate concurrently-running batch was editing. `connectivity.py` and `env_manifest.py` are imported directly for their real vocabularies (`BindTier`/`GateStatus`, layer `status`/`reason`), since neither was part of that concurrently-edited set.
+
+Deliberately bounded: this module JOINS and REPORTS only. It files no question, runs no gate script, writes no state/blackboard/approval record, and holds no stage gate of its own -- `evaluate_uvm_generation_ready()` only refuses or allows a caller's next action.
+
+Proven by `dv_harness_tests/test_intake_state.py` (41 tests): env.manifest layers are built through the REAL `env_manifest.py` producer functions over real fixture `register_map.json`/`soc_arch_map.json`/`testplan_sources.json` (including a genuine register/address-map base-address disagreement and a genuine broken vPlan test reference, both producing real CONTRADICTED verdicts, not fabricated ones); DUT-boundary facts are the real `phy_boundary.classify_boundary()`/`decide_bind_location()` output for both a PARALLEL (bindable) and a SERIAL (BLOCKED) case; bind-tier facts are classified through real `connectivity.BindTier` values across T1-T4, including a negative control where a fabricated (non-`human_answer`) confirmation source still BLOCKS; question_queue decisions are produced by driving a real `QuestionQueueStore` through its real `add_question()`/`answer_question()` API, never a hand-written decision record. Negative controls prove absent evidence never reads as resolved: a state built from nothing refuses on all six blocking categories, and flipping just one category back to BLOCKED in an otherwise-fully-resolved state still refuses generation as a whole.
+
+### Design Source Inventory -- registry table + discovery-order (2026-09-06)
+
+**Gap.** No source-registry table existed anywhere in this codebase: nothing recorded, per design source, its type/version/content hash/authority tier/freshness status in one place. Grep for `source_id`/`SOURCE_REGISTRY`/`DISCOVERY_ORDER` found zero hits before this closure.
+
+**What's new -- `dv_harness/design_source_inventory.py`.**
+- A registry row shape `{source_id, type, version, hash, authority, status, last_checked}` built by `evaluate_source()`/`build_source_registry()`, accepting `SourceEntry` or a plain duck-typed dict per source.
+- Status vocabulary: the task's three (`CURRENT`/`STALE`/`SUPERSEDED`) plus two honest additions the evidence-truth rule requires (`NOT_AVAILABLE` -- path missing/unreadable; `UNKNOWN` -- no recorded_hash yet to compare against). Decided worst-first: SUPERSEDED (explicit `superseded_by`) > NOT_AVAILABLE > UNKNOWN > CURRENT/STALE by real sha256 content-hash comparison (own `_sha256_file`/`_sha256_tree`, modeled in spirit on `signoff_export.compute_bundle_hash()`'s manifest-hash shape and `golden_scenario.evaluate_freshness()`'s worst-wins structure -- neither imported). This module persists no snapshot itself; `recorded_hash`/`superseded_by` are caller-supplied from whatever owns the last inventory run.
+- Authority tier is resolved **by import only** against `source_authority.authority_source()`/`authority_rank()` (that module is unedited). A source with no `authority_hint`, or an unresolvable one, reports `NOT_APPLICABLE` with a real reason rather than a forced/guessed tier -- not every discovery kind (e.g. `ask_user`, `git_history`) sits on the 9-tier conflict-resolution axis at all.
+- A new, explicitly-distinct **DISCOVERY-order** table, `DISCOVERY_ORDER` (10 kinds: repo files on disk, existing UVM environment, build scripts/Makefile, RTL/PHY source, register files, specs/datasheets, VIP examples, regression lists, git history, ask the user) and `discovery_check_order(fact_name, available_kinds)`, answering "which kind of source to check first for a fact not yet known" -- a THIRD mechanism alongside `source_authority.AUTHORITY_ORDER` (conflict resolution) and `tools/verification_flow/evidence_source_priority_gate.py`'s `ORDER` (a coarser 9-item discovery list for that tool's own trace-validation use case), with the three-way distinction spelled out in the module docstring rather than left implicit, mirroring how `source_authority.py` already documents its own near-collision with the gate module.
+
+**Deliberately NOT covered (bounded, disclosed).** No repo-walking/source-discovery scanner (callers supply `path`); no snapshot persistence (recorded_hash/superseded_by are caller-supplied each call); no forcing of every discovery kind onto an authority tier.
+
+**Reused, not reinvented.** `source_authority.authority_source()`/`authority_rank()` (import only, unedited).
+
+**Real test proving it.** `dv_harness_tests/test_design_source_inventory.py` (24 tests, `python -m pytest dv_harness_tests/test_design_source_inventory.py -q` -> `24 passed`): DISCOVERY_ORDER shape/filtering, authority resolution matching `source_authority` directly, sha256 hashing verified against raw `hashlib`, plus five negative controls -- mutated content must not read CURRENT, a missing recorded_hash must not read CURRENT, a missing path must not read CURRENT/STALE, a superseded source must not read CURRENT even on a hash match, and unknown-kind/empty-field inputs must raise rather than silently pass.
+
+**Suggested CLI verb (for the integrator; not added here):** `dv-harness design-source-inventory --sources <sources.json> [--snapshot <prior_registry.json>]` -> prints `build_source_registry()`'s JSON, exit 1 if any row is `STALE`.
+
+
+## Requirement Contract: Ambiguous-Language Detection + Cross-Source Contradiction (2026-09-06)
+
+`dv_harness/requirement_contract.py` gains two purely-additive checks on top of its existing
+`derive_status()`/`STATUS_OVERCLAIMED`/`UNRESOLVED_BLOCKER_HIDDEN` machinery (read first, unchanged
+by this addition; no existing field, status value, or precedence rule changed meaning).
+
+**(a) Ambiguous-language detector.** `detect_ambiguous_language(text)` matches a real word list
+(`AMBIGUOUS_LANGUAGE_PHRASES`: normally, typically, generally, usually, as needed, as appropriate,
+appropriate, should generally, in most cases, in some cases, as applicable, if necessary, where
+applicable, under normal conditions, reasonable, roughly, approximately, etc., and so on, and the
+like, or similar) against `expected_result`/`checker` text, case-insensitively, longest phrase first
+so "should generally" is cited whole rather than shadowed by "generally". This is a DIFFERENT fact
+from the existing `ambiguities` array: that array records an ambiguity someone already FILED; this
+finds hedging prose that reads as resolved but nobody filed yet. It surfaces as a new
+`AMBIGUOUS_LANGUAGE_DETECTED` WARNING in `analyze_requirement_contract()`, citing the matched
+phrase and field -- it does NOT feed `derive_status()`, so a requirement's status is unaffected
+until a human/agent files it as a real `ambiguities` entry (the existing, unchanged path to
+AMBIGUOUS).
+
+**(b) Cross-source contradiction.** `cross_source_contradictions(records)` groups contract-shaped
+records by `feature` (this schema's closest analogue to a cross-document spec_ref) and, for every
+pair sharing one, compares `expected_result`/`configuration` on resolved, stripped/casefolded text.
+A genuine disagreement is a new `CROSS_SOURCE_CONTRADICTION` WARNING in
+`analyze_requirement_contract_set()`, alongside the existing DUPLICATE_REQUIREMENT_ID check --
+duplicate ids are one identity colliding; this is two different ids making incompatible claims. It
+never mutates a record and never writes into either record's own `contradictions` array: filing a
+contradiction stays a human/producer act, the same ARBITRATION boundary this module already keeps.
+
+**Deliberately additive, not a redefinition.** Both new findings are WARNING severity, so
+`downstream_consumable()` (which counts only ERROR findings) is unaffected, and a requirement's
+declared/derived status is unaffected until filed as a real `ambiguities`/`contradictions` entry.
+No CLI or gate change was needed: both functions are consumed through the existing
+`analyze_requirement_contract()`/`analyze_requirement_contract_set()` entry points already called by
+`dv-harness requirement-contract` and by `tools/verification_flow/spec_to_vplan_requirement_quality_gate.py`
+(untouched), so the new findings surface automatically.
+
+Proven by 24 new tests in `dv_harness_tests/test_requirement_contract.py` (120 total, up from 96),
+following the file's existing mutation-driven discipline: phrase detection/citation, the
+longest-phrase-wins de-dup rule, a "status/consumability unchanged" proof, the
+placeholder-vs-hedging-language distinction; agreeing/disagreeing feature pairs, case/whitespace
+insensitivity on both the feature key and the cosmetic-difference check, unresolved-field
+exclusion, single-record/legacy-record non-participation, a 3-way group's every pairwise
+disagreement, and a no-mutation/no-auto-filing proof. The full pre-existing 96-test suite was run
+unchanged first (all pass) before any new test was added.
+
+## Requirement-to-RTL Evidence Correlation (2026-09-06)
+
+A requirement can NAME a DUT-facing fact -- an interrupt, a clock/reset signal, a mode, a feature --
+and nothing in this repo checked whether that name corresponds to anything the DUT actually has.
+`env_manifest.py` already assembles exactly the facts needed to answer that (RTL ports/signals/
+parameters via `verible_parser.to_dict()`, registers/fields via the register-map input contract,
+clocks/resets and address regions via the SoC-arch-map input contract); `dv_harness/dut_evidence_
+correlation.py` reads that assembled manifest, read-only through the existing `env_manifest.
+load_env_manifest()`, and does the join. It parses nothing itself -- there is no second RTL parser,
+register-map reader or SoC-arch-map reader here.
+
+**Input is deliberately duck-typed**, per this batch's file-safety scope: a declared fact is a plain
+dict (`item_id`/`fact_type`/`name`, optional `aliases`/`expected`) rather than an import of
+`requirement_contract.py`'s `RequirementContract`, even though that module already exists in this
+repo. A caller sitting on a real, schema-validated, COMPLETE `requirement_contract` record builds
+this module's `items` list from that record's own `feature`/`protocol`/`precondition`/`observability`
+text -- this module does not parse that prose itself, the same "transcription, never extraction from
+scratch" boundary `doc_extraction_fanout.py` already states for 40d/40e/40f.
+
+**Five-status verdict, never collapsed**: `RTL_CONFIRMED` (an exact name match in an available
+layer, no attribute disagreement), `RTL_CONTRADICTS_SPEC` (an exact match, but a declared attribute
+-- active_level, frequency_mhz, direction, access, width, reset_value, base_address, bus,
+synchronous -- disagrees with the manifest's real recorded value; this module reports the
+disagreement and arbitrates nothing, the same boundary `requirement_contract.py` keeps for a
+CONTRADICTORY requirement), `RTL_PARTIAL` (a case-insensitive substring match only -- a plausible,
+unproven correspondence), `RTL_NOT_FOUND` (every layer relevant to the fact_type was available and
+searched; a real negative), `NOT_AVAILABLE` (every relevant layer was itself NOT_AVAILABLE, or
+`env.manifest.json` does not exist at all -- per the Evidence Truth Rule this is never conflated with
+RTL_NOT_FOUND: "we looked and it is not there" and "we could not look" are different claims).
+
+**Evidence is cited from what the upstream producer actually recorded, never fabricated.** RTL ports/
+signals/parameters and register/field entries carry no source line anywhere upstream
+(`verible_parser.to_dict()`'s dataclasses and `register_map.schema.json` record name/type/access
+only), so this module cites the real file path plus a structural locator (module/port,
+block/register/field) instead of inventing a line number neither producer recorded. Where the
+upstream fact DOES carry a real evidence string with a line (`clock_reset`'s clocks/resets and
+`address_map`'s entries, sourced from `soc_arch_map.schema.json`'s own `evidence` field), that string
+is cited verbatim.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) Matching is name-based
+(exact / case-insensitive substring) only, never semantic -- no fuzzy edit-distance, no synonym
+table; a caller must supply the RTL-shaped name as `name` or an `alias`. (2) It decides nothing
+beyond the verdict: no build, job, approval, stage gate, or memory write -- it reads
+`env.manifest.json` once, read-only. (3) An unrecognised `fact_type` is never rejected or silently
+narrowed -- it searches every `dut_facts` layer (the same breadth as "feature") and the report
+carries a warning naming the unrecognised value. (4) It is REACHED, not WIRED: there is no
+`dv-harness` CLI verb yet (front door is `python -m dv_harness.dut_evidence_correlation`), no
+`run_stage()`/`advance()` call site invokes it, and no graph node declares it.
+
+Proven by `dv_harness_tests/test_dut_evidence_correlation.py` (20 tests) against a real,
+schema-valid `env.manifest.json` built through the real `env_manifest.generate_and_write()` over a
+real verible-parsed RTL fixture, a real register-map JSON and a real soc-arch-map JSON -- nothing
+hand-written. Positive path: exact RTL port / clock+reset / register+field matches, and an alias
+resolving a name the RTL does not literally carry. Negative controls, each proven rather than
+asserted: a fabricated name reads RTL_NOT_FOUND; a mutated reset polarity, clock frequency and
+register access each read RTL_CONTRADICTS_SPEC naming expected-vs-actual; a substring-only match
+reads RTL_PARTIAL and is never upgraded; a missing manifest file and a `None` path both report
+NOT_AVAILABLE for every item; a manifest whose relevant layers are honestly NOT_AVAILABLE is
+distinguished from a real RTL_NOT_FOUND; a malformed item raises `DutEvidenceCorrelationError`; an
+invalid on-disk manifest propagates `env_manifest.EnvManifestValidationError` rather than being
+swallowed. Both the module's Python API and its CLI subprocess entry point (exit 0/1/2) are driven
+end to end.
+
+
+## vPlan Freeze / Baseline: a Second Freeze, One Shared Vocabulary (2026-09-06)
+
+`signoff_export.py`'s section-238 baseline names fifteen project-wide identity fields but none
+of them is specifically about the vPlan/requirement/configuration triad a vPlan-focused freeze
+needs: which spec version a vPlan was written against, which version of the section-184
+Canonical Requirement Contract fed it, which configuration-variant IR it was planned over, and
+exactly which vPlan items (by count and content) existed at freeze time. `grep -rn
+"vplan.*freeze\|freeze.*vplan" --include=*.py .` matched nothing before this change --
+`signoff_export.py`'s own freeze covers a whole project's signoff evidence, not a vPlan
+document's own identity.
+
+`dv_harness/vplan_baseline.py` mirrors `signoff_export.py`'s content-hash freeze/invalidation
+PATTERN -- worst-wins, "we could not check" is never VALID -- scoped to four vPlan-specific
+fields instead of section 238's fifteen: `spec_version` (the vPlan document's own
+`spec_revision`, or a human-declared attested value), `requirement_ir_version` (content identity
+over records `requirement_contract.declares_contract_shape()` confirms are genuinely in the
+section-184 contract shape), `configuration_ir_version` (content identity of a caller-named
+configuration-IR JSON document), and `vplan_items` (item count plus a content-hash aggregate
+keyed by `req_id`/`item_id`).
+
+**Reuse, not reinvention.** Every multi-item digest goes through the real
+`tools/remote/source_identity.aggregate_source_id()`, reached the same way
+`signoff_export._aggregate()` reaches it (`from .harness_deploy import aggregate_source_id`) --
+there is no second hashing scheme. The freeze vocabulary (`CAPTURED`/`NOT_AVAILABLE`/
+`FREEZE_VALID`/`FREEZE_INVALIDATED`/`FREEZE_UNKNOWN`/`SEV_INVALIDATING`/`SEV_INDETERMINATE`/
+`MATERIAL_CHANGE_RISKS`) is IMPORTED directly from `signoff_export.py`, never re-typed --
+`signoff_export.py` itself is untouched, so a freeze verdict means the same three words whether
+it names a vPlan baseline or a whole-project signoff baseline. Post-freeze impact analysis reuses
+the same `change_impact.changed_files()`/`classify_risk()`/`resolve_sha()` chain
+`signoff_export.evaluate_freeze_invalidation()` and `golden_scenario.evaluate_freshness()`
+already use, so "did the project move since this was frozen" has ONE answer across every freeze
+mechanism in this codebase.
+
+**Deliberately NOT imported: `config_variant_coverage.py`.** At write time it was under
+concurrent edit by a separate batch of agents, so `configuration_ir_version` accepts a generic,
+duck-typed JSON document (any project's configuration-variant IR, whatever produced it) and
+hashes its real content rather than validating its internal legality (no dimension/constraint/
+critical-combination checking -- that stays `config_variant_coverage.py`'s job). A caller may
+later validate the same file through `config_variant_coverage.load_config_space()` before naming
+it here; this field would then simply be hashing an already-validated document, with no change
+needed in this module.
+
+**Unlike `signoff_export`'s fields, none of the three input files has a fixed conventional path
+under a project root** -- a vPlan/requirement-IR/configuration-IR file can live anywhere a caller
+names it. The frozen record therefore carries the EXACT paths supplied at capture time, and
+re-derivation at evaluation time re-reads those same paths; a file that moved or vanished since
+the freeze is exactly a `BASELINE_EVIDENCE_DISAPPEARED` finding, never a silent re-pointing at a
+different file. Freeze records live at `.dv-harness/vplan_baseline/freezes/<freeze_id>.json` --
+deliberately NOT inside `.dv-harness/vplan/`, which `signoff_export.collect_signoff_bundle()`
+already copies wholesale into a signoff bundle.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This module DECIDES and
+ARBITRATES nothing: no stage runs, no gate is invoked, no build/regression/LSF submission
+starts, and there is deliberately no stage gate. (2) `configuration_ir_version` is a content-
+identity field only -- it validates nothing about a configuration space's legality. (3) No
+`dv-harness` CLI verb exists yet; the front door is `python -m dv_harness.vplan_baseline
+fields|baseline|freeze|list|status`, the same `execute_verb()` convention `signoff_export`/
+`power-intent`/`golden-scenario` already follow.
+
+Proven by `dv_harness_tests/test_vplan_baseline.py` (27 tests) against a REAL throwaway git
+repository with real commits, a real vPlan JSON document, a real requirement-contract-shaped
+records file, and a real configuration-IR JSON document -- nothing mocked. The central proofs are
+that a field-content change invalidates independently of git (naming exactly the changed field,
+with the frozen record on disk byte-unchanged) and that a real git commit of a HIGH-risk RTL file
+invalidates independently of field content -- proving the two invalidation mechanisms fire on
+their own. A negative control proves a project with no recorded git HEAD reads `FREEZE_UNKNOWN`,
+never `FREEZE_VALID` -- "we could not check" is never a pass. A reuse-proof test independently
+reconstructs the `vplan_items` manifest and feeds it to a freshly-loaded copy of
+`tools/remote/source_identity.py`, asserting byte-identical digests. An AST-based test proves no
+`import`/`from ... import` node anywhere in the module names `config_variant_coverage`.
+
+If a `dv-harness` CLI verb is added, the suggested entry (not wired by this change) is:
+
+```python
+elif args.cmd == "vplan-baseline":
+    from dv_harness.vplan_baseline import execute_verb
+    sys.exit(execute_verb(args.rest))
+```
+
+## Spec-to-vPlan Transform Quality Gate (2026-09-06)
+
+`tools/verification_flow/spec_to_vplan_quality_gate.py` is a new standalone STAGE_GATES script,
+deliberately separate from `spec_to_vplan_requirement_quality_gate.py`. That gate checks PER-
+REQUIREMENT completeness (five required fields on one requirement record, plus its own
+`contract_schema_version`/`requirement_contract.py` layer for records that opt into the richer
+15-field contract). Nothing in this repo checked the SPEC-TO-VPLAN TRANSFORM as a whole -- whether
+the set of vPlan items an agent produced from a spec actually covers that spec, and whether every
+contradiction/ambiguity the agent itself flagged while doing that transform was actually closed
+rather than quietly dropped. This gate is that check, and only that check.
+
+Evidence shape (all keys optional; absent reads as empty): `spec_items[]` (`spec_id`,
+`criticality`), `vplan_items[]` (`vplan_id`, `traces_to: [spec_id, ...]`), `contradictions[]` and
+`ambiguities[]` (`*_id`, `description`, `resolved`/`resolution`/`open_question`). Four rules,
+checked in this priority order (most severe first -- a run carrying several kinds of defect
+reports its worst one as `reason`, while `findings` still names every kind found in one pass):
+
+1. **zero-critical-omission** -- a P0/BLOCKER/CRITICAL spec item with no `vplan_items[].traces_to`
+   entry naming it is `CRITICAL_OMISSION` (exit 3). Criticality is what makes this stronger than an
+   ordinary traceability gap: the point of flagging it critical is that it may not merely be noticed
+   later.
+2. **zero-unresolved-contradiction** -- a filed contradiction with no `resolved: true`, no real
+   `resolution` text, and no named `open_question` is `UNRESOLVED_CONTRADICTION` (exit 4). This gate
+   never decides which side of a contradiction is correct -- arbitration stays a human/source-
+   authority decision, the same boundary `source_authority.py` and `requirement_contract.py` already
+   keep between detecting a conflict and resolving it -- it only refuses to let one pass silently.
+3. **zero-unresolved-ambiguity** -- the identical shape over `ambiguities[]`, the same
+   "resolution/open_question, or FAIL" discipline `spec_to_vplan_requirement_quality_gate.py`
+   already applies per-requirement, applied here across the whole vPlan.
+4. **zero-traceability-gap** -- everything else the spec<->vplan mapping leaves open: a
+   non-critical spec item nobody traced to, a vPlan item whose `traces_to` is empty, or a vPlan
+   item's trace target naming a `spec_id` that does not exist in `spec_items[]` at all (a dangling
+   reference, never trusted as a real link).
+
+`spec_items` empty (or absent) reports `NO_SPEC_ITEMS` (exit 2) rather than a vacuous PASS -- there
+is nothing to check omission or traceability against. Non-dict entries in any list are skipped
+rather than crashing the gate.
+
+**Deliberately bounded.** This is a pure structural/consistency check over the fields the agent
+supplies, the same discipline every sibling script in this directory follows (e.g.
+`coverage_quality_gate.py`): it proves the SET the agent produced is internally coherent -- every
+critical spec item covered, every filed contradiction/ambiguity actually closed, every trace target
+real -- not that any individual spec/vplan claim is true against a real specification document or
+DUT. No spec text, requirement content, or VIP/RTL behavior is invented or read here, and it decides
+and arbitrates nothing beyond reporting.
+
+Proven by `dv_harness_tests/test_spec_to_vplan_quality_gate.py` (14 tests) driving the gate as a
+REAL subprocess: one clean fully-covered payload passes with zero findings, then each of the four
+rules is driven by MUTATING that same clean payload one defect at a time (plus NO_SPEC_ITEMS,
+priority ordering under simultaneous defects, an alternate resolution path, malformed-entry
+graceful-skip, and output determinism), so each assertion proves that rule caught that specific
+injected defect.
+
+**Not yet wired into `gates.py`'s `STAGE_GATES`** -- that edit is left for the integrator. The
+entry fits the `VPLAN` stage, alongside `spec_coverage_audit` and `vplan_writer_validation_gate`:
+
+```python
+("spec_to_vplan_quality_gate", "spec_to_vplan_quality_gate.py", "--vplan-quality"),
+```
+
+## Coverage Hole Taxonomy: 12 Categories + Per-Hole Evidence Citation (2026-09-06)
+
+`coverage_analysis.classify_coverage_hole()` answers exactly one question -- which of 4 ROOT
+CAUSES (MISSING_TEST / INSUFFICIENT_CONSTRAINT / UNREACHABLE_STIMULUS /
+INSUFFICIENT_SEED_ATTEMPTS) explains an uncovered bin -- and is left completely untouched by this
+change: nothing renames, removes, or reroutes those 4 values, and the function itself is not
+edited. What was missing is a wider vocabulary for the STRUCTURE of the hole itself: is this even a
+real open gap (an illegal/ignore bin misreported as one), a cross-coverage combination whose
+individual axes are both already covered, specific to one configuration, a timing/transition
+window, a register bitfield combination, already carved out by an on-record waiver, or corroborated
+(or contradicted) by a real recorded golden-scenario PASS -- and nothing cited, per hole, the real
+evidence source behind whichever classification was reached.
+
+`classify_coverage_hole_taxonomy()` runs `classify_coverage_hole()` first, byte-for-byte unchanged
+(embedded as `root_cause_verdict`), and only ADDS a widened classification on top, falling back to
+that exact base verdict (named, never silently dropped) whenever none of 8 new categories' real
+declared evidence is present. Precedence, most structurally certain first: `ILLEGAL_BIN_
+MISCLASSIFIED_AS_HOLE` (a data-quality override -- the hole's own `bin_kind` names an illegal/ignore
+bin, so it is not a real gap at all) > `WAIVED_HOLE_EXCLUDED` (reuses the exact `hole["waived"]`
+field `escalate_unreachable_holes()` already reads) > `REGISTER_FIELD_COMBINATION_HOLE` (a declared
+register name plus >= 2 field names) > `CROSS_COVERAGE_ONLY_UNCOVERED` (declared `cross_axes` whose
+individual categories are each already >= threshold in the real `parse_coverage_summary()` output
+the caller supplies as `parsed_summary`) > `TIMING_WINDOW_HOLE` (a transition `bin_kind` or a real
+`timing_window_ns`) > `CONFIG_SPECIFIC_HOLE` (`hit_in_configs` a real, non-empty, PROPER subset of
+`legal_configs`) > `GOLDEN_SCENARIO_STALE_EVIDENCE_HOLE` (a real `golden_scenario` capsule recorded
+for a linked pattern -- via the existing `patterns_for_coverage_id()` -- whose
+`evaluate_freshness()` reports STALE against current git HEAD) > `NO_GOLDEN_SCENARIO_EVIDENCE_
+FOR_LINKED_PATTERN` (base root-cause is INSUFFICIENT_CONSTRAINT/UNREACHABLE_STIMULUS but no golden
+capsule was EVER recorded for any linked pattern, so that expensive claim carries no corroborating
+verified-PASS history). None of the 8 fires without the hole record (or the coverage tool that
+produced it) declaring the specific real field each one needs -- an absent field is honestly "does
+not apply", never a guess.
+
+`build_hole_evidence_record()`/`build_hole_evidence_records()` are the citation half: one record per
+hole naming, for whichever classification was reached, the REAL source it came from -- always
+`requirements_registry` (`patterns_for_coverage_id()`) and `evidence_db.jobs`
+(`count_seed_attempts()`/`seed_history_available()`, the same tally the base verdict already
+computed), plus whichever `hole_declared_field` / `coverage_summary.categories` / `golden_scenario`
+citation the fired rule used. An `evidence` list carrying only the two universal entries is a
+legitimate, honestly-reported result (fell back to the base verdict with no additional evidence),
+not a failure to look.
+
+**Deliberately bounded.** This module still parses no real UCIS/urg coverage database (unchanged
+scope, stated in the module's own top-of-file docstring): every new category is derived from a
+field the hole record (or whatever coverage tool produced it) itself declares, never invented from a
+`coverage_id` string. `CROSS_COVERAGE_ONLY_UNCOVERED` additionally needs the caller to supply
+`parsed_summary` (a real `parse_coverage_summary()` result); without it, that category never fires.
+Reuses `golden_scenario.load_golden_scenarios()`/`evaluate_freshness()` and `evidence_db.
+EvidenceStore` exactly as the module's pre-existing `count_seed_attempts()`/`seed_history_
+available()` already do -- read-only, degrading to an honest empty/None result (never raising) when
+no evidence DB or `golden_scenarios` table exists. No CLI verb or `gates.py` `STAGE_GATES` entry was
+added; none was requested and `gates.py`/`cli.py` were not touched.
+
+Proven by `dv_harness_tests/test_coverage_analysis.py` (42 tests total: the original 21 untouched
+plus 21 new). Each of the 8 categories has a positive test plus a negative control (a
+register-field hole with only 1 field, a cross-axis hole whose axis is not fully covered, a
+cross-axis hole with no `parsed_summary` at all, a config hole hit in every legal configuration, a
+config hole whose "hit" set is not even a subset of "legal", and illegal-bin precedence winning over
+a simultaneous `waived` flag). Two tests drive a REAL throwaway git repo, a real `EvidenceStore`, a
+real `vip_distill.distill_sim_log()` envelope and a real `golden_scenario.record_golden_scenario()`
+capsule, proving `GOLDEN_SCENARIO_STALE_EVIDENCE_HOLE` fires only after a real RTL commit inside the
+capsule's watched paths and not before.
+
+## Register-Map Excel/CSV Extraction: Real Transcription for register_map.schema.json (2026-09-06)
+
+`register_map.schema.json`'s own description names why it existed only as a documented INPUT
+CONTRACT rather than a live extractor: "No live RAL model exists in dv_harness itself ... which is
+exactly why this is a documented input contract rather than a live extractor." A real project has
+had to hand-author that JSON from a RAL export, an IP-XACT conversion, or a programming-guide
+transcription. A repo-wide grep for `openpyxl`/`xlsx`/`Excel` before this change matched only
+unrelated document handling (`doc_extraction.py`'s suffix set, `vplan_writer`'s `.xlsx` output) --
+nothing read a register-map SPREADSHEET, which is how many real programming guides and RAL exports
+actually arrive.
+
+`dv_harness/register_excel_extract.py` is that transcription step, and only that -- it never
+invents a register. A spreadsheet row is either transcribed from real cells or its defect is
+reported and that row/field is excluded, never silently dropped and never filled with a guessed
+placeholder.
+
+**Reuse, not a second schema or a second validator.** The output SHAPE is register_map.schema.json
+itself: `to_register_map_document()` builds a document from the extracted `RegisterIR` and validates
+it through the REAL `env_manifest.validate_register_map()` -- there is no second register-map
+validator in this module. The CURRENT access-type vocabulary is read LIVE from
+`register_map.schema.json`'s own `$defs.access_kind.enum` at run time
+(`schema_access_kind_enum()`), never hardcoded, so a future additive schema widening needs no code
+change here to be picked up.
+
+**Access-type normalization is deliberately two separate questions.** `normalize_access_type()`
+folds SPELLING variants ("R/W", "Read-Write", "read write") onto one short canonical token -- a
+formatting normalization only. Whether that token is one of the schema's currently-declared eight
+values (RW/RO/WO/W1C/RW1C/RC/WC/W1S) is answered separately, against the schema file read at run
+time, so the two concerns can never be conflated. This project's real fixture spreadsheet uses
+`RS` (read-to-set: reading the field also sets it, distinct from `RC`'s read-clears) -- a real access
+semantic the schema does not yet declare. The extractor normalizes it correctly as a token but
+never coerces it onto an existing value or silently drops it: it is preserved verbatim in the
+`RegisterIR` and reported in `schema_widening_candidates`, naming exactly which register/field used
+it, so a human/integrator can decide whether to widen the schema additively. Per this task's
+file-safety scope, `register_map.schema.json` itself was NOT edited here -- the proposed additive
+enum value (`"RS"`) is recorded in this task's own report for an integrator to add, rather than
+applied unilaterally to a schema file other production modules (`env_manifest.py`,
+`build_dut_facts_registers()`) also depend on.
+
+**Bounded, honestly.** No `openpyxl` installed -> `NOT_AVAILABLE` naming the real `ImportError`,
+never a crash. Missing file, legacy binary `.xls` (openpyxl reads `.xlsx`/`.xlsm` only, not the
+pre-2007 binary format), an unreadable workbook, no recognizable header row, or missing required
+columns (`Register Name`/`Offset`) -> `NOT_AVAILABLE`/`PARSE_ERROR` with the real reason, and zero
+registers surviving parsing is `PARSE_ERROR`, never a silently-empty "success". A row-level defect
+(unparseable offset/bit-range, an access-type string that is not even a plausible mnemonic, a field
+row with no preceding register-defining row) excludes only that row/field -- recorded in
+`row_errors` -- and the file's status becomes `PARTIAL` rather than the whole extraction failing or
+a bad row being guessed into a register. Offsets/reset values require a `0x`/trailing-`h` hex form or
+plain decimal digits -- a bare un-prefixed hex string is read as decimal, a stated limitation rather
+than a guessed interpretation. `to_register_map_document()` additionally excludes any
+register/field whose access type is not in the CURRENT schema enum, or whose width is not one of the
+schema's declared widths (8/16/32/64/128), from the schema-conformant document it hands to
+`env_manifest.validate_register_map()` -- never force-mapping it onto the nearest existing value --
+while the full fact stays present in the plain `RegisterIR` this module returns, so nothing is lost,
+only kept out of what is presented as already schema-valid.
+
+There is no `dv-harness` CLI verb here (`cli.py` is out of this task's file-safety scope, per the
+same disclosed-scope convention several concurrent 2026-09-06 additions already use) -- the front
+door is `python -m dv_harness.register_excel_extract <path> [--sheet] [--block] [--base-address]
+[--json]` (exit 0 clean, 1 `PARSE_ERROR`, 2 `NOT_AVAILABLE`).
+
+Proven by `dv_harness_tests/test_register_excel_extract.py` (42 tests) against a REAL `.xlsx`
+fixture built with `openpyxl` in the test file itself (plus a CSV variant): a clean multi-register,
+multi-field extraction with mixed reset/access values and the `RS` widening-candidate detection,
+absolute-address computation from a supplied base address, and twelve negative controls (missing
+file, simulated openpyxl absence, legacy `.xls`, unsupported extension, empty workbook, missing
+required headers, all-rows-malformed, a bad offset excluding only that register, a bad bit-range
+excluding only that field, an orphan field row, unrecognized access-type text, an unknown sheet
+name) -- each proving the defect is reported and nothing fabricated. The schema-bridge is proven
+separately: the clean extraction validates against the real schema end to end, `RS`-typed content is
+excluded from the schema-conformant document while schema-legal content survives, and a corrupted
+width excludes its register with a named reason. Both real CLI exit-code paths are driven as real
+subprocesses. Ran `python -m pytest dv_harness_tests/test_register_excel_extract.py -q`: **42
+passed**.
+
+## Programming Sequence IR: Phase Ordering + Register-Dependency Validation (2026-09-06)
+
+`dv_harness/programming_sequence_ir.py` models a programming sequence as an ordered list of
+steps carrying a canonical PHASE (`INIT -> CONFIGURE -> ENABLE -> {RUN/WAIT/VERIFY/DISABLE, any
+order among themselves} -> RESET`) and validates that ordering against a register-facts input --
+the piece `init_seq.py` genuinely does not have. `init_seq.py`'s own `validate_init_seq()` checks
+schema shape and kind-conditional required fields (a `wait_condition` needs a `timeout_us`, etc.);
+it has no phase concept and no register-dependency concept at all, and `directed_test_steps()`
+resolves a step's register name to an absolute address without ever asking whether writing that
+register at that point in the sequence is itself legal. Nothing in `init_seq.py` was duplicated
+or modified to build this.
+
+**Register facts are duck-typed, deliberately not imported from `register_excel_extract.py`**
+(owned by a separate concurrent workstream). `register_facts_from_dicts()` accepts the same shape
+that module's real `RegisterIR.to_dict()` output already carries -- `name`/`offset`/`access_type`
+(the same canonical short access mnemonics `normalize_access_type()` produces: RW, RO, WO, W1C,
+RW1C, RC, WC, W1S, RS) -- plus one field neither existing module carries yet, `depends_on` (a list
+of register names that must be written earlier in the sequence). Once the two modules are wired
+together, `extract_register_map(...)`'s registers can be passed straight through with zero
+translation code, `depends_on` defaulting to `[]` for a source that carries no such column.
+
+**Three independent checks, over a real DAG and a real canonical phase order, not merely a shape
+check.** (1) Phase-order monotonicity against the canonical rank table --
+`PHASE_ORDER_VIOLATION`/`UNKNOWN_PHASE`. (2) Access-type legality per step action (`write` against
+a register whose access_type is not write-legal, `read` against one not read-legal) --
+`ACCESS_TYPE_MISMATCH`/`UNKNOWN_REGISTER`/`UNKNOWN_ACCESS_TYPE` (the last a WARNING, never assumed
+illegal for an access mnemonic this module has simply never seen). (3) Register dependency
+ordering from each fact's own `depends_on` -- a real DFS cycle-detection pass over the facts'
+dependency graph reports a circular claim once (`DEPENDENCY_CYCLE`), a dependency naming a
+register absent from the facts entirely is `DANGLING_DEPENDENCY`, and a register written before
+its own declared dependency was written earlier in THIS sequence is
+`DEPENDENCY_NOT_YET_SATISFIED`.
+
+**Evidence Truth Rule, applied precisely.** No register facts supplied -> `NOT_AVAILABLE` (never a
+silent pass claiming a check that never ran); an IR with zero steps -> `NOT_APPLICABLE`. Only with
+real facts and real steps does a genuine `ORDER_VALID`/`ORDER_INVALID` verdict become possible.
+The vocabulary is deliberately NOT `PASS`/`FAIL` (both real `models.Status` members) --
+`assert_no_verification_verdict_vocabulary()` checks this module's status and finding codes share
+no token with `models.Status` at import time, the same discipline
+`dependency_supply_chain.py`/`capability_evolution.py`/`verification_strategy.py` already hold.
+
+**Deliberately bounded, and stated rather than implied closed.** It validates ORDERING/
+DEPENDENCY/ACCESS-LEGALITY only -- it does not resolve absolute addresses (that is
+`init_seq.py`'s `directed_test_steps()` job) and runs no simulation. It is a standalone module
+with no `gates.py`/`cli.py` wiring yet (file-safety scope for this batch): ad hoc via
+`python -m dv_harness.programming_sequence_ir validate --sequence <file> [--facts <file>]
+[--json]`. If a stage gate or CLI verb is wanted, `gates.py`'s STAGE_GATES has no entry for this
+today; a candidate entry would run this module's `execute_verb()` against the project's own
+sequence/facts artifacts once those exist.
+
+Proven by `dv_harness_tests/test_programming_sequence_ir.py` (25 tests, no mocks): a clean 7-step
+fixture with a real 4-register `depends_on` chain passes with zero findings; both honest-absence
+statuses are exercised; 8 negative controls each mutate the clean fixture one specific way
+(phase regression, unknown phase, unknown register, write-to-RO, read-from-WO, unknown-access-type
+as warning-not-fail, unsatisfied dependency, dangling dependency, a real dependency cycle reported
+exactly once); 6 construction-time refusals (non-contiguous indices, a non-wait step missing its
+register, a bad action, a fact with no name, a non-list `depends_on`, a document with no name);
+and 3 tests drive the real CLI as a subprocess asserting exit 0/1/2.
+
+## Interrupt / DMA / Clock-Reset Fact Extraction from Real Source Text (2026-09-06)
+
+`dv_harness/interrupt_dma_clock_reset_extraction.py` extracts interrupt architecture (source
+list; priority/masking scheme *if stated*), DMA architecture (channel count; descriptor model
+*if stated*), and a clock/reset FACT EXTENSION, all read from whatever real spec/programming-
+guide/RTL text a caller actually supplies -- never invented. The gap: nothing in this repo read
+raw RTL/spec prose for these three facts; `env_manifest.build_dut_facts_clock_reset()` reads a
+`soc_arch_map.schema.json` INPUT CONTRACT (a human-authored file), explicitly declaring itself
+an input contract and not an extractor because "dv_harness owns no SoC to extract from". This
+module is the sibling extractor that docstring points at: it reads real supplied text directly.
+
+**Shape-compatible, not shared code.** Reset entries carry the SAME field names as
+`dut_facts.clock_reset`'s resets (`name`/`active_level`/`synchronous`/`clock`/`clock_resolved`/
+`evidence`/`description`), independently re-derived here (never imported) since the source
+differs entirely -- RTL/spec TEXT here, `soc_arch_map.json` there. `active_level` is likewise
+never defaulted: a reset is reported only when its sensitivity-list or first-`if` idiom proves a
+polarity.
+
+**Line-scan, not a parser, mirroring `vip_symbol_index.py`'s discipline rather than requiring a
+verible binary** (a spec/programming-guide document is not SystemVerilog at all, so a
+parser-only approach could never read the prose half of this task). Interrupt sources come from
+RTL port declarations whose name matches an irq/intr/interrupt convention; DMA channel count from
+an RTL parameter named for a channel count or an explicit "N DMA channels" sentence; the
+descriptor model from a real `typedef struct packed {...} <name>;` whose closing name contains
+"desc"; clock/reset from `always`/`always_ff` sensitivity lists (an async reset's edge appears in
+the sensitivity list itself) and, for a synchronous idiom, the block's own bounded first `if`.
+
+**Priority and masking are bounded to EXPLICIT statement forms on purpose** -- an ordered `>`
+chain, a "X has the highest/lowest priority" sentence, an explicit mask/enable-register sentence
+-- and are NEVER inferred from the interrupt source list or a register's name, per this task's own
+"never infer a priority scheme or channel count that is not written down" instruction and
+CLAUDE.md's No Golden-Reference Content Mining / Evidence Truth Rule. Every one of the six facets
+(interrupt sources, priority scheme, masking scheme, DMA channel count, DMA descriptor model,
+clock/reset facts) carries its OWN status/reason, so one facet's absence never masks another's
+presence, and a missing/unreadable source file is recorded rather than raised.
+
+Reachable as `extract_interrupt_dma_clock_reset(source_paths)` / `python -m
+dv_harness.interrupt_dma_clock_reset_extraction extract --sources <f> [<f> ...] [--json]` (exit 0
+LOADED, 2 NOT_AVAILABLE). No `dv-harness` CLI verb was added (out of this task's file-safety
+scope, which forbade editing `cli.py`) -- see the suggested snippet for the integrator.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It is a regex line-scan, not
+a compiler: preprocessor conditionals, multi-line macro expansions, and continuation forms its
+patterns do not anticipate contribute no citation, never a wrong one. (2) Priority/masking
+extraction only recognises three literal English sentence shapes; a differently-worded but
+equally explicit statement is honestly NOT_AVAILABLE rather than guessed at. (3) Reset
+synchronicity/polarity is decided only from the two RTL shapes a sensitivity list and its
+immediate first `if` can prove; any other idiom is skipped, never guessed at either polarity.
+(4) Naming-convention matching (irq/intr/interrupt; rst/reset) is substring-based against a fixed
+vocabulary; a differently-named signal is honestly NOT_AVAILABLE rather than guessed from a wider
+synonym list this project has no evidence for. (5) There is deliberately no stage gate: this
+module reports facts and makes no PASS/FAIL verdict, the same disclosed-bound several sibling
+extractors (`golden_scenario.py`, `power_intent.py`) already state.
+
+Proven by `dv_harness_tests/test_interrupt_dma_clock_reset_extraction.py` (11 tests) against
+real synthetic fixtures under `dv_harness_tests/fixtures/interrupt_dma_clock_reset/` (their own
+headers say they are fixtures, not any real DUT/spec): a positive path asserting every facet's
+exact extracted value and file:line evidence, and negative controls proving no interrupt ports
+reports NOT_AVAILABLE rather than an empty pass, a document with no priority/masking/DMA language
+reports every facet independently NOT_AVAILABLE, a reset signal name that does not match the
+reset naming convention is never guessed as a reset even though it is the block's literal first
+`if` (while the real clock fact is still reported), a mutated fixture with the channel-count
+parameter removed reports that facet NOT_AVAILABLE while the untouched descriptor model still
+loads, and missing/absent source files are handled honestly. Both real CLI invocations are driven
+as subprocesses.
+
+## PHY Model Behavior IR: Documented Architecture Facts, Never Silicon (2026-09-06)
+
+`dv_harness/phy_boundary.py` already answers a STRUCTURAL question from real RTL: at which layer
+(serial vs. parallel) a bind may mount. It carries no notion of the PHY's own DOCUMENTED
+behaviour -- what training/link-startup states a real PHY specification names, what it actually
+says about TX/RX capability, what power states it names. Nothing in this repository read a PHY
+spec/model document for those facts before this module. `dv_harness/phy_model_behavior_ir.py` is
+that extractor, and it reuses rather than reinvents on both sides of the fact it adds:
+
+- The PHY DOCUMENT is never opened here as a raw PDF/text scan. `dv_harness/vip_user_guide_distill.py`
+  is this repo's one offline document distiller (real `pypdf` extraction, or pre-extracted text);
+  this module consumes the `.reference.json` record + `.fulltext.txt` file that distiller already
+  produces for a real PHY spec/model document (`doc_kind="protocol_spec"`/`"programming_guide"`) --
+  one document-opening code path in this package, not two, and the Context Budget rule ("never
+  loaded into runtime context") stays enforced structurally by staying off it.
+- The RTL-derived serial/parallel BOUNDARY is read, not re-derived. `dv_harness/phy_boundary.py`
+  (read-only -- never edited by this module) already answers "at which layer may a bind mount";
+  its own JSON output is accepted verbatim as the optional `phy_boundary_doc` input, validated
+  with its own `validate_phy_boundary()`, and merged in as `boundary_context`. No second RTL/
+  port-width classifier was written.
+
+**Extraction is STRUCTURAL, never semantic.** A small, disclosed set of section-marker regexes
+(generic across protocols -- "link training", "transmitter", "receiver", "power state", the same
+genericity discipline `phy_boundary.py`'s own `_STRONG_CORE_RE`/`_WEAK_CORE_RE` token matching
+already applies to RTL port names) decides which document SECTION a line sits in, and a small set
+of line-shape patterns ("ID: description" / "ID&nbsp;&nbsp;description" for named facts, a
+bulleted/numbered list item for capability text) decides which lines inside that section are
+candidate facts. The current section resets at EVERY heading-like line, matched or not -- proven
+by a test that an unrelated, recognized heading's content never leaks into the previous section's
+fact list. Nothing here asserts what a training stage, a TX capability, or a power state IS for
+any protocol; it only locates where the DOCUMENT ITSELF already says so, with a real
+`document + fulltext_path + line` citation on every item that a reader can open and verify.
+
+**PHY MODEL BEHAVIOR IS NOT SILICON**, stated once and carried onto every document this module
+produces (EXTRACTED or NOT_AVAILABLE alike) via a fixed `disclosure` field: neither a digital PHY
+model nor specification prose demonstrates analog/electrical correctness of a real PHY
+implementation -- timing margins, signal integrity, jitter, voltage levels, and eye diagrams are
+NOT verified, measured, or claimed correct by anything in this artifact.
+
+**Absent PHY doc/model reports NOT_AVAILABLE for every field, never a guess.** Called with no
+document at all, `extract_phy_model_behavior_ir()` returns a schema-valid document whose top-level
+`status` and all four fact fields (`training_link_startup_stages`, `tx_capabilities`,
+`rx_capabilities`, `power_states`) are NOT_AVAILABLE with a real reason. A document that IS
+supplied but whose text contains no recognizable section for a category reports
+`NO_MARKER_SECTION_DETECTED` -- kept honestly distinct from `MARKER_SECTION_FOUND_NO_ITEMS` (the
+section exists, but no item-shaped line was found inside it); neither is ever a false `FOUND`.
+
+New schema `dv_harness/schemas/phy_model_behavior_ir.schema.json` (Draft 2020-12), following
+`phy_boundary.py`'s own fail-closed `PhyModelBehaviorIRValidationError` / deterministic
+`save`/`load` convention.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This module never opens a
+raw PDF/text file itself -- a caller distils the real PHY document with
+`vip_user_guide_distill.distill_user_guide()` first. (2) The section-marker vocabulary is a small,
+fixed, generic set; a document using an entirely different section-naming convention honestly
+reports `NO_MARKER_SECTION_DETECTED`. (3) The heading detector recognizes only a numbered `X.Y`
+section-number pattern or a short ALL-CAPS line -- proven (`test_a_bare_numbered_list_item_is_not_
+mistaken_for_a_heading`) to NOT mistake a bare numbered list item ("1. Detect") for a heading, the
+false-positive direction that would wrongly cut a real section's items off. (4) Extraction is
+line-based; a fact expressed as free multi-line prose with no bullet/"ID: description" shape is
+honestly not captured rather than paraphrased. (5) It reads and reports only -- no build, no
+simulation, no approval, no stage gate, and no human-approval/governance mechanism is touched.
+
+Proven by `dv_harness_tests/test_phy_model_behavior_ir.py` (22 tests) against a real
+`vip_user_guide_distill.distill_user_guide()` call over a synthetic `.txt` PHY-spec fixture whose
+own text states it is a test fixture describing no real IP, and real
+`phy_boundary.extract_phy_boundary()` calls for the `boundary_context` tests. Positive path: all
+four categories found with correct names/text, every citation verified against the real full-text
+file. Negative controls: no document supplied, a malformed reference-record dict, a missing
+reference-record path, a missing full-text file on disk, a tampered full-text file (hash-mismatch
+detected without blocking extraction), a document with no matching section anywhere, a document
+with a matching section but no item lines (shown distinct from the "no section at all" case), a
+bare numbered list item proven not mistaken for a heading, the anti-leakage property across a
+following unrelated recognized heading, an invalid `phy_boundary_doc` refused rather than trusted,
+and a schema-valid-but-internally-`NOT_AVAILABLE` `phy_boundary_doc` carried through honestly
+rather than silently dropped. `python -m pytest dv_harness_tests/test_phy_model_behavior_ir.py -q`
+-> `22 passed`.
+
+## Design Architecture IR: Full Instance Tree + Bounded FSM Literal Scan (2026-09-06)
+
+`dv_harness/verible_parser.py` already extracts, per RTL FILE, each module's ports/parameters/
+module-level signals plus its instantiations and continuous assigns -- its own docstring: "module/
+port/signal hierarchy, not a full elaboration/semantic model". Nothing in this repo turned that
+per-FILE fact set into one architecture-wide picture: a MULTI-FILE module registry, a full recursive
+INSTANCE TREE (not merely one module's own flat instance list, which is all `env_manifest.py`'s
+`build_dut_facts_rtl()` -- the closest existing consumer -- ever assembles), and any notion of a
+module's internal FSM/control-flow shape. Re-verified by grep before building: no module or symbol
+named `ArchitectureIR`/`instance_tree`/`fsm_candidate` existed anywhere.
+
+`dv_harness/design_architecture_ir.py` is both real, tractable extensions, built entirely on TOP of
+verible_parser.py's own output (a read-only import -- this module never re-parses SystemVerilog and
+never re-implements verible_parser's tree-walk):
+
+- **Full instance tree.** `build_module_registry()` folds every parsed file's modules into one
+  name-keyed registry (first occurrence wins, deterministically by sorted file_path; a module name
+  declared in more than one file is reported in `duplicate_modules`, never silently overwritten --
+  this is intentionally NOT `system_build_proof.py`'s real system-merge-collision analysis, which is
+  a different, already-real mechanism this module does not duplicate or extend). `build_instance_tree()`
+  then recursively resolves every instantiation's `module_name` against that registry, all the way
+  down, carrying each level's real ports/parameters and this instantiation's real port connections.
+  An instance whose module was not supplied to this build (an external module, a VIP BFM, a std cell)
+  is an honest, common, EXPECTED fact -- reported as an unresolved leaf naming the real reason, never
+  an error and never silently dropped. A genuine instantiation CYCLE (A instantiates B, B instantiates
+  A -- writable, if unusual, RTL) is detected by tracking the ancestor path and stopped rather than
+  recursed forever.
+- **Best-effort FSM/control-flow literal scan -- deliberately NOT elaboration.**
+  `extract_fsm_candidates()` is a regex/light-parse scan over the raw SOURCE TEXT of one module --
+  text verible_parser.py already isolated as that module's own byte span via its public `node_span()`
+  -- looking for `always @(posedge <clk>...)` blocks containing a `case` statement. It is not a
+  second SystemVerilog parser: no generate/`ifdef resolution, no expression evaluation, no proof
+  that the case-keyed identifier is really a register beyond "it is (or is not) among this module's
+  own verible-extracted module-level signal declarations". Every candidate carries an explicit
+  status from a closed vocabulary -- `FSM_EXTRACTION_RESOLVED` only when the case-key is a single
+  plain identifier that IS a declared module-level signal, every non-default case item has exactly
+  one distinct resolvable self-assignment target, and the case block actually closed with a real
+  `endcase` this scan could find; anything short of that is `FSM_EXTRACTION_PARTIAL` (an
+  ambiguity/registration problem) or `FSM_EXTRACTION_UNPARSEABLE` (this scan could not close the
+  block it found), and a posedge block with no case in its window is `NOT_APPLICABLE`. A module with
+  no matching pattern at all reports `NOT_AVAILABLE` with a real reason. A guessed state machine is
+  never presented as a confirmed one. `//`/`/* */` comments and `"..."` string literals are blanked
+  out (length- and newline-preserving) before any regex runs, so a stray `case`/`endcase` spelled
+  inside a comment or string cannot corrupt the depth-counted matching -- a real false-positive class
+  for a literal scan, and one this module is explicit about handling rather than ignoring.
+
+Front door: `python -m dv_harness.design_architecture_ir --rtl <f> [--rtl <f> ...] [--top-module NAME]
+[--out ir.json] [--json]` (`execute_verb()`, the same shared-implementation convention
+`power-intent`/`golden-scenario` use). There is no `dv-harness` CLI verb for this yet -- see the
+disclosed residual below. Exit 0 the IR was built (at least one module parsed), 2 NOT_AVAILABLE (no
+files supplied, or nothing could be parsed from any of them).
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This is DECLARATION/
+PATTERN-LEVEL extraction, not elaboration-time proof: no generate/`ifdef condition is evaluated, no
+parameter value is resolved, and a signal declared inside a procedural block is invisible to the FSM
+scan for the same reason verible_parser.py's own signal extraction deliberately does not surface it.
+(2) Only the FIRST `case`/`casex`/`casez` statement in each `always @(posedge ...)` block's own
+best-effort window (bounded by the next `always` header or the module's end) is scanned; a second,
+sibling case in the same always block is not examined. (3) Case-item labels are matched at the start
+of a line for identifiers/`default`/sized literals only; a comma-joined multi-label line is captured
+as one combined label rather than split. (4) `duplicate_modules` is a name-collision report only, not
+a merge-collision analysis -- `system_build_proof.py` already owns that different, deeper question.
+(5) It decides, approves and arbitrates nothing: no build, gate, approval, or stage gate of any kind
+-- reading is the only act, matching `golden_scenario.py`/`power_intent.py`'s own precedent that a
+pure extraction module carries deliberately no stage gate.
+
+Proven by `dv_harness_tests/test_design_architecture_ir.py` (30 tests). The FSM literal scan is a
+PURE function tested directly against hand-written SystemVerilog snippets (no verible dependency):
+a clean resolved FSM, plus real negative controls for every one of the four non-RESOLVED statuses
+(ambiguous next-state, unresolved state, missing endcase, a case key that is neither declared nor a
+plain identifier) and a comment/string-literal robustness control (a fake `case`/`endcase` spelled
+inside a `//`/`/* */` comment and a string literal does not corrupt the real block's depth count).
+Everything needing real module boundaries runs the REAL `verible-verilog-syntax` subprocess (skipped,
+never faked, on a machine without it): a real 3-level instance hierarchy (leaf/mid/top) with a real
+external black-box instance and a real FSM in the top module resolves end to end -- correct depths,
+ports, connections, and FSM states/transitions/line numbers read off the real verible-parsed span --
+plus real controls for a duplicate module name across two files, a genuine mutual-instantiation cycle
+(proven not to recurse forever), a `top_module` override and its unknown-name error, a real syntax
+error in one file among several (isolated, not fatal to the others), an unrunnable verible binary, an
+unreadable file, no files supplied, and the CLI subprocess (`--json`, `--out`, a missing required
+argument, and an unknown `--top-module` exiting 2).
+
+## Design Knowledge Correlation: Cross-Source Conflict / Gap / Doc-vs-Impl (2026-09-06)
+
+A generic cross-source correlation engine over IR-shaped "design knowledge" facts. Every existing
+correlator in this repo answers a narrower question against one specific real producer's own shape:
+`dut_evidence_correlation.py` joins ONE caller-declared item against `env_manifest.py`'s `dut_facts`
+layers; `env_manifest.py`'s own `testplan_correspondence` is a fixed three-way join of ONE project's
+testlist/vPlan/coverage-model triple; `source_authority.py` decides which of TWO already-identified
+conflicting VALUES wins given a 9-level authority order, but never DISCOVERS a conflict on its own.
+Nothing took an arbitrary NUMBER of arbitrarily-shaped knowledge sources and found where they agree,
+disagree, or leave a gap. `dv_harness/design_knowledge_correlation.py` is that general engine.
+
+**Per this batch's file-safety scope, it imports nothing from `dv_harness` itself.** A "source" is a
+plain dict (`source_id`, `source_kind` -- free text, purely descriptive -- `role`, `facts`), and
+`role` is one of `SPEC_DECLARATION` / `IMPLEMENTATION_EVIDENCE` / `OTHER`, deliberately **declared by
+the caller** rather than guessed from `source_kind` text (guessing would be exactly the fabricated
+semantics the Evidence Truth Rule forbids). A future caller sitting in front of a real producer would
+build this shape from that producer's own real output -- one fact per `env_manifest.py` `dut_facts`
+entry (role IMPLEMENTATION_EVIDENCE), one per a real `requirement_contract.py`-validated record's
+`feature`/`expected_behavior` field (role SPEC_DECLARATION), one per a vPlan item (role OTHER) --
+this module does not parse any of those itself, the same extraction-shaped boundary
+`dut_evidence_correlation.py` and `doc_extraction_fanout.py` already draw around requirement prose.
+
+**Three finding categories, plus one assembled artifact:**
+- **CONFLICT** -- two or more sources assert different values for the same `fact_key`. The join is
+  a literal exact-string `fact_key` match, never fuzzy (the same discipline
+  `env_topology.testplan_correspondence` already states the reason for). Values are compared by a
+  representation-tolerant, substance-strict comparator (`"HIGH"`==`"high"`, `100`==`100.0`,
+  `True`=="true"`, but `100` vs `200` is a real conflict), clustered into equivalence classes; more
+  than one class is a CONFLICT, reported with every distinct value and its citing source(s). **No
+  arbitration**: this module never decides which side is right -- that is
+  `source_authority.resolve_conflict()`'s job (a real, existing, narrower mechanism deliberately left
+  untouched and not imported here), or a human's.
+- **GAP** -- a fact the caller explicitly declared EXPECTED (`expected_facts`, each carrying a
+  `reason`/`required_by` citation) that no supplied source covers at all. Without a declared
+  expectation, "a fact no source covers" is undecidable (no enumerated universe of facts a design
+  SHOULD have exists), the same reason `config_variant_coverage.py` requires a caller-declared
+  dimension space -- `correlate()` with no `expected_facts` reports zero gaps, honestly, rather than
+  fabricating an expectation.
+- **DOCUMENTED_VS_IMPLEMENTED** -- a fact_key declared by a SPEC_DECLARATION-role source with no
+  IMPLEMENTATION_EVIDENCE-role source ever asserting it (`..._SPEC_ONLY`), or the reverse
+  (`..._IMPLEMENTATION_ONLY`). It is a PRESENCE check on `role`, not a values check: a fact both
+  sides spoke to, whose values then disagree, is reported once, as a CONFLICT -- the two categories
+  are kept disjoint so one real disagreement is never counted twice. OTHER-role-only coverage yields
+  no doc-vs-impl finding either way, since this module cannot judge a documentation question about a
+  fact neither canonical side spoke to.
+- **Design Knowledge Graph** -- every source and fact assembled into one graph (`SOURCE` / `FACT`
+  nodes, `ASSERTS` edges), with **per-node provenance**: each FACT node embeds its own full
+  `provenance` list (which source, what value, what evidence_ref, what role) inline, so a reader does
+  not have to walk the edge list to see who said what, plus a `consensus` field
+  (`SINGLE_SOURCE`/`AGREEMENT`/`CONFLICT`) computed from the same clustering the CONFLICT detector
+  uses.
+
+Front door: `correlate(sources, expected_facts=None)` (the module's one entry point; raises
+`DesignKnowledgeCorrelationError` -- a fail-closed, caller-usage error, never a silent skip -- on a
+malformed source/fact/expected-fact), `build_knowledge_graph(sources)` (independently callable), and
+`python -m dv_harness.design_knowledge_correlation --sources <file.json> [--expected-facts <file.json>]
+[--json]` (exit 0 clean, 1 a real finding, 2 malformed input). No `dv-harness` CLI verb was added
+(`cli.py` is out of this task's file-safety scope); a suggested verb entry is available for an
+integrator to add.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) No arbitration, by design --
+CONFLICT reports the disagreement and cites both sides' evidence; deciding which is right is a human
+decision or `source_authority.resolve_conflict()`'s. (2) GAP detection is gated entirely on a
+caller-declared `expected_facts` list; this module invents no expectation of its own. (3)
+DOCUMENTED_VS_IMPLEMENTED is a role-presence check, not a semantic one -- a fact asserted only by
+OTHER-role sources is never judged. (4) The join key (`fact_key`) is matched by exact string equality
+only; no fuzzy/semantic matching, and no unit conversion (100 MHz vs 0.1 GHz reads as a genuine
+conflict) -- normalizing heterogeneous naming/units across real producers is a separate,
+extraction-shaped problem this module does not attempt. (5) It decides nothing beyond the three
+finding categories and the graph: no build, no job, no approval, no stage gate, no memory write, and
+no I/O beyond the optional CLI reading the two files the caller names. (6) It generates nothing --
+no VIP API, no RTL content, no protocol behavior -- it only correlates facts a caller already
+extracted.
+
+Proven by `dv_harness_tests/test_design_knowledge_correlation.py` (27 tests) against small, synthetic
+IR-shaped fixtures constructed directly in the test file (never another module's real output, since
+the whole point is to prove the correlation logic itself): a clean fully-agreeing correlation reports
+zero findings and correct per-node provenance; the value comparator is proven representation-tolerant
+(case/whitespace/numeric-repr/bool-as-string) but substance-strict (a real 100-vs-200 disagreement is
+still caught); CONFLICT is proven on a real two-way and a real three-way value split; GAP is proven
+present only when declared-expected and absent, and absent when no expectation was declared or when
+any source covers it; both DOCUMENTED_VS_IMPLEMENTED directions are proven, including the negative
+control that both-sides-present-but-disagreeing is CONFLICT and never additionally a doc-vs-impl
+finding, and that OTHER-role-only coverage yields neither; and nine negative controls drive malformed
+input (empty/non-list sources, duplicate source_id, missing fact_key/value, invalid role, malformed
+expected_facts) to a real `DesignKnowledgeCorrelationError` rather than a silent pass. The CLI is
+driven as four real subprocesses (clean/conflict/malformed/expected-facts-gap), asserting real exit
+codes and real JSON output.
+
+## Spec Intelligence: SCHEMA + Validation/Re-Derivation Gate (2026-09-06)
+
+Turning protocol prose into requirements is inherently an LLM-reading-a-document act, not
+something this codebase can compute the way `verible_parser.py` computes RTL facts. Building a
+fake "spec understander" would be exactly the fabrication the Evidence Truth Rule forbids.
+`dv_harness/spec_intelligence.py` is therefore the CONTRACT an extraction result must satisfy to
+be trusted downstream, not an extractor: a real, mechanical document structure index (SpecMap),
+plus a real, mechanical validation/re-derivation gate over whatever an agent (or a future
+extractor) claims it found about a set of atomic requirements and the relations between them --
+the same discipline `requirement_contract.py` already applies to one requirement record, lifted
+to a SET plus its cross-requirement relations.
+
+**Two vocabularies reused, not re-invented, exactly as the task required.** Every atomic
+requirement IS a `requirement_contract.py` canonical-contract record
+(`contract_schema_version` required); it is validated by `validate_requirement_contract()` and
+analysed by `analyze_requirement_contract()` -- imported and called, never re-typed -- so its
+COMPLETE/PARTIAL/AMBIGUOUS/CONTRADICTORY/UNKNOWN status is that module's own, re-derived by that
+module's own `derive_status()` (a fully hand-mutated fixture reproduces `STATUS_OVERCLAIMED`
+through this module to prove the call is real, not restated). The extraction batch declares
+`evidence_provenance` in `evidence_provenance.py`'s own AGENT_SELF_ATTESTED/TOOL_DERIVED/
+SIMULATION_DERIVED vocabulary -- the field name, the accepted-values tuple and the
+independently-derived set are all imported, never re-spelled. Reading a spec is, honestly, almost
+always AGENT_SELF_ATTESTED; that is accepted for free, and a TOOL_DERIVED/SIMULATION_DERIVED claim
+costs a real on-disk artifact under the project root, exactly as that module's own six-gate
+enforcement charges for an independently-derived claim.
+
+**SpecMap layers on `vip_user_guide_distill.py`; it performs no PDF/text extraction of its own.**
+That module is this repo's one real document distiller and already produces a numbered-heading
+section index with real page/char-offset evidence. `build_spec_map()` reads back that module's
+OWN rendered `.reference.md` section table (never re-running heading detection) and adds two new
+mechanical scans over the already-produced full-text extract: `Table N.M` caption locations, and a
+keyword flag on which section headings are register chapters. A SpecMap therefore carries
+sections/tables/register-chapter LOCATIONS only -- headings, table captions, page numbers,
+character offsets -- and never one sentence of the document's own body text, the same discipline
+`vip_symbol_index.py` keeps against retaining method bodies (asserted directly: the JSON-dumped
+SpecMap record is checked to contain none of the fixture's own prose sentences).
+
+**Two genuinely new vocabularies, because nothing in this repo names either.** Relation kinds
+(`DUPLICATES`/`REFINES`/`EXTENDS`/`CONFLICTS_WITH`) and derivation tags (`EXPLICIT`/
+`IMPLICIT_HIGH_CONFIDENCE`/`IMPLICIT_REVIEW_REQUIRED`). Both are RE-DERIVED, not trusted:
+- A declared `DUPLICATES`/undeclared-duplicate claim is cross-checked against the requirements'
+  own RESOLVED `feature`/`stimulus`/`expected_result` text via `difflib.SequenceMatcher`
+  (`requirement_similarity()`, gated through `requirement_contract.is_resolved()` so "nothing
+  resolved to compare" is `None`, never a fabricated `0.0`). A `DUPLICATES` claim with low
+  similarity is flagged (`DUPLICATES_SIMILARITY_LOW`); a near-identical undeclared pair is flagged
+  the other way (`POSSIBLE_UNDECLARED_DUPLICATE_PAIR`, guarded by `MAX_DEDUP_SCAN_SIZE` so the
+  O(n^2) scan is skipped-and-said-so rather than unbounded on a large batch).
+- A `CONFLICTS_WITH` relation is cross-checked against the underlying contract's own re-derived
+  status: it must correspond to at least one side deriving `CONTRADICTORY`
+  (`requirement_contract.derive_status()`, called), or it is reported as filed nowhere the
+  contract itself would show it (`CONFLICT_RELATION_NOT_FILED_IN_CONTRACT`).
+- `IMPLICIT_REVIEW_REQUIRED` requires the underlying requirement to itself derive AMBIGUOUS or
+  CONTRADICTORY through `derive_status()` -- i.e. a real, filed, unresolved ambiguity/contradiction
+  in `requirement_contract.py`'s own `ambiguities`/`contradictions` arrays, never a second
+  free-floating "open question" flag nobody else can see. `EXPLICIT` requires a real verbatim
+  `source.quote`; both IMPLICIT_* values require a `derivation_basis` naming what explicit
+  material the inference rests on; `IMPLICIT_HIGH_CONFIDENCE` requires the contract's own
+  `confidence` field to actually say HIGH/MEDIUM.
+- Same-pair contradictory declarations (`DUPLICATES` and `CONFLICTS_WITH` on one pair) and
+  self-reference/unknown-endpoint relations are refused as ERRORs.
+
+**Dependency graph is genuinely new code** (no generic DAG utility exists in this repo for this
+shape): nodes are validated requirement ids, edges are the four relation kinds, and only the two
+HIERARCHICAL kinds (`REFINES`/`EXTENDS`) feed cycle detection and a deterministic topological order
+(Kahn's algorithm) -- `DUPLICATES`/`CONFLICTS_WITH` are symmetric facts about a pair and are
+reported as edges but never fed into ordering, proven by a dedicated negative control.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This module extracts nothing
+from a spec document: every atomic-requirement/relation test in its suite hand-constructs the
+extraction document, exactly as its own docstring requires, because claiming this code
+"understood" a spec would be the fabrication the Evidence Truth Rule forbids. (2) It ARBITRATES
+nothing: a CONTRADICTORY/CONFLICTS_WITH pair stops there, the same ARBITRATION boundary
+`requirement_contract.py` already keeps. (3) There is deliberately no stage gate and no
+`dv-harness` CLI verb yet (`cli.py`/`gates.py` are reserved for the integration step) -- the ad hoc
+front door is `python -m dv_harness.spec_intelligence spec-map|analyze`. (4) The similarity
+thresholds (`DUPLICATE_SIMILARITY_LOW_THRESHOLD = 0.5`, `POSSIBLE_UNDECLARED_DUPLICATE_THRESHOLD =
+0.92`) are stated heuristics, not measured constants -- this repo has no labelled corpus of true
+duplicate/non-duplicate requirement pairs to calibrate them against.
+
+Proven by `dv_harness_tests/test_spec_intelligence.py` (54 tests): a positive control (a clean
+hand-built extraction document passes with zero findings), real negative controls for every rule
+above (missing/invalid/unresolvable evidence provenance in both directions, schema-invalid and
+non-contract-shaped atomic records, a real `requirement_contract.py` `STATUS_OVERCLAIMED` surfacing
+through this module unmodified, every relation rule, a real detected REFINES cycle versus a real
+acyclic topological order, and the dedup similarity checks in both directions), and the ONE
+genuinely mechanical half -- SpecMap -- driven end to end over real synthetic `.txt` fixtures
+through the real `vip_user_guide_distill.distill_user_guide()`, including a document with no
+headings at all (honest empty structure) and a refusal when a real producer's own output file is
+missing from disk. Both CLI entry points are driven as real subprocesses with their exit codes
+asserted.
+
+## Verification Intent IR: the Semantic Bridge Between a Requirement and a Generator (2026-09-06)
+
+Master-prompt gap: nothing in this repo turned a `requirement_contract.py`-shaped requirement into
+the INTERPRETIVE shape a downstream generator (vPlan writer, scenario planner, checker/coverage
+generator) actually needs -- what is the test's objective, what stimulus does it imply, what should
+check it, what should be covered -- let alone a per-domain reading across the structural categories
+a real DV requirement routinely cuts across (state-machine, register/CSR, interrupt, reset/clock,
+error/recovery, low-power, performance). A repo-wide grep for `verification_intent_ir` /
+`VerificationIntentIR` / "semantic bridge" matched nothing. `dv_harness/verification_intent_ir.py` is
+that bridge, one record per requirement, and it is deliberately NOT a requirement extractor, a spec
+parser, a scenario generator, or a simulation runner -- it reads one requirement record plus whatever
+real DUT evidence a caller supplies and emits an interpretive record, never a generated artifact.
+
+**REUSE OVER REINVENT, one producer per domain, four of seven with real DUT evidence wired in.**
+`state_machine` reads `protocol_capability.capability_for()`/`derive_status()` -- the real,
+code-derived answer to which protocols carry a state-graph model module (e.g. PCIe's
+`ltssm_top_level_state_graph`) -- never a second state model. `register_csr` reads
+`sys_regmap.required_preconditions()`/`unverifiable_bits()`, scoped to the requirement's own
+`protocol`/`feature` as the governed interface -- the same mode-determining-bit classification
+`init_seq.py`'s Gate-2 precondition check already uses. `interrupt` and `reset_clock` share ONE real
+`interrupt_dma_clock_reset_extraction.extract_interrupt_dma_clock_reset()` call over caller-supplied
+RTL/spec text, reading its own `interrupt_architecture`/`clock_reset_extension` blocks verbatim.
+`low_power` DIRECTLY reuses `power_intent.py`'s UPF model: a caller may hand in an already-computed
+`analyze_power_intent()` report, or `upf_paths` for this module to call the SAME two real functions
+itself -- never a re-derivation of power facts. Its `dut_evidence_status` is `power_intent`'s own
+PASS/FAIL/NOT_AVAILABLE value, **preserved verbatim rather than translated** into this module's own
+vocabulary (disclosed via a `status_vocabulary_source` field naming the different vocabulary), because
+section 224's own UNSUPPORTED/UNKNOWN framing is exactly what its NOT_AVAILABLE already means and
+remapping it would blur that distinction rather than keep it honest.
+
+**`performance` and `error_recovery` have NO evidence producer anywhere in this harness**, and say
+so rather than guessing: no module here derives a throughput/latency/bandwidth target or an
+acceptable-error-rate/recovery-time bound from any real source, so both domains always report
+`PERFORMANCE_TARGET_UNKNOWN` / `ERROR_TARGET_UNKNOWN` with an empty `dut_evidence` and no source --
+proven (by mutation, not by inspection) to stay that way even when every OTHER domain's real evidence
+is supplied in the same call, so no combination of real inputs can accidentally manufacture a target.
+
+**Every field is `evidence_provenance.AGENT_SELF_ATTESTED`, and it is not a caller option.** Turning
+a requirement's prose into "drive this, check that, cover this" is an interpretive act, not a
+measurement -- `evidence_provenance.py`'s vocabulary is imported (never re-typed), and
+`VerificationIntentIR.__post_init__()` hardcodes the field and its caveat text regardless of what a
+caller passes, because this record's interpretive nature is a fact about what the module IS. That is
+a DIFFERENT question from each domain's own DUT evidence: where a real producer exists, that
+producer's own real facts and own real status vocabulary are carried through unchanged -- the
+INTERPRETATION of what those facts mean for a test stays self-attested; the facts themselves are not.
+
+**Applicability is a structural fact only for `state_machine`/`register_csr`.** Those two need a
+requirement to NAME a protocol/interface to look anything up for, so an unresolved one (checked via
+the reused `requirement_contract.is_resolved()`, never re-typed sentinel logic) reports
+`NOT_APPLICABLE` -- deliberately distinct from `NOT_AVAILABLE` (a domain that was asked and found
+nothing). The other five domains are always attempted, gated only on real evidence being supplied.
+This module never infers domain relevance from keyword-matching a requirement's prose -- that would
+itself be exactly the interpretive overreach the AGENT_SELF_ATTESTED marking exists to flag, not
+something a status field could quietly do on its own.
+
+**`requirement_contract.py`'s own verdict on the source requirement is carried through, not
+re-derived.** `declares_contract_shape()`/`downstream_consumable()` are imported and reported as
+`requirement_contract_status`, so a reader sees in one place whether the SOURCE requirement was
+itself fit to generate from, without this module repeating that fifteen-field analysis.
+
+**A module-level vocabulary guard, run at import.** `assert_no_verification_verdict_vocabulary()`
+proves this module's own `DUT_EVIDENCE_FOUND`/`DUT_EVIDENCE_PARTIAL`/`PERFORMANCE_TARGET_UNKNOWN`/
+`ERROR_TARGET_UNKNOWN` tokens never collide with `models.Status` -- the same discipline
+`capability_evolution.py` and `benchmark_dataset.py` already apply to their own vocabularies --
+deliberately excluding `NOT_AVAILABLE`/`NOT_APPLICABLE` (this repo's own shared honest-status
+convention, not `models.Status` members) and excluding `power_intent`'s PASS/FAIL/NOT_AVAILABLE
+passthrough, which is a disclosed, deliberate verbatim reuse rather than a second vocabulary.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It ARBITRATES and GENERATES
+nothing -- no scenario, command.txt, checker or covergroup content is emitted, and there is
+deliberately no stage gate. (2) It never re-derives a DUT fact a real module already computes; every
+`dut_evidence` block is that producer's own output. (3) No JSON schema file accompanies this IR --
+nothing in this repo persists or validates against it yet, so one now would be an artifact kept in
+sync with nobody. (4) It has a real CLI (`python -m dv_harness.verification_intent_ir --requirements
+<file> [--source-paths ...] [--sys-regmap ...] [--upf ...] [--json]`, exit 0 built / 2 nothing to
+build or a supplied input unusable) but no `dv-harness` verb yet and no engine call site -- a REACHED
+capability, not a WIRED one, in the same sense several 2026-09-06 additions above already disclose.
+
+Proven by `dv_harness_tests/test_verification_intent_ir.py` (37 tests), against the real
+`synthetic_lp_soc.upf` power-intent fixture, a real small RTL fixture built per test for
+`interrupt_dma_clock_reset_extraction`'s real line-scanner, a real schema-validated `sys_regmap.json`
+-shaped document, and the real `protocol_capability` registry (PCIe's real state-graph model as the
+positive control, USB_2_3x's real `model=None` entry as the negative control for "no state model").
+Every domain carries at least 3 real negative controls (absent input, malformed input, a structurally
+inapplicable requirement), `performance`/`error_recovery` are proven to stay TARGET_UNKNOWN even with
+every other domain's real evidence supplied, and a monkeypatch test proves the vocabulary-collision
+guard has real detection power rather than merely not tripping by accident.
+
+## vPlan Artifact: Schema + Hierarchy + 9-Dimension Completeness + 15-Value Gap Taxonomy (2026-09-06)
+
+A vPlan (verification plan) is a hierarchy of rows -- sections/features (containers) and leaf verification items -- each of which should carry a requirement link, a verification method, coverage/checker/test linkage, an owner and a priority. Nothing in this repo turned that shape into a checkable artifact: a repo-wide grep for `vplan_artifact`/`VPlanCompletenessReport` matched nothing, and the closest existing mechanism, `env_manifest.py`'s `testplan_correspondence`, answers a narrower, different question -- does a name-matched join of an EXISTING testlist/vPlan/coverage model line up -- over a project's own real `env.manifest.json`. It has no notion of vPlan HIERARCHY, no independent per-dimension status, and no gap taxonomy or next-best-action wiring.
+
+`dv_harness/vplan_artifact.py` is that schema, hierarchy and analysis. It reuses rather than re-mints: `subsystem_discovery`'s READY/PARTIAL/BLOCKED/UNKNOWN readiness words (the same four `golden_flow_readiness.py`/`generation_readiness.py` already reuse), `verification_strategy.STRATEGIES` (SIMULATION/FORMAL/PSS/EMULATION/FPGA_PROTOTYPE) as the known verification-method vocabulary, `memory.CORNER_CASE_RISK_TIERS` (P0..P3) as the priority vocabulary (the same scale `requirement_contract.py`'s own `priority` field already uses), `inference.next_best_action()` through a NEW `VPLAN_GAP_ACTION_CATALOG` (the domain-neutral Gap -> Next-Best-Action engine section 10 forbids re-implementing), and `connectivity.render_markdown_table()` for the optional matrix render.
+
+**Genuinely new**: the vPlan row schema (`validate_vplan_row`/`validate_vplan_document`, fail-closed via `VPlanArtifactValidationError` for a STRUCTURAL defect only); the hierarchy builder (`build_vplan_hierarchy`, a single-parent-pointer tree-walk detecting duplicate ids, orphan parent references and cycles as reported gaps, never raised, since these are semantic-but-shape-valid facts); the NINE independent completeness dimensions (`analyze_vplan_completeness`/`VPlanCompletenessReport`) -- HIERARCHY_INTEGRITY, REQUIREMENT_COVERAGE, VERIFICATION_METHOD_ASSIGNMENT, COVERAGE_MODEL_LINKAGE, CHECKER_LINKAGE, TEST_STIMULUS_LINKAGE, OWNERSHIP_ASSIGNMENT, PRIORITY_ASSIGNMENT, INTENT_CROSS_CONSISTENCY -- each scored, gapped and reasoned about independently and NEVER averaged/weighted/folded into one number, the same non-collapsing-status discipline `requirement_contract.py`'s five-value status vocabulary and `golden_flow_readiness.py`'s per-row Status column already hold; and the FIFTEEN-value gap taxonomy (`GAP_TAXONOMY`), each code mapped to exactly one dimension (`GAP_TO_DIMENSION`) and a severity (`GAP_SEVERITY`: BLOCKED for a structural/false-claim defect such as a dangling reference or a cycle, PARTIAL for an honest absence such as an unmapped requirement or a missing owner) -- both mappings held total by `assert_gap_taxonomy_total()` at import time, so a future edit that adds a gap without wiring it fails a test rather than silently reporting `UNKNOWN` severity.
+
+**Why this takes generic dict/list input rather than importing a real producer.** Per this batch's file-safety scope, this module must not import `spec_intelligence.py` or `verification_intent_ir.py` -- both are owned by OTHER, concurrently-running tasks in this same batch. `vplan_rows`, `requirements` and `verification_intents` are therefore accepted as plain lists of dicts, documented at the top of `analyze_vplan_completeness()` as the shape either sibling module's real output would need to be reduced to (e.g. `{"id": rec.requirement_id}` / `{"id": rec.intent_id, "verification_method": rec.method}`) to feed this analysis with no change to this module's own logic once either lands.
+
+**Deliberately bounded, stated rather than implied closed.** It reads a vPlan RECORD (plus optional requirement/intent records); it does not parse a specification, does not extract vPlan rows from prose, and does not check a vPlan against RTL, a register map, or a real coverage database. Coverage/checker/test-stimulus linkage (dimensions 4-6) is evaluated ONLY over leaf rows whose declared `verification_method` is coverage/test-relevant (`SIMULATION`/`EMULATION`/`PSS` for coverage+checker; `SIMULATION`/`EMULATION` for test-stimulus, since PSS generates its own scenarios rather than citing a pre-existing test) -- a `FORMAL`-only vPlan reports those three dimensions honestly `UNKNOWN` with zero applicable rows rather than a fabricated `READY`. `requirements`/`verification_intents` cross-checks report `UNKNOWN` with a real reason when the caller supplies `None`, never a silent clean pass. It DECIDES, APPROVES and RUNS nothing: no stage executes, no gate script is invoked, no file is written, and there is deliberately no `STAGE_GATES` entry -- a completeness report is an input to a human's vPlan-review decision, exactly like `golden_flow_readiness.py`'s and `generation_readiness.py`'s own matrices. `ControlPlane.approve()`, `policy.can_signoff()`, `assert_human_approval()` and the PR-only main/master governance are untouched and unreferenced.
+
+Proven by `dv_harness_tests/test_vplan_artifact.py` (37 tests): the clean positive path across all 9 dimensions over a fully-populated fixture (two container sections, three leaves spanning SIMULATION/FORMAL/EMULATION); taxonomy/dimension totality self-checks; and real negative controls for every one of the 15 gap codes -- a duplicate row id, an orphan parent reference, a 3-node `parent_id` cycle (all `BLOCKED` on `HIERARCHY_INTEGRITY`), a dangling requirement/intent reference (`BLOCKED`, proven distinct from the honest `PARTIAL` of an unmapped requirement/unreferenced intent), an unrecognized `verification_method`, the FORMAL-only honest-`UNKNOWN` case for dimensions 4-6, a missing owner/priority, an unrecognized priority value, a row/intent `verification_method` contradiction, next-best-action wiring returning exactly the present gap codes with `source == "vplan_artifact"` and never touching the filesystem, schema-validation rejections (non-mapping row, missing id, non-string-list field, non-list document), and the empty-vplan case reporting `UNKNOWN` -- never a fabricated `READY` -- across every one of the 9 dimensions.
+
+## Spec/vPlan Semantic Delta: Per-Requirement ADDED/MODIFIED/REMOVED/REVALIDATION_REQUIRED (2026-09-06)
+
+Nothing in this repo compared two requirement-IR snapshots to say which individual requirements
+changed and how. `grep -rn "spec_vplan_delta\|requirement.*delta\|semantic.*diff" --include=*.py .`
+matched nothing executable before this module.
+
+**A genuinely different axis from `change_impact.py`, confirmed by reading it rather than assumed.**
+`change_impact.py`'s own docstring is explicit: it computes a real `git diff --name-only
+<base>..<head>` over FILES, resolved to RTL modules via the evidence DB and to REQ_ID/VPLAN_ID/
+PATTERN_ID/COVERAGE_ID via the real `.dv-harness/requirements.csv` traceability registry
+(`load_trace_registry()`). It has no notion of a requirement record's own CONTENT and never opens two
+requirement documents to compare them -- "which files changed on disk, and which tests does that
+reach." A spec revision can rewrite a requirement's expected behaviour with zero git diff in this
+project at all (the source is a spec document, which may live outside this repo's own history), and
+that file-diff axis is structurally blind to it. `dv_harness/spec_vplan_delta.py` answers the
+question `change_impact.py` cannot: given two requirement-IR SNAPSHOTS (a previously-recorded
+baseline and a freshly re-extracted current set), which INDIVIDUAL requirement changed and how,
+independent of any file-system diff. The two compose at a caller (file-diff selects regression scope;
+content-diff selects which vPlan items need re-authoring); neither subsumes the other. Also distinct
+from `vplan_baseline.py`, which freezes a whole vPlan document's identity as ONE aggregate hash with a
+single VALID/REVALIDATION_REQUIRED/... verdict over the entire set -- this module reports a
+structured PER-REQUIREMENT classification of what moved and how, a granularity `vplan_baseline.py`'s
+own docstring explicitly leaves to "a project's own vPlan tooling."
+
+**No requirement-IR producer is guaranteed to exist yet, so `before`/`after` are generic, duck-typed
+parameters** -- a list of dicts, or a dict carrying a top-level `requirements` list (the same document
+convention `requirement_contract.execute_verb()` already uses, reused rather than inventing a second
+one). Identity is resolved from `requirement_id` (section 184's spelling), then `req_id` (the
+traceability registry's / older-shape spelling), then `id`, or a caller-declared `identity_field`.
+
+**Five statuses, four of them requested, the fifth kept for honest accounting.** ADDED/REMOVED --
+identity present in only one snapshot. MODIFIED -- at least one CONTENT field (the requirement's
+actual behavioural claim) differs. REVALIDATION_REQUIRED -- content is byte-identical but a
+PROVENANCE field differs (source citation, confidence, priority/criticality, a filed ambiguity/
+contradiction, schema version) -- the behaviour nobody rewrote, but the evidence backing it moved, so
+a human should re-confirm the extraction still holds. Spelled identically to `waiver_store.py`'s own
+`WAIVER_STATUSES` entry of the same name (this project's established word for "neither provably fine
+nor provably wrong"), though a distinct axis here. UNCHANGED -- nothing differs; reported so "nothing
+changed" is never indistinguishable from "we didn't check."
+
+**Which fields count as CONTENT vs. PROVENANCE is shape-agnostic, not a special case per record
+shape.** `content_fields_for()` treats every field present in either record as content UNLESS it is in
+`REVALIDATION_ONLY_FIELD_NAMES` (source/confidence/status/priority/criticality/ambiguities/
+contradictions/support_status/design_evidence/contract_schema_version/notes/revision/spec_revision/
+extracted_at/extracted_by/confirmed_by) -- `requirement_contract.CONTRACT_TEXT_FIELDS` (feature/
+protocol/configuration/precondition/stimulus/expected_result/observability/checker/coverage_intent)
+fall out as content with no separate contract-shaped code path, since none of them is in that set. A
+caller may override `content_fields`/`revalidation_fields` entirely for a different IR shape.
+`classify_requirement_delta()` is worst-wins: a real content difference -> MODIFIED, checked FIRST, so
+a simultaneous content+provenance edit is never demoted to a mere revalidation note. None, an
+all-whitespace string, and a missing key are normalized equal, so re-serialization noise (an explicit
+`""` where the other side simply omitted the key) never manufactures a false MODIFIED.
+
+**vPlan linkage is READ, never invented.** When a caller supplies `root`, every non-UNCHANGED
+requirement is cross-referenced against the REAL `.dv-harness/requirements.csv` registry via
+`change_impact.load_trace_registry()` (imported, not re-parsed), attaching the real VPLAN_ID/
+SCENARIO_ID/COMMAND_ID/PATTERN_ID/COVERAGE_ID the registry already asserts. Three honestly distinct
+outcomes: `NOT_REQUESTED` (no root given -- the caller chose not to ask), `NO_REGISTRY_ROW` (asked;
+the registry -- including one that does not exist on disk at all -- has nothing for this id), and
+`LINKED` (a real row found). **Also reuses, never re-derives**: when both sides of a delta declare the
+section-184 contract shape (`requirement_contract.declares_contract_shape()`), the REAL
+`requirement_contract.derive_status()` is called on each side and any movement in the requirement's
+own re-derived COMPLETE/PARTIAL/AMBIGUOUS/CONTRADICTORY/UNKNOWN status is surfaced as
+`derived_status_delta` -- extra evidence, never part of the four-status classification itself, and
+absent entirely for a non-contract-shaped record.
+
+`python -m dv_harness.spec_vplan_delta --before <baseline.json> --after <current.json> [--root <dir>]
+[--json]`, sharing one `execute_verb()` with the module's own callers. Exit 0 NO_DELTA, 1 DELTA_FOUND
+(a real ADDED/MODIFIED/REMOVED/REVALIDATION_REQUIRED item exists), 2 NOT_AVAILABLE (a file could not
+be read, or both snapshots are empty -- never a clean pass on nothing).
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It compares two ALREADY-EXTRACTED
+requirement-IR snapshots; it does not parse a spec document into requirement-IR records itself -- that
+extraction problem has no canonical producer in this repo yet, which is exactly why `before`/`after`
+are generic parameters rather than a call into one. (2) It never arbitrates which snapshot is "right"
+when both look equally complete -- the same boundary `requirement_contract.py` keeps for
+CONTRADICTORY requirements. (3) It writes nothing and runs no gate: no approval is minted, no stage
+advances, and there is deliberately no `STAGE_GATES` entry -- a gate that passed because nobody
+supplied a baseline yet would be worse than none. (4) An unresolvable identity is reported (a
+`duplicate_identities`/`unidentified_records` count), never silently dropped from the total.
+
+Proven by `dv_harness_tests/test_spec_vplan_delta.py` (20 tests) against synthetic requirement-IR
+fixtures constructed directly (some declaring the real section-184 contract shape, some fully
+generic), since no requirement-IR producer is guaranteed to exist. Negative controls: an
+empty-string-vs-missing field is not a false MODIFIED; a real content change outranks a simultaneous
+provenance change; a duplicate identity is reported, never silently merged; an unidentified record is
+counted, never dropped; both-empty inputs report NOT_AVAILABLE, never a pass; a caller-declared
+`identity_field` is honored; `derived_status_delta` is present and correct only for contract-shaped
+records. Three tests write a REAL `.dv-harness/requirements.csv` and cross-check the resulting linkage
+against `change_impact.load_trace_registry()` called directly, including the honest
+NO_REGISTRY_ROW-vs-no-registry-file distinction. A sanity test confirms `change_impact.py` has no
+content-diff function of its own and that its real entry point needs actual git plumbing (`NO_GIT`
+over a bare directory with no `.git`). Both the module's Python API and its
+`python -m dv_harness.spec_vplan_delta` CLI (including `--root`) are driven end to end, the CLI as
+real subprocesses with DELTA_FOUND/NO_DELTA/NOT_AVAILABLE exit codes asserted.
+
+## Consolidated KPI/Benchmark Report: One Module, Real Producers Only (2026-09-06)
+
+Several near-duplicate KPI trackers were implicit across intake, spec-to-signoff, spec-to-vplan and golden-scenario/USB-benchmark surfaces: `question_queue.py` already computes 4 real intake metrics behind its own verb, `trend_analysis.py` already detects PASS->FAIL regressions and same-SHA flip-flops behind its own report, and `signoff_export.py` already evaluates frozen-baseline invalidation behind its own verb -- but nothing assembled "how healthy is this harness's own verification WORKFLOW" (as opposed to one project's DUT) into one report. `dv_harness/consolidated_kpi_benchmark.py` is that one cross-cutting module, and it computes NOTHING a real producer does not already own -- it reads, counts and reports.
+
+**8 KPIs, each naming its real producer.** `question_queue_self_resolve_rate` reuses `QuestionQueueStore.compute_metrics()` verbatim (bundling its 3 siblings -- blocking-questions/week, repeat-question rate, assumption-overturn rate -- since they are one real computation over one store). `repeated_question_count` is a plain count over that same module's own `list_questions()` raw records (total asks minus distinct question_keys) -- new arithmetic, but a COUNT over raw data, never a re-derivation of `question_queue.py`'s own Tier/self-resolve classification. `time_to_first_pass` reads real section-108 loop telemetry (`loop_telemetry.loop_events()`): the elapsed time from a real `LOOP_STARTED` to the first `LOOP_VERIFY_COMPLETED` carrying `verdict == Status.PASS.value`, per real `run_id`. `false_pass_count` is `trend_analysis.detect_pattern_regressions()`'s own `SAME_GIT_SHA_PASSED_AND_FAILED` reason over the real `evidence_db.regression_verdict_history` table -- a real existing signal that an earlier PASS did not guarantee its own property. `false_ready_count` is `signoff_export.evaluate_all_freezes()`'s own `INVALIDATED` count -- a frozen (declared-READY) signoff baseline later proven wrong by real post-freeze evidence, the closest real analog to "false-READY" this codebase has.
+
+**Honest `NOT_MEASURED`, verified by direct search rather than assumed.** `ir_extraction_accuracy`, `manual_edit_count` and `human_engineering_time` are always reported `NOT_MEASURED`: a repo-wide grep confirmed no module compares an extracted requirement/IR against a ground-truth-labeled extraction (only `requirement_contract.analyze_requirement_contract_set()`'s self-consistency status and `vplan_baseline`'s content-identity version exist, neither of which is an accuracy measurement), and no keystroke/diff-authorship tracker or engineering-time tracker exists anywhere. Each carries its real missing-producer reason rather than a fabricated number.
+
+**The honesty pattern is `confidence_calibration.py`'s** (read for the pattern, no code imported or copied): four distinct statuses -- `MEASURED` / `NOT_MEASURED` / `INSUFFICIENT_HISTORY` / `NOT_AVAILABLE` -- checked at import to share no token with `dv_harness.models.Status`. A rate-shaped KPI below `MIN_SAMPLE_FOR_RATE = 10` (the same "smallest N at which 1/N <= 0.1" derivation) or a timing KPI below `MIN_RUNS_FOR_TIMING = 3` reports `INSUFFICIENT_HISTORY` rather than a rate/median computed off a couple of samples. Every KPI in `KPI_NAMES` always has a row in the report, MEASURED or not -- never silently omitted.
+
+**Reading is never a mutating act.** `QuestionQueueStore`/`EvidenceStore` are opened read-only or not constructed at all when their backing file is absent (proven: a bare project gains zero files/directories from a report); no build, gate, approval, memory, waiver or Blackboard record is written; there is deliberately no stage gate -- a gate that passed on a KPI nobody actually measured would be worse than none. `ControlPlane.approve()`, `policy.can_signoff()` and the PR-only main/master governance are untouched and unreferenced. Per this task's file-safety scope, `dv_harness/gates.py` and `dv_harness/cli.py` were not touched and no entry is proposed for either; the front door is `python -m dv_harness.consolidated_kpi_benchmark {names,report,show}`.
+
+Proven by `dv_harness_tests/test_consolidated_kpi_benchmark.py` (29 tests), every fixture built through the real owning module (`QuestionQueueStore.add_question()`, `loop_telemetry.emit()` through a real `StateStore`, `EvidenceStore.insert_regression_verdict()`, `waiver_store.record_waiver()`/`revoke_waiver()`, `signoff_export.freeze_signoff_baseline()`) -- nothing hand-written into a JSON/JSONL file to look like real evidence. Each KPI has a core positive path (cross-checked against an independent call to the real underlying producer, e.g. the self-resolve-rate KPI's value asserted equal to a directly-called `compute_metrics()` result) plus real negative controls: zero real events (`NOT_AVAILABLE`), too few real events (`INSUFFICIENT_HISTORY`), and a genuinely-clean history reporting a real zero rather than skipping the KPI. The headline test the task requires, `test_ir_extraction_accuracy_is_always_not_measured_never_fabricated` (plus its two siblings for manual-edit-count and human-engineering-time), asserts a KPI with no real producer reports `NOT_MEASURED` with `value is None` on every call, never a fabricated number.
+
+## Protocol Compliance Aggregation: Scoreboard PASS Never Outranks a Real Checker Violation (2026-09-06)
+
+This harness has no formal protocol-checker TOOL, and `dv_harness/protocol_compliance_aggregation.py` does not build one -- verified before writing anything: `vip_distill.py`'s real `SOURCE_KINDS` is exactly `("sim_log", "job_record", "fsdbreport", "combined")`, with no `"protocol_checker"` kind, and none of its `detail` dicts (epilogue/signatures/counts/lsf_status/sim_status/topic/fsdbreport) ever carries a checker-specific verdict field; `dv_harness/uvm_generator/protocol_model_layer.py` -- the other real module this task named to read -- carries no `verdict`/`checker`/`PASS`/`FAIL`/`violation` token at all (it compiles LTSSM state-transition legality into SVA assertions; it produces no runtime checker RESULT). So a real protocol-checker verdict, distinct from the scoreboard verdict `vip_distill.py` already normalizes, is not something this repository's own evidence pipeline produces today, and this module says so rather than inventing one.
+
+What it builds is only the AGGREGATION RULE: given a stage's real scoreboard PASS/FAIL verdict (the real, already-normalized `vip_distill.py` envelope's own `verdict` field, read via `evidence_db.py`'s real `normalized_evidence` table -- reusing its real column list rather than re-parsing evidence a second way) plus, IF a real protocol-checker verdict is present in the SAME evidence set, that verdict too -- **a scoreboard PASS alongside a real protocol-checker violation is still an overall FAIL**, and **absent protocol-checker evidence reports `NOT_CHECKED`, distinct from `CLEAN`/`PASS`, never assumed clean**. `_decide_overall()`'s priority order: a real checker FAIL overrides everything (including a scoreboard PASS and even an absent scoreboard); otherwise a scoreboard FAIL is overall FAIL; no scoreboard evidence at all is `NOT_AVAILABLE`, never a default PASS; either side carrying a real-but-unrecognized verdict string is `UNKNOWN`, never rounded to PASS or FAIL; scoreboard PASS + checker PASS is PASS; scoreboard PASS + checker `NOT_CHECKED` is still PASS, but the report always carries `protocol_checker_status: "NOT_CHECKED"` alongside it so it can never be read as a verified-clean protocol result.
+
+`SCOREBOARD_PASS_VERDICTS`/`SCOREBOARD_FAIL_VERDICTS` cite the same real `vip_distill.py` verdict vocabulary `golden_scenario.py`'s own `PASS_VERDICTS` already documents, independently restated rather than imported: `golden_scenario.py` is one of the files a separate, already-running batch of agents is concurrently editing, and this module deliberately imports neither it nor any other file under concurrent edit in either running batch. `load_normalized_evidence_rows()` queries the real `evidence_db.py` `normalized_evidence` table directly (positional-tuple results zipped against the real, verified column order, avoiding a known real fetchall()-as-dict indexing defect disclosed elsewhere in this codebase) and re-shapes rows back into the real `vip_distill.py` envelope dict shape. `extract_verdicts_from_evidence_set()` is duck-typed over any sequence of such dicts, so it consumes evidence in memory, evidence read back from a real database, or -- once a real protocol-checker producer is ever built -- that producer's own output, without importing a module that does not exist yet. `PROTOCOL_CHECKER_DETAIL_KEYS` (`protocol_checker_verdict`/`vip_checker_verdict`/`checker_verdict`, read from a normalized_evidence row's own free-form `detail` dict) is a disclosed, honest EXTENSION POINT -- explicitly not a claim that any real producer writes one today.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) No formal protocol-checker tool exists or was built here, per this task's own instruction -- the module aggregates whatever real checker evidence a future tool might one day produce, and honestly reports `NOT_CHECKED` until one does. (2) There is deliberately no stage gate and no `gates.py`/`cli.py` change -- this task's scope was the aggregation module alone; a `dv-harness` verb or `STAGE_GATES` entry, if ever wanted, is for a separate integration step. (3) It decides and authorizes nothing beyond reporting: no approval/governance mechanism is referenced.
+
+Proven by `dv_harness_tests/test_protocol_compliance_aggregation.py` (20 tests) against a REAL DuckDB `EvidenceStore` and REAL `vip_distill.distill_sim_log()` envelopes for both a PASSING and a FAILING synthetic sim.log in this project's own documented FINAL CHECK epilogue format -- never hand-typed evidence shaped to look real. The central proof records a real scoreboard-PASS row and a checker-violation row (this repo's honest extension-point shape) against the SAME `job_id` in one real `evidence.duckdb`, and asserts the aggregation reads back out as an overall FAIL. Negative controls: no scoreboard evidence never reads as PASS; an unrecognized scoreboard or checker verdict string reads UNKNOWN, never PASS; a real checker FAIL overrides even an absent scoreboard; fsdbreport rows (which vip_distill.py's own docstring says carry no verdict concept) never contribute a scoreboard verdict even if one is stray-present; an unrelated job's evidence never bleeds into another job's aggregation; and a bare, just-initialized evidence database reports `NOT_AVAILABLE`, never a false clean PASS.
+
+## Spec/Datasheet Structural Map: `dv_harness/spec_doc_map.py` (2026-09-06)
+
+`vip_user_guide_distill.py` already turns a VIP user guide PDF into a bounded, offline reference
+artifact. Nothing in this repo did the analogous thing for the OTHER document family a
+verification environment is built from -- the DUT's own spec/datasheet/programming-guide PDFs.
+`env_manifest.py`'s Tier-1 policy already denies raw PDF originals into runtime context and names
+`vip_user_guide_distill.py` as the route forward for a VIP user guide, but a DUT spec PDF had no
+route at all: an agent asking "what page is the register map chapter on" or "where is Table 4-3"
+had no bounded artifact to answer from and no honest way to get one short of opening the whole PDF.
+
+`dv_harness/spec_doc_map.py` closes that, extending `vip_user_guide_distill.py`'s real `pypdf`
+extraction PATTERN -- the same `pypdf.PdfReader(...).pages[i].extract_text()` call, the same
+"raise rather than silently produce an empty/partial artifact" discipline, the same
+mechanically-detected numbered-heading regex idea -- without editing that file. It deliberately
+does not import from it either: this task's contract narrows extraction to STRUCTURE ONLY (never a
+full-text extract, even as a targeted-read byproduct), while `vip_user_guide_distill.py`'s own
+contract always ALSO writes a `.fulltext.txt`; there is no narrower public entry point in that
+module to call instead of its always-wider `distill_user_guide()`. So this module re-derives the
+~15 lines of straightforward `pypdf` usage rather than importing another module's private helpers
+or forcing a wider artifact than this task allows.
+
+**What it extracts, mechanically, never by interpretation.** A numbered heading ("4.3.1 Link
+Training") or a "Chapter N: Title" heading, a Table caption ("Table 4-1: Register Summary"), and --
+computed from those -- a register-CHAPTER's page range: a chapter-level (`level == 1`, no dot in
+its number) heading whose own title contains a word-bounded `register(s)?`/`register map`/`csr`
+match, bounded from its own detected start page to the page before the next detected chapter's
+start page (or the document's last page for the final chapter). The word-boundary match is
+deliberate: a chapter titled "Registration Procedures" must not be credited as a register-map
+chapter merely for sharing a substring, and a dedicated negative-control test proves it is not.
+Register-titled SUBSECTIONS still appear in the plain section index but are never given their own
+page range, because a subsection's true end is ambiguous from a mechanical scan alone. Table
+CONTENT (rows, fields) is never read -- only the caption line and its page.
+
+**Two artifacts per document, both structure-only, and there is deliberately no full-text
+byproduct at all** -- unlike `vip_user_guide_distill.py`, which always produces one:
+`<stem>.structure_map.json` (schema-versioned record: section index, table index, register-chapter
+ranges, source/extractor identity) and `<stem>.structure_map.md` (the same content as a
+human-readable navigation table). Neither file contains one word of document body prose; a test
+asserts the persisted record and markdown never contain the fixture's own prose sentences.
+
+**Extractor honesty.** A `.pdf` source requires `pypdf`; when it is not installed,
+`extract_spec_doc_map()` raises `SpecDocMapError` naming the real missing dependency rather than
+silently producing an empty/partial structure map. A missing source file and an unsupported suffix
+raise the same way. `execute_verb()` -- the CLI/reporting layer -- turns any of those into the
+honest `status: "NOT_AVAILABLE"` this task's contract requires, carrying the real exception text. A
+`.txt`/`.md` (pre-extracted) source is read directly and records
+`method="pre_extracted_text_structure_scan"`; page numbers are honestly `null` on that path, since
+no real page boundary exists to report.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) Heading/caption detection is a
+line-pattern scan, not layout/typography analysis -- an un-numbered heading with no "Chapter"
+keyword contributes nothing, and that is a real, reported zero rather than a guess (proven by a
+dedicated no-structure fixture). (2) It decides nothing beyond reporting: no build, job, approval,
+or stage gate is touched, and there is deliberately no `STAGE_GATES` entry -- a structural map is an
+input to a human/agent's later targeted reading, never a verification verdict. (3) There is no
+`dv-harness` CLI verb (`cli.py` is out of this task's file-safety scope); the front door is
+`python -m dv_harness.spec_doc_map extract|show`.
+
+Proven by `dv_harness_tests/test_spec_doc_map.py` (17 tests) against REAL PDFs built with
+`reportlab` and read back with real `pypdf` -- never a hand-typed byte string. The core positive
+test builds a real 3-page synthetic "DUT spec" PDF (chapter 1 Overview, chapter 4 Register Map with
+a subsection and a table, chapter 5 Electrical Characteristics with its own table) and asserts the
+section index, table index, and the single register-chapter's computed `[2, 2]` page range, plus
+that no prose sentence from the fixture ever appears in either persisted artifact. Negative
+controls: a structure-free PDF reports real zeros rather than crashing or guessing; a
+"Registration Procedures" chapter is proven NOT to be credited as a register chapter
+(word-boundary detection power); a missing source file, an unsupported suffix, a simulated missing
+`pypdf` dependency, and a malformed/foreign JSON record are all refused with the real reason rather
+than silently accepted; a `.txt` source reports honestly `null` pages throughout; and both
+`execute_verb()` and the real `python -m dv_harness.spec_doc_map` CLI (both verbs, plus the
+NOT_AVAILABLE exit-2 path) are driven end to end, including as real subprocesses.
+
+
+## Verification Intake Contract: the Whole-Project Lifecycle + INTAKE_READY Conjunction (2026-09-06)
+
+Every sub-domain intake mechanism in this project answers its own narrow question well (`env_manifest.py`'s 3-layer manifest, `question_queue.py`'s ask/decide lifecycle, `connectivity.py`'s bind-tier gate, `requirement_contract.py`'s per-requirement status, `golden_scenario.py`'s per-test freshness, `waiver_store.py`'s per-waiver status). Nothing sat one level above them and answered the capstone question a human actually has to ask before generation or signoff can begin: "across every domain intake touches, where is THIS PROJECT's intake right now, and is it actually ready?" A repo-wide grep for `VerificationIntakeContract`/`INTAKE_READY`/`intake_contract` before writing this module matched nothing executable.
+
+`dv_harness/verification_intake_contract.py` is exactly two things, nothing more:
+
+1. **A lifecycle state machine for the whole intake effort**, not any single domain's local state. Thirteen states in the task's own order -- `CREATED -> DISCOVERING -> CORRELATING -> QUESTION_PENDING -> USER_INPUT_RECEIVED -> VALIDATING -> CONFLICT -> PARTIAL -> BLOCKED -> READY_FOR_REVIEW -> BASELINED -> STALE -> REVALIDATING` -- with a real, closed `TRANSITIONS` graph enforcing legal moves (`assert_legal_transition()` on every transition; an illegal jump such as `CREATED` straight to `VALIDATING` raises `IntakeContractError("ILLEGAL_STATE_TRANSITION", ...)` naming the real legal next states). `READY_FOR_REVIEW` is explicitly non-terminal, per spec: it carries five outgoing edges (three send the contract back to earlier work -- `DISCOVERING`/`CORRELATING`/`VALIDATING` -- plus a fresh `QUESTION_PENDING` and forward approval to `BASELINED`). That idea is generalized rather than special-cased: `assert_no_absorbing_state()` runs at import time and proves EVERY state (not only `READY_FOR_REVIEW`) has at least one real outgoing edge -- even `BASELINED` has a real edge to `STALE`, so a baselined contract can be invalidated by a later spec/RTL/config change exactly the way `signoff_export.py`'s frozen baseline can (this module accepts that resulting `STALE` transition; it does not itself decide staleness -- that decision belongs to `golden_scenario.evaluate_freshness()`/`signoff_export.evaluate_freeze_invalidation()`, which this module deliberately does not import).
+
+2. **INTAKE_READY: a conjunction of caller-named critical conditions, never an average.** `evaluate_intake_readiness(conditions)` takes a caller-assembled list of `{"name", "status"}` records (status one of `MET`/`UNMET`/`UNKNOWN`/`NOT_APPLICABLE` -- `MET`/`NOT_APPLICABLE` clear, `UNMET`/`UNKNOWN` both block, deliberately undistinguished: "this failed" and "we could not tell" are both reasons a human must not be told the project is ready). `ready` is `True` iff the blocking list is empty -- one single `UNMET`/`UNKNOWN` condition among any number of clean ones still reports `NOT_READY` naming that one condition, never diluted into a percentage. This is the same worst-wins, no-averaging discipline `golden_flow_readiness.combine_readiness()` already applies one row at a time ("BLOCKED is worse than UNKNOWN on purpose... must not be averaged away"), generalized here over an open-ended, caller-declared condition set rather than a fixed twenty rows -- which conditions exist is never hardcoded, since they come from other, separately-building modules (env manifest completeness, requirement contract completeness, connectivity bind-tier clearance, golden scenario freshness, waiver validity, VIP API provability, and others). An empty condition list reports `NOT_AVAILABLE` with `ready=False`, never a vacuous `READY` over zero conditions. A duplicate condition name, an unrecognized status, or a malformed record all raise `IntakeContractError` rather than being silently dropped or resolved by guessing.
+
+**Deliberately bounded, and stated rather than implied closed.** This module imports NOTHING else from `dv_harness` -- proven by an AST-based test -- because it was built as the capstone of a batch in which several sibling intake modules (`intake_state.py`, `requirement_contract.py`, `golden_scenario.py`, `waiver_store.py`, and others) were concurrently in flux or on this batch's own never-touch list; every sub-domain fact is accepted as a generic, duck-typed parameter (a plain dict or list) rather than fetched by import. It never runs a stage, invokes a gate script, submits a build/regression/LSF job, or writes an approval/governance record -- `ControlPlane.approve()`, `policy.can_signoff()`, `assert_human_approval()` and the PR-only main/master governance are untouched and unreferenced in code (asserted by a tokenize-based test that strips this module's own explanatory docstrings before checking, since the docstrings legitimately name what this module does NOT do). It does not decide what a `CONFLICT` between two domains means or which side wins -- the same "ARBITRATION IS NOT HERE" boundary `requirement_contract.py` already draws for its own `CONTRADICTORY` status. It persists nothing to disk on its own: `VerificationIntakeContract` is a plain in-memory record; a caller decides how (or whether) to serialize it. There is deliberately no `dv-harness` CLI verb and no edit to `gates.py`/`cli.py`/`CLAUDE.md` -- the front door is `python -m dv_harness.verification_intake_contract states|transitions|evaluate`, the same ad hoc fallback several sibling 2026-09-06 modules already use.
+
+Proven by `dv_harness_tests/test_verification_intake_contract.py` (34 tests): a full realistic lifecycle traversal exercising every real loop this project's own intake work actually takes (a `CONFLICT`, a `PARTIAL`, a `BLOCKED`, a human sending a reviewed `READY_FOR_REVIEW` contract back before approving, and a `BASELINED` contract going `STALE` and being `REVALIDATED`); a mutation-style test proving the import-time transition-table guards have real detection power (a state popped from the table, a state made absorbing, a target pointed at a non-existent state each trip the guard that names that specific defect); the headline no-averaging proof (99 clean conditions plus 1 `UNMET` still reports `NOT_READY` naming exactly that one condition); 8 further INTAKE_READY negative controls; the `require_intake_ready` opt-in gate on the `READY_FOR_REVIEW` edge; and CLI subprocess tests for all three verbs and all three exit codes.
+
+## Intake Question Priority: Ask-Gating Table, Next-Best-Question Ranking, and Batching (2026-09-06)
+
+Three small, related mechanisms an intake flow needs whenever a real 3-tier ask-a-human queue (`question_queue.py`) accumulates pending questions faster than a human can answer them, and nothing in this repo decided any of the three: whether a given pending question is even worth asking given what the harness already believes and what getting it wrong would cost, which of several worth-asking questions to surface FIRST, and how to group several LOW-stakes questions into one round without ever letting a high-stakes one hide inside a batch. `dv_harness/intake_question_priority.py` is all three, and it deliberately does not import `question_queue.py` at all -- this task's own scope named that boundary explicitly, so pending-question data arrives as a generic list of dicts and every fact this module needs (confidence, criticality, the four ranking factors, a declared topic key, an `architecture_defining` flag) is read directly off the caller's own dict rather than coupled to that module's schema.
+
+**(a) The gating table is 16 explicit cells, not a computed risk score.** `CONFIDENCE_LEVELS = (LOW, MEDIUM, HIGH, UNKNOWN)` crossed with `CRITICALITY_LEVELS = (MINOR, MAJOR, BLOCKER, UNKNOWN)` -- a fourth "we do not honestly know" value on both axes so an absent or unrecognized fact is never silently guessed into a numeric axis. `GATING_TABLE` spells out all 16 `(confidence, criticality) -> (ASK|DO_NOT_ASK, reason)` pairs by hand, matching this task's own two worked examples verbatim: `(HIGH, MINOR)` and `(HIGH, MAJOR)` are the only "non-critical" DO_NOT_ASK cells, and `(MEDIUM, BLOCKER)` is ASK. Two deliberate asymmetries carry real weight: BLOCKER criticality is ASK at every confidence level including HIGH (an architecture-defining decision is confirmed regardless of how sure the harness already is, the same posture `connectivity.py`'s Bind-Location Tier 3/4 rules already take), and UNKNOWN on either axis is always ASK -- an unclassified criticality is never read as evidence it is safe to skip, and an unclassified confidence is never read as evidence the harness is sure. `gate_question()` normalizes a raw value to UNKNOWN (flagged `*_recognized: False`) rather than raising, and `gate_pending_questions()` runs it over a whole list.
+
+**(b) Next-best-question ranking is exactly the stated formula, and nothing this module invents.** `score_question()` computes `blocking_value * downstream_impact * expected_confidence_gain / user_effort` over four caller-supplied numeric factors -- their real meaning and measurement is entirely the caller's, per this task's own instruction not to invent how they are measured. A missing factor, a non-numeric one (a `bool` is explicitly rejected, since it is a Python `int` subclass), a negative weight, or a `user_effort` that is not strictly positive (the divisor) all report `UNVERIFIABLE` naming the real bad field, never a placeholder score. `rank_questions()` sorts the scorable subset descending (question-id tie-break for determinism) and reports the unrankable subset alongside it, never dropped.
+
+**(c) Batching groups only what was explicitly declared safe to group.** `classify_batch_risk()` treats ONLY an explicitly-declared `MINOR` criticality (with no `architecture_defining: true` flag) as LOW/batchable; BLOCKER, MAJOR, an explicit `architecture_defining` flag, and an absent/unrecognized criticality are all HIGH risk -- deliberately stricter than the gating table's own MAJOR handling, because merging several questions into one round changes what a human reads together. `build_question_batches()` groups LOW-risk questions sharing a caller-declared topic key (`topic`/`related_topic`/`related_group`/`group_key` -- never an inferred/NLP-derived relatedness, which this module does not attempt), splits an oversized group deterministically when `max_batch_size` is given, and places every HIGH-risk question in a batch of exactly one regardless of topic overlap -- the property this task's "NEVER batches an architecture-defining/high-risk question with anything else" rule requires, and it is asserted directly (including the case where the same topic is shared with an otherwise-batchable MINOR question).
+
+`analyze_pending_questions()` composes all three in the natural order (gate, then rank and batch only the to-ask subset -- a DO_NOT_ASK question is never scheduled at all), with `render_report_text()` and a `python -m dv_harness.intake_question_priority` front door (no `dv-harness` CLI verb was wired and neither `cli.py` nor `gates.py` was touched, per this batch's file-safety scope).
+
+**Deliberately bounded.** It reads no file, writes no state, files no question, answers no question, runs no build/regression/LSF job, and touches no approval/governance mechanism -- it computes three small decisions over data the caller supplies and nothing else. It does not decide what a question's confidence/criticality/four ranking factors/topic actually ARE; those are read verbatim off the caller's dict, exactly as `question_queue.py` itself is the authority on its own records.
+
+Proven by `dv_harness_tests/test_intake_question_priority.py` (35 tests): the gating table's full behavior including both of this task's own worked examples, BLOCKER-always-asks-regardless-of-confidence, UNKNOWN-on-either-axis-always-asks, and unrecognized-value normalization; the ranking formula plus six negative controls (missing factor, non-numeric, boolean-rejected, zero/negative `user_effort`, negative weight, unrankable-never-dropped); the batching rule's grouping plus negative controls (a BLOCKER question never merged even sharing a topic, an `architecture_defining`-flagged MINOR question never merged even sharing a topic, a topic-less LOW-risk question never guessed into a group, MAJOR/UNKNOWN questions never grouped even sharing a topic, `max_batch_size` splitting in original order, a non-positive `max_batch_size` refused); the integrated pipeline; and three real CLI subprocess invocations asserting exit codes 0/1/2.
+
+**Disclosed residual**: this is a standalone, non-wired module by design -- no `dv-harness` CLI verb, no graph node, no stage gate, and no import of `question_queue.py`'s real `QuestionQueueStore`. A caller integrating it with the real queue must translate that store's records into the generic dict shape this module expects itself. The four ranking factors' real-world measurement is entirely undefined by this module, as instructed. "Closely related" for batching is a caller-declared topic-key match only; no semantic/NLP relatedness is computed.
+
+## Intake Baseline: a Freeze Over the Twelve Pre-Generation Facts (2026-09-06)
+
+`signoff_export.py`'s SIGNOFF FREEZE / BASELINE (spec section 238) freezes fifteen
+POST-verification fields at signoff. Nothing froze the narrower, earlier set of facts a project
+commits to at INTAKE time, before generation begins: which DUT top/boundary was declared, the
+DUT/TB content identity, the source file hashes the environment was built against, which VIP was
+declared, the bind-topology hash, the reference-UVM hash, the DE `command.txt` hash, the
+known-test list, and how many critical unknowns/conflicts remained unresolved and how many user
+decisions were on record at that moment. Two intake environments that look identical on paper
+could silently diverge on any of these without anything noticing.
+
+`dv_harness/intake_baseline.py` mirrors `signoff_export.py`'s freeze pattern -- content-hash
+based, worst-wins VALID/INVALIDATED/UNKNOWN, "we could not check" is never VALID -- over exactly
+these twelve facts, and reuses rather than reinvents its one real primitive:
+`source_identity.aggregate_source_id()` (the identical `tools/remote/` sys.path convention
+`harness_deploy.py` and `signoff_export.py`'s own `_aggregate()` already establish) folds every
+multi-file or list-shaped fact into one deterministic digest -- there is no second hashing scheme
+anywhere in this module.
+
+**Deliberately decoupled from every other intake-adjacent module.** Every one of the twelve facts
+is accepted as a generic, duck-typed parameter (a plain `{field_name: value}` dict) rather than
+discovered by importing `env_manifest.py`/`connectivity_check.py`/`question_queue.py`/
+`source_authority.py`/`signoff_export.py` itself -- a caller who already has these facts in hand
+(an intake agent, a CLI script, a future generator) can freeze them without this module needing to
+know which other mechanism produced them. Four field-shape captors match what each fact actually
+is: a **declared fact** (`dut_top_boundary`, `vip_declaration`) hashed via canonical sorted-key
+JSON; a **hash-or-files** fact (`dut_sha`, `tb_sha`, `source_file_hashes`, `bind_topology_hash`,
+`reference_uvm_hash`, `de_command_txt_hash`) that accepts an already-computed hex digest, a raw
+content string to hash, or a real `{path: hash-or-content}` multi-file mapping folded through
+`aggregate_source_id()`; a **list** fact (`known_test_list`) folded through that same primitive;
+and a **count** fact (the three unresolved-unknowns/conflicts/decisions counters), which honestly
+rejects `None`, a `bool`, a non-int, or a negative value as `NOT_AVAILABLE` rather than coercing
+it. `assert_intake_fields_have_captors()` holds the declared field list and the captor table equal
+in both directions at import.
+
+**Freeze, then re-derive -- never store -- the verdict.** `freeze_intake_baseline(root, facts,
+frozen_by=...)` records one immutable JSON baseline under `.dv-harness/intake/baselines/
+<freeze_id>.json` (an unattributable freeze is refused) and touches nothing else -- no
+`state.json`, no `events.jsonl`, no approval mechanism. `evaluate_intake_freeze_invalidation()`
+never trusts a stored verdict; it re-derives VALID/INVALIDATED/UNKNOWN on every call from two
+independent, worst-wins checks: (1) each of the twelve fields re-captured NOW against what was
+frozen, by digest -- a field that changed or whose evidence disappeared INVALIDATES, while new
+evidence appearing after the freeze is INDETERMINATE (a real change, not proof the frozen evidence
+was wrong); (2) the frozen record's own self-integrity -- its stored `freeze_id` is independently
+recomputed from its stored baseline and compared, so a hand-edited record is caught rather than
+trusted. `evaluate_all_intake_freezes()` reports the worst status across every freeze on file for
+a project.
+
+`python -m dv_harness.intake_baseline fields|baseline|freeze|list|status` shares one
+`execute_verb()`, the same convention `power-intent`/`golden-scenario`/`signoff_export` use; exit
+0 clear/VALID, 1 INVALIDATED, 2 NOT_AVAILABLE/UNKNOWN/refusal. No `dv-harness` CLI verb was added
+(`cli.py` was under concurrent edit by other parallel gap-closure work in this same session, the
+same reason several sibling additions stayed `python -m`-only that day).
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It discovers nothing itself:
+whether a DUT SHA or a bind-topology hash is real is entirely the caller's declaration: there is no
+filesystem scan, no RTL parse, and no git read anywhere in this module. (2) It ARBITRATES and
+AUTHORIZES nothing: no stage runs, no gate is invoked, and there is deliberately no stage gate -- a
+gate that passed because an intake baseline existed, or failed because one did not, would be
+worse than none. REVALIDATION (deciding an INVALIDATED intake baseline is still acceptable to
+proceed from) is a human act this module does not perform. (3) It is REACHED, not WIRED: no
+`run_stage()`/`advance()` call site invokes it and no graph node declares it, so a caller must
+invoke it directly or through the CLI.
+
+Proven by `dv_harness_tests/test_intake_baseline.py` (52 tests): positive capture of all twelve
+fields, honest `NOT_AVAILABLE` handling across every captor's negative shapes (`None`, empty,
+wrong Python type, a rejected bool/negative count), order-independence and content-sensitivity of
+every digest, a direct proof that the multi-file digest equals an INDEPENDENTLY-imported call to
+`source_identity.aggregate_source_id()` (so a future reimplementation-instead-of-reuse fails), a
+real freeze/list/load round trip against a throwaway directory, the central freeze-invalidation
+proof (unchanged facts stay VALID; a changed DUT SHA is INVALIDATED naming the field; evidence
+disappearing is INVALIDATED; new evidence appearing is INDETERMINATE/UNKNOWN and never
+invalidating; a hand-tampered frozen record is caught by the self-integrity recompute; a
+malformed/empty frozen record reads UNKNOWN, never VALID), `evaluate_all_intake_freezes()`'s
+worst-wins behaviour across multiple recorded freezes, and the real `python -m
+dv_harness.intake_baseline` CLI driven as a subprocess through every verb with all three exit
+codes exercised.
+
+## Target-Conditioned Missing-Artifact Detector (2026-09-06)
+
+"What's missing" was never one fixed checklist in this project -- an agent about to generate a
+subsystem UVM environment needs a completely different subset of prior evidence than an agent
+about to export a signoff bundle, or one deciding whether functional coverage is closed enough to
+report. Before this module, no code anywhere took a downstream TARGET name as an input and derived
+a target-specific missing-artifact list from it: every existing readiness/gate reader
+(`generation_readiness.py`, `golden_flow_readiness.py`, `functional_coverage_signoff.py`,
+`vip_learning_gate.py`, ...) answers its own single fixed question well, but none of them is
+conditioned on "missing FOR WHAT". A generic "you're missing some files" message is exactly the
+failure mode this closes: it names no category and gives a caller nothing to act on.
+
+`dv_harness/target_conditioned_missing_artifact_detector.py` is deliberately small and
+self-contained -- per this batch's file-safety scope it imports nothing from any other module built
+in the same batch and nothing from the frozen/claimed file list, accepting the caller's current
+source-inventory facts as a plain duck-typed mapping (`category_id -> True/False/omitted`) rather
+than reading `env.manifest.json`, the evidence database, or any other artifact itself. Wiring a real
+project's own facts into that mapping (e.g. from `env_manifest.py`'s per-layer `status` fields, or
+`waiver_store.status_report()`) is a caller's job, not this module's.
+
+**A small, explicit, real target-name set** -- `VIP_UVM_CREATION`, `SIGNOFF_PACKAGE`,
+`COVERAGE_CLOSURE`, `REGRESSION_SUBMISSION` -- each mapped in `TARGET_ARTIFACT_TABLE` to the
+specific artifact categories THAT target needs (vip_config_dump, dut_rtl_source, register_map,
+bind_topology, phy_boundary_decision, vip_symbol_index, regression_evidence, coverage_summary,
+waiver_ledger, golden_scenario_capsule, signoff_gate_evidence, requirement_contract,
+testplan_correspondence, regression_list), each carrying its OWN per-(target, category) reason tied
+to a real, already-established concept in this codebase's house vocabulary (env.manifest.json's own
+layers, the waiver ledger's derived status, connectivity.py's bind-tier gate, Bind-Location Rule 5's
+PHY-boundary-first ordering, vip_api_card.py's citation proof) -- never a shared generic reason
+string and never a category invented for a target it is not genuinely tied to.
+`assert_table_covers_declared_categories()` runs at import time so a table entry citing an
+undocumented category, or carrying an empty reason, fails loudly rather than silently rendering a
+blank explanation.
+
+**Three-valued presence, never guessed.** A category in the caller's inventory reads `True`
+(confirmed PRESENT), `False` (confirmed MISSING -- someone actually checked and it is not there),
+or anything else / simply omitted (NOT_ASSESSED -- nobody has reported on it either way). An omitted
+key never silently reads as present (which would let a half-populated inventory claim readiness it
+never earned) and never silently reads as absent either (which would report a false MISSING finding
+about a category nobody looked at). The overall verdict is the strict worst found: any confirmed
+MISSING -> `MISSING_ARTIFACTS` (naming every one, each with its own target-specific reason), else
+any NOT_ASSESSED -> `INCOMPLETE_EVIDENCE`, else `READY`. An unrecognized target is `UNKNOWN_TARGET`
+with zero fabricated per-category findings -- inventing a plausible-looking requirement list for a
+target this module does not define would be exactly the fabrication the Evidence Truth Rule
+forbids.
+
+**It decides and authorizes nothing beyond classification.** No stage runs, no gate is invoked, no
+artifact is read, and no approval machinery is referenced. There is no `dv-harness` CLI verb --
+`cli.py` was explicitly off-limits for this task -- so the only front door is `python -m
+dv_harness.target_conditioned_missing_artifact_detector <TARGET> [inventory.json]` (exit 0 READY,
+1 MISSING_ARTIFACTS/INCOMPLETE_EVIDENCE, 2 UNKNOWN_TARGET/usage), the same disclosed
+python-m-only convention several very recent same-day additions in this project also use when
+`cli.py` is under concurrent edit.
+
+Proven by `dv_harness_tests/test_target_conditioned_missing_artifact_detector.py` (25 tests): the
+core positive path (a fully-present inventory reads READY) for every one of the 4 real targets;
+an unrecognized-target refusal; an empty or omitted inventory reading `INCOMPLETE_EVIDENCE` (never
+READY, never MISSING_ARTIFACTS); a confirmed-absent category producing `MISSING_ARTIFACTS` naming
+it with a reason proven to reference both the specific category AND the specific target (and
+proven NOT to contain a generic "need more files" phrase); MISSING outranking NOT_ASSESSED in the
+fold; seven ambiguous values (`None`, `"unknown"`, `"yes"`, `1`, `0`, `[]`, `{}`) each proven to
+classify as NOT_ASSESSED rather than being guessed present or absent; a cross-target proof that two
+different targets derive two genuinely different, specifically-worded missing findings from the
+identical partial inventory over a category both require; a whole-table uniqueness check that no
+two (target, category) reason strings collide; a completeness check that every declared category
+carries a real, non-empty description; and four real subprocess CLI invocations asserting exit
+codes 0/1/2.
+
+## Source Authority: Conflict-Type Taxonomy (2026-09-06)
+
+`source_authority.resolve_conflict()` decides WHICH VALUE wins when two sources disagree; it never says WHAT KIND of disagreement this was. Two conflicts that both resolve `RESOLVED` -- or both land at `UNDECIDABLE_SAME_AUTHORITY` -- can be entirely different SHAPES of problem: two controller docs disagreeing with each other is a documentation-staleness question; a register file disagreeing with the RTL decoder is a regmap-vs-silicon question; a VIP's shipped example disagreeing with its own user guide is a VIP-internal-consistency question. Nothing anywhere named that shape, so two audits of the same conflict history could each describe "what kind of conflicts this project has" differently from identical underlying records.
+
+A purely additive extension to `dv_harness/source_authority.py` (no other file touched, per this gap-closure's own scope) adds exactly that: a 10-value classification layer over the source TYPES a conflict names, layered on top of -- and never changing the meaning of -- the existing 9-level `AUTHORITY_ORDER`/`resolve_conflict()`/`escalate_conflict()` machinery.
+
+**The vocabulary** (`CONFLICT_TYPES`): `DOC_DOC_CONFLICT`, `DOC_RTL_CONFLICT`, `REGISTER_RTL_CONFLICT`, `GUIDE_REGISTER_CONFLICT`, `PHY_SPEC_MODEL_CONFLICT`, `VERSION_CONFLICT`, `CONFIGURATION_CONFLICT`, `COMMAND_TASK_CONFLICT`, `VIP_DOC_SOURCE_CONFLICT`, `UNKNOWN` -- held closed against drift by `assert_conflict_type_vocabulary_is_closed()`, which runs at import time and fails if a declared `CONFLICT_TYPE_*` constant's value is not in the tuple.
+
+**Why it needs a wider vocabulary than the 9-level order itself.** Four of the ten values (`PHY_SPEC_MODEL_CONFLICT`, `VERSION_CONFLICT`, `CONFIGURATION_CONFLICT`, and the ad hoc half of `COMMAND_TASK_CONFLICT`) name source shapes the conflict-authority order has no rank for at all -- a PHY electrical model, a spec/datasheet document, a tool/VIP version string, a configuration/variant value. `SourceClaim.__post_init__` correctly refuses to rank any of those (there is no level to give a PHY model in the 9-level order), so a genuine PHY-model-vs-spec disagreement can never reach `resolve_conflict()` as a real claim pair -- but it is still a real, nameable conflict. `classify_conflict()` therefore accepts TWO record shapes: a real `resolve_conflict()`/`escalate_conflict()` record (reading each claim's own `source`, always one of the 9 `AUTHORITY_ORDER` ids), or a lighter ad hoc `{"source_a": ..., "source_b": ...}` / `{"sources": [...]}` record for a disagreement the 9-level order was never meant to rank.
+
+**Classification is by source TYPE alone, never by claim content.** `normalize_conflict_source_kind(name)` maps a source name onto one of 13 broad "kinds" -- each of the 9 real `AUTHORITY_ORDER` ids resolves to exactly one kind (checked equal to `{s.id for s in AUTHORITY_ORDER}` by test, so a future 10th authority level cannot go unclassified), and 4 extra kinds (`phy_model`/`spec`/`version`/`configuration`) exist only in this layer, with their own alias table folded through the SAME `_key()` normalization every `AUTHORITY_ORDER` alias already uses. An unrecognized source raises `UNKNOWN_CONFLICT_SOURCE_KIND` rather than silently classifying `UNKNOWN` -- the same "never let a typo hide behind the taxonomy's own honest unknown value" discipline `normalize_source()` already applies to the conflict-authority order itself.
+
+`classify_conflict_type(source_a, source_b)` looks up the unordered kind pair in a fixed table and returns `UNKNOWN` for any pair the table does not name (e.g. `simulation_result` vs. `controller_doc`, or two `existing_testbench_bind` claims) -- naming a conflict's type WRONG is worse than admitting it does not fit one of the nine named shapes. `classify_conflict(conflict)` is the record-level entry point: it classifies a `NO_CONFLICT`-verdict record too (the taxonomy is about which two source types were being COMPARED, not whether they agreed), and refuses -- rather than guesses -- a record naming more than 2 distinct source types (the same 2-3-sides pairwise boundary `escalate_conflict()` already draws for the question-queue schema), a record matching neither accepted shape, a record with no sources at all, or a non-dict.
+
+Proven by 31 new tests appended to `dv_harness_tests/test_source_authority.py` (68 total, all 37 pre-existing tests untouched and still passing): vocabulary closure, `AUTHORITY_ORDER`-id-to-kind completeness, all 9 named pairs (via both `AUTHORITY_ORDER`'s own aliases and the extra-kind alias table, and order-independence), 4 negative controls for unrelated-but-recognized pairs reading `UNKNOWN` plus an unrecognized-source refusal, `classify_conflict()` driven against a REAL `resolve_conflict()` record at all three of its real verdicts (`RESOLVED`/`NO_CONFLICT`/`UNDECIDABLE_SAME_AUTHORITY`), both ad hoc record shapes, and refusals for a 3-plus-source record, an unrecognized record shape, an empty-claims record, and a non-dict input.
+
+**Deliberately bounded.** This layer only LABELS which two source types a conflict compares; it does not re-decide `resolve_conflict()`'s verdict, does not change `escalate_conflict()`'s question-queue behavior, and adds no stage gate -- it is a pure classification function a caller may use when reporting on conflict history, nothing more.
+
+## Register-to-RTL Trace: the Parser-vs-Elaboration Boundary, Applied to Registers (2026-09-06)
+
+A register field's declared control/status meaning (`register_map.schema.json`'s own `fields[].name`/
+`description`) had no code path connecting it to the RTL a generated environment actually binds
+against. The closest neighbours both operate one level away: `sys_regmap.py` derives mode-determining
+control bits for a Gate-2 precondition, and `connectivity.py` derives bind-location/tier confidence for
+a whole INTERFACE -- neither asks "does the RTL this project parsed even contain a signal this specific
+register field's name plausibly refers to". A repo-wide grep for `register_rtl_trace`/
+`RegisterRtlTrace`/`TRACE_CONFIRMED`/`TRACE_PARTIAL` matched nothing executable before this module.
+
+`dv_harness/register_rtl_trace.py` attempts that trace, using `verible_parser.py`'s existing
+declaration-level parse -- import only, read-only, no second SystemVerilog parser in this package.
+
+**The parser-vs-elaboration boundary drives every status this module can report**, the same discipline
+`uvm_structural_lint.py` already applies to its own declaration-level limits, applied here to registers
+instead of UVM classes. `verible_parser.py` parses SOURCE TEXT into a syntax tree; it never elaborates
+-- it does not resolve a `generate`/`ifdef` condition, does not evaluate a parameter, does not simulate
+a single clock edge, and does not know what value any signal ever actually carries. So the STRONGEST
+claim this module can ever make is "a signal (or port) with this name exists in the parsed sources, and
+it is wired to something (not just an unused local declaration)". That proves the NAME is real and
+REFERENCED. It never proves that signal is the field's control/status logic at run time, that the
+field's declared semantics match what the RTL actually does with it, or that the wiring is reachable
+under the design's real configuration. `TRACE_CONFIRMED` is this module's ceiling, not a claim of
+verified behavior -- and it is worded that way in every `TRACE_CONFIRMED` result's own `reason` text.
+
+**Four statuses, and the rule that keeps them honest.** `TRACE_CONFIRMED`: exactly one RTL site (port
+or signal) matches the searched name exactly (case/underscore-normalized), and that site is REFERENCED
+elsewhere in the parsed sources (a port, or an internal signal appearing in a continuous assign's or an
+instance connection's own net list) -- unambiguous existence plus reference, nothing stronger.
+`TRACE_PARTIAL`: a plausible reference exists but is AMBIGUOUS -- more than one exact-name site, an
+exact-name site that is only a bare unused declaration, or only a substring/fuzzy name match -- never
+silently upgraded to `TRACE_CONFIRMED` no matter how plausible the fuzzy match looks; this is the
+module's one hard rule. `TRACE_NOT_FOUND`: a real search was performed over real parsed RTL and no
+matching site, exact or fuzzy, was found anywhere. `BLOCKED`: the trace could not be ATTEMPTED at all
+(no field name to search for, no parsed RTL supplied, or verible itself could not produce a parse) --
+distinct from `TRACE_NOT_FOUND` on purpose, since "we never looked" must never be reported as "we
+looked and found nothing".
+
+**Input is deliberately duck-typed and independent of any other concurrently-developed module.** This
+file imports only `verible_parser.py` and `env_manifest.py`'s existing `load_register_map()` /
+`RegisterMapValidationError` -- both established modules outside the batch this task was built in.
+Register fields may be handed in as plain dicts (the shape `register_map.schema.json`'s own `fields[]`
+entries already have, optionally carrying `register_name`/`block_name` context and an extra
+`rtl_signal_hint` key for a document-stated expected RTL signal name) or as `RegisterFieldRef`
+instances built from one.
+
+`trace_register_field()`/`trace_register_fields()` trace one or many fields; `collect_rtl_sites()` and
+`parse_rtl_sources()` build the searchable RTL corpus once for reuse across many fields rather than
+re-parsing per field. `python -m dv_harness.register_rtl_trace` is the front door
+(`execute_verb()`/`main()`), rendering a report via `format_report()`/`summarize_trace()`.
+
+Proven by `dv_harness_tests/test_register_rtl_trace.py` (31 tests) against small real synthetic RTL
+fixtures parsed through the real verible subprocess: `TRACE_CONFIRMED` is proven only on an unambiguous
+exact-name, referenced site; the ambiguity rule is proven directly -- two conflicting declarations of
+the same signal name, and an exact-name-but-unused declaration, both stay `TRACE_PARTIAL` and never
+upgrade; `BLOCKED` is proven distinct from `TRACE_NOT_FOUND` on an empty/unparseable corpus versus a
+real search that found nothing.
+
+**Disclosed residual**: this closes register-field-to-RTL-name traceability only, at the parser's own
+declaration-level ceiling. It runs no build, no simulation, and no gate of its own -- ad hoc via
+`python -m dv_harness.register_rtl_trace`.
+
+## Change-Cascade Impact Table: "What Does This Change Make Suspect?" (2026-09-06)
+
+This project produces a great many derived artifacts off a small set of upstream facts -- a VIP
+release, a chunk of DUT RTL, a register map, an address map, a bind topology, a UPF power-intent file,
+a requirement record, a waiver, a configuration-variant space, a subsystem registry entry, a
+testplan/vPlan correspondence. Each of those facts already has a real producer somewhere in this
+codebase, and several producers already compute a NARROW, re-derive-one-thing staleness check of their
+own (`golden_scenario.evaluate_freshness()` for one capsule, `waiver_store.derive_status()` for one
+waiver, `signoff_export.evaluate_freeze_invalidation()` for one frozen baseline). None of them, and
+nothing anywhere in this repo, answered the WIDER question a human or an agent actually has the instant
+one of those upstream facts changes: "which OTHER already-computed artifacts across this whole harness
+does that change make suspect, and why, specifically enough to know what to re-run?" A repo-wide grep
+for `change_cascade`/`ChangeCascade`/`downstream_artifact`/`cascade_impact` matched nothing executable
+before this module. An agent who bumped a VIP version had no single place to be told that the VIP API
+cards, the connectivity gate verdicts, and any golden scenario capsule watching that tool version were
+all now suspect -- each fact individually WAS discoverable by reading three different modules' own
+narrow staleness logic, but nothing joined them into one lookup keyed on "what changed".
+
+`dv_harness/change_cascade.py` is that lookup, and only that. It is a small, hand-curated
+`CHANGE_CASCADE_TABLE`: `{changed_field -> downstream artifacts}`, each downstream entry citing its own
+real `producing_module` -- so the citation is checkable rather than trusted prose.
+`assert_producing_modules_resolve()` holds every cited module to the same "does the cited module really
+import" discipline `protocol_capability.py`'s registry and `golden_flow_readiness.py`'s row table
+already apply to themselves. `known_changed_fields()` lists the declared vocabulary;
+`cascade_for_changed_field()` answers one field; `assess_changes()` takes a plain, duck-typed iterable
+(a bare field-name string, or any dict/object carrying a `field` key/attribute) and reports the combined
+impact. It does NOT itself re-derive any staleness verdict -- that stays each artifact's own real
+producer's job -- and it never widens the table by guessing: an undeclared `changed_field` reports
+`UNKNOWN_FIELD` naming the real declared fields, never a silently empty "nothing downstream" result, so
+an unmapped change reads as unknown impact, never zero impact.
+
+**Reuse, not reinvention, of `question_queue.py`'s revocation mechanism.** When a changed field
+invalidates the very fact an earlier Tier-2 auto-assumption or human answer was keyed on, the sanctioned
+undo is already real: `QuestionQueueStore.revoke_decision()`. `revoke_stale_decisions()` is a thin,
+explicit caller of that existing function -- it invents no second decisions store and no second
+revocation mechanic. It is deliberately NOT automatic: this module has no way to know, for an arbitrary
+project, which `question_key` strings that project's own question-queue callers used for a decision a
+given field change now invalidates (question-key naming is each caller's own convention), so guessing
+one would be exactly the fabrication the Evidence Truth Rule forbids. A caller who already knows which
+decision(s) a change invalidated supplies those `question_key` strings explicitly, and this module
+performs the real revocation call one key at a time, treating "nothing was on file for that key"
+(`revoke_decision()`'s own `KeyError`) as an honest `NO_LIVE_DECISION` outcome rather than an error.
+
+**Decoupled from every other concurrently-developed module, on purpose.** Several other gap-closure
+items built alongside this one would be natural upstream producers of "what changed" (a real
+diff-detection module, a subsystem change-request tracker, ...). None of them is imported here --
+`assess_changes()` takes a plain, duck-typed iterable so a future detector's real output can be handed
+to this function unmodified, once that detector exists, as long as each of its records names the field
+it changed. Until then, a caller (human, agent, or a hand-rolled diff check) supplies the list of
+changed fields directly.
+
+Front door: `python -m dv_harness.change_cascade assess|revoke --root <dir> [--json]`
+(`execute_verb()`/`main()`), rendering via `format_cascade_report()`/`format_revoke_outcomes()`.
+
+Proven by `dv_harness_tests/test_change_cascade.py` (26 tests): every declared `changed_field` is
+proven to resolve to real, importable `producing_module` citations; an undeclared field is proven to
+report `UNKNOWN_FIELD` rather than a silent empty result; `revoke_stale_decisions()` is proven against a
+real `QuestionQueueStore` on disk, including the honest `NO_LIVE_DECISION` outcome for a key nothing was
+ever filed under; and `assess_changes()` is proven over both bare strings and dict/object entries.
+
+**Disclosed residual**: it records and reports, and arbitrates nothing -- no approval/governance
+mechanism is referenced. There is deliberately no stage gate. Revoking a decision is always an explicit,
+caller-supplied act; nothing here auto-revokes on its own initiative.
+
+## Requirement Risk IR (`dv_harness/requirement_risk_ir.py`)
+
+Scores one requirement across six risk factors -- `complexity`, `change_frequency`, `bug_history`, `customer_impact`, `observability_difficulty`, `protocol_criticality` -- and, per the Evidence Truth Rule, never blends them into an opaque number without saying which of three honest states each factor is actually in:
+
+- **MEASURED** -- `change_frequency` is the only mechanically-produced factor. It runs `git log --oneline -- <source_file>` under `project_root` through a read-only, degrade-never-raise `_git()` wrapper (the same contract as `trend_analysis._git()`/`change_impact._git()`, reimplemented locally rather than imported, since this module accepts `requirement_facts` as a fully generic/duck-typed parameter and never imports `requirement_contract.py` or any sibling module), then buckets the real commit count onto a documented 1-5 scale (0 commits -> 1, 1-2 -> 2, 3-5 -> 3, 6-10 -> 4, 11+ -> 5). Missing git, a timeout, a non-git-repo root, a nonexistent root, or missing `source_file`/`project_root` all degrade to `NOT_AVAILABLE` with a real reason -- never a guessed score. A real zero-commit result for a path that genuinely has no history is still `MEASURED` (score 1): that count is real evidence, not absent evidence.
+- **DECLARED** -- `complexity`, `customer_impact`, `observability_difficulty`, and `protocol_criticality` have no mechanical producer anywhere in this repo. Each is read only from the caller's `requirement_facts` (dict `.get` or attribute access), validated as a real integer in `[1, 5]` (booleans explicitly rejected despite being an `int` subclass in Python), and reported `DECLARED` -- visibly distinct from a measured value. A missing or invalid declaration is `NOT_AVAILABLE`, never silently defaulted to a middle-of-scale guess.
+- **NOT_AVAILABLE always** -- `bug_history` has no real producer anywhere in this repo (verified by repo-wide grep before this module was written: no defect tracker, no bug database, no incident log) and, per this task's own explicit rule, has no legitimate caller-declaration path either. `bug_history_factor()` always returns `NOT_AVAILABLE` and ignores any `bug_history` key a caller's facts might happen to carry.
+
+`assess_requirement_risk(requirement_facts, *, source_file=None, project_root=None)` returns a `RequirementRiskProfile` with a `composite_score` computed as the mean of only the AVAILABLE factors, always reported alongside `available_factor_count`, `missing_factors`, and `coverage` (`"N/6"`) so a partial profile can never be mistaken for a complete one. `format_risk_report()` renders it for humans; a thin `main()` CLI (`python -m dv_harness.requirement_risk_ir --facts-file ... --source-file ... --project-root ...`) follows the same argparse shape as `change_cascade.py`/`golden_scenario.py`. The module reads and reports only -- it writes nothing, gates nothing, and takes no governance action.
+
+Tested in `dv_harness_tests/test_requirement_risk_ir.py` (20 tests) against a real throwaway git repository built via subprocess (mirroring `test_trend_analysis.py`'s `rtl_repo` fixture), with real, distinct commit counts driving real bucket assignments, plus negative controls for every `NOT_AVAILABLE` degradation path (missing git inputs, non-git directory, nonexistent root, missing/invalid/out-of-range/boolean declared values) and a dedicated check that `bug_history` stays `NOT_AVAILABLE` even when a caller's facts supply one.
+
+## Potential Spec-Gap Detector: 5 Structural-Absence Patterns Over a Requirement Set (2026-09-06)
+
+A specification can be internally consistent sentence-by-sentence and still be STRUCTURALLY
+incomplete: it defines what happens when a transfer completes, never what happens when it errors;
+defines an enable bit, never a disable path; defines an interrupt being asserted, never how it is
+cleared; defines a reset, never what happens to whatever was already in flight when that reset
+lands; defines an error condition, never a recovery path back out. Nothing in this repo asked that
+question over a requirement SET. `requirement_contract.py` (section 184) checks whether a SINGLE
+requirement record is internally coherent -- its own fifteen fields present, its own declared
+status honestly re-derived from its own content -- and never compares one requirement against
+another. `spec_vplan_delta.py` and the `spec_to_vplan_*` gates compare a spec against a vPlan, a
+different axis entirely. A repo-wide search before building confirmed no code anywhere paired a
+"normal condition" requirement against an "error condition" one, an "enable" against a "disable",
+an "interrupt assert" against an "interrupt clear", a "reset" against "in-flight operation
+behavior", or an "error condition" against "error recovery".
+
+`dv_harness/potential_spec_gap_detector.py` closes exactly that, and only that. It is deliberately
+narrow, duck-typed, and self-contained: it imports nothing from `dv_harness` (not even
+`dv_harness.models`) and nothing from any other module in this batch, so it stays fully decoupled
+from whichever concurrently-running effort eventually owns the canonical requirement-set shape. A
+"requirement" is any `Mapping` carrying free text under `text`/`description`/`expected_behavior`/
+`condition`/`behavior`/`spec_text`/`requirement_text`, optionally an id under `id`/`req_id`/
+`requirement_id`/`name`, and optionally an explicit correlation key under `subject`/`signal`/
+`feature`/`operation`/`condition_name` (preferred over anything derived from prose, since a
+human-declared subject is a stronger signal than this module's own guess). A requirement with no
+usable text contributes nothing and is recorded as skipped, never silently dropped or guessed at.
+
+**Classification is a lexical keyword scan over each requirement's own text -- a heuristic, stated
+as one, never a certainty.** Nine fixed-vocabulary flags (normal-condition, error-condition,
+enable, disable, interrupt-assert, interrupt-clear, reset, in-flight-operation-behavior,
+error-recovery) are each derived from a small, explicit phrase list, matched with `\b`
+word-boundary regex for single tokens (so "incomplete" is never mistaken for "complete", and
+"unable" never for "enable" -- each inflected form is listed separately) and substring matching
+for multi-word phrases. Every fired flag carries the exact matched phrase(s) as its evidence, so a
+finding is always inspectable against the real text it was raised from.
+
+**Pairing runs on a same-subject test, not "does the counterpart word appear anywhere in the
+set".** A requirement's subject is its own declared correlation field if present, tokenized, or
+-- absent one -- the significant (stopword- and classification-keyword-filtered) tokens of its own
+text. Two requirements are judged to concern the same subject only when their significant-token
+sets clear a conservative Jaccard-overlap bar (`SUBJECT_MATCH_THRESHOLD = 0.34`), deliberately
+guarding against manufacturing a false pairing out of shared spec-prose vocabulary the way a looser
+bar would. A requirement that already states both halves of a pair in its own text (e.g. "a soft
+reset asserted while a DMA transfer is already in progress shall abort the transfer and
+reinitialize registers") is self-satisfying and raises no finding -- this module never demands a
+well-written single requirement be artificially split in two to avoid a false gap.
+
+**Every finding is `POTENTIAL_SPEC_GAP`, structurally, not merely by convention.**
+`SpecGapFinding.status` is pinned to that one literal string by its own `__post_init__` --
+constructing a finding with any other status raises `ValueError` -- so "never auto-promote a
+detected gap to an approved requirement" is a property the code enforces rather than a documented
+intent a caller could quietly violate. The module's status/gap-type vocabulary
+(`NOT_AVAILABLE`/`GAPS_DETECTED`/`NO_GAPS_DETECTED`/`POTENTIAL_SPEC_GAP` plus the five gap-type
+names) is checked disjoint at import time from a small literal set of verification-verdict tokens
+(`PASS`/`FAIL`/`BLOCKED`/`ACCEPTED_RISK`/`WAIT_USER`/`RETRY`/`NEEDS_USER_INPUT`) by
+`assert_no_verification_verdict_vocabulary()` -- the same discipline several sibling modules apply
+against `dv_harness.models.Status`, applied here against a literal list since this module
+deliberately imports nothing from `dv_harness`.
+
+Front door: `python -m dv_harness.potential_spec_gap_detector <requirements.json> [--json]`
+(accepts a bare JSON list, or `{"requirements": [...]}`); exit 0 no gaps, 1 gaps detected, 2 usage
+error or nothing usable to analyze. No `dv-harness` CLI verb was added and `gates.py`/`cli.py` were
+not touched, per this task's own file-safety scope.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) This is NOT a spec parser: it
+takes an already-extracted requirement set and never reads a raw specification document, RTL, or a
+register map itself. (2) It cannot prove a gap is real -- prose using vocabulary this module's
+keyword lists do not recognize will not be flagged, and unrelated requirements that happen to
+overlap two keyword lists could in principle produce a spurious pairing; every finding is
+`POTENTIAL_SPEC_GAP` for exactly this reason, never a word that would read as a proven absence.
+(3) It decides, approves, and arbitrates nothing: no build, job, or approval is touched, there is
+deliberately no stage gate, and it authors no fix -- closing a real gap is a human writing a new
+requirement, never this module.
+
+Proven by `dv_harness_tests/test_potential_spec_gap_detector.py` (26 tests): one positive-detection
+case per pattern; matching-pair negative controls per pattern (including a self-satisfying
+single-requirement case and a fallback-derived-subject case with no explicit `subject` field
+supplied); an unrelated-subjects control proving a gap still fires when no real counterpart exists
+elsewhere in the set; empty-list/`None`-input and no-usable-text-skipped controls reporting
+`NOT_AVAILABLE` honestly rather than a fabricated clean pass; a no-classifiable-content control
+reporting `NO_GAPS_DETECTED`; structural-pinning tests proving `SpecGapFinding` refuses a
+non-`POTENTIAL_SPEC_GAP` status and an unrecognized gap type; and real subprocess CLI tests
+covering all three exit codes plus the `{"requirements": [...]}` wrapper form.
+
+## SPEC_VPLAN_READY: Composite Readiness for the Spec-to-vPlan Pipeline Stage (2026-09-06)
+
+This project already has two composite "is X ready" conjunctions built on the identical worst-wins discipline, and neither answers the question a caller working the SPEC-TO-VPLAN pipeline stage actually needs: `verification_intake_contract.py`'s `INTAKE_READY` is a whole-PROJECT capstone across every sub-domain intake touches, and `subsystem_maturity_gate.py`'s 9.0/9.5/10.0 levels are a whole-SUBSYSTEM maturity ladder spanning golden-flow connectivity, system smoke-proof, VIP-API provability, bind-tier cleanliness and regression evidence. Neither has any notion of "is the step that turns a parsed specification into a vPlan/requirement-contract artifact ready to drive generation, done" -- a project could be `SPEC_VPLAN_READY` while its overall `INTAKE_READY` is still `False` (a later sub-domain has not caught up), and a subsystem could clear `SPEC_VPLAN_READY` for every one of its constituent specs while sitting nowhere near 9.0 maturity (which needs conditions this gate never touches at all). A repo-wide search for `SPEC_VPLAN_READY`/`spec_vplan_ready` matched nothing executable before this: `tools/verification_flow/spec_to_vplan_quality_gate.py` and `spec_to_vplan_requirement_quality_gate.py` are per-requirement-record shape checks, not a composite verdict over a named condition set.
+
+`dv_harness/spec_vplan_readiness_gate.py` is that composite gate, and it is deliberately a third, independent mechanism rather than an import of either neighbour -- both `verification_intake_contract.py` and `subsystem_maturity_gate.py` (along with `functional_coverage_signoff.py`, whose own Closure rollup uses the identical shape one level down) were concurrently-building batch items this module was scoped to never import. What is reused is the DISCIPLINE those modules already state as a design principle rather than a function this file could call without also importing whichever fixed condition set that module hardcodes: worst-wins, no-averaging, one unresolved condition among a hundred clean ones still blocks. `evaluate_spec_vplan_readiness()` takes a caller-assembled, caller-named list of `{"condition_name", "status", "reason"?}` records -- this module hardcodes NONE of them, since which conditions belong to "is spec-to-vplan done" (spec/doc mapping, requirement-contract completeness, vPlan/spec-delta resolution, and others) depends on whichever real per-domain producers a given project has wired.
+
+**The fold is strictly worst-wins, two tiers deep**, over a condition-status vocabulary of `MET`/`UNMET`/`UNKNOWN`/`NOT_AVAILABLE` and a gate-verdict vocabulary of `QUALIFIED`/`NOT_QUALIFIED`/`INCOMPLETE_EVIDENCE` (both checked disjoint from `models.Status` at import time, the identical guard `subsystem_maturity_gate.py` applies to itself, reimplemented rather than imported since that module is off the import list here): any `UNMET` condition makes the whole gate `NOT_QUALIFIED` outright, regardless of how many others are `MET` and regardless of whether any other condition is `UNKNOWN`/`NOT_AVAILABLE` too -- a single unresolved requirement or vPlan gap is never diluted into a percentage or an average. Only once no condition is `UNMET` does any `UNKNOWN`/`NOT_AVAILABLE` condition make the result `INCOMPLETE_EVIDENCE` -- this task's own instruction stated in code: an unresolved-evidence condition is a third, honestly distinct outcome, never silently read as either a pass or a confirmed failure. Every condition `MET` is the only path to `QUALIFIED`. An absent or empty condition list is `INCOMPLETE_EVIDENCE` with a real reason, never a vacuous `QUALIFIED` over zero conditions measured -- the same "an empty input is UNKNOWN, never READY" rule this project's other composite folds already state. A malformed record (missing `condition_name`/`status`, an empty name, an unrecognized status, or a name repeated by an earlier record in the same list) raises `SpecVplanReadinessGateError` naming exactly what was wrong, rather than being silently dropped or resolved by picking one.
+
+**It reads only.** No stage runs, no gate script is invoked, no build/regression/LSF job starts, and it writes no state/control/approval file of its own -- `ControlPlane.approve()`, `policy.can_signoff()`, `assert_human_approval()` and the PR-only main/master governance are untouched and unreferenced, checked against the module's own real code (not its prose, which legitimately discusses these mechanisms by name as precedent) by a tokenize-based test. A `QUALIFIED` verdict is an input to a human's decision that the spec-to-vplan stage is done, never a substitute for one, and there is deliberately no stage gate of its own.
+
+Front door: `python -m dv_harness.spec_vplan_readiness_gate statuses|verdicts|evaluate --conditions <file> [--json]` (no `dv-harness` CLI verb -- `cli.py` and `gates.py` are on this batch's never-touch list, the same disclosed choice several very recent same-day additions in this repo have also made). Exit 0 `QUALIFIED`, 1 `NOT_QUALIFIED`, 2 `INCOMPLETE_EVIDENCE` or a usage/malformed-input error.
+
+Proven by `dv_harness_tests/test_spec_vplan_readiness_gate.py` (33 tests): the core positive path; the headline no-averaging negative control (20 clean conditions plus one `UNMET` still reads `NOT_QUALIFIED`); `UNKNOWN` and `NOT_AVAILABLE` each independently proven to produce `INCOMPLETE_EVIDENCE`; `UNMET` proven to outrank `UNKNOWN` when both are present in one condition set; an empty/`None` condition list proven `INCOMPLETE_EVIDENCE`; five malformed-record negative controls each raising the correct named error; a real `ast.parse` of the module's own import statements proving it never imports `verification_intake_contract`/`subsystem_maturity_gate`/`functional_coverage_signoff`; and four real `python -m` subprocess invocations asserting all three exit codes plus JSON shape.
+
+## vPlan Item Executability Score: a Third, Distinct Readiness Axis (2026-09-06)
+
+This repo already has two real per-vPlan-adjacent readers, and neither answered this module's question.
+`vplan_artifact.py` scores a vPlan ROW across nine independent dimensions (requirement link, hierarchy
+integrity, ownership, coverage/checker/test linkage, ...), each READY/PARTIAL/BLOCKED/UNKNOWN, never
+averaged into one number -- by design, because folding nine independently-meaningful axes into one score
+would let a caller mistake a vPlan that is BLOCKED on one axis and READY on the other eight for a vPlan
+that is "mostly fine". `subsystem_practicality_score.py` rolls up ten whole-SUBSYSTEM maturity signals
+into one weighted 0-100 score, read off already-derived module verdicts, never per item. Neither answers
+"for THIS ONE vPlan item, how far along is turning it into a runnable generated test -- has anything
+even been identified, is it mapped to real implementation artifacts yet, and if so is that mapping still
+open on unresolved questions?" A repo-wide grep for `executability`/`implementation_readiness`/
+`IDENTIFIED_UNMAPPED` matched nothing before this module.
+
+**A five-value scale, deliberately five fixed points rather than a percent.** `0 NO_EVIDENCE` -- the
+item carries no identity and no mapping fact was even supplied to check. `20 IDENTIFIED_UNMAPPED` -- the
+item is known to exist but zero of its declared mapping facts are present. `50 PARTIALLY_MAPPED` --
+some, but not all, declared mapping facts are present. `80 MAPPED_OPEN_QUESTIONS` -- every declared
+mapping fact is present, but at least one open question against the item remains unresolved.
+`100 FULLY_READY` -- every declared mapping fact is present and no open question remains. A percent-style
+score invites averaging across items and across `vplan_artifact.py`'s nine completeness dimensions,
+exactly the collapsing this module exists to avoid being read as -- five named, ordered checkpoints are
+a status, not a measurement, the same non-numeric-but-ordered discipline `requirement_contract.py`'s
+five-value status vocabulary and `waiver_store.py`'s five-value waiver status already use.
+
+**Duck-typed input, on purpose.** Per this batch's file-safety scope this module must not import
+`vplan_artifact.py`, `verification_intent_ir.py`, or any other in-flight sibling module, and must not
+assume any of their still-moving internal shapes. A vPlan item is accepted as a plain mapping carrying
+whatever identity fields a caller has, a `mapping_facts` value (a `{fact_name: bool}` dict, a list of
+`{"name"/"fact": ..., "present"/"mapped"/"done"/"satisfied": bool}` records, or a bare list of
+fact-name strings each counted present -- callers using the bare-string form should also declare
+`required_mapping_facts` so a fact never even asked about can be told apart from one asked about and
+found absent), an `open_questions` list, and a `blockers` list. Nothing here decides what a "mapping
+fact" IS -- unlike `vplan_artifact.py`'s nine named dimensions, this module mints no second opinion
+about what "coverage-linked" or "checker-linked" means; it only counts how many of whatever facts the
+caller declared are present, which keeps it correct today and automatically compatible with whatever
+shape a future generator (or `vplan_artifact.py` itself) produces, by converting that shape's own facts
+into this same plain form at the call site.
+
+**The one rule this module exists to enforce: score and blocker are never merged.** A vPlan item can be
+scored 100 (`FULLY_READY`: every mapping fact present, no open question outstanding) and STILL carry a
+separately-flagged CRITICAL blocker (e.g. a caller-recorded "this sequence's DUT register write was
+proven wrong by RTL evidence" finding). `score_item_executability()` never folds a blocker into the
+numeric score, and never suppresses, downgrades, or even reads a blocker to decide the score --
+blockers are collected and reported on the SAME record, in their own field, and
+`assert_score_never_hides_a_critical_blocker()` is a standing check any caller can run over a report
+before trusting a high score alone.
+
+`score_item_executability()`/`score_vplan_items()` score one or many items; `render_executability_matrix()`
+renders the report; `python -m dv_harness.vplan_item_executability_score` is the front door.
+
+Proven by `dv_harness_tests/test_vplan_item_executability_score.py` (29 tests): each of the five scale
+points is proven from its own real input shape, all three `mapping_facts` input forms (dict, record list,
+bare-string list with `required_mapping_facts`) are proven equivalent, and the headline negative control
+proves a 100/`FULLY_READY` item still surfaces its own recorded CRITICAL blocker unchanged and
+unsuppressed.
+
+**Disclosed residual**: it counts caller-declared facts; it does not decide what a mapping fact means,
+and it references no approval/governance mechanism.
+
+## File Candidate Ranker: Evidence-Only Ranking of an Ambiguous File Choice (2026-09-06)
+
+Intake repeatedly hits a recurring real shape: which of several similarly-named files is canonical --
+`usb_reg.xlsx` vs `usb_reg_v2.xlsx` vs `usb_reg_final.xlsx`, or three copies of a Makefile nobody
+remembers which one the build actually uses. `dv_harness/file_candidate_ranker.py` is deliberately
+generic: it ranks ANY set of candidate file paths a caller hands it, for any reason the caller is unsure
+which one is canonical -- distinct from, and never confused with, this project's DE-command-specific
+reuse scorer, which answers a narrower domain question.
+
+**Three real, independently-obtained signals per candidate.** Git log reference count/recency (a real
+`git log --oneline -- <path>` subprocess call against a caller-supplied repository root, giving commit
+count and the most recent commit's date/sha/subject); build-script/Makefile reference count (a real
+text scan of every Makefile/shell/csh/tcl/perl/CMake/filelist file found under a caller-supplied project
+root, counting literal occurrences of the candidate's own basename); real file mtime (a real `os.stat()`
+call, mtime plus size as a secondary fact). Per the Evidence Truth Rule, every signal that could not be
+genuinely determined reports `NOT_AVAILABLE` with the specific real reason -- a missing git binary, a
+path outside any git repository, no build scripts found, a candidate absent from disk -- never a
+guessed value, and never a claim about a directory it was not asked to scan.
+
+**This module never picks a winner.** `rank_file_candidates()` always returns EVERY candidate it was
+given, each carrying its own full, independently-cited evidence. The one thing it additionally computes
+-- `display_rank` and the `display_order_reason` explaining it -- is a purely INFORMATIONAL sort order
+over the SAME evidence a human reading the report can already see and override in one glance; it is
+explicitly asserted (by the test suite) never to be read as a decision, a recommendation, or a verdict.
+There is no "winner" field, no "delete the others" action, and `assert_no_verification_verdict_vocabulary()`
+holds this module's vocabulary disjoint from `models.Status` at import time, the same guard several
+other domain-vocabulary modules in this repo already apply to themselves.
+
+**NOT_AVAILABLE vs. a real zero -- a deliberate distinction.** For the build-script and git-recency
+signals, a real, checked zero (a project really has build scripts and none mention this file; a file
+really was found and stat'd and just has an old mtime) is reported AVAILABLE with that zero/old value --
+collapsing "we checked and the answer is zero" into `NOT_AVAILABLE` would itself be the "never conflate
+absence with zero" failure the Evidence Truth Rule forbids. The one place this module deliberately
+reports `NOT_AVAILABLE` for a real, successful, zero-result git log call is a reachable repository with
+real commit history that nonetheless contains ZERO commits touching this particular path -- carried on
+the record with the real `commit_count=0` anyway, never hidden, because for this module's ranking
+purpose that case carries no comparative information beyond what the other two signals already surface
+more concretely.
+
+Proven by `dv_harness_tests/test_file_candidate_ranker.py` (27 tests) against a real throwaway git
+repository with real commits touching different candidate files, built via subprocess in the test
+itself: each signal is proven on its positive path and on its own NOT_AVAILABLE reason, the
+zero-vs-NOT_AVAILABLE distinction is proven directly, and the "never picks a winner" guarantee is
+proven by asserting every candidate is always returned with its full evidence regardless of rank.
+
+**Disclosed residual**: it is a pure fact-gatherer. It decides nothing, writes nothing, and references
+no approval/governance mechanism.
+
+## User Answer Validator: Checking a Raw Intake Answer Against Real Evidence (2026-09-06)
+
+Intake conversations collect free-text answers such as "DUT top = usb_core" or "build includes file
+usb3_link_ctrl.v". Nothing in this repo checked such an answer against anything real: an agent (or a
+human) typing the answer was the only source for it, so a wrong or hallucinated answer would sit in the
+intake record indistinguishable from a correct one. Per the Evidence Truth Rule, a claim like this must
+be checked against a real producer, and where it genuinely cannot be checked the module must say so
+honestly rather than accept it as true by default. `dv_harness/user_answer_validator.py` is that check.
+
+**Reuse, not reinvention, on both halves.** Module/file EXISTENCE inside a supplied RTL file set is
+answered by running the real `verible_parser.parse_file()` against each supplied file -- the same
+verible-verilog-syntax front end `env_manifest.py` itself extends -- and checking whether the claimed
+module name is really among what verible extracted; this module parses RTL through no other path.
+Build INCLUSION is answered by reading `env_manifest.py`'s own already-recorded `dut_facts.rtl` facts
+(via `build_dut_facts_rtl()` or a real `env.manifest.json` loaded through `load_env_manifest()`) and
+checking whether the claimed file appears among the paths that were REALLY parsed into that manifest --
+this module never re-parses a build's file list itself and never re-derives what "the build" is.
+
+**Four honest statuses, never collapsed into three.** `VALIDATED` -- the claim matches real evidence
+exactly. `PARTIALLY_VALIDATED` -- real evidence supports a WEAKER form of the same claim (a module of
+that name exists but under different letter case; a file of that name is recorded but at a different
+path than claimed) -- a real, disclosed, weaker match, never silently promoted to `VALIDATED` and never
+silently dropped. `CONTRADICTED` -- real evidence was fully consulted and the claim is false: the named
+module is absent from every RTL file this module could successfully parse, or the named file is absent
+from every path recorded in the build facts. `UNVERIFIABLE` -- this module could not check the claim at
+all: no RTL file set or build facts were supplied, the real verible binary could not be run, some
+supplied RTL failed to parse and the claim was not found among what DID parse (so absence there is not
+proof of absence overall -- reporting `CONTRADICTED` in that case would be an unearned claim), or the
+answer's own text could not be parsed into a checkable claim in the first place. `UNVERIFIABLE` is never
+silently accepted as `VALIDATED`.
+
+`extract_claim()` parses raw answer text into a checkable `AnswerClaim`; `check_module_existence()` and
+`check_build_inclusion()` are the two real evidence checks; `validate_answer()` is the combined entry
+point. It does not decide which intake answer is "the" answer, does not write to any question queue,
+decision store, or manifest, and does not run any build, job, or LSF submission -- it reads two
+already-real evidence sources and reports what they say.
+
+Proven by `dv_harness_tests/test_user_answer_validator.py` (24 tests): a claimed module present in real
+parsed RTL is `VALIDATED`; a case-mismatched or wrong-path match is `PARTIALLY_VALIDATED`; a genuinely
+absent module/file is `CONTRADICTED`; missing inputs, an unparseable answer, and a real verible parse
+failure with no match found among what did parse are all `UNVERIFIABLE`, distinctly from `CONTRADICTED`.
+
+**Disclosed residual**: this is a distinct consumer from `dut_evidence_correlation.py` (which validates
+REQUIREMENTS, not raw intake answers). It decides nothing beyond its own four-status report.
+
+## Scoreboard Placement Scope: an 8-Value Taxonomy for Where a Compare Sits (2026-09-06)
+
+A repo-wide grep for `PORT_LOCAL`/`FUNCTION_LOCAL`/`BLOCK_LOCAL`/`CROSS_PORT`/`DMA_PATH`/`MEMORY_PATH`/
+`INTERRUPT_PATH`/`END_TO_END` and for `scoreboard_placement_scope`/`ScoreboardPlacementScope` found
+nothing -- no scoreboard placement-scope vocabulary existed anywhere in this repo.
+`amba_scoreboard_env.py` carries an adjacent but DIFFERENT vocabulary (`ENV_ROLE_SCOREBOARD`/
+`ENV_ROLE_SUBSCRIBER`/`ENV_ROLE_PREDICTOR`/...) answering "what UVM CLASS ROLE does this component
+play" -- never "where does its compare operation sit relative to the DUT's ports/paths", the different
+question `dv_harness/scoreboard_placement_scope.py` answers.
+
+**Deliberately standalone.** This module accepts related project facts (what a scoreboard compares;
+what project evidence says about a VIP-adjacent component) as generic, duck-typed dict parameters
+rather than importing `connectivity.py`, `amba_scoreboard_env.py`, or any `syoscb_*` module owned by
+concurrent work elsewhere -- every function here takes plain dicts with documented keys and imports
+nothing else from this package.
+
+**Eight scope values, one fixed precedence order.** `SCOPE_VALUES` is exactly `PORT_LOCAL`,
+`FUNCTION_LOCAL`, `BLOCK_LOCAL`, `CROSS_PORT`, `DMA_PATH`, `MEMORY_PATH`, `INTERRUPT_PATH`, `END_TO_END`.
+Classification precedence (most architecturally specific first, so a compare that is both e.g.
+cross-port and on a DMA path is named `DMA_PATH` rather than the less informative `CROSS_PORT`) is
+`SCOPE_PRECEDENCE`: `END_TO_END > INTERRUPT_PATH > DMA_PATH > MEMORY_PATH > CROSS_PORT > PORT_LOCAL >
+FUNCTION_LOCAL > BLOCK_LOCAL`.
+
+**The Evidence Truth Rule, applied to a taxonomy classifier.** A scope is asserted ONLY from an
+explicit, caller-declared fact (a boolean "does this compare span the DMA engine", an integer port
+count, or a direct `declared_scope` tag already validated against `SCOPE_VALUES`) -- never from
+free-text guessing over a prose description, which would be exactly the "confident guess" the Evidence
+Truth Rule forbids. A `compare_description`/`project_evidence` dict carrying none of the recognised
+fact keys, or carrying only explicitly-False/absent facts, yields `STATUS_UNVERIFIABLE` naming the
+absence -- never a defaulted or inferred scope. A malformed fact (wrong type, an unrecognised
+`declared_scope` value) is a caller error and raises `ScoreboardPlacementScopeError` rather than being
+silently coerced or dropped.
+
+**The SyoSil/similar default rule, stated explicitly rather than assumed.** A SyoSil-originated (or
+declared-similar) VIP scoreboard component -- the real-world SYOSCB family -- is architecturally a
+generic, reusable, protocol-agnostic QUEUE-BASED compare engine: a VIP plugs its own transaction streams
+into a SYOSCB queue instance, and the queue instance itself carries no inherent knowledge of where in
+the DUT's topology that comparison sits. So when such a component is DECLARED present
+(`vip_adjacent_compare_engine_declared: true`, or a naming `component_vendor`/`component_kind`/
+`component_name`) and the compare description carries no placement fact of its own, this module reports
+that one true thing it does know (a queue/compare engine) rather than a bare `STATUS_UNVERIFIABLE` --
+but any REAL project evidence overriding that default always wins, and the default is never presented as
+a measured placement fact.
+
+`classify_scoreboard_scope()` is the entry point; `python -m dv_harness.scoreboard_placement_scope` is
+the front door (`execute_verb()`/`main()`).
+
+Proven by `dv_harness_tests/test_scoreboard_placement_scope.py` (34 tests): each of the 8 scope values
+is proven from its own declared fact, the precedence order is proven directly (a compare declared both
+cross-port and DMA-path resolves to `DMA_PATH`), the SyoSil default is proven both to fire on an absent
+placement fact and to be overridden by real conflicting project evidence, and a malformed
+`declared_scope` value is proven to raise rather than silently coerce.
+
+**Disclosed residual**: it classifies from caller-declared facts only -- it derives no fact of its own
+and references no approval/governance mechanism.
+
+## DE Command Review Package: a Renderer, Never a Recovery Engine (2026-09-06)
+
+`dv_harness/de_command_review_package.py` renders the DE (Design/Verification Engineer) Command Review
+Package: a markdown table pairing each EXISTING command token recovered from a legacy command.txt-style
+pattern file against what this repo's own recovery evidence says about it, so a human DE can confirm or
+correct that recovered meaning before it becomes machine-trusted anywhere downstream.
+
+**This module is a RENDERER ONLY.** It never recovers a command's meaning, never infers a branch owner,
+and never invents a compatibility verdict or a timing value -- it takes a generic, duck-typed list of
+dict-like rows already produced by whatever upstream recovery step ran (elsewhere in this batch, or by
+hand), validates the two fields a review package cannot honestly omit, and defers all table shape/style
+to `connectivity.render_markdown_table()` -- this repo's only parameterized table renderer. No other new
+module from this batch is imported.
+
+**Columns, fixed order.** Existing Command (the literal token from the source file, verbatim); Recovered
+Meaning (what upstream recovery believes the command does); Branch Owner (which of the four fixed
+task-composition layers this command's effect belongs to -- `block`, `branch_a{i}`, `branch_fw`, or
+`branch_b{i}`, the exact vocabulary `.claude/skills/CORE/branch-mapper/SKILL.md` and
+`.claude/skills/CORE/pattern-architecture/SKILL.md` already define; a value outside this vocabulary is
+rejected loudly rather than rendered, because a wrong owner routes review to nobody); Task; Preconditions;
+Expected Effect; Compatibility (upstream recovery's own verdict, rendered verbatim, never computed here);
+Open Ambiguity (left blank only when the input row genuinely has nothing there, never defaulted to a
+fabricated "none").
+
+**Evidence Truth Rule**: a row missing its `existing_command` identity, or carrying a `branch_owner`
+string outside the four-layer vocabulary, is a hard validation error (`DECommandReviewPackageError`),
+never silently dropped or coerced. Every other field renders exactly what the row already holds.
+
+Proven by `dv_harness_tests/test_de_command_review_package.py` (13 tests): the four-layer vocabulary
+validation is proven both ways (a real layer name renders, an invalid one raises), missing-optional-field
+rendering is proven to fall back to `render_markdown_table()`'s own empty-cell behavior, and the renderer
+is proven to never compute or infer a value the input rows do not already carry.
+
+**Disclosed residual**: it renders; it does not recover, infer, or approve anything, and references no
+approval/governance mechanism.
+
+## Command Error Taxonomy: Eleven Per-Dispatch Categories, Deliberately Distinct from `loop_budget.FailureType` (2026-09-06)
+
+`dv_harness/command_error_taxonomy.py` classifies the real failure text produced by ONE command/task
+dispatch (an exception message, a sim.log excerpt around the failing task) into one of eleven granular
+categories with the matched evidence cited, or reports `UNCLASSIFIED` when nothing matches. Per the
+Evidence Truth Rule, an unmatchable message is never forced into a named category -- `UNCLASSIFIED` is
+the honest answer, not a missing feature.
+
+**The task-layer vocabulary is read, not invented.** `.claude/skills/CORE/pattern-architecture/SKILL.md`
+and `.claude/skills/CORE/branch-mapper/SKILL.md` already establish the real `block`/`branch_a0,branch_a1,...`/
+`branch_fw`/`branch_b0,branch_b1,...` task-composition vocabulary this module operationalizes: a dispatch
+stuck inside `branch_fw` (the per-port FW/event-service loop) is `FW_TIMEOUT`; stuck inside `branch_b*`
+(the per-port VIP-driven test body, or naming a Synopsys `svt_`-prefixed VIP component -- the same prefix
+convention `loop_budget.FailureType.VIP` already documents) is `VIP_TIMEOUT`; stuck inside `branch_a*`
+(the per-port DUT+PHY init task, or naming the DUT/PHY generically with no branch label present) is
+`DUT_TIMEOUT`. `BRANCH_OWNERSHIP_ERROR` operationalizes pattern-architecture section 3.1's own named trap
+class -- "two independent task groups can hold conflicting locks on a shared bus sequencer" -- made
+checkable from dispatch-failure text: two distinct task-layer families named together with a
+lock/ownership/arbitration keyword. This module invents no interrupt-priority scheme, no arbitration
+policy, and no timing value -- it only recognizes when dispatch-failure TEXT already names these real,
+pre-established architecture terms.
+
+**Reuse over reinvent.** `CHECK_FAILURE` and part of `TASK_ERROR` are decided by calling the existing,
+real `sim_log_analysis.parse_sim_log()`/`classify_signatures()` triage engine -- this module never
+re-derives a scoreboard/assertion/UVM_FATAL keyword list of its own.
+
+**A different, more granular vocabulary than `loop_budget.FailureType` -- deliberately not merged.**
+`loop_budget.FailureType` answers "why did this STAGE'S RETRY exhaust" (ten classes feeding a
+retry-vs-stop decision across many dispatches at the stage-retry grain). This module answers a
+finer-grained, different question: why did THIS ONE command/task dispatch fail, at the grain a single
+command.txt task call fails at. Neither module imports the other, and
+`assert_disjoint_from_loop_budget_failure_type()` keeps the two string vocabularies from silently
+colliding as either grows; `assert_disjoint_from_verification_verdict_vocabulary()` likewise keeps this
+module's eleven categories (plus `UNCLASSIFIED`) disjoint from `dv_harness.models.Status`.
+
+**What this module does not do.** It classifies; it does not retry, does not stop a loop, does not spend
+a budget, does not decide PASS/FAIL for a stage, and touches no human-approval gate -- a pure function of
+the text it is given, no file I/O of its own beyond what `sim_log_analysis` already does internally, no
+subprocess.
+
+Proven by `dv_harness_tests/test_command_error_taxonomy.py` (29 tests): each of the eleven categories is
+proven from its own real matching text, `UNCLASSIFIED` is proven on genuinely unmatchable text, both
+disjointness asserts are proven to hold, and the `CHECK_FAILURE`/`TASK_ERROR` delegation into
+`sim_log_analysis` is proven to reuse that engine's real classification rather than a second one.
+
+## Pattern Execution Evidence: Per-Dispatched-Task Records, Read from Real Log Narration Only (2026-09-06)
+
+`evidence_db.py`'s `normalized_evidence` table (and `golden_scenario.py` on top of it) records evidence
+at PER-TEST granularity: one row per (job, pattern) with one overall verdict. `dv_harness/pattern_execution_evidence.py`
+is a finer granularity underneath that: one record per DISPATCHED TASK inside a single command.txt/pattern
+run -- the `block`/`branch_a{i}`/`branch_fw`/`branch_b{i}` task-composition layers
+`.claude/skills/CORE/pattern-architecture/SKILL.md` and `.claude/skills/CORE/branch-mapper/SKILL.md`
+already define, reused verbatim here, never re-derived or renamed. Per this task's own instruction, this
+is a DIFFERENT, more granular per-dispatch vocabulary than `loop_budget.FailureType`'s ten-class retry
+taxonomy -- that module classifies why a whole STAGE failed for a retry-vs-stop decision; this module
+records what one TASK inside one pattern run actually did, and the two are never merged.
+
+**The Evidence Truth Rule, applied literally.** Every `start_time`/`end_time` this module reports is a
+REAL `@ <time>` value lifted off a REAL log line that genuinely mentions that task's name next to a
+lifecycle verb (the same "UVM_INFO ... @ <time>: <reporter> [<ID>] starting <name>" / "... complete"
+narration convention `sim_log_analysis.py`'s own tested fixtures already use). A sim.log that never
+narrates a task by name at this granularity yields NO records for it, never a guessed or interpolated
+timestamp -- `granularity_status` says so explicitly at the report level, and every per-field absence
+carries `NOT_AVAILABLE` plus a real reason rather than a default.
+
+**Reuse over reinvent.** The actual marker scan, signature normalization, and severity/category
+classification is 100% `sim_log_analysis.parse_sim_log()`/`classify_signatures()`, called read-only over
+the TEXT SLICE between a task's own start/end line -- there is no second log-marker scanner in this
+module, and `connectivity.render_markdown_table()` renders the report, so there is no second table
+renderer either.
+
+Proven by `dv_harness_tests/test_pattern_execution_evidence.py` (24 tests, organized into classes): task
+lifecycle extraction is proven to find real start/end narration and to yield an empty map when none
+exists; branch-layer classification is proven for every canonical name and to raise on an unrecognized
+one; a clean branch, a branch with a real scoreboard mismatch, and cross-branch isolation (a mismatch
+inside `branch_b1`'s window never leaks into `branch_b0`'s record) are all proven against real narrated
+log text; a hung task is proven to NEVER fabricate an end time; an omitted command and a narration line
+missing a real timestamp both report `NOT_AVAILABLE` rather than a guess; and the file-reading wrapper is
+proven to survive a stray non-UTF-8 byte.
+
+**Disclosed residual**: this closes per-dispatch execution evidence at whatever granularity the real
+sim.log narration actually supports -- it never densifies a log that says less than the record shape
+asks for.
+
+## DE Command Runtime Readiness Gate: Joining Three Already-Real Sources into One Verdict (2026-09-06)
+
+`runtime_event_registry.py` answers "what is this EVENT's status" (with REQUIRES/WAITS_FOR/TRIGGERS/
+UNBLOCKS stop-on-failure propagation) and `command_precondition_gate.py` answers "may THIS COMMAND be
+dispatched right now, given the registry's real event state" -- both real, both tested, both real
+gap-closures from this same workflow run. Neither answered the question a runtime dispatcher actually
+needs before it starts issuing an entire generated pattern's worth of `block`/`branch_a*`/`branch_fw`/
+`branch_b*` commands: "given the registry's current state, every declared command's dispatch readiness,
+AND whatever the branch/grammar-authoring side of the pipeline independently concluded about this same
+pattern, is this pattern's runtime execution actually READY, or is it BLOCKED, and by what,
+specifically?" Nothing in this repo joined those three real sources into one verdict.
+`dv_harness/de_command_runtime_readiness_gate.py` is that join.
+
+**A thin aggregator over three already-real inputs, reusing each one's own vocabulary and computation
+rather than re-deriving any of them.** (1) `RuntimeEventRegistry.propagate()` is called EXACTLY ONCE
+here (never re-run per command), producing the real `PropagationReport` this module reads for both its
+own event-level blockers (an event that is itself FAILED/TIMEOUT/BLOCKED_BY_DEPENDENCY, whether or not
+any command declares it as a precondition) and the shared basis every command's precondition check is
+evaluated against -- `command_precondition_gate.evaluate_command_preconditions()` is called directly with
+that one shared report, the exact pattern that module's own docstring recommends for evaluating several
+commands against one registry state, and the reason this module does not call
+`evaluate_dispatch_readiness()` itself, which would silently re-run `propagate()` a second time. (2) The
+real per-command `CommandDispatchStatus` (READY/BLOCKED/UNKNOWN_PRECONDITION) is read verbatim; a command
+not READY is a blocker, named with that command's own real reason text. (3) A caller-supplied, DUCK-TYPED
+`branch_grammar_results` value -- the branch/grammar-authoring side's own conclusion about this same
+pattern (e.g. `branch_ownership_resolver.validate_branch_assignment()`'s VALID/INVALID/AMBIGUOUS, or
+`command_generation_gate.py`'s own PASS/BLOCKED-shaped payload) -- this module never imports either, or
+any other module from that sibling "DE Command / Branch Architecture" batch, precisely because that
+batch may or may not have finished when this one runs; it accepts whatever shape arrives as generic,
+alias-tolerant records (any of `command_id`/`command_name`/`name`/`id`/`identifier` for who the finding is
+about; any of `status`/`verdict`/`result`/`branch_status`/`ownership_status` for the finding itself; any
+of `reason`/`detail`/`message`/`rationale` for why). A record whose status string is not one of a small,
+explicit, case-insensitive recognized-PASS vocabulary is a blocker, quoting the real status string
+verbatim -- an unrecognized or absent status is never assumed passing, the same "an event absent from the
+registry is UNRESOLVED, never assumed satisfied" discipline `runtime_event_registry.py` already applies
+one layer down.
+
+**The composite verdict is BLOCKED iff ANY of the three sources reports a real blocker**; it is PASS only
+when the registry's propagated event state has no blocking event, every declared command is READY, and
+every supplied branch/grammar-side result (if any were supplied at all -- supplying none is legal, since
+the sibling batch may not have run yet) reports a recognized pass status. Every blocker is named
+individually and by its real source, so a reader never has to guess which of the three layers is the
+reason.
+
+Proven by `dv_harness_tests/test_de_command_runtime_readiness_gate.py` (25 tests): the composite verdict
+is proven BLOCKED from each of the three sources independently and PASS only when all three are clean;
+`propagate()` is proven called exactly once even across many commands; the alias-tolerant record parsing
+is proven across several field-name variants; and an absent/unrecognized branch-grammar status is proven
+to block rather than pass by default.
+
+**Disclosed residual**: this module has no `gates.py` `STAGE_GATES` entry yet -- wiring one in is a
+follow-up integration step, not part of this module's own scope. It aggregates; it authorizes nothing,
+and references no approval/governance mechanism.
+
+## VIP Example Composition: a 7-Condition Composability Gate (2026-09-06)
+
+Composing several already-qualified VIP examples into ONE scenario -- e.g. a USB3 host example plus a USB3 device example, or a host example plus an unrelated protocol's monitor example -- had no compatibility check anywhere in this repo. `vip_capability_extraction.py` classifies individual VIP source CLASSES with a qualification tag; `env_manifest.py` records which VIP instances are configured in ONE already-generated environment; `ip_ownership_conflict.py` and `system_resource_inventory.py`'s SYS-11/SYS-12 machinery flag ownership conflicts for a single subsystem or across already-composed SoC subsystems. None of them answers the earlier, narrower question this module answers: given a caller-declared SET of individually-qualified VIP examples about to be combined into one scenario, are they actually compatible with each other -- checked against seven concrete conditions -- before any of that content is merged into a single command.txt/scenario body.
+
+`dv_harness/example_composition.py` is that gate. Per this batch's file-safety scope it imports NOTHING from `vip_capability_extraction.py`, `ip_ownership_conflict.py`, or `system_resource_inventory` (concurrently-owned or separately-existing mechanisms this module deliberately does not duplicate) -- `examples` is a plain, alias-tolerant list of dicts, the same general shape `vip_capability_extraction.py` would produce for a qualified VIP artifact record, widened with the composition-specific facts this task names. It does not itself decide whether an example is qualified; that judgment belongs to whatever produced the record. Composing means: given examples the caller already asserts are individually usable, are they usable TOGETHER.
+
+**Seven conditions, every one a pure structural comparison of caller-declared facts, never a semantic judgment about protocol behaviour.** (1) VIP version -- examples sharing one normalised `vip_type` must declare the same `vip_version` (scoped by package identity, never by link). (2) Role -- on one logical link, at most one example may declare a role this module recognises as ACTIVE (HOST/MASTER/INITIATOR/DRIVER/ACTIVE/ROOT_COMPLEX/RC/REQUESTER); an unrecognised role never blocks and is never assumed either way. (3) Protocol mode -- examples on one logical link must declare the identical protocol mode. (4) Agent config -- for every `agent_config` field two or more examples on one link both declare, the values must agree; a field only one side declares is never compared. (5) Sequencer ownership -- two or more examples declaring the SAME explicit sequencer/interface/bind path and both resolving to an ACTIVE driver (declared, or inferred from the fixed ACTIVE/PASSIVE role vocabulary) is a real ownership collision; an unresolved active status is reported separately and never forced into a conflict. (6)/(7) Reset/clock assumptions -- two or more examples naming the SAME reset/clock signal must agree on its declared active_level/synchronous (reset) or frequency_mhz/period_ns/edge (clock) facts.
+
+**The one deliberate, disclosed design choice: `_link_key()`'s fallback.** Conditions 2-4 are scoped to one caller-declared logical link (`link_id`/`interface_id`/`port_id`, falling back to a declared `sequencer_path`, falling back further to one shared `UNSPECIFIED_LINK` bucket when neither is declared). That last fallback is deliberate: when an example set gives this module no way to tell two examples apart as independent ports, treating them as unrelated would be an unearned assumption of independence, so they are conservatively grouped together and a real disagreement among them is surfaced rather than hidden behind absent disambiguating evidence. A caller composing a genuine independent multi-port scenario must declare `link_id`/`port_id`/`sequencer_path` to tell the ports apart -- the same evidence this module would need to do so correctly.
+
+**Never resolves a conflict, only names the pair.** Every conflict is reported as `status: BLOCKED` naming the exact conflicting pair (both examples' declared identities) and the specific disagreeing value(s) -- never silently merged, never averaged, and this module never picks a winner between two conflicting examples; that stays a human/caller decision, the same ARBITRATION boundary `requirement_contract.py` and `design_knowledge_correlation.py` already keep for their own conflict findings.
+
+Malformed input is reported and excluded, never silently absorbed: a non-dict entry, an entry with no resolvable identity, and every entry sharing a duplicate identity all land in `malformed_examples` rather than participating in composition (a duplicate identity excludes ALL entries sharing it, never picking one to keep). Fewer than two valid, uniquely-identified examples reports `NOT_AVAILABLE` naming the real count; `examples` itself not being a list/tuple raises `CompositionInputError`.
+
+**Deliberately bounded, and stated rather than implied closed.** This module builds no VIP API, no RTL content, and no scenario/command.txt body; it runs no build/regression/LSF job, and there is deliberately no `STAGE_GATES` entry -- a gate that passed on a composition nobody actually generated from would be worse than none. There is no `dv-harness` CLI verb (`cli.py`/`gates.py` are out of this batch's file-safety scope); the front door is `python -m dv_harness.example_composition compose --examples <file.json> [--json]` (exit 0 COMPOSED, 1 BLOCKED, 2 NOT_AVAILABLE).
+
+Proven by `dv_harness_tests/test_example_composition.py` (26 tests): a clean, fully-compatible USB3 host+device pair composes with zero findings and a no-mutation proof over the input, then each of the 7 conditions is driven to a real, named-pair `BLOCKED` conflict by mutating one fact at a time off that same clean baseline, each paired with a negative control proving the check does not over-fire (different-vip_type examples never compared on version, two independent HOSTs on genuinely different declared links never conflict on role while two with no link information at all DO -- the disclosed fallback's detection power, an active driver sharing a path with a passive one is not an ownership conflict, an unresolved active status is reported but never forced into a conflict, differently-named reset signals are never compared, and clock numeric tolerance never manufactures a false conflict from float representation noise). Three malformed-input controls (non-dict entry, missing identity, duplicate identity excluding both), an insufficient-examples control, a non-sequence-input refusal, and three real CLI subprocess invocations asserting exit codes 0/1/2 round out the suite. Ran `python -m pytest dv_harness_tests/test_example_composition.py -q` -> `26 passed`.
+
+## Per-Pattern Marginal Coverage Contribution: Attribution the Aggregate Curve Cannot Give (2026-09-06)
+
+`loop_convergence.py`'s own docstring is explicit about its own boundary: its coverage series is `trend_analysis.daily_rollup()`'s bins-weighted, PROJECT-WIDE `coverage_percent` curve -- one number per day, aggregated across every pattern that ran that day -- and that module "never attributes movement to one pattern". It can tell you the project is CONVERGING, PLATEAU'd, or OSCILLATING; it cannot tell you which pattern moved the needle, by how much, at what runtime/failure cost. `dv_harness/pattern_coverage_contribution.py` answers that different, narrower question: for ONE named pattern, what new coverage bins (and, of those, which new cross-coverage bins are independently meaningful rather than fully explained by their own already-covered single-axis bins) did its own run(s) contribute, and at what real runtime/failure cost -- never an aggregate curve, always attributed to the one pattern named.
+
+**The real gap, found by grepping `evidence_db.py`'s schema before writing a line of code, per this batch's own instruction.** `coverage_samples` (`insert_coverage_sample()`) is this project's one real coverage-sample store, and its real columns are `(id, category_name, percent, bins_total, bins_hit, sample_timestamp, source, ingested_at)` -- there is **no `pattern` column**. In production, `dashboard._ingest_coverage_summary_to_evidence_db()` passes the `summary.json` PATH as `source`, never a pattern name. `evidence_db.py`'s OTHER real per-pattern table, `jobs`, DOES carry a real `pattern` column plus `runtime_seconds`/`uvm_error_count`/`uvm_fatal_count`/`assertion_failure`/`simulator_crash` -- real, already-attributable evidence needing no new linkage. So the honest state of this project's evidence store is: runtime and failure evidence per pattern already exists; coverage-BIN evidence exists only as an un-attributed, project-wide checkpoint sequence. This module reuses `coverage_samples`/`jobs` EXACTLY as recorded (no new column, no write path -- every read goes through `EvidenceStore(db_path, read_only=True).query()` with an explicit column list zipped back into named dicts, the same convention `protocol_compliance_aggregation.py`'s `load_normalized_evidence_rows()` already established) and asks the ONE additional real fact the schema cannot supply on its own: which checkpoint (`source` value) belongs to which pattern's run. That fact arrives as a required, explicit, caller-declared `sample_attribution` (`[{"source", "pattern"}, ...]`) -- the same "accept an explicit caller-declared fact the real evidence store cannot supply, rather than invent one" discipline `ip_ownership_conflict.py`'s `legacy_bfm_declarations` and `existing_command_reuse_score.py`'s `existing_commands` already use. A pattern with no attributed checkpoint, and no `jobs` rows, has recorded NOTHING this project's evidence store can attribute to it, and reports `NOT_AVAILABLE` for its contribution -- never an estimated or zero delta.
+
+**Mechanics.** `group_into_checkpoints()` groups real `coverage_samples` rows by their own `source` field into chronologically-ordered checkpoints (ordered by the real DuckDB `id` sequence -- never trusted by wall-clock `sample_timestamp`/`ingested_at` resolution). `compute_pattern_coverage_contribution(db_path, pattern, sample_attribution, cross_definitions=None)` walks checkpoints in order, and for each one attributed to `pattern` diffs every category's `bins_hit` against the state immediately prior (baseline 0 for a category never seen before that point), summing `new_bins_hit` across all of the pattern's own checkpoints. A negative delta (bins un-hit between checkpoints, however unusual) is never counted toward `new_bins_hit` (floored at 0) but is still honestly surfaced in `regressed_categories` -- never silently hidden. `coverage_delta_percent` is a bins-weighted percent movement over only the categories the pattern actually touched. Runtime/failures come straight from real `jobs` rows filtered by `pattern`. `cost` is ALWAYS reported `NOT_AVAILABLE` with a real cited reason: a repo-wide check before writing this module found no per-job compute/license-usage cost producer anywhere in this codebase -- `loop_budget.py`'s own CLAUDE.md section states plainly that "max_compute / max_license_usage / max_token_cost ... have no producer in this harness at all" -- so inventing one here would be exactly the fabrication the Evidence Truth Rule forbids. Overall status is `MEASURED` only when both the coverage side and the runtime/failure side were measured; `PARTIALLY_MEASURED` when only one was; `NOT_AVAILABLE` when neither was -- three honestly distinct states, never averaged or collapsed.
+
+**"Meaningful crosses only", built independently rather than importing a claimed file.** `coverage_analysis.py` already has a private `_cross_axes()`/`_cross_axes_all_covered()` pair solving almost exactly this same question (used there to classify a `CROSS_COVERAGE_ONLY_UNCOVERED` coverage hole) -- but `coverage_analysis.py` was one of this batch's own claimed/never-import files, so `classify_cross_coverage_meaningfulness()` re-derives the identical, small, generic logic directly over plain `{"percent","bins_total","bins_hit"}` category dicts (the same shape `coverage_samples` rows already carry) rather than importing a claimed module or leaving the helper unbuilt. It flags a caller-declared cross-coverage bin (`{"cross_name", "axes": [axis1, axis2, ...]}`) `FULLY_EXPLAINED_BY_AXES` (skip-worthy) ONLY when EVERY declared axis is a real, matched, `>= 100%`-covered category in the supplied snapshot; a missing or unmeasurable axis reads `UNKNOWN_AXIS_COVERAGE` and is NEVER treated as fully-explained -- absence of proof that the axes explain the cross is never read as proof they do, so an unprovable cross bin's new hits still count toward `new_crosses_hit`. Meaningfulness is evaluated against the coverage state as it stood immediately BEFORE the pattern's own contribution began, not the final project-wide state -- "already fully explained" means already, prior to this pattern's own run.
+
+**Status vocabulary is asserted disjoint from `dv_harness.models.Status` at import time** (`MEASURED`/`PARTIALLY_MEASURED`/`NOT_AVAILABLE`, `CROSS_MEANINGFUL`/`CROSS_FULLY_EXPLAINED`/`CROSS_UNKNOWN`) -- the same guard `capability_evolution.py`/`benchmark_dataset.py`/`subsystem_maturity_gate.py` already run on their own vocabularies (`PARTIAL` was caught colliding with `Status.PARTIAL` during this module's own test run and renamed to `PARTIALLY_MEASURED` before landing).
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It never writes to `evidence_db.py` -- no `insert_*` method is ever called from this module, and it constructs `EvidenceStore` only in `read_only=True` mode. (2) It arbitrates nothing and runs no gate; there is deliberately no stage gate. (3) `cost` can never resolve to a real measured value in this codebase today -- disclosed rather than silently omitted. (4) It is REACHED, not WIRED: there is a `python -m dv_harness.pattern_coverage_contribution` front door but no `dv-harness` CLI verb, no `run_stage()`/`advance()` call site, and no graph node.
+
+Proven by `dv_harness_tests/test_pattern_coverage_contribution.py` (17 tests), every coverage-sample and job row populated exclusively through `evidence_db.py`'s own real `insert_coverage_sample()`/`insert_job_state()` methods -- never a hand-written store row. The core positive path drives two patterns' real checkpoints (one improving a cross bin whose axes are NOT both yet fully covered, proving `INDEPENDENTLY_MEANINGFUL` rather than a fabricated skip) through real job runtime/failure evidence. Negative controls: no attribution and no jobs -> `NOT_AVAILABLE` (never a fabricated zero, asserted by checking the key is simply absent); coverage-only measured -> `PARTIALLY_MEASURED`; jobs-only measured -> `PARTIALLY_MEASURED`; a malformed attribution entry and an ambiguous same-source-two-patterns attribution both raise `PatternCoverageContributionError`; a wholly absent evidence.duckdb reports `NOT_AVAILABLE` without crashing; a real coverage regression between checkpoints is reported honestly in `regressed_categories` and never counted as new; a cross bin whose axis category cannot be found at all reads `UNKNOWN_AXIS_COVERAGE` and still counts toward `new_crosses_hit` (never silently skipped); and multiple checkpoints attributed to the same pattern are correctly summed. Both real CLI exit-code paths (`MEASURED` -> 0, `NOT_AVAILABLE` -> 2) are driven as real subprocesses.
+
+## Coverage-Closure Action Utility: Rank Actions, Gate Correctness/Risk Before Cost (2026-09-06)
+
+Plenty of per-hole coverage ANALYSIS exists in this repo (`coverage_analysis.classify_coverage_hole()`'s four root causes, `classify_coverage_hole_taxonomy()`'s twelve structural categories) and plenty of per-project READINESS rollups (`generation_readiness.py`, `golden_flow_readiness.py`, `subsystem_practicality_score.py`), but nothing RANKED a set of proposed coverage-closure remediation actions against each other. A coverage-closure effort routinely has more candidate actions (write a directed test, relax an over-constrained sequence, add a waiver, escalate as unreachable) than budget to pursue at once, and nothing ordered that list by expected value. A repo-wide grep for `coverage_closure_action`/`expected_coverage_gain` before this module matched nothing executable.
+
+`dv_harness/coverage_closure_action_utility.py` ranks a duck-typed list of candidate actions by `utility = expected_coverage_gain x requirement_priority x risk_coverage / cost`. `evidence_db.py`'s real `coverage_samples` table (read, never imported, before designing this) is keyed by `category_name`/`percent`/`bins_total`/`bins_hit` -- a coverage tool's own per-category rollup, with no candidate-action, requirement-priority, risk-coverage, or cost concept at all. There is no mechanical producer anywhere in this repo for any of the four factors this formula needs, so -- exactly as `requirement_risk_ir.py` established for its own four caller-declared risk factors -- every factor here is accepted only as an explicit caller declaration and reported with status `DECLARED`, visibly distinct from a `MEASURED` value, never re-derived and never defaulted to a guessed number when absent or invalid (that reports `NOT_AVAILABLE` instead).
+
+**The document's own explicit rule is enforced as code, not merely described: "a cheap-but-wrong action must never outrank a correct one regardless of cost."** Two caller-declared judgments -- `correctness_status` (CONFIRMED_CORRECT/FLAGGED_INCORRECT/UNVERIFIED) and `risk_status` (ACCEPTABLE_RISK/HIGH_RISK/UNVERIFIED), each independent of the `risk_coverage` utility factor (which measures how much risk surface an action addresses, a benefit; `risk_status` asks whether taking the action is itself dangerous, a gate) -- are resolved and applied by `_gate_candidates()` **before** any utility factor, including cost, is ever read for that candidate. A `FLAGGED_INCORRECT`/`HIGH_RISK` action is moved to a separate `excluded` bucket carrying `utility_score=None` and named exclusion reasons -- it is never scored, never ranked with a fabricated low score, and never merely penalized; its declared factors are still reported alongside for audit transparency. Only once gating has removed every flagged action does `_compute_utility()` run for the survivors, and only then does a genuine utility tie among survivors get broken by cost (ascending, cheaper first) and finally by `action_id` for full determinism -- an ordering this module's own call sequence makes structurally impossible to reverse (cost is never read before the gate has decided eligibility). An action with neither flag declared defaults to `UNVERIFIED` on both axes and is NOT excluded -- exclusion is reserved for an explicit flag, never inferred from silence, per the Evidence Truth Rule's ban on treating absence as a finding. An action missing a required utility factor, or declaring an invalid one (zero, negative, boolean, non-numeric, NaN/inf), or declaring an unrecognized gate-status string, is reported `UNRANKABLE` in a third bucket rather than given a fabricated default.
+
+Front door: `python -m dv_harness.coverage_closure_action_utility --candidates-file <file.json> [--json]` (exit 0 all ranked/excluded, 1 at least one candidate is unrankable). No `dv-harness` CLI verb was added and `gates.py`/`cli.py`/`CLAUDE.md` were not touched, per this task's own file-safety scope; this module imports nothing from `dv_harness` itself, including no file from the concurrently-running batch, accepting a candidate action only as a generic duck-typed mapping/object.
+
+Proven by `dv_harness_tests/test_coverage_closure_action_utility.py` (24 tests): the core positive path ranking three candidates by the exact formula; the two headline negative controls proving a cheap/enormous-utility action flagged `FLAGGED_INCORRECT`/`HIGH_RISK` is excluded entirely and never outranks a correct/safe modest-utility one (a case constructed so the wrong action's utility, if computed, would rank #1); a both-flags-together case; cost breaking a genuine utility tie only among gate-cleared candidates, plus a deterministic `action_id` final tie-break; six invalid-factor-value negative controls (0, negative, bool, non-numeric, NaN, inf); a missing-factor negative control; two invalid-gate-string negative controls (proven `UNRANKABLE`, never silently defaulted or silently accepted); an empty-candidate-list refusal (never a vacuous ranking); duck-typed dict vs. attribute-object acceptance; `action_id`/`id`/positional-placeholder fallback; rationale pass-through; the report renderer naming all three buckets; and two real `python -m dv_harness.coverage_closure_action_utility` subprocess CLI runs asserting exit codes 0 and 1. `python -m pytest dv_harness_tests/test_coverage_closure_action_utility.py -q` -> `24 passed`.
+</content>
+
+
+## Runtime Event Registry: Stop-on-Failure Dependency Propagation (2026-09-06)
+
+A generated pattern's task composition (`block`/`branch_a*`/`branch_fw`/`branch_b*`, per
+`branch-mapper`/`pattern-architecture` SKILL.md) and its interrupt-driven service loop
+(`interrupt-event-dispatch`'s ARM/WAIT/WAKE/DECODE/CLEAR loop) both produce and consume NAMED
+RUNTIME EVENTS -- a global bring-up completing, a per-port DUT+PHY init finishing, an interrupt
+being seen and then serviced, a branch_b* VIP scenario finishing. Nothing in this repo tracked
+those events as a first-class registry with a dependency graph: `blackboard.py` stores free-form
+named topics, not typed events with a producer/consumer/timeout/scope; `loop_contract.py`/
+`loop_budget.py` track the HARNESS's own loop state, not a generated environment's runtime event
+flow. An upstream event that failed or timed out left every downstream event depending on it
+silently PENDING forever, with nothing distinguishing "still waiting" from "can never happen
+because its prerequisite already failed".
+
+`dv_harness/runtime_event_registry.py` is that registry. The record shape is exactly
+`{event_name, producer, consumer, payload, timeout, scope, status}`, over a CALLER-DECLARED event
+set -- GLOBAL_READY/DUT_READY/VIP_STARTED/IRQ_SEEN/IRQ_SERVICED/CHECK_DONE are illustrative names
+only (matching this repo's own `block`/`branch_a*`/`branch_fw`/`branch_b*`/verdict vocabulary in
+the tests), never hardcoded inside the module -- a different project's real event names are
+declared by its caller, exactly as `config_variant_coverage.py`'s dimensions are declared, not
+guessed.
+
+**Relations, and the direction convention.** `(from_event, relation, to_event)` with four types:
+REQUIRES/WAITS_FOR read dependent -> prerequisite ("B REQUIRES A" = B depends on A having already
+fired); TRIGGERS/UNBLOCKS read cause -> effect ("A TRIGGERS B" = A firing causes B). REQUIRES is a
+HARD dependency; UNBLOCKS is a RECOVERY override; WAITS_FOR and TRIGGERS are informational-only
+(AT_RISK_WAITS_FOR_FAILED_UPSTREAM / ORPHANED_TRIGGER findings) and never change a status.
+
+**Stop-on-failure propagation is precisely what the task named.** `propagate()` is a fixed-point
+over the REQUIRES sub-graph (validated acyclic at construction -- a REQUIRES cycle is refused as a
+contradiction in the declaration, the same discipline `config_variant_coverage.ConfigSpace` applies
+to a critical combination its own constraints forbid). An event flips PENDING ->
+BLOCKED_BY_DEPENDENCY only when its own raw status is still PENDING, at least one REQUIRES
+prerequisite is FAILED/TIMEOUT/BLOCKED_BY_DEPENDENCY (transitively), and no UNBLOCKS recovery event
+has FIRED. A downstream event no longer sits silently PENDING forever once its prerequisite has
+genuinely failed -- it carries an honest, distinct status naming why, and a real observed status is
+NEVER overwritten by the computed one (proven by a dedicated test).
+
+**The Evidence Truth Rule is enforced structurally, not just by prose.** A non-PENDING observation
+(FIRED/FAILED/TIMEOUT) requires a non-empty `evidence` citation (a sim.log line, an `evidence_db`
+record id, a waveform offset) -- `RuntimeEventObservation.__post_init__` refuses one with none, the
+same discipline `waiver_store`'s revocation and `config_variant_coverage.CriticalCombination.reason`
+already apply. BLOCKED_BY_DEPENDENCY may never be declared directly by a caller -- it is
+`propagate()`'s own computed conclusion, and asserting it directly would be asserting a
+propagation result nobody computed. `timeout` is a caller-declared budget from real project
+policy/RTL evidence, never computed or defaulted here.
+
+**Deliberately kept separate from `loop_budget.FailureType`.** That vocabulary answers "why did a
+harness STAGE ATTEMPT fail" (retryable or not) -- a different, coarser question than "what happened
+to one RUNTIME EVENT". `assert_no_status_vocabulary_collision()` checks the two share no token at
+import, and a dedicated test re-checks it.
+
+Reuses `connectivity.render_markdown_table` (the repo's one parameterized table renderer) for both
+the declared-graph view and the propagation-status view, rather than a second hand-rolled one.
+
+CLI: `python -m dv_harness.runtime_event_registry graph|status --registry <file.json> [--json]`,
+one shared `execute_verb()`. `graph` prints the declared events/relations only; `status` runs
+`propagate()` and prints the effective status + findings table. Exit 0 nothing
+FAILED/TIMEOUT/BLOCKED_BY_DEPENDENCY, 1 at least one is, 2 NOT_AVAILABLE or a usage/declaration
+error.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It observes nothing itself:
+whether an event "really" occurred is decided by the caller from real sim.log/waveform/evidence-db
+evidence before calling this module -- `sim_log_analysis.py` stays the repo's sole real sim.log
+parser. (2) UNBLOCKS is the only recovery mechanism modelled; there is no any-of/all-of REQUIRES
+distinction beyond "at least one failed prerequisite blocks, unless recovered". (3) It DECIDES
+nothing beyond reporting: no gate, no build, no job, no approval, and there is deliberately no
+stage gate. (4) The fixed-point loop is O(events x relations) per iteration over an acyclic REQUIRES
+graph -- adequate for one pattern's real event count, not built for a whole-farm event stream.
+
+Proven by `dv_harness_tests/test_runtime_event_registry.py` (33 tests) against a real illustrative
+event set mapped onto this repo's own `block`/`branch_a*`/`branch_fw`/`branch_b*` vocabulary: direct
+and transitive BLOCKED_BY_DEPENDENCY cascade, TIMEOUT treated identically to FAILED, the UNBLOCKS
+recovery override and its negative control (recovery event not fired -> block still occurs), a real
+observation never being overwritten by propagation, WAITS_FOR/TRIGGERS informational findings, and
+nine real negative controls (duplicate event name, relation naming an unknown event,
+self-referential relation, REQUIRES cycle, non-PENDING observation with no evidence, a direct
+BLOCKED_BY_DEPENDENCY assertion, an unknown relation-type string, an invalid timeout, an observation
+for an undeclared event) -- each asserted to raise `EventRegistryError` naming the real defect. Both
+`execute_verb()` and a real subprocess CLI invocation are driven and their exit codes asserted.
+Nothing in it runs a build, a regression, or an LSF submission, and no human-approval gate is
+referenced.
+
+## Task Return Model: "No Silent Command Failure" (2026-09-06)
+
+Every task this harness's `command.txt`/pattern architecture dispatches -- one per
+`block`/`branch_a*`/`branch_fw`/`branch_b*` branch (see `branch-mapper/SKILL.md`'s
+Initialization Task Hierarchy and the AMBA M x N arbitration prose it operationalizes) --
+must resolve to a real, evidence-grounded outcome, never an assumed one. Nothing in this
+repo checked that before: `loop_budget.FailureType` classifies WHY a STAGE-level retry
+failed, a coarser, different question about the harness's own retry loop, and nothing
+cross-checked a declared list of dispatched tasks against what a sim.log actually recorded.
+
+`dv_harness/task_return_model.py` is that cross-check. Given a declared task list (a
+`task_id` per entry, optionally its `block`/`branch_a*`/`branch_fw`/`branch_b*` layer and
+dispatch command) and a real sim.log, `cross_check_task_outcomes()` resolves each declared
+task to exactly one of seven outcomes: `PASS` / `FAIL` / `TIMEOUT` / `UNSUPPORTED` /
+`INVALID_ARGUMENT` / `ENVIRONMENT_ERROR` / `SILENT_FAILURE_SUSPECTED`. The first six are
+canonical dispatch outcomes; `SILENT_FAILURE_SUSPECTED` is not a seventh normal one -- it is
+what this module reports when the log gives it no way to determine one of the six, so a
+dispatched task that produced no recorded outcome is FLAGGED as suspect rather than silently
+treated as PASS or silently treated as FAIL (either would be fabrication). It is a
+deliberately DIFFERENT, more granular per-dispatch vocabulary from `loop_budget.FailureType`
+and the two are never merged.
+
+**No project in this repo had ever emitted a per-task dispatch-outcome line into a sim.log**,
+confirmed by direct grep before building -- so this module defines and documents its OWN
+recognized convention, `TASK_RESULT: <task_id> => <OUTCOME>` (case-insensitive, tolerant of
+`->`/`:`/`,` separators and PASSED/FAILED/TIMED_OUT/NOT_SUPPORTED/ENV_ERROR spellings), the
+same way `sim_log_analysis.SEVERITY_ORDER` states of itself that it is this module's own
+enum, not a pre-existing project-wide one. A real dispatch layer must be made to emit lines
+in this shape for its tasks to be recognized; until then every declared task in a project's
+sim.log honestly resolves to `SILENT_FAILURE_SUSPECTED`, which is the correct, non-fabricated
+answer.
+
+`sim_log_analysis.py` is imported READ-ONLY for `parse_epilogue()` (the job-level FINAL
+CHECK summary, carried as supplementary context only, never used to override a per-task
+verdict). `render_task_outcome_table()` reuses `connectivity.render_markdown_table()`.
+
+**Never guesses between disagreeing or absent evidence.** No occurrence at all -> honest
+"no recorded outcome"; an occurrence with an unrecognized outcome token -> not treated as
+evidence of any specific canonical outcome; two occurrences for the same task disagreeing on
+outcome -> reported as an unresolvable conflict naming both values found, never picked
+between. A duplicate, missing, or malformed declared `task_id` is a hard
+`TaskReturnModelError`, never silently repaired.
+
+**Deliberately bounded.** This module reads a sim.log and reports; it runs no build, no
+regression, no LSF submission, mints no approval, and has no stage gate of its own. There is
+no `dv-harness` CLI verb (`cli.py` is out of scope); the ad hoc front door is
+`python -m dv_harness.task_return_model --tasks <tasks.json> --log <sim.log> [--json]`.
+
+Proven by `dv_harness_tests/test_task_return_model.py` (24 tests) against a small synthetic
+sim.log carrying one real `TASK_RESULT` line per canonical outcome plus one declared task
+(`branch_a3_init`) with no recorded outcome at all -- the required silent-failure fixture.
+Negative controls: an unrecognized outcome token, conflicting outcomes for one task, and a
+task_id that is a substring of another never cross-matching. Both the library API and the
+real CLI subprocess are exercised, including its exit-code semantics.
+
+## Shared Bus Resource Registry: Intra-Subsystem branch_fw-vs-branch_a* Race Detection (2026-09-06)
+
+`.claude/skills/CORE/branch-mapper/SKILL.md`'s "AMBA M x N Mapping" section and Initialization Task
+Hierarchy item 4 require that a `branch_a{i}` touching a resource shared with other `branch_a*` (or,
+by the same class, with the shared `branch_fw` service loop) carry an explicit, real-RTL-evidence
+arbitration policy -- never an assumption. `.claude/skills/CORE/pattern-architecture/SKILL.md` section
+3.1 names the concrete failure mode this operationalizes: two independent task groups reaching one
+physical bus sequencer through two DIFFERENT named locks/semaphores can be interleaved by the
+arbitration layer in an order neither author controls, silently overwriting one side's write. That
+section's own illustration is `block`/`branch_a*` (DUT-driven) vs `branch_b*` (VIP-driven); the
+identical class of race applies to `branch_fw` vs `branch_a*`, because `branch_fw` is deliberately
+launched immediately after `branch_a*` starts -- specifically so it can respond "while [a sibling]
+port's bring-up is still running" (the same skill, same citation) -- meaning `branch_fw`'s own
+event-service loop can genuinely be writing a shared register (e.g. acknowledging/clearing a
+genuinely-shared INTERRUPT_CONTROLLER bit) at the exact moment a sibling port's `branch_a{i}` is still
+writing a different shared resource (a common PHY config block, a shared reset controller, a shared
+APB/AXI master's arbitrated slave).
+
+`dv_harness/shared_bus_resource_registry.py` is that detector, and it is a genuinely DIFFERENT scope
+from the two nearest-looking modules, stated explicitly rather than left to be inferred:
+`system_resource_inventory.py` (SYS-9..14) is CROSS-SUBSYSTEM / SoC-level -- it collapses two
+different ENVIRONMENTS' resource records into one and its DRIVER_CONFLICT means "two subsystems' VIP
+agents both drive one interface"; `ip_ownership_conflict.py` is single-subsystem but a static
+IDENTITY/ownership question ("is a real VIP agent AND a legacy hand-written BFM/driver both ACTIVE
+on one interface", decided once). Neither models a named lock/semaphore at all, and neither asks
+whether two TASK GROUPS within one running pattern can reach one resource CONCURRENTLY. This module
+is INTRA-subsystem bus ARBITRATION: a runtime task-composition-concurrency question, not an identity
+question.
+
+**Evidence, honestly.** No producer anywhere in this codebase extracts "which named lock a
+`branch_a{i}`/`branch_fw` task holds while writing register X" from a real `command.txt` pattern or
+RTL -- there is no SystemVerilog pattern-body parser in `dv_harness/` (patterns are agent-authored per
+`pattern-architecture`'s own checklist). Per the identical honesty `ip_ownership_conflict.py`'s
+`legacy_bfm_declarations` already applies, WHICH task group programs WHICH resource under WHICH named
+lock is therefore CALLER-DECLARED (`resource_declarations`), never inferred here, and every declared
+programmer record REQUIRES a real `evidence` citation (a pattern file:line, or the RTL/PHY doc line
+the branch-mapper/interrupt-event-dispatch sourcing rules already require). A declaration with no
+evidence, or a `task_group` outside the canonical `block`/`branch_a{i}`/`branch_fw`/`branch_b{i}`
+vocabulary (CLAUDE.md's Architecture-conformance audit rule), is marked invalid and drives an honest
+`UNKNOWN` status rather than a silent `CLEAR` -- and a non-canonical name is deliberately NEVER read as
+proof that a `branch_fw`/`branch_a*` role is ABSENT (a naming defect is not evidence of absence), which
+is the one subtlety this module's own TDD negative control caught: an unrecognized `task_group` string
+now reports `UNKNOWN_INSUFFICIENT_EVIDENCE`, not a false `NO_CONFLICT`. No timing value,
+interrupt-priority scheme, or arbitration WINNER is ever invented -- the module only ever states THAT
+two branches can reach a resource without a common real named lock, never WHICH write would win an
+interleave. `connectivity_rows` is an optional real `connectivity.build_connectivity_matrix()` input,
+used only to resolve a declared resource's real hierarchy path (never invented when absent), via the
+identical bind_target-match convention `ip_ownership_conflict.py` already uses the other direction.
+
+**Reuse over reinvent.** `connectivity.render_markdown_table()` renders the mandatory registry table --
+no fourth hand-rolled table loop. `loop_budget.FailureType` was read for contrast only, per this
+batch's own instruction, and is NOT merged with this module's vocabulary: `CONFLICT_*`/`LOCK_POLICY_*`
+is a new, deliberately more granular per-dispatch taxonomy for this different concern.
+
+**Vocabulary.** Report `status`: `CONTENTION` / `CLEAR` / `NOT_APPLICABLE` / `UNKNOWN` (mirroring
+`ip_ownership_conflict.py`'s own 4-status shape -- `UNKNOWN` is the Evidence-Truth-Rule-mandated honest
+status for untrustworthy/insufficient declarations). Per-resource `conflict_status`: `FW_A_RACE` /
+`NO_CONFLICT` / `NOT_APPLICABLE` / `UNKNOWN_INSUFFICIENT_EVIDENCE`. `lock_policy`:
+`SINGLE_SHARED_LOCK` / `DISTINCT_LOCKS_PER_TASK_GROUP` / `NO_LOCK_DECLARED` /
+`PARTIAL_LOCK_DECLARATION` / `SINGLE_PROGRAMMER_NO_ARBITRATION_NEEDED`. `resource_type` is one of the
+task's own four named classes (`APB_AXI_MASTER` / `INTERRUPT_CONTROLLER` / `SHARED_RESET` /
+`SHARED_PHY_CONFIG`) or `UNCLASSIFIED` -- caller-declared, never guessed from a resource's name, and an
+unrecognized value is carried through verbatim with `resource_type_recognized: false` rather than
+silently coerced. A racing entry's `conflicting_owners` names the real branch ids, declared lock names
+and evidence citations on BOTH sides of every non-agreeing branch_fw/branch_a* pair.
+
+**Detection only, matching the sibling modules' own stated boundary.** This module never picks a lock,
+never edits a pattern file, never invents a lock name, and never touches any approval/governance
+mechanism -- a human aligns the racing branches onto one real named lock, from real RTL/pattern
+evidence. Front door: `python -m dv_harness.shared_bus_resource_registry --resource-declarations
+<file> [--connectivity-rows <file>] [--json]` (no `dv-harness` CLI verb wired; exit 0 `CLEAR` / 1
+`CONTENTION` / 2 `NOT_APPLICABLE`-or-`UNKNOWN`).
+
+Proven by `dv_harness_tests/test_shared_bus_resource_registry.py` (31 tests): canonical task-group
+classification (including 8 non-canonical negative forms), the core branch_fw-vs-branch_a* race
+(mismatched-lock and both-sides-no-lock variants), the positive control (a genuinely shared named lock
+reports `CLEAR`), five negative controls (no declarations, a single-programmer resource, a
+branch_a-only pair correctly out of this module's scope, a non-canonical task_group name correctly
+yielding `UNKNOWN` rather than a false `CLEAR`, missing evidence yielding `UNKNOWN`), a real race still
+detected despite a second invalid declaration on the same resource, duplicate-resource-id refusal,
+overall-status precedence, `lock_policy` unit checks, connectivity-rows enrichment (present and
+absent), `resource_type` honesty, rendering, and 3 real CLI subprocess invocations asserting exit codes
+1/0/2.
+
+## Per-Pattern Runtime Execution State Machine (2026-09-06)
+
+`dv_harness/pattern_runtime_state_machine.py` is a per-PATTERN execution state machine:
+`CREATED -> PARSED -> VALIDATED -> READY -> RUNNING -> WAITING -> CHECKING ->
+PASS/FAIL/TIMEOUT/BLOCKED/CANCELLED`, with legal-transition enforcement
+(`assert_legal_transition()`/`advance_pattern_state()` raise `IllegalPatternTransitionError`
+on any jump not present in the module's TOTAL `LEGAL_TRANSITIONS` table -- e.g. CREATED
+straight to PASS -- and on any transition attempted from a terminal state).
+
+**This tracks one `command.txt`/pattern file's own execution lifecycle**, at the granularity
+`pattern-architecture/SKILL.md` describes: `block -> branch_a* -> branch_fw -> fork/join of
+branch_b* -> verdict/FINAL_CHECK`. CREATED/PARSED/VALIDATED/READY are the file's pre-run states;
+RUNNING/WAITING/CHECKING are in-flight (a `branch_b*` fork sitting on its own `join` -- never
+`join_any`, per that skill's section 2 -- then the FINAL_CHECK verdict step); the five terminal
+states are this one pattern's own outcome. RUNNING is legally allowed to skip WAITING straight to
+CHECKING (section 4: whether `branch_b*` forks at all varies with test intent), and WAITING never
+returns to RUNNING (this tracks the pattern's own top-level phase, not `branch_fw`'s internal
+ARM/WAIT/WAKE/DECODE/CLEAR cycling, which `interrupt-event-dispatch/SKILL.md` already owns).
+
+**Deliberately a SEPARATE vocabulary from `loop_contract.LoopState`, with NO bridge built.**
+`LoopState` answers "where is this LOOP -- the whole verification-closure process across many
+stages/patterns/regression cycles -- as a control process, right now"; `PatternRuntimeState`
+answers "where is THIS ONE PATTERN's own execution, right now" -- a question meaningful many
+times within a single loop iteration. No member name means the same thing across the two
+vocabularies (this module's PASS/FAIL are one pattern's own FINAL_CHECK/scoreboard verdict;
+`LoopState` has no PASS/FAIL at all, by design, precisely so the two are never conflated), and a
+forced mapping between them would misrepresent one as the other -- exactly the caution
+`loop_contract.py`'s own docstring gives for `Status` vs. `LoopState`, applied here one more time
+in the other direction. No `STATUS_TO_LOOP_STATE`-style bridge exists or is planned for this pair.
+
+**Also deliberately distinct, and reused rather than merged, from `sim_log_analysis`'s triage
+categories and `loop_budget.FailureType`.** Those classify WHY a dispatch failed, at the loop's
+own per-stage-attempt retry-budget granularity. This module's states are WHEN, in one pattern's
+own lifecycle, execution currently sits -- an orthogonal, finer-grained axis. This module REUSES
+`sim_log_analysis.parse_epilogue()`/`classify_signatures()` as its sole evidence reader (no second
+marker scan) and never imports or extends `loop_budget.FailureType`.
+
+**Terminal-verdict observation is evidence-derived, never fabricated.**
+`derive_observed_terminal_verdict(log_text)` reads one real sim.log and reports exactly what that
+log's own evidence supports: a real FINAL CHECK epilogue `VERDICT: PASSED|FAILED` line when
+present (this project's own documented FINAL_CHECK convention); absent that, a real fatal/error/
+scoreboard-mismatch/assertion marker reports FAIL, or a real timeout/deadlock marker reports
+TIMEOUT; a log carrying none of the above -- ends cleanly, with zero errors, and states no verdict
+at all -- is reported `SILENT_FAILURE_SUSPECTED` (never defaulted to PASS), which is exactly
+`pattern-architecture/SKILL.md` section 2's own documented join/join_any silent-early-pass trap
+("the run ends cleanly, with zero errors, because nothing had a chance to fail yet") read back as
+a runtime observation; empty log text reports `NOT_AVAILABLE`. `apply_observed_verdict()` composes
+this with the enforcement layer: it refuses to guess a state when no terminal verdict is
+supported (returns unapplied, record untouched), and it still enforces `LEGAL_TRANSITIONS` even
+against real terminal evidence -- having sim.log evidence for the END does not excuse skipping the
+recorded MIDDLE.
+
+Also included: `render_pattern_state_table()` (reuses `connectivity.render_markdown_table()`, this
+repo's only parameterized table renderer), and a small atomic-replace-backed JSON store
+(`load_records()`/`save_records()` under `<root>/.dv-harness/pattern_runtime/records.json`, reusing
+`storage._atomic_replace()`).
+
+**Deliberately bounded.** (1) It DECIDES and ARBITRATES nothing beyond one pattern's own recorded
+phase -- no build, no job, no LSF submission, no approval, and there is no stage gate. (2) A
+pattern that reaches a terminal state is re-run as a fresh record (a new `create_pattern_record()`
+call), not resumed in place -- unlike a persistent loop session, one pattern's own runtime state
+carries no partial progress worth preserving across a restart. (3) It is REACHED, not WIRED: there
+is no `dv-harness` CLI verb (`cli.py` was not touched, per this batch's file-safety scope) -- the
+front door is `python -m dv_harness.pattern_runtime_state_machine {states|show|list|observe}` --
+and no `run_stage()`/`advance()` call site or graph node invokes it.
+
+Proven by `dv_harness_tests/test_pattern_runtime_state_machine.py` (33 tests): totality of
+`LEGAL_TRANSITIONS` over every state; the full happy-path progression to PASS; RUNNING legally
+skipping WAITING; 8 negative controls including the task's own named example (CREATED straight to
+PASS rejected), no transition legal from a terminal state, and WAITING never returning to RUNNING;
+all four real `derive_observed_terminal_verdict()` outcomes, including the central "clean log with
+no epilogue/markers is SILENT_FAILURE_SUSPECTED, never PASS" assertion; `apply_observed_verdict()`
+composing evidence with enforcement (including refusing real terminal evidence against a record
+that skipped its recorded middle); table rendering; and the JSON store's round-trip, bare-root and
+corrupt-store paths.
+
+## Runtime CONTROL-Command Closed Vocabulary (2026-09-06)
+
+command.txt/pattern files carry an explicit rule -- "do not create unrestricted scripting
+behavior in command.txt" -- that nothing in this repo enforced. `dv_harness/
+runtime_control_commands.py` closes it: it validates that any statement it classifies as a
+CONTROL command belongs to the CLOSED vocabulary `WAIT / POLL / REPEAT / BOUNDED_LOOP / SYNC /
+BARRIER` (else `ILLEGAL_CONTROL_COMMAND`), and that `REPEAT`/`BOUNDED_LOOP` -- the two vocabulary
+words that name an iteration count -- declare a real bound argument (else
+`ILLEGAL_UNBOUNDED_LOOP`, even when the command's own name is `BOUNDED_LOOP`: the label is never
+trusted over its own argument).
+
+**Reuse, not reinvention.** Parsing is entirely delegated to the existing, real
+`reference_pattern_audit.extract_command_statements()` parser -- this module never re-parses
+command.txt text of its own. A statement is CONTROL-classified either (a) unconditionally, when
+its real `.category` (already computed by that module) is `C_CONTROL_FLOW` or `C_SYNCHRONIZATION`
+-- native `repeat`/`while`/`for`/`forever`/`if`/`fork`/`join`/`disable`/`wait(...)`/`@(...)`/`#...`
+used DIRECTLY, which IS the "unrestricted scripting" the rule forbids -- or (b) for a backtick
+macro/model-task call, via a disclosed NAME-EVIDENCE classification against
+`CONTROL_INTENT_NAME_TOKENS`, in the exact convention `reference_pattern_audit.classify_wait()`
+already established (a cited heuristic, never proof), because that module's own `_categorize()`
+deliberately leaves a bare macro call `C_UNCLASSIFIED` -- it cannot know a macro's purpose from its
+name, and real command.txt control-flow is overwhelmingly expressed via backtick macros (per
+`pattern-architecture/SKILL.md`'s own USB illustrations), so a check limited to the two existing
+native categories would miss almost every real control command. Report rendering reuses
+`connectivity.render_markdown_table` (the repo's one parameterized table renderer).
+`loop_budget.FailureType` (a DIFFERENT, harness-stage-failure taxonomy) is deliberately not merged
+with this module's per-dispatch vocabulary.
+
+**Evidence Truth Rule.** A statement not recognized as control-shaped is absent from the report,
+never silently "passed". A file that cannot be read/parsed is `NOT_AVAILABLE`, never a fabricated
+`CLEAN`. The "declared bound" check only asks whether a non-empty argument token exists in the
+count position -- it cannot resolve `` `define ``d constants to a finite value, and this module
+invents no "this literal value means unbounded" sentinel convention, since no such convention has
+been observed in this project's own evidence.
+
+`analyze_control_commands(path_or_statements)` / `classify_control_commands(statements)` /
+`render_control_commands_markdown(report)`; CLI: `python -m dv_harness.runtime_control_commands
+--command-file <file> [--json]` (exit 0 CLEAN, 1 a real violation, 2 NOT_AVAILABLE). It decides
+nothing beyond reporting -- no build, no job, no approval, and deliberately no stage gate.
+
+Proven by `dv_harness_tests/test_runtime_control_commands.py` (23 tests) against real
+command.txt-shaped synthetic files parsed by the real `reference_pattern_audit`
+parser: the clean six-word positive path; register/model-task macros never misclassified as
+control; out-of-vocabulary control-intent macros and raw native `while`/`fork`/`join` each flagged
+`ILLEGAL_CONTROL_COMMAND`; bare `` `BOUNDED_LOOP ``, empty-parens `` `BOUNDED_LOOP() ``, bare
+`` `REPEAT ``, and native `repeat()` each flagged `ILLEGAL_UNBOUNDED_LOOP` (including the explicit
+"legal name, no declared bound" case); a missing file reporting `NOT_AVAILABLE` rather than a
+fabricated `CLEAN`; and the real CLI driven as real subprocesses for all three exit codes.
+
+## DE Command Registry Semantic Diff: `command_txt_change_impact.py` (2026-09-06)
+
+The Engineering Discipline Rules' "command.txt change-impact check" (restated from
+`.claude/skills/CORE/command-inventory/SKILL.md`) requires re-checking `.dv-workflow/
+command_inventory.csv` against existing command.txt/scenario cases after every
+generator/schema change -- a FILE-PRESENCE / regression-selection question already
+answered by `change_impact.py`'s real git-diff-driven selection machinery. It never asked
+the narrower question this module answers: given two actual snapshots of a DE command
+registry (before/after some edit), which individual commands' own DEFINITIONS changed,
+and how.
+
+`dv_harness/command_txt_change_impact.py` is a semantic diff over two
+DECommandRegistryIR-shaped snapshots, accepted purely as duck-typed dicts/lists -- it
+never imports `de_command_style_learning.py` (the real producer of that shape, owned by
+a separate concurrent effort) or `spec_vplan_delta.py` (whose semantic-diffing PATTERN it
+mirrors with its own parallel logic, never shared code, since the two modules diff
+structurally different things). Every field (command id, parameters, protocol,
+semantic_role, handler, vip_sequence, effects, deprecated/status, source) is resolved
+through a small alias table that tracks FOUND vs. NOT-FOUND separately from a real empty
+value, so a field a producer has not yet stabilized never gets silently misread as
+unchanged.
+
+**Vocabulary**: UNCHANGED / ARGUMENT_CHANGE / SEMANTIC_CHANGE / NEW_COMMAND /
+REMOVED_COMMAND / DEPRECATED / AMBIGUOUS -- deliberately disjoint from both
+`models.Status` and `loop_budget.FailureType` (checked by
+`assert_no_verification_verdict_vocabulary()`, not merely claimed). Precedence,
+worst-first: an explicit deprecated signal wins; else any semantic-facet difference
+(including reinstatement out of deprecation); else a positional parameter-list
+difference (parameter ORDER is load-bearing for a command.txt macro/task call, so this
+never sorts by name); else any facet this module could not resolve on both sides ->
+AMBIGUOUS, never silently read as UNCHANGED; else UNCHANGED.
+
+**Never fabricates a rename.** A command whose id disappears from the old snapshot and a
+differently-spelled replacement in the new one are always reported as one
+REMOVED_COMMAND plus one NEW_COMMAND -- matching them by guessed similarity would be
+exactly the invented linkage the Evidence Truth Rule forbids.
+
+Reuses `connectivity.render_markdown_table()` for its markdown rendering -- no new table
+renderer. There is no `dv-harness` CLI verb (`cli.py` was out of scope for this batch);
+the front door is `execute_verb()`/`main()`, runnable as
+`python -m dv_harness.command_txt_change_impact --old <old.json> --new <new.json>
+[--json]` (exit 0 nothing concerning, 1 a concerning verdict present, 2 unreadable/
+unparseable input). It runs, builds, submits and approves nothing.
+
+Proven by `dv_harness_tests/test_command_txt_change_impact.py` (34 tests): the core
+UNCHANGED baseline, NEW_COMMAND/REMOVED_COMMAND (with a dedicated no-guessed-rename
+negative control), ARGUMENT_CHANGE for added/reordered/retyped parameters,
+SEMANTIC_CHANGE (including one that outranks a simultaneous argument change and one
+proving whitespace-only `effects` reformatting is NOT a false positive), DEPRECATED
+(flag and status-string forms, plus reinstatement folding into SEMANTIC_CHANGE), four
+AMBIGUOUS negative controls (schema-gap fields, missing parameters, duplicate
+command_id, an unresolved facet that must not default to UNCHANGED), unindexable/
+malformed records reported rather than dropped, a genuinely unparseable snapshot
+raising rather than reading as an empty registry, all three accepted container shapes,
+and the real CLI driven as a subprocess.
+
+## Command Precondition Gate (2026-09-06)
+
+`runtime_event_registry.py` (built earlier in this same workflow run) tracks NAMED RUNTIME EVENTS
+with REQUIRES/WAITS_FOR/TRIGGERS/UNBLOCKS dependency propagation and answers "what is this event's
+status" -- it deliberately does not answer the adjacent question a command dispatcher must ask
+before launching a `block`/`branch_a*`/`branch_fw`/`branch_b*` task
+(`.claude/skills/CORE/branch-mapper/SKILL.md`'s Initialization Task Hierarchy,
+`.claude/skills/CORE/pattern-architecture/SKILL.md`'s five-layer shape): "does THIS COMMAND's own
+declared precondition SET currently hold?" A repo-wide search found no code joining a command's own
+declared prerequisite names to the registry's real event states -- `command_error_taxonomy.py`
+classifies a dispatch's FAILURE text after the fact, and `init_seq.py`'s
+`evaluate_gate2_preconditions()` is a different, narrower mode-bit/register precondition check for
+connectivity Gate 2, not a general per-command runtime-event precondition gate.
+
+`dv_harness/command_precondition_gate.py` closes exactly that, and reuses rather than reinvents:
+a command declares its own precondition NAMES (GLOBAL_READY/DUT_READY/FW_READY/VIP_READY/
+MODE_VALID/RESET_DEASSERTED/PHY_READY are illustrative examples only -- never a hardcoded universal
+list; a project's real names are declared by its caller exactly as `runtime_event_registry`'s own
+event set is), and each is checked against a real `RuntimeEventRegistry.propagate()`'s EFFECTIVE
+(post-propagation) status -- computed once per evaluation, never re-derived or guessed. This module
+invents no interrupt-priority scheme, no arbitration policy and no timing value, and parses no
+sim.log itself; whether an event "really" fired stays `runtime_event_registry`'s own caller-supplied,
+evidence-cited fact.
+
+**Vocabulary: exactly READY / BLOCKED / UNKNOWN_PRECONDITION**, deliberately distinct from both
+`runtime_event_registry.EventStatus` (checked disjoint at import via
+`assert_no_dispatch_status_vocabulary_collision()`, the same discipline
+`runtime_event_registry.assert_no_status_vocabulary_collision()` applies one level down) and
+`command_error_taxonomy`'s eleven-value per-dispatch-failure classification. Per-command status folds
+worst-first: any precondition resolving to a known event that is FAILED/TIMEOUT/
+BLOCKED_BY_DEPENDENCY makes the command BLOCKED (real evidence outranks everything else); else any
+precondition naming NO event in the registry at all makes it UNKNOWN_PRECONDITION -- never silently
+assumed satisfied; else any known event still PENDING (declared, not yet observed to fire) makes it
+BLOCKED in the classic process-scheduling sense ("waiting on a condition that hasn't occurred");
+else, every declared precondition FIRED (or none declared at all) makes it READY. Every verdict
+carries the full per-precondition evidence (`known`/`effective_status`/`raw_status`/`reason`) so an
+UNKNOWN_PRECONDITION or BLOCKED finding is never lost even when another precondition on the same
+command is fine.
+
+`dv-harness` `cli.py` was under concurrent modification by other parallel gap-closure work this same
+session, so no `cli.py` verb was added -- the front door is
+`python -m dv_harness.command_precondition_gate list|check --commands <commands.json>
+[--registry <events.json>] [--out <path>] [--json]`, one shared `execute_verb()`. `list` needs only
+the command declarations; `check` runs `registry.propagate()` once and evaluates every declared
+command against that single propagated state. Exit 0 every command READY, 1 at least one BLOCKED or
+UNKNOWN_PRECONDITION, 2 NOT_AVAILABLE or a usage/declaration error.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It decides nothing beyond
+reporting: no dispatch is actually performed, no build/job/approval, and there is deliberately no
+stage gate. (2) A precondition name is matched EXACTLY against a declared event name -- no fuzzy or
+prefix matching, no alias table. (3) It evaluates one registry's state at one point in time; it is
+not a subscription or re-poller and reports no history.
+
+Proven by `dv_harness_tests/test_command_precondition_gate.py` (30 tests) against a real
+`RuntimeEventRegistry` matching this repo's own `block`/`branch_a*`/`branch_fw`/`branch_b*`
+vocabulary: the core READY path, a genuinely FAILED precondition, a `BLOCKED_BY_DEPENDENCY` cascade
+(reading the real EFFECTIVE, post-propagation status rather than the raw one), a TIMEOUT
+precondition, a still-PENDING precondition (BLOCKED but distinctly, via `awaiting_preconditions`
+rather than `blocking_preconditions`), an unresolved precondition name (UNKNOWN_PRECONDITION, never
+silently READY), and the headline mixed case proving BLOCKED outranks UNKNOWN_PRECONDITION when a
+command declares both kinds of trouble at once. Declaration-level negative controls (blank
+command_id, blank/duplicate precondition names, malformed JSON, missing files) and the vocabulary
+disjointness assertion are also covered, plus both real CLI verbs driven as real subprocesses with
+their exit codes asserted.
+
+## System Readiness Gates: Eight Named Composite Gates Over SYS-37's Own Evidence (2026-09-06)
+
+`system_readiness.derive_system_readiness()` already folds SYS-37's ten named inputs (subsystem
+readiness, shared-resource conflicts, command compatibility, scoreboard compatibility, address map,
+clock/reset, VIP dedup resolution, build integration, scenario availability, regression evidence)
+into ONE READY/PARTIAL/BLOCKED/UNKNOWN verdict -- correct for "can this composition be integrated at
+all", and the wrong shape for "WHICH concern is what is actually stopping it". A caller staring at
+one PARTIAL verdict over ten inputs still has to open the `inputs` list by hand to find the single
+CONCERN among them. `dv_harness/system_readiness_gates.py` is that missing layer: eight NAMED
+composite gates, each a real AND-formula over a domain-scoped subset of SYS-37's own real inputs
+(plus SYS-35's real version-pin `restorable` field and SYS-33's real regression-plan `entry_count`),
+computing nothing new -- every fact is read verbatim off `derive_system_readiness()`'s already-real
+result, imported and called read-only.
+
+**Every one of SYS-37's ten inputs is owned by exactly one of the first seven gates, never
+re-derived twice, never dropped**: `SUBSYSTEM_SELECTION_READY` (a non-empty SYS-1 selection, all
+SYS-4 READY -- `subsystem_readiness`); `RESOURCE_RECONCILIATION_READY` (SYS-24 shared-resource
+scheduling clean, SYS-11/12/17 VIP-dedup/ownership clean -- `shared_resource_conflicts`,
+`vip_dedup_resolution`); `COMMAND_COMPATIBILITY_READY` (SYS-18..22 command-plan collisions/mode
+preservation clean -- `command_compatibility`); `SCOREBOARD_COMPOSITION_READY` (SYS-26 scoreboard
+reuse clean AND the cross-subsystem topology facts a correlation layer needs -- SYS-28 address map,
+SYS-29 clock/reset -- are themselves clean -- `scoreboard_compatibility`, `address_map`,
+`clock_reset`); `BUILD_COMPOSITION_READY` (SYS-4's per-subsystem build presence clean AND SYS-35's
+version pin is genuinely restorable -- `build_integration`, plus a real check of
+`build_composition_version_pin()`'s own `restorable` field); `REGRESSION_PLAN_READY` (SYS-4's
+regression-evidence factor clean, SYS-30 cross-subsystem scenarios exist to regress, AND SYS-33's
+plan really derived at least one entry -- `regression_evidence`, `scenario_availability`, plus a
+real check of `build_system_regression_plan()`'s own `entry_count`); `ERROR_HANDLING_READY` (SYS-37's
+own closing rule made checkable: the VIP-dedup input -- the one whose BLOCKED status IS "an
+unresolved DRIVER_CONFLICT or a blocked dedup decision" -- is clean, AND no SYS-37 input at all is
+BLOCKED); `SYSTEM_SIGNOFF_READY` (every one of the above seven gates READY, AND SYS-37's own overall
+`system_readiness` verdict is READY).
+
+**The same worst-wins, no-averaging discipline this project already applies everywhere**
+(`subsystem_maturity_gate.py`, `functional_coverage_signoff.py`, `spec_vplan_readiness_gate.py`) is
+enforced by one shared `_fold()`: a single condition that is BLOCKED or CONCERN makes the WHOLE gate
+`NOT_READY` regardless of how many other conditions on that gate are clean -- two clean conditions
+and one blocked one is not "mostly ready". A condition genuinely absent evidence for (no scheduling
+plan was supplied, no version pin exists because nothing was selected) is UNKNOWN, and -- when
+nothing worse is present on that gate -- makes the WHOLE gate `INCOMPLETE_EVIDENCE`, a THIRD value
+distinct from both `READY` and `NOT_READY`. This is GF-AT-28 as a hard constraint on this module
+specifically: a Critical UNKNOWN must never silently become READY, and it must equally never be
+reported as a confirmed NOT_READY it was never proven to be. Only when every required condition on a
+gate is CLEAR does that gate report `READY`. `GATE_VERDICTS = (READY, NOT_READY,
+INCOMPLETE_EVIDENCE)` is asserted, at import time, to share no token with `dv_harness.models.Status`
+-- the same guard several sibling composite-gate modules already apply to their own vocabularies.
+
+**File-safety scope was held exactly**: the only imports are `dv_harness.system_readiness` (the
+real, pre-existing, non-claimed module this task named) and `dv_harness.models` (for the
+vocabulary-collision guard); nothing from the concurrent batch's claimed-file list or any other new
+module in this batch is imported, and `gates.py`/`cli.py`/`CLAUDE.md` are untouched.
+
+This module authorizes nothing beyond reporting -- exactly like SYS-37 itself, a `SYSTEM_SIGNOFF_READY`
+verdict here is an input to the SYS-39 human-approval gate, never a substitute for it. No stage runs,
+no gate script is invoked, no build/regression/LSF job starts, no approval is minted, and there is no
+`gates.py`/`STAGE_GATES` entry.
+
+Proven by `dv_harness_tests/test_system_readiness_gates.py` (16 tests): the core positive path drives
+the REAL `system_readiness.derive_system_readiness()` over a fully-populated, all-clear synthetic
+SYS-1/17/18-22/24/26/28/29/30/33/35 evidence set (built directly against each real `_xxx_input()`
+helper's own documented CLEAR condition) and asserts every one of the eight named gates reports
+READY; a GF-AT-28 control drives `derive_system_readiness()` over completely empty evidence (every
+SYS-37 input UNKNOWN) and asserts every gate reads `INCOMPLETE_EVIDENCE`, never `READY`; six further
+real negative controls each flip exactly one real fact -- a BLOCKED subsystem, a blocking command
+collision, an address-map conflict, an unresolved `DRIVER_CONFLICT`, an unpinned subsystem, zero
+cross-subsystem scenarios, a zero-entry regression plan, and a missing regression plan -- with
+everything else left clean, and assert the fold caught exactly that one defect on exactly the
+gate(s) that own it while every unaffected gate stays READY. Structural tests hold the
+vocabulary-collision guard, the exactly-eight-named-gates invariant, and the malformed-input/
+unrecognized-condition-status refusals.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It derives no new SYS-level fact
+of its own -- every condition traces to a real `system_readiness.py`/SYS-35/SYS-33 value, never
+re-computed. (2) There is no `dv-harness` CLI verb and no `STAGE_GATES` entry (per this task's own
+file-safety scope, `gates.py`/`cli.py` were not touched) -- the front door is
+`system_readiness_gates.derive_system_readiness_gates()` /
+`derive_system_readiness_gates_from_assessment()`, a REACHED capability rather than a WIRED one, in
+the same sense several other 2026-09-06 additions above disclose. (3) It arbitrates nothing: an
+unresolved active-driver conflict still names SYS-12's preferred model as text for a human; nothing
+here picks a winner.
+
+## System Error Propagation IR: Tracing a Real Cross-Subsystem Blast Radius (2026-09-06)
+
+`system_topology_analysis.py`'s SYS-28/SYS-29 machinery already computes the only real
+cross-subsystem RELATIONSHIPS this repository has: which address regions two subsystems
+physically share or collide over, which interrupt line names two or more subsystems' own
+evidence both name, and which clock/reset names two subsystems share (or cross a shared-address
+path between). Nothing in this repo turned those relationships into a PROPAGATION graph, or
+asked "if subsystem X faults with condition Y, which OTHER subsystems does the topology's own
+evidence actually show could be affected, and has each of those affected subsystems got a real
+declared recovery action on file?" `dv_harness/system_error_propagation.py` is exactly that trace
+and nothing else.
+
+Per this addition's own file-safety scope, it never imports `system_topology_analysis.py` (or
+`system_resource_inventory.py`). It accepts a `topology` parameter that is a generic, duck-typed
+Mapping shaped like that module's real `build_system_topology_analysis()` output --
+`address_map_reconciliation.overlaps`, `interrupt_map_reconciliation.lines`,
+`clock_reset_comparison.clock_comparisons`/`reset_comparisons` -- read by plain dict access, never
+by importing that module's classes or re-deriving its own analysis. A caller already holding a
+real topology document may pass it here verbatim.
+
+**A propagation edge is minted ONLY from a topology verdict that module's own signal functions
+already treat as a proven coupling, never from its own honest "could not tell" values.** Address:
+`SHARED_MEMORY` / `ADDRESS_OVERLAP_VALID` / `ADDRESS_OVERLAP_CONFLICT` count; SYS-28's own
+`UNKNOWN` (a data-quality defect inside ONE subsystem's own artifacts, per that module's
+`_overlap_signals()` docstring) is excluded -- asserting a path on it would manufacture a
+cross-subsystem finding out of a single subsystem's internal inconsistency, exactly the failure
+mode that module's own comment warns against. Interrupt: only
+`INTERRUPT_LINE_SHARED_ACROSS_SUBSYSTEMS` rows become edges (every pairwise combination among the
+row's own `subsystems` list). Clock/reset: `SAME_CLOCK_DOMAIN` / `CONFLICTING_CLOCK_SOURCE` /
+`CONFLICTING_CLOCK_FREQUENCY` and `CDC_BOUNDARY` (clock), `SAME_RESET_DOMAIN` /
+`CONFLICTING_RESET_POLARITY` / `CONFLICTING_RESET_SEQUENCING` (reset) -- the first three of each
+group fire only when both subsystems name the IDENTICAL signal (a real shared net, whatever the
+two sides' stated frequency/source/polarity/sequencing then say), and `CDC_BOUNDARY` is a real
+SYS-28 shared-address path crossing two differently-named clock domains. `INDEPENDENT_CLOCK_
+DOMAIN`/`INDEPENDENT_RESET_DOMAIN` and either family's shared `UNKNOWN` are excluded.
+
+**Propagation is real graph reachability, not "every other subsystem".** `bfs_reachable()` runs a
+real breadth-first search from the origin over only the edge kinds relevant to the declared
+error-condition kind (`CONDITION_TO_EDGE_KINDS`: `ADDRESS_DECODE_FAULT`/`BUS_ERROR`/
+`DMA_CORRUPTION` -> shared-address edges only; `INTERRUPT_STORM` -> shared-interrupt-line edges
+only; `RESET_ASSERTION` -> shared-reset-domain edges only; `CLOCK_LOSS` -> shared-clock-domain
+edges only; `CDC_VIOLATION` -> clock-domain-crossing plus shared-clock/reset edges; `GENERIC`, or
+any condition kind this module does not recognize, uses every edge kind -- the widest set, never a
+narrower guess). A subsystem the graph does not actually connect to the origin under those edge
+kinds is never reported as affected, which is the direct enforcement of "never assert propagation
+reaches a subsystem the topology does not actually show a path to." Multiple hops are followed
+(a real chain of proven edges), each affected subsystem's report carrying the real edge chain that
+reaches it.
+
+**A declared recovery/response action per subsystem has no real producer anywhere in this
+codebase** (confirmed by direct search before building: no `recovery_action`/`expected_response`/
+`error_handler` field exists in `env_manifest.py`'s schema or any sibling module's output), so it
+is honestly a CALLER-SUPPLIED input -- the same status `ip_ownership_conflict.py`'s
+`legacy_bfm_declarations` and `system_resource_inventory.SubsystemResourceSources.declared_
+physical_interfaces` already carry for their own no-producer facts. `resolve_declared_response()`
+grades each affected subsystem's record into one of four statuses -- `RESPONSE_DECLARED` (a real,
+non-placeholder recovery-action text), `NO_RESPONSE_DECLARED` (no matching record at all, or a
+record with no usable text), `RESPONSE_PLACEHOLDER_ONLY` (a value like `TBD`/`N/A`/`unknown`/`?`),
+`RESPONSE_EXPLICITLY_DECLARED_NONE` (a record explicitly stating `declares_response: false`) --
+and only `RESPONSE_DECLARED` satisfies the chain.
+
+**The Recovery Chain vocabulary is this batch's own rule 8, enforced in code rather than restated
+in prose.** `RECOVERY_CHAIN_COMPLETE` fires only when EVERY affected subsystem carries
+`RESPONSE_DECLARED`; a single missing, placeholder, or explicitly-none response among any number
+of otherwise-clean ones makes the WHOLE chain `RECOVERY_CHAIN_INCOMPLETE`, naming exactly which
+subsystem(s) are missing -- never silently folded into COMPLETE, and never defaulted to "assume
+recovered" when no `declared_responses` input was supplied at all. Zero affected subsystems is the
+honestly distinct `NO_PROPAGATION_DETECTED` (the topology shows the error contained to its origin
+-- nothing was actually verified, so it is never presented as if it were a checked-and-clean
+COMPLETE). An origin the topology does not name anywhere, or an empty topology carrying no
+subsystem evidence in any of its three blocks, reports `NOT_AVAILABLE` rather than a guessed
+trace.
+
+`assert_no_verification_verdict_vocabulary()` (imported from the stable `dv_harness.models`, not a
+claimed-batch file) holds every one of this module's own vocabularies -- the four Recovery Chain
+statuses, the four response statuses, the eight condition kinds, the five edge kinds -- disjoint
+from `models.Status`, the same discipline several sibling modules already apply to their own
+vocabularies.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It never arbitrates which
+subsystem's declared response is correct, never decides a propagation path should be architecturally
+broken, and never picks an error-handling strategy -- detection and reporting only. (2) It never
+invents a declared response: an absent `declared_responses` input reads every affected subsystem as
+`NO_RESPONSE_DECLARED`, never an assumed recovery. (3) It reuses SYS-28/SYS-29's own already-computed
+verdicts verbatim and computes no address/interrupt/clock/reset relationship of its own -- if the
+supplied topology's own analysis is wrong, this module's trace inherits that, honestly, rather than
+re-deriving a second opinion. (4) There is no `dv-harness` CLI verb (`cli.py`/`gates.py` untouched,
+per this batch's file-safety scope) -- the front door is
+`python -m dv_harness.system_error_propagation trace --origin ... --condition ... --topology ...
+[--declared-responses ...] [--json]`.
+
+Proven by `dv_harness_tests/test_system_error_propagation.py` (15 tests) against small synthetic
+topology fixtures shaped exactly like `system_topology_analysis.py`'s real output: the positive path
+(a shared-memory edge propagates an `ADDRESS_DECODE_FAULT` to one real neighbor with a complete
+recovery chain), plus real negative controls -- a missing declared response reads
+`RECOVERY_CHAIN_INCOMPLETE` rather than `COMPLETE`; condition-relevant edge-kind filtering (an
+`INTERRUPT_STORM` never follows a shared-address edge even when one is present, and a `CDC_VIOLATION`
+uses the clock-domain-crossing edge but never a plain shared-address one); an honest SYS-28/SYS-29
+`UNKNOWN`/`INDEPENDENT_*` verdict is never treated as a proven path; an origin absent from the
+topology and an empty topology both report `NOT_AVAILABLE`; a real multi-hop transitive BFS chain is
+followed correctly, with a placeholder (`"TBD"`) response graded the same as a genuinely missing one;
+an explicitly-declared-no-response record is reported distinctly from a genuinely absent one; an
+unrecognized condition kind is treated as `GENERIC` with a named unknown rather than guessed; and
+malformed-input refusals (an empty origin, a non-mapping topology). The real CLI is driven as three
+subprocesses asserting exit codes 0 (`RECOVERY_CHAIN_COMPLETE`), 1 (`RECOVERY_CHAIN_INCOMPLETE`), and
+2 (`NOT_AVAILABLE`).
+
+## Subsystem Adapter IR: a Fixed 8-Operation Facade Over Real Task/Sequence Names (2026-09-06)
+
+Every subsystem-mode verification environment this project builds already carries its own real, generated task/sequence names -- an `init_seq.py`-style directed test step, a `branch_b*`-driven VIP sequence, a hand-authored `command.txt` task, each following that particular subsystem's own naming convention. Nothing anywhere spoke a FIXED, cross-subsystem vocabulary of logical operations against those real names: a caller wanting to "start this subsystem" or "wait until it is ready" had no single place to ask that question without first learning the specific subsystem's own naming scheme. Building a second task/sequence catalog from scratch, or guessing a plausible task name for an operation nobody actually declared, would be exactly the "invent a stub implementation" the Evidence Truth Rule forbids.
+
+`dv_harness/subsystem_adapter_ir.py` is the facade, and only the facade. `LOGICAL_OPERATIONS` is a fixed, import-time-pinned 8-value tuple (`configure`/`start`/`stop`/`reset`/`wait_ready`/`execute`/`monitor`/`get_status`) -- `assert_logical_operations_fixed()` runs at import and fails loudly if a future edit silently widens, narrows, reorders-with-duplicates, or otherwise drifts the vocabulary. `build_subsystem_adapter_ir(mapping_entries, subsystem_name=None)` accepts a duck-typed list of `{operation, existing_task_or_sequence_name}` records -- plain dicts or any object exposing `.get()`, never a dict subclass requirement -- and resolves each of the 8 fixed operations to exactly one `OperationResolution`:
+
+- **RESOLVED** -- the caller supplied a real, non-empty (after whitespace-trimming) task/sequence name for this logical operation. The name is carried through verbatim, trimmed only; this module never rewrites, normalizes, or "corrects" it.
+- **UNSUPPORTED_OPERATION** -- no real mapped task/sequence exists for this operation, whether because the caller's mapping never mentioned it at all, or because it was mentioned with an empty/whitespace-only name (a legitimate explicit "we have nothing for this" declaration). Both paths report the identical honest status and reason, and neither ever synthesizes a fabricated task/sequence name to fill the gap -- the module's one hard rule, restated from its own governing instruction: never invent a stub for a missing mapping.
+
+An operation named in `mapping_entries` that falls OUTSIDE the fixed eight-operation vocabulary is never silently dropped: it is collected into `unrecognized_mappings` on the resulting `SubsystemAdapterIR`, carrying its own real reason, and it never resolves (or leaves unsupported) any of the eight real logical operations -- a caller reading the IR can always see and correct a mis-named mapping rather than have it silently vanish.
+
+**Malformed or ambiguous input is a hard, named error, never a silent repair.** A non-sequence `mapping_entries`, an entry that is not mapping-shaped at all, an entry with a missing or blank `operation`, an entry whose `existing_task_or_sequence_name` key is entirely ABSENT (deliberately distinct from being present as an empty string, which is a legitimate "explicitly unmapped" declaration), or the same operation mapped more than once across one caller-supplied list, each raise `SubsystemAdapterIRError` with a distinct `code`/`detail` -- mirroring `task_return_model.TaskReturnModelError`'s "never silently repaired" discipline for the identical reason: silently resolving a duplicate or malformed declaration on the caller's behalf would hide a real authoring defect from the person who needs to see it. `resolve()`/`is_supported()` likewise reject a request for an operation outside the fixed vocabulary rather than reporting a fabricated `UNSUPPORTED_OPERATION` for a question this module was never asked to answer.
+
+**Deliberately bounded, and stated rather than implied closed.** This module imports nothing else from `dv_harness` -- verified directly against its own import statements -- so it stays usable regardless of which concurrently-built module eventually owns producing a real mapping for a given subsystem; every mapping is accepted as a generic, duck-typed record rather than a specific producer's typed output. It authors no task/sequence body and validates nothing about whether a resolved name is itself syntactically or semantically correct against the underlying environment -- that is a downstream generator's job. It runs no build, no simulation, no LSF submission, mints no approval, and holds no stage gate of its own; it only resolves a caller-supplied mapping against the fixed 8-operation vocabulary and reports, honestly, what that mapping does and does not cover.
+
+Proven by `dv_harness_tests/test_subsystem_adapter_ir.py` (20 tests): fixed-vocabulary sanity plus two mutation-style negative controls proving the import-time drift/duplicate assertion has real detection power; the full-mapping positive path (all 8 operations resolved, names trimmed-but-never-otherwise-rewritten); an empty mapping list (all 8 honestly unsupported); the never-mentioned-vs-explicitly-empty-name distinction (both `UNSUPPORTED_OPERATION`, with distinguishable `reason` text); an unrecognized operation name reported without ever bleeding into a real operation's resolution; `resolve()`/`is_supported()` rejecting an out-of-vocabulary request; six negative controls for malformed/ambiguous input; and a genuinely duck-typed (non-dict, `.get()`-only) mapping-record object proving the input contract is real duck-typing rather than dict-only support in disguise. Run: `python -m pytest dv_harness_tests/test_subsystem_adapter_ir.py -q` -> `20 passed`.
+
+## System Failure Taxonomy: SYSTEM-INTEGRATION Failures, Boundary Localization, Coverage-Hole Scope (2026-09-06)
+
+Three real, closely-related classification mechanisms, one module, because they answer questions at the SAME grain -- the SYSTEM/multi-subsystem-composition level, not the per-command-dispatch level `command_error_taxonomy.py` already owns (eleven categories, one per failed command/task call) and not the per-stage-retry level `loop_budget.FailureType` already owns (ten categories feeding a retry-vs-stop decision). Nothing in this repo classified a failure at the grain a COMPOSED multi-subsystem environment actually breaks at -- a merge collision during system build, a cross-subsystem address-map disagreement, two active VIP agents driving one port, a scoreboard mismatch that only shows up once two subsystems' transactions are compared together. `dv_harness/system_failure_taxonomy.py` is that missing coarser layer.
+
+**(a) A 14-value SYSTEM-INTEGRATION failure taxonomy** (`SUBSYSTEM_FAILURE`, `INTEGRATION_FAILURE`, `ROUTING_FAILURE`, `RESOURCE_CONTENTION_FAILURE`, `ADDRESS_MAP_FAILURE`, `CLOCK_RESET_FAILURE`, `COMMAND_COMPATIBILITY_FAILURE`, `BUILD_COMPOSITION_FAILURE`, `SCOREBOARD_COMPOSITION_FAILURE`, `VIP_DEDUP_FAILURE`, `ERROR_PROPAGATION_FAILURE`, `TIMING_FAILURE`, `CONFIGURATION_FAILURE`, `RECOVERY_FAILURE`) plus the honest `UNCLASSIFIED` fallback. `classify_system_integration_failure(text)` is a pure, regex-rule-based classifier over whatever real failure text a caller already has (a `system_build_proof`-shaped merge report line, a cross-subsystem gate's own rejection text, a composed environment's sim.log excerpt) -- it reads no file and runs no subprocess itself, matching `command_error_taxonomy.py`'s own house style (a fixed `CLASSIFICATION_ORDER`, most structurally specific rule first, each rule citing the exact matched evidence substring and 1-indexed line). An unmatched text is `UNCLASSIFIED`, never forced into one of the fourteen named categories. `TIMING_FAILURE` classifies already-REPORTED timing/race-relationship violation TEXT (a setup/hold violation citation, a race condition, a glitch) -- it measures nothing and runs no timing analysis of its own, so it is not the Performance Verification this entire gap-closure batch deferred; it is a text classifier over evidence some other, already-real tool produced.
+
+**Deliberately DIFFERENT, coarser scope than its two nearest neighbours, stated explicitly rather than left to be discovered.** `command_error_taxonomy.py`'s eleven categories answer "why did THIS ONE command/task dispatch fail". `loop_budget.FailureType`'s ten categories answer "why did THIS STAGE'S RETRY exhaust". This module answers "what KIND of SYSTEM/multi-subsystem-composition failure is this" -- a different, wider grain neither of those two is built to express. Because both of those modules were claimed by a concurrently-running batch of this project's own gap-closure work, this module imports neither: the non-collision is instead asserted against a literal, hand-transcribed copy of each module's own published category vocabulary (`assert_disjoint_from_command_error_taxonomy()` / `assert_disjoint_from_loop_budget_failure_type()`, both run at import time), the same "state the distinction in code, do not silently assume it" discipline several other pairs of near-adjacent vocabularies in this project already apply to themselves. A third guard, `assert_disjoint_from_verification_verdict_vocabulary()`, imports `dv_harness.models.Status` (a small, stable, unclaimed enum, safe to import) to prove this module's full vocabulary -- both taxonomies plus the boundary-localization status words -- never collides with a real stage verdict.
+
+**(b) Root-cause BOUNDARY localization, never a claimed root cause.** `localize_failure_boundary(subsystem_io_map, connections=None)` takes a caller-supplied, fully duck-typed per-subsystem input/output correctness map (each subsystem declaring its own input and output as `CORRECT`/`INCORRECT`/`UNKNOWN`, via either a string-shaped or a bool-shaped record) and names the NARROWEST subsystem boundary the evidence actually proves -- exactly one subsystem whose input is confirmed `CORRECT` and whose output is confirmed `INCORRECT` is the only case that narrows (`status: "NARROWED"`, that subsystem named as `boundary`). Zero such subsystems, more than one, or a real contradiction across a caller-declared direct connection (an upstream `CORRECT` output paired with a downstream `INCORRECT` input on the same wire, or the reverse) all report `status: "UNDETERMINED"` with `boundary: None` and the real candidate set or contradiction cited in `reason` -- never a guessed single subsystem. This is the module's one hard rule: it never claims a specific root cause the input data does not prove, per this batch's own Evidence Truth Rule (rule 8: a Critical UNKNOWN must never silently become a resolved finding).
+
+**(c) A 6-value system coverage-hole taxonomy** (`SUBSYSTEM_GAP`, `INTEGRATION_GAP`, `RESOURCE_GAP`, `SCENARIO_GAP`, `ERROR_PATH_GAP`, `COVERAGE_MODEL_GAP`) plus the honest `UNCLASSIFIED_COVERAGE_HOLE` fallback, via `classify_system_coverage_hole(hole)` over a caller-declared, duck-typed hole record (`coverage_model_missing`, `involves_shared_resource`, `involves_error_path`, `scope`/`subsystem_ids`/`subsystem_id`, `scenario_category_missing`). **Deliberately a different, coarser-grained taxonomy from `coverage_analysis.classify_coverage_hole()`'s four per-BIN root causes** (`MISSING_TEST`/`INSUFFICIENT_CONSTRAINT`/`UNREACHABLE_STIMULUS`/`INSUFFICIENT_SEED_ATTEMPTS`, plus this project's own twelve-value structural extension) -- that mechanism answers "why is ONE coverage bin unhit", read off a real coverage-tool summary and a real seed-attempt count; this module answers "what KIND of system-level gap does a coverage hole represent" (scoped to one subsystem, spanning an integration path, a shared-resource scenario, an error path, a whole missing scenario category, or a coverage MODEL that was never even defined). The six category names share no token with `coverage_analysis`'s vocabulary, and `coverage_analysis.py` is on this batch's claimed-file list, so it is never imported here either -- the two mechanisms compose at a caller rather than one subsuming the other.
+
+**What this module does not do.** It classifies and localizes; it never decides which subsystem to fix, never arbitrates a resource-ownership conflict (that stays `system_resource_inventory.py`'s SYS-11/SYS-12 territory, deliberately not imported here since it is not named by this task), never retries anything, never spends a budget, never decides PASS/FAIL for a stage, and touches no human-approval gate. It performs no file I/O and no subprocess call anywhere in the module -- every input across all three mechanisms is a plain, generic/duck-typed parameter.
+
+Proven by `dv_harness_tests/test_system_failure_taxonomy.py` (58 tests): vocabulary shape/disjointness including a mutation test proving the disjoint guards have real detection power against a real `command_error_taxonomy`/`loop_budget` category name; one positive-match test per each of the fourteen failure categories plus honest-fallback and rejection negative controls (empty text, unmatched text, `None`/non-string input) plus two priority-ordering tests proving `CLASSIFICATION_ORDER` is actually honoured when two categories' markers co-occur in one text; boundary localization's single-candidate narrowing (both string- and bool-shaped input), zero-candidate cases (with and without a blocking `UNKNOWN`), a multiple-independent-candidate `UNDETERMINED`, a real cross-connection contradiction, an unresolvable-connection-ignored-not-assumed case, and six malformed-input negative controls; and one positive test per each of the six coverage-hole categories plus two priority-conflict tests and malformed-input negative controls. Run: `python -m pytest dv_harness_tests/test_system_failure_taxonomy.py -q` -> `58 passed`.
+
+## System Checker Taxonomy: a 9-Value SYSTEM-Scope Classification (2026-09-06)
+
+Nothing in this repo named what KIND of property a SYSTEM-level (cross-subsystem/SoC-composition)
+checker verifies. `verification_architecture.py`'s `CheckerIR` already extends
+`connectivity.generate_protocol_check_entry()`'s per-checker shape with a target-instance/
+mount-side/status/confidence record, but it answers a narrower, different-altitude question: "is
+THIS ONE checker correctly bound and linked within ITS OWN subsystem" -- it has no notion of what
+KIND of system-level concern the checker exists to verify, and it is deliberately scoped to a
+SINGLE subsystem's own bind target. Nothing else in the codebase named a system-scope checker-type
+vocabulary at all: a repo-wide grep for `DATA_FLOW_CHECKER`/`system_checker_taxonomy` before this
+change matched nothing.
+
+`dv_harness/system_checker_taxonomy.py` is that vocabulary, and it is EXPLICITLY a different,
+SYSTEM-scope taxonomy from `verification_architecture.py`'s per-SUBSYSTEM `CheckerIR` -- stated in
+the module's own docstring rather than left to be inferred, and enforced by never importing that
+module (or any other claimed/concurrent-batch file) at all. Nine categories:
+`DATA_FLOW_CHECKER`, `RESOURCE_ARBITRATION_CHECKER`, `ADDRESS_ROUTING_CHECKER`,
+`CLOCK_RESET_SEQUENCING_CHECKER`, `COMMAND_COMPATIBILITY_CHECKER`, `BUILD_INTEGRITY_CHECKER`,
+`SCOREBOARD_COMPOSITION_CHECKER`, `RECOVERY_CHECKER`, `ERROR_PROPAGATION_CHECKER` -- chosen to
+match this project's own real SYSTEM-scope mechanisms in PROSE, without importing any of them:
+`system_resource_inventory.py`'s ACTIVE_DRIVER_CONFLICT detection is a real
+RESOURCE_ARBITRATION_CHECKER concern, `system_build_proof.py`'s `analyze_system_merge()`
+duplicate-package/type/factory-collision checks are a real BUILD_INTEGRITY_CHECKER concern, and
+`system_topology_analysis.py`'s address-region facts are a real ADDRESS_ROUTING_CHECKER concern --
+this module never re-derives or duplicates any of that logic; it only names the KIND of checker a
+caller's description describes.
+
+**Classification-only, over a duck-typed description, evidence-based rather than guessed.**
+`classify_system_checker(description)` accepts a bare string, a dict, or any object exposing
+`checker_name`/`description`/`verifies`/`notes`/`text` fields and/or an explicit
+`declared_checker_type`. An explicit declaration -- validated against the nine-value vocabulary,
+with an unrecognized value raising `SystemCheckerTaxonomyError` rather than silently falling back
+to keyword inference -- always wins. Absent one, classification falls back to a real, cited
+KEYWORD match over the description's own free text, checked in a fixed, documented
+`CLASSIFICATION_ORDER` (most structurally distinctive vocabulary first -- BUILD_INTEGRITY_CHECKER
+and RESOURCE_ARBITRATION_CHECKER's terms are least likely to appear incidentally; DATA_FLOW_CHECKER's
+broader vocabulary is checked last). A description matching nothing is honestly
+`UNCLASSIFIED_SYSTEM_CHECKER` with no matched evidence -- never forced into one of the nine on a
+weak guess. `RECOVERY_CHECKER` (`recover*`) and `ERROR_PROPAGATION_CHECKER` (`propagat*`) are kept
+on deliberately disjoint keyword roots so a description naming both is resolved by
+`CLASSIFICATION_ORDER`, never by accident. `assert_disjoint_from_verification_verdict_vocabulary()`
+holds the nine-value vocabulary (plus `UNCLASSIFIED_SYSTEM_CHECKER`) disjoint from
+`dv_harness.models.Status` at call time, the same guard several sibling taxonomy modules
+(`command_error_taxonomy.py`) already apply to their own vocabularies.
+
+**Deliberately bounded.** It classifies a caller-supplied description only -- it reads no file,
+parses no RTL/UVM source, and runs no build/gate/approval; there is deliberately no stage gate. No
+`dv-harness` CLI verb was added (`cli.py`/`gates.py` were out of this task's file-safety scope) --
+the front door is `python -m dv_harness.system_checker_taxonomy {types|classify}`.
+
+Proven by `dv_harness_tests/test_system_checker_taxonomy.py` (33 tests): the positive path for all
+nine categories via keyword inference and via explicit declaration (including a declaration
+overriding conflicting keyword text, and a `verifies` field accepting a list of phrases); negative
+controls for an unclassifiable description, empty/whitespace-only input, an unrecognized/malformed
+declared value (each raising rather than silently coercing), an unrelated dict with no recognized
+fields, and a dedicated proof that RECOVERY_CHECKER and ERROR_PROPAGATION_CHECKER never
+cross-classify on overlapping error-handling prose; the `CLASSIFICATION_ORDER`/
+`SYSTEM_CHECKER_TYPES` totality assertion and the `models.Status` disjointness guard; and both the
+in-process `execute_verb()` (all three exit codes) and a real `python -m` subprocess invocation.
+
+### pattern_fragment_ir.py -- reusable pattern-fragment extraction for later system-level composition
+
+`dv_harness/pattern_fragment_ir.py` converts a reusable PORTION of an existing subsystem pattern -- never a whole scenario -- into a `PatternFragmentIR`: a small, composable record carrying `preconditions`, `postconditions`, `resources_used`, and `produced_events`/`consumed_events`, so a later system-level composition step has something concrete to reason about instead of re-reading raw pattern text.
+
+**Explicitly distinct from two real, easy-to-confuse modules.** `pattern_ir_assembly.py` assembles the FULL `PatternIR` for ONE scenario -- its `global`/`dut`/`fw_policy`/`vip`/`check` five-layer command lists, built from a whole ScenarioIR-shaped item list; it answers "what does this entire scenario's pattern look like, laid out into its five fixed layers". `example_composition.py` composes multiple already-qualified WHOLE VIP EXAMPLES (a host example plus a device example, say) into one scenario, gated by a 7-condition example-level compatibility check (VIP version, role, protocol mode, agent config, sequencer ownership, reset/clock assumptions). `pattern_fragment_ir.py` answers a narrower, different question than either: given ONE existing pattern's command list and a caller-declared PORTION of it -- an index range, or a marker-delimited slice, never the whole thing by default -- extract that portion as a self-describing fragment carrying what resources it touches, what events it needs already asserted before it runs, and what it leaves behind. It never assembles a scenario's five PatternIR layers and never checks VIP-example-level compatibility. Per this batch's file-safety scope it imports nothing from `pattern_ir_assembly.py`, `example_composition.py`, or any other claimed batch file; `fragment_source` is accepted as a plain duck-typed object via a locally re-derived tolerant-alias field-access helper, not an imported one.
+
+**Selection.** `extract_pattern_fragment(fragment_source, *, fragment_range=None, start_marker=None, end_marker=None, declared_preconditions=None, declared_postconditions=None, fragment_id=None)` resolves the fragment's command slice one of three ways: an explicit `(start, end)` half-open index pair (`SELECTION_EXPLICIT_RANGE`), a `start_marker`/`end_marker` inclusive text-matched pair (`SELECTION_MARKER_RANGE`), or, when neither is supplied, the entire source command list -- honestly flagged `SELECTION_WHOLE_SOURCE_USED_NO_RANGE_DECLARED` with `covers_entire_source=True` rather than silently pretending a portion was declared. An unrecognisable `fragment_source` (no list-shaped commands field under any known alias), an invalid or out-of-range `fragment_range`, an incomplete marker pair, or a marker that is never found each raise a typed `PatternFragmentIrError` carrying a specific reason code (`SOURCE_COMMANDS_NOT_LIST`, `INVALID_FRAGMENT_RANGE`, `MARKER_PAIR_INCOMPLETE`, `START_MARKER_NOT_FOUND`, `END_MARKER_NOT_FOUND`, `EMPTY_FRAGMENT_SELECTION`) -- never a silent fallback to selecting nothing or everything.
+
+**Precondition/postcondition derivation (Evidence Truth Rule applied).** Every fact reported is read directly off the fragment's own command entries via aliased duck-typed fields (`resource`/`resources`/`uses_resource`/`driver`/`agent`; `produces_event`/`produced_event`/`emits_event`/`emits`/`produces`; `consumes_event`/`required_event`/`requires_event`/`waits_for_event`/`consumes`). Given the fragment's own produced-event and consumed-event sets, a consumed event NOT also produced within the same fragment becomes a derived precondition (`DERIVED_UNRESOLVED_CONSUMED_EVENT`) -- something the fragment assumes true on entry that it alone cannot supply; a produced event NOT also consumed within the same fragment becomes a derived postcondition (`DERIVED_UNCONSUMED_PRODUCED_EVENT`) -- something it leaves behind for whatever composes with it later. This is a plain set-difference over the fragment's own declared events, assuming no internal ordering guarantee beyond "declared inside this fragment" (consistent with a fragment being reusable, not a fully sequenced scenario) -- it never invents an event no command actually declared. Callers may additionally pass `declared_preconditions`/`declared_postconditions` (plain strings or small dicts) for facts a human or upstream tool already knows are true but no event field mechanically proves; these are kept tagged `DECLARED`, distinct from and never deduplicated against the `DERIVED_*` entries, since a declared fact and a mechanically-derived one naming the same event remain two different pieces of evidence.
+
+**Absence-of-evidence is a distinct, honest status, never a silently-defaulted empty result.** `resource_evidence_status` and `event_evidence_status` are each `EVIDENCE_DERIVED` when at least one command in the fragment declared that kind of field, or `EVIDENCE_NOT_AVAILABLE` when none did -- kept separate from a legitimately-computed empty `resources_used`/`produced_events`/`consumed_events` list, so "nothing was declared" and "something was declared and none of it applies here" are never collapsed into one indistinguishable outcome. A command with no `text` field at all is collected into `unclassified_commands` and downgrades the fragment's overall `status` from `COMPLETE` to `PARTIAL_TEXT_EVIDENCE`, never silently dropped.
+
+**Composition-facing structural chain check.** `check_fragment_chain_readiness(fragments, *, order=None)` takes an ordered list of `PatternFragmentIR`-shaped fragments -- a caller's declared composition order for a candidate system-level pattern -- and reports, per fragment, whether each of its `DERIVED_UNRESOLVED_CONSUMED_EVENT` preconditions is `COVERED` (an earlier fragment in that order produced or postconditioned the same event) or `UNCOVERED`, plus a per-fragment `chain_status` of `NO_PRECONDITIONS` / `ALL_COVERED` / `HAS_UNCOVERED_PRECONDITIONS`. An explicit `order` argument naming a different set of fragment ids than `fragments` actually holds raises `PatternFragmentIrError("ORDER_MISMATCH", ...)` rather than silently reordering or dropping a fragment; an empty `fragments` list raises `PatternFragmentIrError("EMPTY_FRAGMENT_LIST", ...)`. This is a purely structural event-graph check over caller-declared event names -- it never asserts, and must never be read as asserting, that the resulting composed multi-fragment pattern is behaviourally correct; it only reports whether the produced/consumed event graph is self-consistent in the declared order, reporting `UNCOVERED` rather than guessing a precondition is satisfied when no earlier fragment actually supplies it.
+
+**Tests.** `dv_harness_tests/test_pattern_fragment_ir.py` (16 tests, all passing): the core positive path (explicit-range extraction with correctly derived resources/events/preconditions/postconditions off a real 4-command USB3 port-enumeration-shaped pattern fixture), declared-condition merging alongside derived ones, marker-based selection producing the same result as the equivalent explicit range, the whole-source-used honest flag, the NOT_AVAILABLE-vs-computed-empty distinction for a fragment with resources but no event fields, the unclassified-command status downgrade, six negative controls (non-list commands field, start>=end range, out-of-bounds range, incomplete marker pair, start marker not found, end marker not found) each asserting the specific `PatternFragmentIrError` reason code, and four `check_fragment_chain_readiness` tests (all-covered in correct declared order, uncovered when the producing fragment is omitted, empty-fragment-list error, order-mismatch error).
+
+## SYOSCB-2/33 Phase-2 Vendoring: Human-Approved, Enforced Rather Than Promised (2026-09-06)
+
+SYOSCB-1/3's earlier gap-close pass (see `.work/gap-close-syoscb-syoscb-1-3-real-read-only-syosil-source--report.md`)
+built a real, read-only auditor for the upstream `uvm_syoscb-1.0.2.4` tree and deliberately left the
+Phase-2 vendoring decision open, gated behind SYOSCB-33 human review, with `assert_not_vendored()`
+enforcing (not merely documenting) that no upstream file existed in this repository until that gate
+opened. The project owner explicitly approved that gate in-session on 2026-09-06: vendor the real
+upstream tree at `D:/DV/Scoreboard/uvm_syoscb-1.0.2.4` into this repository as read-only reference
+material, the same convention already used for `reference/USB_UVM_Handoff`.
+
+**What was done.** The upstream tree (234 files: `src/`, `tb/`, `docs/`, `LICENSE.txt`, `NOTICE.txt`,
+`VERSION.txt`, `RELEASE_NOTES.txt`, the three vendor Makefiles) was copied VERBATIM into
+`reference/uvm_syoscb-1.0.2.4/` -- byte-for-byte, nothing edited, nothing renamed. Re-running the real
+`syoscb_source_audit.py` auditor against the new in-repo copy reproduces the identical facts the
+original upstream audit found (version `1.0.2.4`, license `Apache-2.0`, copyright `SyoSil ApS`), which is
+itself a real integrity check: an edited or truncated copy would have audited differently.
+
+**The Phase-2 gate is now a real, on-disk approval record, not a verbal go-ahead.**
+`dv_harness/syoscb_vendoring_approval.json` carries `approved: true`, `l5_destination:
+"reference/uvm_syoscb-1.0.2.4"`, who approved it, when, and the real upstream source path -- a
+structured fact `assert_not_vendored()` can read, not prose a future reader has to trust.
+`load_vendoring_approval()` reads it (returning `None` on a genuinely absent file, and raising on a
+present-but-malformed one -- a broken approval record must never be read as "no approval", which would
+make the check MORE permissive on a parse failure than on a missing file).
+
+**`assert_not_vendored()` gained a narrow, structural exemption -- not a bypass.** It now accepts an
+optional `approval` record; a name/content hit is EXEMPT only when it resolves under that record's own
+`l5_destination` AND the record's `approved` field is truthy -- every hit outside that exact destination,
+or any hit at all when `approved` is false (a draft/revoked record), still raises exactly as before. Every
+approved hit is additionally reported back under `approved_vendored` in the result -- never silently
+absorbed into a bare CLEAN, so a reader can always see WHAT was approved, not just that a check passed.
+Passing no `approval` argument (every pre-existing caller) preserves the original all-or-nothing behavior
+byte-for-byte. The CLI's `--assert-not-vendored` now auto-loads the real approval record for the target
+root before checking, so `python -m dv_harness.syoscb_source_audit ... --assert-not-vendored <root>`
+keeps meaning something once a project has vendored an approved component, rather than becoming
+permanently unusable the moment Phase 2 actually happens.
+
+**No other file in this repository was touched.** `dv_harness/knowledge_center.py`'s
+`THIRD_PARTY_COMPONENT_*` shape (built in the SYOSCB-1/3 pass) is unchanged; a registration PAYLOAD can
+now be built with the real `L5_DESTINATION` filled in (`--l5-destination reference/uvm_syoscb-1.0.2.4`,
+confirmed to no longer report an `L5_DESTINATION` blocker) but was deliberately NOT published to the
+remote Knowledge Center this session -- that is a REMOTE_EXECUTION act requiring the SSH/Remote Transport
+Connection Intake gate, out of scope for a LOCAL_ANALYSIS vendoring pass. `BUILD_STATUS` correctly stays
+`NOT_BUILT_PHASE_2_APPROVAL_REQUIRED`: vendoring is not compiling, and nobody has run a VCS/UVM build
+against this copy yet.
+
+Proven by `dv_harness_tests/test_syoscb_source_audit.py` (47 tests, up from 43): the pre-existing test
+that asserted the live repository carried NO upstream copy was replaced with one asserting the ONLY
+copy present is the real, approved one, reported (not hidden) under `approved_vendored`; a new test
+proves a SECOND, unapproved copy placed anywhere else in the same repository is still caught by name;
+`load_vendoring_approval()` is proven to return `None` on a genuinely absent record and to raise on a
+malformed one; and an approval record whose own `approved` field is `false` is proven to exempt nothing.
+The full pre-existing suite (43 tests) plus the related `test_knowledge_center.py`,
+`test_amba_port_registry.py`, `test_amba_fabric_discovery.py`, `test_amba_fabric_generator.py`,
+`test_knowledge_layer_git_and_duckdb.py`, and `test_amba_vip_bind_plan.py` (196 tests combined) were
+re-run in full and pass unchanged.
+
+**Disclosed residual, stated rather than implied closed.** (1) This closes SYOSCB-2's vendoring decision
+and SYOSCB-33's approval-enforcement mechanism only. SYOSCB-4 (evaluating whether to fork the upstream
+library) remains `NOT_AVAILABLE` -- no fork exists, and none was created here. (2) The vendored copy is
+reference material under the same "No Golden-Reference Content Mining" discipline as
+`reference/USB_UVM_Handoff` -- it may be used to check structural/organizational conformance or as a
+real compare-engine dependency once a generator actually integrates it, never mined for protocol-behavior
+content to paste into generated output. (3) Knowledge Center publication (`record_component()`) was not
+performed -- the payload can be built locally at any time; publishing it is a separate, explicitly
+REMOTE_EXECUTION act for a future session that has established that connection.
+
+## ATB (AutoTestBench) Golden AMBA Reference: Human-Approved Vendoring (2026-09-06)
+
+A real, previously-unlabeled reference tree at `D:/DV/Task/DV_Agent_Harness_L5/L3` -- `coretop/` and
+`soc/`, the latter including a real SyoSil-based scoreboard under `soc/uvc/scb/` -- was renamed to `ATB`
+(AutoTestBench) by explicit user instruction, then explicitly approved by the project owner for Phase-2
+vendoring into this repository as read-only reference material, the same SYOSCB-2/33 approval pattern
+this session already established and enforced in code for the pristine upstream SyoSil release (see the
+section above).
+
+**What was done.** The real ATB tree (145 files, 1.6MB) was copied VERBATIM into `reference/ATB/` --
+`diff -rq` against the original confirmed byte-for-byte identical content, 145/145 files, with no
+edits. `dv_harness/atb_vendoring_approval.json` records the real approval (who, when, source path,
+destination path, and the rename history from `L3` to `ATB`) in the same structured shape
+`dv_harness/syoscb_vendoring_approval.json` already established for the SyoSil vendoring decision -- a
+fact a caller can read, not prose to be trusted.
+
+**Purpose, stated explicitly so it is never misread as license to mine it.** ATB is a golden,
+already-integrated AMBA M x N SoC bus reference architecture -- it exists to ground and validate this
+harness's own AMBA generation and analysis capability against a real, working example (structural/
+organizational conformance checking, and as a real dependency once a generator actually integrates its
+scoreboard), the same "No Golden-Reference Content Mining" discipline already applied to
+`reference/USB_UVM_Handoff`: never a source to copy protocol-behavior content FROM for a different
+project's generated output.
+
+**Relationship to the separately-vendored pristine SyoSil release, stated explicitly since they could be
+confused.** `reference/uvm_syoscb-1.0.2.4/` (vendored earlier this session) is the clean upstream SyoSil
+library release on its own. `reference/ATB/soc/uvc/scb/` is a DIFFERENT artifact -- a real, already
+-integrated golden testbench environment that happens to USE a SyoSil-based scoreboard -- and the two
+trees are not expected to be byte-identical (ATB's copy may be an older revision, or may carry
+project-specific configuration around it). Any module reading ATB for its own SyoSil-adjacent content
+should say which of the two trees it is reading from, never conflate them.
+
+**Disclosed residual**: like the SyoSil vendoring, this is REACHED, not automated -- there is no code
+path that auto-detects and vendors a reference tree on its own; a human decision preceded both. Whether
+ATB's own third-party components (the vendored SyoSil scoreboard inside it) carry their own separate
+license/notice obligations beyond what the pristine `uvm_syoscb-1.0.2.4` release already discloses was
+not independently re-audited in this pass -- `dv_harness/atb_reference_inventory.py` (built the same
+session, see its own section) is the read-only audit layer for this tree going forward.
+
+**ATB is exempt from this project's general "no live simulator" performance disclaimer -- a distinction
+recorded here explicitly, per the project owner's own clarification, so a future session does not have
+to rediscover it.** Every Performance-domain module built this session (`amba_performance_calculator.py`,
+`amba_performance_requirement_checker.py`, `amba_performance_classification.py`,
+`amba_performance_readiness_gates.py`) is bounded by the fact that THIS HARNESS, in general, owns no live
+simulator or formal tool -- every number those modules touch must be CALLER-supplied, never measured by
+the harness itself. ATB is different: it is a real, already-integrated, working AMBA M x N testbench
+environment -- once a future session actually builds and runs ATB (a real VCS/UVM invocation, its own
+Execution Mode declaration and, if remote, its own SSH/Remote Transport Connection Intake gate, exactly
+like any other REMOTE_EXECUTION work in this project), the resulting `fsdb_report.py`-derived timing/
+latency/bandwidth numbers ARE real, measured ground truth for that environment -- not a caller-declared
+assumption a Performance-domain module has to treat with the same suspicion it applies to a project with
+no live testbench at all. A future ATB-integration module may therefore be designed to EXPECT a real
+measured performance artifact to exist once ATB has actually been run, rather than defaulting to
+NOT_AVAILABLE the way this session's generic Performance modules must. This does not relax the Evidence
+Truth Rule -- it still applies in full: the numbers must still come from a REAL fsdbreport/simulation
+artifact ATB actually produced, never estimated or invented on ATB's behalf either. Nothing in this
+session ran or built ATB; this paragraph only removes a false generalization for whichever future session
+does.
+
+## ATB Reference Inventory: Capability Discovery + the Reuse-Then-Block Rule (2026-09-06)
+
+`syoscb_source_audit.py` already answers "what does this one third-party library
+contain" for the real upstream `uvm_syoscb` tree. Nothing answered the question one
+level up, over the real ATB (AutoTestBench, formerly named "L3", renamed this
+session) reference tree at `D:/DV/Task/DV_Agent_Harness_L5/ATB`: what capabilities
+does a whole reference ENVIRONMENT contain, which of them are actually wired into it,
+which are present but never plugged in, which have drifted from what this project
+already vendored elsewhere, and -- for any capability a caller genuinely needs --
+whether it can be reused from here, reused from an already-approved vendored copy, or
+must be reported BLOCKED because neither exists. `dv_harness/atb_reference_inventory.py`
+is that inventory, entirely read-only, and the root it audits is always a caller
+parameter, never hardcoded, so a future caller may point it at a different reference
+tree.
+
+**Reuse, not reinvention, on every structural layer.** Classes come from
+`vip_symbol_index.index_source_text()`, exactly as `syoscb_source_audit.py` already
+uses it -- declarations and `file:line` only, `assert_no_bodies_retained()` run over
+the result. Module-shaped constructs (a bind connector module, a DUT-wrapper or
+testbench-top module) come from `verible_parser.parse_file()`, best-effort: a machine
+with no real `verible-verilog-syntax` on PATH degrades this one layer to an honest
+`module_discovery_status: "NOT_AVAILABLE"` with a real reason -- never a silent zero
+read as "none exist" -- while class and interface discovery are unaffected either way.
+`amba_scoreboard_env.InspectedFile` is the same read-only-proof record
+`syoscb_source_audit.py` already reuses, so "which files did we read, and were they
+unchanged afterward" (`assert_source_unmodified()`) has one shape in this repo rather
+than two. The one construct neither reused tool indexes -- a top-level `interface`
+declaration, which is how every real ATB bind interface is actually shaped -- gets a
+small, local, declaration-line-only regex scan mirroring the identical discipline
+(name + location, never a signal list or a body).
+
+**The status vocabulary is derived from real, checkable evidence, never guessed.**
+`PROVEN` / `IMPLEMENTED_UNPROVEN` / `PARTIAL` / `PRESENT_UNUSED` / `DUPLICATE` /
+`STALE` / `MISSING` / `BLOCKED` / `UNKNOWN`. `DUPLICATE` fires only on a genuine
+same-NAME collision within one SUBSYSTEM (`coretop` vs `soc`) -- the two reference
+environments' own, by-design duplicate copies of one bind interface across
+subsystems are never flagged. `IMPLEMENTED_UNPROVEN` requires a real reference from a
+file OUTSIDE the capability's own kind-directory (`scb/`, `cb/`, `seq/`, `bind/`) in
+the same subsystem -- either by symbol name or by its own declaring filename being
+`` `include ``d, since a real ATB bind interface is wired in by filename, not by the
+interface's own bare symbol. `PRESENT_UNUSED` is everything else that was found.
+`UNKNOWN` is reserved for a genuine cross-tool disagreement -- a name verible reports
+as a `module` that the class/interface scan ALSO reports as a class or interface
+elsewhere in the tree -- never resolved by picking one. `PROVEN` is never
+self-assigned by discovery: `apply_proof_evidence()` is the ONLY path to it, and it
+requires a real, non-empty, caller-declared citation naming the exact capability
+(and refuses to promote a `DUPLICATE` on the strength of one, since the ambiguity
+must be resolved first). `PARTIAL`/`MISSING` come from `evaluate_expected_capabilities()`
+against a caller-DECLARED expectation list -- this module invents no universal
+family list of its own.
+
+**The literal reuse-then-block rule, as code.** `resolve_capability_reuse(name,
+manifest, approval_records, project_root)`: (1) if ATB already has the named
+capability, prefer reusing IT -- `REUSE_LOCAL_ATB_CAPABILITY`, citing ATB's own
+`file:line`; (2) else, if a real, already-APPROVED
+`dv_harness/*vendoring_approval*.json`-shaped record's own `l5_destination` tree
+(structurally scanned the same declaration-only way) contains the capability, reuse
+THAT -- `REUSE_VENDORED_REFERENCE_COPY`, citing the approving record and the real
+vendored `file:line`; (3) else `BLOCKED_NOTHING_TO_REUSE`, naming every location this
+function actually checked and found nothing at. There is no fourth branch that
+proceeds with nothing. `find_project_vendoring_approval_records()` reads --
+generically, by glob, never one hardcoded filename -- every such record on disk and
+fails closed (raises, never silently skips) on one that is malformed, mirroring
+`syoscb_source_audit.load_vendoring_approval()`'s own reasoning (re-derived locally,
+never imported, since that module is on this batch's claimed-file list).
+`evaluate_drift_against_vendored()` compares a known-family capability's real content
+against this project's own already-approved vendored copy of that SAME family
+(gated by a `component_hint`, so a record whose destination happens to be a
+wholesale mirror of ATB itself can never trivially "match itself" and hide a real
+drift finding against the true upstream) -- `STALE` when they genuinely differ,
+naming both real files and both real sha256 digests, and explicitly never claiming
+which side is newer; that stays a human decision.
+
+**Real findings, over the real tree, used directly by this module's own tests**
+(guarded `@real_source`-style so the suite still passes on a machine without ATB):
+every SyoSil scoreboard capability under `ATB/soc/uvc/scb/` is genuinely
+`PRESENT_UNUSED` -- internally self-consistent, but referenced by nothing anywhere
+else in the real `soc` environment, independently confirmed by grep before the
+assertion was written; ATB's own bind interfaces genuinely ARE wired in (a real
+`` `include `` from `soc/bench/uvm_soc_tb.sv`) and read `IMPLEMENTED_UNPROVEN`;
+`ATB/soc/uvc/scb/cl_syoscb_queue_std.svh` genuinely differs in content (a different
+copyright year, a different base class) from this project's own already-approved
+`reference/uvm_syoscb-1.0.2.4/src/cl_syoscb_queue_std.svh`, a real `STALE` finding
+with no fixture involved; `cl_syoscb_report_catcher.svh` exists ONLY in the vendored
+reference copy and not in ATB itself, a real `REUSE_VENDORED_REFERENCE_COPY`
+resolution.
+
+**A stale assumption in this module's own governing task, corrected by current
+evidence rather than by trusting the prompt** (the Evidence Truth Rule applied to
+this module's own build, not only to what it audits): mid-task, `dv_harness/
+atb_vendoring_approval.json` and a full verbatim mirror at `reference/ATB` were found
+to ALREADY exist on disk -- created by a different, concurrently-running agent in
+this same multi-agent session, not by this module. Because
+`find_project_vendoring_approval_records()` discovers every vendoring-approval-shaped
+record by a generic glob rather than one hardcoded filename, it picked this real
+record up automatically with no code change, and `atb_vendoring_approval_status()`
+reports it honestly (`approved: true`, citing that real file) rather than asserting
+the now-superseded "no approval exists". This module created neither artifact and
+copies nothing from ATB itself, ever -- both are read, never written, and the two
+real-evidence tests that depend on that specific record's presence carry a second,
+independent `skipif` guard on it so the suite still passes in a checkout where it is
+absent.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It DECIDES
+nothing beyond reporting: no file is copied, no build/job/approval is touched, and
+there is no stage gate. (2) `PROVEN` requires a real caller-declared citation this
+module cannot manufacture on its own -- ATB has no evidence store of its own wired to
+it, and this module builds none. (3) Module-level (RTL-shaped) discovery is
+best-effort and needs a real `verible-verilog-syntax` on PATH; its absence narrows
+what can be classified, never what silently reads as "found". (4) Duplicate
+detection, family drift, and the reuse-then-block rule all operate on DECLARATION-
+LEVEL structural facts only -- none of it proves behavioral correctness, and none of
+it decides which of two diverging copies is authoritative. (5) No `dv-harness` CLI
+verb was added and `gates.py`/`cli.py`/`CLAUDE.md` were not touched, per this batch's
+explicit file-safety scope; the front door is the module's own Python API,
+`discover_atb_capabilities()`/`resolve_capability_reuse()`/`atb_vendoring_approval_status()`.
+
+Proven by `dv_harness_tests/test_atb_reference_inventory.py` (46 tests): a synthetic,
+ATB-shaped fixture drives every classification rule (duplicate, cross-subsystem
+non-duplicate, kind-directory-scoped wiring, cross-tool ambiguity, drift, the three
+reuse-then-block branches, malformed-approval-record refusals) one defect at a time,
+and a family of `@real_source`-guarded tests runs the identical logic over the real
+ATB tree and the real, already-approved `reference/uvm_syoscb-1.0.2.4` copy, proving
+the module's real findings rather than only a fixture shaped to please it. `python -m
+pytest dv_harness_tests/test_atb_reference_inventory.py -q` -> `46 passed`.
+
+## AMBA Master/Slave Constraint IR: Three Layers, Never Merged (2026-09-06)
+
+A test scenario's "what may I legally send on this AMBA interface" question conflates three genuinely
+different facts whenever it is answered as one number: what the AMBA-4 protocol spec allows in
+general, what THIS DUT actually implements, and what a specific scenario may therefore legally send.
+Nothing in this repo modeled the middle fact at all, and nothing kept the three separate.
+`amba_transaction_ir.py` already answers "is burst_type/burst_len/burst_size APPLICABLE for this
+protocol" from `connectivity.py`'s real signal witness sets, but it stops at applicability -- it
+carries no LEGAL VALUE for an applicable field (what burst lengths AXI4 actually permits, what
+outstanding-transaction/ordering/security legality a protocol carries), and it has no DUT-capability
+concept at all: every AMBA IR in this repo up to now was protocol-general or per-registry-row, never
+"what did we actually confirm THIS DUT implements".
+
+`dv_harness/amba_master_slave_constraint_ir.py` is three deliberately separate IRs over six
+dimensions (burst_type, burst_len, burst_size, outstanding, ordering, security):
+
+- **ProtocolLegalConstraintIR** -- general AMBA-4 legality, never DUT-specific. Applicability for the
+  three burst-shaped dimensions is READ, not re-derived, from `amba_transaction_ir.
+  ir_field_applicability()`/`protocol_signal_vocabulary()` -- there is no second witness table for
+  those three facts. `outstanding`/`ordering`/`security` are dimensions no prior IR modeled; `security`
+  gets its own new witness set (`SECURITY_WITNESS_SIGNALS = {AWPROT, ARPROT, PPROT}`, checked against
+  `connectivity.ALL_AMBA_SIGNAL_NAMES` at import the same way `amba_transaction_ir._assert_witness_
+  tokens_known()` checks its own) -- deliberately excluding AHB's HPROT, since the classic AMBA AHB
+  spec defines it as privileged/bufferable/cacheable access, not a secure/non-secure bit (that arrived
+  only with AHB5, untracked here). Legal VALUES (AXI4 INCR up to 256 beats, FIXED/WRAP capped at 16;
+  AXI3 every burst type capped at 16; AHB's HBURST-encoded discrete lengths; a single-outstanding hard
+  cap for AHB/APB; per-ID-ordered/cross-ID-unordered-permitted for AXI) are cited to the real, public
+  AMBA AXI/AHB/APB protocol specifications -- external published facts, not a project-specific
+  fabrication.
+- **DUTCapabilityConstraintIR** -- what THIS DUT actually implements, from real RTL/spec evidence
+  only. **The one hard rule this module exists to enforce**: "never infer a DUT capability from VIP
+  capability alone -- a VIP manual proves what the VIP CAN drive, never what the DUT actually
+  implements." `assert_no_vip_sourced_dut_capability()` runs on every DUT evidence item before
+  anything is built and RAISES, loudly, the moment any item's `source_kind` names a VIP origin -- there
+  is no downgrade path; a VIP-sourced "confirmation" is not a weaker confirmation, it is refused
+  outright. Only a fixed allowlist of real evidence kinds (`rtl_port`/`rtl_parameter`/`rtl_register`/
+  `register_map`/`spec_document`/`programming_guide`/`human_confirmation`/`register_rtl_trace`) counts
+  toward `DUT_CAPABILITY_CONFIRMED`; an unrecognized source, or no evidence at all, leaves the field
+  `DUT_CAPABILITY_UNKNOWN` -- never defaulted to the protocol's general maximum. Two real citations for
+  one field that disagree report `DUT_CAPABILITY_AMBIGUOUS_CONFLICTING_EVIDENCE` rather than being
+  silently resolved by picking one. `verible_parser.py`/`spec_doc_map.py` are not imported (the latter
+  is claimed by a concurrent batch); a `spec_doc_map.py`-shaped structural index is accepted as a
+  generic `spec_structural_index` parameter used ONLY to enrich a citation's page number with its
+  detected register-chapter range, never to invent a capability value.
+- **ScenarioConstraintIR** -- what a scenario may legally send, derived from the first two. A field
+  the protocol layer rules NOT_APPLICABLE passes through untouched, the DUT layer never even
+  consulted. A field the protocol permits but the DUT layer never confirmed is
+  `REQUIRES_HUMAN_CONFIRMATION` -- never silently assumed to match the protocol's general legality,
+  the field-level enforcement of this module's one hard rule. A DUT-confirmed field is narrowed
+  against protocol legality; a DUT claim that falls OUTSIDE what the protocol allows (a claimed
+  300-beat AXI4 INCR burst against the protocol's own 256-beat ceiling, more than one outstanding
+  transaction claimed on AHB, an ordering claim looser than the protocol requires, a non-power-of-two
+  transfer size) is `DUT_CAPABILITY_CONTRADICTS_PROTOCOL_LEGALITY` -- reported as a real finding, never
+  silently narrowed to whatever happens to fit.
+
+**The three layers are never merged into one flat record, enforced rather than merely documented.**
+`build_amba_master_slave_constraint_model()` returns exactly `{"protocol_legal", "dut_capability",
+"scenario_constraint"}`, and `assert_layers_structurally_separate()` is a real structural guard: it
+raises `CONSTRAINT_MODEL_FLATTENED` the moment a dimension name (`burst_type`, `outstanding`, ...)
+appears on the model's own top level, and `CONSTRAINT_MODEL_NOT_THREE_LAYERS` if the model's keys are
+not exactly the three layer names.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It builds a constraint MODEL a
+human/generator reads; it runs no build, no simulation, and there is deliberately no stage gate. (2)
+`ace_lite_coherency` (AWSNOOP/ARSNOOP/AWDOMAIN/ARDOMAIN/AWBAR/ARBAR) and AXI4-Stream's TID/TDEST
+interleave-depth legality are explicitly NOT modeled (`unmodeled_notes`), the same disclosed-gap
+convention `protocol_capability.py`'s `does_not_model` already uses. (3) Combining a DUT-confirmed
+value against protocol legality is a real, typed comparison per dimension shape (burst-type-set
+intersection, per-burst-type range narrowing, power-of-two validation, an ordering-strictness table
+letting a DUT be stricter but never looser than a protocol requires) -- there is no generic "is this
+smaller" fallback that could silently accept an incompatible shape.
+
+Proven by `dv_harness_tests/test_amba_master_slave_constraint_ir.py` (26 tests): the positive path for
+all three layers and the full model; the critical VIP-evidence-forbidden rule (via both the builder
+and the assert function directly); an unconfirmed DUT capability never assumed; a DUT claim exceeding
+protocol legal maximum flagged as contradiction (burst length, outstanding count, ordering, and
+non-power-of-two size each get their own negative control); conflicting evidence citations reported
+ambiguous rather than resolved; an unresolved protocol reporting UNKNOWN on every dimension;
+unknown-dimension evidence and mismatched-protocol layers each raising; and the structural-separation
+guard catching both a flattened model and a model missing a layer. Only `dv_harness.amba_transaction_ir`
+and `dv_harness.connectivity` (both pre-existing, non-claimed) are imported -- no claimed-batch file or
+other new-this-batch module. `python -m pytest dv_harness_tests/test_amba_master_slave_constraint_ir.py
+-q` -> 26 passed.
+
+## AMBA Functional Coverage IR: Connectivity/Memory-Map/Routing/Ordering Coverpoints, 7-Value Reachability, Meaningful Crosses Only (2026-09-06)
+
+Nothing in this repo's existing, extensive AMBA family (`amba_fabric_discovery.py`, `amba_port_registry.py`, `amba_fabric_analysis.py`, `amba_transaction_ir.py`, `amba_route_transform_predictor.py`) turned their real discovery/analysis facts into a functional-coverage IR: a set of coverpoint bins driven by connectivity legality, memory-map ownership, routing/transform paths, and ordering scenarios, each carrying an honest reachability classification rather than a binary covered/uncovered flag. `dv_harness/amba_functional_coverage_ir.py` is that IR, and it is deliberately standalone: per this batch's file-safety scope it imports neither `connectivity.py` nor `amba_master_slave_constraint_ir.py` (a separate task in the same batch owns the latter) and no other new module from this batch -- connectivity-legal-edge facts, address-region facts, route facts and ordering facts are all accepted as generic, duck-typed dict lists, the same "accept an explicit caller-declared fact rather than invent one" discipline `ip_ownership_conflict.py`'s `legacy_bfm_declarations` and `existing_command_reuse_score.py`'s `existing_commands` already established for a fact their own real evidence store cannot supply on its own.
+
+**A 7-value reachability classification, never collapsed to binary.** `classify_bin_reachability(fact)` derives one of `COVERED_OBSERVED` / `REACHABLE_NOT_YET_HIT` / `PARTIALLY_REACHABLE_CONDITIONAL` / `UNREACHABLE_NO_LEGAL_PATH` / `UNREACHABLE_STRUCTURALLY_EXCLUDED` / `REACHABILITY_CONTRADICTED` / `REACHABILITY_UNKNOWN_INSUFFICIENT_EVIDENCE` from real evidence fields on the caller's fact dict (`observed_hit`, `legal`, `structurally_excluded`, `conditional`, `contradicting_evidence`) -- the AMBA-specific instance of the same discipline `coverage_analysis.classify_coverage_hole()`'s four root causes and this same session's `pattern_coverage_contribution.classify_cross_coverage_meaningfulness()` already apply elsewhere: never let an absence of proof read as a confirmed negative, and never let two different kinds of "not covered" collapse into one word. A real observed hit always wins over every other field. A `structurally_excluded` fact asserted alongside an affirmatively-`legal` connectivity fact is DERIVED as `REACHABILITY_CONTRADICTED` even when the caller never flagged the disagreement explicitly -- a real, checked disagreement between two evidence sources, not a guessed one.
+
+**Four coverpoint builders**, each a thin, duck-typed reduction of a category of real caller-supplied facts into coverpoint bins: `build_connectivity_coverpoints(legal_edges)` (one bin per master-slave/source-dest pair), `build_memory_map_coverpoints(address_regions)` (one bin per owner/region, optionally crossed with an accessing master), `build_routing_coverpoints(route_facts)` (one bin per source-dest route, optionally naming its hop sequence), `build_ordering_coverpoints(ordering_facts)` (one bin per named ordering scenario -- outstanding-transaction-depth buckets, out-of-order-completion scenarios -- optionally scoped to a real master/ID). None of the four derives connectivity legality, address-map ownership, routing behaviour, or ordering semantics itself; each accepts a real, caller-supplied fact per bin and classifies its reachability through the shared `classify_bin_reachability()`.
+
+**"Meaningful crosses only" is reimplemented independently, not imported**, per this task's own explicit instruction: `classify_cross_coverage_meaningfulness()` in `amba_functional_coverage_ir.py` is a fresh implementation of the identical small idea `pattern_coverage_contribution.py`'s own function of the same name already solves for its domain -- both answer "are this cross's two axes already fully explained by their own single-axis coverage" from the same `{"bins_total","bins_hit"}` category-snapshot shape, independently, by design for this batch. `evaluate_cross()` wires this into bin-building: a cross whose two declared axes are BOTH already 100% `COVERED_OBSERVED` is reported `FULLY_EXPLAINED_BY_AXES` and SKIPPED -- zero per-combination cross bins are built at all, because the point of "meaningful crosses only" is to not even track a cross whose information the two single-axis bin sets already fully carry. A cross missing evidence for either axis is `UNKNOWN_AXIS_COVERAGE`, never silently read as either meaningful or fully explained.
+
+`AMBAFunctionalCoverageIR.build(legal_edges=, address_regions=, route_facts=, ordering_facts=, cross_requests=)` assembles all four coverpoint categories plus zero or more cross evaluations (each cross request may name its two axes' snapshots directly, or reference one of this same call's own just-built categories via `axis_a_category`/`axis_b_category`, through the new `axis_snapshot_from_bins()` reducer -- never a stale, separately-passed axis set) into one `all_bins()`/`reachability_summary()`/`to_dict()`-capable IR. `dv-harness` was not touched (per this task's own file-safety scope); the ad hoc front door is `python -m dv_harness.amba_functional_coverage_ir build --facts <file.json> [--json]`.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It decides nothing beyond classification and cross-selection: it writes nothing to any evidence store, mints no memory/blackboard/approval record, runs no build/regression/LSF submission, and there is deliberately no stage gate -- a gate that passed on a coverage IR nobody reviewed would be worse than none. (2) It never derives connectivity legality, address-map ownership, routing/transform behaviour, or ordering semantics itself -- every one of those is a real fact a caller's own pipeline (a real connectivity pass, a real address-map cross-check, `amba_route_transform_predictor.py`, a real ordering/ID-tracking analysis) must supply; this module only turns already-real facts into coverpoint bins and classifies them honestly. (3) It imports no other module from `dv_harness` at all, including no other new module built in this same batch, so it stays usable regardless of which concurrently-built sibling module (`amba_master_slave_constraint_ir.py` included) eventually lands.
+
+Proven by `dv_harness_tests/test_amba_functional_coverage_ir.py` (47 tests): the classifier's 7-way disjoint outcomes including a dedicated test proving all seven values are independently reachable from real input shapes and the derived-contradiction case; each of the four coverpoint builders' positive paths plus identity/duplicate/malformed negative controls; the meaningful-crosses-only skip-vs-track behavior (including the category-derived axis-snapshot path, proven both to skip a fully-explained cross with zero bins and to build real bins for a genuinely meaningful one); the assembled IR's cross-request wiring and its negative controls (missing axis names, an unrecognized category); a full JSON round-trip proof; an empty-build control; and the real CLI driven both in-process and as a real subprocess. `python -m pytest dv_harness_tests/test_amba_functional_coverage_ir.py -q` -> `47 passed`.
+
+## Arbitration Policy IR: Scheme Classification + Starvation-Risk Detection (2026-09-06)
+
+The Engineering Discipline Rules already state a hard project rule ("Concurrent bus arbitration":
+APB/AXI transactions across `block`/`branch_a*`/other branches sharing a resource "must have an
+explicit, RTL-evidence-based arbitration policy modeled"), but nothing in this repo ever classified
+WHAT that policy actually is, or asked whether it can starve a requester. A repo-wide grep
+(`FIXED_PRIORITY`/`ROUND_ROBIN`/`WEIGHTED_ROUND_ROBIN`/`AGE_BASED`/`QOS_BASED`/`arbitration_scheme`/
+`ArbitrationPolicy`) returned zero hits before this module. The real AMBA/SyoSil family
+(`amba_fabric_discovery.py`, `amba_port_registry.py`, `amba_fabric_analysis.py`,
+`amba_transaction_ir.py`, `amba_route_transform_predictor.py`, `amba_scoreboard_env.py`) discovers
+fabric topology, ports, transactions and route transforms -- none of them names or classifies an
+arbitration SCHEME, and `shared_bus_resource_registry.py` (built earlier in this same batch)
+detects a concurrency RACE between two task groups over a shared lock without asking what the
+underlying arbiter's own real policy is. `dv_harness/arbitration_policy_ir.py` fills exactly that
+one narrow gap and nothing else.
+
+**The Evidence Truth Rule, applied literally: a scheme is classified ONLY from real evidence TEXT
+the caller supplies (an RTL comment, an arbiter module's header, a spec/programming-guide paragraph)
+-- never from a component/instance/module NAME alone.** `component_name`/`fabric_name` are accepted
+purely as LABELS for the result; `classify_arbitration_scheme()` never reads either when deciding a
+scheme, proven directly by a dedicated negative-control test (a component literally named
+`round_robin_arbiter_inst` whose supplied evidence text describes FIXED_PRIORITY arbitration
+classifies FIXED_PRIORITY, not the name-implied scheme; the same component with NO evidence text at
+all stays honestly `NOT_AVAILABLE`, never defaulted from the name). Absent evidence text, or
+evidence text matching none of the five real schemes' own phrase vocabulary, is honestly
+`NOT_AVAILABLE`/UNKNOWN -- never a guessed scheme. Evidence citing more than one genuinely distinct
+scheme (with no containment relationship between the matched phrases) is honestly
+`AMBIGUOUS`/UNKNOWN, naming every scheme it found, rather than picking one arbitrarily.
+
+**Classification is a literal phrase match, not a keyword/name heuristic.** Each of the five real
+schemes (FIXED_PRIORITY, ROUND_ROBIN, WEIGHTED_ROUND_ROBIN, AGE_BASED, QOS_BASED) is recognised only
+via a small, fixed list of literal, case-insensitive phrases that unambiguously name that scheme's
+arbitration behaviour (e.g. "weighted round robin arbitration", "fixed priority arbitration",
+"arbitrated according to qos"). Text using different wording is honestly UNKNOWN rather than guessed
+via a broader keyword scan -- narrower recognition is the deliberate, disclosed trade for never
+fabricating a scheme the evidence does not actually state. One real, documented de-duplication rule
+exists: a WEIGHTED_ROUND_ROBIN phrase (e.g. "weighted round robin arbitration") necessarily contains
+the literal substring "round robin arbitration", which the plain ROUND_ROBIN phrase list also
+matches as a real substring -- this is containment, not ambiguity, so WEIGHTED_ROUND_ROBIN (the more
+specific, more informative fact) wins and plain ROUND_ROBIN is dropped from the matched set in that
+one case only. Every other combination of two or more distinct matched schemes is reported
+AMBIGUOUS, naming both.
+
+**Starvation-risk detection never invents a fairness bound.** `extract_fairness_bound()` looks for a
+declared service-window/fairness bound in the SAME evidence text the scheme was classified from (a
+"maximum wait of N cycles", "no requester shall wait more than N cycles", "bounded to N grants",
+"starvation-free within N cycles", or "fairness bound of N cycles" style statement) -- never a
+second, separately-supplied number, and never a value this module computes on its own. Absent such a
+bound in the evidence, this module never fabricates one: if the classified scheme is FIXED_PRIORITY
+and the caller's DECLARED request pattern states a continuously-active high-priority requester
+alongside a present lower-priority requester, that is real, general arbitration theory (not
+RTL-specific) -- fixed-priority arbitration with continuous high-priority traffic can deny a
+lower-priority requester indefinitely with no fairness mechanism on record to bound it -- reported
+`POTENTIAL_STARVATION`; otherwise, with no bound on record, the honest answer is `UNKNOWN` (there is
+no evidence either way, and reporting `BOUNDED` would be an unearned claim). When a bound IS found,
+it is compared against the caller's own DECLARED request pattern -- specifically
+`max_grants_between_service`, a real caller-supplied worst-case wait figure (from a real simulation
+measurement, a formal proof, or a documented worst-case analysis; this module performs none of those
+itself and never derives this number). A pattern within the bound is `BOUNDED`; one exceeding it is
+`POTENTIAL_STARVATION`; a bound with no such figure supplied at all is honestly `UNKNOWN`.
+
+**File-safety / reuse note.** Per this batch's isolation rule, this module imports nothing from any
+other file in this project -- not `amba_fabric_analysis.py`, not `shared_bus_resource_registry.py`,
+not any other new module in this batch. `evidence_text`, `request_pattern`, `fabric_name`/
+`component_name` are all accepted as generic, duck-typed parameters (`request_pattern` tolerates a
+plain dict or any attribute-bearing object via a small `.get()`-or-`getattr()` reader, the same
+convention `requirement_risk_ir.py`'s `_lookup()` already established, re-derived locally here rather
+than imported).
+
+**What this module deliberately does not do**: it does not read RTL or a spec document itself (the
+caller supplies the evidence text); it does not model a real arbiter's cycle-accurate grant
+sequence; it does not decide a fairness bound is CORRECT, only whether a declared pattern fits inside
+a declared bound; it never invents a fairness bound, a request pattern, or a scheme the evidence does
+not literally state; it writes nothing, gates nothing, and approves nothing. There is deliberately no
+stage gate and no `dv-harness` CLI verb (`gates.py`/`cli.py` are untouched, per this batch's own
+file-safety scope) -- the front door is `python -m dv_harness.arbitration_policy_ir --evidence-file
+<file> [--request-pattern-file <file>] [--fabric-name ...] [--component-name ...] [--json]`.
+
+Proven by `dv_harness_tests/test_arbitration_policy_ir.py` (24 tests): one positive control per real
+scheme; NOT_AVAILABLE for absent/blank/unrecognized evidence text; the component-name-never-drives-
+classification negative control (both with conflicting evidence present and with no evidence at all);
+the WRR/round-robin de-duplication proof; a genuine two-scheme AMBIGUOUS case naming both;
+`extract_fairness_bound()`'s positive path across five real phrasings plus its negative controls;
+starvation-risk BOUNDED/POTENTIAL_STARVATION/UNKNOWN driven across every bound-present/bound-absent x
+FIXED_PRIORITY/other-scheme combination, an invalid-observed-value refusal, and a duck-typed request-
+pattern object; the combined `ArbitrationPolicyIR` builder (including the ambiguous-scheme case
+correctly never triggering the FIXED_PRIORITY-only starvation rule); report rendering; and two real
+CLI invocations (JSON output and default text output).
+
+## QoS Policy IR + Ordering Contention Verification (2026-09-06)
+
+Nothing in this repo modelled per-master QoS-level/priority/weight facts or checked whether a
+declared QoS ordering was actually observed at runtime. A repo-wide search before writing this
+confirmed the gap: `multi_port_fairness_qos_gate.py` (referenced by name in this file's own
+Engineering Discipline Rules section) is a per-stage, agent-attested shape check over free-text
+evidence, not a typed IR; nothing else in `dv_harness/` names `qos_level`/`qos_policy`/a
+per-master priority mapping. `dv_harness/qos_policy_ir.py` is that missing IR, and it is
+deliberately narrow: a QoS-level/priority/weight mapping built from real caller-supplied
+spec/RTL evidence, plus a contention-verification helper -- nothing more.
+
+**Every QoS fact requires a real evidence citation, enforced rather than trusted.**
+`build_qos_policy_ir()` takes a duck-typed list of per-master records
+(`master_id`/`qos_level`/`priority`/`weight`/`evidence`/`source`) and REFUSES (raising
+`QoSPolicyIRError`) any entry carrying a `master_id` with no non-empty `evidence` string -- a
+QoS priority/weight claim with no cited spec/RTL source is exactly the unsupported claim the
+Evidence Truth Rule forbids. A `priority`, when declared, must be a real (non-bool) `int`; a
+`weight`, when declared, a real (non-bool) number; either wrong type is a hard refusal, never a
+silently coerced value. An entry that legitimately declares no QoS fact at all (a master named
+but not yet assigned a tier) is NOT an error: it is recorded with the honest
+`NO_QOS_FACTS_DECLARED` status, kept visibly distinct from a malformed record.
+
+**A bare numeric priority is never guessed into an ordering.** `derive_priority_ordering()`
+turns a policy's declared `priority` numbers into a rank ordering (with tie-groups for masters
+sharing one value) ONLY when the caller has explicitly declared `priority_convention` --
+`HIGHER_IS_HIGHER_PRIORITY` or `LOWER_IS_HIGHER_PRIORITY` -- and at least two masters carry a
+real priority value. Different real conventions genuinely disagree here (AMBA AXI QoS: higher
+value wins; a hand-rolled arbitration-priority register: often the opposite), and guessing wrong
+would silently invert every downstream contention verdict. Absent a declared convention or
+enough priority data, it reports `ORDERING_NOT_AVAILABLE` with the real reason -- never a
+fabricated ordering. A caller who already holds a directly-declared ordering (a spec table) may
+skip derivation entirely.
+
+**`verify_qos_contention()` is the ordinal check the task asked for, and only that.** Given a
+declared ordering (highest precedence first; a nested list denotes an explicit priority tie, and
+two tied masters are NEVER flagged against each other) and a caller-supplied list of
+transaction-order records (`master_id`/`position`/`window_id?`), it groups records sharing one
+`window_id` into a single real contention scenario and reports one of three honest verdicts,
+never a fourth invented value and never collapsed into two: `VIOLATED` (a strictly-higher-ranked
+master's transaction was observed at a LATER ordinal `position` than a strictly-lower-ranked
+master's, within the same window -- a real ordering violation, both sides' positions cited);
+`VERIFIED` (no violation, and at least one window genuinely compared two or more masters both
+present in the declared ordering -- a real, checked pass); `UNKNOWN` (nothing was actually
+comparable -- every window was empty, single-master, or every master in it was absent from the
+declared ordering). A master absent from the ordering is reported separately per window
+(`unknown_masters`) and never forced into a comparison it has no declared rank for.
+
+**Deliberately, explicitly NOT a performance check.** Per this batch's own instruction,
+Performance Verification (any numeric latency/bandwidth/throughput target) is entirely out of
+scope for this session. `position` is documented and enforced as a pure caller-supplied ORDINAL
+index -- a grant order or scoreboard sequence number, never a timestamp or cycle count -- and
+this module computes, stores, and claims no numeric performance value anywhere. QoS ordering
+correctness is treated as the purely relative/ordinal question it is, kept structurally separate
+from any timing claim.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) It authors no QoS
+level/priority/weight fact of its own -- every value is transcribed from a caller-supplied,
+evidence-cited record, exactly the "transcribe, never author" boundary several sibling
+extraction modules in this codebase already draw. (2) It performs no RTL/spec parsing itself and
+imports nothing else from `dv_harness` -- inputs are plain, duck-typed dicts/objects, so it stays
+usable regardless of which future extractor eventually produces a real per-master QoS/priority
+fact set. (3) It decides, approves, and arbitrates nothing beyond its own three-verdict report:
+no build, job, or approval is touched, and there is deliberately no stage gate -- a contention
+verdict is an input to a human's arbitration-review decision, never a substitute for one. (4) It
+is a standalone module with no `dv-harness` CLI verb, no graph node, and no `gates.py` entry (out
+of this task's own file-safety scope) -- reachable only by direct import.
+
+Proven by `dv_harness_tests/test_qos_policy_ir.py` (29 tests): the core positive path
+(policy construction, priority-ordering derivation with and without declared ties, a verified
+contention window); real negative controls for every validation rule (missing/blank evidence,
+missing master_id, duplicate master_id, invalid/bool priority and weight types, an unrecognized
+priority convention, insufficient data for ordering derivation with and without a declared
+convention); a real inverted-priority `VIOLATED` case citing both sides' positions; the
+tied-masters-never-flagged and unknown-masters-never-compared negative controls; default-window
+grouping when no `window_id` is declared; multi-window isolation (one window `VERIFIED`, a
+sibling window `VIOLATED`, in one report); and malformed-transaction-record refusals (missing
+master_id, non-int/bool position, invalid window_id).
+
+## Coherency Capability IR: ACE-Style Behavioral Capability, Never Inferred From a Protocol Name (2026-09-06)
+
+`syoscb_compare_policy.py` already has a `_coherency_axis()` function, and `dv_harness/coherency_capability_ir.py` deliberately does NOT import it -- reading it first is exactly what confirmed the two answer different questions at different scopes. `_coherency_axis()` decides one narrow, SyoSil-specific fact: whether `AMBA_TRANSACTION_IR_FIELDS` has a slot for a coherency signal at all, so it can fill one field (`coherency_attributes`) of a compare-key schema (`MATCH_KEY_AXES`) -- and it correctly reports `AXIS_NO_IR_FIELD` for every protocol whose signal vocabulary carries an ACE-Lite signal, because no IR field exists to hold one. It was never meant to, and does not, model coherency BEHAVIOR.
+
+`coherency_capability_ir.py` is a full behavioral capability model, a different and larger scope: four independently classified axes -- snoop-type support, coherency-domain membership, barrier-transaction support, and dirty/clean cache-line tracking -- each carrying its own status, evidence basis, and citation, answering "what can this DUT/interface actually DO" rather than "does a compare-key schema have a slot for this". Nothing in this module reads, imports, or re-derives anything from `syoscb_compare_policy.py`.
+
+**The Evidence Truth Rule is enforced structurally, not only stated.** "ACE support must never be assumed from an AXI base protocol" is a property of `classify_axis(axis_name, evidence)`'s own signature -- it takes no `protocol` argument at all, so no code path can let a protocol string influence an axis's classification. `protocol`/`dut_name` are accepted only by `build_coherency_capability_ir()`, recorded on the resulting IR as informational context, and never consulted by classification -- proven directly (`test_axis_classification_never_reads_the_protocol_field`) by driving identical evidence under three different declared protocol strings and asserting byte-identical axis results, and by a companion test proving a bare `protocol="AXI_MM"` declaration with zero evidence still reports every axis `CAP_UNKNOWN`, never a guessed `NOT_SUPPORTED`.
+
+Every axis is classified from exactly one of three real evidence kinds, each requiring a real citation: (1) `simulation_observed_values` -- real waveform/sim.log evidence that the capability's encoding was actually driven, the strongest proof this module recognizes; (2) `spec_statement` -- an explicit, cited spec/programming-guide sentence, either direction; (3) `signals_present`/`signals_checked` -- a real observed signal set compared against this module's own FIXED ACE/ACE-Lite witness-signal vocabulary (`AXIS_WITNESS_SIGNALS` -- ARSNOOP/AWSNOOP for snoop type; ARDOMAIN/AWDOMAIN plus the AC snoop channel for domain membership; ARBAR/AWBAR/WACK/RACK for barrier transactions; CRRESP plus the CR/CD channels for dirty/clean tracking -- the same "witness signal proves the field" convention `amba_transaction_ir.py`'s own `IR_FIELD_WITNESS_SIGNALS` already uses). A witness signal present proves `CAP_SUPPORTED`; the FULL witness set checked (a real superset, not a partial grep) and confirmed absent proves `CAP_NOT_SUPPORTED` -- a partial signal list can never manufacture a false-negative conclusion, proven directly. Absent all three, the honest answer is `CAP_UNKNOWN`, never a default. `CAP_NOT_APPLICABLE` is reachable only through an explicit caller `declared_not_applicable` (a real reason plus citation) -- never inferred by this module from a protocol name or family.
+
+The whole-IR rollup (`derive_overall_capability()`) is worst-wins, the same "an unresolved fact must never silently disappear into an average" discipline this project applies everywhere: any axis at `CAP_UNKNOWN` forces the overall verdict to `COHERENCY_CAPABILITY_UNKNOWN` regardless of how many other axes are clean.
+
+**File-safety scope held exactly.** This module imports nothing from the claimed file list or any other new module in this batch -- only `dv_harness.models.Status` (a stable, unclaimed module, imported solely to run `assert_no_verification_verdict_vocabulary()` at import time, holding this module's status/evidence-basis/overall vocabularies disjoint from a real stage verdict) and `dv_harness.connectivity.render_markdown_table` (this repo's one parameterized table renderer, reused rather than a fourth hand-rolled table loop -- also unclaimed and pre-existing outside this batch). No `dv-harness` CLI verb was added and `gates.py`/`cli.py`/`CLAUDE.md` were not touched, per this task's own file-safety scope; the front door is `python -m dv_harness.coherency_capability_ir --evidence <file.json> [--json]` (exit 0 every axis determined, 1 at least one axis `CAP_UNKNOWN`, 2 malformed/unreadable input).
+
+**Deliberately bounded, and stated rather than implied closed.** This module classifies four capability axes from evidence a caller already has; it parses no RTL, runs no verible subprocess, and reads no waveform itself -- producing that evidence (a real port parse, a real VIP config dump, a real sim.log capture) is a caller's job. It decides, approves and arbitrates nothing beyond its own classification: no build, no job, no approval, and there is deliberately no stage gate -- a `CoherencyCapabilityIR` is an input to a human's coverage/architecture decision, never a substitute for one.
+
+Proven by `dv_harness_tests/test_coherency_capability_ir.py` (31 tests): the positive path for all three evidence kinds (RTL signal presence, full-enumeration confirmed absence, spec statement both directions, simulation-observed values, declared-not-applicable); the two headline Evidence-Truth-Rule proofs described above; nine negative controls (an unknown axis name, a missing citation for each of the four evidence-declaration shapes, a partial signal enumeration proven unable to manufacture a false `NOT_SUPPORTED`, non-mapping evidence, an unrecognized axis key in a full evidence document); all four overall-rollup combinations (full support, no support, partial, not-applicable, and unknown-outranks-a-partially-clean picture); table rendering and IR-completeness checks; and four real CLI subprocess invocations covering all three exit codes plus a JSON round-trip. `python -m pytest dv_harness_tests/test_coherency_capability_ir.py -q` -> `31 passed`.
+
+## AMBA command.txt extension (dv_harness/amba_command_txt_extension.py, 2026-09-06)
+
+de_command_style_learning.py (this session) already classifies a DE command.txt line GENERICALLY -- what kind of statement it is, and a GLOBAL/DUT/FW/VIP branch-owner guess. It has no notion of AMBA fabric semantics at all: which master issued a transaction, which address region the transaction's address falls in beyond a bare number, or whether the statement executes inside a fork/join block alongside other masters' traffic running in parallel. amba_command_txt_extension.py closes that gap with a narrow, AMBA-specific compiler over the same kind of command record, answering four independent questions per command: operation (WRITE / READ / a recognized-but-neither macro / a structural non-transaction line / genuinely unclassifiable), master (which named master issued it), region (which named address region its address falls in), and parallel-group (which fork/join nesting group, if any, it executes inside).
+
+The module is deliberately built to duck-type its input rather than import either de_command_style_learning.py or pattern_ir_assembly.py -- both are concurrent, differently-scoped modules in this same batch, and this batch's own file-safety rule forbids importing either. Every command record is therefore a plain dict (or any attribute-bearing object), read through small alias tables for its text (raw_text/text/source_text/line/statement/raw), its macro name (command_name/macro/name/command/statement_name), its operation (operation/semantic_operation/op), its master (master/master_name), its address (address/addr/base_address), its arguments (arguments/args), and its position (line_no/line_number/order/index). An explicit field always takes precedence over anything this module derives from raw text, so a producer that already resolved a fact is never second-guessed, and a producer that resolved nothing still gets an honest classification from the record's own text.
+
+Master and region resolution never invent a value: master_registry and region_map are supplied entirely by the caller (real facts from wherever that caller's own project keeps them -- e.g. a fabric-discovery or port-registry artifact reduced to plain dicts before being handed in), and this module is only ever the compiler that reads a command's text against that data. An unrecognized master or region name reports one of several honestly DIFFERENT UNKNOWN-family statuses rather than a single catch-all or a guessed default: MASTER_UNKNOWN_NO_TOKEN (nothing master-shaped could even be extracted), MASTER_UNKNOWN_NO_REGISTRY_SUPPLIED (a candidate token was found but no registry was given to confirm it against), and MASTER_UNKNOWN_NOT_IN_REGISTRY (a candidate token was found and a registry was given, but the token matches nothing in it) are three different findings a reviewer needs to see differently. The region side adds a fourth honest outcome the master side cannot have: REGION_AMBIGUOUS_MULTIPLE_MATCH, when the caller's own region_map itself claims an address from more than one entry -- this module refuses to pick a winner rather than guess. Address parsing accepts only a real Verilog-style sized literal (32'h0002_0100) or an explicit integer/string address field, and explicitly refuses (reporting None with a cited reason) any literal carrying X/Z don't-care bits, rather than silently resolving them to zero.
+
+Parallel-group membership is derived only from literal fork/join/join_any/join_none keyword text found in the records' own raw source (matched whole-word, so an identifier like forklift is never mistaken for the keyword), tracked as a real nesting stack across the ordered record sequence -- never inferred from a naming convention, and never guessed from record adjacency alone. An unbalanced join with no open fork, or a fork left unclosed at the end of the stream, is recorded as a warning on the compiled report rather than silently ignored or force-closed. Records are compiled in the order given unless every record in the batch carries a resolvable position field, in which case they are re-sorted by it -- a caller's own file order is never silently reshuffled by a guess about which field means "position" when that guess would be ambiguous.
+
+Reuse is scoped tightly: AmbaCommandTxtExtensionReport.render_markdown() reuses dv_harness.connectivity.render_markdown_table, the repository's one parameterized table renderer, imported lazily inside the method rather than at module load. assert_no_verification_verdict_vocabulary() imports dv_harness.models lazily to check, rather than merely claim, that this module's four status vocabularies (OPERATION_STATUSES, MASTER_STATUSES, REGION_STATUSES, PARALLEL_GROUP_STATUSES) share no token with the harness's stage-gate Status verdict vocabulary. Neither de_command_style_learning.py, pattern_ir_assembly.py, nor any other file from this batch's claimed-file-safety list is imported anywhere in the module. The module performs no discovery of a project's own masters, slaves, or address map (that is amba_fabric_discovery.py/amba_port_registry.py's job, neither imported nor re-derived here), decides no VIP API, RTL content, or arbitration/security/QoS policy, and contains no performance/timing analysis of any kind. Tests live in dv_harness_tests/test_amba_command_txt_extension.py (22 cases: vocabulary hygiene, the core positive resolved-write/resolved-read/parallel-group path, and negative controls for every UNKNOWN/AMBIGUOUS status, a malformed region_map entry, a non-sequence input, and explicit-field precedence).
+
+## AMBA Readiness Gates: the 9 Named Composite Gates from Section 71 (2026-09-06)
+
+Section 71 of the AMBA M x N golden-flow source document names nine composite readiness gates and spells each out as a literal AND-formula in sections 72-80: L3_REFERENCE_READY, AMBA_PORT_REGISTRY_READY, AMBA_CONSTRAINT_READY, AMBA_CONNECTIVITY_READY, AMBA_VIP_BIND_READY, AMBA_SCOREBOARD_READY, AMBA_COVERAGE_READY, AMBA_TEST_GENERATION_READY, AMBA_SIGNOFF_READY. dv_harness/amba_readiness_gates.py is the evaluator, transcribing every AND-term verbatim from the document and applying this project's standard worst-wins discipline: a single UNMET condition blocks the whole gate as NOT_READY regardless of other clean conditions; UNKNOWN/NOT_AVAILABLE (or a condition never supplied at all) makes the gate INCOMPLETE_EVIDENCE rather than either READY or NOT_READY. AMBA_TEST_GENERATION_READY references three other gates as AND-terms; all nine are evaluated in the document's fixed order so those sub-gates are already computed, with an explicit caller override always outranking the derived value. Proven by 26 tests in dv_harness_tests/test_amba_readiness_gates.py covering the positive path, worst-wins negative controls, cross-gate propagation, malformed-input refusals, and CLI subprocess exit codes.
+
+## Fabric Progress IR: Deadlock/Livelock Risk Over a Caller-Declared Wait Graph (2026-09-06)
+
+This project's real AMBA/SyoSil integration family (amba_fabric_discovery.py, amba_port_registry.py, amba_fabric_analysis.py, amba_transaction_ir.py, amba_route_transform_predictor.py, amba_scoreboard_env.py, syoscb_*) already models fabric TOPOLOGY, TRANSACTION content, and ROUTING/TRANSFORM prediction -- none of it asks whether a caller-declared wait-for relationship among fabric agents forms a real CIRCULAR WAIT, and none of it tracks credit/outstanding-transaction counts toward exhaustion. A repo-wide check found no deadlock/livelock/circular_wait/credit_exhaust/outstanding_exhaust detector anywhere -- "deadlock" appeared only inside free-text failure-classifier regexes in system_failure_taxonomy.py/command_error_taxonomy.py, which classify already-REPORTED failure TEXT and neither build nor walk a dependency graph. dv_harness/fabric_progress_ir.py is that missing analysis, and only that.
+
+Two independent, real graph/arithmetic analyses over facts a caller already has -- never self-derived from RTL, a VIP transaction stream, or any other producer in this project. analyze_resource_dependency_cycle(facts) takes a generic list of {resource, held_by, waiting_for} records: resource is the arbitrated fabric resource the fact is about (a port, a shared bus, a buffer slot, an arbitration grant), held_by is the agent presently holding it, and waiting_for names zero, one, or several OTHER resources that same holder is blocked waiting to acquire. This module never invents a circular-wait scenario -- it builds a resource-to-holder map from the caller's own resource/held_by pairs, resolves each waiting_for entry to the holder of that named resource, and runs real cycle detection over the resulting holder-level wait-for graph. analyze_credit_outstanding(facts) takes a generic list of {resource, credit_available, credit_max, outstanding_count, outstanding_limit} records (all fields but resource optional); exhaustion is decided from the caller's OWN numbers -- credit_available <= 0 is CREDIT_EXHAUSTED, outstanding_count >= outstanding_limit is OUTSTANDING_EXHAUSTED -- neither threshold, neither axis's presence, nor either number is invented here.
+
+analyze_fabric_progress() composes both into one FabricProgressIR, folding an overall_status by strict WORST-WINS (a real risk finding on EITHER axis outranks everything; an evidence GAP on either axis, with no real risk found anywhere, outranks a clean report on both) -- the same no-averaging discipline golden_flow_readiness.combine_readiness()/spec_vplan_readiness_gate.py/system_readiness_gates.py already apply to their own composite folds, never re-derived a second way here.
+
+The Evidence Truth Rule, applied literally: never claim deadlock-freedom (or exhaustion-freedom) from an INCOMPLETE graph. A waiting_for entry naming a resource this module has no {resource, held_by} fact for at all, or one whose holder is AMBIGUOUS (two facts declare two different holders for the same resource -- a real evidence conflict this module never arbitrates, the same arbitration boundary requirement_contract.py/design_knowledge_correlation.py already keep for their own conflicting-claim findings), is reported as an UNRESOLVED dependency. Finding zero cycles over a graph carrying even one unresolved dependency reports INSUFFICIENT_EVIDENCE, never NO_CYCLE_DETECTED -- an absence of proof is not proof of absence.
+
+Proven by dv_harness_tests/test_fabric_progress_ir.py (33 tests): a real injected circular-wait cycle is detected; a clean acyclic graph reports NO_CYCLE_DETECTED; an unresolved dependency (a named resource with no fact, or an ambiguous dual-holder claim) is proven to force INSUFFICIENT_EVIDENCE rather than a false-clean result; both credit and outstanding exhaustion are proven from real caller numbers on both the exhausted and non-exhausted sides; and the worst-wins composite fold is proven against every combination of risk-found/gap/clean on both axes.
+
+Disclosed residual: this module builds and analyzes a graph over facts it is handed -- it derives no topology or dependency fact of its own from RTL or a live simulation, and references no approval/governance mechanism.
+
+## Security Policy IR: an Access Matrix Built Only From Cited Evidence (2026-09-06)
+
+A repo-wide grep for SecurityPolicyIR, security_policy, TrustZone, secure_privileged, access_matrix, S_NS/ARM_TZ, and the real AMBA/SyoSil/system module family (amba_fabric_discovery.py, amba_port_registry.py, amba_fabric_analysis.py, amba_transaction_ir.py, amba_route_transform_predictor.py, amba_scoreboard_env.py, syoscb_compare_policy.py, syoscb_topology_plan.py, syoscb_result_taxonomy.py, syoscb_phase1_report.py, syoscb_source_audit.py, system_resource_inventory.py, system_topology_analysis.py, system_scheduling_plan.py) found no security/privilege PERMISSION concept anywhere in this repo: the AMBA family models fabric topology, transaction routing, and route-transform prediction, never a security axis; the SyoSil family models scoreboard compare/topology/result-taxonomy, an unrelated domain; the system_* family models cross-subsystem resource ownership and topology, not per-access security policy. dv_harness/security_policy_ir.py is new, standalone territory -- it imports nothing from any of those files or from any other new module built in this same batch; its only import is dv_harness.models, for the vocabulary-disjointness check several sibling modules already run against it.
+
+A SecurityPolicyIR is a set of caller-declared ACCESS RULES, each stating an ALLOWED or DENIED decision for a (master, region, secure, privileged) combination -- or a wildcard subset of it -- together with a REQUIRED, non-empty evidence citation (a spec section, an RTL file:line, a register programming-guide reference). A rule with no evidence citation is refused outright (SecurityPolicyIRError) rather than silently accepted: an uncited access-permission claim is exactly the "confident guess" the Evidence Truth Rule forbids, and getting a security-permission fact wrong is higher-consequence than most facts this harness handles. Nothing here infers a decision from a master/region NAME, a naming convention, or any other heuristic -- every decision traces to a rule a caller explicitly declared, with its citation carried through to every classification result that uses it.
+
+An access combination no declared rule covers is classified UNKNOWN -- never defaulted to ALLOWED (a fail-open default-allow guess on a security matrix is exactly the kind of silent default this project forbids) and never defaulted to DENIED either (that would fabricate a security decision nobody declared). A caller MAY declare an explicit, cited default_decision for the whole matrix (e.g. "undeclared regions/masters default DENY, per <spec citation>") -- applied only when no specific rule matches, always distinguishable in the result from a matched-rule decision, and itself requires a citation like any other rule.
+
+Two rules of equal specificity naming the SAME access combination with DIFFERENT decisions is a genuine, uncited-into-agreement CONFLICT -- this module never picks a winner (no source-authority order is declared here; that arbitration, if wanted, belongs to a caller invoking a real conflict-resolution mechanism such as source_authority.py, deliberately not imported here). A conflict classifies as UNKNOWN and names both conflicting rules and their citations.
+
+The negative-test verification helper checks that a supplied test result actually OBSERVED a denial for an access the matrix says should be denied -- it never assumes a negative test passed just because a verdict field says so; it looks for the real observed evidence of the denial (e.g. a recorded error response, an assertion firing) rather than trusting a bare PASS label.
+
+Proven by dv_harness_tests/test_security_policy_ir.py (34 tests): a matched rule classifies correctly with its citation carried through; an uncited rule is refused at construction; an uncovered combination is UNKNOWN both with and without a declared default; a conflicting pair of equal-specificity rules is proven UNKNOWN naming both; and the negative-test verification helper is proven to distinguish a real observed denial from a bare PASS-labeled result that never actually exercised the denial path.
+
+Disclosed residual: this module classifies from caller-declared, cited rules only -- it derives no security fact of its own from RTL or a live simulation, arbitrates no conflict, and references no approval/governance mechanism.
+
+## AMBA Performance Calculator: Pure Arithmetic Over Caller-Supplied Numbers, Never an Invented Peak (2026-09-06)
+
+This harness has no live simulator and no formal tool, so its only real timing evidence is whatever an already-produced artifact (`fsdb_report.py` output, a sim.log, or a caller-supplied trace record) already contains. Nothing in this repo did the ONE-LEVEL-ABOVE-`fsdb_report.py` arithmetic a performance report needs: bandwidth/throughput/latency-percentile/outstanding-count/stall-ratio/utilization computation over real, already-extracted numbers, with the three rules this domain's fabrication risk demands enforced in code rather than left as a docstring promise. `dv_harness/amba_performance_calculator.py` is that arithmetic layer, and only that.
+
+**Three rules, enforced as code, not prose.** (a) A numeric threshold/target is NEVER invented — `evaluate_against_target()` reports `NOT_APPLICABLE`, never a fabricated pass/fail, whenever no caller-declared `target_value` exists. (b) An unprovable peak/baseline/metric yields `UNKNOWN`, never a computed-looking number — every function returns a typed result (`MetricResult`/`LatencyPercentileReport`/`OutstandingStatsResult`/`TargetEvaluationResult`) carrying an explicit `status` in `{COMPUTED, UNKNOWN, NOT_APPLICABLE}` (asserted disjoint from `dv_harness.models.Status` at import time), and an empty/missing input list always reports `UNKNOWN` with a real reason rather than a silent zero or a crash. `bandwidth_utilization()` is the sharpest instance: it MUST report `UNKNOWN` when no caller-supplied, already-proven peak bandwidth is provided — it never divides against an invented or reverse-engineered ceiling. (c) Functional correctness ALWAYS outranks a performance PASS — `decide_overall_verdict()` is a hard PRECEDENCE branch over the real `models.Status.PASS`/`FAIL` vocabulary (reused, not re-spelled): a functional FAIL is the overall verdict regardless of how good the performance numbers are, and a performance PASS can never promote a functionally-incorrect result to an overall PASS. This is a branch, never a weighted score.
+
+**Data shapes.** `LatencyDefinitionIR` states what "latency" means for a measurement (`ISSUE_TO_FIRST_BEAT` / `ISSUE_TO_LAST_BEAT` / `REQUEST_TO_RESPONSE`) — NEVER assumed, mandatory on every latency-percentile call, because different callers mean different things by "latency" and silently picking one would misrepresent whichever quantity the underlying evidence actually measured. `PerformanceSampleIR` is one real observed transaction/window sample (counts, byte sizes, start/end timestamps, all caller-supplied — this module never derives one itself). `PortPerformanceIR`/`PathPerformanceIR` are per-port/per-path aggregates built by `aggregate_port_performance()`, which calls only the module's own pure functions — no metric is ever computed a second, disagreeing way. `PerformanceWindowIR` is a time window over which samples were aggregated; `PerformanceCurveIR` is an ordered series of windows for a future ramp/saturation curve — this module only HOLDS that data shape, it does not generate the ramp itself (that needs a live traffic generator, explicitly out of scope: this harness has no live simulator to validate one against).
+
+**Pure functions, each over real caller-supplied numbers only**: `compute_bandwidth`/`compute_throughput` (bytes or transactions over time), `compute_latency_percentiles` (p50/p90/p95/p99 via linear-interpolation percentile arithmetic, no third-party dependency, mandatory `latency_definition`), `compute_outstanding_stats` (average/peak over a real list of observed outstanding counts), `compute_stall_ratio`/`compute_utilization` (stalled-or-busy cycles over total cycles, both caller-supplied — an over-1.0 ratio is reported as real evidence with a data-quality `reason` rather than clamped or hidden), `bandwidth_utilization`, `evaluate_against_target`, and `decide_overall_verdict`.
+
+**Deliberately bounded, and stated rather than implied closed.** It never reads an FSDB/waveform file, never monitors a live signal, never generates traffic, and never runs a simulation — all explicitly out of scope for this batch. It decides nothing beyond the one hard precedence rule in (c): no gate, no approval, no build/regression/LSF submission, and there is deliberately no stage gate.
+
+Proven by `dv_harness_tests/test_amba_performance_calculator.py` (51 tests) against small real synthetic transaction-trace fixtures built directly in the test file: core positive paths for every function; the required negative controls proving UNKNOWN on an empty/missing sample list rather than a crash or a fabricated zero; the headline `bandwidth_utilization`-is-UNKNOWN-with-no-peak-supplied test; `evaluate_against_target`'s NOT_APPLICABLE-with-no-target test; and the functional-correctness-outranks-performance test (functional FAIL + performance PASS still reads overall FAIL), plus its sibling proving an unresolved/unrecognized functional verdict is never silently promoted to PASS by a good performance number. `python -m pytest dv_harness_tests/test_amba_performance_calculator.py -q` → `51 passed`.
+
+## AMBA Performance Requirement Checker: PASS/FAIL Against a Declared Requirement, Functional Correctness Always Outranks a Performance PASS (2026-09-06)
+
+`amba_performance_calculator.py` (built earlier in this same batch) computes real performance
+METRICS from caller-supplied samples and already carries one generic threshold-comparison
+primitive, `evaluate_against_target()` -- but that function speaks in `meets_target: bool` and
+its own `COMPUTED`/`UNKNOWN`/`NOT_APPLICABLE` metric-status vocabulary, not in this project's
+real PASS/FAIL verdict vocabulary, and it has no notion of a REQUIREMENT as a persisted, typed
+object, nor of functional correctness ever overriding it. `dv_harness/
+amba_performance_requirement_checker.py` is the thin requirement layer that sits directly on
+top of it, reusing `evaluate_against_target()` for the actual comparison arithmetic rather than
+re-implementing it -- there remains exactly one place in this package that decides "does this
+number clear this threshold".
+
+**A requirement is ALWAYS caller/spec-declared, never invented.** `PerformanceRequirementIR` is
+a frozen dataclass (`requirement_id`, `metric_name`, `target_value`, `comparison`, `unit`,
+optional `source`) whose `__post_init__` refuses to construct an instance missing
+`target_value`, `comparison`, or `unit`, or carrying an unrecognized `comparison` operator or a
+non-numeric/boolean `target_value` -- rule (a) enforced at the object's own construction
+boundary, not merely documented. The case where NO requirement exists for a metric at all is
+modeled by never building a placeholder IR: `check_against_requirement()` accepts
+`requirement=None` and reports `NOT_APPLICABLE`, checked BEFORE the measured value is even
+consulted, so "nobody declared a threshold" is never misread as "we tried to measure something
+and failed" (the opposite precedence `evaluate_against_target()` would otherwise apply, since
+that function checks a missing observed value first).
+
+**The measured value may be almost anything a caller already has, and an unresolvable shape
+raises rather than guesses.** `check_against_requirement(measured, metric_name, requirement=None,
+functional_verdict=None)` resolves `measured` via `_resolve_measured_value()`: a bare
+`int`/`float` is used directly; a MetricResult-shaped object (anything carrying both `.status`
+and `.value`, duck-typed rather than isinstance-checked) is honored ONLY when its own status is
+the calculator's real `STATUS_COMPUTED` token (imported, never re-typed) -- an `UNKNOWN`/
+`NOT_APPLICABLE`/unrecognized status on the metric yields `None` plus that metric's own `reason`,
+never a value silently read as zero; a dict or any object exposing a `metric_name` field (the
+shape a real `PortPerformanceIR`/`PathPerformanceIR` and `metric_name="bandwidth"` naturally
+produces) is resolved one level deep by the same two rules. A measured value this module has no
+honest way to read a number out of (a bare list, a bool, a dict missing the named field entirely
+in some cases, an object with neither the field nor a numeric/MetricResult shape) either raises
+`PerformanceRequirementCheckerError` (a genuine caller-usage bug) or reports `UNKNOWN` (an
+honestly incomplete measurement) -- the module's docstring and tests draw that line explicitly:
+malformed shape is a raise, missing-but-well-shaped evidence is `UNKNOWN`.
+
+**Rule (c), functional correctness always outranks a performance PASS, is a hard precedence in
+code, never a weighted score.** `functional_verdict` is optional and, when supplied, must be one
+of `models.Status.PASS`/`models.Status.FAIL` (this project's one real verification-verdict
+vocabulary, reused verbatim rather than a second spelling) -- anything else raises. When it IS a
+real `FAIL`, the returned `status` is forced to `FAIL` UNCONDITIONALLY, regardless of what the
+performance comparison found, including `NOT_APPLICABLE` or `UNKNOWN`: a high-performance but
+functionally-incorrect transaction is still an overall FAIL no matter how good, absent, or
+unmeasured its performance numbers are. When `functional_verdict` is `None` (the caller is not
+asking this call to consider functional correctness at all) or a real `PASS`, the returned
+`status` equals the performance comparison's own verdict unchanged -- a functional PASS never
+elevates an unmeasured or failing performance result into an overall PASS. Both the raw
+`performance_status` and the (possibly overridden) overall `status` are carried on
+`PerformanceRequirementCheckResult`, so a reader can always see whether an overall FAIL came from
+the performance comparison itself or from the functional-correctness override.
+
+**Reuse, not reinvent.** This module imports `amba_performance_calculator`'s own
+`STATUS_COMPUTED`/`STATUS_NOT_APPLICABLE`/`STATUS_UNKNOWN` tokens and its
+`evaluate_against_target()` function directly rather than re-typing a second comparison
+arithmetic or a second metric-status vocabulary, and imports `models.Status` for the PASS/FAIL
+half exactly as the calculator module already does. It never reads an FSDB/waveform file, never
+simulates anything, never parses a sim.log, and performs no gate/approval/build/regression/LSF
+action -- pure arithmetic and classification over numbers a caller already extracted, directly or
+via the calculator layer.
+
+Proven by `dv_harness_tests/test_amba_performance_requirement_checker.py` (24 tests, real
+synthetic numeric traces only): `PerformanceRequirementIR` construction refusals for every
+missing/malformed mandatory field; core PASS/FAIL positive paths; `NOT_APPLICABLE`-never-a-
+failure with and without a measured value present; `UNKNOWN`-never-a-fabricated-number both for a
+plain missing measured value and for a real `bandwidth_utilization()` result that is honestly
+`STATUS_UNKNOWN` because no peak bandwidth was supplied (propagated through this checker, never
+computed into a percentage); real `PortPerformanceIR`-shaped measured values via
+`aggregate_port_performance()`, with real samples and with none; dict and nested-MetricResult-in-
+dict measured shapes; the three required functional-correctness-outranks-performance cases (a
+functional FAIL overriding a performance PASS, a `NOT_APPLICABLE` result, and an `UNKNOWN`
+result), the negative control that a functional PASS never elevates a performance FAIL, and the
+omitted-`functional_verdict` no-op case; plus negative controls for an invalid functional-verdict
+string, an unresolvable measured-value shape, a bare bool measured value, and a dict missing the
+named field reporting `UNKNOWN` rather than raising. Real run:
+`python -m pytest dv_harness_tests/test_amba_performance_requirement_checker.py -q` ->
+`24 passed`.
+
+## AMBA Performance Classification: Saturation / Bottleneck-Candidate / Anomaly / Regression-Delta (2026-09-06)
+
+`amba_performance_calculator.py` already does the raw PERFORMANCE ARITHMETIC (bandwidth, throughput, latency percentiles, utilization, the hard functional-correctness-outranks-performance precedence). Nothing in this repo turned those numbers into a CLASSIFICATION: is a port/path actually SATURATED, what is the leading bottleneck CANDIDATE (not a confirmed root cause), does an observed sample DEVIATE from a real historical baseline, and did a metric IMPROVE/REGRESS/stay UNCHANGED between two measured periods. `dv_harness/amba_performance_classification.py` is that classification layer, built under the same three hard rules `amba_performance_calculator.py` already enforces in code (never a docstring promise): a threshold/target/baseline is never invented (`NOT_APPLICABLE` when absent), an unprovable metric yields `UNKNOWN` (never a computed-looking number), and functional correctness always outranks a performance PASS.
+
+**Four classifiers, each requiring AT LEAST TWO correlated real caller-supplied metrics -- never one metric alone.** `classify_saturation()` requires utilization sitting at/above a caller-declared fraction of a caller-declared max ceiling ALONGSIDE a real rising-latency or rising-stall trend signal; either metric alone reports `UNKNOWN` (never a guessed SATURATED/NOT_SATURATED), and the two metrics DISAGREEING (one signals saturation, the other does not) reports `INDETERMINATE`, never silently resolved in either direction. Asserting a rising trend as `True` with no cited evidence is refused outright (`PerformanceClassificationError`), never silently accepted. `identify_bottleneck_candidate()` builds a structured `{hypothesis, evidence, confidence, gap, next_best_action}` record -- matching this project's existing Hypothesis -> Evidence -> Confidence -> Gap -> Next-Best-Action discipline (see `inference.py` for the pattern; deliberately NOT imported, since that module's `score_confidence()` counts generic corroborating evidence for an arbitrary claim, and this domain needs its own correlated-metric-count-based confidence derivation instead) -- and refuses (raises) to construct one from fewer than 2 real, non-empty, independently-cited correlated evidence entries: a hypothesis resting on one metric is never reported as a candidate. `detect_anomaly()` compares a real observed sample against a real caller-supplied baseline (a historical range, or a mean/stddev distribution plus a caller-declared deviation threshold); an absent baseline is `NOT_APPLICABLE` (a baseline is never fabricated from the observation alone), and a missing observation is `UNKNOWN` regardless of baseline availability. `compute_regression_delta()` compares two real measured samples/periods for one named metric and reports IMPROVED/REGRESSED/UNCHANGED/INCONCLUSIVE -- INCONCLUSIVE, never a fabricated percentage, whenever the two samples declare different units, declare different measurement windows, or the baseline is zero (a percent-change against zero is mathematically undefined, not silently reported as 0% or as an arbitrary large number).
+
+**Reuse, not reinvention, of the functional-correctness precedence.** `decide_overall_performance_verdict()` does not reimplement rule (c) a second time -- it imports and calls `amba_performance_calculator.decide_overall_verdict()` directly, mapping this module's own regression-delta verdict onto that function's `performance_verdict` parameter (IMPROVED/UNCHANGED become a performance PASS, REGRESSED becomes a performance FAIL, INCONCLUSIVE/UNKNOWN/absent are passed through as "no performance verdict was evaluated"). There is exactly one place in this project that decides "does functional correctness outrank a performance result", and this module calls it rather than duplicating it: a functionally-FAILed transaction whose own regression delta reports IMPROVED still resolves to an overall FAIL.
+
+**Jain's fairness index, included because this batch's source document calls for a fairness/QoS-inversion check.** `compute_jains_fairness_index()` is the real, well-known one-line formula (`J = (sum(x_i))**2 / (n * sum(x_i**2))`, Jain/Chiu/Hawe 1984) over a real per-requester allocation/throughput map. It refuses to compute -- reports `UNKNOWN`, never a value silently computed over the subset that happened to report -- the instant ANY declared requester's value is absent, and reports `UNKNOWN` rather than a fabricated `1.0` on the genuinely undefined all-zero (0/0) case; a single requester is honestly `NOT_APPLICABLE` (fairness across one requester is not a meaningful question).
+
+**Deliberately bounded, and stated rather than implied closed.** This module reads no FSDB/waveform file, monitors no live signal, generates no traffic, and runs no simulation -- all explicitly out of scope for this batch, since this harness has no live simulator to validate any of that against; it imports nothing from `dv_harness` beyond `amba_performance_calculator`'s reused precedence function and its own status-token constants, plus `models.Status` for a vocabulary-collision check. It decides, approves, and arbitrates nothing beyond its own classification: no gate, no approval, no build/regression/LSF submission, and no CLI verb was added.
+
+Proven by `dv_harness_tests/test_amba_performance_classification.py` (54 tests): the core positive path for all four classifiers plus the fairness index; the required negative controls -- a single metric never classifies saturation either way, no declared ceiling is `NOT_APPLICABLE`, a missing observation is `UNKNOWN`, a single-evidence-item bottleneck candidate is refused, an absent baseline anomaly check is `NOT_APPLICABLE`, a zero-baseline regression delta is `INCONCLUSIVE` rather than a fabricated percentage, incomplete per-requester fairness data is refused rather than silently computed over the partial set, and an all-zero fairness input is `UNKNOWN` rather than a fabricated perfect score; and the headline functional-correctness-outranks-performance proof, driving a real `REGRESSION_IMPROVED` performance result alongside a functional FAIL to a confirmed overall FAIL through the reused `amba_performance_calculator.decide_overall_verdict()`.
+
+## AMBA Performance Readiness Gates: BUS_PERFORMANCE_READY / BUS_PERFORMANCE_SIGNOFF_READY (2026-09-06)
+
+Two composite gates -- `BUS_PERFORMANCE_READY` and `BUS_PERFORMANCE_SIGNOFF_READY` -- each a real AND-formula over caller-supplied condition inputs, `dv_harness/amba_performance_readiness_gates.py` matches this project's other composite-gate modules (`amba_readiness_gates.py`, `subsystem_maturity_gate.py`, `functional_coverage_signoff.py`, `spec_vplan_readiness_gate.py`, `system_readiness_gates.py`) in shape and discipline. This is the highest fabrication-risk domain in this project -- performance -- and this harness has no live simulator and no formal timing tool, so this module never computes, measures, or estimates a single performance number: it only folds already-real `{"condition_name": ..., "status": ...}` records a caller supplies. It deliberately imports NOTHING from `amba_performance_calculator.py`, `amba_performance_requirement_checker.py`, or `amba_performance_classification.py` -- it never assumes any of those three modules exist, ran, or finished cleanly in the same batch. Whatever those modules concluded reaches this gate only as a generic, duck-typed condition record naming their conceptual output (e.g. `Performance_Target_Declared`, `Performance_Requirement_Evaluation_Complete`) -- this module never inspects a waveform, a sim.log, or an `fsdb_report.py` output itself, and never decides what counts as satisfying a named condition.
+
+**Three fabrication-risk rules are enforced IN CODE here, never left as a docstring promise.** (a) A numeric threshold/target is NEVER invented by this module -- it has no field anywhere for a number; a caller either supplies a condition record saying whether a target was declared (`Performance_Target_Declared`: MET/UNMET/UNKNOWN/NOT_AVAILABLE) or the whole performance dimension is marked `NOT_APPLICABLE` for a project/path that is not performance-critical. (b) An unprovable peak/baseline/metric condition yields UNKNOWN/NOT_AVAILABLE, which this module folds to `INCOMPLETE_EVIDENCE` -- never a computed-looking percentage, never silently promoted to READY (GF-AT-28), and never forced into a confirmed NOT_READY it was never proven to be. (c) Functional correctness ALWAYS outranks a performance PASS -- every gate's own AND-formula includes a `Functional_Correctness_Confirmed` term; because the fold is a strict AND (worst-wins, never averaged or weighted), a functionally-incorrect transaction blocks the WHOLE gate as NOT_READY regardless of how many performance conditions on that same gate read MET -- a hard precedence enforced by the fold's own arithmetic, never a score a high performance number could outweigh.
+
+**Discipline matches this project's other composite-gate modules: worst-wins, never averaged.** A single UNMET condition blocks the WHOLE gate as NOT_READY regardless of how many other conditions on that gate are clean. Only once no condition is UNMET does an UNKNOWN/NOT_AVAILABLE condition -- or a condition nobody supplied evidence for at all -- make the gate `INCOMPLETE_EVIDENCE` rather than either READY or NOT_READY. An explicit, CALLER-DECLARED `NOT_APPLICABLE` outcome is supported for a project/path that is not performance-critical -- never inferred by this module from the condition list itself (there is no rule like "no performance conditions supplied means not applicable", which would silently read an unmeasured project as one with nothing to measure); it is only ever produced when the caller explicitly declares `not_applicable=True` with a real, non-empty `reason`.
+
+`BUS_PERFORMANCE_SIGNOFF_READY`'s own AND-formula names `BUS_PERFORMANCE_READY` as one of its terms, exactly as `AMBA_TEST_GENERATION_READY` names three earlier gates in `amba_readiness_gates.py`: the two gates are evaluated in a fixed order (READY, then SIGNOFF_READY) so that sub-gate reference is already computed by the time it is needed, and an explicit caller-supplied condition record naming `BUS_PERFORMANCE_READY` directly always outranks the derived sub-gate verdict -- the same "real evidence outranks a derived value" precedence this project's Source Authority Order already applies everywhere else.
+
+Proven by `dv_harness_tests/test_amba_performance_readiness_gates.py` (31 tests): the positive path for both gates; the worst-wins negative control (a single UNMET condition blocks the gate regardless of how many others are clean); the functional-correctness-outranks-performance headline proof; `INCOMPLETE_EVIDENCE` proven distinct from `NOT_READY` on an UNKNOWN/absent condition; the explicit caller-declared `NOT_APPLICABLE` path proven never self-inferred; and `BUS_PERFORMANCE_SIGNOFF_READY`'s sub-gate reference proven to use a caller override when supplied and the derived `BUS_PERFORMANCE_READY` value otherwise.
+
+**Disclosed residual**: this module folds caller-supplied conditions only -- it derives no performance fact of its own, runs no build/regression/LSF submission, and references no approval/governance mechanism.

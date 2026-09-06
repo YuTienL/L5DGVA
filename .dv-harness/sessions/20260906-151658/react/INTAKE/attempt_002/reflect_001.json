@@ -1,0 +1,52 @@
+{
+  "signatures": [
+    {
+      "gate_id": "intake_readiness",
+      "ok": true,
+      "detail": {
+        "mode": "SUBSYSTEM",
+        "readiness": "READY_FOR_VPLAN",
+        "missing": []
+      }
+    },
+    {
+      "gate_id": "generated_artifact_boundary_gate",
+      "ok": false,
+      "detail": {
+        "status": "FAIL",
+        "reason": "NO_EVIDENCE_BLOCK_SUPPLIED"
+      }
+    },
+    {
+      "gate_id": "interactive_evidence_intake_gate",
+      "ok": false,
+      "detail": {
+        "status": "FAIL",
+        "reason": "NO_EVIDENCE_BLOCK_SUPPLIED"
+      }
+    },
+    {
+      "gate_id": "de_local_sim_env_intake_gate",
+      "ok": true,
+      "detail": {
+        "status": "PASS",
+        "de_local_sim_env": "NOT_APPLICABLE"
+      }
+    }
+  ],
+  "menu": [
+    {
+      "option_id": "CONVERGE_TERMINATE",
+      "kind": "CONVERGE_TERMINATE",
+      "target": null,
+      "rationale": "Accept the current verdict as final; no further constrained action is available or warranted given the real evidence gathered so far.",
+      "source": "control"
+    }
+  ],
+  "decision": {
+    "chosen_option_id": "CONVERGE_TERMINATE",
+    "conclusion": "Gate verdict is GATE_FAIL: generated_artifact_boundary_gate and interactive_evidence_intake_gate both report FAIL/NO_EVIDENCE_BLOCK_SUPPLIED, while intake_readiness and de_local_sim_env_intake_gate pass. No further constrained action is available without a supplied evidence block, so terminating on the current verdict is the only listed option.",
+    "params": {},
+    "converged": true
+  }
+}

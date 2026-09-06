@@ -686,13 +686,62 @@ def test_real_upstream_supplies_all_three_orderings_and_five_limitations():
 
 
 @real_source
-def test_real_source_is_not_vendored_into_this_repository():
-    """SYOSCB-2/SYOSCB-33's boundary, asserted against the live repository: no
-    upstream file is in here, by name or by content, before Phase 2."""
+def test_real_source_is_vendored_only_under_the_real_approved_destination():
+    """SYOSCB-2/SYOSCB-33's boundary, asserted against the live repository:
+    the ONLY upstream copy in here is the one a real, on-disk approval
+    record names, and it is reported as APPROVED rather than hidden."""
     audit = ssa.audit_syoscb_source(REAL_SYOSCB_ROOT)
-    result = ssa.assert_not_vendored(REPO_ROOT, audit)
+    approval = ssa.load_vendoring_approval(REPO_ROOT)
+    assert approval is not None
+    assert approval["approved"] is True
+    result = ssa.assert_not_vendored(REPO_ROOT, audit, approval=approval)
     assert result["name_check"] == "CLEAN"
     assert result["content_check"] == "CLEAN"
+    assert result["approved_vendored"], "the real approved copy must be reported, not hidden"
+
+
+@real_source
+def test_an_unapproved_copy_elsewhere_is_still_caught(tmp_path):
+    """The approval exempts ONLY its own recorded `l5_destination` -- a second,
+    unapproved copy anywhere else in the same repository must still raise."""
+    audit = ssa.audit_syoscb_source(REAL_SYOSCB_ROOT)
+    approval = ssa.load_vendoring_approval(REPO_ROOT)
+    rogue_repo = tmp_path / "repo"
+    (rogue_repo / "reference" / "uvm_syoscb-1.0.2.4").mkdir(parents=True)
+    (rogue_repo / "reference" / "uvm_syoscb-1.0.2.4" / "VERSION.txt").write_text("1.0.2.4\n")
+    # A second, un-approved vendored copy sitting OUTSIDE the approved destination.
+    (rogue_repo / "somewhere_else" / "uvm_syoscb_copy").mkdir(parents=True)
+    (rogue_repo / "somewhere_else" / "uvm_syoscb_copy" / "VERSION.txt").write_text("1.0.2.4\n")
+    with pytest.raises(ssa.SyoscbSourceAuditError) as exc:
+        ssa.assert_not_vendored(rogue_repo, audit, approval=approval)
+    assert exc.value.reason == "SYOSCB_UPSTREAM_VENDORED_BEFORE_APPROVAL"
+    assert any("somewhere_else" in m for m in exc.value.detail["name_matches"])
+
+
+@real_source
+def test_load_vendoring_approval_returns_none_when_no_record_exists(tmp_path):
+    assert ssa.load_vendoring_approval(tmp_path) is None
+
+
+@real_source
+def test_load_vendoring_approval_raises_on_a_malformed_record(tmp_path):
+    approval_dir = tmp_path / "dv_harness"
+    approval_dir.mkdir()
+    (approval_dir / "syoscb_vendoring_approval.json").write_text("{\"approved\": true}")
+    with pytest.raises(ssa.SyoscbSourceAuditError):
+        ssa.load_vendoring_approval(tmp_path)
+
+
+@real_source
+def test_an_approval_record_that_says_approved_false_does_not_exempt_anything(tmp_path):
+    audit = ssa.audit_syoscb_source(REAL_SYOSCB_ROOT)
+    rogue_repo = tmp_path / "repo"
+    dest = rogue_repo / "reference" / "uvm_syoscb-1.0.2.4"
+    dest.mkdir(parents=True)
+    (dest / "VERSION.txt").write_text("1.0.2.4\n")
+    draft_approval = {"approved": False, "l5_destination": "reference/uvm_syoscb-1.0.2.4"}
+    with pytest.raises(ssa.SyoscbSourceAuditError):
+        ssa.assert_not_vendored(rogue_repo, audit, approval=draft_approval)
 
 
 @real_source

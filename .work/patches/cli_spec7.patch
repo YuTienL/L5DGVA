@@ -1,0 +1,72 @@
+diff --git a/dv_harness/cli.py b/dv_harness/cli.py
+index 5007b54..98f5463 100644
+--- a/dv_harness/cli.py
++++ b/dv_harness/cli.py
+@@ -938,6 +964,38 @@ def main():
+                                  "dv_harness/schemas/testplan_sources.schema.json (the project's real "
+                                  "testlist + vPlan items + coverage model). Omit to report "
+                                  "env_topology.testplan_correspondence as NOT_AVAILABLE.")
++    # Spec section 210's per-artifact generation provenance tuple. Each flag
++    # is optional and its omission is recorded as an honest NOT_DECLARED --
++    # never a default attribution -- so an un-migrated project is never
++    # retroactively failed. --require-provenance is the strict opt-in.
++    penvm_gen.add_argument("--generated-by", default=None, dest="generated_by",
++                            help="Identifier of the agent/skill producing this manifest, in the convention the "
++                                 "profiles use to self-identify: the front-matter `name:` of a "
++                                 ".claude/agents/*.md profile or a .claude/skills/**/SKILL.md skill "
++                                 "(e.g. 'debug-agent'). Checked against the real profiles on disk; an "
++                                 "identifier matching none is recorded as declared, never as verified. Omit "
++                                 "to report generator.agent as NOT_DECLARED.")
++    penvm_gen.add_argument("--input-requirements", default=None, dest="input_requirements_path",
++                            help="Path to the requirements document holding the section 184 requirement "
++                                 "contract that drove this generation. Use with --input-requirement-id.")
++    penvm_gen.add_argument("--input-requirement-id", default=None, dest="input_requirement_id",
++                            help="requirement_id of the contract that drove this generation. The record is "
++                                 "located in --input-requirements, validated, and run through "
++                                 "requirement_contract.downstream_consumable(), so the manifest records "
++                                 "whether the cited requirement was actually fit to generate from.")
++    penvm_gen.add_argument("--input-file", default=None, dest="input_file_path",
++                            help="Fallback input-IR form for a project with no contract-shaped IR: a real "
++                                 "driving input file, recorded as path + sha256 + byte size, never content. "
++                                 "Mutually exclusive with the requirement-contract form.")
++    penvm_gen.add_argument("--project-root", default=None, dest="provenance_project_root",
++                            help="Project root whose git HEAD this manifest belongs to, recorded as "
++                                 "generator.repository_sha.project. The HARNESS's own SHA is always recorded "
++                                 "and is never taken from this path.")
++    penvm_gen.add_argument("--require-provenance", action="store_true", dest="require_provenance",
++                            help="Strict section 210 contract: fail (exit 1) unless every part of the "
++                                 "provenance tuple -- schema version, tool version, a resolved agent, a "
++                                 "resolved input IR and a real harness git SHA -- is answered by real "
++                                 "content. Off by default.")
+ 
+     pvug = sub.add_parser("vip-user-guide", help="OFFLINE distillation of a VIP user guide (or any protocol "
+                                                     "spec / programming guide) into a bounded reference index "
+@@ -2724,7 +2848,8 @@ def main():
+     elif args.cmd == "env-manifest":
+         from . import env_manifest
+         from .env_manifest import (EnvManifestValidationError, RegisterMapValidationError,
+-                                    SocArchMapValidationError, TestplanSourcesValidationError)
++                                    SocArchMapValidationError, TestplanSourcesValidationError,
++                                    GenerationProvenanceIncompleteError, InputIrDeclarationError)
+         from .verible_parser import DEFAULT_VERIBLE_BIN, VeribleParseError, VeribleUnavailableError
+         from .vip_user_guide_distill import UserGuideDistillError
+         if args.envm_cmd == "generate":
+@@ -2741,10 +2866,17 @@ def main():
+                     user_guide_reference_paths=args.user_guide_reference_paths,
+                     soc_arch_map_path=args.soc_arch_map_path,
+                     testplan_sources_path=args.testplan_sources_path,
++                    generated_by=args.generated_by,
++                    project_root=args.provenance_project_root,
++                    input_requirements_path=args.input_requirements_path,
++                    input_requirement_id=args.input_requirement_id,
++                    input_file_path=args.input_file_path,
++                    require_provenance=args.require_provenance,
+                 )
+             except (EnvManifestValidationError, RegisterMapValidationError,
+                     SocArchMapValidationError, TestplanSourcesValidationError,
+-                    UserGuideDistillError,
++                    UserGuideDistillError, GenerationProvenanceIncompleteError,
++                    InputIrDeclarationError,
+                     VeribleParseError, VeribleUnavailableError) as exc:
+                 print(f"env-manifest generate FAILED: {exc}", file=sys.stderr)
+                 raise SystemExit(1)

@@ -1,0 +1,192 @@
+diff --git a/dv_harness/cli.py b/dv_harness/cli.py
+index 5007b54..98f5463 100644
+--- a/dv_harness/cli.py
++++ b/dv_harness/cli.py
+@@ -484,6 +484,32 @@ def main():
+     pgg.add_argument("--branch", default=None,
+                       help="Current branch (pre-merge-commit only) -- the hook script supplies "
+                            "`git rev-parse --abbrev-ref HEAD`. Ignored/unused for --check pre-push.")
++    # Second, STRICTLY ADDITIVE gate (2026-09-06): change-budget/blast-radius.
++    # The branch gate above asks WHERE the change lands; this one asks HOW FAR
++    # it reaches (files touched, transitive importer reach through the real
++    # dv_harness import graph, whether it edits a gate/policy file). It runs
++    # only on a push the branch gate ALREADY ALLOWED and can only turn an
++    # allow into a block -- see dv_harness/change_blast_radius.py.
++    pgg.add_argument("--merge-head", default=None,
++                      help="MERGE_HEAD (pre-merge-commit only) -- the hook script supplies "
++                           "`git rev-parse MERGE_HEAD`, which git does not pass to the hook. "
++                           "Used by the blast-radius check to score the commits the merge would "
++                           "actually bring in. Absent -> that check reports NOT_ASSESSABLE and "
++                           "allows; the branch gate is unaffected either way.")
++    pgg.add_argument("--skip-blast-radius", action="store_true",
++                      help="Run ONLY the PR-only branch gate, skipping the blast-radius check. "
++                           "For diagnosing the branch gate in isolation; it cannot be used to "
++                           "weaken the branch gate, which always runs.")
++
++    # Change-budget / blast-radius assessment, standalone. Same computation the
++    # git-guard hook path runs, callable before you push so the tier and the
++    # digest can be seen (and confirmed) without provoking a blocked push.
++    pbr = sub.add_parser("blast-radius",
++        help="Estimate a change's blast radius (files touched, transitive dv_harness import "
++             "reach, governance/policy files edited) for a real git range, and report whether "
++             "it needs human confirmation. See dv_harness/change_blast_radius.py.")
++    pbr.add_argument("--base", required=True, help="Base revision (any rev git resolves).")
++    pbr.add_argument("--head", default="HEAD", help="Head revision (default HEAD).")
+ 
+     # Research-Capability Evolution master prompt sections 19/53 -- the
+     # `/research` front door, in this repo's own native command mechanism.
+@@ -938,6 +964,38 @@ def main():
+                                  "dv_harness/schemas/testplan_sources.schema.json (the project's real "
+                                  "testlist + vPlan items + coverage model). Omit to report "
+                                  "env_topology.testplan_correspondence as NOT_AVAILABLE.")
++    # Spec section 210's per-artifact generation provenance tuple. Each flag
++    # is optional and its omission is recorded as an honest NOT_DECLARED --
++    # never a default attribution -- so an un-migrated project is never
++    # retroactively failed. --require-provenance is the strict opt-in.
++    penvm_gen.add_argument("--generated-by", default=None, dest="generated_by",
++                            help="Identifier of the agent/skill producing this manifest, in the convention the "
++                                 "profiles use to self-identify: the front-matter `name:` of a "
++                                 ".claude/agents/*.md profile or a .claude/skills/**/SKILL.md skill "
++                                 "(e.g. 'debug-agent'). Checked against the real profiles on disk; an "
++                                 "identifier matching none is recorded as declared, never as verified. Omit "
++                                 "to report generator.agent as NOT_DECLARED.")
++    penvm_gen.add_argument("--input-requirements", default=None, dest="input_requirements_path",
++                            help="Path to the requirements document holding the section 184 requirement "
++                                 "contract that drove this generation. Use with --input-requirement-id.")
++    penvm_gen.add_argument("--input-requirement-id", default=None, dest="input_requirement_id",
++                            help="requirement_id of the contract that drove this generation. The record is "
++                                 "located in --input-requirements, validated, and run through "
++                                 "requirement_contract.downstream_consumable(), so the manifest records "
++                                 "whether the cited requirement was actually fit to generate from.")
++    penvm_gen.add_argument("--input-file", default=None, dest="input_file_path",
++                            help="Fallback input-IR form for a project with no contract-shaped IR: a real "
++                                 "driving input file, recorded as path + sha256 + byte size, never content. "
++                                 "Mutually exclusive with the requirement-contract form.")
++    penvm_gen.add_argument("--project-root", default=None, dest="provenance_project_root",
++                            help="Project root whose git HEAD this manifest belongs to, recorded as "
++                                 "generator.repository_sha.project. The HARNESS's own SHA is always recorded "
++                                 "and is never taken from this path.")
++    penvm_gen.add_argument("--require-provenance", action="store_true", dest="require_provenance",
++                            help="Strict section 210 contract: fail (exit 1) unless every part of the "
++                                 "provenance tuple -- schema version, tool version, a resolved agent, a "
++                                 "resolved input IR and a real harness git SHA -- is answered by real "
++                                 "content. Off by default.")
+ 
+     pvug = sub.add_parser("vip-user-guide", help="OFFLINE distillation of a VIP user guide (or any protocol "
+                                                     "spec / programming guide) into a bounded reference index "
+@@ -2379,8 +2437,11 @@ def main():
+         print(json.dumps(_audit_trail(h.root, args.limit), ensure_ascii=False, indent=2))
+     elif args.cmd == "git-guard":
+         from . import git_governance as _gg
++        # stdin can be consumed ONCE, and both gates need the refspecs, so it
++        # is captured here and handed to each rather than read twice.
++        _push_stdin = sys.stdin.read() if args.check == "pre-push" else ""
+         if args.check == "pre-push":
+-            decision = _gg.evaluate_pre_push(sys.stdin.read(), os.environ)
++            decision = _gg.evaluate_pre_push(_push_stdin, os.environ)
+         else:
+             if not args.branch:
+                 print(json.dumps({"error": "BRANCH_REQUIRED_FOR_PRE_MERGE_COMMIT"}))
+@@ -2397,8 +2458,71 @@ def main():
+                             "hook": decision.hook, "allowed": decision.allowed,
+                             "branch": decision.branch, "detected_markers": decision.detected_markers,
+                             "reason": decision.reason, "user": _access_user(), "host": _access_host()})
+-        print(json.dumps(decision.to_dict(), ensure_ascii=False, indent=2))
+-        raise SystemExit(0 if decision.allowed else 1)
++        # The branch gate's verdict is FINAL when it blocks: print ITS decision
++        # alone and exit, byte-for-byte as before this second gate existed.
++        if not decision.allowed:
++            print(json.dumps(decision.to_dict(), ensure_ascii=False, indent=2))
++            raise SystemExit(1)
++
++        # SECOND GATE, additive only. Reached only on a push/merge the branch
++        # gate allowed, so it can never turn a block into an allow. A crash in
++        # here must not become a bypass of the branch gate NOR an unexplained
++        # abort of a legitimate push -- an unexpected exception is reported and
++        # allowed (fail-open on our own ignorance, per that module's docstring;
++        # a real over-threshold measurement still blocks below).
++        #
++        # OUTPUT CONTRACT: exactly ONE json document on stdout, always -- the
++        # branch decision, with the blast-radius verdict NESTED under
++        # "blast_radius". Found by test_cli_git_guard.py, which (like any hook
++        # or script consuming this command) does json.loads() on the whole of
++        # stdout: printing a second top-level document made every existing
++        # caller fail with "Extra data". The pre-existing top-level keys are
++        # untouched, so this is an additive field, not a changed shape.
++        payload = decision.to_dict()
++        if args.skip_blast_radius:
++            payload["blast_radius"] = {"skipped": True,
++                                        "reason": "--skip-blast-radius"}
++            print(json.dumps(payload, ensure_ascii=False, indent=2))
++            raise SystemExit(0)
++        from . import change_blast_radius as _cbr
++        try:
++            if args.check == "pre-push":
++                br = _cbr.evaluate_pre_push(h.root, _push_stdin, os.environ)
++            else:
++                br = _cbr.evaluate_pre_merge_commit(h.root, args.merge_head, os.environ)
++        except Exception as exc:  # noqa: BLE001 -- see the comment above
++            payload["blast_radius"] = {
++                "allowed": True,
++                "reason": f"blast-radius check errored ({type(exc).__name__}: {exc}) -- "
++                          "allowing; the PR-only branch gate already ran and is unaffected."}
++            print(json.dumps(payload, ensure_ascii=False, indent=2))
++            raise SystemExit(0)
++        # Same real audit trail as the branch gate -- one events.jsonl, never a
++        # second parallel governance log. Logged whenever a tier was really
++        # measured (NOT_ASSESSABLE carries no finding worth a trail entry).
++        if br.tier != _cbr.TIER_NOT_ASSESSABLE:
++            h.store.event({"ts": cp_now(), "event": "BLAST_RADIUS_DECISION",
++                            "hook": br.hook, "allowed": br.allowed, "tier": br.tier,
++                            "digest": (br.assessment or {}).get("digest"),
++                            "file_count": (br.assessment or {}).get("file_count"),
++                            "reach": (br.assessment or {}).get("reach"),
++                            "governance_files_touched": (br.assessment or {}).get(
++                                "governance_files_touched"),
++                            "detected_markers": br.detected_markers, "reason": br.reason,
++                            "user": _access_user(), "host": _access_host()})
++        payload["blast_radius"] = br.to_dict()
++        print(json.dumps(payload, ensure_ascii=False, indent=2))
++        raise SystemExit(0 if br.allowed else 1)
++    elif args.cmd == "blast-radius":
++        from . import change_blast_radius as _cbr
++        assessment = _cbr.assess_range(h.root, args.base, args.head)
++        status = _cbr.confirmation_status(h.root, assessment.digest)
++        print(json.dumps({
++            **assessment.to_dict(),
++            "requires_confirmation": assessment.tier in _cbr.TIERS_REQUIRING_CONFIRMATION,
++            "confirmation": status,
++            "confirmation_command": _cbr.confirmation_command(assessment.digest),
++        }, ensure_ascii=False, indent=2))
+     elif args.cmd == "self-audit":
+         from . import self_audit
+         result = self_audit.run_self_audit(h.root, args.gate, smoke=args.smoke)
+@@ -2724,7 +2848,8 @@ def main():
+     elif args.cmd == "env-manifest":
+         from . import env_manifest
+         from .env_manifest import (EnvManifestValidationError, RegisterMapValidationError,
+-                                    SocArchMapValidationError, TestplanSourcesValidationError)
++                                    SocArchMapValidationError, TestplanSourcesValidationError,
++                                    GenerationProvenanceIncompleteError, InputIrDeclarationError)
+         from .verible_parser import DEFAULT_VERIBLE_BIN, VeribleParseError, VeribleUnavailableError
+         from .vip_user_guide_distill import UserGuideDistillError
+         if args.envm_cmd == "generate":
+@@ -2741,10 +2866,17 @@ def main():
+                     user_guide_reference_paths=args.user_guide_reference_paths,
+                     soc_arch_map_path=args.soc_arch_map_path,
+                     testplan_sources_path=args.testplan_sources_path,
++                    generated_by=args.generated_by,
++                    project_root=args.provenance_project_root,
++                    input_requirements_path=args.input_requirements_path,
++                    input_requirement_id=args.input_requirement_id,
++                    input_file_path=args.input_file_path,
++                    require_provenance=args.require_provenance,
+                 )
+             except (EnvManifestValidationError, RegisterMapValidationError,
+                     SocArchMapValidationError, TestplanSourcesValidationError,
+-                    UserGuideDistillError,
++                    UserGuideDistillError, GenerationProvenanceIncompleteError,
++                    InputIrDeclarationError,
+                     VeribleParseError, VeribleUnavailableError) as exc:
+                 print(f"env-manifest generate FAILED: {exc}", file=sys.stderr)
+                 raise SystemExit(1)

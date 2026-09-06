@@ -100,6 +100,20 @@ PASS_VERDICTS = frozenset({"PASS", "PASSED"})
 #: `_METADATA_ROOTS`), which cannot change a simulation result.
 STALENESS_RISKS = frozenset({RISK_HIGH, RISK_MEDIUM})
 
+#: Golden Subsystem Test Set completeness (2026-09-06): the fixed
+#: qualification_set vocabulary a capsule MAY self-declare -- never required,
+#: since most of this project's existing capsules were recorded before this
+#: field existed and must not become invalid. Naming what KIND of proven
+#: result a capsule represents lets `missing_categories()` answer "which
+#: categories of subsystem test coverage have we never recorded a golden
+#: capsule for at all", a completeness check over capsules ALREADY recorded --
+#: never a claim about which categories SHOULD exist for a given subsystem,
+#: which this module has no evidence to derive.
+QUALIFICATION_SET_CATEGORIES = (
+    "known_pass", "known_dut_fail", "known_tb_fail", "known_vip_fail",
+    "protocol_violation", "timeout", "coverage_hole", "waiver", "register", "perf",
+)
+
 SCHEMA_VERSION = "1.0"
 
 _CAPSULE_ID_SAFE = re.compile(r"[^A-Za-z0-9_.:-]+")
@@ -160,6 +174,12 @@ class GoldenScenario:
     #: the DUT RTL directory, the VIP config file, the command.txt directory.
     #: Empty means "the whole repo", which is wider, never narrower.
     watched_paths: List[str] = field(default_factory=list)
+    #: Optional qualification_set label from `QUALIFICATION_SET_CATEGORIES`.
+    #: Never required -- a capsule with no declared category is simply
+    #: uncategorized, not invalid -- and validated against that fixed
+    #: vocabulary by `validate_capsule()` only when present. See
+    #: `missing_categories()` below.
+    category: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -195,6 +215,12 @@ def validate_capsule(capsule: GoldenScenario) -> None:
             f"expected_result must be a real PASS verdict "
             f"(one of {sorted(PASS_VERDICTS)}), got {capsule.expected_result!r} -- "
             "a golden scenario records a proven-good run, not a known-failing one")
+    category = str(capsule.category or "").strip()
+    if category and category not in QUALIFICATION_SET_CATEGORIES:
+        raise CapsuleValidationError(
+            f"category {capsule.category!r} is not one of the qualification_set "
+            f"categories {sorted(QUALIFICATION_SET_CATEGORIES)} -- leave category "
+            "unset rather than inventing a new one")
 
 
 # --- recording against the REAL evidence store -----------------------------
@@ -215,6 +241,72 @@ def _fetch_job_git_sha(store, job_id: Optional[int]) -> Optional[str]:
         return None
     rows = store.query("SELECT git_sha FROM jobs WHERE job_id = ?", [job_id])
     return rows[0][0] if rows and rows[0][0] else None
+
+
+def _category_column_available(store) -> bool:
+    """Whether the real `golden_scenarios` table already carries a
+    `category` column, checked through the SAME `duckdb_tables()`-style
+    catalog introspection `evidence_db.EvidenceStore._golden_scenario_rows()`
+    already uses to check for the table itself -- there is no second
+    column-introspection convention here. A store predating this addition
+    (or one whose ALTER TABLE below never ran) genuinely lacks it, which
+    must read as "category was never recorded", never crash and never
+    guess a value."""
+    try:
+        rows = store.query(
+            "SELECT 1 FROM duckdb_columns() WHERE table_name = 'golden_scenarios' "
+            "AND column_name = 'category'")
+    except Exception:
+        return False
+    return bool(rows)
+
+
+def _ensure_category_column(store) -> None:
+    """Adds `category` to the real `golden_scenarios` table via the store's
+    own public `query()` -- the same raw-SQL seam `_fetch_normalized_evidence`/
+    `_fetch_job_git_sha` above already use to read through `EvidenceStore` --
+    so this qualification_set addition needs no change to `evidence_db.py`'s
+    own column list. Idempotent, and never attempted against a read_only
+    store (which DuckDB would refuse to ALTER anyway)."""
+    if getattr(store, "read_only", False) or _category_column_available(store):
+        return
+    try:
+        store.query("ALTER TABLE golden_scenarios ADD COLUMN category VARCHAR")
+    except Exception:
+        # Best-effort: an ALTER TABLE that genuinely fails (a DuckDB build too
+        # old for it, a concurrent writer) must not turn an otherwise-good
+        # capsule recording into a crash -- the capsule itself still records
+        # correctly, only its category will not survive this round trip, and
+        # a later load honestly reports it as not recorded rather than
+        # fabricating one.
+        pass
+
+
+def _attach_categories(store, rows: List[dict]) -> List[dict]:
+    """Merges the real `category` column back onto rows
+    `EvidenceStore.get_golden_scenario()`/`list_golden_scenarios()` return --
+    those methods do not know this column exists (it lives outside
+    `evidence_db.py`'s own column list), so it is read back here through the
+    same public `query()` seam it was written through, never a second table.
+    A store that never gained the column reports every row's category as
+    unset rather than raising."""
+    if not rows:
+        return rows
+    if not _category_column_available(store):
+        for row in rows:
+            row.setdefault("category", None)
+        return rows
+    ids = [row["capsule_id"] for row in rows if row.get("capsule_id")]
+    if not ids:
+        return rows
+    placeholders = ", ".join("?" for _ in ids)
+    cat_rows = store.query(
+        f"SELECT capsule_id, category FROM golden_scenarios "
+        f"WHERE capsule_id IN ({placeholders})", ids)
+    cat_map = dict(cat_rows)
+    for row in rows:
+        row["category"] = cat_map.get(row.get("capsule_id"))
+    return rows
 
 
 def record_golden_scenario(store, capsule: GoldenScenario, *,
@@ -266,16 +358,100 @@ def record_golden_scenario(store, capsule: GoldenScenario, *,
         stored.verified_at = now or datetime.now(timezone.utc).isoformat()
 
     store.insert_golden_scenario(stored.to_dict(), evidence_verdict=verdict)
+    # qualification_set category is not one of evidence_db.py's own known
+    # columns (see the module-level note above `_category_column_available`),
+    # so it is persisted through the store's public `query()` seam rather
+    # than through `insert_golden_scenario()` -- best-effort, never fatal to
+    # an otherwise-successful recording.
+    if not getattr(store, "read_only", False):
+        _ensure_category_column(store)
+        if _category_column_available(store):
+            try:
+                store.query(
+                    "UPDATE golden_scenarios SET category = ? WHERE capsule_id = ?",
+                    [stored.category, stored.capsule_id])
+            except Exception:
+                pass
     return stored
 
 
 def load_golden_scenario(store, capsule_id: str) -> Optional[GoldenScenario]:
     row = store.get_golden_scenario(capsule_id)
-    return _row_to_capsule(row) if row else None
+    if row is None:
+        return None
+    _attach_categories(store, [row])
+    return _row_to_capsule(row)
 
 
 def load_golden_scenarios(store) -> List[GoldenScenario]:
-    return [_row_to_capsule(r) for r in store.list_golden_scenarios()]
+    rows = store.list_golden_scenarios()
+    _attach_categories(store, rows)
+    return [_row_to_capsule(r) for r in rows]
+
+
+# --- qualification_set completeness (Golden Subsystem Test Set, 2026-09-06) -
+
+
+def missing_categories(capsules: Sequence[GoldenScenario], *,
+                        required: Sequence[str] = QUALIFICATION_SET_CATEGORIES
+                        ) -> List[str]:
+    """Which of `required` qualification_set categories have NO capsule among
+    `capsules` declaring it.
+
+    A pure completeness check over ALREADY-LOADED capsules (typically
+    `load_golden_scenarios(store)`) -- it runs no query of its own and is not
+    a new store: this module still has exactly one backing table,
+    `golden_scenarios`. A capsule whose `category` is unset, blank, or
+    outside `QUALIFICATION_SET_CATEGORIES` counts toward NONE of `required`
+    -- an uncategorized capsule proves nothing about which category it was
+    meant to cover, so it must never be silently credited to one. Returns
+    the missing category names in `required`'s own order (never a set), so a
+    caller or a test can compare the result against a literal list."""
+    present = {c.category for c in capsules
+               if getattr(c, "category", None) in QUALIFICATION_SET_CATEGORIES}
+    return [cat for cat in required if cat not in present]
+
+
+def qualification_set_report(store, *,
+                              required: Sequence[str] = QUALIFICATION_SET_CATEGORIES
+                              ) -> dict:
+    """Loads every real capsule in `store` and reports Golden Subsystem Test
+    Set completeness: which required categories already have a recorded
+    capsule, which do not, and how many capsules total (including
+    uncategorized ones). `status` is COMPLETE only when every required
+    category is covered -- a store with zero capsules reports INCOMPLETE
+    with every category missing, never a vacuous COMPLETE over nothing."""
+    capsules = load_golden_scenarios(store)
+    missing = missing_categories(capsules, required=required)
+    present_counts = {cat: sum(1 for c in capsules if c.category == cat)
+                      for cat in required}
+    uncategorized = sum(1 for c in capsules
+                        if not c.category or c.category not in QUALIFICATION_SET_CATEGORIES)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "COMPLETE" if not missing else "INCOMPLETE",
+        "required_categories": list(required),
+        "present_counts": present_counts,
+        "missing_categories": missing,
+        "capsule_count": len(capsules),
+        "uncategorized_capsule_count": uncategorized,
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def format_qualification_set_report(report: dict) -> str:
+    lines = [f"GOLDEN SUBSYSTEM TEST SET (qualification_set): {report.get('status')}  "
+             f"(capsules={report.get('capsule_count')}, "
+             f"uncategorized={report.get('uncategorized_capsule_count')})"]
+    missing = report.get("missing_categories") or []
+    if missing:
+        lines.append(f"  MISSING ({len(missing)}): {', '.join(missing)}")
+    else:
+        lines.append("  every required category has at least one recorded capsule")
+    lines.append("  present counts:")
+    for cat, count in (report.get("present_counts") or {}).items():
+        lines.append(f"    {cat}: {count}")
+    return "\n".join(lines)
 
 
 def _row_to_capsule(row: dict) -> GoldenScenario:
@@ -501,8 +677,10 @@ def execute_verb(verb: str, *, root, db_path: Optional[str] = None,
                   current_vip_versions: Optional[Dict[str, str]] = None) -> Tuple[str, int]:
     """Shared implementation for `dv-harness golden-scenario <verb>` and
     `python -m dv_harness.golden_scenario <verb>`. Returns (text, exit_code):
-    0 all FRESH / recorded, 1 at least one STALE, 2 UNKNOWN or nothing to
-    report. Nothing here runs, builds, submits or approves anything."""
+    0 all FRESH / recorded / qualification_set COMPLETE, 1 at least one
+    STALE (or, for `qualification-set`, at least one required category still
+    missing), 2 UNKNOWN or nothing to report. Nothing here runs, builds,
+    submits or approves anything."""
     root = Path(root)
     if verb == "record":
         if not json_file:
@@ -536,6 +714,11 @@ def execute_verb(verb: str, *, root, db_path: Optional[str] = None,
                 lines.append(f"  {c.capsule_id}  test={c.test_name}  "
                              f"verified_sha={c.verified_sha}  evidence_id={c.evidence_id}")
             return "\n".join(lines), 0
+        if verb == "qualification-set":
+            report = qualification_set_report(store)
+            text = (json.dumps(report, indent=2) if as_json
+                    else format_qualification_set_report(report))
+            return text, (0 if report["status"] == "COMPLETE" else 1)
         if verb == "status":
             if capsule_id:
                 capsule = load_golden_scenario(store, capsule_id)
@@ -567,7 +750,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         description="Spec section 225 golden scenario / reference capsules: record a "
                     "proven-good test against real evidence_db evidence, and derive "
                     "FRESH/STALE/UNKNOWN from real git history. Runs nothing.")
-    ap.add_argument("verb", choices=("record", "list", "status"))
+    ap.add_argument("verb", choices=("record", "list", "status", "qualification-set"))
     ap.add_argument("--root", default=".", help="Project root (the git repo whose history "
                                                  "freshness is derived from).")
     ap.add_argument("--db", default=None, help="Evidence database path "

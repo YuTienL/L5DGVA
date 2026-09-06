@@ -1,0 +1,66 @@
+{
+  "adapter": "cli",
+  "claude": {
+    "command": "claude",
+    "max_turns": 40,
+    "permission_mode": "dangerously-skip-permissions",
+    "output_format": "json",
+    "allowed_tools": []
+  },
+  "policy": {
+    "language": "zh-TW",
+    "max_stage_retries": 2,
+    "auto_advance_on_pass": true,
+    "stop_on_blocked": true,
+    "stop_on_wait_user": true,
+    "require_exact_server_sha": true,
+    "require_second_pass_audit": true,
+    "require_all_actionable_findings_closed": true
+  },
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 8765
+  },
+  "knowledge_center": {
+    "remote_root": "/home/svcacct/AI/DB",
+    "enabled": true,
+    "hop_script": "",
+    "categories": [
+      "usb",
+      "pcie",
+      "amba4",
+      "ethernet",
+      "mipi_csi2",
+      "mipi_dsi",
+      "can_fd",
+      "emmc",
+      "sd_sdio",
+      "_general"
+    ],
+    "sync_on_promote": true,
+    "max_age_days": 180,
+    "configured_by": "peter.lin",
+    "configured_at": 1788275781.9464128,
+    "vchost": "vchost-b",
+    "vchop": "host-c"
+  },
+  "memory": {
+    "provider": "hybrid",
+    "vault_path": "",
+    "obsidian_cli": "auto",
+    "git_enabled": true
+  },
+  "reference_tree": {
+    "name": "USB_UVM_Handoff",
+    "path": "reference/USB_UVM_Handoff",
+    "access": "read_only",
+    "usage": "structural_conformance_and_post_hoc_fidelity_only",
+    "content_mining_forbidden": true
+  },
+  "rtl_protection": {
+    "protected_paths": [
+      "D:/DV/Task/USB/DUT",
+      "D:/DV/Task/USB/VIP"
+    ]
+  }
+}

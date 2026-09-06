@@ -1,0 +1,191 @@
+//---------------------------------
+// !! Don't Remove !!
+//---------------------------------
+`ifdef AUDTOP_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef FMTOP_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef PERITOP_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef HSMTOP_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef SS_CDEC_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef SS_CMP_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef SS_CON_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef SS_CPU_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef SS_VIS_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef SS_SF_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+`ifdef SS_VOUT_BD
+`ifndef BD_USED
+  `define BD_USED
+`endif
+`endif
+
+//---------------------------------
+// !! Don't Remove !!
+//---------------------------------
+
+`ifdef AUDTOP_ON
+`ifndef AUDTOP_USED
+  `define AUDTOP_USED
+`endif
+`elsif AUDTOP_ONLY
+`ifndef AUDTOP_USED
+  `define AUDTOP_USED
+`endif
+`endif
+
+`ifdef FMTOP_ON
+`ifndef FMTOP_USED
+  `define FMTOP_USED
+`endif
+`elsif FMTOP_ONLY
+`ifndef FMTOP_USED
+  `define FMTOP_USED
+`endif
+`endif
+
+`ifdef PERITOP_ON
+`ifndef PERITOP_USED
+  `define PERITOP_USED
+`endif
+`elsif PERITOP_ONLY
+`ifndef PERITOP_USED
+  `define PERITOP_USED
+`endif
+`endif
+
+`ifdef HSMTOP_ON
+`ifndef HSMTOP_USED
+  `define HSMTOP_USED
+`endif
+`elsif HSMTOP_ONLY
+`ifndef HSMTOP_USED
+  `define HSMTOP_USED
+`endif
+`endif
+
+`ifdef SS_CDEC_ON
+`ifndef SS_CDEC_USED
+  `define SS_CDEC_USED
+`endif
+`elsif SS_CDEC_ONLY
+`ifndef SS_CDEC_USED
+  `define SS_CDEC_USED
+`endif
+`endif
+
+`ifdef SS_CMP_ON
+`ifndef SS_CMP_USED
+  `define SS_CMP_USED
+`endif
+`elsif SS_CMP_ONLY
+`ifndef SS_CMP_USED
+  `define SS_CMP_USED
+`endif
+`endif
+
+`ifdef SS_CON_ON
+`ifndef SS_CON_USED
+  `define SS_CON_USED
+`endif
+`elsif SS_CON_ONLY
+`ifndef SS_CON_USED
+  `define SS_CON_USED
+`endif
+`endif
+
+`ifdef SS_CPU_ON
+`ifndef SS_CPU_USED
+  `define SS_CPU_USED
+`endif
+`elsif SS_CPU_ONLY
+`ifndef SS_CPU_USED
+  `define SS_CPU_USED
+`endif
+`endif
+
+`ifdef SS_VIS_ON
+`ifndef SS_VIS_USED
+  `define SS_VIS_USED
+`endif
+`elsif SS_VIS_ONLY
+`ifndef SS_VIS_USED
+  `define SS_VIS_USED
+`endif
+`endif
+
+`ifdef SS_SF_ON
+`ifndef SS_SF_USED
+  `define SS_SF_USED
+`endif
+`elsif SS_SF_ONLY
+`ifndef SS_SF_USED
+  `define SS_SF_USED
+`endif
+`endif
+
+`ifdef SS_VOUT_ON
+`ifndef SS_VOUT_USED
+  `define SS_VOUT_USED
+`endif
+`elsif SS_VOT_ONLY
+`ifndef SS_VOUT_USED
+  `define SS_VOUT_USED
+`endif
+`endif
+
+//---------------------------------------------
+// Overwrite define
+//---------------------------------------------
+`undef REPLACE_BD_APB_S0_DDR_CHIP
+`undef REPLACE_BD_APB_S1_DDR_CHIP
+
+`define CONNECT_BD_APB_S0_DDR_CHIP
+`define CONNECT_BD_APB_S1_DDR_CHIP

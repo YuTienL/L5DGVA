@@ -404,6 +404,62 @@ def test_breaker_triggers_are_section_93s():
 
 
 # ==========================================================================
+# Compile-fix loop: fingerprinted NO_PROGRESS stop -- the engine-level
+# compile-retry call site (`BudgetEngine.decide_and_trip_compile_retry()`)
+# ==========================================================================
+def test_the_compile_retry_call_site_trips_the_breaker_as_no_progress(root):
+    """`BudgetEngine.decide_and_trip_compile_retry()` is the compile-retry
+    call site: an identical compile error, retried to the configured
+    threshold, both stops the retry AND trips the breaker with the real
+    NO_PROGRESS trigger, carrying the classification's own evidence."""
+    cfg = dict(BASE_CFG, loop_budget={"repeated_identical_failure_threshold": 2})
+    e = lb.BudgetEngine(root, cfg)
+    cls = lb.classify_failure("Error-[SE] Syntax error")
+
+    d1 = e.decide_and_trip_compile_retry(cls, repeats=1)
+    assert d1.retry is True
+    assert e.breaker_open() is False, "below threshold, nothing trips"
+
+    d2 = e.decide_and_trip_compile_retry(cls, repeats=2)
+    assert d2.retry is False and d2.reason.startswith("NO_PROGRESS")
+    assert e.breaker_open() is True
+    triggers = e.breaker_state()["triggers"]
+    assert triggers[-1]["trigger"] == "NO_PROGRESS"
+    assert triggers[-1]["evidence"]["rule"] == lb.COMPILE_FAILURE_RULE_ID
+    assert triggers[-1]["evidence"]["repeats"] == 2
+
+    # persisted -- a fresh engine over the same root sees the same open breaker
+    reloaded = lb.BudgetEngine(root, cfg)
+    assert reloaded.breaker_open() is True
+
+
+def test_the_compile_retry_call_site_never_trips_on_a_non_compile_repeat(root):
+    """Negative control: the identical repeat-fingerprint mechanism, on a
+    non-compile failure, must still stop the retry (unchanged pre-existing
+    behaviour) but must NOT trip the breaker through this call site -- that
+    stays scoped to a compile-stage failure specifically."""
+    cfg = dict(BASE_CFG, loop_budget={"repeated_identical_failure_threshold": 2})
+    e = lb.BudgetEngine(root, cfg)
+    cls = lb.classify_failure("Connection reset by peer")
+
+    d = e.decide_and_trip_compile_retry(cls, repeats=2)
+    assert d.retry is False
+    assert d.reason.startswith("REPEATED_IDENTICAL_FAILURE")
+    assert e.breaker_open() is False
+
+
+def test_the_compile_retry_call_site_defers_to_the_off_by_default_threshold(root):
+    """With no configured threshold, the compile-retry call site retries
+    forever and trips nothing -- matching every other opt-in mechanism in
+    this module."""
+    e = lb.BudgetEngine(root, BASE_CFG)
+    cls = lb.classify_failure("Error-[SE] Syntax error")
+    d = e.decide_and_trip_compile_retry(cls, repeats=10)
+    assert d.retry is True
+    assert e.breaker_open() is False
+
+
+# ==========================================================================
 # Section 92: license-aware pressure and prioritization
 # ==========================================================================
 def _license_outcome(stdout: str) -> pf.CheckOutcome:
@@ -526,6 +582,124 @@ def test_repeated_identical_failure_threshold_stops_even_a_retryable_type():
     assert lb.decide_retry(cls, repeats=1, cfg=cfg).retry is True
     d = lb.decide_retry(cls, repeats=2, cfg=cfg)
     assert d.retry is False and "REPEATED_IDENTICAL_FAILURE" in d.reason
+
+
+# ==========================================================================
+# Compile-fix loop: fingerprinted NO_PROGRESS stop -- compile-stage
+# recognition and the compile-specific retry decision
+# ==========================================================================
+def test_compile_failure_rule_id_is_the_real_text_rule():
+    """The compile signature this module recognizes is the SAME rule id
+    `classify_failure()` already returns for a real VCS/slang-shaped error --
+    not a second, hand-typed pattern."""
+    cls = lb.classify_failure("Error-[SE] Syntax error")
+    assert cls.rule == lb.COMPILE_FAILURE_RULE_ID
+    assert lb.is_compile_stage_failure(cls) is True
+
+
+def test_a_non_compile_deterministic_failure_is_not_recognized_as_compile():
+    """`gate_rejected_evidence` is DETERMINISTIC too, but it is a rejected
+    gate evidence block, not a compile error -- the negative control that
+    this recognition is narrower than 'is it DETERMINISTIC'."""
+    cls = lb.classify_failure("GATE_FAIL: MISSING_EVIDENCE for stage BUILD")
+    assert cls.failure_type == lb.FailureType.DETERMINISTIC.value
+    assert cls.rule == "gate_rejected_evidence"
+    assert lb.is_compile_stage_failure(cls) is False
+
+
+def test_gate1_fail_status_alone_also_recognizes_a_compile_failure():
+    """Even when the failing text matched no `_TEXT_RULES` pattern at all, a
+    real Gate 1 (elaboration) FAIL is itself a compile-stage signature."""
+    from dv_harness.connectivity import GateStatus
+    cls = lb.classify_failure("some unrecognized tool crash nobody wrote a rule for")
+    assert cls.rule == "no_rule_matched"
+    assert lb.is_compile_stage_failure(cls, gate1_status=GateStatus.FAIL.value) is True
+    assert lb.is_compile_stage_failure(cls, gate1_status=GateStatus.PASS.value) is False
+    assert lb.is_compile_stage_failure(cls) is False
+
+
+def test_gate1_status_from_report_reuses_bind_verification_lints_own_reader():
+    """Reads the SAME markdown/JSON shape
+    `bind_verification_lint.extract_status_block_from_*()` already parses --
+    no second report parser."""
+    md = ("- Gate 1 (elaboration): FAIL\n"
+         "- Gate 2 (zero-time connectivity): PASS\n"
+         "- Gate 3 (transaction activity): PENDING\n")
+    assert lb.gate1_status_from_report(md) == "FAIL"
+    js = json.dumps({"bind_verification_status": {"gate1_elaboration": "PASS"}})
+    assert lb.gate1_status_from_report(js, is_json=True) == "PASS"
+
+
+def test_gate1_status_from_report_is_none_on_an_absent_or_broken_report():
+    """An absent Gate 1 line, or a report that cannot even be parsed, must
+    read as 'we don't know', never as a fabricated FAIL."""
+    assert lb.gate1_status_from_report("no gate lines here at all") is None
+    assert lb.gate1_status_from_report("not valid json {", is_json=True) is None
+
+
+def test_decide_compile_retry_relabels_only_the_compile_repeat_stop_as_no_progress():
+    """The headline behaviour: N identical compile attempts stop as
+    NO_PROGRESS, not the generic REPEATED_IDENTICAL_FAILURE label."""
+    cfg = dict(BASE_CFG, loop_budget={"repeated_identical_failure_threshold": 2})
+    cls = lb.classify_failure("Error-[SE] Syntax error")
+    assert lb.decide_compile_retry(cls, repeats=1, cfg=cfg).retry is True
+    d = lb.decide_compile_retry(cls, repeats=2, cfg=cfg)
+    assert d.retry is False
+    assert d.reason.startswith("NO_PROGRESS")
+    assert "REPEATED_IDENTICAL_FAILURE" in d.reason, (
+        "the original decide_retry() reason must still be traceable inside the relabel")
+
+
+def test_decide_compile_retry_leaves_a_non_compile_repeat_stop_untouched():
+    """Negative control for the whole mechanism: a repeated TRANSIENT failure
+    (this project's own existing repeat-fingerprint test) must still read as
+    REPEATED_IDENTICAL_FAILURE, never NO_PROGRESS -- this wrapper must not
+    change behaviour for anything that is not a compile-stage failure."""
+    cfg = dict(BASE_CFG, loop_budget={"repeated_identical_failure_threshold": 2})
+    cls = lb.classify_failure("Connection reset by peer")
+    d = lb.decide_compile_retry(cls, repeats=2, cfg=cfg)
+    assert d.retry is False
+    assert d.reason.startswith("REPEATED_IDENTICAL_FAILURE")
+    assert not d.reason.startswith("NO_PROGRESS")
+
+
+def test_decide_compile_retry_defaults_to_the_existing_behaviour():
+    """No configured threshold -- the default -- must retry a compile failure
+    exactly as `decide_retry()` already does, however many times it
+    repeats."""
+    cls = lb.classify_failure("Error-[SE] Syntax error")
+    d = lb.decide_compile_retry(cls, repeats=5, cfg=BASE_CFG)
+    assert d.retry is True
+    assert "Recorded, not enforced" in d.reason
+
+
+def test_decide_compile_retry_below_threshold_is_unchanged():
+    cfg = dict(BASE_CFG, loop_budget={"repeated_identical_failure_threshold": 3})
+    cls = lb.classify_failure("Error-[SE] Syntax error")
+    d = lb.decide_compile_retry(cls, repeats=2, cfg=cfg)
+    assert d.retry is True
+
+
+def test_decide_compile_retry_does_not_relabel_a_non_retryable_type_stop():
+    """`enforce_retry_policy`'s NON_RETRYABLE_FAILURE_TYPE stop is a
+    different real fact about the SAME attempt, not a fingerprinted-repeat
+    verdict -- it must pass through unrelabeled even for a compile
+    failure."""
+    cfg = dict(BASE_CFG, loop_budget={"enforce_retry_policy": True})
+    cls = lb.classify_failure("Error-[SE] Syntax error")
+    d = lb.decide_compile_retry(cls, repeats=1, cfg=cfg)
+    assert d.retry is False
+    assert d.reason.startswith("NON_RETRYABLE_FAILURE_TYPE")
+
+
+def test_gate1_fail_status_can_recognize_a_compile_no_progress_stop_too():
+    """Recognition works from the Gate 1 signature alone, even when the text
+    itself matched no `_TEXT_RULES` pattern."""
+    from dv_harness.connectivity import GateStatus
+    cfg = dict(BASE_CFG, loop_budget={"repeated_identical_failure_threshold": 2})
+    cls = lb.classify_failure("some unrecognized tool crash nobody wrote a rule for")
+    d = lb.decide_compile_retry(cls, repeats=2, gate1_status=GateStatus.FAIL.value, cfg=cfg)
+    assert d.retry is False and d.reason.startswith("NO_PROGRESS")
 
 
 # ==========================================================================

@@ -1,0 +1,114 @@
+{
+  "name": "20260906-150036",
+  "note": "End-of-window checkpoint: 6 gap-close workflows this session (GUI, 3-loop, self_check_list, LOOP_ENGINEERING+VI+PC, SPEC-TO-SYSTEM UVM factory, TARGETED_HARDENING) all APPROVED and committed on gap-close/env-manifest-fact-sources; 2 real defects found by independent review and fixed (VI-4 MemoryStore side-effect, evidence_provenance root-containment). USB build agent status (task #4) deferred by user request.",
+  "saved_at": 1788678037.683619,
+  "saved_by": "peter.lin",
+  "current_stage": "ENV_CHECK",
+  "active_stages": [],
+  "overall_status": "PASS",
+  "git_sha": null,
+  "server_sha": null,
+  "dut_version": null,
+  "tb_version": null,
+  "current_project": "DV_Workflow_DE_DV_Agent_Harness_Edition_v15",
+  "current_job": null,
+  "current_hypothesis": "Resolved via RouteResolver to agent=dv-lead on route=lead-route; executing plan PLAN-700EECD5 rev 8 (1 step(s)); blackboard priors read: []",
+  "current_evidence": {
+    "execution_mode_validator": {
+      "execution_mode": "PURE_LOCAL_READ_ANALYSIS",
+      "actions": [
+        "read .claude/settings.json / settings.local.json",
+        "glob .claude/agents",
+        "glob .claude/skills (CORE/USB)",
+        "grep settings.local.json for password/token/secret",
+        "generate .dv-workflow/claude_environment_inventory.csv",
+        "verify JSON syntax via python json module"
+      ]
+    }
+  },
+  "current_confidence": "HIGH",
+  "pending_action": "advance",
+  "related_memory": [
+    {
+      "memory_id": "MEM-D128F6E03E",
+      "level": "engineering",
+      "title": "Stage progress/checklist/timing/token data is real and tracked, but never assembled into a user-facing display or saved report -- a 2-agent audit found the gap is presentation-layer, not data-layer",
+      "root_cause": "None of the 4 requirements are fully real, but for a mixed set of reasons that matter differently: (1) is genuinely computed (gates._stage_completion_from_signatures() -> stage_completion_percent, control_plane.py:353-406, gates.py:1270-1303, regression-tested) but the command a user would naturally run (`dv-harness status`, cli.py:490) does not print it -- it only surfaces via `dv-harness checklist`/`explain` and the dashboard's 3s-polled 'Why' card. (2)/(3) have real underlying mechanisms (engine.py's build_stage_entry_checklist()/build_stage_exit_checklist(), stage_profile.py's begin_stage/end_stage timing, extract_provider_usage() token tracking with a real per-adapter-call agents[] array) but NO banner/logo of any kind exists anywhere in the codebase (grepped for ASCII art/figlet/banner/logo: zero hits) -- the only start/end-tied display is a one-line plain-text print() ([DV-HARNESS-STAGE] ===== STAGE START/DONE: X =====, engine.py:148-155), and the entry/exit checklist data is only populated for 6 of 36 real stage graph nodes (most stages declare no expected_evidence at all). (4) has zero implementation -- stage_profile_report.render() is a real report but print-only, never written to disk, and no 'saved rendering' mechanism exists for any display. A structural finding compounds all of this: since the dashboard runs the harness loop on a background thread in the SAME process (dashboard.py:1674-1718), even the existing one-line console markers never reach the browser UI at all.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "memory_id": "MEM-8E2A6EAC7D",
+      "level": "engineering",
+      "title": "A long-running background build/investigation agent's session transcript can become permanently unresumable mid-investigation (confirmed real this session: 'No transcript found for agent ID' on a SendMessage attempt) with no formal Harness convention requiring such an agent to maintain a structured, continuously-updated resume-state file that a fresh agent could use to pick up cold",
+      "root_cause": "No formal requirement exists for a long-running build/investigation agent to maintain a structured resume-state file (current hypothesis, evidence gathered so far, next planned step, decisions pending user confirmation) as a first-class, continuously-updated deliverable -- this build happened to survive the loss reasonably well because its own documentation discipline (CLAUDE.md trap catalogue, dut-request.md, in-code retraction comments) was already thorough, but that thoroughness was a side effect of general good practice, not a guaranteed, checked convention.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "memory_id": "MEM-72BE64EEB3",
+      "level": "engineering",
+      "title": "TRUE_PASS semantic verification silently degraded to trusting the agent's own self-report -- the independent command.txt<->sim.log cross-check existed and worked but had never once fired in production because the VERIFY prompt never asked for the file paths it needs",
+      "root_cause": "dv_harness/prompts.py's VERIFY-stage evidence-block example for simulation_semantic_validation_gate only ever showed 'sim_log' (an inline pasted text excerpt) and 'command_expectations' (pure agent-attested JSON) -- never 'command_file_path' or 'sim_log_path'. Since the gate script only ran its independent cross-check when these optional fields happened to be present, and no agent following the real prompt would ever supply fields the prompt never mentions, the mechanism was 100% correct and 100% dormant at the same time. A field being technically OPTIONAL-but-supported in a gate script is not the same claim as 'this mechanism is exercised' -- the prompt template is the only thing that actually determines what evidence a real agent supplies, and it had never been updated after the gate-side wiring landed.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "memory_id": "MEM-DBAE7300BF",
+      "level": "engineering",
+      "title": "test_engine_dispatches_all_three_branches_concurrently_and_joins: real-time span assertion failed under -n8 due to OS thread-scheduling jitter, not a dispatch bug -- fixed by diluting the fixed jitter via a longer SLEEP",
+      "root_cause": "Captured failure data (state['windows']) showed COMMAND_PATTERN's window (enter/exit ~0.25s apart) entirely disjoint from DISCOVERY/INTAKE's window (which started ~0.24s after COMMAND_PATTERN's own window had already closed) -- COMMAND_PATTERN ran essentially alone, then DISCOVERY+INTAKE ran together afterward. This is NOT a dispatch-logic bug: engine.py's fan-out (dv_harness/engine.py, the advance()/ _advance_with_fanout() path) correctly uses `ThreadPoolExecutor(max_workers=len(targets))`, submitting all branches in one tight Python-level loop with no artificial staggering. The root cause is real OS-level thread-scheduling latency: under heavy multi-process CPU contention (pytest -n8's 8 competing worker processes, several of which spawn their own gate-script subprocesses concurrently, e.g. the dashboard loop() test fixed the same session -- see MEM-F869C96ECB), the OS can delay actually scheduling 2 of 3 freshly-created worker threads onto a physical core for a real, noticeable duration, even though Python's ThreadPoolExecutor.submit() calls happened essentially simultaneously from the test's own perspective. That absolute OS-jitter magnitude (observed ~0.24s here) does not shrink just because SLEEP is longer -- it is a roughly fixed environmental cost, independent of the fake adapter's own sleep duration.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "memory_id": "MEM-1669464837",
+      "level": "engineering",
+      "title": "Makefile/sim-scripts consolidation from USB_UVM_Handoff is real but incomplete -- 5 files never migrated, and mature real capabilities in the already-consolidated template (regression.list, TEST=, -W, lsf_regress.sh, incremental build, coverage/UNR) went unused by the same-day live USB build because nothing pointed the dispatched agent at them",
+      "root_cause": "Two independent, compounding gaps. (1) The migration itself is incomplete -- 5 files with no callers found within the original scripts directory itself (so their omission didn't break anything internally) but with unverified importance to a real user-facing workflow (waveform/timing/power-domain/IRQ analysis reports), silently dropped with zero record of the decision. (2) Even the PART that IS consolidated (Makefile, LSF scripts) went completely unused by a same-day real build task, because CLAUDE.md pointed the dispatched agent at exactly one sibling file (regression_list_manager.py) rather than the directory as a whole -- see the companion confirmed-consolidation record for the full analysis of that miss.",
+      "confidence": "CONFIRMED"
+    }
+  ],
+  "related_memory_source": "recomputed_at_save_time",
+  "files": [
+    "state.json",
+    "control.json",
+    "config.json",
+    "events.jsonl"
+  ],
+  "dirs": [
+    "blackboard",
+    "plans",
+    "react",
+    "agents",
+    "telemetry",
+    "lsf",
+    "evidence"
+  ],
+  "missing": [
+    "project_meta.json"
+  ],
+  "dirs_copy_skipped": {},
+  "extra_dirs": [
+    "generated/06_tests/command_catalog"
+  ],
+  "artifact_references": {
+    "fsdb": [
+      {
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "path": "generated/10_runtime/waveform/.gitkeep"
+      }
+    ],
+    "coverage": [
+      {
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "path": "generated/11_coverage/.gitkeep"
+      }
+    ],
+    "command_txt_source": [
+      {
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "path": "project_input/08_command/raw/.gitkeep"
+      }
+    ]
+  }
+}

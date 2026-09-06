@@ -1,0 +1,87 @@
+//=========================================================================
+// File Name    : regrw.txt
+// Author       :
+// Description  :
+// Test Feature :
+//
+// Revision
+// 2006/02/10   : creation
+//=========================================================================
+begin
+//`include "wave.txt"
+//`define I2CAPB
+reg     [7:0]  regtestdata;
+integer        i;
+
+
+//initial
+//begin
+
+`ifdef FPGA
+  `GMODEL.trapvalue[13:0]=14'b0000_00000_0_0_0_11;
+`else
+  `GMODEL.trapvalue[13:0]=14'b0000_00000_0_0_0_01;
+`endif
+
+`GMODEL.GLOBAL_INIT;
+$display("!!!!!!!!!!!!!  Global Ini Done    !!!!!!!!!!!!!!");
+`DRAMMODEL.DRAM_INIT;
+$display("!!!!!!!!!!!!!  DRAM Ini Done    !!!!!!!!!!!!!!");
+
+//=========================================================================
+// TOKEN_MISS
+//=========================================================================
+`CPUWRITE1B(32'h0002_0100, 8'h00); //Set GREG to secure
+#100; //Wait Token change out of Register Write Period
+
+force sysq062.u_waq062.u_gtop.u_gregtop.pprot_s_gtop[2:0] = 3'b010; //Non-secure CPU
+$display("!!!!!!!!!!!!!  TOKEN_MISS    !!!!!!!!!!!!!!");
+
+$display("!!!!!!!!!!!!!  regrw    !!!!!!!!!!!!!!");
+`CPUWRITE1B(32'h0002_0000, 8'h07);
+`CPUREAD4B (32'h0002_0000,     i);
+$display("!!!!!!!!!!!!!  0x2_0000 = %h    !!!!!!!!!!!!!!",i);
+
+`CPUWRITE2B(32'h0002_0004,16'h1234);
+`CPUREAD4B (32'h0002_0004,     i);
+$display("!!!!!!!!!!!!!  0x2_0004 = %h    !!!!!!!!!!!!!!",i);
+
+`CPUWRITE4B(32'h0002_0008,32'h87654321);
+`CPUREAD4B (32'h0002_0008,     i);
+$display("!!!!!!!!!!!!!  0x2_0008 = %h    !!!!!!!!!!!!!!",i);
+
+`CPUWRITE4B(32'h0002_0078,32'hABCDEF0);
+`CPUREAD4B (32'h0002_0078,     i);
+$display("!!!!!!!!!!!!!  0x2_0078 = %h    !!!!!!!!!!!!!!",i);
+
+//=========================================================================
+// TOKEN_HIT
+//=========================================================================
+force sysq062.u_waq062.u_gtop.u_gregtop.pprot_s_gtop[2:0] = 3'b000; //Secure CPU
+$display("!!!!!!!!!!!!!  TOKEN_HIT    !!!!!!!!!!!!!!");
+
+$display("!!!!!!!!!!!!!  regrw    !!!!!!!!!!!!!!");
+`CPUWRITE1B(32'h0002_0000, 8'h07);
+`CPUREAD4B (32'h0002_0000,     i);
+$display("!!!!!!!!!!!!!  0x2_0000 = %h    !!!!!!!!!!!!!!",i);
+
+`CPUWRITE2B(32'h0002_0004,16'h1234);
+`CPUREAD4B (32'h0002_0004,     i);
+$display("!!!!!!!!!!!!!  0x2_0004 = %h    !!!!!!!!!!!!!!",i);
+
+`CPUWRITE4B(32'h0002_0008,32'h87654321);
+`CPUREAD4B (32'h0002_0008,     i);
+$display("!!!!!!!!!!!!!  0x2_008 = %h    !!!!!!!!!!!!!!",i);
+
+`CPUWRITE4B(32'h0002_0078,32'hABCDEF0);
+`CPUREAD4B (32'h0002_0078,     i);
+$display("!!!!!!!!!!!!!  0x2_0078 = %h    !!!!!!!!!!!!!!",i);
+
+
+#(`TIMEBASE*100);
+$finish;
+
+end
+
+
+

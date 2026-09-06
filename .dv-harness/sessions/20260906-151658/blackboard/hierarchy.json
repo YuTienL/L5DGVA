@@ -1,0 +1,33 @@
+{
+  "topic": "hierarchy",
+  "value": {
+    "evidence": {
+      "evidence_source_priority_gate": {
+        "attempted_sources": [
+          "EXISTING_PROJECT_FILES",
+          "RTL_PARAMETERS_DEFINES",
+          "EXISTING_UVM_VIP_CONFIG",
+          "EXISTING_TESTS_SEQUENCES",
+          "DESIGN_DOCS",
+          "VPLAN_TEST_TABLE",
+          "BUILD_REGRESSION_SCRIPTS"
+        ],
+        "higher_priority_sources_exhausted": true
+      },
+      "input_source_contract_gate": {
+        "provided_source_classes": [
+          "SPEC",
+          "COMMAND_TXT",
+          "PRIMARY_PROTOCOL_REFERENCE",
+          "RTL_SOURCE",
+          "DE_LOCAL_SIM"
+        ],
+        "protocol_input_kind": "PUBLIC_STANDARD_SPEC",
+        "forbidden_user_prerequisites": []
+      }
+    },
+    "summary": "## Execution Mode Gate\n\n**LOCAL_ANALYSIS**：本輪延續上一輪 DISCOVERY 分析，僅讀檔盤點，不連線伺服器、不跑 VCS/LSF。git_sha 已更新為 `358565c1ee711812f8c286abae3b684d324da6bd`（harness repo 本身狀態），與 USB 專案目錄（`D:/DV/Task/USB`，非本 git repo 追蹤範圍）無關，不影響前一輪已建立的 DUT/VIP 證據。\n\n---\n\n## Plugin / Skill / Agent Readiness（分開確認，不與內容分析混在一起）\n\n| 項目 | 狀態 | 依據 |\n|---|---|---|\n| Skill `subsystem-to-soc-verification` | READY（found=true） | 路徑 `.claude\\skills\\CORE\\subsystem-to-soc-verification\\SKILL.md` 存在 |\n| Skill `protocol-router` | READY（found=true） | 路徑 `.claude\\skills\\CORE\\protocol-router\\SKILL.md` 存在 |\n| Agent `analysis-agent` | READY | Route/Plan 已解析，PLAN-4B40F961 rev.2 已指派 P01/P02 給此 agent |\n| Protocol resolve | READY（HIGH） | `protocol_router.resolve_protocol` 已命中 `usb`，`further_resolution_required: Host vs Device` 已在上一輪用 RTL 證據解掉（`MODE=0`=Device，VIP=Host）|\n| Environment mode | PENDING（非本 stage 阻塞項） | `SYSTEM_LEVEL_MODE` 需要 3 個 subsystem 先各自完成 `SUBSYSTEM_MODE`；DISCOVERY 本身屬於 SUBSYSTEM_MODE 建置的一部分，不因 SYSTEM_LEVEL_MODE 缺件而卡住 |\n\n以上四類分開列示，不互相替代——Skill readiness ≠ Agent readiness ≠ Protocol resolution readiness ≠ Environment mode readiness。\n\n---\n\n## 兩個 Hard Gate 的 Evidence Block\n\n本輪造成 `MISSING_EVIDENCE` / `RETRY_PENDING` 的原因，是上一輪只交了分析內容，沒有把「查證過程本身」結構化成這兩個 gate 要的格式。以下依實際查過的來源與檔案補上：\n\n```dv-harness-evidence:evidence_source_priority_gate\n{\"attempted_sources\": [\"EXISTING_PROJECT_FILES\", \"RTL_PARAMETERS_DEFINES\", \"EXISTING_UVM_VIP_CONFIG\",\n  \"EXISTING_TESTS_SEQUENCES\", \"DESIGN_DOCS\", \"VPLAN_TEST_TABLE\", \"BUILD_REGRESSION_SCRIPTS\"],\n \"higher_priority_sources_exhausted\": true}\n```\n\n逐項對應的實際查證動作（避免這只是填格式而非真的查過）：\n\n| Source | 實際查過的檔案/動作 |\n|---|---|\n| EXISTING_PROJECT_FILES | `Glob D:/DV/Task/USB/**`（5606 檔）、`Glob uvm/**`（291 檔）、`PowerShell Get-ChildItem D:\\DV\\Task\\USB`（頂層目錄：DOC/DUT/ENV/MACRO/MODEL/VIP/uvm/patterns/sim/sim_scratch）|\n| RTL_PARAMETERS_DEFINES | `Grep usb_irq\\|usb_fiq\\|usb_cqintevt\\|usb_esmerr` 於 `DUT/RTLCAT/SS_VOUT_USB.v`（實際命中行 14513-14516, 14897-14898, 16163-16164）；`uvm/docs/usb-uvm-port-analysis.md` 引用之 `udc_DWC_u"
+  },
+  "source": "DISCOVERY",
+  "confidence": "HIGH"
+}

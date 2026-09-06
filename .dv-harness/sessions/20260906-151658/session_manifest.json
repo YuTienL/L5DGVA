@@ -1,0 +1,114 @@
+{
+  "name": "20260906-151658",
+  "note": "Feature branch gap-close/env-manifest-fact-sources pushed to origin (6bf2013..db38806) with CHANGE_BLAST_RADIUS human approval recorded (peterlin, HIGH, digest f23eaff17d27c46f). Awaiting: user to complete gh auth login (attempted once, not yet detected as logged in) so a PR can be opened for human merge to master -- agent will not merge/push to master directly per PR-Only Governance Policy. USB build agent status (task #4) still deferred by user request.",
+  "saved_at": 1788679021.2581818,
+  "saved_by": "peter.lin",
+  "current_stage": "ENV_CHECK",
+  "active_stages": [],
+  "overall_status": "PASS",
+  "git_sha": null,
+  "server_sha": null,
+  "dut_version": null,
+  "tb_version": null,
+  "current_project": "DV_Workflow_DE_DV_Agent_Harness_Edition_v15",
+  "current_job": null,
+  "current_hypothesis": "Resolved via RouteResolver to agent=dv-lead on route=lead-route; executing plan PLAN-700EECD5 rev 8 (1 step(s)); blackboard priors read: []",
+  "current_evidence": {
+    "execution_mode_validator": {
+      "execution_mode": "PURE_LOCAL_READ_ANALYSIS",
+      "actions": [
+        "read .claude/settings.json / settings.local.json",
+        "glob .claude/agents",
+        "glob .claude/skills (CORE/USB)",
+        "grep settings.local.json for password/token/secret",
+        "generate .dv-workflow/claude_environment_inventory.csv",
+        "verify JSON syntax via python json module"
+      ]
+    }
+  },
+  "current_confidence": "HIGH",
+  "pending_action": "advance",
+  "related_memory": [
+    {
+      "memory_id": "MEM-D128F6E03E",
+      "level": "engineering",
+      "title": "Stage progress/checklist/timing/token data is real and tracked, but never assembled into a user-facing display or saved report -- a 2-agent audit found the gap is presentation-layer, not data-layer",
+      "root_cause": "None of the 4 requirements are fully real, but for a mixed set of reasons that matter differently: (1) is genuinely computed (gates._stage_completion_from_signatures() -> stage_completion_percent, control_plane.py:353-406, gates.py:1270-1303, regression-tested) but the command a user would naturally run (`dv-harness status`, cli.py:490) does not print it -- it only surfaces via `dv-harness checklist`/`explain` and the dashboard's 3s-polled 'Why' card. (2)/(3) have real underlying mechanisms (engine.py's build_stage_entry_checklist()/build_stage_exit_checklist(), stage_profile.py's begin_stage/end_stage timing, extract_provider_usage() token tracking with a real per-adapter-call agents[] array) but NO banner/logo of any kind exists anywhere in the codebase (grepped for ASCII art/figlet/banner/logo: zero hits) -- the only start/end-tied display is a one-line plain-text print() ([DV-HARNESS-STAGE] ===== STAGE START/DONE: X =====, engine.py:148-155), and the entry/exit checklist data is only populated for 6 of 36 real stage graph nodes (most stages declare no expected_evidence at all). (4) has zero implementation -- stage_profile_report.render() is a real report but print-only, never written to disk, and no 'saved rendering' mechanism exists for any display. A structural finding compounds all of this: since the dashboard runs the harness loop on a background thread in the SAME process (dashboard.py:1674-1718), even the existing one-line console markers never reach the browser UI at all.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "memory_id": "MEM-53FCE2C191",
+      "level": "engineering",
+      "title": "command.txt/pattern content architecture (block/branch_a/branch_fw/branch_b task composition, arbitration and ordering traps) was NEVER distilled beyond a thin 23-line generic skill -- captured here with real evidence, closing part of the gap",
+      "root_cause": "The real, rich architectural knowledge lives only in USB_UVM_Handoff's own pattern .txt files and their own in-repo README.md/soc_run.svh -- e.g. uvm/tb/patterns/enumeration/usb20_enumeration.txt's real content demonstrates: `include soc_int.svh (blocking, SoC-level, once) -> `include soc_run.svh (branch_a0/branch_a1: ss_vout_init_flow then each port's controller bring-up, launched into the background, non-blocking) -> `USB_FORK_FW_SERVICE (branch_fw: per-port firmware service, never returns, raises usb_fw_port_running[p]) -> fork/join (NOT join_any -- explicitly documented as unsafe once firmware is its own branch, with a real job number and timestamp showing a false-positive-reading early exit) of branch_b0/branch_b1 (per-port USB traffic macros: USB_WAIT_CTRL_READY -> USB_STAGE_LINKUP -> USB_ENUMERATE -> USB_TRAFFIC_CTRL) -> FINAL_CHECK. Named traps embedded in the pattern comments: trap 51 (APB_* VIP sequences and `CPUWRITE hold different locks on the SAME sequencer -- UVM arbitration can interleave them and silently overwrite a USB register write; 'NO SoC REGISTER CONTENT MAY BE ADDED TO A HOST SCRIPT'), trap 98 (LINKUP must precede ENUMERATE -- enumeration cannot start before DSTS.CONNECTSPD reports the port's built speed). None of this was ever pulled out into a reusable, general Harness asset -- every future pattern author has to re-discover it by reading USB_UVM_Handoff's raw files directly, which is exactly the kind of one-off tribal knowledge the Methodology Consolidation Rule exists to prevent.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "memory_id": "MEM-1669464837",
+      "level": "engineering",
+      "title": "Makefile/sim-scripts consolidation from USB_UVM_Handoff is real but incomplete -- 5 files never migrated, and mature real capabilities in the already-consolidated template (regression.list, TEST=, -W, lsf_regress.sh, incremental build, coverage/UNR) went unused by the same-day live USB build because nothing pointed the dispatched agent at them",
+      "root_cause": "Two independent, compounding gaps. (1) The migration itself is incomplete -- 5 files with no callers found within the original scripts directory itself (so their omission didn't break anything internally) but with unverified importance to a real user-facing workflow (waveform/timing/power-domain/IRQ analysis reports), silently dropped with zero record of the decision. (2) Even the PART that IS consolidated (Makefile, LSF scripts) went completely unused by a same-day real build task, because CLAUDE.md pointed the dispatched agent at exactly one sibling file (regression_list_manager.py) rather than the directory as a whole -- see the companion confirmed-consolidation record for the full analysis of that miss.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "memory_id": "MEM-72BE64EEB3",
+      "level": "engineering",
+      "title": "TRUE_PASS semantic verification silently degraded to trusting the agent's own self-report -- the independent command.txt<->sim.log cross-check existed and worked but had never once fired in production because the VERIFY prompt never asked for the file paths it needs",
+      "root_cause": "dv_harness/prompts.py's VERIFY-stage evidence-block example for simulation_semantic_validation_gate only ever showed 'sim_log' (an inline pasted text excerpt) and 'command_expectations' (pure agent-attested JSON) -- never 'command_file_path' or 'sim_log_path'. Since the gate script only ran its independent cross-check when these optional fields happened to be present, and no agent following the real prompt would ever supply fields the prompt never mentions, the mechanism was 100% correct and 100% dormant at the same time. A field being technically OPTIONAL-but-supported in a gate script is not the same claim as 'this mechanism is exercised' -- the prompt template is the only thing that actually determines what evidence a real agent supplies, and it had never been updated after the gate-side wiring landed.",
+      "confidence": "CONFIRMED"
+    },
+    {
+      "memory_id": "MEM-B745B36B2A",
+      "level": "engineering",
+      "title": "REMOTE_EXECUTION was declared and remote work dispatched to a specialized subagent without first running dv-harness lsf-watch-start -- the CLAUDE.md rule exists but is not self-enforcing when a subagent owns the remote work",
+      "root_cause": "CLAUDE.md documents the lsf-watch-start requirement, but it is agent-supplied protocol discipline, not an engine-enforced gate (no code path fires it automatically the moment REMOTE_EXECUTION_REQUIRED is declared -- this is explicitly called out in CLAUDE.md's own text). When the controlling session dispatches remote work to a SPECIALIZED SUBAGENT (here, IP_UVM_DV_Gen) rather than running remote_exec.py commands directly itself, the natural place this rule gets applied -- right before issuing the first remote command -- gets skipped, because the controller's own next action is 'dispatch an agent', not 'issue a remote command', and the dispatched subagent's own prompt did not explicitly carry the lsf-watch-start requirement forward. The rule was followed correctly in every PRIOR remote_exec.py-direct interaction this session (verifying the DUT path, checking relay status) -- the gap was specific to the moment the controller handed off remote responsibility to a subagent without re-stating this specific protocol obligation in the handoff.",
+      "confidence": "CONFIRMED"
+    }
+  ],
+  "related_memory_source": "recomputed_at_save_time",
+  "files": [
+    "state.json",
+    "control.json",
+    "config.json",
+    "events.jsonl"
+  ],
+  "dirs": [
+    "blackboard",
+    "plans",
+    "react",
+    "agents",
+    "telemetry",
+    "lsf",
+    "evidence"
+  ],
+  "missing": [
+    "project_meta.json"
+  ],
+  "dirs_copy_skipped": {},
+  "extra_dirs": [
+    "generated/06_tests/command_catalog"
+  ],
+  "artifact_references": {
+    "fsdb": [
+      {
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "path": "generated/10_runtime/waveform/.gitkeep"
+      }
+    ],
+    "coverage": [
+      {
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "path": "generated/11_coverage/.gitkeep"
+      }
+    ],
+    "command_txt_source": [
+      {
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "path": "project_input/08_command/raw/.gitkeep"
+      }
+    ]
+  }
+}

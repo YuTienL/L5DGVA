@@ -1,0 +1,237 @@
+// vcsuvm flag
+vcsuvm_flag  = -ntb_opts uvm
+vcsuvm_flag += +define+SVT_UVM_TECHNOLOGY
+vcsuvm_flag += +define+SYNOPSYS_SV
+
+// vcs_builds option
+vcs_build_options += +libext+.v+.vlib
+
+// sim_builds option
+sim_build_options += +lint=TFIPC-L
+sim_build_options += +define+DV_SYNTHSIS
+sim_build_options += +define+RTL
+sim_build_options += +define+FASTRST
+sim_build_options += +define+GSIAPB
+sim_build_options += +define+CQ_APB_DIRECT_ACCESS
+sim_build_options += +define+LPDDR4=800
+sim_build_options += +define+tDQS2DQ_0B_T=0.25
+sim_build_options += +define+tDQS2DQ_1B_T=0.25
+sim_build_options += +define+tDQS2DQ_2B_T=0.25
+sim_build_options += +define+tDQS2DQ_3B_T=0.25
+sim_build_options += +define+NO_ISPMODEL
+sim_build_options += +define+DRAMMODEL_EN
+sim_build_options += +notimingcheck
+sim_build_options += +define+no_warning
+sim_build_options += +define+RUN_SIP_MODE
+sim_build_options += +define+Turbo
+sim_build_options += +define+M31_NO_PG_PORT
+sim_build_options += +define+OVL_ASSERT_ON
+sim_build_options += +define+OVL_MAX_REPORT_ERROR=100
+sim_build_options += +neg_tchk
+sim_build_options += +v2k
+sim_build_options += +define+M31_NO_PG_PORT
+sim_build_options += +define+PVT_USER_DEFINED+MRS_VM_NUM=1+MRS_TS_NUM=1+MRS_PD_NUM=1
+sim_build_options += +define+NVM_XHF_RED
+sim_build_options += +define+NVM_NO_PG_PINS
+sim_build_options += +define+OFF_SS_CON_USB
+sim_build_options += +define+IPTDLIB_CELLWRAP_BEHAVIOR
+sim_build_options += +define+IPTUCIEPHY_CELLWRAP_BEHAVIOR
+sim_build_options += +define+IPTUCIEPHY_TSMCN6
+sim_build_options += +define+ASIC_RAM
+sim_build_options += +define+EW_DWC_DDRPHY_DFI1_EXISTS    //for ddr_chip.v
+sim_build_options += +define+DWC_PUB_RID_GE103            //`define DWC_PUB_RID_GE103            //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
+sim_build_options += +define+DWC_PUB_RID_GE210            //`define DWC_PUB_RID_GE210            //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
+sim_build_options += +define+EW_DWC_DDRPHY_PG_PINS        //`define DWC_DDRPHY_PG_PINS           //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
+sim_build_options += +define+EW_DWC_DDRPHY_TOP_PG_PINS    //`define DWC_DDRPHY_TOP_PG_PINS       //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
+sim_build_options += +define+DWC_DDRPHY_PG_PINS
+sim_build_options += +define+DWC_DDRPHY_TOP_PG_PINS
+
+// eda_incdir option
+eda_incdir_option += +incdir+/eda/synopsys/latest/dw/sim_ver
+
+// lib_src_path option
+lib_src_path_option += -y /eda/synopsys/latest/dw/sim_ver
+lib_src_path_option += -y /eda/synopsys/latest/packages/gtech/src_ver
+lib_src_path_option += -v /home/dwaq062/dwaq062/RTLCAT/MISC_ALL.v
+
+//-----------------------------------
+// DV_UVM
+//-----------------------------------
+sim_build_options  +=   +define+TSMC_DISABLE_WARNING_MESSAGE
+sim_build_options  +=   +define+TSMC_DISABLE_INFO_MESSAGE
+sim_build_options  +=   +define+DWC_BCM_MSG_VERBOSITY=0
+sim_build_options  +=   +define+DWC_DISABLE_CDC_METHOD_REPORTING
+
+ //For SNPS APB VIP
+sim_build_options  +=   +define+UVM_DISABLE_AUTO_ITEM_RECORDING
+sim_build_options  +=   +define+UVM_PACKER_MAX_BYTES=1500000
+
+sim_build_options  +=   +define+SVT_APB_IF_SETUP_TIME=0
+sim_build_options  +=   +define+SVT_APB_IF_HOLD_TIME=0
+sim_build_options  +=   +define+SVT_APB_SLAVE_IF_SETUP_TIME=0
+sim_build_options  +=   +define+SVT_APB_SLAVE_IF_HOLD_TIM=0
+sim_build_options  +=   +define+SVT_APB_DISCONNECT_TOP_LEVEL_APB_IF_SIGNALS
+sim_build_options  +=   +define+SVT_APB_MAX_ADDR_WIDTH=64
+sim_build_options  +=   +define+SVT_APB_MAX_DATA_WIDTH=64
+sim_build_options  +=   +define+SVT_APB_MAX_NUM_SLAVES_64
+
+sim_build_options  +=   +define+SVT_AHB_MASTER_IF_SETUP_TIME=0
+sim_build_options  +=   +define+SVT_AHB_MASTER_IF_HOLD_TIME=0
+sim_build_options  +=   +define+SVT_AHB_SLAVE_IF_SETUP_TIME=0
+sim_build_options  +=   +define+SVT_AHB_SLAVE_IF_HOLD_TIM=0
+sim_build_options  +=   +define+SVT_AHB_DISABLE_IMPLICIT_BUS_CONNECTION
+sim_build_options  +=   +define+SVT_AHB_MAX_ADDR_WIDTH=64
+sim_build_options  +=   +define+SVT_AHB_MAX_DATA_WIDTH=64
+sim_build_options  +=   +define+SVT_AHB_MAX_NUM_SLAVES_64
+sim_build_options  +=   +define+SVT_AHB_MAX_NUM_MASTERS_64
+
+sim_build_options  +=   +define+SVT_AXI_MASTER_IF_SETUP_TIME=0
+sim_build_options  +=   +define+SVT_AXI_MASTER_IF_HOLD_TIME=0
+sim_build_options  +=   +define+SVT_AXI_SLAVE_IF_SETUP_TIME=0
+sim_build_options  +=   +define+SVT_AXI_SLAVE_IF_HOLD_TIM=0
+sim_build_options  +=   +define+SVT_AXI_LOCK_WIDTH=1
+sim_build_options  +=   +define+SVT_AXI_LOCK_WIDTH_AS_ONE
+sim_build_options  +=   +define+SVT_AXI_MAX_ADDR_WIDTH=64
+sim_build_options  +=   +define+SVT_AXI_MAX_ADDR_USER_WIDTH=16
+sim_build_options  +=   +define+SVT_AXI_MAX_BURST_LENGTH_WIDTH=12
+sim_build_options  +=   +define+SVT_AXI_MAX_DATA_WIDTH=512
+sim_build_options  +=   +define+SVT_AXI_MAX_ID_WIDTH=32
+sim_build_options  +=   +define+SVT_AXI_RESP_WIDTH=2
+sim_build_options  +=   +define+SVT_AXI_MAX_NUM_SLAVES_64
+sim_build_options  +=   +define+SVT_AXI_MAX_NUM_MASTERS_64
+
+
+sim_build_options  +=   +define+DV_ROOT=${_DV_ROOT_}
+
+// vip incdir option
+vip_incdir_option    = +incdir+${_VIP_ROOT_}/SNPS/src/sverilog/vcs
+vip_incdir_option   += +incdir+${_VIP_ROOT_}/SNPS/include/sverilog
+vip_incdir_option   += +incdir+${_VIP_ROOT_}/SNPS/src/verilog/vcs
+vip_incdir_option   += +incdir+${_VIP_ROOT_}/SNPS/include/verilog 
+
+// bench incdr option 
+bench_incdir_option  =  +incdir+${_SIM_ROOT_}
+
+//For SubSystem Env
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/audtop/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/audtop/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/fmtop/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/fmtop/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/peritop/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/peritop/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/hsmtop/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/hsmtop/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_cdec/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_cdec/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_cmp/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_cmp/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_con/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_con/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_cpu/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_cpu/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_vis/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_vis/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_sf/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_sf/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_vout/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/ss_vout/uvc
+
+//For Boundary Env
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/coretop/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/coretop/uvc
+
+//For Top Level Env
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/soc/bench
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/soc/bench/dut_wrapper
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/soc/tests
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/soc/uvc
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/soc/uvc/bind
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/soc/uvc/seq
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/soc/uvc/seq/common
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/L3/soc/uvc/cb
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/utils
+
+// bench definition option
+top_bench_def  = ${_DV_ROOT_}/L3/soc/bench/sysq062_hir_def.v
+
+// top testbench
+top_bench = ${_DV_ROOT_}/L3/soc/bench/sysq062.v
+
+//-----------------------------------
+
+// model_incdir option
+model_incdir_option += +incdir+/home/dwaq062/dwaq062/MODEL/include
+model_incdir_option += +incdir+/home/dwaq062/dwaq062/MODEL/include/INNO
+model_incdir_option += +incdir+/home/dwaq062/dwaq062/MODEL/include/LPDDR4
+
+// model_flist option
+//model_flist_option += -f /home/dwaq062/dwaq062/MODEL/model.opt
+model_flist_option += -f  ${_DV_ROOT_}/L3/soc/bench/model.opt
+model_flist_option += -f /home/dwaq062/dwaq062/IP/SYNOPSYS/LPDDR54_MCTL/i_DWC_ddrctl_lpddr54/src/DWC_ddrctl_mod.lst
+model_flist_option += -f /home/dwaq062/dwaq062/IP/SYNOPSYS/LPDDR54_PHY_EW/PHY_EW_latest/export/dwc_ddrphy_top.lst
+model_flist_option += -f /home/dwaq062/dwaq062/IP/SYNOPSYS/LPDDR54_PHY_EW/PHY_EW_latest/export/dwc_ddrphy_hardmacro.lst
+
+// hdl_incdir option
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/PVT_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/LPDDR54_MCTL/i_DWC_ddrctl_lpddr54/src
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/SS_CPU_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/SS_SF_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/SS_VIS_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/SS_VOUT_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/SS_CON_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/FM_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/PERI_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/UCIE_include
+hdl_incdir_option += +incdir+/home/dwaq062/dwaq062/RTLCAT/HSM_include
+
+// hdl_flist option
+hdl_flist_option += -f /home/dwaq062/dwaq062/SIMV/fab.opt
+hdl_flist_option += -f /home/dwaq062/dwaq062/MACRO/macro.opt
+hdl_flist_option += -f /home/dwaq062/dwaq062/MACRO/SRAM/sram.opt
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/TOP_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/DUMMY_TOP/audtop_dummy.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CPU_MISC.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CPU_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CPU_CA55.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_SF_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_SF_R52.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/CQ_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VIS_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VIS_MIPIRX_PHY.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VIS_MIPIRX_CTRL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VOUT_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VOUT_MIPITX_CSIC.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VOUT_MIPITX_DSIC.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VOUT_MIPITX_PHY.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VOUT_DP_CTRL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_VOUT_DP_PHY.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CON_USB_CTRL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CON_USB_PHY.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_TOP.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_CTRL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_PHY.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_MISC.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_UNDEF.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_CON_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/DUMMY_TOP/ss_cmp_dummy.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/FM_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/PERI_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/DMA_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/UCIE_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/DUMMY_TOP/ss_cdec_dummy.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/HSM_ALL.v
+hdl_flist_option += /home/dwaq062/dwaq062/MODEL/ss_mem_model.v
+hdl_flist_option += /home/dwaq062/dwaq062/RTLCAT/SS_MEM_ALL.v
+

@@ -159,6 +159,14 @@ STAGE_GATES = {
         # tools/vplan/vplan_writer_validation_gate.py's header for the full
         # rationale and why its JSON payload shape is not an invented schema.
         ("vplan_writer_validation_gate", "../vplan/vplan_writer_validation_gate.py", "--vplan-validation"),
+        # NEW (2026-09-06, 23-agent gap-closure integration pass): checks the
+        # SPEC-TO-VPLAN TRANSFORM as a whole (zero-critical-omission,
+        # zero-unresolved-contradiction, zero-unresolved-ambiguity,
+        # zero-traceability-gap) -- deliberately separate from
+        # spec_to_vplan_requirement_quality_gate.py above, which checks
+        # PER-REQUIREMENT completeness only. See
+        # tools/verification_flow/spec_to_vplan_quality_gate.py's own header.
+        ("spec_to_vplan_quality_gate", "spec_to_vplan_quality_gate.py", "--vplan-quality"),
     ],
     "VERIFICATION_ARCHITECTURE": [
         ("mechanism_readiness_gate", "mechanism_readiness_gate.py", "--plan"),
@@ -192,6 +200,20 @@ STAGE_GATES = {
         ("reference_uvm_compatibility_gate", "reference_uvm_compatibility_gate.py", "--reference"),
         ("reset_clock_power_sequence_gate", "reset_clock_power_sequence_gate.py", "--sequence"),
         ("scoreboard_reference_model_independence_gate", "scoreboard_reference_model_independence_gate.py", "--model"),
+        # NEW (2026-09-06, 23-agent gap-closure integration pass): three
+        # standalone generation-readiness gates over
+        # dv_harness/verification_architecture.py's assembled IR lists (see
+        # that module's own CLAUDE.md section for the VipBindIR/ScoreboardIR/
+        # AssertionIR shapes these check). Each takes the assembled
+        # verification_architecture JSON (minus its embedded `_irs`, i.e. the
+        # same evidence-block payload an agent already emits for this stage)
+        # via a single --architecture flag, matching this stage's existing
+        # single-flag convention. PASS only when every relevant IR record is
+        # RESOLVED/comparable/domain-matched and not named by a placement
+        # conflict; FAIL naming the specific unresolved records otherwise.
+        ("vip_bind_generation_gate", "vip_bind_generation_gate.py", "--architecture"),
+        ("scoreboard_generation_gate", "scoreboard_generation_gate.py", "--architecture"),
+        ("assertion_generation_gate", "assertion_generation_gate.py", "--architecture"),
     ],
     "IMPLEMENT": [
         ("traceability_consistency_gate", "traceability_consistency_gate.py", "--trace"),
@@ -445,6 +467,7 @@ STAGE_GATES = {
     ],
     "COMMAND_PATTERN": [
         ("command_migration_integrity_gate", "command_migration_integrity_gate.py", "--migration"),
+        ("command_generation_gate", "command_generation_gate.py", "--command-request"),
     ],
     "DISCOVERY": [
         ("evidence_source_priority_gate", "evidence_source_priority_gate.py", "--trace"),

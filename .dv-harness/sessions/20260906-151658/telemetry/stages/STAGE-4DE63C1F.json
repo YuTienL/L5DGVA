@@ -1,0 +1,99 @@
+{
+  "profile_id": "STAGE-4DE63C1F",
+  "stage_id": "INTAKE",
+  "stage_name": "INTAKE",
+  "graph_node": "INTAKE",
+  "start_time_epoch": 1788274925.270986,
+  "end_time_epoch": 1788274957.6705122,
+  "stage_wall_clock_sec": 32.39952611923218,
+  "aggregate_agent_runtime_sec": 30.89199423789978,
+  "parallel_saving_sec": 0.0,
+  "parallelism_efficiency": 0.0,
+  "input_tokens": 2,
+  "output_tokens": 1902,
+  "cache_read_tokens": 94088,
+  "cache_write_tokens": 7651,
+  "total_tokens": 1904,
+  "tool_calls": 0,
+  "retries": 0,
+  "finding_count": 0,
+  "closed_finding_count": 0,
+  "status": "PASS",
+  "agents": [
+    {
+      "agent": "analysis-agent",
+      "runtime_sec": 30.89199423789978,
+      "model": "",
+      "job_id": "",
+      "input_tokens": 2,
+      "output_tokens": 1902,
+      "cache_read_tokens": 94088,
+      "cache_write_tokens": 7651,
+      "tool_calls": 0,
+      "retries": 0,
+      "status": "PASS",
+      "total_tokens": 1904
+    }
+  ],
+  "metadata": {
+    "git_sha": "cc5d396a941b1ecb6ce86e24289a98e06226f5bd"
+  },
+  "entry_checklist": {
+    "items": [
+      {
+        "item_id": "environment",
+        "description": "ENV_CHECK's execution_mode/actions readiness record that INTAKE reads before starting intake (node.blackboard_read)",
+        "present": true
+      }
+    ],
+    "present_count": 1,
+    "total_count": 1,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "exit_checklist": {
+    "items": [
+      {
+        "item_id": "intake_readiness",
+        "description": "prompts.STAGE_INSTRUCTIONS[INTAKE]'s dv-harness-evidence:intake_readiness block",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.mode",
+        "description": "declared project mode (SUBSYSTEM or SYSTEM_LEVEL)",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.target_name",
+        "description": "target_name field of intake_readiness",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.protocols",
+        "description": "protocols list of intake_readiness",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.required_artifacts.protocol_spec",
+        "description": "required_artifacts.protocol_spec confirmed present (SUBSYSTEM mode)",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.required_artifacts.dut_design_spec",
+        "description": "required_artifacts.dut_design_spec confirmed present (SUBSYSTEM mode)",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.required_artifacts.rtl_top_or_interface_files",
+        "description": "required_artifacts.rtl_top_or_interface_files confirmed present (SUBSYSTEM mode)",
+        "present": true
+      }
+    ],
+    "present_count": 7,
+    "total_count": 7,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "tokens_per_finding": null,
+  "tokens_per_closed_finding": null
+}

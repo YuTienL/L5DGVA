@@ -1,0 +1,80 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index aa5e7ea..de9821f 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -1378,7 +1378,7 @@ that edge now exist:
+   gate-passing state, and `loop()` never dispatching SIGNOFF while it holds — by
+   `dv_harness_tests/test_qualified_conclusion_closure_gate.py`.
+ 
+-## env.manifest.json Fact Sources: schema 1.1 (2026-09-04)
++## env.manifest.json Fact Sources: schema 1.1 (2026-09-04), provenance 1.2 (2026-09-06)
+ 
+ `env.manifest.json` keeps exactly three top-level layers (`vip_config` / `dut_facts` /
+ `env_topology`) and `dv_harness/env_manifest.py` remains its sole writer. A 2026-09-04 re-audit
+@@ -1416,6 +1416,66 @@ manifest fails `load_env_manifest()` loudly rather than silently presenting an e
+ no address map and no testplan correspondence — a claim about the environment it cannot support.
+ env_manifest.py is the sole writer, so the fix is to regenerate, never to migrate.
+ 
++**Schema 1.2 adds spec section 210's PER-ARTIFACT GENERATION PROVENANCE TUPLE, inside the existing
++`generator` block (2026-09-06, SPEC-7).** The gap was confirmed by direct search before building:
++`generator` was `{"tool", "version"}` and `version` is env_manifest.py's own `SCHEMA_VERSION`, so
++"which harness build produced this artifact" was answerable only by misreading the schema version
++as one; a repo-wide grep found no agent/skill identifier, no input reference and no
++`repository_sha`/`git_sha` field anywhere in the module or its schema, and `git_governance.py`
++carries only push/merge branch protection -- it has no per-artifact SHA-stamping function. Four
++answers now sit in that same block rather than in a second, parallel provenance record beside it:
++- `tool_version` -- the real `dv_harness.__version__`, deliberately distinct from `version`.
++- `agent` -- which agent/skill produced the artifact, in the convention the profiles themselves
++  use to self-identify: the YAML front-matter `name:` of a `.claude/agents/*.md` profile or a
++  `.claude/skills/**/SKILL.md` skill. A declared identifier is CHECKED against the real profiles on
++  disk (`known_generation_identifiers()`), and the four `resolution` values never collapse:
++  AGENT_PROFILE/SKILL (a real profile declares this name), NOT_FOUND (declared and no profile
++  carries it -- recorded as declared, never accepted as verified), PROFILE_TREE_NOT_AVAILABLE
++  (a deployed copy with no `.claude` tree; nobody could check), NOT_DECLARED.
++- `input_ir` -- what drove the generation. The SPEC-3 form cites a section 184 requirement contract
++  by `requirement_id`, and the record is really located in the named document, validated against
++  `requirement_contract.schema.json` and run through `requirement_contract.downstream_consumable()`
++  -- so a manifest that cites a requirement also records whether a generator was ENTITLED to build
++  from it, rather than merely naming it. The fallback form is a real input file recorded as
++  path + sha256 + bytes, never content.
++- `repository_sha` -- the real current git SHA, read by the EXISTING `change_impact.resolve_sha()`
++  (a real `git rev-parse --verify HEAD^{commit}`), the same reader `benchmark_dataset.py` already
++  stamps an experiment record with; there is no second git reader in this package. `harness` is
++  always read from THIS FILE's own checkout, so a caller cannot reroute the generator's identity;
++  `project` is NOT_DECLARED unless a project root is named. No absolute path is recorded.
++
++**This narrows the diffability contract deliberately, and says so rather than leaving it to be
++discovered.** A manifest regenerated after the HARNESS ITSELF moved to a new commit now differs in
++`generator.repository_sha.harness`. That is not the clock noise the no-`generated_at` rule exists
++to exclude -- a different generator really did produce the artifact, which is the fact section 210
++exists to record. Unchanged inputs AND an unchanged harness commit still produce a byte-identical
++file. 1.1 -> 1.2 is a BREAKING bump for the same reason 1.0 -> 1.1 was: the keys are REQUIRED, so a
++stale 1.1 manifest fails `load_env_manifest()` loudly instead of presenting an untraceable artifact
++as a traceable one, and the fix is to regenerate.
++
++**Deliberately bounded.** (1) Nothing is fabricated and nothing is defaulted: an undeclared agent,
++an undeclared input and an undeclared project root are each recorded as NOT_DECLARED with the real
++flag that would answer them, and provenance NEVER fails generation by default -- a project that has
++not adopted it is not retroactively broken. `--require-provenance` (`assert_generation_provenance_
++complete()`) is the strict opt-in, the same disclosed-default shape as `require_tier` /
++`require_phy_boundary`. (2) It records and CHECKS; it arbitrates nothing, approves nothing, and has
++no stage gate. (3) It covers `env.manifest.json` only -- `create_environment()`'s own
++`environment_manifest.json` and the generated `.sv` files carry no provenance tuple yet.
++(4) The flattened tuple reaches the `env_manifest` Blackboard topic as `generation_provenance`, so
++a reading stage can see which agent, which input and which commit produced the facts it is about to
++reason over without opening the file.
++
++Proven by `dv_harness_tests/test_env_manifest_generation_provenance.py` (38 tests), whose detection
++power comes from asserting against sources OUTSIDE the code under test: the harness SHA is compared
++against an INDEPENDENT `git rev-parse HEAD` the test runs itself, the project SHA against a REAL
++throwaway git repository with a REAL commit, `tool_version` against the real
++`dv_harness.__version__`, the agent identifier against the REAL `.claude` profiles in this checkout
++(with a fabricated identifier as the negative control), and the input digest against an
++independently computed hashlib hash. Reuse is held as a property rather than a claim -- patching
++`change_impact.resolve_sha()` must change what the manifest records, which a second hand-rolled
++`git rev-parse` would not respond to. Both the real CLI front door and the breaking-bump refusal of
++a 1.1-shaped manifest are driven end to end.
++
+ ## Context Budget: 3 Tiers + MCP-First Routing (2026-09-03)
+ 
+ An agent's context window is a finite verification resource and is budgeted like one. The tiers

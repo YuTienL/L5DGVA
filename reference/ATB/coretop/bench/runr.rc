@@ -1,0 +1,209 @@
+// vcsuvm flag
+vcsuvm_flag  = -ntb_opts uvm
+vcsuvm_flag += +define+SVT_UVM_TECHNOLOGY
+vcsuvm_flag += +define+SYNOPSYS_SV
+
+// build option
+vcs_build_options  = +libext+.v+.vlib
+vcs_build_options += +neg_tchk
+vcs_build_options += +v2k
+vcs_build_options += +warn=noTFIPC,noNTCDNC
+vcs_build_options += +lint=TFIPC-L
+vcs_build_options += +notimingcheck
+
+// sim build option
+sim_build_options   = +define+OVL_ASSERT_ON
+sim_build_options  += +define+OVL_MAX_REPORT_ERROR=100
+
+sim_build_options  += +define+RTL
+sim_build_options  += +define+ES3
+sim_build_options  += +define+FASTRST
+sim_build_options  += +define+ARM_UD_MODEL
+sim_build_options  += +define+GSIAPB
+sim_build_options  += +define+CQ_APB_DIRECT_ACCESS
+sim_build_options  += +define+DDR3=800
+sim_build_options  += +define+den8192Mb
+sim_build_options  += +define+NO_CDSPMODEL
+sim_build_options  += +define+no_warning
+sim_build_options  += +define+ZNANO_ICATCH_ICG
+sim_build_options  += +define+ZNANO_IMPL_SM13G_VSIRAM
+sim_build_options  += +define+ZNANO_ZSP_DMEMSIZE32K
+sim_build_options  += +define+ZNANO_ZSP_DWAY_8KB
+sim_build_options  += +define+ZNANO_ZSP_IMEMSIZE32K
+sim_build_options  += +define+ZNANO_ZSP_IWAY_8KB
+sim_build_options  += +define+RUN_SIP_MODE
+
+  //For SNPS APB VIP
+sim_build_options  +=   +define+UVM_DISABLE_AUTO_ITEM_RECORDING
+sim_build_options  +=   +define+UVM_PACKER_MAX_BYTES=1500000
+sim_build_options  +=   +define+SVT_APB_DISCONNECT_TOP_LEVEL_APB_IF_SIGNALS
+sim_build_options  +=   +define+SVT_APB_MAX_DATA_WIDTH=32
+sim_build_options  +=   +define+SVT_APB_MAX_NUM_SLAVES_0
+sim_build_options  +=   +define+SVT_AXI_LOCK_WIDTH=1
+sim_build_options  +=   +define+SVT_AXI_MAX_ADDR_WIDTH=32
+sim_build_options  +=   +define+SVT_AXI_MAX_BURST_LENGTH_WIDTH=8
+sim_build_options  +=   +define+SVT_AXI_MAX_DATA_WIDTH=128
+sim_build_options  +=   +define+SVT_AXI_MAX_ID_WIDTH=7
+sim_build_options  +=   +define+SVT_AXI_MAX_NUM_MASTERS_16
+sim_build_options  +=   +define+SVT_AXI_MAX_NUM_SLAVES_16
+sim_build_options  +=   +define+SVT_AXI_RESP_WIDTH=2
+
+sim_build_options  +=   +define+DV_ROOT=${_DV_ROOT_}
+
+// vip incdir option
+vip_incdir_option    = +incdir+${_VIP_ROOT_}/SNPS/src/sverilog/vcs
+vip_incdir_option   += +incdir+${_VIP_ROOT_}/SNPS/include/sverilog
+vip_incdir_option   += +incdir+${_VIP_ROOT_}/SNPS/src/verilog/vcs
+vip_incdir_option   += +incdir+${_VIP_ROOT_}/SNPS/include/verilog 
+
+// vip serach path option
+vip_src_path_option  =
+
+// vip file list option
+vip_flist_option  =
+
+// EDA incdir option
+eda_incdri_option    = +incdir+/eda/synopsys/latest/dw/sim_ver
+eda_incdri_option   += +incdir+/home/dluj060/IP/SYNOPSYS/i_DWC_ddr_umctl2/src
+
+// EDA serach path option
+eda_src_path_option   = -y /eda/synopsys/latest/dw/sim_ver
+eda_src_path_option  += -y /eda/synopsys/latest/packages/gtech/src_ver
+
+// EDA file list option
+eda_flist_option  =
+
+// design incdir option
+hdl_incdri_option    = +incdir+/home/dluj060/MODEL/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/CPU/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/MCU/ZSP/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/SETOP/inc
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/USB/UDC30/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/CDSP/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/MAE/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/CNN/NVDLA/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/EISP/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/USB/UDC30/include
+hdl_incdri_option   += +incdir+/home/dluj060/RTL/USB/XHCI/include
+
+// design serach path option
+hdl_src_path_option  =
+
+// design file list option
+hdl_flist_option  =
+
+// Model incdir option
+model_incdri_option    = +incdir+/home/dluj060/MODEL/std_ovl
+
+// Model serach path option
+model_src_path_option  = -y /home/dluj060/MODEL/std_ovl
+
+// top testbench
+//top_bench = ${_DV_ROOT_}/UT/cdsp/bench/sysj060.v
+
+
+// Model file list option
+//model_flist_option  = /home/dluj060/MODEL/modj060.v
+//model_flist_option += /home/dluj060/MODEL/gmodel.v
+//model_flist_option += /home/dluj060/MODEL/cpumodel.v
+//model_flist_option += /home/dluj060/MODEL/PLLmodel.v
+//model_flist_option += /home/dluj060/MODEL/extrom.v
+//model_flist_option += /home/dluj060/MODEL/extmem.v
+//model_flist_option += /home/dluj060/MODEL/drampause.v
+//model_flist_option += /home/dluj060/MODEL/sensormodel.v
+//model_flist_option += /home/dluj060/MODEL/sensormodule.v
+//model_flist_option += /home/dluj060/MODEL/frontmodel.v
+//model_flist_option += /home/dluj060/MODEL/si2cmodel.v
+//model_flist_option += /home/dluj060/MODEL/sifmodel.v
+//model_flist_option += /home/dluj060/MODEL/sspimodel.v
+//model_flist_option += /home/dluj060/MODEL/i2chostmodel.v
+//model_flist_option += /home/dluj060/MODEL/cdspmodel.v
+//model_flist_option += /home/dluj060/MODEL/audmodel.v
+//model_flist_option += /home/dluj060/MODEL/gsihostmodel.v
+//model_flist_option += /home/dluj060/MODEL/perimodel.v
+//model_flist_option += /home/dluj060/MODEL/fmmodel.v
+//model_flist_option += /home/dluj060/MODEL/mcumodel.v
+//model_flist_option += /home/dluj060/MODEL/cqmodel.v
+//model_flist_option += /home/dluj060/MODEL/usb20model.v
+//model_flist_option += /home/dluj060/MODEL/usbhostsie.v
+//model_flist_option += /home/dluj060/MODEL/m31model.v
+//model_flist_option += /home/maxkuo/PROJECT/LUJ060/SIMVCAN/canbusmodel.v
+
+// Lib incdir option
+lin_incdri_option    = 
+
+// Lib serach path option
+lib_src_path_option  =
+
+// Lib file list option
+lib_flist_option  = -f /home/dluj060/SIMV/umc.opt
+
+// bench incdr option 
+bench_incdir_option  =  +incdir+${_SIM_ROOT_}
+
+    //For UVM TestBench
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/UT/cdsp/bench
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/UT/cdsp/bench/hdl_interconnect
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/UT/cdsp/pattern
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/UT/cdsp/uvc
+
+bench_incdir_option +=  +incdir+${_DV_ROOT_}/utils
+
+// bench serach path option
+bench_src_path_option  =
+
+// bench file list option
+bench_flist_option   = -f /home/dluj060/MACRO/macro.opt
+bench_flist_option  += -f /home/dluj060/MACRO/SRAM/sram.opt
+bench_flist_option  += -f /home/dluj060/RTL/top.opt
+bench_flist_option  += -f /home/dluj060/RTL/global.opt
+bench_flist_option  += -f /home/dluj060/RTL/cpu.opt
+bench_flist_option  += -f /home/dluj060/RTL/zsp.opt
+bench_flist_option  += -f /home/dluj060/RTL/mcutop.opt
+bench_flist_option  += -f /home/dluj060/RTL/cq.opt
+bench_flist_option  += -f /home/dluj060/RTL/wp2.opt
+
+//bench_flist_option  += /home/dluj060/DUMMY_TOP/cdsptop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/cdsp.opt
+
+//bench_flist_option  += /home/dluj060/DUMMY_TOP/maetop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/maetop.opt
+
+bench_flist_option  +=  -f /home/dluj060/RTL/front.opt
+
+//bench_flist_option  +=  /home/dluj060/DUMMY_TOP/usbtop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/usb.opt
+
+//bench_flist_option  += /home/dluj060/DUMMY_TOP/fmtop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/fm.opt
+
+bench_flist_option  += -f /home/dluj060/RTL/peri.opt
+
+//bench_flist_option  +=  /home/dluj060/DUMMY_TOP/dmatop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/dma.opt
+
+//bench_flist_option  +=  /home/dluj060/DUMMY_TOP/audtop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/audtop.opt
+
+//bench_flist_option  +=  /home/dluj060/DUMMY_TOP/disptop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/disptop.opt
+
+//bench_flist_option  += -f ${_DV_ROOT_}/UT/mjpg/bench/hvm_028.opt
+bench_flist_option  += -f /home/dluj060/RTL/hvm.opt
+
+//bench_flist_option  +=  /home/dluj060/DUMMY_TOP/setop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/setop.opt
+
+//bench_flist_option  += -f /home/dluj060/RTL/dramtop.opt
+bench_flist_option  += -f /home/dluj060/RTL/dramtop.opt
+
+//bench_flist_option  += /home/dluj060/DUMMY_TOP/cnntop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/cnn.opt
+
+//bench_flist_option  += /home/dluj060/DUMMY_TOP/wp_eisptop_dummy.v
+bench_flist_option  += -f /home/dluj060/RTL/eisp.opt
+
+
+
+
+

@@ -1,0 +1,131 @@
+{
+  "topic": "env_manifest",
+  "value": {
+    "manifest_path": "C:/Users/peter.lin/AppData/Local/Temp/claude/D--DV-Task-DV-Agent-Harness-L5/278c9eb4-a877-4a03-af82-5a5f90fa4e62/scratchpad/envm/env2.json",
+    "schema_version": "1.1",
+    "vip_config": {
+      "status": "NOT_AVAILABLE",
+      "reason": "no VIP config dump exists yet for this environment -- requires a live UVM simv run with +VIP_CONFIG_DUMP_PATH=<path> (see dv_harness/uvm_generator/templates/uvm_env_manifest/dv_env_manifest_pkg.sv)",
+      "source": {
+        "kind": "vip_config_dump_json",
+        "path": null
+      },
+      "instance_count": 0,
+      "instances": [],
+      "vip_release": {
+        "status": "NOT_AVAILABLE",
+        "reason": "$DESIGNWARE_HOME is not set and no explicit path was supplied -- no VIP install tree to scan, so no VIP version/release-notes/feature-matrix facts exist for this environment yet",
+        "designware_home": null,
+        "packages": []
+      },
+      "user_guide_refs": {
+        "status": "INDEXED",
+        "reason": null,
+        "document_count": 1,
+        "documents": [
+          {
+            "title": "DV_Agent_Harness_L5_Detailed_User_Guide_TC",
+            "doc_kind": "vip_user_guide",
+            "distilled_reference_path": "C:\\Users\\peter.lin\\AppData\\Local\\Temp\\claude\\D--DV-Task-DV-Agent-Harness-L5\\278c9eb4-a877-4a03-af82-5a5f90fa4e62\\scratchpad\\envm\\ug\\DV_Agent_Harness_L5_Detailed_User_Guide_TC.reference.md",
+            "section_count": 17
+          }
+        ]
+      }
+    },
+    "dut_facts": {
+      "rtl": {
+        "status": "PARSED",
+        "reason": null,
+        "file_count": 1,
+        "files": [
+          {
+            "file_path": "C:\\Users\\peter.lin\\AppData\\Local\\Temp\\claude\\D--DV-Task-DV-Agent-Harness-L5\\278c9eb4-a877-4a03-af82-5a5f90fa4e62\\scratchpad\\envm\\rtl\\usb_top.sv",
+            "source_sha256": "7ef69507c8188599fbbea3f29e21b7d4128978673475d359a84c7f06488864e6",
+            "modules": [
+              "usb_top"
+            ]
+          }
+        ]
+      },
+      "registers": {
+        "status": "NOT_AVAILABLE",
+        "reason": "no register-map input file supplied -- see dv_harness/schemas/register_map.schema.json for the expected input contract (a real RAL model export or IP-XACT conversion, never harness-invented register content)",
+        "source": {
+          "kind": "register_map_json",
+          "path": null
+        },
+        "block_count": 0,
+        "blocks": []
+      },
+      "address_map": {
+        "status": "NOT_AVAILABLE",
+        "reason": "no SoC architecture-map input file supplied -- see dv_harness/schemas/soc_arch_map.schema.json for the expected input contract (a real SoC spec pipeline export or IP-XACT memory-map conversion, never harness-invented architecture)",
+        "source": {
+          "kind": "soc_arch_map_json",
+          "path": null
+        },
+        "entry_count": 0,
+        "disagreement_count": 0,
+        "disagreeing_regions": []
+      },
+      "clock_reset": {
+        "status": "NOT_AVAILABLE",
+        "reason": "no SoC architecture-map input file supplied -- see dv_harness/schemas/soc_arch_map.schema.json for the expected input contract",
+        "source": {
+          "kind": "soc_arch_map_json",
+          "path": null
+        },
+        "clocks": [],
+        "resets": []
+      }
+    },
+    "env_topology": {
+      "component_hierarchy": {
+        "status": "NOT_AVAILABLE",
+        "reason": "no component_hierarchy dump exists yet for this environment -- requires a live UVM simv run with +ENV_TOPOLOGY_DUMP_PATH=<path> (see dv_harness/uvm_generator/templates/uvm_env_manifest/dv_env_manifest_pkg.sv)",
+        "source": {
+          "kind": "topology_dump_json",
+          "path": null
+        },
+        "component_count": 0
+      },
+      "config_db_trace": {
+        "status": "NOT_AVAILABLE",
+        "reason": "no sim log with +UVM_CONFIG_DB_TRACE exists yet for this environment",
+        "source": {
+          "kind": "sim_log_uvm_config_db_trace",
+          "path": null
+        },
+        "parse_confidence": null,
+        "entry_count": 0
+      },
+      "testplan_correspondence": {
+        "status": "NOT_AVAILABLE",
+        "reason": "no testplan-sources input file supplied -- see dv_harness/schemas/testplan_sources.schema.json for the expected input contract (the project's own real testlist, vPlan items and coverage model exported to one shape; never harness-invented tests or coverage)",
+        "source": {
+          "kind": "testplan_sources_json",
+          "path": null
+        },
+        "axes_available": {
+          "testlist": false,
+          "vplan_items": false,
+          "coverage_model": false
+        },
+        "summary": {
+          "testlist_count": 0,
+          "vplan_item_count": 0,
+          "coverage_model_count": 0,
+          "linked_count": 0,
+          "broken_count": 0,
+          "unclaimed_count": 0,
+          "orphan_test_count": 0,
+          "orphan_coverage_count": 0
+        },
+        "broken_item_ids": [],
+        "unclaimed_item_ids": []
+      }
+    }
+  },
+  "source": "env-manifest",
+  "confidence": "HIGH"
+}

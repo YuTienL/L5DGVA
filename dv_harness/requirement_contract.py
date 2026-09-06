@@ -61,6 +61,33 @@ generate from", which is the question section 184's contract is FOR. It also
 DECIDES nothing on its own: the only enforcement point added is the existing
 REQUIREMENTS_TRACEABILITY gate, and only for records that declare themselves
 in this shape.
+
+AMBIGUOUS-LANGUAGE DETECTION AND CROSS-SOURCE CONTRADICTION (additive). Two
+further checks, both PURELY ADDITIVE -- neither changes the meaning of an
+existing field, an existing status value, or `derive_status()`'s own
+worst-first precedence:
+
+  * `scan_requirement_ambiguous_language()` / `detect_ambiguous_language()`
+    scan `expected_result`/`checker` text for hedging prose (normally,
+    typically, as needed, in most cases, ...) that READS as resolved but does
+    not commit to one behavior. This is a different fact from the existing
+    `ambiguities` array: that array records an ambiguity someone already
+    FILED; this finds one nobody filed yet. It surfaces as a new
+    `AMBIGUOUS_LANGUAGE_DETECTED` WARNING citing the matched phrase -- it does
+    not touch `derive_status()`, so a requirement's declared/derived status is
+    unaffected until a human or agent files it as a real `ambiguities` entry.
+  * `cross_source_contradictions()` compares every pair of contract-shaped
+    records that share a `feature` (this schema's closest analogue to a
+    cross-document spec_ref) but disagree on `expected_result` or
+    `configuration` -- e.g. two independently-distilled records describing the
+    same feature landing on two different behaviors. It surfaces as a new
+    `CROSS_SOURCE_CONTRADICTION` WARNING on the SET-level analysis
+    (`analyze_requirement_contract_set()`), alongside the existing
+    DUPLICATE_REQUIREMENT_ID check -- duplicate ids are one identity
+    colliding; this is two different ids making incompatible claims. It never
+    writes into either record's own `contradictions` array: filing a
+    contradiction is the producer's (or a human's) act, the same ARBITRATION
+    boundary this module already keeps.
 """
 from __future__ import annotations
 
@@ -163,6 +190,32 @@ _NONE_ALLOWED_FIELDS = frozenset({"configuration", "precondition"})
 SEVERITY_ERROR = "ERROR"
 SEVERITY_WARNING = "WARNING"
 SEVERITY_INFO = "INFO"
+
+#: Ambiguous/hedging phrases that read as a resolved answer but do not commit
+#: to one behavior. Deliberately distinct from `_UNRESOLVED_SENTINELS`: a
+#: sentinel (TBD/UNKNOWN/N/A) is an HONEST placeholder for "nothing was
+#: written here"; a phrase below is prose that WAS written, and reads as an
+#: answer, while leaving the actual behavior undefined. Matching is
+#: case-insensitive substring, longest phrase first (see
+#: `detect_ambiguous_language()`), so "should generally" is cited whole rather
+#: than shadowed by the shorter "generally" it contains.
+AMBIGUOUS_LANGUAGE_PHRASES: Tuple[str, ...] = (
+    "should generally", "under normal conditions", "where applicable",
+    "as appropriate", "if necessary", "in most cases", "in some cases",
+    "as applicable", "as needed", "and so on", "and the like", "or similar",
+    "normally", "typically", "generally", "usually", "appropriate",
+    "reasonable", "roughly", "approximately", "etc.",
+)
+
+#: Section 184's EXPECTED RESULT and CHECKER -- the two fields whose vague
+#: prose most directly threatens what a downstream generator would build:
+#: what pass/fail means, and what mechanism decides it.
+AMBIGUOUS_LANGUAGE_SCAN_FIELDS: Tuple[str, ...] = ("expected_result", "checker")
+
+#: The two fields section 184 identifies as most likely to genuinely disagree
+#: between two independently-authored records describing the same feature:
+#: what is expected to happen, and under what configuration.
+CROSS_SOURCE_CONTRADICTION_FIELDS: Tuple[str, ...] = ("expected_result", "configuration")
 
 
 class RequirementContractValidationError(ValueError):
@@ -270,6 +323,96 @@ def _open_ambiguities(record: dict) -> List[dict]:
 def _unresolved_contradictions(record: dict) -> List[dict]:
     return [c for c in (record.get("contradictions") or [])
             if isinstance(c, dict) and not str(c.get("resolution", "")).strip()]
+
+
+# --------------------------------------------------------------------------
+# Ambiguous-language detection (additive -- does not feed derive_status())
+# --------------------------------------------------------------------------
+
+def detect_ambiguous_language(text: Any) -> List[str]:
+    """Every AMBIGUOUS_LANGUAGE_PHRASES entry found in `text` (case-insensitive
+    substring match), longest phrase first with shorter matches that are
+    wholly contained in an already-found longer one dropped -- so a text
+    containing "should generally" is cited once, not also as "generally".
+    Non-string or unresolved (empty/whitespace) input returns [] -- a missing
+    or placeholder field is the already-covered UNRESOLVED_FIELD/
+    STATUS_OVERCLAIMED defect, not vague language."""
+    if not isinstance(text, str) or not text.strip():
+        return []
+    lowered = text.lower()
+    matched = sorted((p for p in AMBIGUOUS_LANGUAGE_PHRASES if p in lowered),
+                     key=len, reverse=True)
+    out: List[str] = []
+    for phrase in matched:
+        if not any(phrase != longer and phrase in longer for longer in out):
+            out.append(phrase)
+    return out
+
+
+def scan_requirement_ambiguous_language(record: dict) -> List[dict]:
+    """Scan AMBIGUOUS_LANGUAGE_SCAN_FIELDS (`expected_result`/`checker`) for
+    hedging language that reads as a resolved answer without committing to
+    one behavior. Returns one {"field", "phrase"} entry per match; empty when
+    nothing matched. Purely a text scan -- it does not consult `ambiguities`,
+    does not resolve or file anything, and does not affect `derive_status()`."""
+    out: List[dict] = []
+    for field_name in AMBIGUOUS_LANGUAGE_SCAN_FIELDS:
+        for phrase in detect_ambiguous_language(record.get(field_name)):
+            out.append({"field": field_name, "phrase": phrase})
+    return out
+
+
+# --------------------------------------------------------------------------
+# Cross-source contradiction (additive -- a SET-level check, like the
+# existing duplicate-requirement-id check)
+# --------------------------------------------------------------------------
+
+def cross_source_contradictions(records: Sequence[dict]) -> List[dict]:
+    """Compare every pair of contract-shaped records in `records` that share a
+    `feature` but disagree on CROSS_SOURCE_CONTRADICTION_FIELDS
+    (`expected_result`/`configuration`) -- e.g. two records independently
+    distilled from two source documents, describing the same feature, and
+    landing on two different behaviors or configurations. Comparison is on
+    stripped/casefolded text and only over RESOLVED values on both sides (an
+    unresolved field on either side is the already-covered PARTIAL/
+    STATUS_OVERCLAIMED defect, not a contradiction to report here).
+
+    Returns one WARNING finding per disagreeing (record, field) pair. This
+    never mutates a record and never writes into either record's own
+    `contradictions` array -- filing a contradiction is the producer's (or a
+    human's) act; this function only surfaces the disagreement for one of
+    them to file, the same ARBITRATION boundary `derive_status()` keeps."""
+    findings: List[dict] = []
+    by_feature: Dict[str, List[dict]] = {}
+    for rec in records:
+        if not isinstance(rec, dict) or not declares_contract_shape(rec):
+            continue
+        feature = rec.get("feature")
+        if not is_resolved(feature, "feature"):
+            continue
+        by_feature.setdefault(str(feature).strip().casefold(), []).append(rec)
+
+    for group in by_feature.values():
+        if len(group) < 2:
+            continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i], group[j]
+                for field_name in CROSS_SOURCE_CONTRADICTION_FIELDS:
+                    va, vb = a.get(field_name), b.get(field_name)
+                    if not (is_resolved(va, field_name) and is_resolved(vb, field_name)):
+                        continue
+                    if str(va).strip().casefold() == str(vb).strip().casefold():
+                        continue
+                    findings.append(_finding(
+                        SEVERITY_WARNING, "CROSS_SOURCE_CONTRADICTION",
+                        a.get("requirement_id"),
+                        f"disagrees with {b.get('requirement_id')!r} on {field_name} "
+                        f"for feature {a.get('feature')!r}: {va!r} vs {vb!r}",
+                        other_requirement_id=b.get("requirement_id"),
+                        field=field_name, feature=a.get("feature"),
+                        this_value=va, other_value=vb))
+    return findings
 
 
 # --------------------------------------------------------------------------
@@ -456,6 +599,15 @@ def analyze_requirement_contract(record: dict) -> List[dict]:
             "status UNKNOWN: this requirement stays visible as a gap and must not "
             "feed a generator (section 32)."))
 
+    for hit in scan_requirement_ambiguous_language(record):
+        findings.append(_finding(
+            SEVERITY_WARNING, "AMBIGUOUS_LANGUAGE_DETECTED", rid,
+            f"{hit['field']} contains ambiguous/hedging language {hit['phrase']!r}: "
+            "it reads as a resolved answer but does not commit to one behavior. "
+            "This does not by itself change the derived status -- file it as a real "
+            "entry in `ambiguities` if it should block COMPLETE.",
+            field=hit["field"], matched_phrase=hit["phrase"]))
+
     # The older shape's UNSUPPORTED_BY_DUT rule, carried over unchanged so a
     # record that migrates to the contract shape does not lose it.
     if record.get("support_status") == "UNSUPPORTED_BY_DUT" and \
@@ -493,6 +645,8 @@ def analyze_requirement_contract_set(records: Sequence[dict]) -> dict:
                 SEVERITY_ERROR, "DUPLICATE_REQUIREMENT_ID", rid,
                 f"requirement_id {rid!r} appears {n} times; requirement identity "
                 "must be unique for traceability to mean anything"))
+
+    findings.extend(cross_source_contradictions(records))
 
     return {"analyzed": analyzed, "status_counts": counts, "findings": findings}
 

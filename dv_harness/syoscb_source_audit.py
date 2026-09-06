@@ -55,6 +55,7 @@ renders.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -785,10 +786,43 @@ _SKIP_DIRS: frozenset = frozenset({".git", "__pycache__", ".pytest_cache", "node
                                    ".venv", "venv", ".mypy_cache"})
 
 
-def assert_not_vendored(repo_root, audit: Optional[SyoscbSourceAudit] = None) -> dict:
+#: Where a real SYOSCB-33 human approval of vendoring is recorded, relative to
+#: a project root. A JSON object; see `load_vendoring_approval()`.
+VENDORING_APPROVAL_FILENAME = "dv_harness/syoscb_vendoring_approval.json"
+
+
+def load_vendoring_approval(repo_root) -> Optional[dict]:
+    """Reads the real, on-disk SYOSCB-33 approval record if one exists --
+    never invented, never assumed. Returns `None` (not an empty dict) when no
+    approval file is present, so "nobody approved this" and "an approval
+    exists but is malformed" stay distinguishable to a caller. A present but
+    malformed (non-JSON, or missing `approved`/`l5_destination`) file raises
+    `SyoscbSourceAuditError` rather than being silently ignored -- a broken
+    approval record must never be read as "no approval", which would make
+    `assert_not_vendored()` MORE permissive on a parse failure than on a
+    missing file."""
+    path = Path(repo_root) / VENDORING_APPROVAL_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SyoscbSourceAuditError("SYOSCB_VENDORING_APPROVAL_UNREADABLE", {
+            "path": str(path), "error": str(exc)}) from exc
+    if not isinstance(record, dict) or "approved" not in record or "l5_destination" not in record:
+        raise SyoscbSourceAuditError("SYOSCB_VENDORING_APPROVAL_MALFORMED", {
+            "path": str(path),
+            "hint": "an approval record must be a JSON object carrying at least "
+                    "'approved' and 'l5_destination'"})
+    return record
+
+
+def assert_not_vendored(repo_root, audit: Optional[SyoscbSourceAudit] = None,
+                         approval: Optional[dict] = None) -> dict:
     """SYOSCB-2/SYOSCB-33's boundary, enforced rather than promised: no
-    upstream file may be inside this repository before the Phase-2 approval
-    gate lets it in.
+    upstream file may be inside this repository UNLESS it sits under a real,
+    recorded SYOSCB-33 human approval's own `l5_destination` -- an unapproved
+    copy anywhere else is still refused exactly as before.
 
     Two independent detectors, because either alone is evadable:
       * a path segment named like the upstream tree (`uvm_syoscb...`) -- catches
@@ -798,13 +832,38 @@ def assert_not_vendored(repo_root, audit: Optional[SyoscbSourceAudit] = None) ->
     The content check is cheap: only a file whose (basename, size) already
     matches an audited file is ever hashed.
 
-    Returns the evidence dict on a clean repository; raises
+    `approval`, if supplied, must be a record shaped like
+    `load_vendoring_approval()`'s return value with `approved: true` -- a
+    falsy/absent `approved` field means the record is on file but does NOT
+    authorize anything (e.g. a revoked or draft approval), so a hit under its
+    `l5_destination` is still reported, never silently allowed. Passing no
+    `approval` preserves the original all-or-nothing behaviour exactly, so
+    every existing caller is unaffected.
+
+    Returns the evidence dict (an approved hit's own relative path is listed
+    under `approved_vendored`, always reported, never hidden by being
+    excused) on a repository with no UNAPPROVED upstream file; raises
     `SyoscbSourceAuditError` naming the offending paths otherwise. Passing no
     audit runs the name check alone, which is still a real check -- it just
     cannot see a renamed copy, and the result says so."""
     root = Path(repo_root)
     if not root.is_dir():
         raise SyoscbSourceAuditError("REPO_ROOT_NOT_FOUND", {"repo_root": str(repo_root)})
+
+    approved_prefix = None
+    if approval and approval.get("approved") and approval.get("l5_destination"):
+        approved_prefix = Path(approval["l5_destination"])
+        if not approved_prefix.is_absolute():
+            approved_prefix = (root / approved_prefix).resolve()
+
+    def _is_approved(path: Path) -> bool:
+        if approved_prefix is None:
+            return False
+        try:
+            path.resolve().relative_to(approved_prefix)
+        except ValueError:
+            return False
+        return True
 
     by_key: dict = {}
     if audit is not None:
@@ -813,13 +872,15 @@ def assert_not_vendored(repo_root, audit: Optional[SyoscbSourceAudit] = None) ->
 
     name_hits: list = []
     content_hits: list = []
+    approved_hits: list = []
     scanned = 0
     for path in root.rglob("*"):
         parts = path.relative_to(root).parts
         if any(p in _SKIP_DIRS for p in parts):
             continue
+        rel = str(path.relative_to(root)).replace("\\", "/")
         if path.name.lower().startswith(VENDORED_NAME_PREFIX):
-            name_hits.append(str(path.relative_to(root)).replace("\\", "/"))
+            (approved_hits if _is_approved(path) else name_hits).append(rel)
             continue
         if not by_key or not path.is_file():
             continue
@@ -832,18 +893,20 @@ def assert_not_vendored(repo_root, audit: Optional[SyoscbSourceAudit] = None) ->
             continue
         scanned += 1
         if _sha256_bytes(path.read_bytes()) in digests:
-            content_hits.append(str(path.relative_to(root)).replace("\\", "/"))
+            (approved_hits if _is_approved(path) else content_hits).append(rel)
 
     if name_hits or content_hits:
         raise SyoscbSourceAuditError("SYOSCB_UPSTREAM_VENDORED_BEFORE_APPROVAL", {
             "repo_root": str(root), "name_matches": sorted(name_hits),
             "content_matches": sorted(content_hits),
             "hint": "SYOSCB-2 vendoring is a PHASE-2 action gated by SYOSCB-33/34; nothing "
-                    "may be copied out of the upstream tree before a human approves it"})
+                    "may be copied out of the upstream tree before a human approves it, and "
+                    "only the exact l5_destination a real approval record names is exempt"})
     return {"repo_root": str(root).replace("\\", "/"),
             "name_check": "CLEAN",
             "content_check": "CLEAN" if by_key else "NOT_RUN_NO_AUDIT_SUPPLIED",
-            "candidate_files_hashed": scanned}
+            "candidate_files_hashed": scanned,
+            "approved_vendored": sorted(approved_hits)}
 
 
 #: A rendered artifact must never look like emittable SystemVerilog. Mirrors
@@ -1116,7 +1179,8 @@ def _main(argv=None) -> int:  # pragma: no cover - thin CLI over tested function
         audit, l5_destination=args.l5_destination)
         if args.registration_payload else None)
     if args.assert_not_vendored:
-        assert_not_vendored(args.assert_not_vendored, audit)
+        approval = load_vendoring_approval(args.assert_not_vendored)
+        assert_not_vendored(args.assert_not_vendored, audit, approval=approval)
     if args.json:
         doc = audit.to_dict()
         if payload is not None:

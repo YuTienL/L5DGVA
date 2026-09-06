@@ -496,3 +496,140 @@ def test_cli_reference_audit_escalate_files_real_questions(asymmetric_dir, tmp_p
     assert proc.returncode == 1, proc.stderr          # asymmetry found -> exit 1, unchanged
     assert "Escalated to the question queue" in proc.stdout
     assert question_queue.QuestionQueueStore(root).list_questions()
+
+
+# ===========================================================================
+# Conflict-type taxonomy (2026-09-06 additive extension)
+# ===========================================================================
+
+def test_taxonomy_has_exactly_ten_values_and_is_closed():
+    """The task-specified 10-value vocabulary, verbatim -- and every
+    CONFLICT_TYPE_* constant's value must actually be one of the ten (the
+    guard `assert_conflict_type_vocabulary_is_closed()` runs at import)."""
+    assert len(sa.CONFLICT_TYPES) == 10
+    assert set(sa.CONFLICT_TYPES) == {
+        "DOC_DOC_CONFLICT", "DOC_RTL_CONFLICT", "REGISTER_RTL_CONFLICT",
+        "GUIDE_REGISTER_CONFLICT", "PHY_SPEC_MODEL_CONFLICT", "VERSION_CONFLICT",
+        "CONFIGURATION_CONFLICT", "COMMAND_TASK_CONFLICT", "VIP_DOC_SOURCE_CONFLICT",
+        "UNKNOWN",
+    }
+    sa.assert_conflict_type_vocabulary_is_closed()  # must not raise
+
+
+def test_every_authority_order_id_has_a_conflict_kind():
+    """A future 10th AUTHORITY_ORDER level must not go unclassified here."""
+    assert set(sa._AUTHORITY_ID_TO_KIND.keys()) == {s.id for s in sa.AUTHORITY_ORDER}
+
+
+@pytest.mark.parametrize("a,b,expected", [
+    ("controller_doc", "dut_rtl", "DOC_RTL_CONFLICT"),
+    ("dut_rtl", "controller_doc", "DOC_RTL_CONFLICT"),           # order-independent
+    ("register_file", "dut_rtl", "REGISTER_RTL_CONFLICT"),
+    ("ip_user_guide", "register_file", "GUIDE_REGISTER_CONFLICT"),
+    ("phy_model", "spec", "PHY_SPEC_MODEL_CONFLICT"),
+    ("phy_boundary", "datasheet", "PHY_SPEC_MODEL_CONFLICT"),     # extra-kind aliases resolve too
+    ("version", "version", "VERSION_CONFLICT"),
+    ("tool_version", "vip_version", "VERSION_CONFLICT"),
+    ("configuration", "configuration", "CONFIGURATION_CONFLICT"),
+    ("config", "cfg", "CONFIGURATION_CONFLICT"),
+    ("reference_command_txt", "reference_command_txt", "COMMAND_TASK_CONFLICT"),
+    ("command.txt", "makefile", "COMMAND_TASK_CONFLICT"),         # AUTHORITY_ORDER aliases
+    ("vip_document", "vip_example", "VIP_DOC_SOURCE_CONFLICT"),
+    ("controller_doc", "controller_doc", "DOC_DOC_CONFLICT"),
+    ("spec_doc", "programming_doc", "DOC_DOC_CONFLICT"),          # both alias to controller_doc
+])
+def test_classify_conflict_type_maps_named_pairs(a, b, expected):
+    assert sa.classify_conflict_type(a, b) == expected
+
+
+@pytest.mark.parametrize("a,b", [
+    ("simulation_result", "controller_doc"),
+    ("existing_testbench_bind", "dut_rtl"),
+    ("simulation_result", "simulation_result"),
+    ("vip_example", "controller_doc"),
+])
+def test_classify_conflict_type_unrelated_pairs_are_unknown_not_guessed(a, b):
+    """A pair the table does not name must read UNKNOWN, never a plausible
+    -looking but invented category."""
+    assert sa.classify_conflict_type(a, b) == "UNKNOWN"
+
+
+def test_classify_conflict_type_refuses_an_unrecognized_source():
+    """Same discipline as `normalize_source()`: an unrecognized source must
+    never be silently classified UNKNOWN, because that would hide a real
+    typo behind the taxonomy's own honest 'no named shape fits' value."""
+    with pytest.raises(sa.SourceAuthorityError) as exc:
+        sa.classify_conflict_type("somebody's slack message", "dut_rtl")
+    assert exc.value.reason == "UNKNOWN_CONFLICT_SOURCE_KIND"
+
+
+def test_classify_conflict_reads_a_real_resolve_conflict_record():
+    """The literal task requirement: classify a REAL conflict record (from
+    `resolve_conflict()`), not a hand-built stand-in."""
+    conflict = sa.resolve_conflict([
+        sa.SourceClaim("controller_doc", "base = 0x1272_8000", "Doc/regs.md:88"),
+        sa.SourceClaim("dut_rtl", "base = 0x1272_0000", "rtl/decoder.sv:118"),
+    ])
+    assert conflict["verdict"] == sa.VERDICT_RESOLVED  # fixture precondition
+    assert sa.classify_conflict(conflict) == "DOC_RTL_CONFLICT"
+
+
+def test_classify_conflict_classifies_no_conflict_records_too():
+    """The taxonomy is about which two source TYPES were being compared, not
+    about whether they agreed -- a NO_CONFLICT record still classifies."""
+    conflict = sa.resolve_conflict([
+        sa.SourceClaim("dut_rtl", "base = 0x1272_0000", "rtl/decoder.sv:118"),
+        sa.SourceClaim("controller_doc", "base = 0x1272_0000", "Doc/regs.md:88"),
+    ])
+    assert conflict["verdict"] == sa.VERDICT_NO_CONFLICT  # fixture precondition
+    assert sa.classify_conflict(conflict) == "DOC_RTL_CONFLICT"
+
+
+def test_classify_conflict_reads_an_undecidable_same_authority_record():
+    conflict = sa.resolve_conflict([
+        sa.SourceClaim("reference_pattern_file", "offset 0020 is programmed", "p.txt:42"),
+        sa.SourceClaim("command.txt", "offset 0020 is never programmed", "p.txt (absent)"),
+    ])
+    assert conflict["verdict"] == sa.VERDICT_UNDECIDABLE  # fixture precondition
+    assert sa.classify_conflict(conflict) == "COMMAND_TASK_CONFLICT"
+
+
+def test_classify_conflict_accepts_ad_hoc_source_a_source_b_shape():
+    """A disagreement between two kinds AUTHORITY_ORDER has no level for at
+    all (a PHY model vs. a spec doc) can never reach `resolve_conflict()` --
+    `SourceClaim` correctly refuses to rank either one -- but it is still a
+    real, nameable conflict shape."""
+    assert sa.classify_conflict({"source_a": "phy_model", "source_b": "spec"}) \
+        == "PHY_SPEC_MODEL_CONFLICT"
+
+
+def test_classify_conflict_accepts_ad_hoc_sources_list_shape():
+    assert sa.classify_conflict({"sources": ["configuration", "configuration"]}) \
+        == "CONFIGURATION_CONFLICT"
+
+
+def test_classify_conflict_refuses_more_than_two_distinct_source_types():
+    """A pairwise classification, mirroring escalate_conflict()'s own 2-3
+    -sides boundary: a 3-plus-way disagreement does not reduce to one
+    labelled pair without deciding which two sides the label is about."""
+    with pytest.raises(sa.SourceAuthorityError) as exc:
+        sa.classify_conflict({"sources": ["dut_rtl", "controller_doc", "ip_user_guide"]})
+    assert exc.value.reason == "CONFLICT_TYPE_NEEDS_ONE_OR_TWO_SOURCE_TYPES"
+
+
+def test_classify_conflict_refuses_an_unrecognized_record_shape():
+    with pytest.raises(sa.SourceAuthorityError) as exc:
+        sa.classify_conflict({"nothing_this_function_understands": True})
+    assert exc.value.reason == "CONFLICT_RECORD_SHAPE_NOT_RECOGNIZED"
+
+
+def test_classify_conflict_refuses_a_record_with_no_claims_or_sources():
+    with pytest.raises(sa.SourceAuthorityError) as exc:
+        sa.classify_conflict({"claims": []})
+    assert exc.value.reason == "CONFLICT_RECORD_SHAPE_NOT_RECOGNIZED"
+
+
+def test_classify_conflict_refuses_a_non_dict_record():
+    with pytest.raises(sa.SourceAuthorityError) as exc:
+        sa.classify_conflict(["not", "a", "dict"])
+    assert exc.value.reason == "CONFLICT_RECORD_MUST_BE_A_DICT"

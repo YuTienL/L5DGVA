@@ -1,0 +1,19 @@
+{
+  "iteration": 6,
+  "node": "ENV_CHECK",
+  "reason_summary": "Resolved via RouteResolver to agent=dv-lead on route=lead-route; executing plan PLAN-700EECD5 rev 4 (1 step(s)); blackboard priors read: []",
+  "action": {
+    "adapter": "ClaudeCLIAdapter",
+    "agent": "dv-lead",
+    "resume_session": null
+  },
+  "tool": "ClaudeAdapter.run",
+  "observation": {
+    "ok": false,
+    "status": "FAIL",
+    "session_id": null
+  },
+  "evidence": {},
+  "confidence": "LOW",
+  "next_action": "retry_or_reroute"
+}

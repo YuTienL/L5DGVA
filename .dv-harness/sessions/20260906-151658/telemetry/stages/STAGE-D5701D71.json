@@ -1,0 +1,34 @@
+{
+  "profile_id": "STAGE-D5701D71",
+  "stage_id": "ENV_CHECK",
+  "stage_name": "ENV_CHECK",
+  "graph_node": "ENV_CHECK",
+  "start_time_epoch": 1788270156.4249387,
+  "end_time_epoch": null,
+  "stage_wall_clock_sec": 0.0,
+  "aggregate_agent_runtime_sec": 0.0,
+  "parallel_saving_sec": 0.0,
+  "parallelism_efficiency": 0.0,
+  "input_tokens": null,
+  "output_tokens": null,
+  "cache_read_tokens": null,
+  "cache_write_tokens": null,
+  "total_tokens": null,
+  "tool_calls": 0,
+  "retries": 0,
+  "finding_count": 0,
+  "closed_finding_count": 0,
+  "status": "RUNNING",
+  "agents": [],
+  "metadata": {
+    "git_sha": "d46f3c2712d7d5cd50ac8a3bd13c54b4b9ddb3f1"
+  },
+  "entry_checklist": {
+    "items": [],
+    "present_count": 0,
+    "total_count": 0,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "exit_checklist": null
+}

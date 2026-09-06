@@ -403,6 +403,184 @@ def test_the_older_shapes_unsupported_by_dut_rule_is_carried_over():
     assert "UNSUPPORTED_WITHOUT_DESIGN_EVIDENCE" not in codes(rc.analyze_requirement_contract(r))
 
 
+# --------------------------------------------------------------------------
+# Ambiguous-language detection (additive; does not touch derive_status())
+# --------------------------------------------------------------------------
+
+def test_clean_record_has_no_ambiguous_language():
+    """The baseline fixture is unambiguous prose -- the positive control for
+    every mutation below."""
+    r = clean_record()
+    assert rc.scan_requirement_ambiguous_language(r) == []
+    assert "AMBIGUOUS_LANGUAGE_DETECTED" not in codes(rc.analyze_requirement_contract(r))
+
+
+@pytest.mark.parametrize("field_name,phrase", [
+    ("expected_result", "the device should generally enter L1"),
+    ("expected_result", "the device typically enters L1 within tL1Entry"),
+    ("checker", "check that latency is roughly tL1Entry, or similar"),
+    ("checker", "the scoreboard checks as appropriate for the current mode"),
+])
+def test_ambiguous_hedging_language_is_detected_and_cited(field_name, phrase):
+    r = clean_record()
+    r[field_name] = phrase
+    hits = rc.scan_requirement_ambiguous_language(r)
+    assert hits and hits[0]["field"] == field_name
+    assert hits[0]["phrase"] in phrase.lower()
+    found = [f for f in rc.analyze_requirement_contract(r)
+             if f["code"] == "AMBIGUOUS_LANGUAGE_DETECTED"]
+    assert found and found[0]["severity"] == rc.SEVERITY_WARNING
+    assert found[0]["field"] == field_name
+    assert found[0]["matched_phrase"] in phrase.lower()
+    assert phrase.lower().count(found[0]["matched_phrase"]) >= 1
+
+
+def test_a_longer_hedging_phrase_is_cited_whole_not_as_a_shorter_substring():
+    r = clean_record()
+    r["expected_result"] = "the device should generally enter L1"
+    hits = rc.scan_requirement_ambiguous_language(r)
+    phrases = {h["phrase"] for h in hits}
+    assert "should generally" in phrases
+    assert "generally" not in phrases   # not double-cited as a substring
+
+
+def test_ambiguous_language_detection_does_not_change_derived_or_declared_status():
+    """Purely additive: detecting hedging prose must not flip status, must not
+    block COMPLETE, and must not interact with STATUS_OVERCLAIMED /
+    UNRESOLVED_BLOCKER_HIDDEN."""
+    r = clean_record()
+    r["expected_result"] = "the device typically enters L1 within tL1Entry"
+    assert rc.derive_status(r)[0] == "COMPLETE"
+    assert rc.downstream_consumable(r)[0] is True
+    codes_found = codes(rc.analyze_requirement_contract(r))
+    assert codes_found == {"AMBIGUOUS_LANGUAGE_DETECTED"}
+
+
+@pytest.mark.parametrize("placeholder", ["TBD", "", "   ", "N/A"])
+def test_a_placeholder_field_is_not_reported_as_ambiguous_language(placeholder):
+    """An unresolved/placeholder field is the already-covered PARTIAL /
+    MISSING_CONTRACT_FIELD defect, never vague language."""
+    r = clean_record()
+    r["checker"] = placeholder
+    assert rc.scan_requirement_ambiguous_language(r) == []
+
+
+def test_detect_ambiguous_language_ignores_non_string_input():
+    assert rc.detect_ambiguous_language(None) == []
+    assert rc.detect_ambiguous_language(123) == []
+    assert rc.detect_ambiguous_language({"document": "x"}) == []
+
+
+# --------------------------------------------------------------------------
+# Cross-source contradiction (additive; a SET-level check)
+# --------------------------------------------------------------------------
+
+def test_two_records_on_the_same_feature_that_agree_report_no_contradiction():
+    a, b = clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"] = "REQ-A", "REQ-B"
+    assert rc.cross_source_contradictions([a, b]) == []
+    result = rc.analyze_requirement_contract_set([a, b])
+    assert "CROSS_SOURCE_CONTRADICTION" not in codes(result["findings"])
+
+
+def test_two_records_on_the_same_feature_disagreeing_on_expected_result_is_flagged():
+    a, b = clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"] = "REQ-A", "REQ-B"
+    a["source"] = {"document": "usb2_spec.pdf", "locator": "7.2.3"}
+    b["source"] = {"document": "phy_databook.pdf", "locator": "4.1"}
+    b["expected_result"] = "device NAKs and stays in U0 until host retries"
+    found = rc.cross_source_contradictions([a, b])
+    assert len(found) == 1
+    f = found[0]
+    assert f["severity"] == rc.SEVERITY_WARNING
+    assert f["code"] == "CROSS_SOURCE_CONTRADICTION"
+    assert f["requirement_id"] == "REQ-A"
+    assert f["other_requirement_id"] == "REQ-B"
+    assert f["field"] == "expected_result"
+    assert "CROSS_SOURCE_CONTRADICTION" in codes(
+        rc.analyze_requirement_contract_set([a, b])["findings"])
+
+
+def test_two_records_on_the_same_feature_disagreeing_on_configuration_is_flagged():
+    a, b = clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"] = "REQ-A", "REQ-B"
+    b["configuration"] = "FS, LPM disabled"
+    found = rc.cross_source_contradictions([a, b])
+    assert any(f["field"] == "configuration" for f in found)
+
+
+def test_records_on_different_features_are_never_compared():
+    a, b = clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"] = "REQ-A", "REQ-B"
+    b["feature"] = "a completely different feature"
+    b["expected_result"] = "something else entirely"
+    assert rc.cross_source_contradictions([a, b]) == []
+
+
+def test_feature_matching_is_case_and_whitespace_insensitive():
+    a, b = clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"] = "REQ-A", "REQ-B"
+    a["feature"] = "  LPM L1 Entry  "
+    b["feature"] = "lpm l1 entry"
+    b["expected_result"] = "device NAKs instead"
+    found = rc.cross_source_contradictions([a, b])
+    assert len(found) == 1
+
+
+def test_a_purely_cosmetic_difference_is_not_reported():
+    """Whitespace/case-only differences on the compared field are NOT a
+    contradiction -- only genuinely different text is."""
+    a, b = clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"] = "REQ-A", "REQ-B"
+    b["expected_result"] = "  " + a["expected_result"].upper() + "  "
+    assert rc.cross_source_contradictions([a, b]) == []
+
+
+@pytest.mark.parametrize("field_name", ["expected_result", "configuration"])
+def test_an_unresolved_field_on_either_side_is_not_reported_as_a_contradiction(field_name):
+    """An unresolved field is the already-covered PARTIAL defect, not a
+    cross-source contradiction -- reporting both would be double-counting one
+    problem as two."""
+    a, b = clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"] = "REQ-A", "REQ-B"
+    b[field_name] = "TBD"
+    assert rc.cross_source_contradictions([a, b]) == []
+
+
+def test_a_single_record_alone_reports_no_cross_source_contradiction():
+    a = clean_record()
+    assert rc.cross_source_contradictions([a]) == []
+
+
+def test_legacy_records_never_participate_in_cross_source_comparison():
+    a = clean_record()
+    a["requirement_id"] = "REQ-A"
+    legacy = legacy_record(feature=a["feature"])
+    assert rc.cross_source_contradictions([a, legacy]) == []
+
+
+def test_three_way_group_reports_every_disagreeing_pair():
+    a, b, c = clean_record(), clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"], c["requirement_id"] = "REQ-A", "REQ-B", "REQ-C"
+    b["expected_result"] = "device NAKs"
+    c["expected_result"] = "device ignores the token"
+    found = rc.cross_source_contradictions([a, b, c])
+    pairs = {(f["requirement_id"], f["other_requirement_id"]) for f in found}
+    assert pairs == {("REQ-A", "REQ-B"), ("REQ-A", "REQ-C"), ("REQ-B", "REQ-C")}
+
+
+def test_cross_source_contradiction_never_mutates_any_record_or_files_a_contradiction():
+    """ARBITRATION IS NOT HERE: this surfaces a disagreement, it never writes
+    into either record's own `contradictions` array."""
+    a, b = clean_record(), clean_record()
+    a["requirement_id"], b["requirement_id"] = "REQ-A", "REQ-B"
+    b["expected_result"] = "device NAKs"
+    snap_a, snap_b = copy.deepcopy(a), copy.deepcopy(b)
+    rc.cross_source_contradictions([a, b])
+    assert a == snap_a and b == snap_b
+    assert a.get("contradictions", []) == [] and b.get("contradictions", []) == []
+
+
 def test_duplicate_requirement_ids_are_rejected_across_the_set():
     a, b = clean_record(), clean_record()
     result = rc.analyze_requirement_contract_set([a, b])

@@ -1,0 +1,107 @@
+
+//=====================================================================
+//                Parameter declare
+//=====================================================================
+
+  reg [  7:0] qdata[0:127];
+  reg [  7:0] vlcsize3, vlcsize1, vlcsize2;
+  reg [  7:0] tmpdata, tmpdata1;
+  reg [23: 0] vlcsize, size_in_dram;
+  reg [31: 0] qaddr;
+
+  parameter   srcwidth      = 320       ,
+              deswidth      = 240         , //enc only for thumb need 32n
+              desheight     = 0         ,
+              jpgwidth      = 320       , 
+              jpgheight     = 240       , 
+              imgwidth      = 320       , 
+              imgheight     = 240       , 
+              filldramzero  = 3000_0000 ; //zero filled to DRAM
+
+
+  integer     DRAM_BASEADDR ;
+  integer     HVCSRC0_YADDR ;
+  integer     HVCSRC0_UVADDR;
+  integer     MJPG_VLCADDR  ;
+  integer     MJPG_TMBYADDR ;
+  integer     MJPG_TMBUVADDR;
+
+//=====================================================================
+//                Setting
+//=====================================================================
+
+//DRAM Address Location
+initial begin
+  DRAM_BASEADDR   = 32'h4000_0000               ;
+  HVCSRC0_YADDR   = 30'h000_0000 + DRAM_BASEADDR;
+  HVCSRC0_UVADDR  = 30'h200_0000 + DRAM_BASEADDR;
+  MJPG_VLCADDR    = 30'h400_0000 + DRAM_BASEADDR;
+  MJPG_TMBYADDR   = 30'h600_0000 + DRAM_BASEADDR;
+  MJPG_TMBUVADDR  = 30'h610_0000 + DRAM_BASEADDR;
+end
+
+initial begin
+  `GMODEL.trapvalue[13:0]=14'b0000_00000_1_0_0_01 ;
+  `GMODEL.GLOBAL_INIT                             ;
+  `DRAMMODEL.DRAM_INIT                            ;
+  
+//YUV Source setting
+  `CPUWRITE4B (32'h1000_8040,HVCSRC0_YADDR        );  // Y     buffer
+  `CPUWRITE4B (32'h1000_8044,HVCSRC0_UVADDR       );  // UV    buffer
+  `CPUWRITE4B (32'h1000_8048,MJPG_VLCADDR         );  // VLC   buffer
+  `CPUWRITE4B (32'h1000_8060,MJPG_TMBYADDR        );  // tmbY  buffer
+  `CPUWRITE4B (32'h1000_8064,MJPG_TMBUVADDR       );  // tmbUV buffer
+  
+  `CPUWRITE1B (32'h1000_00B1,8'h02                );  // jpgclk 
+  `CPUWRITE1B (32'h1000_00A4,8'h07                );  // regclk
+  `CPUWRITE1B (32'h1000_800F,8'h01                );  // abcdis
+  `CPUWRITE2B (32'h1000_8054,16'h0041             );  // bit2~0: 1 => cmpmode
+                                                      // bit5~3: 0 => jpgmode
+                                                      // bit7~6: 0 => yuv420
+                                                      //         1 => yuv422
+                                                      //         2 => yuv411
+                                                      //         3 => yuv444
+                                                      // bit8  :      bwmode
+                                                      // bit9  :      vertical
+                                                      // bit10 :      yuv420to422
+                                                      // bit11 :      scaledn
+
+  `CPUWRITE2B (32'h1000_8070,imgwidth             );  // imgwidth
+  `CPUWRITE2B (32'h1000_8072,imgheight            );  // imgheight
+  `CPUWRITE2B (32'h1000_8078,jpgwidth             );  // jpgwidth
+  `CPUWRITE2B (32'h1000_807A,jpgheight            );  // jpgheight
+  `CPUWRITE2B (32'h1000_8090,srcwidth             );  // srcwidth
+  `CPUWRITE2B (32'h1000_8098,16'd00               );  // offsetx
+  `CPUWRITE2B (32'h1000_809a,16'd00               );  // offsety
+
+  `CPUWRITE1B (32'h1000_8186,8'h00                );  // JFIF mode
+  `CPUWRITE1B (32'h1000_8187,8'h00                );  // bit0 : 0 => no truncate
+                                                      // bit0 : 1 => truncate
+  `CPUWRITE2B (32'h1000_818E,8'd0                 );  // ENC CUT Restart marker
+  `CPUWRITE4B (32'h1000_81C8,32'h887100           );  // bit0   : trunc_brc_en
+                                                      // bit1   : jpguvsuben
+                                                      // bit2   : brc_mben
+                                                      // bit6~4 : acDelta
+  `CPUWRITE4B (32'h1000_81CC,32'h2000004F         );  // Truncpt, Refer to reg[0x81C9] bit 0.
+
+
+  `CPUWRITE1B (32'h1000_80AD,8'h05                );  // sram slp sd DEC OFF
+  
+  #100ns;
+  $finish;
+
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+

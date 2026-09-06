@@ -1,0 +1,20 @@
+-v /home/dwaq062/dwaq062/SIMV/fab_primitives.v
+
+//TSMC 6nm STD
+-v /eda/clib/TSMC/6nm/FF/STD_cell/tcbn06_bwph240l11p57cpd_base_lvt_100d/digital/Front_End/verilog/tcbn06_bwph240l11p57cpd_base_lvt_100a/tcbn06_bwph240l11p57cpd_base_lvt.v
+-v /eda/clib/TSMC/6nm/FF/STD_cell/tcbn06_bwph240l11p57cpd_base_svt_100d/digital/Front_End/verilog/tcbn06_bwph240l11p57cpd_base_svt_100a/tcbn06_bwph240l11p57cpd_base_svt.v
+-v /eda/clib/TSMC/6nm/FF/STD_cell/tcbn06_bwph240l11p57cpd_mb_lvt_100d/digital/Front_End/verilog/tcbn06_bwph240l11p57cpd_mb_lvt_100a/tcbn06_bwph240l11p57cpd_mb_lvt.v
+//TSMC 6nm IO
+-v /eda/clib/TSMC/6nm/FF/IO/tphn7_18gpio_130g/digital/Front_End/verilog/tphn7_18gpio_130c/tphn7_18gpio.v
+-v /eda/clib/TSMC/6nm/FF/IO/tphn7_18od33sdio_130f/digital/Front_End/verilog/tphn7_18od33sdio_130a/tphn7_18od33sdio.v
+
+
+
+//UMC 22nm IO
+//-v /eda/clib/UMC/22nm/IO/Faraday/FXREG015HN0U/2020Q4V0.5.0/FrontEnd/vcs/FXREG015HN0U.vp.vcs
+-v /eda/clib/UMC/22nm/IO/Faraday/fon0u_qrs18/2020Q4v0.6/T09_ANALOGESD_IO/FrontEnd/verilog/fon0u_qrs18_t09_analogesd_io_30.msv.lib.src
+-v /eda/clib/UMC/22nm/IO/Faraday/fon0u_qrs18/2020Q4v0.6/T18_ANALOGESD_IO/FrontEnd/verilog/fon0u_qrs18_t18_analogesd_io_30.msv.lib.src
+-v /eda/clib/UMC/22nm/IO/Faraday/fon0u_qrs18/2020Q4v0.6/T18_GENERIC_POC_IO/FrontEnd/verilog/fon0u_qrs18_t18_generic_poc_io_30.lib.src
+-v /eda/clib/UMC/22nm/IO/Faraday/fon0u_qrs18/2020Q4v0.6/T18_GENERIC_POC_IO/FrontEnd/verilog/fon0u_qrs18_t18_generic_poc_io_30.msv.lib.src
+-v /eda/clib/UMC/22nm/IO/Faraday/fon0u_qrs18/2020Q4v0.6/TMVH33L18_GENERIC_POC_IO/FrontEnd/verilog/fon0u_qrs18_tmvh33l18_generic_poc_io_30.lib.src
+-v /eda/clib/UMC/22nm/IO/Faraday/fon0u_qrs18/2020Q4v0.6/TMVH33L18_GENERIC_POC_IO/FrontEnd/verilog/fon0u_qrs18_tmvh33l18_generic_poc_io_30.msv.lib.src

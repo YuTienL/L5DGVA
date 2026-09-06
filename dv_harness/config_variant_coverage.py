@@ -849,6 +849,86 @@ def build_plan(space: ConfigSpace, strength: int = 2) -> dict:
     }
 
 
+def plan_from_requirement_configuration(
+    configuration: Mapping[str, Sequence[Any]],
+    *,
+    requirement_id: str = "",
+    strength: int = 2,
+    space_id: Optional[str] = None,
+    description: str = "",
+    constraints: Optional[Sequence[Mapping[str, Any]]] = None,
+    critical_combinations: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> dict:
+    """vPlan-generation adapter: go straight from a section 184 requirement's
+    declared configuration DIMENSIONS to a covering-array plan, without a
+    caller hand-translating the shape into `ConfigDimension`/`ConfigSpace`
+    objects itself. A THIN wiring function -- it performs no IPOG work of its
+    own, it only shapes `configuration` into the raw dict
+    `config_space_from_dict()` already parses and hands the result to
+    `build_plan()`, both of which are the real, existing, tested mechanisms.
+
+    IMPORTANT SHAPE NOTE, checked against `dv_harness/schemas/
+    requirement_contract.schema.json` rather than assumed: that schema's own
+    `configuration` field (section 184's "Configuration") is `contract_text`
+    -- a free-text STRING ("NONE" or prose), not a structured mapping. This
+    function therefore does NOT parse a requirement record's `configuration`
+    string field itself -- doing so would mean inventing a natural-language
+    parser and guessing at a dimension/value split the contract does not
+    encode, which is exactly the fabrication this codebase forbids. Instead
+    it takes `configuration` as a CALLER-SUPPLIED structured mapping of
+    dimension name -> declared legal values (the shape a vPlan generator
+    would already have to have extracted -- from one requirement's
+    configuration/precondition text, or reconciled across several requirements
+    covering the same feature -- by some other, requirement-content-aware
+    mechanism this module does not implement or claim to). `requirement_id`
+    is carried through only as PROVENANCE (each dimension's `source` and the
+    plan's own `space_id`/`description`), never as something this function
+    reads requirement content from.
+
+    `constraints` / `critical_combinations`, when supplied, are passed through
+    UNCHANGED in `config_space_from_dict()`'s own raw shape (a list of
+    `{"forbid": {...}, "reason": ...}` / `{"assignment": {...}, "reason": ...}`
+    dicts) -- this adapter invents neither; a caller with declared forbidden
+    combinations or critical configurations for the requirement supplies them
+    exactly as `config-variants plan --space <file>` would expect them in a
+    space JSON file.
+
+    Raises `ConfigSpaceError` (the module's one real error type) on a missing
+    or malformed `configuration` mapping, or on anything `config_space_from_dict`/
+    `build_plan` itself rejects (duplicate dimension, illegal critical
+    combination, and so on) -- never silently drops or defaults a dimension.
+    """
+    if not isinstance(configuration, Mapping) or not configuration:
+        raise ConfigSpaceError(
+            "plan_from_requirement_configuration requires a non-empty mapping of "
+            "dimension name -> legal values; requirement_contract.schema.json's own "
+            "'configuration' field is free-text (contract_text), so this adapter takes a "
+            "caller-extracted dimension->values mapping, never a parse of that prose field")
+
+    source = f"requirement_contract:{requirement_id}" if requirement_id else "requirement_contract"
+    dims_raw: List[Dict[str, Any]] = []
+    for name, values in configuration.items():
+        if not isinstance(values, (list, tuple)):
+            raise ConfigSpaceError(
+                f"requirement configuration dimension {name!r} must declare its legal values as "
+                f"a list/tuple, got {type(values).__name__}")
+        dims_raw.append({"name": str(name), "values": list(values), "source": source})
+
+    raw_space = {
+        "space_id": space_id or (f"requirement_{requirement_id}_configuration" if requirement_id
+                                 else "requirement_configuration"),
+        "description": description or (
+            f"covering-array plan generated from requirement {requirement_id}'s declared "
+            "configuration" if requirement_id else
+            "covering-array plan generated from a requirement's declared configuration"),
+        "dimensions": dims_raw,
+        "constraints": list(constraints or []),
+        "critical_combinations": list(critical_combinations or []),
+    }
+    space = config_space_from_dict(raw_space)
+    return build_plan(space, strength)
+
+
 def format_plan(plan: Mapping[str, Any]) -> str:
     cov = plan.get("coverage", {})
     shape = ", ".join("{}x{}".format(d["name"], d["value_count"])

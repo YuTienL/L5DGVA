@@ -457,3 +457,224 @@ def test_cli_status_without_an_evidence_db_is_not_available(tmp_path):
         capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
     assert r.returncode == 2
     assert "NOT_AVAILABLE" in r.stdout
+
+
+# --- qualification_set: category field + completeness (2026-09-06) --------
+
+
+def _make_capsule(category, *, capsule_id=None, evidence_id="EVID-x"):
+    """A minimal in-memory GoldenScenario, no store involved -- used for the
+    pure `missing_categories()` tests, which take already-loaded capsules and
+    run no query of their own."""
+    return gs.GoldenScenario(
+        capsule_id=capsule_id or f"GS-fixture-{category}", project="p", subsystem="s",
+        test_name="t", evidence_id=evidence_id, category=category)
+
+
+def test_validate_capsule_rejects_an_unrecognized_category():
+    with pytest.raises(gs.CapsuleValidationError):
+        gs.validate_capsule(_capsule("EVID-x", category="not_a_real_category"))
+    # A category from the real fixed vocabulary is accepted; validate_capsule
+    # must not raise for it.
+    gs.validate_capsule(_capsule("EVID-x", category="known_pass"))
+    # An unset category (the default) is legal too -- category is optional.
+    gs.validate_capsule(_capsule("EVID-x", category=None))
+
+
+def test_capsule_from_json_accepts_a_declared_category():
+    data = _capsule("EVID-x", category="timeout").to_dict()
+    built = gs.capsule_from_json(data)
+    assert built.category == "timeout"
+
+
+def test_missing_categories_lists_uncovered_categories_in_required_order():
+    capsules = [_make_capsule("known_pass"), _make_capsule("timeout"),
+                _make_capsule(None, capsule_id="GS-uncategorized")]
+    missing = gs.missing_categories(capsules)
+    assert missing == [c for c in gs.QUALIFICATION_SET_CATEGORIES
+                        if c not in ("known_pass", "timeout")]
+    assert "known_pass" not in missing
+    assert "timeout" not in missing
+
+
+def test_missing_categories_empty_when_every_required_category_is_present():
+    capsules = [_make_capsule(c) for c in gs.QUALIFICATION_SET_CATEGORIES]
+    assert gs.missing_categories(capsules) == []
+
+
+def test_missing_categories_an_uncategorized_capsule_credits_nothing():
+    """A capsule with no declared category (the default) must not be
+    silently credited toward ANY required category."""
+    capsules = [_make_capsule(None), _make_capsule(None, capsule_id="GS-uncategorized-2")]
+    assert gs.missing_categories(capsules, required=("known_pass", "timeout")) == \
+        ["known_pass", "timeout"]
+
+
+def test_missing_categories_ignores_an_out_of_vocabulary_category():
+    """A category string outside the fixed vocabulary (a typo, or a stale
+    value from before the vocabulary was fixed) must not be credited toward
+    a required category it does not name -- it is effectively uncategorized."""
+    capsules = [_make_capsule("known_pass"), _make_capsule("made_up_category")]
+    missing = gs.missing_categories(capsules, required=("known_pass", "timeout"))
+    assert missing == ["timeout"]
+
+
+def test_missing_categories_respects_a_custom_required_subset():
+    capsules = [_make_capsule("register")]
+    assert gs.missing_categories(capsules, required=("register", "perf")) == ["perf"]
+
+
+@requires_git
+def test_category_round_trips_through_the_real_store(project, store):
+    """A capsule's `category` is not one of `evidence_db.py`'s own known
+    columns, so it is persisted through `golden_scenario.py`'s own
+    `query()`-based seam -- proved here by recording through the real
+    `record_golden_scenario()` and reading it back both singly and via
+    `load_golden_scenarios()`, never assuming the in-memory return value
+    alone proves persistence."""
+    root, sha = project
+    envelope = _ingest_passing_evidence(store, root, sha)
+    stored = gs.record_golden_scenario(
+        store, _capsule(envelope["evidence_id"], category="known_pass"))
+    assert stored.category == "known_pass"
+
+    single = gs.load_golden_scenario(store, stored.capsule_id)
+    assert single.category == "known_pass"
+
+    all_loaded = gs.load_golden_scenarios(store)
+    assert [c.category for c in all_loaded] == ["known_pass"]
+
+    # The existing scalar/json fields are completely unaffected by this
+    # addition -- the shape of an already-recorded capsule field is unchanged.
+    assert single.verified_sha == sha
+    assert single.requirements == ["REQ-USB3-LFPS-001"]
+
+
+@requires_git
+def test_uncategorized_capsule_round_trips_as_none(project, store):
+    root, sha = project
+    envelope = _ingest_passing_evidence(store, root, sha)
+    stored = gs.record_golden_scenario(store, _capsule(envelope["evidence_id"]))
+    assert stored.category is None
+    assert gs.load_golden_scenario(store, stored.capsule_id).category is None
+
+
+@requires_git
+def test_load_reports_none_category_when_the_column_was_never_added(project, store):
+    """A capsule written directly through the store's own
+    `insert_golden_scenario()` (bypassing `record_golden_scenario()`, which is
+    the only thing that ever adds the `category` column) must still load
+    cleanly, with category read as None rather than raising -- the negative
+    control proving `_attach_categories()` degrades honestly on a
+    `golden_scenarios` table that genuinely never gained the column."""
+    root, sha = project
+    envelope = _ingest_passing_evidence(store, root, sha)
+    capsule = _capsule(envelope["evidence_id"], category="known_pass")
+    store.insert_golden_scenario(capsule.to_dict(), evidence_verdict="PASSED")
+    loaded = gs.load_golden_scenario(store, capsule.capsule_id)
+    assert loaded is not None
+    assert loaded.category is None
+    assert gs.load_golden_scenarios(store)[0].category is None
+
+
+def test_qualification_set_report_on_an_empty_store_is_incomplete(tmp_path):
+    db = tmp_path / "empty.duckdb"
+    with EvidenceStore(db) as s:
+        report = gs.qualification_set_report(s)
+    assert report["status"] == "INCOMPLETE"
+    assert report["missing_categories"] == list(gs.QUALIFICATION_SET_CATEGORIES)
+    assert report["capsule_count"] == 0
+
+
+@requires_git
+def test_qualification_set_report_partial_over_a_real_store(project, store):
+    root, sha = project
+    envelope = _ingest_passing_evidence(store, root, sha)
+    gs.record_golden_scenario(store, _capsule(envelope["evidence_id"], category="known_pass"))
+    gs.record_golden_scenario(store, _capsule(
+        envelope["evidence_id"], capsule_id="GS-timeout-case", category="timeout"))
+    gs.record_golden_scenario(store, _capsule(
+        envelope["evidence_id"], capsule_id="GS-uncategorized-case"))
+
+    report = gs.qualification_set_report(store)
+    assert report["status"] == "INCOMPLETE"
+    assert set(report["missing_categories"]) == \
+        set(gs.QUALIFICATION_SET_CATEGORIES) - {"known_pass", "timeout"}
+    assert report["present_counts"]["known_pass"] == 1
+    assert report["present_counts"]["timeout"] == 1
+    assert report["present_counts"]["register"] == 0
+    assert report["capsule_count"] == 3
+    assert report["uncategorized_capsule_count"] == 1
+
+
+@requires_git
+def test_qualification_set_report_complete_when_every_category_is_recorded(project, store):
+    root, sha = project
+    envelope = _ingest_passing_evidence(store, root, sha)
+    for i, category in enumerate(gs.QUALIFICATION_SET_CATEGORIES):
+        gs.record_golden_scenario(store, _capsule(
+            envelope["evidence_id"], capsule_id=f"GS-cat-{i}", category=category))
+    report = gs.qualification_set_report(store)
+    assert report["status"] == "COMPLETE"
+    assert report["missing_categories"] == []
+    assert report["capsule_count"] == len(gs.QUALIFICATION_SET_CATEGORIES)
+    assert report["uncategorized_capsule_count"] == 0
+
+
+@requires_git
+def test_cli_qualification_set_reports_missing_then_complete(project, store, tmp_path):
+    """The real `qualification-set` CLI verb, driven as a subprocess: exit 1
+    with the real missing categories while only some are recorded, exit 0
+    once every required category has a real recorded capsule."""
+    root, sha = project
+    envelope = _ingest_passing_evidence(store, root, sha)
+    store.close()  # release the DuckDB file for the subprocess
+
+    def run(*args):
+        return subprocess.run(
+            [sys.executable, "-m", "dv_harness.golden_scenario", *args,
+             "--root", str(root)],
+            capture_output=True, text=True, timeout=180, encoding="utf-8",
+            errors="replace")
+
+    def record(category, i):
+        capsule = _capsule(envelope["evidence_id"], capsule_id=f"GS-cli-cat-{i}",
+                           category=category)
+        capsule_json = tmp_path / f"capsule_{i}.json"
+        capsule_json.write_text(json.dumps(capsule.to_dict()), encoding="utf-8")
+        rec = run("record", "--json-file", str(capsule_json))
+        assert rec.returncode == 0, rec.stdout + rec.stderr
+
+    for i, category in enumerate(gs.QUALIFICATION_SET_CATEGORIES[:3]):
+        record(category, i)
+
+    partial = run("qualification-set", "--json")
+    assert partial.returncode == 1, partial.stdout + partial.stderr
+    payload = json.loads(partial.stdout)
+    assert payload["status"] == "INCOMPLETE"
+    assert set(payload["missing_categories"]) == set(gs.QUALIFICATION_SET_CATEGORIES[3:])
+    assert "MISSING" not in partial.stdout  # --json means no text rendering
+
+    for i, category in enumerate(gs.QUALIFICATION_SET_CATEGORIES[3:], start=3):
+        record(category, i)
+
+    complete = run("qualification-set")
+    assert complete.returncode == 0, complete.stdout + complete.stderr
+    assert "COMPLETE" in complete.stdout
+    assert "every required category has at least one recorded capsule" in complete.stdout
+
+
+@requires_git
+def test_cli_record_rejects_an_unrecognized_category(project, store, tmp_path):
+    root, sha = project
+    envelope = _ingest_passing_evidence(store, root, sha)
+    store.close()
+    capsule = _capsule(envelope["evidence_id"], category="totally_made_up")
+    capsule_json = tmp_path / "bad_category_capsule.json"
+    capsule_json.write_text(json.dumps(capsule.to_dict()), encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, "-m", "dv_harness.golden_scenario", "record",
+         "--json-file", str(capsule_json), "--root", str(root)],
+        capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace")
+    assert r.returncode == 2
+    assert "CapsuleValidationError" in r.stdout

@@ -1,0 +1,6 @@
+Synthetic fixture used as a negative control to prove the extractor reports
+NOT_AVAILABLE per facet rather than fabricating anything when a document
+simply does not discuss any of those topics.
+
+This block describes an unrelated bus protocol handshake with a request
+signal, an acknowledge signal, timing diagrams, and register bit fields.

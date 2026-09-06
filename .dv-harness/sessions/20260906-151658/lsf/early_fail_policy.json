@@ -1,0 +1,14 @@
+{
+  "uvm_error_threshold": 0,
+  "kill_on_uvm_fatal": true,
+  "kill_on_uvm_error_above_threshold": true,
+  "kill_on_fatal_assertion": true,
+  "kill_on_simulator_crash": true,
+  "kill_on_explicit_fail_marker": true,
+  "kill_on_warning": false,
+  "require_exact_job_id": true,
+  "require_log_job_match": true,
+  "allowlist": [],
+  "preserve_other_jobs": true,
+  "fix_proposal_required_after_early_fail": true
+}

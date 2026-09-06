@@ -1,0 +1,102 @@
+- global:
+    _PROJ_ROOT_: /home/ziptmp1/peterlin/dwaq062
+    _DV_ROOT_:  /home/ziptmp1/peterlin/dwaq062/DV
+    _VIP_ROOT_: /home/ziptmp1/peterlin/dwaq062/VIP
+    _SIM_ROOT_: /home/ziptmp1/peterlin/temp/runr/dwaq062/test
+- task: 
+    # type: Define this task use for.
+    # value support VCS
+    type: VCS
+    name: SOC
+    compile:
+            path: ${_DV_ROOT_}/L3/soc/bench
+            # bypass: Skip compile step
+            # value is case sensitive.
+            # 
+            # value: NO or YES, default: OFF
+            # 
+            # 
+            bypass: NO
+            
+            # lsfopt: enable LSF grid system, support LSF_INT and LSF_ON
+            # LSF_INT for interactive mode, it's like execute by command and 
+            # block & wait the step complete then go.
+            # LSF_ON for batch mode, submit job and then go next.
+            # 
+            # mark it to diable LSF
+            # 
+            # value: LSF_ON or LSF_INT, default: <disable>
+            # 
+            lsfopt: LSF_ON
+
+            # fgpopt: enable VCS Fine-Grained Parallelism
+            # value is case sensitive.
+            # 
+            # value: FGP_OFF or FGP_ON, default: FGP_OFF
+            # 
+            fgpopt:  FGP_OFF
+            
+            # distopt: Enable Distribution build feature.
+            #
+            # value: DIST_ON or DIST_OFF, default: DIST_ON
+            # 
+            distopt: DIST_ON
+
+            # compopt: Designer customized VCS compile option
+            # 
+            # value: <VCS any option>, default: <null>
+            # 
+            #compopt: -debug_access+all -kdb -diag timescale -timescale=1ns/10ps +lint=none -error=noMPD -error=noIOPCWM +warn=noIWNF +warn=noFCDCI +warn=noICPSD_W +warn=noVCM-TRIMVEC +define+DV_UVM +define+UVM_REPORT_DISABLE_FILE_LINE -top sysq062 -top uvm_soc_tb
+            compopt: -debug_access+all -kdb -timescale=1ns/10ps +lint=none -error=noMPD -error=noIOPCWM +warn=noIWNF +warn=noFCDCI +warn=noICPSD_W +warn=noVCM-TRIMVEC +define+DV_UVM +define+UVM_REPORT_DISABLE_FILE_LINE -top sysq062 -top uvm_soc_tb
+
+            # beforerun: execute shell script before vcs. Must be in one line.
+            # if you need to run mulitple steps, you can write a script file or use
+            # ";" to splite it. e.g  sleep 10 ; echo "I am live back"
+            # 
+            # value: default: <null> 
+            # 
+            #beforerun: ${_SIM_ROOT_}/compile_setup.sh
+            beforerun: cp ${_DV_ROOT_}/L3/soc/bench/command.txt . ; cp ${_DV_ROOT_}/L3/soc/bench/*.opt . ; cp ${_DV_ROOT_}/L3/soc/bench/wave.txt .
+
+            # afterrun: execute shell script after vcs compile. Must be in one line.
+            # if you need to run mulitple steps, you can write a script file or use
+            # ";" to splite it. e.g  sleep 10 ; echo "I am live back"
+            # 
+            # value: default: <null> 
+            # 
+            afterrun:
+    simulation: 
+            - sim:
+                rand: 1
+                name: soc_sanity_test 
+                # beforerun: execute shell script before vcs. Must be in one line.
+                # if you need to run mulitple steps, you can write a script file or use
+                # ";" to splite it. e.g  sleep 10 ; echo "I am live back"
+                # 
+                # value: default: <null> 
+                #                         
+                #beforerun: ${_SIM_ROOT_}/sim_setup.sh
+                beforerun:
+
+                # lsfopt: enable LSF grid system, support LSF_INT and LSF_ON
+                # LSF_INT for interactive mode, it's like execute by command and 
+                # block & wait the step complete then go.
+                # LSF_ON for batch mode, submit job and then go next.
+                # 
+                # mark it to diable LSF
+                # 
+                # value: LSF_ON or LSF_INT, default: <disable>
+                # 
+                lsfopt: LSF_ON
+                fgpopt: FGP_ON
+                simopt: +UVM_VERBOSITY=UVM_LOW +UVM_IBJECTION_TRACE +UVM_PHASE_TRACE -ucli -do ${_DV_ROOT_}/utils/run_vcs.tcl 
+                #simopt: +UVM_VERBOSITY=UVM_LOW +UVM_IBJECTION_TRACE +UVM_PHASE_TRACE
+                _TEST_NAME_: soc_sanity_test
+
+                # afterrun: execute shell script after vcs compile. Must be in one line.
+                # if you need to run mulitple steps, you can write a script file or use
+                # ";" to splite it. e.g  sleep 10 ; echo "I am live back"
+                # 
+                # value: default: <null> 
+                # 
+                afterrun:          

@@ -1,0 +1,14 @@
+{
+  "plan_id": "PLAN-11107368",
+  "node_id": "ENV_CHECK",
+  "goal": "REMOTE_EXECUTION_REQUIRED confirmed 2026-08-30 via manually-run remote_hop.py (human-executed in their own terminal per credential-boundary rule, output pasted into session -- no nested run-stage subprocess invoked, Human Override per explicit user choice). remote_connection={account: devuser, vc_machine: vchost-b, ssh_machine: host-b, working_path: /home/svcacct/DV/temp/USB} -- no password recorded anywhere. Evidence: telnet vchost-b login OK, ssh host-b OK, pwd == working_path exactly, ls -la shows working_path owned by devuser:spmm with rwxr-xr-x (write access confirmed), currently empty (0 files besides . / .. -- expected, no git repo yet, that is a GIT_PUSH/SERVER_SYNC-stage concern not an ENV_CHECK concern). Toolchain preflight: vcs/verdi/fsdbreport resolved at /eda/sunplus/bin/*, bsub resolved at LSF 10.1 path -- all on PATH independent of VCWORKDIR. Satisfies tools/real_env/execution_mode_validator.py's required_remote_connection_fields with no password field present.",
+  "status": "RUNNING",
+  "steps": [
+    {
+      "step_id": "P01",
+      "name": "ENV_CHECK",
+      "status": "NOT_STARTED"
+    }
+  ],
+  "revision": 2
+}

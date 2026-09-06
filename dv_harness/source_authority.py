@@ -51,6 +51,23 @@ the two are different questions ("which value do I use now" vs "which of
 these two artifacts is wrong"), and only the first is decidable mechanically.
 A same-rank disagreement (`UNDECIDABLE_SAME_AUTHORITY`) is not decidable even
 for the first question, and escalating it is mandatory, not advisory.
+
+CONFLICT-TYPE TAXONOMY (2026-09-06, purely additive -- see the "Conflict-type
+taxonomy" section near the end of this file). `resolve_conflict()` decides
+which VALUE wins; it never says what KIND of disagreement this was. A
+10-value taxonomy (`CONFLICT_TYPES`, `classify_conflict()`/
+`classify_conflict_type()`) now labels which two SOURCE TYPES a conflict
+compares -- e.g. two controller docs disagreeing (`DOC_DOC_CONFLICT`) is a
+different shape of problem from a register file disagreeing with the RTL
+decoder (`REGISTER_RTL_CONFLICT`), even though `resolve_conflict()` might
+reach the identical `RESOLVED` verdict for both. Four of the ten values name
+source shapes the 9-level `AUTHORITY_ORDER` has no rank for at all (a PHY
+electrical model, a spec document, a tool/VIP version, a configuration
+value) -- `SourceClaim` correctly refuses to rank any of those as a
+conflict-AUTHORITY source, so `classify_conflict()` also accepts a lighter,
+ad hoc `{"source_a", "source_b"}` / `{"sources": [...]}` record for exactly
+that case. Nothing about `resolve_conflict()`, `escalate_conflict()` or any
+other existing function/field changed to add this.
 """
 from __future__ import annotations
 
@@ -642,3 +659,271 @@ def format_order() -> str:
         if s.id == "register_file":
             lines.append(f"       sub-order within this tier: {' > '.join(REGISTER_FILE_SUBORDER)}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Conflict-type taxonomy (2026-09-06, purely additive)
+# ---------------------------------------------------------------------------
+# `resolve_conflict()` decides WHICH VALUE WINS; it never says WHAT KIND of
+# disagreement this was. Two conflicts that both resolve RESOLVED (or both
+# UNDECIDABLE_SAME_AUTHORITY) can be entirely different SHAPES of problem --
+# a controller doc disagreeing with another controller doc is a documentation
+# staleness question; a register file disagreeing with the RTL decoder is a
+# regmap-vs-silicon question; a VIP's shipped example disagreeing with its own
+# user guide is a VIP-internal-consistency question -- and nothing anywhere
+# named that shape. This section adds a 10-value classification layer over
+# the SOURCE TYPES a conflict names, never over claim content: it does not
+# reinterpret what `resolve_conflict()`/`escalate_conflict()` already decided,
+# it only labels which two kinds of source were disagreeing.
+#
+# The taxonomy is intentionally WIDER than the 9-level `AUTHORITY_ORDER`
+# itself. Four of its ten values (PHY_SPEC_MODEL_CONFLICT, VERSION_CONFLICT,
+# CONFIGURATION_CONFLICT, and half of COMMAND_TASK_CONFLICT) name kinds of
+# source the 9-level conflict-authority order has no level for at all -- a
+# PHY electrical model, a spec/datasheet document, a tool/VIP version string,
+# a configuration/variant value. `SourceClaim` correctly refuses any of those
+# as a conflict-AUTHORITY source (there is no rank to give a PHY model in the
+# 9-level order), so a genuine PHY-model-vs-spec conflict can never reach
+# `resolve_conflict()` in the first place -- but it is still a real
+# disagreement worth NAMING. `classify_conflict()` therefore accepts either a
+# real `resolve_conflict()`/`escalate_conflict()` record (whose claims are
+# always one of the 9 AUTHORITY_ORDER ids) or a lighter, ad hoc
+# `{"source_a": ..., "source_b": ...}` / `{"sources": [...]}` record for a
+# disagreement this module's own 9-level order was never meant to rank.
+
+CONFLICT_TYPE_DOC_DOC = "DOC_DOC_CONFLICT"
+CONFLICT_TYPE_DOC_RTL = "DOC_RTL_CONFLICT"
+CONFLICT_TYPE_REGISTER_RTL = "REGISTER_RTL_CONFLICT"
+CONFLICT_TYPE_GUIDE_REGISTER = "GUIDE_REGISTER_CONFLICT"
+CONFLICT_TYPE_PHY_SPEC_MODEL = "PHY_SPEC_MODEL_CONFLICT"
+CONFLICT_TYPE_VERSION = "VERSION_CONFLICT"
+CONFLICT_TYPE_CONFIGURATION = "CONFIGURATION_CONFLICT"
+CONFLICT_TYPE_COMMAND_TASK = "COMMAND_TASK_CONFLICT"
+CONFLICT_TYPE_VIP_DOC_SOURCE = "VIP_DOC_SOURCE_CONFLICT"
+CONFLICT_TYPE_UNKNOWN = "UNKNOWN"
+
+#: The full 10-value vocabulary, in the order the task that added them named
+#: them. `assert_conflict_type_vocabulary_is_closed()` holds every constant
+#: above to exactly this tuple, so a future typo'd constant (defined but
+#: never added here) or a stray addition (added here but never given its own
+#: constant) both fail loudly rather than silently drifting apart.
+CONFLICT_TYPES: tuple = (
+    CONFLICT_TYPE_DOC_DOC, CONFLICT_TYPE_DOC_RTL, CONFLICT_TYPE_REGISTER_RTL,
+    CONFLICT_TYPE_GUIDE_REGISTER, CONFLICT_TYPE_PHY_SPEC_MODEL, CONFLICT_TYPE_VERSION,
+    CONFLICT_TYPE_CONFIGURATION, CONFLICT_TYPE_COMMAND_TASK, CONFLICT_TYPE_VIP_DOC_SOURCE,
+    CONFLICT_TYPE_UNKNOWN,
+)
+
+
+def assert_conflict_type_vocabulary_is_closed() -> None:
+    declared = {n for n in globals() if n.startswith("CONFLICT_TYPE_")}
+    # every declared CONFLICT_TYPE_* constant's VALUE must appear in the tuple
+    missing_from_tuple = [n for n in declared if globals()[n] not in CONFLICT_TYPES]
+    if missing_from_tuple:
+        raise SourceAuthorityError("CONFLICT_TYPE_CONSTANT_NOT_IN_VOCABULARY",
+                                    {"constants": sorted(missing_from_tuple)})
+    if len(CONFLICT_TYPES) != len(set(CONFLICT_TYPES)):
+        raise SourceAuthorityError("CONFLICT_TYPE_VOCABULARY_HAS_DUPLICATES",
+                                    {"values": list(CONFLICT_TYPES)})
+
+
+assert_conflict_type_vocabulary_is_closed()
+
+#: Broad conflict-taxonomy KINDS. Narrower than free text, wider than the 9
+#: AUTHORITY_ORDER ids: every AUTHORITY_ORDER source maps to exactly one of
+#: these (see `_AUTHORITY_ID_TO_KIND`), and four more (`phy_model`, `spec`,
+#: `version`, `configuration`) exist ONLY here, for the source shapes the
+#: conflict-authority order was never meant to rank at all.
+KIND_DOC = "doc"
+KIND_RTL = "rtl"
+KIND_REGISTER = "register"
+KIND_GUIDE = "guide"
+KIND_PHY_MODEL = "phy_model"
+KIND_SPEC = "spec"
+KIND_VERSION = "version"
+KIND_CONFIGURATION = "configuration"
+KIND_COMMAND_TASK = "command_task"
+KIND_VIP_DOC = "vip_doc"
+KIND_VIP_SOURCE = "vip_source"
+KIND_SIMULATION = "simulation"
+KIND_TESTBENCH_BIND = "testbench_bind"
+
+#: Canonical AUTHORITY_ORDER source id -> its broad conflict-taxonomy kind.
+#: `test_every_authority_order_id_has_a_conflict_kind` holds this dict's key
+#: set equal to `{s.id for s in AUTHORITY_ORDER}`, so a future 10th level
+#: cannot go unclassified here.
+_AUTHORITY_ID_TO_KIND: Dict[str, str] = {
+    "simulation_result": KIND_SIMULATION,
+    "reference_command_txt": KIND_COMMAND_TASK,
+    "dut_rtl": KIND_RTL,
+    "register_file": KIND_REGISTER,
+    "existing_testbench_bind": KIND_TESTBENCH_BIND,
+    "controller_doc": KIND_DOC,
+    "ip_user_guide": KIND_GUIDE,
+    "vip_example": KIND_VIP_SOURCE,
+    "vip_document": KIND_VIP_DOC,
+}
+
+#: Alias table for the 4 kinds that have no AUTHORITY_ORDER level at all.
+#: Goes through the SAME `_key()` fold (case/whitespace/hyphen/slash) every
+#: AUTHORITY_ORDER alias already uses, so "PHY Model" and "phy-model" resolve
+#: identically to a level name would.
+_EXTRA_KIND_NAMES: Dict[str, tuple] = {
+    KIND_PHY_MODEL: ("phy_model", "phy", "phy_boundary", "phy_electrical_model"),
+    KIND_SPEC: ("spec", "specification", "datasheet", "protocol_spec"),
+    KIND_VERSION: ("version", "tool_version", "vip_version", "release_version"),
+    KIND_CONFIGURATION: ("configuration", "config", "config_variant", "cfg"),
+}
+_EXTRA_KIND_ALIASES: Dict[str, str] = {
+    _key(_name): _kind
+    for _kind, _names in _EXTRA_KIND_NAMES.items()
+    for _name in _names
+}
+
+
+def normalize_conflict_source_kind(name) -> str:
+    """The broad conflict-taxonomy KIND for `name`.
+
+    Wider than `normalize_source()`'s 9 AUTHORITY_ORDER levels on purpose:
+    several taxonomy values (PHY_SPEC_MODEL_CONFLICT, VERSION_CONFLICT,
+    CONFIGURATION_CONFLICT) name source shapes the conflict-authority order
+    was never meant to rank. Tries a real AUTHORITY_ORDER source FIRST --
+    so "dut_rtl"/"decoder"/"controller doc" keep meaning exactly what they
+    already mean everywhere else in this module -- then the extra-kind
+    table. Raises rather than guessing, the same discipline
+    `normalize_source()` itself uses: an unrecognized kind must never be
+    silently classified UNKNOWN at THIS layer, because that would hide a
+    genuine typo behind the taxonomy's own honest "no named shape fits"
+    value.
+    """
+    if isinstance(name, AuthoritySource):
+        return _AUTHORITY_ID_TO_KIND[name.id]
+    k = _key(name)
+    src = _BY_ALIAS.get(k)
+    if src is not None:
+        return _AUTHORITY_ID_TO_KIND[src.id]
+    kind = _EXTRA_KIND_ALIASES.get(k)
+    if kind is not None:
+        return kind
+    raise SourceAuthorityError("UNKNOWN_CONFLICT_SOURCE_KIND", {
+        "source": name,
+        "known_authority_ids": [s.id for s in AUTHORITY_ORDER],
+        "known_extra_kinds": sorted(set(_EXTRA_KIND_ALIASES.values())),
+        "hint": "Add the name to AUTHORITY_ORDER's own aliases if it is a real "
+                "synonym for one of the 9 conflict-authority levels, or to "
+                "_EXTRA_KIND_NAMES if it names one of the 4 kinds with no "
+                "conflict-authority level at all. Never guess a kind.",
+    })
+
+
+#: Unordered KIND-pair -> conflict-type. Symmetric by construction (looked up
+#: as a `frozenset`, so declaring a pair once covers both orderings; a
+#: single-kind key, e.g. `frozenset({KIND_DOC})`, is what a `frozenset` of two
+#: EQUAL kinds collapses to, and is exactly how "two docs disagree" /
+#: "two versions disagree" / "two configurations disagree" are represented).
+#: A pair this table does not name -- including a pairing between two
+#: recognized-but-taxonomically-unrelated kinds, e.g. simulation_result vs.
+#: controller_doc, or two existing_testbench_bind claims -- classifies
+#: UNKNOWN rather than a guessed category: naming a conflict's type WRONG is
+#: worse than admitting it does not fit one of the nine named shapes.
+_CONFLICT_TYPE_TABLE: Dict[frozenset, str] = {
+    frozenset({KIND_DOC}): CONFLICT_TYPE_DOC_DOC,
+    frozenset({KIND_DOC, KIND_RTL}): CONFLICT_TYPE_DOC_RTL,
+    frozenset({KIND_REGISTER, KIND_RTL}): CONFLICT_TYPE_REGISTER_RTL,
+    frozenset({KIND_GUIDE, KIND_REGISTER}): CONFLICT_TYPE_GUIDE_REGISTER,
+    frozenset({KIND_PHY_MODEL, KIND_SPEC}): CONFLICT_TYPE_PHY_SPEC_MODEL,
+    frozenset({KIND_VERSION}): CONFLICT_TYPE_VERSION,
+    frozenset({KIND_CONFIGURATION}): CONFLICT_TYPE_CONFIGURATION,
+    frozenset({KIND_COMMAND_TASK}): CONFLICT_TYPE_COMMAND_TASK,
+    frozenset({KIND_VIP_DOC, KIND_VIP_SOURCE}): CONFLICT_TYPE_VIP_DOC_SOURCE,
+}
+
+
+def classify_conflict_type(source_a, source_b) -> str:
+    """Classify a disagreement between `source_a` and `source_b` into one of
+    the 10-value `CONFLICT_TYPES` taxonomy, from the two source TYPES alone
+    -- never from claim CONTENT, which this classifier has no business
+    interpreting (that judgment stays with `resolve_conflict()` and,
+    ultimately, the human `escalate_conflict()` asks). Each side is
+    normalized through `normalize_conflict_source_kind()` (raises on a
+    genuinely unrecognized source, same as `normalize_source()`); the
+    resulting kind pair is looked up in `_CONFLICT_TYPE_TABLE`, and any pair
+    the table does not name classifies `CONFLICT_TYPE_UNKNOWN` rather than a
+    guessed value.
+    """
+    kind_a = normalize_conflict_source_kind(source_a)
+    kind_b = normalize_conflict_source_kind(source_b)
+    return _CONFLICT_TYPE_TABLE.get(frozenset({kind_a, kind_b}), CONFLICT_TYPE_UNKNOWN)
+
+
+def _distinct_conflict_sources(conflict: dict) -> List[str]:
+    """Extract the distinct source identifiers a conflict record names, from
+    whichever of the two shapes this classifier accepts:
+
+      * a real `resolve_conflict()`/`escalate_conflict()` record, whose
+        `claims` list carries each claim's own `source` (always one of the 9
+        AUTHORITY_ORDER ids, since `SourceClaim.__post_init__` already
+        normalizes it there);
+      * a lighter, ad hoc record -- `{"source_a": ..., "source_b": ...}` or
+        `{"sources": [...]}` -- for a disagreement between kinds the
+        conflict-authority order has no level for at all (a PHY model vs. a
+        spec, two tool versions, two configuration values), which can never
+        reach `resolve_conflict()` in the first place because `SourceClaim`
+        correctly refuses to rank them.
+
+    Raises on a record matching neither shape, rather than defaulting to an
+    empty/degenerate classification.
+    """
+    if not isinstance(conflict, dict):
+        raise SourceAuthorityError("CONFLICT_RECORD_MUST_BE_A_DICT", {"got": type(conflict).__name__})
+    claims = conflict.get("claims")
+    if claims:
+        sources = [c["source"] for c in claims]
+    elif "source_a" in conflict and "source_b" in conflict:
+        sources = [conflict["source_a"], conflict["source_b"]]
+    elif conflict.get("sources"):
+        sources = list(conflict["sources"])
+    else:
+        raise SourceAuthorityError("CONFLICT_RECORD_SHAPE_NOT_RECOGNIZED", {
+            "conflict": conflict,
+            "hint": "Expected a resolve_conflict()-shaped record (a non-empty "
+                    "'claims' list), or {'source_a', 'source_b'}, or "
+                    "{'sources': [...]}.",
+        })
+    if not sources:
+        raise SourceAuthorityError("CONFLICT_RECORD_HAS_NO_SOURCES", {"conflict": conflict})
+    # dedupe while preserving first-seen order, so a 2-source record's
+    # classification does not depend on set iteration order
+    seen: list = []
+    for s in sources:
+        if s not in seen:
+            seen.append(s)
+    return seen
+
+
+def classify_conflict(conflict: dict) -> str:
+    """Classify a whole conflict record (see `_distinct_conflict_sources()`
+    for the two shapes accepted) into one of the 10-value `CONFLICT_TYPES`
+    taxonomy, by the source TYPES it names -- never by whether the sources
+    agreed. A `NO_CONFLICT`-verdict `resolve_conflict()` record still
+    classifies: this taxonomy is about which two kinds of source were being
+    COMPARED, not about whether they turned out to disagree.
+
+    A record naming exactly one distinct source classifies that source
+    against itself (`classify_conflict_type(s, s)`) -- the representation
+    for "two claims of the same kind disagree" (e.g. two `controller_doc`
+    claims, or two ad hoc `version` claims). A record naming more than 2
+    distinct source types is refused rather than guessed at: this is a
+    PAIRWISE classification, the same 2-3-sides boundary
+    `escalate_conflict()` already draws for the question-queue schema, and a
+    3-plus-way disagreement does not reduce to one labelled pair without
+    deciding which two sides the label is about.
+    """
+    distinct = _distinct_conflict_sources(conflict)
+    if len(distinct) > 2:
+        raise SourceAuthorityError("CONFLICT_TYPE_NEEDS_ONE_OR_TWO_SOURCE_TYPES", {
+            "distinct_sources": distinct,
+        })
+    if len(distinct) == 1:
+        return classify_conflict_type(distinct[0], distinct[0])
+    return classify_conflict_type(distinct[0], distinct[1])

@@ -1,0 +1,24 @@
+{
+  "enabled": true,
+  "dual_time_model": true,
+  "stage_wall_clock": "actual elapsed user-visible stage time",
+  "aggregate_agent_runtime": "sum of all agent runtime in the stage",
+  "provider_token_usage_only": true,
+  "unavailable_token_usage": "N/A/null",
+  "metrics": [
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "total_tokens",
+    "tool_calls",
+    "retries",
+    "findings",
+    "closed_findings",
+    "parallel_saving_sec",
+    "parallelism_efficiency",
+    "tokens_per_finding",
+    "tokens_per_closed_finding"
+  ],
+  "telemetry_is_not_verification_memory": true
+}

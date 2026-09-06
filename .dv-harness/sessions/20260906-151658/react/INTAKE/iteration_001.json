@@ -1,0 +1,48 @@
+{
+  "iteration": 1,
+  "node": "INTAKE",
+  "reason_summary": "Resolved via RouteResolver to agent=analysis-agent on route=analysis-route; executing plan PLAN-C31496E5 rev 1 (2 step(s)); blackboard priors read: ['environment']",
+  "action": {
+    "adapter": "ClaudeCLIAdapter",
+    "agent": "analysis-agent",
+    "resume_session": null
+  },
+  "tool": "ClaudeAdapter.run",
+  "observation": {
+    "ok": true,
+    "status": "PARTIAL",
+    "session_id": "04e7cbda-8298-480f-a430-7e8c4e161535"
+  },
+  "evidence": {
+    "intake_readiness": {
+      "mode": "SUBSYSTEM",
+      "target_name": "USB2.0/USB3.1 Gen1/Gen2 dual-port subsystem (lan063.u_ss_vout.u_usbtop[1:0] / DWC_usb31)",
+      "protocols": [
+        "USB2.0",
+        "USB3.1_Gen1",
+        "USB3.1_Gen2"
+      ],
+      "required_artifacts": {
+        "protocol_spec": true,
+        "dut_design_spec": true,
+        "rtl_top_or_interface_files": true,
+        "command_txt": [
+          "D:/DV/Task/USB/command.txt",
+          "D:/DV/Task/USB/patterns/USB2_bulkin.txt",
+          "D:/DV/Task/USB/patterns/USB31_SSPbulkin.txt",
+          "D:/DV/Task/USB/uvm/tb/patterns/enumeration/usb20_enumeration.txt",
+          "D:/DV/Task/USB/uvm/tb/patterns/pattern_list.txt"
+        ],
+        "vip_reference": [
+          "D:/DV/Task/USB/VIP/doc/usb_svt_uvm_user_guide.txt",
+          "D:/DV/Task/USB/VIP/doc/usb_svt_hdl_user_guide.txt",
+          "D:/DV/Task/USB/VIP/examples/tb_usb_svt_uvm_20_phy",
+          "D:/DV/Task/USB/VIP/examples/tb_usb_svt_uvm_20_b2b_phy"
+        ]
+      }
+    },
+    "de_local_sim_env_intake_gate": {}
+  },
+  "confidence": "MEDIUM",
+  "next_action": "retry_or_reroute"
+}

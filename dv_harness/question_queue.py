@@ -80,7 +80,7 @@ import tempfile
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from . import exemptions as _exemptions
 
@@ -139,6 +139,29 @@ class QuestionValidationError(ValueError):
     never persist/ask an invalid question."""
 
 
+class DoNotAskError(QuestionValidationError):
+    """Raised by `add_question(enforce_do_not_ask=True)` when the SAME
+    question_key already has a live, REAL decision on file that makes a
+    fresh ask of it redundant -- see `find_redundant_decision()` for exactly
+    which decisions qualify and why a Tier-3 hard trigger over a Tier-2
+    guess deliberately does NOT. Carries the redundant decision itself so a
+    caller can report which one made the new question unnecessary, rather
+    than merely knowing something did."""
+
+    def __init__(self, question_key: str, decision: Dict[str, Any]):
+        current = decision.get("current") or {}
+        self.question_key = question_key
+        self.decision = decision
+        super().__init__(
+            "question_key %r already has a live decision on file (source=%r, answer=%r, "
+            "decided_by=%r, decided_at=%r) that already answers it -- refusing to file a "
+            "duplicate question. Read the cited decision (or call revoke_decision() first "
+            "if it is genuinely wrong) rather than re-asking."
+            % (question_key, current.get("source"), current.get("answer"),
+               current.get("decided_by"), current.get("decided_at"))
+        )
+
+
 def is_cannot_assume(context: Dict[str, Any]) -> bool:
     """The Part-B Tier-3 predicate, HARD-CODED per spec ("a hard-coded
     trigger, not a judgment call"): true iff `context` claims the question
@@ -158,6 +181,16 @@ _SAFE_BLAST_RADII = frozenset({"single_regression"})
 # not an answer -- treating it as one lets the harness answer its own
 # escalation with its own earlier guess. See classify_tier().
 HUMAN_DECISION_SOURCE = "human_answer"
+
+#: The literal `current.source` value `_persist_decision`/`add_question` write
+#: for a Tier-2 log-and-continue default (see add_question's Tier-2 branch,
+#: which has used this exact string since before this constant existed --
+#: named here, not re-typed, so `find_redundant_decision()` below shares one
+#: spelling with the code that writes it). A REAL auto-resolution (the
+#: harness actually reasoned about blast radius and decided this was safe to
+#: assume), as distinct from a human answer -- see HUMAN_DECISION_SOURCE and
+#: `find_redundant_decision()` for why the two are treated differently.
+TIER2_AUTO_ASSUMPTION_SOURCE = "tier2_auto_assumption"
 
 #: classify_tier()'s reason string when an ACTIVE exemptions.yaml entry
 #: resolved the ask. Deliberately NOT "decisions_store_hit": a consumer
@@ -190,6 +223,47 @@ def _is_human_decision(prior_decision: Optional[Dict[str, Any]]) -> bool:
     if not prior_decision:
         return False
     return (prior_decision.get("current") or {}).get("source") == HUMAN_DECISION_SOURCE
+
+
+def find_redundant_decision(prior_decision: Optional[Dict[str, Any]],
+                            context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The do-not-ask predicate: is `prior_decision` a REAL resolution
+    (`find_decision()`'s live hit for this question_key) that makes a FRESH
+    ask of it -- with this `context` -- genuinely redundant? Returns
+    `prior_decision` itself when it is (never a bare True/False), so a
+    caller can report exactly which decision applies; returns None when no
+    real decision is on file, or when one exists but does not (yet) make
+    this particular ask redundant.
+
+    Two real sources qualify, and they are NOT treated alike -- deliberately
+    mirroring classify_tier()'s own evaluation order rather than inventing a
+    second one:
+      - A HUMAN answer (`HUMAN_DECISION_SOURCE`) is ALWAYS redundant,
+        regardless of this ask's own context. This is classify_tier()'s step
+        2 restated as a filing-time refusal: "a human answer on file DOES
+        still win over a hard trigger... safe precisely because a human,
+        not the harness, supplied it."
+      - A Tier-2 auto-assumption (`TIER2_AUTO_ASSUMPTION_SOURCE`) is
+        redundant ONLY when this ask's own context trips NO Tier-3 hard
+        trigger (`is_cannot_assume(context)` is False). A machine's own
+        earlier guess must never suppress a later, genuinely Tier-3-
+        triggering ask of the same question_key -- that is review defect
+        F3-a, and treating a tier2 guess as blanket-redundant here would
+        resurrect it under the do-not-ask feature's own name. A hard-
+        trigger ask over a tier2 guess is a real escalation, not a repeat,
+        and must still be filed.
+      - Anything else (no decision, an unrecognized/legacy source with no
+        `current.source` at all) is NOT redundant -- fail toward asking a
+        human rather than silently swallowing a question on the strength of
+        a record this function cannot positively identify as real."""
+    if prior_decision is None:
+        return None
+    source = (prior_decision.get("current") or {}).get("source")
+    if source == HUMAN_DECISION_SOURCE:
+        return prior_decision
+    if source == TIER2_AUTO_ASSUMPTION_SOURCE and not is_cannot_assume(context):
+        return prior_decision
+    return None
 
 
 def hard_triggers(context: Dict[str, Any]) -> List[str]:
@@ -831,7 +905,8 @@ class QuestionQueueStore:
     def add_question(self, *, domain: str, question: str, context_path: str,
                        options: Any, recommendation: str,
                        assumption_if_unanswered: str, question_key: Optional[str] = None,
-                       context: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None) -> dict:
+                       context: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None,
+                       enforce_do_not_ask: bool = False) -> dict:
         """Ask one question. NEVER pings/notifies -- it only persists the
         record (see build_digest() for the only aggregation/reporting path,
         per Part B: "never real-time pings"). Returns the full persisted
@@ -843,10 +918,32 @@ class QuestionQueueStore:
         normalize_options() to the single persisted shape (see its docstring
         for why the string form is an input convenience and not a second
         storage format). A malformed element raises QuestionValidationError
-        here, before anything is persisted."""
+        here, before anything is persisted.
+
+        `enforce_do_not_ask` (default False, disclosed-default like this
+        module's other opt-in strictness flags): when True, refuse to file a
+        new record at all -- raising `DoNotAskError` rather than persisting
+        anything -- when `find_redundant_decision()` finds a live decision
+        for this exact `question_key` that already makes the ask redundant
+        (see that function for exactly which decisions qualify, and why a
+        Tier-2 auto-assumption does NOT suppress a genuinely Tier-3-
+        triggering re-ask). Defaulting to False keeps every existing caller's
+        behavior byte-identical: the ordinary path still files a fresh
+        SELF_RESOLVED/ASSUMED/OPEN record every time (as `test_asking_the_
+        same_question_twice_self_resolves_the_second_time` already proves),
+        which is what `repeat_question_rate` and `build_digest()`'s batching
+        are measured against. `enforce_do_not_ask=True` is for a caller that
+        wants to stop growing questions.json with duplicates of an
+        already-decided question altogether -- e.g. a repeatedly-re-run
+        detector filing the SAME multi-option escalation every pass, the
+        exact churn `build_multiple_choice_question()` is built to avoid."""
         context = dict(context or {})
         options = normalize_options(options)
         question_key = question_key or make_question_key(domain, question, context_path)
+        if enforce_do_not_ask:
+            redundant = find_redundant_decision(self.find_decision(question_key), context)
+            if redundant is not None:
+                raise DoNotAskError(question_key, redundant)
         owner = route_owner(domain)
         qid = make_question_id(domain, question_key)
 
@@ -1266,3 +1363,229 @@ class QuestionQueueStore:
             "tier3_count": sum(1 for q in qs if q["tier"] == TIER3_CANNOT_ASSUME),
             "open_blocking_count": sum(1 for q in qs if q["status"] == "OPEN"),
         }
+
+
+# ---- N-way question builder: the exactly-2-option shape, generalized -------
+
+# `source_authority.escalate_conflict()` builds exactly ONE shape: two named
+# sides of a source disagreement, each carrying its own evidence path as its
+# option `rationale`, validated by `assert_both_evidence_paths_present()`
+# before the record is persisted, then filed once (idempotent on
+# question_key) as a Tier-3 blocking question. `build_multiple_choice_
+# question()` below is that SAME shape with the "exactly 2" generalized to
+# "N >= 2 named candidates" -- reusing this module's own machinery
+# (`add_question`, `make_question_key`) exactly as `escalate_conflict`
+# already does, so a caller with 3 plausible bind targets, 3 candidate root
+# causes, or any other N-way pre-researched choice gets ONE well-formed
+# question instead of hand-rolling the option-shape/evidence-citation/
+# dedup discipline itself.
+#
+# Disclosed residual, stated rather than left to be discovered: this is a
+# SEPARATE implementation from `source_authority.assert_both_evidence_paths_
+# present()`, not a shared call into it -- this task's own scope is
+# `dv_harness/question_queue.py` only, and `source_authority.py` (where
+# `escalate_conflict`/`assert_both_evidence_paths_present` actually live) is
+# outside it. Unifying the two for real means either making
+# `source_authority.escalate_conflict()` call this module's generalized N=2
+# case, or pointing both at one shared validator -- either edit touches
+# `source_authority.py`, which this change does not. What IS true, and
+# checked below rather than merely asserted, is that the two enforce the
+# IDENTICAL rule (every named candidate's evidence path must appear verbatim
+# in the question text or an option's label/rationale) -- see
+# `test_assert_all_evidence_paths_present_matches_source_authority_rule` --
+# so this is a deliberate, disclosed duplication of ONE rule, not an
+# undisclosed drift into two diverging ones.
+
+#: Same admission bar `source_authority.CONFLICT_QUESTION_CONTEXT` uses:
+#: `affects_spec_intent` is the honest reason a caller choosing between N
+#: pre-researched candidates cannot be resolved by the harness itself --
+#: which of several plausible interpretations/targets/root-causes is
+#: correct is exactly a spec-intent judgment call. A caller with a
+#: genuinely different reason may override via `extra_context=`, the same
+#: contract every other evidence dict in this codebase carries.
+MULTIPLE_CHOICE_QUESTION_CONTEXT: dict = {"affects_spec_intent": True}
+
+#: What a multi-candidate escalation says when nobody answers. Deliberately
+#: NOT a value -- mirrors `source_authority.NO_SAFE_ASSUMPTION`: a Tier-3
+#: question never silently uses its assumption, and naming one of the N
+#: candidates here would be the one string a future tier relaxation could
+#: pick up and act on as if it had been decided.
+NO_SAFE_ASSUMPTION_MULTIPLE_CHOICE = (
+    "NONE IS SAFE -- a choice among multiple pre-researched candidates with no "
+    "single authority-derived winner is Tier-3 by construction; a human must pick "
+    "which candidate is correct before anything proceeds on the strength of it."
+)
+
+
+def _schema_options_max_items() -> int:
+    """The REAL current cap on `options` this module's own schema enforces --
+    read from question.schema.json itself rather than a second hardcoded
+    "3", so a future schema change is picked up automatically instead of
+    requiring this function to be found and edited in step. Today that cap
+    is 2-3 (see question.schema.json's own `options.maxItems`), the exact
+    reason `source_authority.escalate_conflict()` already refuses (rather
+    than truncates) a conflict with more than 3 sides."""
+    return _load_schema()["properties"]["options"]["maxItems"]
+
+
+def assert_all_evidence_paths_present(question_text: str, options: List[Dict[str, str]],
+                                       evidence_paths: Sequence[str]) -> None:
+    """The N-ary generalization of `source_authority.
+    assert_both_evidence_paths_present()`'s rule (see this module's own
+    disclosed-residual note above for why this is a second, deliberately
+    identical implementation rather than a shared call): refuse a
+    multi-candidate question that fails to carry EVERY named candidate's
+    evidence path, verbatim, somewhere in the question text or an option's
+    own label/rationale. An escalation naming N choices without saying
+    where each one's evidence lives is worse than none filed at all -- it
+    reads as researched work while leaving the human reader with nowhere to
+    check N-1 of the N claims.
+
+    Raises QuestionValidationError (never a bare assert) naming exactly
+    which evidence path(s) are missing, and how many candidates that is out
+    of the total -- so a caller can tell "forgot one citation" from "wrote
+    the wrong candidate list entirely" without re-deriving it by hand."""
+    blob = question_text + " " + " ".join(
+        f"{o.get('label', '')} {o.get('rationale', '')}" for o in options
+    )
+    missing = [p for p in evidence_paths if p not in blob]
+    if missing:
+        raise QuestionValidationError(
+            "multiple-choice question is missing the evidence path for %d of %d "
+            "candidate(s): %r -- every candidate's evidence_path must appear in the "
+            "question text or its own option rationale before this can be filed."
+            % (len(missing), len(evidence_paths), missing)
+        )
+
+
+def build_multiple_choice_question(
+    store: "QuestionQueueStore",
+    *,
+    domain: str,
+    subject: str,
+    candidates: Sequence[Dict[str, Any]],
+    question_text: Optional[str] = None,
+    recommendation_label: Optional[str] = None,
+    context_path: Optional[str] = None,
+    question_key: Optional[str] = None,
+    extra_context: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> dict:
+    """File ONE well-formed Tier-3 blocking question offering N >= 2 named
+    candidates, each carrying its own evidence path -- the N-way
+    generalization of `source_authority.escalate_conflict()`'s exactly-2-
+    option shape (see the module-level comment above this function for the
+    full relationship, including what is and is not shared with it).
+
+    `candidates`: a sequence of >= 2 dicts, each REQUIRED to carry:
+      - `label` (str): the candidate's name, becomes options[].label.
+      - `evidence_path` (str): where THIS candidate's supporting evidence
+        lives (a file:line, an env.manifest.json pointer, a register/port
+        name, ...) -- folded into the option's `rationale` and asserted
+        present by `assert_all_evidence_paths_present()` before anything is
+        persisted, exactly the discipline `escalate_conflict` already
+        enforces for its 2 sides, generalized to all N.
+      - `rationale` (str, optional): additional pre-research reasoning
+        beyond the bare evidence citation.
+    Fewer than 2 candidates, or a candidate missing `label`/`evidence_path`,
+    raises QuestionValidationError before anything is touched.
+
+    More than `_schema_options_max_items()` candidates is REFUSED, not
+    truncated -- silently dropping the (N-3)th candidate would drop that
+    candidate's evidence path with it, exactly the failure
+    `escalate_conflict`'s own "> 3 sides" refusal exists to prevent. Split a
+    wider decision into pairwise/grouped questions instead.
+
+    `question_text` defaults to a generated summary naming every candidate
+    and its evidence path; a caller with a more precise question may pass
+    its own (which must still satisfy `assert_all_evidence_paths_present()`).
+    `recommendation_label` defaults to the first candidate when omitted --
+    mirroring `escalate_conflict`'s own UNDECIDABLE-verdict behavior: with
+    no authority-derived winner, recommending one anyway would be inventing
+    the tie-break this function is explicitly declining to make; the
+    highest-listed candidate is offered only as a starting point, never as
+    a claimed answer.
+
+    Idempotent on `question_key` (derived from domain/question_text/
+    context_path when not supplied), the SAME discipline `escalate_conflict`
+    already uses: an existing record for this exact key is returned as-is
+    rather than duplicated, so a detector that reruns over unchanged sources
+    never grows the queue. Files with `context={"affects_spec_intent": True,
+    ...}` (see `MULTIPLE_CHOICE_QUESTION_CONTEXT`), so `classify_tier()`
+    reaches Tier 3 (`CANNOT_ASSUME`, blocking) on its own ordinary rules --
+    no tier is asserted directly by this function."""
+    candidates = list(candidates)
+    if len(candidates) < 2:
+        raise QuestionValidationError(
+            f"build_multiple_choice_question needs >= 2 named candidates, got "
+            f"{len(candidates)}"
+        )
+    max_options = _schema_options_max_items()
+    if len(candidates) > max_options:
+        raise QuestionValidationError(
+            f"build_multiple_choice_question got {len(candidates)} candidates, but "
+            f"question.schema.json's options only allows up to {max_options} -- refused "
+            f"rather than truncated (dropping a candidate would drop its evidence path "
+            f"with it). Split a wider decision into pairwise/grouped multiple-choice "
+            f"questions to keep every evidence path."
+        )
+    for i, c in enumerate(candidates):
+        if not isinstance(c, dict) or not c.get("label") or not c.get("evidence_path"):
+            raise QuestionValidationError(
+                f"candidates[{i}] must be a dict carrying at least a non-empty 'label' "
+                f"and 'evidence_path' (got {c!r})"
+            )
+
+    options: List[Dict[str, str]] = []
+    for c in candidates:
+        prefix = f"{c['rationale']} " if c.get("rationale") else ""
+        options.append({
+            "label": c["label"],
+            "rationale": f"{prefix}evidence: {c['evidence_path']}",
+        })
+
+    if question_text is None:
+        parts = [
+            "%s: %s [evidence: %s]" % (c["label"], c.get("rationale") or "see cited evidence",
+                                        c["evidence_path"])
+            for c in candidates
+        ]
+        question_text = f"Multiple candidates for {subject}: " + "; ".join(parts)
+
+    assert_all_evidence_paths_present(question_text, options,
+                                       [c["evidence_path"] for c in candidates])
+
+    labels = [o["label"] for o in options]
+    if recommendation_label is not None and recommendation_label not in labels:
+        raise QuestionValidationError(
+            f"recommendation_label {recommendation_label!r} is not one of the offered "
+            f"candidate labels {labels!r} -- a question must never recommend a candidate "
+            f"it did not actually offer."
+        )
+    recommendation = recommendation_label or options[0]["label"]
+
+    ctx = dict(MULTIPLE_CHOICE_QUESTION_CONTEXT)
+    ctx.update(extra_context or {})
+
+    key = question_key or make_question_key(
+        domain, question_text, context_path or candidates[0]["evidence_path"])
+
+    # Idempotent dedup BEFORE filing -- same reasoning escalate_conflict's own
+    # comment gives: add_question() appends unconditionally, so a detector
+    # that reruns over unchanged sources would otherwise mint a fresh
+    # duplicate record (same Q-ID, same question_key) on every pass.
+    for existing in store.list_questions():
+        if existing.get("question_key") == key:
+            return existing
+
+    return store.add_question(
+        domain=domain,
+        question=question_text,
+        context_path=context_path or candidates[0]["evidence_path"],
+        options=options,
+        recommendation=recommendation,
+        assumption_if_unanswered=NO_SAFE_ASSUMPTION_MULTIPLE_CHOICE,
+        question_key=key,
+        context=ctx,
+        now=now,
+    )

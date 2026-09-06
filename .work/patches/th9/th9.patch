@@ -1,0 +1,408 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index b0f8a44..40d7c8b 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -4222,3 +4222,94 @@ fabricated artifacts into this project's real audit trail. (4) It detects; it do
+ re-baseline: there is no "revalidate" verb, because deciding that an invalidated signoff is
+ acceptable is a human judgment, and minting a fresh freeze over a changed project is just
+ `freeze` again with a human named on it.
++
++
++## Evidence Provenance: Self-Attested vs. Independently Derived (2026-09-06, TH-9)
++
++`gates.run_gate()` assembles every stage gate's payload from the ONE fenced evidence block
++(`dv-harness-evidence:<gate_id>`) the AGENT typed. For most gates that is fine -- the
++script re-derives something, or cross-checks the claim against a harness-owned artifact
++(`ContextFlag`, `DV_HARNESS_PROJECT_ROOT`, the waiver ledger, the subsystem registry, a real
++remote transcript). Six gates were not like that, and a completeness audit named this the most
++consequential gap type it found. Re-verified by direct search before building:
++`grep -rn "evidence_provenance|AGENT_SELF_ATTESTED|TOOL_DERIVED|SIMULATION_DERIVED"
++--include=*.py --include=*.json .` matched exactly one unrelated string in a reference-base
++manifest, and no gate anywhere asked who produced its input.
++
++Each of those six gates' PASS is a statement about **dynamic system BEHAVIOUR** -- deadlock and
++livelock freedom (`system_level_deadlock_livelock_gate`), shared-resource contention
++(`system_level_resource_contention_gate`), per-port forward progress
++(`per_port_queue_starvation_gate`), fairness/QoS (`multi_port_fairness_qos_gate`), interrupt
++acknowledgement latency (`interrupt_storm_latency_gate`) and scoreboard transaction liveness
++(`scoreboard_transaction_liveness_gate`) -- a property nothing can establish without RUNNING
++something. Their scripts are pure shape checks over numbers the agent typed:
++`system_level_deadlock_livelock_gate.py` is nine lines and PASSes on
++`{"deadlock_detected": false, ...}`. So "the composed system is deadlock-free" could be produced
++by an agent writing that line, and the resulting PASS was rendered on the dashboard and in the
++signoff bundle **identically** to a PASS backed by a real tool run. That indistinguishability --
++not the absence of a formal checker -- is the defect.
++
++`dv_harness/evidence_provenance.py` closes exactly that, and **nothing more**. It does not verify
++deadlock freedom; a real deadlock checker needs a formal tool this project does not have, and
++building a fake one is the fabrication the Evidence Truth Rule forbids.
++
++- **`evidence_provenance` is a REQUIRED field on those six gates' evidence blocks**, enforced in
++  `run_gate()` BEFORE the script is invoked -- because this is a question about the payload's
++  SOURCE, not its content. Absent -> `EVIDENCE_PROVENANCE_MISSING`; unrecognised ->
++  `EVIDENCE_PROVENANCE_INVALID`. There is deliberately no default: defaulting would decide the
++  very question the field exists to record. The refusal names the field, the accepted values and
++  the claim the gate would otherwise have made, so it is actionable rather than a bare rejection.
++- **The asymmetry is the whole design: the honest answer is the cheap one.**
++  `AGENT_SELF_ATTESTED` is always accepted and needs nothing else -- an agent must never be pushed
++  toward a stronger claim to get a stage moving. `TOOL_DERIVED`/`SIMULATION_DERIVED` cost a real
++  `evidence_derivation` naming a producing tool AND an `artifact_path` that must EXIST under the
++  project root (`EVIDENCE_PROVENANCE_DERIVATION_MISSING` / `EVIDENCE_PROVENANCE_ARTIFACT_NOT_FOUND`).
++  The path is resolved against the project being judged, not the CWD.
++- **Every consumer renders the caveat, from ONE computation.**
++  `control_plane.describe_stage()` -- the single shared read path the dashboard's "Why (current
++  stage)" card and the CLI's `explain`/`evidence`/`checklist` verbs both already go through --
++  carries `summarize_evidence_blocks()`, so a self-attested deadlock-freedom claim cannot be
++  caveated in one surface and presented bare in the other. `dashboard.py`'s `provenanceBlock()`
++  renders a self-attested claim with the existing bold+red `.err` treatment a missing checklist
++  item gets, not a grey note. `signoff_export.read_signoff_stage_status()` carries
++  `summarize_project_provenance()` -- signoff is exactly where a headline claim gets believed --
++  reading `state.json` with the same plain `read_text`/`json.loads` that function already uses,
++  never `StateStore` (which would MINT one). `run_gate()` also stamps the provenance and its
++  caveat onto the gate DETAIL, so `react_loop`'s signature menu and stage telemetry carry it too.
++- **Absence is never read as derived.** `caveat_for(None)` is the self-attested caveat: on any
++  surface, "nobody said" is at best as strong as "the agent said so".
++
++**Deliberately bounded, and stated rather than implied closed.** (1) The artifact check proves a
++FILE EXISTS at a path the agent named; it does not parse it and cannot prove the file contains the
++claim. It is a real COST, not a proof -- it stops a free upgrade from AGENT_SELF_ATTESTED to
++TOOL_DERIVED, it does not make TOOL_DERIVED mean "verified", and `DERIVED_CAVEAT` says so on
++every surface that renders one. (2) It cannot detect a FALSE declaration: an agent that types
++`TOOL_DERIVED` and cites a real unrelated file passes. What is closed is the SILENT case --
++evidence carrying no provenance at all, rendered exactly like tool-derived evidence.
++(3) Only those six gates are enforced. That set is not "the gates we got to"; it is the gates
++whose PASS asserts a measured dynamic-behaviour property over agent-typed numbers, stated with
++each gate's own headline claim in `PROVENANCE_REQUIRED_GATES` so a reader can check the rule was
++applied rather than trust that it was. Every other gate is byte-for-byte unaffected and carries
++no provenance annotation -- stamping one would present a field nobody supplied and nobody checked
++as if it had been decided. (4) It ARBITRATES and AUTHORIZES nothing: no stage runs, no build /
++regression / LSF submission starts, no approval is minted, and there is deliberately no stage
++gate of its own. An AGENT_SELF_ATTESTED PASS is still a PASS -- it is a PASS a human is now told
++the provenance of. (5) `dv_harness/prompts.py` was updated so a real agent emits the field; the
++two pre-existing test fixtures that hand-typed these blocks now declare `AGENT_SELF_ATTESTED`,
++which is the honest value for a hand-written fixture and exactly what a real agent typing those
++numbers must declare.
++
++Proven by `dv_harness_tests/test_evidence_provenance.py` (42 tests) against the REAL
++`gates.evaluate_stage_evidence()` over the REAL shipped `STAGE_GATES`, running the REAL gate
++scripts as subprocesses, and the REAL consumers -- `describe_stage()`, the REAL dashboard server
++driven over REAL HTTP through the same `_start_dashboard`/`_wait_ready`/`_get` harness every
++other dashboard card test uses, and `read_signoff_stage_status()`. Nothing is mocked and no test
++writes a gate detail by hand. The negative controls carry the detection power: every one of the
++six clean payloads is first proven to PASS on the merits (so a provenance FAIL can never be a
++shape failure wearing its name), the deadlock-freedom refusal is paired with the same payload
++ACCEPTED once it honestly declares who wrote it, the two independence refusals are paired with
++the same claim accepted once the cited artifact really exists on disk, an artifact under a
++DIFFERENT root is still refused, a genuinely bad payload still fails on the SCRIPT's own reason
++with provenance declared, an unenforced gate reaches its script unchanged and carries no
++annotation, a derived claim is proven NOT to be caveated, and a byte-level snapshot proves
++summarizing provenance writes nothing.
+diff --git a/dv_harness/control_plane.py b/dv_harness/control_plane.py
+index 8f8d102..0f28d27 100644
+--- a/dv_harness/control_plane.py
++++ b/dv_harness/control_plane.py
+@@ -390,6 +390,7 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
+     evidence/checklist all already go through, so both UIs render it
+     identically and neither has to re-read telemetry itself."""
+     from .gates import extract_evidence_blocks, evaluate_stage_evidence_with_completion
++    from .evidence_provenance import summarize_evidence_blocks
+ 
+     root = Path(root)
+     ss = (state.stages or {}).get(stage, {}) if hasattr(state, "stages") else (state.get("stages", {}).get(stage, {}))
+@@ -397,6 +398,7 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
+     verdict, reasons, completion = evaluate_stage_evidence_with_completion(root, stage, last_message)
+     cp = ControlPlane(root).load()
+     checklists = _latest_stage_checklists(root, stage)
++    evidence_blocks = extract_evidence_blocks(last_message)
+     return {
+         "stage": stage,
+         "status": ss.get("status"),
+@@ -410,7 +412,16 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
+         "stage_completion_note": completion["stage_completion_note"],
+         "entry_checklist": checklists["entry_checklist"],
+         "exit_checklist": checklists["exit_checklist"],
+-        "evidence_blocks": extract_evidence_blocks(last_message),
++        "evidence_blocks": evidence_blocks,
++        # EVIDENCE PROVENANCE (2026-09-06, TH-9): who actually produced the
++        # headline dynamic-behaviour claims this stage's evidence carries
++        # (dv_harness/evidence_provenance.py). Computed here rather than in
++        # each UI because this is the ONE shared read path the dashboard's
++        # "Why (current stage)" card and the CLI's explain/evidence/checklist
++        # verbs both already go through -- two renderers, one answer, so a
++        # self-attested deadlock-freedom claim cannot be caveated in one
++        # surface and presented bare in the other.
++        "evidence_provenance": summarize_evidence_blocks(evidence_blocks),
+         "human_correction": cp.get("corrections", {}).get(stage),
+         "human_approval": cp.get("approvals", {}).get(stage),
+         "takeover": cp.get("takeover") if cp.get("takeover", {}).get("stage") == stage else None,
+diff --git a/dv_harness/dashboard.py b/dv_harness/dashboard.py
+index 65038cb..122da2c 100644
+--- a/dv_harness/dashboard.py
++++ b/dv_harness/dashboard.py
+@@ -148,7 +148,9 @@ category gets a numeric suffix -- never a silent overwrite.</div>
+ <div class="note">Real per-run blocking_reason/gate_verdict for the current stage -- not the static explainer below.
+ Stage completion percent and the entry/exit evidence checklist below come from the same
+ <code>control_plane.describe_stage()</code> data the CLI's <code>explain</code>/<code>evidence</code>/<code>checklist</code>
+-subcommands print.</div>
++subcommands print. The Evidence provenance block names who produced each headline dynamic-behaviour
++claim (deadlock/livelock, starvation, fairness, interrupt latency, scoreboard liveness); an
++<code>AGENT_SELF_ATTESTED</code> claim is shown in red and is NOT independently derived evidence.</div>
+ <div id="stageWhy" style="margin-top:8px"></div></div>
+ <div class="card"><h3>LSF</h3><div id="lsftiles" class="tiles"></div>
+ <div class="note" style="margin-top:8px">Per-job drill-down (GET /api/lsf/jobs[/&lt;job_id&gt;], CLI <code>dv-harness lsf [job_id]</code>). Click a row to expand its full detail. Read-only here: real job submission/kill/reconciliation against LSF (<code>dv-harness lsf-submit</code>/<code>lsf-kill</code>/<code>lsf-reconcile</code>, wrapping real <code>bsub</code>/<code>bkill</code>/<code>bjobs</code>) is CLI-only today.</div>
+@@ -671,6 +673,31 @@ function checklistBlock(title, cl){
+     <div class="bar" style="margin-top:4px"><div style="width:${pct}%"></div></div>
+     ${rows}${missingNote}</div>`;
+ }
++// Evidence-provenance caveat block (2026-09-06, TH-9). Six stage gates make
++// claims about dynamic system BEHAVIOUR -- deadlock/livelock freedom, port
++// starvation, fairness/QoS, interrupt latency, scoreboard liveness -- from
++// numbers the agent typed, and their scripts only check the shape of those
++// numbers. control_plane.describe_stage() now carries
++// evidence_provenance.summarize_evidence_blocks() for exactly those gates, so
++// this card can no longer present a self-attested "deadlock-free" identically
++// to a tool-derived one. Rendered with the existing .err class (the same
++// bold+red treatment a missing checklist item gets) precisely so it cannot be
++// skimmed past. An empty/absent summary renders nothing -- a stage carrying
++// none of these six gates has no such claim to caveat.
++function provenanceBlock(p){
++  if(!p || !(p.entries||[]).length) return '';
++  let rows = p.entries.map(e=>{
++    let declared = e.evidence_provenance || 'UNDECLARED';
++    return e.independently_derived
++      ? `<div>${icon('PASS')} <code>${e.gate_id}</code> [${declared}] -- ${e.claim}</div>`
++      : `<div class="err">${icon('FAIL')} <b><code>${e.gate_id}</code> [${declared}]</b> -- ${e.claim}</div>`;
++  }).join('');
++  let banner = p.has_self_attested_claims
++    ? `<div class="err" style="margin-top:4px"><b>${p.caveat}</b></div>`
++    : '';
++  return `<div style="margin-top:8px"><b>Evidence provenance (headline behaviour claims)</b>
++    ${rows}${banner}</div>`;
++}
+ function stageWhyHTML(d){
+   if(!d) return '(no current stage)';
+   let raw = `stage: ${d.stage}\nstatus: ${d.status}\nattempts: ${d.attempts}\nblocking_reason: ${d.blocking_reason||'(none)'}\ngate_verdict: ${d.gate_verdict}\ngate_reasons: ${JSON.stringify(d.gate_reasons)}\nhuman_correction: ${JSON.stringify(d.human_correction)}\nhuman_approval: ${JSON.stringify(d.human_approval)}\ntakeover: ${JSON.stringify(d.takeover)}`;
+@@ -680,6 +707,7 @@ function stageWhyHTML(d){
+     + `<div style="margin-top:8px"><b>Stage completion:</b> ${pct}% (${gp}/${gt} gates passed)
+        <div class="bar" style="margin-top:4px"><div style="width:${pct}%"></div></div>
+        ${d.stage_completion_note ? `<div class="note" style="margin-top:2px">${d.stage_completion_note}</div>` : ''}</div>`
++    + provenanceBlock(d.evidence_provenance)
+     + checklistBlock('Entry checklist (evidence required before this stage runs)', d.entry_checklist)
+     + checklistBlock('Exit checklist (evidence this stage should have produced)', d.exit_checklist);
+ }
+diff --git a/dv_harness/gates.py b/dv_harness/gates.py
+index b26b468..2cee9be 100644
+--- a/dv_harness/gates.py
++++ b/dv_harness/gates.py
+@@ -5,6 +5,7 @@ from typing import Any, Dict
+ from .config import load_config
+ from .memory import CornerCaseLibrary
+ from .control_plane import ControlPlane
++from . import evidence_provenance as _evidence_provenance
+ 
+ TOOLS_DIR = "tools/verification_flow"
+ 
+@@ -1148,6 +1149,20 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
+         except Exception:
+             pass
+ 
++    # EVIDENCE PROVENANCE (2026-09-06, TH-9). Runs BEFORE the script, because
++    # this is a question about the payload's SOURCE, not about its content: a
++    # deadlock-freedom claim whose producer is undeclared must not be able to
++    # reach the script, pass its shape check, and be rendered exactly like a
++    # tool-derived one. Scoped to evidence_provenance.PROVENANCE_REQUIRED_GATES
++    # (six gates asserting measured dynamic behaviour over agent-typed
++    # numbers); every other gate returns None here and is byte-for-byte
++    # unaffected. See dv_harness/evidence_provenance.py for the full rationale
++    # and the disclosed bounds.
++    provenance_fail = _evidence_provenance.check_payload(root, gate_id, payload)
++    if provenance_fail is not None:
++        _log_gate_history(False, provenance_fail)
++        return GateResult(gate_id, False, provenance_fail)
++
+     tmp_paths = []
+     unresolved = []
+     try:
+@@ -1216,6 +1231,14 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
+     # READY_FOR_TEST_GENERATION, READY_FOR_CLOSURE, TRUE_PASS-nested, ...).
+     script_ok = proc.returncode == 0
+ 
++    # Carry the declared provenance and its caveat on the RESULT, so every
++    # downstream reader of a gate detail (control_plane.describe_stage() ->
++    # the dashboard's "Why (current stage)" card and the CLI's explain/
++    # evidence verbs, react_loop's GateSignature menu, engine.py's stage
++    # telemetry) sees who produced this claim without re-opening the evidence
++    # block. No-op for any gate outside PROVENANCE_REQUIRED_GATES.
++    detail = _evidence_provenance.annotate_gate_detail(gate_id, payload, detail)
++
+     if unresolved:
+         # The script already ran above against the unwrapped (bare-value)
+         # payload -- script_ok tells us whether it would have passed on the
+diff --git a/dv_harness/prompts.py b/dv_harness/prompts.py
+index 8ef8b79..de86cfb 100644
+--- a/dv_harness/prompts.py
++++ b/dv_harness/prompts.py
+@@ -1333,10 +1333,12 @@ true，都會 FAIL NON_INDEPENDENT_TEST_ORACLE——代表這個 oracle 跟 DUT
+ UNPINNED_EXPECTED_SOURCE / NO_PREDICTION_METHOD。）
+ 
+ ```dv-harness-evidence:scoreboard_transaction_liveness_gate
+-{"missing_expected_transactions": 0, "missing_actual_transactions": 0,
++{"evidence_provenance": "AGENT_SELF_ATTESTED",
++ "missing_expected_transactions": 0, "missing_actual_transactions": 0,
+  "duplicate_transactions": 0, "max_transaction_latency": 500,
+  "observed_max_transaction_latency": 120}
+ ```
++（`evidence_provenance` 為必填，規則見下一組說明。）
+ （`missing_expected_transactions`/`missing_actual_transactions`/`duplicate_transactions` 三者只要
+ 有任何一個大於 0，就分別 FAIL MISSING_EXPECTED_TRANSACTIONS / MISSING_ACTUAL_TRANSACTIONS /
+ DUPLICATE_TRANSACTIONS；`max_transaction_latency` 不得缺省，否則 FAIL
+@@ -1346,8 +1348,24 @@ NO_TRANSACTION_LATENCY_BOUND；`observed_max_transaction_latency` 超過 `max_tr
+ 第四組：多 port 場景下的 interrupt/fairness/starvation（單 port 或本輪未涉及多 port 行為時，
+ 對應清單可以誠實地留空陣列，gate 對空清單會直接通過，不需要硬湊資料）：
+ 
++這一組（連同下面的 scoreboard_transaction_liveness_gate）以及 SYSTEM_LEVEL 的
++deadlock/livelock 與 shared-resource contention gate，宣告的都是「系統動態行為」——
++沒有真的跑過東西就無法成立的性質。所以這些 evidence block 一律必須額外帶一個
++`evidence_provenance` 欄位，說明這些數字是誰產生的（缺欄位會 FAIL
++EVIDENCE_PROVENANCE_MISSING，值不在清單內會 FAIL EVIDENCE_PROVENANCE_INVALID）：
++- `"AGENT_SELF_ATTESTED"`：由你自己填寫、沒有經過任何工具或模擬獨立推導。這是誠實的
++  預設值，永遠會被接受，不需要附任何其他東西——不要為了讓 stage 過關而謊報更強的來源。
++- `"TOOL_DERIVED"` / `"SIMULATION_DERIVED"`：真的有工具／模擬跑出這些數字。此時必須同時附
++  `"evidence_derivation": {"tool": "<真實工具名>", "artifact_path": "<真實存在的檔案路徑>"}`，
++  且該路徑在 project root 底下必須真的存在，否則 FAIL EVIDENCE_PROVENANCE_DERIVATION_MISSING
++  / EVIDENCE_PROVENANCE_ARTIFACT_NOT_FOUND。
++（harness 只檢查該 artifact 檔案存在，不會去解析內容——所以這是「來源宣告」而不是
++「claim 已被驗證」。宣告為 AGENT_SELF_ATTESTED 的結論會在 dashboard 與 signoff 匯出上
++被明確標示為未經獨立推導。）
++
+ ```dv-harness-evidence:interrupt_storm_latency_gate
+-{"sources": [{"source_id": "...", "max_ack_latency_cycles": 64,
++{"evidence_provenance": "AGENT_SELF_ATTESTED",
++ "sources": [{"source_id": "...", "max_ack_latency_cycles": 64,
+   "observed_max_ack_latency_cycles": 20, "storm_rate": null,
+   "storm_test_evidence": null, "lost_interrupts": 0}]}
+ ```
+@@ -1358,7 +1376,8 @@ FAIL LOST_INTERRUPTS。本輪測項未涉及任何 interrupt source 時，`{"sou
+ 預設值。）
+ 
+ ```dv-harness-evidence:multi_port_fairness_qos_gate
+-{"ports": [{"port_id": "...", "min_service_share_percent": 20,
++{"evidence_provenance": "AGENT_SELF_ATTESTED",
++ "ports": [{"port_id": "...", "min_service_share_percent": 20,
+   "observed_service_share_percent": 25, "qos_enabled": false,
+   "qos_policy_verified": false}]}
+ ```
+@@ -1367,7 +1386,8 @@ FAIL LOST_INTERRUPTS。本輪測項未涉及任何 interrupt source 時，`{"sou
+ `qos_policy_verified` 不是 true 會 FAIL QOS_NOT_VERIFIED。非多 port 測項可同樣附 `{"ports": []}`。）
+ 
+ ```dv-harness-evidence:per_port_queue_starvation_gate
+-{"ports": [{"port_id": "...", "independent_queue": true, "max_wait_cycles": 256,
++{"evidence_provenance": "AGENT_SELF_ATTESTED",
++ "ports": [{"port_id": "...", "independent_queue": true, "max_wait_cycles": 256,
+   "observed_wait_cycles": 40, "forward_progress_evidence": "..."}]}
+ ```
+ （`independent_queue` 必須為 true，否則 FAIL PORT_NOT_INDEPENDENT_QUEUE；`max_wait_cycles` 不得
+@@ -2417,9 +2437,16 @@ DEPENDENCY_UNKNOWN_SUBSYSTEM；整張圖不能有環（例如 A→B→A），有
+ Deadlock / Livelock 分析：
+ 
+ ```dv-harness-evidence:system_level_deadlock_livelock_gate
+-{"deadlock_detected": false, "livelock_detected": false,
++{"evidence_provenance": "AGENT_SELF_ATTESTED",
++ "deadlock_detected": false, "livelock_detected": false,
+  "forward_progress_assertions": ["..."], "stress_scenario_evidence": ["..."]}
+ ```
++（`evidence_provenance` 為必填欄位：`"AGENT_SELF_ATTESTED"`（你自己填的，永遠被接受、不需附
++其他東西）／`"TOOL_DERIVED"`／`"SIMULATION_DERIVED"`。後兩者必須同時附
++`"evidence_derivation": {"tool": "...", "artifact_path": "..."}`，且該路徑在 project root 底下
++必須真的存在。缺欄位 FAIL EVIDENCE_PROVENANCE_MISSING。「system 沒有 deadlock」是動態行為結論，
++沒跑過任何東西就宣稱是不成立的——誠實標記為 AGENT_SELF_ATTESTED 不會擋住 stage，但會在
++dashboard 與 signoff 匯出上明確標示為未經獨立推導。）
+ （deadlock_detected 或 livelock_detected 為 true 會直接 FAIL（分別是
+ SYSTEM_DEADLOCK_DETECTED，會附上 deadlock_cycle；SYSTEM_LIVELOCK_DETECTED）——這兩個欄位必須
+ 反映真實分析結果，不是預設隨便填 false；forward_progress_assertions 與 stress_scenario_evidence
+@@ -2430,7 +2457,8 @@ NO_STRESS_SCENARIO_EVIDENCE，代表沒有真的用 forward-progress assertion 
+ 共享資源競爭：
+ 
+ ```dv-harness-evidence:system_level_resource_contention_gate
+-{"shared_resources": ["DDR", "APB_BUS"],
++{"evidence_provenance": "AGENT_SELF_ATTESTED",
++ "shared_resources": ["DDR", "APB_BUS"],
+  "scenarios": [{"scenario_id": "SC1", "resources": ["DDR"],
+    "arbitration_or_contention_policy": "...", "contention_testcase_ids": ["..."]}]}
+ ```
+diff --git a/dv_harness/signoff_export.py b/dv_harness/signoff_export.py
+index ffaac22..4d3d199 100644
+--- a/dv_harness/signoff_export.py
++++ b/dv_harness/signoff_export.py
+@@ -340,6 +340,15 @@ def read_signoff_stage_status(root: Path) -> Dict[str, Any]:
+     from .gates import STAGE_GATES
+     required_gates = [gid for gid, _, _ in STAGE_GATES.get("SIGNOFF", [])]
+ 
++    # EVIDENCE PROVENANCE (2026-09-06, TH-9). Signoff is exactly where a
++    # headline claim gets believed, so the bundle a human reads before signing
++    # must say which of those claims nothing but the agent stands behind.
++    # `summarize_project_provenance()` reads the same state.json this function
++    # already read, with the same plain read_text/json.loads (never
++    # StateStore, which would MINT one) -- so asking the question still cannot
++    # bring a project's governance state into existence.
++    from .evidence_provenance import summarize_project_provenance
++
+     return {
+         "state_file_present": state_present,
+         "current_stage": current_stage,
+@@ -348,6 +357,7 @@ def read_signoff_stage_status(root: Path) -> Dict[str, Any]:
+         "signoff_event_count": signoff_event_count,
+         "subsystem_registry_present": registry_path.is_file(),
+         "required_signoff_gates": required_gates,
++        "evidence_provenance": summarize_project_provenance(root),
+     }
+ 
+ 
+diff --git a/dv_harness_tests/test_engine_gates_and_routing.py b/dv_harness_tests/test_engine_gates_and_routing.py
+index 57a64ab..eb87580 100644
+--- a/dv_harness_tests/test_engine_gates_and_routing.py
++++ b/dv_harness_tests/test_engine_gates_and_routing.py
+@@ -35,14 +35,14 @@ _VERIFY_EXTRA_GATES = (
+     '```dv-harness-evidence:command_intent_semantic_closure_gate\n{"command_id": "cmd1", "command_hash": "h1", "expected_semantics": "X_DONE", "observed_semantics": "X_DONE", "sim_log_hash": "sh1", "simulation_result": "PASSED"}\n```\n'
+     '```dv-harness-evidence:expected_data_provenance_gate\n{"scoreboards": [{"scoreboard_id": "SB1", "expected_source": "REFERENCE_MODEL", "expected_source_hash": "H1", "prediction_method": "PREDICT_BEFORE_DRIVE"}]}\n```\n'
+     '```dv-harness-evidence:false_pass_false_fail_arbitration_gate\n{"simulation_status": "PASS", "semantic_status": "TRUE_PASS", "checker_status": "PASS", "fatal_or_uvm_error": false}\n```\n'
+-    '```dv-harness-evidence:interrupt_storm_latency_gate\n{"sources": [{"source_id": "irq0", "max_ack_latency_cycles": 100, "observed_max_ack_latency_cycles": 50, "storm_rate": null, "lost_interrupts": 0}]}\n```\n'
+-    '```dv-harness-evidence:multi_port_fairness_qos_gate\n{"ports": [{"port_id": "p0", "min_service_share_percent": 10, "observed_service_share_percent": 20, "qos_enabled": false}]}\n```\n'
++    '```dv-harness-evidence:interrupt_storm_latency_gate\n{"evidence_provenance": "AGENT_SELF_ATTESTED", "sources": [{"source_id": "irq0", "max_ack_latency_cycles": 100, "observed_max_ack_latency_cycles": 50, "storm_rate": null, "lost_interrupts": 0}]}\n```\n'
++    '```dv-harness-evidence:multi_port_fairness_qos_gate\n{"evidence_provenance": "AGENT_SELF_ATTESTED", "ports": [{"port_id": "p0", "min_service_share_percent": 10, "observed_service_share_percent": 20, "qos_enabled": false}]}\n```\n'
+     '```dv-harness-evidence:negative_test_effectiveness_gate\n{"checks": [{"id": "c1", "positive_passed": true, "negative_mutation_applied": true, "negative_control_result": "FAIL"}]}\n```\n'
+-    '```dv-harness-evidence:per_port_queue_starvation_gate\n{"ports": [{"port_id": "p0", "independent_queue": true, "max_wait_cycles": 100, "observed_wait_cycles": 50, "forward_progress_evidence": "log.txt"}]}\n```\n'
++    '```dv-harness-evidence:per_port_queue_starvation_gate\n{"evidence_provenance": "AGENT_SELF_ATTESTED", "ports": [{"port_id": "p0", "independent_queue": true, "max_wait_cycles": 100, "observed_wait_cycles": 50, "forward_progress_evidence": "log.txt"}]}\n```\n'
+     '```dv-harness-evidence:remote_execution_provenance_gate\n{"transcript_path": "/tmp/verify.txt", "claimed_exit_code": 0}\n```\n'
+     '```dv-harness-evidence:rerun_determinism_gate\n{"runs": [{"input_fingerprint": "fp1", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "ck1"}, {"input_fingerprint": "fp1", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "ck1"}]}\n```\n'
+     '```dv-harness-evidence:run_environment_reproducibility_gate\n{"rtl_hash": "abc", "testbench_hash": "def", "simulator_version": "vcs-2023", "vip_version": "1.0", "compile_options_hash": "co1", "runtime_options_hash": "ro1", "env_hash": "e1", "final_verdict": "PASS", "replay_command": "make replay"}\n```\n'
+-    '```dv-harness-evidence:scoreboard_transaction_liveness_gate\n{"missing_expected_transactions": 0, "missing_actual_transactions": 0, "duplicate_transactions": 0, "max_transaction_latency": 100, "observed_max_transaction_latency": 50}\n```\n'
++    '```dv-harness-evidence:scoreboard_transaction_liveness_gate\n{"evidence_provenance": "AGENT_SELF_ATTESTED", "missing_expected_transactions": 0, "missing_actual_transactions": 0, "duplicate_transactions": 0, "max_transaction_latency": 100, "observed_max_transaction_latency": 50}\n```\n'
+     '```dv-harness-evidence:semantic_evidence_strength_gate\n{"minimum_rank": 2, "expectations": [{"expectation_id": "e1", "evidence": [{"type": "ASSERTION", "contradicted": false}]}]}\n```\n'
+     '```dv-harness-evidence:simulation_completion_recheck_gate\n{"simulation_ended": true, "semantic_workflow_started": true}\n```\n'
+     '```dv-harness-evidence:simulation_semantic_trace_gate\n{"final_state": "TRUE_PASS", "signoff_credit_allowed": true, "results": [{"expectation_id": "E1", "status": "MATCH", "source_line": 12, "evidence_source": "sim.log"}]}\n```\n'
+diff --git a/dv_harness_tests/test_system_level_soc_composition_wiring.py b/dv_harness_tests/test_system_level_soc_composition_wiring.py
+index 951dbd6..187c94d 100644
+--- a/dv_harness_tests/test_system_level_soc_composition_wiring.py
++++ b/dv_harness_tests/test_system_level_soc_composition_wiring.py
+@@ -195,12 +195,20 @@ def _system_level_evidence(subsystems, soc_name="demo_soc"):
+             "subsystems": names,
+             "dependencies": [{"from": a, "to": b}],
+         },
++        # evidence_provenance (2026-09-06, TH-9): these two gates assert
++        # dynamic system BEHAVIOUR (deadlock/livelock freedom, contention
++        # arbitration) from numbers written here by hand, so
++        # gates.run_gate() now requires each to declare who produced them.
++        # AGENT_SELF_ATTESTED is the honest value for a hand-written fixture
++        # and is exactly what a real agent typing these numbers must declare.
+         "system_level_deadlock_livelock_gate": {
++            "evidence_provenance": "AGENT_SELF_ATTESTED",
+             "deadlock_detected": False, "livelock_detected": False,
+             "forward_progress_assertions": ["fp_assert_apb_grant"],
+             "stress_scenario_evidence": ["stress-run-1"],
+         },
+         "system_level_resource_contention_gate": {
++            "evidence_provenance": "AGENT_SELF_ATTESTED",
+             "shared_resources": ["APB_BUS"],
+             "scenarios": [{"scenario_id": "SC1", "resources": ["APB_BUS"],
+                            "arbitration_or_contention_policy": "round-robin",

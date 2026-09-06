@@ -1,0 +1,142 @@
+
+`ifndef GUARD_SVT_AHB_MASTER_BIND_IF_SVI
+`define GUARD_SVT_AHB_MASTER_BIND_IF_SVI
+
+`include "svt_ahb_port_defines.svi"
+
+/**
+    @grouphdr Interfaces svt_ahb_master_bind_if AHB Master SV Bind interface.
+ */
+
+/**
+ * @groupname svt_ahb_master_bind_if
+ * <b>General description:</b><p>
+ * Bind interface is an interface which contains directional signals for AHB. 
+ * Users can connect DUT signals to these directional signals. 
+ * Bind interfaces provided with VIP are svt_ahb_master_bind_if and svt_ahb_slave_bind_if.
+ * To use bind interface, user still needs to instantiate the non-bind interface, 
+ * and then connect bind interface to the non-bind interface. 
+ * 
+ * VIP provides MASTER and SLAVE connector modules to connect the VIP bind interface to VIP non-bind interface.
+ * User needs to instantiate a connector module corresponding to each instance of VIP MASTER and SLAVE, and pass
+ * the bind interface and non-bind interface instance to this connector module.
+ *
+ * The connector module is parameterized in order to distinguish between Active and Passive connection.
+ * Based on the value of the parameter(Active or Passive) passed from the TB while instantiating the 
+ * connector module the corresponding signal connections are made between MASTER IF and MASTER BIND IF.
+ *
+ * The MASTER Bind interface svt_ahb_master_bind_if defines the AHB signals, along with the Parametrized MASTER connector
+ * module (svt_ahb_master_connector) which is used to connect the VIP bind interface to VIP non-bind interface in either 
+ * Active or Passive mode depending on the value of the parameter passed.
+ */
+interface svt_ahb_master_bind_if #( int HADDR_WIDTH_PARAM              = `SVT_AHB_MAX_ADDR_WIDTH,
+                                    int HWDATA_WIDTH_PARAM             = `SVT_AHB_MAX_DATA_WIDTH,
+                                    int HRDATA_WIDTH_PARAM             = `SVT_AHB_MAX_DATA_WIDTH,
+                                    int CONTROL_HUSER_WIDTH_PARAM      = `SVT_AHB_MAX_USER_WIDTH,
+                                    int HBURST_WIDTH_PARAM             = `SVT_AHB_HBURST_PORT_WIDTH,
+                                    int HPROT_WIDTH_PARAM              = `SVT_AHB_HPROT_PORT_WIDTH,
+                                    int HSIZE_WIDTH_PARAM              = `SVT_AHB_HSIZE_PORT_WIDTH,
+                                    `ifdef SVT_AHB_V6_ENABLE
+                                    int HBSTRB_WIDTH_PARAM             = `SVT_AHB_HBSTRB_PORT_WIDTH,
+                                    `endif
+                                    int HTRANS_WIDTH_PARAM             = `SVT_AHB_HTRANS_PORT_WIDTH,
+                                    int HRESP_WIDTH_PARAM              = `SVT_AHB_HRESP_PORT_WIDTH,
+                                    int HRDATA_HUSER_WIDTH_PARAM       = `SVT_AHB_MAX_DATA_USER_WIDTH,
+                                    int HWDATA_HUSER_WIDTH_PARAM       = `SVT_AHB_MAX_DATA_USER_WIDTH
+                                  )
+(
+  input                             			            hgrant,
+  input  [(HRDATA_WIDTH_PARAM-1) : 0] 	            hrdata,
+  input                     			            hready,
+  input  [(HRESP_WIDTH_PARAM-1) : 0]    	    hresp,
+  input  [(HRDATA_HUSER_WIDTH_PARAM-1) : 0]      hrdata_huser,
+  inout  [(HADDR_WIDTH_PARAM-1) : 0] 	        haddr,
+  `ifdef SVT_AHB_V6_ENABLE
+  inout [(HBSTRB_WIDTH_PARAM- 1):0]           hbstrb,
+	inout                                       hunalign,
+  `endif
+  inout  [(HBURST_WIDTH_PARAM-1) : 0] 		    hburst,
+  inout             			                    hbusreq,
+  inout               			                    hlock,
+  inout  [(HPROT_WIDTH_PARAM-1) : 0]           hprot,
+  inout                 		                    hnonsec,
+  inout  [(HSIZE_WIDTH_PARAM-1) : 0]           hsize,
+  inout  [(HTRANS_WIDTH_PARAM-1) : 0] 		    htrans,
+  inout  [(HWDATA_WIDTH_PARAM-1) : 0]               hwdata,
+  inout           			                        hwrite,
+  inout  [(CONTROL_HUSER_WIDTH_PARAM-1) : 0]	control_huser,
+  inout  [(HWDATA_HUSER_WIDTH_PARAM-1) : 0]      hwdata_huser
+);
+endinterface :svt_ahb_master_bind_if
+
+//================================================================================================
+module svt_ahb_master_connector #(parameter is_active=1) (svt_ahb_master_if master_if, svt_ahb_master_bind_if master_bind_if);
+
+`ifdef SVT_MULTI_SIM_PROCEDURAL_COMBINATORIAL_DRIVE
+
+  // input (Mater Inputs)
+  always @(*) 
+  begin
+    master_if.hgrant   =  master_bind_if.hgrant;
+    master_if.hrdata   =  master_bind_if.hrdata;
+    master_if.hready   =  master_bind_if.hready;
+    master_if.hresp    =  master_bind_if.hresp;
+    master_if.hrdata_huser  =  master_bind_if.hrdata_huser;
+  end
+`else
+    assign  master_if.hgrant   =  master_bind_if.hgrant;
+    assign  master_if.hrdata   =  master_bind_if.hrdata;
+    assign  master_if.hready   =  master_bind_if.hready;
+    assign  master_if.hresp    =  master_bind_if.hresp;
+    assign  master_if.hrdata_huser   =  master_bind_if.hrdata_huser;
+`endif
+
+  // inout (Master Outputs)
+  // if master is active
+  initial begin
+    if (is_active) begin
+      force master_bind_if.haddr     =  master_if.haddr;
+  `ifdef SVT_AHB_V6_ENABLE
+      force  master_bind_if.hbstrb    =  master_if.hbstrb;
+ 	  force  master_bind_if.hunalign  =  master_if.hunalign;
+  `endif
+      force  master_bind_if.hburst    =  master_if.hburst;
+      force  master_bind_if.hbusreq   =  master_if.hbusreq;
+      force  master_bind_if.hlock     =  master_if.hlock;
+      force  master_bind_if.hprot     =  master_if.hprot;
+      force  master_bind_if.hnonsec   =  master_if.hnonsec;
+      force  master_bind_if.hsize     =  master_if.hsize;
+      force  master_bind_if.htrans    =  master_if.htrans;
+      force  master_bind_if.hwdata    =  master_if.hwdata;
+      force  master_bind_if.hwrite    =  master_if.hwrite;
+      force  master_bind_if.control_huser = master_if.control_huser;
+      force  master_bind_if.hwdata_huser  = master_if.hwdata_huser;
+	end  
+  end
+
+  // if master is passive 
+  always @(*)
+  begin
+    if(is_active == 0) begin
+      master_if.haddr     =   master_bind_if.haddr;
+      `ifdef SVT_AHB_V6_ENABLE
+      master_if.hbstrb    =   master_bind_if.hbstrb;
+ 	 	  master_if.hunalign  =   master_bind_if.hunalign;
+      `endif
+      master_if.hburst    =   master_bind_if.hburst;
+      master_if.hbusreq   =   master_bind_if.hbusreq;
+      master_if.hlock     =   master_bind_if.hlock;
+      master_if.hprot     =   master_bind_if.hprot;
+      master_if.hnonsec   =   master_bind_if.hnonsec;
+      master_if.hsize     =   master_bind_if.hsize;
+      master_if.htrans    =   master_bind_if.htrans;
+      master_if.hwdata    =   master_bind_if.hwdata;
+      master_if.hwrite    =   master_bind_if.hwrite;
+      master_if.control_huser = master_bind_if.control_huser;
+      master_if.hwdata_huser  = master_bind_if.hwdata_huser;
+    end 
+  end
+
+endmodule
+
+`endif // GUARD_SVT_AHB_MASTER_BIND_IF_SVI

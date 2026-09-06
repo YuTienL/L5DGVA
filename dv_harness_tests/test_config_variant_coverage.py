@@ -441,6 +441,97 @@ def test_strength_beyond_the_dimension_count_is_refused():
 
 
 # --------------------------------------------------------------------------
+# vPlan-stage wiring: plan_from_requirement_configuration()
+# --------------------------------------------------------------------------
+# A synthetic requirement's declared configuration -- the dimension->legal-
+# values MAPPING shape the adapter takes, deliberately distinct from
+# requirement_contract.schema.json's own `configuration` FIELD (free-text
+# `contract_text`, confirmed by reading that schema rather than assumed).
+
+SYNTHETIC_REQUIREMENT_CONFIGURATION = {
+    "gen_speed": ["gen3", "gen4", "gen5"],
+    "lane_width": [1, 2, 4, 8],
+    "feature_mode": ["ide", "sriov"],
+}
+
+
+def test_plan_from_requirement_configuration_covers_every_legal_pair_by_independent_recount():
+    plan = cvc.plan_from_requirement_configuration(
+        SYNTHETIC_REQUIREMENT_CONFIGURATION, requirement_id="REQ-232-1")
+
+    raw = {"dimensions": [{"name": name, "values": values}
+                          for name, values in SYNTHETIC_REQUIREMENT_CONFIGURATION.items()],
+           "constraints": []}
+    uncovered = _brute_force_uncovered_pairs(raw, plan["combinations"])
+    assert uncovered == [], f"missing pairwise interaction(s): {uncovered[:5]}"
+    assert plan["status"] == STATUS_FULL
+    assert plan["algorithm"] == "IPOG"
+    # a real reduction versus the 3*4*2 = 24-point cross product
+    assert plan["full_cross_product_size"] == 24
+    assert plan["selected_combination_count"] < 24
+
+
+def test_plan_from_requirement_configuration_carries_requirement_id_as_provenance():
+    plan = cvc.plan_from_requirement_configuration(
+        SYNTHETIC_REQUIREMENT_CONFIGURATION, requirement_id="REQ-232-1")
+
+    assert plan["space_id"] == "requirement_REQ-232-1_configuration"
+    assert "REQ-232-1" in plan["description"]
+    for dim in plan["dimensions"]:
+        assert dim["source"] == "requirement_contract:REQ-232-1"
+
+    # no requirement_id at all is still honestly labelled, never left blank
+    unattributed = cvc.plan_from_requirement_configuration(SYNTHETIC_REQUIREMENT_CONFIGURATION)
+    assert unattributed["space_id"] == "requirement_configuration"
+    for dim in unattributed["dimensions"]:
+        assert dim["source"] == "requirement_contract"
+
+
+def test_plan_from_requirement_configuration_passes_through_constraints_and_critical_combinations():
+    plan = cvc.plan_from_requirement_configuration(
+        SYNTHETIC_REQUIREMENT_CONFIGURATION,
+        requirement_id="REQ-232-2",
+        constraints=[{"forbid": {"gen_speed": "gen3", "lane_width": 8}, "reason": "not a legal combo"}],
+        critical_combinations=[{"assignment": {"gen_speed": "gen5", "feature_mode": "sriov"},
+                                "reason": "declared critical by the requirement"}])
+
+    assert plan["constraint_count"] == 1
+    assert not any(r["gen_speed"] == "gen3" and r["lane_width"] == 8 for r in plan["combinations"])
+    assert plan["critical_combinations"]["declared"] == 1
+    assert plan["critical_combinations"]["missing_count"] == 0
+    assert any(r["gen_speed"] == "gen5" and r["feature_mode"] == "sriov"
+               for r in plan["combinations"])
+
+
+@pytest.mark.parametrize("bad_configuration, needle", [
+    ({}, "non-empty mapping"),
+    (None, "non-empty mapping"),
+    ({"gen_speed": "gen3"}, "must declare its legal values as a list/tuple"),
+])
+def test_plan_from_requirement_configuration_refuses_a_malformed_mapping(bad_configuration, needle):
+    """Three distinct negative controls: an empty mapping, a non-mapping, and
+    a dimension whose 'values' is a bare scalar rather than a list -- none of
+    these may silently produce a one-dimension or zero-dimension plan."""
+    with pytest.raises(ConfigSpaceError) as e:
+        cvc.plan_from_requirement_configuration(bad_configuration)
+    assert needle in str(e.value)
+
+
+def test_plan_from_requirement_configuration_still_refuses_an_uncompletable_critical_combination():
+    """The adapter forwards to the same generate_covering_array() that already
+    refuses to silently drop a critical combination with no legal completion
+    -- it must not swallow or soften that refusal."""
+    with pytest.raises(ConfigSpaceError) as e:
+        cvc.plan_from_requirement_configuration(
+            {"a": ["a1", "a2"], "b": ["b1", "b2"]},
+            requirement_id="REQ-232-3",
+            constraints=[{"forbid": {"a": "a1", "b": "b1"}, "reason": "x"},
+                        {"forbid": {"a": "a1", "b": "b2"}, "reason": "y"}],
+            critical_combinations=[{"assignment": {"a": "a1"}, "reason": "declared critical"}])
+    assert "no legal completion" in str(e.value)
+
+
+# --------------------------------------------------------------------------
 # the real CLI entry points, driven as real subprocesses
 # --------------------------------------------------------------------------
 

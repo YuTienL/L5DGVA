@@ -11,12 +11,18 @@ import pytest
 
 from dv_harness.question_queue import (
     DIGEST_BOUNDARY_STAGES,
+    DoNotAskError,
+    HUMAN_DECISION_SOURCE,
+    TIER2_AUTO_ASSUMPTION_SOURCE,
     QuestionQueueStore,
     QuestionValidationError,
     TIER1_SELF_RESOLVE,
     TIER2_SAFE_ASSUME,
     TIER3_CANNOT_ASSUME,
+    assert_all_evidence_paths_present,
+    build_multiple_choice_question,
     classify_tier,
+    find_redundant_decision,
     is_cannot_assume,
     make_question_id,
     make_question_key,
@@ -663,3 +669,289 @@ def test_add_question_rejects_malformed_options_before_persisting_anything(tmp_p
         )
     # Nothing was written -- the raise happens before the append/save.
     assert store.list_questions() == []
+
+
+# =================================================================================
+# (a) Do-not-ask enforcement: find_redundant_decision() + add_question(enforce_do_not_ask=True)
+# =================================================================================
+
+def test_find_redundant_decision_none_when_no_prior():
+    assert find_redundant_decision(None, {}) is None
+
+
+def test_find_redundant_decision_human_answer_is_always_redundant():
+    # A human answer makes a re-ask redundant regardless of the new ask's
+    # own context -- even one that would otherwise be a slam-dunk Tier-3 --
+    # mirroring classify_tier()'s own step 2 ("a human answer on file DOES
+    # still win over a hard trigger").
+    prior = {"current": {"source": HUMAN_DECISION_SOURCE, "answer": "yes",
+                          "decided_by": "designer@example.com", "decided_at": "2026-09-01T00:00:00+00:00"}}
+    assert find_redundant_decision(prior, {"affects_pass_fail_verdict": True}) is prior
+    assert find_redundant_decision(prior, {}) is prior
+
+
+def test_find_redundant_decision_tier2_auto_assumption_redundant_when_no_new_hard_trigger():
+    prior = {"current": {"source": TIER2_AUTO_ASSUMPTION_SOURCE, "answer": "guess"}}
+    assert find_redundant_decision(prior, {}) is prior
+    assert find_redundant_decision(prior, {"blast_radius": "single_regression"}) is prior
+
+
+def test_find_redundant_decision_tier2_auto_assumption_NOT_redundant_over_a_hard_trigger():
+    # F3-a, restated as a do-not-ask negative control: a machine's own
+    # earlier guess must never suppress a later, genuinely Tier-3-triggering
+    # re-ask of the same question_key. If this ever returned the prior
+    # decision here, do-not-ask enforcement would resurrect F3-a under a new
+    # name.
+    prior = {"current": {"source": TIER2_AUTO_ASSUMPTION_SOURCE, "answer": "guess"}}
+    assert find_redundant_decision(prior, {"affects_pass_fail_verdict": True}) is None
+    assert find_redundant_decision(prior, {"affects_spec_intent": True}) is None
+    assert find_redundant_decision(prior, {"affects_read_only_file_change": True}) is None
+
+
+def test_find_redundant_decision_unrecognized_source_is_not_redundant():
+    # Fail closed, same discipline classify_tier()'s _is_human_decision()
+    # already applies: a legacy/hand-written record with no recognizable
+    # `current.source` is not positively identified as a real resolution, so
+    # it must not silently swallow a fresh ask.
+    assert find_redundant_decision({"current": {"answer": "yes"}}, {}) is None
+    assert find_redundant_decision({"current": {"source": "something_else", "answer": "yes"}}, {}) is None
+
+
+def test_add_question_enforce_do_not_ask_off_by_default_preserves_existing_behavior(tmp_path):
+    # The disclosed default: enforce_do_not_ask=False (the implicit default)
+    # must file a fresh record every time, byte-identically to every
+    # existing caller's behavior before this change (see
+    # test_asking_the_same_question_twice_self_resolves_the_second_time).
+    store = QuestionQueueStore(tmp_path)
+    kwargs = dict(domain="dut", question="Is R9 W1C?", context_path="dut.regs.R9",
+                   options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+                   context={"affects_pass_fail_verdict": True})
+    first = store.add_question(**kwargs)
+    store.answer_question(first["id"], answer="Yes.", basis="RTL", decided_by="designer@example.com")
+    second = store.add_question(**kwargs)  # enforce_do_not_ask omitted -> False
+    assert second["status"] == "SELF_RESOLVED"
+    assert len(store.list_questions()) == 2
+
+
+def test_add_question_enforce_do_not_ask_refuses_a_duplicate_of_a_human_answered_key(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    kwargs = dict(domain="dut", question="Is R10 W1C?", context_path="dut.regs.R10",
+                   options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+                   context={"affects_pass_fail_verdict": True})
+    first = store.add_question(**kwargs)
+    store.answer_question(first["id"], answer="Yes, W1C.", basis="RTL reg_map.sv line 9",
+                            decided_by="designer@example.com")
+
+    with pytest.raises(DoNotAskError) as exc:
+        store.add_question(**kwargs, enforce_do_not_ask=True)
+    err = exc.value
+    assert err.question_key == first["question_key"]
+    assert err.decision["current"]["answer"] == "Yes, W1C."
+    assert err.decision["current"]["source"] == HUMAN_DECISION_SOURCE
+    assert "already has a live decision" in str(err)
+    # Refused BEFORE persisting -- no second record was appended.
+    assert len(store.list_questions()) == 1
+
+
+def test_add_question_enforce_do_not_ask_refuses_a_duplicate_tier2_assumption_with_no_new_trigger(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    kwargs = dict(domain="env", question="Is monitor9 passive-only?", context_path="env.topology.monitor9",
+                   options=_opts(), recommendation=_opts()[0]["label"],
+                   assumption_if_unanswered="Treat monitor9 as passive-only.")
+    first = store.add_question(**kwargs)  # no hard trigger -> Tier 2, auto-assumption persisted
+    assert first["tier"] == TIER2_SAFE_ASSUME
+
+    with pytest.raises(DoNotAskError) as exc:
+        store.add_question(**kwargs, enforce_do_not_ask=True)
+    assert exc.value.decision["current"]["source"] == TIER2_AUTO_ASSUMPTION_SOURCE
+    assert len(store.list_questions()) == 1
+
+
+def test_add_question_enforce_do_not_ask_still_escalates_a_genuine_tier3_over_a_tier2_guess(tmp_path):
+    # The critical negative control: enforce_do_not_ask=True must NOT
+    # resurrect F3-a. A prior tier2_auto_assumption decision must never
+    # block a later ask of the same question_key whose OWN context trips a
+    # real Tier-3 hard trigger -- that ask must still be FILED (and escalate
+    # for real), never refused as "redundant".
+    store = QuestionQueueStore(tmp_path)
+    common = dict(domain="dut", question=_SPEC_INTENT_Q, context_path="dut.regs.TX_ERR2",
+                   options=_opts(), recommendation=_opts()[0]["label"],
+                   assumption_if_unanswered="Assume legal drop per spec.")
+    first = store.add_question(**common, context={}, enforce_do_not_ask=True)
+    assert first["tier"] == TIER2_SAFE_ASSUME
+
+    second = store.add_question(**common, context=dict(_ALL_HARD_TRIGGERS), enforce_do_not_ask=True)
+    assert second["question_key"] == first["question_key"]
+    assert second["tier"] == TIER3_CANNOT_ASSUME
+    assert second["status"] == "OPEN"
+    assert second["blocking"] is True
+    assert len(store.list_questions()) == 2  # genuinely filed, not refused
+
+
+def test_add_question_enforce_do_not_ask_allows_a_first_ask_with_no_prior_decision(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="env", question="Is agent9 active?", context_path="env.agents.agent9",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="a",
+        enforce_do_not_ask=True,
+    )
+    assert q["status"] == "ASSUMED"
+
+
+# =================================================================================
+# (b) build_multiple_choice_question(): the N-ary generalization of
+# source_authority.escalate_conflict()'s exactly-2-option shape
+# =================================================================================
+
+def _candidates(n=3):
+    labels = ["Configure as bus slave/responder", "Configure as bus master/initiator",
+              "Configure as passive monitor only"]
+    paths = ["dut.rtl:usb3_link_ctrl.v:120", "dut.rtl:usb3_link_ctrl.v:145", "env.topology.monitor0"]
+    return [{"label": labels[i], "evidence_path": paths[i], "rationale": f"candidate {i}"}
+            for i in range(n)]
+
+
+def test_build_multiple_choice_files_one_tier3_blocking_question_with_all_candidates(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = build_multiple_choice_question(
+        store, domain="dut", subject="usb3_link_ctrl boundary role",
+        candidates=_candidates(3),
+    )
+    assert q["tier"] == TIER3_CANNOT_ASSUME
+    assert q["blocking"] is True
+    assert q["status"] == "OPEN"
+    assert [o["label"] for o in q["options"]] == [c["label"] for c in _candidates(3)]
+    for c in _candidates(3):
+        assert c["evidence_path"] in q["question"] or any(
+            c["evidence_path"] in o.get("rationale", "") for o in q["options"])
+    assert q["recommendation"] == _candidates(3)[0]["label"]
+    validate_question(q)
+
+
+def test_build_multiple_choice_requires_at_least_two_candidates(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    with pytest.raises(QuestionValidationError):
+        build_multiple_choice_question(store, domain="dut", subject="x", candidates=_candidates(1))
+    assert store.list_questions() == []
+
+
+def test_build_multiple_choice_refuses_a_candidate_missing_label_or_evidence_path(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    bad = [{"label": "a", "evidence_path": "p1"}, {"label": "b"}]  # missing evidence_path
+    with pytest.raises(QuestionValidationError):
+        build_multiple_choice_question(store, domain="dut", subject="x", candidates=bad)
+    assert store.list_questions() == []
+
+
+def test_assert_all_evidence_paths_present_is_the_real_guard_build_multiple_choice_relies_on(tmp_path):
+    # build_multiple_choice_question ALWAYS embeds each candidate's own
+    # evidence_path into its own option's rationale ("evidence: <path>"),
+    # mirroring source_authority._option_for()'s identical, unconditional
+    # behavior -- so a missing-evidence-path failure can never be triggered
+    # through the public API's normal candidate/question_text inputs alone
+    # (proven positively by
+    # test_build_multiple_choice_default_question_text_cites_every_evidence_path).
+    # assert_all_evidence_paths_present() is therefore a regression safety
+    # net against a FUTURE edit to that option-construction internal, not a
+    # path reachable today -- proven directly here by calling it exactly as
+    # build_multiple_choice_question would, with one candidate's option
+    # rationale deliberately NOT carrying its evidence path (the mutation
+    # this guard exists to catch).
+    cands = _candidates(2)
+    options_missing_one_citation = [
+        {"label": cands[0]["label"], "rationale": f"evidence: {cands[0]['evidence_path']}"},
+        {"label": cands[1]["label"], "rationale": "no evidence cited here"},
+    ]
+    with pytest.raises(QuestionValidationError) as exc:
+        assert_all_evidence_paths_present(
+            f"Multiple candidates for x: {cands[0]['label']}; {cands[1]['label']}",
+            options_missing_one_citation, [c["evidence_path"] for c in cands],
+        )
+    assert cands[1]["evidence_path"] in str(exc.value)
+    # And a store never even sees a call in this scenario -- nothing to assert.
+    store = QuestionQueueStore(tmp_path)
+    assert store.list_questions() == []
+
+
+def test_build_multiple_choice_default_question_text_cites_every_evidence_path(tmp_path):
+    # Positive control: the auto-generated question_text (no override) must
+    # itself satisfy assert_all_evidence_paths_present -- proven by the fact
+    # that add_question does not raise.
+    store = QuestionQueueStore(tmp_path)
+    q = build_multiple_choice_question(store, domain="dut", subject="x", candidates=_candidates(3))
+    for c in _candidates(3):
+        assert c["evidence_path"] in q["question"]
+
+
+def test_build_multiple_choice_recommendation_must_be_an_offered_candidate(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    with pytest.raises(QuestionValidationError):
+        build_multiple_choice_question(
+            store, domain="dut", subject="x", candidates=_candidates(2),
+            recommendation_label="never offered",
+        )
+    assert store.list_questions() == []
+
+
+def test_build_multiple_choice_recommendation_defaults_to_first_candidate_when_undecidable(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = build_multiple_choice_question(store, domain="dut", subject="x", candidates=_candidates(3))
+    assert q["recommendation"] == _candidates(3)[0]["label"]
+
+
+def test_build_multiple_choice_is_idempotent_on_question_key(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    first = build_multiple_choice_question(store, domain="dut", subject="idempotent case",
+                                            candidates=_candidates(2))
+    second = build_multiple_choice_question(store, domain="dut", subject="idempotent case",
+                                             candidates=_candidates(2))
+    assert second["id"] == first["id"]
+    assert len(store.list_questions()) == 1  # not re-filed as a duplicate
+
+
+def test_build_multiple_choice_refuses_more_candidates_than_the_real_schema_cap(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    four = _candidates(3) + [{"label": "Configure as bridge", "evidence_path": "env.topology.bridge0"}]
+    with pytest.raises(QuestionValidationError) as exc:
+        build_multiple_choice_question(store, domain="dut", subject="x", candidates=four)
+    assert "3" in str(exc.value)  # the real question.schema.json options.maxItems value
+    assert store.list_questions() == []
+
+
+def test_assert_all_evidence_paths_present_matches_source_authority_rule():
+    # Disclosed-residual proof: this module's generalized N-ary validator is
+    # a SEPARATE implementation from source_authority.
+    # assert_both_evidence_paths_present() (that function, and
+    # escalate_conflict(), live in source_authority.py, outside this
+    # change's declared scope of question_queue.py -- see the module-level
+    # comment above build_multiple_choice_question()). What is checked here
+    # is that the two enforce the IDENTICAL rule rather than having quietly
+    # drifted into two different ones: both accept a question that carries
+    # every evidence path, and both reject one missing any.
+    from dv_harness import source_authority
+    from dv_harness.question_queue import assert_all_evidence_paths_present
+
+    conflict = {
+        "claims": [
+            {"source": "rtl", "claim": "0x1000", "evidence_path": "rtl/decoder.v:88"},
+            {"source": "doc", "claim": "0x2000", "evidence_path": "docs/regmap.md:14"},
+        ],
+    }
+    options = [
+        {"label": "0x1000 (rtl)", "rationale": "evidence: rtl/decoder.v:88"},
+        {"label": "0x2000 (doc)", "rationale": "evidence: docs/regmap.md:14"},
+    ]
+    complete_text = "Address disagreement: rtl says 0x1000 [rtl/decoder.v:88]; doc says 0x2000 [docs/regmap.md:14]."
+    incomplete_text = "Address disagreement: rtl says 0x1000 [rtl/decoder.v:88]."
+
+    # Both PASS when every evidence path is present.
+    source_authority.assert_both_evidence_paths_present(complete_text, options, conflict)
+    assert_all_evidence_paths_present(
+        complete_text, options, [c["evidence_path"] for c in conflict["claims"]])
+
+    # Both REJECT the identical incomplete text/options.
+    with pytest.raises(source_authority.SourceAuthorityError):
+        source_authority.assert_both_evidence_paths_present(incomplete_text, options[:1], conflict)
+    with pytest.raises(QuestionValidationError):
+        assert_all_evidence_paths_present(
+            incomplete_text, options[:1], [c["evidence_path"] for c in conflict["claims"]])
