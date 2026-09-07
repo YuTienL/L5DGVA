@@ -122,13 +122,15 @@ def test_controlled_experiment_measures_a_real_before_and_after(root, fixture_pr
     assert bench["produced_by"] == ce.BENCHMARK_PRODUCER
 
     # The measurement is real and it MOVED: the baseline arm had no migration
-    # manifest so its one real gate was unsatisfied; the treatment arm had one,
-    # so the same real gate subprocess accepted the same stage's evidence.
+    # manifest so neither of its two real gates was satisfied; the treatment
+    # arm had one, so the same two real gate subprocesses (command_migration_
+    # integrity_gate + command_generation_gate, STAGE_GATES["COMMAND_PATTERN"])
+    # both accepted the same stage's evidence.
     assert bench["before"]["totals"] == {
-        "gates_total": 1, "gates_satisfied": 0, "stage_completion_percent": 0.0}
+        "gates_total": 2, "gates_satisfied": 0, "stage_completion_percent": 0.0}
     assert bench["after"]["totals"] == {
-        "gates_total": 1, "gates_satisfied": 1, "stage_completion_percent": 100.0}
-    assert bench["delta"]["gates_satisfied"] == 1
+        "gates_total": 2, "gates_satisfied": 2, "stage_completion_percent": 100.0}
+    assert bench["delta"]["gates_satisfied"] == 2
     assert bench["delta"]["stage_completion_percent"] == 100.0
     assert bench["delta"]["changed_outcome_stages"] == [FIXTURE_STAGE]
     assert bench["outcome"] == "IMPROVED"

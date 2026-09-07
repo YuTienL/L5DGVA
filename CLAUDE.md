@@ -9781,9 +9781,99 @@ named field reporting `UNKNOWN` rather than raising. Real run:
 
 **Jain's fairness index, included because this batch's source document calls for a fairness/QoS-inversion check.** `compute_jains_fairness_index()` is the real, well-known one-line formula (`J = (sum(x_i))**2 / (n * sum(x_i**2))`, Jain/Chiu/Hawe 1984) over a real per-requester allocation/throughput map. It refuses to compute -- reports `UNKNOWN`, never a value silently computed over the subset that happened to report -- the instant ANY declared requester's value is absent, and reports `UNKNOWN` rather than a fabricated `1.0` on the genuinely undefined all-zero (0/0) case; a single requester is honestly `NOT_APPLICABLE` (fairness across one requester is not a meaningful question).
 
-**Deliberately bounded, and stated rather than implied closed.** This module reads no FSDB/waveform file, monitors no live signal, generates no traffic, and runs no simulation -- all explicitly out of scope for this batch, since this harness has no live simulator to validate any of that against; it imports nothing from `dv_harness` beyond `amba_performance_calculator`'s reused precedence function and its own status-token constants, plus `models.Status` for a vocabulary-collision check. It decides, approves, and arbitrates nothing beyond its own classification: no gate, no approval, no build/regression/LSF submission, and no CLI verb was added.
+**Deliberately bounded, and stated rather than implied closed.** This module reads no FSDB/waveform file, monitors no live signal, generates no traffic, and runs no simulation -- all explicitly out of scope for this batch, since this harness has no live simulator to validate any of that against; it imports nothing from `dv_harness` beyond `amba_performance_calculator`'s reused precedence function and its own status-token constants, plus `models.Status` for a vocabulary-collision check. It decides, approves, and arbitrates nothing beyond its own classification: no gate, no approval, no build/regression/LSF submission. **2026-09-07 correction**: the "no CLI verb was added" clause above is now stale -- see "AMBA Performance Modules: Standalone Front Doors + `dv-harness` CLI Wiring" below, which closes that gap for this module and its two siblings.
 
 Proven by `dv_harness_tests/test_amba_performance_classification.py` (54 tests): the core positive path for all four classifiers plus the fairness index; the required negative controls -- a single metric never classifies saturation either way, no declared ceiling is `NOT_APPLICABLE`, a missing observation is `UNKNOWN`, a single-evidence-item bottleneck candidate is refused, an absent baseline anomaly check is `NOT_APPLICABLE`, a zero-baseline regression delta is `INCONCLUSIVE` rather than a fabricated percentage, incomplete per-requester fairness data is refused rather than silently computed over the partial set, and an all-zero fairness input is `UNKNOWN` rather than a fabricated perfect score; and the headline functional-correctness-outranks-performance proof, driving a real `REGRESSION_IMPROVED` performance result alongside a functional FAIL to a confirmed overall FAIL through the reused `amba_performance_calculator.decide_overall_verdict()`.
+
+## AMBA Performance Modules: Standalone Front Doors + `dv-harness` CLI Wiring (2026-09-07)
+
+An audit phase re-verified this project's own governing claim before trusting it: `grep -n
+"^def main\|__main__\|execute_verb"` over `amba_performance_calculator.py`,
+`amba_performance_classification.py`, and `amba_performance_requirement_checker.py` returned zero
+matches, while `amba_performance_readiness_gates.py` already carried a real `execute_verb()`/
+`main()`/`if __name__ == "__main__":` triple (lines 528-617) and a real, wired `dv-harness
+amba-performance-readiness-gates` verb (`cli.py:2354-2358, 6248-6249`). The confirmed gap was
+narrower than "not wired into `cli.py`" -- the pattern several dozen other CLAUDE.md sections
+describe as a deliberate, disclosed choice: three of the four modules had **no CLI-callable entry
+point at all**, standalone or wired. They were pure importable Python APIs, usable only via direct
+import (by `dashboard.py`'s AMBA Per-Port Performance Center / AMBA Performance Trend View cards,
+and by their own test suites).
+
+**Task A -- standalone front doors, mirroring `amba_performance_readiness_gates.py`'s own real
+pattern exactly.** Each of the three modules gained an `execute_verb(argv)`/`main()`/
+`if __name__ == "__main__":` triple, argparse subcommands over the module's own already-real pure
+functions -- no new arithmetic, no new classification logic, no new comparison arithmetic:
+
+- `amba_performance_calculator.py`: `bandwidth`/`throughput`/`latency-percentiles`/`outstanding`/
+  `stall-ratio`/`utilization`/`bandwidth-utilization`/`evaluate-target`/`overall-verdict`/
+  `aggregate-port`, each calling exactly one of `compute_bandwidth()`/`compute_throughput()`/
+  `compute_latency_percentiles()`/`compute_outstanding_stats()`/`compute_stall_ratio()`/
+  `compute_utilization()`/`bandwidth_utilization()`/`evaluate_against_target()`/
+  `decide_overall_verdict()`/`aggregate_port_performance()` unchanged.
+- `amba_performance_classification.py`: `saturation`/`bottleneck`/`anomaly`/`regression-delta`/
+  `fairness`/`overall-verdict`, each calling exactly one of `classify_saturation()`/
+  `identify_bottleneck_candidate()`/`detect_anomaly()`/`compute_regression_delta()`/
+  `compute_jains_fairness_index()`/`decide_overall_performance_verdict()` unchanged.
+- `amba_performance_requirement_checker.py`: `check`, calling `check_against_requirement()`
+  unchanged, building a `PerformanceRequirementIR` from CLI flags only when `--target` is
+  supplied (with `--requirement-id` and `--unit` then required -- a requirement is never invented
+  with a missing field, mirroring that dataclass's own `__post_init__` refusal) and reading a
+  measured value from `--measured-value` (a bare number) or `--measured-file` (a JSON number/dict,
+  read by `_resolve_measured_value()` unchanged).
+
+Every result is a real dataclass instance, printed via `dataclasses.asdict()` (JSON with `--json`,
+or a plain `key: value` listing by default) -- never a re-serialization that could disagree with
+the object's own real fields. Exit codes follow each module's own status vocabulary honestly
+(never a silent success for an unresolved result): `COMPUTED`/a real `PASS`/a real non-alarming
+classification (`NOT_SATURATED`/`NO_ANOMALY`/`IMPROVED`/`UNCHANGED`) exits 0; `UNKNOWN`/
+`NOT_APPLICABLE`/`FAIL`/a real finding needing attention (`SATURATED`/`ANOMALY_DETECTED`/
+`REGRESSED`/`INDETERMINATE`/`INCONCLUSIVE`) exits 1; a malformed argument or unreadable/invalid
+JSON input file exits 2, printing `NOT_AVAILABLE: <reason>` to stderr rather than a bare
+traceback.
+
+**Task B -- `dv-harness` CLI verbs, purely additive.** `cli.py` gained three new
+`sub.add_parser(...)` blocks (`amba-performance-calc`, `amba-performance-classify`,
+`amba-performance-check-requirement`) immediately before the existing
+`amba-performance-readiness-gates` subparser, and three matching `elif args.cmd == "...":`
+dispatch blocks immediately before that verb's own dispatch block -- following the *exact*
+established convention that verb's own dispatch already uses (reconstruct the equivalent argv
+from the parsed CLI flags, then `raise SystemExit(<module>.execute_verb(<reconstructed_argv>))`).
+No existing subparser, dispatch branch, or business logic in `cli.py` was touched, reordered, or
+reformatted. All flags a caller might need across every one of the three modules' own verbs are
+declared once on each new top-level subparser (an argparse convenience over reconstructing a
+nested-subcommand CLI, not a second copy of any module's own logic); a flag irrelevant to the
+verb actually requested is simply never forwarded into the reconstructed argv.
+
+Verified end to end, not merely wired: `python -m dv_harness.cli --help` lists all three new
+verbs alongside every pre-existing one; `dv-harness amba-performance-calc bandwidth
+--total-bytes 1000 --duration-seconds 2 --json`, `dv-harness amba-performance-classify anomaly
+--observed-value 5 --baseline-min 1 --baseline-max 3 --json`, and `dv-harness
+amba-performance-check-requirement check --metric-name bandwidth --measured-value 900
+--requirement-id REQ1 --target 1000 --unit bytes_per_second --json` were each driven as real
+subprocess invocations through the `dv-harness` entry point and produced the identical real
+dataclass output (and exit code) their standalone `python -m dv_harness.<module>` front doors
+produce.
+
+**Deliberately bounded, and stated rather than implied closed.** This closes the CLI-callability
+gap only -- it adds no new arithmetic, no new classification rule, and no new comparison logic to
+any of the three modules; every verb is pure argparse plumbing over an already-real, already-tested
+function. `amba_performance_readiness_gates.py` was not touched (it already had both halves). No
+`gates.py` `STAGE_GATES` entry was added for any of the three -- none of them is, or was asked to
+be, a stage gate; they remain callable computation/classification utilities, now reachable both by
+import and from the command line.
+
+Re-verified against the full, real, pre-existing test suite for this whole family (no test file was
+added or edited, since no production logic changed): `python -m pytest
+dv_harness_tests/test_amba_performance_calculator.py
+dv_harness_tests/test_amba_performance_classification.py
+dv_harness_tests/test_amba_performance_requirement_checker.py
+dv_harness_tests/test_amba_performance_readiness_gates.py
+dv_harness_tests/test_dashboard_amba_performance_center.py
+dv_harness_tests/test_dashboard_amba_performance_trend_view.py -q` -> `181 passed`, byte-identical
+to the audit's own pre-change baseline. `python -m pytest
+dv_harness_tests/test_cli_adapter_command_resolution.py dv_harness_tests/test_cli_blackboard.py
+dv_harness_tests/test_cli_preflight.py dv_harness_tests/test_cli_question_queue.py -q` ->
+`36 passed`, confirming the purely-additive `cli.py` edit disturbs no other verb.
 
 ## AMBA Performance Readiness Gates: BUS_PERFORMANCE_READY / BUS_PERFORMANCE_SIGNOFF_READY (2026-09-06)
 
@@ -21488,3 +21578,115 @@ The full pre-existing `dv_harness_tests/test_dashboard_interactive.py` suite (54
 unchanged and passes, confirming dashboard.py itself was never touched, and a full-repo
 `pytest --collect-only` (13499 tests, zero collection errors) confirms this new module introduces no
 import-time collision anywhere else in the suite.
+
+## GUI VIP Coverage Wizard: an 11-Step Guide to Functional-Coverage Signoff (2026-09-07)
+
+Section GUI-XX asked for an interactive, step-by-step guide walking a user through VIP-based
+verification environment creation to 100% functional coverage. `dv_harness/
+gui_vip_coverage_wizard.py` is that wizard -- a STANDALONE `ThreadingHTTPServer`
+(`python -m dv_harness.gui_vip_coverage_wizard --project-root <dir> --port <n>`), built to the exact
+same file-safety precedent `gui_intake_wizard.py`/`gui_intake_control_plane.py` already established
+(both read in full before writing a line of this module): it never imports `dashboard.py`/
+`engine.py`/`gates.py`/`cli.py`, so it stays untouched by whichever concurrent workflow is editing
+those four files.
+
+**Eleven real, grounded steps, each read from a producer this project already ships -- never a
+computed-here verdict.** DUT/RTL Discovery and VIP Discovery reuse `intake_state.build_intake_state()`'s
+own per-field `dut_rtl`/`dut_registers`/`dut_address_map`/`dut_clock_reset`/`vip_resolution` facts
+(a two-pass grounded builder, `build_grounded_intake_state()`, mirroring `gui_intake_wizard.py`'s own
+pattern -- independently re-derived here since that function is private to that module, not imported).
+Bind-Tier/PHY-Boundary Readiness reads the SAME module's `dut_boundary`/`critical_bind` category
+folds, and additionally surfaces `architecture_choice_ranking.rank_bind_location_candidates()`'s real
+ranking when a caller declares candidate bind locations in `wizard_inputs.json`. The VIP Learning Gate
+step renders `vip_learning_gate.run_pre_generation_checkpoint()` verbatim -- a pure composite readout,
+no answer of its own. UVM Generation Readiness renders `intake_state.evaluate_uvm_generation_ready()`
+and DISCLOSES, on the same view, that an `active_driver_conflict` blocker is not answerable through
+this wizard's own question mechanism (arbitration, human-only). VIP/UVM Generation and Single-Test
+Proof each filter `golden_flow_readiness.derive_golden_flow_readiness(root)["rows"]` to their own real
+`row_id`. Coverage-Hole Identification parses a real coverage summary via
+`coverage_analysis.parse_coverage_summary()`/`identify_holes()` and escalates every real
+`UNREACHABLE_STIMULUS` hole through `coverage_analysis.escalate_unreachable_holes()` (the real batch
+convenience combining `classify_coverage_hole()` + `escalate_unreachable_stimulus()` this project
+already ships -- discovered mid-build to be a strict improvement over a manual per-hole loop). Ranked
+Coverage-Closure Actions renders `coverage_closure_action_utility.rank_coverage_closure_actions()`
+verbatim. Functional Coverage Signoff renders `functional_coverage_signoff.
+analyze_functional_coverage_signoff(root, cfg=...)` verbatim -- reading this project's own real
+`.dv-harness/env.manifest.json` and `evidence.duckdb` directly, never anything this wizard's own
+`wizard_inputs.json` supplies. The terminal Overall Maturity Summary step renders
+`subsystem_maturity_gate.derive_maturity_gate()` for all three real levels (9.0/9.5/10.0) side by
+side, with no precondition of its own.
+
+**The one "100% complete" signal is EXACTLY Step 10's own real
+`functional_coverage_signoff_ready` boolean, never a fabricated completion percentage.** `GET
+/api/state`'s top-level `overall_ready` is `null` whenever Step 10's own report status is
+`STATUS_NOT_AVAILABLE`, and is that report's own boolean otherwise -- this wizard computes no average
+across its eleven steps and no completion percentage of its own; proven directly by a dedicated test
+showing `overall_ready` stays `None` even after four OTHER steps' fields are fully resolved, and
+becomes exactly Step 10's own value the moment (and only the moment) Step 10's real inputs exist.
+
+**`POST /answer` / `POST /api/answer` confirms one intake field through the ONE sanctioned
+mechanism this project already has** -- `question_queue.QuestionQueueStore.add_question()` (2
+options: the real answer, and `"UNCONFIRMED_NO_HUMAN_ANSWER_YET"`) followed by
+`answer_question()` -- never a second, wizard-local decision store, and it REFUSES
+(`ALREADY_RESOLVED`) to re-ask a field `intake_state.already_resolved()` already reports settled. A
+bare `question_id` in the same POST answers an already-filed question directly (covering the
+coverage-hole-escalation and closure-action multi-choice questions this wizard's own steps 8/9 file
+through the identical real mechanism), so there is exactly one answer-writing code path for every
+kind of question this wizard's steps can raise.
+
+**`POST /advance` / `POST /api/advance` is a GENUINE refusal gate, distinct from
+`gui_intake_wizard.advance_step()`'s pure clamped navigation.** `advance_precondition(root, step)`
+is called, per real step, BEFORE the new `current_step_index` is written: a single `next`/`back`
+move checks the CURRENT step's own real gate (all four DUT/RTL fields resolved; the VIP Learning
+Gate's own verdict is not `BLOCKED`; the golden-flow row's own status is `READY`; etc.), and a
+direct `step_id=` jump forward checks EVERY intervening step's own precondition, refusing with a 400
+naming the first real one that has not cleared -- never a bare "not allowed", always the specific
+unmet fact. Moving backward is always allowed and clamps at index 0. The terminal review step
+carries no precondition, by design.
+
+**Auth mirrors `gui_intake_control_plane.py`'s own established pattern exactly**: its own session
+token (`.dv-harness/gui_vip_coverage_wizard_session.json`, minted via `secrets.token_urlsafe(32)`
+and written through the same `storage._atomic_replace()` atomic-write primitive), validated with
+`dashboard_auth.presented_token()` (header/`Authorization: Bearer`/`?token=` parsing) +
+`secrets.compare_digest()` -- never `dashboard_auth.issue_session_token()`, which mints
+`dashboard.py`'s own, separate session file.
+
+**Disclosed boundary, not silently papered over**: answering a bind question through THIS wizard
+makes `intake_state.py`'s OWN readiness view (and therefore this wizard's Step 3/Step 5) report the
+field resolved -- it does NOT, on its own, populate a bind entry's `human_confirmation` sub-dict the
+way `connectivity.enforce_bind_tier_policy()`'s own, stricter Tier-3 requirement needs, so
+`vip_learning_gate.py`'s `check_bind_tier` sub-check (Step 4) can genuinely still report BLOCKING
+even after Step 3 reads clean. These are two real, different mechanisms this wizard reuses rather
+than unifies (unifying them would mean editing `intake_state.py`/`connectivity.py`, both out of this
+module's file-safety scope).
+
+**Deliberately bounded, and stated rather than implied closed**: no live simulator; no arbitration
+of an `active_driver_conflict`; no waiver lifecycle (stays `waiver_store.py`'s own job); no VIP/RTL/
+pattern CONTENT generation of any kind (No Golden-Reference Content Mining); and deliberately NO
+`STAGE_GATES` entry of its own -- a REACHED capability (a real, standalone server a user runs), never
+a WIRED engine stage.
+
+Proven by `dv_harness_tests/test_gui_vip_coverage_wizard.py` (35 tests,
+`python -m pytest dv_harness_tests/test_gui_vip_coverage_wizard.py -q` -> `35 passed`): real
+grounding for steps 1/2/3 via `env_manifest.build_dut_facts_registers()`/`build_vip_release()` and
+`phy_boundary.classify_boundary()`/`decide_bind_location()` (the exact fixture recipe
+`test_intake_state.py` already established); the REQUIRED negative control proving `overall_ready`
+never fabricates a value when Step 10's real inputs are absent, and never averages the other ten
+steps' own progress into it; a real end-to-end `answer_field()` round trip through a real
+`QuestionQueueStore` (including the `ALREADY_RESOLVED` refusal); real coverage-hole identification
+and closure-action ranking against real `coverage_analysis.py`/`coverage_closure_action_utility.py`
+calls; a real `functional_coverage_signoff.py` SIGNOFF_READY reached via the exact
+`env_manifest.generate_env_manifest()` + `EvidenceStore.insert_coverage_sample()` fixture recipe
+`test_functional_coverage_signoff.py` already established; genuine `advance_step()` precondition
+refusals (including the forward-jump-names-the-first-unmet-step case); HTML rendering assertions;
+and a full live-server test (`_wait_ready`/`_get_json`/`_post_json` helpers matching
+`test_gui_intake_wizard.py`'s own convention) driving the real GET/answer/advance/404 cycle over
+real HTTP, plus the `--no-auth` local-debugging opt-out. Re-run alongside
+`dv_harness_tests/test_intake_state.py`, `dv_harness_tests/test_functional_coverage_signoff.py`,
+`dv_harness_tests/test_vip_learning_gate.py`, and `dv_harness_tests/test_question_queue.py` (291
+tests combined, all passing) to confirm zero regression to every real module this wizard reuses.
+
+**Disclosed residual**: this is a REACHED capability, not a WIRED one -- no `run_stage()`/
+`advance()` call site or graph node invokes it; a user runs the standalone server directly. Step 3's
+architecture-choice ranking is shown only when a caller declares candidate bind locations in
+`wizard_inputs.json`; this wizard performs no bind-location discovery of its own.

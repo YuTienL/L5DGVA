@@ -57,8 +57,8 @@ calculator module).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Tuple
+from dataclasses import asdict, dataclass, is_dataclass
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from .models import Status
 from .amba_performance_calculator import (
@@ -370,3 +370,130 @@ def check_against_requirement(
         functional_verdict=functional_verdict,
         reason=overall_reason,
     )
+
+
+# --------------------------------------------------------------------------
+# Standalone CLI front door -- pure plumbing over check_against_requirement().
+# No new arithmetic; this only builds a PerformanceRequirementIR (or leaves
+# it None) and a measured value from CLI/file input, then calls the one real
+# checker function above.
+# --------------------------------------------------------------------------
+
+
+def _print_result(obj, as_json: bool) -> None:
+    payload = asdict(obj) if is_dataclass(obj) else obj
+    import json as _json
+
+    if as_json:
+        print(_json.dumps(payload, indent=2, default=str))
+    else:
+        for key, value in payload.items():
+            print(f"{key}: {value}")
+
+
+def _load_json_file(path: str):
+    import json as _json
+
+    with open(path, "r", encoding="utf-8") as handle:
+        return _json.load(handle)
+
+
+def _exit_code_for_status(status: Optional[str]) -> int:
+    """0 for a real, confirmed PASS; 1 for a real FAIL or an honestly
+    unresolved result (NOT_APPLICABLE, UNKNOWN) -- never a silent success
+    for a requirement this module could not actually evaluate.
+    """
+    if status == Status.PASS.value:
+        return 0
+    return 1
+
+
+def execute_verb(argv: Optional[Sequence[Any]] = None) -> int:
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(prog="amba_performance_requirement_checker")
+    sub = parser.add_subparsers(dest="verb", required=True)
+
+    p = sub.add_parser("check", help="compare a measured value against a declared requirement")
+    p.add_argument("--metric-name", required=True)
+    measured_group = p.add_mutually_exclusive_group(required=True)
+    measured_group.add_argument("--measured-value", type=float, default=None)
+    measured_group.add_argument(
+        "--measured-file", default=None, help="path to a JSON number/dict measured value"
+    )
+    p.add_argument(
+        "--requirement-id",
+        default=None,
+        help="omit (with --target) to check with no declared requirement -> NOT_APPLICABLE",
+    )
+    p.add_argument("--target", type=float, default=None)
+    p.add_argument("--comparison", default="<=", choices=_TARGET_COMPARISONS)
+    p.add_argument("--unit", default=None)
+    p.add_argument("--source", default=None)
+    p.add_argument(
+        "--functional-verdict",
+        default=None,
+        choices=[Status.PASS.value, Status.FAIL.value],
+    )
+    p.add_argument("--json", action="store_true")
+
+    args = parser.parse_args(argv)
+
+    try:
+        if args.verb != "check":
+            parser.error(f"unknown verb: {args.verb}")
+            return 2
+
+        if args.measured_value is not None:
+            measured: Any = args.measured_value
+        elif args.measured_file is not None:
+            measured = _load_json_file(args.measured_file)
+        else:
+            measured = None
+
+        requirement: Optional[PerformanceRequirementIR] = None
+        if args.target is not None:
+            if not args.requirement_id or not args.unit:
+                parser.error(
+                    "--target requires --requirement-id and --unit (a requirement is "
+                    "never invented with a missing field)"
+                )
+                return 2
+            requirement = PerformanceRequirementIR(
+                requirement_id=args.requirement_id,
+                metric_name=args.metric_name,
+                target_value=args.target,
+                comparison=args.comparison,
+                unit=args.unit,
+                source=args.source,
+            )
+
+        result = check_against_requirement(
+            measured,
+            args.metric_name,
+            requirement=requirement,
+            functional_verdict=args.functional_verdict,
+        )
+    except (
+        PerformanceRequirementCheckerError,
+        OSError,
+        json.JSONDecodeError,
+        TypeError,
+    ) as exc:
+        print(f"NOT_AVAILABLE: {exc}", file=sys.stderr)
+        return 2
+
+    _print_result(result, args.json)
+    return _exit_code_for_status(result.status)
+
+
+def main() -> None:
+    import sys
+
+    sys.exit(execute_verb())
+
+
+if __name__ == "__main__":
+    main()

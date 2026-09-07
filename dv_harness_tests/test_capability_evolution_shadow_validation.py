@@ -149,8 +149,12 @@ def test_a_replication_really_ran_two_arms_and_moved_no_state(root, fixture_proj
         assert (workspace / arm / ".dv-harness" / "state.json").is_file()
     assert (record["before"]["stages"][FIXTURE_STAGE]["gate_outcome_digest"]
             != record["after"]["stages"][FIXTURE_STAGE]["gate_outcome_digest"])
+    # STAGE_GATES["COMMAND_PATTERN"] carries two real gates (command_migration_
+    # integrity_gate + command_generation_gate); the fixture's stub agent
+    # supplies both evidence blocks once the migration manifest is present, so
+    # a real PASS satisfies both, not one.
     assert record["before"]["totals"]["gates_satisfied"] == 0
-    assert record["after"]["totals"]["gates_satisfied"] == 1
+    assert record["after"]["totals"]["gates_satisfied"] == 2
 
 
 def test_a_replication_is_refused_before_a_benchmark_exists(root, fixture_project):

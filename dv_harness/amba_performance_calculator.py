@@ -71,7 +71,7 @@ live simulator this harness does not have.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .models import Status
@@ -885,3 +885,161 @@ def aggregate_port_performance(
         bandwidth_utilization=bw_util,
         source_evidence=source_evidence,
     )
+
+
+# --------------------------------------------------------------------------
+# Standalone CLI front door -- pure plumbing over the pure functions above.
+# No new arithmetic; each verb calls exactly one already-real function.
+# --------------------------------------------------------------------------
+
+
+def _print_result(obj, as_json: bool) -> None:
+    payload = asdict(obj) if is_dataclass(obj) else obj
+    import json as _json
+
+    if as_json:
+        print(_json.dumps(payload, indent=2, default=str))
+    else:
+        for key, value in payload.items():
+            print(f"{key}: {value}")
+
+
+def _load_json_file(path: str):
+    import json as _json
+
+    with open(path, "r", encoding="utf-8") as handle:
+        return _json.load(handle)
+
+
+def _exit_code_for_status(status: Optional[str]) -> int:
+    """Maps a result's own status/verdict onto an exit code: 0 for a real,
+    definitive outcome (COMPUTED, a real PASS), 1 for an outcome this
+    module's own honesty rules could not (or did not) resolve to a
+    computed/passing result (UNKNOWN, NOT_APPLICABLE, FAIL) -- never a
+    silent success for an honestly-incomplete result.
+    """
+    if status in (STATUS_COMPUTED, Status.PASS.value):
+        return 0
+    if status in (STATUS_UNKNOWN, STATUS_NOT_APPLICABLE, Status.FAIL.value):
+        return 1
+    return 0
+
+
+def execute_verb(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(prog="amba_performance_calculator")
+    sub = parser.add_subparsers(dest="verb", required=True)
+
+    p = sub.add_parser("bandwidth", help="bytes / duration")
+    p.add_argument("--total-bytes", type=float, required=True)
+    p.add_argument("--duration-seconds", type=float, required=True)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("throughput", help="transactions / duration")
+    p.add_argument("--transaction-count", type=float, required=True)
+    p.add_argument("--duration-seconds", type=float, required=True)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("latency-percentiles", help="p50/p90/p95/p99 over a real latency list")
+    p.add_argument("--latencies", required=True, help="path to a JSON list of latency numbers")
+    p.add_argument("--latency-definition", required=True, choices=LATENCY_DEFINITIONS)
+    p.add_argument("--percentiles", default="50,90,95,99", help="comma-separated percentile list")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("outstanding", help="average/peak over a real outstanding-count list")
+    p.add_argument("--counts", required=True, help="path to a JSON list of outstanding counts")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("stall-ratio", help="stalled_cycles / total_cycles")
+    p.add_argument("--stalled-cycles", type=float, required=True)
+    p.add_argument("--total-cycles", type=float, required=True)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("utilization", help="busy_cycles / total_cycles")
+    p.add_argument("--busy-cycles", type=float, required=True)
+    p.add_argument("--total-cycles", type=float, required=True)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("bandwidth-utilization", help="observed / caller-declared peak bandwidth")
+    p.add_argument("--observed", type=float, required=True)
+    p.add_argument("--peak", type=float, default=None, help="caller-declared peak bandwidth (omit -> UNKNOWN)")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("evaluate-target", help="generic observed-vs-declared-target comparison")
+    p.add_argument("--observed", type=float, required=True)
+    p.add_argument("--target", type=float, default=None, help="omit -> NOT_APPLICABLE, never invented")
+    p.add_argument("--comparison", default="<=", choices=_TARGET_COMPARISONS)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("overall-verdict", help="rule (c): functional correctness outranks performance")
+    p.add_argument("--functional", required=True, choices=[Status.PASS.value, Status.FAIL.value])
+    p.add_argument("--performance", default=None)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("aggregate-port", help="build a real PortPerformanceIR over real samples")
+    p.add_argument("--port-id", required=True)
+    p.add_argument("--samples", required=True, help="path to a JSON list of PerformanceSampleIR-shaped dicts")
+    p.add_argument("--latency-definition", default=None, choices=LATENCY_DEFINITIONS)
+    p.add_argument("--peak-bandwidth", type=float, default=None)
+    p.add_argument("--window-start", type=float, default=None)
+    p.add_argument("--window-end", type=float, default=None)
+    p.add_argument("--json", action="store_true")
+
+    args = parser.parse_args(argv)
+
+    try:
+        if args.verb == "bandwidth":
+            result = compute_bandwidth(args.total_bytes, args.duration_seconds)
+        elif args.verb == "throughput":
+            result = compute_throughput(args.transaction_count, args.duration_seconds)
+        elif args.verb == "latency-percentiles":
+            latencies = _load_json_file(args.latencies)
+            percentiles = [int(x.strip()) for x in args.percentiles.split(",") if x.strip()]
+            result = compute_latency_percentiles(latencies, args.latency_definition, percentiles)
+        elif args.verb == "outstanding":
+            counts = _load_json_file(args.counts)
+            result = compute_outstanding_stats(counts)
+        elif args.verb == "stall-ratio":
+            result = compute_stall_ratio(args.stalled_cycles, args.total_cycles)
+        elif args.verb == "utilization":
+            result = compute_utilization(args.busy_cycles, args.total_cycles)
+        elif args.verb == "bandwidth-utilization":
+            result = bandwidth_utilization(args.observed, args.peak)
+        elif args.verb == "evaluate-target":
+            result = evaluate_against_target(args.observed, args.target, args.comparison)
+        elif args.verb == "overall-verdict":
+            result = decide_overall_verdict(args.functional, args.performance)
+        elif args.verb == "aggregate-port":
+            raw_samples = _load_json_file(args.samples)
+            samples = [PerformanceSampleIR(**entry) for entry in raw_samples]
+            result = aggregate_port_performance(
+                args.port_id,
+                samples,
+                latency_definition=args.latency_definition,
+                peak_bandwidth_bytes_per_second=args.peak_bandwidth,
+                window_start=args.window_start,
+                window_end=args.window_end,
+            )
+        else:
+            parser.error(f"unknown verb: {args.verb}")
+            return 2
+    except (PerformanceCalculatorError, OSError, json.JSONDecodeError, TypeError) as exc:
+        print(f"NOT_AVAILABLE: {exc}", file=sys.stderr)
+        return 2
+
+    _print_result(result, args.json)
+    status = getattr(result, "status", None) or getattr(result, "verdict", None)
+    return _exit_code_for_status(status)
+
+
+def main() -> None:
+    import sys
+
+    sys.exit(execute_verb())
+
+
+if __name__ == "__main__":
+    main()

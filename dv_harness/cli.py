@@ -2351,6 +2351,106 @@ def main():
                            "'ordering_facts','cross_requests'}.")
     pafc.add_argument("--json", action="store_true", help="Emit the machine-readable IR.")
 
+    papc = sub.add_parser("amba-performance-calc",
+                          help="Pure AMBA/AXI-class PERFORMANCE ARITHMETIC over caller-supplied "
+                               "numbers only -- bandwidth/throughput/latency-percentiles/"
+                               "outstanding/stall-ratio/utilization/bandwidth-utilization/"
+                               "target-evaluation/overall-verdict/per-port aggregation. Never "
+                               "invents a threshold or estimates a missing number. See "
+                               "dv_harness/amba_performance_calculator.py.")
+    papc.add_argument("apc_verb", choices=(
+        "bandwidth", "throughput", "latency-percentiles", "outstanding", "stall-ratio",
+        "utilization", "bandwidth-utilization", "evaluate-target", "overall-verdict",
+        "aggregate-port"))
+    papc.add_argument("--total-bytes", type=float, default=None)
+    papc.add_argument("--duration-seconds", type=float, default=None)
+    papc.add_argument("--transaction-count", type=float, default=None)
+    papc.add_argument("--latencies", default=None,
+                      help="latency-percentiles: path to a JSON list of numbers.")
+    papc.add_argument("--latency-definition", default=None,
+                      choices=("ISSUE_TO_FIRST_BEAT", "ISSUE_TO_LAST_BEAT", "REQUEST_TO_RESPONSE"))
+    papc.add_argument("--percentiles", default="50,90,95,99")
+    papc.add_argument("--counts", default=None, help="outstanding: path to a JSON list of ints.")
+    papc.add_argument("--stalled-cycles", type=float, default=None)
+    papc.add_argument("--total-cycles", type=float, default=None)
+    papc.add_argument("--busy-cycles", type=float, default=None)
+    papc.add_argument("--observed", type=float, default=None)
+    papc.add_argument("--peak", type=float, default=None)
+    papc.add_argument("--target", type=float, default=None)
+    papc.add_argument("--comparison", default="<=", choices=("<=", "<", ">=", ">", "=="))
+    papc.add_argument("--functional", default=None, choices=("PASS", "FAIL"))
+    papc.add_argument("--performance", default=None)
+    papc.add_argument("--port-id", default=None)
+    papc.add_argument("--samples", default=None,
+                      help="aggregate-port: path to a JSON list of PerformanceSampleIR dicts.")
+    papc.add_argument("--peak-bandwidth", type=float, default=None)
+    papc.add_argument("--window-start", type=float, default=None)
+    papc.add_argument("--window-end", type=float, default=None)
+    papc.add_argument("--json", action="store_true")
+
+    papcl = sub.add_parser("amba-performance-classify",
+                           help="AMBA/AXI-class PERFORMANCE CLASSIFICATION over caller-supplied "
+                                "numbers only -- saturation/bottleneck-candidate/anomaly-"
+                                "detection/regression-delta/Jain's-fairness-index/overall-"
+                                "verdict. Never concludes from one metric alone. See "
+                                "dv_harness/amba_performance_classification.py.")
+    papcl.add_argument("apcl_verb", choices=(
+        "saturation", "bottleneck", "anomaly", "regression-delta", "fairness",
+        "overall-verdict"))
+    papcl.add_argument("--utilization-value", type=float, default=None)
+    papcl.add_argument("--utilization-max", type=float, default=None)
+    papcl.add_argument("--near-max-ratio-threshold", type=float, default=None)
+    papcl.add_argument("--rising-latency-trend", default=None, choices=("true", "false"))
+    papcl.add_argument("--latency-trend-evidence", default=None)
+    papcl.add_argument("--rising-stall-trend", default=None, choices=("true", "false"))
+    papcl.add_argument("--stall-trend-evidence", default=None)
+    papcl.add_argument("--hypothesis", default=None)
+    papcl.add_argument("--evidence", action="append", default=None,
+                       help="bottleneck: repeat for each real evidence citation.")
+    papcl.add_argument("--gap", default=None)
+    papcl.add_argument("--next-best-action", default=None)
+    papcl.add_argument("--observed-value", type=float, default=None)
+    papcl.add_argument("--baseline-min", type=float, default=None)
+    papcl.add_argument("--baseline-max", type=float, default=None)
+    papcl.add_argument("--baseline-mean", type=float, default=None)
+    papcl.add_argument("--baseline-stddev", type=float, default=None)
+    papcl.add_argument("--deviation-threshold-stddev", type=float, default=None)
+    papcl.add_argument("--metric-name", default=None)
+    papcl.add_argument("--baseline-value", type=float, default=None)
+    papcl.add_argument("--current-value", type=float, default=None)
+    papcl.add_argument("--baseline-window", default=None)
+    papcl.add_argument("--current-window", default=None)
+    papcl.add_argument("--baseline-unit", default=None)
+    papcl.add_argument("--current-unit", default=None)
+    papcl.add_argument("--higher-is-better", action="store_true")
+    papcl.add_argument("--improvement-threshold-percent", type=float, default=None)
+    papcl.add_argument("--values", default=None,
+                       help="fairness: path to a JSON object mapping requester id -> value.")
+    papcl.add_argument("--functional", default=None, choices=("PASS", "FAIL"))
+    papcl.add_argument("--regression-delta-verdict", default=None)
+    papcl.add_argument("--json", action="store_true")
+
+    papchk = sub.add_parser("amba-performance-check-requirement",
+                            help="Compares a real measured performance value against a "
+                                 "caller/spec-declared PerformanceRequirementIR (PASS/FAIL/"
+                                 "NOT_APPLICABLE/UNKNOWN), with functional correctness's hard "
+                                 "precedence over a performance PASS already applied. See "
+                                 "dv_harness/amba_performance_requirement_checker.py.")
+    papchk.add_argument("apchk_verb", choices=("check",))
+    papchk.add_argument("--metric-name", required=True)
+    papchk_measured = papchk.add_mutually_exclusive_group(required=True)
+    papchk_measured.add_argument("--measured-value", type=float, default=None)
+    papchk_measured.add_argument("--measured-file", default=None,
+                                 help="path to a JSON number/dict measured value.")
+    papchk.add_argument("--requirement-id", default=None,
+                        help="omit (with --target) to check with no declared requirement.")
+    papchk.add_argument("--target", type=float, default=None)
+    papchk.add_argument("--comparison", default="<=", choices=("<=", "<", ">=", ">", "=="))
+    papchk.add_argument("--unit", default=None)
+    papchk.add_argument("--source", default=None)
+    papchk.add_argument("--functional-verdict", default=None, choices=("PASS", "FAIL"))
+    papchk.add_argument("--json", action="store_true")
+
     paprg = sub.add_parser("amba-performance-readiness-gates",
                            help="BUS_PERFORMANCE_READY / BUS_PERFORMANCE_SIGNOFF_READY composite "
                                 "gates over caller-supplied condition records -- never computes "
@@ -6245,6 +6345,136 @@ def main():
         if args.json:
             _afc_argv.append("--json")
         raise SystemExit(_afc.execute_verb(_afc_argv))
+    elif args.cmd == "amba-performance-calc":
+        # One shared implementation with `python -m
+        # dv_harness.amba_performance_calculator` (execute_verb(argv)); that
+        # module's own front door does its own argparse, so this reconstructs
+        # the equivalent argv and passes it straight through -- same real
+        # implementation, no arithmetic reimplemented here.
+        from . import amba_performance_calculator as _apc
+        _apc_argv = [args.apc_verb]
+        _apc_float_flags = (
+            ("--total-bytes", args.total_bytes),
+            ("--duration-seconds", args.duration_seconds),
+            ("--transaction-count", args.transaction_count),
+            ("--stalled-cycles", args.stalled_cycles),
+            ("--total-cycles", args.total_cycles),
+            ("--busy-cycles", args.busy_cycles),
+            ("--observed", args.observed),
+            ("--peak", args.peak),
+            ("--target", args.target),
+            ("--peak-bandwidth", args.peak_bandwidth),
+            ("--window-start", args.window_start),
+            ("--window-end", args.window_end),
+        )
+        for _flag, _value in _apc_float_flags:
+            if _value is not None:
+                _apc_argv += [_flag, str(_value)]
+        if args.latencies:
+            _apc_argv += ["--latencies", args.latencies]
+        if args.latency_definition:
+            _apc_argv += ["--latency-definition", args.latency_definition]
+        if args.apc_verb == "latency-percentiles" and args.percentiles:
+            _apc_argv += ["--percentiles", args.percentiles]
+        if args.counts:
+            _apc_argv += ["--counts", args.counts]
+        if args.comparison and args.apc_verb == "evaluate-target":
+            _apc_argv += ["--comparison", args.comparison]
+        if args.functional:
+            _apc_argv += ["--functional", args.functional]
+        if args.performance:
+            _apc_argv += ["--performance", args.performance]
+        if args.port_id:
+            _apc_argv += ["--port-id", args.port_id]
+        if args.samples:
+            _apc_argv += ["--samples", args.samples]
+        if args.json:
+            _apc_argv.append("--json")
+        raise SystemExit(_apc.execute_verb(_apc_argv))
+    elif args.cmd == "amba-performance-classify":
+        # One shared implementation with `python -m
+        # dv_harness.amba_performance_classification` (execute_verb(argv)).
+        from . import amba_performance_classification as _apcl
+        _apcl_argv = [args.apcl_verb]
+        _apcl_float_flags = (
+            ("--utilization-value", args.utilization_value),
+            ("--utilization-max", args.utilization_max),
+            ("--near-max-ratio-threshold", args.near_max_ratio_threshold),
+            ("--observed-value", args.observed_value),
+            ("--baseline-min", args.baseline_min),
+            ("--baseline-max", args.baseline_max),
+            ("--baseline-mean", args.baseline_mean),
+            ("--baseline-stddev", args.baseline_stddev),
+            ("--deviation-threshold-stddev", args.deviation_threshold_stddev),
+            ("--baseline-value", args.baseline_value),
+            ("--current-value", args.current_value),
+            ("--improvement-threshold-percent", args.improvement_threshold_percent),
+        )
+        for _flag, _value in _apcl_float_flags:
+            if _value is not None:
+                _apcl_argv += [_flag, str(_value)]
+        if args.rising_latency_trend:
+            _apcl_argv += ["--rising-latency-trend", args.rising_latency_trend]
+        if args.latency_trend_evidence:
+            _apcl_argv += ["--latency-trend-evidence", args.latency_trend_evidence]
+        if args.rising_stall_trend:
+            _apcl_argv += ["--rising-stall-trend", args.rising_stall_trend]
+        if args.stall_trend_evidence:
+            _apcl_argv += ["--stall-trend-evidence", args.stall_trend_evidence]
+        if args.hypothesis:
+            _apcl_argv += ["--hypothesis", args.hypothesis]
+        if args.evidence:
+            for _ev in args.evidence:
+                _apcl_argv += ["--evidence", _ev]
+        if args.gap:
+            _apcl_argv += ["--gap", args.gap]
+        if args.next_best_action:
+            _apcl_argv += ["--next-best-action", args.next_best_action]
+        if args.metric_name:
+            _apcl_argv += ["--metric-name", args.metric_name]
+        if args.baseline_window:
+            _apcl_argv += ["--baseline-window", args.baseline_window]
+        if args.current_window:
+            _apcl_argv += ["--current-window", args.current_window]
+        if args.baseline_unit:
+            _apcl_argv += ["--baseline-unit", args.baseline_unit]
+        if args.current_unit:
+            _apcl_argv += ["--current-unit", args.current_unit]
+        if args.higher_is_better:
+            _apcl_argv.append("--higher-is-better")
+        if args.values:
+            _apcl_argv += ["--values", args.values]
+        if args.functional:
+            _apcl_argv += ["--functional", args.functional]
+        if args.regression_delta_verdict:
+            _apcl_argv += ["--regression-delta-verdict", args.regression_delta_verdict]
+        if args.json:
+            _apcl_argv.append("--json")
+        raise SystemExit(_apcl.execute_verb(_apcl_argv))
+    elif args.cmd == "amba-performance-check-requirement":
+        # One shared implementation with `python -m
+        # dv_harness.amba_performance_requirement_checker` (execute_verb(argv)).
+        from . import amba_performance_requirement_checker as _apchk
+        _apchk_argv = [args.apchk_verb, "--metric-name", args.metric_name]
+        if args.measured_value is not None:
+            _apchk_argv += ["--measured-value", str(args.measured_value)]
+        else:
+            _apchk_argv += ["--measured-file", args.measured_file]
+        if args.requirement_id:
+            _apchk_argv += ["--requirement-id", args.requirement_id]
+        if args.target is not None:
+            _apchk_argv += ["--target", str(args.target)]
+        if args.comparison:
+            _apchk_argv += ["--comparison", args.comparison]
+        if args.unit:
+            _apchk_argv += ["--unit", args.unit]
+        if args.source:
+            _apchk_argv += ["--source", args.source]
+        if args.functional_verdict:
+            _apchk_argv += ["--functional-verdict", args.functional_verdict]
+        if args.json:
+            _apchk_argv.append("--json")
+        raise SystemExit(_apchk.execute_verb(_apchk_argv))
     elif args.cmd == "amba-performance-readiness-gates":
         from . import amba_performance_readiness_gates as _aprg
         _aprg_argv = [args.aprg_verb]

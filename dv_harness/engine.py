@@ -1132,6 +1132,68 @@ class DVHarness:
                 pass
             return None
 
+    def _classify_plan_quality_shape_for_telemetry(self, stage: str) -> Optional[Dict[str, Any]]:
+        """plan_quality_feedback gap-close (2026-09-07, REACHED-not-WIRED
+        closure): fires the real, read-only
+        plan_quality_feedback.aggregate_stage_sequence_shapes() classifier
+        on the real engine path, modeled byte-for-byte on
+        _classify_loop_convergence_for_telemetry() immediately above --
+        called at the SAME low-frequency point, retry exhaustion, where
+        "does this run's graph-traversal SHAPE have a real history of
+        thrashing" is genuinely worth asking. It reads only
+        loop_telemetry.read_loop_telemetry()-backed data (no state.json,
+        no StateStore.load(), no other file opened), writes a free-form
+        PLAN_QUALITY_SHAPE_CLASSIFIED/PLAN_QUALITY_SHAPE_CLASSIFY_FAILED
+        event via self.store.event() -- deliberately NOT routed through
+        loop_telemetry.emit()'s closed nineteen-name section-108
+        vocabulary, since a plan-quality shape classification is not one
+        of those named event types and widening that vocabulary is a
+        separate, larger change this hook does not make -- mints no
+        verdict, touches no gate, and returns None rather than a
+        fabricated result on any failure.
+
+        Deliberately reads across the WHOLE recorded telemetry history
+        (no run_id filter passed to aggregate_stage_sequence_shapes()):
+        the question this module answers ("has a session taking THIS SAME
+        graph-traversal shape thrashed before") is cross-session by
+        construction -- filtering to only the current session's own
+        run_id would leave nothing to compare it against. The emitted
+        event still names the CURRENT session's own shape (and that
+        shape's real classified status), when the current run_id is
+        findable among the aggregated shapes, purely as a convenience for
+        a reader of this one event -- the full per-shape breakdown is
+        always available via the real CLI/API this module already ships."""
+        try:
+            from . import plan_quality_feedback as _pqf
+            report = _pqf.aggregate_stage_sequence_shapes(self.root)
+            payload = report.to_dict()
+            sess = getattr(self, "_loop_run", None)
+            current_run_id = sess.get("run_id") if sess else None
+            current_shape = None
+            if current_run_id:
+                for shape_row in payload.get("shapes") or []:
+                    if current_run_id in (shape_row.get("run_ids") or []):
+                        current_shape = {"shape": shape_row.get("shape"),
+                                         "status": shape_row.get("status"),
+                                         "reason": shape_row.get("reason")}
+                        break
+            self.store.event({
+                "ts": now(), "stage": stage, "event": "PLAN_QUALITY_SHAPE_CLASSIFIED",
+                "available": payload.get("available"),
+                "sessions_examined": payload.get("sessions_examined"),
+                "status_counts": payload.get("status_counts"),
+                "current_run_shape": current_shape,
+            })
+            return payload
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "stage": stage,
+                                  "event": "PLAN_QUALITY_SHAPE_CLASSIFY_FAILED",
+                                  "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+            return None
+
     def _emit_loop_convergence_events(self, stage: str,
                                       report: Optional[Dict[str, Any]]) -> None:
         """Turn ONE real convergence report into its section-108 event.
@@ -1980,6 +2042,117 @@ class DVHarness:
         self.blackboard.write("subsystem_registry", {"entry": entry}, source=stage)
         self.store.event({"ts": now(), "stage": stage, "event": "SUBSYSTEM_ENVIRONMENT_REGISTERED",
                            "name": entry.get("name"), "qualification_state": entry.get("qualification_state")})
+
+    def _refresh_requirement_vplan_center_snapshot(self, stage: str, evidence_blocks: dict) -> None:
+        """Requirement/vPlan Center auto-population (2026-09-07, GUI/
+        dashboard auto-population audit, tasks 1+2). dashboard.
+        _read_requirement_vplan_center_state() already renders a real
+        Requirement/vPlan Center card off two conventional files --
+        .dv-harness/requirement_vplan/requirements.json and .../vplan.json
+        -- but before this, nothing in the harness ever WROTE either one
+        (a repo-wide grep for those two path strings found only
+        dashboard.py, the reader). Both halves are closed here, mirroring
+        _refresh_declared_subsystem_topics's own discipline exactly: never
+        GENERATE a fact -- only mirror one a real gate-verified PASS
+        already produced -- wrapped in try/except so a refresh can never
+        turn an already-earned stage PASS into a failure, with one
+        REQUIREMENT_VPLAN_CENTER_REFRESH* event recorded per attempt
+        (success or failure) so the audit trail can answer "was this ever
+        produced, and if not why" from real events rather than the file's
+        mere absence.
+
+        requirements.json (REQUIREMENTS_TRACEABILITY stage):
+        evidence_blocks["spec_to_vplan_requirement_quality_gate"] is,
+        byte-for-byte, the same `{"requirements": [...]}` dict
+        gates.run_gate() already JSON-dumped verbatim to the temp file
+        that gate script's own `d.get('requirements', [])` just read back
+        and PASSED against (tools/verification_flow/
+        spec_to_vplan_requirement_quality_gate.py:99-104) -- and it is
+        EXACTLY the "bare list, or {'requirements': [...]}" shape
+        dashboard.py's own reader already expects. A verbatim mirror; no
+        reshaping needed.
+
+        vplan.json (VPLAN stage): evidence_blocks["spec_to_vplan_quality_
+        gate"] carries a real `vplan_items: [{"vplan_id", "traces_to"}]`
+        array (tools/verification_flow/spec_to_vplan_quality_gate.py's own
+        declared evidence shape). vplan_artifact.validate_vplan_row()
+        requires only a non-empty `id` -- every other field is optional --
+        so each item is rewritten with the minimal, non-fabricating field
+        rename vplan_id -> id / traces_to -> requirement_refs; an item
+        with no non-empty vplan_id is skipped rather than assigned a
+        fabricated id. Every vplan_artifact dimension a rewritten row does
+        not carry (owner/priority/verification_method/...) is left
+        absent, so the Center honestly reports PARTIAL/UNKNOWN for it
+        rather than inventing one."""
+        try:
+            if stage == "REQUIREMENTS_TRACEABILITY":
+                gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
+                if "spec_to_vplan_requirement_quality_gate" not in gate_ids:
+                    return
+                block = evidence_blocks.get("spec_to_vplan_requirement_quality_gate")
+                if not isinstance(block, dict):
+                    return
+                self._write_requirement_vplan_center_file(stage, "requirements.json", block)
+            elif stage == "VPLAN":
+                gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
+                if "spec_to_vplan_quality_gate" not in gate_ids:
+                    return
+                block = evidence_blocks.get("spec_to_vplan_quality_gate")
+                if not isinstance(block, dict):
+                    return
+                items = block.get("vplan_items")
+                if not isinstance(items, list):
+                    return
+                rows = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    vplan_id = item.get("vplan_id")
+                    if not isinstance(vplan_id, str) or not vplan_id.strip():
+                        continue
+                    row: Dict[str, Any] = {"id": vplan_id}
+                    traces_to = item.get("traces_to")
+                    if isinstance(traces_to, list) and all(
+                            isinstance(t, str) and t.strip() for t in traces_to):
+                        row["requirement_refs"] = traces_to
+                    rows.append(row)
+                if not rows:
+                    return
+                self._write_requirement_vplan_center_file(stage, "vplan.json", {"vplan_rows": rows})
+        except Exception as exc:  # a refresh must never fail a real stage
+            self.store.event({"ts": now(), "stage": stage,
+                               "event": "REQUIREMENT_VPLAN_CENTER_REFRESH_FAILED",
+                               "error": f"{type(exc).__name__}: {exc}"})
+
+    def _write_requirement_vplan_center_file(self, stage: str, filename: str, payload: dict) -> None:
+        """Shared atomic-write + event-logging tail for
+        _refresh_requirement_vplan_center_snapshot() above -- mirrors
+        Blackboard.write()'s own tempfile.mkstemp() + storage.
+        _atomic_replace() idiom (never a plain truncate-then-write), and
+        _persist_subsystem_registry_entry's own best-effort
+        event-on-failure discipline. A write failure is recorded and never
+        allowed to turn an already-earned stage PASS into a crash."""
+        import tempfile
+        from .storage import _atomic_replace
+        path = self.root / ".dv-harness" / "requirement_vplan" / filename
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=path.stem + ".", suffix=".json", dir=str(path.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                _atomic_replace(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+        except OSError as exc:
+            self.store.event({"ts": now(), "stage": stage,
+                               "event": "REQUIREMENT_VPLAN_CENTER_WRITE_FAILED",
+                               "file": filename, "error": str(exc)})
+            return
+        self.store.event({"ts": now(), "stage": stage,
+                           "event": "REQUIREMENT_VPLAN_CENTER_REFRESHED",
+                           "file": filename})
 
     def _export_signoff_bundle(self, stage: str) -> None:
         """The real production-path caller for
@@ -3058,6 +3231,13 @@ class DVHarness:
             "ts": now(), "stage": stage, "event": "VERIFIED_FIX_PROMOTED",
             "promotion": promotion,
         })
+        # rca_ontology gap-close (2026-09-07): classify THIS same
+        # already-gate-verified record's root-cause CATEGORY the moment its
+        # promotion is complete -- best-effort, read-only, and strictly
+        # downstream of the promotion above (never allowed to affect it).
+        if promotion.get("destination") != "PROMOTION_FAILED":
+            self._classify_rca_category_for_verified_fix(
+                stage, record, promotion.get("memory_id"))
 
         # Phase 10 (2026-09-03): "on PASS ... trigger the Workstream-1
         # promotion evaluation" -- the moment a real ENGINEERING_MEMORY
@@ -3078,6 +3258,58 @@ class DVHarness:
         if promotion.get("destination") == "ENGINEERING_MEMORY" and promotion.get("memory_id"):
             self._evaluate_organizational_promotion(
                 stage, promotion["memory_id"], _confidence_inputs)
+
+    def _classify_rca_category_for_verified_fix(self, stage: str, record: Dict[str, Any],
+                                                 memory_id: Optional[str]) -> None:
+        """rca_ontology gap-close (2026-09-07, REACHED-not-WIRED closure):
+        rca_ontology.py built a real, standalone ontology
+        (classify_closed_root_cause_record()) with no engine call site
+        ever invoking it. This is that call site -- deliberately the one
+        the module's own audit-time review already named as safe: it fires
+        immediately after `promotion = route_and_store(self.root, record,
+        cfg=self.cfg)` succeeds, on the SAME `record` dict
+        _promote_verified_fix_knowledge() already built and just persisted
+        (with `memory_id` merged in from the real `route_and_store()`
+        result -- never a re-derivation, and never a second, differently-
+        shaped record).
+
+        rca_ontology.py's own module docstring is explicit that it "never
+        writes a memory record, never promotes a tier" and has no
+        gates.py/cli.py/STAGE_GATES reference at all -- it answers a pure
+        taxonomy question ("what kind of component owned this already-
+        verified fix") over a record that has ALREADY been gate-verified
+        and persisted by the two real RE_AUDIT gates one line earlier, so
+        it cannot affect that already-completed PASS or promotion. Its own
+        `closure_status()` re-derives eligibility from `record` itself
+        (memory_router.route_memory()/engineering_admission_gate()) rather
+        than trusting anything this method claims, so a record that somehow
+        does not actually qualify is honestly reported NOT_YET_CLOSED
+        rather than miscategorized.
+
+        Best-effort, mirroring every sibling _promote_*/_record_* method in
+        this class: a classification failure records
+        RCA_CATEGORY_CLASSIFY_FAILED and never turns an already-completed
+        promotion into a crash."""
+        try:
+            from . import rca_ontology as _rca
+            classified = dict(record)
+            if memory_id:
+                classified["memory_id"] = memory_id
+            result = _rca.classify_closed_root_cause_record(classified, root=self.root)
+            self.store.event({
+                "ts": now(), "stage": stage, "event": "RCA_CATEGORY_CLASSIFIED",
+                "memory_id": memory_id, "category": result.category,
+                "signature_key": result.signature_key,
+                "closure_status": result.closure_status,
+            })
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "stage": stage,
+                                  "event": "RCA_CATEGORY_CLASSIFY_FAILED",
+                                  "memory_id": memory_id,
+                                  "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
 
     def _evaluate_organizational_promotion(self, stage: str, memory_id: str,
                                             confidence_inputs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3115,7 +3347,67 @@ class DVHarness:
             "ts": now(), "stage": stage, "event": "ORGANIZATIONAL_PROMOTION_EVALUATED",
             "memory_id": memory_id, "result": org_eval,
         })
+        # memory_lineage gap-close (2026-09-07): fire the real, read-only
+        # lineage walker at the single rarest, lowest-frequency real moment
+        # in this engine -- an ACTUAL Organizational-tier promotion, itself
+        # already gated by the three independent real checks above. Best
+        # effort and strictly downstream of the promotion decision: it can
+        # never affect org_eval, which is already computed and returned.
+        if org_eval.get("destination") == "ORGANIZATIONAL_MEMORY" and org_eval.get("memory_id"):
+            self._trace_memory_lineage_for_promotion(stage, org_eval["memory_id"])
         return org_eval
+
+    def _trace_memory_lineage_for_promotion(self, stage: str, org_memory_id: str) -> None:
+        """memory_lineage gap-close (2026-09-07, REACHED-not-WIRED closure):
+        memory_lineage.py built a real, standalone, read-only multi-hop
+        lineage walker (Organizational -> Engineering -> Job tier, back
+        through every recoverable MemoryGC.confirm()/corroborating_memory_ids
+        back-pointer) with no engine call site invoking it. This is that
+        call site -- deliberately the narrowest one available: it fires
+        only once _evaluate_organizational_promotion() above has ALREADY
+        confirmed a record genuinely crossed into ORGANIZATIONAL_MEMORY,
+        exactly the "how did this conclusion get here" trace a human
+        reviewing that promotion would want automatically, with zero
+        ability to alter the promotion decision it is reacting to (this
+        method is called strictly after org_eval is computed and its own
+        ORGANIZATIONAL_PROMOTION_EVALUATED event is already recorded).
+
+        org_record is intentionally omitted: this call site holds only the
+        route_and_store()-shaped push result (destination/memory_id/...),
+        not the full pushed record, so build_organizational_lineage() falls
+        back to its own local DV-Knowledge Vault mirror resolution --
+        exactly the path that function's own docstring documents for a
+        caller in this position ("Omitted, this falls back to the local
+        DV-Knowledge Vault mirror -- the only local trace of an
+        Organizational-tier record, since that tier has no local per-tier
+        JSON store by design").
+
+        Mints nothing, arbitrates nothing (memory_router.organizational_
+        admission_gate() -- already run above, via promote_to_organizational()
+        -- remains the only real gate deciding whether a record SHOULD have
+        promoted; this only reconstructs, honestly, what lineage already
+        exists). Best-effort, mirroring every sibling _promote_*/_record_*
+        method in this class: a lineage-walk failure records
+        MEMORY_LINEAGE_TRACE_FAILED and never turns an already-completed
+        promotion into a crash."""
+        try:
+            from . import memory_lineage as _ml
+            result = _ml.build_organizational_lineage(self.root, org_memory_id)
+            self.store.event({
+                "ts": now(), "stage": stage, "event": "MEMORY_LINEAGE_TRACED",
+                "org_memory_id": org_memory_id, "status": result.status,
+                "unresolved_reference_count": result.unresolved_reference_count,
+                "external_reference_count": result.external_reference_count,
+                "chain_length": len(result.chain),
+            })
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "stage": stage,
+                                  "event": "MEMORY_LINEAGE_TRACE_FAILED",
+                                  "org_memory_id": org_memory_id,
+                                  "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
 
     def _record_debug_attempt_job_memory(self, stage: str, ss: Dict[str, Any],
                                           failure_signature: Optional[Dict[str, Any]],
@@ -4689,6 +4981,7 @@ class DVHarness:
                                                        resolved_protocol=_promotion_protocol,
                                                        producing_agent_profile=_resolved_agent_name)
                     self._persist_subsystem_registry_entry(stage, evidence_blocks)
+                    self._refresh_requirement_vplan_center_snapshot(stage, evidence_blocks)
                     self._export_signoff_bundle(stage)
                     self._compose_soc_environment_files(stage, evidence_blocks)
                     self._score_root_cause_confidence(stage, evidence_blocks, verdict)
@@ -5658,6 +5951,13 @@ class DVHarness:
                 self._record_loop_state_observation(stage, occasion="RETRY_BUDGET_EXHAUSTED",
                                                     convergence=convergence)
                 self._emit_loop_convergence_events(stage, convergence)
+
+                # plan_quality_feedback gap-close (2026-09-07): a sibling
+                # classifier at the SAME retry-exhaustion point, asking a
+                # different real question -- has THIS SAME graph-traversal
+                # shape thrashed across other real sessions -- best-effort
+                # and never allowed to affect the routing decision above.
+                self._classify_plan_quality_shape_for_telemetry(stage)
 
                 # LOOP-3, section 91: the same spend, recorded against the ONE
                 # unified ledger, so "what has this run spent on which

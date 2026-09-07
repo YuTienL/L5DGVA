@@ -82,7 +82,7 @@ submission.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Mapping, Optional, Sequence, Tuple
 
 from .amba_performance_calculator import (
@@ -796,3 +796,179 @@ def compute_jains_fairness_index(
         fairness_index=j,
         status=STATUS_COMPUTED,
     )
+
+
+# --------------------------------------------------------------------------
+# Standalone CLI front door -- pure plumbing over the classifiers above.
+# No new classification logic; each verb calls exactly one already-real
+# function.
+# --------------------------------------------------------------------------
+
+
+def _print_result(obj, as_json: bool) -> None:
+    payload = asdict(obj) if is_dataclass(obj) else obj
+    import json as _json
+
+    if as_json:
+        print(_json.dumps(payload, indent=2, default=str))
+    else:
+        for key, value in payload.items():
+            print(f"{key}: {value}")
+
+
+def _load_json_file(path: str):
+    import json as _json
+
+    with open(path, "r", encoding="utf-8") as handle:
+        return _json.load(handle)
+
+
+def _optional_bool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    return value == "true"
+
+
+def _exit_code_for_status(status: Optional[str]) -> int:
+    """0 for a real, definitive, non-alarming outcome (COMPUTED,
+    NOT_SATURATED, NO_ANOMALY, IMPROVED/UNCHANGED, a real PASS); 1 for a
+    real finding that needs attention (SATURATED, ANOMALY_DETECTED,
+    REGRESSED, FAIL) or an honestly-unresolved result (UNKNOWN,
+    NOT_APPLICABLE, INDETERMINATE, INCONCLUSIVE) -- never a silent success
+    for a result this module's own honesty rules could not resolve.
+    """
+    if status in (
+        STATUS_COMPUTED,
+        SATURATION_NOT_SATURATED,
+        NO_ANOMALY,
+        REGRESSION_IMPROVED,
+        REGRESSION_UNCHANGED,
+        Status.PASS.value,
+    ):
+        return 0
+    return 1
+
+
+def execute_verb(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(prog="amba_performance_classification")
+    sub = parser.add_subparsers(dest="verb", required=True)
+
+    p = sub.add_parser("saturation", help="utilization-near-max ALONGSIDE a rising trend signal")
+    p.add_argument("--utilization-value", type=float, default=None)
+    p.add_argument("--utilization-max", type=float, default=None)
+    p.add_argument("--near-max-ratio-threshold", type=float, default=None)
+    p.add_argument("--rising-latency-trend", choices=["true", "false"], default=None)
+    p.add_argument("--latency-trend-evidence", default=None)
+    p.add_argument("--rising-stall-trend", choices=["true", "false"], default=None)
+    p.add_argument("--stall-trend-evidence", default=None)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("bottleneck", help="build a structured Hypothesis->Evidence->Confidence->Gap->Action record")
+    p.add_argument("--hypothesis", required=True)
+    p.add_argument("--evidence", action="append", required=True, help="repeat for each real evidence citation")
+    p.add_argument("--gap", default=None)
+    p.add_argument("--next-best-action", default=None)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("anomaly", help="real observed value vs. a real caller-supplied baseline")
+    p.add_argument("--observed-value", type=float, default=None)
+    p.add_argument("--baseline-min", type=float, default=None)
+    p.add_argument("--baseline-max", type=float, default=None)
+    p.add_argument("--baseline-mean", type=float, default=None)
+    p.add_argument("--baseline-stddev", type=float, default=None)
+    p.add_argument("--deviation-threshold-stddev", type=float, default=None)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("regression-delta", help="two real measured periods, compared")
+    p.add_argument("--metric-name", required=True)
+    p.add_argument("--baseline-value", type=float, default=None)
+    p.add_argument("--current-value", type=float, default=None)
+    p.add_argument("--baseline-window", default=None)
+    p.add_argument("--current-window", default=None)
+    p.add_argument("--baseline-unit", default=None)
+    p.add_argument("--current-unit", default=None)
+    p.add_argument("--higher-is-better", action="store_true", help="default: lower is better")
+    p.add_argument("--improvement-threshold-percent", type=float, default=None)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("fairness", help="Jain's fairness index over a real per-requester value map")
+    p.add_argument("--values", required=True, help="path to a JSON object mapping requester id -> value (or null)")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("overall-verdict", help="rule (c), reused from amba_performance_calculator")
+    p.add_argument("--functional", required=True, choices=[Status.PASS.value, Status.FAIL.value])
+    p.add_argument("--regression-delta-verdict", default=None)
+    p.add_argument("--json", action="store_true")
+
+    args = parser.parse_args(argv)
+
+    try:
+        if args.verb == "saturation":
+            result = classify_saturation(
+                args.utilization_value,
+                args.utilization_max,
+                args.near_max_ratio_threshold,
+                rising_latency_trend=_optional_bool(args.rising_latency_trend),
+                latency_trend_evidence=args.latency_trend_evidence,
+                rising_stall_trend=_optional_bool(args.rising_stall_trend),
+                stall_trend_evidence=args.stall_trend_evidence,
+            )
+        elif args.verb == "bottleneck":
+            result = identify_bottleneck_candidate(
+                args.hypothesis,
+                args.evidence,
+                gap=args.gap,
+                next_best_action=args.next_best_action,
+            )
+        elif args.verb == "anomaly":
+            result = detect_anomaly(
+                args.observed_value,
+                baseline_min=args.baseline_min,
+                baseline_max=args.baseline_max,
+                baseline_mean=args.baseline_mean,
+                baseline_stddev=args.baseline_stddev,
+                deviation_threshold_stddev=args.deviation_threshold_stddev,
+            )
+        elif args.verb == "regression-delta":
+            result = compute_regression_delta(
+                args.metric_name,
+                args.baseline_value,
+                args.current_value,
+                baseline_window=args.baseline_window,
+                current_window=args.current_window,
+                baseline_unit=args.baseline_unit,
+                current_unit=args.current_unit,
+                lower_is_better=not args.higher_is_better,
+                improvement_threshold_percent=args.improvement_threshold_percent,
+            )
+        elif args.verb == "fairness":
+            values = _load_json_file(args.values)
+            result = compute_jains_fairness_index(values)
+        elif args.verb == "overall-verdict":
+            result = decide_overall_performance_verdict(
+                args.functional, args.regression_delta_verdict
+            )
+        else:
+            parser.error(f"unknown verb: {args.verb}")
+            return 2
+    except (PerformanceClassificationError, OSError, json.JSONDecodeError, TypeError) as exc:
+        print(f"NOT_AVAILABLE: {exc}", file=sys.stderr)
+        return 2
+
+    _print_result(result, args.json)
+    status = getattr(result, "status", None) or getattr(result, "verdict", None)
+    return _exit_code_for_status(status)
+
+
+def main() -> None:
+    import sys
+
+    sys.exit(execute_verb())
+
+
+if __name__ == "__main__":
+    main()

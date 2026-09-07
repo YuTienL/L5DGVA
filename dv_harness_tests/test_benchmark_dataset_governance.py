@@ -401,8 +401,12 @@ def test_two_dataset_versions_produce_two_distinguishable_results(root, fixtures
             assert record[{"baseline": "before", "treatment": "after"}[arm]]["arm"] == arm
     improved = json.loads(Path(by_case["manifest-matching-hashes"]["record_path"])
                           .read_text(encoding="utf-8"))
+    # STAGE_GATES["COMMAND_PATTERN"] carries two real gates
+    # (command_migration_integrity_gate + command_generation_gate); the
+    # fixture's stub agent grounds both on the SAME matching-hashes manifest,
+    # so a real PASS satisfies both, not one.
     assert improved["before"]["totals"]["gates_satisfied"] == 0
-    assert improved["after"]["totals"]["gates_satisfied"] == 1
+    assert improved["after"]["totals"]["gates_satisfied"] == 2
 
     # -- both runs are on disk and readable back
     runs = bd.read_eval_runs(root, DATASET_ID)
