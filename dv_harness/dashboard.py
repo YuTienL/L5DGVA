@@ -810,6 +810,77 @@ renders what the two real modules themselves computed.</div>
 <tbody id="vipEnvBuilderProvenBody"></tbody></table></div>
 </div>
 
+<div class="card" id="orphanedForkDetectionCard"><h3>Orphaned/Leaked-Fork Detection</h3>
+<div class="note">Real <code>orphaned_fork_detection.analyze_pattern_directory()</code> report (GET
+/api/orphaned-fork-detection, computed live off
+<code>.dv-harness/orphaned_fork_detection/inputs.json</code>) -- for every <code>branch_b*</code>
+region in every real command.txt/pattern file scanned, whether every non-blocking VIP-sequence
+DISPATCH has a real, paired explicit WAIT before that branch reports a result, per
+<code>pattern-architecture</code> SKILL.md section 3.5. This module discovers no project fact
+itself; a caller declares which real <code>pattern_dir</code> to scan. No
+<code>inputs.json</code> on disk yet shows an honest empty state naming the file this card looked
+for, never a fabricated pattern_dir. <b>Read-only</b>: this card runs no build or generation -- it
+only renders what <code>analyze_pattern_directory()</code> itself found in real source text.</div>
+<div id="orphanedForkTiles" class="tiles" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><button onclick="loadOrphanedForkDetection()">Refresh</button></div>
+<div class="note" id="orphanedForkEmptyNote" style="margin-top:8px"></div>
+<div class="note" id="orphanedForkErrorNote" style="margin-top:6px"></div>
+<div style="overflow-x:auto"><table id="orphanedForkFilesTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">File</th><th style="padding:4px">Status</th><th style="padding:4px">Reason</th>
+<th style="padding:4px">Regions</th></tr></thead>
+<tbody id="orphanedForkFilesBody"></tbody></table></div>
+</div>
+
+<div class="card" id="multiVipCooperationCard"><h3>Multi-VIP Cooperation Architecting</h3>
+<div class="note">Real <code>multi_vip_cooperation_architecting.build_multi_vip_cooperation()</code>
+report (GET /api/multi-vip-cooperation, computed live off
+<code>.dv-harness/multi_vip_cooperation/inputs.json</code>) -- for every DUT+PHY topology whose
+declared interfaces share a real coupling fact (e.g. one physical PHY instance backing two logical
+interfaces, a dual-role port), whether that pairing genuinely needs two cooperating VIP instances,
+and if so, whether the shared virtual-sequencer composition and interface-readiness sequencing are
+fully architected yet. Every fact (interfaces, coupling, sequencing) must be caller-declared -- this
+module has no project-discovery path of its own. No <code>inputs.json</code> on disk yet shows an
+honest empty state naming the file this card looked for, never a fabricated cooperation record.
+<b>Read-only</b>: this card runs no build or generation, and picks no winner between two active
+drivers -- it only renders what <code>build_multi_vip_cooperation()</code> itself computed from
+real, caller-declared evidence.</div>
+<div id="multiVipCoopTiles" class="tiles" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><button onclick="loadMultiVipCooperation()">Refresh</button></div>
+<div class="note" id="multiVipCoopEmptyNote" style="margin-top:8px"></div>
+<div class="note" id="multiVipCoopErrorNote" style="margin-top:6px"></div>
+<div style="overflow-x:auto"><table id="multiVipCoopRelTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Interface A</th><th style="padding:4px">Interface B</th>
+<th style="padding:4px">Cooperation</th><th style="padding:4px">Architecture</th>
+<th style="padding:4px">Sequencing</th><th style="padding:4px">Vseqr Composition</th></tr></thead>
+<tbody id="multiVipCoopRelBody"></tbody></table></div>
+</div>
+
+<div class="card" id="dutErrataCorrelationCard"><h3>DUT Errata/Known-Issues Correlation</h3>
+<div class="note">Real <code>dut_errata_correlation.analyze_errata()</code> report (GET
+/api/dut-errata-correlation, computed live off
+<code>.dv-harness/dut_errata_correlation/inputs.json</code>'s declared <code>source_path</code>
+plus this project's own real <code>env.manifest.json</code>, auto-resolved) -- every real erratum
+this module structurally extracted from the declared errata/known-issues document, correlated
+against real RTL/register evidence: <b>RTL_LOCATED</b> (a real exact match), <b>RTL_PARTIALLY_
+LOCATED</b> (an unproven substring match), <b>RTL_NOT_LOCATED</b> (searched, not found -- a real
+negative), <b>NO_AFFECTED_COMPONENT_CITED</b>, or the honest <b>NOT_AVAILABLE</b> when no
+manifest was available to check against -- never collapsed into RTL_NOT_LOCATED. No
+<code>source_path</code> declared reports the honest top-level NOT_AVAILABLE without ever
+attempting to open anything, never a fabricated erratum list. <b>Read-only</b>: this card runs no
+build or generation -- it only renders what <code>analyze_errata()</code> itself extracted and
+correlated from real evidence.</div>
+<div id="dutErrataTiles" class="tiles" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><button onclick="loadDutErrataCorrelation()">Refresh</button></div>
+<div class="note" id="dutErrataErrorNote" style="margin-top:6px"></div>
+<div style="overflow-x:auto"><table id="dutErrataTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Erratum ID</th><th style="padding:4px">Title</th>
+<th style="padding:4px">Correlation</th><th style="padding:4px">Affected Components</th></tr></thead>
+<tbody id="dutErrataBody"></tbody></table></div>
+</div>
+
 <div class="card" id="researchCard"><h3>Research / Capability Evolution</h3>
 <div class="note">Real <code>CapabilityEvolutionCandidate</code> records -- the harness reasoning about
 changes to ITSELF (GET /api/research, reading <code>capability_evolution.read_candidates()</code> off
@@ -1446,6 +1517,73 @@ card runs no build, simulation, or gate.</div>
 <th style="padding:4px">Terminal?</th><th style="padding:4px">Transitions</th><th style="padding:4px">Created</th></tr></thead>
 <tbody id="patternRuntimeStateBody"></tbody></table></div>
 <div class="note" id="patternRuntimeStateNote" style="margin-top:8px"></div>
+</div>
+
+<div class="card" id="intakeBaselineCard"><h3>Intake Baseline</h3>
+<div class="note">Real <code>intake_baseline.py</code> freeze/list/status card (GET
+/api/intake-baseline): every recorded intake-freeze record under
+<code>.dv-harness/intake/baselines/*.json</code> (the twelve pre-generation intake
+facts -- DUT top/boundary, DUT/TB SHA, source file hashes, VIP declaration, bind
+topology hash, reference-UVM hash, DE command.txt hash, known-test list, and the
+three unresolved-unknowns/conflicts/decisions counters), plus a real
+VALID/INVALIDATED/UNKNOWN re-evaluation against CURRENT facts. That evaluation only
+ever runs against a real, on-disk current-facts document (this project's own
+<code>.dv-harness/intake/current_facts.json</code>) -- with none present, freezes are
+still listed but no evaluation is fabricated. <b>Read-only</b>: this card never
+freezes, writes, or gates anything itself.</div>
+<div id="intakeBaselineTiles" class="tiles" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><button onclick="loadIntakeBaseline()">Refresh</button></div>
+<div style="overflow-x:auto"><table id="intakeBaselineTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Freeze ID</th><th style="padding:4px">Frozen By</th><th style="padding:4px">Frozen At</th>
+<th style="padding:4px">Status</th><th style="padding:4px">Invalidating</th><th style="padding:4px">Indeterminate</th></tr></thead>
+<tbody id="intakeBaselineBody"></tbody></table></div>
+<div class="note" id="intakeBaselineNote" style="margin-top:8px"></div>
+</div>
+
+<div class="card" id="patternCoverageContributionCard"><h3>Pattern Coverage Contribution</h3>
+<div class="note">Real <code>pattern_coverage_contribution.compute_pattern_coverage_contribution()</code>
+output (GET /api/pattern-coverage-contribution): a real, attributed per-pattern marginal coverage
+contribution (new bins hit, new <em>meaningful</em> cross bins hit, a bins-weighted
+coverage_delta_percent) plus real runtime/failure evidence from <code>evidence_db.py</code>'s
+<code>jobs</code> table -- read straight off <code>.dv-harness/evidence/evidence.duckdb</code>, never
+re-derived here. <code>sample_attribution</code> is a required, explicit, caller-declared fact this
+codebase has NO producer for -- a JSON file of <code>[{"source":..., "pattern":...}, ...]</code>
+mapping each real coverage checkpoint's own <code>source</code> value to the pattern that produced it.
+With no attribution file supplied, this card honestly reports "attribution required" rather than
+inventing one. <b>Read-only</b>: this card runs no build, simulation, or gate.</div>
+<div class="ctrlrow"><label>Pattern <input id="pccPattern" size="20" placeholder="e.g. usb3_link_up"></label>
+  <label>Attribution JSON <input id="pccAttribution" size="34" placeholder="/path/to/attribution.json"></label>
+  <label>Cross Definitions JSON <input id="pccCrossDefs" size="26" placeholder="(optional)"></label>
+  <button onclick="loadPatternCoverageContribution()">Compute</button></div>
+<div id="patternCoverageContributionTiles" class="tiles" style="margin-top:8px"></div>
+<div style="overflow-x:auto"><table id="patternCoverageContributionTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Category</th><th style="padding:4px">Before</th><th style="padding:4px">After</th>
+<th style="padding:4px">Bins Total</th><th style="padding:4px">New Bins Hit</th></tr></thead>
+<tbody id="patternCoverageContributionBody"></tbody></table></div>
+<div class="note" id="patternCoverageContributionNote" style="margin-top:8px"></div>
+</div>
+
+<div class="card" id="buildRemoteLsfIntakeCard"><h3>Build/Remote/LSF Intake</h3>
+<div class="note">Real <code>build_remote_lsf_intake.py</code> readiness card (GET
+/api/build-remote-lsf-intake): eda_license_available/lsf_configured/
+build_environment_reachable/disk_space_sufficient/workdir_ready/
+eda_env_vars_configured/remote_transport_available, each mapped from a real
+<code>preflight.py</code> CheckOutcome/TransportDecision. <b>This card NEVER runs a live
+probe</b> -- it only reads an already-declared PreflightResult/TransportDecision JSON
+document a real <code>preflight.run_preflight()</code> run already wrote elsewhere, at
+<code>.dv-harness/build_remote_lsf_intake/preflight_result.json</code>. Absent that
+file, this card honestly reports nothing rather than invoking a real network/host/
+license/LSF-queue probe on every page load.</div>
+<div id="buildRemoteLsfIntakeTiles" class="tiles" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><button onclick="loadBuildRemoteLsfIntake()">Refresh</button></div>
+<div style="overflow-x:auto"><table id="buildRemoteLsfIntakeTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Field</th><th style="padding:4px">Status</th><th style="padding:4px">Confidence</th>
+<th style="padding:4px">Value</th><th style="padding:4px">Reason</th></tr></thead>
+<tbody id="buildRemoteLsfIntakeBody"></tbody></table></div>
+<div class="note" id="buildRemoteLsfIntakeNote" style="margin-top:8px"></div>
 </div>
 
 <div class="card" id="memoryQualityPolicyCard"><h3>Memory Quality Policy</h3>
@@ -3690,6 +3828,169 @@ function renderVipEnvironmentBuilder(){
   }).join('') || '<tr><td style="padding:4px" colspan="3">No PROVEN citations.</td></tr>';
 }
 
+// Orphaned/Leaked-Fork Detection card. Same fetch-once + client-side-render
+// shape as the VIP/Environment Builder card just above -- computes nothing
+// itself, only renders orphaned_fork_detection.py's real branch_b*-dispatch/
+// wait pairing report, read live off
+// .dv-harness/orphaned_fork_detection/inputs.json.
+let _orphanedForkData = null;
+async function loadOrphanedForkDetection(){
+  _orphanedForkData = await (await fetch('/api/orphaned-fork-detection')).json();
+  renderOrphanedForkDetection();
+}
+function orphanedForkFileClass(s){
+  if(s==='FINDINGS_FOUND') return 'BLOCKED';
+  if(s==='UNREADABLE') return 'UNKNOWN';
+  if(s==='NOT_APPLICABLE') return 'NOT_STARTED';
+  return 'PASS'; // CLEAN
+}
+async function loadMultiVipCooperation(){
+  _multiVipCoopData = await (await fetch('/api/multi-vip-cooperation')).json();
+  renderMultiVipCooperation();
+}
+let _multiVipCoopData = null;
+function renderOrphanedForkDetection(){
+  let r = _orphanedForkData;
+  let tiles = document.getElementById('orphanedForkTiles');
+  let emptyNote = document.getElementById('orphanedForkEmptyNote');
+  let errNote = document.getElementById('orphanedForkErrorNote');
+  let body = document.getElementById('orphanedForkFilesBody');
+  if(!r) return;
+  if(r.error){
+    errNote.innerHTML = '<span class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</span>';
+    emptyNote.textContent = ''; tiles.innerHTML = ''; body.innerHTML = '';
+    return;
+  }
+  errNote.innerHTML = '';
+  if(!r.available || !r.report){
+    emptyNote.innerHTML = 'No <code>'+(r.inputs_path||'')+'</code> exists on disk yet. Write a real '
+      +'{"pattern_dir": "...", "glob"?: "*.txt"} document there (see '
+      +'<code>orphaned_fork_detection.analyze_pattern_directory()</code>\'s own docstring for the '
+      +'shape) to populate this card -- nothing here is fabricated.';
+    tiles.innerHTML = ''; body.innerHTML = '';
+    return;
+  }
+  emptyNote.textContent = '';
+  let rep = r.report;
+  tiles.innerHTML = [
+    tile(rep.overall_status||'-','Overall Status'),
+    tile((rep.files_scanned||[]).length,'Files Scanned'),
+    tile(rep.orphaned_dispatch_count||0,'Orphaned Dispatches'),
+    tile(rep.unclosed_region_count||0,'Unclosed Regions'),
+  ].join('');
+  body.innerHTML = (rep.reports||[]).map(fr=>
+    `<tr style="border-bottom:1px solid #edf1f5">`+
+    `<td style="padding:4px">${fr.file}</td>`+
+    `<td style="padding:4px" class="${orphanedForkFileClass(fr.status)}">${fr.status}</td>`+
+    `<td style="padding:4px">${fr.reason||''}</td>`+
+    `<td style="padding:4px">${(fr.regions||[]).length}</td></tr>`
+  ).join('') || '<tr><td style="padding:4px" colspan="4">No files scanned.</td></tr>';
+}
+
+// Multi-VIP Cooperation Architecting card. Same fetch-once + client-side-
+// render shape as the Orphaned/Leaked-Fork Detection card just above --
+// computes nothing itself, only renders multi_vip_cooperation_architecting.
+// py's real build_multi_vip_cooperation() report, read live off
+// .dv-harness/multi_vip_cooperation/inputs.json.
+function multiVipCoopStatusClass(s){
+  if(s==='COOPERATION_ARCHITECTED') return 'PASS';
+  if(s==='COOPERATION_DETECTED_ARCHITECTURE_INCOMPLETE') return 'BLOCKED';
+  if(s==='INSUFFICIENT_EVIDENCE') return 'UNKNOWN';
+  return 'NOT_STARTED'; // NO_MULTI_VIP_COOPERATION_DETECTED
+}
+function renderMultiVipCooperation(){
+  let r = _multiVipCoopData;
+  let tiles = document.getElementById('multiVipCoopTiles');
+  let emptyNote = document.getElementById('multiVipCoopEmptyNote');
+  let errNote = document.getElementById('multiVipCoopErrorNote');
+  let body = document.getElementById('multiVipCoopRelBody');
+  if(!r) return;
+  if(r.error){
+    errNote.innerHTML = '<span class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</span>';
+    emptyNote.textContent = ''; tiles.innerHTML = ''; body.innerHTML = '';
+    return;
+  }
+  errNote.innerHTML = '';
+  if(!r.available || !r.report){
+    emptyNote.innerHTML = 'No <code>'+(r.inputs_path||'')+'</code> exists on disk yet. Write a real '
+      +'{"interfaces": [...], "env_manifest"?, "rtl_modules"?, "declared_coupling_facts"?, '
+      +'"sequencing_relations"?, "sequencing_observations"?} document there (see '
+      +'<code>multi_vip_cooperation_architecting.build_multi_vip_cooperation()</code>\'s own '
+      +'docstring for the shape) to populate this card -- nothing here is fabricated.';
+    tiles.innerHTML = ''; body.innerHTML = '';
+    return;
+  }
+  emptyNote.textContent = '';
+  let rep = r.report;
+  let rels = rep.relationships||[];
+  tiles.innerHTML = [
+    tile(rep.overall_status||'-','Overall Status'),
+    tile((rep.interfaces||[]).length,'Interfaces'),
+    tile(rels.length,'Coupled Pairs'),
+  ].join('');
+  body.innerHTML = rels.map(x=>
+    `<tr style="border-bottom:1px solid #edf1f5">`+
+    `<td style="padding:4px">${x.interface_a}</td>`+
+    `<td style="padding:4px">${x.interface_b}</td>`+
+    `<td style="padding:4px" class="${multiVipCoopStatusClass(x.cooperation_status)}">${x.cooperation_status||''}</td>`+
+    `<td style="padding:4px">${x.architecture_status||''}</td>`+
+    `<td style="padding:4px">${(x.sequencing_dependency||{}).status||''}</td>`+
+    `<td style="padding:4px">${(x.virtual_sequencer_composition||{}).composition_mode||''}</td></tr>`
+  ).join('') || '<tr><td style="padding:4px" colspan="6">No coupled interface pairs -- no multi-VIP cooperation detected.</td></tr>';
+}
+
+// DUT Errata/Known-Issues Correlation card. Same fetch-once + client-side-
+// render shape as the Multi-VIP Cooperation card just above -- computes
+// nothing itself, only renders dut_errata_correlation.py's real
+// analyze_errata() report, read live off
+// .dv-harness/dut_errata_correlation/inputs.json (source_path) plus this
+// project's own real env.manifest.json (manifest_path, auto-resolved --
+// never declared by the caller).
+let _dutErrataData = null;
+async function loadDutErrataCorrelation(){
+  _dutErrataData = await (await fetch('/api/dut-errata-correlation')).json();
+  renderDutErrataCorrelation();
+}
+function dutErrataStatusClass(s){
+  if(s==='RTL_LOCATED') return 'PASS';
+  if(s==='RTL_PARTIALLY_LOCATED') return 'PARTIAL';
+  if(s==='RTL_NOT_LOCATED') return 'BLOCKED';
+  if(s==='NO_AFFECTED_COMPONENT_CITED') return 'NOT_STARTED';
+  return 'UNKNOWN'; // NOT_AVAILABLE
+}
+function renderDutErrataCorrelation(){
+  let r = _dutErrataData;
+  let tiles = document.getElementById('dutErrataTiles');
+  let errNote = document.getElementById('dutErrataErrorNote');
+  let body = document.getElementById('dutErrataBody');
+  if(!r) return;
+  if(r.error){
+    errNote.innerHTML = '<span class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</span>';
+  } else { errNote.innerHTML = ''; }
+  let rep = r.report;
+  if(!rep){ tiles.innerHTML = tile('-','No report'); body.innerHTML = ''; return; }
+  let sum = rep.summary||{};
+  tiles.innerHTML = [
+    tile(rep.status||'-','Status'),
+    tile(rep.erratum_count||0,'Errata'),
+    tile(sum.RTL_LOCATED||0,'RTL_LOCATED'),
+    tile(sum.RTL_NOT_LOCATED||0,'RTL_NOT_LOCATED'),
+  ].join('');
+  if(rep.status!=='ANALYZED'){
+    body.innerHTML = '<tr><td style="padding:4px" colspan="4">'+(rep.reason||'No errata/known-issues '
+      +'document declared -- write {"source_path": "...", "title"?} to <code>'+(r.inputs_path||'')
+      +'</code> to populate this card.')+'</td></tr>';
+    return;
+  }
+  body.innerHTML = (rep.errata||[]).map(e=>
+    `<tr style="border-bottom:1px solid #edf1f5">`+
+    `<td style="padding:4px">${e.erratum_id||''}</td>`+
+    `<td style="padding:4px">${e.title||''}</td>`+
+    `<td style="padding:4px" class="${dutErrataStatusClass(e.correlation_status)}">${e.correlation_status||''}</td>`+
+    `<td style="padding:4px">${(e.citations||[]).map(c=>c.name).join(', ')}</td></tr>`
+  ).join('') || '<tr><td style="padding:4px" colspan="4">No errata extracted.</td></tr>';
+}
+
 // Loop Engineering Center card (LOOP-4, section 107). Joined to load()'s 3s
 // poll, unlike the Memory card below and like the AMBA/Research cards: a
 // running loop changes state on every iteration, and "why is this loop still
@@ -4362,6 +4663,153 @@ function renderPatternRuntimeState(){
   ).join('; ')) : '';
 }
 
+// Intake Baseline card. Fetch-once + render, same shape as the two cards
+// above -- renders only intake_baseline.py's own real list_intake_freezes()/
+// evaluate_all_intake_freezes() output, never a dashboard-local
+// re-derivation of a freeze's status.
+let _intakeBaselineData = null;
+async function loadIntakeBaseline(){
+  _intakeBaselineData = await (await fetch('/api/intake-baseline')).json();
+  renderIntakeBaseline();
+}
+function renderIntakeBaseline(){
+  let r = _intakeBaselineData;
+  let tiles = document.getElementById('intakeBaselineTiles');
+  let body = document.getElementById('intakeBaselineBody');
+  let note = document.getElementById('intakeBaselineNote');
+  if(!r) return;
+  if(r.error){
+    tiles.innerHTML = tile('ERROR','Intake Baseline');
+    body.innerHTML = '<tr><td style="padding:4px" colspan="6" class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</td></tr>';
+    note.innerHTML = '';
+    return;
+  }
+  let freezes = r.freezes || [];
+  let evalu = r.evaluation;
+  tiles.innerHTML = [
+    tile(freezes.length,'Recorded Freezes'),
+    tile(r.current_facts_supplied? 'yes':'no','Current Facts Supplied'),
+    tile(evalu? evalu.status : '-','Re-Evaluation Status'),
+  ].join('');
+  body.innerHTML = freezes.slice().reverse().map(f=>{
+    let ev = (evalu && evalu.freezes || []).find(e=>e.freeze_id===f.freeze_id);
+    return `<tr style="border-bottom:1px solid #edf1f5">`+
+      `<td style="padding:4px"><code>${f.freeze_id||''}</code></td>`+
+      `<td style="padding:4px">${f.frozen_by||''}</td>`+
+      `<td style="padding:4px">${f.frozen_at||''}</td>`+
+      `<td style="padding:4px">${ev? ('<code>'+ev.status+'</code>') : '(not evaluated -- no current facts supplied)'}</td>`+
+      `<td style="padding:4px">${ev? ev.invalidating_count : '-'}</td>`+
+      `<td style="padding:4px">${ev? ev.indeterminate_count : '-'}</td></tr>`;
+  }).join('') || '<tr><td style="padding:4px" colspan="6">No intake freezes recorded yet -- a caller must call intake_baseline.freeze_intake_baseline() itself.</td></tr>';
+  note.innerHTML = r.current_facts_supplied
+    ? ('Evaluated against: <code>'+r.current_facts_path+'</code>')
+    : ('No current-facts document found at <code>'+(r.current_facts_path||'')+'</code> -- freezes are listed but never re-evaluated against fabricated facts.');
+}
+
+// Pattern Coverage Contribution card. Button-triggered (like the FSDB Report
+// card above), never auto-loaded on page load, since pattern_coverage_
+// contribution.py's own real compute_pattern_coverage_contribution() needs a
+// real ?pattern= and a real ?attribution= file path this card cannot supply
+// on its own -- see _read_pattern_coverage_contribution_state()'s comment.
+let _patternCoverageContributionData = null;
+async function loadPatternCoverageContribution(){
+  let pattern = val('pccPattern'), attribution = val('pccAttribution'), crossDefs = val('pccCrossDefs');
+  let note = document.getElementById('patternCoverageContributionNote');
+  if(!pattern){ note.textContent = 'pattern is required'; return; }
+  let qs = 'pattern='+encodeURIComponent(pattern)
+    +(attribution?'&attribution='+encodeURIComponent(attribution):'')
+    +(crossDefs?'&cross_definitions='+encodeURIComponent(crossDefs):'');
+  _patternCoverageContributionData = await (await fetch('/api/pattern-coverage-contribution?'+qs)).json();
+  renderPatternCoverageContribution();
+}
+function renderPatternCoverageContribution(){
+  let r = _patternCoverageContributionData;
+  let tiles = document.getElementById('patternCoverageContributionTiles');
+  let body = document.getElementById('patternCoverageContributionBody');
+  let note = document.getElementById('patternCoverageContributionNote');
+  if(!r) return;
+  if(!r.available || !r.report){
+    tiles.innerHTML = tile(r.error? r.error.reason : 'UNAVAILABLE', 'Pattern Coverage Contribution');
+    body.innerHTML = '<tr><td style="padding:4px" colspan="5" class="err">'+
+      (r.error? (r.error.reason+': '+JSON.stringify(r.error.detail)) : 'not available')+'</td></tr>';
+    note.innerHTML = '';
+    return;
+  }
+  let rep = r.report;
+  let cov = rep.coverage || {};
+  let rt = rep.runtime || {};
+  let fl = rep.failures || {};
+  tiles.innerHTML = [
+    tile(rep.status,'Overall Status'),
+    tile(cov.new_bins_hit!=null? cov.new_bins_hit : '-','New Bins Hit'),
+    tile(cov.new_crosses_hit!=null? cov.new_crosses_hit : '-','New Meaningful Crosses'),
+    tile(cov.coverage_delta_percent!=null? cov.coverage_delta_percent+'%' : '-','Coverage Delta'),
+    tile(rt.total_seconds!=null? rt.total_seconds+'s' : '-','Total Runtime'),
+    tile(fl.failed_job_count!=null? fl.failed_job_count : '-','Failed Jobs'),
+    tile(rep.cost? rep.cost.status : '-','Cost'),
+  ].join('');
+  let rows = cov.category_breakdown || [];
+  body.innerHTML = rows.map(c=>
+    `<tr style="border-bottom:1px solid #edf1f5">`+
+    `<td style="padding:4px">${c.category_name||''}${c.is_cross?' (cross: '+(c.cross_verdict||'')+')':''}</td>`+
+    `<td style="padding:4px">${c.before_bins_hit!=null?c.before_bins_hit:'-'}</td>`+
+    `<td style="padding:4px">${c.after_bins_hit!=null?c.after_bins_hit:'-'}</td>`+
+    `<td style="padding:4px">${c.bins_total!=null?c.bins_total:'-'}</td>`+
+    `<td style="padding:4px">${c.new_bins_hit!=null?c.new_bins_hit:'-'}</td></tr>`
+  ).join('') || '<tr><td style="padding:4px" colspan="5">'+(cov.reason||'No category breakdown available.')+'</td></tr>';
+  let ev = (rep.evidence||[]).map(e=>e.source+': '+e.status).join('; ');
+  let regressed = (cov.regressed_categories||[]);
+  note.innerHTML = 'Evidence: '+ev
+    + (regressed.length? (' -- <span class="err">regressed categories: '+regressed.join(', ')+'</span>') : '')
+    + (rep.cost? (' -- cost: '+rep.cost.reason) : '');
+}
+
+// Build/Remote/LSF Intake card. Fetch-once + render, same shape as the cards
+// above -- renders only build_remote_lsf_intake.py's own real
+// fields_from_preflight()/evaluate_build_remote_lsf_readiness() output, from
+// an already-declared PreflightResult/TransportDecision JSON document on
+// disk. NEVER triggers a live preflight probe from this page.
+let _buildRemoteLsfIntakeData = null;
+async function loadBuildRemoteLsfIntake(){
+  _buildRemoteLsfIntakeData = await (await fetch('/api/build-remote-lsf-intake')).json();
+  renderBuildRemoteLsfIntake();
+}
+function renderBuildRemoteLsfIntake(){
+  let r = _buildRemoteLsfIntakeData;
+  let tiles = document.getElementById('buildRemoteLsfIntakeTiles');
+  let body = document.getElementById('buildRemoteLsfIntakeBody');
+  let note = document.getElementById('buildRemoteLsfIntakeNote');
+  if(!r) return;
+  if(r.error){
+    tiles.innerHTML = tile('ERROR','Build/Remote/LSF Intake');
+    body.innerHTML = '<tr><td style="padding:4px" colspan="5" class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</td></tr>';
+    note.innerHTML = '';
+    return;
+  }
+  if(!r.available || !r.fields){
+    tiles.innerHTML = tile('NOT AVAILABLE','Build/Remote/LSF Intake');
+    body.innerHTML = '<tr><td style="padding:4px" colspan="5">No preflight_result.json declared at <code>'+(r.inputs_path||'')+'</code> -- this card never invokes a live probe on its own; run a real preflight elsewhere first, then write its result there.</td></tr>';
+    note.innerHTML = '';
+    return;
+  }
+  let fields = r.fields || [];
+  let readiness = r.readiness || {};
+  tiles.innerHTML = [
+    tile(readiness.ready? 'yes':'no','Ready'),
+    tile(readiness.status||'-','Category Status'),
+    tile(fields.filter(f=>f.status==='BLOCKED').length,'Blocked Fields'),
+  ].join('');
+  body.innerHTML = fields.map(f=>
+    `<tr style="border-bottom:1px solid #edf1f5">`+
+    `<td style="padding:4px">${f.field||''}</td>`+
+    `<td style="padding:4px"><code>${f.status||''}</code></td>`+
+    `<td style="padding:4px">${f.confidence||''}</td>`+
+    `<td style="padding:4px">${f.value!=null?f.value:'-'}</td>`+
+    `<td style="padding:4px">${f.reason||''}</td></tr>`
+  ).join('') || '<tr><td style="padding:4px" colspan="5">No fields.</td></tr>';
+  note.innerHTML = 'Evaluated against: <code>'+(r.inputs_path||'')+'</code>';
+}
+
 // Memory Quality Policy card. Fetch-once + render, same shape as the cards
 // above -- renders only memory_quality_policy.py's own real
 // evaluate_memory_quality() report (never apply()), never a dashboard-local
@@ -4719,6 +5167,9 @@ async function load(){
  await loadVerificationArchitecture();
  await loadSystemTransactionE2EScoreboard();
  await loadVipEnvironmentBuilder();
+ await loadOrphanedForkDetection();
+ await loadMultiVipCooperation();
+ await loadDutErrataCorrelation();
  await loadLoopCenter();
  await loadAgentActivity();
  await loadChangeImpact();
@@ -4727,6 +5178,8 @@ async function load(){
  await loadScenarioPatternCorrespondence();
  await loadIntakeEvents();
  await loadPatternRuntimeState();
+ await loadIntakeBaseline();
+ await loadBuildRemoteLsfIntake();
  await loadMemoryQualityPolicy();
  await loadNotificationCenter();
  await loadObservability();
@@ -6828,12 +7281,22 @@ def _read_question_queue_state(root: Path) -> Dict[str, Any]:
     except Exception as e:
         metrics = {"error": str(e)}
 
+    # Best-effort: question_queue.list_clarification_requests() is read-only (never mints
+    # store.clarifications_path) but is included in a try/except anyway, matching every
+    # other real, existing read in this function -- a clarification-read failure must
+    # never sink the whole card.
+    try:
+        clarifications = question_queue.list_clarification_requests(store)
+    except Exception:
+        clarifications = []
+
     return {
         "available": True,
         "total_questions": len(all_questions),
         "pending_questions": pending,
         "escalation_packages": packages,
         "decisions": decisions[:50],
+        "clarifications": clarifications,
         "metrics": metrics,
         "error": None,
     }
@@ -8529,6 +8992,418 @@ def _read_pattern_runtime_state_machine_state(root: Path) -> Dict[str, Any]:
     return {"available": True, "records": records or [], "states": states, "error": None}
 
 
+# --- Intake Baseline (GET /api/intake-baseline) ------------------------------
+# intake_baseline.py's own real per-project freeze/list/status card. Reuses
+# ONLY that module's own real, unmodified functions: list_intake_freezes()
+# (real, safe, zero-arg -- always called) and evaluate_all_intake_freezes()
+# (needs real CURRENT facts to compare a freeze against; called ONLY when a
+# real facts JSON file is found on disk at this project's own conventional
+# path, .dv-harness/intake/current_facts.json, or supplied via an explicit
+# `?current_facts=<path>` query param -- NEVER invoked with synthetic/None
+# facts and rendered as a real VALID/INVALIDATED verdict, since that would
+# misreport "everything invalidated" as a genuine finding). Never freezes,
+# writes, or gates anything itself -- see intake_baseline.py's own module
+# docstring ("REACHED, not WIRED... this module only reads already-frozen
+# JSON off disk and re-derives a report").
+def _default_current_facts_path(root: Path) -> Path:
+    return Path(root) / ".dv-harness" / "intake" / "current_facts.json"
+
+
+def _read_intake_baseline_state(root: Path,
+                                 current_facts_path: Optional[Path] = None
+                                 ) -> Dict[str, Any]:
+    """Read-only by design: `list_intake_freezes()` only reads
+    `.dv-harness/intake/baselines/*.json`, and `evaluate_all_intake_freezes()`
+    is only ever called over a REAL, on-disk current-facts document -- never
+    a fabricated/None one presented as a real evaluation."""
+    from . import intake_baseline as _ib
+
+    try:
+        freezes = _ib.list_intake_freezes(root)
+    except Exception as e:
+        return {"available": True, "freezes": None, "evaluation": None,
+                "current_facts_path": None,
+                "error": {"reason": f"UNEXPECTED_ERROR: {type(e).__name__}",
+                          "detail": {"message": str(e)}}}
+
+    facts_path = current_facts_path or _default_current_facts_path(root)
+    evaluation: Optional[Dict[str, Any]] = None
+    evaluation_error: Optional[Dict[str, Any]] = None
+    if facts_path.is_file():
+        try:
+            current_facts = json.loads(facts_path.read_text(encoding="utf-8"))
+            if not isinstance(current_facts, dict):
+                evaluation_error = {
+                    "reason": "CURRENT_FACTS_FILE_MUST_BE_A_JSON_OBJECT",
+                    "detail": {"path": str(facts_path)}}
+            else:
+                evaluation = _ib.evaluate_all_intake_freezes(root, current_facts)
+        except (OSError, ValueError) as e:
+            evaluation_error = {"reason": f"CURRENT_FACTS_FILE_UNREADABLE: {type(e).__name__}",
+                                 "detail": {"path": str(facts_path), "message": str(e)}}
+        except Exception as e:
+            evaluation_error = {"reason": f"UNEXPECTED_ERROR: {type(e).__name__}",
+                                 "detail": {"message": str(e)}}
+
+    return {
+        "available": True,
+        "fields": list(_ib.INTAKE_FIELDS),
+        "freezes": freezes,
+        "current_facts_path": str(facts_path),
+        "current_facts_supplied": facts_path.is_file(),
+        "evaluation": evaluation,
+        "error": evaluation_error,
+    }
+
+
+# --- Pattern Coverage Contribution (GET /api/pattern-coverage-contribution) --
+# pattern_coverage_contribution.py's real per-pattern marginal coverage
+# contribution (new bins hit, new meaningful cross bins hit, a bins-weighted
+# coverage_delta_percent) plus real runtime/failure evidence from
+# evidence_db.py's `jobs` table -- never a dashboard-local re-derivation of
+# any of that arithmetic. `db_path` resolves via THIS project's own existing
+# `_evidence_db.default_db_path(root)` convention (already used elsewhere in
+# this file, e.g. `_ingest_coverage_summary_to_evidence_db()` above).
+# `pattern` and the `sample_attribution`/`cross_definitions` JSON file paths
+# come from query params, mirroring the FSDB-report arm's own "accept a
+# declared path via query string" convention (`?path=`/`?period=`/`?hier=`
+# above). `sample_attribution` is a REQUIRED, explicit, caller-declared fact
+# this codebase has no producer for (per pattern_coverage_contribution.py's
+# own module docstring) -- when no attribution file is supplied, this route
+# returns an honest "not available, attribution required" payload, NEVER an
+# invented one.
+def _read_pattern_coverage_contribution_state(
+        root: Path, pattern: Optional[str],
+        attribution_path: Optional[Path] = None,
+        cross_definitions_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Read-only: `compute_pattern_coverage_contribution()` opens
+    `evidence.duckdb` `read_only=True` and writes nothing. Never invokes the
+    real computation with a fabricated/empty `sample_attribution` -- that is
+    the one fact this module cannot supply on its own, so its absence is
+    reported honestly rather than silently substituted."""
+    from . import pattern_coverage_contribution as _pcc
+    from . import evidence_db as _evidence_db
+
+    if not pattern:
+        return {"available": False, "report": None,
+                "error": {"reason": "PATTERN_QUERY_PARAM_REQUIRED",
+                          "detail": {"message": "supply ?pattern=<name>"}}}
+
+    db_path = _evidence_db.default_db_path(root)
+    if not Path(db_path).exists():
+        return {"available": False, "report": None,
+                "error": {"reason": "EVIDENCE_DB_NOT_FOUND",
+                          "detail": {"db_path": str(db_path)}}}
+
+    if attribution_path is None:
+        return {"available": False, "report": None,
+                "error": {"reason": "SAMPLE_ATTRIBUTION_REQUIRED",
+                          "detail": {"message":
+                              "sample_attribution is required and this codebase has no "
+                              "producer for it (per pattern_coverage_contribution.py's own "
+                              "module docstring) -- supply ?attribution=<path to a JSON "
+                              "file of [{\"source\": ..., \"pattern\": ...}, ...]>"}}}
+    try:
+        attribution = json.loads(Path(attribution_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"available": False, "report": None,
+                "error": {"reason": f"ATTRIBUTION_FILE_UNREADABLE: {type(e).__name__}",
+                          "detail": {"path": str(attribution_path), "message": str(e)}}}
+
+    cross_definitions = None
+    if cross_definitions_path is not None:
+        try:
+            cross_definitions = json.loads(Path(cross_definitions_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            return {"available": False, "report": None,
+                    "error": {"reason": f"CROSS_DEFINITIONS_FILE_UNREADABLE: {type(e).__name__}",
+                              "detail": {"path": str(cross_definitions_path), "message": str(e)}}}
+
+    try:
+        report = _pcc.compute_pattern_coverage_contribution(
+            db_path, pattern, attribution, cross_definitions=cross_definitions)
+    except _pcc.PatternCoverageContributionError as e:
+        return {"available": False, "report": None,
+                "error": {"reason": "PATTERN_COVERAGE_CONTRIBUTION_INVALID_INPUT",
+                          "detail": {"message": str(e)}}}
+    except Exception as e:
+        return {"available": False, "report": None,
+                "error": {"reason": f"UNEXPECTED_ERROR: {type(e).__name__}",
+                          "detail": {"message": str(e)}}}
+
+    return {"available": True, "report": report, "error": None}
+
+
+# --- Build/Remote/LSF Intake (GET /api/build-remote-lsf-intake) --------------
+# build_remote_lsf_intake.py's own real build/remote/LSF readiness card --
+# eda_license_available/lsf_configured/build_environment_reachable/
+# disk_space_sufficient/workdir_ready/eda_env_vars_configured/
+# remote_transport_available, each mapped from a real preflight.py
+# CheckOutcome/TransportDecision.
+#
+# CRITICAL SAFETY CONSTRAINT (the one candidate in this family with real
+# live-probe risk): preflight.run_preflight() performs real network/host/
+# license/LSF-queue probes -- exactly the class of "real live LSF farm"
+# check this environment forbids fabricating OR silently invoking on every
+# dashboard page load. This route therefore NEVER calls
+# preflight.run_preflight()/resolve_transport() itself. It follows the exact
+# convention _read_resource_orchestrator_state() already established above:
+# read an already-declared PreflightResult/TransportDecision-shaped JSON
+# document off disk (a project-owned path, .dv-harness/build_remote_lsf_
+# intake/preflight_result.json, written by whatever process already ran the
+# REAL preflight.run_preflight() elsewhere, outside this request path),
+# reconstruct real preflight.CheckOutcome/TransportDecision objects from it,
+# and pass those into build_remote_lsf_intake.py's own real
+# fields_from_preflight()/evaluate_build_remote_lsf_readiness() -- never a
+# second, dashboard-local mapping of check status onto field status. Absent
+# file -> honest "not available", mirroring resource_orchestrator's own
+# empty return when its inputs file is missing.
+def _default_build_remote_lsf_intake_inputs_path(root: Path) -> Path:
+    return root / ".dv-harness" / "build_remote_lsf_intake" / "preflight_result.json"
+
+
+def _read_build_remote_lsf_intake_state(root: Path,
+                                         inputs_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Read-only by design, and NEVER live: this function performs zero
+    subprocess calls and zero network I/O of its own -- it only reads a
+    JSON file (written by a real preflight run elsewhere) and calls
+    build_remote_lsf_intake.py's own real, unmodified field-mapping
+    functions on the reconstructed objects."""
+    from . import build_remote_lsf_intake as _brl
+    from . import preflight as _preflight
+
+    path = Path(inputs_path) if inputs_path else _default_build_remote_lsf_intake_inputs_path(root)
+    empty = {"available": False, "inputs_path": str(path), "fields": None,
+             "readiness": None, "error": None}
+    if not path.exists():
+        return empty
+
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": "MALFORMED_INPUTS_FILE", "detail": {"message": str(e)}}}
+    if not isinstance(doc, dict):
+        return {**empty, "available": True,
+                "error": {"reason": "INPUTS_NOT_AN_OBJECT", "detail": {}}}
+
+    # preflight_result may be passed straight through as a plain dict --
+    # build_remote_lsf_intake.fields_from_preflight()'s own real
+    # _checks_by_name() normalizer already accepts a dict shaped like
+    # preflight.PreflightResult.to_dict() (never re-derived here).
+    preflight_result = doc.get("preflight_result")
+    if preflight_result is not None and not isinstance(preflight_result, dict):
+        return {**empty, "available": True,
+                "error": {"reason": "PREFLIGHT_RESULT_NOT_AN_OBJECT", "detail": {}}}
+
+    # transport_decision, unlike preflight_result, must become a REAL
+    # preflight.TransportDecision object -- _field_from_transport_decision()
+    # reads it via attribute access (decision.resolved/.evidence/.available/
+    # .reason), not dict keys.
+    transport_doc = doc.get("transport_decision")
+    transport_decision = None
+    if transport_doc is not None:
+        if not isinstance(transport_doc, dict) or not transport_doc.get("requested") \
+                or not transport_doc.get("resolved"):
+            return {**empty, "available": True,
+                    "error": {"reason": "TRANSPORT_DECISION_MALFORMED", "detail": {}}}
+        transport_decision = _preflight.TransportDecision(
+            requested=str(transport_doc["requested"]),
+            resolved=str(transport_doc["resolved"]),
+            available=bool(transport_doc.get("available", False)),
+            reason=str(transport_doc.get("reason") or ""),
+            evidence=transport_doc.get("evidence") or {},
+        )
+
+    try:
+        fields = _brl.fields_from_preflight(preflight_result, transport_decision)
+        readiness = _brl.evaluate_build_remote_lsf_readiness(fields)
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": f"UNEXPECTED_ERROR: {type(e).__name__}",
+                          "detail": {"message": str(e)}}}
+
+    return {
+        "available": True,
+        "inputs_path": str(path),
+        "fields": [f.to_dict() for f in fields],
+        "readiness": readiness.to_dict(),
+        "error": None,
+    }
+
+
+# --- Orphaned/Leaked-Fork Detection (GET /api/orphaned-fork-detection) ------
+# GUI card surfacing orphaned_fork_detection.py's real branch_b*-internal
+# non-blocking-VIP-sequence-dispatch/wait pairing check -- following the
+# exact same fetch-real-artifact-and-render convention
+# _read_evidence_integrity_signoff_blocker_state()/_read_design_knowledge_
+# state() above already established, rather than inventing a new one.
+#
+# orphaned_fork_detection.py discovers no project fact itself: it needs a
+# real pattern_dir to scan, and has no project-discovery path of its own for
+# one. Absent a caller-declared
+# .dv-harness/orphaned_fork_detection/inputs.json ({"pattern_dir": "...",
+# "glob"?: "*.txt"}), the honest empty state is reported -- never a
+# fabricated pattern_dir. analyze_pattern_directory() itself never raises on
+# a missing/empty directory (Path.glob() on a nonexistent dir yields nothing
+# -> FILE_NOT_APPLICABLE), so once a pattern_dir is declared this reader's
+# own try/except is defense-in-depth only.
+def _default_orphaned_fork_detection_inputs_path(root: Path) -> Path:
+    return root / ".dv-harness" / "orphaned_fork_detection" / "inputs.json"
+
+
+def _read_orphaned_fork_detection_state(root: Path,
+                                         inputs_path: Optional[Path] = None) -> Dict[str, Any]:
+    """orphaned_fork_detection.analyze_pattern_directory()'s real report for
+    GET /api/orphaned-fork-detection, over a caller-declared pattern_dir --
+    see the module comment above."""
+    ip = Path(inputs_path) if inputs_path else _default_orphaned_fork_detection_inputs_path(root)
+    empty = {"available": False, "inputs_path": str(ip), "report": None, "error": None}
+    if not ip.exists():
+        return empty
+
+    try:
+        inputs = json.loads(ip.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": "MALFORMED_INPUTS_FILE", "detail": {"message": str(e)}}}
+
+    pattern_dir = inputs.get("pattern_dir") if isinstance(inputs, dict) else None
+    if not pattern_dir:
+        return {**empty, "available": True,
+                "error": {"reason": "PATTERN_DIR_NOT_DECLARED", "detail": {}}}
+    glob = inputs.get("glob") or "*.txt"
+
+    from . import orphaned_fork_detection as ofd
+    try:
+        report = ofd.analyze_pattern_directory(pattern_dir, glob=glob)
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": "ORPHANED_FORK_DETECTION_FAILED",
+                          "detail": {"message": str(e)}}}
+
+    return {"available": True, "inputs_path": str(ip), "report": report, "error": None}
+
+
+# --- Multi-VIP Cooperation Architecting (GET /api/multi-vip-cooperation) ----
+# GUI card surfacing multi_vip_cooperation_architecting.py's real per-
+# interface-pair cooperation/architecture/sequencing report -- following the
+# exact same fetch-real-artifact-and-render convention above.
+#
+# multi_vip_cooperation_architecting.py's own docstring is explicit that
+# every fact (interfaces, coupling, sequencing) must be caller-declared -- it
+# has no project-discovery path of its own. Absent a caller-declared
+# .dv-harness/multi_vip_cooperation/inputs.json (interfaces/env_manifest/
+# rtl_modules/declared_coupling_facts/sequencing_relations/
+# sequencing_observations, exactly build_multi_vip_cooperation()'s own
+# kwargs), the honest empty state is reported -- never a fabricated
+# cooperation record, and this reader never auto-populates `interfaces` from
+# env.manifest.json's own vip_config.vip_instances (a different fact --
+# VIP instances already bound -- from what this module needs: declared
+# candidate interfaces, including unbound ones).
+def _default_multi_vip_cooperation_inputs_path(root: Path) -> Path:
+    return root / ".dv-harness" / "multi_vip_cooperation" / "inputs.json"
+
+
+def _read_multi_vip_cooperation_state(root: Path,
+                                       inputs_path: Optional[Path] = None) -> Dict[str, Any]:
+    """multi_vip_cooperation_architecting.build_multi_vip_cooperation()'s
+    real report for GET /api/multi-vip-cooperation, over a caller-declared
+    interface/coupling/sequencing set -- see the module comment above."""
+    ip = Path(inputs_path) if inputs_path else _default_multi_vip_cooperation_inputs_path(root)
+    empty = {"available": False, "inputs_path": str(ip), "report": None, "error": None}
+    if not ip.exists():
+        return empty
+
+    try:
+        inputs = json.loads(ip.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": "MALFORMED_INPUTS_FILE", "detail": {"message": str(e)}}}
+
+    interfaces = inputs.get("interfaces") if isinstance(inputs, dict) else None
+    if not interfaces:
+        return {**empty, "available": True,
+                "error": {"reason": "INTERFACES_NOT_DECLARED", "detail": {}}}
+
+    from . import multi_vip_cooperation_architecting as mvca
+    try:
+        ir = mvca.build_multi_vip_cooperation(
+            interfaces,
+            env_manifest=inputs.get("env_manifest"),
+            rtl_modules=inputs.get("rtl_modules"),
+            declared_coupling_facts=inputs.get("declared_coupling_facts"),
+            sequencing_relations=inputs.get("sequencing_relations"),
+            sequencing_observations=inputs.get("sequencing_observations"),
+        )
+    except mvca.MultiVipCooperationError as e:
+        return {**empty, "available": True,
+                "error": {"reason": "MULTI_VIP_COOPERATION_INVALID_INPUT",
+                          "detail": {"message": str(e)}}}
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": "MULTI_VIP_COOPERATION_FAILED",
+                          "detail": {"message": str(e)}}}
+
+    return {"available": True, "inputs_path": str(ip), "report": ir.to_dict(), "error": None}
+
+
+# --- DUT Errata/Known-Issues Correlation (GET /api/dut-errata-correlation) --
+# GUI card surfacing dut_errata_correlation.py's real per-erratum RTL/
+# register correlation report -- following the exact same fetch-real-
+# artifact-and-render convention above.
+#
+# dut_errata_correlation.analyze_errata()'s own contract already returns the
+# honest top-level NOT_AVAILABLE for a source_path of None without ever
+# attempting to open anything, so this reader calls it UNCONDITIONALLY -- no
+# special-casing for a missing inputs.json is needed here (unlike the two
+# readers above, whose underlying build functions raise on no real facts at
+# all). `source_path` has no project-discovery path of its own (no errata
+# PDF is auto-produced by anything in this repo), so it is read from a
+# caller-declared .dv-harness/dut_errata_correlation/inputs.json
+# ({"source_path": "...", "title"?: "..."}); `manifest_path` reuses the
+# already-established env_manifest.default_manifest_path(root) helper -- the
+# exact same call dashboard.py's own subsystem_system_verification reader
+# already makes. analyze_errata() never raises by design (it catches
+# ErrataDocumentError internally and returns a NOT_AVAILABLE dict); the
+# try/except below is defense-in-depth only.
+def _default_dut_errata_correlation_inputs_path(root: Path) -> Path:
+    return root / ".dv-harness" / "dut_errata_correlation" / "inputs.json"
+
+
+def _read_dut_errata_correlation_state(root: Path,
+                                        inputs_path: Optional[Path] = None) -> Dict[str, Any]:
+    """dut_errata_correlation.analyze_errata()'s real report for
+    GET /api/dut-errata-correlation -- see the module comment above."""
+    ip = Path(inputs_path) if inputs_path else _default_dut_errata_correlation_inputs_path(root)
+    source_path = None
+    title = None
+    malformed_inputs_error = None
+    if ip.exists():
+        try:
+            inputs = json.loads(ip.read_text(encoding="utf-8"))
+            if isinstance(inputs, dict):
+                source_path = inputs.get("source_path")
+                title = inputs.get("title")
+        except Exception as e:
+            malformed_inputs_error = {"reason": "MALFORMED_INPUTS_FILE",
+                                       "detail": {"message": str(e)}}
+
+    from . import env_manifest
+    manifest_path = env_manifest.default_manifest_path(root)
+
+    from . import dut_errata_correlation as dec
+    try:
+        report = dec.analyze_errata(source_path, manifest_path, title=title)
+    except Exception as e:
+        return {"available": True, "inputs_path": str(ip), "report": None,
+                "error": {"reason": "DUT_ERRATA_CORRELATION_FAILED",
+                          "detail": {"message": str(e)}}}
+
+    return {"available": True, "inputs_path": str(ip), "report": report,
+            "error": malformed_inputs_error}
+
+
 # --- Memory Quality Policy (GET /api/memory-quality-policy) ------------------
 # memory-quality-policy-no-dashboard-card: memory_quality_policy.py (a real,
 # already-wired `dv-harness memory-quality-policy report|apply` CLI verb --
@@ -8887,6 +9762,22 @@ def _dispatch_control(root: Path, body: Dict[str, Any]) -> Any:
         store = question_queue.QuestionQueueStore(root)
         return store.revoke_decision(question_key, reason=reason,
                                       revoked_by=body.get("revoked_by"))
+    # question_queue.request_clarification() (2026-09-07): a human signals "I don't
+    # understand this question" and gets back a reworded rendering grounded entirely
+    # in evidence the persisted record already carries -- never a second question
+    # filing mechanism, never a new Q-ID, never a change to tier/status/blocking.
+    # KeyError (unknown question_id) propagates unchanged, matching QUESTION_ANSWER/
+    # QUESTION_REVOKE's own KeyError handling above.
+    if cmd == "QUESTION_REQUEST_CLARIFICATION":
+        from . import question_queue
+        question_id = body.get("question_id")
+        if not question_id:
+            raise ValueError("question_id is required for QUESTION_REQUEST_CLARIFICATION")
+        store = question_queue.QuestionQueueStore(root)
+        return question_queue.request_clarification(
+            store, question_id,
+            requested_by=body.get("requested_by"),
+            reason=body.get("reason"))
     raise ValueError(f"Unknown command: {cmd}")
 
 
@@ -9542,6 +10433,50 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 # pattern_runtime_state_machine.py's own real execute_verb()
                 # verbatim.
                 self._send_json(_read_pattern_runtime_state_machine_state(project_root))
+            elif self.path == "/api/intake-baseline" or self.path.startswith("/api/intake-baseline?"):
+                # Read-only by design -- see _read_intake_baseline_state()'s
+                # own comment: list_intake_freezes() is always called (real,
+                # safe, zero-arg); evaluate_all_intake_freezes() is called
+                # ONLY when a real current-facts JSON file is found (this
+                # project's own .dv-harness/intake/current_facts.json, or an
+                # explicit ?current_facts=<path> override) -- never invoked
+                # with fabricated facts.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                facts_override = urllib.parse.unquote(params["current_facts"]) if "current_facts" in params else None
+                self._send_json(_read_intake_baseline_state(
+                    project_root, Path(facts_override) if facts_override else None))
+            elif self.path == "/api/pattern-coverage-contribution" or \
+                    self.path.startswith("/api/pattern-coverage-contribution?"):
+                # Read-only by design -- see
+                # _read_pattern_coverage_contribution_state()'s own comment:
+                # this never re-derives coverage-checkpoint arithmetic, it
+                # calls pattern_coverage_contribution.py's own real
+                # compute_pattern_coverage_contribution() verbatim, and never
+                # invents the required sample_attribution fact.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                pcc_pattern = urllib.parse.unquote(params["pattern"]) if "pattern" in params else None
+                pcc_attribution = urllib.parse.unquote(params["attribution"]) if "attribution" in params else None
+                pcc_cross_defs = urllib.parse.unquote(params["cross_definitions"]) if "cross_definitions" in params else None
+                self._send_json(_read_pattern_coverage_contribution_state(
+                    project_root, pcc_pattern,
+                    Path(pcc_attribution) if pcc_attribution else None,
+                    Path(pcc_cross_defs) if pcc_cross_defs else None))
+            elif self.path == "/api/build-remote-lsf-intake" or \
+                    self.path.startswith("/api/build-remote-lsf-intake?"):
+                # Read-only by design, and NEVER live -- see
+                # _read_build_remote_lsf_intake_state()'s own comment: this
+                # NEVER calls preflight.run_preflight()/resolve_transport()
+                # itself; it only reads an already-declared PreflightResult/
+                # TransportDecision-shaped JSON document off disk and calls
+                # build_remote_lsf_intake.py's own real fields_from_
+                # preflight()/evaluate_build_remote_lsf_readiness() verbatim.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                brl_inputs_override = urllib.parse.unquote(params["inputs"]) if "inputs" in params else None
+                self._send_json(_read_build_remote_lsf_intake_state(
+                    project_root, Path(brl_inputs_override) if brl_inputs_override else None))
             elif self.path == "/api/scenario-pattern-command-txt-correspondence" or \
                     self.path.startswith("/api/scenario-pattern-command-txt-correspondence?"):
                 # Read-only by design -- see
@@ -9562,6 +10497,40 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                     Path(_cap_report) if _cap_report else None,
                     params.get("command_file") or None,
                 ))
+            elif self.path == "/api/orphaned-fork-detection" or self.path.startswith("/api/orphaned-fork-detection?"):
+                # Read-only, matching /api/multi-vip-cooperation just below:
+                # this card renders orphaned_fork_detection.py's own real
+                # branch_b*-dispatch/wait pairing report, never a dashboard-
+                # local re-derivation of any finding -- see
+                # _read_orphaned_fork_detection_state()'s own comment.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                inputs_override = urllib.parse.unquote(params["inputs"]) if "inputs" in params else None
+                self._send_json(_read_orphaned_fork_detection_state(
+                    project_root, Path(inputs_override) if inputs_override else None))
+            elif self.path == "/api/multi-vip-cooperation" or self.path.startswith("/api/multi-vip-cooperation?"):
+                # Read-only, matching /api/orphaned-fork-detection just
+                # above: this card renders multi_vip_cooperation_
+                # architecting.py's own real build_multi_vip_cooperation()
+                # report, never a dashboard-local re-derivation of any
+                # cooperation/architecture/sequencing status -- see
+                # _read_multi_vip_cooperation_state()'s own comment.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                inputs_override = urllib.parse.unquote(params["inputs"]) if "inputs" in params else None
+                self._send_json(_read_multi_vip_cooperation_state(
+                    project_root, Path(inputs_override) if inputs_override else None))
+            elif self.path == "/api/dut-errata-correlation" or self.path.startswith("/api/dut-errata-correlation?"):
+                # Read-only, matching /api/multi-vip-cooperation just above:
+                # this card renders dut_errata_correlation.py's own real
+                # analyze_errata() report, never a dashboard-local
+                # re-derivation of any erratum's RTL/register correlation --
+                # see _read_dut_errata_correlation_state()'s own comment.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                inputs_override = urllib.parse.unquote(params["inputs"]) if "inputs" in params else None
+                self._send_json(_read_dut_errata_correlation_state(
+                    project_root, Path(inputs_override) if inputs_override else None))
             elif self.path == "/api/memory-quality-policy":
                 # Read-only by design -- see _read_memory_quality_policy_
                 # state()'s own comment: this never re-derives a stale/

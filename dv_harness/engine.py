@@ -2369,6 +2369,75 @@ class DVHarness:
             "multi_agent_consensus_count": multi_agent_consensus_count,
         }
 
+    def _root_cause_hypotheses_voi_ranking(
+            self, block: Dict[str, Any],
+            confidence_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """inference.rank_evidence_by_information_value() gap-close
+        (2026-09-07, REACHED-not-WIRED closure): adapts
+        root_cause_evidence_gate's own real `hypotheses` array -- the SAME
+        list _root_cause_confidence_inputs() above already reads for its
+        multi_agent_consensus_count signal -- into the {hypothesis_id,
+        required_evidence_categories, supplied_evidence_categories,
+        current_confidence_level} shape rank_evidence_by_information_value()
+        expects, without inventing a per-hypothesis evidence vocabulary:
+        every hypothesis is checked against the SAME
+        self.ROOT_CAUSE_EVIDENCE_CATEGORIES this method's caller already
+        uses for the selected root_cause. first_bad_event/causal_chain are
+        structurally absent on every per-hypothesis dict (they are not in
+        root_cause_evidence_gate.py's own per-hypothesis field list -- only
+        the top-level block carries them), so both correctly discriminate
+        to a 0 voi_score (every hypothesis missing them equally -- nothing
+        to discriminate) rather than being silently narrowed to a
+        different, invented vocabulary.
+
+        Per this project's Evidence Truth Rule, the SELECTED hypothesis
+        (the one whose own `claim` matches block["root_cause"]) uses the
+        caller's own INDEPENDENTLY RECOMPUTED confidence_result["level"] --
+        never its self-reported `confidence` field. Every OTHER
+        (alternative, refuted) hypothesis has no independent recompute
+        available at this call site, so its own self-declared `confidence`
+        is used ONLY as an advisory urgency weight (this function never
+        gates or scores anything, only ranks which MISSING evidence
+        category would most help discriminate between hypotheses still
+        standing), and only when it is a real, recognized
+        inference.CONFIDENCE_LEVELS value -- an unrecognized/absent one
+        (e.g. the gate's own "CONFIRMED", which is not a
+        score_confidence()-producible level) is passed through as None,
+        treated as MEDIUM by rank_evidence_by_information_value() itself,
+        never guessed at here.
+
+        Returns None when block["hypotheses"] is absent/empty/carries no
+        usable hypothesis dict -- nothing to rank. Sits strictly downstream
+        of confidence_result/gap; never feeds back into verdict, gate
+        evaluation, or promotion."""
+        hyps = block.get("hypotheses")
+        if not isinstance(hyps, list) or not hyps:
+            return None
+        from .inference import rank_evidence_by_information_value, CONFIDENCE_LEVELS
+        selected_claim = block.get("root_cause")
+        adapted = []
+        for i, h in enumerate(hyps):
+            if not isinstance(h, dict):
+                continue
+            claim = h.get("claim")
+            hypothesis_id = (claim if isinstance(claim, str) and claim.strip()
+                             else f"hypothesis[{i}]")
+            supplied = [c for c in self.ROOT_CAUSE_EVIDENCE_CATEGORIES if h.get(c)]
+            if claim is not None and claim == selected_claim:
+                level = confidence_result.get("level")
+            else:
+                declared = h.get("confidence")
+                level = declared if declared in CONFIDENCE_LEVELS else None
+            adapted.append({
+                "hypothesis_id": hypothesis_id,
+                "required_evidence_categories": list(self.ROOT_CAUSE_EVIDENCE_CATEGORIES),
+                "supplied_evidence_categories": supplied,
+                "current_confidence_level": level,
+            })
+        if not adapted:
+            return None
+        return rank_evidence_by_information_value(adapted)
+
     def _react_step_inference(self, stage: str, evidence_blocks: Dict[str, Any],
                                signatures: Optional[List[Any]] = None,
                                adapter_ok: bool = True,
@@ -2689,6 +2758,27 @@ class DVHarness:
             "concurrent_agent_evidence_count": concurrent_agents,
             "gap": gap, "next_best_action": next_actions, "promotion": promotion,
         })
+
+        # inference.rank_evidence_by_information_value() gap-close
+        # (2026-09-07): a real, cited advisory ranking of which MISSING
+        # evidence category would most help discriminate between the
+        # candidate hypotheses this gate already recorded, sitting beside
+        # (never feeding back into) the confidence score/gap above.
+        # Best-effort, mirrors every other side effect in this method.
+        try:
+            voi_ranking = self._root_cause_hypotheses_voi_ranking(block, confidence_result)
+            if voi_ranking is not None:
+                self.blackboard.write("root_cause_evidence_voi_ranking",
+                                      voi_ranking, source=stage)
+                self.store.event({
+                    "ts": now(), "stage": stage, "event": "ROOT_CAUSE_EVIDENCE_VOI_RANKED",
+                    "hypothesis_count": voi_ranking.get("hypothesis_count"),
+                    "ranked_category_count": len(voi_ranking.get("ranked") or []),
+                })
+        except Exception as exc:
+            self.store.event({"ts": now(), "stage": stage,
+                              "event": "ROOT_CAUSE_EVIDENCE_VOI_RANKING_FAILED",
+                              "error": f"{type(exc).__name__}: {exc}"})
 
         # Qualified Conclusion (qualified-conclusion-implementation task,
         # 2026-09-01): composes the gate verdict this method was called with
@@ -3525,6 +3615,121 @@ class DVHarness:
             ],
         })
         return {"results": results}
+
+    def _file_confidence_reweight_candidate_from_calibration(
+            self, stage: str) -> Optional[Dict[str, Any]]:
+        """CROSS-LOOP COUPLING (2026-09-07): the sibling of
+        _file_capability_evolution_candidates_from_repeated_failures() above,
+        for the SAME FAILURE_RECOVERY/RE_AUDIT FAIL/PARTIAL moment -- files a
+        CapabilityEvolutionCandidate at DISCOVERED from
+        confidence_calibration.py's own real, already-computed finding that
+        this project's own recorded confirm/retract history CONTRADICTS the
+        tier ordering (CONFIRMED > HIGH > MEDIUM > LOW) this harness actually
+        acts on (Knowledge Center promotion, Engineering-tier admission,
+        qualified-conclusion gating).
+
+        Both draft_reweighted_confidence_proposal() (confidence_calibration.py)
+        and build_confidence_reweight_candidate()/file_confidence_reweight_
+        candidate() (capability_evolution.py) already existed, real and
+        individually tested, with no engine call site -- this method is that
+        wire, closing the exact gap those two modules' own CLAUDE.md sections
+        disclosed as "REACHED, not WIRED".
+
+        Never a live formula change. calibrate()/draft_reweighted_confidence_
+        proposal() perform no write of any kind; file_confidence_reweight_
+        candidate() only ever files a DISCOVERED-tier candidate (never calls
+        transition(), refuses to persist anything not at DISCOVERED) whose
+        every downstream step (a controlled experiment, a shadow-replication
+        stability window, a human's HUMAN_APPROVED decision) is untouched and
+        uncalled from here -- inference.py's live score_confidence() formula
+        is never read, imported, or edited by this method.
+
+        Best-effort, exactly like its sibling: a calibration/filing failure
+        must never turn an already-computed stage result into a crash. Every
+        outcome, including "no proposal drafted", is one
+        CONFIDENCE_REWEIGHT_AUTO_DISCOVERY event in .dv-harness/events.jsonl.
+        """
+        try:
+            from .confidence_calibration import calibrate, draft_reweighted_confidence_proposal
+            from .capability_evolution import file_confidence_reweight_candidate
+            report = calibrate(self.root, cfg=self.cfg)
+            proposal = draft_reweighted_confidence_proposal(report)
+            result = file_confidence_reweight_candidate(self.root, proposal, cfg=self.cfg)
+        except Exception as exc:
+            self.store.event({
+                "ts": now(), "stage": stage,
+                "event": "CONFIDENCE_REWEIGHT_AUTO_DISCOVERY_FAILED",
+                "error": str(exc),
+            })
+            return None
+        self.store.event({
+            "ts": now(), "stage": stage,
+            "event": "CONFIDENCE_REWEIGHT_AUTO_DISCOVERY",
+            "proposal_status": proposal.get("status"),
+            "filed": bool(result.get("filed")),
+            "reason": result.get("reason"),
+            "candidate_id": result.get("candidate_id"),
+        })
+        return {"proposal": proposal, "result": result}
+
+    def _detect_hypothesis_generation_bias(self, stage: str) -> Optional[Dict[str, Any]]:
+        """inference.py gap-close (2026-09-07, REACHED-not-WIRED closure):
+        `inference.collect_hypothesis_shapes()` / `detect_hypothesis_
+        generation_bias()` were built real, individually tested, with no
+        engine call site -- the item's own worked example, "hypotheses
+        citing only a symptom register and never a control register are
+        wrong more often", surfaces here as a real, cited finding IF this
+        project's own retracted-hypothesis history actually shows that
+        pattern, never asserted a priori.
+
+        Root-level, read-only, needs no per-stage `block` data -- called at
+        the same FAILURE_RECOVERY/RE_AUDIT FAIL/PARTIAL moment as the two
+        capability-evolution couplings above, purely for a real,
+        already-relevant occasion to refresh it, never because it depends on
+        anything either of those wrote. `collect_hypothesis_shapes()` is a
+        pure read of this project's own real MemoryStore (constructing one
+        only if it does not already exist, mirroring every other real
+        MemoryStore call site in this class); `detect_hypothesis_generation_
+        bias()` performs no I/O of its own at all.
+
+        Advisory ONLY, per that function's own docstring: this never scores
+        a hypothesis, never blocks a stage, and never touches `score_
+        confidence()`'s own formula/weights -- a finding here is descriptive
+        evidence a human (or a future, separately-approved production
+        change) may act on, not a decision this method makes.
+
+        Writes the real result to a new `"hypothesis_generation_bias"`
+        Blackboard topic (never re-derived by a reader; the SAME dict this
+        method computed) and records one HYPOTHESIS_GENERATION_BIAS_DETECTED
+        event, mirroring _trace_memory_lineage_for_promotion()'s own
+        event-naming convention -- "no pattern qualified" is itself citable
+        evidence, so this fires on every real status, not only BIAS_DETECTED.
+        Best-effort: a failure here must never turn an already-computed
+        stage result into a crash."""
+        try:
+            from . import inference as _inf
+            hypotheses = _inf.collect_hypothesis_shapes(self.root)
+            result = _inf.detect_hypothesis_generation_bias(hypotheses)
+            self.blackboard.write("hypothesis_generation_bias", result, source=stage)
+            self.store.event({
+                "ts": now(), "stage": stage,
+                "event": "HYPOTHESIS_GENERATION_BIAS_DETECTED",
+                "status": result.get("status"), "reason": result.get("reason"),
+                "hypothesis_count": result.get("hypothesis_count"),
+                "category_finding_count": len(result.get("category_findings") or []),
+                "shape_finding_count": len(result.get("shape_findings") or []),
+            })
+            return result
+        except Exception as exc:
+            try:
+                self.store.event({
+                    "ts": now(), "stage": stage,
+                    "event": "HYPOTHESIS_GENERATION_BIAS_DETECTED_FAILED",
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            except Exception:
+                pass
+            return None
 
     def _maybe_run_self_tuning_review(self) -> None:
         """Best-effort autonomous gate self-tuning review -- see
@@ -5152,6 +5357,21 @@ class DVHarness:
             #          docstring for why every human-approval gate is
             #          untouched by it.
             self._file_capability_evolution_candidates_from_repeated_failures(stage)
+            # ---- 3e. CROSS-LOOP COUPLING (2026-09-07): the sibling coupling
+            #          above catches a REPEATED failure signature; this one
+            #          catches this project's own recorded confirm/retract
+            #          history CONTRADICTING the confidence-tier ordering the
+            #          harness acts on, via confidence_calibration.py's own
+            #          real calibrate() report. Same DISCOVERED-only, never a
+            #          live formula change, best-effort discipline -- see the
+            #          method's own docstring.
+            self._file_confidence_reweight_candidate_from_calibration(stage)
+            # ---- 3f. inference.py gap-close (2026-09-07): advisory-only
+            #          hypothesis-generation-bias detection over this
+            #          project's own real retracted-hypothesis history. See
+            #          the method's own docstring for why this scores no
+            #          hypothesis and blocks nothing.
+            self._detect_hypothesis_generation_bias(stage)
 
         # ---- 4. ReAct record: this call itself is one Reason/Act/Observe
         #         record per run_stage() attempt (iteration number is this

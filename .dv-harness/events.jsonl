@@ -1681,3 +1681,11 @@
 {"ts": "2026-09-07T10:50:57.574092+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-09-07T11:00:17.660680+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-09-07T11:00:28.919885+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-07T14:06:48.350683+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-07T14:07:00.534550+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-07T14:25:51.366176+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-07T14:26:04.111887+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-07T14:56:31.465019+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-07T14:56:43.456779+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-07T15:13:57.434898+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-07T15:14:09.510459+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}

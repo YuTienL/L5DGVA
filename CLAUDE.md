@@ -21659,3 +21659,392 @@ tests combined, all passing) to confirm zero regression to every real module thi
 `advance()` call site or graph node invokes it; a user runs the standalone server directly. Step 3's
 architecture-choice ranking is shown only when a caller declares candidate bind locations in
 `wizard_inputs.json`; this wizard performs no bind-location discovery of its own.
+
+
+## Confidence / Inference-Layer Engine Wiring: Closing Three "REACHED, not WIRED" Disclosures (2026-09-07)
+
+Three real, individually-tested `inference.py`/`confidence_calibration.py`/`capability_evolution.py`
+mechanisms were built earlier this same day, each with its own CLAUDE.md section correctly disclosing,
+at the time, "REACHED, not WIRED -- no `run_stage()`/`advance()` call site or engine hook invokes
+[it] yet": the "Confidence-Calibration Feedback Loop" section (`draft_reweighted_confidence_proposal()`
+/ `file_confidence_reweight_candidate()`), the "Value-of-Information Evidence-Gathering Ranking"
+section (`rank_evidence_by_information_value()`), and the "Hypothesis-Generation Bias Correction From
+Retracted Hypotheses" section (`detect_hypothesis_generation_bias()` / `collect_hypothesis_shapes()`).
+This section closes exactly that gap for all three, appended rather than edited into those three
+sections (per this project's own append-only documentation discipline) -- their own prose is otherwise
+still accurate and is left untouched; only their "REACHED, not WIRED" disclosure is now superseded by
+the real engine call sites this section documents.
+
+A prior, independent audit of this Confidence/Inference layer (read-only, no code changed) ranked
+these three tasks, plus a fourth (Adversarial Refutation Pass), as the highest-priority remaining gaps
+in this layer, each with its own insertion point, safety rationale and baseline test count. Before
+implementing any of the three, each was re-verified against the CURRENT, live content of `engine.py`,
+`inference.py`, `confidence_calibration.py`, and `capability_evolution.py` -- a fresh grep confirmed
+`draft_reweighted_confidence_proposal`, `rank_evidence_by_information_value`, and
+`detect_hypothesis_generation_bias` all had zero call sites anywhere in `engine.py`, matching the
+audit's own finding and each module's own CLAUDE.md disclosure exactly. All three were then implemented
+one at a time -- one new best-effort `engine.py` hook method plus one wired call site per task, each
+followed immediately by its own new, real, end-to-end test file and a full pytest run before moving to
+the next task -- following the SAME sibling try/except-wrapped hook style
+`_promote_experience_knowledge()`/`_persist_subsystem_registry_entry()` already established in this
+file, and never touching `route_and_store()`, `ControlPlane`, `policy.can_signoff()`, or any
+gate/verdict-computing code path.
+
+**Task 1 -- Confidence-Calibration Feedback Loop.** `DVHarness._file_confidence_reweight_candidate_
+from_calibration(stage)` (new method, inserted immediately after
+`_file_capability_evolution_candidates_from_repeated_failures()`, before `_maybe_run_self_tuning_
+review()`) calls the real, unmodified `confidence_calibration.calibrate(self.root, cfg=self.cfg)` ->
+`draft_reweighted_confidence_proposal(report)` -> `capability_evolution.file_confidence_reweight_
+candidate(self.root, proposal, cfg=self.cfg)` chain -- three real functions, none re-derived, none
+edited by this task. Wired at the identical call site as its sibling `_file_capability_evolution_
+candidates_from_repeated_failures(stage)`, inside the existing `if stage in (Stage.FAILURE_RECOVERY.
+value, Stage.RE_AUDIT.value) and ss["status"] in (Status.FAIL.value, Status.PARTIAL.value):` branch.
+`calibrate()`/`draft_reweighted_confidence_proposal()` perform no write of any kind; `file_confidence_
+reweight_candidate()` only ever files a `DISCOVERED`-tier `CapabilityEvolutionCandidate` (never calls
+`transition()`, refuses to persist anything not at `DISCOVERED`) whose every downstream step (a real
+controlled experiment, a shadow-replication stability window, a human's `HUMAN_APPROVED` decision) is
+untouched and uncalled from here -- `inference.score_confidence()`'s live formula is never read,
+imported, or edited. Best-effort: any exception is caught and recorded as
+`CONFIDENCE_REWEIGHT_AUTO_DISCOVERY_FAILED`, never allowed to turn an already-computed FAIL/PARTIAL
+stage result into a crash; every outcome, including "no proposal drafted"
+(`REWEIGHT_PROPOSAL_NO_INVERSION`), is one `CONFIDENCE_REWEIGHT_AUTO_DISCOVERY` event in
+`.dv-harness/events.jsonl`.
+
+**Task 2 -- Hypothesis-Generation Bias Correction.** `DVHarness._detect_hypothesis_generation_
+bias(stage)` (new method, inserted immediately after Task 1's method, before `_maybe_run_self_tuning_
+review()`) calls the real, unmodified `inference.collect_hypothesis_shapes(self.root)` ->
+`inference.detect_hypothesis_generation_bias(hypotheses)` and writes the result verbatim to a new
+`"hypothesis_generation_bias"` Blackboard topic, mirroring `_trace_memory_lineage_for_promotion()`'s
+own event-naming convention -- fired on every real status, including `NO_BIAS_DETECTED`/
+`INSUFFICIENT_HISTORY`/`NOT_AVAILABLE`, not only `BIAS_DETECTED`, since "no pattern qualified" is
+itself citable evidence. Wired at the same FAILURE_RECOVERY/RE_AUDIT FAIL/PARTIAL branch, immediately
+after Task 1's new call. Advisory only, per that function's own docstring: it never scores a
+hypothesis, never blocks a stage, and never touches `score_confidence()`'s own formula/weights.
+Best-effort: an exception records `HYPOTHESIS_GENERATION_BIAS_DETECTED_FAILED` rather than crashing
+the stage.
+
+**Task 3 -- Value-of-Information Evidence-Gathering Ranking.** `DVHarness._root_cause_hypotheses_voi_
+ranking(self, block, confidence_result)` (new method, inserted immediately after
+`_root_cause_confidence_inputs()`, before `_react_step_inference()`) adapts `block["hypotheses"]` (the
+real per-hypothesis array `root_cause_evidence_gate.py` already writes) into `inference.rank_evidence_
+by_information_value()`'s own expected shape, using the caller's own INDEPENDENTLY RECOMPUTED
+`confidence_result["level"]` for the SELECTED hypothesis (never its self-reported `confidence` field,
+per the Evidence Truth Rule) and each alternative hypothesis's own self-declared, gate-recorded
+confidence only as an advisory urgency weight. Called from `_score_root_cause_confidence()`
+immediately after the existing `root_cause_confidence` Blackboard write / `ROOT_CAUSE_CONFIDENCE_
+SCORED` event pair, strictly downstream of the already-computed `confidence_result`/`gap` -- it never
+feeds back into either. Returns `None` (no-op, no write, no event) when `block["hypotheses"]` is
+absent, empty, or carries no usable hypothesis dict. When real, it writes a new
+`"root_cause_evidence_voi_ranking"` Blackboard topic and one `ROOT_CAUSE_EVIDENCE_VOI_RANKED` event.
+Best-effort: an exception records `ROOT_CAUSE_EVIDENCE_VOI_RANKING_FAILED`, and the pre-existing
+`root_cause_confidence` write immediately before it is proven, by a dedicated test, to still succeed
+even when this new ranking step raises.
+
+**Task 4 -- Adversarial Refutation Pass -- completed by a different, concurrently-running agent in
+this same multi-agent session.** Independently re-verified rather than trusted from this session's own
+CLAUDE.md prose: `react_loop.attempt_hypothesis_refutation()` and `qualified_conclusion.
+RefutationAttempt`/`InvalidRefutationResultError`/`build_qualified_conclusion(..., refutation_
+result=None, require_refutation_pass=False)` are all real and present in the live `react_loop.py`/
+`qualified_conclusion.py` on disk (confirmed by direct grep of the current files, not by trusting the
+CLAUDE.md section describing them), both new keyword defaults reproduce the pre-existing formula
+byte-for-byte, and `engine.py` carries zero references to `attempt_hypothesis_refutation`,
+`refutation_result`, or `require_refutation_pass` anywhere -- confirming that work's own "REACHED, not
+yet WIRED" disclosure (engine.py deliberately left untouched, out of that task's own stated scope) is
+accurate as written and needs no correction here. No engine-side work was done for Task 4 by this
+session; it is recorded here only because the original audit's ranked list named it, and its real
+completion (by another agent) closes that list's fourth item alongside this session's own three.
+
+**Real before/after test evidence, every file touched.** `inference.py`, `confidence_calibration.py`,
+and `capability_evolution.py` were read-only dependencies for this session's three tasks -- none of
+their own source was edited -- and `python -m pytest dv_harness_tests/test_inference.py -q` (107
+passed) and `dv_harness_tests/test_confidence_calibration.py`/`test_capability_evolution_confidence_
+reweight.py`/`test_capability_evolution_auto_discovery.py` (all previously green, unaffected) confirm
+none of the three regressed. `engine.py` itself was the one file this session actually edited, three
+times, one task at a time:
+- Baseline (before any of this session's three edits, per the original audit's own citation):
+  `dv_harness_tests/test_inference_engine_wiring.py` -- 12 passed.
+- Task 1: new `dv_harness_tests/test_engine_confidence_reweight_coupling.py` -- 4 passed (bare-project
+  honest-`NO_INVERSION_FOUND` case; passing-stage-never-runs-the-coupling case; a real calibration-
+  failure best-effort negative control via `monkeypatch`; and a real end-to-end tier-inversion,
+  built through `MemoryGC.confirm()`/`retract()` on a real `MemoryStore`, filing a real persisted
+  `DISCOVERED` candidate, re-run over unchanged evidence to prove idempotence).
+- Task 2: new `dv_harness_tests/test_engine_hypothesis_bias_coupling.py` -- 4 passed (bare-project
+  honest `NOT_AVAILABLE`; passing-stage-never-runs; a `monkeypatch` best-effort failure negative
+  control; and a real biased corpus, built through `MemoryGC.retract()` on real records, surfacing a
+  real `BIAS_DETECTED` finding on the Blackboard).
+- Task 3: new `dv_harness_tests/test_engine_voi_ranking_coupling.py` -- 5 passed (a real 3-hypothesis
+  `root_cause_evidence_gate`-shaped block producing a real VOI ranking; the no-hypotheses-field and
+  empty-hypotheses-list no-op cases; a `monkeypatch` best-effort negative control proving the
+  pre-existing `root_cause_confidence` write survives a ranking failure; and a direct proof that the
+  ranking changes when the recomputed confidence level is forced HIGH vs. LOW, showing the SELECTED
+  hypothesis's urgency weight is driven by the independently recomputed level, never its self-reported
+  one).
+- Combined re-run, all three new suites together (re-verified again at the end of this task, not
+  merely once mid-implementation): `python -m pytest dv_harness_tests/test_engine_confidence_reweight_
+  coupling.py dv_harness_tests/test_engine_hypothesis_bias_coupling.py dv_harness_tests/test_engine_
+  voi_ranking_coupling.py -q` -> **13 passed**.
+- Full `engine.py` regression, re-run fresh at the end of this task against the current, fully
+  concurrently-edited `engine.py`/`gates.py`: `python -m pytest dv_harness_tests/test_engine_gates_
+  and_routing.py -q` -> **239 passed, 0 failed** (273.44s) -- a clean run, no failures at all, an
+  improvement over the original audit's own baseline note of one pre-existing unrelated failure,
+  which has since been fixed by other concurrent work in this shared multi-agent session.
+
+**Safety, restated concretely for this session's own three edits.** All three new methods are
+try/except-wrapped exactly like every existing sibling hook in this class; none calls `run_stage()`,
+`route_and_store()`, `ControlPlane`, or `policy.can_signoff()`; none mutates `ss["status"]`, a gate
+verdict, or any value `gates.py`/`policy.py` reads to decide PASS/FAIL/routing; and every one of the
+three new Blackboard topics/events is additive (a brand-new topic/event name, never an edit to an
+existing one), so a project that has never triggered the FAILURE_RECOVERY/RE_AUDIT FAIL/PARTIAL branch
+sees byte-identical behavior to before this session.
+
+
+## Dashboard Wiring: Question-Queue Clarification, Intake Baseline, Pattern-Coverage-Contribution, Build/Remote/LSF Intake Cards -- Coverage/Pattern + Intake Lifecycle Area (2026-09-07)
+
+An audit phase identified four real, already-tested, but dashboard-unreachable capabilities and
+ranked them by size of gap. All four are now wired into `dv_harness/dashboard.py` following that
+file's own established fetch-real-artifact-and-render convention: a thin `_read_*_state()` helper
+that calls the real module's own unmodified function, one new `GET`/`POST /api/control` route, and
+one new served card + JS `load()`/`render()` pair added to the page's existing 3s poll loop. No
+module listed below was modified to build this -- every read is a call into a function that already
+existed and was already independently tested.
+
+**Task 1 -- `question_queue.py`: `request_clarification()` / `list_clarification_requests()`
+(smallest gap, wired first).** `_read_question_queue_state()` gained one additive
+`"clarifications"` key calling `question_queue.list_clarification_requests(store)` (read-only,
+never mints `store.clarifications_path`) alongside the card's existing questions/decisions/metrics
+fields -- wrapped in the same try/except-then-empty-list pattern every other read in that function
+already uses, so a clarification-read failure can never sink the whole card. The write side is a
+new `QUESTION_REQUEST_CLARIFICATION` command in `_dispatch_control()`, requiring `question_id` and
+calling `question_queue.request_clarification(store, question_id, requested_by=..., reason=...)`
+verbatim -- no new logic, only a dispatch arm. `dashboard_auth.CONTROL_COMMAND_REQUIRED_ROLE` gained
+`"QUESTION_REQUEST_CLARIFICATION": OPERATOR` (lower than `QUESTION_ANSWER`/`QUESTION_REVOKE`'s
+`APPROVER`, since `request_clarification()` never writes to `questions.json`/`decisions.json` and
+never changes a question's tier/status/blocking -- it only best-effort-appends to a sibling audit
+file, `clarifications.json`, via the same atomic-write primitive the store already uses elsewhere).
+
+**Task 2 -- `intake_baseline.py`: freeze/list/status card.** `_read_intake_baseline_state(root,
+current_facts_path=None)` calls `intake_baseline.list_intake_freezes(root)` and, for the most
+recent freeze, `intake_baseline.evaluate_intake_freeze_invalidation()` (optionally re-evaluated
+against a caller-supplied `?current_facts=` override path) -- both real, unmodified functions. `GET
+/api/intake-baseline` and the `intakeBaselineCard` render the real VALID/INVALIDATED/UNKNOWN
+worst-wins verdict this module already computes; the card never freezes or invalidates anything
+itself (no POST verb was added for this card -- freezing stays a deliberate, explicit
+`intake_baseline.freeze_intake_baseline()` call with a named `frozen_by`, matching that module's
+own "an unattributable freeze is not a freeze" rule).
+
+**Task 3 -- `pattern_coverage_contribution.py`: per-pattern coverage attribution card.**
+`_read_pattern_coverage_contribution_state(root, pattern, attribution_path=None,
+cross_definitions_path=None)` calls `pattern_coverage_contribution.
+compute_pattern_coverage_contribution()` verbatim. Because that module's own contract REQUIRES a
+caller-declared `sample_attribution` document (no producer exists anywhere in this codebase for
+that fact -- "which coverage checkpoint belongs to which pattern" is not derivable from
+`evidence_db.py`'s schema alone, see that module's own CLAUDE.md section), this card is
+button-triggered rather than auto-loaded in `load()`: a text input for pattern/attribution-path/
+cross-definitions-path plus a "Compute" button, honestly reporting `PATTERN_QUERY_PARAM_REQUIRED`/
+`SAMPLE_ATTRIBUTION_REQUIRED` rather than a fabricated report when the caller has not supplied
+those real inputs yet.
+
+**Task 4 -- `build_remote_lsf_intake.py`: build/remote/LSF readiness card, with the explicit safety
+constraint honored.** `_read_build_remote_lsf_intake_state(root, inputs_path=None)` NEVER calls
+`preflight.run_preflight()` -- it reads an ALREADY-DECLARED `preflight_result.json` document (the
+same "reconstruct from a JSON document already on disk, never invoke a live probe" pattern
+`_read_resource_orchestrator_state()` already established for the identical class of risk) and
+passes it to `build_remote_lsf_intake.fields_from_preflight()`/`merge_into_intake_state()`. Auto-
+loaded in `load()` (unlike Task 3, it needs no user input) since the honest absence of a declared
+`preflight_result.json` is itself a safe, non-probing empty state. Verified directly, per the task's
+own safety requirement: a live end-to-end smoke test drove this card against a project with NO
+license server, LSF queue, or network reachable at all, and confirmed zero outbound calls of any
+kind were made -- the endpoint reads the declared JSON document only.
+
+**All four `_read_*_state()` helpers** sit consecutively in `dashboard.py`, immediately before the
+pre-existing `# --- Memory Quality Policy ---` section, each following the identical
+`{"available": bool, ..., "error": {"reason": str, "detail": dict} | None}` honest-empty-state
+contract every other card in this file already uses. All four `GET` dispatch arms sit consecutively
+in `do_GET`'s `elif` chain, immediately after `/api/pattern-runtime-state`. `load()`'s JS sequence
+now includes, in order: `... await loadIntakeBaseline(); await loadBuildRemoteLsfIntake(); ...`
+(Task 3's `loadPatternCoverageContribution()` is deliberately excluded from the auto-load sequence,
+per its own required-input contract above).
+
+**gui_action_safety.py drift, discovered and fixed as a direct, in-scope consequence of Task 1.**
+Running the broader `-k dashboard` sweep (the "re-run the real existing pytest suite... report the
+real pass/fail counts" instruction, exercised beyond the four directly-assigned test files)
+surfaced `GuiActionSafetyDriftError: GUI_ACTION_DECLARATIONS drifted from dashboard.py's real POST
+dispatch: missing_control_commands=['QUESTION_ANSWER', 'QUESTION_REQUEST_CLARIFICATION',
+'QUESTION_REVOKE']`. `gui_action_safety.py` (see its own CLAUDE.md section above) maintains an
+INDEPENDENT, third safety-declaration table cross-checked against `dashboard_auth.py`'s own two
+dispatch tables via `assert_coverage_matches_real_dispatch()`; `QUESTION_ANSWER`/`QUESTION_REVOKE`
+were ALREADY missing from it before this session (a genuine pre-existing drift from earlier work
+that wired them into `dashboard.py`'s `_dispatch_control()` without ever updating this third table),
+and this session's own `QUESTION_REQUEST_CLARIFICATION` addition made it a 3-item drift. Given
+`gui_action_safety.py`'s own house style ("a POST endpoint or control command added to dashboard.py
+later is caught here too, not only in dashboard_auth.py"), and that it is directly in the blast
+radius of Task 1's own testing requirement, three new `_declare(...)` entries were added to
+`_DECLARATIONS`:
+
+- `QUESTION_ANSWER` / `QUESTION_REVOKE`: both `category=CAT_DECISION_APPROVAL`,
+  `impact=IMPACT_GOVERNANCE_RECORD`, `reversible=False`, `rollback_plan_kind=
+  ROLLBACK_KIND_NOT_REVERSIBLE` -- exactly matching the pattern already used for APPROVE/COSIGN/
+  CORRECT/RESEARCH_*, since `dashboard_auth.py`'s own `CONTROL_COMMAND_REQUIRED_ROLE` comment
+  already states these two commands share "the same 'records a decision other mechanisms then rely
+  on' rationale as APPROVE/COSIGN/CORRECT above."
+- `QUESTION_REQUEST_CLARIFICATION`: `category=CAT_RUN_CONTROL`, `impact=IMPACT_FILE_ARTIFACT_WRITE`,
+  `reversible=False`, `rollback_plan_kind=ROLLBACK_KIND_NOT_REVERSIBLE` -- deliberately NOT
+  `CAT_DECISION_APPROVAL`, since `question_queue.request_clarification()`'s own docstring and this
+  session's own `dashboard_auth.py` comment both state it "never writes to questions.json/
+  decisions.json and never changes a question's tier/status/blocking"; it appends a best-effort
+  record to a sibling audit file with no real un-append mechanism anywhere in this codebase.
+
+All ~9 hardcoded "21"/"13 real control commands" references across `gui_action_safety.py`'s
+comments/docstrings were updated to "24"/"16 real sub-commands", and
+`test_gui_action_safety.py`'s two hardcoded count assertions (`test_21_real_actions_declared`,
+`test_cli_declarations_json`) were updated from `== 21` to `== 24`. `gui_audit_log.py`'s
+`KNOWN_SCOPED_ACTIONS` was deliberately left untouched: all three commands genuinely have no scope
+mapping there, so a rollback plan built for any of them honestly reports
+`NO_SCOPE_MAPPING_FOR_ACTION:<action>` -- the same disclosed, pre-existing limitation the `/api/
+setup`/`/api/config` declarations already carry.
+
+**Real test evidence, before and after.** Before any change in this session, each of the four
+target modules' own real pytest baselines were: `test_question_queue.py` 166 passed,
+`test_intake_baseline.py` 52 passed, `test_pattern_coverage_contribution.py` 17 passed,
+`test_build_remote_lsf_intake.py` 18 passed (253 combined) -- unchanged after this session's wiring,
+re-confirmed by a fresh run: `python -m pytest dv_harness_tests/test_question_queue.py
+dv_harness_tests/test_intake_baseline.py dv_harness_tests/test_pattern_coverage_contribution.py
+dv_harness_tests/test_build_remote_lsf_intake.py dv_harness_tests/test_gui_action_safety.py
+dv_harness_tests/test_dashboard_auth.py -q` -> `325 passed`. The `gui_action_safety.py` fix was
+verified in isolation first (`python -m pytest dv_harness_tests/test_gui_action_safety.py -q` ->
+`57 passed`, up from a run that previously reported `1 failed` via
+`test_coverage_matches_real_dashboard_dispatch`), then re-verified against the full breadth this
+task's own instructions require: `python -m pytest dv_harness_tests/ -k "dashboard" -q` -> `381
+passed, 13308 deselected` in 266s, zero failures -- confirming the drift is fully resolved with no
+regression to any other dashboard-adjacent test in this repository. `python -c "import
+ast; ast.parse(...)"` confirmed `dashboard.py`/`dashboard_auth.py`/`gui_action_safety.py`/
+`question_queue.py` all parse cleanly throughout.
+
+**Deliberately bounded, and stated rather than implied closed.** (1) Every one of the four cards is
+read-only against its own real module's already-computed state -- none of them re-derives a
+verdict, and only Task 1's `QUESTION_REQUEST_CLARIFICATION` write path is new mutating surface,
+gated at OPERATOR role and cited above with its real rationale. (2) The `gui_action_safety.py` fix
+closes the drift THIS session's own change caused, plus the two pre-existing `QUESTION_ANSWER`/
+`QUESTION_REVOKE` gaps that predate this session -- it does not audit `gui_action_safety.py`'s
+table against any FUTURE dashboard change, which stays that module's own `assert_coverage_
+matches_real_dispatch()` self-check's job on every subsequent test run. (3) No `STAGE_GATES` entry,
+no CLI verb, and no engine call site were added for any of these four cards -- they are REACHED
+dashboard surfaces a human/GUI reads, never a WIRED stage-gate mechanism.
+
+
+## Dashboard Wiring: Multi-VIP Cooperation / Orphaned-Fork Detection / DUT Errata Correlation -- System/VIP Correlation + Governance/Memory-Hygiene Area (2026-09-07)
+
+Three real, already-tested modules -- `multi_vip_cooperation_architecting.py`,
+`orphaned_fork_detection.py`, `dut_errata_correlation.py` -- had zero dashboard
+surface before this change, confirmed by direct grep of the live
+`dv_harness/dashboard.py` immediately before editing it (`multi_vip_cooperation_
+architecting|orphaned_fork_detection|dut_errata_correlation` matched nothing).
+These were the three genuine gaps this area's own audit report identified after
+re-verifying its four other candidates against the live file: `harness_status.py`,
+`scenario_pattern_command_txt_correspondence.py`, `memory_quality_policy.py`, and
+`evidence_integrity_states.py` were all confirmed already wired by other
+concurrent work in this same multi-agent session and correctly dropped from the
+task list rather than force-duplicated.
+
+**Every addition follows the file's own established fetch-real-artifact-and-render
+pattern, byte for byte** -- the same shape `_read_evidence_integrity_signoff_
+blocker_state()`/`_read_design_knowledge_state()`/`_read_vip_environment_builder_
+state()` already use: a thin `_read_*_state()` helper calling the real module's
+own unmodified function, one new `GET` route in the existing `do_GET` dispatch
+chain, and one new served card + JS `load()`/`render()` pair wired into the
+page's existing 3-second poll loop. No new POST/`/api/control` command was
+added, so `dashboard_auth.py`'s role matrix and `gui_action_safety.py`'s own
+cross-check both stay untouched and unaffected -- confirmed by re-running both
+suites after this change (103 passed, unchanged).
+
+**`orphaned_fork_detection.py` (GET `/api/orphaned-fork-detection`)** reads a
+caller-declared `.dv-harness/orphaned_fork_detection/inputs.json`
+(`{"pattern_dir": "...", "glob"?: "*.txt"}`) and calls the real, unmodified
+`analyze_pattern_directory()` on it -- a project's every `branch_b*` region's
+non-blocking VIP-sequence dispatch/wait pairing, per `pattern-architecture`
+SKILL.md section 3.5. `analyze_pattern_directory()` itself never raises on a
+missing/empty directory, so this reader's own try/except is defense-in-depth
+only; the real honesty boundary is the ABSENT `inputs.json` case, reported
+`{"available": false}` naming the file this endpoint looked for rather than a
+fabricated `pattern_dir`.
+
+**`multi_vip_cooperation_architecting.py` (GET `/api/multi-vip-cooperation`)**
+reads a caller-declared `.dv-harness/multi_vip_cooperation/inputs.json`
+(`interfaces`/`env_manifest`/`rtl_modules`/`declared_coupling_facts`/
+`sequencing_relations`/`sequencing_observations`, exactly
+`build_multi_vip_cooperation()`'s own kwargs) and calls that real function
+verbatim. That module's own docstring is explicit that every fact must be
+caller-declared -- it has no project-discovery path of its own -- so this
+reader never auto-populates `interfaces` from `env.manifest.json`'s own
+`vip_config.vip_instances` (a different fact -- VIP instances already bound --
+from what this module needs: declared candidate interfaces, including unbound
+ones). No `interfaces` declared, or the file absent entirely, is the honest
+empty state, never a fabricated cooperation record.
+
+**`dut_errata_correlation.py` (GET `/api/dut-errata-correlation`)** is the one
+reader that calls its underlying function UNCONDITIONALLY, because
+`analyze_errata()`'s own contract already returns the honest top-level
+`NOT_AVAILABLE` for a `source_path` of `None` without ever attempting to open
+anything -- confirmed directly from the module's own docstring before writing
+this reader, so no special-casing was needed here at all, the simplest of the
+three readers to implement correctly. `source_path`/`title` are read from a
+caller-declared `.dv-harness/dut_errata_correlation/inputs.json`; `manifest_path`
+reuses the ALREADY-ESTABLISHED `env_manifest.default_manifest_path(root)`
+helper -- the exact same call this file's own `_read_subsystem_system_
+verification_state()` reader already makes, genuine reuse rather than a new
+convention.
+
+**Why all three are safe.** None of the three modules imports or calls
+`route_and_store()`, `ControlPlane`, `policy.can_signoff()`, `gates.py`, or
+`engine.py`'s stage-dispatch machinery -- confirmed by reading each module's
+own import list before wiring it in. All three new hooks are GET-only, read-
+only, try/except-wrapped reader functions -- no new write path, no new
+`/api/control` command, and no change to `dashboard_auth.py`'s role matrix was
+required or made.
+
+Proven end to end by a new `dv_harness_tests/test_dashboard_orphaned_fork_
+multi_vip_dut_errata_cards.py` (8 tests, `python -m pytest dv_harness_tests/
+test_dashboard_orphaned_fork_multi_vip_dut_errata_cards.py -q` -> `8 passed`):
+the honest empty/`NOT_AVAILABLE` state on a bare project for all three cards
+(including the deliberate contrast between the two `{"available": false}`
+readers and `dut_errata_correlation`'s always-`{"available": true}` shape);
+every card proven served in the page HTML and wired into the existing `load()`
+poll loop; a real orphaned-dispatch pattern file (the exact fixture
+`orphaned_fork_detection.py`'s own test suite already uses) served and
+cross-checked byte-for-byte against a DIRECT call into
+`analyze_pattern_directory()` over the identical real inputs; a real
+two-interface, shared-`bind_target` cooperation record served and
+cross-checked against a direct `build_multi_vip_cooperation()` call
+(normalizing only the one real, legitimately time-varying `generated_at`
+timestamp the underlying `RuntimeEventRegistry.propagate()` stamps); a real
+`env.manifest.json`-driven `dut_errata_correlation` call cross-checked against
+a direct `analyze_errata()` call; and two malformed-`inputs.json` negative
+controls per the applicable readers, each surfacing a real, named
+`MALFORMED_INPUTS_FILE` reason rather than a bare 500.
+
+**Real before/after test evidence.** Baseline (unmodified, since neither
+module's own source was touched):
+`python -m pytest dv_harness_tests/test_multi_vip_cooperation_architecting.py
+dv_harness_tests/test_orphaned_fork_detection.py dv_harness_tests/test_dut_
+errata_correlation.py -q` -> `80 passed` (31 + 24 + 25, exactly matching this
+area's own audit report's cited baseline, re-confirmed both before and after
+this change, byte-identical). `dv_harness_tests/test_dashboard_interactive.py`
+(the core, heavily-shared dashboard regression suite) -> `54 passed`, unchanged.
+`dv_harness_tests/test_dashboard_auth.py` + `test_dashboard_authorization_
+matrix.py` + `test_gui_action_safety.py` (the three role-matrix/action-safety
+cross-check suites) -> `103 passed`, unchanged -- confirming this purely
+GET-only, purely additive change introduced no drift into either safety
+declaration table.
+
+**Deliberately bounded, and stated rather than implied closed.** All three
+cards are read-only end to end: none of them runs a build, a simulation, a
+gate, or an approval, and there is deliberately no `STAGE_GATES` entry and no
+`dv-harness` CLI verb for any of the three -- they remain REACHED capabilities
+(a real CLI/import caller already existed for each) now additionally surfaced
+on the dashboard, not newly WIRED into any engine stage. None of the three
+readers arbitrates a finding: a `multi-vip-cooperation` `COOPERATION_REQUIRED`
+pair whose composition is `ADAPTER_REQUIRED` is rendered exactly as that real
+verdict, never resolved by this dashboard layer; an `orphaned-fork-detection`
+finding names the real dispatch/line citation, never a guessed root cause; a
+`dut-errata-correlation` `RTL_NOT_LOCATED` verdict is rendered as the real
+negative it is, never softened.

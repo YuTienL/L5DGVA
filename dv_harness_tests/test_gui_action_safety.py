@@ -34,8 +34,8 @@ def test_exactly_11_categories():
 
 
 def test_21_real_actions_declared():
-    # 8 non-control endpoints + 13 real control commands.
-    assert len(gas.GUI_ACTION_DECLARATIONS) == 21
+    # 8 non-control endpoints + 16 real control commands.
+    assert len(gas.GUI_ACTION_DECLARATIONS) == 24
 
 
 def test_every_declaration_carries_all_required_fields():
@@ -95,7 +95,7 @@ def test_coverage_matches_real_dashboard_dispatch():
 
 def test_coverage_drift_is_detected_on_a_stale_declared_endpoint(monkeypatch):
     # dashboard_auth's own two guards still pass (real dashboard.py is
-    # untouched); this module's OWN 21-action table now claims an endpoint
+    # untouched); this module's OWN 24-action table now claims an endpoint
     # dashboard.py does not really dispatch -- a real, isolated drift only
     # THIS module's comparison can catch.
     patched = dict(gas.GUI_ACTION_DECLARATIONS)
@@ -354,7 +354,7 @@ def test_cli_declarations_json():
     proc = _run_cli("declarations", "--json")
     assert proc.returncode == 0
     data = json.loads(proc.stdout)
-    assert len(data) == 21
+    assert len(data) == 24
 
 
 def test_cli_validate_exits_zero_on_a_clean_table():

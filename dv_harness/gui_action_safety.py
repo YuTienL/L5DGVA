@@ -17,7 +17,7 @@ Reuse over reinvent, on every axis this framework declares:
   - **Required permission** is never a second VIEWER/OPERATOR/APPROVER table.
     Every declaration's `required_role` is computed by calling
     `dashboard_auth.required_role()` itself at MODULE IMPORT time, for each
-    of the 21 real actions -- so this module can never silently drift from
+    of the 24 real actions -- so this module can never silently drift from
     the real authorization matrix; if that table's role for an action
     changes, this module's declaration changes with it on the next import,
     automatically, with no second edit.
@@ -40,7 +40,7 @@ Reuse over reinvent, on every axis this framework declares:
     the same way `dashboard_auth.assert_endpoints_mapped()`/
     `assert_control_commands_mapped()` already do -- this module calls those
     two functions directly (never re-parsing `dashboard.py`'s source a
-    second time) and then checks its OWN 21-action table covers exactly the
+    second time) and then checks its OWN 24-action table covers exactly the
     same real action set those two functions just proved `dashboard_auth.py`
     covers.
 
@@ -48,7 +48,7 @@ The 11 categories are not copied from a document unavailable in this
 checkout -- no file anywhere in this repository names an external "11
 consequential-action categories" list, confirmed by a repo-wide search
 before this module was written. They are instead a closed, EVIDENCE-DERIVED
-grouping of the real 21 actions `dashboard_auth.py`'s own two dispatch
+grouping of the real 24 actions `dashboard_auth.py`'s own two dispatch
 tables (`ENDPOINT_REQUIRED_ROLE`, `CONTROL_COMMAND_REQUIRED_ROLE`) already
 enumerate, following that same module's own stated grouping rationale (e.g.
 its docstring's own "writes a real human DECISION into this project's audit
@@ -83,7 +83,7 @@ reset, category CAT_DECISION_APPROVAL below) and from COSIGN (opt-in
 agreement, scoped only to `gates.JUDGMENT_FIELDS`, also
 CAT_DECISION_APPROVAL). It deliberately gets NO 12th entry in
 ACTION_CATEGORIES: every category here answers "which class of consequence
-does one of the 21 REAL dashboard-dispatched `/api/control` commands belong
+does one of the 24 REAL dashboard-dispatched `/api/control` commands belong
 to" (`assert_category_coverage_is_total()` requires each of the 11 to be
 used by at least one such REAL declaration, checked at import), and
 FLAG_SUSPICIOUS is not one -- `dashboard.py`'s `_dispatch_control()` has no
@@ -214,7 +214,7 @@ class GuiActionSafetyError(Exception):
 
 class GuiActionSafetyDriftError(GuiActionSafetyError):
     """`assert_coverage_matches_real_dispatch()`'s own refusal: this
-    module's 21-action table no longer matches dashboard.py's real dispatch
+    module's 24-action table no longer matches dashboard.py's real dispatch
     that `dashboard_auth.py` itself just proved it covers."""
 
 
@@ -301,7 +301,7 @@ def validate_all_declarations() -> Dict[str, List[str]]:
     return {decl.action_id: validate_declaration(decl) for decl in GUI_ACTION_DECLARATIONS.values()}
 
 
-# ---- The 21 real declarations -----------------------------------------------
+# ---- The 24 real declarations -----------------------------------------------
 # Every `path`/`control_command` pair here is a real branch in
 # dashboard.py's do_POST()/_dispatch_control() (verified by direct reading,
 # 2026-09-06). `assert_coverage_matches_real_dispatch()` re-checks this
@@ -432,6 +432,49 @@ _DECLARATIONS: Tuple[GUIActionDeclaration, ...] = (
         impact=IMPACT_GOVERNANCE_RECORD,
         reversible=False, rollback_plan_kind=ROLLBACK_KIND_NOT_REVERSIBLE,
     ),
+    # question_queue.py dashboard wiring: QUESTION_ANSWER/QUESTION_REVOKE both
+    # write a real human DECISION into question_queue.py's own decisions.json
+    # audit trail -- the same "records a decision other mechanisms then rely
+    # on" rationale as APPROVE/COSIGN/CORRECT/RESEARCH_* above, per
+    # dashboard_auth.py's own CONTROL_COMMAND_REQUIRED_ROLE comment.
+    _declare(
+        path="/api/control", control_command="QUESTION_ANSWER",
+        category=CAT_DECISION_APPROVAL,
+        scope=".dv-harness/question_queue/decisions.json (one entry's `current`) -- "
+              "QuestionQueueStore.answer_question(); writes a real human DECISION "
+              "(classify_tier()'s own HUMAN_DECISION_SOURCE) other mechanisms then rely on",
+        impact=IMPACT_GOVERNANCE_RECORD,
+        reversible=False, rollback_plan_kind=ROLLBACK_KIND_NOT_REVERSIBLE,
+    ),
+    _declare(
+        path="/api/control", control_command="QUESTION_REVOKE",
+        category=CAT_DECISION_APPROVAL,
+        scope=".dv-harness/question_queue/decisions.json (one entry's `current`) -- "
+              "QuestionQueueStore.revoke_decision(); withdraws a previously recorded "
+              "human/Tier-2 decision",
+        impact=IMPACT_GOVERNANCE_RECORD,
+        reversible=False, rollback_plan_kind=ROLLBACK_KIND_NOT_REVERSIBLE,
+    ),
+    # question_queue.request_clarification() (2026-09-07): a human signals "I
+    # don't understand this question" and gets back a reworded rendering
+    # grounded entirely in evidence the persisted record already carries --
+    # NEVER a second question filing mechanism, never a new Q-ID, never a
+    # change to tier/status/blocking. Deliberately NOT CAT_DECISION_APPROVAL:
+    # per dashboard_auth.py's own comment, this is lower-risk than
+    # QUESTION_ANSWER/QUESTION_REVOKE and writes no decision at all -- only a
+    # best-effort append to a sibling audit file.
+    _declare(
+        path="/api/control", control_command="QUESTION_REQUEST_CLARIFICATION",
+        category=CAT_RUN_CONTROL,
+        scope=".dv-harness/question_queue/clarifications.json (one appended record) -- "
+              "question_queue.request_clarification(); NEVER writes to questions.json/"
+              "decisions.json and never changes tier/status/blocking",
+        impact=IMPACT_FILE_ARTIFACT_WRITE,
+        reversible=False, rollback_plan_kind=ROLLBACK_KIND_NOT_REVERSIBLE,
+        note="A real, best-effort append to a sibling audit file, never a governance "
+             "decision -- deliberately NOT CAT_DECISION_APPROVAL. No real un-append "
+             "mechanism exists in this codebase for one clarification record.",
+    ),
     _declare(
         path="/api/config", control_command=None,
         category=CAT_POLICY_CONFIGURATION,
@@ -557,14 +600,14 @@ def assert_coverage_matches_real_dispatch() -> None:
     """dashboard_auth.py's own two drift guards prove ITS tables still cover
     dashboard.py's real do_POST()/_dispatch_control() dispatch (never
     re-parsed a second time here). This function then proves THIS module's
-    21-action table covers exactly the same real action set -- no more, no
+    24-action table covers exactly the same real action set -- no more, no
     fewer -- so a POST endpoint or control command added to dashboard.py
     later is caught here too, not only in dashboard_auth.py."""
     dashboard_auth.assert_endpoints_mapped()
     dashboard_auth.assert_control_commands_mapped()
 
     # /api/control itself is not a declared action HERE -- it is represented
-    # at the finer grain of its 13 real sub-commands instead (each its own
+    # at the finer grain of its 16 real sub-commands instead (each its own
     # GUIActionDeclaration), so it is excluded from the bare-endpoint diff
     # below and covered separately by the control-command diff.
     real_endpoints = set(dashboard_auth.dispatched_post_endpoints()) - {dashboard_auth.CONTROL_ENDPOINT}

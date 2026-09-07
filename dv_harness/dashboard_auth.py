@@ -187,6 +187,13 @@ CONTROL_COMMAND_REQUIRED_ROLE = {
     # rationale as APPROVE/COSIGN/CORRECT above.
     "QUESTION_ANSWER": APPROVER,
     "QUESTION_REVOKE": APPROVER,
+    # request_clarification() (2026-09-07) never writes to questions.json/
+    # decisions.json and never changes a question's tier/status/blocking -- it
+    # only appends to a sibling audit file (clarifications.json) via the same
+    # atomic-write primitive the store already uses elsewhere. Lower-risk than
+    # QUESTION_ANSWER/QUESTION_REVOKE, so OPERATOR (matching the steering-only
+    # commands above) rather than APPROVER.
+    "QUESTION_REQUEST_CLARIFICATION": OPERATOR,
 }
 
 #: An action neither table maps requires the HIGHEST role. Deny-by-default: a
