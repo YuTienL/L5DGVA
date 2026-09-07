@@ -19709,59 +19709,28 @@ its equally-reach-count scored siblings rather than being dropped or given a fab
 the full `sequence_session_queue()` pipeline driven end to end, plus the real CLI subprocess across
 all three documented exit codes.
 
-## Open Item: Clock/Reset Dependency Graph (incl. multi-die/partition topology) (2026-09-07, dut_discovery)
+## [CLOSED, 2026-09-07] Clock/Reset Dependency Graph (incl. multi-die/partition topology)
 
-This item's own implementation agent produced no result in this batch (an empty/placeholder
-report with no module, no tests, no evidence). Verified directly before writing this note: no
-module named `clock_reset_dependency_graph` (or any close variant) exists anywhere in this
-repository -- confirmed by grep, and independently confirmed by `dv_harness/
-holistic_clock_reset_power_consistency.py`'s own module docstring, which states outright ("checked
-by grep before writing a line of this file") that no such module exists and that the nearest real
-evidence shapes are `env_manifest.build_dut_facts_clock_reset()` and `interrupt_dma_clock_reset_
-extraction.py`'s `clock_reset_extension` block -- both already model a per-clock/per-reset
-DEPENDENCY (each reset carries a `clock` field and a `clock_resolved` RESOLVED/UNKNOWN_CLOCK/
-NOT_SPECIFIED verdict), but neither exposes it as a queryable GRAPH object, and neither models
-MULTI-DIE or PARTITION topology at all.
+Was disclosed open (dut_discovery batch, 2026-09-07: no `clock_reset_dependency_graph` module
+existed, and `holistic_clock_reset_power_consistency.py` explicitly did not cover it -- see that
+module's own CLAUDE.md section for the original gap analysis). Closed the same day by
+`dv_harness/clock_reset_dependency_graph.py` -- a standalone, queryable clock<->reset<->power-domain
+graph, including the multi-die/partition-topology dimension via an explicit, caller-declared (never
+inferred) `partition_assignment` map. See "## Clock/Reset Dependency Graph: a Standalone Queryable
+Object, Closing the Open Item (2026-09-07)" below for the full closure record. Re-verified in this
+pass: `dv_harness_tests/test_clock_reset_dependency_graph.py` -> 38 passed.
 
-`holistic_clock_reset_power_consistency.py` (built by other, concurrently-running work in this
-same repository, not this batch) reads that same clock/reset dependency data and reuses it inside a
-DIFFERENT, narrower analysis -- whole-environment bind-set consistency against clock/reset/power
-topology taken as one whole -- but it is explicitly not a general-purpose dependency-GRAPH module,
-carries no multi-die/partition concept, and does not close this item's own scope.
+## [CLOSED, 2026-09-07] Legal Parameter-Combination Extraction from RTL
 
-This item remains genuinely open. The real gap is a standalone, queryable
-clock<->reset dependency graph (nodes for clocks/resets/power domains, edges for the real
-`clock_resolved` RESOLVED relationships) with an added multi-die/partition-topology dimension
-neither existing real source (`env_manifest.py`, `interrupt_dma_clock_reset_extraction.py`) models
-at all -- no per-die or per-partition scoping exists anywhere in this repository's clock/reset
-evidence today, so building the multi-die half honestly would require a new evidence source, not
-merely a new graph wrapper over what already exists.
-
-## Open Item: Legal Parameter-Combination Extraction from RTL (2026-09-07, dut_discovery)
-
-This item's own implementation agent produced no result in this batch (an empty/placeholder report
-with no module, no tests, no evidence). Verified directly before writing this note: a repo-wide
-grep for `legal_param_combination`/`param_combination`/`parameter_combination`/"legal parameter
-combination" matched nothing executable anywhere in `dv_harness/`, and no CLAUDE.md section
-anywhere in this file names it either.
-
-The closest real, adjacent mechanisms in this repository were checked and confirmed NOT to cover
-this gap: `param_define_extraction.py` extracts each RTL parameter's own DECLARED default value and
-`` `define `` constants, one at a time, with no notion of which COMBINATIONS of several parameters'
-values are jointly legal for a given DUT configuration; `config_variant_coverage.py` (and its
-`system_configuration_ir.py` sibling) generate a pairwise-covering test-configuration PLAN over a
-CALLER-DECLARED dimension space, but that space's legal values are an input the caller supplies --
-neither module derives which parameter combinations are legal FROM the RTL itself (a `generate`/
-`` `ifdef `` guard, an `initial`/elaboration-time `$error`/assertion checking a parameter
-combination, or a real cross-parameter constraint expression somewhere in the source).
-
-This item remains genuinely open. The real gap is a parser-level (never elaboration-level, per this
-project's own verible-based ceiling) extractor that scans RTL source for explicit
-legality-constraining constructs over two or more parameters -- a `generate if` combination guard,
-an elaboration-time `$error`/`$fatal` firing on an illegal combination, or a documented legal-
-combination table in an accompanying spec -- and reports which combinations the SOURCE TEXT itself
-proves are legal or illegal, honestly reporting `NOT_AVAILABLE` for any combination the RTL never
-states anything about. No such extractor exists in this repository today.
+Was disclosed open (dut_discovery batch, 2026-09-07: no extractor existed for which parameter
+COMBINATIONS a `generate if`/elaboration-time `$error` guard proves legal or illegal). Closed the
+same day by `dv_harness/legal_param_combination_extraction.py`, reusing `verible_parser.py`'s real
+front end (never a second SystemVerilog parser) and `param_define_extraction.py`'s real declared-
+parameter list to ground which conditions genuinely reference two or more of a module's own real
+parameters. See "## Legal Parameter-Combination Extraction from RTL (2026-09-07,
+legal_param_combination_extraction) -- CLOSES the prior open item" below for the full closure
+record. Re-verified in this pass: `dv_harness_tests/test_legal_param_combination_extraction.py` ->
+25 passed.
 
 ## Holistic Clock/Reset/Power Consistency: the Chosen Bind Set as ONE WHOLE, Not Pairwise (2026-09-07)
 
