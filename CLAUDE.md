@@ -19404,37 +19404,54 @@ REACHED, not WIRED: there is no `dv-harness` CLI verb and no dashboard/GUI surfa
 -- a caller (a human via a future CLI/GUI, or an agent handling a "I don't understand" signal)
 invokes `request_clarification()` directly today.
 
-## "Why Am I Being Asked This" Grounding: Already Substantively Closed by Sibling Work, No Dedicated Module Built for This Item (2026-09-07)
+## [CLOSED, 2026-09-08] "Why Am I Being Asked This" Grounding
 
-This item's own item-implementation agent produced no real evidence -- its report carried
-placeholder `module_paths: ["a"]`, `test_paths: ["b"]`, `real_evidence_summary: "test"`, and
-`claude_md_section_markdown: "test"`. No module or test file matching those paths exists anywhere
-in this repository (confirmed by `Glob`), so nothing from that agent's own report could be
-verified or appended.
+Was recorded as remaining open, distinct from the two real sibling mechanisms it reused
+(`request_clarification()`, `build_escalation_package()`), because no dedicated module named
+"why grounding" existed yet. Closed by `dv_harness/question_why_grounding.py` exactly as this
+entry's own closing paragraph specified -- a thin, explicitly-named wrapper over those two
+functions, never a third, independently-derived explanation mechanism. See "## Question 'Why Am I
+Being Asked This' Grounding: Closing the Disclosed Residual (2026-09-08)" below for the full
+closure record. This header is left as a short cross-reference (per this file's own convention for
+a superseded gap-claim) rather than deleted outright.
 
-However, integration-time verification found the underlying CAPABILITY this item asks for --
-letting a human (or agent) see WHY a specific question was raised, in plain language, before
-answering it -- is already real and substantively closed by two sibling mechanisms built
-elsewhere in this same batch, both documented with their own CLAUDE.md sections above:
+## Question "Why Am I Being Asked This" Grounding: Closing the Disclosed Residual (2026-09-08)
 
-- `request_clarification()` (see "Question Rephrasing / Clarification Loop" immediately above)
-  is, in large part, exactly this capability: it re-renders an already-filed question's
-  `tier_reason` through `_explain_tier_reason()`'s fixed plain-English lookup table, cites every
-  option's own pre-researched rationale, and surfaces the `exemption` citation and
-  `context_path` -- content that, per that section's own account, "never reached a human before."
-- `build_escalation_package()` (`dv_harness/question_queue.py:2264`, documented under "Question
-  Escalation Package: the 9-Field Structured View" elsewhere in this file) independently
-  assembles a 9-field human-facing view of a question record including its `urgency` (derived
-  from the real `tier`) and `context`.
+`dv_harness/question_why_grounding.py` is exactly the follow-up the "'Why Am I Being Asked This'
+Grounding" section above named: "a thin, explicitly-named wrapper over `request_clarification()`/
+`build_escalation_package()` rather than a third, independently-derived explanation mechanism." It
+computes no new fact about a question record, no new plain-English translation, and no new evidence
+citation logic -- `explain_why_asked(store, question_id)` is a pure re-shaping of `question_queue.
+request_clarification(store, question_id, record=False)`'s own real return value into a
+purpose-named `{"question_id", "why", "evidence", "package"}` shape.
 
-Neither of those two mechanisms was built BY this item's own (non-existent) work, and neither is
-named "why grounding" in this codebase -- so this item is reported honestly as **remaining open**
-as a distinct, separately-tracked deliverable: no module exists at the two claimed paths, and this
-integration pass did not build a new one under this item's own name, since doing so would
-duplicate `request_clarification()`'s real, already-tested "why" content rather than close a
-genuine gap. A future pass wanting a dedicated `question_why_grounding` entry point should build a
-thin, explicitly-named wrapper over `request_clarification()`/`build_escalation_package()` rather
-than a third, independently-derived explanation mechanism.
+**Why a distinct entry point rather than callers reaching for `request_clarification()` directly.**
+That function's own framing is REACTIVE: a human signals "I don't understand this question I was
+already asked", and by default that signal is itself recorded as a real audit entry
+(`record=True`) in `store.clarifications_path`. "Why am I being asked this" is a genuinely
+different, PROACTIVE use -- the same grounding context shown *before* anyone attempts to answer,
+with no implication anyone was confused and nothing filed as if they were.
+`explain_why_asked()` therefore always calls the reused function with `record=False`; a dedicated
+AST-walking test proves this module's own source contains no call to `add_question()`/
+`answer_question()`/`_atomic_write_json()` or any other write-shaped primitive at all -- never
+merely claimed.
+
+Deliberately bounded: no question is ever filed or answered here, and nothing is decided --
+`render_why_asked_markdown()` reuses the same "one labeled section per block" shape
+`render_clarification_markdown()`/`render_escalation_package_markdown()` already establish, under
+a "why" heading rather than a "clarification" one. There is no `dv-harness` CLI verb
+(`cli.py`/`gates.py` were not touched, matching this session's own established convention for a
+standalone module built while those files are under concurrent edit pressure) -- the front door is
+`python -m dv_harness.question_why_grounding explain --root <dir> --question-id <id> [--json]`.
+
+Proven by `dv_harness_tests/test_question_why_grounding.py` (11 tests): the headline reuse proof
+(every field matches `request_clarification()`'s own real output, including the exact hard-trigger
+plain-English translation and per-option evidence citation); the never-writes-`clarifications.json`
+negative control (across two consecutive calls); a never-mutates-`questions.json` proof; the
+unknown-question-id refusal; the missing-rationale honesty negative control; the Tier-2
+machine-guess note; markdown rendering; the structural never-writes AST guard; and three real CLI
+invocations (JSON, markdown, and the exit-2 refusal path). Re-run alongside the full pre-existing
+`test_question_queue.py` suite (177 tests combined) -- zero regressions.
 
 ## Structured Conflict Display Package: the 9-Field Rendering Over Real Conflict Records (2026-09-07)
 
