@@ -1,12 +1,18 @@
 """Tests for dv_harness/transaction_correlation_ir.py.
 
-Covers the three correlation/bookkeeping mechanisms: response correlation (matching a response back
-to its originating request), write/read data-beat association, and burst split/merge linkage built on
-top of `amba_route_transform_predictor.detect_burst_split_merge()`'s real output shape. Every test uses
-real evidence-shaped fixtures (never a mocked correlation decision) and includes, per the Evidence
-Truth Rule, dedicated negative controls proving the module refuses to claim a match/linkage/association
-when the required evidence is genuinely absent or ambiguous.
+Covers the four correlation/bookkeeping mechanisms: response correlation (matching a response back
+to its originating request), write/read data-beat association, burst split/merge linkage built on
+top of `amba_route_transform_predictor.detect_burst_split_merge()`'s real output shape, and
+(SYOSCB-11, added 2026-09-06) logical AXI transaction reconstruction -- joining the first two (and,
+where applicable, the third) into one full record per transaction. Every test uses real
+evidence-shaped fixtures (never a mocked correlation decision) and includes, per the Evidence Truth
+Rule, dedicated negative controls proving the module refuses to claim a match/linkage/association/
+reconstruction when the required evidence is genuinely absent or ambiguous.
 """
+import json
+import subprocess
+import sys
+
 import pytest
 
 from dv_harness.amba_route_transform_predictor import (
@@ -19,6 +25,9 @@ from dv_harness.transaction_correlation_ir import (
     BEAT_ASSOCIATED,
     BEAT_ORPHAN,
     BEAT_UNKNOWN_LENGTH,
+    BeatAssociationEntry,
+    DataAssociationReport,
+    TransactionDataAssociation,
     DATA_ASSOCIATION_COMPLETE,
     DATA_ASSOCIATION_EXCESS,
     DATA_ASSOCIATION_NO_BEATS,
@@ -29,6 +38,14 @@ from dv_harness.transaction_correlation_ir import (
     LINKAGE_INSUFFICIENT_EVIDENCE,
     LINKAGE_NOT_APPLICABLE,
     LINKAGE_PARTIAL,
+    LOGICAL_TXN_BURST_LINKAGE_UNCONFIRMED,
+    LOGICAL_TXN_COMPLETE,
+    LOGICAL_TXN_EXCESS_DATA,
+    LOGICAL_TXN_INSUFFICIENT_EVIDENCE,
+    LOGICAL_TXN_PARTIAL_DATA,
+    LOGICAL_TXN_PENDING,
+    LOGICAL_TXN_RESPONSE_AMBIGUOUS,
+    LOGICAL_TXN_UNKNOWN_DATA_LENGTH,
     REQUEST_PENDING,
     RESPONSE_AMBIGUOUS_ORDER,
     RESPONSE_MATCHED,
@@ -37,6 +54,8 @@ from dv_harness.transaction_correlation_ir import (
     associate_data_beats,
     correlate_responses,
     link_burst_split_merge,
+    reconstruct_logical_transactions,
+    render_logical_transaction_report,
 )
 
 
@@ -332,3 +351,204 @@ class TestBurstSplitMergeLinkage:
         bad_child = {"transaction_ref": "C1", "address": 0x1000, "total_bytes": 32, "evidence": []}
         with pytest.raises(TransactionCorrelationIRError):
             link_burst_split_merge(event_no_factor, _parent(), [bad_child])
+
+
+# ===========================================================================
+# 4. Logical transaction reconstruction (SYOSCB-11)
+# ===========================================================================
+
+def _logical_txn(ref, request_ref, scope="P0", evidence=("sim.log:5",)):
+    return {"transaction_ref": ref, "request_ref": request_ref, "scope": scope,
+            "evidence": list(evidence)}
+
+
+class TestLogicalTransactionReconstruction:
+    def test_complete_transaction_joins_matched_response_and_complete_data(self):
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", tid="AWID0", expected=2)],
+                                    [_beat("B1", bid="AWID0"), _beat("B2", bid="AWID0")])
+        results = reconstruct_logical_transactions(
+            [_logical_txn("W1", "Q1")], responses, data)
+        assert len(results) == 1
+        r = results[0]
+        assert r.status == LOGICAL_TXN_COMPLETE
+        assert r.request_ref == "Q1"
+        assert r.response_ref == "R1"
+        assert r.response_status == RESPONSE_MATCHED
+        assert r.data_status == DATA_ASSOCIATION_COMPLETE
+        assert r.associated_beat_refs == ["B1", "B2"]
+        # Evidence is the real union of the transaction's own citation, the response
+        # correlation's, and every associated beat's -- never a subset silently dropped.
+        assert "sim.log:5" in r.evidence
+        assert "sim.log:10" in r.evidence  # from the request
+        assert "sim.log:20" in r.evidence  # from the response
+        assert "sim.log:2" in r.evidence   # from the beats
+
+    def test_pending_response_outranks_a_fully_complete_data_status(self):
+        # No response observed at all -- the request is still pending. Even though the data
+        # side is fully complete, the composed status must never claim COMPLETE without a
+        # real matched response: pending outranks a clean data status.
+        responses = correlate_responses([_req("Q1")], [])
+        data = associate_data_beats([_txn("W1", tid="AWID0", expected=1)],
+                                    [_beat("B1", bid="AWID0")])
+        r = reconstruct_logical_transactions([_logical_txn("W1", "Q1")], responses, data)[0]
+        assert r.status == LOGICAL_TXN_PENDING
+        assert r.response_ref is None
+
+    def test_ambiguous_response_order_is_surfaced_not_resolved(self):
+        reqs = [_req("Q1", tid="ID0"), _req("Q2", tid="ID0")]  # both missing sequence_number
+        resps = [_resp("R1", tid="ID0")]
+        responses = correlate_responses(reqs, resps)
+        data = associate_data_beats([_txn("W1", tid="ID0", expected=0)], [])
+        r = reconstruct_logical_transactions([_logical_txn("W1", "Q1")], responses, data)[0]
+        assert r.status == LOGICAL_TXN_RESPONSE_AMBIGUOUS
+        assert r.response_status == RESPONSE_AMBIGUOUS_ORDER
+
+    def test_partial_data_reported_even_with_a_matched_response(self):
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", expected=3)], [_beat("B1")])
+        r = reconstruct_logical_transactions([_logical_txn("W1", "Q1")], responses, data)[0]
+        assert r.status == LOGICAL_TXN_PARTIAL_DATA
+        assert r.data_status == DATA_ASSOCIATION_PARTIAL
+
+    def test_unknown_data_length_reported_never_guessed_complete(self):
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", expected=None)], [_beat("B1")])
+        r = reconstruct_logical_transactions([_logical_txn("W1", "Q1")], responses, data)[0]
+        assert r.status == LOGICAL_TXN_UNKNOWN_DATA_LENGTH
+
+    def test_excess_data_beats_reported(self):
+        # associate_data_beats()'s own FIFO cursor advances past a transaction the instant it
+        # reaches its declared expected_beat_count, so a genuine excess-beat rollup is not
+        # reachable through that function on this fixture shape (confirmed by section 2's own
+        # `test_excess_beats_reported_never_silently_accepted`, which asserts the transaction
+        # stays DATA_ASSOCIATION_COMPLETE). reconstruct_logical_transactions() is a pure join
+        # over an ALREADY-COMPUTED DataAssociationReport, so its own EXCESS-status handling is
+        # exercised directly against a synthetic report -- exactly the report shape
+        # associate_data_beats() would itself emit if it ever did.
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = DataAssociationReport(
+            beats=[BeatAssociationEntry(status=BEAT_ASSOCIATED, beat_ref="B1",
+                                        transaction_ref="W1", scope="P0", reason="matched",
+                                        evidence=["sim.log:2"])],
+            transactions=[TransactionDataAssociation(
+                status=DATA_ASSOCIATION_EXCESS, transaction_ref="W1", scope="P0",
+                expected_beat_count=1, associated_beat_count=2,
+                associated_beat_refs=["B1", "B2"],
+                reason="associated 2 beat(s), exceeding the declared expected 1")])
+        r = reconstruct_logical_transactions([_logical_txn("W1", "Q1")], responses, data)[0]
+        assert r.status == LOGICAL_TXN_EXCESS_DATA
+
+    def test_confirmed_burst_linkage_included_in_a_complete_record(self):
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", expected=0)], [])
+        event = _real_split_event()
+        parent = _parent(ref="W1")
+        children = [_child("C1", 0x1000, 32), _child("C2", 0x1020, 32),
+                    _child("C3", 0x1040, 32), _child("C4", 0x1060, 32)]
+        linkage = link_burst_split_merge(event, parent, children)
+        assert linkage.status == LINKAGE_CONFIRMED
+        r = reconstruct_logical_transactions(
+            [_logical_txn("W1", "Q1")], responses, data, burst_linkage_by_ref={"W1": linkage})[0]
+        assert r.status == LOGICAL_TXN_COMPLETE
+        assert r.burst_linkage_status == LINKAGE_CONFIRMED
+        assert "confirmed" in r.reason
+
+    def test_unconfirmed_burst_linkage_blocks_completeness(self):
+        # Response matched and data complete, but the caller's own burst-split-merge linkage for
+        # this same parent transaction never confirmed -- the composed record must not read
+        # COMPLETE while a real linkage question is still open.
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", expected=0)], [])
+        event_no_factor = {"status": TRANSFORM_PREDICTED_FROM_TOPOLOGY,
+                           "value": {"kind": "SPLIT"}, "evidence": ["e1"]}
+        parent = _parent(ref="W1")
+        children = [_child("C1", 0x1000, 32), _child("C2", 0x1040, 32),
+                    _child("C3", 0x1060, 32)]  # leaves a real gap -> LINKAGE_PARTIAL
+        linkage = link_burst_split_merge(event_no_factor, parent, children)
+        assert linkage.status == LINKAGE_PARTIAL
+        r = reconstruct_logical_transactions(
+            [_logical_txn("W1", "Q1")], responses, data, burst_linkage_by_ref={"W1": linkage})[0]
+        assert r.status == LOGICAL_TXN_BURST_LINKAGE_UNCONFIRMED
+        assert r.burst_linkage_status == LINKAGE_PARTIAL
+
+    def test_burst_linkage_parent_ref_mismatch_is_refused(self):
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", expected=0)], [])
+        event = _real_split_event()
+        linkage = link_burst_split_merge(
+            event, _parent(ref="OTHER_PARENT"),
+            [_child("C1", 0x1000, 32), _child("C2", 0x1020, 32),
+             _child("C3", 0x1040, 32), _child("C4", 0x1060, 32)])
+        with pytest.raises(TransactionCorrelationIRError):
+            reconstruct_logical_transactions(
+                [_logical_txn("W1", "Q1")], responses, data,
+                burst_linkage_by_ref={"W1": linkage})
+
+    def test_insufficient_evidence_when_no_response_correlation_entry_exists(self):
+        # correlate_responses() was run over a request set that never included this
+        # transaction's own request_ref -- the join has genuinely nothing to find, and the
+        # module must say so honestly rather than silently treat it as complete or drop it.
+        responses = correlate_responses([_req("Q_OTHER")], [_resp("R_OTHER")])
+        data = associate_data_beats([_txn("W1", expected=0)], [])
+        r = reconstruct_logical_transactions([_logical_txn("W1", "Q1")], responses, data)[0]
+        assert r.status == LOGICAL_TXN_INSUFFICIENT_EVIDENCE
+        assert "response-correlation" in r.reason
+
+    def test_insufficient_evidence_when_no_data_association_entry_exists(self):
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W_OTHER", expected=0)], [])
+        r = reconstruct_logical_transactions([_logical_txn("W1", "Q1")], responses, data)[0]
+        assert r.status == LOGICAL_TXN_INSUFFICIENT_EVIDENCE
+        assert "data-association" in r.reason
+
+    def test_duplicate_transaction_ref_is_refused(self):
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", expected=0)], [])
+        with pytest.raises(TransactionCorrelationIRError):
+            reconstruct_logical_transactions(
+                [_logical_txn("W1", "Q1"), _logical_txn("W1", "Q1")], responses, data)
+
+    def test_transaction_record_missing_evidence_is_refused(self):
+        bad = {"transaction_ref": "W1", "request_ref": "Q1", "scope": "P0", "evidence": []}
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", expected=0)], [])
+        with pytest.raises(TransactionCorrelationIRError):
+            reconstruct_logical_transactions([bad], responses, data)
+
+    def test_render_report_covers_every_entry_and_the_empty_case(self):
+        responses = correlate_responses([_req("Q1")], [_resp("R1")])
+        data = associate_data_beats([_txn("W1", expected=0)], [])
+        results = reconstruct_logical_transactions([_logical_txn("W1", "Q1")], responses, data)
+        text = render_logical_transaction_report(results)
+        assert "LOGICAL_TXN_COMPLETE" in text
+        assert "W1" in text
+        assert "no transactions supplied" in render_logical_transaction_report([])
+
+    def test_cli_reconstruct_subcommand_end_to_end(self, tmp_path):
+        import pathlib
+        repo_root = pathlib.Path(__file__).resolve().parents[1]
+        (tmp_path / "requests.json").write_text(json.dumps([_req("Q1")]))
+        (tmp_path / "responses.json").write_text(json.dumps([_resp("R1")]))
+        (tmp_path / "data_transactions.json").write_text(
+            json.dumps([_txn("W1", tid="AWID0", expected=2)]))
+        (tmp_path / "beats.json").write_text(
+            json.dumps([_beat("B1", bid="AWID0"), _beat("B2", bid="AWID0")]))
+        (tmp_path / "transactions.json").write_text(
+            json.dumps([_logical_txn("W1", "Q1")]))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "dv_harness.transaction_correlation_ir", "reconstruct",
+             "--transactions", str(tmp_path / "transactions.json"),
+             "--requests", str(tmp_path / "requests.json"),
+             "--responses", str(tmp_path / "responses.json"),
+             "--data-transactions", str(tmp_path / "data_transactions.json"),
+             "--beats", str(tmp_path / "beats.json"),
+             "--json"],
+            cwd=str(repo_root),
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert len(payload) == 1
+        assert payload[0]["status"] == LOGICAL_TXN_COMPLETE

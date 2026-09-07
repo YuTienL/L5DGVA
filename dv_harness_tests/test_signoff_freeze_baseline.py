@@ -598,6 +598,233 @@ def test_the_freeze_module_touches_no_approval_machinery():
         assert forbidden not in src, forbidden
 
 
+# --- freeze acceptance: revalidation is a human act, made real -------------
+#
+# WIRING_GAP_EXISTING_MODULE closure (signoff-freeze-revalidation-explicitly-
+# undone). freeze_acceptance_digest()/freeze_acceptance_command()/
+# freeze_acceptance_status() are pure functions over an already-fetched
+# `approval` record -- proven directly below with no ControlPlane involved at
+# all, so the "touches no approval machinery" test above and these tests can
+# never disagree about what this module does. The real fetch-then-judge
+# composition (commands.cmd_signoff_freeze_acceptance_status) is proven
+# end-to-end against a REAL throwaway project and a REAL ControlPlane
+# approval, mirroring dv_harness_tests/test_bounded_self_healing.py's own
+# "commands.py wiring" tests for its sibling APPROVAL_ONLY_STAGES key.
+
+def test_freeze_acceptance_digest_and_command_are_real_and_deterministic():
+    evaluation = {"freeze_id": "fz-1", "findings": [
+        {"code": "BASELINE_FIELD_CHANGED", "field": "waivers", "severity": "INVALIDATING"},
+    ]}
+    d1 = sx.freeze_acceptance_digest(evaluation)
+    d2 = sx.freeze_acceptance_digest(evaluation)
+    assert d1 == d2 and d1  # deterministic, non-empty
+
+    # Reordering the SAME findings must not move the digest (sorted key).
+    evaluation2 = {"freeze_id": "fz-1", "findings": list(reversed(evaluation["findings"] * 1))}
+    assert sx.freeze_acceptance_digest(evaluation2) == d1
+
+    # A genuinely different finding set moves it.
+    evaluation3 = {"freeze_id": "fz-1", "findings": [
+        {"code": "BASELINE_FIELD_CHANGED", "field": "waivers", "severity": "INVALIDATING"},
+        {"code": "POST_FREEZE_MATERIAL_CHANGE", "field": None, "severity": "INVALIDATING"},
+    ]}
+    assert sx.freeze_acceptance_digest(evaluation3) != d1
+
+    cmd = sx.freeze_acceptance_command("fz-1", d1)
+    assert "dv-harness approve SIGNOFF_FREEZE_REVALIDATION" in cmd
+    assert "fz-1" in cmd and d1 in cmd
+
+
+def test_freeze_acceptance_status_is_a_pure_function_never_touching_disk():
+    evaluation = {"freeze_id": "fz-1", "findings": [
+        {"code": "BASELINE_FIELD_CHANGED", "field": "waivers", "severity": "INVALIDATING"},
+    ]}
+    digest = sx.freeze_acceptance_digest(evaluation)
+
+    # negative control: no approval at all
+    s = sx.freeze_acceptance_status(evaluation, None)
+    assert s == {"accepted": False, "state": "ABSENT", "digest": digest, "approval": None}
+
+    # negative control: an approval on file for a DIFFERENT freeze
+    other = {"note": "freeze fz-OTHER 00000000: unrelated"}
+    s = sx.freeze_acceptance_status(evaluation, other)
+    assert s["accepted"] is False
+    assert s["state"] == "PRESENT_BUT_NOT_MATCHING"
+
+    # negative control: the right freeze_id but a stale/different digest
+    stale = {"note": "freeze fz-1 00000000000000: stale"}
+    s = sx.freeze_acceptance_status(evaluation, stale)
+    assert s["accepted"] is False
+    assert s["state"] == "PRESENT_BUT_NOT_MATCHING"
+
+    # positive: freeze_id AND digest both present in the note
+    matching = {"note": f"freeze fz-1 {digest}: reviewed and acceptable",
+                "reviewer_id": "dv-lead", "approved_at": "2026-09-07T00:00:00+00:00"}
+    s = sx.freeze_acceptance_status(evaluation, matching)
+    assert s == {"accepted": True, "state": "PINNED_MATCH", "digest": digest, "approval": matching}
+
+
+@requires_git
+def test_evaluate_freeze_invalidation_with_acceptance_valid_freeze_never_requires_it(tmp_path):
+    root, _ = _make_project(tmp_path)
+    frozen = sx.freeze_signoff_baseline(root, frozen_by="dv-lead")
+    report = sx.evaluate_freeze_invalidation_with_acceptance(root, frozen)
+    assert report["status"] == sx.FREEZE_VALID
+    assert report["acceptance"] == {"required": False, "accepted": True, "state": "NOT_REQUIRED",
+                                     "digest": None, "approval": None, "command": None}
+
+
+@requires_git
+def test_freeze_acceptance_becomes_true_only_after_a_real_pinned_approval(tmp_path):
+    """The end-to-end proof that a human CAN accept an INVALIDATED freeze:
+    revoke the waiver (a real, non-git material change), confirm the
+    evaluation reports INVALIDATED with no acceptance on file, then record a
+    real Control Plane approval citing the exact freeze_id+digest and confirm
+    the SAME evaluation now reports accepted."""
+    from dv_harness.control_plane import ControlPlane
+
+    root, _ = _make_project(tmp_path)
+    frozen = sx.freeze_signoff_baseline(root, frozen_by="dv-lead")
+    waiver_store.revoke_waiver(root, "W-238-1", revoked_by="dv-lead",
+                               reason="corner is reachable after all")
+
+    report = sx.evaluate_freeze_invalidation_with_acceptance(root, frozen)
+    assert report["status"] == sx.FREEZE_INVALIDATED
+    acceptance = report["acceptance"]
+    assert acceptance["required"] is True
+    assert acceptance["accepted"] is False
+    assert acceptance["state"] == "ABSENT"
+    digest = acceptance["digest"]
+    assert frozen["freeze_id"] in acceptance["command"]
+    assert digest in acceptance["command"]
+
+    ControlPlane(root).approve(
+        sx.SIGNOFF_FREEZE_REVALIDATION_STAGE,
+        note=f"freeze {frozen['freeze_id']} {digest}: reviewed, acceptable",
+        reviewer_id="dv-lead", reviewer_confidence="HIGH")
+
+    approval = ControlPlane(root).get_approval(sx.SIGNOFF_FREEZE_REVALIDATION_STAGE)
+    report2 = sx.evaluate_freeze_invalidation_with_acceptance(root, frozen, approval=approval)
+    assert report2["status"] == sx.FREEZE_INVALIDATED  # the freeze is still, honestly, invalidated
+    assert report2["acceptance"]["accepted"] is True
+    assert report2["acceptance"]["state"] == "PINNED_MATCH"
+
+
+@requires_git
+def test_freeze_acceptance_is_explicitly_undone_by_a_new_divergence(tmp_path):
+    """The headline negative control: a further divergence AFTER a human
+    accepted one INVALIDATED evaluation must retire that acceptance rather
+    than let it silently keep covering a WORSE, never-reviewed state -- the
+    exact "revalidation" this item's own title says was never made real."""
+    from dv_harness.control_plane import ControlPlane
+
+    root, _ = _make_project(tmp_path)
+    frozen = sx.freeze_signoff_baseline(root, frozen_by="dv-lead")
+    waiver_store.revoke_waiver(root, "W-238-1", revoked_by="dv-lead",
+                               reason="corner is reachable after all")
+    report = sx.evaluate_freeze_invalidation_with_acceptance(root, frozen)
+    digest_before = report["acceptance"]["digest"]
+
+    ControlPlane(root).approve(
+        sx.SIGNOFF_FREEZE_REVALIDATION_STAGE,
+        note=f"freeze {frozen['freeze_id']} {digest_before}: reviewed, acceptable",
+        reviewer_id="dv-lead", reviewer_confidence="HIGH")
+    approval = ControlPlane(root).get_approval(sx.SIGNOFF_FREEZE_REVALIDATION_STAGE)
+    report = sx.evaluate_freeze_invalidation_with_acceptance(root, frozen, approval=approval)
+    assert report["acceptance"]["accepted"] is True
+
+    # A genuinely new, independent divergence -- the coverage database moves.
+    _write_json(root / ".dv-harness" / "coverage" / "summary.json",
+                {"categories": [{"name": "functional", "percent": 74.0, "bins": 100}]})
+
+    report_after = sx.evaluate_freeze_invalidation_with_acceptance(root, frozen, approval=approval)
+    assert report_after["status"] == sx.FREEZE_INVALIDATED
+    assert report_after["acceptance"]["accepted"] is False
+    assert report_after["acceptance"]["state"] == "PRESENT_BUT_NOT_MATCHING"
+    assert report_after["acceptance"]["digest"] != digest_before
+    # The stale approval is still real evidence on the record (never hidden);
+    # it just no longer covers the current, worse evaluation.
+    assert report_after["acceptance"]["approval"]["reviewer_id"] == "dv-lead"
+
+
+# --- commands.py wiring: the real, already-existing `dv-harness approve` verb --
+
+def test_commands_approval_stage_choices_includes_signoff_freeze_revalidation():
+    from dv_harness import commands
+    assert sx.SIGNOFF_FREEZE_REVALIDATION_STAGE in commands.APPROVAL_ONLY_STAGES
+    assert sx.SIGNOFF_FREEZE_REVALIDATION_STAGE in commands.approval_stage_choices()
+
+
+@requires_git
+def test_cmd_signoff_freeze_acceptance_status_composes_a_real_approval(tmp_path):
+    """commands.cmd_signoff_freeze_acceptance_status() is the real composition
+    point: a real freeze, a real Control Plane approval fetch, and the SAME
+    signoff_export.py functions proven pure above -- reused, not
+    re-implemented."""
+    from dv_harness import commands
+    from dv_harness.control_plane import ControlPlane
+
+    class _StubStore:
+        def event(self, ev):
+            pass
+
+    class _StubHarness:
+        pass
+
+    root, _ = _make_project(tmp_path)
+    h = _StubHarness()
+    h.root = root
+    h.store = _StubStore()
+
+    frozen = sx.freeze_signoff_baseline(root, frozen_by="dv-lead")
+    report = commands.cmd_signoff_freeze_acceptance_status(h)
+    assert report["status"] == sx.FREEZE_VALID
+    assert report["acceptance"]["required"] is False
+
+    waiver_store.revoke_waiver(root, "W-238-1", revoked_by="dv-lead",
+                               reason="corner is reachable after all")
+    report = commands.cmd_signoff_freeze_acceptance_status(h)
+    assert report["status"] == sx.FREEZE_INVALIDATED
+    assert report["acceptance"]["accepted"] is False
+    digest = report["acceptance"]["digest"]
+
+    # The REAL, generic, already-existing approval verb -- this is exactly
+    # what `dv-harness approve SIGNOFF_FREEZE_REVALIDATION --note ...` does.
+    entry = commands.cmd_approve(
+        h, sx.SIGNOFF_FREEZE_REVALIDATION_STAGE,
+        note=f"freeze {frozen['freeze_id']} {digest}: reviewed, acceptable",
+        reviewer_id="dv-lead", reviewer_confidence="HIGH")
+    assert entry["stage"] == sx.SIGNOFF_FREEZE_REVALIDATION_STAGE
+
+    report = commands.cmd_signoff_freeze_acceptance_status(h)
+    assert report["acceptance"]["accepted"] is True
+    assert report["acceptance"]["state"] == "PINNED_MATCH"
+
+    # Cross-checked against a direct ControlPlane read of the same record.
+    approval = ControlPlane(root).get_approval(sx.SIGNOFF_FREEZE_REVALIDATION_STAGE)
+    assert approval["reviewer_id"] == "dv-lead"
+    assert report["acceptance"]["approval"] == approval
+
+
+def test_cmd_signoff_freeze_acceptance_status_raises_with_no_frozen_baseline(tmp_path):
+    from dv_harness import commands
+
+    class _StubStore:
+        def event(self, ev):
+            pass
+
+    class _StubHarness:
+        pass
+
+    h = _StubHarness()
+    h.root = tmp_path
+    h.store = _StubStore()
+
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        commands.cmd_signoff_freeze_acceptance_status(h)
+
+
 def test_no_stage_gate_was_introduced_for_the_freeze():
     """A gate that passed because a freeze had not been recorded, or failed
     because one had, would be worse than none -- section 238 is a record, not

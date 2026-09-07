@@ -33,6 +33,9 @@
 # rather than standing up a second router beside it. resolve() itself is
 # UNCHANGED by that addition -- no existing DV/protocol/regression/signoff
 # routing decision passes through any of the new code.
+import itertools as _itertools
+import json as _json
+
 from .protocol_router import protocol_skill_routes
 
 # 'research-route' -> 'research-architect' (2026-09-04) is a real entry, not a
@@ -500,4 +503,375 @@ def research_route_plan(decision, root=None, focus=None, documents=None):
         'skipped_steps': [s for s in steps if not s['applicable']],
         'all_steps': steps,
         'decision': decision,
+    }
+
+
+# --- Skill-Routing Accuracy Tracking (2026-09-07, skill_routing_accuracy_tracking) ------
+#
+# GAP, confirmed by direct search before writing a line of this: neither RouteResolver.
+# resolve() nor protocol_router.resolve_protocol() left any real, persisted record of the
+# routing decision they made for a given stage/run -- each is a pure function computing an
+# answer from its own inputs, and nothing downstream ever wrote that answer anywhere a later
+# reader could join it against what actually happened next. So a question this project's own
+# real evidence trail could answer in principle -- "when this stage's skill/agent routing
+# resolved a particular way, did the stage then fail for a reason a missing or wrong-routed
+# skill would explain" -- had no real data behind it at all.
+#
+# What follows is ADDITIVE ONLY. resolve()/resolve_protocol()/resolve_intent() above are
+# completely untouched: their signatures, their return values, and their behavior for every
+# existing caller (engine.run_stage(), the test suite pinned in
+# test_route_resolver_protocol_fold_in.py, commands.cmd_research()) are unchanged by anything
+# below. This section adds two new, OPTIONAL functions a caller invokes AFTER calling
+# resolve()/resolve_protocol() with the real decision those functions already returned --
+# never a replacement for either, and never a second place that decides a route.
+#
+# REUSE OVER REINVENT: the persistence mechanism is the SAME `storage.StateStore.event()`
+# every other subsystem in this harness already writes `.dv-harness/events.jsonl` through
+# (loop_telemetry.py, live_event_model.py, gui_audit_log.py, ...) -- there is no second event
+# file and no second serializer here. The read-back half reuses
+# `loop_telemetry.read_events()` (that module's own public, generic events.jsonl reader,
+# already the reuse target `platform_health.py` and `live_event_model.py` both point at) --
+# there is no third independent events.jsonl parser in this package either.
+#
+# The outcome-classification vocabulary is GROUNDED, never invented: every literal string it
+# matches against a stage's own real `gates.evaluate_stage_evidence()` `reasons` list is a
+# real, already-shipped sentinel this harness's own routing/dispatch machinery writes today --
+# `protocol_router.resolve_protocol()`'s own `"UNRESOLVED_NEEDS_ROUTING_QUESTION"` reason
+# string (this very module's sibling function, above), `tools/verification_flow/
+# protocol_profile_binding_gate.py`'s own real `gate_id`
+# ("protocol_profile_binding_gate", registered in `gates.STAGE_GATES["PROTOCOL_CAPABILITY"]`)
+# and its own literal `"PROFILE_SKILL_NOT_CONSULTED"` FAIL reason (that gate exists precisely
+# to check whether a protocol's resolved profile/vip-lookup skill was actually consulted --
+# see this file's own NOTICE at the top), and `agent_dispatch.py`'s own real
+# `NOT_DISPATCHED` status literal. A gate-reasons list matching none of these is honestly
+# `OUTCOME_NOT_EXPLAINED_BY_ROUTING`, never silently folded into either "routing was fine" or
+# "routing was the cause" -- and a caller that has not yet observed any outcome at all
+# (`gate_reasons` empty/absent) is honestly `NO_OUTCOME_YET`, kept distinct from "checked and
+# found nothing routing-related", per this project's own Evidence Truth Rule.
+#
+# Per rule 3 of this batch's own governing instructions, no scoring weight, threshold or
+# routing DECISION is ever changed by anything below -- this section only RECORDS a decision
+# that was already made (by the unmodified resolve()/resolve_protocol() above) and RECORDS a
+# later observed outcome; `skill_routing_accuracy_report()` at the bottom only aggregates and
+# reports those two real record streams. Applying a finding here to production routing
+# behavior (e.g. auto-preferring one route over another) would itself be a production-behavior
+# change and, like every other one in this project, would have to be proposed as data through
+# `capability_evolution.py`'s existing controlled-experiment machinery for a human to approve
+# -- nothing here does that, or could, since nothing here writes to `DEFAULT_ROUTES`,
+# `PROTOCOL_SENSITIVE_SKILLS`, or any other value `resolve()`/`resolve_protocol()` actually
+# reads.
+
+#: The two real event names this section ever writes -- a fixed, closed vocabulary, the same
+#: "an unrecognized name is worse than no event" discipline `loop_telemetry.emit()`/
+#: `live_event_model.emit()` already enforce for their own vocabularies.
+ROUTING_TELEMETRY_EVENTS = ('ROUTING_DECISION_RECORDED', 'ROUTING_OUTCOME_RECORDED')
+
+#: `record_routing_decision()`'s own `kind` argument -- which of the two real router
+#: functions above produced the `decision` dict being recorded. Never a third value: this
+#: module has exactly two decision-producing functions, `resolve()` and `resolve_protocol()`.
+ROUTING_DECISION_KIND_ROUTE = 'route_resolution'       # RouteResolver.resolve()'s own dict
+ROUTING_DECISION_KIND_PROTOCOL = 'protocol_resolution'  # protocol_router.resolve_protocol()'s own dict
+ROUTING_DECISION_KINDS = (ROUTING_DECISION_KIND_ROUTE, ROUTING_DECISION_KIND_PROTOCOL)
+
+#: The grounded outcome-classification vocabulary `classify_routing_outcome()` returns.
+#: `NO_OUTCOME_YET` and `OUTCOME_NOT_EXPLAINED_BY_ROUTING` are the two honest "we do not have
+#: a routing explanation" answers, kept deliberately distinct (absent evidence vs. evidence
+#: that was checked and found unrelated); the other three each cite the one real literal
+#: sentinel that earned them, named beside each one below.
+OUTCOME_NO_OUTCOME_YET = 'NO_OUTCOME_YET'
+OUTCOME_UNRESOLVED_PROTOCOL = 'OUTCOME_EXPLAINED_UNRESOLVED_PROTOCOL'  # cites protocol_router.resolve_protocol()'s own reason
+OUTCOME_MISSING_SKILL = 'OUTCOME_EXPLAINED_MISSING_SKILL'              # cites protocol_profile_binding_gate's own reason
+OUTCOME_WRONG_AGENT = 'OUTCOME_EXPLAINED_WRONG_AGENT'                  # cites agent_dispatch.py's own NOT_DISPATCHED status
+OUTCOME_NOT_EXPLAINED = 'OUTCOME_NOT_EXPLAINED_BY_ROUTING'
+ROUTING_OUTCOME_STATUSES = (
+    OUTCOME_NO_OUTCOME_YET, OUTCOME_UNRESOLVED_PROTOCOL, OUTCOME_MISSING_SKILL,
+    OUTCOME_WRONG_AGENT, OUTCOME_NOT_EXPLAINED,
+)
+
+# The real, cited literal strings each OUTCOME_EXPLAINED_* status matches against a stage's
+# own real `reasons` list (a list of plain strings; `gates._evaluate_stage_evidence_core()`
+# builds each failing entry as `f"{gate_id}: {gr.detail}"`, so both a gate's own id and its
+# own detail dict's string repr are present in the joined text this module scans).
+_REASON_UNRESOLVED_PROTOCOL = 'UNRESOLVED_NEEDS_ROUTING_QUESTION'
+_REASON_PROFILE_GATE_ID = 'protocol_profile_binding_gate'
+_REASON_PROFILE_SKILL_NOT_CONSULTED = 'PROFILE_SKILL_NOT_CONSULTED'
+_REASON_NOT_DISPATCHED = 'NOT_DISPATCHED'
+
+
+class RoutingTelemetryError(ValueError):
+    """Raised by record_routing_decision()/record_routing_outcome() for a kind/decision_id
+    outside their own real closed contracts, or a payload that will not JSON-serialize."""
+
+
+def assert_routing_telemetry_events_total():
+    """ROUTING_TELEMETRY_EVENTS is exactly the two names this section's writers ever use, with
+    no duplicate -- run at import so a future edit that silently widens or narrows it fails a
+    test rather than drifting unnoticed, the same self-check convention
+    `loop_telemetry.assert_events_match_section_108()` / `live_event_model.
+    assert_gui_live_events_total()` already apply to their own vocabularies."""
+    if len(ROUTING_TELEMETRY_EVENTS) != 2:
+        raise AssertionError(
+            f'ROUTING_TELEMETRY_EVENTS must carry exactly 2 names; found '
+            f'{len(ROUTING_TELEMETRY_EVENTS)}: {list(ROUTING_TELEMETRY_EVENTS)}')
+    if len(set(ROUTING_TELEMETRY_EVENTS)) != len(ROUTING_TELEMETRY_EVENTS):
+        raise AssertionError(
+            f'ROUTING_TELEMETRY_EVENTS carries a duplicate name: {list(ROUTING_TELEMETRY_EVENTS)}')
+
+
+def assert_no_routing_telemetry_verdict_vocabulary_collision():
+    """This section's own event names and outcome statuses share no token with
+    `dv_harness.models.Status` -- the same guard several sibling modules in this codebase
+    already run against their own domain vocabularies, so a routing-telemetry status can never
+    be mistaken for (or silently collide with) a real stage verdict."""
+    from .models import Status
+    verdict_values = {s.value for s in Status}
+    collisions = (set(ROUTING_TELEMETRY_EVENTS) | set(ROUTING_OUTCOME_STATUSES)) & verdict_values
+    if collisions:
+        raise AssertionError(
+            f'skill-routing-accuracy-tracking vocabulary collides with '
+            f'dv_harness.models.Status: {sorted(collisions)}')
+
+
+assert_routing_telemetry_events_total()
+assert_no_routing_telemetry_verdict_vocabulary_collision()
+
+
+#: A real, monotonically-increasing per-process counter, so two `record_routing_decision()`
+#: calls made back-to-back in the SAME process can never collide on `decision_id` even when
+#: `engine.now()`'s own isoformat resolution happens to land on the identical microsecond
+#: twice in a row (a real, documented edge case `loop_telemetry.new_run_id()`'s own docstring
+#: already accepts for its coarser second-resolution stamp; this counter closes it here rather
+#: than merely accepting it).
+_ROUTING_DECISION_SEQ = _itertools.count(1)
+
+
+def _routing_event_ts_and_pid():
+    """The same real UTC-ISO timestamp format every event in this harness uses
+    (`engine.now()`), imported lazily -- router.py is imported at module level by engine.py
+    (see the NOTICE at the top of this file), so an eager `from .engine import now` here would
+    be a real import cycle; every other module in this codebase with the identical constraint
+    (loop_telemetry.emit(), live_event_model.emit()) defers this same import for the same
+    reason."""
+    from .engine import now
+    import os
+    return now(), os.getpid()
+
+
+def classify_routing_outcome(gate_reasons):
+    """Classify a stage's real, already-computed gate-failure reason strings for whether the
+    failure is one a missing/wrong-routed skill would explain.
+
+    `gate_reasons` is `gates.evaluate_stage_evidence()`'s own real `reasons` list for the
+    stage this routing decision fed -- passed through verbatim by the caller, never
+    re-derived or fabricated here. This is a LITERAL match against the small, closed, cited
+    vocabulary named above `_REASON_*`, never a semantic reading of gate text: a real gate
+    failure whose text matches none of those three real sentinels is honestly
+    `OUTCOME_NOT_EXPLAINED_BY_ROUTING`, and an empty/absent `gate_reasons` (no outcome has
+    been observed at all yet) is honestly `OUTCOME_NO_OUTCOME_YET` -- neither is ever guessed
+    toward the other.
+
+    Returns `{"status": <one of ROUTING_OUTCOME_STATUSES>, "matched_statuses": [...]}` --
+    `matched_statuses` carries every one of the three OUTCOME_EXPLAINED_* signals that
+    actually matched (a real stage can genuinely fail more than one of these at once), with
+    `status` set to the first one found in the fixed order below; both fields are `[]`/one of
+    the two non-explained values when nothing (or nothing at all) matched."""
+    if not gate_reasons:
+        return {'status': OUTCOME_NO_OUTCOME_YET, 'matched_statuses': []}
+    text = '\n'.join(str(r) for r in gate_reasons)
+    matched = []
+    if _REASON_UNRESOLVED_PROTOCOL in text:
+        matched.append(OUTCOME_UNRESOLVED_PROTOCOL)
+    if _REASON_PROFILE_GATE_ID in text and _REASON_PROFILE_SKILL_NOT_CONSULTED in text:
+        matched.append(OUTCOME_MISSING_SKILL)
+    if _REASON_NOT_DISPATCHED in text:
+        matched.append(OUTCOME_WRONG_AGENT)
+    if not matched:
+        return {'status': OUTCOME_NOT_EXPLAINED, 'matched_statuses': []}
+    return {'status': matched[0], 'matched_statuses': matched}
+
+
+def _assert_json_serializable(record, what):
+    try:
+        _json.dumps(record, ensure_ascii=False)
+    except (TypeError, ValueError) as e:
+        raise RoutingTelemetryError(f'{what} is not JSON-serializable: {e}') from e
+
+
+def record_routing_decision(store, decision, *, kind, stage=None, run_id=None, source=None):
+    """Record ONE real routing decision -- the ALREADY-COMPUTED return value of
+    `RouteResolver.resolve()` (`kind=ROUTING_DECISION_KIND_ROUTE`) or
+    `protocol_router.resolve_protocol()` (`kind=ROUTING_DECISION_KIND_PROTOCOL`) -- through
+    the real `storage.StateStore.event()` audit trail.
+
+    `store` is a real `storage.StateStore` (or any object exposing an `.event(dict)` method of
+    that identical shape). `decision` must be the real dict either function already returned
+    -- this function never calls, re-derives, or second-guesses either one; it only persists
+    the answer they already gave. Neither `resolve()` nor `resolve_protocol()`'s own
+    signature, return value, or behavior is read, mutated, or in any way touched by this
+    function's existence -- it is a NEW, OPTIONAL sibling a caller invokes strictly AFTER the
+    real call it is recording.
+
+    Returns the full record actually written, including its own `decision_id` -- the ONE
+    thing a caller must hold onto to later join a real outcome via
+    `record_routing_outcome()`."""
+    if kind not in ROUTING_DECISION_KINDS:
+        raise RoutingTelemetryError(
+            f'kind={kind!r} is not one of {list(ROUTING_DECISION_KINDS)}')
+    if not isinstance(decision, dict):
+        raise RoutingTelemetryError(
+            f'decision must be the real dict RouteResolver.resolve() or '
+            f'protocol_router.resolve_protocol() already returned, got {type(decision)!r}')
+    ts, pid = _routing_event_ts_and_pid()
+    seq = next(_ROUTING_DECISION_SEQ)
+    decision_id = f'{kind}:{stage or decision.get("route") or "unknown"}:{ts}:{pid}:{seq}'
+    record = {
+        'ts': ts,
+        'event': 'ROUTING_DECISION_RECORDED',
+        'decision_id': decision_id,
+        'kind': kind,
+        'decision': decision,
+    }
+    if stage is not None:
+        record['stage'] = stage
+    if run_id is not None:
+        record['run_id'] = run_id
+    if source is not None:
+        record['source'] = str(source)
+    _assert_json_serializable(record, 'decision')
+    store.event(record)
+    return record
+
+
+def record_routing_outcome(store, decision_id, gate_reasons=None, *,
+                           stage=None, run_id=None, source=None):
+    """Record the real, later-observed outcome for a decision previously recorded by
+    `record_routing_decision()`, joined by that call's own `decision_id`.
+
+    `gate_reasons` is `gates.evaluate_stage_evidence()`'s own real `reasons` list for the
+    stage this routing decision fed -- an absent/empty list is honestly classified
+    `OUTCOME_NO_OUTCOME_YET` (see `classify_routing_outcome()`), never guessed. Like
+    `record_routing_decision()`, this is a purely additive sibling: no existing function's
+    signature or behavior is touched by this one's existence.
+
+    Returns the full record actually written."""
+    if not decision_id or not isinstance(decision_id, str):
+        raise RoutingTelemetryError(
+            'decision_id must be the real, non-empty decision_id record_routing_decision() '
+            'returned for the decision this outcome is for')
+    classification = classify_routing_outcome(gate_reasons or [])
+    ts, _pid = _routing_event_ts_and_pid()
+    record = {
+        'ts': ts,
+        'event': 'ROUTING_OUTCOME_RECORDED',
+        'decision_id': decision_id,
+        'status': classification['status'],
+        'matched_statuses': classification['matched_statuses'],
+        'gate_reasons': list(gate_reasons or []),
+    }
+    if stage is not None:
+        record['stage'] = stage
+    if run_id is not None:
+        record['run_id'] = run_id
+    if source is not None:
+        record['source'] = str(source)
+    _assert_json_serializable(record, 'gate_reasons')
+    store.event(record)
+    return record
+
+
+#: The honest empty-state reason, naming the real writer this report reads.
+NO_ROUTING_DECISIONS_RECORDED = 'NO_ROUTING_DECISIONS_RECORDED'
+
+
+def skill_routing_accuracy_report(root, *, scan_lines=None):
+    """Read back and join every real `record_routing_decision()`/`record_routing_outcome()`
+    pair recorded so far in `.dv-harness/events.jsonl`, and report how often a routed
+    decision's later observed outcome was one a missing/wrong-routed skill would explain.
+
+    Reuses `loop_telemetry.read_events()` -- that module's own public, generic events.jsonl
+    reader -- rather than a third independent parser beside it and `live_event_model.
+    read_events()`'s own identical re-export. A project on which neither
+    `record_routing_decision()` nor `record_routing_outcome()` has ever been called reports
+    the honest `{"available": False, "reason": NO_ROUTING_DECISIONS_RECORDED, ...}` rather than
+    a fabricated report -- this is a REACHED capability, not a WIRED one: nothing in
+    `engine.run_stage()` calls either recording function today, so a bare project's own real
+    events.jsonl genuinely carries none of these records yet, and this function must never
+    present that absence as a clean 100%-accurate report.
+
+    A decision recorded more than once with the SAME decision_id (should never happen in
+    practice, since decision_id is minted fresh per `record_routing_decision()` call) is
+    deduplicated to its first occurrence; a decision recorded with more than one outcome uses
+    only the LATEST outcome (by scan order) for that decision_id, since a later real
+    observation supersedes an earlier one.
+
+    The `explains_failure_rate` is computed ONLY over decisions whose outcome resolved to one
+    of `OUTCOME_EXPLAINED_*`/`OUTCOME_NOT_EXPLAINED_BY_ROUTING` (i.e. a real outcome WAS
+    observed) -- a decision still sitting at `NO_OUTCOME_YET` never counts toward either side
+    of that rate, and a zero denominator reports the rate as `None` with a real reason rather
+    than a fabricated number."""
+    from .loop_telemetry import read_events as _read_shared_events
+    kwargs = {} if scan_lines is None else {'scan_lines': scan_lines}
+    entries, scanned, truncated = _read_shared_events(root, **kwargs)
+
+    decisions = {}
+    for e in entries:
+        if e.get('event') != 'ROUTING_DECISION_RECORDED':
+            continue
+        did = e.get('decision_id')
+        if not did or did in decisions:
+            continue
+        decisions[did] = e
+
+    outcomes = {}
+    for e in entries:
+        if e.get('event') != 'ROUTING_OUTCOME_RECORDED':
+            continue
+        did = e.get('decision_id')
+        if not did:
+            continue
+        outcomes[did] = e  # later entries in scan order overwrite earlier ones
+
+    if not decisions:
+        return {
+            'available': False,
+            'reason': NO_ROUTING_DECISIONS_RECORDED,
+            'events_scanned': scanned,
+            'scan_truncated': truncated,
+        }
+
+    per_decision = []
+    status_counts = {s: 0 for s in ROUTING_OUTCOME_STATUSES}
+    for did, dec_event in decisions.items():
+        outcome_event = outcomes.get(did)
+        status = outcome_event['status'] if outcome_event else OUTCOME_NO_OUTCOME_YET
+        status_counts[status] = status_counts.get(status, 0) + 1
+        per_decision.append({
+            'decision_id': did,
+            'kind': dec_event.get('kind'),
+            'stage': dec_event.get('stage'),
+            'route': (dec_event.get('decision') or {}).get('route'),
+            'status': status,
+            'matched_statuses': (outcome_event or {}).get('matched_statuses', []),
+        })
+
+    explained = (status_counts[OUTCOME_UNRESOLVED_PROTOCOL]
+                 + status_counts[OUTCOME_MISSING_SKILL]
+                 + status_counts[OUTCOME_WRONG_AGENT])
+    not_explained = status_counts[OUTCOME_NOT_EXPLAINED]
+    observed_denominator = explained + not_explained
+    explains_failure_rate = (explained / observed_denominator) if observed_denominator else None
+
+    return {
+        'available': True,
+        'decisions_recorded': len(decisions),
+        'decisions_with_outcome_recorded': sum(1 for d in per_decision
+                                               if d['status'] != OUTCOME_NO_OUTCOME_YET),
+        'status_counts': status_counts,
+        'explains_failure_rate': explains_failure_rate,
+        'explains_failure_rate_reason': (
+            None if observed_denominator else
+            'no decision with an observed outcome yet -- rate is not computable, never fabricated'),
+        'decisions': per_decision,
+        'events_scanned': scanned,
+        'scan_truncated': truncated,
     }

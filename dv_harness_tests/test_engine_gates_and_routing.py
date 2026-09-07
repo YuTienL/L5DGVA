@@ -73,6 +73,25 @@ _VERIFICATION_ARCHITECTURE_EXTRA_GATES = (
     '```dv-harness-evidence:reference_uvm_compatibility_gate\n{"reference_name": "ref_usb_uvm", "reference_revision": "r12", "reference_hash": "abc123", "compatibility_analysis": {"protocol_role": "HOST", "interface_mapping": "mapped", "config_mapping": "mapped", "sequence_reuse": "partial", "scoreboard_checker_reuse": "full"}, "reuse_decision": "REUSE", "adaptation_plan": "plan.md"}\n```\n'
     '```dv-harness-evidence:reset_clock_power_sequence_gate\n{"events": [{"event": "reset_deassert"}, {"event": "clock_stable"}, {"event": "power_up"}], "ordering_rules": [{"before": "reset_deassert", "after": "clock_stable"}], "power_aware_design": false}\n```\n'
     '```dv-harness-evidence:scoreboard_reference_model_independence_gate\n{"shares_dut_implementation_code": false, "shared_algorithm_source_hash": "", "dut_algorithm_source_hash": "xyz", "independent_oracle_basis": "spec-derived C model", "negative_control_detected": true}\n```\n'
+    # ADDED (2026-09-07, engine-gates-verification-architecture-gap-close):
+    # vip_bind_generation_gate/scoreboard_generation_gate/assertion_generation_gate
+    # (registered onto this stage in the 2026-09-06 23-agent gap-closure
+    # integration pass -- see gates.py STAGE_GATES["VERIFICATION_ARCHITECTURE"])
+    # are a THIRD mandatory tuple on this stage: every flow must also supply
+    # real, RESOLVED dv_harness.verification_architecture IR records for
+    # these three, or the stage cannot reach PASS. These three payloads are
+    # not hand-typed placeholders -- each is the REAL `to_dict()` output of
+    # va.build_vip_bind_ir()/build_scoreboard_ir()/build_assertion_ir() run
+    # against real inputs (a bind entry with real PHY-boundary evidence, a
+    # scoreboard entry with real agreeing endpoint boundary kinds, an
+    # assertion candidate whose declared clock/reset domains real match a
+    # real `env_manifest.build_dut_facts_clock_reset()`-shaped clock_reset
+    # map), independently re-verified by running each real gate script
+    # (tools/verification_flow/{vip_bind,scoreboard,assertion}_generation_gate.py)
+    # against it to a real exit-0 PASS before being spliced in here.
+    '```dv-harness-evidence:vip_bind_generation_gate\n{"vip_bind": [{"ir_kind": "vip_bind", "target_instance": "chip.core.usb0", "ports": [{"name": "clk", "source": "chip.clk"}], "reason": "USB VIP bind", "tier": "T1_ALREADY_DECIDED", "bind_tier": "T1_ALREADY_DECIDED", "boundary_kind": "PARALLEL", "bindable": true, "mount_layer": "PARALLEL", "chain_classification": "DIRECT", "chain_path": [], "status": "RESOLVED", "confidence": "HIGH", "source_evidence": [{"fact_source": "connectivity.bind_entry", "detail": {"target_instance": "chip.core.usb0", "tier": "T1_ALREADY_DECIDED"}}, {"fact_source": "phy_boundary.decide_bind_location", "detail": {"mount_layer": "PARALLEL", "bindable": true}}]}], "placement_conflicts": []}\n```\n'
+    '```dv-harness-evidence:scoreboard_generation_gate\n{"scoreboard": [{"ir_kind": "scoreboard", "scoreboard_id": "SB1", "endpoint_pairs": [{"source": "chip.core.m0", "sink": "chip.core.s0"}], "unfilled_fields": [], "comparable": true, "comparability_reason": "endpoint boundary kinds agree for every declared pair", "status": "RESOLVED", "confidence": "HIGH", "source_evidence": [{"fact_source": "connectivity.generate_scoreboard_entry", "detail": {"scoreboard_id": "SB1"}}, {"fact_source": "phy_boundary.classify_boundary", "detail": {"reason": "endpoint boundary kinds agree for every declared pair"}}]}]}\n```\n'
+    '```dv-harness-evidence:assertion_generation_gate\n{"assertion": [{"ir_kind": "assertion", "assertion_id": "A1", "target_signal": "chip.core.usb0.valid", "target_instance": "chip.core.usb0", "clock_domain": "CLK_D0", "reset_domain": "CLK_D0", "checked_property": "valid_stable_until_ready", "clock_domain_match": true, "reset_domain_match": true, "status": "RESOLVED", "confidence": "HIGH", "source_evidence": [{"fact_source": "caller_declared_assertion_candidate", "detail": {"assertion_id": "A1"}}, {"fact_source": "env_manifest.build_dut_facts_clock_reset", "detail": {"known_clock_domains": ["CLK_D0"]}}]}]}\n```\n'
 )
 _FAILURE_RECOVERY_EXTRA_GATES = (
     '```dv-harness-evidence:failure_signature_recurrence_gate\n{"failures": [{"failure_id": "F1", "signature": "SIG_A"}, {"failure_id": "F2", "signature": "SIG_A", "linked_to_existing_failure": "F1"}]}\n```\n'
@@ -456,6 +475,26 @@ def _vplan_writer_validation_extra_gate_text(tmp: Path) -> str:
     return "```dv-harness-evidence:vplan_writer_validation_gate\n" + json.dumps(payload) + "\n```\n"
 
 
+# NEW (2026-09-06/07, spec-to-vplan-quality-gate-wiring): VPLAN gained a
+# third mandatory gate (spec_to_vplan_quality_gate) alongside
+# spec_coverage_audit and vplan_writer_validation_gate -- see
+# tools/verification_flow/spec_to_vplan_quality_gate.py's own header and
+# CLAUDE.md's "Spec-to-vPlan Transform Quality Gate" section. This is a
+# minimal internally-coherent (one non-critical spec item, fully traced,
+# no contradictions/ambiguities) PASS payload -- the gate's own
+# dv_harness_tests/test_spec_to_vplan_quality_gate.py proves the rules in
+# depth; this fixture only needs a clean PASS so stage-level VPLAN tests
+# aren't blocked by the new mandatory tuple.
+_SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT = (
+    "```dv-harness-evidence:spec_to_vplan_quality_gate\n"
+    + json.dumps({
+        "spec_items": [{"spec_id": "S1", "criticality": "P2"}],
+        "vplan_items": [{"vplan_id": "V1", "traces_to": ["S1"]}],
+    })
+    + "\n```\n"
+)
+
+
 def test_newly_wired_orphan_gates_pass_with_valid_evidence():
     # SOC_SCENARIO_PLANNER and FAILURE_RECOVERY each gained more mandatory
     # gates in the 2026-08-28 mass-wiring pass -- their _EXTRA_GATES const
@@ -463,7 +502,9 @@ def test_newly_wired_orphan_gates_pass_with_valid_evidence():
     # gained a second mandatory gate (vplan_writer_validation_gate) in the
     # 2026-09-01 vplan-doc-and-wiring-fix pass -- see
     # _vplan_writer_validation_extra_gate_text above for why its evidence
-    # needs a real tmp fixture rather than a static JSON string.
+    # needs a real tmp fixture rather than a static JSON string -- and a
+    # third (spec_to_vplan_quality_gate) in the spec-to-vplan-quality-gate-
+    # wiring pass, see _SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT above.
     tmp = Path(tempfile.mkdtemp())
     try:
         cases = {
@@ -479,7 +520,7 @@ def test_newly_wired_orphan_gates_pass_with_valid_evidence():
                 '"command_txt": ["CLAUDE.md"], "vip_reference": ["dv_harness/gates.py"]}}',
                 _INTAKE_EXTRA_GATES),
             "VPLAN": ("spec_coverage_audit", '{"requirements": [{"req_id": "R1", "status": "VERIFIED"}]}',
-                _vplan_writer_validation_extra_gate_text(tmp)),
+                _vplan_writer_validation_extra_gate_text(tmp) + _SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT),
             "SOC_SCENARIO_PLANNER": ("corner_risk_rank",
                 '{"cases": [{"corner_id": "c1", "risk_factors": ["reset", "cdc"]}]}',
                 _SOC_SCENARIO_PLANNER_EXTRA_GATES),
@@ -938,6 +979,13 @@ def test_run_stage_promotes_vplan_summary_to_project_memory_on_pass():
                     gate_dir / "spec_coverage_audit.py")
         shutil.copy(ROOT / "tools" / "vplan" / "vplan_writer_validation_gate.py",
                     gate_dir / "vplan_writer_validation_gate.py")
+        # spec_to_vplan_quality_gate (VPLAN's third mandatory gate, see
+        # _SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT above) resolves relative to
+        # tools/verification_flow, unlike the two tools/vplan gates above.
+        vf_gate_dir = tmp / "tools" / "verification_flow"
+        vf_gate_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools" / "verification_flow" / "spec_to_vplan_quality_gate.py",
+                    vf_gate_dir / "spec_to_vplan_quality_gate.py")
         h.set_stage("VPLAN")
 
         # Real on-disk evidence vplan_writer_validation_gate's real
@@ -976,6 +1024,7 @@ def test_run_stage_promotes_vplan_summary_to_project_memory_on_pass():
         text = (
             f"```dv-harness-evidence:spec_coverage_audit\n{json.dumps(spec_coverage_payload)}\n```\n"
             f"```dv-harness-evidence:vplan_writer_validation_gate\n{json.dumps(vplan_validation_payload)}\n```\n"
+            + _SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT
         )
 
         class _PassAdapter:

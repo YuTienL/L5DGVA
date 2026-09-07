@@ -12,8 +12,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
+from dv_harness import question_queue
 from dv_harness import signoff_export
 from dv_harness.uvm_generator.protocol_env_generator import ProtocolEnvGenerator
+
+GIT = shutil.which("git")
+requires_git = pytest.mark.skipif(GIT is None, reason="git is not on PATH")
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -362,3 +368,194 @@ def test_cli_signoff_export_subcommand():
         assert (out_dir / "self_audit_result.json").exists()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --- file_bundle_artifact_question / file_freeze_finding_question ----------
+# (2026-09-07, "signoff-reviewer-cannot-ask-question-about-specific-
+# evidence" gap closure): a human reviewing a real, already-produced bundle
+# manifest or freeze-invalidation report now has a reachable, real path to
+# file a NEW question tied to one specific evidence item, reusing question_
+# queue.file_signoff_evidence_question() unmodified.
+
+def test_file_bundle_artifact_question_cites_a_present_artifact(tmp_path):
+    tmp = _make_partial_project()
+    try:
+        out_dir = tmp / "signoff_out"
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        store = question_queue.QuestionQueueStore(tmp)
+
+        rec = signoff_export.file_bundle_artifact_question(
+            store, result["manifest"], "vplan",
+            question="Does this bundled vplan/ directory reflect the reviewed vPlan revision?",
+            options=["Yes -- matches reviewed revision", "No -- stale, must regenerate"],
+            recommendation="No -- stale, must regenerate",
+            raised_by="dv-reviewer",
+        )
+
+        assert rec["tier"] == question_queue.TIER3_CANNOT_ASSUME
+        assert rec["blocking"] is True
+        assert rec["grounding_evidence"]["evidence_path"] == (
+            "manifest.json#manifest[artifact='vplan']")
+        assert "present=True" in rec["grounding_evidence"]["summary"]
+        assert "dv-reviewer" in rec["grounding_evidence"]["summary"]
+        question_queue.validate_question(rec)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_file_bundle_artifact_question_cites_an_absent_artifact_honestly(tmp_path):
+    """An absent artifact is still a real, citable manifest entry --
+    present=False, bundled_path=None -- and the question's own grounding
+    evidence must say so honestly, never claim a bundled_path that does not
+    exist."""
+    tmp = _make_partial_project()
+    try:
+        out_dir = tmp / "signoff_out"
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        by_artifact = {m["artifact"]: m for m in result["manifest"]}
+        assert by_artifact["tb_source"]["present"] is False  # fixture sanity
+
+        store = question_queue.QuestionQueueStore(tmp)
+        rec = signoff_export.file_bundle_artifact_question(
+            store, result["manifest"], "tb_source",
+            question="Is tb_source genuinely absent, or was generation skipped?",
+            options=["Genuinely absent", "Mistake -- regenerate before signoff"],
+            recommendation="Mistake -- regenerate before signoff",
+        )
+        assert "present=False" in rec["grounding_evidence"]["summary"]
+        assert "bundled_path=None" in rec["grounding_evidence"]["summary"]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_file_bundle_artifact_question_unknown_artifact_is_refused(tmp_path):
+    tmp = _make_partial_project()
+    try:
+        out_dir = tmp / "signoff_out"
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        store = question_queue.QuestionQueueStore(tmp)
+        with pytest.raises(KeyError):
+            signoff_export.file_bundle_artifact_question(
+                store, result["manifest"], "this_artifact_does_not_exist",
+                question="q?", options=["a", "b"], recommendation="a",
+            )
+        assert store.list_questions() == []
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_file_bundle_artifact_question_is_idempotent_on_re_review(tmp_path):
+    tmp = _make_partial_project()
+    try:
+        out_dir = tmp / "signoff_out"
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        store = question_queue.QuestionQueueStore(tmp)
+        kwargs = dict(question="q?", options=["a", "b"], recommendation="a")
+        first = signoff_export.file_bundle_artifact_question(store, result["manifest"], "vplan", **kwargs)
+        second = signoff_export.file_bundle_artifact_question(store, result["manifest"], "vplan", **kwargs)
+        assert first["id"] == second["id"]
+        assert len(store.list_questions()) == 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_file_bundle_artifact_question_accepts_a_root_path_for_store(tmp_path):
+    """`store` may be a project root (str/Path), the same convenience
+    source_authority.escalate_conflict() already offers, rather than
+    requiring the caller to construct a QuestionQueueStore first."""
+    tmp = _make_partial_project()
+    try:
+        out_dir = tmp / "signoff_out"
+        result = signoff_export.collect_signoff_bundle(tmp, out_dir)
+        rec = signoff_export.file_bundle_artifact_question(
+            tmp, result["manifest"], "vplan",
+            question="q?", options=["a", "b"], recommendation="a",
+        )
+        store = question_queue.QuestionQueueStore(tmp)
+        assert store.get_question(rec["id"]) is not None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _make_git_freeze_project(tmp_path):
+    root = tmp_path / "freeze_proj"
+    (root / "rtl").mkdir(parents=True)
+    (root / "rtl" / "top.v").write_text(
+        "module top(input clk, output reg q); always @(posedge clk) q <= 1'b0; endmodule\n",
+        encoding="utf-8")
+    (root / ".gitignore").write_text(".dv-harness/\n", encoding="utf-8")
+    subprocess.run([GIT, "init", "-q", "-b", "master", str(root)], check=True, timeout=60)
+    subprocess.run([GIT, "config", "user.email", "signoff-question-test@example.invalid"],
+                   cwd=str(root), check=True, timeout=30)
+    subprocess.run([GIT, "config", "user.name", "signoff-question-test"],
+                   cwd=str(root), check=True, timeout=30)
+    subprocess.run([GIT, "add", "-A"], cwd=str(root), check=True, timeout=30)
+    subprocess.run([GIT, "commit", "-qm", "initial DUT"], cwd=str(root), check=True, timeout=30)
+    return root
+
+
+@requires_git
+def test_file_freeze_finding_question_cites_a_real_invalidating_finding(tmp_path):
+    root = _make_git_freeze_project(tmp_path)
+    frozen = signoff_export.freeze_signoff_baseline(root, frozen_by="dv-lead")
+
+    # a real RTL edit + commit -> a real, HIGH-risk POST_FREEZE_MATERIAL_CHANGE finding
+    (root / "rtl" / "top.v").write_text(
+        "module top(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n",
+        encoding="utf-8")
+    subprocess.run([GIT, "add", "-A"], cwd=str(root), check=True, timeout=30)
+    subprocess.run([GIT, "commit", "-qm", "edit rtl"], cwd=str(root), check=True, timeout=30)
+
+    evaluation = signoff_export.evaluate_freeze_invalidation(root, frozen)
+    assert evaluation["status"] == signoff_export.FREEZE_INVALIDATED  # fixture sanity
+    assert evaluation["findings"], "fixture sanity: a real finding must exist"
+
+    store = question_queue.QuestionQueueStore(root)
+    rec = signoff_export.file_freeze_finding_question(
+        store, evaluation, 0,
+        question="Is this baseline divergence expected, or does the freeze need re-review?",
+        options=["Expected -- proceed with signoff", "Unexpected -- block signoff"],
+        recommendation="Unexpected -- block signoff",
+        raised_by="qa-reviewer",
+    )
+
+    assert rec["tier"] == question_queue.TIER3_CANNOT_ASSUME
+    assert rec["blocking"] is True
+    real_code = evaluation["findings"][0]["code"]
+    assert evaluation["freeze_id"] in rec["grounding_evidence"]["evidence_path"]
+    assert real_code in rec["grounding_evidence"]["evidence_path"]
+    assert "qa-reviewer" in rec["grounding_evidence"]["summary"]
+    question_queue.validate_question(rec)
+
+    # idempotent: re-reviewing the same finding returns the same record
+    again = signoff_export.file_freeze_finding_question(
+        store, evaluation, 0,
+        question="Is this baseline divergence expected, or does the freeze need re-review?",
+        options=["Expected -- proceed with signoff", "Unexpected -- block signoff"],
+        recommendation="Unexpected -- block signoff",
+        raised_by="qa-reviewer",
+    )
+    assert again["id"] == rec["id"]
+    assert len(store.list_questions()) == 1
+
+
+@requires_git
+def test_file_freeze_finding_question_out_of_range_index_is_refused(tmp_path):
+    """Negative control: a freshly-frozen, unmutated project's real
+    evaluate_freeze_invalidation() report carries zero findings (VALID) --
+    asking for finding index 0 against zero real findings must raise
+    IndexError rather than fabricate a citation for a finding that does not
+    exist."""
+    root = _make_git_freeze_project(tmp_path)
+    frozen = signoff_export.freeze_signoff_baseline(root, frozen_by="dv-lead")
+    evaluation = signoff_export.evaluate_freeze_invalidation(root, frozen)
+    assert evaluation["status"] == signoff_export.FREEZE_VALID  # fixture sanity
+    assert evaluation["findings"] == []
+
+    store = question_queue.QuestionQueueStore(root)
+    with pytest.raises(IndexError):
+        signoff_export.file_freeze_finding_question(
+            store, evaluation, 0,
+            question="q?", options=["a", "b"], recommendation="a",
+        )
+    assert store.list_questions() == []

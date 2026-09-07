@@ -46,8 +46,15 @@ _VALID_STAGES = {s.value for s in Stage}
 # cannot drift apart.
 from .capability_evolution import HUMAN_APPROVAL_STAGE as _RESEARCH_APPROVAL_STAGE
 from .change_blast_radius import BLAST_RADIUS_APPROVAL_STAGE as _BLAST_RADIUS_APPROVAL_STAGE
+# SIGNOFF_FREEZE_REVALIDATION_STAGE is a 4th APPROVAL_ONLY_STAGES key, registered the identical
+# way the three above were -- see signoff_export.py's own SIGNOFF_FREEZE_REVALIDATION_STAGE
+# comment for the full reasoning. Restored 2026-09-07: this wiring was lost in the disclosed
+# git-stash incident recorded elsewhere in CLAUDE.md and confirmed missing by direct grep/test
+# during a batch-verification pass; signoff_export.py's own pure functions were unaffected.
+from .signoff_export import SIGNOFF_FREEZE_REVALIDATION_STAGE as _SIGNOFF_FREEZE_REVALIDATION_STAGE
 
-APPROVAL_ONLY_STAGES = frozenset({_RESEARCH_APPROVAL_STAGE, _BLAST_RADIUS_APPROVAL_STAGE})
+APPROVAL_ONLY_STAGES = frozenset({_RESEARCH_APPROVAL_STAGE, _BLAST_RADIUS_APPROVAL_STAGE,
+                                   _SIGNOFF_FREEZE_REVALIDATION_STAGE})
 
 
 def _check_stage(stage: str) -> None:
@@ -324,6 +331,30 @@ def cmd_constraint_list(h):
     return ControlPlane(h.root).list_constraints()
 
 
+# ---- SIGNOFF FREEZE ACCEPTANCE (read-only status; the write is cmd_approve above) --------
+def cmd_signoff_freeze_acceptance_status(h, freeze_id: Optional[str] = None,
+                                          head: str = "HEAD") -> Dict[str, Any]:
+    """Real composition point for signoff_export.py's own freeze-acceptance functions: loads
+    the real frozen baseline (`load_freeze`, most-recent when `freeze_id` is omitted), fetches
+    the real ControlPlane approval on file for SIGNOFF_FREEZE_REVALIDATION_STAGE, and composes
+    them through `evaluate_freeze_invalidation_with_acceptance()` -- signoff_export.py's own
+    pure functions, never re-implemented here. Read-only: writes no state and logs no event,
+    matching cmd_constraint_list()'s own read-only shape immediately above. The actual
+    acceptance WRITE stays the existing, generic cmd_approve() -- there is no second
+    approval-writing code path anywhere. Raises ValueError (mirroring _check_stage's own
+    message shape) when no frozen baseline exists for this project at all."""
+    from .signoff_export import (load_freeze, evaluate_freeze_invalidation_with_acceptance,
+                                  SIGNOFF_FREEZE_REVALIDATION_STAGE)
+    frozen = load_freeze(h.root, freeze_id)
+    if frozen is None:
+        raise ValueError(
+            f"no frozen signoff baseline on file for this project"
+            + (f" (freeze_id={freeze_id!r})" if freeze_id else "")
+            + " -- run signoff_export.freeze_signoff_baseline() first")
+    approval = ControlPlane(h.root).get_approval(SIGNOFF_FREEZE_REVALIDATION_STAGE)
+    return evaluate_freeze_invalidation_with_acceptance(h.root, frozen, approval=approval, head=head)
+
+
 # ---- COSIGN ---------------------------------------------------------------
 def cmd_cosign(h, stage: str, field_path: str, value: Any, reviewer_id: Optional[str] = None,
                 reviewer_confidence: str = "HIGH") -> Dict[str, Any]:
@@ -337,6 +368,37 @@ def cmd_cosign(h, stage: str, field_path: str, value: Any, reviewer_id: Optional
     entry = ControlPlane(h.root).add_cosign(stage, field_path, value, reviewer_id, reviewer_confidence)
     h.store.event({"ts": cp_now(), "cmd": "cosign", "stage": stage, "field_path": field_path,
                     "reviewer_id": entry["reviewer_id"], "reviewer_confidence": entry["reviewer_confidence"]})
+    return {"stage": stage, **entry}
+
+
+# ---- FLAG_SUSPICIOUS -------------------------------------------------------
+# A real gap this closes (2026-09-07): no verb let a reviewer mark ONE
+# specific already-produced gate result or evidence citation as suspicious/
+# needing re-verification, distinct from cmd_correct() above (a whole-STAGE
+# reset) and cmd_cosign() above (opt-in AGREEMENT with a pending
+# gates.JUDGMENT_FIELDS value). See ControlPlane.flag_suspicious()'s own
+# docstring for the full distinction and evidence_provenance.py for how a
+# flag against one of PROVENANCE_REQUIRED_GATES' own results is surfaced next
+# to that gate's own self-attested/independently-derived caveat.
+def cmd_flag_suspicious(h, stage: str, target: str, reason: str,
+                         flagged_by: Optional[str] = None,
+                         severity: str = "MEDIUM") -> Dict[str, Any]:
+    _check_stage(stage)
+    entry = ControlPlane(h.root).flag_suspicious(
+        stage, target, reason, flagged_by=flagged_by, severity=severity)
+    h.store.event({"ts": cp_now(), "cmd": "flag-suspicious", "stage": stage,
+                    "target": target, "severity": entry["severity"],
+                    "flagged_by": entry["flagged_by"]})
+    return {"stage": stage, **entry}
+
+
+def cmd_resolve_suspicious_flag(h, stage: str, target: str, resolution_note: str,
+                                 resolved_by: Optional[str] = None) -> Dict[str, Any]:
+    _check_stage(stage)
+    entry = ControlPlane(h.root).resolve_suspicious_flag(
+        stage, target, resolution_note, resolved_by=resolved_by)
+    h.store.event({"ts": cp_now(), "cmd": "resolve-suspicious-flag", "stage": stage,
+                    "target": target, "resolved_by": entry["resolved_by"]})
     return {"stage": stage, **entry}
 
 

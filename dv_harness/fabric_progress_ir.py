@@ -44,13 +44,31 @@ or any other producer in this project:
      neither number is invented here.
 
 `analyze_fabric_progress(resource_dependency_facts, credit_outstanding_facts)`
-composes both into one `FabricProgressIR`, folding an `overall_status` by
-strict WORST-WINS (a real risk finding on EITHER axis outranks everything;
-an evidence GAP on either axis, with no real risk found anywhere, outranks a
-clean report on both) -- the same no-averaging discipline
+composes all THREE into one `FabricProgressIR`, folding an `overall_status`
+by strict WORST-WINS (a real risk finding on ANY axis outranks everything;
+an evidence GAP on any axis, with no real risk found anywhere, outranks a
+clean report on all three) -- the same no-averaging discipline
 `golden_flow_readiness.combine_readiness()` / `spec_vplan_readiness_gate.py`
 / `system_readiness_gates.py` already apply to their own composite folds,
 never re-derived a second way here.
+
+  3. `analyze_resource_contention(facts)` -- a real CONTENTION-specific
+     metric this module's original two analyses never asked: over the SAME
+     `resource_dependency_facts` shape `analyze_resource_dependency_cycle()`
+     already consumes, this counts, per resource, how many DISTINCT holders
+     currently declare that resource in their own `waiting_for` -- i.e. how
+     many real parties are concurrently racing to acquire it. This is a
+     genuinely different question from circular-wait detection (a resource
+     can be heavily contended with zero cycle anywhere in the graph -- N
+     agents queued on one arbiter grant is real contention with no deadlock)
+     and from credit/outstanding exhaustion (a resource can be contended
+     while its own credit/outstanding counters are still healthy). A
+     resource with two or more concurrent waiters is `CONTENDED`; the module
+     never invents a severity threshold beyond that raw count, and never
+     arbitrates an ambiguous holder declaration here either -- an ambiguously
+     -held contended resource is reported with `holder: None`,
+     `ambiguous_holder: True`, and its real waiter set, never a guessed
+     single holder.
 
 THE EVIDENCE TRUTH RULE, APPLIED LITERALLY. This module's headline
 obligation is the one this task states explicitly: never claim
@@ -114,8 +132,24 @@ CREDIT_OUTSTANDING_STATUSES: Tuple[str, ...] = (
     "INSUFFICIENT_EVIDENCE",
 )
 
-#: The composed report's own overall status -- a THIRD vocabulary, never a
-#: relabeling of either sub-analysis's own words, so a reader always knows
+#: Concurrent resource CONTENTION -- two or more distinct holders declared
+#: as waiting to acquire the same resource at once. A separate concern from
+#: both circular-wait detection and credit/outstanding exhaustion; a fourth
+#: vocabulary, never a relabeling of either.
+CONTENTION_STATUSES: Tuple[str, ...] = (
+    "NO_CONTENTION_DETECTED",
+    "CONTENTION_DETECTED",
+    "INSUFFICIENT_EVIDENCE",
+)
+
+#: Per-resource contention verdict.
+RESOURCE_CONTENTION_STATUSES: Tuple[str, ...] = (
+    "CONTENDED",
+    "NOT_CONTENDED",
+)
+
+#: The composed report's own overall status -- a fifth vocabulary, never a
+#: relabeling of any sub-analysis's own words, so a reader always knows
 #: which report a given status string belongs to.
 OVERALL_STATUSES: Tuple[str, ...] = (
     "NO_RISK_DETECTED",
@@ -146,6 +180,8 @@ def assert_no_verification_verdict_vocabulary() -> None:
     vocabulary = (
         set(CIRCULAR_WAIT_STATUSES)
         | set(CREDIT_OUTSTANDING_STATUSES)
+        | set(CONTENTION_STATUSES)
+        | set(RESOURCE_CONTENTION_STATUSES)
         | set(OVERALL_STATUSES)
     )
     collision = verdicts.intersection(vocabulary)
@@ -255,6 +291,20 @@ class ResourceDependencyFinding:
         }
 
 
+def _build_holders_by_resource(parsed: Sequence[ResourceDependencyFact]) -> Dict[str, List[str]]:
+    """resource -> list of distinct declared `held_by` values, in first-seen
+    order. Shared, unchanged logic behind both `analyze_resource_dependency_
+    cycle()`'s ambiguity detection and `analyze_resource_contention()`'s
+    holder resolution -- one definition of "who holds this resource,
+    according to the facts", never two."""
+    holders_by_resource: Dict[str, List[str]] = {}
+    for f in parsed:
+        holders_by_resource.setdefault(f.resource, [])
+        if f.held_by not in holders_by_resource[f.resource]:
+            holders_by_resource[f.resource].append(f.held_by)
+    return holders_by_resource
+
+
 def analyze_resource_dependency_cycle(
     facts: Sequence[Mapping[str, Any]]
 ) -> ResourceDependencyFinding:
@@ -280,11 +330,7 @@ def analyze_resource_dependency_cycle(
     parsed = _parse_resource_dependency_facts(facts)
 
     # resource -> set of distinct declared holders (ambiguity detection).
-    holders_by_resource: Dict[str, List[str]] = {}
-    for f in parsed:
-        holders_by_resource.setdefault(f.resource, [])
-        if f.held_by not in holders_by_resource[f.resource]:
-            holders_by_resource[f.resource].append(f.held_by)
+    holders_by_resource = _build_holders_by_resource(parsed)
 
     ambiguous_resources: List[Dict[str, Any]] = [
         {"resource": r, "conflicting_holders": sorted(hs)}
@@ -590,6 +636,130 @@ def analyze_credit_outstanding(
 
 
 # -----------------------------------------------------------------------------
+# (3) Resource-contention detection -- a contention-specific metric neither
+# the cycle detector nor the credit/outstanding analysis above computes.
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class ResourceContentionFinding:
+    """One resource's own contention verdict.
+
+    `holder` is the resolved, unambiguous `held_by` value when exactly one is
+    declared for this resource, else `None` (with `ambiguous_holder: True`)
+    -- this module never guesses a single holder out of two conflicting
+    declarations, the same arbitration boundary
+    `analyze_resource_dependency_cycle()` already keeps. `waiters` names
+    every DISTINCT holder whose own `waiting_for` names this resource;
+    `status` is `CONTENDED` when two or more concurrent waiters are declared,
+    `NOT_CONTENDED` otherwise (zero or exactly one waiter -- a single queued
+    party is not contention)."""
+
+    resource: str
+    holder: Optional[str]
+    ambiguous_holder: bool
+    waiter_count: int
+    waiters: List[str]
+    status: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "resource": self.resource,
+            "holder": self.holder,
+            "ambiguous_holder": self.ambiguous_holder,
+            "waiter_count": self.waiter_count,
+            "waiters": list(self.waiters),
+            "status": self.status,
+        }
+
+
+@dataclass
+class ResourceContentionAnalysis:
+    status: str
+    findings: List[ResourceContentionFinding]
+    reason: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "findings": [f.to_dict() for f in self.findings],
+            "reason": self.reason,
+        }
+
+
+def analyze_resource_contention(
+    facts: Sequence[Mapping[str, Any]]
+) -> ResourceContentionAnalysis:
+    """Detect real CONTENTION -- two or more distinct holders concurrently
+    declared as waiting to acquire the SAME resource -- over the identical
+    `resource_dependency_facts` shape `analyze_resource_dependency_cycle()`
+    consumes. See the module docstring's item (3) for why this is a
+    genuinely separate metric from circular-wait detection and from
+    credit/outstanding exhaustion, never folded into either."""
+    if facts is None:
+        raise FabricProgressIrError("NULL_FACTS", "resource_dependency_facts must not be None")
+    if not isinstance(facts, Sequence) or isinstance(facts, (str, bytes)):
+        raise FabricProgressIrError(
+            "MALFORMED_FACTS", f"resource_dependency_facts must be a sequence, got {type(facts)}"
+        )
+    if len(facts) == 0:
+        return ResourceContentionAnalysis(
+            status="INSUFFICIENT_EVIDENCE",
+            findings=[],
+            reason="no resource-dependency facts declared -- nothing to analyze for contention",
+        )
+
+    parsed = _parse_resource_dependency_facts(facts)
+    holders_by_resource = _build_holders_by_resource(parsed)
+
+    # resource -> list of distinct holders whose own waiting_for names it.
+    waiters_by_resource: Dict[str, List[str]] = {}
+    for f in parsed:
+        for res in f.waiting_for:
+            waiters_by_resource.setdefault(res, [])
+            if f.held_by not in waiters_by_resource[res]:
+                waiters_by_resource[res].append(f.held_by)
+
+    findings: List[ResourceContentionFinding] = []
+    any_contended = False
+    for resource in sorted(waiters_by_resource):
+        waiters = sorted(waiters_by_resource[resource])
+        holders = holders_by_resource.get(resource, [])
+        ambiguous = len(holders) > 1
+        holder = holders[0] if len(holders) == 1 else None
+        contended = len(waiters) >= 2
+        if contended:
+            any_contended = True
+        findings.append(
+            ResourceContentionFinding(
+                resource=resource,
+                holder=holder,
+                ambiguous_holder=ambiguous,
+                waiter_count=len(waiters),
+                waiters=waiters,
+                status="CONTENDED" if contended else "NOT_CONTENDED",
+            )
+        )
+
+    if any_contended:
+        contended_names = [f.resource for f in findings if f.status == "CONTENDED"]
+        return ResourceContentionAnalysis(
+            status="CONTENTION_DETECTED",
+            findings=findings,
+            reason=(
+                f"{len(contended_names)} resource(s) have two or more concurrent waiters: "
+                f"{', '.join(contended_names)}"
+            ),
+        )
+
+    return ResourceContentionAnalysis(
+        status="NO_CONTENTION_DETECTED",
+        findings=findings,
+        reason="no resource has more than one concurrent waiter declared",
+    )
+
+
+# -----------------------------------------------------------------------------
 # Composed report.
 # -----------------------------------------------------------------------------
 
@@ -599,12 +769,14 @@ class FabricProgressIR:
     overall_status: str
     resource_dependency: ResourceDependencyFinding
     credit_outstanding: CreditOutstandingAnalysis
+    resource_contention: ResourceContentionAnalysis
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "overall_status": self.overall_status,
             "resource_dependency": self.resource_dependency.to_dict(),
             "credit_outstanding": self.credit_outstanding.to_dict(),
+            "resource_contention": self.resource_contention.to_dict(),
         }
 
 
@@ -619,23 +791,38 @@ def analyze_fabric_progress(
     resource_dependency_facts: Sequence[Mapping[str, Any]],
     credit_outstanding_facts: Sequence[Mapping[str, Any]],
 ) -> FabricProgressIR:
-    """Compose `analyze_resource_dependency_cycle()` and
-    `analyze_credit_outstanding()` into one `FabricProgressIR`, folding
-    `overall_status` by strict worst-wins: a real risk finding on EITHER
-    axis outranks everything; an evidence gap on either axis (with no real
-    risk found anywhere) outranks a clean report on both -- never averaged,
-    never silently dropped."""
+    """Compose `analyze_resource_dependency_cycle()`,
+    `analyze_credit_outstanding()` and `analyze_resource_contention()` (the
+    latter re-run over the same `resource_dependency_facts`) into one
+    `FabricProgressIR`, folding `overall_status` by strict worst-wins: a real
+    risk finding on ANY axis outranks everything; an evidence gap on any
+    axis (with no real risk found anywhere) outranks a clean report on all
+    three -- never averaged, never silently dropped."""
     rd = analyze_resource_dependency_cycle(resource_dependency_facts)
     co = analyze_credit_outstanding(credit_outstanding_facts)
+    contention = analyze_resource_contention(resource_dependency_facts)
 
-    if rd.status == "CIRCULAR_WAIT_DETECTED" or co.status in _RISK_CREDIT_STATUSES:
+    if (
+        rd.status == "CIRCULAR_WAIT_DETECTED"
+        or co.status in _RISK_CREDIT_STATUSES
+        or contention.status == "CONTENTION_DETECTED"
+    ):
         overall = "PROGRESS_RISK_DETECTED"
-    elif rd.status == "INSUFFICIENT_EVIDENCE" or co.status == "INSUFFICIENT_EVIDENCE":
+    elif (
+        rd.status == "INSUFFICIENT_EVIDENCE"
+        or co.status == "INSUFFICIENT_EVIDENCE"
+        or contention.status == "INSUFFICIENT_EVIDENCE"
+    ):
         overall = "INSUFFICIENT_EVIDENCE"
     else:
         overall = "NO_RISK_DETECTED"
 
-    return FabricProgressIR(overall_status=overall, resource_dependency=rd, credit_outstanding=co)
+    return FabricProgressIR(
+        overall_status=overall,
+        resource_dependency=rd,
+        credit_outstanding=co,
+        resource_contention=contention,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -678,6 +865,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"  {report.resource_dependency.reason}")
         print(f"credit_outstanding.status: {report.credit_outstanding.status}")
         print(f"  {report.credit_outstanding.reason}")
+        print(f"resource_contention.status: {report.resource_contention.status}")
+        print(f"  {report.resource_contention.reason}")
 
     if report.overall_status == "PROGRESS_RISK_DETECTED":
         return 1

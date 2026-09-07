@@ -35,6 +35,107 @@ def _dump_scope_decided_by(store, scope: str) -> str:
     return str(((decision or {}).get("current") or {}).get("decided_by") or "")
 
 
+# --- Global Status Bar theme (CLAUDE_L5_GLOBAL_STATUS_BAR_MASTER.md sections
+# 412-413): `status full|blockers|jobs|coverage|agents|system|evidence|
+# signoff` -- a persistent one-line HarnessStatusIR header (stable enough to
+# print before/after any other command and compare by eye), plus 8 detailed
+# subviews, both read from this batch's own `harness_status.
+# HarnessStatusService` -- never a second aggregation of any field that
+# module already computed. Bare `dv-harness status` (no subview) is
+# UNCHANGED: it stays exactly `print(h.summary())`, the pre-existing
+# engine/graph-state JSON real callers (e.g. `dv_harness_tests/
+# test_session_and_info.py::test_status_shows_current_stage`) already parse.
+def _harness_status_header_line(snapshot: Dict[str, Any]) -> str:
+    """The one persistent, one-line header every subview prints first --
+    a pure field selection over an already-computed `HarnessStatusService.
+    serve()` snapshot, never a second derivation of harness state."""
+    harness = snapshot.get("harness") or {}
+    workflow = snapshot.get("workflow") or {}
+    execution = snapshot.get("execution") or {}
+    blockers = snapshot.get("blockers") or {}
+
+    def _n(v: Any) -> str:
+        return "?" if v is None else str(v)
+
+    return (f"[dv-harness] state={harness.get('state', 'UNKNOWN')} "
+            f"readiness={harness.get('readiness', 'UNKNOWN')} "
+            f"signoff={harness.get('signoff_state', 'UNKNOWN')} "
+            f"stage={workflow.get('current_node') or workflow.get('current_operation') or '-'} "
+            f"jobs={_n(execution.get('passed_jobs'))}P/{_n(execution.get('failed_jobs'))}F/"
+            f"{_n(execution.get('running_jobs'))}R "
+            f"blockers={blockers.get('critical_failures', 0)} "
+            f"human_gates={blockers.get('human_gates', 0)} "
+            f"unknowns={len(snapshot.get('unknowns') or [])}")
+
+
+def _harness_status_view_payload(view: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Which already-computed `HarnessStatusIR` fields each named subview
+    shows -- a pure field selection, never a second derivation of any value
+    `HarnessStatusService.serve()` already computed."""
+    if view == "blockers":
+        return dict(snapshot.get("blockers") or {})
+    if view == "jobs":
+        return dict(snapshot.get("execution") or {})
+    if view == "coverage":
+        closure = snapshot.get("closure") or {}
+        return {k: closure.get(k) for k in ("functional_coverage", "code_coverage")}
+    if view == "agents":
+        return dict(snapshot.get("workflow") or {})
+    if view == "system":
+        identity = snapshot.get("identity") or {}
+        closure = snapshot.get("closure") or {}
+        payload = {"system": identity.get("system"), "subsystem": identity.get("subsystem"),
+                   "closure_system": closure.get("system"), "closure_subsystem": closure.get("subsystem")}
+        payload.update(snapshot.get("integration") or {})
+        return payload
+    if view == "evidence":
+        return dict(snapshot.get("evidence") or {})
+    if view == "signoff":
+        harness = snapshot.get("harness") or {}
+        payload = {"signoff_state": harness.get("signoff_state")}
+        payload.update(snapshot.get("baseline") or {})
+        return payload
+    raise ValueError(f"unknown status view: {view!r}")
+
+
+def _render_harness_status_view(view: str, snapshot: Dict[str, Any], *, as_json: bool) -> str:
+    """Render one of the 8 `status <view>` subviews over a real
+    `HarnessStatusService.serve()` snapshot. Always leads with the one-line
+    header (see above); `full` additionally walks every IR section."""
+    header = _harness_status_header_line(snapshot)
+
+    if view == "full":
+        if as_json:
+            return json.dumps(snapshot, ensure_ascii=False, indent=2)
+        lines = [header, ""]
+        for section in ("identity", "baseline", "harness", "workflow", "execution",
+                         "closure", "integration", "blockers", "resources",
+                         "freshness", "evidence"):
+            lines.append(f"{section}:")
+            for k, v in (snapshot.get(section) or {}).items():
+                lines.append(f"  {k}: {v}")
+        unknowns = snapshot.get("unknowns") or []
+        if unknowns:
+            lines.append(f"\n{len(unknowns)} unresolved field(s):")
+            for u in unknowns[:10]:
+                lines.append(f"  - {u['field']}: {u['reason']}")
+        return "\n".join(lines)
+
+    payload = _harness_status_view_payload(view, snapshot)
+    if as_json:
+        return json.dumps({"header": header, view: payload}, ensure_ascii=False, indent=2)
+    lines = [header, "", f"{view}:"]
+    for k, v in payload.items():
+        lines.append(f"  {k}: {v}")
+    if view == "evidence":
+        unknowns = snapshot.get("unknowns") or []
+        if unknowns:
+            lines.append(f"\n{len(unknowns)} unresolved field(s):")
+            for u in unknowns[:10]:
+                lines.append(f"  - {u['field']}: {u['reason']}")
+    return "\n".join(lines)
+
+
 # --- Human-readable stage completion / checklist rendering (2026-09-01,
 # runtime-progress-visibility pass) ------------------------------------------
 # control_plane.describe_stage() carries stage_completion_percent/
@@ -148,7 +249,21 @@ def main():
     prun.add_argument("--stage", choices=[s.value for s in Stage])
     prun.add_argument("--dry-run", action="store_true", dest="dry_run", help=_DRY_RUN_HELP)
 
-    sub.add_parser("status")
+    pstatus = sub.add_parser(
+        "status",
+        help="Bare: the existing engine/graph-state summary (unchanged). With a subview "
+             "(full|blockers|jobs|coverage|agents|system|evidence|signoff): a persistent "
+             "one-line HarnessStatusIR header plus that subview's detail, read from "
+             "HarnessStatusService (dv_harness/harness_status.py) -- never a second "
+             "aggregation. See CLAUDE_L5_GLOBAL_STATUS_BAR_MASTER.md sections 412-413.")
+    pstatus.add_argument(
+        "status_view", nargs="?", default=None,
+        choices=["full", "blockers", "jobs", "coverage", "agents",
+                 "system", "evidence", "signoff"],
+        help="Optional HarnessStatusIR subview; omit for the unchanged bare summary.")
+    pstatus.add_argument("--json", action="store_true",
+                          help="With a subview: print the selected fields as JSON "
+                               "instead of plain text.")
     sub.add_parser("advance")
     sub.add_parser("stats")
 
@@ -609,6 +724,32 @@ def main():
                                "the real stage status and a bundle_kind of SIGNOFF_GATE_VERIFIED "
                                "or PRE_SIGNOFF_GATE_INPUT.")
 
+    psyssignoff = sub.add_parser("system-signoff-package",
+        help="System-scope signoff package: assembles real subsystem_contract.py records plus a "
+             "system_verification_contract.py rollup and a system_closure_aggregator.py rollup into "
+             "one exportable package, reusing signoff_export.py's bundle-manifest mechanics -- the "
+             "system-scope sibling of `signoff-export`. See dv_harness/system_signoff_package.py.")
+    psyssignoff.add_argument("--root", default=".")
+    psyssignoff.add_argument("--out-dir", required=True, dest="out_dir")
+    psyssignoff.add_argument("--subsystem", action="append", default=[], dest="subsystems",
+        help="a registered subsystem name to live-assemble (repeatable).")
+    psyssignoff.add_argument("--subsystem-contracts", default=None, dest="subsystem_contracts_path",
+        help="JSON file: a bare array, or {'subsystem_contracts': [...]}, of already-built "
+             "subsystem_contract.py-shaped records.")
+    psyssignoff.add_argument("--topology", default=None, dest="topology_path")
+    psyssignoff.add_argument("--resource-registry", default=None, dest="resource_registry_path")
+    psyssignoff.add_argument("--command-registry", default=None, dest="command_registry_path")
+    psyssignoff.add_argument("--closure-dimensions", default=None, dest="closure_dimensions_path",
+        help="JSON file: a bare list of {dimension_name, status} records, or {'dimensions': [...]}.")
+    psyssignoff.add_argument("--system-name", default=None)
+    psyssignoff.add_argument("--manifest", default=None, dest="manifest_path",
+        help="explicit env.manifest.json path for every live-assembled subsystem.")
+    psyssignoff.add_argument("--requirements", default=None, dest="requirements_path")
+    psyssignoff.add_argument("--db", default=None, dest="db_path")
+    psyssignoff.add_argument("--declared-spec-version", default=None, dest="declared_spec_version")
+    psyssignoff.add_argument("--require-system-signoff-pass", action="store_true")
+    psyssignoff.add_argument("--json", action="store_true")
+
     pkc = sub.add_parser("knowledge", help="Shared, cross-user knowledge center on a fixed Linux-server "
                                             "path (Engineering/Organizational Memory + Corner-Case Library). "
                                             "See dv_harness/knowledge_center.py.")
@@ -799,6 +940,82 @@ def main():
                       help="status: a CURRENT VIP/tool version (repeatable). A recorded version that no "
                            "longer matches makes the capsule STALE with no git change at all.")
     pgs.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
+    pgsrg = sub.add_parser("global-status-ready-gate",
+                            help="GLOBAL_STATUS_READY / CLI_STATUS_READY composite gates over an "
+                                 "already-assembled HarnessStatusIR document (its to_dict() JSON) -- "
+                                 "structural readiness of the Global Status Bar's own data shape, "
+                                 "never a project readiness verdict. Reads only; assembles nothing, "
+                                 "runs no stage/gate/build/regression/LSF job, and authorizes "
+                                 "nothing. See dv_harness/global_status_ready_gate.py.")
+    pgsrg.add_argument("document", help="path to a HarnessStatusIR.to_dict() JSON file")
+    pgsrg.add_argument("--json", action="store_true", dest="gsrg_as_json",
+                        help="Emit the full machine-readable gates report.")
+
+    ppqf = sub.add_parser("plan-quality-feedback",
+                           help="Cross-run stage-sequencing efficiency feedback: groups loop "
+                                "sessions (from loop_telemetry.read_loop_telemetry(), never a "
+                                "second aggregation) by the graph-traversal SHAPE they took and "
+                                "classifies each shape THRASHING/MIXED/EFFICIENT/"
+                                "INSUFFICIENT_DATA from real loop_convergence oscillation/plateau "
+                                "verdicts and retry ratios. Reads only; runs, builds, submits and "
+                                "approves nothing. See dv_harness/plan_quality_feedback.py.")
+    ppqf.add_argument("pqf_verb", choices=("show", "report"))
+    ppqf.add_argument("--run-id", default=None,
+                       help="Restrict the underlying loop_telemetry read to one run_id.")
+    ppqf.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
+    pvvd = sub.add_parser("vip-version-drift-detection",
+                           help="Cross-environment VIP version drift detection: cross-checks every "
+                                "subsystem's env.manifest.json-derived VIP release facts against each "
+                                "other and reports STATUS_NO_DRIFT / STATUS_DRIFT_DETECTED / "
+                                "STATUS_INCOMPLETE_EVIDENCE / STATUS_NOT_AVAILABLE. One shared "
+                                "implementation with `python -m dv_harness.vip_version_drift_detection`. "
+                                "Reads only; runs, builds, submits and approves nothing. See "
+                                "dv_harness/vip_version_drift_detection.py.")
+    pvvd.add_argument("--root", required=True, help="project root under which subsystem manifests "
+                                                       "are discovered (or overridden with --manifests).")
+    pvvd.add_argument("--manifests", default=None,
+                       help="comma-separated name=path pairs overriding registry discovery.")
+    pvvd.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
+    pdcg = sub.add_parser("design-completeness-gate",
+                           help="Worst-wins completeness rollup over the thirteen real Design "
+                                "Intelligence extraction categories (register map, register-to-RTL "
+                                "trace, PHY boundary, PHY model behavior, architecture IR, "
+                                "interrupt/DMA/clock-reset, programming sequence, verification "
+                                "intent, DUT-evidence correlation, design-knowledge correlation, "
+                                "design source inventory, spec/doc map, power intent). Each row "
+                                "calls that category's own real extractor with caller-supplied "
+                                "per-project inputs; a category with no input supplied is UNKNOWN, "
+                                "never silently NOT_AVAILABLE. Reads and reports only -- runs, "
+                                "builds, submits and approves nothing. Same shared implementation "
+                                "as `python -m dv_harness.design_completeness_gate` "
+                                "(design_completeness_gate.execute).")
+    pdcg.add_argument("--inputs", default=None,
+                       help="Path to a JSON file: {row_id: {kwarg: value, ...}} per-category real "
+                            "inputs for this project. Omitted or absent categories are UNKNOWN.")
+    pdcg.add_argument("--json", action="store_true", help="Print the full matrix as JSON.")
+
+    pspc = sub.add_parser("scenario-pattern-command-txt-correspondence",
+                           help="Cross-reference vip_capability_extraction.py's real, classified "
+                                "VIPScenarioPatternIR declared sequence-pattern classes against a "
+                                "project's real command.txt/pattern branch_b* (VIP-owned) sequence "
+                                "usages: CORRESPONDENCE_CONFIRMED/CORRESPONDENCE_NOT_FOUND per usage "
+                                "and USED_IN_COMMAND_TXT/NOT_USED_IN_COMMAND_TXT per declared pattern. "
+                                "Never a second VIP indexer, command.txt parser, or branch-ownership "
+                                "heuristic -- reads real vip_capability_extraction.json + real "
+                                "de_command_style_learning classification only. Runs, builds, submits "
+                                "and approves nothing. See "
+                                "dv_harness/scenario_pattern_command_txt_correspondence.py.")
+    pspc.add_argument("--capability-report", required=True,
+                       help="A vip_capability_extraction.json document "
+                            "(write_capability_extraction_report()'s own output).")
+    pspc.add_argument("--command-file", action="append", default=None, dest="spc_command_files",
+                       help="A real command.txt/pattern file to scan (repeatable).")
+    pspc.add_argument("--out-dir", default=None,
+                       help="Also write scenario_pattern_command_txt_correspondence.json here.")
+    pspc.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
 
     pmuc = sub.add_parser("coord", help="Spec section 239 multi-user coordination CONFLICT "
                                           "DETECTION between two or more concurrent users' "
@@ -1601,6 +1818,15 @@ def main():
     pauth_resolve.add_argument("--subject", default=None,
                                help="What the two sources disagree ABOUT (required with --escalate).")
 
+    psaov = sub.add_parser("source-authority-order-validation",
+                            help="Report whether source_authority.py's fixed 9-level AUTHORITY_ORDER "
+                                 "actually matches which side a human has picked in practice, over this "
+                                 "project's real, answered Tier-3 conflict escalations. Read-only -- "
+                                 "never edits AUTHORITY_ORDER. See "
+                                 "dv_harness/source_authority_order_validation.py.")
+    psaov.add_argument("--json", action="store_true",
+                        help="Emit the machine-readable report.")
+
     pconfig = sub.add_parser("config", help="View/update .dv-harness/config.json's policy block.")
     pconfig_sub = pconfig.add_subparsers(dest="config_cmd", required=True)
     pconfig_set = pconfig_sub.add_parser("set", help="dv-harness config set require_dv_review_cosign true|false")
@@ -2074,6 +2300,1755 @@ def main():
     _pvs_rec.add_argument("--json", action="store_true",
                           help="Print the raw report JSON instead of the rendered report.")
 
+    # ------------------------------------------------------------------
+    # grpA wiring (2026-09-06): pure front-door wiring for 14 already-built,
+    # already-tested real dv_harness modules. Each module already has its own
+    # `python -m dv_harness.<module>` front door (execute_verb()/main()); the
+    # blocks below add a matching dv-harness verb that imports the module and
+    # calls that same real implementation. No new logic here.
+    # ------------------------------------------------------------------
+
+    pacc = sub.add_parser("agent-checkpoint-check",
+                          help="Checks a build/investigation tree for a resume-state artifact "
+                               "matching CORE/agent-checkpoint-discipline/SKILL.md's schema "
+                               "(dual-file CLAUDE.md+docs/*.md, or single-file RESUME.md/"
+                               "STATUS.md). Exit 0 current, 1 missing/incomplete/stale. See "
+                               "dv_harness/agent_checkpoint_check.py.")
+    pacc.add_argument("build_tree", help="Path to the build/investigation tree to check "
+                                          "(need not be a DVHarness project itself).")
+    pacc.add_argument("--stale-threshold-hours", type=float, default=None,
+                      help="Hours of gap (artifact mtime vs. newest other file in tree) before "
+                           "flagging stale. Defaults to the module's own threshold.")
+
+    papp = sub.add_parser("agent-parallelism-policy",
+                          help="Task-class priority policy (Critical/Normal/Deferred/Blocked) "
+                               "and per-resource concurrency caps layered on top of "
+                               "resource_orchestrator.py's GRANTED/QUEUED/DEFERRED ranking. "
+                               "Same convention as `python -m dv_harness.agent_parallelism_policy`. "
+                               "See dv_harness/agent_parallelism_policy.py.")
+    papp.add_argument("app_verb", choices=("policy", "plan"))
+    papp.add_argument("--policy-path", default=None,
+                      help="Path to an agent_parallelism_policy.json-shaped file; defaults to "
+                           "dv_harness/agent_parallelism_policy.json.")
+    papp.add_argument("--requests", default="",
+                      help="plan: JSON list of contenders (project_id/stage/"
+                           "consumes_scarce_resource/[task_class]/...).")
+    papp.add_argument("--resource-name", default="",
+                      help="plan: the resource name to look up in the policy's per-resource "
+                           "caps, e.g. 'eda_license' or 'lsf_queue:regression'.")
+    papp.add_argument("--queue", default="")
+    papp.add_argument("--json", action="store_true",
+                      help="Emit the machine-readable payload (default: still JSON -- this "
+                           "module's own front door always prints JSON).")
+
+    pafc = sub.add_parser("amba-functional-coverage-ir",
+                          help="Builds an AMBAFunctionalCoverageIR (connectivity/memory-map/"
+                               "routing/ordering coverpoints, 7-value reachability, meaningful "
+                               "crosses only) from a caller-declared facts file. See "
+                               "dv_harness/amba_functional_coverage_ir.py.")
+    pafc.add_argument("--facts", required=True,
+                      help="JSON file: {'legal_edges','address_regions','route_facts',"
+                           "'ordering_facts','cross_requests'}.")
+    pafc.add_argument("--json", action="store_true", help="Emit the machine-readable IR.")
+
+    paprg = sub.add_parser("amba-performance-readiness-gates",
+                           help="BUS_PERFORMANCE_READY / BUS_PERFORMANCE_SIGNOFF_READY composite "
+                                "gates over caller-supplied condition records -- never computes "
+                                "a performance number itself. See "
+                                "dv_harness/amba_performance_readiness_gates.py.")
+    paprg.add_argument("aprg_verb", choices=("gates", "conditions", "evaluate"))
+    paprg.add_argument("--gate", default=None, help="conditions: one gate name.")
+    paprg.add_argument("--conditions", default=None,
+                       help="evaluate: path to a JSON list of condition records.")
+    paprg.add_argument("--not-applicable", default=None,
+                       help="evaluate: path to a JSON object mapping gate name to its "
+                            "NOT_APPLICABLE declaration.")
+    paprg.add_argument("--json", action="store_true")
+
+    parg = sub.add_parser("amba-readiness-gates",
+                          help="The 9 named composite AMBA readiness gates from section 71 "
+                               "(L3_REFERENCE_READY .. AMBA_SIGNOFF_READY), each a real "
+                               "AND-formula over caller-supplied condition records. See "
+                               "dv_harness/amba_readiness_gates.py.")
+    parg.add_argument("arg_verb", choices=("gates", "conditions", "evaluate"))
+    parg.add_argument("--gate", default=None, help="conditions: one gate name.")
+    parg.add_argument("--conditions", default=None,
+                      help="evaluate: path to a JSON list of condition records.")
+    parg.add_argument("--json", action="store_true")
+
+    papi = sub.add_parser("arbitration-policy-ir",
+                          help="Classifies a fabric's real arbitration scheme (FIXED_PRIORITY / "
+                               "ROUND_ROBIN / WEIGHTED_ROUND_ROBIN / AGE_BASED / QOS_BASED / "
+                               "UNKNOWN) strictly from supplied RTL/spec evidence text, plus a "
+                               "starvation-risk assessment. Reads and reports only. See "
+                               "dv_harness/arbitration_policy_ir.py.")
+    papi.add_argument("--evidence-file", default=None,
+                      help="Path to a text file containing the real RTL/spec evidence to "
+                           "classify.")
+    papi.add_argument("--request-pattern-file", default=None,
+                      help="JSON file with a declared request pattern.")
+    papi.add_argument("--fabric-name", default=None, help="Label only -- never used to classify.")
+    papi.add_argument("--component-name", default=None,
+                      help="Label only -- never used to classify.")
+    papi.add_argument("--json", action="store_true", help="Emit the machine-readable IR.")
+
+    pafcm = sub.add_parser("artifact-completeness",
+                           help="Assesses whether a named artifact category (per project's own "
+                                "declared sub-fact inventory) is structurally complete. See "
+                                "dv_harness/artifact_completeness.py.")
+    pafcm.add_argument("category", help="Artifact category name (see the module for the known "
+                                         "set).")
+    pafcm.add_argument("subfact_inventory", nargs="?", default=None,
+                       help="Optional JSON file: the category's own sub-fact inventory.")
+
+    pard = sub.add_parser("artifact-relationship-discovery",
+                          help="Discovers real DUPLICATE/SUPERSEDES/CONTRADICTS/RELATED "
+                               "relationships across a design_source_inventory registry (or a "
+                               "bare list of registry rows). See "
+                               "dv_harness/artifact_relationship_discovery.py.")
+    pard.add_argument("--sources", required=True,
+                      help="Path to a JSON file: a design_source_inventory "
+                           "build_source_registry() result, or a bare list of registry rows.")
+    pard.add_argument("--json", action="store_true", help="Print JSON instead of markdown.")
+
+    pbpm = sub.add_parser("backpressure-model",
+                          help="Classifies legal-backpressure-tolerance (BOUNDED/UNBOUNDED/"
+                               "NOT_AVAILABLE, plus a declared max-stall-cycles figure where "
+                               "BOUNDED) on named AMBA channels strictly from supplied per-"
+                               "channel RTL/spec evidence text. See "
+                               "dv_harness/backpressure_model.py.")
+    pbpm.add_argument("--evidence-file", default=None,
+                      help="JSON file: {\"<channel>\": \"<evidence text>\", ...}.")
+    pbpm.add_argument("--observed-stalls-file", default=None,
+                      help="JSON file: {\"<channel>\": <observed max stall cycles>, ...} for an "
+                           "optional per-channel stall-violation check.")
+    pbpm.add_argument("--json", action="store_true", help="Emit the machine-readable model.")
+
+    pbsh = sub.add_parser("bounded-self-healing",
+                          help="Classifies a failure's self-healing eligibility and evaluates "
+                               "whether a bounded self-heal action is authorized for a stage "
+                               "(requires a real recorded human approval under the module's "
+                               "own HUMAN_APPROVAL_STAGE). See dv_harness/bounded_self_healing.py.")
+    pbsh.add_argument("bsh_verb", choices=("eligible-types", "classify", "evaluate", "ledger"))
+    pbsh.add_argument("--text", default="",
+                      help="classify/evaluate: the failing attempt's blocking_reason / log "
+                           "excerpt.")
+    pbsh.add_argument("--stage", default="", help="evaluate: the graph stage name.")
+
+    pbor = sub.add_parser("branch-ownership-resolver",
+                          help="Classifies a proposed operation's ownership tier "
+                               "(GLOBAL/DUT/FW/VIP/AMBIGUOUS/UNKNOWN) and validates an existing "
+                               "block/branch_a*/branch_fw/branch_b* assignment against it. See "
+                               "dv_harness/branch_ownership_resolver.py.")
+    pbor.add_argument("bor_verb", choices=("classify", "validate"))
+    pbor.add_argument("--payload", required=True,
+                      help="JSON file carrying operation_kind, optional per_port/driven_by/"
+                           "arbitration_policy, and (for 'validate') branch_label.")
+
+    pcc = sub.add_parser("change-cascade",
+                         help="Given a changed upstream field name, reports which of this "
+                              "harness's own already-computed downstream artifacts are now "
+                              "suspect and why; on request, revokes a named stale question-"
+                              "queue decision through the real question_queue.revoke_decision(). "
+                              "See dv_harness/change_cascade.py.")
+    pcc.add_argument("cc_verb", choices=("fields", "assess", "revoke"))
+    pcc.add_argument("--changed-field", default=None,
+                     help="assess/revoke: one changed field name (see `fields` for the list).")
+    pcc.add_argument("--changes-file", default=None,
+                     help="assess: a JSON file holding a field name, a list of field names, or "
+                          "a list of {'field': ...} records to assess together.")
+    pcc.add_argument("--question-key", action="append", default=None, dest="question_keys",
+                     help="revoke: a question_key to revoke (repeatable).")
+    pcc.add_argument("--revoked-by", default=None, help="revoke: who is revoking this decision.")
+    pcc.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
+    pcsq = sub.add_parser("checker-sb-qualification",
+                          help="Folds a set of real, cited defect-detection/false-PASS trials "
+                               "into a worst-wins qualification verdict per named checker/"
+                               "scoreboard component, and an overall gate across all of them. "
+                               "See dv_harness/checker_sb_qualification.py.")
+    pcsq.add_argument("csq_verb", choices=("evaluate",))
+    pcsq.add_argument("--trials", dest="csq_trials_path", default=None,
+                      help="JSON file: a bare list of trial records, or {'trials': [...]}.")
+    pcsq.add_argument("--required", action="append", default=None,
+                      help="A required 'component_id:component_kind' pair (repeatable).")
+    pcsq.add_argument("--json", action="store_true", dest="csq_as_json",
+                      help="Emit the machine-readable gate report.")
+
+    pcci = sub.add_parser("coherency-capability-ir",
+                          help="Classifies ACE-style behavioral coherency capability (snoop-"
+                               "type support, coherency-domain membership, barrier-transaction "
+                               "support, dirty/clean tracking) strictly from supplied caller "
+                               "evidence -- ACE support is never assumed from an AXI base "
+                               "protocol. See dv_harness/coherency_capability_ir.py.")
+    pcci.add_argument("--evidence", required=True,
+                      help="Path to a JSON evidence document: "
+                           "{\"protocol\"?, \"dut_name\"?, \"ir_id\"?, \"axes\": {...}}.")
+    pcci.add_argument("--json", action="store_true", help="Emit the IR as JSON.")
+
+    pcpg = sub.add_parser("command-precondition-gate",
+                          help="Validates a command's declared preconditions against "
+                               "runtime_event_registry's current propagated event state before "
+                               "dispatch. Reports only. See dv_harness/command_precondition_gate.py.")
+    pcpg.add_argument("cpg_verb", choices=("list", "check"))
+    pcpg.add_argument("--commands", required=True,
+                      help="Declared command/precondition JSON file.")
+    pcpg.add_argument("--registry", default=None,
+                      help="check: runtime event registry JSON file.")
+    pcpg.add_argument("--out", default=None,
+                      help="check: also write the dispatch report JSON here.")
+    pcpg.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
+    pctt = sub.add_parser("command-task-trace",
+                          help="Traces a DE command name through task/macro -> UVM bridge -> "
+                               "VIP API -> checker via real grep-based cross-reference over a "
+                               "generated environment's own files. "
+                               "See dv_harness/command_task_trace.py.")
+    pctt.add_argument("--env-dir", required=True, help="generated environment directory")
+    pctt.add_argument("--command", action="append", dest="ctt_commands", required=True,
+                      help="DE command name to trace; may be repeated")
+    pctt.add_argument("--vip-prefix", action="append", dest="ctt_vip_prefixes", default=None,
+                      help="identifier prefix marking a VIP API reference (e.g. svt_); may be "
+                           "repeated")
+    pctt.add_argument("--no-verible", action="store_true",
+                      help="skip the optional verible task-signature enrichment")
+    pctt.add_argument("--verible-bin", default=None)
+    pctt.add_argument("--json", action="store_true")
+
+    pctci = sub.add_parser("command-txt-change-impact",
+                           help="Semantic diff between two DECommandRegistryIR-shaped DE command "
+                                "registry snapshots. See dv_harness/command_txt_change_impact.py.")
+    pctci.add_argument("--old", required=True, help="Path to the OLD (before) snapshot JSON file.")
+    pctci.add_argument("--new", required=True, help="Path to the NEW (after) snapshot JSON file.")
+    pctci.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
+
+    pconfcal = sub.add_parser("confidence-calibration",
+                              help="Does a confidence tier's real track record in this project's "
+                                   "Memory records match the ordering this harness acts on? "
+                                   "See dv_harness/confidence_calibration.py.")
+    pconfcal.add_argument("cal_verb", choices=("tiers", "report", "show"))
+    pconfcal.add_argument("--json", action="store_true")
+
+    pconn = sub.add_parser("connectivity-check",
+                           help="Standing connectivity check: re-runs connectivity.py's 3 machine "
+                                "gates (elaboration / static zero-time connectivity / transaction "
+                                "activity) and records the RTL fingerprint they were produced "
+                                "against. See dv_harness/connectivity_check.py.")
+    pconn.add_argument("--config", default=None,
+                       help="Config JSON (default: <project-root>/.dv-harness/"
+                            "connectivity_check.json)")
+    pconn.add_argument("--state", default=None, help="State JSON path override.")
+    pconn.add_argument("--report", default=None, help="Markdown report path override.")
+    pconn.add_argument("--check-only", action="store_true",
+                       help="Do not run the gates; only compare the current RTL fingerprint "
+                            "against the last recorded gate run.")
+
+    pckb = sub.add_parser("consolidated-kpi-benchmark",
+                          help="Consolidated cross-cutting KPI/benchmark report -- self-resolve "
+                               "rate, repeated-question count, time-to-first-PASS, false-PASS/"
+                               "false-READY count, and honest NOT_MEASURED disclosures. "
+                               "See dv_harness/consolidated_kpi_benchmark.py.")
+    pckb.add_argument("ckb_verb", choices=("names", "report", "show"))
+    pckb.add_argument("--json", action="store_true")
+
+    pcb = sub.add_parser("context-budget",
+                         help="3-tier context budget: classify a path/command, emit the "
+                              "PreToolUse deny for a tier-1 read, or build the tier-2 resident "
+                              "pack. See dv_harness/context_budget.py.")
+    pcb_sub = pcb.add_subparsers(dest="cb_verb", required=True)
+    pcb_sub.add_parser("hook", help="Read a PreToolUse payload on stdin; print a deny JSON.")
+    pcb_sub.add_parser("session-start", help="Print the SessionStart hook JSON.")
+    _pcb_cl = pcb_sub.add_parser("classify", help="Classify one path (or --command) into a tier.")
+    _pcb_cl.add_argument("target", nargs="?", default="")
+    _pcb_cl.add_argument("--command", default=None, help="Classify a shell command string instead.")
+    _pcb_res = pcb_sub.add_parser("resident", help="Report tier-2 artifact residency.")
+    _pcb_res.add_argument("--json", action="store_true")
+
+    pccau = sub.add_parser("coverage-closure-action-utility",
+                           help="Ranks candidate coverage-closure actions by utility = "
+                                "expected_coverage_gain x requirement_priority x risk_coverage / "
+                                "cost; excludes FLAGGED_INCORRECT/HIGH_RISK actions before cost "
+                                "is ever considered. "
+                                "See dv_harness/coverage_closure_action_utility.py.")
+    pccau.add_argument("--candidates-file", required=True,
+                       help="JSON file holding a list of candidate-action objects.")
+    pccau.add_argument("--json", action="store_true")
+
+    pcchc = sub.add_parser("coverage-closure-hole-correlation",
+                           help="Correlates coverage holes by real declared shared evidence and "
+                                "annotates the coverage_closure_action_utility ranking with which "
+                                "already-cleared actions would close a correlated multi-hole "
+                                "bundle. See dv_harness/coverage_closure_hole_correlation.py.")
+    pcchc.add_argument("--holes-file", required=True,
+                       help="JSON file holding a list of coverage-hole records.")
+    pcchc.add_argument("--candidates-file", dest="cchc_candidates_file", required=True,
+                       help="JSON file holding a list of candidate coverage-closure actions.")
+    pcchc.add_argument("--closes-holes-field", default=None)
+    pcchc.add_argument("--parsed-summary-file", default=None)
+    pcchc.add_argument("--json", action="store_true")
+
+    pcdi = sub.add_parser("coverage-db-integrity",
+                          help="Coverage-DB merge integrity: real content fingerprint of a "
+                               "coverage database, and per-entry fingerprint/tool-config "
+                               "compatibility checking before a merge. "
+                               "See dv_harness/coverage_db_integrity.py.")
+    pcdi_sub = pcdi.add_subparsers(dest="cdi_verb", required=True)
+    _pcdi_fp = pcdi_sub.add_parser("fingerprint",
+                                   help="Compute one coverage DB's content fingerprint.")
+    _pcdi_fp.add_argument("--db-path", required=True)
+    _pcdi_chk = pcdi_sub.add_parser("check", help="Verify a merge request.")
+    _pcdi_chk.add_argument("--merge-request", required=True)
+
+    pdcrr = sub.add_parser("de-command-runtime-readiness-gate",
+                           help="Composite DE_COMMAND_RUNTIME_READY verdict: aggregates "
+                                "runtime_event_registry state, command_precondition_gate "
+                                "results, and a caller-supplied branch/grammar-side result set. "
+                                "See dv_harness/de_command_runtime_readiness_gate.py.")
+    pdcrr.add_argument("dcrr_verb", choices=("check",))
+    pdcrr.add_argument("--registry", dest="dcrr_registry", required=True,
+                       help="Runtime event registry JSON file.")
+    pdcrr.add_argument("--commands", dest="dcrr_commands", default=None,
+                       help="Declared command/precondition JSON file.")
+    pdcrr.add_argument("--branch-grammar", default=None,
+                       help="Duck-typed branch/grammar-side result set JSON file.")
+    pdcrr.add_argument("--out", dest="dcrr_out", default=None)
+    pdcrr.add_argument("--json", action="store_true")
+
+    pdq = sub.add_parser("dependency-qualification",
+                         help="The QUALIFICATION record for a dependency/VIP/third-party "
+                              "component: has it been vetted, by whom, against what criteria -- "
+                              "distinct from dependency_supply_chain.py's inventory/pinning/"
+                              "advisory checks. See dv_harness/dependency_qualification.py.")
+    pdq.add_argument("dq_verb", choices=("statuses", "list", "coverage", "record", "revoke"))
+    pdq.add_argument("--inventory", default=None,
+                     help="Path to a dependency_supply_chain build_inventory() JSON dump "
+                          "(required for `coverage`).")
+    pdq.add_argument("--record-file", default=None, help="Required for `record`.")
+    pdq.add_argument("--qualification-id", default=None, help="Required for `revoke`.")
+    pdq.add_argument("--revoked-by", default=None, help="Required for `revoke`.")
+    pdq.add_argument("--reason", default=None, help="Required for `revoke`.")
+    pdq.add_argument("--json", action="store_true")
+
+    pdai = sub.add_parser("design-architecture-ir",
+                          help="Wraps verible_parser.py's per-file RTL facts into a full "
+                               "multi-file ArchitectureIR: a complete recursive instance tree "
+                               "plus a best-effort FSM-candidate literal scan. "
+                               "See dv_harness/design_architecture_ir.py.")
+    pdai.add_argument("--rtl", action="append", required=True, dest="dai_rtl_files",
+                      help="An RTL file to include in this build (repeatable).")
+    pdai.add_argument("--top-module", default=None)
+    pdai.add_argument("--verible-bin", default=None)
+    pdai.add_argument("--out", default=None, help="Also write the full JSON IR to this path.")
+    pdai.add_argument("--json", action="store_true")
+
+    pdkc = sub.add_parser("design-knowledge-correlation",
+                          help="General cross-source correlation engine over IR-shaped design "
+                               "knowledge facts: real CONFLICT/GAP/DOCUMENTED_VS_IMPLEMENTED "
+                               "findings plus a Design Knowledge Graph. Never arbitrates a "
+                               "conflict. See dv_harness/design_knowledge_correlation.py.")
+    pdkc.add_argument("--sources", required=True, help="JSON file: a list of source dicts.")
+    pdkc.add_argument("--expected-facts", default=None,
+                      help="JSON file: a list of {fact_key, reason?, required_by?}.")
+    pdkc.add_argument("--json", action="store_true")
+
+    pdtt = sub.add_parser("digital-thread", help="Assemble the digital-thread traceability "
+                                                   "report (requirement -> vPlan -> command -> "
+                                                   "test -> evidence), read-only, joining "
+                                                   "env.manifest.json and evidence.duckdb facts. "
+                                                   "See dv_harness/digital_thread_traceability.py.")
+    pdtt.add_argument("--vplan-file", default=None,
+                      help="JSON file: a list of vplan_artifact-shaped rows.")
+    pdtt.add_argument("--env-manifest", default=None, help="Explicit env.manifest.json path.")
+    pdtt.add_argument("--db-path", default=None, help="Explicit evidence.duckdb path.")
+    pdtt.add_argument("--json", action="store_true")
+
+    pdcc = sub.add_parser("doc-citation-check", help="Check every citation of a real source "
+                                                       "artifact inside a doc against that "
+                                                       "artifact's current real content -- drift, "
+                                                       "missing source, out-of-range, unverifiable. "
+                                                       "See dv_harness/doc_citation_check.py.")
+    pdcc.add_argument("docs", nargs="*",
+                      help="Doc paths (repo-relative or absolute) to check. Omitted (with no "
+                           "--memory-docs) checks this project's own memory docs by default, "
+                           "exactly like the standalone `python -m` front door.")
+    pdcc.add_argument("--memory-docs", action="store_true",
+                      help="Explicitly check this project's own memory docs, in addition to any "
+                           "docs named positionally.")
+
+    pdec = sub.add_parser("dut-evidence-correlation", help="Correlate a caller-declared "
+                                                             "requirement fact (an interrupt, a "
+                                                             "clock/reset signal, a mode, ...) "
+                                                             "against env.manifest.json's real "
+                                                             "assembled RTL/register/clock-reset/"
+                                                             "address-map facts. "
+                                                             "See dv_harness/dut_evidence_correlation.py.")
+    pdec.add_argument("--manifest", required=True, help="Path to env.manifest.json.")
+    pdec.add_argument("--items", required=True,
+                      help="JSON file: a list of declared-fact items.")
+    pdec.add_argument("--json", action="store_true")
+
+    pdci = sub.add_parser("dynamic-connectivity", help="Classify a fabric path's routing/decode "
+                                                         "as RECONFIGURABLE_CONFIRMED / "
+                                                         "STATIC_CONFIRMED / UNKNOWN / AMBIGUOUS "
+                                                         "from real, cited caller evidence only "
+                                                         "-- never from the protocol/fabric name. "
+                                                         "See dv_harness/dynamic_connectivity_ir.py.")
+    pdci_sub = pdci.add_subparsers(dest="dci_verb", required=True)
+    pdci_sub.add_parser("statuses", help="List the reconfigurability-status vocabulary.")
+    pdci_classify = pdci_sub.add_parser("classify",
+                                        help="Classify every declared path in a JSON path-spec "
+                                             "file.")
+    pdci_classify.add_argument("--paths", required=True,
+                               help="JSON file of {\"paths\": [...]}, or a bare list.")
+    pdci_classify.add_argument("--json", action="store_true")
+
+    pdig = sub.add_parser("dynamic-intake-graph", help="Build a queryable graph view over an "
+                                                         "already-assembled IntakeState -- field "
+                                                         "nodes, category groupings, and "
+                                                         "caller-declared artifact-relationship "
+                                                         "edges. A view, never a gate. "
+                                                         "See dv_harness/dynamic_intake_graph.py.")
+    pdig.add_argument("--intake-state", required=True,
+                      help="Path to an IntakeState.to_dict()-shaped JSON file.")
+    pdig.add_argument("--relationships", default=None,
+                      help="Path to a caller-supplied artifact-relationship-edges JSON file.")
+    pdig.add_argument("--json", action="store_true", help="Emit the full graph as JSON.")
+
+    pexc = sub.add_parser("example-composition", help="Composability gate over several "
+                                                        "individually-qualified VIP examples "
+                                                        "about to be combined into one scenario: "
+                                                        "7 real structural conditions, never a "
+                                                        "semantic judgement. "
+                                                        "See dv_harness/example_composition.py.")
+    pexc.add_argument("verb", choices=("compose",))
+    pexc.add_argument("--examples", required=True, help="JSON file: a list of example dicts.")
+    pexc.add_argument("--json", action="store_true")
+
+    pecr = sub.add_parser("existing-command-reuse", help="Rank existing DE command.txt commands "
+                                                           "against a new vPlan-driven need: "
+                                                           "semantic-name match, argument-shape "
+                                                           "compatibility, branch-ownership "
+                                                           "compatibility, real evidence_db "
+                                                           "regression history. Never forces a "
+                                                           "low-confidence pick. "
+                                                           "See dv_harness/existing_command_reuse_score.py.")
+    pecr.add_argument("--need-file", required=True, help="JSON file: the need dict.")
+    pecr.add_argument("--commands-file", required=True,
+                      help="JSON file: a list of existing-command dicts.")
+    pecr.add_argument("--db", default=None, help="Evidence database path override.")
+    pecr.add_argument("--json", action="store_true")
+
+    pfpi = sub.add_parser("fabric-progress", help="Deadlock/livelock risk over a caller-declared "
+                                                    "resource-dependency wait graph, plus real "
+                                                    "credit/outstanding-transaction exhaustion "
+                                                    "arithmetic. Never claims deadlock-freedom "
+                                                    "from an incomplete graph. "
+                                                    "See dv_harness/fabric_progress_ir.py.")
+    pfpi.add_argument("--resource-dependency", default=None,
+                      help="JSON file: a list of {resource, held_by, waiting_for} facts.")
+    pfpi.add_argument("--credit-outstanding", default=None,
+                      help="JSON file: a list of credit/outstanding-transaction facts.")
+    pfpi.add_argument("--json", action="store_true")
+
+    pfcr = sub.add_parser("file-candidate-rank", help="Evidence-only ranking of an ambiguous "
+                                                        "file choice: real git-log reference "
+                                                        "count/recency, real build-script "
+                                                        "reference count, real file mtime. Never "
+                                                        "picks a winner. "
+                                                        "See dv_harness/file_candidate_ranker.py.")
+    pfcr.add_argument("verb", choices=("rank",))
+    pfcr.add_argument("candidates", nargs="+", help="Candidate file paths.")
+    pfcr.add_argument("--repo-root", default=None, help="Git repository root.")
+    pfcr.add_argument("--fcr-project-root", dest="fcr_project_root", default=None,
+                      help="Project root to scan for build scripts/Makefiles "
+                           "(default: this project's own root).")
+
+    pfcs = sub.add_parser("functional-coverage-signoff", help="FUNCTIONAL_COVERAGE_SIGNOFF_READY "
+                                                                "verdict + Closure metric, "
+                                                                "aggregated read-only from "
+                                                                "waiver_store, coverage_analysis "
+                                                                "and env_manifest/evidence_db. "
+                                                                "See dv_harness/functional_coverage_signoff.py.")
+    pfcs.add_argument("--json", action="store_true")
+
+    pgcq = sub.add_parser("gen-code-quality-gate", help="Composite PASS/FAIL/INCOMPLETE_EVIDENCE "
+                                                          "quality gate over generated UVM/SV "
+                                                          "code: folds uvm_structural_lint.py's "
+                                                          "real findings and vip_api_card.py's "
+                                                          "real BLOCKED-citation findings "
+                                                          "worst-wins. "
+                                                          "See dv_harness/gen_code_quality_gate.py.")
+    pgcq.add_argument("--env-dir", default=None,
+                      help="Generated UVM environment directory to lint.")
+    pgcq.add_argument("--verible-bin", default=None)
+    pgcq.add_argument("--vip-source", action="append", default=None, dest="gcq_vip_sources",
+                      help="Generated .sv/.svh file or directory to VIP-API-validate "
+                           "(repeatable; requires --vip-index).")
+    pgcq.add_argument("--vip-index", default=None, help="vip_symbol_index JSON document.")
+    pgcq.add_argument("--relative-to", default=None,
+                      help="Root for reported VIP-API usage paths (default: --env-dir).")
+    pgcq.add_argument("--json", action="store_true")
+
+    pgsb = sub.add_parser("golden-subsystem-benchmark", help="Golden Subsystem Benchmark / KPI / "
+                                                               "Critical False-Architecture-Claim "
+                                                               "Metrics: a versioned corpus of "
+                                                               "hand-curated ground-truth "
+                                                               "architecture claims, graded "
+                                                               "against verification_architecture.py "
+                                                               "and design_architecture_ir.py's own "
+                                                               "output, with a worst-wins "
+                                                               "false-positive-architecture-claim "
+                                                               "KPI. "
+                                                               "See dv_harness/golden_subsystem_benchmark.py.")
+    pgsb.add_argument("gsb_verb", choices=("register", "list", "verify", "diff",
+                                            "record-tuning-use", "leakage", "eval", "runs"))
+    pgsb.add_argument("--dataset-id", default=None)
+    pgsb.add_argument("--json-file", default=None, help="register: the dataset version JSON file.")
+    pgsb.add_argument("--version", type=int, default=None,
+                      help="Operate on this dataset version (default: the latest).")
+    pgsb.add_argument("--old-version", type=int, default=None, help="diff: the earlier version.")
+    pgsb.add_argument("--new-version", type=int, default=None, help="diff: the later version.")
+    pgsb.add_argument("--case-id", default=None)
+    pgsb.add_argument("--subject-id", default=None,
+                      help="The extractor/agent version being graded.")
+    pgsb.add_argument("--subject-version", default=None)
+    pgsb.add_argument("--subject-kind", default=None)
+    pgsb.add_argument("--used-for", default=None,
+                      help="record-tuning-use: what the case was used to tune.")
+    pgsb.add_argument("--extracted-docs-file", default=None,
+                      help="eval: JSON file mapping case_id -> the real extracted doc for that "
+                           "case.")
+    pgsb.add_argument("--json", action="store_true")
+
+    pgal = sub.add_parser("gui-audit-log", help="Structured 7-field GUI action audit records "
+                                                  "(who/when/before/after/evidence/approval/result) "
+                                                  "for every dashboard-issued /api/control command -- "
+                                                  "the same events.jsonl entries `dv-harness audit` "
+                                                  "already reads, filtered to the structured subset "
+                                                  "gui_audit_log.py's wrap_dispatch() writes. "
+                                                  "See dv_harness/gui_audit_log.py.")
+    pgal.add_argument("gal_verb", choices=("show",))
+    pgal.add_argument("--limit", type=int, default=50)
+    pgal.add_argument("--action", default=None,
+                       help="Narrow to one dashboard command, e.g. APPROVE.")
+    pgal.add_argument("--json", action="store_true")
+
+    pgiw = sub.add_parser("gui-intake-wizard", help="GUI-01 Interactive Intake Wizard: start the "
+                                                      "real, standalone HTTP server (GET current "
+                                                      "step, POST answer, POST advance), grounded "
+                                                      "entirely in intake_state.py's real per-field "
+                                                      "IntakeFieldRecord data. Blocks until "
+                                                      "interrupted. "
+                                                      "See dv_harness/gui_intake_wizard.py.")
+    pgiw.add_argument("--host", default="127.0.0.1")
+    pgiw.add_argument("--port", type=int, default=8799)
+
+    pgcp = sub.add_parser("gui-intake-control-plane", help="GUI Intake Control Plane: a real "
+                                                              "backend over question_queue.py + "
+                                                              "intake_state.py (pending questions, "
+                                                              "per-field intake statuses, answer/ "
+                                                              "approve from the UI). 'serve' starts "
+                                                              "its own standalone, session-token-"
+                                                              "gated HTTP server and blocks until "
+                                                              "interrupted; 'snapshot' prints the "
+                                                              "real control-plane state as JSON. "
+                                                              "See dv_harness/gui_intake_control_plane.py.")
+    pgcp.add_argument("gicp_verb", choices=("serve", "snapshot"))
+    pgcp.add_argument("--host", default="127.0.0.1")
+    pgcp.add_argument("--port", type=int, default=0)
+    pgcp.add_argument("--no-auth", action="store_true",
+                       help="serve: disable the session-token gate (local debugging only).")
+
+    phcl = sub.add_parser("human-correction-lesson", help="Capture a structured human correction "
+                                                            "(a false claim -> the human's real "
+                                                            "correcting evidence) as a debug_lesson "
+                                                            "Engineering Memory record, and ask "
+                                                            "whether this exact mistake has been "
+                                                            "corrected before. "
+                                                            "See dv_harness/human_correction_lesson.py.")
+    phcl_sub = phcl.add_subparsers(dest="hcl_verb", required=True)
+    phcl_record = phcl_sub.add_parser("record",
+                                      help="Capture one structured human correction as a "
+                                           "debug_lesson.")
+    phcl_record.add_argument("--before-claim", required=True)
+    phcl_record.add_argument("--after-claim", required=True)
+    phcl_record.add_argument("--correction-evidence", required=True)
+    phcl_record.add_argument("--corrected-by", required=True)
+    phcl_record.add_argument("--mistake-category", required=True)
+    phcl_record.add_argument("--before-reasoning", default=None)
+    phcl_record.add_argument("--protocol", default=None)
+    phcl_record.add_argument("--scope", default=None)
+    phcl_record.add_argument("--title", default=None)
+    phcl_record.add_argument("--confidence", default=None)
+    phcl_query = phcl_sub.add_parser("query",
+                                     help="Ask whether a human has corrected this exact mistake "
+                                          "before.")
+    phcl_query.add_argument("--before-claim", required=True)
+    phcl_query.add_argument("--mistake-category", default=None)
+    phcl.add_argument("--json", action="store_true")
+
+    pivb = sub.add_parser("iface-contract-vip-bind", help="Spec section 219: validate that a "
+                                                            "declared interface contract (signal "
+                                                            "list, protocol, direction) matches "
+                                                            "what a real, already-existing VIP "
+                                                            "bind actually connects to. "
+                                                            "See dv_harness/iface_contract_vip_bind_validator.py.")
+    pivb.add_argument("--contracts", required=True,
+                      help="JSON file: a list of declared-interface-contract records, or "
+                           "{\"interfaces\": [...]}.")
+    pivb.add_argument("--bind-root", default=None,
+                      help="Root directory to grep for real 'bind ...' statements.")
+    pivb.add_argument("--modules", default=None,
+                      help="JSON file of already-parsed RTL modules.")
+    pivb.add_argument("--json", action="store_true")
+    pivb.add_argument("--strict-unprovable", action="store_true",
+                      help="Exit non-zero on UNPROVABLE cards too, not just BLOCKED ones.")
+
+    pib = sub.add_parser("intake-baseline",
+                         help="Freeze/evaluate the twelve pre-generation intake facts "
+                              "(DUT top/boundary, DUT/TB SHA, source file hashes, VIP "
+                              "declaration, bind topology hash, reference-UVM hash, DE "
+                              "command.txt hash, known-test list, unresolved-unknowns/"
+                              "conflicts/decisions counts). "
+                              "See dv_harness/intake_baseline.py.")
+    pib.add_argument("ib_verb", choices=["fields", "baseline", "freeze", "list", "status"])
+    pib.add_argument("--root", default=None, help="Defaults to the project root.")
+    pib.add_argument("--facts", default=None,
+                     help="JSON object of intake facts, keyed by the field names the "
+                          "'fields' verb prints.")
+    pib.add_argument("--freeze-id", default=None)
+    pib.add_argument("--frozen-by", default=None)
+    pib.add_argument("--note", default="")
+    pib.add_argument("--json", action="store_true")
+
+    pics = sub.add_parser("intake-contract-stale",
+                          help="Section 18: is a VerificationIntakeContract's BASELINED "
+                               "evidence still fresh, real detection over a real git diff "
+                               "and a real declared staleness window. "
+                               "See dv_harness/intake_contract_stale_detection.py.")
+    pics.add_argument("ics_verb", choices=["window", "detect"])
+    pics.add_argument("--contract", default=None,
+                      help="For 'detect': a VerificationIntakeContract.to_dict() JSON file.")
+    pics.add_argument("--recorded-sha", default=None)
+    pics.add_argument("--window-seconds", type=float, default=None)
+
+    pie = sub.add_parser("intake-events",
+                         help="The fixed 18-event INTAKE_* taxonomy over "
+                              ".dv-harness/events.jsonl -- section 34. "
+                              "See dv_harness/intake_events.py.")
+    pie.add_argument("ie_verb", choices=["names", "events"])
+    pie.add_argument("--json", action="store_true")
+
+    pim = sub.add_parser("intake-modes",
+                         help="Intake rigor MODE (FAST/STANDARD/STRICT/SIGNOFF): which "
+                              "intake_state.py fields/categories are mandatory for each "
+                              "mode. See dv_harness/intake_modes.py.")
+    pim.add_argument("im_verb", choices=["modes", "conditions", "evaluate"])
+    pim.add_argument("--mode", default=None, help="FAST|STANDARD|STRICT|SIGNOFF.")
+    pim.add_argument("--intake-state", default=None,
+                     help="For 'evaluate': an IntakeState.to_dict()-shaped JSON document.")
+    pim.add_argument("--json", action="store_true")
+
+    piqp = sub.add_parser("intake-question-priority",
+                          help="Confidence x Criticality ask-gating, next-best-question "
+                               "ranking, and LOW-risk batching over a generic list of "
+                               "pending-question dicts. "
+                               "See dv_harness/intake_question_priority.py.")
+    piqp.add_argument("--pending-questions", required=True,
+                      help="Path to a JSON array of pending-question dicts.")
+    piqp.add_argument("--max-batch-size", type=int, default=None)
+    piqp.add_argument("--json", action="store_true")
+
+    pisp = sub.add_parser("intake-source-priority",
+                          help="The 10-step DISCOVERY ladder for a fact not yet known -- "
+                               "distinct from source_authority.py's 9-level CONFLICT "
+                               "order. See dv_harness/intake_source_priority.py.")
+    pisp.add_argument("isp_verb", choices=["order", "next", "self-check"])
+    pisp.add_argument("--fact", default=None)
+    pisp.add_argument("--available", default=None,
+                      help="Comma-separated source ids/aliases actually available.")
+    pisp.add_argument("--json", action="store_true")
+
+    piag = sub.add_parser("integration-adapter-gen",
+                          help="Generate adapter glue code (a `define macro-redirect .svh "
+                               "file) from an already-resolved SubsystemAdapterIR mapping. "
+                               "See dv_harness/integration_adapter_gen.py.")
+    piag.add_argument("mapping_file",
+                      help="JSON file: a list of {operation, "
+                           "existing_task_or_sequence_name} mapping entries, or an object "
+                           "carrying 'mapping_entries' and optionally 'subsystem_name'.")
+    piag.add_argument("--subsystem-name", default=None)
+    piag.add_argument("--out", default=None, help="Write the generated .svh to this path.")
+
+    pidce = sub.add_parser("interrupt-dma-clock-reset",
+                           help="Extract interrupt architecture, DMA architecture, and a "
+                                "clock/reset fact extension from real supplied spec/RTL "
+                                "text -- never inferred. "
+                                "See dv_harness/interrupt_dma_clock_reset_extraction.py.")
+    pidce.add_argument("--sources", nargs="+", required=True,
+                       help="One or more real spec/programming-guide/RTL text files.")
+    pidce.add_argument("--json", action="store_true")
+
+    ptre = sub.add_parser("timing-requirements",
+                          help="Extract DOCUMENTED setup/hold/latency timing requirements "
+                               "(a stated bound with a comparison direction and unit) from "
+                               "real spec/programming-guide/RTL-comment text -- never a "
+                               "measured/simulated value, and never inferred. Section 289. "
+                               "See dv_harness/timing_requirement_extraction.py.")
+    ptre.add_argument("--sources", nargs="+", required=True,
+                       help="One or more real spec/programming-guide/RTL text files.")
+    ptre.add_argument("--json", action="store_true")
+
+    pioc = sub.add_parser("ip-ownership-conflict",
+                          help="IP-level (single-subsystem) check: is a real VIP agent AND "
+                               "a legacy hand-written BFM/driver both declared ACTIVE on "
+                               "the same interface/port? Detection only. "
+                               "See dv_harness/ip_ownership_conflict.py.")
+    pioc.add_argument("--env-manifest", required=True,
+                      help="Path to this subsystem's env.manifest.json (or any JSON "
+                           "carrying its vip_config layer).")
+    pioc.add_argument("--legacy-bfm", default=None,
+                      help="JSON array of caller-declared legacy BFM/driver records.")
+    pioc.add_argument("--connectivity-rows", default=None,
+                      help="JSON array of real connectivity-matrix rows for this SAME "
+                           "subsystem.")
+    pioc.add_argument("--json", action="store_true")
+
+    plsd = sub.add_parser("loop-stale-detection",
+                          help="Section 97: is a loop session's evidence still fresh, real "
+                               "detection over a real elapsed-time window and a real git "
+                               "diff. See dv_harness/loop_stale_detection.py.")
+    plsd.add_argument("lsd_verb", choices=["window", "detect"])
+    plsd.add_argument("--run-id", default=None)
+    plsd.add_argument("--window-seconds", type=float, default=None)
+
+    plt = sub.add_parser("loop-telemetry",
+                         help="Section 107/108's Loop Engineering Center table over the "
+                              "real section-108 loop telemetry events in "
+                              ".dv-harness/events.jsonl. "
+                              "See dv_harness/loop_telemetry.py.")
+    plt.add_argument("lt_verb", choices=["names", "events", "rows", "show"])
+    plt.add_argument("--run-id", default=None)
+    plt.add_argument("--json", action="store_true")
+
+    pmqp = sub.add_parser("memory-quality-policy",
+                          help="Recommend (and optionally apply, via the real MemoryGC) "
+                               "stale/deprecate actions over this project's own Memory "
+                               "store. See dv_harness/memory_quality_policy.py.")
+    pmqp.add_argument("mqp_verb", choices=["report", "apply"])
+    pmqp.add_argument("--stale-after-days", type=int, default=None)
+    pmqp.add_argument("--deprecate-after-days", type=int, default=None)
+    pmqp.add_argument("--json", action="store_true")
+
+    matr = sub.add_parser("model-agent-tool-router",
+                          help="Model/Agent/Tool Router: task-type -> agent/model/tool "
+                              "with a documented, data-driven fallback policy. "
+                              "See dv_harness/model_agent_tool_router.py.")
+    matr.add_argument("matr_verb", choices=["task-types", "criteria", "route"])
+    matr.add_argument("--task-type", default=None)
+    matr.add_argument("--unavailable-agents", default="")
+    matr.add_argument("--unavailable-models", default="")
+    matr.add_argument("--unavailable-tools", default="")
+    matr.add_argument("--json", action="store_true")
+
+    podg = sub.add_parser("ordering-domain-graph",
+                          help="Build and report on an ordering-domain graph from a JSON "
+                               "document carrying 'domains'/'memberships'/'edges' lists -- "
+                               "every fact caller-declared and evidence-cited, never "
+                               "inferred. See dv_harness/ordering_domain_graph.py.")
+    podg.add_argument("--facts-file", required=True,
+                      help="JSON file with {'domains': [...], 'memberships': [...], "
+                           "'edges': [...]}.")
+    podg.add_argument("--json", action="store_true")
+
+    # ------------------------------------------------------------------
+    # grpE wiring (2026-09-06): pure front-door wiring for 14 already-built,
+    # already-tested real dv_harness modules. Each module already has its own
+    # `python -m dv_harness.<module>` front door (execute_verb()/main()); the
+    # blocks below add a matching dv-harness verb that imports the module and
+    # calls that same real implementation. No new logic here.
+    # ------------------------------------------------------------------
+
+    povpe = sub.add_parser("org-verification-policy",
+                           help="Org-declarable, EXECUTABLE verification-policy rules engine "
+                                "(CLAUDE.md sections 135-137, vi_meta_governance/ovpe). A policy "
+                                "is DATA (org_verification_policy.schema.json), never Python "
+                                "code: a `condition` (three-valued True/False/UNRESOLVABLE over "
+                                "project facts), an `action_if_matched` (BLOCK/WARN/ALLOW) for a "
+                                "named `governs` topic, a scope and severity. See "
+                                "dv_harness/org_verification_policy_engine.py.")
+    povpe.add_argument("ovpe_verb", choices=("validate", "evaluate"))
+    povpe.add_argument("--policies", required=True, help="Policy document JSON file.")
+    povpe.add_argument("--facts", default=None, help="evaluate: facts JSON file to check the "
+                                                       "policies against.")
+    povpe.add_argument("--json", action="store_true")
+
+    ppcc = sub.add_parser("pattern-coverage-contribution",
+                          help="Per-pattern marginal functional-coverage contribution -- new "
+                               "bins hit (and meaningful new cross-coverage bins) attributed to "
+                               "ONE named pattern's own recorded evidence.duckdb checkpoints, "
+                               "plus its real jobs runtime/failure evidence. Distinct from "
+                               "loop_convergence.py's project-wide aggregate curve. See "
+                               "dv_harness/pattern_coverage_contribution.py.")
+    ppcc.add_argument("--db-path", required=True, help="evidence.duckdb path.")
+    ppcc.add_argument("--pattern", required=True, help="Pattern/test name to attribute.")
+    ppcc.add_argument("--attribution", required=True,
+                      help="JSON file: list of {'source','pattern'} records mapping a "
+                           "coverage_samples checkpoint's own 'source' to the pattern that "
+                           "produced it.")
+    ppcc.add_argument("--cross-definitions", default=None,
+                      help="JSON file: list of {'cross_name','axes'} records.")
+    ppcc.add_argument("--json", action="store_true")
+
+    ppee = sub.add_parser("pattern-execution-evidence",
+                          help="Per-DISPATCHED-TASK execution evidence inside one command.txt/"
+                               "pattern run's block/branch_a*/branch_fw/branch_b* task-"
+                               "composition layers, read from real @<time> lifecycle narration "
+                               "in a sim.log (reusing sim_log_analysis.py's marker scan) -- "
+                               "never a guessed timestamp. See "
+                               "dv_harness/pattern_execution_evidence.py.")
+    ppee.add_argument("log_path", help="Path to a sim.log.")
+    ppee.add_argument("--command", default=None,
+                      help="Real command.txt/pattern name this log belongs to.")
+    ppee.add_argument("--json", action="store_true")
+
+    pprs = sub.add_parser("pattern-runtime-state",
+                          help="Per-PATTERN execution state machine: CREATED -> PARSED -> "
+                               "VALIDATED -> READY -> RUNNING -> WAITING -> CHECKING -> "
+                               "PASS/FAIL/TIMEOUT/BLOCKED/CANCELLED, with legal-transition "
+                               "enforcement plus evidence-derived terminal-verdict observation "
+                               "from a real sim.log. Deliberately a separate vocabulary from "
+                               "loop_contract.LoopState, no bridge. See "
+                               "dv_harness/pattern_runtime_state_machine.py.")
+    pprs.add_argument("prs_verb", choices=("states", "show", "list", "observe"))
+    pprs.add_argument("--pattern-id", default=None, help="show: which pattern's record to print.")
+    pprs.add_argument("--log-file", default=None, help="observe: a real sim.log file to read.")
+    pprs.add_argument("--json", action="store_true")
+
+    ppsr = sub.add_parser("platform-startup-readiness",
+                          help="STARTUP-TIME readiness check: is the harness itself correctly "
+                               "configured, are its declared Python dependencies present, is "
+                               "config.json valid -- before a single stage has ever run, "
+                               "distinct from platform-health's ongoing operational aggregator "
+                               "over recorded run history. See "
+                               "dv_harness/platform_startup_readiness.py.")
+    ppsr.add_argument("--json", action="store_true")
+
+    psgd = sub.add_parser("spec-gap-detector",
+                          help="Five structural-absence patterns over a requirement set "
+                               "(normal-vs-error condition, enable-vs-disable, interrupt "
+                               "assert-vs-clear, reset-vs-in-flight-operation, error-condition-"
+                               "vs-recovery), each reported POTENTIAL_SPEC_GAP for a human to "
+                               "review -- never auto-promoted to an approved requirement. See "
+                               "dv_harness/potential_spec_gap_detector.py.")
+    psgd.add_argument("requirements", help="JSON file: a list of requirement objects, or "
+                                            "{\"requirements\": [...]}.")
+    psgd.add_argument("--json", action="store_true")
+
+    ppdr = sub.add_parser("prior-decision-reevaluation",
+                          help="Flags a PRIOR capability-evolution decision (REJECTED/HOLD/"
+                               "SUPERSEDED) for human RECONSIDERATION when new real repeated-"
+                               "failure or cross-project evidence has accumulated against it "
+                               "since the decision was made. Detection only -- never reverses a "
+                               "decision or files a new candidate itself (Research-Capability "
+                               "Evolution master prompt section 77). See "
+                               "dv_harness/prior_decision_reevaluation.py.")
+    ppdr.add_argument("pdr_verb", choices=("detect", "file"))
+    ppdr.add_argument("--candidates", default=None,
+                      help="JSON file of persisted CapabilityEvolutionCandidate records "
+                           "(default: read from this project's own Blackboard/memory store).")
+    ppdr.add_argument("--cross-project-patterns", default=None,
+                      help="JSON file: the caller's own already-computed "
+                           "cross_project_mining.mine_cross_project_patterns() "
+                           "'cross_project_patterns' list.")
+    ppdr.add_argument("--min-occurrences", type=int, default=None)
+    ppdr.add_argument("--json", action="store_true")
+
+    ppsir = sub.add_parser("programming-sequence-ir",
+                           help="Canonical Programming Sequence IR (Init->Configure->Enable->"
+                                "...->Reset) validator: phase-order monotonicity, register "
+                                "access-type legality, and depends_on ordering against a "
+                                "duck-typed register-facts list; or build/query a project-wide "
+                                "register dependency graph. Reads only. See "
+                                "dv_harness/programming_sequence_ir.py.")
+    ppsir.add_argument("psir_verb", choices=("validate", "graph"))
+    ppsir.add_argument("--sequence", default=None,
+                       help="ProgrammingSequenceIR JSON document (required for 'validate').")
+    ppsir.add_argument("--facts", default=None,
+                       help="Register facts JSON: a list of {name, offset, access_type, "
+                            "depends_on} dicts (required for 'graph'; optional for 'validate').")
+    ppsir.add_argument("--catalog", default=None,
+                       help="Illegal sequence catalog JSON (optional, 'validate' only).")
+    ppsir.add_argument("--json", action="store_true")
+
+    purc = sub.add_parser("usage-recipe-catalog",
+                          help="Documented, purpose-cited step-by-step USAGE RECIPES assembled "
+                               "over programming_sequence_ir.py's real per-sequence facts -- "
+                               "named ordered step subsets ('here is how to bring the link up: "
+                               "steps 0-3, per programming-guide section 4.2'), never a parallel "
+                               "step-ordering validator: ordering validation delegates entirely "
+                               "to programming_sequence_ir.validate_step_ordering(). Reads only. "
+                               "See dv_harness/usage_recipe_catalog.py.")
+    purc.add_argument("urc_verb", choices=("catalog", "validate"))
+    purc.add_argument("--recipes", default=None, dest="recipes_json",
+                      help="Usage recipe catalog JSON: a list of {recipe_id, purpose, citation, "
+                           "steps, ...} dicts (required).")
+    purc.add_argument("--facts", default=None, dest="facts_json",
+                      help="Register facts JSON (as programming_sequence_ir.py's --facts). "
+                           "Optional for 'validate'; omitting it reports NOT_AVAILABLE per recipe.")
+    purc.add_argument("--catalog", default=None, dest="catalog_json",
+                      help="Illegal sequence catalog JSON (as programming_sequence_ir.py's "
+                           "--catalog). Optional, 'validate' only.")
+    purc.add_argument("--recipe-id", default=None, dest="urc_recipe_id",
+                      help="Validate only this one recipe (default: validate every recipe and "
+                           "report the worst-wins rollup). 'validate' only.")
+    purc.add_argument("--json", action="store_true")
+
+    ppcap = sub.add_parser("protocol-capability",
+                           help="What protocol-specific generation this harness can actually "
+                                "DO, derived from the code that exists (GENERIC_SKELETON_ONLY / "
+                                "PROTOCOL_MODEL_PARTIAL / PROTOCOL_MODEL_COMPLETE / DUT_PROVEN), "
+                                "never from a label typed into a registry JSON file. "
+                                "--check/--sync are mutually exclusive; with neither, prints "
+                                "the capability rows. See dv_harness/protocol_capability.py.")
+    _ppcap_g = ppcap.add_mutually_exclusive_group()
+    _ppcap_g.add_argument("--check", action="store_true",
+                          help="Exit 2 if the registry claims more than the code supports.")
+    _ppcap_g.add_argument("--sync", action="store_true",
+                          help="Rewrite the registry (and semantic-models) capability fields "
+                               "from the code.")
+    ppcap.add_argument("--capability-root", default=None,
+                       help="Project root to check/sync/report over (default: this repo).")
+    ppcap.add_argument("--json", action="store_true")
+
+    ppco = sub.add_parser("protocol-compliance-oracle",
+                          help="Checks whether a GENERATED sequence/pattern's own declared "
+                               "STIMULUS (a list of transaction dicts) is itself protocol-legal, "
+                               "BEFORE anything is simulated -- a static, evidence-grounded lint "
+                               "reusing amba_transaction_ir.py's applicability facts and "
+                               "amba_master_slave_constraint_ir.py's legal-value facts (spec "
+                               "section 222). Distinct from protocol_compliance_aggregation.py, "
+                               "which reads an ALREADY-COMPUTED scoreboard verdict from a real "
+                               "simulation run. See dv_harness/protocol_compliance_oracle.py.")
+    ppco.add_argument("--pattern", required=True,
+                      help="JSON file: {protocol, transactions, concurrent_groups?, "
+                           "data_width_bytes?}.")
+    ppco.add_argument("--json", action="store_true")
+
+    prca = sub.add_parser("rca-ontology",
+                          help="Fixed root-cause CATEGORY ontology (DUT/testbench/VIP/stimulus/"
+                               "checker/coverage-model/spec/toolchain/configuration/flaky/"
+                               "accepted-limitation) for a CLOSED Engineering-Memory record, plus "
+                               "failure-signature-based aggregation across records -- a coarser, "
+                               "deliberately disjoint axis from command_error_taxonomy.py and "
+                               "system_failure_taxonomy.py. See dv_harness/rca_ontology.py.")
+    prca.add_argument("rca_verb", choices=("categories", "classify"))
+    prca.add_argument("--records", default=None,
+                      help="classify: JSON array of closed Engineering-Memory records.")
+    prca.add_argument("--rca-root", default=None, help="classify: project root.")
+
+    pree = sub.add_parser("register-excel-extract",
+                          help="Turns a real register-map .xlsx/.csv spreadsheet into a "
+                               "structured RegisterIR and, where the row's access type/width "
+                               "are schema-legal, a register_map.schema.json-shaped document "
+                               "env_manifest.py can load -- a real transcription, never a "
+                               "guessed register. See dv_harness/register_excel_extract.py.")
+    pree.add_argument("excel_path", help="Register-map .xlsx/.csv file.")
+    pree.add_argument("--sheet", default=None, help="Sheet name (default: first sheet).")
+    pree.add_argument("--block", default=None, help="Default block name for rows with none.")
+    pree.add_argument("--base-address", default=None,
+                      help="Hex (0x.../...h) or decimal block base address.")
+    pree.add_argument("--json", action="store_true")
+
+    prrt = sub.add_parser("register-rtl-trace",
+                          help="Traces a register_map.schema.json field's declared name to a "
+                               "real RTL signal/control-logic reference via the real verible "
+                               "declaration-level parse (import only, no second SystemVerilog "
+                               "parser) -- TRACE_CONFIRMED is its ceiling, never a claim of "
+                               "verified elaboration-time behavior. See "
+                               "dv_harness/register_rtl_trace.py.")
+    prrt.add_argument("--register-map", required=True,
+                      help="Path to a register_map.schema.json document.")
+    prrt.add_argument("--rtl", action="append", required=True, dest="rrt_rtl_paths",
+                      help="An RTL source file to parse (repeatable).")
+    prrt.add_argument("--strict-partial", action="store_true",
+                      help="Exit non-zero when any field's trace is TRACE_PARTIAL (ambiguous).")
+    prrt.add_argument("--json", action="store_true")
+
+    prri = sub.add_parser("requirement-risk-ir",
+                          help="Six-factor requirement risk profile (complexity, "
+                               "change_frequency, bug_history, customer_impact, "
+                               "observability_difficulty, protocol_criticality). "
+                               "change_frequency is MEASURED from real git history; the four "
+                               "other declared factors come only from --facts-file; bug_history "
+                               "is always NOT_AVAILABLE (no real producer in this repo). Reads "
+                               "and reports only. See dv_harness/requirement_risk_ir.py.")
+    prri.add_argument("--facts-file", default=None,
+                      help="JSON file with requirement facts (requirement_id/id, complexity, "
+                           "customer_impact, observability_difficulty, protocol_criticality, "
+                           "and optional '<factor>_rationale' keys).")
+    prri.add_argument("--source-file", default=None,
+                      help="Path (relative to --project-root) whose git history measures "
+                           "change_frequency.")
+    prri.add_argument("--requirement-project-root", default=None,
+                      help="Git repository root that --source-file is measured against "
+                           "(default: this dv-harness project root).")
+    prri.add_argument("--json", action="store_true")
+
+    prqt = sub.add_parser("requirement-testability",
+                          help="Spec section 218 requirement testability classification: "
+                               "TESTABLE / UNTESTABLE_PROSE / INDETERMINATE over "
+                               "requirement_contract.py-shaped records -- a requirement can "
+                               "be schema-COMPLETE and still untestable prose. Reads and "
+                               "reports only. See dv_harness/requirement_testability.py.")
+    prqt.add_argument("--requirements", required=True,
+                      help="JSON file with a top-level `requirements` list.")
+    prqt.add_argument("--json", action="store_true")
+    prqt.add_argument("--fail-on-indeterminate", action="store_true",
+                      help="Also fail on INDETERMINATE findings, not only UNTESTABLE_PROSE.")
+
+    preso = sub.add_parser("resource-orchestrator",
+                           help="Global cross-job resource orchestration: ranking-rule / "
+                                "contenders / capacity / plan over real preflight checks and "
+                                "the cross-project registry. A grant is advisory only -- it "
+                                "reserves nothing and authorizes no real submission. "
+                                "See dv_harness/resource_orchestrator.py.")
+    preso.add_argument("reso_verb", choices=["ranking-rule", "contenders", "capacity", "plan"])
+    preso.add_argument("--requests", default="",
+                       help="JSON list of resource requests; omit to build them from the "
+                            "cross-project registry.")
+    preso.add_argument("--queue", default="")
+
+    prcc = sub.add_parser("runtime-control-commands",
+                          help="Validate that every CONTROL-classified command.txt/pattern "
+                               "command belongs to the closed vocabulary WAIT/POLL/REPEAT/"
+                               "BOUNDED_LOOP/SYNC/BARRIER, and that REPEAT/BOUNDED_LOOP declare "
+                               "a real iteration limit. Reads one file; verifies no behavior. "
+                               "See dv_harness/runtime_control_commands.py.")
+    prcc.add_argument("--command-file", required=True,
+                      help="A command.txt/pattern file to parse and check.")
+    prcc.add_argument("--json", action="store_true")
+
+    prer = sub.add_parser("runtime-events",
+                          help="Runtime event registry: event_name/producer/consumer/payload/"
+                               "timeout/scope/status over a declared event set, with REQUIRES/"
+                               "WAITS_FOR/TRIGGERS/UNBLOCKS dependency-graph stop-on-failure "
+                               "propagation. Reports only. See dv_harness/runtime_event_registry.py.")
+    prer.add_argument("re_verb", choices=("graph", "status"))
+    prer.add_argument("--registry", required=True, help="Runtime event registry JSON file.")
+    prer.add_argument("--out", default=None,
+                      help="status: also write the propagation report JSON here.")
+    prer.add_argument("--json", action="store_true")
+
+    pswr = sub.add_parser("safe-write-rollback",
+                          help="Safe Write / Rollback Contract: snapshot-before-write plus a "
+                               "checkable, attributable undo record for any real production "
+                               "write this harness performs. See dv_harness/safe_write_rollback.py.")
+    pswr_sub = pswr.add_subparsers(dest="swr_verb", required=True)
+    pswr_write = pswr_sub.add_parser("write", help="Snapshot and perform one write.")
+    pswr_write.add_argument("--path", required=True, help="project-relative destination path")
+    pswr_write.add_argument("--content-file", required=True,
+                            help="local file whose bytes to write")
+    pswr_write.add_argument("--actor", required=True)
+    pswr_write.add_argument("--reason", required=True)
+    pswr_write.add_argument("--write-id", default=None)
+    pswr_plan = pswr_sub.add_parser("plan", help="Check whether a rollback is safe right now.")
+    pswr_plan.add_argument("--write-id", required=True)
+    pswr_apply = pswr_sub.add_parser("apply", help="Actually undo one write.")
+    pswr_apply.add_argument("--write-id", required=True)
+    pswr_apply.add_argument("--actor", required=True)
+    pswr_apply.add_argument("--reason", required=True)
+    pswr_bplan = pswr_sub.add_parser("batch-plan", help="Check a batched-write rollback plan.")
+    pswr_bplan.add_argument("--batch-id", required=True)
+    pswr_bapply = pswr_sub.add_parser("batch-apply", help="Undo a whole recorded batch.")
+    pswr_bapply.add_argument("--batch-id", required=True)
+    pswr_bapply.add_argument("--actor", required=True)
+    pswr_bapply.add_argument("--reason", required=True)
+    pswr_sub.add_parser("list", help="List every recorded write_id.")
+    pswr_sub.add_parser("list-batches", help="List every recorded batch_id.")
+
+    pssb = sub.add_parser("safety-sandbox",
+                          help="Declare a sandbox scope, then check a proposed change (or "
+                               "verify a real git diff) stays within it. "
+                               "See dv_harness/safety_sandbox.py.")
+    pssb_sub = pssb.add_subparsers(dest="ss_verb", required=True)
+    pssb_declare = pssb_sub.add_parser("declare", help="Declare a sandbox over a path set.")
+    pssb_declare.add_argument("--paths", nargs="*", default=[])
+    pssb_declare.add_argument("--declared-by", required=True)
+    pssb_declare.add_argument("--reason", required=True)
+    pssb_declare.add_argument("--sandbox-id", default=None)
+    pssb_check = pssb_sub.add_parser("check", help="Check a proposed path set against a sandbox.")
+    pssb_check.add_argument("--sandbox-id", required=True)
+    pssb_check.add_argument("--paths", nargs="+", required=True)
+    pssb_verify = pssb_sub.add_parser("verify-diff",
+                                      help="Verify a real git diff stays within a sandbox.")
+    pssb_verify.add_argument("--sandbox-id", required=True)
+    pssb_verify.add_argument("--base", required=True)
+    pssb_verify.add_argument("--head", default="HEAD")
+    pssb_status = pssb_sub.add_parser("status", help="Print one sandbox declaration.")
+    pssb_status.add_argument("--sandbox-id", required=True)
+    pssb_sub.add_parser("list", help="List every declared sandbox_id.")
+
+    psps = sub.add_parser("scoreboard-placement-scope",
+                          help="Classify a scoreboard's compare-operation placement scope "
+                               "(PORT_LOCAL..END_TO_END, 8 values) strictly from caller-"
+                               "declared facts, never from a naming heuristic. "
+                               "See dv_harness/scoreboard_placement_scope.py.")
+    psps_sub = psps.add_subparsers(dest="sps_verb", required=True)
+    psps_sub.add_parser("scopes", help="List the 8 scope values and their definitions.")
+    psps_classify = psps_sub.add_parser("classify",
+                                        help="Classify a scoreboard's placement scope.")
+    psps_classify.add_argument("--description", required=True,
+                               help="Path to a JSON file of compare_description facts.")
+    psps_classify.add_argument("--evidence", default=None,
+                               help="Path to a JSON file of project_evidence facts.")
+    psps_classify.add_argument("--json", action="store_true")
+
+    pspi = sub.add_parser("security-policy-ir",
+                          help="Classify a proposed AMBA access (master/region/secure/"
+                               "privileged) against a declared, cited security access matrix. "
+                               "Never infers a decision from a name. "
+                               "See dv_harness/security_policy_ir.py.")
+    pspi_sub = pspi.add_subparsers(dest="spi_verb", required=True)
+    pspi_sub.add_parser("statuses",
+                        help="List the access-status and verification-status vocabularies.")
+    pspi_classify = pspi_sub.add_parser("classify",
+                                        help="Classify a proposed access against a declared policy.")
+    pspi_classify.add_argument("--policy", required=True,
+                               help="JSON file of {rules, default_decision, default_evidence}.")
+    pspi_classify.add_argument("--master", required=True)
+    pspi_classify.add_argument("--region", required=True)
+    pspi_classify.add_argument("--secure", required=True, choices=["true", "false"])
+    pspi_classify.add_argument("--privileged", required=True, choices=["true", "false"])
+    pspi_classify.add_argument("--json", action="store_true")
+    pspi_verify = pspi_sub.add_parser("verify-negative-test",
+                                      help="Verify a denial was actually observed.")
+    pspi_verify.add_argument("--policy", required=True)
+    pspi_verify.add_argument("--master", required=True)
+    pspi_verify.add_argument("--region", required=True)
+    pspi_verify.add_argument("--secure", required=True, choices=["true", "false"])
+    pspi_verify.add_argument("--privileged", required=True, choices=["true", "false"])
+    pspi_verify.add_argument("--test-result", required=True,
+                             help="JSON file of the test_result dict.")
+    pspi_verify.add_argument("--json", action="store_true")
+
+    pslr = sub.add_parser("self-learning-readiness",
+                          help="Section 55's SELF-LEARNING READINESS MATRIX (22 rows), "
+                               "aggregated from real research/capability-evolution and "
+                               "five-tier-memory sources. Reads only; runs and writes "
+                               "nothing. See dv_harness/self_learning_readiness.py.")
+    pslr.add_argument("--json", action="store_true")
+
+    psbrr = sub.add_parser("shared-bus-resource-registry",
+                           help="Intra-subsystem shared-bus-resource registry: does a real "
+                                "branch_fw programmer and a real branch_a* programmer reach "
+                                "the same shared resource without a common named lock? "
+                                "Detection only -- never picks a lock. "
+                                "See dv_harness/shared_bus_resource_registry.py.")
+    psbrr.add_argument("--resource-declarations", dest="sbrr_resource_declarations",
+                       help="JSON array of caller-declared shared-resource records.")
+    psbrr.add_argument("--connectivity-rows", dest="sbrr_connectivity_rows", default=None,
+                       help="JSON array of real connectivity-matrix rows for this subsystem.")
+    psbrr.add_argument("--json", action="store_true")
+
+    psdm = sub.add_parser("spec-doc-map",
+                          help="Offline STRUCTURAL distiller for non-VIP DUT spec/datasheet/"
+                               "programming-guide documents: chapter/section titles, table "
+                               "locations, register-chapter page ranges. Never extracts or "
+                               "persists full body prose. See dv_harness/spec_doc_map.py.")
+    psdm_sub = psdm.add_subparsers(dest="sdm_verb", required=True)
+    psdm_ex = psdm_sub.add_parser("extract",
+                                  help="Extract a structure map from one source document.")
+    psdm_ex.add_argument("--source", required=True, dest="sdm_source_path")
+    psdm_ex.add_argument("--out-dir", required=True, dest="sdm_out_dir")
+    psdm_ex.add_argument("--title", dest="sdm_title", default=None)
+    psdm_ex.add_argument("--doc-kind", dest="sdm_doc_kind", default="dut_spec")
+    psdm_ex.add_argument("--json", action="store_true")
+    psdm_sh = psdm_sub.add_parser("show",
+                                  help="Print an already-extracted structure_map.json record.")
+    psdm_sh.add_argument("--record", required=True, dest="sdm_record_path")
+    psdm_sh.add_argument("--json", action="store_true")
+
+    psi = sub.add_parser("spec-intelligence",
+                         help="Build a SpecMap structure index, or validate an atomic "
+                              "requirement extraction/relation/dependency document (section "
+                              "184/187 contract + relation re-derivation). "
+                              "See dv_harness/spec_intelligence.py.")
+    psi_sub = psi.add_subparsers(dest="si_cmd", required=True)
+    psi_map = psi_sub.add_parser("spec-map",
+                                 help="Build a SpecMap from a vip_user_guide_distill reference record.")
+    psi_map.add_argument("--reference", required=True, dest="si_reference")
+    psi_map.add_argument("--out", required=True, dest="si_out")
+    psi_map.add_argument("--json", action="store_true")
+    psi_an = psi_sub.add_parser("analyze", help="Validate an extraction document.")
+    psi_an.add_argument("--extraction", required=True, dest="si_extraction")
+    psi_an.add_argument("--project-root", dest="si_project_root", default=None)
+    psi_an.add_argument("--json", action="store_true")
+    psi_an.add_argument("--fail-on-error", action="store_true")
+
+    psvd = sub.add_parser("spec-vplan-delta",
+                          help="Semantic diff of two requirement-IR-shaped snapshots: "
+                               "ADDED/MODIFIED/REMOVED/REVALIDATION_REQUIRED per requirement. "
+                               "See dv_harness/spec_vplan_delta.py.")
+    psvd.add_argument("--before", required=True, help="Baseline requirement-IR JSON file.")
+    psvd.add_argument("--after", required=True, help="Current requirement-IR JSON file.")
+    psvd.add_argument("--vplan-delta-root", default=None,
+                      help="Project root whose .dv-harness/requirements.csv grounds "
+                           "vPlan/pattern/coverage linkage (default: this project's own root).")
+    psvd.add_argument("--json", action="store_true")
+
+    psvrg = sub.add_parser("spec-vplan-readiness-gate",
+                           help="The SPEC_VPLAN_READY conjunction over caller-named spec-to-"
+                                "vplan-stage conditions -- worst-wins, never averaged. "
+                                "See dv_harness/spec_vplan_readiness_gate.py.")
+    psvrg.add_argument("svrg_verb", choices=("statuses", "verdicts", "evaluate"))
+    psvrg.add_argument("--conditions", dest="svrg_conditions",
+                       help="evaluate: JSON list of {condition_name, status, reason} records.")
+    psvrg.add_argument("--json", action="store_true")
+
+    pscm = sub.add_parser("subsys-compat-matrix",
+                          help="Subsystem Compatibility Matrix: which subsystem pairs are "
+                               "known-compatible for composition, from the REAL SYS-9..14 "
+                               "cross-subsystem resource analysis and each subsystem's own "
+                               "real IP-ownership self-check. Never a hand-typed matrix. "
+                               "See dv_harness/subsys_compat_matrix.py.")
+    pscm.add_argument("--root", dest="scm_root", default=None,
+                      help="Project root (contains .dv-harness/). Default: this project's own.")
+    pscm.add_argument("--selected", dest="scm_selected", default=None,
+                      help="Path to a JSON array of subsystem names. Omit to use the real "
+                           "registered subsystem set.")
+    pscm.add_argument("--ip-ownership-inputs", dest="scm_ip_ownership_inputs", default=None,
+                      help="Path to a JSON object keyed by subsystem id, each value carrying "
+                           "optional legacy_bfm_declarations/connectivity_rows/env_manifest "
+                           "for that subsystem's own IP-ownership self-check.")
+    pscm.add_argument("--json", action="store_true")
+
+    pssc = sub.add_parser("subsystem-contract",
+                          help="Assemble one authoritative SubsystemVerificationContract "
+                               "record from this project's existing real readers "
+                               "(env_manifest, requirement_contract, golden_scenario, "
+                               "signoff_export, waiver_store). 'assemble' reads only; "
+                               "'snapshot' additionally writes "
+                               ".dv-harness/subsystem_contract.json. "
+                               "See dv_harness/subsystem_contract.py.")
+    pssc.add_argument("ssc_verb", choices=("assemble", "snapshot"))
+    pssc.add_argument("--root", dest="ssc_root", default=None)
+    pssc.add_argument("--subsystem", dest="ssc_subsystem", default=None,
+                      help="Registered subsystem name (environment_mode_router registry). "
+                           "Omit for project scope.")
+    pssc.add_argument("--manifest", dest="ssc_manifest", default=None,
+                      help="Explicit env.manifest.json path (default: this project's own).")
+    pssc.add_argument("--requirements", dest="ssc_requirements", default=None,
+                      help="Requirement-contract JSON file (default: a few conventional "
+                           "paths).")
+    pssc.add_argument("--db", dest="ssc_db", default=None,
+                      help="Evidence database path (default: "
+                           "<root>/.dv-harness/evidence/evidence.duckdb).")
+    pssc.add_argument("--declared-spec-version", dest="ssc_spec_version", default=None,
+                      help="A human-declared spec version (attested, never machine-"
+                           "verified).")
+    pssc.add_argument("--json", action="store_true")
+
+    psmg = sub.add_parser("subsystem-maturity-gate",
+                          help="Composite 9.0/9.5/10.0 subsystem maturity qualification "
+                               "gates. Reads only; runs no stage, gate script, build, "
+                               "regression or LSF job. "
+                               "See dv_harness/subsystem_maturity_gate.py.")
+    psmg_sub = psmg.add_subparsers(dest="smg_verb", required=True)
+    psmg_cond = psmg_sub.add_parser("conditions", help="List the declared conditions.")
+    psmg_cond.add_argument("--json", action="store_true")
+    psmg_eval = psmg_sub.add_parser("evaluate", help="Evaluate one maturity level.")
+    psmg_eval.add_argument("--level", required=True, choices=("9.0", "9.5", "10.0"))
+    psmg_eval.add_argument("--root", dest="smg_root", default=None)
+    psmg_eval.add_argument("--json", action="store_true")
+    psmg_eval.add_argument("--vip-api-cards", dest="smg_vip_api_cards", default=None,
+                           help="path to a written vip_api_cards.json artifact")
+    psmg_eval.add_argument("--vip-source", action="append", default=None,
+                           dest="smg_vip_sources",
+                           help="generated SystemVerilog source/dir to validate "
+                                "(repeatable); used only if --vip-api-cards is not given")
+    psmg_eval.add_argument("--vip-index", dest="smg_vip_index", default=None,
+                           help="a vip_symbol_index document, used with --vip-source")
+    psmg_eval.add_argument("--bind-topology", dest="smg_bind_topology", default=None,
+                           help="a manifest_inputs/*_bind_topology.json path")
+    psmg_eval.add_argument("--require-tier", dest="smg_require_tier", action="store_true")
+    psmg_eval.add_argument("--evidence-db", dest="smg_evidence_db", default=None,
+                           help="override the default .dv-harness/evidence/evidence.duckdb "
+                                "path")
+    psmg_eval.add_argument("--smoke-proof-report", dest="smg_smoke_proof_report",
+                           default=None,
+                           help="a JSON file holding a "
+                                "system_build_proof.SmokeProofReport.to_dict()")
+
+    pspr = sub.add_parser("subsystem-practicality-score",
+                          help="A 10-dimension weighted maturity rollup over this project's "
+                               "own generation_readiness/golden_flow_readiness/"
+                               "loop_convergence/coverage_analysis/confidence_calibration "
+                               "reports. Reads only; runs no stage. "
+                               "See dv_harness/subsystem_practicality_score.py.")
+    pspr.add_argument("spr_verb", nargs="?", default="show",
+                      choices=["dimensions", "report", "show"])
+    pspr.add_argument("--project-root", dest="spr_project_root", default=None)
+    pspr.add_argument("--json", action="store_true")
+    pspr.add_argument("--deep", action="store_true",
+                      help="also run generation_readiness.py's expensive SYS-1..SYS-30 "
+                           "cross-subsystem chain")
+
+    psyo = sub.add_parser("syoscb-source-audit",
+                          help="SYOSCB-1 read-only audit of an uvm_syoscb source tree, and "
+                               "the SYOSCB-3 Knowledge Center registration payload built "
+                               "from it. Reads only; never copies, never publishes. "
+                               "See dv_harness/syoscb_source_audit.py.")
+    psyo.add_argument("syo_root", help="upstream source directory to audit, read-only")
+    psyo.add_argument("--json", action="store_true", help="emit the audit as JSON")
+    psyo.add_argument("--registration-payload", dest="syo_registration_payload",
+                      action="store_true",
+                      help="also build (never publish) the SYOSCB-3 registration payload")
+    psyo.add_argument("--l5-destination", dest="syo_l5_destination", default=None,
+                      help="the approved in-repo destination, if a human has decided one")
+    psyo.add_argument("--assert-not-vendored", dest="syo_assert_not_vendored",
+                      metavar="REPO_ROOT", default=None,
+                      help="fail if any upstream file is already inside this repository")
+
+    psct = sub.add_parser("system-checker-taxonomy",
+                          help="Classify a SYSTEM-scope checker's KIND (data-flow, "
+                               "resource-arbitration, address-routing, clock-reset-"
+                               "sequencing, command-compatibility, build-integrity, "
+                               "scoreboard-composition, recovery, error-propagation) from a "
+                               "declared or keyword-matched description. "
+                               "See dv_harness/system_checker_taxonomy.py.")
+    psct_sub = psct.add_subparsers(dest="sct_cmd", required=True)
+    psct_sub.add_parser("types", help="List the fixed nine checker categories.")
+    psct_classify = psct_sub.add_parser("classify",
+                                        help="Classify a list of checker descriptions.")
+    psct_classify.add_argument("sct_path",
+                               help="JSON file: bare list, or {\"checkers\": [...]}.")
+    psct_classify.add_argument("--json", action="store_true")
+
+    psca = sub.add_parser("system-closure-aggregator",
+                          help="Strict worst-wins CLOSED/NOT_CLOSED/INCOMPLETE_EVIDENCE "
+                               "rollup over twelve caller-declared system closure "
+                               "dimensions -- never averaged. "
+                               "See dv_harness/system_closure_aggregator.py.")
+    psca.add_argument("--dimensions", dest="sca_dimensions", required=True,
+                      help="path to a JSON file: a bare list of "
+                           "{dimension_name, status} records, or "
+                           "{\"dimensions\": [...]}")
+    psca.add_argument("--markdown", dest="sca_markdown", action="store_true",
+                      help="render as a markdown table instead of JSON")
+
+    pscg = sub.add_parser("system-command-grammar-ir",
+                          help="Compose several subsystems' own command.txt style learning "
+                               "into one system-level grammar verdict. "
+                               "See dv_harness/system_command_grammar_ir.py.")
+    pscg.add_argument("--subsystem", action="append", default=[], dest="scg_subsystem",
+                      metavar="ID=PATH",
+                      help="one subsystem's id and its real command.txt-style file path, "
+                           "e.g. --subsystem usb0=usb0/command.txt (repeatable)")
+    pscg.add_argument("--json", action="store_true")
+
+    psep = sub.add_parser("system-error-propagation",
+                          help="Trace an ErrorPropagationIR: given an origin subsystem and "
+                               "an error/failure condition, over a real-or-duck-typed "
+                               "cross-subsystem topology document, find which OTHER "
+                               "subsystems the topology's own proven relationships show a "
+                               "path to, and whether each declares a real recovery action. "
+                               "Reads only; runs/submits/approves nothing. "
+                               "See dv_harness/system_error_propagation.py.")
+    psep.add_argument("sep_verb", choices=("trace",))
+    psep.add_argument("--origin", required=True, help="Origin subsystem_id.")
+    psep.add_argument("--condition", dest="sep_condition_text", default=None,
+                      help="Error condition, as a bare string, or free text treated as "
+                           "GENERIC.")
+    psep.add_argument("--condition-file", dest="sep_condition_path", default=None,
+                      help="Path to a JSON document {\"kind\", \"description\"} instead of "
+                           "--condition.")
+    psep.add_argument("--topology", required=True, dest="sep_topology_path",
+                      help="Path to a topology JSON document shaped like "
+                           "system_topology_analysis.build_system_topology_analysis()'s "
+                           "output.")
+    psep.add_argument("--declared-responses", dest="sep_declared_responses_path",
+                      default=None,
+                      help="Path to a JSON array of caller-declared "
+                           "{\"subsystem_id\", \"response_action\", \"evidence\"} records.")
+    psep.add_argument("--json", action="store_true")
+
+    psfw = sub.add_parser("system-fw-service-registry",
+                          help="Per-SYSTEM branch_fw service-loop ownership registry across "
+                               "composed subsystems. Reuses branch_ownership_resolver.py's "
+                               "FW classification and system_resource_inventory.py's real "
+                               "cross-subsystem findings; re-derives neither. "
+                               "See dv_harness/system_fw_service_registry.py.")
+    psfw.add_argument("--input", dest="sfw_input", default=None,
+                      help="Path to a JSON file: {\"subsystem_declarations\": [...], "
+                           "\"cross_subsystem_findings\": {...}} (the latter optional).")
+    psfw.add_argument("--json", action="store_true")
+
+    psvc = sub.add_parser("system-verification-contract",
+                          help="Assemble one authoritative SystemVerificationContract "
+                               "record from N caller-supplied subsystem_contract.py-shaped "
+                               "records plus a system_topology_analysis.py-shaped document, "
+                               "a system_resource_inventory."
+                               "real_cross_subsystem_findings()-shaped record and a "
+                               "system_command_plan.py-shaped document. "
+                               "See dv_harness/system_verification_contract.py.")
+    psvc.add_argument("svc_verb", choices=("assemble", "snapshot"))
+    psvc.add_argument("--root", dest="svc_root", default=None)
+    psvc.add_argument("--subsystem-contracts", dest="svc_subsystem_contracts", default=None,
+                      help="JSON file: a bare array, or {'subsystem_contracts': [...]}, of "
+                           "subsystem_contract.py-shaped records.")
+    psvc.add_argument("--topology", dest="svc_topology", default=None,
+                      help="JSON file: a system_topology_analysis.py-shaped document.")
+    psvc.add_argument("--resource-registry", dest="svc_resource_registry", default=None,
+                      help="JSON file: a system_resource_inventory."
+                           "real_cross_subsystem_findings()-shaped record.")
+    psvc.add_argument("--command-registry", dest="svc_command_registry", default=None,
+                      help="JSON file: a system_command_plan.py-shaped document.")
+    psvc.add_argument("--system-name", dest="svc_system_name", default=None)
+    psvc.add_argument("--json", action="store_true")
+
+    pmad = sub.add_parser("missing-artifact-detector",
+                          help="Target-conditioned missing-artifact detector: given a "
+                               "downstream TARGET name (VIP_UVM_CREATION/SIGNOFF_PACKAGE/"
+                               "COVERAGE_CLOSURE/REGRESSION_SUBMISSION) and a caller-"
+                               "declared source-inventory, reports READY/"
+                               "MISSING_ARTIFACTS/INCOMPLETE_EVIDENCE/UNKNOWN_TARGET. "
+                               "See dv_harness/target_conditioned_missing_artifact_detector.py.")
+    pmad.add_argument("mad_target", help="Downstream target name.")
+    pmad.add_argument("mad_inventory", nargs="?", default=None,
+                      help="Path to a JSON inventory file: {category_id: True/False/"
+                           "omitted}. Omit for an empty inventory.")
+
+    ptrm = sub.add_parser("task-return-model",
+                          help="Cross-check a declared task list against a real sim.log "
+                               "and report each task's resolved outcome ('no silent "
+                               "command failure'). "
+                               "See dv_harness/task_return_model.py.")
+    ptrm.add_argument("--tasks", required=True, dest="trm_tasks",
+                      help="Path to a JSON file: a list of task_id strings, or a list of "
+                           "{task_id, layer, command} dicts.")
+    ptrm.add_argument("--log", required=True, dest="trm_log",
+                      help="Path to the real sim.log.")
+    ptrm.add_argument("--json", action="store_true")
+
+    ptci = sub.add_parser("transaction-correlation",
+                          help="Correlate observed AMBA request/response/data-beat/sub-"
+                               "transaction records into the Transaction Correlation IR. "
+                               "Reads and reports only -- writes nothing, gates nothing. "
+                               "See dv_harness/transaction_correlation_ir.py.")
+    ptci_sub = ptci.add_subparsers(dest="tci_cmd", required=True)
+    ptci_resp = ptci_sub.add_parser("responses", help="Correlate responses to requests.")
+    ptci_resp.add_argument("--requests", required=True, dest="tci_requests",
+                           help="JSON file: a list of request records.")
+    ptci_resp.add_argument("--responses", required=True, dest="tci_responses",
+                           help="JSON file: a list of response records.")
+    ptci_resp.add_argument("--json", action="store_true")
+    ptci_data = ptci_sub.add_parser("data",
+                                    help="Associate data beats with transactions.")
+    ptci_data.add_argument("--transactions", required=True, dest="tci_transactions",
+                           help="JSON file: a list of transaction records.")
+    ptci_data.add_argument("--beats", required=True, dest="tci_beats",
+                           help="JSON file: a list of data-beat records.")
+    ptci_data.add_argument("--json", action="store_true")
+    ptci_link = ptci_sub.add_parser("linkage",
+                                    help="Link burst split/merge sub-transactions to their "
+                                         "parent.")
+    ptci_link.add_argument("--event", required=True, dest="tci_event",
+                           help="JSON file: one detected split/merge event.")
+    ptci_link.add_argument("--parent", required=True, dest="tci_parent",
+                           help="JSON file: one parent transaction record.")
+    ptci_link.add_argument("--children", required=True, dest="tci_children",
+                           help="JSON file: a list of child transaction records.")
+    ptci_link.add_argument("--json", action="store_true")
+    ptci_recon = ptci_sub.add_parser(
+        "reconstruct",
+        help="Reassemble one full logical AXI transaction record per declared "
+             "transaction by joining already-computed response-correlation and "
+             "data-association results.")
+    ptci_recon.add_argument("--transactions", required=True, dest="tci_transactions",
+                            help="JSON file: a list of {transaction_ref, request_ref, "
+                                 "scope, evidence} records.")
+    ptci_recon.add_argument("--requests", required=True, dest="tci_requests",
+                            help="JSON file: a list of request records.")
+    ptci_recon.add_argument("--responses", required=True, dest="tci_responses",
+                            help="JSON file: a list of response records.")
+    ptci_recon.add_argument("--data-transactions", required=True,
+                            dest="tci_data_transactions",
+                            help="JSON file: the transaction records for data-beat "
+                                 "association.")
+    ptci_recon.add_argument("--beats", required=True, dest="tci_beats",
+                            help="JSON file: a list of data-beat records.")
+    ptci_recon.add_argument("--json", action="store_true")
+
+    psti = sub.add_parser("system-transaction-ir",
+                          help="Compose amba_transaction_ir.py's per-fabric transaction facts "
+                               "across subsystems into one System Transaction IR, over the "
+                               "declared 22-field amba_transaction_ir shape plus real "
+                               "cross-subsystem system_transaction_links evidence. Reads and "
+                               "reports only -- writes nothing, gates nothing. "
+                               "See dv_harness/system_transaction_ir.py.")
+    psti_sub = psti.add_subparsers(dest="sti_cmd", required=True)
+    psti_sub.add_parser("fields", help="List the reused 22-field amba_transaction_ir shape.")
+    psti_build = psti_sub.add_parser(
+        "build",
+        help="Build the SystemTransactionIR from declared per-fabric templates and "
+             "cross-subsystem link evidence.")
+    psti_build.add_argument("--fabrics", required=True,
+                            help="JSON file: {subsystem_id: [per-fabric IR templates]}.")
+    psti_build.add_argument("--links", required=True,
+                            help="JSON file: a list of system_transaction_links entries.")
+    psti_build.add_argument("--json", action="store_true")
+
+    # --- grpH wiring: unknown_uncertainty_registry, user_correction_trigger,
+    # verification_boundary_ir, verification_intake_contract,
+    # verification_intent_ir, verification_knowledge_graph,
+    # vip_capability_extraction, vip_learning_gate, vplan_baseline,
+    # vplan_item_executability_score, waiver_store, plus the two overlap-
+    # checked items memory_cli.py (genuinely distinct from the existing
+    # `memory` verb, which is the Markdown Vault surface only -- memory_cli.py
+    # is the raw JSON MemoryStore/CornerCaseLibrary front door and was never
+    # wired) and schema_config_governance.py (genuinely distinct from the
+    # existing `schema-compat` verb -- it extends that module's own
+    # classifier with the FORWARD_COMPATIBLE/MIGRATION_REQUIRED verdicts and
+    # the section-146 governance registry, reusing schema_compat.py rather
+    # than duplicating it). Each verb below reconstructs the module's own
+    # `python -m dv_harness.<module>` argv and calls that module's real
+    # execute_verb()/main(), same convention as transaction-correlation above.
+
+    puur = sub.add_parser("unknown-uncertainty-registry",
+                          help="Collect every open UNKNOWN row across this project's real "
+                               "row-based readiness reports (golden_flow_readiness.py, "
+                               "generation_readiness.py) into one registry. Derives no new "
+                               "fact and resolves nothing. See "
+                               "dv_harness/unknown_uncertainty_registry.py.")
+    puur.add_argument("uur_verb", choices=["assemble", "snapshot"], metavar="{assemble,snapshot}")
+    puur.add_argument("--no-deep", action="store_true", dest="uur_no_deep",
+                      help="skip generation_readiness's expensive SYS-1..SYS-30 topology chain")
+    puur.add_argument("--json", action="store_true")
+
+    puct = sub.add_parser("user-correction-trigger",
+                          help="Detect repeated user-correction patterns and file a DISCOVERED "
+                               "capability-evolution candidate for each one found. "
+                               "See dv_harness/user_correction_trigger.py.")
+    puct.add_argument("uct_verb", choices=["detect", "file"], metavar="{detect,file}")
+    puct.add_argument("--min-occurrences", type=int, default=None, dest="uct_min_occurrences")
+
+    pvbi = sub.add_parser("verification-boundary-ir",
+                          help="Classify a verification boundary into the fixed 10-value "
+                               "boundary-class taxonomy and record cited 7-role ownership. "
+                               "See dv_harness/verification_boundary_ir.py.")
+    pvbi_sub = pvbi.add_subparsers(dest="vbi_cmd", required=True)
+    pvbi_sub.add_parser("classes", help="list the fixed 10-value boundary-class taxonomy")
+    pvbi_sub.add_parser("roles", help="list the fixed 7-role ownership vocabulary")
+    pvbi_build = pvbi_sub.add_parser("build", help="build and report VerificationBoundaryIR(s)")
+    pvbi_build.add_argument("--boundaries", required=True, dest="vbi_boundaries",
+                            help="path to a JSON file: a list of boundary dicts")
+    pvbi_build.add_argument("--json", action="store_true")
+
+    pvic = sub.add_parser("verification-intake-contract",
+                          help="The whole-project VerificationIntakeContract lifecycle "
+                               "(13-state machine) and the INTAKE_READY conjunction over "
+                               "caller-named critical conditions. "
+                               "See dv_harness/verification_intake_contract.py.")
+    pvic.add_argument("vic_verb", choices=["states", "transitions", "evaluate"],
+                      metavar="{states,transitions,evaluate}")
+    pvic.add_argument("--state", default=None, dest="vic_state",
+                      help="For 'transitions': the current state to list legal next states for.")
+    pvic.add_argument("--conditions", default=None, dest="vic_conditions",
+                      help="For 'evaluate': JSON file of {name,status,reason} condition records.")
+    pvic.add_argument("--json", action="store_true")
+
+    pvii = sub.add_parser("verification-intent-ir",
+                          help="Build the Verification Intent IR set (state_machine/"
+                               "register_csr/interrupt/reset_clock/low_power/performance/"
+                               "error_recovery domain plans) for every requirement in a "
+                               "requirement-contract-shaped JSON file. "
+                               "See dv_harness/verification_intent_ir.py.")
+    pvii.add_argument("--requirements", required=True, dest="vii_requirements",
+                      help='JSON file: a bare list of requirement records, or {"requirements":[...]}')
+    pvii.add_argument("--source-paths", nargs="*", default=None, dest="vii_source_paths",
+                      help="RTL/spec text files for interrupt_dma_clock_reset_extraction.py")
+    pvii.add_argument("--sys-regmap", default=None, dest="vii_sys_regmap", help="sys_regmap.json path")
+    pvii.add_argument("--upf", nargs="*", default=None, dest="vii_upf", help="UPF file(s)")
+    pvii.add_argument("--json", action="store_true")
+
+    pvkg = sub.add_parser("verification-knowledge-graph",
+                          help="Build the cross-linked graph over real evidence-DB rows, "
+                               "requirement-contract records and memory-store records, with "
+                               "the section-184 traceability-gap report. "
+                               "See dv_harness/verification_knowledge_graph.py.")
+    pvkg.add_argument("--evidence-db", default=None, dest="vkg_evidence_db",
+                      help="path to a real evidence.duckdb")
+    pvkg.add_argument("--requirements", default=None, dest="vkg_requirements",
+                      help="path to a requirement_contract-shaped JSON file")
+    pvkg.add_argument("--memory-root", default=None, dest="vkg_memory_root",
+                      help="project root containing .dv-harness/memory")
+    pvkg.add_argument("--json", action="store_true")
+
+    pvce = sub.add_parser("vip-capability-extraction",
+                          help="Classify a real vip_symbol_index into VIPConfigIR/"
+                               "VIPTransactionIR/VIPScenarioPatternIR/VIPCheckerCapabilityIR/"
+                               "VIPCoverageCapabilityIR, each carrying a 5-level qualification "
+                               "tag. See dv_harness/vip_capability_extraction.py.")
+    pvce.add_argument("--index", required=True, dest="vce_index",
+                      help="vip_symbol_index JSON document.")
+    pvce.add_argument("--project-source", action="append", default=None, dest="vce_project_sources",
+                      help="Generated project .sv/.svh file or directory (repeatable).")
+    pvce.add_argument("--example-source", action="append", default=None, dest="vce_example_sources",
+                      help="VIP Examples/ .sv/.svh file or directory (repeatable).")
+    pvce.add_argument("--user-guide-reference-md", action="append", default=None,
+                      dest="vce_user_guide_reference_md",
+                      help="A <stem>.reference.md produced by vip_user_guide_distill (repeatable).")
+    pvce.add_argument("--out-dir", default=None, dest="vce_out_dir",
+                      help="Also write vip_capability_extraction.json here.")
+    pvce.add_argument("--json", action="store_true")
+
+    pvlg = sub.add_parser("vip-learning-gate",
+                          help="One pre-generation checkpoint over four already-real signals: "
+                               "vip_api_card.py, phy_boundary.py, connectivity.py bind-tier "
+                               "resolution and env_manifest.py's vip_config layer. "
+                               "See dv_harness/vip_learning_gate.py.")
+    pvlg.add_argument("--vip-source", action="append", dest="vlg_vip_sources", default=None,
+                      help="Generated .sv/.svh source or directory to VIP-API-validate (repeatable).")
+    pvlg.add_argument("--vip-index", default=None, dest="vlg_vip_index", help="vip_symbol_index JSON document.")
+    pvlg.add_argument("--vip-relative-to", default=None, dest="vlg_vip_relative_to",
+                      help="Root for reported VIP API usage paths.")
+    pvlg.add_argument("--phy-boundary", default=None, dest="vlg_phy_boundary",
+                      help="A real phy_boundary.json document.")
+    pvlg.add_argument("--bind-entries", default=None, dest="vlg_bind_entries",
+                      help="A JSON file: a list of bind entries.")
+    pvlg.add_argument("--require-tier", action="store_true", dest="vlg_require_tier",
+                      help="Also refuse a bind entry carrying no tier at all.")
+    pvlg.add_argument("--env-manifest", default=None, dest="vlg_env_manifest",
+                      help="A real env.manifest.json document.")
+    pvlg.add_argument("--json", action="store_true")
+
+    pvpb = sub.add_parser("vplan-baseline",
+                          help="vPlan-scoped signoff freeze / baseline (mirrors "
+                               "signoff_export.py's freeze/invalidation pattern) over "
+                               "spec_version/requirement_ir_version/configuration_ir_version/"
+                               "vplan_items. See dv_harness/vplan_baseline.py.")
+    pvpb.add_argument("vpb_verb", choices=["fields", "baseline", "freeze", "list", "status"],
+                      metavar="{fields,baseline,freeze,list,status}")
+    pvpb.add_argument("--vplan", default=None, dest="vpb_vplan", help="path to a vPlan JSON document")
+    pvpb.add_argument("--requirements", default=None, dest="vpb_requirements",
+                      help="path to a requirement-contract records JSON file")
+    pvpb.add_argument("--configuration-ir", default=None, dest="vpb_configuration_ir",
+                      help="path to a configuration-IR JSON document")
+    pvpb.add_argument("--freeze-id", default=None, dest="vpb_freeze_id")
+    pvpb.add_argument("--frozen-by", default=None, dest="vpb_frozen_by")
+    pvpb.add_argument("--spec-version", default=None, dest="vpb_spec_version",
+                      help="declare the spec version this vPlan is against")
+    pvpb.add_argument("--head", default="HEAD", dest="vpb_head")
+    pvpb.add_argument("--json", action="store_true")
+
+    pvie = sub.add_parser("vplan-item-executability-score",
+                          help="Score one/many vPlan items on the fixed 5-point "
+                               "NO_EVIDENCE/IDENTIFIED_UNMAPPED/PARTIALLY_MAPPED/"
+                               "MAPPED_OPEN_QUESTIONS/FULLY_READY executability scale -- "
+                               "never conflated with a separately-reported critical blocker. "
+                               "See dv_harness/vplan_item_executability_score.py.")
+    pvie.add_argument("--items", required=True, dest="vie_items",
+                      help="JSON file: a list of vPlan item records")
+    pvie.add_argument("--required-facts", default=None, dest="vie_required_facts",
+                      help="comma-separated fact names")
+    pvie.add_argument("--json", action="store_true")
+
+    pwvs = sub.add_parser("waiver-store",
+                          help="Report on the real waiver ledger (.dv-harness/waivers/"
+                               "waivers.json) this project's real waiver gates already read -- "
+                               "derived VALID/REVALIDATION_REQUIRED/EXPIRED/REVOKED/UNKNOWN "
+                               "status per waiver, never stored. "
+                               "See dv_harness/waiver_store.py.")
+    pwvs.add_argument("wvs_verb", choices=["statuses", "list", "status"], metavar="{statuses,list,status}")
+    pwvs.add_argument("--json", action="store_true")
+
+    pmst = sub.add_parser("memory-store",
+                          help="The raw JSON MemoryStore/CornerCaseLibrary front door "
+                               "(dv_harness/memory.py) -- search/get/deprecate over durable "
+                               "5-tier memory records and the corner-case library, plus "
+                               "index-check/reindex. Deliberately a SEPARATE command group from "
+                               "the `memory` verb above, which is specifically the Markdown/"
+                               "YAML Vault's own surface (dv_harness/memory_vault.py). "
+                               "See dv_harness/memory_cli.py.")
+    pmst_sub = pmst.add_subparsers(dest="mst_cmd", required=True)
+    pmst_search = pmst_sub.add_parser("search")
+    pmst_search.add_argument("--protocol", default="")
+    pmst_search.add_argument("--scope", default="")
+    pmst_search.add_argument("--symptom", action="append", default=[], dest="mst_symptom")
+    pmst_search.add_argument("--text", default="")
+    pmst_search.add_argument("--level", action="append", default=[], dest="mst_level",
+                             choices=["working", "job", "project", "engineering", "organizational"],
+                             help="Restrict to one or more memory tiers (repeatable).")
+    pmst_search.add_argument("--confidence", default="")
+    pmst_search.add_argument("--status", default="")
+    pmst_search.add_argument("--property", action="append", default=[], dest="mst_properties",
+                             metavar="KEY=VALUE")
+    pmst_search.add_argument("--rank-by", default="relevance", dest="mst_rank_by",
+                             choices=["relevance", "usefulness"],
+                             help="Ranking mode (2026-09-07). 'relevance' (default) is the "
+                                  "pre-existing fixed heuristic, unchanged. 'usefulness' "
+                                  "additionally weights real reuse_count/MemoryGC.mark_used() "
+                                  "history into the score -- an explicit, opt-in alternative "
+                                  "that never changes which records match, only their order.")
+    pmst_search.add_argument("--usefulness-weight", type=float, default=1.0, dest="mst_usefulness_weight",
+                             help="Multiplier on log1p(reuse_count) when --rank-by usefulness is used.")
+    pmst_search.add_argument("--limit", type=int, default=8)
+    pmst_get = pmst_sub.add_parser("get")
+    pmst_get.add_argument("memory_id")
+    pmst_dep = pmst_sub.add_parser("deprecate")
+    pmst_dep.add_argument("memory_id")
+    pmst_dep.add_argument("--reason", required=True)
+    pmst_ccs = pmst_sub.add_parser("corner-case-search")
+    pmst_ccs.add_argument("--protocol", default="")
+    pmst_ccs.add_argument("--category", default="")
+    pmst_ccs.add_argument("--text", default="")
+    pmst_ccg = pmst_sub.add_parser("corner-case-get")
+    pmst_ccg.add_argument("ccl_id")
+    pmst_cca = pmst_sub.add_parser("corner-case-add")
+    pmst_cca.add_argument("--record", required=True, dest="mst_record",
+                          help="path to a JSON file with the corner_case fields")
+    pmst_cca.add_argument("--resolution", default=None, dest="mst_resolution",
+                          help="optional path to a JSON file with {test_mapping,semantic_verdict,"
+                               "runtime_evidence_hash} -- runs through CornerCaseLibraryConsolidator")
+    pmst_ccd = pmst_sub.add_parser("corner-case-deprecate")
+    pmst_ccd.add_argument("ccl_id")
+    pmst_ccd.add_argument("--reason", required=True)
+    pmst_sub.add_parser("index-check", help="Read-only drift report between the per-tier record "
+                                             "files on disk and index.json's rows. Repairs nothing.")
+    pmst_rix = pmst_sub.add_parser("reindex", help="Rebuild index.json from the real record files "
+                                                    "on disk (MemoryStore.reindex()).")
+    pmst_rix.add_argument("--prune-missing", action="store_true", dest="mst_prune_missing",
+                          help="Also DROP index rows whose record file no longer exists.")
+
+    pscg = sub.add_parser("schema-config-governance",
+                          help="Section 146 schema/configuration governance registry over "
+                               "dv_harness/schemas/*.schema.json (schema_id/schema_version/"
+                               "unknown_field_policy/required_field_policy/validation/"
+                               "compatibility, plus the fifteen named logical schemas), plus "
+                               "the FORWARD_COMPATIBLE/MIGRATION_REQUIRED verdicts and impact-"
+                               "analysis artifacts (consumer inventory, rollback, tests, "
+                               "human-gate) that `schema-compat` (dv_harness/schema_compat.py) "
+                               "does not cover -- reuses that module's own "
+                               "classify_schema_change() rather than re-deriving JSON Schema "
+                               "comparison logic. See dv_harness/schema_config_governance.py.")
+    pscg_sub = pscg.add_subparsers(dest="scg_cmd", required=True)
+    pscg_reg = pscg_sub.add_parser("registry", help="audit every real dv_harness/schemas/*.schema.json "
+                                                     "plus the fifteen named logical schemas")
+    pscg_reg.add_argument("--json", action="store_true")
+    pscg_cla = pscg_sub.add_parser("classify", help="five-value BACKWARD/FORWARD/MIGRATION_REQUIRED/"
+                                                     "BREAKING/UNKNOWN classification of one schema change")
+    pscg_cla.add_argument("--old", required=True, dest="scg_old")
+    pscg_cla.add_argument("--new", required=True, dest="scg_new")
+    pscg_cla.add_argument("--schema-filename", dest="scg_schema_filename",
+                          help="the real dv_harness/schemas/<file> this change targets")
+    pscg_cla.add_argument("--owning-module", dest="scg_owning_module",
+                          help="the real dv_harness/<file>.py that owns this schema")
+    pscg_cla.add_argument("--migration-fn", dest="scg_migration_fn",
+                          help="module.path:function_name of a real migration function")
+    pscg_cla.add_argument("--corpus", nargs="*", default=[], dest="scg_corpus")
+    pscg_cla.add_argument("--json", action="store_true")
+
     args = ap.parse_args()
     h = DVHarness(Path(args.project_root))
     # Per-invocation override of the DEGRADED-mode probe transport, applied
@@ -2094,7 +4069,13 @@ def main():
                     "user": _access_user(), "host": _access_host()})
 
     if args.cmd == "status":
-        print(h.summary())
+        if getattr(args, "status_view", None) is None:
+            print(h.summary())
+        else:
+            from .harness_status import HarnessStatusService
+            _hs_snapshot = HarnessStatusService(h.root).serve()
+            print(_render_harness_status_view(args.status_view, _hs_snapshot,
+                                               as_json=args.json))
     elif args.cmd == "stats":
         from .stats_snapshot import compute_stats
         print(json.dumps(compute_stats(h.root), ensure_ascii=False, indent=2))
@@ -2641,6 +4622,30 @@ def main():
         # not read a 0 and carry on with an empty out dir.
         if result["status"] == "REFUSED":
             raise SystemExit(2)
+    elif args.cmd == "system-signoff-package":
+        from . import system_signoff_package
+        argv = ["collect", "--root", args.root, "--out-dir", args.out_dir]
+        for name in args.subsystems:
+            argv += ["--subsystem", name]
+        for flag, val in (
+            ("--subsystem-contracts", args.subsystem_contracts_path),
+            ("--topology", args.topology_path),
+            ("--resource-registry", args.resource_registry_path),
+            ("--command-registry", args.command_registry_path),
+            ("--closure-dimensions", args.closure_dimensions_path),
+            ("--system-name", args.system_name),
+            ("--manifest", args.manifest_path),
+            ("--requirements", args.requirements_path),
+            ("--db", args.db_path),
+            ("--declared-spec-version", args.declared_spec_version),
+        ):
+            if val is not None:
+                argv += [flag, val]
+        if args.require_system_signoff_pass:
+            argv.append("--require-system-signoff-pass")
+        if args.json:
+            argv.append("--json")
+        raise SystemExit(system_signoff_package.execute_verb(argv))
     elif args.cmd == "knowledge":
         from .config import load_config, save_config
         from .knowledge_center import KnowledgeCenterClient, _default_user
@@ -2850,6 +4855,95 @@ def main():
         print(_gs_text)
         if _gs_code:
             raise SystemExit(_gs_code)
+    elif args.cmd == "global-status-ready-gate":
+        # One shared implementation with `python -m dv_harness.global_status_ready_gate`
+        # (global_status_ready_gate.execute_verb), same convention as golden-scenario
+        # above. This gate reads an already-assembled HarnessStatusIR document from
+        # disk (its to_dict() JSON) -- it assembles nothing itself; nothing in this
+        # repo yet builds a real HarnessStatusIR for it to be handed (see the
+        # HarnessStatusIR CLAUDE.md section: this is the front door to a REACHED
+        # capability, not yet a WIRED one). Exit codes: 0 GLOBAL_STATUS_READY,
+        # 1 NOT_READY, 2 INCOMPLETE_EVIDENCE / a document that could not be read.
+        from . import global_status_ready_gate as _gsrg
+        try:
+            _gsrg_text, _gsrg_code = _gsrg.execute_verb(
+                args.document, as_json=args.gsrg_as_json)
+        except (_gsrg.GlobalStatusReadyGateError, _gsrg.hsi.HarnessStatusIRError,
+                OSError, json.JSONDecodeError) as e:
+            print(f"ERROR: {e}")
+            raise SystemExit(2)
+        print(_gsrg_text)
+        if _gsrg_code:
+            raise SystemExit(_gsrg_code)
+    elif args.cmd == "plan-quality-feedback":
+        # One shared implementation with `python -m dv_harness.plan_quality_feedback`
+        # (plan_quality_feedback.execute_verb), same convention as golden-scenario
+        # above. Exit codes: 0 available, 2 NOT_AVAILABLE (no section-108 loop
+        # telemetry recorded for this project -- never a fabricated clean matrix).
+        from . import plan_quality_feedback as _pqf
+        _pqf_code, _pqf_payload = _pqf.execute_verb(
+            h.root, args.pqf_verb, run_id=args.run_id, as_json=args.json)
+        if args.json:
+            print(json.dumps(_pqf_payload, indent=2, ensure_ascii=False, default=str))
+        else:
+            print(_pqf_payload)
+        if _pqf_code:
+            raise SystemExit(_pqf_code)
+    elif args.cmd == "vip-version-drift-detection":
+        # One shared implementation with
+        # `python -m dv_harness.vip_version_drift_detection`
+        # (vip_version_drift_detection.execute_verb), same convention as
+        # power-intent/golden-scenario above. That module's own execute_verb
+        # takes and parses a raw argv list itself, so this dispatch just
+        # rebuilds one from the already-parsed cli.py args and hands it
+        # through unmodified -- no drift logic is reimplemented here. Exit
+        # codes (module's own docstring): 0 STATUS_NO_DRIFT, 1
+        # STATUS_DRIFT_DETECTED, 2 STATUS_INCOMPLETE_EVIDENCE /
+        # STATUS_NOT_AVAILABLE / a usage error.
+        from . import vip_version_drift_detection as _vvd
+        _vvd_argv = ["--root", args.root]
+        if args.manifests:
+            _vvd_argv += ["--manifests", args.manifests]
+        if args.json:
+            _vvd_argv += ["--json"]
+        _vvd_code = _vvd.execute_verb(_vvd_argv)
+        if _vvd_code:
+            raise SystemExit(_vvd_code)
+    elif args.cmd == "design-completeness-gate":
+        # One shared implementation with
+        # `python -m dv_harness.design_completeness_gate` (design_completeness_gate.execute),
+        # same convention as golden-scenario/power-intent above. Exit codes: 0 every declared
+        # Design Intelligence extraction category is READY, 2 otherwise (PARTIAL/BLOCKED/UNKNOWN
+        # anywhere in the matrix) -- never a silent pass on an incomplete intake.
+        from . import design_completeness_gate as _dcg
+        try:
+            _dcg_text, _dcg_code = _dcg.execute(args.inputs, as_json=args.json)
+        except _dcg.DesignCompletenessError as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_dcg_text)
+        if _dcg_code:
+            raise SystemExit(_dcg_code)
+    elif args.cmd == "scenario-pattern-command-txt-correspondence":
+        # One shared implementation with
+        # `python -m dv_harness.scenario_pattern_command_txt_correspondence`
+        # (execute_verb), same convention as golden-scenario above. Exit
+        # codes: 0 every branch_b* usage corresponds and every declared
+        # pattern is used, 1 at least one real CORRESPONDENCE_NOT_FOUND or
+        # NOT_USED_IN_COMMAND_TXT finding, 2 NOT_AVAILABLE (no scenario-
+        # pattern records, no command files, or none could be read -- never
+        # a silent pass).
+        from . import scenario_pattern_command_txt_correspondence as _spc
+        try:
+            _spc_text, _spc_code = _spc.execute_verb(
+                args.capability_report, args.spc_command_files or [],
+                as_json=args.json, out_dir=args.out_dir)
+        except (_spc.ScenarioPatternCommandTxtCorrespondenceError, json.JSONDecodeError) as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_spc_text)
+        if _spc_code:
+            raise SystemExit(_spc_code)
     elif args.cmd == "vip-api-check":
         # One shared implementation with `python -m dv_harness.vip_api_card`
         # (vip_api_card.execute_verb), same convention as power-intent /
@@ -3286,6 +5380,16 @@ def main():
             print(f"authority {args.authority_cmd} FAILED: {exc.reason} "
                   f"{json.dumps(exc.detail, ensure_ascii=False, default=str)}", file=sys.stderr)
             raise SystemExit(1)
+    elif args.cmd == "source-authority-order-validation":
+        # One shared implementation with
+        # `python -m dv_harness.source_authority_order_validation` (execute_verb(argv)).
+        # Exit codes: 0 the fixed 9-level order matches real practice, 1
+        # ORDER_DIVERGES_FROM_PRACTICE, 2 NO_EVALUABLE_CASES.
+        from . import source_authority_order_validation as _saov
+        _saov_argv = ["--root", str(h.root)]
+        if args.json:
+            _saov_argv.append("--json")
+        raise SystemExit(_saov.execute_verb(_saov_argv))
     elif args.cmd == "subsystem-discovery":
         from . import subsystem_discovery as sd
         kc_client = None
@@ -4105,6 +6209,1461 @@ def main():
             r = h.run_stage(args.goal, dry_run=args.dry_run)
             print(r.text)
             raise SystemExit(0 if r.ok else 1)
+    elif args.cmd == "agent-checkpoint-check":
+        # One shared implementation with `python -m
+        # dv_harness.agent_checkpoint_check` -- same real
+        # check_resume_state_artifact() the module's own CLI calls. Exit 0
+        # RESUME_ARTIFACT_CURRENT, 1 missing/incomplete/stale.
+        import json as _acc_json
+        from . import agent_checkpoint_check as _acc
+        _acc_kwargs = {}
+        if args.stale_threshold_hours is not None:
+            _acc_kwargs["stale_threshold_seconds"] = int(args.stale_threshold_hours * 3600)
+        _acc_result = _acc.check_resume_state_artifact(args.build_tree, **_acc_kwargs)
+        print(_acc_json.dumps(_acc_result.to_dict(), indent=2, default=str))
+        raise SystemExit(0 if _acc_result.ok else 1)
+    elif args.cmd == "agent-parallelism-policy":
+        # One shared implementation with `python -m
+        # dv_harness.agent_parallelism_policy` (execute_verb), same convention
+        # as power-intent above.
+        import json as _app_json
+        from . import agent_parallelism_policy as _app
+        _app_code, _app_payload = _app.execute_verb(
+            h.root, args.app_verb, policy_path=args.policy_path,
+            requests_path=args.requests, resource_name=args.resource_name,
+            queue=args.queue)
+        print(_app_json.dumps(_app_payload, ensure_ascii=False, indent=2, default=str))
+        if _app_code:
+            raise SystemExit(_app_code)
+    elif args.cmd == "amba-functional-coverage-ir":
+        # One shared implementation with `python -m
+        # dv_harness.amba_functional_coverage_ir` (execute_verb(argv)); that
+        # module's own front door does its own argparse, so this passes the
+        # equivalent argv straight through -- same real implementation.
+        from . import amba_functional_coverage_ir as _afc
+        _afc_argv = ["build", "--facts", args.facts]
+        if args.json:
+            _afc_argv.append("--json")
+        raise SystemExit(_afc.execute_verb(_afc_argv))
+    elif args.cmd == "amba-performance-readiness-gates":
+        from . import amba_performance_readiness_gates as _aprg
+        _aprg_argv = [args.aprg_verb]
+        if args.aprg_verb == "conditions":
+            if args.gate:
+                _aprg_argv += ["--gate", args.gate]
+        elif args.aprg_verb == "evaluate":
+            if args.conditions:
+                _aprg_argv += ["--conditions", args.conditions]
+            if args.not_applicable:
+                _aprg_argv += ["--not-applicable", args.not_applicable]
+        if args.json:
+            _aprg_argv.append("--json")
+        raise SystemExit(_aprg.execute_verb(_aprg_argv))
+    elif args.cmd == "amba-readiness-gates":
+        from . import amba_readiness_gates as _arg
+        _arg_argv = [args.arg_verb]
+        if args.arg_verb == "conditions":
+            if args.gate:
+                _arg_argv += ["--gate", args.gate]
+        elif args.arg_verb == "evaluate":
+            if args.conditions:
+                _arg_argv += ["--conditions", args.conditions]
+        if args.json:
+            _arg_argv.append("--json")
+        raise SystemExit(_arg.execute_verb(_arg_argv))
+    elif args.cmd == "arbitration-policy-ir":
+        # One shared implementation with `python -m
+        # dv_harness.arbitration_policy_ir` (main(argv)).
+        from . import arbitration_policy_ir as _api
+        _api_argv = []
+        if args.evidence_file:
+            _api_argv += ["--evidence-file", args.evidence_file]
+        if args.request_pattern_file:
+            _api_argv += ["--request-pattern-file", args.request_pattern_file]
+        if args.fabric_name:
+            _api_argv += ["--fabric-name", args.fabric_name]
+        if args.component_name:
+            _api_argv += ["--component-name", args.component_name]
+        if args.json:
+            _api_argv.append("--json")
+        raise SystemExit(_api.main(_api_argv))
+    elif args.cmd == "artifact-completeness":
+        # One shared implementation with `python -m
+        # dv_harness.artifact_completeness` (execute_verb(argv)).
+        from . import artifact_completeness as _afcm
+        _afcm_argv = [args.category]
+        if args.subfact_inventory:
+            _afcm_argv.append(args.subfact_inventory)
+        _afcm_code, _afcm_report, _afcm_text = _afcm.execute_verb(_afcm_argv)
+        print(_afcm_text)
+        if _afcm_code:
+            raise SystemExit(_afcm_code)
+    elif args.cmd == "artifact-relationship-discovery":
+        # One shared implementation with `python -m
+        # dv_harness.artifact_relationship_discovery` (main(argv)).
+        from . import artifact_relationship_discovery as _ard
+        _ard_argv = ["--sources", args.sources]
+        if args.json:
+            _ard_argv.append("--json")
+        raise SystemExit(_ard.main(_ard_argv))
+    elif args.cmd == "backpressure-model":
+        # One shared implementation with `python -m
+        # dv_harness.backpressure_model` (main(argv)).
+        from . import backpressure_model as _bpm
+        _bpm_argv = []
+        if args.evidence_file:
+            _bpm_argv += ["--evidence-file", args.evidence_file]
+        if args.observed_stalls_file:
+            _bpm_argv += ["--observed-stalls-file", args.observed_stalls_file]
+        if args.json:
+            _bpm_argv.append("--json")
+        raise SystemExit(_bpm.main(_bpm_argv))
+    elif args.cmd == "bounded-self-healing":
+        # One shared implementation with `python -m
+        # dv_harness.bounded_self_healing` (execute_verb); approval itself
+        # still goes through the real, existing `dv-harness approve` verb.
+        import json as _bsh_json
+        from . import bounded_self_healing as _bsh
+        _bsh_code, _bsh_payload = _bsh.execute_verb(
+            h.root, args.bsh_verb, text=args.text, stage=args.stage)
+        print(_bsh_json.dumps(_bsh_payload, ensure_ascii=False, indent=2, default=str))
+        if _bsh_code:
+            raise SystemExit(_bsh_code)
+    elif args.cmd == "branch-ownership-resolver":
+        # One shared implementation with `python -m
+        # dv_harness.branch_ownership_resolver` (execute_verb).
+        import json as _bor_json
+        from . import branch_ownership_resolver as _bor
+        _bor_code, _bor_result = _bor.execute_verb(args.bor_verb, payload_path=args.payload)
+        print(_bor_json.dumps(_bor_result, indent=2, sort_keys=True, default=str))
+        if _bor_code:
+            raise SystemExit(_bor_code)
+    elif args.cmd == "change-cascade":
+        # One shared implementation with `python -m dv_harness.change_cascade`
+        # (execute_verb) -- that module's own docstring already names this
+        # exact `dv-harness change-cascade <verb>` convention.
+        from . import change_cascade as _cc
+        _cc_text, _cc_code = _cc.execute_verb(
+            args.cc_verb, root=h.root, changed_field=args.changed_field,
+            changes_json_file=args.changes_file, question_keys=args.question_keys,
+            revoked_by=args.revoked_by, as_json=args.json)
+        print(_cc_text)
+        if _cc_code:
+            raise SystemExit(_cc_code)
+    elif args.cmd == "checker-sb-qualification":
+        # One shared implementation with `python -m
+        # dv_harness.checker_sb_qualification` (execute_verb).
+        from . import checker_sb_qualification as _csq
+        raise SystemExit(_csq.execute_verb(
+            args.csq_verb, trials_path=args.csq_trials_path, required=args.required,
+            as_json=args.csq_as_json))
+    elif args.cmd == "coherency-capability-ir":
+        # One shared implementation with `python -m
+        # dv_harness.coherency_capability_ir` (execute_verb(args)); that
+        # module's execute_verb takes an argparse.Namespace, so a matching one
+        # is built here from this parser's own values.
+        import argparse as _cci_argparse
+        from . import coherency_capability_ir as _cci
+        _cci_ns = _cci_argparse.Namespace(evidence=args.evidence, json=args.json)
+        _cci_code, _cci_ir, _cci_text = _cci.execute_verb(_cci_ns)
+        print(_cci_text)
+        if _cci_code:
+            raise SystemExit(_cci_code)
+    elif args.cmd == "command-precondition-gate":
+        # One shared implementation with `python -m
+        # dv_harness.command_precondition_gate` (main(argv)).
+        from . import command_precondition_gate as _cpg
+        _cpg_argv = [args.cpg_verb, "--commands", args.commands, "--root", str(h.root)]
+        if args.registry:
+            _cpg_argv += ["--registry", args.registry]
+        if args.out:
+            _cpg_argv += ["--out", args.out]
+        if args.json:
+            _cpg_argv.append("--json")
+        raise SystemExit(_cpg.main(_cpg_argv))
+    elif args.cmd == "command-task-trace":
+        # One shared implementation with `python -m
+        # dv_harness.command_task_trace` (main(argv), execute_verb aliased to
+        # main).
+        from . import command_task_trace as _ctt
+        _ctt_argv = ["--env-dir", args.env_dir]
+        for _c in args.ctt_commands:
+            _ctt_argv += ["--command", _c]
+        for _p in (args.ctt_vip_prefixes or []):
+            _ctt_argv += ["--vip-prefix", _p]
+        if args.no_verible:
+            _ctt_argv.append("--no-verible")
+        if args.verible_bin:
+            _ctt_argv += ["--verible-bin", args.verible_bin]
+        if args.json:
+            _ctt_argv.append("--json")
+        raise SystemExit(_ctt.main(_ctt_argv))
+    elif args.cmd == "command-txt-change-impact":
+        # One shared implementation with `python -m
+        # dv_harness.command_txt_change_impact` (main(argv)).
+        from . import command_txt_change_impact as _ctci
+        _ctci_argv = ["--old", args.old, "--new", args.new]
+        if args.json:
+            _ctci_argv.append("--json")
+        raise SystemExit(_ctci.main(_ctci_argv))
+    elif args.cmd == "confidence-calibration":
+        # One shared implementation with `python -m
+        # dv_harness.confidence_calibration` (main(argv)).
+        from . import confidence_calibration as _cconf
+        _cconf_argv = [args.cal_verb, "--project-root", str(h.root)]
+        if args.json:
+            _cconf_argv.append("--json")
+        raise SystemExit(_cconf.main(_cconf_argv))
+    elif args.cmd == "connectivity-check":
+        # One shared implementation with `python -m
+        # dv_harness.connectivity_check` (main(argv)).
+        from . import connectivity_check as _connchk
+        _connchk_argv = ["--project-root", str(h.root)]
+        if args.config:
+            _connchk_argv += ["--config", args.config]
+        if args.state:
+            _connchk_argv += ["--state", args.state]
+        if args.report:
+            _connchk_argv += ["--report", args.report]
+        if args.check_only:
+            _connchk_argv.append("--check-only")
+        raise SystemExit(_connchk.main(_connchk_argv))
+    elif args.cmd == "consolidated-kpi-benchmark":
+        # One shared implementation with `python -m
+        # dv_harness.consolidated_kpi_benchmark` (main(argv)).
+        from . import consolidated_kpi_benchmark as _ckb
+        _ckb_argv = [args.ckb_verb, "--project-root", str(h.root)]
+        if args.json:
+            _ckb_argv.append("--json")
+        raise SystemExit(_ckb.main(_ckb_argv))
+    elif args.cmd == "context-budget":
+        # One shared implementation with `python -m dv_harness.context_budget`
+        # (main(argv)).
+        from . import context_budget as _cbud
+        if args.cb_verb == "hook":
+            raise SystemExit(_cbud.main(["hook"]))
+        elif args.cb_verb == "session-start":
+            raise SystemExit(_cbud.main(["session-start", "--root", str(h.root)]))
+        elif args.cb_verb == "classify":
+            _cbud_argv = ["classify"]
+            if args.command:
+                _cbud_argv += ["--command", args.command]
+            elif args.target:
+                _cbud_argv.append(args.target)
+            raise SystemExit(_cbud.main(_cbud_argv))
+        else:
+            _cbud_argv = ["resident", "--root", str(h.root)]
+            if args.json:
+                _cbud_argv.append("--json")
+            raise SystemExit(_cbud.main(_cbud_argv))
+    elif args.cmd == "coverage-closure-action-utility":
+        # One shared implementation with `python -m
+        # dv_harness.coverage_closure_action_utility` (main(argv)).
+        from . import coverage_closure_action_utility as _ccau
+        _ccau_argv = ["--candidates-file", args.candidates_file]
+        if args.json:
+            _ccau_argv.append("--json")
+        raise SystemExit(_ccau.main(_ccau_argv))
+    elif args.cmd == "coverage-closure-hole-correlation":
+        # One shared implementation with `python -m
+        # dv_harness.coverage_closure_hole_correlation` (main(argv)).
+        from . import coverage_closure_hole_correlation as _cchc
+        _cchc_argv = ["--root", str(h.root), "--holes-file", args.holes_file,
+                      "--candidates-file", args.cchc_candidates_file]
+        if args.closes_holes_field:
+            _cchc_argv += ["--closes-holes-field", args.closes_holes_field]
+        if args.parsed_summary_file:
+            _cchc_argv += ["--parsed-summary-file", args.parsed_summary_file]
+        if args.json:
+            _cchc_argv.append("--json")
+        raise SystemExit(_cchc.main(_cchc_argv))
+    elif args.cmd == "coverage-db-integrity":
+        # One shared implementation with `python -m
+        # dv_harness.coverage_db_integrity` (execute_verb(argv)).
+        from . import coverage_db_integrity as _cdi
+        if args.cdi_verb == "fingerprint":
+            raise SystemExit(_cdi.execute_verb(["fingerprint", "--db-path", args.db_path]))
+        else:
+            raise SystemExit(_cdi.execute_verb(["check", "--merge-request", args.merge_request]))
+    elif args.cmd == "de-command-runtime-readiness-gate":
+        # One shared implementation with `python -m
+        # dv_harness.de_command_runtime_readiness_gate` (main(argv)).
+        from . import de_command_runtime_readiness_gate as _dcrr
+        _dcrr_argv = [args.dcrr_verb, "--registry", args.dcrr_registry, "--root", str(h.root)]
+        if args.dcrr_commands:
+            _dcrr_argv += ["--commands", args.dcrr_commands]
+        if args.branch_grammar:
+            _dcrr_argv += ["--branch-grammar", args.branch_grammar]
+        if args.dcrr_out:
+            _dcrr_argv += ["--out", args.dcrr_out]
+        if args.json:
+            _dcrr_argv.append("--json")
+        raise SystemExit(_dcrr.main(_dcrr_argv))
+    elif args.cmd == "dependency-qualification":
+        # One shared implementation with `python -m
+        # dv_harness.dependency_qualification` (main(argv)).
+        from . import dependency_qualification as _dq
+        _dq_argv = [args.dq_verb, "--root", str(h.root)]
+        if args.inventory:
+            _dq_argv += ["--inventory", args.inventory]
+        if args.record_file:
+            _dq_argv += ["--record-file", args.record_file]
+        if args.qualification_id:
+            _dq_argv += ["--qualification-id", args.qualification_id]
+        if args.revoked_by:
+            _dq_argv += ["--revoked-by", args.revoked_by]
+        if args.reason:
+            _dq_argv += ["--reason", args.reason]
+        if args.json:
+            _dq_argv.append("--json")
+        raise SystemExit(_dq.main(_dq_argv))
+    elif args.cmd == "design-architecture-ir":
+        # One shared implementation with `python -m
+        # dv_harness.design_architecture_ir` (main(argv)).
+        from . import design_architecture_ir as _dai
+        _dai_argv = []
+        for _r in args.dai_rtl_files:
+            _dai_argv += ["--rtl", _r]
+        if args.top_module:
+            _dai_argv += ["--top-module", args.top_module]
+        if args.verible_bin:
+            _dai_argv += ["--verible-bin", args.verible_bin]
+        if args.out:
+            _dai_argv += ["--out", args.out]
+        if args.json:
+            _dai_argv.append("--json")
+        raise SystemExit(_dai.main(_dai_argv))
+    elif args.cmd == "design-knowledge-correlation":
+        # One shared implementation with `python -m
+        # dv_harness.design_knowledge_correlation` (execute_verb(argv)).
+        from . import design_knowledge_correlation as _dkc
+        _dkc_argv = ["--sources", args.sources]
+        if args.expected_facts:
+            _dkc_argv += ["--expected-facts", args.expected_facts]
+        if args.json:
+            _dkc_argv.append("--json")
+        raise SystemExit(_dkc.execute_verb(_dkc_argv))
+    elif args.cmd == "digital-thread":
+        # One shared implementation with `python -m
+        # dv_harness.digital_thread_traceability` (main(argv)).
+        from . import digital_thread_traceability as _dtt
+        _dtt_argv = ["--root", str(h.root)]
+        if args.vplan_file:
+            _dtt_argv += ["--vplan-file", args.vplan_file]
+        if args.env_manifest:
+            _dtt_argv += ["--env-manifest", args.env_manifest]
+        if args.db_path:
+            _dtt_argv += ["--db-path", args.db_path]
+        if args.json:
+            _dtt_argv.append("--json")
+        raise SystemExit(_dtt.main(_dtt_argv))
+    elif args.cmd == "doc-citation-check":
+        # One shared implementation with `python -m dv_harness.doc_citation_check`
+        # (main(argv)) -- that module's own argv is a bare list of doc paths
+        # (or `--memory-docs`), not a real argparse tree, so this dispatch
+        # reconstructs that exact shape rather than a parsed-flags call.
+        from . import doc_citation_check as _dcc
+        _dcc_argv = list(args.docs)
+        if args.memory_docs:
+            _dcc_argv.append("--memory-docs")
+        raise SystemExit(_dcc.main(_dcc_argv))
+    elif args.cmd == "dut-evidence-correlation":
+        # One shared implementation with `python -m
+        # dv_harness.dut_evidence_correlation` (execute_verb(argv), that
+        # module's own argv-taking front door).
+        from . import dut_evidence_correlation as _dec
+        _dec_argv = ["--manifest", args.manifest, "--items", args.items]
+        if args.json:
+            _dec_argv.append("--json")
+        raise SystemExit(_dec.execute_verb(_dec_argv))
+    elif args.cmd == "dynamic-connectivity":
+        # One shared implementation with `python -m dv_harness.dynamic_connectivity_ir`
+        # (main(argv)).
+        from . import dynamic_connectivity_ir as _dci
+        if args.dci_verb == "statuses":
+            raise SystemExit(_dci.main(["statuses"]))
+        _dci_argv = ["classify", "--paths", args.paths]
+        if args.json:
+            _dci_argv.append("--json")
+        raise SystemExit(_dci.main(_dci_argv))
+    elif args.cmd == "dynamic-intake-graph":
+        # One shared implementation with `python -m dv_harness.dynamic_intake_graph`
+        # (main(argv)).
+        from . import dynamic_intake_graph as _dig
+        _dig_argv = ["--intake-state", args.intake_state]
+        if args.relationships:
+            _dig_argv += ["--relationships", args.relationships]
+        if args.json:
+            _dig_argv.append("--json")
+        raise SystemExit(_dig.main(_dig_argv))
+    elif args.cmd == "example-composition":
+        # One shared implementation with `python -m dv_harness.example_composition`
+        # (main(argv)).
+        from . import example_composition as _exc
+        _exc_argv = ["compose", "--examples", args.examples]
+        if args.json:
+            _exc_argv.append("--json")
+        raise SystemExit(_exc.main(_exc_argv))
+    elif args.cmd == "existing-command-reuse":
+        # One shared implementation with `python -m
+        # dv_harness.existing_command_reuse_score` (main(argv)).
+        from . import existing_command_reuse_score as _ecr
+        _ecr_argv = ["--need-file", args.need_file, "--commands-file", args.commands_file,
+                     "--root", str(h.root)]
+        if args.db:
+            _ecr_argv += ["--db", args.db]
+        if args.json:
+            _ecr_argv.append("--json")
+        raise SystemExit(_ecr.main(_ecr_argv))
+    elif args.cmd == "fabric-progress":
+        # One shared implementation with `python -m dv_harness.fabric_progress_ir`
+        # (main(argv)).
+        from . import fabric_progress_ir as _fpi
+        _fpi_argv = []
+        if args.resource_dependency:
+            _fpi_argv += ["--resource-dependency", args.resource_dependency]
+        if args.credit_outstanding:
+            _fpi_argv += ["--credit-outstanding", args.credit_outstanding]
+        if args.json:
+            _fpi_argv.append("--json")
+        raise SystemExit(_fpi.main(_fpi_argv))
+    elif args.cmd == "file-candidate-rank":
+        # One shared implementation with `python -m dv_harness.file_candidate_ranker`
+        # (main(argv)).
+        from . import file_candidate_ranker as _fcr
+        _fcr_argv = ["rank"] + list(args.candidates)
+        if args.repo_root:
+            _fcr_argv += ["--repo-root", args.repo_root]
+        _fcr_argv += ["--project-root", args.fcr_project_root or str(h.root)]
+        raise SystemExit(_fcr.main(_fcr_argv))
+    elif args.cmd == "functional-coverage-signoff":
+        # One shared implementation with `python -m
+        # dv_harness.functional_coverage_signoff` (main(argv)).
+        from . import functional_coverage_signoff as _fcs
+        _fcs_argv = ["--project-root", str(h.root)]
+        if args.json:
+            _fcs_argv.append("--json")
+        raise SystemExit(_fcs.main(_fcs_argv))
+    elif args.cmd == "gen-code-quality-gate":
+        # One shared implementation with `python -m dv_harness.gen_code_quality_gate`
+        # (main(argv)).
+        from . import gen_code_quality_gate as _gcq
+        _gcq_argv = []
+        if args.env_dir:
+            _gcq_argv += ["--env-dir", args.env_dir]
+        if args.verible_bin:
+            _gcq_argv += ["--verible-bin", args.verible_bin]
+        for _s in (args.gcq_vip_sources or []):
+            _gcq_argv += ["--vip-source", _s]
+        if args.vip_index:
+            _gcq_argv += ["--vip-index", args.vip_index]
+        if args.relative_to:
+            _gcq_argv += ["--relative-to", args.relative_to]
+        if args.json:
+            _gcq_argv.append("--json")
+        raise SystemExit(_gcq.main(_gcq_argv))
+    elif args.cmd == "golden-subsystem-benchmark":
+        # One shared implementation with `python -m
+        # dv_harness.golden_subsystem_benchmark` (main(argv)).
+        from . import golden_subsystem_benchmark as _gsb
+        _gsb_argv = [args.gsb_verb, "--root", str(h.root)]
+        if args.dataset_id:
+            _gsb_argv += ["--dataset-id", args.dataset_id]
+        if args.json_file:
+            _gsb_argv += ["--json-file", args.json_file]
+        if args.version is not None:
+            _gsb_argv += ["--version", str(args.version)]
+        if args.old_version is not None:
+            _gsb_argv += ["--old-version", str(args.old_version)]
+        if args.new_version is not None:
+            _gsb_argv += ["--new-version", str(args.new_version)]
+        if args.case_id:
+            _gsb_argv += ["--case-id", args.case_id]
+        if args.subject_id:
+            _gsb_argv += ["--subject-id", args.subject_id]
+        if args.subject_version:
+            _gsb_argv += ["--subject-version", args.subject_version]
+        if args.subject_kind:
+            _gsb_argv += ["--subject-kind", args.subject_kind]
+        if args.used_for:
+            _gsb_argv += ["--used-for", args.used_for]
+        if args.extracted_docs_file:
+            _gsb_argv += ["--extracted-docs-file", args.extracted_docs_file]
+        if args.json:
+            _gsb_argv.append("--json")
+        raise SystemExit(_gsb.main(_gsb_argv))
+    elif args.cmd == "gui-audit-log":
+        # One shared implementation with `python -m dv_harness.gui_audit_log`
+        # (execute_verb(argv), that module's own argv-taking front door --
+        # it does its own argparse and printing, so this just builds the
+        # identical argv list rather than re-deriving its output).
+        from . import gui_audit_log as _gal
+        _gal_argv = [args.gal_verb, "--root", str(h.root), "--limit", str(args.limit)]
+        if args.action:
+            _gal_argv += ["--action", args.action]
+        if args.json:
+            _gal_argv.append("--json")
+        raise SystemExit(_gal.execute_verb(_gal_argv))
+    elif args.cmd == "gui-intake-wizard":
+        # One shared implementation with `python -m dv_harness.gui_intake_wizard`
+        # (main(argv)) -- that module's own standalone ThreadingHTTPServer,
+        # grounded entirely in intake_state.py's real per-field data. Ships
+        # as its own standalone server (not a dashboard.py card) per that
+        # module's own disclosed reasoning; this verb is the thin real
+        # connection this gap-close item adds. Blocks until interrupted.
+        from . import gui_intake_wizard as _giw
+        raise SystemExit(_giw.main(["--project-root", str(h.root),
+                                     "--host", args.host, "--port", str(args.port)]))
+    elif args.cmd == "gui-intake-control-plane":
+        # One shared implementation with `python -m
+        # dv_harness.gui_intake_control_plane` (main(argv)) -- a real backend
+        # over question_queue.py + intake_state.py, ships as its own
+        # standalone, session-token-gated server (not a dashboard.py card)
+        # per that module's own disclosed reasoning; this verb is the thin
+        # real connection this gap-close item adds. 'serve' blocks until
+        # interrupted.
+        from . import gui_intake_control_plane as _gicp
+        _gicp_argv = [args.gicp_verb, "--project-root", str(h.root)]
+        if args.gicp_verb == "serve":
+            _gicp_argv += ["--host", args.host, "--port", str(args.port)]
+            if args.no_auth:
+                _gicp_argv.append("--no-auth")
+        raise SystemExit(_gicp.main(_gicp_argv))
+    elif args.cmd == "human-correction-lesson":
+        # One shared implementation with `python -m
+        # dv_harness.human_correction_lesson` (execute_verb(argv), that
+        # module's own argv-taking front door).
+        from . import human_correction_lesson as _hcl
+        _hcl_argv = ["--root", str(h.root)]
+        if args.json:
+            _hcl_argv.append("--json")
+        _hcl_argv.append(args.hcl_verb)
+        if args.hcl_verb == "record":
+            _hcl_argv += ["--before-claim", args.before_claim, "--after-claim", args.after_claim,
+                          "--correction-evidence", args.correction_evidence,
+                          "--corrected-by", args.corrected_by,
+                          "--mistake-category", args.mistake_category]
+            if args.before_reasoning:
+                _hcl_argv += ["--before-reasoning", args.before_reasoning]
+            if args.protocol:
+                _hcl_argv += ["--protocol", args.protocol]
+            if args.scope:
+                _hcl_argv += ["--scope", args.scope]
+            if args.title:
+                _hcl_argv += ["--title", args.title]
+            if args.confidence:
+                _hcl_argv += ["--confidence", args.confidence]
+        else:
+            _hcl_argv += ["--before-claim", args.before_claim]
+            if args.mistake_category:
+                _hcl_argv += ["--mistake-category", args.mistake_category]
+        raise SystemExit(_hcl.execute_verb(_hcl_argv))
+    elif args.cmd == "iface-contract-vip-bind":
+        # One shared implementation with `python -m
+        # dv_harness.iface_contract_vip_bind_validator` (main(argv)).
+        from . import iface_contract_vip_bind_validator as _ivb
+        _ivb_argv = ["--contracts", args.contracts]
+        if args.bind_root:
+            _ivb_argv += ["--bind-root", args.bind_root]
+        if args.modules:
+            _ivb_argv += ["--modules", args.modules]
+        if args.json:
+            _ivb_argv.append("--json")
+        if args.strict_unprovable:
+            _ivb_argv.append("--strict-unprovable")
+        raise SystemExit(_ivb.main(_ivb_argv))
+    elif args.cmd == "intake-baseline":
+        # One shared implementation with `python -m dv_harness.intake_baseline`
+        # (execute_verb(argv)).
+        from . import intake_baseline as _ib
+        _ib_argv = [args.ib_verb, "--root", args.root or str(h.root)]
+        if args.facts:
+            _ib_argv += ["--facts", args.facts]
+        if args.freeze_id:
+            _ib_argv += ["--freeze-id", args.freeze_id]
+        if args.frozen_by:
+            _ib_argv += ["--frozen-by", args.frozen_by]
+        if args.note:
+            _ib_argv += ["--note", args.note]
+        raise SystemExit(_ib.execute_verb(_ib_argv))
+    elif args.cmd == "intake-contract-stale":
+        # One shared implementation with
+        # `python -m dv_harness.intake_contract_stale_detection` (main(argv)).
+        from . import intake_contract_stale_detection as _icsd
+        _icsd_argv = [args.ics_verb, "--project-root", str(h.root)]
+        if args.contract:
+            _icsd_argv += ["--contract", args.contract]
+        if args.recorded_sha:
+            _icsd_argv += ["--recorded-sha", args.recorded_sha]
+        if args.window_seconds is not None:
+            _icsd_argv += ["--window-seconds", str(args.window_seconds)]
+        raise SystemExit(_icsd.main(_icsd_argv))
+    elif args.cmd == "intake-events":
+        # One shared implementation with `python -m dv_harness.intake_events`
+        # (main(argv)).
+        from . import intake_events as _ie
+        _ie_argv = [args.ie_verb, "--project-root", str(h.root)]
+        if args.json:
+            _ie_argv.append("--json")
+        raise SystemExit(_ie.main(_ie_argv))
+    elif args.cmd == "intake-modes":
+        # One shared implementation with `python -m dv_harness.intake_modes`
+        # (main(argv)).
+        from . import intake_modes as _im
+        _im_argv = [args.im_verb]
+        if args.mode:
+            _im_argv += ["--mode", args.mode]
+        if args.intake_state:
+            _im_argv += ["--intake-state", args.intake_state]
+        if args.json:
+            _im_argv.append("--json")
+        raise SystemExit(_im.main(_im_argv))
+    elif args.cmd == "intake-question-priority":
+        # One shared implementation with
+        # `python -m dv_harness.intake_question_priority` (main(argv)).
+        from . import intake_question_priority as _iqp
+        _iqp_argv = ["--pending-questions", args.pending_questions]
+        if args.max_batch_size is not None:
+            _iqp_argv += ["--max-batch-size", str(args.max_batch_size)]
+        if args.json:
+            _iqp_argv.append("--json")
+        raise SystemExit(_iqp.main(_iqp_argv))
+    elif args.cmd == "intake-source-priority":
+        # One shared implementation with
+        # `python -m dv_harness.intake_source_priority` (execute_verb(argv)).
+        from . import intake_source_priority as _isp
+        _isp_argv = [args.isp_verb]
+        if args.isp_verb == "next":
+            if args.fact:
+                _isp_argv += ["--fact", args.fact]
+            if args.available:
+                _isp_argv += ["--available", args.available]
+            if args.json:
+                _isp_argv.append("--json")
+        raise SystemExit(_isp.execute_verb(_isp_argv))
+    elif args.cmd == "integration-adapter-gen":
+        # One shared implementation with
+        # `python -m dv_harness.integration_adapter_gen` (main(argv)).
+        from . import integration_adapter_gen as _iag
+        _iag_argv = [args.mapping_file]
+        if args.subsystem_name:
+            _iag_argv += ["--subsystem-name", args.subsystem_name]
+        if args.out:
+            _iag_argv += ["--out", args.out]
+        raise SystemExit(_iag.main(_iag_argv))
+    elif args.cmd == "interrupt-dma-clock-reset":
+        # One shared implementation with `python -m
+        # dv_harness.interrupt_dma_clock_reset_extraction` (execute_verb(argv)).
+        from . import interrupt_dma_clock_reset_extraction as _idce
+        _idce_argv = ["extract", "--sources"] + list(args.sources)
+        if args.json:
+            _idce_argv.append("--json")
+        raise SystemExit(_idce.execute_verb(_idce_argv))
+    elif args.cmd == "timing-requirements":
+        # One shared implementation with `python -m
+        # dv_harness.timing_requirement_extraction` (execute_verb(argv)).
+        from . import timing_requirement_extraction as _tre
+        _tre_argv = ["extract", "--sources"] + list(args.sources)
+        if args.json:
+            _tre_argv.append("--json")
+        raise SystemExit(_tre.execute_verb(_tre_argv))
+    elif args.cmd == "ip-ownership-conflict":
+        # One shared implementation with `python -m dv_harness.ip_ownership_conflict`
+        # (main(argv)).
+        from . import ip_ownership_conflict as _ioc
+        _ioc_argv = ["--env-manifest", args.env_manifest]
+        if args.legacy_bfm:
+            _ioc_argv += ["--legacy-bfm", args.legacy_bfm]
+        if args.connectivity_rows:
+            _ioc_argv += ["--connectivity-rows", args.connectivity_rows]
+        if args.json:
+            _ioc_argv.append("--json")
+        raise SystemExit(_ioc.main(_ioc_argv))
+    elif args.cmd == "loop-stale-detection":
+        # One shared implementation with `python -m dv_harness.loop_stale_detection`
+        # (main(argv)).
+        from . import loop_stale_detection as _lsd
+        _lsd_argv = [args.lsd_verb, "--project-root", str(h.root)]
+        if args.run_id:
+            _lsd_argv += ["--run-id", args.run_id]
+        if args.window_seconds is not None:
+            _lsd_argv += ["--window-seconds", str(args.window_seconds)]
+        raise SystemExit(_lsd.main(_lsd_argv))
+    elif args.cmd == "loop-telemetry":
+        # One shared implementation with `python -m dv_harness.loop_telemetry`
+        # (main(argv)).
+        from . import loop_telemetry as _lt
+        _lt_argv = [args.lt_verb, "--project-root", str(h.root)]
+        if args.run_id:
+            _lt_argv += ["--run-id", args.run_id]
+        if args.json:
+            _lt_argv.append("--json")
+        raise SystemExit(_lt.main(_lt_argv))
+    elif args.cmd == "memory-quality-policy":
+        # One shared implementation with `python -m dv_harness.memory_quality_policy`
+        # (execute_verb(argv)).
+        from . import memory_quality_policy as _mqp
+        _mqp_argv = ["--root", str(h.root), args.mqp_verb]
+        if args.stale_after_days is not None:
+            _mqp_argv += ["--stale-after-days", str(args.stale_after_days)]
+        if args.deprecate_after_days is not None:
+            _mqp_argv += ["--deprecate-after-days", str(args.deprecate_after_days)]
+        if args.json:
+            _mqp_argv.append("--json")
+        raise SystemExit(_mqp.execute_verb(_mqp_argv))
+    elif args.cmd == "model-agent-tool-router":
+        # One shared implementation with `python -m dv_harness.model_agent_tool_router`
+        # (execute_verb(argv)).
+        from . import model_agent_tool_router as _matr
+        _matr_argv = [args.matr_verb]
+        if args.matr_verb == "route":
+            if args.task_type:
+                _matr_argv += ["--task-type", args.task_type]
+            _matr_argv += ["--root", str(h.root)]
+            if args.unavailable_agents:
+                _matr_argv += ["--unavailable-agents", args.unavailable_agents]
+            if args.unavailable_models:
+                _matr_argv += ["--unavailable-models", args.unavailable_models]
+            if args.unavailable_tools:
+                _matr_argv += ["--unavailable-tools", args.unavailable_tools]
+        if args.json:
+            _matr_argv.append("--json")
+        raise SystemExit(_matr.execute_verb(_matr_argv))
+    elif args.cmd == "ordering-domain-graph":
+        # One shared implementation with `python -m dv_harness.ordering_domain_graph`
+        # (main(argv)).
+        from . import ordering_domain_graph as _odg
+        _odg_argv = ["--facts-file", args.facts_file]
+        if args.json:
+            _odg_argv.append("--json")
+        raise SystemExit(_odg.main(_odg_argv))
+    elif args.cmd == "org-verification-policy":
+        # One shared implementation with `python -m dv_harness.org_verification_policy_engine`
+        # (execute_verb(argv)).
+        from . import org_verification_policy_engine as _ovpe
+        _ovpe_argv = [args.ovpe_verb, "--policies", args.policies]
+        if args.ovpe_verb == "evaluate" and args.facts:
+            _ovpe_argv += ["--facts", args.facts]
+        if args.json:
+            _ovpe_argv.append("--json")
+        raise SystemExit(_ovpe.execute_verb(_ovpe_argv))
+    elif args.cmd == "pattern-coverage-contribution":
+        # One shared implementation with `python -m dv_harness.pattern_coverage_contribution`
+        # (execute_verb(argv)).
+        from . import pattern_coverage_contribution as _pcc
+        _pcc_argv = ["contribution", "--db-path", args.db_path, "--pattern", args.pattern,
+                     "--attribution", args.attribution]
+        if args.cross_definitions:
+            _pcc_argv += ["--cross-definitions", args.cross_definitions]
+        if args.json:
+            _pcc_argv.append("--json")
+        raise SystemExit(_pcc.execute_verb(_pcc_argv))
+    elif args.cmd == "pattern-execution-evidence":
+        # One shared implementation with `python -m dv_harness.pattern_execution_evidence`
+        # (main(argv)).
+        from . import pattern_execution_evidence as _pee
+        _pee_argv = [args.log_path]
+        if args.command:
+            _pee_argv += ["--command", args.command]
+        if args.json:
+            _pee_argv.append("--json")
+        raise SystemExit(_pee.main(_pee_argv))
+    elif args.cmd == "pattern-runtime-state":
+        # One shared implementation with `python -m dv_harness.pattern_runtime_state_machine`
+        # (main(argv)).
+        from . import pattern_runtime_state_machine as _prs
+        _prs_argv = [args.prs_verb, "--root", str(h.root)]
+        if args.pattern_id:
+            _prs_argv += ["--pattern-id", args.pattern_id]
+        if args.log_file:
+            _prs_argv += ["--log-file", args.log_file]
+        if args.json:
+            _prs_argv.append("--json")
+        raise SystemExit(_prs.main(_prs_argv))
+    elif args.cmd == "platform-startup-readiness":
+        # One shared implementation with `python -m dv_harness.platform_startup_readiness`
+        # (main(argv)).
+        from . import platform_startup_readiness as _psr
+        _psr_argv = ["--root", str(h.root)]
+        if args.json:
+            _psr_argv.append("--json")
+        raise SystemExit(_psr.main(_psr_argv))
+    elif args.cmd == "spec-gap-detector":
+        # One shared implementation with `python -m dv_harness.potential_spec_gap_detector`
+        # (main(argv)).
+        from . import potential_spec_gap_detector as _psgd
+        _psgd_argv = [args.requirements]
+        if args.json:
+            _psgd_argv.append("--json")
+        raise SystemExit(_psgd.main(_psgd_argv))
+    elif args.cmd == "prior-decision-reevaluation":
+        # One shared implementation with `python -m dv_harness.prior_decision_reevaluation`
+        # (main(argv)).
+        from . import prior_decision_reevaluation as _pdr
+        _pdr_argv = [args.pdr_verb, "--root", str(h.root)]
+        if args.candidates:
+            _pdr_argv += ["--candidates", args.candidates]
+        if args.cross_project_patterns:
+            _pdr_argv += ["--cross-project-patterns", args.cross_project_patterns]
+        if args.min_occurrences is not None:
+            _pdr_argv += ["--min-occurrences", str(args.min_occurrences)]
+        raise SystemExit(_pdr.main(_pdr_argv))
+    elif args.cmd == "programming-sequence-ir":
+        # One shared implementation with `python -m dv_harness.programming_sequence_ir`
+        # (main(argv)).
+        from . import programming_sequence_ir as _psir
+        _psir_argv = [args.psir_verb]
+        if args.sequence:
+            _psir_argv += ["--sequence", args.sequence]
+        if args.facts:
+            _psir_argv += ["--facts", args.facts]
+        if args.catalog:
+            _psir_argv += ["--catalog", args.catalog]
+        if args.json:
+            _psir_argv.append("--json")
+        raise SystemExit(_psir.main(_psir_argv))
+    elif args.cmd == "usage-recipe-catalog":
+        # One shared implementation with `python -m dv_harness.usage_recipe_catalog`
+        # (execute_verb(verb, ...)).
+        from . import usage_recipe_catalog as _urc
+        _urc_text, _urc_code = _urc.execute_verb(
+            args.urc_verb,
+            recipes_json=args.recipes_json,
+            facts_json=args.facts_json,
+            catalog_json=args.catalog_json,
+            recipe_id=args.urc_recipe_id,
+            as_json=args.json,
+        )
+        print(_urc_text)
+        raise SystemExit(_urc_code)
+    elif args.cmd == "protocol-capability":
+        # One shared implementation with `python -m dv_harness.protocol_capability`
+        # (module-private _main(argv)).
+        from . import protocol_capability as _ppcap
+        _ppcap_argv = []
+        if args.check:
+            _ppcap_argv.append("--check")
+        if args.sync:
+            _ppcap_argv.append("--sync")
+        if args.capability_root:
+            _ppcap_argv += ["--root", args.capability_root]
+        if args.json:
+            _ppcap_argv.append("--json")
+        raise SystemExit(_ppcap._main(_ppcap_argv))
+    elif args.cmd == "protocol-compliance-oracle":
+        # One shared implementation with `python -m dv_harness.protocol_compliance_oracle`
+        # (execute_verb(argv)).
+        from . import protocol_compliance_oracle as _ppco
+        _ppco_argv = ["--pattern", args.pattern]
+        if args.json:
+            _ppco_argv.append("--json")
+        raise SystemExit(_ppco.execute_verb(_ppco_argv))
+    elif args.cmd == "rca-ontology":
+        # One shared implementation with `python -m dv_harness.rca_ontology`
+        # (execute_verb(argv) -- main() itself already raises SystemExit, so
+        # execute_verb() is called directly here rather than double-wrapping).
+        from . import rca_ontology as _prca
+        if args.rca_verb == "categories":
+            _prca_argv = ["categories"]
+        else:
+            if not args.records:
+                print("rca-ontology classify requires --records", file=sys.stderr)
+                raise SystemExit(2)
+            _prca_argv = ["classify", "--records", args.records]
+            if args.rca_root:
+                _prca_argv += ["--root", args.rca_root]
+        raise SystemExit(_prca.execute_verb(_prca_argv))
+    elif args.cmd == "register-excel-extract":
+        # One shared implementation with `python -m dv_harness.register_excel_extract`
+        # (execute_verb(argv)).
+        from . import register_excel_extract as _pree
+        _pree_argv = [args.excel_path]
+        if args.sheet:
+            _pree_argv += ["--sheet", args.sheet]
+        if args.block:
+            _pree_argv += ["--block", args.block]
+        if args.base_address:
+            _pree_argv += ["--base-address", args.base_address]
+        if args.json:
+            _pree_argv.append("--json")
+        raise SystemExit(_pree.execute_verb(_pree_argv))
+    elif args.cmd == "register-rtl-trace":
+        # One shared implementation with `python -m dv_harness.register_rtl_trace`
+        # (main(argv)).
+        from . import register_rtl_trace as _prrt
+        _prrt_argv = ["--register-map", args.register_map]
+        for _rp in args.rrt_rtl_paths:
+            _prrt_argv += ["--rtl", _rp]
+        if args.strict_partial:
+            _prrt_argv.append("--strict-partial")
+        if args.json:
+            _prrt_argv.append("--json")
+        raise SystemExit(_prrt.main(_prrt_argv))
+    elif args.cmd == "requirement-risk-ir":
+        # One shared implementation with `python -m dv_harness.requirement_risk_ir`
+        # (main(argv)).
+        from . import requirement_risk_ir as _prri
+        _prri_argv = []
+        if args.facts_file:
+            _prri_argv += ["--facts-file", args.facts_file]
+        if args.source_file:
+            _prri_argv += ["--source-file", args.source_file]
+        _prri_root = args.requirement_project_root or str(h.root)
+        _prri_argv += ["--project-root", _prri_root]
+        if args.json:
+            _prri_argv.append("--json")
+        raise SystemExit(_prri.main(_prri_argv))
+    elif args.cmd == "requirement-testability":
+        # One shared implementation with `python -m dv_harness.requirement_testability`
+        # (execute_verb()).
+        from . import requirement_testability as _prqt
+        _prqt_text, _prqt_code = _prqt.execute_verb(
+            args.requirements, as_json=args.json,
+            fail_on_indeterminate=args.fail_on_indeterminate)
+        print(_prqt_text)
+        raise SystemExit(_prqt_code)
+    elif args.cmd == "resource-orchestrator":
+        # One shared implementation with `python -m dv_harness.resource_orchestrator`
+        # (execute_verb()).
+        from . import resource_orchestrator as _preso
+        _preso_code, _preso_payload = _preso.execute_verb(
+            h.root, args.reso_verb, requests_path=args.requests, queue=args.queue)
+        print(json.dumps(_preso_payload, ensure_ascii=False, indent=2, default=str))
+        raise SystemExit(_preso_code)
+    elif args.cmd == "runtime-control-commands":
+        # One shared implementation with `python -m dv_harness.runtime_control_commands`
+        # (execute_verb()).
+        from . import runtime_control_commands as _prcc
+        _prcc_text, _prcc_code = _prcc.execute_verb(args.command_file, as_json=args.json)
+        print(_prcc_text)
+        raise SystemExit(_prcc_code)
+    elif args.cmd == "runtime-events":
+        # One shared implementation with `python -m dv_harness.runtime_event_registry`
+        # (execute_verb()).
+        from . import runtime_event_registry as _prer
+        _prer_text, _prer_code = _prer.execute_verb(
+            args.re_verb, root=h.root, registry_path=args.registry, out_path=args.out,
+            as_json=args.json)
+        print(_prer_text)
+        raise SystemExit(_prer_code)
+    elif args.cmd == "safe-write-rollback":
+        # One shared implementation with `python -m dv_harness.safe_write_rollback`
+        # (execute_verb(argv) -- that module's own execute_verb parses its own argv
+        # and prints/returns an exit code directly, so it is called with a
+        # reconstructed argv list rather than the (text, code) convention).
+        from . import safe_write_rollback as _pswr
+        _pswr_argv = ["--root", str(h.root), args.swr_verb]
+        if args.swr_verb == "write":
+            _pswr_argv += ["--path", args.path, "--content-file", args.content_file,
+                          "--actor", args.actor, "--reason", args.reason]
+            if args.write_id:
+                _pswr_argv += ["--write-id", args.write_id]
+        elif args.swr_verb == "plan":
+            _pswr_argv += ["--write-id", args.write_id]
+        elif args.swr_verb == "apply":
+            _pswr_argv += ["--write-id", args.write_id, "--actor", args.actor,
+                          "--reason", args.reason]
+        elif args.swr_verb == "batch-plan":
+            _pswr_argv += ["--batch-id", args.batch_id]
+        elif args.swr_verb == "batch-apply":
+            _pswr_argv += ["--batch-id", args.batch_id, "--actor", args.actor,
+                          "--reason", args.reason]
+        raise SystemExit(_pswr.execute_verb(_pswr_argv))
+    elif args.cmd == "safety-sandbox":
+        # One shared implementation with `python -m dv_harness.safety_sandbox`
+        # (execute_verb(argv) -- see the safe-write-rollback wiring above for why
+        # a reconstructed argv list is used here instead).
+        from . import safety_sandbox as _pssb
+        _pssb_argv = ["--root", str(h.root), args.ss_verb]
+        if args.ss_verb == "declare":
+            if args.paths:
+                _pssb_argv += ["--paths"] + list(args.paths)
+            _pssb_argv += ["--declared-by", args.declared_by, "--reason", args.reason]
+            if args.sandbox_id:
+                _pssb_argv += ["--sandbox-id", args.sandbox_id]
+        elif args.ss_verb == "check":
+            _pssb_argv += ["--sandbox-id", args.sandbox_id, "--paths"] + list(args.paths)
+        elif args.ss_verb == "verify-diff":
+            _pssb_argv += ["--sandbox-id", args.sandbox_id, "--base", args.base,
+                           "--head", args.head]
+        elif args.ss_verb == "status":
+            _pssb_argv += ["--sandbox-id", args.sandbox_id]
+        raise SystemExit(_pssb.execute_verb(_pssb_argv))
+    elif args.cmd == "scoreboard-placement-scope":
+        # One shared implementation with `python -m dv_harness.scoreboard_placement_scope`
+        # (main(argv)).
+        from . import scoreboard_placement_scope as _psps
+        _psps_argv = [args.sps_verb]
+        if args.sps_verb == "classify":
+            _psps_argv += ["--description", args.description]
+            if args.evidence:
+                _psps_argv += ["--evidence", args.evidence]
+            if args.json:
+                _psps_argv.append("--json")
+        raise SystemExit(_psps.main(_psps_argv))
+    elif args.cmd == "security-policy-ir":
+        # One shared implementation with `python -m dv_harness.security_policy_ir`
+        # (main(argv)).
+        from . import security_policy_ir as _pspi
+        _pspi_argv = [args.spi_verb]
+        if args.spi_verb == "classify":
+            _pspi_argv += ["--policy", args.policy, "--master", args.master,
+                          "--region", args.region, "--secure", args.secure,
+                          "--privileged", args.privileged]
+            if args.json:
+                _pspi_argv.append("--json")
+        elif args.spi_verb == "verify-negative-test":
+            _pspi_argv += ["--policy", args.policy, "--master", args.master,
+                          "--region", args.region, "--secure", args.secure,
+                          "--privileged", args.privileged, "--test-result", args.test_result]
+            if args.json:
+                _pspi_argv.append("--json")
+        raise SystemExit(_pspi.main(_pspi_argv))
+    elif args.cmd == "self-learning-readiness":
+        # One shared implementation with `python -m dv_harness.self_learning_readiness`
+        # (execute()).
+        from . import self_learning_readiness as _pslr
+        _pslr_code, _pslr_matrix, _pslr_text = _pslr.execute(h.root, as_json=args.json)
+        print(json.dumps(_pslr_matrix, ensure_ascii=False, indent=2) if args.json else _pslr_text)
+        raise SystemExit(_pslr_code)
+    elif args.cmd == "shared-bus-resource-registry":
+        # One shared implementation with `python -m dv_harness.shared_bus_resource_registry`
+        # (execute_verb()).
+        from . import shared_bus_resource_registry as _psbrr
+        _psbrr_text, _psbrr_code = _psbrr.execute_verb(
+            args.sbrr_resource_declarations,
+            connectivity_rows_path=args.sbrr_connectivity_rows, as_json=args.json)
+        print(_psbrr_text)
+        raise SystemExit(_psbrr_code)
+    elif args.cmd == "spec-doc-map":
+        # One shared implementation with `python -m dv_harness.spec_doc_map`
+        # (execute_verb()).
+        from . import spec_doc_map as _psdm
+        _psdm_text, _psdm_code = _psdm.execute_verb(
+            args.sdm_verb,
+            source_path=getattr(args, "sdm_source_path", None),
+            out_dir=getattr(args, "sdm_out_dir", None),
+            record_path=getattr(args, "sdm_record_path", None),
+            title=getattr(args, "sdm_title", None),
+            doc_kind=getattr(args, "sdm_doc_kind", "dut_spec"),
+            as_json=args.json)
+        print(_psdm_text)
+        raise SystemExit(_psdm_code)
+    elif args.cmd == "spec-intelligence":
+        # One shared implementation with `python -m dv_harness.spec_intelligence`
+        # (execute_verb_spec_map()/execute_verb_analyze()).
+        from . import spec_intelligence as _psi
+        if args.si_cmd == "spec-map":
+            _psi_text, _psi_code = _psi.execute_verb_spec_map(
+                args.si_reference, args.si_out, as_json=args.json)
+        else:
+            _psi_text, _psi_code = _psi.execute_verb_analyze(
+                args.si_extraction, as_json=args.json,
+                fail_on_error=args.fail_on_error, project_root=args.si_project_root)
+        print(_psi_text)
+        raise SystemExit(_psi_code)
+    elif args.cmd == "spec-vplan-delta":
+        # One shared implementation with `python -m dv_harness.spec_vplan_delta`
+        # (execute_verb()).
+        from . import spec_vplan_delta as _psvd
+        _psvd_root = args.vplan_delta_root or str(h.root)
+        _psvd_text, _psvd_code = _psvd.execute_verb(
+            args.before, args.after, root=_psvd_root, as_json=args.json)
+        print(_psvd_text)
+        raise SystemExit(_psvd_code)
+    elif args.cmd == "spec-vplan-readiness-gate":
+        # One shared implementation with `python -m dv_harness.spec_vplan_readiness_gate`
+        # (execute_verb()).
+        from . import spec_vplan_readiness_gate as _psvrg
+        _psvrg_text, _psvrg_code = _psvrg.execute_verb(
+            args.svrg_verb, conditions_path=args.svrg_conditions, as_json=args.json)
+        print(_psvrg_text)
+        raise SystemExit(_psvrg_code)
+    elif args.cmd == "subsys-compat-matrix":
+        # One shared implementation with `python -m dv_harness.subsys_compat_matrix`
+        # (subsys_compat_matrix.execute_verb()), same convention as power-intent above.
+        from . import subsys_compat_matrix as _scm
+        _scm_text, _scm_code = _scm.execute_verb(
+            args.scm_root or str(h.root), selected_path=args.scm_selected,
+            ip_ownership_inputs_path=args.scm_ip_ownership_inputs, as_json=args.json)
+        print(_scm_text)
+        raise SystemExit(_scm_code)
+    elif args.cmd == "subsystem-contract":
+        # One shared implementation with `python -m dv_harness.subsystem_contract`
+        # (subsystem_contract.execute_verb()), same convention as
+        # system-verification-contract below.
+        from . import subsystem_contract as _ssc
+        try:
+            _ssc_text, _ssc_code = _ssc.execute_verb(
+                args.ssc_verb, root=args.ssc_root or str(h.root),
+                subsystem=args.ssc_subsystem, manifest_path=args.ssc_manifest,
+                requirements_path=args.ssc_requirements, db_path=args.ssc_db,
+                declared_spec_version=args.ssc_spec_version, as_json=args.json)
+        except _ssc.SubsystemContractError as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_ssc_text)
+        raise SystemExit(_ssc_code)
+    elif args.cmd == "subsystem-maturity-gate":
+        # One shared implementation with `python -m dv_harness.subsystem_maturity_gate`
+        # (main(argv)).
+        from . import subsystem_maturity_gate as _smg
+        _smg_argv = [args.smg_verb]
+        if args.smg_verb == "conditions":
+            if args.json:
+                _smg_argv.append("--json")
+        else:
+            _smg_argv += ["--level", args.level, "--root", args.smg_root or str(h.root)]
+            if args.json:
+                _smg_argv.append("--json")
+            if args.smg_vip_api_cards:
+                _smg_argv += ["--vip-api-cards", args.smg_vip_api_cards]
+            for _smg_vs in (args.smg_vip_sources or []):
+                _smg_argv += ["--vip-source", _smg_vs]
+            if args.smg_vip_index:
+                _smg_argv += ["--vip-index", args.smg_vip_index]
+            if args.smg_bind_topology:
+                _smg_argv += ["--bind-topology", args.smg_bind_topology]
+            if args.smg_require_tier:
+                _smg_argv.append("--require-tier")
+            if args.smg_evidence_db:
+                _smg_argv += ["--evidence-db", args.smg_evidence_db]
+            if args.smg_smoke_proof_report:
+                _smg_argv += ["--smoke-proof-report", args.smg_smoke_proof_report]
+        raise SystemExit(_smg.main(_smg_argv))
+    elif args.cmd == "subsystem-practicality-score":
+        # One shared implementation with
+        # `python -m dv_harness.subsystem_practicality_score` (main(argv)).
+        from . import subsystem_practicality_score as _spr
+        _spr_argv = [args.spr_verb, "--project-root", args.spr_project_root or str(h.root)]
+        if args.json:
+            _spr_argv.append("--json")
+        if args.deep:
+            _spr_argv.append("--deep")
+        raise SystemExit(_spr.main(_spr_argv))
+    elif args.cmd == "syoscb-source-audit":
+        # One shared implementation with `python -m dv_harness.syoscb_source_audit`
+        # (module-private _main(argv)).
+        from . import syoscb_source_audit as _syo
+        _syo_argv = [args.syo_root]
+        if args.json:
+            _syo_argv.append("--json")
+        if args.syo_registration_payload:
+            _syo_argv.append("--registration-payload")
+        if args.syo_l5_destination:
+            _syo_argv += ["--l5-destination", args.syo_l5_destination]
+        if args.syo_assert_not_vendored:
+            _syo_argv += ["--assert-not-vendored", args.syo_assert_not_vendored]
+        raise SystemExit(_syo._main(_syo_argv))
+    elif args.cmd == "system-checker-taxonomy":
+        # One shared implementation with `python -m dv_harness.system_checker_taxonomy`
+        # (execute_verb(argv)).
+        from . import system_checker_taxonomy as _sct
+        _sct_argv = [args.sct_cmd]
+        if args.sct_cmd == "classify":
+            _sct_argv.append(args.sct_path)
+            if args.json:
+                _sct_argv.append("--json")
+        raise SystemExit(_sct.execute_verb(_sct_argv))
+    elif args.cmd == "system-closure-aggregator":
+        # One shared implementation with `python -m dv_harness.system_closure_aggregator`
+        # (execute_verb(argv)).
+        from . import system_closure_aggregator as _sca
+        _sca_argv = ["--dimensions", args.sca_dimensions]
+        if args.sca_markdown:
+            _sca_argv.append("--markdown")
+        raise SystemExit(_sca.execute_verb(_sca_argv))
+    elif args.cmd == "system-command-grammar-ir":
+        # One shared implementation with `python -m dv_harness.system_command_grammar_ir`
+        # (main(argv)).
+        from . import system_command_grammar_ir as _scg
+        _scg_argv = []
+        for _scg_entry in args.scg_subsystem:
+            _scg_argv += ["--subsystem", _scg_entry]
+        if args.json:
+            _scg_argv.append("--json")
+        raise SystemExit(_scg.main(_scg_argv))
+    elif args.cmd == "system-error-propagation":
+        # One shared implementation with `python -m dv_harness.system_error_propagation`
+        # (system_error_propagation.execute_verb()), same convention as power-intent above.
+        from . import system_error_propagation as _sep
+        _sep_text, _sep_code = _sep.execute_verb(
+            origin=args.origin, condition_path=args.sep_condition_path,
+            condition_text=args.sep_condition_text, topology_path=args.sep_topology_path,
+            declared_responses_path=args.sep_declared_responses_path, as_json=args.json)
+        print(_sep_text)
+        raise SystemExit(_sep_code)
+    elif args.cmd == "system-fw-service-registry":
+        # One shared implementation with `python -m dv_harness.system_fw_service_registry`
+        # (execute_verb()).
+        from . import system_fw_service_registry as _sfw
+        _sfw_text, _sfw_code = _sfw.execute_verb(args.sfw_input, as_json=args.json)
+        print(_sfw_text)
+        raise SystemExit(_sfw_code)
+    elif args.cmd == "system-verification-contract":
+        # One shared implementation with
+        # `python -m dv_harness.system_verification_contract` (execute_verb()), same
+        # convention as subsystem-contract above.
+        from . import system_verification_contract as _svc
+        try:
+            _svc_text, _svc_code = _svc.execute_verb(
+                args.svc_verb, root=args.svc_root or str(h.root),
+                subsystem_contracts_path=args.svc_subsystem_contracts,
+                topology_path=args.svc_topology,
+                resource_registry_path=args.svc_resource_registry,
+                command_registry_path=args.svc_command_registry,
+                system_name=args.svc_system_name, as_json=args.json)
+        except _svc.SystemVerificationContractError as e:
+            print(f"{type(e).__name__}: {e}")
+            raise SystemExit(2)
+        print(_svc_text)
+        raise SystemExit(_svc_code)
+    elif args.cmd == "missing-artifact-detector":
+        # One shared implementation with
+        # `python -m dv_harness.target_conditioned_missing_artifact_detector`
+        # (execute_verb(argv)).
+        from . import target_conditioned_missing_artifact_detector as _mad
+        _mad_argv = [args.mad_target]
+        if args.mad_inventory:
+            _mad_argv.append(args.mad_inventory)
+        _mad_code, _mad_report, _mad_text = _mad.execute_verb(_mad_argv)
+        print(_mad_text)
+        raise SystemExit(_mad_code)
+    elif args.cmd == "task-return-model":
+        # One shared implementation with `python -m dv_harness.task_return_model`
+        # (main(argv)).
+        from . import task_return_model as _trm
+        _trm_argv = ["--tasks", args.trm_tasks, "--log", args.trm_log]
+        if args.json:
+            _trm_argv.append("--json")
+        raise SystemExit(_trm.main(_trm_argv))
+    elif args.cmd == "transaction-correlation":
+        # One shared implementation with `python -m dv_harness.transaction_correlation_ir`
+        # (main(argv)).
+        from . import transaction_correlation_ir as _tci
+        _tci_argv = [args.tci_cmd]
+        if args.tci_cmd == "responses":
+            _tci_argv += ["--requests", args.tci_requests, "--responses", args.tci_responses]
+        elif args.tci_cmd == "data":
+            _tci_argv += ["--transactions", args.tci_transactions, "--beats", args.tci_beats]
+        elif args.tci_cmd == "linkage":
+            _tci_argv += ["--event", args.tci_event, "--parent", args.tci_parent,
+                          "--children", args.tci_children]
+        elif args.tci_cmd == "reconstruct":
+            _tci_argv += ["--transactions", args.tci_transactions,
+                          "--requests", args.tci_requests,
+                          "--responses", args.tci_responses,
+                          "--data-transactions", args.tci_data_transactions,
+                          "--beats", args.tci_beats]
+        if args.json:
+            _tci_argv.append("--json")
+        raise SystemExit(_tci.main(_tci_argv))
+    elif args.cmd == "system-transaction-ir":
+        # One shared implementation with `python -m dv_harness.system_transaction_ir`
+        # (main(argv)).
+        from . import system_transaction_ir as _sti
+        _sti_argv = [args.sti_cmd]
+        if args.sti_cmd == "build":
+            _sti_argv += ["--fabrics", args.fabrics, "--links", args.links]
+            if args.json:
+                _sti_argv.append("--json")
+        raise SystemExit(_sti.main(_sti_argv))
+    elif args.cmd == "unknown-uncertainty-registry":
+        # One shared implementation with
+        # `python -m dv_harness.unknown_uncertainty_registry` (execute_verb(argv)).
+        from . import unknown_uncertainty_registry as _uur
+        _uur_argv = [args.uur_verb, "--project-root", str(h.root)]
+        if args.uur_no_deep:
+            _uur_argv.append("--no-deep")
+        if args.json:
+            _uur_argv.append("--json")
+        raise SystemExit(_uur.execute_verb(_uur_argv))
+    elif args.cmd == "user-correction-trigger":
+        # One shared implementation with
+        # `python -m dv_harness.user_correction_trigger` (execute_verb(argv)).
+        from . import user_correction_trigger as _uct
+        _uct_argv = [args.uct_verb, "--root", str(h.root)]
+        if args.uct_min_occurrences is not None:
+            _uct_argv += ["--min-occurrences", str(args.uct_min_occurrences)]
+        raise SystemExit(_uct.execute_verb(_uct_argv))
+    elif args.cmd == "verification-boundary-ir":
+        # One shared implementation with
+        # `python -m dv_harness.verification_boundary_ir` (main(argv)).
+        from . import verification_boundary_ir as _vbi
+        _vbi_argv = [args.vbi_cmd]
+        if args.vbi_cmd == "build":
+            _vbi_argv += ["--boundaries", args.vbi_boundaries]
+            if args.json:
+                _vbi_argv.append("--json")
+        raise SystemExit(_vbi.main(_vbi_argv))
+    elif args.cmd == "verification-intake-contract":
+        # One shared implementation with
+        # `python -m dv_harness.verification_intake_contract`
+        # (verification_intake_contract.execute_verb, keyword form).
+        from . import verification_intake_contract as _vic
+        _vic_text, _vic_code = _vic.execute_verb(
+            args.vic_verb, conditions_path=args.vic_conditions, state=args.vic_state,
+            as_json=args.json)
+        print(_vic_text)
+        raise SystemExit(_vic_code)
+    elif args.cmd == "verification-intent-ir":
+        # One shared implementation with
+        # `python -m dv_harness.verification_intent_ir`
+        # (verification_intent_ir.execute_verb, keyword form).
+        from . import verification_intent_ir as _vii
+        _vii_text, _vii_code = _vii.execute_verb(
+            args.vii_requirements, source_paths=args.vii_source_paths,
+            sys_regmap_path=args.vii_sys_regmap, upf_paths=args.vii_upf, as_json=args.json)
+        print(_vii_text)
+        raise SystemExit(_vii_code)
+    elif args.cmd == "verification-knowledge-graph":
+        # One shared implementation with
+        # `python -m dv_harness.verification_knowledge_graph` (main(argv)).
+        from . import verification_knowledge_graph as _vkg
+        _vkg_argv = []
+        if args.vkg_evidence_db:
+            _vkg_argv += ["--evidence-db", args.vkg_evidence_db]
+        if args.vkg_requirements:
+            _vkg_argv += ["--requirements", args.vkg_requirements]
+        if args.vkg_memory_root:
+            _vkg_argv += ["--memory-root", args.vkg_memory_root]
+        if args.json:
+            _vkg_argv.append("--json")
+        raise SystemExit(_vkg.main(_vkg_argv))
+    elif args.cmd == "vip-capability-extraction":
+        # One shared implementation with
+        # `python -m dv_harness.vip_capability_extraction` (main(argv)).
+        from . import vip_capability_extraction as _vce
+        _vce_argv = ["--index", args.vce_index]
+        for _s in (args.vce_project_sources or []):
+            _vce_argv += ["--project-source", _s]
+        for _s in (args.vce_example_sources or []):
+            _vce_argv += ["--example-source", _s]
+        for _s in (args.vce_user_guide_reference_md or []):
+            _vce_argv += ["--user-guide-reference-md", _s]
+        if args.vce_out_dir:
+            _vce_argv += ["--out-dir", args.vce_out_dir]
+        if args.json:
+            _vce_argv.append("--json")
+        raise SystemExit(_vce.main(_vce_argv))
+    elif args.cmd == "vip-learning-gate":
+        # One shared implementation with `python -m dv_harness.vip_learning_gate`
+        # (vip_learning_gate.execute_verb, keyword form).
+        from . import vip_learning_gate as _vlg
+        _vlg_text, _vlg_code = _vlg.execute_verb(
+            vip_sources=args.vlg_vip_sources, vip_index_path=args.vlg_vip_index,
+            vip_relative_to=args.vlg_vip_relative_to, phy_boundary_path=args.vlg_phy_boundary,
+            bind_entries_path=args.vlg_bind_entries, bind_require_tier=args.vlg_require_tier,
+            env_manifest_path=args.vlg_env_manifest, as_json=args.json)
+        print(_vlg_text)
+        raise SystemExit(_vlg_code)
+    elif args.cmd == "vplan-baseline":
+        # One shared implementation with `python -m dv_harness.vplan_baseline`
+        # (execute_verb(argv)).
+        from . import vplan_baseline as _vpb
+        _vpb_argv = [args.vpb_verb, "--root", str(h.root)]
+        if args.vpb_vplan:
+            _vpb_argv += ["--vplan", args.vpb_vplan]
+        if args.vpb_requirements:
+            _vpb_argv += ["--requirements", args.vpb_requirements]
+        if args.vpb_configuration_ir:
+            _vpb_argv += ["--configuration-ir", args.vpb_configuration_ir]
+        if args.vpb_freeze_id:
+            _vpb_argv += ["--freeze-id", args.vpb_freeze_id]
+        if args.vpb_frozen_by:
+            _vpb_argv += ["--frozen-by", args.vpb_frozen_by]
+        if args.vpb_spec_version:
+            _vpb_argv += ["--spec-version", args.vpb_spec_version]
+        if args.vpb_head:
+            _vpb_argv += ["--head", args.vpb_head]
+        if args.json:
+            _vpb_argv.append("--json")
+        raise SystemExit(_vpb.execute_verb(_vpb_argv))
+    elif args.cmd == "vplan-item-executability-score":
+        # One shared implementation with
+        # `python -m dv_harness.vplan_item_executability_score` (execute_verb(args)).
+        from . import vplan_item_executability_score as _vie
+        _vie_argv = ["--items", args.vie_items]
+        if args.vie_required_facts:
+            _vie_argv += ["--required-facts", args.vie_required_facts]
+        if args.json:
+            _vie_argv.append("--json")
+        raise SystemExit(_vie.execute_verb(_vie_argv))
+    elif args.cmd == "waiver-store":
+        # One shared implementation with `python -m dv_harness.waiver_store`
+        # (execute_verb(argv)).
+        from . import waiver_store as _wvs
+        _wvs_argv = [args.wvs_verb, "--root", str(h.root)]
+        if args.json:
+            _wvs_argv.append("--json")
+        raise SystemExit(_wvs.execute_verb(_wvs_argv))
+    elif args.cmd == "memory-store":
+        # Overlap-checked (grpH): genuinely distinct from the `memory` verb
+        # above, which is the Markdown/YAML Vault surface (memory_vault.py)
+        # only. This wires the pre-existing dv_harness/memory_cli.py script
+        # (memory.py's raw JSON MemoryStore/CornerCaseLibrary) for the first
+        # time -- same dispatch logic that script's own main() already runs.
+        from .memory import (
+            MemoryStore as _MStore, MemoryRetriever as _MRetriever, MemoryGC as _MGC,
+            CornerCaseLibrary as _CCLibrary, CornerCaseLibraryConsolidator as _CCConsolidator,
+            PropertyFilterError as _PropertyFilterError, parse_property_filters as _parse_property_filters,
+        )
+        _mst_store = _MStore(h.root)
+        if args.mst_cmd == "search":
+            try:
+                _mst_props = _parse_property_filters(args.mst_properties)
+            except _PropertyFilterError as e:
+                print(json.dumps({"ok": False, "error": "BAD_PROPERTY_FILTER", "detail": str(e)}, ensure_ascii=False))
+                raise SystemExit(2)
+            print(json.dumps(_MRetriever(_mst_store).search({
+                "protocol": args.protocol, "scope": args.scope, "symptoms": args.mst_symptom,
+                "text": args.text, "level": args.mst_level, "confidence": args.confidence,
+                "status": args.status, "property": _mst_props,
+            }, limit=args.limit, rank_by=args.mst_rank_by,
+               usefulness_weight=args.mst_usefulness_weight), ensure_ascii=False, indent=2))
+        elif args.mst_cmd == "get":
+            print(json.dumps(_mst_store.get(args.memory_id), ensure_ascii=False, indent=2))
+        elif args.mst_cmd == "deprecate":
+            print("OK" if _MGC(_mst_store).deprecate(args.memory_id, args.reason) else "NOT_FOUND")
+        elif args.mst_cmd == "corner-case-search":
+            _mst_lib = _CCLibrary(h.root)
+            print(json.dumps(_mst_lib.search({
+                "protocol": args.protocol, "category": args.category, "text": args.text,
+            }), ensure_ascii=False, indent=2))
+        elif args.mst_cmd == "corner-case-get":
+            _mst_lib = _CCLibrary(h.root)
+            print(json.dumps(_mst_lib.get(args.ccl_id), ensure_ascii=False, indent=2))
+        elif args.mst_cmd == "corner-case-add":
+            _mst_lib = _CCLibrary(h.root)
+            _mst_record = json.loads(Path(args.mst_record).read_text(encoding="utf-8"))
+            if args.mst_resolution:
+                _mst_resolution = json.loads(Path(args.mst_resolution).read_text(encoding="utf-8"))
+                _mst_rec = _CCConsolidator(_mst_lib).from_resolved_corner_case(_mst_record, _mst_resolution)
+            else:
+                _mst_rec = _mst_lib.add(_mst_record)
+            print(json.dumps(_mst_rec, ensure_ascii=False, indent=2))
+        elif args.mst_cmd == "corner-case-deprecate":
+            _mst_lib = _CCLibrary(h.root)
+            print("OK" if _mst_lib.deprecate(args.ccl_id, args.reason) else "NOT_FOUND")
+        elif args.mst_cmd == "index-check":
+            print(json.dumps(_mst_store.index_integrity(), ensure_ascii=False, indent=2))
+        elif args.mst_cmd == "reindex":
+            print(json.dumps(_mst_store.reindex(prune_missing=args.mst_prune_missing), ensure_ascii=False, indent=2))
+    elif args.cmd == "schema-config-governance":
+        # Overlap-checked (grpH): genuinely distinct from the `schema-compat`
+        # verb above -- extends that module's own classify_schema_change()
+        # with the FORWARD_COMPATIBLE/MIGRATION_REQUIRED verdicts and the
+        # section-146 governance registry, reusing rather than duplicating it.
+        from . import schema_config_governance as _scg
+        if args.scg_cmd == "registry":
+            _scg_text, _scg_code = _scg.execute_verb(action="registry", root=str(h.root), as_json=args.json)
+        else:
+            _scg_text, _scg_code = _scg.execute_verb(
+                action="classify", root=str(h.root), old=args.scg_old, new=args.scg_new,
+                schema_filename=args.scg_schema_filename, owning_module=args.scg_owning_module,
+                migration_fn=args.scg_migration_fn, corpus=args.scg_corpus, as_json=args.json)
+        print(_scg_text)
+        raise SystemExit(_scg_code)
 
 if __name__ == "__main__":
     main()

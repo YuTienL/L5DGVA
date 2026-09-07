@@ -266,6 +266,210 @@ def test_zero_item_checklist_reports_100_percent_not_zero():
         shutil.rmtree(tmp)
 
 
+# --- env_manifest.py + target_conditioned_missing_artifact_detector.py reuse
+# (2026-09-06, stage_entry_exit_banner gap-close; self_check_list.md #33) ---
+# A synthesized, clearly-fictional register map -- test data only, never real
+# project register content (see register_map.schema.json's own docstring on
+# the input-contract discipline this fixture demonstrates, not violates).
+_REGISTER_MAP_FIXTURE = {
+    "schema_version": "1.0",
+    "source": {"kind": "ral_model_export", "description": "synthesized test fixture, not a real project"},
+    "blocks": [
+        {
+            "name": "TEST_CTRL_BLOCK",
+            "base_address": "0x1000",
+            "description": "Synthesized fixture block for stage_progress_display tests.",
+            "registers": [
+                {
+                    "name": "CTRL", "address_offset": "0x0", "width": 32,
+                    "access": "RW", "reset_value": "0x0", "description": "Control register.",
+                    "fields": [
+                        {"name": "ENABLE", "bit_offset": 0, "bit_width": 1,
+                         "access": "RW", "reset_value": "0x0"},
+                    ],
+                },
+            ],
+        }
+    ],
+}
+
+
+def _write_register_map(tmp: Path) -> Path:
+    p = tmp / "register_map.json"
+    p.write_text(json.dumps(_REGISTER_MAP_FIXTURE), encoding="utf-8")
+    return p
+
+
+def _write_env_manifest(tmp: Path, **generate_kwargs) -> Path:
+    """A real, schema-valid env.manifest.json at the exact path
+    env_manifest.default_manifest_path() resolves for this project root
+    (.dv-harness/env.manifest.json, per context_budget.policy.json's tier-2
+    always_resident declaration)."""
+    from dv_harness.env_manifest import generate_and_write
+    out = tmp / ".dv-harness" / "env.manifest.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    generate_and_write(out, **generate_kwargs)
+    return out
+
+
+def test_env_manifest_items_are_empty_with_no_manifest_on_disk():
+    # Negative control: a project genuinely mid-INTAKE has no env.manifest.json
+    # yet -- that absence must never be invented into a checklist finding.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        assert spd.build_env_manifest_checklist_items(tmp) == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_env_manifest_items_reflect_the_real_per_layer_status():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        rm = _write_register_map(tmp)
+        _write_env_manifest(tmp, register_map_path=rm)
+        items = spd.build_env_manifest_checklist_items(tmp)
+        by_id = {it["item_id"]: it for it in items}
+        assert set(by_id) == {
+            "env_manifest.vip_config", "env_manifest.dut_facts.rtl",
+            "env_manifest.dut_facts.registers",
+            "env_manifest.env_topology.testplan_correspondence",
+        }
+        for it in items:
+            assert it["source"] == spd.SOURCE_ENV_MANIFEST
+        # Only the layer this manifest was actually given real input for
+        # reads present -- the rest stay their real, honest NOT_AVAILABLE.
+        assert by_id["env_manifest.dut_facts.registers"]["present"] is True
+        assert by_id["env_manifest.vip_config"]["present"] is False
+        assert by_id["env_manifest.dut_facts.rtl"]["present"] is False
+        assert by_id["env_manifest.env_topology.testplan_correspondence"]["present"] is False
+        assert "status: LOADED" in by_id["env_manifest.dut_facts.registers"]["description"]
+        assert "status: NOT_AVAILABLE" in by_id["env_manifest.vip_config"]["description"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_env_manifest_items_are_empty_on_a_malformed_manifest_file():
+    # An unreadable/invalid manifest degrades to "no items", never a crash --
+    # this is display-only, informational machinery.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        out = tmp / ".dv-harness" / "env.manifest.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("{ not valid json", encoding="utf-8")
+        assert spd.build_env_manifest_checklist_items(tmp) == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_target_conditioned_items_are_empty_for_a_stage_with_no_mapped_target():
+    # Negative control: a stage this repo has no established downstream-
+    # target semantics for must never get a guessed target's requirements.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        assert "INTAKE" not in spd.STAGE_ARTIFACT_TARGET
+        assert spd.build_target_conditioned_checklist_items(tmp, "INTAKE") == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_target_conditioned_items_match_the_real_per_target_table_and_derive_from_env_manifest():
+    from dv_harness import target_conditioned_missing_artifact_detector as tcmad
+
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        rm = _write_register_map(tmp)
+        _write_env_manifest(tmp, register_map_path=rm)
+
+        items = spd.build_target_conditioned_checklist_items(tmp, "IMPLEMENT")
+        required = tcmad.required_categories_for_target(spd.STAGE_ARTIFACT_TARGET["IMPLEMENT"])
+        # Every real required category for VIP_UVM_CREATION appears exactly
+        # once, reusing that module's own per-category reason verbatim --
+        # never a second, invented wording.
+        assert {it["item_id"] for it in items} == \
+            {f"target:VIP_UVM_CREATION:{r.category_id}" for r in required}
+        by_category = {it["item_id"].rsplit(":", 1)[-1]: it for it in items}
+        for r in required:
+            it = by_category[r.category_id]
+            assert it["source"] == spd.SOURCE_TARGET_CONDITIONED
+            assert it["description"] == r.reason
+        # register_map is the one category this manifest gives real evidence
+        # for, and it is really present -- everything else this target needs
+        # (vip_config_dump, dut_rtl_source, plus the categories this function
+        # has no env_manifest-derived evidence for at all) reads absent,
+        # never guessed present.
+        assert by_category["register_map"]["present"] is True
+        assert by_category["vip_config_dump"]["present"] is False
+        assert by_category["dut_rtl_source"]["present"] is False
+        assert by_category["bind_topology"]["present"] is False
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_target_conditioned_items_still_report_the_real_requirement_with_no_manifest_at_all():
+    # A project with NO env.manifest.json yet still gets told what
+    # VIP_UVM_CREATION will need and why -- "nothing has been assessed" is
+    # itself useful information for the STAGE-START banner, not silence.
+    from dv_harness import target_conditioned_missing_artifact_detector as tcmad
+
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        items = spd.build_target_conditioned_checklist_items(tmp, "SIGNOFF")
+        required = tcmad.required_categories_for_target("SIGNOFF_PACKAGE")
+        assert len(items) == len(required)
+        assert all(it["present"] is False for it in items)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stage_input_checklist_widens_with_real_env_manifest_and_target_evidence():
+    # Integration: build_stage_input_checklist() -- the function
+    # engine._emit_stage_start_display() actually calls at a real stage
+    # boundary -- carries both new sources for a real mapped stage, on top
+    # of (never instead of) the pre-existing graph-declared items.
+    tmp, h = _fresh_harness()
+    try:
+        rm = _write_register_map(tmp)
+        _write_env_manifest(tmp, register_map_path=rm)
+        gd = GraphDefinition.load(REAL_GRAPH)
+        node = gd.nodes["IMPLEMENT"]
+        report = spd.build_stage_input_checklist(tmp, "IMPLEMENT", node, h.blackboard,
+                                                  stage_history={})
+        sources = {it["item_id"]: it["sources"] for it in report["items"]}
+        assert any(spd.SOURCE_ENV_MANIFEST in s for s in sources.values())
+        assert any(spd.SOURCE_TARGET_CONDITIONED in s for s in sources.values())
+        # The pre-existing graph-declared sources are still exactly present --
+        # this is additive, never a replacement.
+        declared = set(node.blackboard_read) | {d["item_id"] for d in node.expected_evidence}
+        assert declared <= set(sources)
+        # And the checklist's own internal-consistency invariant still holds
+        # over the widened item set.
+        items = report["items"]
+        assert report["total_count"] == len(items)
+        assert report["present_count"] == sum(1 for it in items if it["present"])
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_unmapped_stage_checklist_is_byte_identical_with_no_manifest_present():
+    # Regression guard: a stage with no env.manifest.json on disk and no
+    # STAGE_ARTIFACT_TARGET entry must produce EXACTLY the pre-existing item
+    # set -- the widening is additive-only and must never touch a stage that
+    # has no new real evidence to add.
+    tmp, h = _fresh_harness()
+    try:
+        assert "ARCH_CALIBRATION" not in spd.STAGE_ARTIFACT_TARGET
+        gd = GraphDefinition.load(REAL_GRAPH)
+        node = gd.nodes["ARCH_CALIBRATION"]
+        report = spd.build_stage_input_checklist(tmp, "ARCH_CALIBRATION", node, h.blackboard,
+                                                  stage_history={})
+        declared = (set(node.blackboard_read)
+                    | {d["item_id"] for d in node.expected_evidence}
+                    | {g[0] for g in STAGE_GATES["ARCH_CALIBRATION"]})
+        assert {it["item_id"] for it in report["items"]} == declared
+    finally:
+        shutil.rmtree(tmp)
+
+
 # --- the "please provide more detail on X" reminder ------------------------
 
 def test_detail_requests_name_every_missing_item_and_reuse_the_real_questions():

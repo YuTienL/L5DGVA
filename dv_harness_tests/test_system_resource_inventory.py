@@ -798,6 +798,61 @@ def test_configuration_conflicts_escalate_through_the_existing_source_authority(
     assert escalations[0]["conflict"]["verdict"] == sa.VERDICT_UNDECIDABLE
     assert escalations[0]["conflict"]["winner"] is None
     assert len(escalations[0]["conflict"]["tied"]) == 2
+    # Without a question_store, resolve_conflict() is computed but nothing is
+    # actually escalated -- the exact gap this closes; no `question_id` key
+    # is ever fabricated for an escalation nobody asked to file.
+    assert "question_id" not in escalations[0]
+
+
+def test_configuration_conflict_is_filed_into_the_real_question_queue(tmp_path):
+    """source_authority.py's own docstring calls escalating a RESOLVED or
+    UNDECIDABLE_SAME_AUTHORITY conflict "mandatory, not advisory". This is
+    the other half of test_configuration_conflicts_escalate_through_the_
+    existing_source_authority: the SAME UNDECIDABLE_SAME_AUTHORITY verdict,
+    but with a real `question_store` supplied so it is actually filed rather
+    than only computed."""
+    from dv_harness import question_queue
+
+    store = question_queue.QuestionQueueStore(tmp_path)
+    a, b = _two_subsystems_sharing_one_cpu_master(
+        tmp_path, b_active=False,
+        a_config={"data_width": "64"}, b_config={"data_width": "32"})
+    analysis = sri.build_cross_subsystem_resource_analysis([a, b], question_store=store)
+    escalations = analysis["configuration_conflict_escalations"]
+    assert len(escalations) == 1
+    assert escalations[0]["conflict"]["verdict"] == sa.VERDICT_UNDECIDABLE
+    assert escalations[0]["question_id"]
+    questions = store.list_questions()
+    assert len(questions) == 1
+    assert questions[0]["id"] == escalations[0]["question_id"]
+    assert questions[0]["domain"] == "dut"
+    blob = json.dumps(questions[0])
+    assert "data_width" in blob
+    # collect_open_questions() (system_phase1_report.py) reads this exact
+    # field off this exact list -- the field the gap named as never receiving
+    # a real id.
+    from dv_harness import system_phase1_report as spr
+    open_qs = spr.collect_open_questions(resource_analysis=analysis)
+    sys11 = [q for q in open_qs if q["source"] == "SYS-11 configuration conflict"]
+    assert len(sys11) == 1
+    assert sys11[0]["question_id"] == escalations[0]["question_id"]
+    assert sys11[0]["question_id"] != ""
+    # Idempotent: re-analyzing the identical pair must not grow the queue.
+    analysis_again = sri.build_cross_subsystem_resource_analysis([a, b], question_store=store)
+    assert len(analysis_again["configuration_conflict_escalations"]) == 1
+    assert len(store.list_questions()) == 1
+
+
+def test_a_clean_pair_with_a_question_store_files_nothing(tmp_path):
+    """Negative control: a pair with no configuration conflict at all must
+    file nothing, even with a real question_store supplied."""
+    from dv_harness import question_queue
+
+    store = question_queue.QuestionQueueStore(tmp_path)
+    a, b = _two_subsystems_sharing_one_cpu_master(tmp_path, b_active=False)
+    analysis = sri.build_cross_subsystem_resource_analysis([a, b], question_store=store)
+    assert analysis["configuration_conflict_escalations"] == []
+    assert store.list_questions() == []
 
 
 # ============================================================================

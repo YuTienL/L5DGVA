@@ -414,3 +414,138 @@ def test_conditional_resolver_is_a_noop_for_every_ordinary_single_edge_stage():
                 assert h._resolve_conditional_fanout_frontier(node_id, frontier) == frontier, node_id
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --- genuine cross-branch CONTRADICTION detection (2026-09-07,
+# fanout_contradiction_detection) ------------------------------------------
+#
+# additive to the whole fan-out mechanism above: contributing_agents,
+# multi_agent_consensus_count and the root_cause_evidence_gate PASS itself
+# are untouched by every test below -- these tests only assert on the new
+# branch_contradiction_flag field.
+
+def _branch_root_cause_text(claim: str | None) -> str:
+    """A branch's own real evidence text. RCA_RTL_EVIDENCE/RCA_LOG_EVIDENCE/
+    RCA_VIP_SPEC_EVIDENCE are deliberately NOT gated on root_cause_evidence_
+    gate (STAGE_GATES has no entry for them), so this fenced block is never
+    required to PASS the branch stage -- it is only real text a branch agent
+    MAY choose to emit, exactly what _detect_rca_branch_contradictions()
+    reads. `claim is None` reproduces a branch that found nothing citable
+    (no fenced block at all) -- the uncorroborated, non-contradictory case."""
+    if claim is None:
+        return "branch findings: nothing conclusive to cite yet."
+    return "branch findings.\n\n" + _evidence("root_cause_evidence_gate", {"root_cause": claim})
+
+
+def _run_rca_fanout_to_join(claims: dict) -> tuple[Path, "DVHarness"]:
+    """Drives FAILURE_RECOVERY -> the real RCA_G1 fan-out -> RCA_JOIN exactly
+    like test_real_issue_triage_dispatches_the_rca_fanout_end_to_end above,
+    except each branch's own stubbed text is built from `claims`
+    ({stage_id: claim_or_None}) instead of the generic placeholder text, so
+    each branch's real Blackboard topic really carries (or really omits) a
+    root_cause_evidence_gate-shaped block for RCA_JOIN's synthesis point to
+    read back. Caller is responsible for shutil.rmtree(tmp)."""
+    tmp, h = _real_project_harness()
+    texts = _texts("REAL_ISSUE")
+    for stage_id, claim in claims.items():
+        texts[stage_id] = _branch_root_cause_text(claim)
+    h.adapter = _ScriptedAdapter(texts, harness=h)
+    h.set_stage("FAILURE_RECOVERY")
+    h.run_stage("goal")
+    assert h.state.stages["FAILURE_RECOVERY"]["status"] == Status.PASS.value
+    assert h.advance("goal") == "RCA_JOIN"
+    for b in RCA_BRANCHES:
+        assert h.state.stages[b]["status"] == Status.PASS.value
+    h.run_stage("goal")
+    assert h.state.stages["RCA_JOIN"]["status"] == Status.PASS.value, \
+        h.state.stages["RCA_JOIN"].get("blocking_reason")
+    return tmp, h
+
+
+def test_rca_join_flags_a_real_cross_branch_contradiction():
+    """Two of the three real, independently-dispatched RCA_G1 branches each
+    cite a REAL but DIFFERENT root_cause for the same finding -- exactly the
+    genuine disagreement the fan-out's own blind-dispatch design can produce,
+    and CLAUDE.md's Evidence Truth Rule requires be surfaced rather than
+    silently folded into (or out of) the consensus count."""
+    tmp, h = _run_rca_fanout_to_join({
+        "RCA_RTL_EVIDENCE": "remote-wake enable register never programmed before the LPM token",
+        "RCA_LOG_EVIDENCE": "host issued the LPM token before device reset completed",
+        "RCA_VIP_SPEC_EVIDENCE": None,
+    })
+    try:
+        fusion = h.blackboard.read("rca_evidence_fusion")["value"]
+        flag = fusion["branch_contradiction_flag"]
+        assert flag["contradiction_detected"] is True
+        agents = {c["agent"] for c in flag["conflicting_claims"]}
+        assert agents == {"rtl-evidence-agent", "log-evidence-agent"}
+        claims = {c["root_cause"] for c in flag["conflicting_claims"]}
+        assert len(claims) == 2
+
+        # additive-only: the existing consensus-count accumulation and the
+        # already-real contributing_agents list are completely untouched by
+        # a real detected contradiction.
+        contributing = {c["agent"] for c in fusion["contributing_agents"]}
+        assert contributing == {"rtl-evidence-agent", "log-evidence-agent", "vip-spec-evidence-agent"}
+        rcc = h.blackboard.read("root_cause_confidence")["value"]
+        assert rcc["concurrent_agent_evidence_count"] == 3
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_rca_join_reports_no_contradiction_when_branches_agree():
+    """Two branches independently citing the SAME real root cause is
+    corroboration, not contradiction -- must never be flagged."""
+    same = "remote-wake enable register never programmed before the LPM token"
+    tmp, h = _run_rca_fanout_to_join({
+        "RCA_RTL_EVIDENCE": same,
+        "RCA_LOG_EVIDENCE": same,
+        "RCA_VIP_SPEC_EVIDENCE": None,
+    })
+    try:
+        flag = h.blackboard.read("rca_evidence_fusion")["value"]["branch_contradiction_flag"]
+        assert flag["contradiction_detected"] is False
+        assert flag["conflicting_claims"] == []
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_rca_join_reports_no_contradiction_when_branches_are_merely_uncorroborated():
+    """One branch citing a real root cause and the other two finding nothing
+    citable is the honest UNCORROBORATED case CLAUDE.md's own item text
+    distinguishes from a genuine contradiction -- must never be flagged as
+    one."""
+    tmp, h = _run_rca_fanout_to_join({
+        "RCA_RTL_EVIDENCE": "remote-wake enable register never programmed before the LPM token",
+        "RCA_LOG_EVIDENCE": None,
+        "RCA_VIP_SPEC_EVIDENCE": None,
+    })
+    try:
+        flag = h.blackboard.read("rca_evidence_fusion")["value"]["branch_contradiction_flag"]
+        assert flag["contradiction_detected"] is False
+        assert flag["conflicting_claims"] == []
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_rca_join_contradiction_flag_is_never_fabricated_when_no_branch_cites_a_root_cause():
+    """The generic placeholder branch text used by every OTHER test in this
+    file (no fenced root_cause_evidence_gate block at all, exactly the
+    original test_real_issue_triage_dispatches_the_rca_fanout_end_to_end
+    fixture) must produce an honest, present, non-contradictory flag -- never
+    a missing field, and never a fabricated True."""
+    tmp, h = _real_project_harness()
+    try:
+        h.adapter = _ScriptedAdapter(_texts("REAL_ISSUE"), harness=h)
+        h.set_stage("FAILURE_RECOVERY")
+        h.run_stage("goal")
+        assert h.advance("goal") == "RCA_JOIN"
+        h.run_stage("goal")
+        assert h.state.stages["RCA_JOIN"]["status"] == Status.PASS.value
+
+        flag = h.blackboard.read("rca_evidence_fusion")["value"]["branch_contradiction_flag"]
+        assert flag["contradiction_detected"] is False
+        assert flag["conflicting_claims"] == []
+        assert "uncorroborated" in flag["basis"]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)

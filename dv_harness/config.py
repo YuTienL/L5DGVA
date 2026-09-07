@@ -36,7 +36,33 @@ DEFAULT_CONFIG = {
         # termination conditions).
         "enable_inner_react_loop": True,
         "inner_react_max_iterations": 3,
-        "inner_react_max_adapter_calls": 2
+        "inner_react_max_adapter_calls": 2,
+        # Adaptive, complexity-sensitive ReAct iteration/adapter-call budget
+        # (2026-09-07, adaptive_react_budget gap-close -- see
+        # dv_harness/react_loop.py's compute_adaptive_react_budget() for the
+        # real scaling formula and its real complexity signal: the number
+        # of distinct git-modified files, and the distinct top-level
+        # subsystem directories those files sit under, currently touched by
+        # the worktree). OFF by default ("enabled": False), same explicit-
+        # opt-in convention as self_tuning/escalation/dry_run above -- a
+        # project that never sets adaptive_react_budget.enabled=true keeps
+        # the two fixed inner_react_max_iterations/
+        # inner_react_max_adapter_calls values above, unchanged, for every
+        # stage. min_iterations/max_iterations and min_adapter_calls/
+        # max_adapter_calls are the real, human-editable floor/ceiling this
+        # mode's linear scaling is clamped inside (never unbounded);
+        # files_per_iteration_step/subsystems_per_iteration_step are how many
+        # additional real touched files/subsystems it takes to earn one more
+        # unit of budget above the floor.
+        "adaptive_react_budget": {
+            "enabled": False,
+            "min_iterations": 2,
+            "max_iterations": 6,
+            "files_per_iteration_step": 3,
+            "min_adapter_calls": 1,
+            "max_adapter_calls": 4,
+            "subsystems_per_iteration_step": 1
+        }
     },
     "dashboard": {
         "host": "127.0.0.1",

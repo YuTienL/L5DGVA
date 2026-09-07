@@ -8,9 +8,9 @@
 - Protocol: `demo`
 - Source roots: `vip_src`
 - Files scanned: 1
-- Classes indexed: 6
-- Methods indexed: 11
-- Source bytes scanned: 2,972
+- Classes indexed: 7
+- Methods indexed: 13
+- Source bytes scanned: 3,665
 
 ## What this document is, and is not
 
@@ -110,3 +110,14 @@ never treat this inventory as a behavioural specification.
 | --- | --- | --- | --- |
 | `run_phase` | task | `(uvm_phase phase)` | `vip_src/svt_demo_pkg.sv:83` |
 | `report_phase` | function | `(uvm_phase phase)` | `vip_src/svt_demo_pkg.sv:89` |
+
+## Callbacks / Coverage
+
+### `class svt_demo_report_cb` extends `uvm_callback`
+
+- Declared at `vip_src/svt_demo_pkg.sv:108`
+
+| Method | Kind | Signature | Location |
+| --- | --- | --- | --- |
+| `post_report` | function | `(int status)` | `vip_src/svt_demo_pkg.sv:109` |
+| `pre_close` | task | `(int unsigned quiesce_ns)` | `vip_src/svt_demo_pkg.sv:113` |

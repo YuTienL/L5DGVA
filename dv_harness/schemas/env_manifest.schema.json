@@ -281,7 +281,8 @@
                             "properties": {
                               "name": { "type": ["string", "null"] },
                               "type_text": { "type": ["string", "null"] },
-                              "default_text": { "type": ["string", "null"] }
+                              "default_text": { "type": ["string", "null"] },
+                              "line": { "type": ["integer", "null"] }
                             }
                           }
                         },

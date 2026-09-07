@@ -155,3 +155,24 @@ class Blackboard:
   items=self.read_capability_evolution_candidates().get('items',{});counts={}
   for v in items.values():counts[v.get('current_status','UNKNOWN')]=counts.get(v.get('current_status','UNKNOWN'),0)+1
   return {'total':len(items),'by_status':counts}
+
+ # --- Agent self-escalation signals (2026-09-07, agent_self_escalation gap
+ # close): the "agent_escalation_signals" topic's value is the ONE
+ # accumulated, live record of every real
+ # inference.build_deeper_investigation_signal() this run's own stage
+ # attempts produced -- {"items": [ {..one signal..}, ... ]}, same
+ # {"items": [...]} append-only shape debug_loop_history above already uses.
+ # Deliberately NOT a question_queue.py record: nothing here is addressed to
+ # a human, nothing here blocks a stage, and nothing here is a decision --
+ # it is an AGENT-FACING advisory a caller/graph orchestrator MAY read (via
+ # a real node.blackboard_read declaration, exactly like every other topic
+ # here) to decide, entirely on its own, whether to fan out more agents.
+ # Appending one never itself dispatches anything -- see inference.py's own
+ # ESCALATION_SIGNAL_DISCLOSURE, carried verbatim on every entry.
+ def read_agent_escalation_signals(self):
+  payload=self.read('agent_escalation_signals');val=payload.get('value') if isinstance(payload,dict) else None
+  if not isinstance(val,dict) or not isinstance(val.get('items'),list):val={'items':[]}
+  return val
+ def append_agent_escalation_signal(self,signal,source=''):
+  registry=self.read_agent_escalation_signals();signal=dict(signal);signal['sequence_number']=len(registry['items'])+1
+  registry['items'].append(signal);self.write('agent_escalation_signals',registry,source=source);return registry

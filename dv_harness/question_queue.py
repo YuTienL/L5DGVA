@@ -162,6 +162,33 @@ class DoNotAskError(QuestionValidationError):
         )
 
 
+class CosignNotApplicableError(QuestionValidationError):
+    """Raised by `QuestionQueueStore.add_decision_cosign()` when the live
+    decision for a question_key is not eligible for a second-human
+    co-sign: either no live decision is on file at all, or its
+    `current.source` is not HUMAN_DECISION_SOURCE.
+
+    This is the load-bearing refusal for the whole co-sign feature: a
+    Tier-2 auto-assumption is a machine guess, never a human decision
+    (see `_is_human_decision()`), and letting it be co-signed would let a
+    SECOND signature dress a machine guess up as human-trusted -- exactly
+    the kind of weakening of the existing Tier-3 human-decision-sourcing
+    rule this feature must never permit. Carries the live decision (or
+    None) so a caller can report exactly why the co-sign was refused."""
+
+    def __init__(self, question_key: str, decision: Optional[Dict[str, Any]]):
+        self.question_key = question_key
+        self.decision = decision
+        if decision is None:
+            reason = "no live decision is on file for this question_key"
+        else:
+            reason = ("current.source is %r, not %r -- only a real recorded human "
+                       "answer may be co-signed, never a tier2_auto_assumption or "
+                       "any other machine-sourced decision"
+                       % ((decision.get("current") or {}).get("source"), HUMAN_DECISION_SOURCE))
+        super().__init__("cannot co-sign question_key %r: %s" % (question_key, reason))
+
+
 def is_cannot_assume(context: Dict[str, Any]) -> bool:
     """The Part-B Tier-3 predicate, HARD-CODED per spec ("a hard-coded
     trigger, not a judgment call"): true iff `context` claims the question
@@ -448,6 +475,15 @@ def validate_question(question: dict) -> None:
             f"it did not actually offer."
         )
 
+    suggested = question.get("suggested_answer")
+    if suggested is not None and suggested.get("value") != question.get("recommendation"):
+        raise QuestionValidationError(
+            f"suggested_answer['value'] {suggested.get('value')!r} must equal recommendation "
+            f"{question.get('recommendation')!r} -- a suggested answer IS the recommendation, "
+            f"carrying its own real evidence citation; a suggestion that disagreed with the "
+            f"question's own recommendation would be two different answers pretending to be one."
+        )
+
 
 # ---- id / key helpers ---------------------------------------------------------
 
@@ -532,6 +568,367 @@ def normalize_options(options: Any) -> List[Dict[str, str]]:
     return normalized
 
 
+#: Keys a `grounding_evidence` dict may carry -- mirrors question.schema.json's
+#: own `grounding_evidence` shape (additionalProperties: false), checked here
+#: too so a bad key is a QuestionValidationError naming the key rather than a
+#: schema traceback.
+_GROUNDING_EVIDENCE_KEYS = frozenset({"summary", "evidence_path"})
+
+
+def normalize_grounding_evidence(grounding_evidence: Any) -> Optional[Dict[str, str]]:
+    """The "why am I being asked this" field (spec: a question record must be
+    able to carry WHY it is being asked -- e.g. "found register X in Excel
+    but absent from RTL" -- distinct from `context_path`, which says WHERE in
+    the evidence the question concerns, not why that location is in question
+    at all). Additive and OPTIONAL: `None` (the default) means no caller
+    supplied one, which is left as `None` on the record -- never fabricated
+    from `question`/`context_path`/`tier_reason` text, per the Evidence Truth
+    Rule ("absent evidence must produce an honest status, never silently
+    defaulted").
+
+    Accepts only a `{"summary": str, "evidence_path": str}` dict, both
+    required together: a WHY with no citation of where that finding actually
+    lives is exactly the kind of unsupported claim this field exists to
+    prevent, so `summary` alone (a bare narrative) or `evidence_path` alone
+    (a bare pointer with no stated reason) are both refused rather than
+    silently accepted as partial grounding. Raises QuestionValidationError
+    (never TypeError/KeyError, and never silently drops/guesses) on anything
+    malformed -- the same discipline `normalize_options()` already applies to
+    `options`."""
+    if grounding_evidence is None:
+        return None
+    if not isinstance(grounding_evidence, dict):
+        raise QuestionValidationError(
+            f"grounding_evidence must be a {{'summary': str, 'evidence_path': str}} dict or None, "
+            f"got {type(grounding_evidence).__name__}"
+        )
+    unknown = sorted(set(grounding_evidence) - _GROUNDING_EVIDENCE_KEYS)
+    if unknown:
+        raise QuestionValidationError(
+            f"grounding_evidence has unknown key(s) {unknown!r}; only "
+            f"{sorted(_GROUNDING_EVIDENCE_KEYS)!r} are allowed."
+        )
+    missing = sorted(_GROUNDING_EVIDENCE_KEYS - set(grounding_evidence))
+    if missing:
+        raise QuestionValidationError(
+            f"grounding_evidence is missing required key(s) {missing!r} -- a WHY with no cited "
+            "evidence_path (or a citation with no stated reason) is exactly the unsupported claim "
+            "this field exists to prevent; supply both, or omit grounding_evidence entirely."
+        )
+    summary = grounding_evidence.get("summary")
+    evidence_path = grounding_evidence.get("evidence_path")
+    if not isinstance(summary, str) or not summary.strip():
+        raise QuestionValidationError("grounding_evidence['summary'] must be a non-empty string.")
+    if not isinstance(evidence_path, str) or not evidence_path.strip():
+        raise QuestionValidationError("grounding_evidence['evidence_path'] must be a non-empty string.")
+    return {"summary": summary, "evidence_path": evidence_path}
+
+
+# ---- Suggest-then-confirm mode (2026-09-07, additive) -----------------------
+#
+# Every intake question was open-ended: a question carries pre-researched
+# options and a recommendation (validate_question()'s own "recommendation
+# must be one of options[].label" rule), but nothing ever populated that
+# recommendation FROM real, already-computed evidence -- a human always had
+# to author it from scratch, even when env_manifest.py or design_source_
+# inventory.py already knows the answer. `suggested_answer` is the additive
+# field that closes that gap: when a caller's real evidence already suggests
+# a likely value, add_question(suggested_answer=...) files the question WITH
+# that value as its recommendation, cited to exactly which real evidence
+# producer it came from -- the human then confirms it (answer_question() with
+# the same value) or corrects it (a different value), never authoring from a
+# blank slate. This is additive to the schema (a new OPTIONAL property; no
+# schema_version bump, since every pre-existing question record -- which
+# simply omits the field -- still validates unchanged) and additive to
+# add_question() (a new keyword-only parameter defaulting to `None`, so every
+# existing caller's behavior is byte-for-byte unchanged).
+#
+# THE ONE HARD RULE THIS MODE ENFORCES: a suggestion must always cite its
+# real evidence source, never be inferred from the question's own text. That
+# is enforced twice: normalize_suggested_answer() below refuses to build one
+# with no `source_module`/`source_path` (mirroring normalize_grounding_
+# evidence()'s identical "an uncited claim is refused outright" discipline
+# one field over), and validate_question() (see its own added check) refuses
+# to persist a question whose suggested_answer.value disagrees with its own
+# recommendation -- a suggestion IS the recommendation, carrying its own real
+# citation, never a second, silently-different answer.
+
+#: The only two real evidence producers this suggest-then-confirm mode
+#: currently derives an answer FROM -- both real, structured modules whose
+#: own output the two derive_suggested_answer_from_* functions below read
+#: verbatim, never re-parsed or guessed at. An open-ended `source_module`
+#: string would let a suggestion cite a source nobody could actually go
+#: check; restricting it to these two named modules (per this task's own
+#: naming of them) keeps every suggestion independently verifiable.
+SUGGESTED_ANSWER_SOURCE_MODULES = frozenset({"env_manifest", "design_source_inventory"})
+
+#: Keys a `suggested_answer` dict may carry -- mirrors question.schema.json's
+#: own `suggested_answer` shape (additionalProperties: false), checked here
+#: too so a bad key is a QuestionValidationError naming the key rather than a
+#: schema traceback (same convention as _OPTION_KEYS/_GROUNDING_EVIDENCE_KEYS
+#: above).
+_SUGGESTED_ANSWER_KEYS = frozenset({"value", "source_module", "source_path", "rationale"})
+
+
+def normalize_suggested_answer(suggested_answer: Any) -> Optional[Dict[str, str]]:
+    """The suggest-then-confirm mode's own evidence-citation contract,
+    mirroring normalize_grounding_evidence()'s discipline exactly: `None`
+    (the default -- no caller supplied one) stays `None`, never fabricated
+    from the question's own text or a guessed default. A real suggestion
+    REQUIRES `value` (the suggested answer itself, which must also equal the
+    question's own `recommendation` -- checked in validate_question(), since
+    that is a cross-field rule JSON Schema alone cannot express), `source_
+    module` (which real evidence producer it came from -- restricted to
+    SUGGESTED_ANSWER_SOURCE_MODULES, never an open string a reader could not
+    actually go check), and `source_path` (WHERE in that producer's own
+    output the value was read, e.g. "env.manifest.json#vip_config.vip_
+    release.version" or "design_source_inventory#usb3_regmap.version") -- a
+    suggested value with no citation of where it came from is exactly the
+    unsupported claim this field exists to prevent, the same reasoning
+    normalize_grounding_evidence() already applies to its own `evidence_
+    path`. `rationale` is optional, free text.
+
+    Raises QuestionValidationError (never TypeError/KeyError, and never
+    silently drops/guesses) on anything malformed."""
+    if suggested_answer is None:
+        return None
+    if not isinstance(suggested_answer, dict):
+        raise QuestionValidationError(
+            f"suggested_answer must be a "
+            f"{{'value': str, 'source_module': str, 'source_path': str, 'rationale': str?}} dict "
+            f"or None, got {type(suggested_answer).__name__}"
+        )
+    unknown = sorted(set(suggested_answer) - _SUGGESTED_ANSWER_KEYS)
+    if unknown:
+        raise QuestionValidationError(
+            f"suggested_answer has unknown key(s) {unknown!r}; only "
+            f"{sorted(_SUGGESTED_ANSWER_KEYS)!r} are allowed."
+        )
+    missing = sorted({"value", "source_module", "source_path"} - set(suggested_answer))
+    if missing:
+        raise QuestionValidationError(
+            f"suggested_answer is missing required key(s) {missing!r} -- a suggested value with no "
+            "citation of its real evidence source is exactly the unsupported claim this field exists "
+            "to prevent; supply all three, or omit suggested_answer entirely."
+        )
+    value = suggested_answer.get("value")
+    source_module = suggested_answer.get("source_module")
+    source_path = suggested_answer.get("source_path")
+    if not isinstance(value, str) or not value.strip():
+        raise QuestionValidationError("suggested_answer['value'] must be a non-empty string.")
+    if source_module not in SUGGESTED_ANSWER_SOURCE_MODULES:
+        raise QuestionValidationError(
+            f"suggested_answer['source_module'] must be one of "
+            f"{sorted(SUGGESTED_ANSWER_SOURCE_MODULES)!r} -- the only real evidence producers this "
+            f"suggest-then-confirm mode currently derives an answer from -- got {source_module!r}."
+        )
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise QuestionValidationError("suggested_answer['source_path'] must be a non-empty string.")
+    result: Dict[str, str] = {"value": value, "source_module": source_module, "source_path": source_path}
+    rationale = suggested_answer.get("rationale")
+    if rationale:
+        if not isinstance(rationale, str):
+            raise QuestionValidationError("suggested_answer['rationale'] must be a string when present.")
+        result["rationale"] = rationale
+    return result
+
+
+#: env_manifest.py's own real per-layer `status` literals (grepped from that
+#: module's real source, not guessed) split into "real evidence is present at
+#: this node" vs. "this layer honestly reports absence" -- see derive_
+#: suggested_answer_from_env_manifest()'s own walk below. An unrecognized
+#: status (neither set) is treated the SAME as absent: this function only
+#: ever suggests a value when it can positively confirm the evidence is
+#: really there, never on the strength of a status literal it does not
+#: recognize.
+_ENV_MANIFEST_PRESENT_STATUSES = frozenset({
+    "PARSED", "LOADED", "CAPTURED", "SCANNED", "INDEXED", "DECLARED", "RESOLVED",
+})
+_ENV_MANIFEST_ABSENT_STATUSES = frozenset({"NOT_AVAILABLE", "NOT_DECLARED"})
+
+
+def derive_suggested_answer_from_env_manifest(manifest: Dict[str, Any], path: Sequence[Any], *,
+                                                rationale: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """Derive a suggest-then-confirm candidate from a real, already-loaded
+    env.manifest.json document -- `env_manifest.load_env_manifest(path)`'s
+    own return value, handed in by the caller. This function never reads a
+    file itself and never re-derives a fact env_manifest.py already computed
+    -- REUSE OVER REINVENT: that module is the sole writer/reader of
+    env.manifest.json, and this function only walks its already-produced
+    dict.
+
+    `path` walks from the manifest root down to the fact to suggest (dict
+    keys and/or list indices), e.g. `["vip_config", "vip_release", "version"]`
+    or `["dut_facts", "registers", "blocks", 0, "name"]`.
+
+    Returns `None` -- never a guessed value -- whenever: the path's own most
+    SPECIFIC fact-layer node (see below) reports a status that is not a real
+    evidence-PRESENT one (see `_ENV_MANIFEST_PRESENT_STATUSES`/
+    `_ENV_MANIFEST_ABSENT_STATUSES` above -- env_manifest.py's own NOT_
+    AVAILABLE/NOT_DECLARED layers report their absence honestly and must
+    never be silently read as available); the path does not resolve (a
+    missing key, an out-of-range index, or a `path` that walks into a
+    non-container); or the resolved value is empty/None. A resolved scalar
+    is used verbatim; a resolved list/dict is JSON-encoded (sorted keys,
+    deterministic) so it can be carried as one string value.
+
+    WHY "most specific" rather than "every ancestor": some env.manifest.json
+    layers are COMPOSITES whose own top-level `status` describes only ONE of
+    several sub-facts merged into the same dict -- concretely,
+    `vip_config`'s own `status` describes its zero-time VIP-instance config
+    dump only (build_vip_config()'s own field), yet `vip_config.vip_release`
+    and `vip_config.user_guide_refs` are separate sub-layers merged into that
+    SAME dict by build_vip_config_layer(), each carrying its OWN, genuinely
+    independent `status`. Gating every ancestor's status blindly would make
+    `vip_config.vip_release` (a real SCANNED $DESIGNWARE_HOME result) read
+    as unavailable merely because no VIP config DUMP happens to exist yet --
+    two unrelated facts, wrongly conflated. So a node's own `status` is only
+    consulted when the CHILD being descended into does not itself carry a
+    more specific `status` of its own; when it does, checking is deferred to
+    that child on the next step, which is the correct, most-specific source
+    of truth for everything beneath it.
+    """
+    if not isinstance(manifest, dict):
+        return None
+    current: Any = manifest
+    for segment in path:
+        if isinstance(current, dict):
+            if segment not in current:
+                return None
+            child = current[segment]
+            child_has_own_status = isinstance(child, dict) and "status" in child
+            if not child_has_own_status:
+                status = current.get("status")
+                if status is not None and status not in _ENV_MANIFEST_PRESENT_STATUSES:
+                    return None
+            current = child
+        elif isinstance(current, list):
+            if not isinstance(segment, int) or isinstance(segment, bool) or not (0 <= segment < len(current)):
+                return None
+            current = current[segment]
+        else:
+            return None
+    if isinstance(current, dict):
+        status = current.get("status")
+        if status is not None and status not in _ENV_MANIFEST_PRESENT_STATUSES:
+            return None
+    if current is None:
+        return None
+    if isinstance(current, str) and not current.strip():
+        return None
+    if isinstance(current, (list, dict)) and len(current) == 0:
+        return None
+    if isinstance(current, str):
+        value_str = current
+    else:
+        import json as _json
+        value_str = _json.dumps(current, sort_keys=True, default=str)
+    payload: Dict[str, Any] = {
+        "value": value_str,
+        "source_module": "env_manifest",
+        "source_path": "env.manifest.json#" + ".".join(str(p) for p in path),
+    }
+    if rationale:
+        payload["rationale"] = rationale
+    return normalize_suggested_answer(payload)
+
+
+def derive_suggested_answer_from_design_source_inventory(rows: Optional[Sequence[dict]], source_id: str,
+                                                            *, field: str = "version",
+                                                            rationale: Optional[str] = None
+                                                            ) -> Optional[Dict[str, str]]:
+    """Derive a suggest-then-confirm candidate from a real, already-computed
+    design-source registry -- `design_source_inventory.build_source_
+    registry()`'s (or a single `evaluate_source()`'s) own row list, handed in
+    by the caller. Never re-derives freshness/authority/anything else that
+    module already computed; it only reads one already-evaluated row's own
+    `field`.
+
+    Suggests a value ONLY when the matching row's own `status` is that
+    module's real `STATUS_CURRENT` -- a STALE/SUPERSEDED/NOT_AVAILABLE/
+    UNKNOWN source is never suggested as an answer, since design_source_
+    inventory.py's own module docstring is explicit that a source whose
+    content has moved since it was last checked (or that has been
+    deliberately retired) must not be trusted as if it still described
+    reality; a fact this function cannot positively confirm is CURRENT is
+    exactly the honest-absence case suggest-then-confirm must not paper over
+    with a stale guess.
+
+    Returns `None` when: `rows` is empty/None; no row matches `source_id`;
+    the matching row's status is not CURRENT; or `field` is missing/empty on
+    that row."""
+    if not rows:
+        return None
+    row = None
+    for r in rows:
+        if isinstance(r, dict) and r.get("source_id") == source_id:
+            row = r
+            break
+    if row is None:
+        return None
+    from . import design_source_inventory as _design_source_inventory
+    if row.get("status") != _design_source_inventory.STATUS_CURRENT:
+        return None
+    value = row.get(field)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    payload: Dict[str, Any] = {
+        "value": str(value),
+        "source_module": "design_source_inventory",
+        "source_path": f"design_source_inventory#{source_id}.{field}",
+    }
+    if rationale:
+        payload["rationale"] = rationale
+    return normalize_suggested_answer(payload)
+
+
+def build_suggest_then_confirm_options(suggested_answer: Dict[str, str], *,
+                                         alternative_labels: Optional[Sequence[str]] = None
+                                         ) -> Dict[str, Any]:
+    """Convenience for the suggest-then-confirm mode's own caller contract:
+    given an already-derived `suggested_answer` (from derive_suggested_
+    answer_from_env_manifest()/derive_suggested_answer_from_design_source_
+    inventory(), or any dict normalize_suggested_answer() accepts), builds
+    the matching `options`/`recommendation` add_question() needs -- the
+    suggested value as one option (its own `rationale` citing the real
+    `source_module`/`source_path`), plus 0-2 real caller-declared
+    alternatives (never invented here), with `recommendation` set to the
+    suggested value so validate_question()'s cross-check passes by
+    construction. Returns `{"options": [...], "recommendation": str,
+    "suggested_answer": dict}` -- spread the first two into add_question()
+    and pass the third through as its own `suggested_answer=` argument.
+
+    Raises QuestionValidationError if `suggested_answer` does not normalize,
+    if `alternative_labels` would push the total past question.schema.json's
+    own 2-3 option cap, or if an alternative repeats the suggested value
+    itself (a real alternative must be a genuinely different candidate)."""
+    suggested_answer = normalize_suggested_answer(suggested_answer)
+    if suggested_answer is None:
+        raise QuestionValidationError(
+            "build_suggest_then_confirm_options() requires a real suggested_answer -- "
+            "see normalize_suggested_answer()."
+        )
+    value = suggested_answer["value"]
+    rationale = f"Suggested from {suggested_answer['source_module']}: {suggested_answer['source_path']}"
+    if suggested_answer.get("rationale"):
+        rationale += f" -- {suggested_answer['rationale']}"
+    options: List[Dict[str, str]] = [{"label": value, "rationale": rationale}]
+    for alt in (alternative_labels or []):
+        alt = str(alt)
+        if alt == value:
+            raise QuestionValidationError(
+                f"alternative_labels repeats the suggested value {value!r} -- an alternative must be "
+                f"a genuinely different candidate."
+            )
+        options.append({"label": alt})
+    if not (2 <= len(options) <= 3):
+        raise QuestionValidationError(
+            f"build_suggest_then_confirm_options() would produce {len(options)} option(s); "
+            f"question.schema.json requires 2-3 -- supply exactly 1-2 alternative_labels."
+        )
+    return {"options": options, "recommendation": value, "suggested_answer": suggested_answer}
+
+
 def _now_iso(now: Optional[datetime] = None) -> str:
     return (now or datetime.now(timezone.utc)).isoformat()
 
@@ -590,6 +987,11 @@ class QuestionQueueStore:
         self.questions_path = self.dir / "questions.json"
         self.decisions_path = self.dir / "decisions.json"
         self.decisions_md_path = self.dir / "decisions.md"
+        # Sibling audit file for request_clarification() (see that function's
+        # own module-level comment) -- a real, separate persistence target,
+        # never a field smuggled onto question.schema.json's own strict
+        # `additionalProperties: false` record.
+        self.clarifications_path = self.dir / "clarifications.json"
         # Injected Part-A manifest/MCP reader for Tier-1 resolution -- see
         # this module's own docstring. None (the default) means "nothing is
         # resolvable from the manifest yet", never a fake always-empty stub
@@ -714,6 +1116,19 @@ class QuestionQueueStore:
                 "source": current.get("source"),
                 "ever_tier2_assumed": bool(entry.get("ever_tier2_assumed")),
                 "overturned": bool(entry.get("overturned")),
+                # Additive (2026-09-07, second_human_review_cosign): whether
+                # this LIVE decision carries a second-human co-sign that
+                # still covers its current answer -- the same "recorded
+                # cosigns_answer equals the live current answer text" test
+                # is_decision_cosigned() applies, computed inline here from
+                # `entry`/`current` already in hand rather than a second
+                # disk re-read per key. Never affects `source`/trust above;
+                # a reading stage that wants the stronger two-human
+                # guarantee checks this flag itself, this method never
+                # infers it into `source`.
+                "cosigned": bool(current.get("source") == HUMAN_DECISION_SOURCE and any(
+                    c.get("cosigns_answer") == current.get("answer")
+                    for c in (entry.get("cosigns") or []))),
             }
         value = {
             "decisions_path": str(self.decisions_path),
@@ -805,6 +1220,15 @@ class QuestionQueueStore:
             lines.append(f"- **Source:** {cur.get('source', '-')}")
             lines.append(f"- **Ever a Tier-2 auto-assumption:** {'yes' if d.get('ever_tier2_assumed') else 'no'}")
             lines.append(f"- **Overturned a prior assumption:** {'yes' if d.get('overturned') else 'no'}")
+            cosigns = d.get("cosigns") or []
+            current_answer_text = cur.get("answer")
+            live_cosigns = [c for c in cosigns if c.get("cosigns_answer") == current_answer_text]
+            if live_cosigns:
+                names = ", ".join(str(c.get("reviewer_id", "-")) for c in live_cosigns)
+                lines.append(f"- **Second-human co-sign(s) of current answer:** {names}")
+            elif cosigns:
+                lines.append("- **Second-human co-sign(s):** none cover the CURRENT answer "
+                              "(a prior answer was co-signed, then the decision was revoked/re-answered)")
             lines.append("")
         revoked = data.get("revoked", [])
         if revoked:
@@ -866,6 +1290,136 @@ class QuestionQueueStore:
         self._save_decisions(data)
         return revocation
 
+    # -- second-human co-sign of a recorded Tier-3 decision ------------------
+    #
+    # Every decision path in this module trusts a SINGLE human's recorded
+    # answer once `current.source == HUMAN_DECISION_SOURCE` -- by design,
+    # per this module's own Tier-3 sourcing rule, and that rule is untouched
+    # here. What follows is an ADDITIVE, opt-in verb: a second reviewer may
+    # record that they independently reviewed and co-sign an already-
+    # recorded human answer, for a downstream consumer that wants that
+    # extra assurance before treating a particular Tier-3 answer as
+    # trusted. A co-sign is never required to reach HUMAN_DECISION_SOURCE
+    # trust (classify_tier(), find_redundant_decision(), _is_human_decision()
+    # and every other reader of `current.source` are completely unaware
+    # this section exists, and continue to treat a HUMAN_DECISION_SOURCE
+    # decision as fully trusted with or without one), and a co-sign can
+    # never itself promote a tier2_auto_assumption to human-sourced trust
+    # (see CosignNotApplicableError) -- so the existing rule is neither
+    # weakened nor bypassed, only optionally strengthened per-decision.
+    #
+    # Distinct from control_plane.ControlPlane.add_cosign(): that mechanism
+    # co-signs a JUDGMENT_FIELDS wrapper value inside a stage's gate
+    # evidence block (gates.py Tier-5); this one co-signs a question_queue
+    # decisions.json record. Neither reads nor writes the other's store;
+    # they share the word "cosign" and the general shape of the idea, and
+    # nothing else.
+
+    def add_decision_cosign(self, question_key: str, *, reviewer_id: str,
+                              basis: Optional[str] = None, now: Optional[datetime] = None,
+                              cosigned_by: Optional[str] = None) -> dict:
+        """Record a SECOND human reviewer's co-sign of the live, already-
+        recorded HUMAN_DECISION_SOURCE decision for `question_key`.
+
+        Requires the live decision to already be human-sourced --
+        `CosignNotApplicableError` when none exists, or when the live
+        decision's `current.source` is anything else (most commonly
+        `tier2_auto_assumption`): a co-sign of a machine guess would be
+        exactly the sourcing-rule weakening this feature must refuse.
+
+        `reviewer_id` must name a REAL, DIFFERENT person from the
+        original `current.decided_by` -- a co-sign is a second,
+        independent review, not the same person re-affirming their own
+        answer; `ValueError` otherwise, and whenever `reviewer_id` itself
+        is missing/blank.
+
+        Keyed to the EXACT `current.answer` TEXT being co-signed at the
+        moment of the call, mirroring `ControlPlane.add_cosign()`'s own
+        exact-value discipline ("a value that later changes ... is NOT
+        covered by a stale co-sign; a fresh one ... is required again")
+        -- deliberately NOT keyed on `question_id_of_answer`, which
+        `make_question_id()` derives from `question_key` alone and is
+        therefore IDENTICAL across every answer ever given to the same
+        question_key, including two different answer texts. `answer`
+        text is what actually changes when a decision is revoked and
+        re-answered, or when the same question_key is answered again
+        with a genuinely different answer, so it is what
+        `is_decision_cosigned()` checks to decide whether an earlier
+        co-sign still covers the LIVE current answer. Never mutates
+        `current` or `history` -- purely additive metadata appended to
+        the entry's own `cosigns` list, so nothing that reads the
+        decision's real answer/source/basis is affected by whether a
+        co-sign exists."""
+        if not reviewer_id or not str(reviewer_id).strip():
+            raise ValueError("reviewer_id is required for a co-sign")
+        live = self.find_decision(question_key)
+        if live is None or not _is_human_decision(live):
+            raise CosignNotApplicableError(question_key, live)
+        current = live.get("current") or {}
+        original_decider = current.get("decided_by")
+        if original_decider and str(reviewer_id).strip() == str(original_decider).strip():
+            raise ValueError(
+                "reviewer_id %r is the same person who made the original decision "
+                "(decided_by=%r) -- a co-sign requires a second, independent reviewer, "
+                "not the original decider re-affirming their own answer"
+                % (reviewer_id, original_decider))
+        data = self._load_decisions()
+        decisions = data.setdefault("decisions", {})
+        entry = decisions.get(question_key)
+        if entry is None or not _is_human_decision(entry):
+            # Re-checked against the just-reloaded store rather than trusting
+            # `live` above across the two loads (revoked/re-answered between
+            # the read and here would otherwise let a stale co-sign through).
+            raise CosignNotApplicableError(question_key, entry)
+        current = entry.get("current") or {}
+        cosign = {
+            "reviewer_id": str(reviewer_id).strip(),
+            "cosigned_at": _now_iso(now),
+            "cosigned_by": cosigned_by or reviewer_id,
+            "basis": basis,
+            "cosigns_answer": current.get("answer"),
+            "cosigns_question_id_of_answer": current.get("question_id_of_answer"),
+            "cosigns_decided_by": current.get("decided_by"),
+            "cosigns_decided_at": current.get("decided_at"),
+        }
+        entry.setdefault("cosigns", []).append(cosign)
+        decisions[question_key] = entry
+        self._save_decisions(data)
+        return cosign
+
+    def get_decision_cosigns(self, question_key: str) -> List[Dict[str, Any]]:
+        """Every co-sign ever recorded for `question_key`'s decision, in
+        the order recorded -- including one whose `cosigns_answer` no
+        longer equals the live decision's current answer text (a stale
+        co-sign, kept for the audit trail; see `is_decision_cosigned()`
+        for the "does a LIVE co-sign exist" question). Empty list when
+        the question_key has no live decision or none was ever
+        co-signed."""
+        live = self.find_decision(question_key)
+        if live is None:
+            return []
+        return list(live.get("cosigns") or [])
+
+    def is_decision_cosigned(self, question_key: str) -> bool:
+        """True iff `question_key`'s LIVE decision is human-sourced AND
+        carries at least one co-sign whose recorded `cosigns_answer`
+        exactly equals the live decision's own current `answer` text --
+        i.e. a co-sign that genuinely covers the answer as it stands
+        right now, never a stale one left over from a since-changed
+        answer (see `add_decision_cosign()`'s docstring for why this is
+        keyed on the answer text rather than `question_id_of_answer`).
+
+        This is the one place a downstream consumer wanting the stronger
+        "two humans reviewed this" guarantee should check; the ordinary
+        Tier-3 human-decision-sourcing rule (`_is_human_decision()`) is
+        completely unaffected by this method's result either way."""
+        live = self.find_decision(question_key)
+        if live is None or not _is_human_decision(live):
+            return False
+        current_answer = (live.get("current") or {}).get("answer")
+        return any(c.get("cosigns_answer") == current_answer
+                    for c in (live.get("cosigns") or []))
+
     def _persist_decision(self, *, question_key: str, domain: str, owner: str, question: str,
                             answer: str, basis: str, decided_by: str, source: str,
                             question_id_of_answer: str, now: Optional[datetime] = None) -> dict:
@@ -906,7 +1460,9 @@ class QuestionQueueStore:
                        options: Any, recommendation: str,
                        assumption_if_unanswered: str, question_key: Optional[str] = None,
                        context: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None,
-                       enforce_do_not_ask: bool = False) -> dict:
+                       enforce_do_not_ask: bool = False,
+                       grounding_evidence: Optional[Dict[str, str]] = None,
+                       suggested_answer: Optional[Dict[str, str]] = None) -> dict:
         """Ask one question. NEVER pings/notifies -- it only persists the
         record (see build_digest() for the only aggregation/reporting path,
         per Part B: "never real-time pings"). Returns the full persisted
@@ -936,9 +1492,38 @@ class QuestionQueueStore:
         wants to stop growing questions.json with duplicates of an
         already-decided question altogether -- e.g. a repeatedly-re-run
         detector filing the SAME multi-option escalation every pass, the
-        exact churn `build_multiple_choice_question()` is built to avoid."""
+        exact churn `build_multiple_choice_question()` is built to avoid.
+
+        `grounding_evidence` (default None, disclosed-default like this
+        module's other opt-in fields): an optional, additive
+        `{"summary": str, "evidence_path": str}` dict answering "why is this
+        question being asked" -- e.g. {"summary": "register X is present in
+        the Excel register map but absent from the RTL port list",
+        "evidence_path": "reg_map.xlsx#CTRL_REG / env.manifest.json#dut_facts.rtl"}
+        -- distinct from `context_path` (WHERE the question concerns) and
+        from `tier_reason` (WHICH classify_tier() rule fired). Only ever
+        populated from what the caller actually passes here; see
+        normalize_grounding_evidence()'s own docstring for why a partial
+        dict (a summary with no citation, or vice versa) is refused rather
+        than silently accepted.
+
+        `suggested_answer` (default None, disclosed-default like this
+        module's other opt-in fields): the suggest-then-confirm mode's own
+        `{"value": str, "source_module": "env_manifest"|"design_source_
+        inventory", "source_path": str, "rationale": str?}` dict -- see
+        normalize_suggested_answer()'s own docstring, and derive_suggested_
+        answer_from_env_manifest()/derive_suggested_answer_from_design_
+        source_inventory() for how a caller derives one from real, already-
+        computed evidence rather than authoring it by hand. When supplied,
+        its `value` MUST equal `recommendation` (checked by validate_
+        question() below, since a suggestion IS the recommendation, cited)
+        -- the caller is expected to build `options`/`recommendation` around
+        the suggested value (e.g. via build_suggest_then_confirm_options())
+        rather than pass a `suggested_answer` that disagrees with them."""
         context = dict(context or {})
         options = normalize_options(options)
+        grounding_evidence = normalize_grounding_evidence(grounding_evidence)
+        suggested_answer = normalize_suggested_answer(suggested_answer)
         question_key = question_key or make_question_key(domain, question, context_path)
         if enforce_do_not_ask:
             redundant = find_redundant_decision(self.find_decision(question_key), context)
@@ -1000,6 +1585,8 @@ class QuestionQueueStore:
             "answered_at": None, "answer": None, "basis": None, "decided_by": None,
             "overturned": False, "resolved_from_decision_id": None,
             "digest_batch_id": None, "digest_emitted_at": None,
+            "grounding_evidence": grounding_evidence,
+            "suggested_answer": suggested_answer,
         }
 
         # Attached on EVERY tier when one exists, not only when it resolved
@@ -1078,6 +1665,17 @@ class QuestionQueueStore:
             if q["id"] == question_id:
                 return q
         return None
+
+    def get_escalation_package(self, question_id: str) -> dict:
+        """build_escalation_package() (see below) over a real persisted record,
+        looked up by Q-ID through get_question() -- the store's own existing
+        read path, never a second lookup mechanism. Raises KeyError (matching
+        answer_question()'s own sibling raise) when no such question exists,
+        rather than returning None and pushing the check onto every caller."""
+        record = self.get_question(question_id)
+        if record is None:
+            raise KeyError(f"No question with id {question_id!r}")
+        return build_escalation_package(record)
 
     def list_questions(self, *, status: Optional[str] = None, tier: Optional[int] = None,
                          blocking: Optional[bool] = None, domain: Optional[str] = None) -> List[dict]:
@@ -1470,6 +2068,7 @@ def build_multiple_choice_question(
     question_key: Optional[str] = None,
     extra_context: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    grounding_evidence: Optional[Dict[str, str]] = None,
 ) -> dict:
     """File ONE well-formed Tier-3 blocking question offering N >= 2 named
     candidates, each carrying its own evidence path -- the N-way
@@ -1513,7 +2112,16 @@ def build_multiple_choice_question(
     never grows the queue. Files with `context={"affects_spec_intent": True,
     ...}` (see `MULTIPLE_CHOICE_QUESTION_CONTEXT`), so `classify_tier()`
     reaches Tier 3 (`CANNOT_ASSUME`, blocking) on its own ordinary rules --
-    no tier is asserted directly by this function."""
+    no tier is asserted directly by this function.
+
+    `grounding_evidence` (default None): passed straight through to
+    `add_question()` -- see that function's and normalize_grounding_
+    evidence()'s own docstrings. Never synthesized from `candidates` here:
+    each candidate's own `evidence_path` already answers WHERE its evidence
+    lives (folded into that candidate's own option `rationale`), which is a
+    different question from WHY a human is being asked to choose among
+    them at all; a caller with a real answer to the latter supplies it
+    explicitly rather than having one guessed on their behalf."""
     candidates = list(candidates)
     if len(candidates) < 2:
         raise QuestionValidationError(
@@ -1588,4 +2196,523 @@ def build_multiple_choice_question(
         question_key=key,
         context=ctx,
         now=now,
+        grounding_evidence=grounding_evidence,
     )
+
+
+# ---- Signoff-stage evidence-review questions (2026-09-07, additive) --------
+#
+# Gap: a human reviewing SIGNOFF-STAGE evidence (a signoff_export.py bundle
+# manifest artifact, a signoff_blocker_list.py closure dimension, a
+# functional_coverage_signoff.py closure finding, an evidence_provenance.py
+# self-attested/derived caveat) had no reachable path to file a NEW
+# clarifying question tied to one specific evidence item. Verified by direct
+# grep before writing this: every real add_question()/build_multiple_choice_
+# question() call site in this codebase is AI/gate-initiated (source_
+# authority.escalate_conflict(), connectivity's T4 escalation, coverage_
+# analysis's escalate_unreachable_stimulus/holes, the waveform-dump gate,
+# gui_intake_wizard's answer flow, ...); request_clarification() (above)
+# only RE-RENDERS a question that has ALREADY been filed by one of those.
+# None of signoff_export.py/signoff_blocker_list.py/system_signoff_package.py/
+# evidence_provenance.py has ever called add_question() at all.
+#
+# file_signoff_evidence_question() closes it by REUSE, not by a second
+# filing mechanism: it is a thin, idempotent wrapper around this store's own
+# add_question(), mirroring source_authority.escalate_conflict()'s and this
+# module's own build_multiple_choice_question()'s pre-add_question() dedup-
+# on-question_key discipline exactly, so a human re-reviewing the SAME
+# evidence item (a dashboard re-render, a re-run signoff pass) gets back the
+# ALREADY-FILED record rather than a duplicate that grows questions.json.
+
+#: The four real signoff-stage evidence surfaces a human reviews before/at
+#: signoff -- a closed vocabulary, never an open string a reader could not
+#: go check (the same discipline normalize_suggested_answer()'s own
+#: SUGGESTED_ANSWER_SOURCE_MODULES already applies one field over).
+SIGNOFF_EVIDENCE_KIND_BUNDLE = "signoff_export_bundle"
+SIGNOFF_EVIDENCE_KIND_BLOCKER_LIST = "signoff_blocker_list"
+SIGNOFF_EVIDENCE_KIND_COVERAGE_CLOSURE = "functional_coverage_closure"
+SIGNOFF_EVIDENCE_KIND_PROVENANCE_CAVEAT = "evidence_provenance_caveat"
+
+SIGNOFF_EVIDENCE_KINDS = frozenset({
+    SIGNOFF_EVIDENCE_KIND_BUNDLE, SIGNOFF_EVIDENCE_KIND_BLOCKER_LIST,
+    SIGNOFF_EVIDENCE_KIND_COVERAGE_CLOSURE, SIGNOFF_EVIDENCE_KIND_PROVENANCE_CAVEAT,
+})
+
+#: Tier-3 by construction, the same posture CONFLICT_QUESTION_CONTEXT/
+#: MULTIPLE_CHOICE_QUESTION_CONTEXT already take: a question raised against
+#: one specific piece of SIGNOFF evidence is, by definition, a question about
+#: whether a pass/fail-relevant artifact is trustworthy -- exactly
+#: classify_tier()'s own "affects_pass_fail_verdict" hard trigger, never
+#: asserted directly; always reached through classify_tier()'s ordinary
+#: evaluation of this context dict.
+SIGNOFF_EVIDENCE_QUESTION_CONTEXT: dict = {"affects_pass_fail_verdict": True}
+
+#: What a signoff-evidence question says when nobody answers. Deliberately
+#: NOT a value -- mirrors NO_SAFE_ASSUMPTION_MULTIPLE_CHOICE immediately
+#: above: a Tier-3 question about signoff evidence must never silently use
+#: an assumed answer, since that is precisely the "is this evidence
+#: trustworthy" question a human flagged as unresolved.
+NO_SAFE_ASSUMPTION_SIGNOFF_EVIDENCE = (
+    "NONE IS SAFE -- signoff-stage evidence a human flagged as needing "
+    "clarification must not be silently trusted or silently discarded; a "
+    "human must resolve this before the affected signoff evidence is relied "
+    "on further."
+)
+
+
+def file_signoff_evidence_question(
+    store: "QuestionQueueStore",
+    *,
+    evidence_kind: str,
+    evidence_path: str,
+    evidence_summary: str,
+    question: str,
+    options: Any,
+    recommendation: str,
+    domain: str = "env",
+    raised_by: Optional[str] = None,
+    context_path: Optional[str] = None,
+    question_key: Optional[str] = None,
+    extra_context: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """File ONE new, real Tier-3 blocking question tied to ONE named piece of
+    signoff-stage evidence (`evidence_kind` -- see SIGNOFF_EVIDENCE_KINDS).
+
+    `evidence_path`/`evidence_summary` become the question's own
+    `grounding_evidence` citation -- WHY this question exists, cited to WHERE
+    in the real evidence it concerns (normalize_grounding_evidence()'s own
+    existing "an uncited claim is refused outright" rule is reused
+    unmodified: both are required and non-blank, or add_question() itself
+    raises QuestionValidationError before anything is persisted).
+
+    Idempotent on `question_key`, the SAME discipline source_authority.
+    escalate_conflict() and build_multiple_choice_question() (above) already
+    apply: a caller reviewing the SAME evidence item twice gets back the
+    ALREADY-FILED record, never a duplicate -- add_question()'s own dedup is
+    caller-supplied (see its docstring's `enforce_do_not_ask`), and this is
+    what supplies it for this call site specifically.
+
+    `raised_by` (optional): who RAISED the question, folded as an
+    attribution prefix into the recorded `grounding_evidence["summary"]`.
+    This is NOT the same fact as a recorded decision's own `decided_by` --
+    who ANSWERS a question is, and stays, recorded only via the existing,
+    sanctioned `answer_question()` path; `raised_by` here never writes a
+    decision and is never treated as one.
+
+    Files with `context={"affects_pass_fail_verdict": True, ...}` (see
+    SIGNOFF_EVIDENCE_QUESTION_CONTEXT) so `classify_tier()` reaches Tier 3
+    on its own ordinary rules -- no tier is asserted directly by this
+    function. `extra_context` lets a caller with a genuinely different real
+    reason override/extend that default, the same contract every other
+    context dict in this module already carries."""
+    if evidence_kind not in SIGNOFF_EVIDENCE_KINDS:
+        raise QuestionValidationError(
+            f"evidence_kind {evidence_kind!r} is not one of {sorted(SIGNOFF_EVIDENCE_KINDS)!r} -- "
+            "a signoff-evidence question must cite one of this module's known signoff-stage "
+            "evidence kinds, never an open string a reader could not go check."
+        )
+
+    summary = f"[raised by: {raised_by}] {evidence_summary}" if raised_by else evidence_summary
+    grounding_evidence = {"summary": summary, "evidence_path": evidence_path}
+    # Pre-validated here (raises with a signoff-specific call-site name)
+    # rather than left to surface only once inside add_question() -- reuses
+    # normalize_grounding_evidence() unmodified either way.
+    normalize_grounding_evidence(grounding_evidence)
+
+    ctx = dict(SIGNOFF_EVIDENCE_QUESTION_CONTEXT)
+    ctx["signoff_evidence_kind"] = evidence_kind
+    ctx.update(extra_context or {})
+
+    key = question_key or make_question_key(domain, question, context_path or evidence_path)
+
+    # Idempotent dedup BEFORE filing -- same reasoning escalate_conflict's
+    # and build_multiple_choice_question's own comments give: add_question()
+    # appends unconditionally, so a human re-reviewing the same evidence item
+    # (a dashboard re-render, a re-run signoff pass) would otherwise mint a
+    # fresh duplicate record (same Q-ID, same question_key) on every review.
+    for existing in store.list_questions():
+        if existing.get("question_key") == key:
+            return existing
+
+    return store.add_question(
+        domain=domain,
+        question=question,
+        context_path=context_path or evidence_path,
+        options=options,
+        recommendation=recommendation,
+        assumption_if_unanswered=NO_SAFE_ASSUMPTION_SIGNOFF_EVIDENCE,
+        question_key=key,
+        context=ctx,
+        grounding_evidence=grounding_evidence,
+        now=now,
+    )
+
+
+# ---- Question Escalation Package: the 9-field structured view (spec section 32) --
+#
+# question_queue.py's own persisted question record (question.schema.json) already
+# carries every fact a human-facing escalation needs -- id, domain, question,
+# context_path, options, recommendation, assumption_if_unanswered, owner, tier,
+# blocking -- accumulated one Part-B mechanism at a time across this module's
+# history. What never existed was a single, NAMED 9-field VIEW assembling exactly
+# those facts into the shape a human reviewer (or a digest/GUI renderer) actually
+# reads, so two renderers of "the same escalation" could each pick a different
+# subset of the raw record and call it the package.
+#
+# Disclosed residual, stated rather than left to be discovered: this repository
+# checkout does not carry the literal spec-section-32 document text (a repo-wide
+# search found no file containing it), so the 9 field NAMES below are this
+# module's own defensible synthesis -- built from established human-in-the-loop
+# escalation practice and this module's own existing, already-tested vocabulary
+# (domain/owner/tier routing, options-with-rationale, the Tier-2
+# assumption-if-unanswered contract) -- rather than a verbatim transcription of a
+# document this checkout does not have. What IS load-bearing regardless of the
+# exact names, and enforced rather than merely claimed: every one of the 9 fields
+# is a REAL, already-persisted fact from a record add_question() /
+# build_multiple_choice_question() already produced -- never a fabricated value,
+# and never a second, independently-filed record. build_escalation_package() is a
+# pure, read-only PROJECTION of an existing record (the same "a generated view of
+# a real store is never a second source of truth" discipline this module's own
+# decisions.md already applies to decisions.json) -- it is never written back into
+# questions.json, so question.schema.json's `additionalProperties: false` contract
+# is untouched and no schema_version bump is required to add it.
+
+#: The 9 named fields of a Question Escalation Package, in a fixed order --
+#: build_escalation_package()'s only output shape.
+ESCALATION_PACKAGE_FIELDS: tuple = (
+    "question_id", "category", "context", "question_text", "options",
+    "recommended_option", "default_if_unanswered", "owner", "urgency",
+)
+
+#: Field 9 (urgency), DERIVED from the tier classify_tier() already computed for
+#: this record -- never an independently-declared value that could drift from the
+#: tier a caller actually got escalated at. Tier 3 (blocking) is a live
+#: awaiting-human-answer escalation; Tier 2 carries this module's own Tier-2
+#: contract language ("logged and continues" -- see add_question()'s Tier-2
+#: branch and TIER2_AUTO_ASSUMPTION_SOURCE); Tier 1 was never actually escalated
+#: to a human at all, so its package is purely informational.
+_URGENCY_BY_TIER: Dict[int, str] = {
+    TIER3_CANNOT_ASSUME: "BLOCKING_AWAITING_HUMAN_ANSWER",
+    TIER2_SAFE_ASSUME: "NON_BLOCKING_TIME_BOXED_ASSUMPTION_LOGGED",
+    TIER1_SELF_RESOLVE: "INFORMATIONAL_ALREADY_SELF_RESOLVED",
+}
+
+#: The real record keys build_escalation_package() reads from -- every one
+#: REQUIRED by question.schema.json's own `required` array, so a record that
+#: cleared validate_question() always carries all of them. Listed here (not
+#: re-derived from the schema) so a record that did NOT come through this
+#: module's own filing mechanism -- a hand-built dict missing one -- is refused
+#: with a specific, actionable message rather than a bare KeyError.
+_ESCALATION_PACKAGE_REQUIRED_RECORD_KEYS: tuple = (
+    "id", "domain", "context_path", "question", "options",
+    "recommendation", "assumption_if_unanswered", "owner", "tier",
+)
+
+
+def build_escalation_package(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Project a persisted question RECORD (as returned by add_question() /
+    build_multiple_choice_question() / QuestionQueueStore.get_question() /
+    get_escalation_package()) into the 9 named ESCALATION_PACKAGE_FIELDS -- and
+    only that: every value here is read straight off `record`, never
+    re-derived from a second source, never independently computed, and never
+    guessed when the record's own field is absent.
+
+    Raises QuestionValidationError -- never a KeyError, and never a silently
+    fabricated default -- when `record` is missing a field this projection
+    needs (a malformed/incomplete dict, e.g. one built by hand rather than by
+    this module's own filing mechanism, or carrying a `tier` outside the 3
+    known values). This is the negative-control property this function
+    exists to guarantee: an escalation package can never be assembled from
+    evidence that is not really there."""
+    if not isinstance(record, dict):
+        raise QuestionValidationError(
+            f"cannot build an escalation package: record must be a dict, got "
+            f"{type(record).__name__}"
+        )
+    missing = [k for k in _ESCALATION_PACKAGE_REQUIRED_RECORD_KEYS if record.get(k) is None]
+    if missing:
+        raise QuestionValidationError(
+            "cannot build an escalation package: the question record is missing "
+            f"{missing!r} -- only a record produced by add_question() / "
+            "build_multiple_choice_question() (never a hand-built dict) carries "
+            "every fact this 9-field projection requires."
+        )
+    tier = record["tier"]
+    urgency = _URGENCY_BY_TIER.get(tier)
+    if urgency is None:
+        raise QuestionValidationError(
+            f"cannot build an escalation package: record['tier'] is {tier!r}, not "
+            f"one of the 3 known tiers ({sorted(_URGENCY_BY_TIER)!r}) -- urgency "
+            f"(field 9) has no honest value to report."
+        )
+    return {
+        "question_id": record["id"],
+        "category": record["domain"],
+        "context": record["context_path"],
+        "question_text": record["question"],
+        "options": record["options"],
+        "recommended_option": record["recommendation"],
+        "default_if_unanswered": record["assumption_if_unanswered"],
+        "owner": record["owner"],
+        "urgency": urgency,
+    }
+
+
+def render_escalation_package_markdown(package: Dict[str, Any]) -> str:
+    """Human-readable rendering of an escalation package, in
+    ESCALATION_PACKAGE_FIELDS order -- for a digest/GUI renderer that wants
+    ONE consistent block per escalated question rather than reformatting the
+    raw record itself. No new table-rendering machinery: this is the same
+    "one labeled field per line" shape this module's own
+    QuestionQueueStore._render_decisions_md() already uses for a per-decision
+    block, applied here to a package instead of a decision."""
+    lines = [f"### {package['question_id']}", ""]
+    lines.append(f"- **Category:** {package['category']}")
+    lines.append(f"- **Context:** {package['context']}")
+    lines.append(f"- **Question:** {package['question_text']}")
+    lines.append("- **Options:**")
+    for opt in package["options"]:
+        rationale = f" -- {opt['rationale']}" if opt.get("rationale") else ""
+        lines.append(f"  - {opt['label']}{rationale}")
+    lines.append(f"- **Recommended option:** {package['recommended_option']}")
+    lines.append(f"- **Default if unanswered:** {package['default_if_unanswered']}")
+    lines.append(f"- **Owner:** {package['owner']}")
+    lines.append(f"- **Urgency:** {package['urgency']}")
+    return "\n".join(lines)
+
+
+# ---- Question rephrasing / clarification loop (2026-09-07) ------------------
+#
+# question_queue.py files a question exactly once (add_question()), with a
+# fixed question text and 2-3 pre-researched options. Nothing in this module
+# -- or anywhere else in dv_harness, confirmed by a repo-wide search before
+# writing this -- gave a human who does not understand an already-filed
+# question any way to signal that and get back a clearer restatement,
+# grounded in the SAME evidence that question already carries. Neither
+# `reference_pattern_audit.classify_wait()`-style heuristics nor an LLM call
+# is available or appropriate here: this module only ever has the literal
+# fields a question record already carries to work with, and re-wording a
+# question's own sentence with anything beyond those fields would risk
+# silently changing what it actually asks -- exactly the fabrication the
+# Evidence Truth Rule forbids.
+#
+# `request_clarification()` is deliberately NOT a second filing mechanism:
+# it never calls add_question(), never mints a new Q-ID or question_key,
+# and never changes a question's tier/status/blocking. It only
+#   (a) re-renders an EXISTING record -- read via store.get_question(), the
+#       store's own existing lookup, never a second one -- into a clearer,
+#       more scannable structure built entirely from fields that record
+#       already carries (options[].rationale, context_path, tier_reason,
+#       exemption, assumption_if_unanswered/answer); and
+#   (b) records, best-effort, that a human asked for one, in a small sibling
+#       JSON file next to questions.json/decisions.json
+#       (QuestionQueueStore.clarifications_path) -- reusing this module's own
+#       _atomic_write_json()/_read_json() primitives rather than inventing a
+#       second persistence mechanism, and NEVER touching questions.json
+#       itself: question.schema.json's `additionalProperties: false` on the
+#       persisted question record stays exactly as strict as before.
+#
+# "Simpler phrasing" is honestly bounded. This does not run any kind of
+# paraphrase over the question's own free-text sentence -- there is no
+# semantic-rewriting capability in this module to do that safely, and
+# attempting one would be an unearned claim about what the question means.
+# What it DOES do is translate classify_tier()'s own small, closed,
+# machine-oriented tier_reason vocabulary (a raw
+# "hard_trigger:affects_pass_fail_verdict") into a plain-English sentence via
+# a fixed lookup table (_TIER_REASON_TRIGGER_EXPLANATIONS /
+# _explain_tier_reason()) -- content that TODAY never reaches a human at all,
+# since build_escalation_package()'s own 9-field view omits tier_reason and
+# exemption entirely -- and lay every option's own already-researched
+# rationale out explicitly under a fixed "evidence" heading instead of
+# leaving it buried inside options[].rationale.
+
+#: classify_tier()'s own 3 hard-trigger names (see hard_triggers()), each
+#: translated into one plain-English clause. An unrecognized trigger name
+#: (this table drifting out of sync with hard_triggers()) falls back to
+#: printing the raw trigger name rather than guessing at a synonym for it --
+#: see _explain_tier_reason().
+_TIER_REASON_TRIGGER_EXPLANATIONS: Dict[str, str] = {
+    "affects_pass_fail_verdict": "it could change whether a test is reported PASS or FAIL",
+    "affects_spec_intent": "it is about what the spec actually intends, not just an implementation detail",
+    "affects_read_only_file_change": "it would mean changing a file this harness normally treats as read-only",
+}
+
+
+def _explain_tier_reason(tier_reason: str) -> List[str]:
+    """Translate one of classify_tier()'s own fixed, literal tier_reason
+    strings (see that function's docstring for the full closed vocabulary it
+    produces) into plain-English sentences -- a lookup over known literal
+    forms, never a paraphrase of the question itself. An unrecognized head
+    or suffix (this function's vocabulary drifting out of sync with
+    classify_tier()'s) is surfaced verbatim rather than silently dropped or
+    guessed at, so a reader still sees the real value instead of nothing."""
+    if not tier_reason:
+        return []
+    notes: List[str] = []
+    parts = tier_reason.split(";")
+    head = parts[0]
+    if head == "decisions_store_hit":
+        notes.append("A human already answered this exact question before; this reuses that answer.")
+    elif head == "active_exemption":
+        notes.append("An on-file, currently-active exemption already covers this check.")
+    elif head == "resolved_from_manifest":
+        notes.append("The answer was already recorded in this project's own environment manifest.")
+    elif head == "no_hard_trigger_low_blast_radius":
+        notes.append("Nothing about this looked pass/fail-critical, so the worst case if the "
+                      "assumption is wrong is one wasted, cheaply re-run regression.")
+    elif head.startswith("hard_trigger:"):
+        for t in head[len("hard_trigger:"):].split(","):
+            explanation = _TIER_REASON_TRIGGER_EXPLANATIONS.get(t)
+            notes.append(f"This needs a human decision because {explanation}." if explanation
+                          else f"This needs a human decision (hard trigger on file: {t!r}).")
+    elif head.startswith("blast_radius_exceeds_safe_assume_bound:"):
+        radius = head.split(":", 1)[1]
+        notes.append("The risk if the assumption is wrong is wider than one regression (recorded "
+                      f"blast radius: {radius!r}), so this cannot be auto-assumed.")
+    else:
+        notes.append(f"Reason on file: {tier_reason!r}.")
+    for suffix in parts[1:]:
+        if suffix == "overrides_prior_non_human_decision":
+            notes.append("This overrides an earlier machine guess (not a human answer) for the same "
+                          "question -- the machine's own earlier guess is not treated as settled.")
+        elif suffix.startswith("covered_by_active_exemption:"):
+            exemption_id = suffix.split(":", 1)[1]
+            notes.append(f"An active exemption ({exemption_id}) already covers the underlying check, "
+                          "but it does not by itself answer this specific question.")
+    return notes
+
+
+def request_clarification(store: "QuestionQueueStore", question_id: str, *,
+                            requested_by: Optional[str] = None,
+                            reason: Optional[str] = None,
+                            now: Optional[datetime] = None,
+                            record: bool = True) -> Dict[str, Any]:
+    """A human signals "I don't understand question `question_id`" and gets
+    back a reworded rendering of that SAME question, grounded entirely in
+    evidence the persisted record already carries -- see the module-level
+    comment above for the full contract (never a second filing mechanism,
+    never an NLP paraphrase of the question's own sentence).
+
+    Raises KeyError when no such question exists -- the exact sibling raise
+    get_escalation_package() already uses for the identical lookup failure,
+    so both "read this question" entry points fail the same way.
+
+    Returns:
+      {"question_id", "package": <build_escalation_package()'s 9 fields>,
+       "plain_summary": [str, ...],  # ordered, plain-English restatement,
+                                      # grounded in tier_reason/exemption/
+                                      # assumption_if_unanswered/answer
+       "evidence": [str, ...],       # every option's own pre-researched
+                                      # rationale, labeled and cited
+       "clarification_id": str|None, # None only when record=False or the
+                                      # best-effort write itself failed
+       "requested_at": iso8601}
+
+    `record=True` (default) additionally appends a real audit entry to
+    `store.clarifications_path` (`.dv-harness/question_queue/
+    clarifications.json`), written through this module's own
+    _atomic_write_json() -- the SAME atomic-write primitive
+    QuestionQueueStore's own _save_questions()/_save_decisions() already
+    use, so this is one more sibling artifact in that store, never a new
+    write mechanism. The write is best-effort: a failure degrades to
+    `clarification_id=None` rather than losing the rendering the human
+    actually asked for (the one part of this call that must never fail)."""
+    target = store.get_question(question_id)
+    if target is None:
+        raise KeyError(f"No question with id {question_id!r}")
+
+    package = build_escalation_package(target)
+
+    plain_summary: List[str] = [
+        f"Question: {target['question']}",
+        f"Where this comes from: {target['context_path']}",
+    ]
+    plain_summary.extend(_explain_tier_reason(target.get("tier_reason", "")))
+    exemption = target.get("exemption")
+    if exemption:
+        plain_summary.append(
+            "On-file exemption %s (owner %s, valid until %s): %s"
+            % (exemption["id"], exemption["owner"], exemption["valid_until"], exemption["reason"])
+        )
+    if target["tier"] == TIER3_CANNOT_ASSUME:
+        plain_summary.append("If nobody answers: " + target["assumption_if_unanswered"])
+    elif target["tier"] == TIER2_SAFE_ASSUME:
+        plain_summary.append(
+            "Already logged and continuing with (a machine guess, not a human answer): "
+            + str(target.get("answer"))
+        )
+    elif target["tier"] == TIER1_SELF_RESOLVE:
+        plain_summary.append(
+            "Already resolved automatically -- answer: %s (basis: %s)"
+            % (target.get("answer"), target.get("basis"))
+        )
+
+    evidence: List[str] = []
+    for opt in target["options"]:
+        rationale = opt.get("rationale")
+        evidence.append(f"{opt['label']}: {rationale}" if rationale
+                         else f"{opt['label']}: (no additional rationale on file)")
+
+    now_iso = _now_iso(now)
+    clarification_id: Optional[str] = None
+    if record:
+        try:
+            data = _read_json(store.clarifications_path,
+                                {"schema_version": SCHEMA_VERSION, "requests": []})
+            requests = data.setdefault("requests", [])
+            clarification_id = "CLARIFY-%s-%03d" % (question_id, len(requests) + 1)
+            requests.append({
+                "clarification_id": clarification_id,
+                "question_id": question_id,
+                "question_key": target["question_key"],
+                "requested_by": requested_by or "unknown",
+                "reason": reason,
+                "requested_at": now_iso,
+                "plain_summary": plain_summary,
+            })
+            _atomic_write_json(store.clarifications_path, data)
+        except Exception:
+            clarification_id = None
+
+    return {
+        "question_id": question_id,
+        "package": package,
+        "plain_summary": plain_summary,
+        "evidence": evidence,
+        "clarification_id": clarification_id,
+        "requested_at": now_iso,
+    }
+
+
+def list_clarification_requests(store: "QuestionQueueStore", *,
+                                  question_id: Optional[str] = None) -> List[dict]:
+    """Every clarification request on file (see request_clarification()),
+    optionally filtered to one `question_id`. Read-only; never mints
+    `store.clarifications_path` (a missing file reads as an empty list,
+    same as `_read_json()`'s own default-on-absence contract elsewhere in
+    this module)."""
+    data = _read_json(store.clarifications_path, {"schema_version": SCHEMA_VERSION, "requests": []})
+    reqs = data.get("requests", [])
+    if question_id is not None:
+        reqs = [r for r in reqs if r.get("question_id") == question_id]
+    return reqs
+
+
+def render_clarification_markdown(clarification: Dict[str, Any]) -> str:
+    """Human-readable rendering of a request_clarification() result -- the
+    same "one labeled section per block" shape this module's own
+    render_escalation_package_markdown()/_render_decisions_md() already use,
+    applied here to a clarification instead of a package/decision."""
+    lines = [f"### Clarification for {clarification['question_id']}", ""]
+    lines.append("**In plain terms:**")
+    for line in clarification["plain_summary"]:
+        lines.append(f"- {line}")
+    lines.append("")
+    lines.append("**Evidence already found, per option:**")
+    for line in clarification["evidence"]:
+        lines.append(f"- {line}")
+    if clarification.get("clarification_id"):
+        lines.append("")
+        lines.append(f"- **Recorded as:** {clarification['clarification_id']}")
+    return "\n".join(lines)

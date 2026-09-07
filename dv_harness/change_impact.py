@@ -713,3 +713,429 @@ def render_selection_section(payload: dict) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+# ============================================================================
+# --- semantic RTL diff: WHAT a diff means, not just which files/tests it --
+# touches ("Semantic Change Impact Engine (verify-first)", 2026-09-06) -----
+# ============================================================================
+#
+# GAP AUDITED FIRST (REUSE OVER REINVENT, before writing a line below):
+# `change_impact.py`'s existing half of this module -- classify_risk(),
+# compute_change_impact() -- computes impact purely from a real
+# `git diff --name-only` FILE LIST resolved against changed FILE PATHS
+# (suffix, path segment, RTL-parse module-name lookup). It never opens the
+# diff's own CONTENT. A commit that adds one comment to a `.sv` file and a
+# commit that deletes that same file's only DUT output port are scored
+# byte-for-byte identically today -- same HIGH risk (RTL suffix), same
+# confidence, same regression selection -- because nothing downstream of
+# `classify_risk()` ever reads a line of the diff. A repo-wide search before
+# writing this confirmed no other module closes this: `change_blast_radius.py`
+# widens the same file-path reasoning to an import-closure ("how far does a
+# changed FILE reach"), never a content diff; `command_txt_change_impact.py`
+# and `spec_vplan_delta.py` semantic-diff a DE command REGISTRY and a
+# requirement-contract SET respectively -- real semantic diffs, but over a
+# different domain (structured records, not RTL/SV source text) and neither
+# imports or is imported by this module. This section is the first place in
+# the repo that reasons about WHAT a code-level diff actually changed.
+#
+# SCOPE, stated rather than implied wider: declaration-level only, the exact
+# "module/port/signal hierarchy, not a full elaboration/semantic model"
+# bound `verible_parser.py` already states for itself. A module added or
+# removed, a port added/removed/re-directioned/re-typed(width), a parameter
+# added/removed/re-typed/re-defaulted, a module-level signal added/removed/
+# re-typed -- each a real, cited before/after value, never a guessed one.
+# Anything living INSIDE a procedural block (an always_ff's own logic, an
+# assertion body, a case statement) is invisible to this parser exactly as
+# it is invisible to `verible_parser.py` itself, and is reported as the
+# honest `BODY_ONLY_CHANGE` bucket below -- "the declared interface did not
+# move, but the file's content did, by a means this parser cannot see
+# inside" -- never silently folded into "nothing changed".
+#
+# HONESTY, worst-wins in the one direction that matters here: an
+# unverifiable file (verible missing, a real syntax error at either
+# revision, `git show` failing) is `NOT_AVAILABLE` -- collected separately
+# in `unverifiable_files` and NEVER counted as "no interface change", the
+# same "an absence of proof about a diff's content must never read as proof
+# the diff was safe" rule the Evidence Truth Rule states generally.
+#
+# WIRING, disclosed rather than implied closed: this is additive and
+# REACHED, not WIRED. `compute_change_impact()` / `compute_and_write()` /
+# `select_regression()` above and their existing confidence /
+# `expand_to_full_regression` / regression-selection behaviour are
+# UNCHANGED byte-for-byte by this section -- nothing here alters what a
+# caller downstream of the pre-existing pipeline already sees, and no
+# `engine.py` call site invokes it (the same "prefer a standalone front
+# door over touching a large, concurrently-edited engine/gates/cli module"
+# choice several sibling 2026-09-06 additions in this project already
+# disclose, made the same way here since this multi-agent batch runs
+# alongside other work touching `engine.py`). A caller who wants the
+# semantic verification calls `compute_semantic_change_impact()` directly,
+# or `python -m dv_harness.change_impact semantic-diff --root <dir> --base
+# <sha> [--head <sha>] [--json]`.
+
+
+def _import_verible_parser():
+    """Lazy, degrade-never-raise import -- mirrors `file_to_module_map()`'s
+    own try/except-on-import convention above, so a checkout without
+    `verible_parser` (or a broken install) reports `NOT_AVAILABLE` rather
+    than crashing this file's own import."""
+    try:
+        from . import verible_parser
+        return verible_parser
+    except Exception:
+        return None
+
+
+RTL_CHANGE_MODULE_ADDED = "MODULE_ADDED"
+RTL_CHANGE_MODULE_REMOVED = "MODULE_REMOVED"
+RTL_CHANGE_PORT_ADDED = "PORT_ADDED"
+RTL_CHANGE_PORT_REMOVED = "PORT_REMOVED"
+RTL_CHANGE_PORT_DIRECTION_CHANGED = "PORT_DIRECTION_CHANGED"
+RTL_CHANGE_PORT_TYPE_OR_WIDTH_CHANGED = "PORT_TYPE_OR_WIDTH_CHANGED"
+RTL_CHANGE_PARAM_ADDED = "PARAMETER_ADDED"
+RTL_CHANGE_PARAM_REMOVED = "PARAMETER_REMOVED"
+RTL_CHANGE_PARAM_TYPE_CHANGED = "PARAMETER_TYPE_CHANGED"
+RTL_CHANGE_PARAM_DEFAULT_CHANGED = "PARAMETER_DEFAULT_CHANGED"
+RTL_CHANGE_SIGNAL_ADDED = "SIGNAL_ADDED"
+RTL_CHANGE_SIGNAL_REMOVED = "SIGNAL_REMOVED"
+RTL_CHANGE_SIGNAL_TYPE_CHANGED = "SIGNAL_TYPE_CHANGED"
+
+# Which of the above change a module's own EXTERNAL CONTRACT -- what a
+# testbench, a bind, or an instantiating parent module can depend on --
+# versus an internal-only fact. Ports/parameters (and the module's own
+# existence) are the contract; a module-level signal declared but never
+# exposed as a port is not, because nothing outside the module can ever
+# legally reference it by name -- the same external-interface-vs-internal
+# -implementation line `phy_boundary.py`/`connectivity.py` already draw,
+# for a different purpose, one layer down.
+INTERFACE_IMPACTING_CHANGE_KINDS = frozenset({
+    RTL_CHANGE_MODULE_ADDED, RTL_CHANGE_MODULE_REMOVED,
+    RTL_CHANGE_PORT_ADDED, RTL_CHANGE_PORT_REMOVED,
+    RTL_CHANGE_PORT_DIRECTION_CHANGED, RTL_CHANGE_PORT_TYPE_OR_WIDTH_CHANGED,
+    RTL_CHANGE_PARAM_ADDED, RTL_CHANGE_PARAM_REMOVED,
+    RTL_CHANGE_PARAM_TYPE_CHANGED, RTL_CHANGE_PARAM_DEFAULT_CHANGED,
+})
+
+
+@dataclass
+class SemanticRtlChange:
+    """One real, cited before/after structural fact about one module in one
+    file -- never a guessed summary of what a diff "probably" did."""
+    file: str
+    module: Optional[str]
+    kind: str
+    detail: str
+    interface_impacting: bool
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def rtl_file_content_at_revision(root: Path, sha: str, rel_path: str) -> dict:
+    """Real `git show <sha>:<rel_path>`, degrade-never-raise exactly like
+    every other git call in this module (see `_git()` above). Returns
+    `{"status", "content", "detail"}`; `status` is PRESENT /
+    NOT_PRESENT_AT_REVISION / NO_GIT. A nonzero exit here almost always
+    means "this path did not exist at this revision" (added or deleted
+    somewhere across base..head) -- a real, honest structural fact in its
+    own right, never a silent empty diff."""
+    rc, out, err = _git(root, ["show", f"{sha}:{rel_path}"])
+    if rc == 127:
+        return {"status": "NO_GIT", "content": None, "detail": err}
+    if rc != 0:
+        return {"status": "NOT_PRESENT_AT_REVISION", "content": None, "detail": err}
+    return {"status": "PRESENT", "content": out, "detail": None}
+
+
+def _parse_rtl_content(vp, content: str, rel_path: str, verible_bin: str) -> dict:
+    """Writes `content` to a throwaway temp file (verible really parses
+    those real bytes -- this never fabricates a parse result from diff text
+    alone) and runs the REAL `verible_parser.parse_file()` against it.
+    Returns `{"status", "modules", "detail"}`: PARSED / VERIBLE_UNAVAILABLE
+    / PARSE_ERROR -- the same three-way distinction `verible_parser.py`'s
+    own two exception types already carry, never collapsed into one."""
+    suffix = Path(rel_path).suffix or ".sv"
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        result = vp.parse_file(tmp_path, verible_bin=verible_bin)
+        return {"status": "PARSED", "modules": result.modules, "detail": None}
+    except vp.VeribleUnavailableError as e:
+        return {"status": "VERIBLE_UNAVAILABLE", "modules": None, "detail": str(e)}
+    except vp.VeribleParseError as e:
+        return {"status": "PARSE_ERROR", "modules": None, "detail": str(e)}
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _diff_port_lists(file_path: str, module_name: Optional[str],
+                      old_ports: list, new_ports: list) -> List[SemanticRtlChange]:
+    changes: List[SemanticRtlChange] = []
+    old_by_name = {p.name: p for p in old_ports if p.name}
+    new_by_name = {p.name: p for p in new_ports if p.name}
+    for name in sorted(set(new_by_name) - set(old_by_name)):
+        p = new_by_name[name]
+        changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_PORT_ADDED,
+            f"port {name!r} added ({p.direction} {p.data_type})", True))
+    for name in sorted(set(old_by_name) - set(new_by_name)):
+        p = old_by_name[name]
+        changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_PORT_REMOVED,
+            f"port {name!r} removed (was {p.direction} {p.data_type})", True))
+    for name in sorted(set(old_by_name) & set(new_by_name)):
+        o, n = old_by_name[name], new_by_name[name]
+        if (o.direction or "") != (n.direction or ""):
+            changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_PORT_DIRECTION_CHANGED,
+                f"port {name!r} direction {o.direction!r} -> {n.direction!r}", True))
+        if (o.data_type or "") != (n.data_type or ""):
+            changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_PORT_TYPE_OR_WIDTH_CHANGED,
+                f"port {name!r} type/width {o.data_type!r} -> {n.data_type!r}", True))
+    return changes
+
+
+def _diff_param_lists(file_path: str, module_name: Optional[str],
+                       old_params: list, new_params: list) -> List[SemanticRtlChange]:
+    changes: List[SemanticRtlChange] = []
+    old_by_name = {p.name: p for p in old_params if p.name}
+    new_by_name = {p.name: p for p in new_params if p.name}
+    for name in sorted(set(new_by_name) - set(old_by_name)):
+        p = new_by_name[name]
+        changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_PARAM_ADDED,
+            f"parameter {name!r} added (default={p.default_text!r})", True))
+    for name in sorted(set(old_by_name) - set(new_by_name)):
+        p = old_by_name[name]
+        changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_PARAM_REMOVED,
+            f"parameter {name!r} removed (was default={p.default_text!r})", True))
+    for name in sorted(set(old_by_name) & set(new_by_name)):
+        o, n = old_by_name[name], new_by_name[name]
+        if (o.type_text or "") != (n.type_text or ""):
+            changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_PARAM_TYPE_CHANGED,
+                f"parameter {name!r} type {o.type_text!r} -> {n.type_text!r}", True))
+        if (o.default_text or "") != (n.default_text or ""):
+            changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_PARAM_DEFAULT_CHANGED,
+                f"parameter {name!r} default {o.default_text!r} -> {n.default_text!r}", True))
+    return changes
+
+
+def _diff_signal_lists(file_path: str, module_name: Optional[str],
+                        old_signals: list, new_signals: list) -> List[SemanticRtlChange]:
+    changes: List[SemanticRtlChange] = []
+    old_by_name = {s.name: s for s in old_signals if s.name}
+    new_by_name = {s.name: s for s in new_signals if s.name}
+    for name in sorted(set(new_by_name) - set(old_by_name)):
+        s = new_by_name[name]
+        changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_SIGNAL_ADDED,
+            f"internal signal {name!r} added ({s.data_type})", False))
+    for name in sorted(set(old_by_name) - set(new_by_name)):
+        s = old_by_name[name]
+        changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_SIGNAL_REMOVED,
+            f"internal signal {name!r} removed (was {s.data_type})", False))
+    for name in sorted(set(old_by_name) & set(new_by_name)):
+        o, n = old_by_name[name], new_by_name[name]
+        if (o.data_type or "") != (n.data_type or "") or (o.unpacked_dims or "") != (n.unpacked_dims or ""):
+            changes.append(SemanticRtlChange(file_path, module_name, RTL_CHANGE_SIGNAL_TYPE_CHANGED,
+                f"internal signal {name!r} type {o.data_type!r}{o.unpacked_dims or ''} -> "
+                f"{n.data_type!r}{n.unpacked_dims or ''}", False))
+    return changes
+
+
+def _diff_modules(file_path: str, base_modules: list, head_modules: list) -> List[SemanticRtlChange]:
+    changes: List[SemanticRtlChange] = []
+    base_by_name = {m.name: m for m in base_modules if m.name}
+    head_by_name = {m.name: m for m in head_modules if m.name}
+    for name in sorted(set(head_by_name) - set(base_by_name)):
+        changes.append(SemanticRtlChange(file_path, name, RTL_CHANGE_MODULE_ADDED,
+            f"module {name!r} added", True))
+    for name in sorted(set(base_by_name) - set(head_by_name)):
+        changes.append(SemanticRtlChange(file_path, name, RTL_CHANGE_MODULE_REMOVED,
+            f"module {name!r} removed", True))
+    for name in sorted(set(base_by_name) & set(head_by_name)):
+        b, h = base_by_name[name], head_by_name[name]
+        changes += _diff_port_lists(file_path, name, b.ports, h.ports)
+        changes += _diff_param_lists(file_path, name, b.parameters, h.parameters)
+        changes += _diff_signal_lists(file_path, name, b.signals, h.signals)
+    return changes
+
+
+def semantic_diff_rtl_file(root: Path, base_sha: str, head_sha: str, rel_path: str,
+                            *, verible_bin: str = "verible-verilog-syntax") -> dict:
+    """The one real per-file entry point: WHAT changed in this one RTL/SV
+    file between `base_sha` and `head_sha`, at verible_parser.py's own
+    documented declaration-level scope. Returns:
+        status: FILE_ADDED / FILE_REMOVED / FILE_UNCHANGED_STRUCTURALLY /
+                BODY_ONLY_CHANGE / CHANGED / NOT_AVAILABLE
+        changes: list[dict] (SemanticRtlChange.to_dict())
+        interface_impacting: bool -- True iff any real change touches a
+                module/port/parameter (see INTERFACE_IMPACTING_CHANGE_KINDS)
+        detail: the real reason when status is NOT_AVAILABLE
+
+    NOT_AVAILABLE is the honest "we could not verify" state and must never
+    be read as "nothing changed structurally". BODY_ONLY_CHANGE is the
+    honest "the file's bytes differ but every module's own declared
+    interface is identical" state -- the change is inside a procedural
+    body, a comment, or formatting, beyond this parser's declared scope."""
+    vp = _import_verible_parser()
+    if vp is None:
+        return {"status": "NOT_AVAILABLE", "changes": [], "interface_impacting": False,
+                "detail": "dv_harness.verible_parser could not be imported"}
+
+    base_file = rtl_file_content_at_revision(root, base_sha, rel_path)
+    head_file = rtl_file_content_at_revision(root, head_sha, rel_path)
+    if base_file["status"] == "NO_GIT" or head_file["status"] == "NO_GIT":
+        return {"status": "NOT_AVAILABLE", "changes": [], "interface_impacting": False,
+                "detail": "git not available"}
+
+    base_present = base_file["status"] == "PRESENT"
+    head_present = head_file["status"] == "PRESENT"
+
+    if not base_present and not head_present:
+        return {"status": "NOT_AVAILABLE", "changes": [], "interface_impacting": False,
+                "detail": f"{rel_path!r} not present at either revision"}
+
+    if base_present and head_present and base_file["content"] == head_file["content"]:
+        return {"status": "FILE_UNCHANGED_STRUCTURALLY", "changes": [],
+                "interface_impacting": False, "detail": "byte-identical content at both revisions"}
+
+    base_parsed = _parse_rtl_content(vp, base_file["content"], rel_path, verible_bin) if base_present else None
+    head_parsed = _parse_rtl_content(vp, head_file["content"], rel_path, verible_bin) if head_present else None
+    for parsed in (base_parsed, head_parsed):
+        if parsed is not None and parsed["status"] != "PARSED":
+            return {"status": "NOT_AVAILABLE", "changes": [], "interface_impacting": False,
+                    "detail": f"{parsed['status']}: {parsed['detail']}"}
+
+    if not base_present:
+        changes = [SemanticRtlChange(rel_path, m.name, RTL_CHANGE_MODULE_ADDED,
+                                      f"new file adds module {m.name!r}", True)
+                   for m in (head_parsed["modules"] or []) if m.name]
+        return {"status": "FILE_ADDED", "changes": [c.to_dict() for c in changes],
+                "interface_impacting": True, "detail": None}
+
+    if not head_present:
+        changes = [SemanticRtlChange(rel_path, m.name, RTL_CHANGE_MODULE_REMOVED,
+                                      f"file removed, taking module {m.name!r} with it", True)
+                   for m in (base_parsed["modules"] or []) if m.name]
+        return {"status": "FILE_REMOVED", "changes": [c.to_dict() for c in changes],
+                "interface_impacting": True, "detail": None}
+
+    changes = _diff_modules(rel_path, base_parsed["modules"] or [], head_parsed["modules"] or [])
+    if not changes:
+        return {"status": "BODY_ONLY_CHANGE", "changes": [], "interface_impacting": False,
+                "detail": ("content differs but no declaration-level (module/port/parameter/"
+                           "signal) difference was found -- the change is inside a procedural "
+                           "body, a comment, or formatting, beyond this parser's declared scope")}
+    interface_impacting = any(c.kind in INTERFACE_IMPACTING_CHANGE_KINDS for c in changes)
+    return {"status": "CHANGED", "changes": [c.to_dict() for c in changes],
+            "interface_impacting": interface_impacting, "detail": None}
+
+
+def compute_semantic_change_impact(root: Path, *, base_sha: str, head_sha: str = "HEAD",
+                                    diff: Optional[dict] = None,
+                                    verible_bin: str = "verible-verilog-syntax",
+                                    rtl_suffixes: Sequence[str] = _RTL_SUFFIXES) -> dict:
+    """WHAT the diff means for every RTL/SV file it touches -- additive to,
+    and independent of, `compute_change_impact()` above: this function reads
+    no state that one writes and changes nothing about its confidence /
+    `expand_to_full_regression` / regression-selection behaviour. Only files
+    whose suffix is in `rtl_suffixes` (`_RTL_SUFFIXES`, the exact same set
+    `classify_risk()` already uses -- imported, not re-typed) are
+    semantically diffed; every other changed file is reported under
+    `non_rtl_files_skipped`, never silently dropped."""
+    root = Path(root)
+    diff = diff if diff is not None else changed_files(root, base_sha, head_sha)
+    base = diff.get("base_sha") or base_sha
+    head = diff.get("head_sha") or head_sha
+
+    if diff.get("status") != "REAL_DIFF":
+        return {
+            "base_sha": base, "head_sha": head, "status": "NOT_AVAILABLE",
+            "detail": f"underlying diff status {diff.get('status')!r}: {diff.get('detail')}",
+            "per_file": [], "interface_impacting_files": [], "body_only_files": [],
+            "unverifiable_files": [], "non_rtl_files_skipped": [],
+        }
+
+    per_file: List[dict] = []
+    interface_impacting_files: List[str] = []
+    body_only_files: List[str] = []
+    unverifiable_files: List[str] = []
+    non_rtl_files_skipped: List[str] = []
+
+    for f in diff.get("files") or []:
+        base_name = f.rsplit("/", 1)[-1]
+        suffix = ("." + base_name.rsplit(".", 1)[-1]) if "." in base_name else ""
+        if suffix.lower() not in rtl_suffixes:
+            non_rtl_files_skipped.append(f)
+            continue
+        result = semantic_diff_rtl_file(root, base, head, f, verible_bin=verible_bin)
+        result["file"] = f
+        per_file.append(result)
+        if result["status"] == "NOT_AVAILABLE":
+            unverifiable_files.append(f)
+        elif result.get("interface_impacting"):
+            interface_impacting_files.append(f)
+        elif result["status"] == "BODY_ONLY_CHANGE":
+            body_only_files.append(f)
+
+    return {
+        "base_sha": base, "head_sha": head, "status": "COMPUTED", "detail": None,
+        "per_file": per_file,
+        "interface_impacting_files": interface_impacting_files,
+        "body_only_files": body_only_files,
+        "unverifiable_files": unverifiable_files,
+        "non_rtl_files_skipped": non_rtl_files_skipped,
+    }
+
+
+def execute_verb(argv: Optional[Sequence[str]] = None) -> int:
+    """Standalone front door -- `python -m dv_harness.change_impact
+    semantic-diff --root <dir> --base <sha> [--head <sha>] [--json]`. Not
+    wired into `cli.py` (a large, concurrently-edited file in this
+    project's own batch, per that file's own disclosed-scope convention).
+    Exit 0: no interface-impacting file found. 1: at least one real
+    interface-impacting file found. 2: NOT_AVAILABLE or a usage error."""
+    import argparse
+    parser = argparse.ArgumentParser(prog="python -m dv_harness.change_impact")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("semantic-diff",
+                        help="WHAT changed in RTL/SV files between two revisions, not just which files")
+    p.add_argument("--root", default=".")
+    p.add_argument("--base", required=True)
+    p.add_argument("--head", default="HEAD")
+    p.add_argument("--json", action="store_true")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.cmd != "semantic-diff":
+        return 2
+
+    report = compute_semantic_change_impact(Path(args.root), base_sha=args.base, head_sha=args.head)
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
+    else:
+        print(f"status: {report['status']}")
+        if report["status"] != "COMPUTED":
+            print(f"detail: {report['detail']}")
+        else:
+            for pf in report["per_file"]:
+                print(f"- {pf['file']}: {pf['status']} "
+                      f"(interface_impacting={pf.get('interface_impacting')})")
+                for c in pf.get("changes") or []:
+                    print(f"    {c['kind']}: {c['detail']}")
+            print(f"interface_impacting_files: {report['interface_impacting_files']}")
+            print(f"body_only_files: {report['body_only_files']}")
+            print(f"unverifiable_files: {report['unverifiable_files']}")
+
+    if report["status"] != "COMPUTED":
+        return 2
+    return 1 if report["interface_impacting_files"] else 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    return execute_verb(argv)
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(main())

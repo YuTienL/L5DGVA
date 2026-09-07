@@ -363,3 +363,57 @@ def test_cli_reports_exit_2_on_malformed_input(tmp_path: Path):
         capture_output=True, text=True, cwd=str(Path(__file__).resolve().parents[1]),
     )
     assert proc.returncode == 2, proc.stderr
+
+
+# ===========================================================================
+# "Why am I being asked this" -- grounding_evidence carried through, never
+# invented (the same optional {"summary": ..., "evidence_path": ...} shape
+# dv_harness.question_queue.add_question() accepts).
+# ===========================================================================
+
+def _ge():
+    return {"summary": "register CTRL_REG is in the Excel map but absent from RTL",
+            "evidence_path": "reg_map.xlsx#CTRL_REG"}
+
+
+def test_gate_pending_questions_carries_grounding_evidence_through_when_present():
+    questions = [
+        {"question_id": "k1", "confidence": "LOW", "criticality": "MAJOR",
+         "grounding_evidence": _ge()},
+    ]
+    result = iqp.gate_pending_questions(questions)
+    assert result["gated"][0]["grounding_evidence"] == _ge()
+
+
+def test_gate_pending_questions_never_fabricates_grounding_evidence_when_absent():
+    # The negative control: a question dict with no grounding_evidence key
+    # at all must never gain a fabricated one on the way through gating.
+    questions = [{"question_id": "k1", "confidence": "LOW", "criticality": "MAJOR"}]
+    result = iqp.gate_pending_questions(questions)
+    assert "grounding_evidence" not in result["gated"][0]
+
+
+def test_rank_questions_carries_grounding_evidence_through_for_ranked_entry():
+    questions = [
+        {"question_id": "k1", "blocking_value": 2, "downstream_impact": 2,
+         "expected_confidence_gain": 2, "user_effort": 1, "grounding_evidence": _ge()},
+    ]
+    result = iqp.rank_questions(questions)
+    assert result["ranked"][0]["grounding_evidence"] == _ge()
+
+
+def test_rank_questions_carries_grounding_evidence_through_for_unrankable_entry():
+    questions = [
+        {"question_id": "k1", "user_effort": 0, "grounding_evidence": _ge()},
+    ]
+    result = iqp.rank_questions(questions)
+    assert result["unrankable"][0]["grounding_evidence"] == _ge()
+
+
+def test_rank_questions_never_fabricates_grounding_evidence_when_absent():
+    questions = [
+        {"question_id": "k1", "blocking_value": 2, "downstream_impact": 2,
+         "expected_confidence_gain": 2, "user_effort": 1},
+    ]
+    result = iqp.rank_questions(questions)
+    assert "grounding_evidence" not in result["ranked"][0]

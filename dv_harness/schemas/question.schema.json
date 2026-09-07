@@ -103,7 +103,32 @@
       }
     },
     "digest_batch_id": { "type": ["string", "null"] },
-    "digest_emitted_at": { "type": ["string", "null"], "format": "date-time" }
+    "digest_emitted_at": { "type": ["string", "null"], "format": "date-time" },
+    "grounding_evidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["summary", "evidence_path"],
+      "description": "Optional, additive \"why am I being asked this\" citation -- distinct from `context_path` (WHERE the question concerns) and `tier_reason` (WHICH classify_tier() rule fired). Populated ONLY from real caller-supplied evidence (dv_harness.question_queue.add_question()'s `grounding_evidence=` argument, normalized by normalize_grounding_evidence()) -- never inferred or fabricated from the question text itself. `null` when no caller supplied one; both keys are required together when present, since a summary with no citation of where that finding lives (or a citation with no stated reason) is exactly the unsupported claim this field exists to prevent.",
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "description": "One-sentence WHY this question exists, e.g. 'found register X in the Excel register map but absent from the RTL port list'." },
+        "evidence_path": { "type": "string", "minLength": 1, "description": "Where the grounding finding actually lives -- a file:line, an env.manifest.json JSON-pointer, a register/port name, a spreadsheet cell reference. Never fabricated -- must cite something the caller actually supplied." }
+      }
+    },
+    "suggested_answer": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["value", "source_module", "source_path"],
+      "description": "The suggest-then-confirm mode's own evidence-cited candidate answer (2026-09-07, additive -- optional, so every pre-2026-09-07 question record, which simply omits this field, still validates unchanged; no schema_version bump). Populated ONLY from real, already-computed evidence via dv_harness.question_queue.normalize_suggested_answer() / derive_suggested_answer_from_env_manifest() / derive_suggested_answer_from_design_source_inventory() -- never inferred from the question text itself. `value` MUST equal `recommendation` (validate_question()'s own cross-check, since JSON Schema alone cannot express it) -- a suggested answer IS the recommendation, carrying its own real citation of exactly where it came from, so a human reviewing this question can confirm it (answer with the same value) or correct it (answer with a different one) rather than authoring an answer from scratch. `null`/absent when no caller supplied one (every question stays open-ended by default).",
+      "properties": {
+        "value": { "type": "string", "minLength": 1, "description": "The suggested answer itself -- must equal recommendation." },
+        "source_module": {
+          "enum": ["env_manifest", "design_source_inventory"],
+          "description": "Which real evidence producer this suggestion was derived from -- restricted to the two named, structured modules a reader can actually go check; never an open-ended string."
+        },
+        "source_path": { "type": "string", "minLength": 1, "description": "Where in that producer's own output the value was read, e.g. 'env.manifest.json#vip_config.vip_release.version' or 'design_source_inventory#usb3_regmap.version'. Never fabricated -- must cite something the caller actually supplied." },
+        "rationale": { "type": "string", "description": "Optional free-text note on why this evidence suggests this value." }
+      }
+    }
   },
   "allOf": [
     { "if": { "properties": { "domain": { "const": "vip" } } },

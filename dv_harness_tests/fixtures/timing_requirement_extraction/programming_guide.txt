@@ -1,0 +1,11 @@
+# SYNTHETIC test fixture -- not derived from any real protocol specification.
+Section 4.2 Timing Requirements
+
+The setup time for DATA relative to CLK shall be at least 5 ns (tSU >= 5 ns).
+The hold time for DATA relative to CLK shall be at least 2 ns (tHOLD >= 2 ns).
+Read latency shall not exceed 16 clock cycles.
+Write latency must not exceed 20 ns.
+The setup time for CTRL is TBD.
+Simulation observed setup margin of 6 ns on DATA relative to CLK during regression.
+The interface operates at 100 MHz.
+Latency is 50 ns.

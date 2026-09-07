@@ -279,7 +279,13 @@ def gate_pending_questions(questions: Sequence[Mapping[str, Any]]) -> Dict[str, 
     and `criticality` fields; a question dict missing either field gates on
     UNKNOWN for that axis, which this table always resolves to ASK for a
     missing/unrecognized criticality (see GATING_TABLE), so a question that
-    never declared its own risk is never silently skipped."""
+    never declared its own risk is never silently skipped.
+
+    A caller-declared `grounding_evidence` field (the same optional
+    `{"summary": ..., "evidence_path": ...}` shape `question_queue.
+    add_question()` accepts -- "why is this question being asked", never
+    invented here) is carried through onto the gate result verbatim when
+    present, so gating this module performs never silently drops it."""
     results: List[Dict[str, Any]] = []
     to_ask: List[str] = []
     do_not_ask: List[str] = []
@@ -288,6 +294,8 @@ def gate_pending_questions(questions: Sequence[Mapping[str, Any]]) -> Dict[str, 
         qid = _question_id(q, i)
         gate = gate_question(q.get("confidence"), q.get("criticality"))
         gate["question_id"] = qid
+        if "grounding_evidence" in q:
+            gate["grounding_evidence"] = q["grounding_evidence"]
         results.append(gate)
         (to_ask if gate["decision"] == DECISION_ASK else do_not_ask).append(qid)
     return {
@@ -347,6 +355,10 @@ def rank_questions(questions: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     deterministic across runs regardless of input ordering. An unrankable
     question is reported in `unrankable` with its real reason -- never
     dropped, and never merged into the ranked list with a fabricated score.
+
+    A caller-declared `grounding_evidence` field (see `gate_pending_
+    questions()`'s own docstring) is likewise carried through verbatim onto
+    whichever of `ranked`/`unrankable` the question lands in.
     """
     ranked: List[Dict[str, Any]] = []
     unrankable: List[Dict[str, Any]] = []
@@ -355,11 +367,17 @@ def rank_questions(questions: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         qid = _question_id(q, i)
         result = score_question(q)
         if result["status"] == SCORE_STATUS_SCORED:
-            ranked.append({"question_id": qid, "score": result["score"],
-                           "factors": result["factors"]})
+            entry: Dict[str, Any] = {"question_id": qid, "score": result["score"],
+                                       "factors": result["factors"]}
+            if "grounding_evidence" in q:
+                entry["grounding_evidence"] = q["grounding_evidence"]
+            ranked.append(entry)
         else:
-            unrankable.append({"question_id": qid, "reason": result["reason"],
-                               "factors": result["factors"]})
+            entry = {"question_id": qid, "reason": result["reason"],
+                      "factors": result["factors"]}
+            if "grounding_evidence" in q:
+                entry["grounding_evidence"] = q["grounding_evidence"]
+            unrankable.append(entry)
     ranked.sort(key=lambda r: (-r["score"], r["question_id"]))
     for position, entry in enumerate(ranked, start=1):
         entry["rank"] = position

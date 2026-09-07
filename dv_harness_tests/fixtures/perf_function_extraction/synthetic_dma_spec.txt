@@ -1,0 +1,14 @@
+Synthetic test fixture for dv_harness_tests/test_perf_function_extraction.py.
+This is NOT a real specification and describes no real IP -- it exists only
+to give perf_function_extraction.py's line-scan real, cited prose to
+extract from.
+
+Chapter 4: Performance Characteristics
+
+This DMA engine computes throughput as the number of bytes transferred divided by the number of elapsed cycles.
+
+Bandwidth is calculated as the product of the data width and the clock frequency, divided by eight.
+
+Latency is defined as the number of cycles from request issue to first response beat.
+
+The engine's throughput is a key design consideration for high-speed transfers.

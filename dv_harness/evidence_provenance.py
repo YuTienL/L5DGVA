@@ -72,6 +72,27 @@ DELIBERATELY BOUNDED, and stated rather than implied closed.
     `TOOL_DERIVED` and points at a real unrelated file passes the check. What
     is closed is the SILENT case: evidence that carried no provenance at all
     and was therefore rendered exactly like tool-derived evidence.
+
+FLAG_SUSPICIOUS (2026-09-07), a DIFFERENT axis, additive to everything above.
+Provenance answers "who produced this evidence"; it says nothing about
+whether a reviewer, having read a PASS, doubts it. There was no verb for
+that anywhere in this codebase, distinct from the two nearest-looking
+mechanisms: CORRECT (`control_plane.py`'s `set_correction()`) resets a
+whole STAGE, and COSIGN (`add_cosign()`) is opt-in AGREEMENT scoped only to
+`gates.JUDGMENT_FIELDS`. `control_plane.py`'s `flag_suspicious()` is the
+missing third verb -- a durable doubt record against one named `target` (a specific
+gate result or evidence citation), resetting nothing and requiring no
+agreement. `suspicion_target_for_gate()` above is the one convention this
+module recognises for flagging a whole gate result (`"gate:<gate_id>"`);
+`summarize_evidence_blocks()`/`summarize_project_provenance()` fold an OPEN
+flag against one of `PROVENANCE_REQUIRED_GATES`' own results into the same
+summary this module already produces, so a flagged claim is caveated on the
+same surfaces a self-attested one already is, never a third, separately-read
+place. A flag against any other target string (a non-provenance-required
+gate, a bare evidence-citation path) is still real and on file --
+`control_plane.describe_stage()`'s own top-level `suspicious_flags` key
+carries every flag for a stage regardless of whether this module's narrower
+convention recognises its `target`.
 """
 from __future__ import annotations
 
@@ -150,6 +171,37 @@ DERIVED_CAVEAT = (
     "found on disk. The harness checked that the artifact EXISTS; it did not "
     "parse it, so this is provenance, not verification of the claim."
 )
+
+#: The `target` key convention `control_plane.py`'s `flag_suspicious()`
+#: uses to flag one of PROVENANCE_REQUIRED_GATES' own results as suspicious
+#: (2026-09-07). A suspicion flag is a DIFFERENT axis from provenance -- who
+#: produced the evidence vs. whether a reviewer now doubts the result -- and
+#: is neither CORRECT (a whole-stage reset) nor COSIGN (agreement, opt-in and
+#: scoped only to gates.JUDGMENT_FIELDS); see that function's own docstring
+#: for the full distinction. "gate:<gate_id>" is deliberately a
+#: different shape from add_cosign()'s own "<gate_id>/<loc>" convention: a
+#: suspicion flag here names the whole gate RESULT this module enforces
+#: provenance on, never one judgment field inside it.
+SUSPICION_TARGET_PREFIX = "gate:"
+
+#: Rendered wherever an OPEN suspicion flag is shown against one of these six
+#: gates' own results, alongside (never instead of) that gate's own provenance
+#: caveat -- a flagged TOOL_DERIVED result is still exactly as independently
+#: produced as it was; a human has separately said they doubt it.
+SUSPICION_FLAG_CAVEAT = (
+    "FLAGGED SUSPICIOUS: a reviewer has marked this gate's result as needing "
+    "re-verification. See the flag's own 'reason' for why."
+)
+
+
+def suspicion_target_for_gate(gate_id: str) -> str:
+    """The `target` string a caller passes to
+    `control_plane.py`'s `flag_suspicious()` / `commands.cmd_flag_suspicious()`
+    to flag one of PROVENANCE_REQUIRED_GATES' own results as suspicious. Not
+    restricted to PROVENANCE_REQUIRED_GATES itself -- any gate id may be
+    flagged this way -- but this is the one convention this module's own
+    consumers (summarize_evidence_blocks() below) recognise and surface."""
+    return f"{SUSPICION_TARGET_PREFIX}{gate_id}"
 
 
 class ProvenanceCheckError(Exception):
@@ -319,32 +371,53 @@ def annotate_gate_detail(gate_id: str, payload: Any, detail: Dict[str, Any]) -> 
     return out
 
 
-def summarize_evidence_blocks(blocks: Dict[str, Any]) -> Dict[str, Any]:
+def summarize_evidence_blocks(blocks: Dict[str, Any],
+                               suspicious_flags: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The per-consumer summary: for the enforced gates present in one stage's
     evidence blocks, what each declared and whether any headline claim rests
     on self-attestation.
 
     `blocks` is exactly `gates.extract_evidence_blocks()`'s output, so a
-    consumer that already has the blocks does not re-parse the agent text."""
+    consumer that already has the blocks does not re-parse the agent text.
+
+    `suspicious_flags` (2026-09-07) is optional and additive -- a stage's own
+    `control.json["suspicious_flags"][stage]` map (as
+    `control_plane.describe_stage()` now passes), keyed by the same `target`
+    strings `control_plane.py`'s `flag_suspicious()` stores. Omitting it (the default)
+    leaves every entry's `flagged_suspicious`/`suspicion_flag` at their honest
+    False/None -- existing callers see no behaviour change. A flag is only
+    ever recognised here when its `target` equals
+    `suspicion_target_for_gate(gate_id)`; any other `target` string a caller
+    used is a real flag `control_plane.describe_stage()`'s own top-level
+    `suspicious_flags` key still carries, just not folded into this
+    provenance-specific view."""
     entries: List[Dict[str, Any]] = []
     for gate_id in sorted(PROVENANCE_REQUIRED_GATES):
         if gate_id not in (blocks or {}):
             continue
         payload = (blocks or {})[gate_id]
         provenance = declared_provenance(payload)
+        flag = (suspicious_flags or {}).get(suspicion_target_for_gate(gate_id))
+        flagged = bool(flag and flag.get("status") == "OPEN")
         entries.append({
             "gate_id": gate_id,
             "claim": PROVENANCE_REQUIRED_GATES[gate_id],
             PROVENANCE_FIELD: provenance,
             "independently_derived": is_independently_derived(provenance),
             "caveat": caveat_for(provenance),
+            "flagged_suspicious": flagged,
+            "suspicion_flag": flag,
         })
     self_attested = [e["gate_id"] for e in entries if not e["independently_derived"]]
+    flagged_gate_ids = [e["gate_id"] for e in entries if e["flagged_suspicious"]]
     return {
         "entries": entries,
         "self_attested_gate_ids": self_attested,
         "has_self_attested_claims": bool(self_attested),
         "caveat": SELF_ATTESTED_CAVEAT if self_attested else None,
+        "flagged_gate_ids": flagged_gate_ids,
+        "has_flagged_suspicious": bool(flagged_gate_ids),
+        "suspicion_caveat": SUSPICION_FLAG_CAVEAT if flagged_gate_ids else None,
     }
 
 
@@ -357,7 +430,10 @@ def summarize_project_provenance(root: Path) -> Dict[str, Any]:
     the whole .dv-harness tree when none exists, and asking a project who
     attested its evidence must never bring that project's governance state
     into existence -- the same reason
-    `signoff_export.read_signoff_stage_status()` reads it the same way."""
+    `signoff_export.read_signoff_stage_status()` reads it the same way.
+    `.dv-harness/control.json` (the suspicion-flag store) is read the same
+    plain way, for the same reason -- `control_plane.py`'s own read/write
+    class constructor mkdirs `.dv-harness`, so it is never used here either."""
     from .gates import extract_evidence_blocks
 
     root = Path(root)
@@ -385,14 +461,24 @@ def summarize_project_provenance(root: Path) -> Dict[str, Any]:
             "has_self_attested_claims": False,
             "caveat": None,
         }
+    control_path = root / ".dv-harness" / "control.json"
+    all_flags: Dict[str, Any] = {}
+    if control_path.is_file():
+        try:
+            control = json.loads(control_path.read_text(encoding="utf-8"))
+            if isinstance(control, dict):
+                all_flags = control.get("suspicious_flags") or {}
+        except (OSError, ValueError):
+            all_flags = {}
     stages = state.get("stages") if isinstance(state, dict) else None
     per_stage: Dict[str, Any] = {}
     self_attested: List[Dict[str, Any]] = []
+    flagged_suspicious: List[Dict[str, Any]] = []
     for stage, ss in sorted((stages or {}).items()):
         if not isinstance(ss, dict):
             continue
         blocks = extract_evidence_blocks(ss.get("last_message", "") or "")
-        summary = summarize_evidence_blocks(blocks)
+        summary = summarize_evidence_blocks(blocks, suspicious_flags=all_flags.get(stage, {}))
         if not summary["entries"]:
             continue
         per_stage[stage] = summary
@@ -404,9 +490,19 @@ def summarize_project_provenance(root: Path) -> Dict[str, Any]:
                     "claim": entry["claim"],
                     PROVENANCE_FIELD: entry[PROVENANCE_FIELD],
                 })
+            if entry["flagged_suspicious"]:
+                flagged_suspicious.append({
+                    "stage": stage,
+                    "gate_id": entry["gate_id"],
+                    "claim": entry["claim"],
+                    "suspicion_flag": entry["suspicion_flag"],
+                })
     return {
         "available": True,
         "reason": None,
+        "flagged_suspicious_claims": flagged_suspicious,
+        "has_flagged_suspicious_claims": bool(flagged_suspicious),
+        "suspicion_caveat": SUSPICION_FLAG_CAVEAT if flagged_suspicious else None,
         "state_path": str(state_path),
         "stages": per_stage,
         "self_attested_claims": self_attested,

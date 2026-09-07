@@ -1,0 +1,11 @@
+Synthetic test fixture for dv_harness_tests/test_perf_function_extraction.py.
+This is NOT a real specification and describes no real IP.
+
+Chapter 1: Overview
+
+This document describes the register interface of a generic peripheral.
+It contains no performance-related function statement of any recognised
+shape (no assignment naming a performance metric, and no explicit
+"computes/calculates/defines <metric> as/by/via ..." sentence) -- it exists
+purely as the negative control proving the module reports NOT_AVAILABLE
+rather than fabricating a performance function fact when none is present.

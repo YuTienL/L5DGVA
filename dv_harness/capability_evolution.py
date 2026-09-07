@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .blackboard import Blackboard
+from .confidence_calibration import REWEIGHT_PROPOSAL_DRAFTED
 from .inference import identify_gap, next_best_action, score_confidence
 
 _SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"
@@ -1884,6 +1885,299 @@ def file_candidates_for_repeated_failures(
             root, min_occurrences=min_occurrences
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# CONFIDENCE-CALIBRATION FEEDBACK LOOP (2026-09-07)
+#
+# WHAT THIS CLOSES. `confidence_calibration.calibrate()` can report a real
+# FINDING_INVERTED_TIER_ORDER: a confidence tier this harness treats as
+# stronger (CONFIRMED > HIGH > MEDIUM > LOW) held up LESS often, over this
+# project's own real gate-verified confirm/retract outcomes, than a tier it
+# treats as weaker. That is real evidence about `inference.score_confidence()`'s
+# own formula constants -- and this module never lets it become a live edit to
+# that formula. `confidence_calibration.draft_reweighted_confidence_proposal()`
+# turns the finding into DATA: which constant a cited inversion would
+# tighten, by how much, and why. What was missing is the other half section
+# 53.3/61 already require for every other capability-evolution proposal in
+# this file: a real candidate, filed through the SAME build_candidate()/
+# persist_candidate() path every other trigger in this module already uses,
+# so a human evaluates it exactly the way every other production-behavior
+# proposal in this harness is evaluated -- never a special, weaker path for
+# "just a couple of numbers".
+#
+# WHAT IT DELIBERATELY DOES NOT DO. It writes nothing to inference.py, ever,
+# at any point in this file. `build_confidence_reweight_candidate()` only
+# copies the proposal's own numbers into a candidate's `proposed_action`/
+# `experiment_plan` TEXT; the only place those numbers could ever become a
+# real edit to a real file is `run_controlled_experiment()`'s `mutation`
+# argument, applied to the TREATMENT copy of an ISOLATED fixture the human
+# supplies once the candidate reaches EXPERIMENT_APPROVED -- never to this
+# live project, and never automatically. Filing this candidate performs none
+# of that: like every other auto-filed candidate here, it pins at DISCOVERED,
+# with all six existing_* searches honestly NOT SEARCHED (no repository
+# search is performed), so overlap_status/recommendation are DERIVED to
+# UNKNOWN and the schema's own allOf pins current_status to DISCOVERED/
+# EVIDENCE_GATHERING/REJECTED -- reaching PROPOSED needs a real
+# research-architect pass, exactly as it does for every other candidate this
+# module auto-files.
+
+# Master prompt section 64's gap-detection source this coupling supplies. An
+# internal calibration audit finding a tier-ordering inversion in this
+# project's own records is section 64's own INTERNAL_AUDIT case, not a
+# regression/failure/coverage/research/user-correction trigger.
+CONFIDENCE_REWEIGHT_TRIGGER_TYPE = "INTERNAL_AUDIT"
+
+# The one named harness capability this bears on. Part of candidate_id's hash
+# input (via affected_capability), so a re-weighting proposal about the
+# confidence-scoring formula can never collide with a candidate about
+# anything else.
+CONFIDENCE_REWEIGHT_AFFECTED_CAPABILITY = "inference-confidence-scoring"
+
+# Recorded in status_history.by and as the Blackboard write's source, so a
+# human reading the candidate can tell this auto-filed source apart from a
+# research-architect one or the repeated-failure coupling without inferring
+# it from the field contents.
+CONFIDENCE_REWEIGHT_BY = "confidence-calibration"
+
+
+def build_confidence_reweight_candidate(
+    root, proposal: Dict[str, Any], *,
+    status_history: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Assemble the DISCOVERED candidate for one
+    `confidence_calibration.draft_reweighted_confidence_proposal()` PROPOSAL.
+
+    `proposal` must be that function's own PROPOSAL_DRAFTED result -- data
+    describing which `inference.score_confidence()` formula constant(s) a
+    real, cited tier-ordering inversion suggests tightening, and by how much.
+    This function never applies any of it: it only carries the proposal,
+    verbatim, into this candidate's `proposed_action`/`experiment_plan`
+    fields, so a human can review the exact numbers -- and the exact real
+    findings that motivated them -- before anything happens to production
+    scoring.
+
+    Goes through the ordinary build_candidate(), exactly like
+    build_repeated_failure_candidate(): the recommendation is DERIVED (UNKNOWN,
+    because no repository search was performed), confidence is recomputed
+    through the real inference.score_confidence(), and the whole candidate is
+    schema-validated before it exists. Nothing here is a second candidate
+    constructor.
+    """
+    if proposal.get("status") != REWEIGHT_PROPOSAL_DRAFTED:
+        raise ValueError(
+            "build_confidence_reweight_candidate() requires a "
+            f"{REWEIGHT_PROPOSAL_DRAFTED!r} result from "
+            "confidence_calibration.draft_reweighted_confidence_proposal(); got "
+            f"status={proposal.get('status')!r}"
+        )
+
+    from .doc_extraction import evidence_ref
+
+    changed = list(proposal.get("changed_constants") or [])
+    changed_names = sorted({entry["constant"] for entry in changed})
+    cited_findings = [
+        finding for entry in changed for finding in (entry.get("cited_findings") or [])
+    ]
+    proposal_digest = _sha256_text(json.dumps(
+        {"changed": [(e["constant"], e["current_value"], e["proposed_value"]) for e in changed]},
+        sort_keys=True,
+    ))[:12]
+
+    fields: Dict[str, Any] = {
+        "trigger_source": (
+            "confidence_calibration.calibrate() FINDING_INVERTED_TIER_ORDER: "
+            + "; ".join(
+                f"{c['higher_tier']}>{c['lower_tier']} "
+                f"({c['higher_observed_reliability']:.0%} vs "
+                f"{c['lower_observed_reliability']:.0%})"
+                for c in cited_findings
+            )
+            if cited_findings else
+            "confidence_calibration.draft_reweighted_confidence_proposal()"
+        ),
+        "trigger_type": CONFIDENCE_REWEIGHT_TRIGGER_TYPE,
+        "source_provenance": [
+            evidence_ref(
+                document="dv_harness/confidence_calibration.py",
+                version=proposal_digest,
+                page="",
+                section="calibrate()/FINDING_INVERTED_TIER_ORDER",
+                location=f"{c['higher_tier']}>{c['lower_tier']}",
+            )
+            for c in cited_findings
+        ] or [
+            evidence_ref(
+                document="dv_harness/confidence_calibration.py",
+                version=proposal_digest,
+                page="",
+                section="draft_reweighted_confidence_proposal()",
+                location="changed_constants",
+            )
+        ],
+        # One entry per CITED FINDING, never merely per constant name: two
+        # different real inversions that both happen to tighten the same
+        # constant (e.g. HIGH underperforming both MEDIUM and LOW) are two
+        # distinct pieces of evidence, and evidence_refs must actually GROW
+        # when a genuinely new one appears -- the same "ALREADY_ON_FILE_
+        # UNCHANGED means the SET of contributing evidence did not change"
+        # comparison file_confidence_reweight_candidate() below performs.
+        "evidence_refs": sorted({
+            f"dv_harness/inference.py:score_confidence:{entry['constant']}:"
+            f"{finding['higher_tier']}>{finding['lower_tier']}"
+            for entry in changed for finding in (entry.get("cited_findings") or [])
+        }) or ["dv_harness/inference.py:score_confidence"],
+        "affected_capability": CONFIDENCE_REWEIGHT_AFFECTED_CAPABILITY,
+        "hypothesis": (
+            "This project's own real Memory records, read by "
+            "confidence_calibration.calibrate(), show a tier-ordering inversion "
+            f"in {', '.join(changed_names) or 'a score_confidence()-governed tier'}: a "
+            "higher confidence tier held up less often than a lower one over real, "
+            "gate-verified confirm/retract outcomes. Tightening the named "
+            "inference.score_confidence() threshold constant(s) may restore the ordering "
+            "this harness already acts on (CONFIRMED > HIGH > MEDIUM > LOW)."
+        ),
+        "proposed_action": (
+            "PROPOSAL ONLY, never applied here: re-weight inference.score_confidence()'s "
+            f"formula constants from {proposal.get('current_constants')} to "
+            f"{proposal.get('proposed_constants')}. Neither this candidate nor "
+            "dv_harness/confidence_calibration.py nor dv_harness/capability_evolution.py "
+            "writes to inference.py. Evaluating this proposal requires: (1) a human moving "
+            "this candidate to EXPERIMENT_APPROVED; (2) "
+            "capability_evolution.run_controlled_experiment() with a mutation that "
+            "rewrites inference.py's constants to the proposed values inside an isolated "
+            "TREATMENT fixture copy only, measured against an untouched BASELINE copy of "
+            "the SAME fixture; (3) capability_evolution.run_shadow_replication() to clear "
+            "the real stability window; (4) a human decision at HUMAN_APPROVED. No step "
+            "here performs any of that."
+        ),
+        "exact_gap": "",
+        "expected_verification_benefit": (
+            "A confidence tier this harness spends (Knowledge Center promotion, "
+            "Engineering-tier admission, qualified-conclusion gating) would match its own "
+            "measured reliability more closely, reducing the chance a HIGH/MEDIUM label is "
+            "trusted more than this project's own real track record supports."
+        ),
+        "evidence_strength": {
+            "scale": 2,
+            "rationale": (
+                f"{len(cited_findings)} real INVERTED_TIER_ORDER finding(s) computed by "
+                "confidence_calibration.calibrate() over this project's own gate-verified "
+                "confirm/retract outcomes -- a real observation, not a controlled experiment "
+                "comparing the proposed constants against the current ones."
+            ),
+        },
+        "confidence": {
+            "inputs": {
+                "independent_sources_count": min(len(cited_findings), 3) or 1,
+                "evidence_refs_verified": True,
+                "counter_evidence_count": 0,
+                "multi_agent_consensus_count": 0,
+            }
+        },
+        "implementation_difficulty": "LOW",
+        "integration_risk": "MEDIUM",
+        "maintenance_cost": "LOW",
+        "experiment_required": True,
+        "experiment_plan": (
+            "capability_evolution.run_controlled_experiment() over a human-supplied "
+            "isolated fixture, with a mutation that rewrites inference.py's "
+            f"score_confidence() constants from {proposal.get('current_constants')} to "
+            f"{proposal.get('proposed_constants')} in the treatment copy only, over "
+            "stages the fixture's own graph actually reaches."
+        ),
+        "benchmark_plan": (
+            "Compare gate satisfaction and stage completion between the baseline (current "
+            "constants) and treatment (proposed constants) arms via "
+            "capability_evolution.compare_experiment_arms(), then run "
+            "capability_evolution.run_shadow_replication() at least once more before this "
+            "candidate may reach PROMOTION_CANDIDATE, per assert_stability_window()."
+        ),
+        "acceptance_criteria": [
+            "The stability window (capability_evolution.assert_stability_window()) reports "
+            "IMPROVED or UNCHANGED, never DEGRADED, across every replicated run.",
+            "A fresh confidence_calibration.calibrate() run against the same or a "
+            "comparable corpus, evaluated with the proposed constants, no longer reports "
+            "the cited INVERTED_TIER_ORDER finding(s).",
+        ],
+        "rollback_plan": (
+            f"Filing this candidate applies nothing: one Blackboard entry under "
+            f"'{BLACKBOARD_TOPIC}' and one Working Memory audit record, no production file "
+            "touched. inference.py's live formula is unchanged by every step up to and "
+            "including BENCHMARKED. If this candidate is ever approved into PRODUCTION, "
+            "the undo is restoring inference.py's prior score_confidence() constants -- the "
+            "same git revert any other approved code change in this repository already "
+            "uses."
+        ),
+        "approval_level": "HUMAN_APPROVAL_REQUIRED",
+        "discovered_by": CONFIDENCE_REWEIGHT_BY,
+    }
+    for slot in L5_SEARCH_SLOTS:
+        fields[slot] = _auto_filed_search_slot(slot)
+    if status_history is not None:
+        fields["status_history"] = [dict(entry) for entry in status_history]
+
+    candidate = build_candidate(**fields)
+    if candidate["current_status"] != "DISCOVERED":
+        raise IllegalPromotionTransitionError(
+            f"an auto-filed confidence-reweight candidate was assembled at "
+            f"{candidate['current_status']!r}; it may only ever file at DISCOVERED"
+        )
+    return candidate
+
+
+def file_confidence_reweight_candidate(root, proposal: Dict[str, Any], *,
+                                       cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """File (or refresh) ONE candidate for a
+    `confidence_calibration.draft_reweighted_confidence_proposal()` result.
+
+    Same three-outcome shape as file_repeated_failure_candidate(), plus a
+    fourth, earlier outcome: a proposal whose own status is not
+    PROPOSAL_DRAFTED (no inversion, or one not addressable by
+    score_confidence()) is not filed at all -- there is nothing to propose.
+
+      * proposal.status != PROPOSAL_DRAFTED -- nothing filed; the proposal's
+        own status/reason is returned so a caller can see why.
+      * ALREADY_BEYOND_DISCOVERED -- a human or a research-architect has
+        already moved this candidate on. Re-filing would drag it backwards.
+      * ALREADY_ON_FILE_UNCHANGED -- same candidate, same cited evidence.
+      * filed -- new, or the same candidate with genuinely new evidence.
+    """
+    if proposal.get("status") != REWEIGHT_PROPOSAL_DRAFTED:
+        return {
+            "filed": False,
+            "reason": proposal.get("status", "NO_PROPOSAL"),
+            "proposal_reason": proposal.get("reason", ""),
+        }
+
+    candidate = build_confidence_reweight_candidate(root, proposal)
+    candidate_id = candidate["candidate_id"]
+    existing = read_candidate(root, candidate_id)
+
+    if existing is not None:
+        current = existing.get("current_status")
+        if current != "DISCOVERED":
+            return {
+                "filed": False, "reason": "ALREADY_BEYOND_DISCOVERED",
+                "candidate_id": candidate_id, "current_status": current,
+            }
+        if list(existing.get("evidence_refs") or []) == candidate["evidence_refs"]:
+            return {
+                "filed": False, "reason": "ALREADY_ON_FILE_UNCHANGED",
+                "candidate_id": candidate_id, "current_status": current,
+            }
+        candidate = build_confidence_reweight_candidate(
+            root, proposal, status_history=list(existing.get("status_history") or []))
+
+    persisted = persist_candidate(root, candidate, source=CONFIDENCE_REWEIGHT_BY, cfg=cfg)
+    return {
+        "filed": True,
+        "reason": "NEW_EVIDENCE" if existing is not None else "DISCOVERED",
+        "candidate_id": candidate_id,
+        "current_status": candidate["current_status"],
+        "evidence_refs": list(candidate["evidence_refs"]),
+        "persisted": persisted,
+    }
 
 
 # ---------------------------------------------------------------------------

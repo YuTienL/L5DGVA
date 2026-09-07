@@ -136,6 +136,18 @@ between two domains actually means or which side wins -- exactly like
 resolves. It persists nothing to disk on its own: `VerificationIntakeContract`
 is a plain in-memory record a caller may serialize however their own project
 convention calls for; this module mints no `.dv-harness/` state of its own.
+
+`create_contract()` and `transition_contract()` both accept an OPT-IN
+`store: Any = None` (2026-09-06). This is telemetry over an ALREADY-COMPUTED
+transition, not a new write path: when a caller passes a real
+`storage.StateStore`, the one INTAKE_* event naming the state just entered
+is recorded through `dv_harness.intake_events` into the same real
+`.dv-harness/events.jsonl` `dv-harness audit` already reads -- the fixed
+18-event INTAKE_* taxonomy, never a second audit file. Omitting `store`
+(the default) leaves both calls byte-for-byte identical to before this
+parameter existed; "mints no state of its own" above is unchanged -- a
+`store` is a real `StateStore` the CALLER already opened, never one this
+module constructs.
 """
 from __future__ import annotations
 
@@ -382,15 +394,24 @@ def create_contract(
     *,
     sub_domain_data: Optional[Mapping[str, Any]] = None,
     now: Optional[str] = None,
+    store: Any = None,
 ) -> VerificationIntakeContract:
     """A fresh contract at `CREATED`, optionally seeded with whatever
     sub-domain data a caller already has on hand (e.g. an already-generated
     `env.manifest.json` dict, an already-computed list of question_queue
-    decisions) -- accepted and stored as-is, never inspected for shape."""
+    decisions) -- accepted and stored as-is, never inspected for shape.
+
+    `store`, per this module's own "mints no `.dv-harness/` state of its
+    own" boundary above, is OPT-IN and defaults to `None`: when a caller
+    passes a real `storage.StateStore`, `dv_harness.intake_events.
+    emit_contract_transition()` writes the real `INTAKE_CREATED` event
+    through it (best-effort -- a telemetry failure never turns a successful
+    `create_contract()` call into one); when omitted, this call is
+    byte-for-byte identical to before this parameter existed."""
     if not contract_id or not str(contract_id).strip():
         raise IntakeContractError("EMPTY_CONTRACT_ID", {})
     ts = now or _utcnow_iso()
-    return VerificationIntakeContract(
+    contract = VerificationIntakeContract(
         contract_id=str(contract_id),
         state=IntakeContractState.CREATED.value,
         sub_domains=dict(sub_domain_data or {}),
@@ -400,6 +421,11 @@ def create_contract(
         }],
         created_at=ts, updated_at=ts,
     )
+    if store is not None:
+        from . import intake_events as _ie
+        _ie.emit_contract_transition(store, contract, from_state=None,
+                                     reason="contract created", by=None)
+    return contract
 
 
 def transition_contract(
@@ -412,6 +438,7 @@ def transition_contract(
     sub_domain_data: Optional[Mapping[str, Any]] = None,
     require_intake_ready: bool = False,
     readiness: "Optional[IntakeReadinessResult]" = None,
+    store: Any = None,
 ) -> VerificationIntakeContract:
     """Returns a NEW `VerificationIntakeContract` moved to `to_state`, never
     mutating the one passed in (the same `dataclasses.replace`-style
@@ -433,7 +460,13 @@ def transition_contract(
     `evaluate_intake_readiness()`) whose `.ready` is True, or the transition
     is refused with `INTAKE_NOT_READY_FOR_REVIEW`. Default False keeps every
     existing caller's behavior unchanged: a caller not yet using the
-    INTAKE_READY conjunction can still drive the state machine on its own."""
+    INTAKE_READY conjunction can still drive the state machine on its own.
+
+    `store` is the same opt-in `dv_harness.intake_events` wiring
+    `create_contract()` carries -- a real `storage.StateStore` makes this
+    transition write the one INTAKE_* event that names `to_state`
+    (best-effort; omitting `store` means never an event, per this module's
+    own "mints no state of its own" boundary)."""
     assert_legal_transition(contract.state, to_state)
     if (require_intake_ready and to_state == IntakeContractState.READY_FOR_REVIEW.value):
         if readiness is None or not getattr(readiness, "ready", False):
@@ -449,10 +482,15 @@ def transition_contract(
     new_history = list(contract.state_history) + [{
         "from": contract.state, "to": to_state, "reason": reason, "by": by, "at": ts,
     }]
-    return dataclasses.replace(
+    new_contract = dataclasses.replace(
         contract, state=to_state, sub_domains=merged, state_history=new_history,
         updated_at=ts,
     )
+    if store is not None:
+        from . import intake_events as _ie
+        _ie.emit_contract_transition(store, new_contract, from_state=contract.state,
+                                     reason=reason, by=by)
+    return new_contract
 
 
 # ===========================================================================

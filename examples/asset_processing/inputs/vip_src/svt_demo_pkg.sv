@@ -99,4 +99,20 @@ package svt_demo_pkg;
     endfunction
   endclass
 
+  // Real UVM callback convention: a project extends `uvm_callback` and
+  // declares virtual "hook" methods a testbench overrides with its own
+  // implementation, invoked at specific points via `uvm_callback_iter`/
+  // ``uvm_do_callbacks``. Added for dv_harness/vip_callback_hook_extraction.py
+  // (the sixth VIP capability IR) -- the fixture previously declared no
+  // callback/hook-shaped class at all.
+  class svt_demo_report_cb extends uvm_callback;
+    virtual function void post_report(int status);
+      $display("svt_demo_report_cb: post_report status=%0d", status);
+    endfunction
+
+    virtual task pre_close(int unsigned quiesce_ns);
+      #quiesce_ns;
+    endtask
+  endclass
+
 endpackage

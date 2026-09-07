@@ -1,6 +1,7 @@
 """dv_harness/example_composition.py -- composes multiple already-qualified VIP
-examples into ONE scenario, gated by an explicit 7-condition composability
-check, 2026-09-06.
+examples into ONE scenario, gated by an explicit 8-condition composability
+check, 2026-09-06 (extended 2026-09-07 with condition 8,
+DUT_TOPOLOGY_APPLICABLE).
 
 THE GAP THIS CLOSES
 -------------------
@@ -92,7 +93,28 @@ compatibility rule this codebase has no evidence for:
    SAME clock signal must agree on its declared `frequency_mhz`/`period_ns`/
    `edge`.
 
+CONDITION 8 (2026-09-07 GAP-CLOSE): DUT_TOPOLOGY_APPLICABLE -- AN EXAMPLE'S
+OWN STRUCTURE, CHECKED AGAINST REAL DUT TOPOLOGY, NOT AGAINST ANOTHER EXAMPLE
+------------------------------------------------------------------------------
+Every one of the seven conditions above validates examples AGAINST EACH
+OTHER -- none of them ever asks whether ONE example's own declared structure
+corresponds to anything in the project's REAL DUT topology before that
+example is trusted as a compatibility reference at all. Condition 8 closes
+exactly that gap: an example's declared `dut_target_instance` (a dot-
+separated DUT hierarchy path -- the same `target_instance` vocabulary
+`connectivity.py`'s own bind-entry contract already uses, per CLAUDE.md's
+Bind-Location Rules, reused here rather than a second name for the same
+concept) is checked against a caller-supplied, real
+`design_architecture_ir.build_architecture_ir()`-shaped instance tree.
+See `check_dut_topology_applicability()`'s own docstring for the full
+mechanical rationale (a longest-real-suffix match, never a whole-path
+assumption, never a fabricated match). Absent a real, successfully-built
+topology document, this condition is honestly `NOT_APPLICABLE` -- an
+example's DUT-target structure was simply never checked, never assumed
+clean by omission.
+
 `_link_key()` IS THE ONE DELIBERATE, DISCLOSED DESIGN CHOICE THIS MODULE MAKES
+FOR CONDITIONS 2-4
 --------------------------------------------------------------------------------
 Conditions 2-4 are scoped to one "logical link" -- a caller-declared
 `link_id`/`interface_id`/`port_id`, falling back to a declared
@@ -133,12 +155,15 @@ resolvable identity, two entries sharing one identity) is reported in
 the whole evaluation or being silently merged into an anonymous participant.
 
 Front door: `python -m dv_harness.example_composition compose --examples
-<file.json> [--json]` (`execute_verb()`, the same shared-implementation
-convention `power-intent`/`golden-scenario`/`config-variants` use). Exit
-0 COMPOSED, 1 BLOCKED (a real condition-7 conflict was found), 2 NOT_AVAILABLE
-(fewer than two valid examples, or a malformed input document). There is no
-`dv-harness` CLI verb -- `cli.py` is out of this batch's file-safety scope,
-the same disclosed choice several sibling 2026-09-06 modules already state.
+<file.json> [--dut-topology <file.json>] [--json]` (`execute_verb()`, the
+same shared-implementation convention `power-intent`/`golden-scenario`/
+`config-variants` use). `--dut-topology` is optional and feeds condition 8
+only; omitted, condition 8 reports NOT_APPLICABLE and every other condition
+is unaffected. Exit 0 COMPOSED, 1 BLOCKED (a real conflict was found on any
+of the 8 conditions), 2 NOT_AVAILABLE (fewer than two valid examples, or a
+malformed input document). There is no `dv-harness` CLI verb -- `cli.py` is
+out of this batch's file-safety scope, the same disclosed choice several
+sibling 2026-09-06/07 modules already state.
 """
 from __future__ import annotations
 
@@ -169,6 +194,13 @@ COND_AGENT_CONFIG = "AGENT_CONFIG_COMPATIBLE"
 COND_SEQUENCER_OWNERSHIP = "NO_SEQUENCER_OWNERSHIP_CONFLICT"
 COND_RESET_ASSUMPTIONS = "NO_RESET_ASSUMPTION_CONFLICT"
 COND_CLOCK_ASSUMPTIONS = "NO_CLOCK_ASSUMPTION_CONFLICT"
+#: 2026-09-07 gap-close (vip_example_dut_topology_applicability): the seven
+#: conditions above all validate examples AGAINST EACH OTHER. None of them
+#: ever asks whether ONE example's own declared structure corresponds to
+#: anything in the project's REAL DUT topology before that example is
+#: trusted as a compatibility reference at all -- see
+#: `check_dut_topology_applicability()` below for the full rationale.
+COND_DUT_TOPOLOGY_APPLICABILITY = "DUT_TOPOLOGY_APPLICABLE"
 
 CONDITIONS = (
     COND_VIP_VERSION,
@@ -178,6 +210,7 @@ CONDITIONS = (
     COND_SEQUENCER_OWNERSHIP,
     COND_RESET_ASSUMPTIONS,
     COND_CLOCK_ASSUMPTIONS,
+    COND_DUT_TOPOLOGY_APPLICABILITY,
 )
 
 CONDITION_DESCRIPTIONS = {
@@ -192,6 +225,10 @@ CONDITION_DESCRIPTIONS = {
                             "active_level/synchronous facts",
     COND_CLOCK_ASSUMPTIONS: "examples naming the same clock signal must agree on its "
                             "frequency_mhz/period_ns/edge facts",
+    COND_DUT_TOPOLOGY_APPLICABILITY: "an example's own declared DUT target-instance path must "
+                                     "resolve against the project's real, parsed DUT instance "
+                                     "topology before the example is trusted as a compatibility "
+                                     "reference",
 }
 
 #: Role tokens (normalised upper-case, single word) this module recognises as
@@ -235,6 +272,16 @@ _FIELD_ALIASES: Dict[str, Tuple[str, ...]] = {
     "sequencer_path": ("sequencer_path", "SEQUENCER_PATH", "interface_path", "INTERFACE_PATH",
                        "bind_target", "BIND_TARGET", "instance_path", "INSTANCE_PATH"),
     "link_id": ("link_id", "LINK_ID", "interface_id", "INTERFACE_ID", "port_id", "PORT_ID"),
+    #: The DUT-side hierarchical instance path this example claims to target
+    #: -- deliberately a DIFFERENT concept from `sequencer_path` above
+    #: (that is the VIP-side TB sequencer hierarchy; this is the real DUT
+    #: instance chain the example's interface is claimed to bind against).
+    #: `target_instance` is the exact field name `connectivity.py`'s own
+    #: bind-entry contract already uses for this concept (see CLAUDE.md's
+    #: Bind-Location Rules), reused here rather than inventing a second
+    #: vocabulary for the same fact.
+    "dut_target_instance": ("dut_target_instance", "DUT_TARGET_INSTANCE", "target_instance",
+                            "TARGET_INSTANCE", "dut_instance_path", "DUT_INSTANCE_PATH"),
     "active": ("active", "ACTIVE", "is_active", "IS_ACTIVE", "driver_active"),
     "reset_assumptions": ("reset_assumptions", "RESET_ASSUMPTIONS", "reset"),
     "clock_assumptions": ("clock_assumptions", "CLOCK_ASSUMPTIONS", "clock"),
@@ -369,6 +416,7 @@ class VipExample:
     active: Optional[bool]
     reset: Optional[dict]
     clock: Optional[dict]
+    dut_target_instance: Optional[str]
     raw: dict = field(repr=False)
 
 
@@ -410,6 +458,7 @@ def normalize_examples(examples: Sequence[Any]) -> Tuple[List[VipExample], List[
             active=_infer_active(_get(raw, "active"), role_norm),
             reset=_get_reset(raw),
             clock=_get_clock(raw),
+            dut_target_instance=_get(raw, "dut_target_instance"),
             raw=raw,
         )
         provisional.append(vip_ex)
@@ -438,6 +487,17 @@ def normalize_examples(examples: Sequence[Any]) -> Tuple[List[VipExample], List[
 
 def _pair_entry(a: VipExample, b: VipExample, detail: dict) -> dict:
     return {"pair": [a.identity, b.identity], "detail": detail}
+
+
+def _single_entry(a: VipExample, detail: dict) -> dict:
+    """The single-example counterpart of `_pair_entry()` -- condition 8 below
+    is not a pairwise comparison, it is one example checked against real
+    external evidence (the DUT topology), so there is only ever one identity
+    to cite. `pair` is kept as a single-element list (rather than dropped)
+    purely so `format_composition_report()`'s existing `conflict['pair']`
+    rendering keeps working unmodified for every condition, seven pairwise
+    and this one single-example condition alike."""
+    return {"pair": [a.identity], "example": a.identity, "detail": detail}
 
 
 def check_vip_version_compatibility(vip_examples: Sequence[VipExample]) -> dict:
@@ -622,6 +682,151 @@ def check_clock_assumptions(vip_examples: Sequence[VipExample]) -> dict:
                                   ("frequency_mhz", "period_ns", "edge"), "clock")
 
 
+# --------------------------------------------------------------------------
+# condition 8 (2026-09-07 gap-close): DUT_TOPOLOGY_APPLICABLE
+#
+# THE GAP THIS CLOSES
+# --------------------
+# The seven conditions above are all EXAMPLE-vs-EXAMPLE comparisons -- they
+# ask "do these declared facts agree with EACH OTHER", never "is this
+# example's own declared structure real". An example whose declared
+# `dut_target_instance` names a DUT hierarchy path that does not exist
+# anywhere in this project's actual RTL -- a hallucinated bind target, a
+# stale path left over from a different project, a typo -- would pass all
+# seven existing conditions cleanly (nothing else disagrees with a fact
+# nobody else mentions) and be composed and trusted regardless. This
+# condition is the missing check: BEFORE an example is trusted as a
+# compatibility reference, does its own declared DUT-facing structure
+# actually correspond to something real in the project's parsed DUT
+# topology.
+#
+# WHAT "REAL DUT TOPOLOGY" MEANS HERE
+# ------------------------------------
+# `dut_topology` is the caller-supplied output of
+# `design_architecture_ir.build_architecture_ir()` (or an equivalent
+# `design_architecture_ir.save_architecture_ir()`-written JSON document
+# loaded back) -- this module never imports `design_architecture_ir.py`
+# itself and never builds one: verifying real RTL needs a real verible
+# parse this module has no business performing, exactly the same
+# duck-typed-input discipline this file's own docstring already commits to
+# for VIP capability records. Absent a real, successfully `status: "BUILT"`
+# topology document, this condition is honestly NOT_APPLICABLE -- an
+# example's DUT-target structure was simply never checked, never assumed
+# clean.
+#
+# HOW THE CHECK WORKS, MECHANICALLY (NEVER SEMANTICALLY)
+# ---------------------------------------------------------
+# An example's declared `dut_target_instance` (a dot-separated hierarchical
+# instance path, e.g. "chip.core.subsys0.usb0") is compared against every
+# real instantiation chain the topology's own instance tree actually
+# contains. A testbench-level path commonly carries a leading prefix
+# (a TB top instance) the DUT-only topology never parsed, so this is
+# deliberately a real, contiguous SUFFIX match rather than requiring the
+# whole path to match from an assumed root: the longest tail of the
+# declared path that exactly equals a real, contiguous chain of instance
+# names anywhere in the tree decides the result. A two-or-more-segment
+# declared path requires at least a 2-segment real match (a single common
+# instance-name word such as "clk" or "if" coinciding by chance is not
+# treated as evidence); a single-segment declared path requires only that
+# one name to appear. Zero real match at all is the finding this condition
+# exists to catch -- reported, never silently passed and never fabricated
+# into a guessed match.
+# --------------------------------------------------------------------------
+
+def _flatten_dut_instance_chains(dut_topology: Any) -> List[Tuple[Tuple[str, ...], bool, Optional[str]]]:
+    """Walks a `design_architecture_ir.build_architecture_ir()`-shaped
+    `dut_topology["instance_tree"]["trees"]` into a flat list of every real
+    instantiation chain it contains: `(chain_of_instance_names, resolved,
+    module_name)`. Tolerant of a malformed/foreign document -- never raises,
+    simply contributes no chains, since an unusable topology is exactly the
+    NOT_APPLICABLE case this condition already handles honestly."""
+    if not isinstance(dut_topology, dict):
+        return []
+    tree = dut_topology.get("instance_tree")
+    if not isinstance(tree, dict):
+        return []
+    chains: List[Tuple[Tuple[str, ...], bool, Optional[str]]] = []
+
+    def _walk(node: Any, prefix: Tuple[str, ...]) -> None:
+        if not isinstance(node, dict):
+            return
+        instance_name = node.get("instance_name")
+        chain = prefix + (str(instance_name),) if instance_name else prefix
+        if chain:
+            chains.append((chain, bool(node.get("resolved")), node.get("module_name")))
+        for child in node.get("children") or []:
+            _walk(child, chain)
+
+    for root in tree.get("trees") or []:
+        _walk(root, ())
+    return chains
+
+
+def _best_topology_suffix_match(segments: Tuple[str, ...],
+                                chains: Sequence[Tuple[Tuple[str, ...], bool, Optional[str]]]) -> Tuple[int, bool]:
+    """The longest contiguous SUFFIX of `segments` that exactly equals a
+    contiguous suffix of some real chain in `chains` (case-insensitive) --
+    see the condition-8 docstring above for why a suffix match, not a
+    whole-path match. Returns `(best_match_len, resolved_of_best_match)`;
+    `(0, False)` means no real instance chain corresponds to any tail of
+    the declared path at all."""
+    seg_lower = tuple(s.lower() for s in segments)
+    best_len = 0
+    best_resolved = False
+    for chain, resolved, _module_name in chains:
+        chain_lower = tuple(c.lower() for c in chain)
+        max_len = min(len(chain_lower), len(seg_lower))
+        for length in range(max_len, 0, -1):
+            if chain_lower[-length:] == seg_lower[-length:]:
+                if length > best_len or (length == best_len and resolved and not best_resolved):
+                    best_len, best_resolved = length, resolved
+                break
+    return best_len, best_resolved
+
+
+def check_dut_topology_applicability(vip_examples: Sequence[VipExample],
+                                     dut_topology: Optional[Any]) -> dict:
+    if not isinstance(dut_topology, dict) or dut_topology.get("status") != "BUILT":
+        reason = ("no real DUT topology (design_architecture_ir.py's own instance tree) was "
+                  "supplied to validate against")
+        if isinstance(dut_topology, dict) and dut_topology.get("status"):
+            reason = (f"the supplied DUT topology reports status={dut_topology.get('status')!r} "
+                      f"({dut_topology.get('reason')!r}) -- no real instance tree to validate "
+                      "against")
+        return {"status": COND_STATUS_NOT_APPLICABLE, "conflicts": [], "examples_checked": 0,
+                "reason": reason}
+
+    chains = _flatten_dut_instance_chains(dut_topology)
+    conflicts: List[dict] = []
+    checked = 0
+    for ve in vip_examples:
+        declared = ve.dut_target_instance
+        if not declared:
+            continue
+        checked += 1
+        segments = tuple(s for s in str(declared).split(".") if s)
+        if not segments:
+            continue
+        min_required = 2 if len(segments) >= 2 else 1
+        best_len, _resolved = _best_topology_suffix_match(segments, chains)
+        if best_len < min_required:
+            conflicts.append(_single_entry(ve, {
+                "declared_dut_target_instance": declared,
+                "reason": "no real instance chain in the project's parsed DUT topology matches "
+                          "any tail of this declared path -- this example cannot be trusted as "
+                          "a compatibility reference until its DUT target is verified against "
+                          "real RTL",
+                "longest_real_match_segments": best_len,
+                "segments_required": min_required,
+            }))
+    if checked == 0:
+        return {"status": COND_STATUS_NOT_APPLICABLE, "conflicts": [], "examples_checked": 0,
+                "reason": "no example declared a dut_target_instance to validate against the "
+                          "real DUT topology"}
+    return {"status": COND_STATUS_CONFLICT if conflicts else COND_STATUS_CLEAR,
+            "conflicts": conflicts, "examples_checked": checked}
+
+
 CONDITION_CHECKS = {
     COND_VIP_VERSION: check_vip_version_compatibility,
     COND_ROLE: check_role_compatibility,
@@ -630,6 +835,11 @@ CONDITION_CHECKS = {
     COND_SEQUENCER_OWNERSHIP: check_sequencer_ownership,
     COND_RESET_ASSUMPTIONS: check_reset_assumptions,
     COND_CLOCK_ASSUMPTIONS: check_clock_assumptions,
+    #: Dispatched specially in `evaluate_vip_example_composition()` (it needs
+    #: the caller-supplied `dut_topology` as a second argument, unlike the
+    #: seven pairwise checks above) -- still listed here so
+    #: `assert_conditions_complete()` holds it total the same way.
+    COND_DUT_TOPOLOGY_APPLICABILITY: check_dut_topology_applicability,
 }
 
 
@@ -654,9 +864,15 @@ assert_conditions_complete()
 # top-level evaluation
 # --------------------------------------------------------------------------
 
-def evaluate_vip_example_composition(examples: Sequence[Any]) -> dict:
+def evaluate_vip_example_composition(examples: Sequence[Any],
+                                     dut_topology: Optional[Any] = None) -> dict:
     """Composes `examples` (a plain sequence of dicts) into one scenario,
-    validated against the 7 conditions. Returns a report dict; see module
+    validated against the 8 conditions (see module docstring for the first
+    seven; `dut_topology`, optional, is condition 8's real
+    `design_architecture_ir.build_architecture_ir()`-shaped instance-tree
+    document -- omitted, condition 8 reports the honest NOT_APPLICABLE it
+    always reported before this parameter existed, so every pre-existing
+    caller's behaviour is unchanged). Returns a report dict; see module
     docstring for the `status`/`conflicts` shape. Never raises on malformed
     per-example data (reported in `malformed_examples` instead); raises
     `CompositionInputError` only when `examples` itself is not a usable
@@ -686,7 +902,10 @@ def evaluate_vip_example_composition(examples: Sequence[Any]) -> dict:
     conditions: Dict[str, dict] = {}
     conflict_count = 0
     for cond_id in CONDITIONS:
-        result = CONDITION_CHECKS[cond_id](usable)
+        if cond_id == COND_DUT_TOPOLOGY_APPLICABILITY:
+            result = CONDITION_CHECKS[cond_id](usable, dut_topology)
+        else:
+            result = CONDITION_CHECKS[cond_id](usable)
         result = {"condition": cond_id, "description": CONDITION_DESCRIPTIONS[cond_id], **result}
         conditions[cond_id] = result
         conflict_count += len(result.get("conflicts") or [])
@@ -742,12 +961,13 @@ _EXIT_BY_STATUS = {
 }
 
 
-def execute_verb(examples: Sequence[Any], *, as_json: bool = False) -> Tuple[str, int]:
+def execute_verb(examples: Sequence[Any], *, dut_topology: Optional[Any] = None,
+                 as_json: bool = False) -> Tuple[str, int]:
     """Shared implementation for `python -m dv_harness.example_composition`.
     Returns (text, exit_code): 0 COMPOSED, 1 BLOCKED, 2 NOT_AVAILABLE / a
     malformed `examples` document. Runs nothing, writes nothing."""
     try:
-        report = evaluate_vip_example_composition(examples)
+        report = evaluate_vip_example_composition(examples, dut_topology=dut_topology)
     except CompositionInputError as e:
         return f"CompositionInputError: {e}", 2
     text = _json.dumps(report, indent=2) if as_json else format_composition_report(report)
@@ -759,16 +979,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="python -m dv_harness.example_composition",
         description="Composes multiple qualified VIP examples (a JSON list of dicts) into one "
-                    "scenario, validated against a 7-condition composition gate: VIP version, "
+                    "scenario, validated against an 8-condition composition gate: VIP version, "
                     "role, protocol mode, agent config, sequencer ownership, reset assumptions, "
-                    "clock assumptions. A real conflict on any condition BLOCKS composition and "
-                    "names the specific conflicting pair -- it never picks a winner.")
+                    "clock assumptions, and (with --dut-topology) DUT topology applicability. A "
+                    "real conflict on any condition BLOCKS composition and names the specific "
+                    "conflicting pair -- it never picks a winner.")
     ap.add_argument("verb", choices=("compose",))
     ap.add_argument("--examples", required=True, help="JSON file: a list of example dicts.")
+    ap.add_argument("--dut-topology", default=None,
+                    help="Optional JSON file: a design_architecture_ir.build_architecture_ir()"
+                         "-shaped document, used only for condition 8 (DUT_TOPOLOGY_APPLICABLE). "
+                         "Omitted, condition 8 reports NOT_APPLICABLE.")
     ap.add_argument("--json", action="store_true", help="Emit the machine-readable report.")
     a = ap.parse_args(argv)
     examples = _json.loads(Path(a.examples).read_text(encoding="utf-8"))
-    text, code = execute_verb(examples, as_json=a.json)
+    dut_topology = (_json.loads(Path(a.dut_topology).read_text(encoding="utf-8"))
+                    if a.dut_topology else None)
+    text, code = execute_verb(examples, dut_topology=dut_topology, as_json=a.json)
     print(text)
     return code
 

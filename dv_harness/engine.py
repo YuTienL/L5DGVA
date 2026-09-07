@@ -13,7 +13,8 @@ from .gates import evaluate_stage_evidence, extract_evidence_blocks, STAGE_GATES
 from .react_loop import InnerReactLoop, evaluate_stage_evidence_with_detail
 from .memory_router import route_and_store, promote_to_organizational
 from .memory_vault import build_failure_signature, search_related_memory_for_debug
-from .inference import score_confidence, identify_gap, next_best_action, promote_if_high_confidence
+from .inference import (score_confidence, identify_gap, next_best_action, promote_if_high_confidence,
+                        build_deeper_investigation_signal)
 from .qualified_conclusion import build_qualified_conclusion
 from .knowledge_center import KnowledgeCenterClient
 from .adapters.cli import ClaudeCLIAdapter
@@ -1755,7 +1756,8 @@ class DVHarness:
         return None
 
     def _promote_experience_knowledge(self, stage: str, evidence_blocks: dict,
-                                      resolved_protocol: Optional[str] = None) -> None:
+                                       resolved_protocol: Optional[str] = None,
+                                       producing_agent_profile: Optional[str] = None) -> None:
         """Closed-loop wiring (2026-08-28, w4qxjh0iq design + adversarial
         verify): a PASS verdict on a stage whose STAGE_GATES include
         experience_knowledge_gate means that gate script already confirmed
@@ -1775,7 +1777,16 @@ class DVHarness:
         the evidence block's own `protocol` when building the record. See
         _engineering_record_protocol() for why that precedence is what makes
         the Engineering -> Organizational confirmation path reachable at
-        all."""
+        all.
+
+        `producing_agent_profile` (2026-09-07, agent_profile_track_record
+        gap-close) is the SAME `route_info["agent"]`/`_resolved_agent_name`
+        value run_stage()'s own per-agent stage-profiler attribution already
+        resolves for this exact attempt -- threaded through here verbatim,
+        never re-derived, and stored on the record via memory.py's new
+        optional `producing_agent_profile` field. Reporting only: nothing in
+        this method (or anywhere else in this pass) consumes that field to
+        change dispatch/routing/scoring."""
         gate_ids = {gid for gid, _, _ in STAGE_GATES.get(stage, [])}
         if "experience_knowledge_gate" not in gate_ids:
             return
@@ -1818,6 +1829,7 @@ class DVHarness:
             "source_knowledge_id": block.get("knowledge_id"),
             "protocol": self._engineering_record_protocol(resolved_protocol,
                                                           block.get("protocol")),
+            "producing_agent_profile": producing_agent_profile,
         }
         # Deliberately do NOT set record["memory_id"] from knowledge_id:
         # MemoryStore.add() uses it verbatim as a filename component with no
@@ -2287,6 +2299,100 @@ class DVHarness:
             "next_best_action": next_actions,
         }
 
+    def _record_agent_escalation_signal(self, stage: str, step_inference: Dict[str, Any],
+                                         context_path: Optional[str] = None
+                                         ) -> Optional[Dict[str, Any]]:
+        """Records a real, AGENT-FACING inference.build_deeper_investigation_
+        signal() entry (agent_self_escalation gap-close, 2026-09-07) whenever
+        THIS attempt's own real score_confidence() result --
+        step_inference["confidence_detail"], the exact dict
+        _react_step_inference() just computed one call above -- lands on LOW.
+
+        Deliberately NOT a question_queue.py record, and this is a structural
+        fact about this method, not merely a claim: it never imports or calls
+        anything in question_queue.py, never files or answers a question,
+        and never blocks a stage or changes ss["status"]/routing in any way.
+        It is a fact about THIS agent's OWN mid-investigation confidence,
+        appended to the real "agent_escalation_signals" Blackboard topic
+        (Blackboard.append_agent_escalation_signal(), the same {"items": [...]}
+        append-only shape debug_loop_history already uses) for a caller/graph
+        orchestrator to read -- via a real node.blackboard_read declaration,
+        exactly like every other topic there -- and decide, entirely on its
+        own initiative, whether to fan out further agents. Recording it never
+        itself dispatches anything; see inference.py's own module comment for
+        this section and its ESCALATION_SIGNAL_DISCLOSURE, carried verbatim
+        onto every recorded entry.
+
+        Returns None (no signal recorded) whenever confidence_detail is
+        missing/malformed or the real level is not LOW -- the identical
+        "an absent finding is a real answer, not an error" convention this
+        project already applies elsewhere, never a fabricated escalation.
+
+        Best-effort, mirroring every sibling `_record_*` method in this file:
+        a recording failure must never turn an already-computed, already-
+        persisted react_reasoning_step into a crash."""
+        try:
+            confidence_detail = step_inference.get("confidence_detail") if isinstance(step_inference, dict) else None
+            if not isinstance(confidence_detail, dict):
+                return None
+            signal = build_deeper_investigation_signal(
+                confidence_detail, stage=stage, context_path=context_path,
+                gap=step_inference.get("gap"))
+            if signal is None:
+                return None
+            registry = self.blackboard.append_agent_escalation_signal(signal, source=stage)
+            self.store.event({"ts": now(), "event": "AGENT_ESCALATION_SIGNAL_RECORDED",
+                              "stage": stage, "signal": signal["signal"],
+                              "sequence_number": registry["items"][-1]["sequence_number"]})
+            return registry
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "event": "AGENT_ESCALATION_SIGNAL_RECORD_FAILED",
+                                  "stage": stage, "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+            return None
+
+    def _file_low_confidence_human_checkpoint(self, stage: str, step_inference: Dict[str, Any],
+                                                context_path: Optional[str] = None
+                                                ) -> Optional[Dict[str, Any]]:
+        """Files the real, HUMAN-FACING counterpart to
+        `_record_agent_escalation_signal()` immediately above (gap-close
+        2026-09-07, no-human-facing-preaction-low-confidence-checkpoint) --
+        see `dv_harness.low_confidence_human_checkpoint` for the full
+        design. Reuses the SAME `step_inference` this attempt already
+        computed one call above; never recomputes confidence.
+
+        Unlike the agent-facing signal, this files a real, persisted,
+        Tier-3 BLOCKING `question_queue.py` record (only when this
+        attempt's own real `score_confidence()` result lands LOW) carrying
+        the full rendered Hypothesis -> Evidence -> Confidence -> Gap
+        reasoning chain, so a human reviewing the queue sees WHY before
+        answering "proceed?". Idempotent on question_key across retries of
+        the same stage/evidence/gap -- see that module's own docstring.
+
+        Best-effort, mirroring every sibling `_record_*`/`_file_*` method
+        in this file: a filing failure must never turn an already-computed,
+        already-persisted react_reasoning_step into a crash."""
+        try:
+            from . import low_confidence_human_checkpoint as _lchc
+            from .question_queue import QuestionQueueStore
+            store = QuestionQueueStore(self.root, blackboard=self.blackboard)
+            record = _lchc.file_low_confidence_checkpoint(
+                store, stage, step_inference, context_path=context_path)
+            if record is not None:
+                self.store.event({"ts": now(), "event": "LOW_CONFIDENCE_HUMAN_CHECKPOINT_FILED",
+                                  "stage": stage, "question_id": record.get("id"),
+                                  "status": record.get("status")})
+            return record
+        except Exception as exc:
+            try:
+                self.store.event({"ts": now(), "event": "LOW_CONFIDENCE_HUMAN_CHECKPOINT_FILE_FAILED",
+                                  "stage": stage, "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+            return None
+
     def _score_root_cause_confidence(self, stage: str, evidence_blocks: dict,
                                       verdict: str = "PASS") -> None:
         """Wires dv_harness/inference.py's score_confidence/identify_gap/
@@ -2658,7 +2764,8 @@ class DVHarness:
         self.store.event({"ts": now(), "stage": stage, "event": "COVERAGE_HISTORY_SAMPLE_APPENDED",
                            "percent": percent})
 
-    def _promote_project_topology_knowledge(self, stage: str, evidence_blocks: dict) -> None:
+    def _promote_project_topology_knowledge(self, stage: str, evidence_blocks: dict,
+                                             producing_agent_profile: Optional[str] = None) -> None:
         """Closed-loop wiring (Task 9, 2026-08-31 poster-gap-closing round 2):
         a PASS verdict on PROJECT_MODEL's project_model_topology_completeness_gate
         means that gate script (tools/verification_flow/project_model_topology_
@@ -2693,6 +2800,10 @@ class DVHarness:
             "dv_readiness": block.get("dv_readiness"),
             "dv_readiness_basis": block.get("dv_readiness_basis"),
             "architecture_evidence_db_ref": block.get("architecture_evidence_db_ref"),
+            # producing_agent_profile (2026-09-07, agent_profile_track_record
+            # gap-close): same `_resolved_agent_name` value run_stage() already
+            # threads through every sibling _promote_*/_record_* method below.
+            "producing_agent_profile": producing_agent_profile,
         }
         try:
             promotion = route_and_store(self.root, record, cfg=self.cfg)
@@ -2703,7 +2814,8 @@ class DVHarness:
             "promotion": promotion,
         })
 
-    def _promote_vplan_summary_knowledge(self, stage: str, evidence_blocks: dict) -> None:
+    def _promote_vplan_summary_knowledge(self, stage: str, evidence_blocks: dict,
+                                          producing_agent_profile: Optional[str] = None) -> None:
         """Closed-loop wiring (memory-engine-schema-completion audit,
         2026-09-01): the audit found Project Memory populated by exactly ONE
         gate (_promote_project_topology_knowledge above, keyed on
@@ -2760,6 +2872,7 @@ class DVHarness:
             "vplan_suites": suites,
             "vplan_pattern_dir": block.get("pattern_dir"),
             "vplan_dispatcher_file": block.get("dispatcher_file"),
+            "producing_agent_profile": producing_agent_profile,
         }
         try:
             promotion = route_and_store(self.root, record, cfg=self.cfg)
@@ -2771,7 +2884,8 @@ class DVHarness:
         })
 
     def _promote_verified_fix_knowledge(self, stage: str, evidence_blocks: dict,
-                                        resolved_protocol: Optional[str] = None) -> None:
+                                        resolved_protocol: Optional[str] = None,
+                                        producing_agent_profile: Optional[str] = None) -> None:
         """Closed-loop wiring (verified-fix-auto-promotion gap-closing pass,
         2026-09-02): DEBUG_WORKFLOW_GUIDE.md's Knowledge Center push
         previously only ever happened two ways -- _promote_experience_knowledge
@@ -2917,6 +3031,10 @@ class DVHarness:
             "tb_sha": self.state.tb_version,
             "test": closure_block.get("target_testcase_id"),
             "result": closure_block.get("target_post_fix_result"),
+            # producing_agent_profile (2026-09-07, agent_profile_track_record
+            # gap-close): same `_resolved_agent_name` value threaded through
+            # every sibling _promote_*/_record_* method in this class.
+            "producing_agent_profile": producing_agent_profile,
         }
         # The four real inference.score_confidence() inputs this run's own
         # gate-validated root_cause evidence produces. Computed ONCE and used
@@ -3000,7 +3118,8 @@ class DVHarness:
         return org_eval
 
     def _record_debug_attempt_job_memory(self, stage: str, ss: Dict[str, Any],
-                                          failure_signature: Optional[Dict[str, Any]]) -> None:
+                                          failure_signature: Optional[Dict[str, Any]],
+                                          producing_agent_profile: Optional[str] = None) -> None:
         """Phase 10 AFTER-hook, FAIL/PARTIAL branch (2026-09-03,
         obsidian-memory-debugflow task): "on FAIL, update Job Memory only (no
         promotion)". A debug attempt (FAILURE_RECOVERY triage, or a RE_AUDIT
@@ -3032,6 +3151,7 @@ class DVHarness:
             "failure_signature": failure_signature,
             "protocol": (failure_signature or {}).get("protocol"),
             "git_sha": self.state.git_sha,
+            "producing_agent_profile": producing_agent_profile,
         }
         try:
             promotion = route_and_store(self.root, record, cfg=self.cfg)
@@ -3531,6 +3651,65 @@ class DVHarness:
                                "topics": reports})
         return reports
 
+    def _detect_rca_branch_contradictions(self, contributing: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Genuine cross-branch CONTRADICTION detection at RCA_JOIN's real
+        fan-out synthesis point (2026-09-07, fanout_contradiction_detection
+        gap close). Additive only: this never changes
+        multi_agent_consensus_count / _root_cause_confidence_inputs() above,
+        which stay driven solely by RCA_JOIN's own gate-verified
+        root_cause_evidence_gate block, and it never touches the existing
+        consensus-count accumulation. It adds one new, distinct signal this
+        harness never computed before -- do two (or more) of the REAL,
+        independently-dispatched RCA_G1 branches, each blind to the others by
+        the fan-out's own design (gates.py's own comment: "the fan-out's
+        whole point is that they run blind to each other"), name two
+        DIFFERENT root causes for the SAME finding? That is a genuinely
+        different fact from a branch simply finding nothing (uncorroborated,
+        never flagged here) -- CLAUDE.md's Evidence Truth Rule requires a
+        real disagreement be surfaced, not silently folded into (or out of)
+        a consensus count either way.
+
+        `contributing` is the SAME real contributing_agents list computed
+        immediately above from real graph + real state facts (branch really
+        PASSed, branch's own topic really written) -- never recomputed a
+        second, possibly-disagreeing way. Every claim compared here is read
+        straight off that branch's OWN real Blackboard topic, never from
+        RCA_JOIN's own agent text, the identical anti-fabrication discipline
+        contributing_agents itself already applies. Specifically, it reads
+        the root_cause_evidence_gate-shaped block a branch agent MAY have
+        emitted even though RCA_RTL_EVIDENCE/RCA_LOG_EVIDENCE/
+        RCA_VIP_SPEC_EVIDENCE are deliberately NOT gated on it (gates.py's
+        own comment: gating a branch on this gate would push it to invent
+        the very cross-domain conclusion RCA_JOIN exists to make -- reading
+        it here, never requiring it, respects that boundary).
+
+        Comparison is real-text-exact (case/whitespace-normalized), never
+        fuzzy -- the same "never fuzzy" discipline this project's other
+        evidence-matching code already applies throughout, so a flagged
+        contradiction is always two REAL, textually distinct claims, never a
+        guessed semantic difference."""
+        branch_claims: List[Dict[str, Any]] = []
+        for c in contributing:
+            payload = self.blackboard.read(c["stage"])
+            bb_value = payload.get("value") if isinstance(payload, dict) else None
+            branch_evidence = bb_value.get("evidence") if isinstance(bb_value, dict) else None
+            rc_block = (branch_evidence.get("root_cause_evidence_gate")
+                        if isinstance(branch_evidence, dict) else None)
+            claim = rc_block.get("root_cause") if isinstance(rc_block, dict) else None
+            if isinstance(claim, str) and claim.strip():
+                branch_claims.append({"stage": c["stage"], "agent": c["agent"],
+                                       "root_cause": claim.strip()})
+        distinct = {c["root_cause"].lower() for c in branch_claims}
+        contradiction_detected = len(distinct) >= 2
+        return {
+            "contradiction_detected": contradiction_detected,
+            "conflicting_claims": branch_claims if contradiction_detected else [],
+            "basis": ("two or more RCA_G1 branches independently reported different "
+                      "real root_cause claims for this finding" if contradiction_detected else
+                      "no two distinct real root_cause claims found among the branches "
+                      "that actually contributed evidence (uncorroborated, not contradictory)"),
+        }
+
     def _write_blackboard_from_evidence(self, node, stage: str, evidence: dict, result) -> None:
         writer = STAGE_BLACKBOARD_WRITERS.get(stage)
         values = writer(evidence, stage, result) if writer else _bb_generic_fallback(node, evidence, stage, result)
@@ -3552,6 +3731,8 @@ class DVHarness:
                     contributing.append({"stage": branch.id, "agent": branch.agent,
                                           "evidence_topics": list(branch.blackboard_write)})
             values["rca_evidence_fusion"]["contributing_agents"] = contributing
+            values["rca_evidence_fusion"]["branch_contradiction_flag"] = (
+                self._detect_rca_branch_contradictions(contributing))
         for topic in node.blackboard_write:
             value = values.get(topic, {"evidence": evidence, "summary": (result.text or "")[:2000]})
             if topic == "findings":
@@ -4505,16 +4686,20 @@ class DVHarness:
                         ((route_info or {}).get("protocol_decision") or {}).get("protocol")
                     )
                     self._promote_experience_knowledge(stage, evidence_blocks,
-                                                       resolved_protocol=_promotion_protocol)
+                                                       resolved_protocol=_promotion_protocol,
+                                                       producing_agent_profile=_resolved_agent_name)
                     self._persist_subsystem_registry_entry(stage, evidence_blocks)
                     self._export_signoff_bundle(stage)
                     self._compose_soc_environment_files(stage, evidence_blocks)
                     self._score_root_cause_confidence(stage, evidence_blocks, verdict)
                     self._append_coverage_history_sample(stage, evidence_blocks)
-                    self._promote_project_topology_knowledge(stage, evidence_blocks)
-                    self._promote_vplan_summary_knowledge(stage, evidence_blocks)
+                    self._promote_project_topology_knowledge(
+                        stage, evidence_blocks, producing_agent_profile=_resolved_agent_name)
+                    self._promote_vplan_summary_knowledge(
+                        stage, evidence_blocks, producing_agent_profile=_resolved_agent_name)
                     self._promote_verified_fix_knowledge(stage, evidence_blocks,
-                                                         resolved_protocol=_promotion_protocol)
+                                                         resolved_protocol=_promotion_protocol,
+                                                         producing_agent_profile=_resolved_agent_name)
                     self._arm_rca_evidence_fanout(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness
@@ -4662,7 +4847,9 @@ class DVHarness:
         #          debug attempt.
         if (stage in (Stage.FAILURE_RECOVERY.value, Stage.RE_AUDIT.value)
                 and ss["status"] in (Status.FAIL.value, Status.PARTIAL.value)):
-            self._record_debug_attempt_job_memory(stage, ss, debug_failure_signature)
+            self._record_debug_attempt_job_memory(
+                stage, ss, debug_failure_signature,
+                producing_agent_profile=_resolved_agent_name)
             # ---- 3d. CROSS-LOOP COUPLING (2026-09-05): the record just
             #          written is the newest piece of the evidence this reads.
             #          Files a CapabilityEvolutionCandidate at DISCOVERED when
@@ -4697,6 +4884,26 @@ class DVHarness:
                 adapter_ok=bool(result.ok),
                 reroute_target=react_reroute_target,
                 protocol=((route_info or {}).get("protocol_decision") or {}).get("protocol"),
+            )
+            # Agent self-escalation signal (2026-09-07, agent_self_escalation
+            # gap-close): best-effort, over the SAME step_inference just
+            # computed above -- see _record_agent_escalation_signal()'s own
+            # docstring for why this is deliberately NOT a question_queue.py
+            # record and never itself dispatches anything.
+            self._record_agent_escalation_signal(
+                stage, step_inference,
+                context_path=f".dv-harness/react/{stage}/iteration_{ss['attempts']:03d}.json",
+            )
+            # Human-facing low-confidence checkpoint (gap-close 2026-09-07,
+            # no-human-facing-preaction-low-confidence-checkpoint): the
+            # missing HUMAN counterpart to the agent-facing signal recorded
+            # one call above -- see dv_harness.low_confidence_human_
+            # checkpoint's own module docstring for the full design and its
+            # disclosed residual (filing a real Tier-3 blocking question
+            # here does not, by itself, halt this stage mid-call).
+            self._file_low_confidence_human_checkpoint(
+                stage, step_inference,
+                context_path=f".dv-harness/react/{stage}/iteration_{ss['attempts']:03d}.json",
             )
             # action carries route/protocol_decision/environment_mode_decision
             # (2026-09-03, gap-close-engine cleanup): these three resolver

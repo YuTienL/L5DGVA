@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "task_class_priority": ["SIGNOFF_FAMILY", "EXECUTION", "ANALYSIS"],
+  "resources": {},
+  "default_reason": "No max_concurrent cap is declared for any resource by default -- mirroring loop_budget.py's own 'no dimension is bounded by default, and every one says why' rule. Measured license/queue capacity (from resource_orchestrator.capacity_from_checks()) remains the sole bound until a project declares a real administrative cap here, with a real reason, per resource name (e.g. 'eda_license', 'lsf_queue:<queue-name>'). The task_class_priority ordering itself is not a numeric claim -- it restates the ordering loop_budget.DEFAULT_CRITICAL_STAGES already implies (signoff-family work outranks other execution-layer work, which outranks pure analysis work that consumes no scarce resource) as an explicit, project-editable policy rather than a hardcoded Python list."
+}

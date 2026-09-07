@@ -255,6 +255,97 @@ def test_end_to_end_assembly_surfaces_join_any_risk_via_top_level_config():
     assert "JOIN_ANY_WITH_BRANCH_FW" in risk_names
 
 
+# ===========================================================================
+# branch_fw-vs-branch_a* relative launch-timing window
+# (pattern-architecture SKILL.md section 1; audit-confirmed gap the coarse
+# ordinal declared_order check cannot see -- both the correct and the buggy
+# timing read as the identical "dut before fw_policy" ordinal pair)
+# ===========================================================================
+
+def test_fw_launch_timing_not_supplied_adds_no_risk():
+    # Backward compatibility: omitting the new keyword must not change any
+    # existing caller's result at all.
+    result = pia.validate_layer_ordering(list(pia.DEFAULT_LAYER_ORDER))
+    assert result["risks"] == []
+
+
+def test_fw_launch_timing_concurrent_with_dut_start_is_clean():
+    result = pia.validate_layer_ordering(
+        list(pia.DEFAULT_LAYER_ORDER),
+        fw_launch_timing=pia.FW_TIMING_CONCURRENT_WITH_DUT_START,
+    )
+    assert result["risks"] == []
+
+
+def test_fw_launch_timing_after_dut_completion_is_named_risk():
+    result = pia.validate_layer_ordering(
+        list(pia.DEFAULT_LAYER_ORDER),
+        fw_launch_timing=pia.FW_TIMING_AFTER_DUT_COMPLETION,
+    )
+    # The ordinal order itself is still fine -- this is a genuinely
+    # independent, finer-grained finding the ordinal check cannot express.
+    assert result["status"] == pia.ORDER_STATUS_PASS
+    risk_names = {r["risk"] for r in result["risks"]}
+    assert "FW_LAUNCHED_AFTER_DUT_COMPLETION" in risk_names
+
+
+def test_fw_launch_timing_unknown_is_flagged_honestly_not_guessed():
+    result = pia.validate_layer_ordering(
+        list(pia.DEFAULT_LAYER_ORDER), fw_launch_timing=pia.FW_TIMING_UNKNOWN,
+    )
+    risk_names = {r["risk"] for r in result["risks"]}
+    assert "FW_LAUNCH_TIMING_UNKNOWN" in risk_names
+    # Never conflated with the confirmed-buggy finding.
+    assert "FW_LAUNCHED_AFTER_DUT_COMPLETION" not in risk_names
+
+
+def test_fw_launch_timing_unrecognized_value_is_flagged_conservatively():
+    result = pia.validate_layer_ordering(
+        list(pia.DEFAULT_LAYER_ORDER), fw_launch_timing="sometime_probably",
+    )
+    risk_names = {r["risk"] for r in result["risks"]}
+    assert "FW_LAUNCH_TIMING_UNRECOGNIZED_VALUE" in risk_names
+
+
+def test_fw_launch_timing_contradicts_declared_absent_branch_fw():
+    result = pia.validate_layer_ordering(
+        list(pia.DEFAULT_LAYER_ORDER),
+        fw_launch_timing=pia.FW_TIMING_AFTER_DUT_COMPLETION,
+        branch_fw_present=False,
+    )
+    risk_names = {r["risk"] for r in result["risks"]}
+    assert "FW_LAUNCH_TIMING_CONTRADICTS_ABSENT_BRANCH_FW" in risk_names
+    # The contradiction is reported instead of the (now-meaningless) timing
+    # finding, never both stacked on top of each other.
+    assert "FW_LAUNCHED_AFTER_DUT_COMPLETION" not in risk_names
+
+
+def test_fw_launch_timing_combines_with_a_real_declared_order_deviation():
+    # The two checks are genuinely independent: a real FW_POLICY_AFTER_VIP
+    # ordinal deviation and a real fine-grained timing-window finding must
+    # both surface together, neither masking the other.
+    result = pia.validate_layer_ordering(
+        ["global", "dut", "vip", "fw_policy", "check"],
+        fw_launch_timing=pia.FW_TIMING_AFTER_DUT_COMPLETION,
+    )
+    assert result["status"] == pia.ORDER_STATUS_DEVIATION_RISK
+    risk_names = {r["risk"] for r in result["risks"]}
+    assert "FW_POLICY_AFTER_VIP" in risk_names
+    assert "FW_LAUNCHED_AFTER_DUT_COMPLETION" in risk_names
+
+
+def test_end_to_end_assembly_surfaces_fw_launch_timing_risk_via_top_level_config():
+    cfg = {
+        "items": _real_scenario_items(),
+        "fw_policy_commands": ["FW_SERVICE_LOOP_ARM_ALL_PORTS"],
+        "fw_launch_timing": pia.FW_TIMING_AFTER_DUT_COMPLETION,
+    }
+    pir = pia.assemble_pattern_ir(cfg)
+    assert pir.branch_fw_present is True
+    risk_names = {r["risk"] for r in pir.ordering_risks}
+    assert "FW_LAUNCHED_AFTER_DUT_COMPLETION" in risk_names
+
+
 def test_branch_index_suffixed_layer_names_normalize_to_canonical():
     assert pia._canonical_layer("branch_a0") == pia.LAYER_DUT
     assert pia._canonical_layer("branch_b1") == pia.LAYER_VIP

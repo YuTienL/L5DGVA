@@ -204,7 +204,7 @@ python -m dv_harness.memory_cli --project-root . reindex
 ### Organizational Memory has no local file store, by design
 
 Unlike the other 4 tiers, `OrganizationalMemoryStore.add()` writes straight
-to the shared Knowledge Center (`memory.py:942-975`) — there is no
+to the shared Knowledge Center (`memory.py:1117-1149`) — there is no
 `.dv-harness/memory/organizational/*.json`. The Vault write-through still
 happens locally (a human-browsable copy), but the tier's actual backing
 store IS the cross-user Knowledge Center, because organizational knowledge
@@ -258,7 +258,7 @@ a record across this boundary. Three independent, all-required gates:
    `confirmation_count` (with `last_confirmed_at` /
    `last_confirmation_evidence`) is **integrity-owned**: `MemoryStore.add()`
    discards whatever the record body carries and restores the on-disk value
-   (`_apply_confirmation_integrity()`, `memory.py:706`), so only
+   (`_apply_confirmation_integrity()`, `memory.py:210`), so only
    `MemoryGC.confirm()` — which passes `_confirmation_write=True` — can
    advance it. Before 2026-09-04 these were plain `setdefault`s, so a single
    creation event carrying `{"confirmation_count": 2}` was written through

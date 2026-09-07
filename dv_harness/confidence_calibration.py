@@ -54,7 +54,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .inference import CONFIDENCE_LEVELS, identify_gap, next_best_action
+from .inference import CONFIDENCE_LEVELS, identify_gap, next_best_action, score_confidence
 from .memory import MEMORY_LEVELS, MemoryStore
 from .memory_router import ENGINEERING_ADMISSION_CONFIDENCE_LEVELS
 
@@ -278,7 +278,320 @@ def assert_tier_sources_resolvable() -> Dict[str, str]:
     return dict(TIER_DEFINITION_SOURCE)
 
 
+# ---------------------------------------------------------------------------
+# CONFIDENCE-CALIBRATION FEEDBACK LOOP (2026-09-07): when a real
+# INVERTED_TIER_ORDER finding shows a tier this harness treats as stronger
+# holding up LESS often than one it treats as weaker, that is evidence about
+# `inference.score_confidence()`'s own formula constants -- the weights and
+# thresholds that decide which tier a given amount of evidence earns. Nothing
+# in this module may act on that evidence directly: a weight/threshold change
+# is a production-scoring change like any other, and CLAUDE.md's Evidence
+# Truth Rule requires it be PROPOSED as data for a human to approve through
+# this project's existing controlled-experiment machinery, never applied on
+# the strength of a calibration report alone.
+#
+# `draft_reweighted_confidence_proposal()` (below) is the propose-as-data
+# half: it reads calibrate()'s own real findings and drafts which of
+# score_confidence()'s constants a cited inversion would tighten, by how much,
+# and why -- pure data, no write anywhere. `dv_harness/capability_evolution.py`'s
+# `build_confidence_reweight_candidate()` / `file_confidence_reweight_candidate()`
+# carry that proposal, verbatim, into a DISCOVERED capability-evolution
+# candidate through the EXISTING build_candidate()/persist_candidate() path --
+# the same one `file_repeated_failure_candidate()` already uses for its own
+# auto-filed findings, reused rather than duplicated. From there, the ONLY path
+# to production is section 61's own LEVEL B -> LEVEL C: a human moves the
+# candidate to EXPERIMENT_APPROVED, `capability_evolution.
+# run_controlled_experiment()` measures the proposed constants against the
+# real, unmodified ones inside an isolated fixture's TREATMENT copy (never this
+# live project, never inference.py's real file), `run_shadow_replication()`
+# clears a real stability window, and only then may a human approve it into
+# HUMAN_APPROVED/PRODUCTION. This module never calls any of that -- it only
+# drafts the data those functions consume.
+
+#: `inference.score_confidence()`'s OWN current formula constants, kept here
+#: purely as DATA a re-weighting proposal can diff against -- never a second
+#: copy the live formula could silently drift from.
+#: `assert_score_confidence_constants_current()` (called at import, below)
+#: re-derives every one of these by PROBING the real, unmodified
+#: `score_confidence()` with controlled synthetic inputs and raises the moment
+#: a future edit to that function's formula disagrees with what is recorded
+#: here -- the same "a description must never silently drift from the code it
+#: describes" discipline `TIER_DEFINITION_SOURCE` already applies one level up.
+SCORE_CONFIDENCE_CONSTANTS: Dict[str, int] = {
+    "source_weight": 2,
+    "source_cap": 3,
+    "evidence_verified_bonus": 2,
+    "counter_evidence_penalty": 3,
+    "consensus_bonus": 2,
+    "consensus_threshold": 2,
+    "high_threshold": 6,
+    "medium_threshold": 3,
+}
+
+#: Which of SCORE_CONFIDENCE_CONSTANTS a real INVERTED_TIER_ORDER finding can
+#: defensibly propose tightening: the ENTRY BAR for the tier the finding names
+#: as `higher_tier` (over-ranked relative to its own real track record).
+#: Deliberately excludes every WEIGHT constant (source_weight/source_cap/
+#: evidence_verified_bonus/counter_evidence_penalty/consensus_bonus/
+#: consensus_threshold) -- those decide what counts as corroborating or
+#: refuting evidence at all, and reweighting one of those on the strength of a
+#: tier-ordering finding alone would be changing what evidence MEANS rather
+#: than how hard a tier is to reach with it. CONFIRMED is deliberately absent:
+#: it is minted by `memory.MemoryConsolidator.from_closed_finding()` behind a
+#: procedural bar (single_sim PASS + regression PASS/NOT_REQUIRED + re-audit
+#: CLEAN), never by this formula, so no re-weighting of `score_confidence()`
+#: can move it.
+TIER_ENTRY_THRESHOLD_CONSTANT: Dict[str, str] = {
+    "HIGH": "high_threshold",
+    "MEDIUM": "medium_threshold",
+}
+
+REWEIGHT_PROPOSAL_NO_INVERSION = "NO_INVERSION_FOUND"
+REWEIGHT_PROPOSAL_DRAFTED = "PROPOSAL_DRAFTED"
+REWEIGHT_PROPOSAL_NOT_ADDRESSABLE = "INVERSIONS_NOT_ADDRESSABLE_BY_SCORE_CONFIDENCE"
+
+
+def assert_score_confidence_constants_current() -> None:
+    """Prove SCORE_CONFIDENCE_CONSTANTS still describes the REAL, live
+    `inference.score_confidence()` -- by calling it with controlled synthetic
+    inputs, never by reading or duplicating its source. A future edit to that
+    function's formula fails this loudly at import, the same way a tier
+    renamed out of `inference.CONFIDENCE_LEVELS` already fails
+    `assert_tiers_cover_inference_levels()` loudly.
+
+    Called at import (below), so drift is a loud import error rather than a
+    re-weighting proposal silently drafted against a formula this harness no
+    longer runs.
+    """
+    c = SCORE_CONFIDENCE_CONSTANTS
+    base = score_confidence(0, False, 0, 0)
+
+    one_more = score_confidence(1, False, 0, 0)
+    if one_more["score"] - base["score"] != c["source_weight"]:
+        raise AssertionError(
+            f"SCORE_CONFIDENCE_CONSTANTS['source_weight']={c['source_weight']} no longer "
+            f"matches inference.score_confidence(): one more independent source moved the "
+            f"score by {one_more['score'] - base['score']}"
+        )
+
+    at_cap = score_confidence(c["source_cap"], False, 0, 0)
+    beyond_cap = score_confidence(c["source_cap"] + 3, False, 0, 0)
+    if beyond_cap["score"] != at_cap["score"]:
+        raise AssertionError(
+            f"SCORE_CONFIDENCE_CONSTANTS['source_cap']={c['source_cap']} no longer caps "
+            "inference.score_confidence(): more independent sources than the cap still "
+            "moved the score"
+        )
+    if c["source_cap"] > 0:
+        below_cap = score_confidence(c["source_cap"] - 1, False, 0, 0)
+        if below_cap["score"] == at_cap["score"]:
+            raise AssertionError(
+                f"SCORE_CONFIDENCE_CONSTANTS['source_cap']={c['source_cap']} is no longer "
+                "the real cap: one fewer independent source did not move the score"
+            )
+
+    with_evidence = score_confidence(0, True, 0, 0)
+    if with_evidence["score"] - base["score"] != c["evidence_verified_bonus"]:
+        raise AssertionError(
+            f"SCORE_CONFIDENCE_CONSTANTS['evidence_verified_bonus']="
+            f"{c['evidence_verified_bonus']} no longer matches inference.score_confidence()"
+        )
+
+    with_counter = score_confidence(0, False, 1, 0)
+    if base["score"] - with_counter["score"] != c["counter_evidence_penalty"]:
+        raise AssertionError(
+            f"SCORE_CONFIDENCE_CONSTANTS['counter_evidence_penalty']="
+            f"{c['counter_evidence_penalty']} no longer matches inference.score_confidence()"
+        )
+
+    at_threshold = score_confidence(0, False, 0, c["consensus_threshold"])
+    if at_threshold["score"] - base["score"] != c["consensus_bonus"]:
+        raise AssertionError(
+            f"SCORE_CONFIDENCE_CONSTANTS['consensus_bonus']={c['consensus_bonus']} no "
+            "longer matches inference.score_confidence() at consensus_threshold="
+            f"{c['consensus_threshold']}"
+        )
+    if c["consensus_threshold"] > 0:
+        below_threshold = score_confidence(0, False, 0, c["consensus_threshold"] - 1)
+        if below_threshold["score"] - base["score"] == c["consensus_bonus"]:
+            raise AssertionError(
+                f"SCORE_CONFIDENCE_CONSTANTS['consensus_threshold']="
+                f"{c['consensus_threshold']} is no longer the real threshold: one fewer "
+                "consensus count still granted the bonus"
+            )
+
+    # Level thresholds, checked against a representative sample of the real
+    # achievable score space rather than one hand-picked value -- every
+    # sampled (sources, evidence, consensus) combination's real LEVEL must
+    # match what high_threshold/medium_threshold predict for its real SCORE.
+    for sources in range(0, c["source_cap"] + 3):
+        for evidence_verified in (False, True):
+            for consensus in range(0, c["consensus_threshold"] + 3):
+                result = score_confidence(sources, evidence_verified, 0, consensus)
+                score = result["score"]
+                expected = ("HIGH" if score >= c["high_threshold"]
+                            else "MEDIUM" if score >= c["medium_threshold"] else "LOW")
+                if result["level"] != expected:
+                    raise AssertionError(
+                        "SCORE_CONFIDENCE_CONSTANTS' thresholds no longer describe "
+                        f"inference.score_confidence(): inputs (independent_sources_count="
+                        f"{sources}, evidence_refs_verified={evidence_verified}, "
+                        f"multi_agent_consensus_count={consensus}) scored {score} and "
+                        f"returned level {result['level']!r}, but high_threshold="
+                        f"{c['high_threshold']}/medium_threshold={c['medium_threshold']} "
+                        f"predict {expected!r}"
+                    )
+
+
+def _inversion_citation(finding: Dict[str, Any]) -> Dict[str, Any]:
+    """The subset of one FINDING_INVERTED_TIER_ORDER finding a re-weighting
+    proposal cites -- copied verbatim from calibrate()'s own real output, never
+    re-derived, so a proposal can never disagree with the report it was drafted
+    from."""
+    return {
+        "higher_tier": finding["higher_tier"],
+        "lower_tier": finding["lower_tier"],
+        "higher_observed_reliability": finding["higher_observed_reliability"],
+        "lower_observed_reliability": finding["lower_observed_reliability"],
+        "margin": finding["margin"],
+        "detail": finding["detail"],
+    }
+
+
+def draft_reweighted_confidence_proposal(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Draft a re-weighted `score_confidence()` formula-constants PROPOSAL from
+    a real `calibrate()` report -- DATA only, never a live code change.
+
+    Reads `report["findings"]` for real FINDING_INVERTED_TIER_ORDER entries.
+    With none, there is no tier-ordering evidence to propose a re-weighting
+    from, and this function says so rather than drafting a proposal against
+    nothing (`REWEIGHT_PROPOSAL_NO_INVERSION`). With findings that name only
+    CONFIRMED as the over-ranked tier, no re-weighting of `score_confidence()`
+    can address them (CONFIRMED is not produced by this formula at all), and
+    this function says that too rather than drafting a proposal that cannot
+    possibly fix what it cites (`REWEIGHT_PROPOSAL_NOT_ADDRESSABLE`).
+
+    Otherwise (`REWEIGHT_PROPOSAL_DRAFTED`): for every addressable finding,
+    tighten the ENTRY BAR for its `higher_tier` by exactly one
+    `source_weight` -- the smallest increment `score_confidence()`'s own
+    formula can express -- citing the real finding that motivated it. Two or
+    more findings naming the same tier tighten that one bar ONCE, by the
+    single largest bump any one of them alone would call for, never summed:
+    piling up bumps from several findings that all point at the same
+    constant would manufacture a bigger change than any one of them is
+    individually evidence for.
+
+    This function performs no write of any kind, to `inference.py` or
+    anywhere else. Carrying the result to a human for approval is
+    `dv_harness/capability_evolution.py`'s `build_confidence_reweight_candidate()`
+    / `file_confidence_reweight_candidate()`'s job, not this one's.
+    """
+    assert_score_confidence_constants_current()
+    current = dict(SCORE_CONFIDENCE_CONSTANTS)
+
+    findings = [f for f in (report.get("findings") or [])
+                if f.get("kind") == FINDING_INVERTED_TIER_ORDER]
+    if not findings:
+        return {
+            "status": REWEIGHT_PROPOSAL_NO_INVERSION,
+            "reason": (
+                "calibrate()'s report carries no INVERTED_TIER_ORDER finding; there is no "
+                "real tier-ordering evidence to propose a score_confidence() re-weighting "
+                "from."
+            ),
+            "current_constants": current,
+            "proposed_constants": None,
+            "changed_constants": [],
+            "addressable_inversions": [],
+            "unaddressable_inversions": [],
+        }
+
+    addressable = [f for f in findings if f["higher_tier"] in TIER_ENTRY_THRESHOLD_CONSTANT]
+    unaddressable = [f for f in findings if f["higher_tier"] not in TIER_ENTRY_THRESHOLD_CONSTANT]
+
+    if not addressable:
+        return {
+            "status": REWEIGHT_PROPOSAL_NOT_ADDRESSABLE,
+            "reason": (
+                f"{len(findings)} INVERTED_TIER_ORDER finding(s) exist, but every one names "
+                "CONFIRMED as the over-ranked tier. CONFIRMED is minted by "
+                "memory.MemoryConsolidator.from_closed_finding() behind a procedural bar "
+                "(single_sim PASS + regression PASS/NOT_REQUIRED + re-audit CLEAN), never by "
+                "inference.score_confidence()'s formula, so no re-weighting of this formula's "
+                "constants can address it."
+            ),
+            "current_constants": current,
+            "proposed_constants": None,
+            "changed_constants": [],
+            "addressable_inversions": [],
+            "unaddressable_inversions": [_inversion_citation(f) for f in unaddressable],
+        }
+
+    bump = SCORE_CONFIDENCE_CONSTANTS["source_weight"]
+    changed: Dict[str, Dict[str, Any]] = {}
+    for finding in addressable:
+        const_name = TIER_ENTRY_THRESHOLD_CONSTANT[finding["higher_tier"]]
+        entry = changed.setdefault(const_name, {
+            "constant": const_name,
+            "current_value": current[const_name],
+            "proposed_value": current[const_name],
+            "cited_findings": [],
+        })
+        entry["cited_findings"].append(_inversion_citation(finding))
+        entry["proposed_value"] = max(entry["proposed_value"], current[const_name] + bump)
+
+    proposed = dict(current)
+    for const_name, entry in changed.items():
+        proposed[const_name] = entry["proposed_value"]
+
+    # MEDIUM's own bar must stay strictly below HIGH's -- a real, disclosed
+    # clamp rather than a silent numeric fudge, since this pair is the only
+    # place two proposed values could otherwise cross.
+    if proposed["medium_threshold"] >= proposed["high_threshold"]:
+        clamped_value = max(proposed["high_threshold"] - bump, 0)
+        entry = changed.setdefault("medium_threshold", {
+            "constant": "medium_threshold",
+            "current_value": current["medium_threshold"],
+            "proposed_value": current["medium_threshold"],
+            "cited_findings": [],
+        })
+        entry["proposed_value"] = clamped_value
+        entry["clamped"] = True
+        proposed["medium_threshold"] = clamped_value
+
+    for entry in changed.values():
+        entry["delta"] = entry["proposed_value"] - entry["current_value"]
+
+    return {
+        "status": REWEIGHT_PROPOSAL_DRAFTED,
+        "reason": (
+            f"{len(addressable)} of {len(findings)} INVERTED_TIER_ORDER finding(s) name a "
+            "score_confidence()-governed tier (HIGH or MEDIUM) as over-ranked relative to "
+            "its own real track record."
+        ),
+        "current_constants": current,
+        "proposed_constants": proposed,
+        "changed_constants": sorted(changed.values(), key=lambda e: e["constant"]),
+        "addressable_inversions": [_inversion_citation(f) for f in addressable],
+        "unaddressable_inversions": [_inversion_citation(f) for f in unaddressable],
+        "disclosure": (
+            "DATA PROPOSAL ONLY. Nothing in dv_harness/confidence_calibration.py, and no "
+            "call in this function, writes to inference.py or changes score_confidence()'s "
+            "live formula. Per this project's Evidence Truth Rule, a weight/threshold "
+            "change proposal must never be applied directly to production scoring -- it "
+            "must be routed through capability_evolution.py's existing controlled-"
+            "experiment/shadow-validation machinery "
+            "(capability_evolution.build_confidence_reweight_candidate() / "
+            "file_confidence_reweight_candidate(), then a human running "
+            "capability_evolution.run_controlled_experiment() and "
+            "run_shadow_replication() over an isolated fixture) for a human to approve, "
+            "exactly like every other production-behavior change in this project."
+        ),
+    }
+
+
 assert_tiers_cover_inference_levels()
+assert_score_confidence_constants_current()
 
 
 def normalize_tier(value: Any) -> Optional[str]:

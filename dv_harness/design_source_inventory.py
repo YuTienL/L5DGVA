@@ -78,6 +78,33 @@ per-source snapshot table (e.g. from `evidence_db.py`) plugs in by populating
 `recorded_hash` from that table's last-known hash for the same `source_id`,
 and `superseded_by` from whatever marks a source retired -- no change to this
 module needed.
+
+PER-FACT-TYPE CONTEXTUAL AUTHORITY (2026-09-06/07, additive, contextual_source_
+precedence gap-close). Before this addition, a row's `authority` field always
+came from `source_authority.authority_source()` alone -- the SAME fixed
+9-level order for every row, whatever kind of fact that row was actually
+about. `dv_harness/contextual_source_precedence.py` is a small, ADDITIVE
+override layer over that base order (never a second copy of it, never an edit
+to `source_authority.py`) letting precedence vary BY FACT TYPE -- e.g. a
+documented timing budget (controller doc/programming guide/datasheet) may
+legitimately outrank an RTL comment restating it, while a functional-behavior
+fact keeps the base order (RTL still wins) unchanged. `SourceEntry` gained one
+new, optional field, `fact_type` (default `None`), threaded through
+`evaluate_source()` into `_resolve_authority()`. Passing no `fact_type` is
+BYTE-IDENTICAL to every pre-existing caller's behaviour -- the `authority`
+dict's `rank`/`id`/`doc_phrase`/`status`/`reason` fields are unchanged, and it
+gains a new `authority_order_used: None` key. Passing a real `fact_type` with
+a declared override (currently only `"timing"`) reports the CONTEXTUAL rank
+for that fact type instead of the base rank, with `authority_order_used`
+naming which order actually decided it (`"PER_FACT_TYPE_OVERRIDE"` or
+`"BASE_AUTHORITY_ORDER"`) -- never left for a reader to infer. A `fact_type`
+with no declared override (including "functional", never overridden on
+purpose -- RTL already outranks doc there in the base order) falls straight
+through to the base order, proven byte-identical to the no-`fact_type` case in
+that module's own test suite. This module still never re-derives or arbitrates
+anything `source_authority.py` itself owns -- it only asks that module's own
+override layer which rank applies, exactly as it already asked
+`authority_source()` directly before this change.
 """
 from __future__ import annotations
 
@@ -89,6 +116,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
 from . import source_authority
+from . import contextual_source_precedence
 
 __all__ = [
     "DesignSourceInventoryError",
@@ -315,12 +343,19 @@ class SourceEntry:
     `recorded_hash` / `superseded_by` are the caller-supplied "what did I
     record last time" inputs the freshness derivation compares against; see
     module docstring's FRESHNESS/STALENESS section.
+
+    `fact_type`, if given, selects a per-fact-type contextual authority
+    reordering via `contextual_source_precedence.py` (see module docstring's
+    "PER-FACT-TYPE CONTEXTUAL AUTHORITY" section) -- left `None` (the
+    default) for byte-identical-to-before behaviour: the base
+    `source_authority.AUTHORITY_ORDER` rank, unchanged.
     """
     source_id: str
     type: str
     path: Optional[str] = None
     version: Optional[str] = None
     authority_hint: Optional[str] = None
+    fact_type: Optional[str] = None
     recorded_hash: Optional[str] = None
     superseded_by: Optional[str] = None
     detail: dict = field(default_factory=dict)
@@ -335,13 +370,24 @@ class SourceEntry:
                                               {"source_id": self.source_id})
 
 
-def _resolve_authority(authority_hint: Optional[str]) -> dict:
+def _resolve_authority(authority_hint: Optional[str],
+                        fact_type: Optional[str] = None) -> dict:
     """Authority-tier lookup, by IMPORT ONLY against `source_authority`'s
-    public API (`authority_source`) -- never a re-derived ranking."""
+    public API (`authority_source`) -- never a re-derived ranking.
+
+    `fact_type=None` (every pre-existing caller) is byte-identical to this
+    function's behaviour before the per-fact-type override layer existed:
+    `rank`/`id`/`doc_phrase`/`status`/`reason` unchanged, plus a new
+    `authority_order_used: None` key. A real `fact_type` routes the rank
+    through `contextual_source_precedence.contextual_rank()` instead of
+    `source_authority.authority_rank()` directly -- that function itself
+    falls back to the base order for any fact_type with no declared
+    override, so this is additive, never a second ranking scheme.
+    """
     if not authority_hint:
         return {
             "status": AUTHORITY_NOT_APPLICABLE, "rank": None, "id": None,
-            "doc_phrase": None,
+            "doc_phrase": None, "authority_order_used": None,
             "reason": ("NO_AUTHORITY_HINT_SUPPLIED: discovery order and authority "
                        "order are different axes (see module docstring) -- not every "
                        "design-source kind has to sit on the conflict-resolution axis "
@@ -352,13 +398,17 @@ def _resolve_authority(authority_hint: Optional[str]) -> dict:
     except source_authority.SourceAuthorityError as exc:
         return {
             "status": AUTHORITY_NOT_APPLICABLE, "rank": None, "id": None,
-            "doc_phrase": None,
+            "doc_phrase": None, "authority_order_used": None,
             "reason": (f"UNRESOLVED_AUTHORITY_HINT: source_authority has no tier for "
                        f"{authority_hint!r} ({exc.reason})"),
         }
+    if fact_type:
+        rank, order_used = contextual_source_precedence.contextual_rank(src.id, fact_type)
+    else:
+        rank, order_used = src.rank, None
     return {
-        "status": AUTHORITY_RESOLVED, "rank": src.rank, "id": src.id,
-        "doc_phrase": src.doc_phrase, "reason": None,
+        "status": AUTHORITY_RESOLVED, "rank": rank, "id": src.id,
+        "doc_phrase": src.doc_phrase, "authority_order_used": order_used, "reason": None,
     }
 
 
@@ -399,7 +449,7 @@ def evaluate_source(entry: Union[SourceEntry, dict], *,
         entry = SourceEntry(**dict(entry))
     hash_result = compute_source_hash(entry.path)
     status, reasons = _resolve_status(entry, hash_result)
-    authority = _resolve_authority(entry.authority_hint)
+    authority = _resolve_authority(entry.authority_hint, entry.fact_type)
     last_checked = (now or datetime.now(timezone.utc)).isoformat()
     return {
         "source_id": entry.source_id,

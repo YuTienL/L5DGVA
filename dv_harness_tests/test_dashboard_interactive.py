@@ -787,7 +787,16 @@ def test_audit_endpoint_reports_events_and_control_state_with_limit():
         assert status == 200
         assert data["limit"] == 1
         assert len(data["events"]) == 1
-        assert data["events"][0]["cmd"] == "approve"  # most recent
+        # Structured GUI Audit Log (dv_harness/gui_audit_log.py, 2026-09-06):
+        # every POST /api/control dispatch now writes a SECOND, richer event
+        # right after commands.py's own generic {"cmd": "approve", ...} one,
+        # through the SAME StateStore.event()/events.jsonl this generic
+        # `events` list already tails -- so the single most-recent raw event
+        # is that structured record, not the generic one. The generic
+        # "approve" cmd event is still on disk one line earlier, as asserted
+        # in the unlimited /api/audit read above (`"approve" in cmds`).
+        assert data["events"][0]["type"] == "GUI_AUDIT_RECORD"
+        assert data["events"][0]["action"] == "APPROVE"
     finally:
         shutil.rmtree(tmp)
 

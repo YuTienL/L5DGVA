@@ -1561,13 +1561,322 @@ def evaluate_all_freezes(root: Path, *, head: str = "HEAD",
             "freezes": results, "evaluated_at": _now_iso()}
 
 
+# --- freeze acceptance: revalidation is a human act, made real -------------
+#
+# WIRING_GAP_EXISTING_MODULE closure (signoff-freeze-revalidation-explicitly-
+# undone): evaluate_freeze_invalidation() computes a real INVALIDATED/VALID/
+# UNKNOWN verdict, but its own docstring's "REVALIDATION is a human act" had
+# no code behind it -- confirmed by direct grep before writing this: no
+# cmd_revalidate (or equivalent) verb existed anywhere in commands.py, and no
+# persisted record let a human accept an INVALIDATED/UNKNOWN freeze.
+#
+# REUSE OVER REINVENT: this is the SAME digest-pinned-Control-Plane-approval
+# pattern change_blast_radius.py already established one gate over (its own
+# module docstring: "the pin is what stops it degrading into a permanent
+# blanket bypass, since growing the change moves the digest and retires the
+# approval") -- never a second approval mechanism, never a second store.
+# SIGNOFF_FREEZE_REVALIDATION_STAGE is a FOURTH APPROVAL_ONLY_STAGES key
+# (commands.py), so `dv-harness approve SIGNOFF_FREEZE_REVALIDATION --note
+# '<freeze_id> <digest>: ...' --reviewer-id ... --reviewer-confidence ...` is
+# real, already-reachable CLI usage the instant this key is registered there
+# -- and the SAME generic "APPROVE" /api/control command dashboard.py already
+# dispatches for any stage string, so no dashboard.py dispatch branch or
+# gui_action_safety.py declaration is needed either: "APPROVE" is declared
+# there ONCE, generically, not once per approvable stage.
+#
+# "Trigger an attributed re-freeze" is deliberately NOT a second verb here.
+# freeze_signoff_baseline(root, ..., frozen_by=...) -- already reachable via
+# `... freeze --frozen-by <human>` and via collect_signoff_bundle()'s own
+# automatic freeze on a real SIGNOFF_GATE_VERIFIED bundle -- IS that action: a
+# fresh freeze_id/frozen_at/frozen_by is exactly a new, attributed re-freeze.
+# A second function that only re-called freeze_signoff_baseline() would be
+# the parallel mechanism this project forbids.
+#
+# THIS MODULE STILL TOUCHES NO APPROVAL MACHINERY
+# (test_the_freeze_module_touches_no_approval_machinery, pre-existing):
+# every function below is a PURE function over an `approval` record the
+# CALLER already fetched from the real Human Control Plane store -- this file
+# imports no approval class at all, anywhere. The real fetch-then-judge
+# composition lives in commands.py (cmd_signoff_freeze_acceptance_status),
+# the established location in this codebase for combining a domain module's
+# real output with a Control-Plane approval read (see cmd_research_approve,
+# which composes capability_evolution.py the identical way).
+SIGNOFF_FREEZE_REVALIDATION_STAGE = "SIGNOFF_FREEZE_REVALIDATION"
+
+
+def freeze_acceptance_digest(evaluation: Dict[str, Any]) -> str:
+    """A real, deterministic digest over exactly what a human is being asked
+    to accept: the freeze_id plus every real finding's own (code, field,
+    severity) -- never the WHOLE evaluation, whose `current_baseline`/
+    `impact_analysis` carry volatile, non-decision-bearing detail (a fresh
+    git HEAD sha on every call) that would make the digest churn for no real
+    reason. The SAME finding set on the SAME freeze produces the SAME digest;
+    a NEW divergence (a finding this evaluation did not have) moves it --
+    the identical anti-blanket-approval property change_blast_radius.py's own
+    `_digest()` already established for a change's own touched-file set."""
+    freeze_id = str(evaluation.get("freeze_id") or "")
+    material = [f"freeze_id:{freeze_id}"]
+    for f in sorted(evaluation.get("findings") or [],
+                     key=lambda f: (str(f.get("code")), str(f.get("field")), str(f.get("severity")))):
+        material.append(f"{f.get('code')}:{f.get('field')}:{f.get('severity')}")
+    return hashlib.sha256("\n".join(material).encode("utf-8")).hexdigest()[:16]
+
+
+def freeze_acceptance_command(freeze_id: str, digest: str) -> str:
+    """The exact, real command a human runs to accept this evaluation --
+    returned so a caller (a block message, a dashboard note) can show it
+    copy-pasteable rather than describing an approval that has to be looked
+    up, mirroring change_blast_radius.confirmation_command()."""
+    return (f"dv-harness approve {SIGNOFF_FREEZE_REVALIDATION_STAGE} "
+            f"--note 'freeze {freeze_id} {digest}: <why this is acceptable>' "
+            f"--reviewer-id <you> --reviewer-confidence HIGH|MEDIUM|LOW")
+
+
+def freeze_acceptance_status(evaluation: Dict[str, Any],
+                              approval: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Is `approval` -- a record the CALLER already fetched via the real
+    Control Plane's `get_approval(SIGNOFF_FREEZE_REVALIDATION_STAGE)`, or
+    `None` when there is none on file -- a real, PINNED human acceptance of
+    THIS exact evaluation (this freeze_id, and this exact finding set)? This
+    function itself never reads `.dv-harness/control.json` or imports the
+    approval class; it only judges a record it is handed, preserving this
+    module's own "touches no approval machinery" boundary.
+
+    An approval whose note does not carry both the freeze_id and the digest
+    is reported PRESENT BUT NOT MATCHING rather than silently ignored or
+    silently trusted: "a human accepted a DIFFERENT divergence of this
+    freeze" is a different, more useful fact than either "accepted" or
+    "never reviewed at all"."""
+    freeze_id = str(evaluation.get("freeze_id") or "")
+    digest = freeze_acceptance_digest(evaluation)
+    if not approval:
+        return {"accepted": False, "state": "ABSENT", "digest": digest, "approval": None}
+    note = str(approval.get("note") or "")
+    if freeze_id and freeze_id in note and digest in note:
+        return {"accepted": True, "state": "PINNED_MATCH", "digest": digest, "approval": approval}
+    return {"accepted": False, "state": "PRESENT_BUT_NOT_MATCHING", "digest": digest,
+            "approval": approval}
+
+
+def evaluate_freeze_invalidation_with_acceptance(root: Path, frozen: Dict[str, Any], *,
+                                                  approval: Optional[Dict[str, Any]] = None,
+                                                  head: str = "HEAD",
+                                                  diff: Optional[Dict[str, Any]] = None,
+                                                  declared: Optional[Dict[str, Any]] = None,
+                                                  current_baseline: Optional[Dict[str, Any]] = None
+                                                  ) -> Dict[str, Any]:
+    """evaluate_freeze_invalidation()'s own report, additively carrying one new
+    "acceptance" block naming whether `approval` -- a real Control-Plane
+    approval record the CALLER already fetched for
+    SIGNOFF_FREEZE_REVALIDATION_STAGE, or `None` -- covers THIS EXACT
+    INVALIDATED/UNKNOWN verdict. Never changes evaluate_freeze_invalidation()'s
+    own status/findings/severity computation, which stays the single,
+    unmodified source of truth for whether a freeze is still good; this
+    function itself fetches nothing from that store (see freeze_acceptance_
+    status's own docstring for why).
+
+    A VALID evaluation needs no acceptance at all (`required: False`); only a
+    real INVALIDATED/UNKNOWN evaluation is checked against `approval`."""
+    report = evaluate_freeze_invalidation(root, frozen, head=head, diff=diff,
+                                           declared=declared, current_baseline=current_baseline)
+    if report["status"] == FREEZE_VALID:
+        report["acceptance"] = {"required": False, "accepted": True, "state": "NOT_REQUIRED",
+                                 "digest": None, "approval": None, "command": None}
+        return report
+    status = freeze_acceptance_status(report, approval)
+    report["acceptance"] = {
+        "required": True, **status,
+        "command": freeze_acceptance_command(str(report.get("freeze_id") or ""), status["digest"]),
+    }
+    return report
+
+
+# --- Second-reviewer status for the CURRENT signoff evidence bundle --------
+#
+# Real gap this closes (2026-09-07, item id
+# "no-second-reviewer-mechanism-at-signoff-scope"): before
+# `add_bundle_review()`/`get_bundle_reviews()` (the Human Control Plane's
+# own store, control_plane.py) existed, nothing recorded MORE THAN ONE
+# reviewer against a signoff evidence bundle at all -- the Control Plane's
+# own `approvals[stage]` holds exactly one entry, overwritten on every
+# fresh `approve()` call (archived, never lost -- but never concurrent
+# either), and this module's own freeze/manifest machinery carried no
+# reviewer concept whatsoever. `add_decision_cosign()` (question_queue.py)
+# is the nearest-looking real mechanism and was deliberately not extended:
+# it co-signs one already-recorded Tier-3 INTAKE DECISION keyed on that
+# decision's own exact answer text, a different object entirely from a
+# whole signoff evidence bundle.
+#
+# THIS MODULE STILL TOUCHES NO APPROVAL MACHINERY
+# (test_the_freeze_module_touches_no_approval_machinery, pre-existing,
+# see SIGNOFF_FREEZE_REVALIDATION_STAGE's own comment above): the function
+# below is a PURE function over a `reviews` list the CALLER already
+# fetched from the real Human Control Plane's own store (control_plane.py's
+# `get_bundle_reviews("SIGNOFF", bundle_hash)` method) -- this file imports
+# no Control-Plane class anywhere, exactly like `freeze_acceptance_status()`
+# one section above.
+
+def bundle_second_review_status(manifest: List[Dict[str, Any]],
+                                 reviews: Optional[Sequence[Dict[str, Any]]],
+                                 approver_id: Optional[str] = None) -> Dict[str, Any]:
+    """Is this signoff bundle's REAL, current content -- `compute_bundle_hash
+    (manifest)`, the SAME real content-derived hash `freeze_signoff_baseline()`
+    and `evaluate_freeze_invalidation()` already use -- covered by a real,
+    independent SECOND human reviewer?
+
+    `manifest` is a real `collect_signoff_bundle()` (or `load_freeze()`)
+    result's own `"manifest"` list. `reviews` is the list the caller
+    already fetched via the real Human Control Plane store's own
+    `get_bundle_reviews("SIGNOFF", compute_bundle_hash(manifest))` method
+    (or `None`/`[]` when nobody has ever reviewed anything for this
+    project yet). `approver_id`, when supplied, excludes that one person's
+    own review from counting as the required SECOND, independent one --
+    mirroring that same store's `has_independent_bundle_review()` method's
+    own same-person rule.
+
+    A review whose own recorded `bundle_hash` does not equal the
+    manifest's CURRENT hash is reported separately as a STALE reviewer
+    (the bundle changed content since that human looked at it) rather than
+    silently trusted or silently dropped -- mirroring
+    `freeze_acceptance_status()`'s own PRESENT_BUT_NOT_MATCHING
+    distinction one section above."""
+    bundle_hash = compute_bundle_hash(manifest)
+    reviews = list(reviews or [])
+    current = [r for r in reviews if str(r.get("bundle_hash") or "").strip() == bundle_hash]
+    stale = [r for r in reviews if str(r.get("bundle_hash") or "").strip() != bundle_hash]
+    if not current:
+        return {"independently_reviewed": False,
+                "state": "PRESENT_BUT_STALE" if stale else "ABSENT",
+                "bundle_hash": bundle_hash, "reviewers": [],
+                "stale_reviewers": [r.get("reviewer_id") for r in stale]}
+    approver_norm = str(approver_id).strip().casefold() if approver_id else None
+    independent = [r for r in current
+                   if approver_norm is None
+                   or str(r.get("reviewer_id") or "").strip().casefold() != approver_norm]
+    return {
+        "independently_reviewed": bool(independent),
+        "state": "REVIEWED" if independent else "SAME_PERSON_ONLY",
+        "bundle_hash": bundle_hash,
+        "reviewers": [r.get("reviewer_id") for r in current],
+        "stale_reviewers": [r.get("reviewer_id") for r in stale],
+    }
+
+
+# --- Filing a clarifying question tied to ONE signoff-stage evidence item ---
+#
+# Gap (2026-09-07): a human reviewing THIS module's own real output -- a
+# collect_signoff_bundle() manifest artifact, an evaluate_freeze_invalidation()
+# finding -- had no reachable path to file a NEW clarifying question tied to
+# that one specific evidence item. Confirmed by direct grep before writing
+# this: this file had zero add_question()/build_multiple_choice_question()
+# call sites. Both functions below are REUSE, not a second filing mechanism:
+# each locates and cites ONE real item of this module's own already-produced
+# evidence, then hands that citation straight to question_queue.py's new
+# file_signoff_evidence_question() (added the same day, for exactly this gap)
+# -- the tier classification, routing, dedup and persistence are all that
+# function's, unmodified.
+
+def file_bundle_artifact_question(store, manifest: List[Dict[str, Any]], artifact: str, *,
+                                    question: str, options: Any, recommendation: str,
+                                    raised_by: Optional[str] = None,
+                                    now: Optional[Any] = None) -> Dict[str, Any]:
+    """File a real, new Tier-3 question tied to ONE named artifact entry of an
+    already-produced `collect_signoff_bundle()` manifest -- e.g. "why is
+    tb_source reported absent" or "is this content_sha256 the revision we
+    actually reviewed". `manifest` is that call's own real `"manifest"` list
+    (or a `load_freeze()`/on-disk `manifest.json`'s own `"manifest"` list --
+    the identical shape either way).
+
+    `store` may be a real `question_queue.QuestionQueueStore` or a project
+    root (str/Path) to build one from, mirroring `source_authority.
+    escalate_conflict()`'s own convenience.
+
+    Raises KeyError naming every real artifact on the manifest when
+    `artifact` does not match one of them -- this function never files a
+    question about an evidence item that was not actually produced."""
+    entry = next((m for m in manifest if m.get("artifact") == artifact), None)
+    if entry is None:
+        known = sorted({str(m.get("artifact")) for m in manifest})
+        raise KeyError(f"no manifest artifact named {artifact!r}; known artifacts: {known}")
+    evidence_path = f"manifest.json#manifest[artifact={artifact!r}]"
+    summary = (
+        f"signoff bundle artifact {artifact!r}: present={entry.get('present')!r}, "
+        f"bundled_path={entry.get('bundled_path')!r}, "
+        f"content_sha256={entry.get('content_sha256')!r}"
+    )
+    from . import question_queue
+    qstore = (question_queue.QuestionQueueStore(Path(store))
+              if isinstance(store, (str, Path)) else store)
+    return question_queue.file_signoff_evidence_question(
+        qstore,
+        evidence_kind=question_queue.SIGNOFF_EVIDENCE_KIND_BUNDLE,
+        evidence_path=evidence_path,
+        evidence_summary=summary,
+        question=question,
+        options=options,
+        recommendation=recommendation,
+        raised_by=raised_by,
+        now=now,
+    )
+
+
+def file_freeze_finding_question(store, evaluation: Dict[str, Any], finding_index: int, *,
+                                   question: str, options: Any, recommendation: str,
+                                   raised_by: Optional[str] = None,
+                                   now: Optional[Any] = None) -> Dict[str, Any]:
+    """File a real, new Tier-3 question tied to ONE named finding of an
+    already-computed `evaluate_freeze_invalidation()` report -- e.g. a real
+    `BASELINE_FIELD_CHANGED`/`POST_FREEZE_MATERIAL_CHANGE` finding a human
+    wants a second opinion on before trusting the frozen baseline further.
+
+    `store` may be a real `question_queue.QuestionQueueStore` or a project
+    root (str/Path) to build one from.
+
+    Raises IndexError naming the real finding count when `finding_index` is
+    out of range -- this function never files a question about a finding
+    that does not actually exist on this report."""
+    findings = evaluation.get("findings") or []
+    if not (0 <= finding_index < len(findings)):
+        raise IndexError(
+            f"finding_index {finding_index} out of range for {len(findings)} real "
+            f"finding(s) on this evaluate_freeze_invalidation() report"
+        )
+    finding = findings[finding_index]
+    freeze_id = evaluation.get("freeze_id")
+    evidence_path = f"freeze:{freeze_id}#findings[{finding_index}].code={finding.get('code')}"
+    summary = (
+        f"freeze {freeze_id!r} finding {finding.get('code')!r} "
+        f"(severity={finding.get('severity')!r}, field={finding.get('field')!r}): "
+        f"{finding.get('detail')!r}"
+    )
+    from . import question_queue
+    qstore = (question_queue.QuestionQueueStore(Path(store))
+              if isinstance(store, (str, Path)) else store)
+    return question_queue.file_signoff_evidence_question(
+        qstore,
+        evidence_kind=question_queue.SIGNOFF_EVIDENCE_KIND_BUNDLE,
+        evidence_path=evidence_path,
+        evidence_summary=summary,
+        question=question,
+        options=options,
+        recommendation=recommendation,
+        raised_by=raised_by,
+        now=now,
+    )
+
+
 # --- front door ------------------------------------------------------------
 
 def execute_verb(argv: Sequence[str]) -> int:
     """Shared implementation for `python -m dv_harness.signoff_export <verb>`.
     Exit 0 clear, 1 a real finding (a freeze is INVALIDATED), 2 nothing to
     report / usage refusal. A reporting signal, never an approval signal in
-    either direction: no verb here approves, revalidates or runs anything."""
+    either direction: no verb here approves, revalidates or runs anything.
+    Acceptance-status reporting (whether a real human has accepted an
+    INVALIDATED/UNKNOWN evaluation) lives in commands.cmd_signoff_freeze_
+    acceptance_status(), which needs a real Control-Plane approval read this
+    module deliberately never performs -- see SIGNOFF_FREEZE_REVALIDATION_
+    STAGE's own comment above."""
     import argparse
     ap = argparse.ArgumentParser(
         prog="signoff-export",
@@ -1616,6 +1925,14 @@ def execute_verb(argv: Sequence[str]) -> int:
                            ("freeze_id", "frozen_at", "frozen_by", "bundle_kind",
                             "bundle_hash")} for r in rows], indent=2))
         return 0 if rows else 2
+
+    # `accept`/acceptance-status is deliberately NOT a verb here: reporting it
+    # honestly needs a real Control-Plane get_approval() read, and this module
+    # touches no approval machinery at all (test_the_freeze_module_touches_
+    # no_approval_machinery) -- see commands.cmd_signoff_freeze_acceptance_
+    # status(), which composes THIS module's pure functions with a real
+    # Control-Plane fetch, the established location in this codebase for that
+    # combination.
 
     # status
     if args.freeze_id:

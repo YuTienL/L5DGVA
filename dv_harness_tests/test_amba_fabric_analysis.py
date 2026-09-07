@@ -32,6 +32,8 @@ from dv_harness import amba_fabric_discovery as afd
 from dv_harness import amba_port_registry as apr
 from dv_harness.amba_fabric_analysis import (
     ADDRESS_MAP_COMPLETE,
+    ADDRESS_MAP_ESCALATION_FILED,
+    ADDRESS_MAP_ESCALATION_TOO_MANY_SIDES,
     ADDRESS_MAP_SOURCE_ADDRESS_MAP_PACKAGE,
     ADDRESS_MAP_SOURCE_CSR_DEFINITIONS,
     ADDRESS_MAP_SOURCE_FIRMWARE_HEADERS,
@@ -75,6 +77,7 @@ from dv_harness.amba_fabric_analysis import (
     build_fabric_scaling_plan,
     cross_check_fabric_address_map,
     derived_reset_active_low,
+    escalate_address_map_conflicts,
     measure_clock_period,
     render_address_map_cross_check_report,
     render_clock_reset_domain_report,
@@ -690,6 +693,117 @@ def test_the_cross_check_feeds_the_existing_topology_projection(registry):
         address_width=32, assume_full_connectivity=True)
     assert {r["owner"] for r in topology["address_map"]} == set(slaves)
     assert set(topology["slaves"]) == set(slaves)
+
+
+# ---------------------------------------------------------------------------
+# AMBA-23 escalation: `resolve_conflict()` is only half of "mandatory, not
+# advisory" -- these prove the other half, `escalate_conflict()`, actually
+# fires (source_authority.py:45-53 confirmed by direct reading; the two
+# real conflict call sites here previously computed a verdict and never
+# escalated it).
+# ---------------------------------------------------------------------------
+
+def test_a_resolved_conflict_escalates_into_the_real_question_queue(tmp_path):
+    """RESOLVED_BY_AUTHORITY still names a real disagreement -- the decoder
+    wins for EXECUTION, but the losing document may be stale, and only a
+    human can say. Mirrors
+    test_a_document_disagreeing_with_the_decoder_loses_but_is_not_blocking,
+    with `question_store=` added."""
+    from dv_harness import question_queue
+
+    store = question_queue.QuestionQueueStore(tmp_path)
+    result = cross_check_fabric_address_map(
+        [_claim(ADDRESS_MAP_SOURCE_RTL_DECODER, DDR, 0, HALF),
+         _claim(ADDRESS_MAP_SOURCE_MEMORY_MAP_DOCUMENT, DDR, 0x1000, HALF,
+                "docs/memory_map.md:3"),
+         _claim(ADDRESS_MAP_SOURCE_RTL_DECODER, PERIPH, HALF, HALF)],
+        [DDR, PERIPH], address_width=32, question_store=store)
+    ddr = next(r for r in result.regions if r.owner == DDR)
+    assert ddr.status == ADDRESS_REGION_RESOLVED_BY_AUTHORITY
+    assert len(result.escalations) == 1
+    esc = result.escalations[0]
+    assert esc["owner"] == DDR
+    assert esc["escalation_status"] == ADDRESS_MAP_ESCALATION_FILED
+    assert esc["question_id"]
+    questions = store.list_questions()
+    assert len(questions) == 1
+    assert questions[0]["id"] == esc["question_id"]
+    assert "docs/memory_map.md:3" in questions[0]["question"]
+    assert "rtl/decoder.sv:42" in questions[0]["question"]
+    # Idempotent: re-running over the identical cross-check must not grow
+    # the queue, the same discipline every sibling escalator already has.
+    result_again = cross_check_fabric_address_map(
+        [_claim(ADDRESS_MAP_SOURCE_RTL_DECODER, DDR, 0, HALF),
+         _claim(ADDRESS_MAP_SOURCE_MEMORY_MAP_DOCUMENT, DDR, 0x1000, HALF,
+                "docs/memory_map.md:3"),
+         _claim(ADDRESS_MAP_SOURCE_RTL_DECODER, PERIPH, HALF, HALF)],
+        [DDR, PERIPH], address_width=32, question_store=store)
+    assert len(result_again.escalations) == 1
+    assert len(store.list_questions()) == 1
+
+
+def test_an_undecidable_conflict_escalates_into_the_real_question_queue(tmp_path):
+    """Both sides are the same authority tier -- resolve_conflict() cannot
+    pick a winner, so escalation is the ONLY real answer. Mirrors
+    test_two_equal_authority_sources_that_disagree_are_undecidable, with
+    `question_store=` added."""
+    from dv_harness import question_queue
+
+    store = question_queue.QuestionQueueStore(tmp_path)
+    result = cross_check_fabric_address_map(
+        [_claim(ADDRESS_MAP_SOURCE_ADDRESS_MAP_PACKAGE, DDR, 0, HALF, "pkg/a.sv:1"),
+         _claim(ADDRESS_MAP_SOURCE_CSR_DEFINITIONS, DDR, 0x2000, HALF, "csr/a.json:1")],
+        [DDR], address_width=32, question_store=store)
+    ddr = result.regions[0]
+    assert ddr.status == ADDRESS_REGION_UNDECIDABLE
+    assert len(result.escalations) == 1
+    esc = result.escalations[0]
+    assert esc["escalation_status"] == ADDRESS_MAP_ESCALATION_FILED
+    questions = store.list_questions()
+    assert len(questions) == 1
+    assert "pkg/a.sv:1" in questions[0]["question"]
+    assert "csr/a.json:1" in questions[0]["question"]
+
+
+def test_a_clean_agreeing_region_escalates_nothing(tmp_path):
+    """Negative control: AGREED regions never reach `authority_verdict` at
+    all, so a real `question_store` supplied to a cross-check that has
+    nothing to disagree about must file nothing."""
+    from dv_harness import question_queue
+
+    store = question_queue.QuestionQueueStore(tmp_path)
+    result = cross_check_fabric_address_map(
+        [_claim(ADDRESS_MAP_SOURCE_RTL_DECODER, DDR, 0, HALF),
+         _claim(ADDRESS_MAP_SOURCE_ADDRESS_MAP_PACKAGE, DDR, 0, HALF, "pkg/addr_map.sv:11")],
+        [DDR], address_width=32, question_store=store)
+    assert result.regions[0].status == ADDRESS_REGION_AGREED
+    assert result.escalations == []
+    assert store.list_questions() == []
+
+
+def test_a_region_with_more_than_three_evidence_sides_is_reported_not_crashed(tmp_path):
+    """Negative control: `escalate_conflict()`'s own schema allows only 2-3
+    pre-researched options. A region whose real evidence spans 4 distinct
+    sources must be REPORTED, never silently dropped and never allowed to
+    crash the whole escalation pass."""
+    from dv_harness import question_queue
+
+    store = question_queue.QuestionQueueStore(tmp_path)
+    crosscheck = cross_check_fabric_address_map(
+        [_claim(ADDRESS_MAP_SOURCE_RTL_DECODER, DDR, 0, HALF, "rtl/decoder.sv:1"),
+         _claim(ADDRESS_MAP_SOURCE_ADDRESS_MAP_PACKAGE, DDR, 0x1000, HALF, "pkg/a.sv:1"),
+         _claim(ADDRESS_MAP_SOURCE_CSR_DEFINITIONS, DDR, 0x2000, HALF, "csr/a.json:1"),
+         _claim(ADDRESS_MAP_SOURCE_MEMORY_MAP_DOCUMENT, DDR, 0x3000, HALF, "docs/mm.md:1")],
+        [DDR], address_width=32)
+    ddr = crosscheck.regions[0]
+    assert ddr.status == ADDRESS_REGION_RESOLVED_BY_AUTHORITY
+    assert len(ddr.authority_verdict["claims"]) == 4
+    escalations = escalate_address_map_conflicts(store, crosscheck)
+    assert len(escalations) == 1
+    assert escalations[0]["escalation_status"] == ADDRESS_MAP_ESCALATION_TOO_MANY_SIDES
+    assert escalations[0]["side_count"] == 4
+    # Refused, not filed -- the queue stays untouched.
+    assert store.list_questions() == []
 
 
 # ===========================================================================

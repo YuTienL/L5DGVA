@@ -26,10 +26,12 @@ import pytest
 
 from dv_harness.qualified_conclusion import (
     QualifiedConclusion,
+    RefutationAttempt,
     build_qualified_conclusion,
     InvalidGateVerdictError,
     InvalidConfidenceResultError,
     InvalidExecutionEvidenceError,
+    InvalidRefutationResultError,
     QUALIFYING_GATE_VERDICTS,
 )
 from dv_harness.inference import score_confidence
@@ -164,6 +166,128 @@ def test_empty_execution_evidence_yields_empty_hypothesis_and_refs():
     assert qc.hypothesis == ""
     assert qc.evidence_refs == []
     assert qc.is_qualified is True  # gate/confidence alone still drive qualification
+
+
+# --- Adversarial refutation pass (adversarial_refutation_pass task, ------
+# --- purely additive -- refutation_result/require_refutation_pass default
+# --- to values that reproduce every scenario above byte-for-byte) ----------
+
+def _refuted(**overrides) -> dict:
+    d = {"attempted": True, "refuted": True, "counter_evidence": ["rtl.sv:1"],
+         "rationale": "found a real contradiction"}
+    d.update(overrides)
+    return d
+
+
+def _not_refuted(**overrides) -> dict:
+    d = {"attempted": True, "refuted": False, "counter_evidence": [],
+         "rationale": "hypothesis withstands scrutiny"}
+    d.update(overrides)
+    return d
+
+
+def _never_attempted(**overrides) -> dict:
+    d = {"attempted": False, "refuted": False, "counter_evidence": [],
+         "rationale": "no valid verdict returned"}
+    d.update(overrides)
+    return d
+
+
+def test_default_omitted_refutation_args_reproduce_pre_existing_behavior_exactly():
+    # Byte-for-byte backward compatibility: every existing 2-positional-arg
+    # caller (engine.py's real call site included) must be unaffected.
+    qc_old = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE)
+    qc_new = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                         refutation_result=None, require_refutation_pass=False)
+    assert qc_old.is_qualified is qc_new.is_qualified is True
+    assert qc_new.refutation is None
+
+
+def test_confirmed_refutation_disqualifies_unconditionally_even_without_require_flag():
+    # The key safety property: real counter-evidence must never be silently
+    # outvoted by a high confidence score just because the caller never set
+    # require_refutation_pass=True.
+    qc = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                     refutation_result=_refuted())
+    assert qc.is_qualified is False
+    assert qc.refutation["refuted"] is True
+
+
+def test_confirmed_non_refutation_never_blocks_qualification_when_not_required():
+    qc = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                     refutation_result=_not_refuted())
+    assert qc.is_qualified is True
+    assert qc.refutation["refuted"] is False
+
+
+def test_require_refutation_pass_true_with_no_attempt_never_qualifies_never_errors():
+    # The "structurally forced" property: setting require_refutation_pass=True
+    # is NOT itself sufficient -- a real completed attempt must actually exist.
+    qc = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                     refutation_result=None, require_refutation_pass=True)
+    assert qc.is_qualified is False
+    assert qc.refutation is None
+
+
+def test_require_refutation_pass_true_with_a_never_attempted_result_never_qualifies():
+    # attempted=False (adapter failure / two unparseable replies) must never
+    # be silently treated as "the hypothesis was not refuted".
+    qc = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                     refutation_result=_never_attempted(),
+                                     require_refutation_pass=True)
+    assert qc.is_qualified is False
+
+
+def test_require_refutation_pass_true_with_a_confirmed_survival_qualifies():
+    qc = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                     refutation_result=_not_refuted(),
+                                     require_refutation_pass=True)
+    assert qc.is_qualified is True
+    assert qc.refutation["attempted"] is True
+
+
+def test_require_refutation_pass_true_with_a_confirmed_refutation_still_disqualifies():
+    qc = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                     refutation_result=_refuted(),
+                                     require_refutation_pass=True)
+    assert qc.is_qualified is False
+
+
+def test_gate_fail_still_disqualifies_even_with_a_confirmed_survival():
+    # The refutation pass is an ADDITIONAL requirement, never a substitute
+    # for the pre-existing gate-verdict/confidence composition.
+    qc = build_qualified_conclusion("GATE_FAIL", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                     refutation_result=_not_refuted(),
+                                     require_refutation_pass=True)
+    assert qc.is_qualified is False
+
+
+def test_refutation_attempt_dataclass_is_accepted_interchangeably_with_a_plain_dict():
+    ra = RefutationAttempt(attempted=True, refuted=False, counter_evidence=[],
+                            rationale="withstands scrutiny")
+    qc = build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                     refutation_result=ra, require_refutation_pass=True)
+    assert qc.is_qualified is True
+    assert qc.refutation == ra.as_dict()
+
+
+def test_malformed_refutation_result_raises_typed_error_missing_attempted_field():
+    with pytest.raises(InvalidRefutationResultError) as exc_info:
+        build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                    refutation_result={"refuted": False})
+    assert exc_info.value.reason == "MALFORMED_REFUTATION_RESULT"
+
+
+def test_malformed_refutation_result_raises_typed_error_non_bool_refuted_field():
+    with pytest.raises(InvalidRefutationResultError):
+        build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                    refutation_result={"attempted": True, "refuted": "no"})
+
+
+def test_malformed_refutation_result_raises_typed_error_non_dict():
+    with pytest.raises(InvalidRefutationResultError):
+        build_qualified_conclusion("PASS", _confidence("HIGH"), _EXECUTION_EVIDENCE,
+                                    refutation_result="not a dict")
 
 
 # --- Error paths: malformed caller input, never a silent wrong answer ------

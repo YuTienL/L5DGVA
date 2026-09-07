@@ -110,6 +110,7 @@
         "disabled_builtin_checks": { "type": "array" },
         "target_instance": { "type": ["string", "null"] },
         "mount_side": { "enum": ["PRE_BRIDGE", "POST_BRIDGE", null] },
+        "checker_domain": { "enum": ["REGISTER_CSR", "INTERRUPT", "DMA", "STATE", "TIMING", null] },
         "status": { "$ref": "#/$defs/status" },
         "confidence": { "$ref": "#/$defs/confidence" },
         "source_evidence": { "type": "array", "items": { "$ref": "#/$defs/source_evidence_entry" } }
@@ -160,7 +161,10 @@
           "enum": [
             "VIP_AFTER_BRIDGE", "CHECKER_WRONG_SIDE_OF_BRIDGE", "ASSERTION_WRONG_CLOCK_DOMAIN",
             "SCOREBOARD_INPUTS_NOT_COMPARABLE", "DUPLICATE_ACTIVE_VIP", "WRONG_RESET_DOMAIN",
-            "VIP_CHECKER_DUPLICATES_SVA", "SCOREBOARD_DUPLICATES_CHECKER", "DUPLICATE_SCOREBOARD_PATH"
+            "VIP_CHECKER_DUPLICATES_SVA", "SCOREBOARD_DUPLICATES_CHECKER", "DUPLICATE_SCOREBOARD_PATH",
+            "CSR_CHECKER_WRONG_TARGET_DOMAIN", "INTERRUPT_CHECKER_WRONG_TARGET_DOMAIN",
+            "DMA_CHECKER_WRONG_TARGET_DOMAIN", "STATE_CHECKER_WRONG_TARGET_DOMAIN",
+            "TIMING_CHECKER_WRONG_TARGET_DOMAIN"
           ]
         },
         "severity": { "enum": ["HIGH", "MEDIUM", "LOW"] },

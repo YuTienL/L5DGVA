@@ -85,6 +85,17 @@ runs no gate script, writes no state/blackboard/approval record, and holds
 no stage gate of its own. `evaluate_uvm_generation_ready()` only refuses or
 allows continuing to the next human/agent action; it starts no generation
 and approves nothing.
+
+`build_intake_state()` and `evaluate_uvm_generation_ready()` both accept an
+OPT-IN `store: Any = None` (2026-09-06). This is telemetry, not a new write
+path: when a caller passes a real `storage.StateStore`, the two real,
+already-computed results this module produces -- the joined `IntakeState`
+and the `UvmGenerationReadiness` verdict -- are ALSO recorded through
+`dv_harness.intake_events` into the same real `.dv-harness/events.jsonl`
+`dv-harness audit` already reads (the fixed 18-event INTAKE_* taxonomy,
+never a second audit file). Omitting `store` (the default) leaves both
+calls byte-for-byte identical to before this parameter existed; this module
+still mints no `.dv-harness/` tree of its own.
 """
 from __future__ import annotations
 
@@ -273,14 +284,23 @@ class UvmGenerationReadiness:
         return {"ready": self.ready, "blocking": self.blocking, "checked_at": self.checked_at}
 
 
-def evaluate_uvm_generation_ready(intake_state: IntakeState, *, now: Optional[str] = None) -> UvmGenerationReadiness:
+def evaluate_uvm_generation_ready(intake_state: IntakeState, *, now: Optional[str] = None,
+                                   store: Any = None) -> UvmGenerationReadiness:
     """UVM_GENERATION_READY: refuses (never silently proceeds) while ANY of
     `BLOCKING_CATEGORIES` -- DUT boundary, VIP unresolved, active-driver
     conflict, critical bind, build env, known-PASS test -- is unresolved.
 
     A category with no fields recorded at all is folded to MISSING by
     `IntakeState.category_status()` and therefore blocks here too: a
-    category this run never evaluated must never read as ready."""
+    category this run never evaluated must never read as ready.
+
+    `store` is the same opt-in `dv_harness.intake_events` wiring
+    `build_intake_state()` carries (see its own docstring): a real
+    `storage.StateStore` makes this call write exactly one of
+    `INTAKE_GENERATION_READY`/`INTAKE_GENERATION_BLOCKED` (best-effort;
+    omitting `store`, the default, leaves this call byte-for-byte identical
+    to before this parameter existed -- this module still writes no
+    state/blackboard/approval record of its own)."""
     blocking: Dict[str, dict] = {}
     for category in BLOCKING_CATEGORIES:
         status = intake_state.category_status(category)
@@ -289,7 +309,11 @@ def evaluate_uvm_generation_ready(intake_state: IntakeState, *, now: Optional[st
                 "status": status,
                 "fields": [r.to_dict() for r in intake_state.fields_in_category(category)],
             }
-    return UvmGenerationReadiness(ready=not blocking, blocking=blocking, checked_at=now or _utcnow_iso())
+    result = UvmGenerationReadiness(ready=not blocking, blocking=blocking, checked_at=now or _utcnow_iso())
+    if store is not None:
+        from . import intake_events as _ie
+        _ie.emit_generation_readiness(store, result)
+    return result
 
 
 # ---- env_manifest joining ----------------------------------------------------
@@ -664,6 +688,7 @@ def build_intake_state(
     build_env_gate: Any = None,
     known_pass_tests: Optional[List[dict]] = None,
     now: Optional[str] = None,
+    store: Any = None,
 ) -> IntakeState:
     """Build one `IntakeState` joining:
       - `env_manifest` -- an `env_manifest.load_env_manifest()`-shaped dict
@@ -682,7 +707,18 @@ def build_intake_state(
     Every argument is optional and independently absent-able: a caller with
     only an env.manifest.json and nothing else still gets a real, honest
     IntakeState (every other category reads MISSING, and
-    `evaluate_uvm_generation_ready()` refuses naming them)."""
+    `evaluate_uvm_generation_ready()` refuses naming them).
+
+    `store` is the disclosed-default opt-in event wiring
+    (`dv_harness.intake_events`), the same shape `require_tier`/
+    `require_phy_boundary` already use elsewhere in this codebase: `None`
+    (the default) leaves this call byte-for-byte identical to before this
+    parameter existed -- this module still writes no state/blackboard/
+    approval record of its own. A real `storage.StateStore` makes this call
+    write one `INTAKE_STATE_BUILT` summary plus one `INTAKE_FIELD_BLOCKED`/
+    `INTAKE_FIELD_CONTRADICTED` per field genuinely carrying that status
+    (best-effort -- a telemetry failure never turns a successful build into
+    a crash)."""
     records: List[IntakeFieldRecord] = []
     em = env_manifest or {}
 
@@ -742,4 +778,8 @@ def build_intake_state(
             overlaid.append(_apply_decision_overlay(r, decision))
         records = overlaid
 
-    return IntakeState(records, generated_at=now)
+    state = IntakeState(records, generated_at=now)
+    if store is not None:
+        from . import intake_events as _ie
+        _ie.emit_intake_state_report(store, state)
+    return state

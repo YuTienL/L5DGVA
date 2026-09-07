@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, tempfile, time
+import json, os, tempfile, threading, time
 from pathlib import Path
 from typing import Any, Dict
 from .models import HarnessState
@@ -38,6 +38,16 @@ class StateStore:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.state_file = self.dir / "state.json"
         self.events_file = self.dir / "events.jsonl"
+        # Real, not hypothetical: engine._advance_with_fanout() runs every
+        # parallel_group branch (RCA_G1, ANALYSIS_G1) via ex.submit(self.
+        # _run_branch_to_terminal, ...) on the SAME DVHarness instance, so
+        # every branch thread shares this ONE StateStore object -- an
+        # in-process threading.Lock fully serializes event() below for the
+        # real concurrency shape this bug was found under (see event()'s
+        # own docstring). It does not, and is not meant to, guard against a
+        # SEPARATE process (e.g. dashboard.py) appending concurrently --
+        # that already-different, cross-process case is unchanged.
+        self._event_lock = threading.Lock()
 
     def load(self) -> HarnessState:
         if not self.state_file.exists():
@@ -62,5 +72,40 @@ class StateStore:
                 os.unlink(tmp)
 
     def event(self, event: Dict[str, Any]) -> None:
-        with self.events_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        """Append one line to events.jsonl -- serialized by a real
+        threading.Lock, with a short retry-on-transient-PermissionError
+        exactly like _atomic_replace() above as a second, independent
+        safety net (2026-09-07, real defect found while adding RCA_JOIN's
+        own genuine cross-branch contradiction detection).
+
+        engine._advance_with_fanout() runs parallel_group branches -- RCA_G1
+        and ANALYSIS_G1 both -- through a real ThreadPoolExecutor inside one
+        process, and every branch's run_stage() calls this method from its
+        own thread, all sharing this one StateStore instance (see __init__'s
+        own comment). Two threads opening the SAME file in append mode at
+        nearly the same instant reproduced two real, independent failures
+        on Windows: a PermissionError (WinError 5) from the open() call
+        itself, AND -- confirmed separately under real concurrent-thread
+        stress -- a genuinely LOST line with no exception raised at all
+        (Windows' CRT-level append is a seek-to-end-then-write, not POSIX
+        O_APPEND's atomic single write, so two interleaved writers can each
+        seek to the same offset and one overwrite the other). Retrying the
+        open() alone only fixes the first failure; the lock is what actually
+        closes the second, real data-loss one, for the real in-process
+        concurrency shape this bug was found under. It does not, and is not
+        meant to, guard against a SEPARATE process (e.g. dashboard.py)
+        appending concurrently -- that already-different, cross-process case
+        is unchanged, and the retry-on-PermissionError loop is kept as a
+        defensive second layer for exactly that external case (a reader
+        transiently holding the file open across a process boundary)."""
+        last_exc: Exception | None = None
+        with self._event_lock:
+            for attempt in range(10):
+                try:
+                    with self.events_file.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+                    return
+                except PermissionError as e:
+                    last_exc = e
+                    time.sleep(0.02 * (attempt + 1))
+        raise last_exc

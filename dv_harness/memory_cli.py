@@ -26,6 +26,15 @@ def main():
     s.add_argument("--property",action="append",default=[],dest="properties",metavar="KEY=VALUE",
                     help="Arbitrary record-field filter, repeatable (e.g. --property kind=root_cause). "
                          "Reads the record file for fields index.json does not carry.")
+    s.add_argument("--rank-by",default=MemoryRetriever.RELEVANCE_RANK,dest="rank_by",
+                    choices=list(MemoryRetriever.RANK_MODES),
+                    help="Ranking mode (2026-09-07). 'relevance' (default) is the pre-existing "
+                         "fixed heuristic, unchanged. 'usefulness' additionally weights real "
+                         "reuse_count/MemoryGC.mark_used() history into the score -- an explicit, "
+                         "opt-in alternative that never changes which records match, only their order.")
+    s.add_argument("--usefulness-weight",type=float,default=MemoryRetriever.DEFAULT_USEFULNESS_WEIGHT,
+                    dest="usefulness_weight",
+                    help="Multiplier on log1p(reuse_count) when --rank-by usefulness is used.")
     s.add_argument("--limit",type=int,default=8)
     g=sp.add_parser("get"); g.add_argument("memory_id")
     d=sp.add_parser("deprecate"); d.add_argument("memory_id"); d.add_argument("--reason",required=True)
@@ -63,7 +72,7 @@ def main():
             "protocol":a.protocol,"scope":a.scope,"symptoms":a.symptom,"text":a.text,
             "level":a.level,"confidence":a.confidence,"status":a.status,
             "property":property_filters,
-        },limit=a.limit),ensure_ascii=False,indent=2))
+        },limit=a.limit,rank_by=a.rank_by,usefulness_weight=a.usefulness_weight),ensure_ascii=False,indent=2))
     elif a.cmd=="get":
         print(json.dumps(store.get(a.memory_id),ensure_ascii=False,indent=2))
     elif a.cmd=="deprecate":

@@ -1575,6 +1575,317 @@ def plan_cross_subsystem_checking(registry: Mapping[str, Any],
 
 
 # ===========================================================================
+# SCENARIO-LEVEL PARALLEL EXECUTION SCHEDULING (additive; not one of SYS-23..27)
+# ===========================================================================
+#
+# WHY THIS IS A GENUINE GAP, NOT A RESTATEMENT OF SYS-25 OR SYS-30
+# -----------------------------------------------------------------
+# SYS-25's own module docstring above says it plainly: "SYS-25 classifies
+# command-pair RELATIONSHIPS. It schedules nothing." Its six-valued verdict is
+# about a PAIR OF COMMANDS, and `check_no_global_serialization()` only asks
+# whether two SUBSYSTEMS were wrongly serialized. Neither is a question about
+# two whole SCENARIOS.
+#
+# `system_topology_analysis.plan_system_scenario_model()` (SYS-30) is the
+# other near neighbour, and it is INSIDE-one-scenario scheduling: its
+# `_block_plan()` groups ONE scenario's OWN commands into PARALLEL/SEQUENTIAL
+# blocks. It never compares two DIFFERENT scenarios against each other, and it
+# could not import this reasoning even if it wanted to say more -- that module
+# already imports `system_scheduling_plan` (`from . import system_scheduling_
+# plan as ssp`), so the reverse import would be circular. That is exactly why
+# this capability belongs HERE, as an ADDITIVE extension of this module, and
+# is exposed as a function any caller (including `system_topology_analysis.py`,
+# which already holds SYS-30's scenario list) can call with plain,
+# duck-typed scenario records -- never by this module importing that one.
+#
+# So the real, unmet question is: given two already-planned SYS-30-shaped
+# scenarios (or any two named command sets with a declared participating-
+# subsystem list), may they be DISPATCHED to run AT THE SAME TIME without
+# contending for a resource SYS-24 already scheduled, or violating a
+# relationship SYS-25 already classified? Nothing in this codebase answers
+# that before this section.
+#
+# NO SECOND MODEL. Every fact this section reads is imported or re-read from
+# THIS module's own SYS-24 `shared_resource_scheduling` output and SYS-25
+# `parallelism_model` output -- both already computed once by
+# `build_system_scheduling_plan()`. It re-derives no resource-sharing fact and
+# no command-pair relationship a second way; it only asks what those two
+# already-decided artifacts imply about a PAIR OF SCENARIOS built from them.
+#
+# WORST-WINS, LIKE EVERY OTHER GATE IN THIS FILE. A scenario pair is
+# `SCENARIO_PARALLEL_SAFE` only when every one of the checks below comes back
+# clean; a single blocking or unresolved signal fails the whole pair, exactly
+# as SYS-25's own `SYS25_PRECEDENCE` picks the most restrictive matched signal
+# rather than averaging.
+#
+# STILL PLANNING ONLY. This produces a scheduling PLAN -- a verdict a human or
+# an LSF dispatcher would read before submitting two scenarios concurrently.
+# It submits no job, runs no simulator, and emits no scenario body, parallel
+# block, sequencer or arbiter -- the same SYS-40 boundary the rest of this
+# file holds.
+
+#: Every value this section can reach for one scenario PAIR, most restrictive
+#: first. A pair reaches `SCENARIO_PARALLEL_SAFE` only by falling through all
+#: four blocking/unresolved checks -- the same "residual, never asserted"
+#: shape SYS-25's own `REL_PARALLEL_SAFE`/`REL_UNKNOWN` precedence already
+#: uses.
+SCENARIO_SERIALIZE_SHARED_SUBSYSTEM = "SCENARIO_SERIALIZE_SHARED_SUBSYSTEM_INSTANCE"
+SCENARIO_SERIALIZE_SHARED_RESOURCE = "SCENARIO_SERIALIZE_SHARED_RESOURCE_CONTENTION"
+SCENARIO_SERIALIZE_COMMAND_DEPENDENCY = "SCENARIO_SERIALIZE_COMMAND_DEPENDENCY"
+SCENARIO_UNKNOWN = "SCENARIO_UNKNOWN_PENDING_EVIDENCE"
+SCENARIO_PARALLEL_SAFE = "SCENARIO_PARALLEL_SAFE"
+
+SCENARIO_SCHEDULING_PRECEDENCE: tuple = (
+    SCENARIO_SERIALIZE_SHARED_SUBSYSTEM, SCENARIO_SERIALIZE_SHARED_RESOURCE,
+    SCENARIO_SERIALIZE_COMMAND_DEPENDENCY, SCENARIO_UNKNOWN, SCENARIO_PARALLEL_SAFE,
+)
+SCENARIO_SCHEDULING_VERDICTS: tuple = SCENARIO_SCHEDULING_PRECEDENCE
+
+
+def scenario_command_ids(scenario: Mapping[str, Any]) -> List[str]:
+    """The `system_command_id` list a scenario record covers.
+
+    Accepts a plain `command_ids` list (the generic, minimal shape), or the
+    real `system_topology_analysis.plan_system_scenario_model()` (SYS-30)
+    shape, whose commands live one level down inside `block_plan[].members[].
+    system_command_id`. Reading the SYS-30 shape directly, rather than
+    requiring a caller to flatten it first, is what lets this function be
+    called with SYS-30's own scenario records unmodified.
+    """
+    if scenario.get("command_ids") is not None:
+        return list(scenario["command_ids"])
+    ids: List[str] = []
+    for block in scenario.get("block_plan") or []:
+        for member in block.get("members") or []:
+            cid = member.get("system_command_id")
+            if cid:
+                ids.append(cid)
+    return ids
+
+
+def _relationship_pair_index(relationships: Mapping[str, Any],
+                             ) -> Dict[Tuple[str, str], str]:
+    """{sorted (command_a, command_b) -> relationship} off SYS-25's own pair
+    list.
+
+    This is the same lookup `system_topology_analysis._pair_relationship_
+    index()` already builds one layer up -- reimplemented here, never
+    imported, because that module imports THIS one (`from . import
+    system_scheduling_plan as ssp`) and the reverse import would be circular.
+    Both are a few lines over the SAME `relationships["pairs"]` list SYS-25
+    produces; neither re-decides a relationship.
+    """
+    index: Dict[Tuple[str, str], str] = {}
+    for pair in (relationships or {}).get("pairs") or []:
+        key = tuple(sorted((pair["command_a"], pair["command_b"])))
+        index[key] = pair["relationship"]
+    return index
+
+
+def _scenario_pair_signals(scenario_a: Mapping[str, Any], scenario_b: Mapping[str, Any],
+                           command_ids_a: Sequence[str], command_ids_b: Sequence[str],
+                           known_command_ids: Set[str],
+                           pair_index: Mapping[Tuple[str, str], str],
+                           scheduling: Mapping[str, Any],
+                           ) -> List[Dict[str, Any]]:
+    """Every blocking/unresolved signal for one scenario pair, each naming the
+    real field it was read from -- the SYS-25 `_pair_signals()` shape, one
+    granularity up."""
+    signals: List[Dict[str, Any]] = []
+    subsystems_a = set(scenario_a.get("participating_subsystems") or [])
+    subsystems_b = set(scenario_b.get("participating_subsystems") or [])
+    shared_subsystems = sorted(subsystems_a & subsystems_b)
+    if shared_subsystems:
+        signals.append({
+            "verdict": SCENARIO_SERIALIZE_SHARED_SUBSYSTEM,
+            "from_field": "scenario.participating_subsystems",
+            "basis": (f"both scenarios include subsystem(s) {shared_subsystems}; that "
+                      "subsystem's own command.txt is sequential by construction and this "
+                      "evidence models one running instance of it, so two scenarios "
+                      "sharing it cannot be certified to run concurrently from this "
+                      "evidence"),
+            "detail": shared_subsystems,
+        })
+
+    set_a, set_b = set(command_ids_a), set(command_ids_b)
+    for row in scheduling.get("entries") or []:
+        if row.get("scheduling_disposition") != SCHED_SINGLE_SHARED_ACCESS_POINT:
+            continue
+        routed = set(row.get("routed_commands") or [])
+        hit_a = sorted(routed & set_a)
+        hit_b = sorted(routed & set_b)
+        if hit_a and hit_b:
+            signals.append({
+                "verdict": SCENARIO_SERIALIZE_SHARED_RESOURCE,
+                "from_field": "shared_resource_scheduling.entries.routed_commands",
+                "basis": (f"both scenarios route commands through the single shared "
+                          f"access point SYS-24 named for {row['shared_resource_key']} "
+                          f"({row['shared_access_point']}); every user must route through "
+                          "it, so the two scenarios cannot arbitrate it concurrently"),
+                "detail": {"shared_resource_key": row["shared_resource_key"],
+                           "commands_a": hit_a[:4], "commands_b": hit_b[:4]},
+            })
+
+    unresolved: List[Tuple[str, str]] = []
+    for command_a in sorted(set_a):
+        for command_b in sorted(set_b):
+            key = tuple(sorted((command_a, command_b)))
+            relationship = pair_index.get(key)
+            if relationship is not None:
+                if relationship != REL_PARALLEL_SAFE:
+                    signals.append({
+                        "verdict": SCENARIO_SERIALIZE_COMMAND_DEPENDENCY,
+                        "from_field": "parallelism_model.pairs",
+                        "basis": (f"SYS-25 classified {command_a} / {command_b} as "
+                                  f"{relationship}, which forbids running them "
+                                  "concurrently"),
+                        "detail": {"command_a": command_a, "command_b": command_b,
+                                  "relationship": relationship},
+                    })
+            elif command_a not in known_command_ids or command_b not in known_command_ids:
+                # A command this evidence never covers. Never same-subsystem: that
+                # case is excluded from SYS-25's own pairing (see `classify_
+                # parallelism_relationships`) and is already reported above via
+                # `shared_subsystems`, not silently re-flagged as an evidence gap.
+                unresolved.append((command_a, command_b))
+    if unresolved:
+        signals.append({
+            "verdict": SCENARIO_UNKNOWN,
+            "from_field": "parallelism_model.pairs",
+            "basis": ("at least one command pair between these scenarios names a command "
+                      "absent from the SYS-21 command IR this parallelism model was built "
+                      "from, so its relationship could not be classified"),
+            "detail": {"unresolved_pairs": [list(p) for p in unresolved[:4]],
+                      "unresolved_pair_count": len(unresolved)},
+        })
+    return signals
+
+
+def evaluate_scenario_pair_parallel_safety(scenario_a: Mapping[str, Any],
+                                           scenario_b: Mapping[str, Any],
+                                           ir: Mapping[str, Any],
+                                           scheduling: Mapping[str, Any],
+                                           relationships: Mapping[str, Any],
+                                           ) -> Dict[str, Any]:
+    """One scenario PAIR's parallel-execution verdict, from the SAME SYS-24
+    `shared_resource_scheduling` and SYS-25 `parallelism_model` documents
+    `build_system_scheduling_plan()` already produced. Re-derives neither.
+
+    `ir` is the SYS-21 System Command IR the `relationships` argument was
+    classified from (`classify_parallelism_relationships(ir)`'s own input) --
+    passed explicitly, never re-read from a global, so a caller cannot get a
+    scenario-scheduling verdict decided against evidence the relationships
+    model was not actually built from.
+    """
+    command_ids_a = scenario_command_ids(scenario_a)
+    command_ids_b = scenario_command_ids(scenario_b)
+    known_command_ids = {e["system_command_id"] for e in (ir.get("entries") or [])}
+
+    scenario_pair_id = "SCENPAIR-" + hashlib.sha256(
+        "|".join(sorted((str(scenario_a.get("scenario_id") or ""),
+                         str(scenario_b.get("scenario_id") or ""))))
+        .encode("utf-8")).hexdigest()[:10].upper()
+
+    if not command_ids_a or not command_ids_b:
+        return {
+            "scenario_pair_id": scenario_pair_id,
+            "scenario_a": scenario_a.get("scenario_id") or "",
+            "scenario_b": scenario_b.get("scenario_id") or "",
+            "verdict": SCENARIO_UNKNOWN,
+            "basis": ("at least one of the two scenarios supplies no command_ids to "
+                      "evaluate, so a parallel-safety verdict is not decidable from this "
+                      "evidence"),
+            "from_field": "",
+            "also_matched": [],
+            "signals": [],
+            "command_count_a": len(command_ids_a),
+            "command_count_b": len(command_ids_b),
+        }
+
+    pair_index = _relationship_pair_index(relationships)
+    signals = _scenario_pair_signals(scenario_a, scenario_b, command_ids_a, command_ids_b,
+                                     known_command_ids, pair_index, scheduling)
+    matched = {s["verdict"] for s in signals}
+    verdict = next((v for v in SCENARIO_SCHEDULING_PRECEDENCE if v in matched),
+                   SCENARIO_PARALLEL_SAFE)
+    chosen = next((s for s in signals if s["verdict"] == verdict), None)
+    return {
+        "scenario_pair_id": scenario_pair_id,
+        "scenario_a": scenario_a.get("scenario_id") or "",
+        "scenario_b": scenario_b.get("scenario_id") or "",
+        "verdict": verdict,
+        "basis": (chosen["basis"] if chosen else
+                  "no blocking signal matched: the two scenarios share no subsystem, no "
+                  "SYS-24 shared access point routes commands from both, and every "
+                  "cross-subsystem command pair between them was classified "
+                  f"{REL_PARALLEL_SAFE}"),
+        "from_field": chosen["from_field"] if chosen else "",
+        "also_matched": sorted(matched - {verdict}),
+        "signals": signals,
+        "command_count_a": len(command_ids_a),
+        "command_count_b": len(command_ids_b),
+    }
+
+
+def schedule_scenario_parallel_execution(scenarios: Sequence[Mapping[str, Any]],
+                                         ir: Mapping[str, Any],
+                                         scheduling: Mapping[str, Any],
+                                         relationships: Mapping[str, Any],
+                                         ) -> Dict[str, Any]:
+    """Every scenario PAIR's parallel-execution verdict, over a caller-supplied
+    scenario list -- typically SYS-30's own `system_scenario_model["scenarios"]`
+    -- against THIS module's own SYS-24/SYS-25 evidence.
+
+    This is a SCHEDULING DECISION about which already-planned scenarios may be
+    DISPATCHED at the same time; it submits no job, runs no simulator, and
+    generates no scenario body, parallel block, sequencer or arbiter -- the
+    same SYS-40 boundary `PHASE_BOUNDARY` states for the rest of this module.
+    """
+    scenarios = list(scenarios)
+    pairs: List[Dict[str, Any]] = []
+    for i, scenario_a in enumerate(scenarios):
+        for scenario_b in scenarios[i + 1:]:
+            pairs.append(evaluate_scenario_pair_parallel_safety(
+                scenario_a, scenario_b, ir, scheduling, relationships))
+    pairs.sort(key=lambda p: (p["scenario_a"], p["scenario_b"]))
+    by_verdict = {v: sum(1 for p in pairs if p["verdict"] == v)
+                 for v in SCENARIO_SCHEDULING_VERDICTS}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "verdicts": list(SCENARIO_SCHEDULING_VERDICTS),
+        "precedence": list(SCENARIO_SCHEDULING_PRECEDENCE),
+        "scenario_count": len(scenarios),
+        "pairs": pairs,
+        "summary": {
+            "pair_count": len(pairs),
+            "by_verdict": by_verdict,
+            "parallel_safe_pairs": by_verdict[SCENARIO_PARALLEL_SAFE],
+        },
+        "scenario_execution_boundary": (
+            "This is a scheduling DECISION about which already-planned SYS-30 scenarios "
+            "may be dispatched concurrently. No job is submitted, no simulator is run, "
+            "and no scenario body, parallel block, sequencer or arbiter is generated by "
+            "this function or anything it calls. Every signal is read from this module's "
+            "own already-computed SYS-24 shared_resource_scheduling and SYS-25 "
+            "parallelism_model; nothing here re-derives resource sharing or command-pair "
+            "safety a second way."),
+    }
+
+
+def render_scenario_parallel_schedule_table(schedule: Mapping[str, Any]) -> str:
+    columns = ["SCENARIO A", "SCENARIO B", "VERDICT", "ALSO MATCHED"]
+    lines = ["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
+    for pair in schedule.get("pairs") or []:
+        lines.append("| " + " | ".join(_cell(v) for v in (
+            pair["scenario_a"], pair["scenario_b"], pair["verdict"],
+            ",".join(pair["also_matched"]) or "-",
+        )) + " |")
+    if len(lines) == 2:
+        lines.append("| _(fewer than two scenarios supplied)_ |" + " - |" * (len(columns) - 1))
+    return "\n".join(lines)
+
+
+# ===========================================================================
 # Composition
 # ===========================================================================
 

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, uuid, time
+import json, math, os, uuid, time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -255,6 +255,35 @@ class MemoryStore:
         mem.setdefault("confidence","UNKNOWN")
         mem.setdefault("status","ACTIVE")
         mem.setdefault("provenance",None)
+        # applicability_context (2026-09-07, context_scoped_validity): an
+        # OPTIONAL, caller-declared statement of what this record's claim is
+        # scoped to (e.g. {"vip_release": "R-2020.12"}, {"protocol_version":
+        # "3.0"}) -- never a new status value, purely an additive scoping
+        # fact `MemoryGC.confirm()`/`retract()` may read (see
+        # `_context_compatible()` below). A record that never sets this
+        # (the overwhelming majority, and every record this codebase's own
+        # real writers already produce) defaults to None here, which is what
+        # keeps confirm()/retract() unconditionally global for it, exactly
+        # as before this field existed.
+        mem.setdefault("applicability_context",None)
+        # producing_agent_profile (2026-09-07, agent_profile_track_record gap-close):
+        # an OPTIONAL, caller-supplied statement of which `.claude/agents/*.md`
+        # profile (its front-matter `name:`) produced this record -- e.g. the
+        # `route_info["agent"]`/`_resolved_agent_name` value engine.py's real
+        # run_stage() already resolves and attributes stage-profiler runs to,
+        # now threaded onto the memory record those same PASS-verdict writers
+        # persist. Purely additive: a record whose writer never supplied one
+        # (the overwhelming majority of this project's own real records, and
+        # every record ever written before this field existed) defaults to
+        # None here -- read back identically to a record file on disk that
+        # simply has no such key at all, so an existing record is never
+        # retroactively treated as "attributed to nobody" versus "attributed,
+        # unknown". See agent_profile_track_record.py for the read-only report
+        # that joins this field against MemoryGC.confirm()/retract() outcomes;
+        # nothing here or in that module enforces the named profile actually
+        # exists, and nothing routes engine.py's real dispatch logic through
+        # it yet -- reporting only, in this pass.
+        mem.setdefault("producing_agent_profile",None)
         if _confirmation_write:
             for field,default in self._CONFIRMATION_OWNED_DEFAULTS.items():
                 mem.setdefault(field,default)
@@ -453,6 +482,35 @@ class MemoryRetriever:
     # caller relies on.
     STATUS_ANY = ("ANY", "*")
 
+    # rank_by values accepted by search() (2026-09-07,
+    # retrieval_ranking_learns_usefulness). RELEVANCE_RANK is the untouched,
+    # pre-existing default every caller gets when `rank_by` is omitted --
+    # byte-for-byte the same fixed heuristic (relevance + confidence +
+    # recency) this class has always used. USEFULNESS_RANK is a new, opt-in
+    # alternative a caller must explicitly request: it additionally folds in
+    # the real, already-recorded reuse_count/last_used_at signal
+    # MemoryGC.mark_used() has been writing on every real reuse all along,
+    # but which search() itself never read for ranking before this change.
+    #
+    # This is deliberately NOT a change to the default scoring formula, and
+    # NOT a weight/threshold tuned against production data -- both of which
+    # this project's own rules require be routed through
+    # capability_evolution.py's controlled-experiment machinery for a human
+    # to approve before ever reaching production scoring. USEFULNESS_RANK is
+    # a second, additive, explicitly-requested code path a caller opts into;
+    # it changes nothing about what RELEVANCE_RANK (the default) returns.
+    RELEVANCE_RANK = "relevance"
+    USEFULNESS_RANK = "usefulness"
+    RANK_MODES = (RELEVANCE_RANK, USEFULNESS_RANK)
+
+    # log1p(reuse_count), not the raw count: reuse_count is unbounded (a
+    # record reused 50 times must not dwarf every relevance/confidence/
+    # recency term this class already computes), and log1p(0) == 0 so a
+    # never-reused record contributes exactly nothing -- there is no need to
+    # special-case "reuse_count is absent" separately from "reuse_count is
+    # zero", both read as "no observed reuse yet".
+    DEFAULT_USEFULNESS_WEIGHT = 1.0
+
     def __init__(self, store: MemoryStore): self.store=store
 
     def _record_field(self, row: Dict[str,Any], key: str, record_cache: Dict[str,Any]):
@@ -476,7 +534,29 @@ class MemoryRetriever:
             return str(wanted) in {str(x) for x in actual}
         return str(actual)==str(wanted)
 
-    def search(self, query: Dict[str,Any], limit: int=8, now: Optional[float]=None):
+    def search(self, query: Dict[str,Any], limit: int=8, now: Optional[float]=None,
+               rank_by: str=RELEVANCE_RANK, usefulness_weight: float=DEFAULT_USEFULNESS_WEIGHT):
+        """Unchanged for every existing caller: omitting `rank_by` (or passing
+        the default RELEVANCE_RANK) reproduces the exact pre-existing
+        relevance+confidence+recency score, with the exact pre-existing
+        relevance floor (see finding I2 below) -- byte-for-byte, since the new
+        usefulness term is only ever added when `rank_by == USEFULNESS_RANK`.
+
+        `rank_by=USEFULNESS_RANK` is the new, opt-in mode
+        (retrieval_ranking_learns_usefulness, 2026-09-07): it adds
+        `usefulness_weight * log1p(reuse_count)` on top of the unchanged
+        relevance/confidence/recency score for every record that already
+        cleared the relevance floor. It never changes WHICH records the
+        relevance floor admits -- a record with zero query overlap still
+        cannot be returned purely because it happens to be well-reused,
+        exactly the same guarantee finding I2 established for
+        recency/confidence. It only re-orders among records that already
+        matched the query, biasing toward ones this project's own real
+        MemoryGC.mark_used() calls have already shown other callers found
+        useful enough to reuse.
+        """
+        if rank_by not in self.RANK_MODES:
+            raise ValueError(f"unknown rank_by {rank_by!r}; must be one of {self.RANK_MODES}")
         q_protocol=str(query.get("protocol","")).lower()
         q_scope=str(query.get("scope","")).lower()
         q_sym=_tok(query.get("symptoms",[]))
@@ -558,6 +638,13 @@ class MemoryRetriever:
             score = relevance
             score += {"CONFIRMED":2,"HIGH":1.5,"MEDIUM":.75,"LOW":.25}.get(row.get("confidence",""),0)
             score += _recency_score(row, now)
+            if rank_by == self.USEFULNESS_RANK:
+                # Real, already-recorded usage evidence (memory.py's own
+                # MemoryGC.mark_used(), never a fabricated proxy for it) --
+                # see the class docstring above for why log1p rather than the
+                # raw reuse_count.
+                reuse_count = int(row.get("reuse_count") or 0)
+                score += usefulness_weight * math.log1p(max(0, reuse_count))
             scored.append((score,row))
         scored.sort(key=lambda x:x[0],reverse=True)
         out=[]
@@ -649,6 +736,34 @@ class MemoryConsolidator:
             "source_finding_id":finding.get("finding_id")
         })
 
+def _context_compatible(record_context: Optional[Dict[str,Any]], query_context: Optional[Dict[str,Any]]) -> bool:
+    """Additive scoping check for MemoryGC.confirm()/retract() (2026-09-07,
+    context_scoped_validity). A record's own declared `applicability_context`
+    (e.g. {"vip_release": "R-2020.12"}) and a caller's query context are
+    compatible unless they explicitly ASSERT DIFFERENT VALUES for the SAME
+    key -- a key present in only one side is never treated as a mismatch,
+    since neither side made a claim about it. This is deliberately permissive
+    rather than an exact-dict-equality check: a record scoped only to
+    {"protocol_version": "3.0"} must still be confirmable by a caller whose
+    own context additionally names {"vip_release": "R-2020.12"}, since the
+    record never claimed anything about vip_release either way.
+
+    A record with no declared context (`record_context` falsy -- None, the
+    real default every pre-existing record has, or an explicitly empty {})
+    is ALWAYS compatible: it made no scope claim at all, so it stays global,
+    exactly the pre-2026-09-07 behavior for every record that never opts
+    into this field. A caller passing no query context (`query_context`
+    falsy) is asking for the unscoped, global confirm/retract this method
+    always performed before this parameter existed, so it is likewise always
+    compatible regardless of what the record itself declares."""
+    if not record_context or not query_context:
+        return True
+    for key, value in record_context.items():
+        if key in query_context and query_context[key] != value:
+            return False
+    return True
+
+
 class MemoryGC:
     def __init__(self, store: MemoryStore): self.store=store
     def deprecate(self, memory_id: str, reason: str):
@@ -677,14 +792,31 @@ class MemoryGC:
         self.store.add(mem["level"],mem)
         return True
 
-    def retract(self, memory_id: str, reason: str, evidence: Optional[Dict[str,Any]]=None):
+    def retract(self, memory_id: str, reason: str, evidence: Optional[Dict[str,Any]]=None,
+                *, context: Optional[Dict[str,Any]]=None):
         """The record was found to be wrong outright (no replacement exists
         yet). Mirrors CLAUDE.md's Evidence Truth Rule: a retraction should
         itself cite the evidence that overturned the original claim, not
         just an opinion -- `evidence` is stored but not schema-enforced here
-        (enforcement belongs to whichever gate consumes it)."""
+        (enforcement belongs to whichever gate consumes it).
+
+        `context` (2026-09-07, context_scoped_validity) is a purely additive,
+        opt-in scoping parameter: omitting it (the default, and every
+        pre-existing caller) retracts the record exactly as unconditionally
+        as before this parameter existed, regardless of whether the record
+        itself declares an `applicability_context`. Only when a caller
+        SUPPLIES `context` is the record's own declared context consulted
+        (via `_context_compatible()`) -- a record with no declared context
+        still retracts globally even then, and a record whose declared
+        context explicitly disagrees with the caller's on a shared key is
+        left untouched, reported False exactly like an unresolved
+        `memory_id` (a caller checking only truthiness sees no behavior
+        change; a caller wanting the two cases told apart re-reads the
+        record afterward)."""
         mem=self.store.get(memory_id)
         if not mem: return False
+        if context is not None and not _context_compatible(mem.get("applicability_context"), context):
+            return False
         mem["status"]="RETRACTED"
         mem["retraction_reason"]=reason
         mem["retraction_evidence"]=evidence or {}
@@ -703,7 +835,8 @@ class MemoryGC:
         self.store.add(mem["level"],mem)
         return True
 
-    def confirm(self, memory_id: str, evidence: Optional[Dict[str,Any]]=None):
+    def confirm(self, memory_id: str, evidence: Optional[Dict[str,Any]]=None,
+                *, context: Optional[Dict[str,Any]]=None):
         """An independent, later run re-derived the SAME conclusion with
         fresh evidence: bump confirmation_count/last_confirmed_at, and if it
         had been flagged NEEDS_REVALIDATION, restore it to ACTIVE -- this is
@@ -716,9 +849,26 @@ class MemoryGC:
         (MemoryStore._CONFIRMATION_OWNED_FIELDS) -- it increments from the
         value already on disk and passes _confirmation_write=True, which is
         what MemoryStore.add() requires before it will accept them from a
-        record body at all. See _apply_confirmation_integrity()."""
+        record body at all. See _apply_confirmation_integrity().
+
+        `context` (2026-09-07, context_scoped_validity) is a purely additive,
+        opt-in scoping parameter, mirroring `retract()`'s own: omitting it
+        (the default, and every pre-existing caller -- `MemoryConsolidator.
+        from_closed_finding()` and `memory_router.py`'s own confirm-on-
+        re-derivation call included) confirms the record exactly as
+        unconditionally as before this parameter existed. Only when a caller
+        SUPPLIES `context` is the record's own declared
+        `applicability_context` consulted (via `_context_compatible()`) -- a
+        record declaring no context still confirms globally even then, and a
+        record whose declared context explicitly disagrees with the
+        caller's on a shared key (e.g. confirming a VIP-release-scoped
+        finding under a DIFFERENT VIP release) is left untouched and this
+        call reports False, the same shape an unresolved `memory_id` already
+        returns."""
         mem=self.store.get(memory_id)
         if not mem: return False
+        if context is not None and not _context_compatible(mem.get("applicability_context"), context):
+            return False
         mem["confirmation_count"]=int(mem.get("confirmation_count",0))+1
         mem["last_confirmed_at"]=time.time()
         if evidence:

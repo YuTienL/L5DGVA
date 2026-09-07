@@ -11,7 +11,14 @@ import pytest
 
 from dv_harness.question_queue import (
     DIGEST_BOUNDARY_STAGES,
+    SIGNOFF_EVIDENCE_KIND_BLOCKER_LIST,
+    SIGNOFF_EVIDENCE_KIND_BUNDLE,
+    SIGNOFF_EVIDENCE_KIND_COVERAGE_CLOSURE,
+    SIGNOFF_EVIDENCE_KIND_PROVENANCE_CAVEAT,
+    SIGNOFF_EVIDENCE_KINDS,
+    CosignNotApplicableError,
     DoNotAskError,
+    ESCALATION_PACKAGE_FIELDS,
     HUMAN_DECISION_SOURCE,
     TIER2_AUTO_ASSUMPTION_SOURCE,
     QuestionQueueStore,
@@ -20,13 +27,24 @@ from dv_harness.question_queue import (
     TIER2_SAFE_ASSUME,
     TIER3_CANNOT_ASSUME,
     assert_all_evidence_paths_present,
+    build_escalation_package,
     build_multiple_choice_question,
+    build_suggest_then_confirm_options,
     classify_tier,
+    derive_suggested_answer_from_design_source_inventory,
+    derive_suggested_answer_from_env_manifest,
+    file_signoff_evidence_question,
     find_redundant_decision,
     is_cannot_assume,
     make_question_id,
     make_question_key,
+    normalize_grounding_evidence,
     normalize_options,
+    normalize_suggested_answer,
+    render_clarification_markdown,
+    render_escalation_package_markdown,
+    request_clarification,
+    list_clarification_requests,
     route_owner,
     validate_question,
 )
@@ -955,3 +973,1223 @@ def test_assert_all_evidence_paths_present_matches_source_authority_rule():
     with pytest.raises(QuestionValidationError):
         assert_all_evidence_paths_present(
             incomplete_text, options[:1], [c["evidence_path"] for c in conflict["claims"]])
+
+
+# =================================================================================
+# (c) build_escalation_package() / get_escalation_package(): the 9-field
+# Question Escalation Package view (spec section 32), reusing add_question()'s
+# and build_multiple_choice_question()'s existing filing mechanism rather than
+# a parallel one.
+# =================================================================================
+
+def test_escalation_package_has_exactly_the_9_named_fields_in_order(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is this DUT boundary master or slave?",
+        context_path="rtl/usb3_link_ctrl.v:120", options=_opts(),
+        recommendation="Configure as bus slave/responder",
+        assumption_if_unanswered="assume slave",
+        context={"affects_pass_fail_verdict": True},  # Tier-3
+    )
+    pkg = build_escalation_package(q)
+    assert tuple(pkg.keys()) == ESCALATION_PACKAGE_FIELDS
+    assert len(ESCALATION_PACKAGE_FIELDS) == 9
+
+
+def test_escalation_package_fields_trace_1to1_to_the_real_persisted_record(tmp_path):
+    # Every field must be the REAL persisted value -- never re-derived or
+    # independently computed -- except urgency, which is a documented
+    # deterministic function of the record's own tier (checked separately
+    # below).
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="vip", question="Which VIP config field applies?",
+        context_path="env.manifest.json#/vip_config/instances/0",
+        options=_opts(), recommendation="Configure as bus slave/responder",
+        assumption_if_unanswered="assume slave (single regression)",
+        context={"affects_pass_fail_verdict": True},
+    )
+    pkg = build_escalation_package(q)
+    assert pkg["question_id"] == q["id"]
+    assert pkg["category"] == q["domain"]
+    assert pkg["context"] == q["context_path"]
+    assert pkg["question_text"] == q["question"]
+    assert pkg["options"] is q["options"]  # the SAME real options, not a copy/rebuild
+    assert pkg["recommended_option"] == q["recommendation"]
+    assert pkg["default_if_unanswered"] == q["assumption_if_unanswered"]
+    assert pkg["owner"] == q["owner"]
+
+
+def test_escalation_package_urgency_reflects_the_records_real_tier(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+
+    tier3 = store.add_question(
+        domain="dut", question="q3", context_path="p3", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a3",
+        context={"affects_pass_fail_verdict": True},
+    )
+    assert tier3["tier"] == TIER3_CANNOT_ASSUME
+    assert build_escalation_package(tier3)["urgency"] == "BLOCKING_AWAITING_HUMAN_ANSWER"
+
+    tier2 = store.add_question(
+        domain="env", question="q2", context_path="p2", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a2",
+        context={},  # no hard trigger, low blast radius -> Tier 2
+    )
+    assert tier2["tier"] == TIER2_SAFE_ASSUME
+    assert build_escalation_package(tier2)["urgency"] == "NON_BLOCKING_TIME_BOXED_ASSUMPTION_LOGGED"
+
+    tier1 = store.add_question(
+        domain="env", question="q1", context_path="p1", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a1",
+        context={"resolvable_from_manifest": True, "manifest_value": "SLAVE"},
+    )
+    assert tier1["tier"] == TIER1_SELF_RESOLVE
+    assert build_escalation_package(tier1)["urgency"] == "INFORMATIONAL_ALREADY_SELF_RESOLVED"
+
+
+def test_escalation_package_refuses_to_fabricate_from_an_incomplete_record():
+    # Negative control: no evidence, no package -- the property this house
+    # style is graded on. A record missing real fields must be refused, never
+    # silently completed with a guessed/default value.
+    with pytest.raises(QuestionValidationError) as exc:
+        build_escalation_package({"id": "Q-DUT-DEADBEEF", "domain": "dut"})
+    msg = str(exc.value)
+    for missing_key in ("context_path", "question", "options", "recommendation",
+                          "assumption_if_unanswered", "owner", "tier"):
+        assert missing_key in msg
+
+
+def test_escalation_package_refuses_a_non_dict_record():
+    with pytest.raises(QuestionValidationError):
+        build_escalation_package(["not", "a", "dict"])  # type: ignore[arg-type]
+
+
+def test_escalation_package_refuses_an_unrecognized_tier(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    q["tier"] = 99  # corrupt, as if hand-edited -- never a real classify_tier() output
+    with pytest.raises(QuestionValidationError) as exc:
+        build_escalation_package(q)
+    assert "99" in str(exc.value)
+
+
+def test_get_escalation_package_reuses_add_questions_own_filing_mechanism(tmp_path):
+    # No parallel filing path: get_escalation_package() is a lookup through
+    # the SAME get_question() read path plus build_escalation_package(),
+    # never a second store or a second record.
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    pkg_via_store = store.get_escalation_package(q["id"])
+    pkg_via_function = build_escalation_package(q)
+    assert pkg_via_store == pkg_via_function
+
+
+def test_get_escalation_package_unknown_id_raises_keyerror(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    with pytest.raises(KeyError):
+        store.get_escalation_package("Q-DUT-00000000")
+
+
+def test_escalation_package_reuses_build_multiple_choice_questions_filing(tmp_path):
+    # The other half of "reusing build_multiple_choice_question()'s existing
+    # filing mechanism rather than a parallel one": a question filed through
+    # the N-way builder is escalation-package-able exactly like any other.
+    store = QuestionQueueStore(tmp_path)
+    q = build_multiple_choice_question(store, domain="dut", subject="x", candidates=_candidates(2))
+    pkg = store.get_escalation_package(q["id"])
+    assert pkg["question_id"] == q["id"]
+    assert pkg["urgency"] == "BLOCKING_AWAITING_HUMAN_ANSWER"  # multiple-choice is always Tier 3
+    assert [o["label"] for o in pkg["options"]] == [c["label"] for c in _candidates(2)]
+
+
+def test_escalation_package_is_never_persisted_into_questions_json(tmp_path):
+    # A pure read-side projection -- never written back into the store, so
+    # question.schema.json's additionalProperties:false contract on the real
+    # persisted record is never touched and no schema_version bump is needed.
+    import json
+
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    store.get_escalation_package(q["id"])  # build (and discard) a package
+    on_disk = json.loads(store.questions_path.read_text(encoding="utf-8"))
+    persisted = on_disk["questions"][0]
+    assert "escalation_package" not in persisted
+    assert set(persisted.keys()).isdisjoint(
+        {"question_id", "category", "recommended_option", "default_if_unanswered", "urgency"}
+    )
+    validate_question(persisted)  # still a schema-valid record, untouched
+
+
+def test_render_escalation_package_markdown_contains_every_field(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is this master or slave?", context_path="rtl/x.v:1",
+        options=_opts(), recommendation="Configure as bus slave/responder",
+        assumption_if_unanswered="assume slave",
+        context={"affects_pass_fail_verdict": True},
+    )
+    pkg = store.get_escalation_package(q["id"])
+    text = render_escalation_package_markdown(pkg)
+    assert pkg["question_id"] in text
+    assert pkg["question_text"] in text
+    assert pkg["recommended_option"] in text
+    assert pkg["default_if_unanswered"] in text
+    assert pkg["owner"] in text
+    assert pkg["urgency"] in text
+    for opt in pkg["options"]:
+        assert opt["label"] in text
+
+
+# =================================================================================
+# (d) request_clarification(): re-render an existing question with more
+# context / simpler phrasing, grounded in already-found evidence -- never a
+# second filing mechanism (question_rephrase_clarification_loop).
+# =================================================================================
+
+def test_request_clarification_returns_the_real_package_grounded_in_the_record(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is this DUT boundary master or slave?",
+        context_path="rtl/usb3_link_ctrl.v:120", options=_opts(),
+        recommendation="Configure as bus slave/responder",
+        assumption_if_unanswered="assume slave (single regression)",
+        context={"affects_pass_fail_verdict": True},  # Tier-3
+    )
+    result = request_clarification(store, q["id"], reason="I don't understand this", record=False)
+    assert result["question_id"] == q["id"]
+    assert result["package"] == build_escalation_package(q)
+    assert any(line == f"Question: {q['question']}" for line in result["plain_summary"])
+    assert any(line == f"Where this comes from: {q['context_path']}" for line in result["plain_summary"])
+    # The hard-trigger reason is translated into a plain-English clause, not
+    # left as the raw "hard_trigger:affects_pass_fail_verdict" token.
+    assert any("PASS or FAIL" in line for line in result["plain_summary"])
+    assert q["tier_reason"] not in "\n".join(result["plain_summary"])
+    # Tier-3: the exact fallback assumption is restated, never omitted.
+    assert any(q["assumption_if_unanswered"] in line for line in result["plain_summary"])
+
+
+def test_request_clarification_unknown_id_raises_keyerror(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    with pytest.raises(KeyError):
+        request_clarification(store, "Q-DUT-00000000", record=False)
+
+
+def test_request_clarification_lists_every_options_own_rationale_as_evidence(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    result = request_clarification(store, q["id"], record=False)
+    for opt in q["options"]:
+        assert any(opt["label"] in line and opt["rationale"] in line for line in result["evidence"])
+
+
+def test_request_clarification_never_fabricates_a_missing_option_rationale(tmp_path):
+    # Negative control: an option with no rationale on file must be reported
+    # as honestly absent, never filled in with an invented explanation.
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p",
+        options=["bare label a", "bare label b"],  # normalize_options() carries no rationale
+        recommendation="bare label a", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    result = request_clarification(store, q["id"], record=False)
+    assert "bare label a: (no additional rationale on file)" in result["evidence"]
+    assert "bare label b: (no additional rationale on file)" in result["evidence"]
+
+
+def test_request_clarification_never_files_a_second_question_or_mutates_the_record(tmp_path):
+    import json
+
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    before = store.questions_path.read_text(encoding="utf-8")
+    request_clarification(store, q["id"], record=False)
+    request_clarification(store, q["id"], record=True)
+    after = store.questions_path.read_text(encoding="utf-8")
+    assert before == after  # byte-identical: no second question filed, no field mutated
+    assert len(json.loads(after)["questions"]) == 1
+    assert store.list_questions()[0]["id"] == q["id"]
+
+
+def test_request_clarification_tier2_notes_it_is_a_machine_guess_not_a_human_answer(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="env", question="q2", context_path="p2", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a2",
+        context={},  # no hard trigger, low blast radius -> Tier 2
+    )
+    assert q["tier"] == TIER2_SAFE_ASSUME
+    result = request_clarification(store, q["id"], record=False)
+    assert any("machine guess, not a human answer" in line and q["answer"] in line
+               for line in result["plain_summary"])
+
+
+def test_request_clarification_tier1_notes_it_was_already_resolved(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="env", question="q1", context_path="p1", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a1",
+        context={"resolvable_from_manifest": True, "manifest_value": "SLAVE"},
+    )
+    assert q["tier"] == TIER1_SELF_RESOLVE
+    result = request_clarification(store, q["id"], record=False)
+    assert any("Already resolved automatically" in line and "SLAVE" in line
+               for line in result["plain_summary"])
+
+
+def test_request_clarification_includes_the_exemption_citation_when_present(tmp_path, monkeypatch):
+    store = QuestionQueueStore(tmp_path)
+    fake_exemption = {
+        "id": "EXEMPT-1", "check_id": "CHK-1", "reason": "known limitation, documented",
+        "basis_document": "doc.md#s2", "owner": "designer", "valid_until": "2099-01-01",
+    }
+    monkeypatch.setattr(store, "find_exemption", lambda check_id, as_of=None: fake_exemption)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True, "check_id": "CHK-1"},
+    )
+    assert q["exemption"]["id"] == "EXEMPT-1"
+    result = request_clarification(store, q["id"], record=False)
+    joined = "\n".join(result["plain_summary"])
+    assert "EXEMPT-1" in joined and "designer" in joined and "2099-01-01" in joined
+    assert "does not by itself answer this specific question" in joined
+
+
+def test_request_clarification_surfaces_an_unrecognized_tier_reason_verbatim(tmp_path):
+    # Negative control: a tier_reason this module's lookup table does not
+    # (yet) know about is never dropped or guessed at -- it is surfaced
+    # verbatim, exactly the "unearned guess" the Evidence Truth Rule forbids
+    # in the other direction (never silently discarding real evidence).
+    import json
+
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    data = json.loads(store.questions_path.read_text(encoding="utf-8"))
+    data["questions"][0]["tier_reason"] = "some_future_rule_this_module_does_not_know_about"
+    store.questions_path.write_text(json.dumps(data), encoding="utf-8")
+
+    result = request_clarification(store, q["id"], record=False)
+    assert any("some_future_rule_this_module_does_not_know_about" in line
+               for line in result["plain_summary"])
+
+
+def test_request_clarification_multiple_hard_triggers_are_each_explained(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True, "affects_spec_intent": True},
+    )
+    assert q["tier_reason"].startswith("hard_trigger:affects_pass_fail_verdict,affects_spec_intent")
+    result = request_clarification(store, q["id"], record=False)
+    joined = "\n".join(result["plain_summary"])
+    assert "PASS or FAIL" in joined
+    assert "spec actually intends" in joined
+
+
+def test_request_clarification_record_false_never_writes_the_clarifications_file(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    result = request_clarification(store, q["id"], record=False)
+    assert result["clarification_id"] is None
+    assert not store.clarifications_path.exists()
+    assert list_clarification_requests(store) == []
+
+
+def test_request_clarification_record_true_persists_and_list_reads_it_back(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    result = request_clarification(store, q["id"], requested_by="alice",
+                                     reason="not sure what this means", record=True)
+    assert result["clarification_id"] is not None
+    assert store.clarifications_path.exists()
+
+    all_reqs = list_clarification_requests(store)
+    assert len(all_reqs) == 1
+    rec = all_reqs[0]
+    assert rec["clarification_id"] == result["clarification_id"]
+    assert rec["question_id"] == q["id"]
+    assert rec["question_key"] == q["question_key"]
+    assert rec["requested_by"] == "alice"
+    assert rec["reason"] == "not sure what this means"
+
+    filtered = list_clarification_requests(store, question_id=q["id"])
+    assert filtered == all_reqs
+    assert list_clarification_requests(store, question_id="Q-DUT-00000000") == []
+
+
+def test_request_clarification_second_request_appends_not_overwrites(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    first = request_clarification(store, q["id"], record=True)
+    second = request_clarification(store, q["id"], record=True)
+    assert first["clarification_id"] != second["clarification_id"]
+    assert len(list_clarification_requests(store, question_id=q["id"])) == 2
+
+
+def test_request_clarification_defaults_requested_by_to_unknown(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="q", context_path="p", options=_opts(),
+        recommendation="Configure as bus slave/responder", assumption_if_unanswered="a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    request_clarification(store, q["id"], record=True)
+    assert list_clarification_requests(store)[0]["requested_by"] == "unknown"
+
+
+def test_render_clarification_markdown_contains_plain_summary_evidence_and_id(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is this master or slave?", context_path="rtl/x.v:1",
+        options=_opts(), recommendation="Configure as bus slave/responder",
+        assumption_if_unanswered="assume slave",
+        context={"affects_pass_fail_verdict": True},
+    )
+    result = request_clarification(store, q["id"], record=True)
+    text = render_clarification_markdown(result)
+    assert q["id"] in text
+    assert q["question"] in text
+    for opt in q["options"]:
+        assert opt["label"] in text
+        assert opt["rationale"] in text
+    assert result["clarification_id"] in text
+
+
+# --- "Why am I being asked this" grounding_evidence -------------------------
+
+def _ge():
+    return {"summary": "register CTRL_REG appears in the Excel register map but is absent from "
+                         "the RTL port list", "evidence_path": "reg_map.xlsx#CTRL_REG"}
+
+
+def test_normalize_grounding_evidence_none_stays_none():
+    assert normalize_grounding_evidence(None) is None
+
+
+def test_normalize_grounding_evidence_valid_dict_round_trips():
+    ge = _ge()
+    result = normalize_grounding_evidence(ge)
+    assert result == ge
+    assert result is not ge  # a fresh dict, not the caller's own object
+
+
+def test_normalize_grounding_evidence_rejects_non_dict():
+    with pytest.raises(QuestionValidationError):
+        normalize_grounding_evidence("register X is missing from RTL")
+
+
+def test_normalize_grounding_evidence_rejects_unknown_key():
+    with pytest.raises(QuestionValidationError):
+        normalize_grounding_evidence({"summary": "x", "evidence_path": "y", "confidence": "high"})
+
+
+def test_normalize_grounding_evidence_rejects_summary_with_no_citation():
+    # A bare narrative with nowhere to check it is exactly the unsupported
+    # claim this field exists to prevent -- the negative control this
+    # module refuses to fabricate a partial grounding for.
+    with pytest.raises(QuestionValidationError):
+        normalize_grounding_evidence({"summary": "register X is missing from RTL"})
+
+
+def test_normalize_grounding_evidence_rejects_evidence_path_with_no_reason():
+    with pytest.raises(QuestionValidationError):
+        normalize_grounding_evidence({"evidence_path": "reg_map.xlsx#CTRL_REG"})
+
+
+def test_normalize_grounding_evidence_rejects_blank_strings():
+    with pytest.raises(QuestionValidationError):
+        normalize_grounding_evidence({"summary": "   ", "evidence_path": "reg_map.xlsx#CTRL_REG"})
+    with pytest.raises(QuestionValidationError):
+        normalize_grounding_evidence({"summary": "real reason", "evidence_path": ""})
+
+
+def test_add_question_default_grounding_evidence_is_none(tmp_path):
+    # The honest default: no caller-supplied evidence, so the field is
+    # persisted as null -- never invented from the question/context_path.
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is CTRL_REG real?", context_path="reg_map.xlsx#CTRL_REG",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    assert q["grounding_evidence"] is None
+    validate_question(q)  # schema-valid with the field null
+
+
+def test_add_question_persists_real_caller_supplied_grounding_evidence(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    ge = _ge()
+    q = store.add_question(
+        domain="dut", question="Is CTRL_REG real?", context_path="reg_map.xlsx#CTRL_REG",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+        context={"affects_pass_fail_verdict": True}, grounding_evidence=ge,
+    )
+    assert q["grounding_evidence"] == ge
+    validate_question(q)
+    # Persisted to disk, and readable back through the ordinary query path.
+    reloaded = store.get_question(q["id"])
+    assert reloaded["grounding_evidence"] == ge
+
+
+def test_add_question_refuses_malformed_grounding_evidence_and_persists_nothing(tmp_path):
+    # The required negative control: a partial grounding (a WHY with no
+    # cited WHERE) must never be silently accepted or fabricated into a
+    # complete one -- add_question() refuses before anything is written.
+    store = QuestionQueueStore(tmp_path)
+    with pytest.raises(QuestionValidationError):
+        store.add_question(
+            domain="dut", question="Is CTRL_REG real?", context_path="reg_map.xlsx#CTRL_REG",
+            options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+            context={"affects_pass_fail_verdict": True},
+            grounding_evidence={"summary": "no citation for this claim"},
+        )
+    assert store.list_questions() == []
+
+
+def test_build_multiple_choice_question_threads_grounding_evidence_through(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    ge = _ge()
+    q = build_multiple_choice_question(
+        store, domain="dut", subject="CTRL_REG existence",
+        candidates=[
+            {"label": "real register", "evidence_path": "rtl/ctrl.v:12"},
+            {"label": "spreadsheet typo", "evidence_path": "reg_map.xlsx#CTRL_REG"},
+        ],
+        grounding_evidence=ge,
+    )
+    assert q["grounding_evidence"] == ge
+
+
+def test_build_multiple_choice_question_default_grounding_evidence_is_none(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = build_multiple_choice_question(
+        store, domain="dut", subject="CTRL_REG existence",
+        candidates=[
+            {"label": "real register", "evidence_path": "rtl/ctrl.v:12"},
+            {"label": "spreadsheet typo", "evidence_path": "reg_map.xlsx#CTRL_REG"},
+        ],
+    )
+    assert q["grounding_evidence"] is None
+
+
+# --- Second-human co-sign of a recorded Tier-3 decision (2026-09-07) --------
+#
+# Additive, distinct from control_plane.ControlPlane's JUDGMENT_FIELDS
+# cosign mechanism (gates.py Tier-5) -- this one co-signs a question_queue
+# decisions.json record, never a gate evidence field.
+
+def _human_answered_decision(tmp_path, *, decided_by="designer@example.com", answer="Yes, W1C."):
+    """A real Tier-3-escalated, human-answered decision -- the only kind of
+    decision `add_decision_cosign()` may ever be applied to."""
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is register R0 write-1-to-clear?", context_path="dut.regs.R0",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    assert q["tier"] == TIER3_CANNOT_ASSUME
+    store.answer_question(q["id"], answer=answer, basis="RTL reg_map.sv line 42", decided_by=decided_by)
+    return store, q["question_key"]
+
+
+def test_add_decision_cosign_records_a_real_second_reviewer(tmp_path):
+    store, key = _human_answered_decision(tmp_path)
+    assert store.is_decision_cosigned(key) is False  # not co-signed yet
+    cosign = store.add_decision_cosign(
+        key, reviewer_id="reviewer2@example.com", basis="independently re-derived from the same RTL",
+    )
+    assert cosign["reviewer_id"] == "reviewer2@example.com"
+    assert cosign["cosigns_answer"] == "Yes, W1C."
+    assert cosign["basis"] == "independently re-derived from the same RTL"
+    assert store.is_decision_cosigned(key) is True
+    cosigns = store.get_decision_cosigns(key)
+    assert len(cosigns) == 1
+    assert cosigns[0]["reviewer_id"] == "reviewer2@example.com"
+
+
+def test_cosign_never_weakens_or_bypasses_the_existing_human_decision_rule(tmp_path):
+    # The decision's own `current`/`history` -- what classify_tier() and
+    # every other reader actually consult -- must be byte-identical before
+    # and after a co-sign, and a repeat ask must still self-resolve at
+    # Tier 1 off the SAME human answer, cosign or not.
+    store, key = _human_answered_decision(tmp_path)
+    before = store.find_decision(key)
+    store.add_decision_cosign(key, reviewer_id="reviewer2@example.com")
+    after = store.find_decision(key)
+    assert after["current"] == before["current"]
+    assert after["history"] == before["history"]
+
+    kwargs = dict(
+        domain="dut", question="Is register R0 write-1-to-clear?", context_path="dut.regs.R0",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+        context={"affects_pass_fail_verdict": True},
+    )
+    second = store.add_question(**kwargs)
+    assert second["tier"] == TIER1_SELF_RESOLVE
+    assert second["answer"] == "Yes, W1C."
+
+
+def test_cosign_refuses_when_no_live_decision_exists(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    with pytest.raises(CosignNotApplicableError):
+        store.add_decision_cosign("dut::dut.regs.R0::never asked", reviewer_id="reviewer2@example.com")
+
+
+def test_cosign_refuses_a_tier2_auto_assumption_never_fabricates_human_trust(tmp_path):
+    # The required negative control: a Tier-2 auto-assumption is only the
+    # harness's own machine guess (see _is_human_decision()'s own
+    # docstring) -- co-signing it must never become a backdoor into
+    # HUMAN_DECISION_SOURCE-level trust for something no human ever
+    # actually decided.
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="env", question="Is monitor0 passive-only?", context_path="env.topology.monitor0",
+        options=_opts(), recommendation=_opts()[0]["label"],
+        assumption_if_unanswered="Treat monitor0 as passive-only.",
+    )
+    assert q["tier"] == TIER2_SAFE_ASSUME
+    decision = store.find_decision(q["question_key"])
+    assert decision["current"]["source"] == TIER2_AUTO_ASSUMPTION_SOURCE
+    with pytest.raises(CosignNotApplicableError):
+        store.add_decision_cosign(q["question_key"], reviewer_id="reviewer2@example.com")
+    assert store.is_decision_cosigned(q["question_key"]) is False
+    assert store.get_decision_cosigns(q["question_key"]) == []
+
+
+def test_cosign_requires_a_real_reviewer_id(tmp_path):
+    store, key = _human_answered_decision(tmp_path)
+    with pytest.raises(ValueError):
+        store.add_decision_cosign(key, reviewer_id="")
+    with pytest.raises(ValueError):
+        store.add_decision_cosign(key, reviewer_id="   ")
+    assert store.is_decision_cosigned(key) is False
+
+
+def test_cosign_refuses_the_original_decider_cosigning_their_own_answer(tmp_path):
+    store, key = _human_answered_decision(tmp_path, decided_by="designer@example.com")
+    with pytest.raises(ValueError):
+        store.add_decision_cosign(key, reviewer_id="designer@example.com")
+    assert store.is_decision_cosigned(key) is False
+
+
+def test_cosign_becomes_stale_once_the_decision_is_re_answered_differently(tmp_path):
+    store, key = _human_answered_decision(tmp_path, answer="Yes, W1C.")
+    original_qid = store.find_decision(key)["current"]["question_id_of_answer"]
+    store.add_decision_cosign(key, reviewer_id="reviewer2@example.com")
+    assert store.is_decision_cosigned(key) is True
+
+    # make_question_id() is derived from question_key alone, so re-answering
+    # the SAME Q-ID with a genuinely different answer (a real correction) is
+    # the case a cosign staleness check must actually catch.
+    store.answer_question(original_qid, answer="No, RW.", basis="revised RTL reading",
+                            decided_by="designer2@example.com")
+
+    assert store.is_decision_cosigned(key) is False  # stale: does not cover the new answer
+    cosigns = store.get_decision_cosigns(key)
+    assert len(cosigns) == 1  # kept for the audit trail, not deleted
+    assert cosigns[0]["cosigns_answer"] == "Yes, W1C."
+    assert store.find_decision(key)["current"]["answer"] == "No, RW."
+
+
+def test_cosign_does_not_survive_revoke_and_reanswer(tmp_path):
+    store, key = _human_answered_decision(tmp_path)
+    store.add_decision_cosign(key, reviewer_id="reviewer2@example.com")
+    assert store.is_decision_cosigned(key) is True
+    store.revoke_decision(key, reason="turned out to be wrong", revoked_by="designer@example.com")
+    assert store.find_decision(key) is None
+    with pytest.raises(CosignNotApplicableError):
+        store.add_decision_cosign(key, reviewer_id="reviewer2@example.com")
+
+
+def test_decisions_md_and_blackboard_topic_report_the_cosign_honestly(tmp_path):
+    store, key = _human_answered_decision(tmp_path)
+    store.add_decision_cosign(key, reviewer_id="reviewer2@example.com")
+    md = store.decisions_md_path.read_text(encoding="utf-8")
+    assert "reviewer2@example.com" in md
+    assert "Second-human co-sign" in md
+
+    from dv_harness.blackboard import Blackboard
+    board = Blackboard(tmp_path)
+    topic = board.read("open_questions_decisions")
+    assert topic["value"]["decisions"][key]["cosigned"] is True
+
+
+def test_decisions_md_reports_a_stale_cosign_as_not_covering_the_current_answer(tmp_path):
+    store, key = _human_answered_decision(tmp_path, answer="Yes, W1C.")
+    original_qid = store.find_decision(key)["current"]["question_id_of_answer"]
+    store.add_decision_cosign(key, reviewer_id="reviewer2@example.com")
+    store.answer_question(original_qid, answer="No, RW.", basis="revised RTL reading",
+                            decided_by="designer2@example.com")
+    md = store.decisions_md_path.read_text(encoding="utf-8")
+    assert "none cover the CURRENT answer" in md
+
+
+# ===========================================================================
+# Suggest-then-confirm mode (2026-09-07, item proactive_answer_suggestion)
+# ===========================================================================
+
+def _real_suggestion():
+    return {
+        "value": "R-2020.12", "source_module": "env_manifest",
+        "source_path": "env.manifest.json#vip_config.vip_release.packages.1.version",
+        "rationale": "newest scanned package under $DESIGNWARE_HOME",
+    }
+
+
+class TestNormalizeSuggestedAnswer:
+    def test_none_stays_none(self):
+        assert normalize_suggested_answer(None) is None
+
+    def test_valid_suggestion_round_trips(self):
+        s = _real_suggestion()
+        assert normalize_suggested_answer(s) == s
+
+    def test_valid_suggestion_without_rationale(self):
+        s = {"value": "v3", "source_module": "design_source_inventory",
+             "source_path": "design_source_inventory#usb3_regmap.version"}
+        assert normalize_suggested_answer(s) == s
+
+    def test_non_dict_raises(self):
+        with pytest.raises(QuestionValidationError, match="must be a"):
+            normalize_suggested_answer("R-2020.12")
+
+    def test_unknown_key_raises(self):
+        s = dict(_real_suggestion(), extra="nope")
+        with pytest.raises(QuestionValidationError, match="unknown key"):
+            normalize_suggested_answer(s)
+
+    @pytest.mark.parametrize("missing", ["value", "source_module", "source_path"])
+    def test_missing_required_key_raises(self, missing):
+        s = _real_suggestion()
+        del s[missing]
+        with pytest.raises(QuestionValidationError, match="missing required key"):
+            normalize_suggested_answer(s)
+
+    def test_blank_value_raises(self):
+        s = dict(_real_suggestion(), value="   ")
+        with pytest.raises(QuestionValidationError, match="value.*non-empty"):
+            normalize_suggested_answer(s)
+
+    def test_unrecognized_source_module_raises(self):
+        """The negative control the Evidence Truth Rule requires: a
+        suggestion must always cite one of the two REAL evidence producers
+        this mode derives an answer from -- an open-ended module name is
+        refused outright, never silently accepted as a citation nobody could
+        actually go check."""
+        s = dict(_real_suggestion(), source_module="my_own_guess")
+        with pytest.raises(QuestionValidationError, match="source_module"):
+            normalize_suggested_answer(s)
+
+    def test_blank_source_path_raises(self):
+        s = dict(_real_suggestion(), source_path="")
+        with pytest.raises(QuestionValidationError, match="source_path"):
+            normalize_suggested_answer(s)
+
+    def test_non_string_rationale_raises(self):
+        s = dict(_real_suggestion(), rationale=42)
+        with pytest.raises(QuestionValidationError, match="rationale"):
+            normalize_suggested_answer(s)
+
+
+class TestDeriveSuggestedAnswerFromEnvManifest:
+    """`derive_suggested_answer_from_env_manifest()` walks a real
+    env.manifest.json-shaped dict; the fixtures here mirror
+    dv_harness.env_manifest.build_vip_config_layer()'s own real, documented
+    field shapes (status/reason/packages[].name/version) rather than a
+    made-up structure -- see that module's own real
+    build_vip_release()/scan_designware_home() docstrings for the shape."""
+
+    def _manifest(self, vip_release_status="SCANNED"):
+        return {
+            "vip_config": {
+                # This dump-level status is DELIBERATELY the opposite of
+                # vip_release's own status below -- the real composite-layer
+                # case build_vip_config_layer() produces (vip_config's own
+                # top status describes only its zero-time config dump, a
+                # DIFFERENT fact from vip_release's real $DESIGNWARE_HOME
+                # scan result merged into the same dict).
+                "status": "NOT_AVAILABLE", "reason": "no dump", "vip_instances": [],
+                "vip_release": {
+                    "status": vip_release_status, "reason": None,
+                    "designware_home": "/dw",
+                    "packages": [
+                        {"name": "amba_svt", "version": "Q-2019.06"},
+                        {"name": "usb_svt", "version": "R-2020.12"},
+                    ],
+                },
+            },
+        }
+
+    def test_real_evidence_present_suggests_the_real_value(self):
+        r = derive_suggested_answer_from_env_manifest(
+            self._manifest(), ["vip_config", "vip_release", "packages", 1, "version"])
+        assert r == {
+            "value": "R-2020.12", "source_module": "env_manifest",
+            "source_path": "env.manifest.json#vip_config.vip_release.packages.1.version",
+        }
+
+    def test_composite_layers_own_unrelated_status_does_not_gate_a_sibling_sub_layer(self):
+        """The headline correctness proof: vip_config's own status is
+        NOT_AVAILABLE (no config dump), yet vip_release -- a genuinely
+        separate, real, SCANNED sub-layer merged into the same dict -- must
+        still be suggestible. Gating on every ancestor blindly would wrongly
+        refuse this real evidence."""
+        manifest = self._manifest(vip_release_status="SCANNED")
+        assert manifest["vip_config"]["status"] == "NOT_AVAILABLE"
+        r = derive_suggested_answer_from_env_manifest(
+            manifest, ["vip_config", "vip_release", "packages", 0, "version"])
+        assert r is not None and r["value"] == "Q-2019.06"
+
+    def test_a_sub_layers_own_not_available_status_is_still_honored(self):
+        """The converse of the above -- vip_release's OWN status must still
+        gate its own facts, even while its sibling vip_instances (gated by
+        the parent) is separately available/unavailable."""
+        manifest = self._manifest(vip_release_status="NOT_AVAILABLE")
+        r = derive_suggested_answer_from_env_manifest(
+            manifest, ["vip_config", "vip_release", "packages", 0, "version"])
+        assert r is None
+
+    def test_parent_status_still_gates_a_plain_non_status_bearing_child(self):
+        """vip_instances is a plain list with no status of its own, so
+        vip_config's own (here NOT_AVAILABLE) status is the correct, most
+        specific fact available and must gate it."""
+        manifest = self._manifest()
+        manifest["vip_config"]["vip_instances"] = [{"instance_path": "u0", "vip_type": "usb3"}]
+        r = derive_suggested_answer_from_env_manifest(
+            manifest, ["vip_config", "vip_instances", 0, "vip_type"])
+        assert r is None
+
+    def test_negative_control_no_evidence_at_all_refuses_to_fabricate(self):
+        """The mandatory negative control: a genuinely absent layer must
+        never produce a guessed answer."""
+        bare = {"vip_config": {"status": "NOT_AVAILABLE", "reason": "no dump", "vip_instances": []}}
+        r = derive_suggested_answer_from_env_manifest(
+            bare, ["vip_config", "vip_release", "packages", 0, "version"])
+        assert r is None
+
+    def test_missing_path_segment_returns_none(self):
+        r = derive_suggested_answer_from_env_manifest(
+            self._manifest(), ["vip_config", "vip_release", "does_not_exist"])
+        assert r is None
+
+    def test_out_of_range_index_returns_none(self):
+        r = derive_suggested_answer_from_env_manifest(
+            self._manifest(), ["vip_config", "vip_release", "packages", 99, "version"])
+        assert r is None
+
+    def test_empty_string_value_returns_none(self):
+        manifest = self._manifest()
+        manifest["vip_config"]["vip_release"]["packages"][1]["version"] = "   "
+        r = derive_suggested_answer_from_env_manifest(
+            manifest, ["vip_config", "vip_release", "packages", 1, "version"])
+        assert r is None
+
+    def test_non_dict_manifest_returns_none(self):
+        assert derive_suggested_answer_from_env_manifest("not a dict", ["vip_config"]) is None
+
+    def test_non_string_leaf_value_is_json_encoded(self):
+        manifest = self._manifest()
+        r = derive_suggested_answer_from_env_manifest(
+            manifest, ["vip_config", "vip_release", "packages", 0])
+        assert r is not None
+        assert '"name": "amba_svt"' in r["value"]
+        assert '"version": "Q-2019.06"' in r["value"]
+
+    def test_derived_suggestion_normalizes_cleanly(self):
+        r = derive_suggested_answer_from_env_manifest(
+            self._manifest(), ["vip_config", "vip_release", "packages", 1, "version"],
+            rationale="latest scanned release")
+        assert normalize_suggested_answer(r) == r
+        assert r["rationale"] == "latest scanned release"
+
+
+class TestDeriveSuggestedAnswerFromDesignSourceInventory:
+    """Uses the REAL dv_harness.design_source_inventory.evaluate_source()
+    pipeline (a real temp file, really hashed) rather than a hand-typed row,
+    so this proves the two real modules actually compose."""
+
+    def _current_row(self, tmp_path, *, content='{"schema_version":"1.0"}', version="v3"):
+        from dv_harness import design_source_inventory as dsi
+        p = tmp_path / "regmap.json"
+        p.write_text(content, encoding="utf-8")
+        probe = dsi.evaluate_source(dsi.SourceEntry(source_id="usb3_regmap", type="register_map",
+                                                       path=str(p), version=version))
+        row = dsi.evaluate_source(dsi.SourceEntry(source_id="usb3_regmap", type="register_map",
+                                                     path=str(p), version=version,
+                                                     recorded_hash=probe["hash"]))
+        assert row["status"] == dsi.STATUS_CURRENT
+        return row, p
+
+    def test_real_current_row_is_suggested(self, tmp_path):
+        row, _p = self._current_row(tmp_path)
+        r = derive_suggested_answer_from_design_source_inventory([row], "usb3_regmap")
+        assert r == {
+            "value": "v3", "source_module": "design_source_inventory",
+            "source_path": "design_source_inventory#usb3_regmap.version",
+        }
+
+    def test_negative_control_a_stale_source_is_never_suggested(self, tmp_path):
+        """The mandatory negative control on this half: a source whose
+        content has moved since it was last checked must never be suggested
+        as if it still described reality."""
+        row, p = self._current_row(tmp_path)
+        p.write_text('{"schema_version":"1.1"}', encoding="utf-8")
+        from dv_harness import design_source_inventory as dsi
+        stale_row = dsi.evaluate_source(dsi.SourceEntry(source_id="usb3_regmap", type="register_map",
+                                                            path=str(p), version="v3",
+                                                            recorded_hash=row["hash"]))
+        assert stale_row["status"] == dsi.STATUS_STALE
+        r = derive_suggested_answer_from_design_source_inventory([stale_row], "usb3_regmap")
+        assert r is None
+
+    def test_unknown_status_no_recorded_hash_is_never_suggested(self, tmp_path):
+        from dv_harness import design_source_inventory as dsi
+        p = tmp_path / "regmap.json"
+        p.write_text("{}", encoding="utf-8")
+        row = dsi.evaluate_source(dsi.SourceEntry(source_id="usb3_regmap", type="register_map", path=str(p)))
+        assert row["status"] == dsi.STATUS_UNKNOWN
+        assert derive_suggested_answer_from_design_source_inventory([row], "usb3_regmap") is None
+
+    def test_no_matching_source_id_returns_none(self, tmp_path):
+        row, _p = self._current_row(tmp_path)
+        assert derive_suggested_answer_from_design_source_inventory([row], "some_other_source") is None
+
+    def test_empty_rows_returns_none(self):
+        assert derive_suggested_answer_from_design_source_inventory([], "usb3_regmap") is None
+        assert derive_suggested_answer_from_design_source_inventory(None, "usb3_regmap") is None
+
+    def test_missing_field_returns_none(self, tmp_path):
+        row, _p = self._current_row(tmp_path)
+        assert derive_suggested_answer_from_design_source_inventory(
+            [row], "usb3_regmap", field="does_not_exist") is None
+
+    def test_custom_field_is_honored(self, tmp_path):
+        row, _p = self._current_row(tmp_path)
+        r = derive_suggested_answer_from_design_source_inventory([row], "usb3_regmap", field="type")
+        assert r["value"] == "register_map"
+        assert r["source_path"] == "design_source_inventory#usb3_regmap.type"
+
+
+class TestBuildSuggestThenConfirmOptions:
+    def test_builds_options_and_recommendation(self):
+        built = build_suggest_then_confirm_options(_real_suggestion(), alternative_labels=["R-2019.06"])
+        assert built["recommendation"] == "R-2020.12"
+        assert built["options"][0]["label"] == "R-2020.12"
+        assert "Suggested from env_manifest" in built["options"][0]["rationale"]
+        assert "newest scanned package" in built["options"][0]["rationale"]
+        assert built["suggested_answer"]["value"] == "R-2020.12"
+
+    def test_default_produces_exactly_two_options_via_a_synthetic_alternative_free_form(self):
+        # No alternative_labels supplied -> only the suggested value itself
+        # would form ONE option, below the schema's own 2-option minimum;
+        # this must be refused rather than silently accepted as a 1-option
+        # question (an open-ended question suggest-then-confirm mode still
+        # must never file).
+        with pytest.raises(QuestionValidationError, match="2-3"):
+            build_suggest_then_confirm_options(_real_suggestion(), alternative_labels=[])
+
+    def test_with_one_alternative_produces_two_options(self):
+        built = build_suggest_then_confirm_options(_real_suggestion(), alternative_labels=["R-2019.06"])
+        assert [o["label"] for o in built["options"]] == ["R-2020.12", "R-2019.06"]
+
+    def test_too_many_alternatives_raises(self):
+        with pytest.raises(QuestionValidationError, match="2-3"):
+            build_suggest_then_confirm_options(_real_suggestion(),
+                                                 alternative_labels=["A", "B", "C"])
+
+    def test_alternative_repeating_the_suggested_value_raises(self):
+        with pytest.raises(QuestionValidationError, match="repeats the suggested value"):
+            build_suggest_then_confirm_options(_real_suggestion(), alternative_labels=["R-2020.12"])
+
+    def test_invalid_suggested_answer_raises(self):
+        with pytest.raises(QuestionValidationError):
+            build_suggest_then_confirm_options({"value": "x"})  # missing source_module/source_path
+
+
+class TestValidateQuestionSuggestedAnswerCrossCheck:
+    def _minimal_question(self, **overrides):
+        q = {
+            "schema_version": "1.0", "id": "Q-VIP-00000000", "question_key": "k",
+            "blocking": False, "domain": "vip", "owner": "DV-owner/Synopsys-AE",
+            "question": "Which VIP release?", "context_path": "env.manifest.json#vip_config",
+            "options": [{"label": "R-2020.12"}, {"label": "R-2019.06"}],
+            "recommendation": "R-2020.12", "assumption_if_unanswered": "assume newest",
+            "tier": 2, "tier_reason": "no_hard_trigger_low_blast_radius", "status": "ASSUMED",
+            "created_at": "2026-09-07T00:00:00+00:00", "suggested_answer": None,
+        }
+        q.update(overrides)
+        return q
+
+    def test_agreeing_suggested_answer_passes(self):
+        q = self._minimal_question(suggested_answer=_real_suggestion())
+        validate_question(q)  # must not raise
+
+    def test_absent_suggested_answer_passes(self):
+        validate_question(self._minimal_question())  # must not raise
+
+    def test_mismatched_suggested_answer_raises(self):
+        """The house rule this whole mode rests on: a suggestion IS the
+        recommendation, cited -- it must never silently diverge from it."""
+        bad = self._minimal_question(
+            suggested_answer=dict(_real_suggestion(), value="SOMETHING_ELSE"))
+        with pytest.raises(QuestionValidationError, match="must equal recommendation"):
+            validate_question(bad)
+
+
+class TestAddQuestionSuggestThenConfirmIntegration:
+    """End-to-end: real derivation from a real env_manifest-shaped dict,
+    through build_suggest_then_confirm_options(), through a real
+    QuestionQueueStore.add_question() call, round-tripped back out."""
+
+    def test_full_suggest_then_confirm_round_trip(self, tmp_path):
+        store = QuestionQueueStore(tmp_path)
+        manifest = TestDeriveSuggestedAnswerFromEnvManifest()._manifest()
+        derived = derive_suggested_answer_from_env_manifest(
+            manifest, ["vip_config", "vip_release", "packages", 1, "version"],
+            rationale="newest scanned package")
+        assert derived is not None
+        built = build_suggest_then_confirm_options(derived, alternative_labels=["Q-2019.06"])
+
+        rec = store.add_question(
+            domain="vip", question="Which VIP release is this environment built against?",
+            context_path="env.manifest.json#vip_config.vip_release",
+            options=built["options"], recommendation=built["recommendation"],
+            assumption_if_unanswered="Assume the newest scanned VIP release until confirmed.",
+            suggested_answer=built["suggested_answer"],
+        )
+        assert rec["suggested_answer"] == derived
+        assert rec["recommendation"] == rec["suggested_answer"]["value"] == "R-2020.12"
+
+        # round-trips through the real persisted store, not just the return value
+        fetched = store.get_question(rec["id"])
+        assert fetched["suggested_answer"]["source_path"].startswith("env.manifest.json#")
+
+        # a human CONFIRMS the suggestion by answering with the same value
+        answered = store.answer_question(rec["id"], answer="R-2020.12", basis="confirmed by DV owner",
+                                           decided_by="alice")
+        assert answered["status"] == "ANSWERED"
+        assert answered["answer"] == "R-2020.12"
+
+    def test_add_question_without_suggested_answer_is_unaffected(self, tmp_path):
+        """The disclosed-default guarantee: every pre-existing caller that
+        never passes suggested_answer= behaves byte-for-byte as before --
+        the field is simply None."""
+        store = QuestionQueueStore(tmp_path)
+        rec = store.add_question(
+            domain="env", question="What is the top module name?",
+            context_path="env.manifest.json#dut_facts.rtl",
+            options=["usb3_top", "usb3_dev_top"], recommendation="usb3_top",
+            assumption_if_unanswered="assume usb3_top",
+        )
+        assert rec["suggested_answer"] is None
+        validate_question(rec)  # schema still accepts the (absent) field
+
+    def test_negative_control_no_real_evidence_files_an_ordinary_open_question(self, tmp_path):
+        """When the harness cannot derive a suggestion (evidence genuinely
+        absent), the caller falls back to filing an ordinary, un-suggested
+        question rather than fabricating one -- proving the mode never
+        forces a guess through when there is nothing real to suggest."""
+        store = QuestionQueueStore(tmp_path)
+        bare_manifest = {"vip_config": {"status": "NOT_AVAILABLE", "reason": "no dump",
+                                          "vip_instances": []}}
+        derived = derive_suggested_answer_from_env_manifest(
+            bare_manifest, ["vip_config", "vip_release", "packages", 0, "version"])
+        assert derived is None
+
+        rec = store.add_question(
+            domain="vip", question="Which VIP release is this environment built against?",
+            context_path="env.manifest.json#vip_config.vip_release",
+            options=["R-2020.12", "unknown -- ask vendor"],
+            recommendation="R-2020.12",
+            assumption_if_unanswered="Assume R-2020.12 until confirmed.",
+            suggested_answer=derived,  # None -- never fabricated
+        )
+        assert rec["suggested_answer"] is None
+
+
+class TestFileSignoffEvidenceQuestion:
+    """dv_harness_tests coverage for question_queue.file_signoff_evidence_
+    question() (2026-09-07 gap closure: "signoff-reviewer-cannot-ask-
+    question-about-specific-evidence"): the reachable path a human reviewing
+    signoff-stage evidence uses to file a NEW clarifying question tied to
+    one specific evidence item, reusing add_question()'s own Tier-3/routing/
+    grounding-evidence machinery unmodified."""
+
+    def test_files_a_real_tier3_question_citing_the_named_evidence(self, tmp_path):
+        store = QuestionQueueStore(tmp_path)
+        rec = file_signoff_evidence_question(
+            store,
+            evidence_kind=SIGNOFF_EVIDENCE_KIND_BUNDLE,
+            evidence_path="manifest.json#manifest[artifact='tb_source']",
+            evidence_summary="tb_source reported absent in the exported signoff bundle",
+            question="Is tb_source genuinely absent, or was generation skipped by mistake?",
+            options=["Genuinely absent -- IP-level project, no TB generated",
+                     "Mistake -- generation must be re-run before signoff"],
+            recommendation="Mistake -- generation must be re-run before signoff",
+            raised_by="dv-reviewer",
+        )
+        assert rec["tier"] == TIER3_CANNOT_ASSUME
+        assert rec["blocking"] is True
+        assert rec["status"] == "OPEN"
+        assert rec["domain"] == "env"
+        assert rec["owner"] == route_owner("env")
+        assert rec["grounding_evidence"]["evidence_path"] == (
+            "manifest.json#manifest[artifact='tb_source']")
+        assert "dv-reviewer" in rec["grounding_evidence"]["summary"]
+        assert "tb_source reported absent" in rec["grounding_evidence"]["summary"]
+        validate_question(rec)  # a real, schema-valid persisted record
+
+        # the store actually holds it, not merely the return value
+        [only] = store.list_questions()
+        assert only["id"] == rec["id"]
+
+    def test_evidence_kind_vocabulary_is_closed_and_named(self):
+        assert SIGNOFF_EVIDENCE_KINDS == {
+            SIGNOFF_EVIDENCE_KIND_BUNDLE, SIGNOFF_EVIDENCE_KIND_BLOCKER_LIST,
+            SIGNOFF_EVIDENCE_KIND_COVERAGE_CLOSURE, SIGNOFF_EVIDENCE_KIND_PROVENANCE_CAVEAT,
+        }
+
+    def test_unrecognized_evidence_kind_is_refused_never_silently_accepted(self, tmp_path):
+        store = QuestionQueueStore(tmp_path)
+        with pytest.raises(QuestionValidationError):
+            file_signoff_evidence_question(
+                store, evidence_kind="some_made_up_kind",
+                evidence_path="x", evidence_summary="y",
+                question="q?", options=["a", "b"], recommendation="a",
+            )
+        assert store.list_questions() == []  # the refused attempt persisted nothing
+
+    def test_missing_evidence_citation_is_refused_by_the_reused_grounding_check(self, tmp_path):
+        """Negative control proving this is REUSE, not a second, looser
+        validation path: an empty evidence_path is refused by
+        normalize_grounding_evidence()'s own existing rule, unmodified."""
+        store = QuestionQueueStore(tmp_path)
+        with pytest.raises(QuestionValidationError):
+            file_signoff_evidence_question(
+                store, evidence_kind=SIGNOFF_EVIDENCE_KIND_COVERAGE_CLOSURE,
+                evidence_path="", evidence_summary="a coverage bin closure claim",
+                question="q?", options=["a", "b"], recommendation="a",
+            )
+        assert store.list_questions() == []
+
+    def test_idempotent_on_question_key_never_grows_the_queue(self, tmp_path):
+        """A human re-reviewing the SAME evidence item (a dashboard
+        re-render, a re-run signoff pass) must get back the already-filed
+        record, never a duplicate -- the same dedup escalate_conflict() and
+        build_multiple_choice_question() already apply, reused here."""
+        store = QuestionQueueStore(tmp_path)
+        kwargs = dict(
+            evidence_kind=SIGNOFF_EVIDENCE_KIND_BLOCKER_LIST,
+            evidence_path="signoff_blocker_list#waiver_status",
+            evidence_summary="waiver_status dimension reports UNMET",
+            question="Is this expired waiver a real blocker, or should it be renewed first?",
+            options=["Real blocker -- signoff must wait", "Renew the waiver, then re-check"],
+            recommendation="Renew the waiver, then re-check",
+        )
+        first = file_signoff_evidence_question(store, **kwargs)
+        second = file_signoff_evidence_question(store, **kwargs)
+        assert first["id"] == second["id"]
+        assert len(store.list_questions()) == 1
+
+    def test_two_different_evidence_items_never_collide_on_one_question_key(self, tmp_path):
+        store = QuestionQueueStore(tmp_path)
+        one = file_signoff_evidence_question(
+            store, evidence_kind=SIGNOFF_EVIDENCE_KIND_BUNDLE,
+            evidence_path="manifest.json#manifest[artifact='tb_source']",
+            evidence_summary="tb_source absent",
+            question="q?", options=["a", "b"], recommendation="a",
+        )
+        other = file_signoff_evidence_question(
+            store, evidence_kind=SIGNOFF_EVIDENCE_KIND_BUNDLE,
+            evidence_path="manifest.json#manifest[artifact='vplan']",
+            evidence_summary="vplan present",
+            question="q?", options=["a", "b"], recommendation="a",
+        )
+        assert one["id"] != other["id"]
+        assert len(store.list_questions()) == 2
+
+    def test_context_fires_the_real_pass_fail_hard_trigger_never_asserted_directly(self, tmp_path):
+        store = QuestionQueueStore(tmp_path)
+        rec = file_signoff_evidence_question(
+            store, evidence_kind=SIGNOFF_EVIDENCE_KIND_PROVENANCE_CAVEAT,
+            evidence_path="evidence_provenance#deadlock_freedom",
+            evidence_summary="AGENT_SELF_ATTESTED deadlock-freedom claim on the composed system",
+            question="Has anyone independently re-derived this self-attested claim?",
+            options=["Yes -- treat as reliable", "No -- treat as unverified"],
+            recommendation="No -- treat as unverified",
+        )
+        # classify_tier() reached Tier 3 through its own ordinary hard-trigger
+        # evaluation of SIGNOFF_EVIDENCE_QUESTION_CONTEXT -- this function
+        # never asserts the tier directly, proven by reading the real reason
+        # classify_tier() itself recorded.
+        assert "affects_pass_fail_verdict" in rec["tier_reason"]
+
+    def test_extra_context_can_add_but_not_silently_drop_the_default_trigger(self, tmp_path):
+        store = QuestionQueueStore(tmp_path)
+        rec = file_signoff_evidence_question(
+            store, evidence_kind=SIGNOFF_EVIDENCE_KIND_COVERAGE_CLOSURE,
+            evidence_path="functional_coverage_signoff#usb3_lfps",
+            evidence_summary="closure claims 100% but the underlying bin count looks stale",
+            question="q?", options=["a", "b"], recommendation="a",
+            extra_context={"affects_spec_intent": True},
+        )
+        assert rec["tier"] == TIER3_CANNOT_ASSUME
+        assert "affects_pass_fail_verdict" in rec["tier_reason"]
+        assert "affects_spec_intent" in rec["tier_reason"]
+
+    def test_raised_by_is_never_confused_with_a_recorded_decisions_decided_by(self, tmp_path):
+        store = QuestionQueueStore(tmp_path)
+        rec = file_signoff_evidence_question(
+            store, evidence_kind=SIGNOFF_EVIDENCE_KIND_BUNDLE,
+            evidence_path="manifest.json#manifest[artifact='vplan']",
+            evidence_summary="vplan/ directory bundled",
+            question="q?", options=["a", "b"], recommendation="a",
+            raised_by="qa-reviewer",
+        )
+        # raised_by never writes an answer/decision by itself.
+        assert rec["decided_by"] is None
+        assert rec["answered_at"] is None
+        answered = store.answer_question(rec["id"], answer="a", basis="reviewed manifest by hand",
+                                           decided_by="dv-lead")
+        # only the real, sanctioned answer_question() path may record a
+        # decider -- and it is a materially different person than raised_by.
+        assert answered["decided_by"] == "dv-lead"

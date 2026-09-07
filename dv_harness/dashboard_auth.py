@@ -178,6 +178,15 @@ CONTROL_COMMAND_REQUIRED_ROLE = {
     "RESEARCH_APPROVE": APPROVER,
     "RESEARCH_REJECT": APPROVER,
     "RESEARCH_HOLD": APPROVER,
+    # question_queue.py dashboard wiring (2026-09-07): both write a real human
+    # DECISION into question_queue.py's own decisions.json audit trail --
+    # QUESTION_ANSWER records a human's answer (classify_tier()'s own
+    # HUMAN_DECISION_SOURCE, which permanently overrides a Tier-2 auto-
+    # assumption and suppresses every future re-ask), QUESTION_REVOKE
+    # withdraws one. Same "records a decision other mechanisms then rely on"
+    # rationale as APPROVE/COSIGN/CORRECT above.
+    "QUESTION_ANSWER": APPROVER,
+    "QUESTION_REVOKE": APPROVER,
 }
 
 #: An action neither table maps requires the HIGHEST role. Deny-by-default: a

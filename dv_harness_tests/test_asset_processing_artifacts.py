@@ -501,7 +501,8 @@ def index():
 def test_index_finds_real_classes_and_inheritance(index):
     by_name = {c["name"]: c for c in index["classes"]}
     assert set(by_name) == {"svt_demo_cfg", "svt_demo_transaction", "svt_demo_base_sequence",
-                            "svt_demo_driver", "svt_demo_monitor", "svt_demo_agent"}
+                            "svt_demo_driver", "svt_demo_monitor", "svt_demo_agent",
+                            "svt_demo_report_cb"}
     assert by_name["svt_demo_cfg"]["base_class"] == "uvm_object"
     assert by_name["svt_demo_driver"]["is_virtual"] is True
     assert by_name["svt_demo_cfg"]["is_virtual"] is False

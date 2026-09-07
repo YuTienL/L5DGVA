@@ -11,6 +11,7 @@ from dv_harness.fabric_progress_ir import (
     FabricProgressIrError,
     analyze_credit_outstanding,
     analyze_fabric_progress,
+    analyze_resource_contention,
     analyze_resource_dependency_cycle,
     assert_no_verification_verdict_vocabulary,
 )
@@ -230,6 +231,96 @@ def test_none_facts_raises_for_credit_outstanding():
 
 
 # ---------------------------------------------------------------------------
+# Resource contention: a genuinely separate, contention-specific metric.
+# ---------------------------------------------------------------------------
+
+
+def test_two_distinct_waiters_on_one_resource_is_contention():
+    # Two agents (B and C) both blocked wanting the resource A holds --
+    # real contention, no cycle anywhere in this graph.
+    facts = [
+        {"resource": "R1", "held_by": "A", "waiting_for": None},
+        {"resource": "R2", "held_by": "B", "waiting_for": "R1"},
+        {"resource": "R3", "held_by": "C", "waiting_for": "R1"},
+    ]
+    analysis = analyze_resource_contention(facts)
+    assert analysis.status == "CONTENTION_DETECTED"
+    r1 = next(f for f in analysis.findings if f.resource == "R1")
+    assert r1.status == "CONTENDED"
+    assert r1.holder == "A"
+    assert r1.ambiguous_holder is False
+    assert r1.waiter_count == 2
+    assert set(r1.waiters) == {"B", "C"}
+
+
+def test_a_single_waiter_is_not_contention():
+    facts = [
+        {"resource": "R1", "held_by": "A", "waiting_for": None},
+        {"resource": "R2", "held_by": "B", "waiting_for": "R1"},
+    ]
+    analysis = analyze_resource_contention(facts)
+    assert analysis.status == "NO_CONTENTION_DETECTED"
+    r1 = next(f for f in analysis.findings if f.resource == "R1")
+    assert r1.status == "NOT_CONTENDED"
+    assert r1.waiter_count == 1
+
+
+def test_no_waiters_at_all_is_not_contention():
+    facts = [{"resource": "R1", "held_by": "A", "waiting_for": None}]
+    analysis = analyze_resource_contention(facts)
+    assert analysis.status == "NO_CONTENTION_DETECTED"
+    assert analysis.findings == []
+
+
+def test_contention_is_distinct_from_a_circular_wait():
+    # A real 2-cycle (A<->B): exactly one waiter per resource, so this must
+    # read as CONTENTION-free even though a real deadlock exists on the
+    # sibling analysis over the identical facts.
+    facts = [
+        {"resource": "R1", "held_by": "A", "waiting_for": "R2"},
+        {"resource": "R2", "held_by": "B", "waiting_for": "R1"},
+    ]
+    cycle_finding = analyze_resource_dependency_cycle(facts)
+    contention = analyze_resource_contention(facts)
+    assert cycle_finding.status == "CIRCULAR_WAIT_DETECTED"
+    assert contention.status == "NO_CONTENTION_DETECTED"
+
+
+def test_contended_resource_with_ambiguous_holder_never_guesses_a_holder():
+    # R1's holder is genuinely ambiguous (two conflicting held_by facts);
+    # two other agents both wait on it -- real contention, but the holder
+    # must be reported None/ambiguous rather than picked.
+    facts = [
+        {"resource": "R1", "held_by": "A", "waiting_for": None},
+        {"resource": "R1", "held_by": "Z", "waiting_for": None},
+        {"resource": "R2", "held_by": "B", "waiting_for": "R1"},
+        {"resource": "R3", "held_by": "C", "waiting_for": "R1"},
+    ]
+    analysis = analyze_resource_contention(facts)
+    assert analysis.status == "CONTENTION_DETECTED"
+    r1 = next(f for f in analysis.findings if f.resource == "R1")
+    assert r1.status == "CONTENDED"
+    assert r1.holder is None
+    assert r1.ambiguous_holder is True
+
+
+def test_empty_resource_dependency_facts_is_insufficient_evidence_for_contention():
+    analysis = analyze_resource_contention([])
+    assert analysis.status == "INSUFFICIENT_EVIDENCE"
+    assert analysis.findings == []
+
+
+def test_malformed_facts_raise_for_contention():
+    with pytest.raises(FabricProgressIrError):
+        analyze_resource_contention([{"held_by": "A"}])
+
+
+def test_none_facts_raises_for_contention():
+    with pytest.raises(FabricProgressIrError):
+        analyze_resource_contention(None)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
 # Composed FabricProgressIR: worst-wins overall fold.
 # ---------------------------------------------------------------------------
 
@@ -269,6 +360,22 @@ def test_overall_insufficient_evidence_outranks_a_clean_axis():
     assert report.overall_status == "INSUFFICIENT_EVIDENCE"
 
 
+def test_overall_risk_detected_when_only_contention_is_found():
+    # No cycle, credit/outstanding both clean -- but two agents contend for
+    # one resource. That alone must still drive PROGRESS_RISK_DETECTED.
+    rd = [
+        {"resource": "R1", "held_by": "A", "waiting_for": None},
+        {"resource": "R2", "held_by": "B", "waiting_for": "R1"},
+        {"resource": "R3", "held_by": "C", "waiting_for": "R1"},
+    ]
+    co = [{"resource": "AXI_M0", "credit_available": 4, "credit_max": 8}]
+    report = analyze_fabric_progress(rd, co)
+    assert report.overall_status == "PROGRESS_RISK_DETECTED"
+    assert report.resource_dependency.status == "NO_CYCLE_DETECTED"
+    assert report.credit_outstanding.status == "NO_EXHAUSTION_DETECTED"
+    assert report.resource_contention.status == "CONTENTION_DETECTED"
+
+
 def test_overall_risk_outranks_insufficient_evidence():
     # A real cycle on one axis, and a genuine gap on the other -- the real
     # risk must win, not be diluted by the unrelated gap.
@@ -287,6 +394,7 @@ def test_to_dict_round_trips_cleanly():
     report = analyze_fabric_progress(rd, co)
     d = report.to_dict()
     assert d["overall_status"] == "NO_RISK_DETECTED"
+    assert d["resource_contention"]["status"] == "NO_CONTENTION_DETECTED"
     json.dumps(d)  # must be JSON-serializable
 
 

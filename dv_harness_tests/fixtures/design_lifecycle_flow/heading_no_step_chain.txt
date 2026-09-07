@@ -1,0 +1,11 @@
+Synthetic fixture -- a real Initialization Sequence heading with only prose
+beneath it (no numbered list, bulleted list, or arrow chain), used to prove
+this module distinguishes "no heading found" from "a heading was found but
+no recognizable step chain beneath it". Not any real DUT's programming
+guide.
+
+# Initialization Sequence
+
+The block must be brought out of reset, configured, and enabled before any
+transfer may begin. Refer to the register programming guide for the exact
+register writes required.

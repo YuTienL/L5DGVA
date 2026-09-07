@@ -79,7 +79,7 @@ AMBA-16..22's are.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from dv_harness import amba_fabric_discovery as afd
 from dv_harness.amba_fabric_discovery import (
@@ -326,6 +326,12 @@ class AddressMapCrossCheck:
     completeness_status: str = ADDRESS_MAP_NOT_CHECKED
     completeness_detail: dict = field(default_factory=dict)
     address_width: Optional[int] = None
+    #: Real question-queue escalation outcomes, one per RESOLVED_BY_AUTHORITY /
+    #: UNDECIDABLE_SAME_AUTHORITY region -- populated only when
+    #: `cross_check_fabric_address_map(..., question_store=...)` was actually
+    #: given a store to file into. Stays empty otherwise, so a caller that
+    #: never opts in sees no behavior change.
+    escalations: list = field(default_factory=list)       # list[dict]
 
     @property
     def bind_planning_owners(self) -> list:
@@ -357,6 +363,7 @@ class AddressMapCrossCheck:
             "refused_owners": self.refused_owners,
             "owners_without_address_evidence": self.owners_without_address_evidence,
             "undecided_owners": self.undecided_owners,
+            "escalations": [dict(e) for e in self.escalations],
         }
 
 
@@ -442,7 +449,9 @@ def _reconcile_one_owner(owner: str, claims: list, traced: bool) -> AddressRegio
 
 
 def cross_check_fabric_address_map(claims, traced_slaves, *, address_width=None,
-                                   reserved_regions=None) -> AddressMapCrossCheck:
+                                   reserved_regions=None,
+                                   question_store: Any = None, now=None,
+                                   ) -> AddressMapCrossCheck:
     """AMBA-23 for a whole fabric.
 
     `claims` is an iterable of `AddressRegionClaim`. `traced_slaves` is the list
@@ -461,6 +470,16 @@ def cross_check_fabric_address_map(claims, traced_slaves, *, address_width=None,
     report a human reads at AMBA-30's gate, and a fabric with a real address
     gap must produce a report naming the gap rather than an exception instead
     of a report.
+
+    `question_store` (a `question_queue.QuestionQueueStore` or a project-root
+    path): when supplied, every real RESOLVED_BY_AUTHORITY /
+    UNDECIDABLE_SAME_AUTHORITY region this reconciliation produces is
+    additionally filed through `escalate_address_map_conflicts()` -- the same
+    `source_authority.escalate_conflict()` channel every other real conflict
+    detector in this codebase already uses. Omitting it (the default) keeps
+    `result.escalations` empty and files nothing anywhere, exactly the same
+    opt-in shape `system_topology_analysis.reconcile_address_maps()`'s own
+    `question_store` argument already has one module over.
     """
     by_owner: dict = {}
     for claim in claims or ():
@@ -477,6 +496,9 @@ def cross_check_fabric_address_map(claims, traced_slaves, *, address_width=None,
     for owner in traced + [o for o in sorted(by_owner) if o not in traced_set]:
         result.regions.append(_reconcile_one_owner(
             owner, by_owner.get(owner, []), owner in traced_set))
+
+    if question_store is not None:
+        result.escalations = escalate_address_map_conflicts(question_store, result, now=now)
 
     if address_width is None:
         result.completeness_status = ADDRESS_MAP_NOT_CHECKED
@@ -508,6 +530,80 @@ def cross_check_fabric_address_map(claims, traced_slaves, *, address_width=None,
     result.completeness_detail = {"region_count": len(regions),
                                   "checked_by": "amba_fabric_generator.compute_address_regions"}
     return result
+
+
+#: Real question-queue escalation outcomes for one `AddressRegionCrossCheck`.
+#: `FILED` -- a real question was persisted (or already existed, idempotently).
+#: `TOO_MANY_SIDES_FOR_QUESTION_SCHEMA` -- the region's own real evidence spans
+#: more sources than `escalate_conflict()`'s 2-3-option schema allows; reported
+#: rather than silently dropped or truncated, the same refusal-over-truncation
+#: `escalate_conflict()` itself already applies to a 4th claim's evidence.
+ADDRESS_MAP_ESCALATION_FILED = "FILED"
+ADDRESS_MAP_ESCALATION_TOO_MANY_SIDES = "TOO_MANY_SIDES_FOR_QUESTION_SCHEMA"
+
+
+def escalate_address_map_conflicts(store, crosscheck: AddressMapCrossCheck, *,
+                                   now=None) -> list:
+    """File every real AMBA-23 address-ownership conflict a `cross_check_
+    fabric_address_map()` result already computed into the REAL question
+    queue, through `source_authority.escalate_conflict()` -- the same channel
+    `system_topology_analysis.escalate_address_conflicts()`,
+    `address_map_verifier.escalate_doc_disagreements()` and
+    `reference_pattern_audit.escalate_asymmetries()` already use, never a
+    second escalation mechanism.
+
+    `_reconcile_one_owner()` already computes the real conflict
+    (`region.authority_verdict`, a `source_authority.resolve_conflict()`
+    result) for every RESOLVED_BY_AUTHORITY and UNDECIDABLE_SAME_AUTHORITY
+    region -- `source_authority.py`'s own docstring calls escalating either
+    one "mandatory, not advisory" -- and until this function existed nothing
+    ever escalated it: a human never saw the disagreement even though this
+    module had already decided, correctly, which artifact to trust for
+    execution (or that it could not decide at all).
+
+    Idempotent by construction, the same discipline every sibling escalator
+    already relies on: `escalate_conflict()`'s own question_key is derived
+    from the question text, which is derived from the owner and each claim's
+    real evidence path, so re-running this over an unchanged cross-check
+    re-mints the SAME question rather than a duplicate.
+
+    A region whose real evidence spans MORE than the 3 sides
+    `escalate_conflict()`'s own schema allows is reported, never crashed on:
+    the returned entry's `escalation_status` names the real reason
+    (`ADDRESS_MAP_ESCALATION_FILED` or `ADDRESS_MAP_ESCALATION_TOO_MANY_
+    SIDES`) so a caller can tell a genuine escalation from one this function
+    could not perform.
+    """
+    from . import source_authority as sa
+
+    filed: list = []
+    for region in crosscheck.regions:
+        if region.status not in (ADDRESS_REGION_RESOLVED_BY_AUTHORITY,
+                                 ADDRESS_REGION_UNDECIDABLE):
+            continue
+        conflict = region.authority_verdict
+        if not conflict:
+            continue
+        entry = {"owner": region.owner, "region_status": region.status}
+        try:
+            record = sa.escalate_conflict(
+                store, conflict, domain="dut",
+                subject=f"AMBA-23 address-map ownership for {region.owner}",
+                context_path=region.owner,
+                extra_context={"affects_spec_intent": True,
+                               "amba23_address_region_status": region.status},
+                now=now)
+        except sa.SourceAuthorityError as exc:
+            if exc.reason != "CONFLICT_SIDES_MUST_BE_2_TO_3":
+                raise
+            entry["escalation_status"] = ADDRESS_MAP_ESCALATION_TOO_MANY_SIDES
+            entry["side_count"] = len(conflict.get("claims") or [])
+            filed.append(entry)
+            continue
+        entry["escalation_status"] = ADDRESS_MAP_ESCALATION_FILED
+        entry["question_id"] = (record or {}).get("id")
+        filed.append(entry)
+    return filed
 
 
 def address_map_slaves_for_topology(crosscheck: AddressMapCrossCheck) -> list:

@@ -52,8 +52,44 @@ DEFAULT_CONTROL = {
     "approvals": {},     # stage -> {"note","reviewer_id","reviewer_confidence","approved_at"}
     "approval_history": {},  # stage -> [archived approvals, oldest first, each tagged "outcome"]
     "cosigns": {},       # stage -> {"<gate_id>/<loc>": {"value","reviewer_id","reviewer_confidence","cosigned_at","cosigned_by"}}
+    "suspicious_flags": {},  # stage -> {"<target>": {"target","reason","severity","status","flagged_by","flagged_at","resolved_by","resolved_at","resolution_note"}}
+    "bundle_reviews": {},  # stage -> {"<bundle_hash>": [{"bundle_hash","reviewer_id","note","reviewer_confidence","reviewed_at","reviewed_by"}, ...]} -- see ControlPlane.add_bundle_review()
     "next_constraint_seq": 1,
 }
+
+# ---- FLAG_SUSPICIOUS vocabulary --------------------------------------------
+# See ControlPlane.flag_suspicious()'s docstring for what this verb is and,
+# just as importantly, what it deliberately is NOT (it is neither CORRECT nor
+# COSIGN). Kept as real, checked constants -- not free-text -- the same
+# discipline REVIEWER_CONFIDENCE_LEVELS already applies to approve()/
+# add_cosign()'s own reviewer_confidence field.
+SUSPICION_SEVERITY_LEVELS = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+SUSPICION_STATUS_OPEN = "OPEN"
+SUSPICION_STATUS_RESOLVED = "RESOLVED"
+SUSPICION_STATUSES = (SUSPICION_STATUS_OPEN, SUSPICION_STATUS_RESOLVED)
+
+
+class SecondReviewerRequiredError(ValueError):
+    """Raised by `ControlPlane.assert_bundle_second_review_satisfied()` when
+    no real, independent second reviewer is on file for a (stage,
+    bundle_hash) pair -- see `add_bundle_review()`'s docstring for the real
+    gap this closes (2026-09-07, item id
+    "no-second-reviewer-mechanism-at-signoff-scope"). Carries the stage,
+    bundle_hash and the intended approver so a caller can report exactly
+    what is missing rather than a bare refusal."""
+
+    def __init__(self, stage: str, bundle_hash: str, approver_id: Optional[str]):
+        self.stage = stage
+        self.bundle_hash = bundle_hash
+        self.approver_id = approver_id
+        super().__init__(
+            f"stage {stage!r} bundle {bundle_hash!r} has no independent second "
+            f"reviewer on file"
+            + (f" (distinct from approver {approver_id!r})" if approver_id else "")
+            + " -- call ControlPlane.add_bundle_review() with a real second "
+              "human's reviewer_id before this bundle may be treated as "
+              "dual-reviewed"
+        )
 
 
 def now() -> str:
@@ -337,6 +373,228 @@ class ControlPlane:
         data = self.load().get("cosigns", {})
         return data.get(stage, {}) if stage else data
 
+    # ---- FLAG_SUSPICIOUS ----------------------------------------------------
+    # A real gap this closes (2026-09-07): before this, a reviewer had no way
+    # to mark ONE specific already-produced gate result or evidence citation
+    # as suspicious/needing re-verification. The only two nearby mechanisms
+    # both answer a different question:
+    #   - CORRECT (set_correction() above) resets the WHOLE STAGE -- a human
+    #     telling the harness "redo this stage's work", consuming attempts
+    #     and triggering a replan. It cannot target one gate result inside an
+    #     otherwise-fine stage without discarding everything else.
+    #   - COSIGN (add_cosign() above) is AGREEMENT: a reviewer accepting a
+    #     PENDING judgment value so gates._check_judgment_fields will accept
+    #     it, and it is opt-in and scoped ONLY to gates.JUDGMENT_FIELDS
+    #     (Tier-5 DV_JUDGMENT fields). It has no way to express the opposite
+    #     stance (doubt), and no way to target a non-judgment-field citation
+    #     (e.g. a specific evidence artifact path, or an already-PASSed gate
+    #     whose result a human now suspects).
+    # flag_suspicious() is neither: it is a durable, out-of-band DOUBT record
+    # against one named `target` -- resets nothing, requires no agreement
+    # value, and is not restricted to JUDGMENT_FIELDS. `target` is a free
+    # string the caller chooses to identify what is being doubted; two
+    # conventions already exist elsewhere in this codebase and are safe to
+    # reuse here: add_cosign()'s own "<gate_id>/<loc>" shape for one judgment
+    # field, or evidence_provenance.suspicion_target_for_gate(gate_id) (that
+    # module's own "gate:<gate_id>" convention) for a whole gate result --
+    # see that module for how a flag against one of its six dynamic-behaviour
+    # gates is surfaced next to that gate's own provenance caveat. Any other
+    # citation string (an evidence artifact path, a doc section) is equally
+    # valid; this method does not interpret `target`, only stores it.
+    def flag_suspicious(self, stage: str, target: str, reason: str,
+                         flagged_by: Optional[str] = None, severity: str = "MEDIUM",
+                         context: Optional[str] = None) -> Dict[str, Any]:
+        if not target or not str(target).strip():
+            raise ValueError("target is required to flag something suspicious")
+        if not reason or not str(reason).strip():
+            raise ValueError("reason is required to flag something suspicious")
+        if not flagged_by or not str(flagged_by).strip():
+            raise ValueError("flagged_by is required to flag something suspicious")
+        if severity not in SUSPICION_SEVERITY_LEVELS:
+            raise ValueError(f"invalid severity: {severity!r} "
+                              f"(must be one of {SUSPICION_SEVERITY_LEVELS})")
+        data = self.load()
+        entry = {
+            "target": target,
+            "reason": reason,
+            "severity": severity,
+            "context": context,
+            "status": SUSPICION_STATUS_OPEN,
+            "flagged_by": flagged_by,
+            "flagged_at": now(),
+            "resolved_by": None,
+            "resolved_at": None,
+            "resolution_note": None,
+        }
+        data.setdefault("suspicious_flags", {}).setdefault(stage, {})[target] = entry
+        self.save(data)
+        return entry
+
+    def get_suspicious_flag(self, stage: str, target: str) -> Optional[Dict[str, Any]]:
+        return self.load().get("suspicious_flags", {}).get(stage, {}).get(target)
+
+    def list_suspicious_flags(self, stage: Optional[str] = None,
+                               open_only: bool = False) -> Dict[str, Any]:
+        """All suspicion-flag records for `stage` ({target: entry}), or the
+        whole stage->{target: entry} map when stage is None. `open_only`
+        filters out RESOLVED entries at every level, mirroring
+        get_active_correction()'s "consumed" filter above."""
+        data = self.load().get("suspicious_flags", {})
+        scoped = data.get(stage, {}) if stage else data
+        if not open_only:
+            return scoped
+        if stage:
+            return {k: v for k, v in scoped.items() if v.get("status") == SUSPICION_STATUS_OPEN}
+        return {s: {k: v for k, v in flags.items() if v.get("status") == SUSPICION_STATUS_OPEN}
+                for s, flags in scoped.items()}
+
+    def resolve_suspicious_flag(self, stage: str, target: str, resolution_note: str,
+                                 resolved_by: Optional[str] = None) -> Dict[str, Any]:
+        """Mark a suspicion flag RESOLVED. Never deletes the record -- like
+        the approval/correction history elsewhere in this file, a flag that
+        was raised and then resolved must stay on the audit trail rather than
+        vanish, so `list_suspicious_flags(open_only=False)` can still show it
+        was raised and how it was resolved."""
+        if not resolution_note or not str(resolution_note).strip():
+            raise ValueError("resolution_note is required to resolve a suspicion flag")
+        data = self.load()
+        entry = data.get("suspicious_flags", {}).get(stage, {}).get(target)
+        if entry is None:
+            raise ValueError(f"no suspicion flag on file for stage={stage!r} target={target!r}")
+        entry["status"] = SUSPICION_STATUS_RESOLVED
+        entry["resolved_by"] = resolved_by or _default_user()
+        entry["resolved_at"] = now()
+        entry["resolution_note"] = resolution_note
+        self.save(data)
+        return entry
+
+    # ---- SIGNOFF BUNDLE SECOND REVIEW ----------------------------------
+    # Real gap this closes (2026-09-07, item id
+    # "no-second-reviewer-mechanism-at-signoff-scope"): `approvals` above
+    # holds exactly ONE reviewer entry per stage -- a fresh approve() call
+    # OVERWRITES it (archived into approval_history via _archive_approval(),
+    # never lost, but never CONCURRENT either: two reviewers cannot both
+    # have a live record for one stage at once). add_cosign() is opt-in
+    # AGREEMENT with a single PENDING gates.JUDGMENT_FIELDS value inside
+    # one stage's evidence block -- a narrow, per-field mechanism, not a
+    # whole-bundle review. question_queue.QuestionQueueStore.
+    # add_decision_cosign() is the nearest-looking real mechanism and was
+    # deliberately NOT extended or duplicated here (REUSE OVER REINVENT
+    # was checked first): it co-signs one already-recorded Tier-3 INTAKE
+    # DECISION, keyed on that decision's own exact answer TEXT -- a
+    # different object entirely from a whole `signoff_export.py` evidence
+    # BUNDLE, and that module's own store (decisions.json) has no bundle
+    # concept at all. Neither existing mechanism covers "a second human
+    # independently reviewed the WHOLE signoff evidence bundle before it
+    # is approved".
+    #
+    # add_bundle_review() is that missing mechanism, modelled directly on
+    # add_decision_cosign()'s own real, tested discipline (same reasoning,
+    # a different store) rather than inventing a new one from scratch:
+    # additive, never overwritten -- a real second (third, fourth, ...)
+    # reviewer's record must never silently replace an earlier one, since
+    # the whole point is that MORE THAN ONE human looked at the SAME
+    # bundle; keyed to the EXACT content the review covers
+    # (`signoff_export.compute_bundle_hash()`'s own real, content-derived
+    # hash over the bundle's manifest -- reused, never invented here, and
+    # never a bare bundle directory PATH, which says nothing about whether
+    # the bundle's own CONTENT changed since a prior review, the same
+    # exact-value discipline `ControlPlane.add_cosign()`'s own docstring
+    # states: "a value that later changes ... is NOT covered by a stale
+    # co-sign; a fresh one ... is required again"); and refuses to let the
+    # SAME person be their own second reviewer -- a co-sign is a second,
+    # INDEPENDENT review, not the same person re-affirming their own look,
+    # exactly the check `add_decision_cosign()` already makes for a Tier-3
+    # decision.
+    #
+    # This module intentionally makes NO call site out of
+    # `assert_bundle_second_review_satisfied()` (approve() itself is
+    # untouched, so every existing caller's behaviour is byte-identical) --
+    # wiring a stage gate / CLI verb / dashboard action that actually
+    # BLOCKS a SIGNOFF approval on it is future work outside control_plane.
+    # py's own file scope (commands.py/cli.py/dashboard.py were not part
+    # of this change), the same REACHED-vs-WIRED disclosure this project's
+    # gui_action_safety.py already makes for FLAG_SUSPICIOUS the same day.
+    def add_bundle_review(self, stage: str, bundle_hash: str, reviewer_id: str,
+                           note: str = "", reviewer_confidence: str = "HIGH",
+                           reviewed_by: Optional[str] = None) -> Dict[str, Any]:
+        """Record ONE independent human reviewer's review of the signoff
+        evidence bundle identified by `bundle_hash` for `stage`. Additive
+        -- appended to `bundle_reviews[stage][bundle_hash]`, never
+        overwriting an earlier reviewer's record the way `approve()`
+        overwrites `approvals[stage]`. See this method's own governing
+        comment above for the real gap this closes and why it is not a
+        duplicate of `add_cosign()`/`add_decision_cosign()`."""
+        from .gates import REVIEWER_CONFIDENCE_LEVELS  # see approve()'s identical lazy-import note
+        if not stage or not str(stage).strip():
+            raise ValueError("stage is required to record a bundle review")
+        if not bundle_hash or not str(bundle_hash).strip():
+            raise ValueError(
+                "bundle_hash is required to record a bundle review -- use "
+                "signoff_export.compute_bundle_hash() over the real bundle "
+                "manifest; never invent one"
+            )
+        if not reviewer_id or not str(reviewer_id).strip():
+            raise ValueError("reviewer_id is required to record a bundle review")
+        if reviewer_confidence not in REVIEWER_CONFIDENCE_LEVELS:
+            raise ValueError(f"invalid reviewer_confidence: {reviewer_confidence!r} "
+                              f"(must be one of {REVIEWER_CONFIDENCE_LEVELS})")
+        bundle_hash = str(bundle_hash).strip()
+        data = self.load()
+        entry = {
+            "bundle_hash": bundle_hash,
+            "reviewer_id": str(reviewer_id).strip(),
+            "note": note,
+            "reviewer_confidence": reviewer_confidence,
+            "reviewed_at": now(),
+            "reviewed_by": reviewed_by or reviewer_id,
+        }
+        (data.setdefault("bundle_reviews", {})
+             .setdefault(stage, {})
+             .setdefault(bundle_hash, [])
+             .append(entry))
+        self.save(data)
+        return entry
+
+    def get_bundle_reviews(self, stage: str, bundle_hash: str) -> List[Dict[str, Any]]:
+        """Every review recorded for `(stage, bundle_hash)`, in the order
+        recorded. Empty when nobody has reviewed this exact bundle content
+        yet -- a bundle re-exported with different content gets a
+        different `bundle_hash` and therefore an honestly EMPTY review
+        list, never a stale reviewer list left over from a prior,
+        different bundle."""
+        return list(self.load().get("bundle_reviews", {})
+                    .get(stage, {}).get(str(bundle_hash).strip(), []))
+
+    def has_independent_bundle_review(self, stage: str, bundle_hash: str,
+                                       approver_id: Optional[str] = None) -> bool:
+        """True iff at least one recorded review of `(stage, bundle_hash)`
+        was made by a reviewer whose id differs from `approver_id`
+        (case/whitespace-insensitive, mirroring `add_decision_cosign()`'s
+        own same-person check) -- a real second, INDEPENDENT human. With
+        `approver_id=None` (caller has not named the intended approver
+        yet), True iff at least one review exists at all."""
+        reviews = self.get_bundle_reviews(stage, bundle_hash)
+        if not reviews:
+            return False
+        if approver_id is None:
+            return True
+        approver_norm = str(approver_id).strip().casefold()
+        return any(str(r.get("reviewer_id", "")).strip().casefold() != approver_norm
+                   for r in reviews)
+
+    def assert_bundle_second_review_satisfied(self, stage: str, bundle_hash: str,
+                                               approver_id: Optional[str] = None) -> None:
+        """Raise `SecondReviewerRequiredError` unless a real, independent
+        second reviewer is on file for `(stage, bundle_hash)` -- the real
+        enforcement point a caller (a stage gate, a CLI verb, a dashboard
+        action -- none of which this module dispatches itself) uses to
+        actually BLOCK an approval until this project's own dual-review
+        requirement is genuinely met, rather than merely reportable via
+        `has_independent_bundle_review()` alone."""
+        if not self.has_independent_bundle_review(stage, bundle_hash, approver_id):
+            raise SecondReviewerRequiredError(stage, bundle_hash, approver_id)
+
 
 # ---- WHY / EVIDENCE shared read path ---------------------------------------
 def _latest_stage_checklists(root: Path, stage: str) -> Dict[str, Optional[Dict[str, Any]]]:
@@ -421,10 +679,19 @@ def describe_stage(root: Path, state, stage: str) -> Dict[str, Any]:
         # verbs both already go through -- two renderers, one answer, so a
         # self-attested deadlock-freedom claim cannot be caveated in one
         # surface and presented bare in the other.
-        "evidence_provenance": summarize_evidence_blocks(evidence_blocks),
+        "evidence_provenance": summarize_evidence_blocks(
+            evidence_blocks, suspicious_flags=cp.get("suspicious_flags", {}).get(stage, {})),
         "human_correction": cp.get("corrections", {}).get(stage),
         "human_approval": cp.get("approvals", {}).get(stage),
         "takeover": cp.get("takeover") if cp.get("takeover", {}).get("stage") == stage else None,
+        # FLAG_SUSPICIOUS (2026-09-07): every suspicion-flag record on file
+        # for this stage, regardless of whether it also matches one of
+        # evidence_provenance.PROVENANCE_REQUIRED_GATES (the subset already
+        # folded into "evidence_provenance" above) -- so a flag against a
+        # non-provenance-required gate result, or against an evidence
+        # citation string that is not a gate id at all, is still visible
+        # through this same shared read path.
+        "suspicious_flags": cp.get("suspicious_flags", {}).get(stage, {}),
     }
 
 

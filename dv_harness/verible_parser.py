@@ -61,6 +61,14 @@ slicing the ORIGINAL SOURCE TEXT at a subtree's own min-start/max-end span,
 never by re-deriving it from the parse tree's operator/operand structure --
 robust to any expression shape verible's grammar allows, without this
 module having to model SystemVerilog expression syntax itself.
+
+Since 2026-09-07 (param_define_extraction, spec section 284) each `ParamInfo`
+also carries its own real 1-based source `line`, computed off the same
+`kParamDeclaration` node span this module already resolves -- so a consumer
+citing one specific parameter fact never has to re-derive a line number by
+re-scanning the source text itself. A purely additive, backward-compatible
+field (see `ParamInfo`'s own docstring note); nothing else about parameter
+extraction changed.
 """
 from __future__ import annotations
 
@@ -109,6 +117,16 @@ class ParamInfo:
     name: Optional[str]
     type_text: Optional[str]
     default_text: Optional[str]
+    # Added 2026-09-07 (param_define_extraction, spec section 284): the
+    # real 1-based source line this kParamDeclaration starts on, computed
+    # the same way every other line number in this codebase's sibling
+    # extraction modules is (`source.count("\n", 0, start) + 1` over the
+    # node's own real byte span) -- never a guess, and `None` only when a
+    # param node's span could not be computed at all (defensive; verible's
+    # own tree always carries leaf offsets in practice). Appended as the
+    # LAST field with a default so every existing positional-construction
+    # call site (verified by grep before this edit) stays valid.
+    line: Optional[int] = None
 
 
 @dataclass
@@ -327,7 +345,9 @@ def _extract_params(header, source: str) -> list:
         type_text = _text_of(_direct_child_tagged(param_type, "kTypeInfo"), source) if param_type else None
         trailing = _direct_child_tagged(pd, "kTrailingAssign")
         default_text = _text_of(_direct_child_tagged(trailing, "kExpression"), source) if trailing else None
-        out.append(ParamInfo(name=name, type_text=type_text, default_text=default_text))
+        pd_span = _span(pd)
+        line = source.count("\n", 0, pd_span[0]) + 1 if pd_span is not None else None
+        out.append(ParamInfo(name=name, type_text=type_text, default_text=default_text, line=line))
     return out
 
 

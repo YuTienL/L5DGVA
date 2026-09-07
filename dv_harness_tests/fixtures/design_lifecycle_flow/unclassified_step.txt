@@ -1,0 +1,9 @@
+Synthetic fixture -- an initialization flow carrying one step whose text
+matches no phase keyword, used to prove UNCLASSIFIED reporting rather than
+a guessed phase. Not any real DUT's programming guide.
+
+# Initialization Sequence
+
+1. Assert power-on reset
+2. Perform vendor calibration handshake
+3. Enable block

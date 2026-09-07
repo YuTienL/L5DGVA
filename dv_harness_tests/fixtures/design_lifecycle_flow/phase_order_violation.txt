@@ -1,0 +1,8 @@
+Synthetic fixture -- deliberately mis-ordered initialization flow, used to
+prove PHASE_ORDER_VIOLATION detection. Not any real DUT's programming guide.
+
+# Initialization Sequence
+
+1. Enable block
+2. Base configuration
+3. Start operation

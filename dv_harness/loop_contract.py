@@ -214,6 +214,18 @@ def assert_legal_loop_transition(from_state: Optional[str], to_state: str) -> No
 
 LOOP_STATE_VALUES = tuple(s.value for s in LoopState)
 
+#: The base `LoopState`s section 86's own `LEGAL_LOOP_TRANSITIONS` allows a
+#: STALE transition FROM -- derived from that table itself (never hand-typed
+#: a second time) so this set can never drift from the one real transition
+#: graph. `derive_loop_state()`'s `stale` override only ever applies to one of
+#: these five: overriding a HUMAN_GATE/BLOCKED/RETRY_WAIT/BUDGET_EXHAUSTED/
+#: PLATEAU/OSCILLATING/terminal state to STALE would both misdescribe what
+#: actually happened AND violate the state machine
+#: `assert_legal_loop_transition()` enforces everywhere else.
+STALE_ELIGIBLE_BASE_STATES = tuple(
+    LoopState(k) for k, v in LEGAL_LOOP_TRANSITIONS.items()
+    if k is not None and LoopState.STALE.value in v)
+
 
 # --------------------------------------------------------------------------
 # The one real Status <-> LoopState bridge
@@ -281,7 +293,8 @@ def derive_loop_state(status: str, *,
                       loop_done: bool = False,
                       oscillating: bool = False,
                       plateau: bool = False,
-                      progress_oscillating: bool = False) -> LoopState:
+                      progress_oscillating: bool = False,
+                      stale: bool = False) -> LoopState:
     """The one function that turns real backend facts into a LoopState.
 
     Section 86: "State transitions must derive from backend evidence, not
@@ -322,6 +335,20 @@ def derive_loop_state(status: str, *,
          own work" is the more specific fact, and it points at a different
          remedy than "this stimulus has reached its ceiling".
       7. Otherwise the STATUS_TO_LOOP_STATE table.
+      8. `stale` -- checked LAST, and only overrides a `base` that is one of
+         `STALE_ELIGIBLE_BASE_STATES` (READY/RUNNING/VERIFYING/CONVERGING/
+         STOPPED -- exactly the five states section 86's own
+         `LEGAL_LOOP_TRANSITIONS` allows a STALE edge FROM). `stale` is a
+         real fact from `loop_stale_detection.detect_loop_staleness()` --
+         the loop session's last real event is older than a declared
+         staleness window, or the project's own source moved (a real git
+         diff at HIGH/MEDIUM risk) since the state this session is about to
+         resume against -- never a guess from an agent's prose. Placed last
+         and scoped this narrowly so it can never re-route a genuine
+         TAKEOVER/PAUSE/RETRY_WAIT/BUDGET_EXHAUSTED/BLOCKED/HUMAN_GATE/
+         PLATEAU/OSCILLATING finding, or a terminal SUCCESS/FAILED/CANCELLED
+         one: those are real facts about what already happened and staleness
+         says nothing that would make any of them less true.
     """
     if takeover_active:
         return LoopState.HUMAN_GATE
@@ -346,6 +373,8 @@ def derive_loop_state(status: str, *,
             return LoopState.OSCILLATING
         if plateau:
             return LoopState.PLATEAU
+    if stale and base in STALE_ELIGIBLE_BASE_STATES:
+        return LoopState.STALE
     return base
 
 
@@ -1003,7 +1032,8 @@ def observe_verification_closure_loop(state, cfg: Dict[str, Any], *,
                                       control_plane_state: Optional[Dict[str, Any]] = None,
                                       debug_loop_entries: Optional[List[Dict[str, Any]]] = None,
                                       stage: Optional[str] = None,
-                                      convergence: Optional[Dict[str, Any]] = None
+                                      convergence: Optional[Dict[str, Any]] = None,
+                                      staleness: Optional[Dict[str, Any]] = None
                                       ) -> LoopObservation:
     """Derive the Verification Closure Loop's state from a REAL
     `models.HarnessState` plus the real ControlPlane payload and the real
@@ -1018,7 +1048,17 @@ def observe_verification_closure_loop(state, cfg: Dict[str, Any], *,
     is absent -- a project with no evidence database, or a caller that did not
     ask for one -- `plateau` stays `PLATEAU_NOT_EVALUATED`: a detector that
     never ran and a detector that ran and found nothing are different facts,
-    and this is the one place that distinction is recorded."""
+    and this is the one place that distinction is recorded.
+
+    `staleness` is one `loop_stale_detection.detect_loop_staleness()` report
+    (section 97): whether this session's last real event is older than a
+    declared staleness window, or the project's own source moved (a real git
+    diff at HIGH/MEDIUM risk) since the state being resumed. Absent -- a
+    caller that did not ask, or a staleness check that itself failed -- the
+    loop state is derived exactly as it always was (`stale=False`); a real
+    `status: "STALE"` verdict from that report is the only thing that can move
+    this observation's state to STALE, and only when the base state it would
+    otherwise report is one of `STALE_ELIGIBLE_BASE_STATES`."""
     cp = control_plane_state or {}
     stage = stage or getattr(state, "current_stage", "")
     stages = getattr(state, "stages", {}) or {}
@@ -1054,18 +1094,32 @@ def observe_verification_closure_loop(state, cfg: Dict[str, Any], *,
                 f"trend_analysis.py / coverage_analysis.py produced no usable series for "
                 f"this project, and 'no plateau' without one would be an unearned claim.")
 
+    # Section 97: a real staleness verdict, when one was computed for this
+    # project -- never re-derived here. `is_stale` defaults False so an
+    # absent/failed staleness check changes nothing about the state this
+    # function would otherwise report.
+    stale_report = staleness if isinstance(staleness, dict) else None
+    is_stale = bool(stale_report.get("is_stale")) if stale_report else False
+    if stale_report:
+        note = (note + " | " if note else "") + (
+            f"staleness ({stale_report.get('status')}): "
+            f"{'; '.join(s.get('reason', '') for s in (stale_report.get('signals') or []))}")
+
     loop_state = derive_loop_state(
         status, attempts=attempts, max_attempts=max_attempts,
         paused=paused, takeover_active=takeover, loop_done=loop_done,
         oscillating=bool(osc["oscillating"]),
         plateau=(conv_verdict == LoopState.PLATEAU.value),
-        progress_oscillating=(conv_verdict == LoopState.OSCILLATING.value))
+        progress_oscillating=(conv_verdict == LoopState.OSCILLATING.value),
+        stale=is_stale)
     return LoopObservation(
         loop_id=VERIFICATION_CLOSURE_LOOP,
         state=loop_state.value,
         derived_from=("models.HarnessState + ControlPlane state + Blackboard "
                       "debug_loop_history"
-                      + (" + loop_convergence over the evidence database" if conv else "")),
+                      + (" + loop_convergence over the evidence database" if conv else "")
+                      + (" + loop_stale_detection over state.json/events.jsonl/git"
+                         if stale_report else "")),
         evidence={
             "stage": stage,
             "stage_status": status,
@@ -1076,6 +1130,7 @@ def observe_verification_closure_loop(state, cfg: Dict[str, Any], *,
             "takeover_active": takeover,
             "oscillation": osc,
             "convergence": conv,
+            "staleness": stale_report,
         },
         plateau=plateau_field,
         note=note,
@@ -1316,6 +1371,19 @@ def observe_all(root: Path, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, A
         out["convergence"] = {"available": False,
                               "reason": f"{type(exc).__name__}: {exc}"}
 
+    # Section 97, best-effort and READ-ONLY: a staleness check that itself
+    # fails to run (no git, an unresolvable recorded SHA) must never crash
+    # this observation -- observe_verification_closure_loop() treats an
+    # absent report exactly as it always has (stale=False), never guessing.
+    staleness = None
+    try:
+        from . import loop_stale_detection as _lsd
+        staleness = _lsd.detect_loop_staleness(root, cfg)
+        out["staleness"] = staleness
+    except Exception as exc:
+        out["staleness"] = {"status": "UNKNOWN", "is_stale": False,
+                            "reason": f"{type(exc).__name__}: {exc}"}
+
     try:
         state = StateStore(root).load()
         bb = Blackboard(root)
@@ -1324,7 +1392,8 @@ def observe_all(root: Path, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, A
             state, cfg,
             control_plane_state=ControlPlane(root).load(),
             debug_loop_entries=history.get("entries") or [],
-            convergence=convergence)
+            convergence=convergence,
+            staleness=staleness)
         out["observations"][VERIFICATION_CLOSURE_LOOP] = obs.to_dict()
     except Exception as exc:  # observability must never crash a caller
         out["observations"][VERIFICATION_CLOSURE_LOOP] = {

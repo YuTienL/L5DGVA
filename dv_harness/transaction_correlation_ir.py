@@ -1,9 +1,23 @@
 """dv_harness/transaction_correlation_ir.py -- the Transaction Correlation IR: a real, evidence-based
-bookkeeping layer that answers three questions no existing module in this repo answers -- (1) which
+bookkeeping layer that answers four questions no existing module in this repo answers -- (1) which
 observed RESPONSE goes with which observed REQUEST, from real ID/tag evidence rather than a guessed
-ordering; (2) which observed WRITE/READ DATA BEAT belongs to which observed transaction; and (3) which
+ordering; (2) which observed WRITE/READ DATA BEAT belongs to which observed transaction; (3) which
 observed SUB-TRANSACTIONS at one end of a route are the real children of a single LOGICAL PARENT
-transaction a caller has already detected was split or merged along that route.
+transaction a caller has already detected was split or merged along that route; and (4) -- SYOSCB-11,
+added 2026-09-06 -- reassembling ONE full LOGICAL AXI TRANSACTION record for a caller-declared
+transaction by JOINING the already-computed outputs of (1) and (2) (and, when applicable, (3)) into a
+single record, rather than leaving a caller to manually cross-reference three separate result lists.
+
+SYOSCB-11'S VERIFY-FIRST FINDING, RECORDED HONESTLY. Mechanisms (1) and (2) above already do the real
+correlation WORK a "logical transaction reconstruction" needs -- matching a response to its request,
+and associating every data beat to its transaction -- and mechanism (3) already reconstructs a burst
+split/merge PARENT out of its real observed CHILDREN. What none of the three ever produced is a single
+combined record answering "what do we currently know about THIS ONE logical transaction, end to end" --
+a caller had to run all three separately and cross-reference their outputs by hand. `reconstruct_
+logical_transactions()` below closes exactly that composition gap and nothing more: it is a pure JOIN
+over records the caller has already correlated with `correlate_responses()`/`associate_data_beats()`/
+`link_burst_split_merge()`, performs no correlation logic of its own, and never claims a transaction is
+complete on any dimension it was not handed real, already-computed evidence for.
 
 THE GAP THIS CLOSES, AND WHAT IT DELIBERATELY IS NOT. `dv_harness/amba_transaction_ir.py` (SYOSCB-10)
 already gives one AMBA transaction a typed shape -- `transaction_id`, `original_id`, `fabric_id`,
@@ -655,6 +669,180 @@ def link_burst_split_merge(detected_event: Any, parent_transaction: Any,
 
 
 # ===========================================================================
+# 4. Logical transaction reconstruction -- one full record per logical AXI transaction
+# ===========================================================================
+
+LOGICAL_TXN_COMPLETE = "LOGICAL_TXN_COMPLETE"
+LOGICAL_TXN_PENDING = "LOGICAL_TXN_PENDING_NO_RESPONSE_YET"
+LOGICAL_TXN_RESPONSE_AMBIGUOUS = "LOGICAL_TXN_RESPONSE_AMBIGUOUS_ORDER"
+LOGICAL_TXN_PARTIAL_DATA = "LOGICAL_TXN_PARTIAL_DATA"
+LOGICAL_TXN_UNKNOWN_DATA_LENGTH = "LOGICAL_TXN_UNKNOWN_DATA_LENGTH"
+LOGICAL_TXN_EXCESS_DATA = "LOGICAL_TXN_EXCESS_DATA_BEATS"
+LOGICAL_TXN_BURST_LINKAGE_UNCONFIRMED = "LOGICAL_TXN_BURST_LINKAGE_UNCONFIRMED"
+LOGICAL_TXN_INSUFFICIENT_EVIDENCE = "LOGICAL_TXN_INSUFFICIENT_EVIDENCE"
+
+LOGICAL_TXN_STATUSES: Sequence[str] = (
+    LOGICAL_TXN_COMPLETE, LOGICAL_TXN_PENDING, LOGICAL_TXN_RESPONSE_AMBIGUOUS,
+    LOGICAL_TXN_PARTIAL_DATA, LOGICAL_TXN_UNKNOWN_DATA_LENGTH, LOGICAL_TXN_EXCESS_DATA,
+    LOGICAL_TXN_BURST_LINKAGE_UNCONFIRMED, LOGICAL_TXN_INSUFFICIENT_EVIDENCE,
+)
+
+_BURST_LINKAGE_CLEAN_STATUSES = (LINKAGE_CONFIRMED, LINKAGE_NOT_APPLICABLE)
+
+
+@dataclass
+class LogicalAxiTransactionIR:
+    """One fully-reassembled logical AXI transaction: the real response-correlation outcome, the
+    real data-beat-association outcome, and (when the caller supplies one) the real burst
+    split/merge linkage outcome for this transaction, joined into a single record. `status` is
+    never a guess -- it is the worst (least-complete) of the real, already-computed statuses this
+    record was actually built from, exactly like every other worst-wins rollup in this module."""
+    status: str  # one of LOGICAL_TXN_STATUSES
+    transaction_ref: str
+    scope: Any
+    request_ref: Optional[str]
+    response_ref: Optional[str]
+    response_status: Optional[str]
+    data_status: Optional[str]
+    associated_beat_refs: List[str]
+    burst_linkage_status: Optional[str]
+    reason: str
+    evidence: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _beat_evidence_for_transaction(data_report: "DataAssociationReport", transaction_ref: str) -> List[str]:
+    ev: List[str] = []
+    for b in data_report.beats:
+        if b.transaction_ref == transaction_ref:
+            ev.extend(b.evidence)
+    return ev
+
+
+def reconstruct_logical_transactions(
+        transaction_records: Sequence[Any],
+        response_entries: Sequence[ResponseCorrelationEntry],
+        data_report: "DataAssociationReport",
+        burst_linkage_by_ref: Optional[Mapping[Any, "BurstLinkageEntry"]] = None,
+) -> List[LogicalAxiTransactionIR]:
+    """Assemble ONE `LogicalAxiTransactionIR` per caller-declared transaction by JOINING the
+    already-computed outputs of `correlate_responses()` and `associate_data_beats()` -- reused, never
+    re-derived -- plus, when the caller supplies one, an already-computed `link_burst_split_merge()`
+    verdict for a transaction that is itself the parent of a detected burst split/merge.
+
+    Each `transaction_records` entry must carry a `transaction_ref` (matching a
+    `TransactionDataAssociation.transaction_ref` already present in `data_report`, i.e. the same
+    ref used in the `transactions` list handed to `associate_data_beats()`) and a `request_ref`
+    (matching a `ResponseCorrelationEntry.request_ref` already present in `response_entries`), plus
+    a non-empty `evidence` citation like every other record this module builds a decision from. A
+    transaction whose declared refs resolve to NEITHER a real response-correlation entry NOR a real
+    data-association entry is honestly `LOGICAL_TXN_INSUFFICIENT_EVIDENCE`, naming exactly which
+    half is missing, rather than silently reported as complete or dropped.
+
+    `burst_linkage_by_ref`, when supplied, maps a `transaction_ref` to the `BurstLinkageEntry` this
+    transaction is the PARENT of (typically `link_burst_split_merge()`'s own return value, whose
+    `parent_ref` must equal that same `transaction_ref` -- a mismatch is a caller data-integrity
+    defect and is refused, not silently accepted). Only `LINKAGE_CONFIRMED` and
+    `LINKAGE_NOT_APPLICABLE` (this transaction was never claimed to be a split/merge parent at all)
+    count as "clean" for the composed status; every other linkage outcome is reported as its own
+    honest `LOGICAL_TXN_BURST_LINKAGE_UNCONFIRMED` finding rather than silently ignored.
+    """
+    resp_by_request_ref: Dict[Any, ResponseCorrelationEntry] = {
+        e.request_ref: e for e in response_entries if e.request_ref is not None
+    }
+    data_by_ref: Dict[Any, "TransactionDataAssociation"] = {
+        t.transaction_ref: t for t in data_report.transactions
+    }
+    burst_map: Mapping[Any, "BurstLinkageEntry"] = burst_linkage_by_ref or {}
+
+    results: List[LogicalAxiTransactionIR] = []
+    seen_refs = set()
+    for t in transaction_records:
+        tref = _require_evidence(t, kind="logical transaction", ref_field="transaction_ref")
+        if tref in seen_refs:
+            raise TransactionCorrelationIRError(f"duplicate transaction_ref {tref!r}")
+        seen_refs.add(tref)
+        req_ref = _get(t, "request_ref")
+        scope = _get(t, "scope")
+        own_evidence = _evidence_list(t)
+
+        resp_entry = resp_by_request_ref.get(req_ref) if req_ref is not None else None
+        data_entry = data_by_ref.get(tref)
+        burst_entry = burst_map.get(tref)
+        if burst_entry is not None and burst_entry.parent_ref != tref:
+            raise TransactionCorrelationIRError(
+                f"burst_linkage_by_ref entry for {tref!r} carries a mismatched parent_ref "
+                f"{burst_entry.parent_ref!r} -- the linkage supplied for a transaction must be that "
+                f"transaction's own parent linkage")
+
+        beat_evidence = _beat_evidence_for_transaction(data_report, tref)
+        combined_evidence = sorted(set(
+            own_evidence
+            + (resp_entry.evidence if resp_entry is not None else [])
+            + beat_evidence
+            + (burst_entry.evidence if burst_entry is not None else [])))
+
+        if resp_entry is None or data_entry is None:
+            missing = []
+            if resp_entry is None:
+                missing.append(f"no response-correlation entry for request_ref {req_ref!r}")
+            if data_entry is None:
+                missing.append(f"no data-association entry for transaction_ref {tref!r}")
+            results.append(LogicalAxiTransactionIR(
+                status=LOGICAL_TXN_INSUFFICIENT_EVIDENCE, transaction_ref=tref, scope=scope,
+                request_ref=req_ref,
+                response_ref=(resp_entry.response_ref if resp_entry is not None else None),
+                response_status=(resp_entry.status if resp_entry is not None else None),
+                data_status=(data_entry.status if data_entry is not None else None),
+                associated_beat_refs=(list(data_entry.associated_beat_refs) if data_entry is not None else []),
+                burst_linkage_status=(burst_entry.status if burst_entry is not None else None),
+                reason="; ".join(missing),
+                evidence=combined_evidence))
+            continue
+
+        burst_clean = burst_entry is None or burst_entry.status in _BURST_LINKAGE_CLEAN_STATUSES
+
+        if resp_entry.status == RESPONSE_AMBIGUOUS_ORDER:
+            status = LOGICAL_TXN_RESPONSE_AMBIGUOUS
+            reason = ("response correlation could not establish FIFO completion order for this "
+                      "transaction's request -- see response_status")
+        elif resp_entry.status == REQUEST_PENDING:
+            status = LOGICAL_TXN_PENDING
+            reason = "request is still outstanding -- no response observed yet"
+        elif data_entry.status == DATA_ASSOCIATION_UNKNOWN_LENGTH:
+            status = LOGICAL_TXN_UNKNOWN_DATA_LENGTH
+            reason = ("this transaction declares no expected_beat_count -- data completeness "
+                      "cannot be judged")
+        elif data_entry.status == DATA_ASSOCIATION_EXCESS:
+            status = LOGICAL_TXN_EXCESS_DATA
+            reason = "more data beats were associated than this transaction's own declared length"
+        elif data_entry.status in (DATA_ASSOCIATION_PARTIAL, DATA_ASSOCIATION_NO_BEATS):
+            status = LOGICAL_TXN_PARTIAL_DATA
+            reason = f"data association is incomplete for this transaction ({data_entry.reason})"
+        elif not burst_clean:
+            status = LOGICAL_TXN_BURST_LINKAGE_UNCONFIRMED
+            reason = (f"this transaction is a declared burst split/merge parent whose linkage is "
+                      f"{burst_entry.status} -- see burst_linkage_status")
+        else:
+            status = LOGICAL_TXN_COMPLETE
+            reason = ("response matched and all expected data beats associated"
+                      + (" and burst split/merge linkage confirmed"
+                         if burst_entry is not None and burst_entry.status == LINKAGE_CONFIRMED
+                         else ""))
+
+        results.append(LogicalAxiTransactionIR(
+            status=status, transaction_ref=tref, scope=scope, request_ref=req_ref,
+            response_ref=resp_entry.response_ref, response_status=resp_entry.status,
+            data_status=data_entry.status, associated_beat_refs=list(data_entry.associated_beat_refs),
+            burst_linkage_status=(burst_entry.status if burst_entry is not None else None),
+            reason=reason, evidence=combined_evidence))
+
+    return results
+
+
+# ===========================================================================
 # Reporting
 # ===========================================================================
 
@@ -678,6 +866,20 @@ def render_data_association_report(report: DataAssociationReport) -> str:
     for t in report.transactions:
         lines.append(f"    [{t.status}] transaction={t.transaction_ref!r} "
                      f"{t.associated_beat_count}/{t.expected_beat_count} beat(s)  ({t.reason})")
+    return "\n".join(lines)
+
+
+def render_logical_transaction_report(entries: Sequence[LogicalAxiTransactionIR]) -> str:
+    lines = ["Logical AXI Transaction Reconstruction", ""]
+    for e in entries:
+        lines.append(f"  [{e.status}] transaction={e.transaction_ref!r} scope={e.scope!r} "
+                     f"request={e.request_ref!r} response={e.response_ref!r}")
+        lines.append(f"    response_status={e.response_status!r} data_status={e.data_status!r} "
+                     f"burst_linkage_status={e.burst_linkage_status!r}")
+        lines.append(f"    beats: {e.associated_beat_refs}")
+        lines.append(f"    {e.reason}")
+    if not entries:
+        lines.append("  (no transactions supplied)")
     return "\n".join(lines)
 
 
@@ -712,7 +914,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_link.add_argument("--parent", required=True, help="JSON file: one parent transaction record.")
     p_link.add_argument("--children", required=True, help="JSON file: a list of child transaction records.")
 
-    for p in (p_resp, p_data, p_link):
+    p_recon = sub.add_parser(
+        "reconstruct",
+        help="Reassemble one full logical AXI transaction record per declared transaction by joining "
+             "already-computed response-correlation and data-association results.")
+    p_recon.add_argument("--transactions", required=True,
+                          help="JSON file: a list of {transaction_ref, request_ref, scope, evidence} records.")
+    p_recon.add_argument("--requests", required=True, help="JSON file: a list of request records.")
+    p_recon.add_argument("--responses", required=True, help="JSON file: a list of response records.")
+    p_recon.add_argument("--data-transactions", required=True,
+                          help="JSON file: the transaction records for data-beat association "
+                               "(the `transactions` input to associate_data_beats()).")
+    p_recon.add_argument("--beats", required=True, help="JSON file: a list of data-beat records.")
+
+    for p in (p_resp, p_data, p_link, p_recon):
         p.add_argument("--json", action="store_true", help="Emit the machine-readable IR.")
 
     a = ap.parse_args(argv)
@@ -744,6 +959,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         else:
             print(render_burst_linkage_report(entry))
         return 0 if entry.status == LINKAGE_CONFIRMED else 1
+
+    if a.cmd == "reconstruct":
+        response_entries = correlate_responses(_load(a.requests), _load(a.responses))
+        data_report = associate_data_beats(_load(a.data_transactions), _load(a.beats))
+        entries = reconstruct_logical_transactions(
+            _load(a.transactions), response_entries, data_report)
+        if a.json:
+            print(json.dumps([e.to_dict() for e in entries], indent=2, default=str))
+        else:
+            print(render_logical_transaction_report(entries))
+        return 0 if all(e.status == LOGICAL_TXN_COMPLETE for e in entries) else 1
 
     return 2
 

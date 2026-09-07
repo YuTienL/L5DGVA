@@ -77,6 +77,24 @@ placement question cannot be answered from the evidence supplied (no
 boundary evidence for an endpoint, no declared clock/reset map, no chain
 data at all), the honest answer is `status="UNKNOWN"`/`confidence="UNKNOWN"`
 with a real reason string -- never a silently-assumed pass.
+
+NAMED PER-DOMAIN CHECKER-PLACEMENT RULES (2026-09-06)
+------------------------------------------------------
+`CheckerIR`'s `target_instance`/`mount_side` fields above already answer
+ONE generic, structural placement question for any checker -- which bridge
+side it mounts on. What was still missing is a named rule PER PROTOCOL
+DOMAIN: a register/CSR checker belongs on the CSR bus target, an interrupt
+checker on the interrupt line, a DMA checker on the DMA master, a
+state-machine checker on the FSM-owning target, a timing/handshake checker
+within the timed clock/reset domain -- five distinct claims, not one
+generic "is this linked" question. `CHECKER_DOMAIN_PLACEMENT_RULES` is that
+small rule table (CSR built first per its own request; the four siblings
+follow the identical shape), `CheckerIR.checker_domain` is the new,
+optional, caller-declared field it is checked against, and
+`check_checker_domain_placement()` is the comparator -- called from
+`detect_placement_conflicts()` exactly like the pre-existing
+clock/reset-domain checks, and reporting nothing (never a guess) whenever
+either the checker's own domain or its target's domain was not declared.
 """
 from __future__ import annotations
 
@@ -469,13 +487,21 @@ class CheckerIR:
     module's own additions -- neither exists on the underlying entry --
     naming which bind target this checker watches and, when the caller
     knows, which side of a bridge (if any) it is mounted on. Both default
-    to `None`: an unlinked checker is reported PARTIAL, never guessed."""
+    to `None`: an unlinked checker is reported PARTIAL, never guessed.
+    `checker_domain` is this module's third addition (2026-09-06): which of
+    the five named protocol domains
+    (`CHECKER_DOMAIN_PLACEMENT_RULES`/`CHECKER_DOMAINS`) this checker
+    verifies -- a caller-declared fact, never inferred from `vip_type` or
+    an interface name, and `None` when a caller has not declared one (no
+    domain-placement rule is ever evaluated against a checker with no
+    declared domain)."""
     raw: dict
     target_instance: Optional[str]
     mount_side: Optional[str]
     status: str
     confidence: str
     source_evidence: list
+    checker_domain: Optional[str] = None
 
     def __post_init__(self) -> None:
         _validate_vocab(self.status, IR_STATUS_VALUES, "status", self.interface_row_id)
@@ -491,6 +517,7 @@ class CheckerIR:
             **self.raw,
             "target_instance": self.target_instance,
             "mount_side": self.mount_side,
+            "checker_domain": self.checker_domain,
             "status": self.status,
             "confidence": self.confidence,
             "source_evidence": self.source_evidence,
@@ -504,33 +531,126 @@ class CheckerIR:
 CHECKER_MOUNT_SIDES: tuple = ("PRE_BRIDGE", "POST_BRIDGE")
 
 
+# ---------------------------------------------------------------------------
+# Named, per-protocol-domain checker-placement rules (2026-09-06).
+#
+# `CheckerIR`'s own `target_instance`/`mount_side` fields above already
+# answer ONE generic, structural placement question -- "is this checker on
+# the correct side of a bridge" -- for ANY checker, regardless of what it
+# verifies. What was still generic, not yet a named per-domain rule, is the
+# question this table answers: a checker that verifies a specific
+# PROTOCOL-DOMAIN concern (register/CSR read-write semantics, interrupt
+# assert/clear, DMA data-movement legality, FSM state-transition legality,
+# clock/reset-domain timing/handshake behaviour) must be mounted at the
+# bind target that actually belongs to THAT domain -- never at some other
+# target the checker happens to be linked to.
+#
+# Every rule here is the same shape, and it is enforced the same way
+# `ASSERTION_WRONG_CLOCK_DOMAIN`/`WRONG_RESET_DOMAIN` above already enforce
+# theirs: a caller-DECLARED fact (`checker_domain` on the checker link) is
+# cross-checked against a second caller-DECLARED fact (the bind target's own
+# functional-domain classification, `target_domain_by_instance`) -- never
+# inferred from a name, a VIP type, or a protocol family. Absent either
+# fact, `check_checker_domain_placement()` reports nothing: an unresolved
+# domain-placement question is UNKNOWN, never guessed toward either
+# agreement or conflict.
+# ---------------------------------------------------------------------------
+
+CHECKER_DOMAIN_PLACEMENT_RULES: dict = {
+    "REGISTER_CSR": {
+        "finding_kind": "CSR_CHECKER_WRONG_TARGET_DOMAIN",
+        "rationale": (
+            "a register/CSR-domain checker must be mounted at the bind target whose real, "
+            "caller-declared functional-domain classification is REGISTER_CSR -- the point that "
+            "actually carries address-decoded register reads/writes. A CSR check (e.g. W1C, "
+            "read-only-write-rejected, reserved-bit tie-off) performed at any other target "
+            "validates the wrong address-decode point, never the register bus itself."
+        ),
+    },
+    "INTERRUPT": {
+        "finding_kind": "INTERRUPT_CHECKER_WRONG_TARGET_DOMAIN",
+        "rationale": (
+            "an interrupt-domain checker must be mounted at the bind target classified "
+            "INTERRUPT -- the interrupt line/controller itself. Interrupt assert/clear/ack "
+            "sequencing is only observable at that line; a checker mounted on an unrelated CSR "
+            "or DMA target cannot see it at all."
+        ),
+    },
+    "DMA": {
+        "finding_kind": "DMA_CHECKER_WRONG_TARGET_DOMAIN",
+        "rationale": (
+            "a DMA-domain checker must be mounted at the bind target classified DMA -- the "
+            "actual data-movement master/channel. Descriptor/transfer legality cannot be "
+            "verified from a CSR (configuration-only) target, which never observes the data "
+            "path itself."
+        ),
+    },
+    "STATE": {
+        "finding_kind": "STATE_CHECKER_WRONG_TARGET_DOMAIN",
+        "rationale": (
+            "a state-machine-domain checker must be mounted at the bind target classified "
+            "STATE -- the FSM-owning block itself. A state-transition-legality check needs "
+            "direct visibility of that FSM's own control point, not a downstream or upstream "
+            "proxy for it."
+        ),
+    },
+    "TIMING": {
+        "finding_kind": "TIMING_CHECKER_WRONG_TARGET_DOMAIN",
+        "rationale": (
+            "a timing/handshake-domain checker must be mounted at the bind target classified "
+            "TIMING -- within the same clock/reset domain being timed. A timing check performed "
+            "downstream of a clock-domain-crossing bridge measures the wrong domain's timing "
+            "entirely."
+        ),
+    },
+}
+
+#: The checker-domain vocabulary the five named placement rules above
+#: cover. Declared on a checker link (`checker_domain`) and on a bind
+#: target (`target_domain_by_instance`) -- never guessed from either side.
+CHECKER_DOMAINS: tuple = tuple(CHECKER_DOMAIN_PLACEMENT_RULES.keys())
+
+
 def build_checker_ir(protocol_check_entries: list, checker_links: Optional[dict] = None) -> list:
     """Assemble one `CheckerIR` per protocol-check plan entry.
 
     `protocol_check_entries`: `connectivity.generate_protocol_check_entry()`
     shaped dicts.
     `checker_links`: optional `{interface_row_id: {"target_instance": ...,
-    "mount_side": "PRE_BRIDGE"|"POST_BRIDGE"}}` -- project-declared linkage
-    from a checker's interface row to the bind target it watches. Without
-    it a checker cannot be cross-checked against a bind's chain
-    classification at all (see `detect_placement_conflicts()`), and this
-    function reports that honestly rather than guessing a link from the
-    interface/vip_type name."""
+    "mount_side": "PRE_BRIDGE"|"POST_BRIDGE", "checker_domain":
+    <one of CHECKER_DOMAINS>}}` -- project-declared linkage from a
+    checker's interface row to the bind target it watches, and (since
+    2026-09-06) which of the five named protocol domains
+    (`CHECKER_DOMAIN_PLACEMENT_RULES`) it verifies. Without a link a
+    checker cannot be cross-checked against a bind's chain classification,
+    or against its own domain-placement rule, at all (see
+    `detect_placement_conflicts()`/`check_checker_domain_placement()`),
+    and this function reports that honestly rather than guessing a link
+    from the interface/vip_type name. `checker_domain` is entirely
+    optional -- omitting it never affects `status`/`confidence`, it only
+    means no domain-placement rule can be evaluated for this checker."""
     out = []
     for entry in protocol_check_entries or []:
         row_id = entry.get("interface_row_id")
         link = (checker_links or {}).get(row_id) or {}
         target = link.get("target_instance")
         mount_side = link.get("mount_side")
+        checker_domain = link.get("checker_domain")
         if mount_side is not None and mount_side not in CHECKER_MOUNT_SIDES:
             raise VerificationArchitectureError(
                 f"mount_side must be one of {list(CHECKER_MOUNT_SIDES)}, got {mount_side!r} "
                 f"(checker interface_row_id={row_id!r})"
             )
+        if checker_domain is not None and checker_domain not in CHECKER_DOMAINS:
+            raise VerificationArchitectureError(
+                f"checker_domain must be one of {list(CHECKER_DOMAINS)}, got {checker_domain!r} "
+                f"(checker interface_row_id={row_id!r})"
+            )
         evidence = [_evidence("connectivity.generate_protocol_check_entry", interface_row_id=row_id)]
         if link:
             evidence.append(_evidence("caller_declared_checker_link",
-                                       target_instance=target, mount_side=mount_side))
+                                       target_instance=target, mount_side=mount_side,
+                                       checker_domain=checker_domain))
         if target and mount_side:
             status = "RESOLVED"
         elif target:
@@ -541,6 +661,7 @@ def build_checker_ir(protocol_check_entries: list, checker_links: Optional[dict]
         out.append(CheckerIR(
             raw=entry, target_instance=target, mount_side=mount_side,
             status=status, confidence=confidence, source_evidence=evidence,
+            checker_domain=checker_domain,
         ))
     return out
 
@@ -811,7 +932,7 @@ PLACEMENT_CONFLICT_KINDS: tuple = (
     "SCOREBOARD_INPUTS_NOT_COMPARABLE",
     "DUPLICATE_ACTIVE_VIP",
     "WRONG_RESET_DOMAIN",
-)
+) + tuple(rule["finding_kind"] for rule in CHECKER_DOMAIN_PLACEMENT_RULES.values())
 
 
 def _finding(kind: str, *, severity: str, summary: str, evidence: list, **extra) -> dict:
@@ -822,10 +943,52 @@ def _finding(kind: str, *, severity: str, summary: str, evidence: list, **extra)
     return d
 
 
+def check_checker_domain_placement(
+    checkers: list, target_domain_by_instance: Optional[dict] = None,
+) -> list:
+    """The five named, protocol-domain checker-placement rules
+    (`CHECKER_DOMAIN_PLACEMENT_RULES`). A checker declaring
+    `checker_domain=<domain>` must be linked (via `target_instance`) to a
+    bind target whose OWN real, caller-declared functional-domain
+    classification (`target_domain_by_instance`) is the identical domain --
+    the same "declared field vs. declared map, never inferred from a name"
+    shape `ASSERTION_WRONG_CLOCK_DOMAIN`/`WRONG_RESET_DOMAIN` above already
+    use for clock/reset. Absent either fact (no declared `checker_domain`
+    on the checker, or no entry for its `target_instance` in
+    `target_domain_by_instance`) this reports nothing for that checker --
+    an unresolved domain-placement question is UNKNOWN, never guessed
+    toward either agreement or conflict."""
+    target_domain_by_instance = target_domain_by_instance or {}
+    findings = []
+    for c in checkers:
+        if not c.checker_domain or not c.target_instance:
+            continue
+        target_domain = target_domain_by_instance.get(c.target_instance)
+        if target_domain is None:
+            continue
+        if target_domain == c.checker_domain:
+            continue
+        rule = CHECKER_DOMAIN_PLACEMENT_RULES[c.checker_domain]
+        findings.append(_finding(
+            rule["finding_kind"], severity="HIGH",
+            summary=f"checker on interface {c.interface_row_id!r} declares "
+                    f"checker_domain={c.checker_domain!r} but its target_instance "
+                    f"{c.target_instance!r} is declared domain {target_domain!r} -- "
+                    f"{rule['rationale']}",
+            evidence=c.source_evidence + [_evidence(
+                "caller_declared_target_domain", target_instance=c.target_instance,
+                target_domain=target_domain,
+            )],
+            interface_row_id=c.interface_row_id, target_instance=c.target_instance,
+            checker_domain=c.checker_domain, target_domain=target_domain,
+        ))
+    return findings
+
+
 def detect_placement_conflicts(
     *, vip_selections: Optional[list] = None, vip_binds: Optional[list] = None,
     checkers: Optional[list] = None, scoreboards: Optional[list] = None,
-    assertions: Optional[list] = None,
+    assertions: Optional[list] = None, target_domain_by_instance: Optional[dict] = None,
 ) -> list:
     """Walk a subsystem's assembled IRs and report every placement conflict
     the evidence they carry can actually support. Every argument defaults
@@ -839,6 +1002,10 @@ def detect_placement_conflicts(
     assertions = assertions or []
 
     findings = []
+
+    # The 5 named checker-domain-placement rules (CSR/INTERRUPT/DMA/STATE/
+    # TIMING) -- see check_checker_domain_placement()'s own docstring.
+    findings.extend(check_checker_domain_placement(checkers, target_domain_by_instance))
 
     # VIP_AFTER_BRIDGE: a VIP instance whose own hierarchy path sits below
     # (i.e. is a descendant of) a bind target whose chain crosses a real
@@ -1178,6 +1345,7 @@ def assemble_verification_architecture(
     protocol_check_entries: Optional[list] = None, checker_links: Optional[dict] = None,
     scoreboard_entries: Optional[list] = None, boundary_by_endpoint: Optional[dict] = None,
     assertion_candidates: Optional[list] = None, clock_reset: Optional[dict] = None,
+    target_domain_by_instance: Optional[dict] = None,
 ) -> dict:
     """One call assembling all five IR lists, both comparators, and the
     five rendered matrices. Every argument is optional -- a caller building
@@ -1193,6 +1361,7 @@ def assemble_verification_architecture(
     conflicts = detect_placement_conflicts(
         vip_selections=vip_selections, vip_binds=vip_binds, checkers=checkers,
         scoreboards=scoreboards, assertions=assertions,
+        target_domain_by_instance=target_domain_by_instance,
     )
     duplicates = detect_intra_subsystem_duplicates(
         checkers=checkers, scoreboards=scoreboards, assertions=assertions,

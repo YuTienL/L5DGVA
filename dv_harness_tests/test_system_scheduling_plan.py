@@ -1124,3 +1124,280 @@ def test_the_cli_reports_the_plan_and_writes_no_system_level_artifact(tmp_path):
     for path in tmp_path.rglob("*.sv"):
         assert path.read_text(encoding="utf-8") == (
             "// synthetic fixture, empty on purpose\n"), path
+
+
+# ============================================================================
+# SCENARIO-LEVEL PARALLEL EXECUTION SCHEDULING (additive; not SYS-23..27)
+# ============================================================================
+# This covers `scenario_command_ids()`, `evaluate_scenario_pair_parallel_
+# safety()`, `schedule_scenario_parallel_execution()` and `render_scenario_
+# parallel_schedule_table()` -- the module's own scenario-granularity
+# scheduler, documented in its "SCENARIO-LEVEL PARALLEL EXECUTION SCHEDULING"
+# section. It answers a question neither SYS-25 (a command PAIR) nor SYS-30's
+# `_block_plan()` (ONE scenario's own commands) answers: may two
+# already-planned SCENARIOS be dispatched to run at the same time, given THIS
+# module's own already-computed SYS-24 `shared_resource_scheduling` and SYS-25
+# `parallelism_model`. Every fixture below reuses the SAME PCIE/USB/LONER
+# command.txt bodies the SYS-24/SYS-25 suites above already proved contend,
+# order and stay independent, so a scenario-level verdict is checked against a
+# command-level verdict this file already established rather than a fresh
+# claim.
+
+def _scenario(scenario_id, subsystems, command_ids):
+    return {"scenario_id": scenario_id, "participating_subsystems": list(subsystems),
+            "command_ids": list(command_ids)}
+
+
+def test_scenario_command_ids_reads_the_plain_shape():
+    assert ssp.scenario_command_ids({"command_ids": ["A::X", "A::Y"]}) == ["A::X", "A::Y"]
+
+
+def test_scenario_command_ids_reads_the_real_sys30_block_plan_shape():
+    """`system_topology_analysis.plan_system_scenario_model()`'s own scenario
+    shape carries commands one level down inside `block_plan[].members[]`,
+    never a top-level `command_ids` list -- this must read THAT shape
+    unmodified, because it is the shape the real SYS-30 producer emits."""
+    scenario = {"block_plan": [
+        {"block_kind": "SEQUENTIAL",
+         "members": [{"system_command_id": "PCIE::CPUWRITE4B"},
+                    {"system_command_id": "PCIE::CPUREAD4B"}]},
+        {"block_kind": "PARALLEL",
+         "members": [{"system_command_id": "USB::CPUWRITE4B"}]},
+    ]}
+    assert ssp.scenario_command_ids(scenario) == [
+        "PCIE::CPUWRITE4B", "PCIE::CPUREAD4B", "USB::CPUWRITE4B"]
+
+
+def test_scenario_command_ids_with_neither_shape_is_empty():
+    assert ssp.scenario_command_ids({}) == []
+
+
+def test_two_scenarios_sharing_a_subsystem_instance_must_serialize(tmp_path):
+    """The most restrictive scenario-level signal: a command.txt is sequential
+    by construction and this evidence models ONE running instance of it, so
+    two scenarios that both include PCIE cannot be certified concurrent from
+    this evidence -- regardless of which PCIE commands each one covers."""
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      USB=CONTENDING_CPU_SIDE_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    verdict = ssp.evaluate_scenario_pair_parallel_safety(
+        _scenario("SCEN_A", ["PCIE"], ["PCIE::CPUREAD4B"]),
+        _scenario("SCEN_B", ["PCIE"], ["PCIE::`SMEMMODEL.FILLMEM"]),
+        ir, scheduling, relationships)
+    assert verdict["verdict"] == ssp.SCENARIO_SERIALIZE_SHARED_SUBSYSTEM
+    assert "PCIE" in verdict["basis"]
+    assert verdict["from_field"] == "scenario.participating_subsystems"
+
+
+def test_two_scenarios_routed_through_one_shared_access_point_must_serialize(tmp_path):
+    """PCIE and USB both drive `BFM:DUT_SIDE` through `CPUWRITE4B` -- the SAME
+    SYS-24 finding `test_two_subsystems_driving_one_bfm_get_one_named_access_
+    point` above already proved at the command layer. Neither scenario shares
+    a subsystem with the other, so this is proof the resource-level signal
+    fires on its own."""
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      USB=CONTENDING_CPU_SIDE_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    verdict = ssp.evaluate_scenario_pair_parallel_safety(
+        _scenario("SCEN_A", ["PCIE"], ["PCIE::CPUWRITE4B"]),
+        _scenario("SCEN_B", ["USB"], ["USB::CPUWRITE4B"]),
+        ir, scheduling, relationships)
+    assert verdict["verdict"] == ssp.SCENARIO_SERIALIZE_SHARED_RESOURCE
+    assert "BFM:DUT_SIDE" in verdict["basis"]
+    assert verdict["from_field"] == "shared_resource_scheduling.entries.routed_commands"
+
+
+def test_precedence_prefers_shared_resource_over_command_dependency_and_keeps_both(tmp_path):
+    """A full-scenario pair (every PCIE command vs every USB command) matches
+    BOTH the SYS-24 shared-access-point signal and at least one SYS-25
+    non-parallel-safe command-pair signal (SERIALIZE_RESOURCE on the
+    CPUWRITE4B pair, per `test_two_commands_contending_on_one_resource_are_
+    serialize_resource` above). The more restrictive SHARED_RESOURCE signal
+    must win and the command-dependency signal must still be recorded, never
+    silently discarded."""
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      USB=CONTENDING_CPU_SIDE_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    pcie_ids = sorted(e["system_command_id"] for e in ir["entries"]
+                      if e["source_subsystem"] == "PCIE")
+    usb_ids = sorted(e["system_command_id"] for e in ir["entries"]
+                     if e["source_subsystem"] == "USB")
+    verdict = ssp.evaluate_scenario_pair_parallel_safety(
+        _scenario("SCEN_A", ["PCIE"], pcie_ids), _scenario("SCEN_B", ["USB"], usb_ids),
+        ir, scheduling, relationships)
+    assert verdict["verdict"] == ssp.SCENARIO_SERIALIZE_SHARED_RESOURCE
+    assert ssp.SCENARIO_SERIALIZE_COMMAND_DEPENDENCY in verdict["also_matched"]
+
+
+def test_two_genuinely_independent_scenarios_stay_parallel_safe(tmp_path):
+    """The SAME command pair `test_two_unrelated_subsystems_stay_parallel_
+    safe` above already proved SYS-25 REL_PARALLEL_SAFE, one layer up: no
+    shared subsystem, no shared SYS-24 access point, and the one
+    cross-subsystem command pair between them was classified
+    PARALLEL_SAFE."""
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      LONER=INDEPENDENT_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    verdict = ssp.evaluate_scenario_pair_parallel_safety(
+        _scenario("SCEN_A", ["PCIE"], ["PCIE::`SMEMMODEL.FILLMEM"]),
+        _scenario("SCEN_B", ["LONER"], ["LONER::`LONERMODEL.SETUP"]),
+        ir, scheduling, relationships)
+    assert verdict["verdict"] == ssp.SCENARIO_PARALLEL_SAFE
+    assert verdict["signals"] == []
+
+
+def test_negative_control_a_command_absent_from_the_ir_is_unknown_not_parallel_safe(tmp_path):
+    """THE REQUIRED NEGATIVE CONTROL. A scenario naming a command this
+    evidence never covers (a typo, or a command the SYS-21 IR this
+    parallelism model was built from does not include) must NEVER be
+    certified PARALLEL_SAFE by omission -- that would fabricate a scheduling
+    decision from an evidence gap. It must report SCENARIO_UNKNOWN_PENDING_
+    EVIDENCE instead."""
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      LONER=INDEPENDENT_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    verdict = ssp.evaluate_scenario_pair_parallel_safety(
+        _scenario("SCEN_A", ["PCIE"], ["PCIE::NONEXISTENT_MACRO_NEVER_EXTRACTED"]),
+        _scenario("SCEN_B", ["LONER"], ["LONER::`LONERMODEL.SETUP"]),
+        ir, scheduling, relationships)
+    assert verdict["verdict"] == ssp.SCENARIO_UNKNOWN
+    assert "SYS-21 command IR" in verdict["basis"]
+    assert verdict["signals"], "the evidence gap itself must be a recorded signal"
+    assert verdict["signals"][0]["verdict"] == ssp.SCENARIO_UNKNOWN
+
+
+def test_negative_control_a_scenario_with_no_commands_is_unknown_not_parallel_safe(tmp_path):
+    """A scenario naming no command at all supplies nothing to check. This
+    must never default to PARALLEL_SAFE either."""
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      LONER=INDEPENDENT_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    verdict = ssp.evaluate_scenario_pair_parallel_safety(
+        _scenario("SCEN_EMPTY", ["PCIE"], []),
+        _scenario("SCEN_B", ["LONER"], ["LONER::`LONERMODEL.SETUP"]),
+        ir, scheduling, relationships)
+    assert verdict["verdict"] == ssp.SCENARIO_UNKNOWN
+    assert verdict["command_count_a"] == 0
+
+
+def test_scenario_pair_ids_are_stable_and_order_independent(tmp_path):
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      LONER=INDEPENDENT_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    scenario_a = _scenario("SCEN_A", ["PCIE"], ["PCIE::`SMEMMODEL.FILLMEM"])
+    scenario_b = _scenario("SCEN_B", ["LONER"], ["LONER::`LONERMODEL.SETUP"])
+    forward = ssp.evaluate_scenario_pair_parallel_safety(
+        scenario_a, scenario_b, ir, scheduling, relationships)
+    backward = ssp.evaluate_scenario_pair_parallel_safety(
+        scenario_b, scenario_a, ir, scheduling, relationships)
+    assert forward["scenario_pair_id"] == backward["scenario_pair_id"]
+    assert forward["scenario_pair_id"].startswith("SCENPAIR-")
+
+
+def test_schedule_scenario_parallel_execution_covers_every_pair_exactly_once(tmp_path):
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      USB=CONTENDING_CPU_SIDE_COMMANDS,
+                                      LONER=INDEPENDENT_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    scenarios = [
+        _scenario("SCEN_PCIE", ["PCIE"], ["PCIE::`SMEMMODEL.FILLMEM"]),
+        _scenario("SCEN_USB", ["USB"], ["USB::CPUWRITE4B"]),
+        _scenario("SCEN_LONER", ["LONER"], ["LONER::`LONERMODEL.SETUP"]),
+    ]
+    schedule = ssp.schedule_scenario_parallel_execution(scenarios, ir, scheduling, relationships)
+    assert schedule["scenario_count"] == 3
+    assert schedule["summary"]["pair_count"] == 3
+    # scenario_a/scenario_b keep the two scenarios' ORIGINAL input order (the
+    # same convention `classify_parallelism_relationships()` already uses for
+    # command_a/command_b), so compare unordered pairs rather than assuming a
+    # normalized alphabetical side.
+    seen_pairs = {frozenset((p["scenario_a"], p["scenario_b"])) for p in schedule["pairs"]}
+    assert seen_pairs == {frozenset(("SCEN_PCIE", "SCEN_USB")),
+                         frozenset(("SCEN_PCIE", "SCEN_LONER")),
+                         frozenset(("SCEN_USB", "SCEN_LONER"))}
+    assert sum(schedule["summary"]["by_verdict"].values()) == 3
+    assert schedule["pairs"] == sorted(schedule["pairs"],
+                                       key=lambda p: (p["scenario_a"], p["scenario_b"]))
+
+
+def test_schedule_scenario_parallel_execution_never_submits_or_generates_anything(tmp_path):
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      LONER=INDEPENDENT_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    scenarios = [_scenario("SCEN_A", ["PCIE"], ["PCIE::`SMEMMODEL.FILLMEM"]),
+                _scenario("SCEN_B", ["LONER"], ["LONER::`LONERMODEL.SETUP"])]
+    schedule = ssp.schedule_scenario_parallel_execution(scenarios, ir, scheduling, relationships)
+    boundary = schedule["scenario_execution_boundary"]
+    assert "No job is submitted" in boundary
+    assert "no scenario body, parallel block, sequencer or arbiter is generated" in boundary
+
+
+def test_render_scenario_parallel_schedule_table_with_fewer_than_two_scenarios():
+    empty = ssp.schedule_scenario_parallel_execution(
+        [], {"entries": []}, {"entries": []}, {"pairs": []})
+    table = ssp.render_scenario_parallel_schedule_table(empty)
+    assert "fewer than two scenarios" in table
+
+
+def test_render_scenario_parallel_schedule_table_renders_every_pair(tmp_path):
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      LONER=INDEPENDENT_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    scenarios = [_scenario("SCEN_A", ["PCIE"], ["PCIE::`SMEMMODEL.FILLMEM"]),
+                _scenario("SCEN_B", ["LONER"], ["LONER::`LONERMODEL.SETUP"])]
+    schedule = ssp.schedule_scenario_parallel_execution(scenarios, ir, scheduling, relationships)
+    table = ssp.render_scenario_parallel_schedule_table(schedule)
+    assert "SCEN_A" in table and "SCEN_B" in table
+    assert ssp.SCENARIO_PARALLEL_SAFE in table
+
+
+def test_scenario_scheduling_precedence_is_a_permutation_and_most_restrictive_first():
+    assert sorted(ssp.SCENARIO_SCHEDULING_PRECEDENCE) == sorted(ssp.SCENARIO_SCHEDULING_VERDICTS)
+    assert ssp.SCENARIO_SCHEDULING_PRECEDENCE[0] == ssp.SCENARIO_SERIALIZE_SHARED_SUBSYSTEM
+    assert ssp.SCENARIO_SCHEDULING_PRECEDENCE[-1] == ssp.SCENARIO_PARALLEL_SAFE
+
+
+def test_scenario_scheduler_reuses_sys24_and_sys25_and_derives_no_new_fact(tmp_path):
+    """No second resource-sharing model and no second command-pair classifier
+    at this granularity: every signal this layer can produce names a real
+    field from THIS module's own already-computed SYS-24/SYS-25 documents."""
+    _, command_plan, document = _plan(tmp_path, PCIE=CPU_SIDE_COMMANDS,
+                                      USB=CONTENDING_CPU_SIDE_COMMANDS)
+    ir = command_plan["system_command_ir"]
+    scheduling = document["shared_resource_scheduling"]
+    relationships = document["parallelism_model"]
+    pcie_ids = sorted(e["system_command_id"] for e in ir["entries"]
+                      if e["source_subsystem"] == "PCIE")
+    usb_ids = sorted(e["system_command_id"] for e in ir["entries"]
+                     if e["source_subsystem"] == "USB")
+    verdict = ssp.evaluate_scenario_pair_parallel_safety(
+        _scenario("SCEN_A", ["PCIE"], pcie_ids), _scenario("SCEN_B", ["USB"], usb_ids),
+        ir, scheduling, relationships)
+    allowed_fields = {
+        "scenario.participating_subsystems",
+        "shared_resource_scheduling.entries.routed_commands",
+        "parallelism_model.pairs",
+        "",
+    }
+    for signal in verdict["signals"]:
+        assert signal["from_field"] in allowed_fields, signal["from_field"]

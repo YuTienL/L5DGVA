@@ -35,6 +35,33 @@ What already existed and is REUSED here rather than rebuilt:
     wall-clock/agent-runtime/token numbers StageExecutionProfiler already
     records, including one row per sub-agent run (see that function).
 
+STAGE-ENTRY BANNER EVIDENCE, WIDENED (2026-09-06, stage_entry_exit_banner
+gap-close; self_check_list.md #33). The STAGE-START checklist above already
+existed and was already wired into a real, PROACTIVE display at every real
+stage transition (engine.py's run_stage() calls _emit_stage_start_display()/
+_emit_stage_done_display() at the actual entry/exit points, not on a
+separate on-demand query) -- self_check_list.md #32's real-time
+stage/remaining-items/completion-% requirement was already satisfied by
+reusing this exact checklist/stage-report/stage-profile machinery. What was
+missing, and is now additive here, is #33's specific instruction to source
+the required-documents/files/materials list from env_manifest.py and
+target_conditioned_missing_artifact_detector.py, not only from the graph
+node's own declarations:
+  - env_manifest.py: build_env_manifest_checklist_items() turns a project's
+    real env.manifest.json (when one exists) into one checklist item per
+    layer, presence-checked from that layer's own real `status` field --
+    env_manifest.py's own honesty contract, never re-derived.
+  - target_conditioned_missing_artifact_detector.py: build_target_
+    conditioned_checklist_items() adds one item per real artifact CATEGORY a
+    stage's own mapped downstream TARGET (STAGE_ARTIFACT_TARGET) requires,
+    each carrying that module's own per-category reason -- reusing its real
+    detect_missing_artifacts() rather than a second requirement table.
+Both are additive-only and honest-by-omission: a project with no manifest on
+disk, or a stage absent from STAGE_ARTIFACT_TARGET, contributes zero extra
+items, never a fabricated one -- so every stage this project already had a
+byte-exact checklist for stays byte-exact unless it genuinely gains new real
+evidence.
+
 DELIBERATE DESIGN CHOICES:
   - Pure 7-bit ASCII for the banner. Box-drawing characters render as
     mojibake or raise UnicodeEncodeError on a Windows cp950/cp437 console
@@ -138,6 +165,14 @@ SOURCE_EXPECTED_EVIDENCE = "graph.expected_evidence"
 SOURCE_BLACKBOARD_WRITE = "graph.blackboard_write"
 SOURCE_EXPECTED_OUTPUTS = "graph.expected_outputs"
 SOURCE_STAGE_GATES = "gates.STAGE_GATES"
+#   "env_manifest.summarize_for_blackboard" -- one item per real
+#     env.manifest.json layer this project has actually generated (2026-09-06,
+#     stage_entry_exit_banner gap-close; self_check_list.md #33).
+#   "target_conditioned_missing_artifact_detector.detect_missing_artifacts" --
+#     one item per real artifact CATEGORY the stage's own mapped downstream
+#     TARGET requires, with that module's own per-category reason.
+SOURCE_ENV_MANIFEST = "env_manifest.summarize_for_blackboard"
+SOURCE_TARGET_CONDITIONED = "target_conditioned_missing_artifact_detector.detect_missing_artifacts"
 
 KIND_EVIDENCE_BLOCK = "evidence_block"
 
@@ -210,6 +245,151 @@ def _evidence_block_present(blocks: Any, gate_id: str) -> bool:
     return isinstance(blocks, dict) and bool(blocks.get(gate_id))
 
 
+# --- env_manifest.py + target_conditioned_missing_artifact_detector.py reuse
+# (2026-09-06, stage_entry_exit_banner gap-close) ---------------------------
+# self_check_list.md #33 asks the STAGE-START banner to name the specific
+# required documents/files/materials for THIS stage, reusing env_manifest.py
+# and target_conditioned_missing_artifact_detector.py as the real evidence
+# source for what is required vs. present -- not the graph-node declarations
+# alone, which is all the checklist above draws on. Both helpers below are
+# additive and honest-by-omission: a project with no real env.manifest.json
+# on disk, or a stage with no established downstream-target mapping, gets no
+# extra items -- never a fabricated one. Neither raises; build_stage_input_
+# checklist() is display-only and a real presence-check failure here must
+# read as "not present", never crash the checklist that is about to be
+# printed at a real stage boundary.
+
+# env_manifest.py's own two negative layer statuses (build_dut_facts_rtl(),
+# build_vip_config(), build_env_topology(), ...) -- every other real status a
+# layer can carry (PARSED/LOADED/CAPTURED/SCANNED/INDEXED/DECLARED/RESOLVED)
+# is a real produced fact and reads present. Re-derived here rather than
+# imported: env_manifest.py exposes no single shared constant for this set,
+# and each of its own builders spells the two negative strings as literals.
+_ENV_MANIFEST_NEGATIVE_STATUSES = frozenset({"NOT_AVAILABLE", "NOT_DECLARED", None})
+
+
+def _env_manifest_layer_present(layer: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(layer, dict):
+        return False
+    return layer.get("status") not in _ENV_MANIFEST_NEGATIVE_STATUSES
+
+
+def build_env_manifest_checklist_items(root: Path) -> List[Dict[str, Any]]:
+    """One checklist item per real env.manifest.json layer this project has
+    actually generated, presence-checked from that layer's own real `status`
+    field -- env_manifest.py's own honesty contract (see its module
+    docstring's per-layer NOT_AVAILABLE-with-a-real-reason convention),
+    re-read here rather than re-derived. A project with no manifest on disk
+    (env_manifest.default_manifest_path() finds nothing, or the file fails to
+    load/validate) contributes zero items -- a project genuinely mid-INTAKE
+    has no manifest yet, and that absence is not itself a checklist defect
+    this function should invent."""
+    from . import env_manifest as em
+
+    try:
+        path = em.default_manifest_path(root)
+        if path is None or not Path(path).exists():
+            return []
+        manifest = em.load_env_manifest(path)
+    except Exception:
+        return []
+
+    summary = em.summarize_for_blackboard(manifest, manifest_path=path)
+    dut_facts = summary.get("dut_facts") or {}
+    env_topology = summary.get("env_topology") or {}
+    layers = (
+        ("env_manifest.vip_config", summary.get("vip_config"),
+         "which real VIP package/version this environment is built against "
+         "(env.manifest.json's vip_config layer)"),
+        ("env_manifest.dut_facts.rtl", dut_facts.get("rtl"),
+         "verible-parsed DUT RTL port/module table (env.manifest.json's "
+         "dut_facts.rtl layer)"),
+        ("env_manifest.dut_facts.registers", dut_facts.get("registers"),
+         "parsed DUT register map field/offset facts (env.manifest.json's "
+         "dut_facts.registers layer)"),
+        ("env_manifest.env_topology.testplan_correspondence",
+         env_topology.get("testplan_correspondence"),
+         "the real testlist/vPlan/coverage-model three-way join "
+         "(env.manifest.json's env_topology.testplan_correspondence layer)"),
+    )
+    items: List[Dict[str, Any]] = []
+    for item_id, layer, desc in layers:
+        status = (layer or {}).get("status") if isinstance(layer, dict) else None
+        items.append({
+            "item_id": item_id, "kind": "env_manifest_layer",
+            "source": SOURCE_ENV_MANIFEST,
+            "description": f"{desc} (status: {status})",
+            "present": _env_manifest_layer_present(layer),
+        })
+    return items
+
+
+# Which downstream TARGET (target_conditioned_missing_artifact_detector.py's
+# own fixed, small target-name vocabulary) a stage's own real work
+# corresponds to. Deliberately small and explicit -- a stage absent from this
+# table gets no target-conditioned items, never a guessed target: inventing a
+# plausible-looking target for a stage this table does not name would be
+# exactly the fabrication that module's own docstring already refuses to do
+# for an unrecognized target name.
+STAGE_ARTIFACT_TARGET: Dict[str, str] = {
+    "IMPLEMENT": "VIP_UVM_CREATION",
+    "SIGNOFF": "SIGNOFF_PACKAGE",
+    "COVERAGE_CLOSURE": "COVERAGE_CLOSURE",
+    "REGRESSION_SELECT": "REGRESSION_SUBMISSION",
+}
+
+
+def _env_manifest_inventory(root: Path) -> Dict[str, bool]:
+    """The subset of target_conditioned_missing_artifact_detector.py's own
+    artifact-category vocabulary this function can honestly answer from
+    env_manifest.py alone. Every other category (bind_topology,
+    regression_evidence, waiver_ledger, ...) is left OUT of the returned dict
+    entirely -- detect_missing_artifacts() reads a category's absence from
+    the inventory as NOT_ASSESSED, never a guessed True/False."""
+    layer_present = {it["item_id"]: it["present"] for it in build_env_manifest_checklist_items(root)}
+    inventory: Dict[str, bool] = {}
+    _MAP = {
+        "env_manifest.vip_config": "vip_config_dump",
+        "env_manifest.dut_facts.rtl": "dut_rtl_source",
+        "env_manifest.dut_facts.registers": "register_map",
+        "env_manifest.env_topology.testplan_correspondence": "testplan_correspondence",
+    }
+    for layer_id, category_id in _MAP.items():
+        if layer_id in layer_present:
+            inventory[category_id] = layer_present[layer_id]
+    return inventory
+
+
+def build_target_conditioned_checklist_items(root: Path, stage: str) -> List[Dict[str, Any]]:
+    """Per-target required-artifact-category findings from
+    target_conditioned_missing_artifact_detector.py's own real table, scoped
+    to whichever downstream TARGET this stage corresponds to
+    (STAGE_ARTIFACT_TARGET). A stage with no mapped target contributes zero
+    items -- never an invented target -- and a category this function has no
+    real env_manifest-derived evidence for reports NOT_ASSESSED (via that
+    module's own three-valued presence rule), never a guessed present/
+    absent."""
+    target = STAGE_ARTIFACT_TARGET.get(stage)
+    if target is None:
+        return []
+    try:
+        from . import target_conditioned_missing_artifact_detector as tcmad
+        inventory = _env_manifest_inventory(root)
+        report = tcmad.detect_missing_artifacts(target, inventory)
+    except Exception:
+        return []
+
+    items: List[Dict[str, Any]] = []
+    for f in report.findings:
+        items.append({
+            "item_id": f"target:{target}:{f.category_id}", "kind": "target_artifact_category",
+            "source": SOURCE_TARGET_CONDITIONED,
+            "description": f.reason,
+            "present": f.status == tcmad.PRESENT,
+        })
+    return items
+
+
 def build_stage_input_checklist(root: Path, stage: str, node, blackboard,
                                  stage_history: Optional[Dict[str, Dict[str, Any]]] = None
                                  ) -> Dict[str, Any]:
@@ -230,7 +410,14 @@ def build_stage_input_checklist(root: Path, stage: str, node, blackboard,
         (state.stages[stage]["last_evidence_blocks"], the same field
         build_stage_entry_checklist() reads) -- so a first attempt honestly
         reports 0/N required blocks supplied, and a retry shows exactly which
-        ones already landed."""
+        ones already landed.
+
+    Two further real declaration sources, additive and honest-by-omission
+    (2026-09-06, self_check_list.md #33): env.manifest.json's own per-layer
+    status (build_env_manifest_checklist_items()) and, for a stage with a
+    real mapped downstream target, target_conditioned_missing_artifact_
+    detector.py's own per-category reason (build_target_conditioned_
+    checklist_items()) -- see both functions' own docstrings."""
     from .engine import _checklist_item_present
 
     history = stage_history or {}
@@ -264,6 +451,9 @@ def build_stage_input_checklist(root: Path, stage: str, node, blackboard,
             "description": f"required evidence block ```dv-harness-evidence:{gate_id}```",
             "present": _evidence_block_present(own_blocks, gate_id),
         })
+
+    items.extend(build_env_manifest_checklist_items(Path(root)))
+    items.extend(build_target_conditioned_checklist_items(Path(root), stage))
 
     return _summarize(items)
 

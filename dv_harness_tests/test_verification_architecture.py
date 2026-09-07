@@ -444,6 +444,163 @@ def test_duplicate_passive_vip_is_not_a_conflict():
 
 
 # ===========================================================================
+# Named per-protocol-domain checker-placement rules (CSR + Interrupt/DMA/
+# State/Timing) -- CHECKER_DOMAIN_PLACEMENT_RULES /
+# check_checker_domain_placement()
+# ===========================================================================
+
+def test_checker_domain_placement_rules_cover_exactly_five_named_domains():
+    assert va.CHECKER_DOMAINS == ("REGISTER_CSR", "INTERRUPT", "DMA", "STATE", "TIMING")
+    # Every rule names a distinct finding kind, and every one of those kinds
+    # is registered in the closed PLACEMENT_CONFLICT_KINDS vocabulary --
+    # never a rule whose own kind `_finding()` would reject.
+    kinds = {rule["finding_kind"] for rule in va.CHECKER_DOMAIN_PLACEMENT_RULES.values()}
+    assert kinds == {
+        "CSR_CHECKER_WRONG_TARGET_DOMAIN", "INTERRUPT_CHECKER_WRONG_TARGET_DOMAIN",
+        "DMA_CHECKER_WRONG_TARGET_DOMAIN", "STATE_CHECKER_WRONG_TARGET_DOMAIN",
+        "TIMING_CHECKER_WRONG_TARGET_DOMAIN",
+    }
+    assert kinds <= set(va.PLACEMENT_CONFLICT_KINDS)
+
+
+def test_checker_ir_carries_declared_checker_domain():
+    entry = connectivity.generate_protocol_check_entry("row1", "svt_csr", ["w1c_check"], {})
+    checkers = va.build_checker_ir([entry], {"row1": {
+        "target_instance": "chip.core.usb0.csr_if", "mount_side": "POST_BRIDGE",
+        "checker_domain": "REGISTER_CSR",
+    }})
+    c = checkers[0]
+    assert c.checker_domain == "REGISTER_CSR"
+    assert c.to_dict()["checker_domain"] == "REGISTER_CSR"
+
+
+def test_checker_domain_defaults_to_none_when_undeclared():
+    """Negative control: an ordinary checker_links entry that never
+    mentions checker_domain must never be given one -- absent, not
+    defaulted to any of the five names."""
+    entry = connectivity.generate_protocol_check_entry("row1", "svt_axi", ["c1"], {})
+    checkers = va.build_checker_ir([entry], {"row1": {"target_instance": "chip.core.usb0.axi_if",
+                                                        "mount_side": "POST_BRIDGE"}})
+    assert checkers[0].checker_domain is None
+    assert checkers[0].status == "RESOLVED"  # unaffected by the new, optional field
+
+
+def test_checker_ir_rejects_unknown_checker_domain():
+    entry = connectivity.generate_protocol_check_entry("row1", "svt_axi", ["c1"], {})
+    with pytest.raises(va.VerificationArchitectureError):
+        va.build_checker_ir([entry], {"row1": {"target_instance": "x", "checker_domain": "GALACTIC"}})
+
+
+def _domain_checker(domain, target="chip.core.usb0.iface"):
+    entry = connectivity.generate_protocol_check_entry("row1", "svt_x", ["c1"], {})
+    return va.build_checker_ir([entry], {"row1": {
+        "target_instance": target, "mount_side": "POST_BRIDGE", "checker_domain": domain,
+    }})
+
+
+@pytest.mark.parametrize("domain,expected_kind", [
+    ("REGISTER_CSR", "CSR_CHECKER_WRONG_TARGET_DOMAIN"),
+    ("INTERRUPT", "INTERRUPT_CHECKER_WRONG_TARGET_DOMAIN"),
+    ("DMA", "DMA_CHECKER_WRONG_TARGET_DOMAIN"),
+    ("STATE", "STATE_CHECKER_WRONG_TARGET_DOMAIN"),
+    ("TIMING", "TIMING_CHECKER_WRONG_TARGET_DOMAIN"),
+])
+def test_checker_domain_placement_mismatch_detected_for_each_named_rule(domain, expected_kind):
+    checkers = _domain_checker(domain)
+    # every other declared domain disagrees -- pick one deterministically
+    wrong_target_domain = next(d for d in va.CHECKER_DOMAINS if d != domain)
+    findings = va.check_checker_domain_placement(
+        checkers, {"chip.core.usb0.iface": wrong_target_domain})
+    assert len(findings) == 1
+    f = findings[0]
+    assert f["kind"] == expected_kind
+    assert f["checker_domain"] == domain
+    assert f["target_domain"] == wrong_target_domain
+    # also reachable through the composed comparator
+    findings2 = va.detect_placement_conflicts(
+        checkers=checkers, target_domain_by_instance={"chip.core.usb0.iface": wrong_target_domain})
+    assert any(x["kind"] == expected_kind for x in findings2)
+
+
+@pytest.mark.parametrize("domain", list(va.CHECKER_DOMAINS))
+def test_checker_domain_placement_agreement_is_not_a_conflict(domain):
+    """Negative control: a checker whose declared domain matches its
+    target's declared domain must never be flagged, for any of the five
+    named rules."""
+    checkers = _domain_checker(domain)
+    findings = va.check_checker_domain_placement(checkers, {"chip.core.usb0.iface": domain})
+    assert findings == []
+
+
+def test_csr_checker_correctly_placed_on_the_real_csr_target_is_not_flagged():
+    """The task's own headline example: a register/CSR checker mounted on
+    the real CSR bus target must be clean."""
+    checkers = _domain_checker("REGISTER_CSR", target="chip.core.usb0.apb_csr_if")
+    findings = va.detect_placement_conflicts(
+        checkers=checkers,
+        target_domain_by_instance={"chip.core.usb0.apb_csr_if": "REGISTER_CSR"},
+    )
+    assert findings == []
+
+
+def test_checker_domain_placement_unresolved_without_target_domain_evidence():
+    """Negative control: a declared checker_domain with NO
+    target_domain_by_instance entry for its target is UNRESOLVED, not a
+    guessed pass or a guessed conflict -- it produces no finding at all."""
+    checkers = _domain_checker("REGISTER_CSR")
+    findings = va.check_checker_domain_placement(checkers, target_domain_by_instance=None)
+    assert findings == []
+    findings2 = va.check_checker_domain_placement(checkers, {"some.other.target": "REGISTER_CSR"})
+    assert findings2 == []
+
+
+def test_checker_domain_placement_never_fires_without_a_declared_checker_domain():
+    """Negative control: an ordinary checker with no declared
+    checker_domain is never swept into a domain-placement finding, even
+    when target_domain_by_instance carries an entry for its target."""
+    entry = connectivity.generate_protocol_check_entry("row1", "svt_axi", ["c1"], {})
+    checkers = va.build_checker_ir([entry], {"row1": {"target_instance": "chip.core.usb0.axi_if",
+                                                        "mount_side": "POST_BRIDGE"}})
+    findings = va.detect_placement_conflicts(
+        checkers=checkers, target_domain_by_instance={"chip.core.usb0.axi_if": "INTERRUPT"})
+    assert findings == []
+
+
+def test_checker_domain_placement_evidence_cites_both_declared_facts():
+    checkers = _domain_checker("REGISTER_CSR")
+    findings = va.check_checker_domain_placement(checkers, {"chip.core.usb0.iface": "DMA"})
+    fact_sources = {e["fact_source"] for e in findings[0]["evidence"]}
+    assert "caller_declared_checker_link" in fact_sources
+    assert "caller_declared_target_domain" in fact_sources
+
+
+def test_assemble_verification_architecture_carries_checker_domain_through_schema(
+    real_vip_config, real_vip_release, real_clock_reset,
+):
+    """checker_domain must round-trip through the full assembly and still
+    validate against verification_architecture.schema.json, and a real
+    domain mismatch must surface as a real CSR_CHECKER_WRONG_TARGET_DOMAIN
+    finding in the assembled document."""
+    tier = connectivity.classify_bind_tier(existing_bind={"target": "chip.core.usb0.host_vip"})
+    check_entry = connectivity.generate_protocol_check_entry(
+        "chip.core.usb0::csr_if", "svt_csr", ["w1c_check"], {})
+    doc = va.assemble_verification_architecture(
+        vip_config=real_vip_config, vip_release=real_vip_release,
+        protocol_check_entries=[check_entry],
+        checker_links={"chip.core.usb0::csr_if": {
+            "target_instance": "chip.core.usb0.csr_if", "mount_side": "POST_BRIDGE",
+            "checker_domain": "REGISTER_CSR",
+        }},
+        target_domain_by_instance={"chip.core.usb0.csr_if": "DMA"},
+        clock_reset=real_clock_reset,
+    )
+    to_validate = {k: v for k, v in doc.items() if k != "_irs"}
+    va.validate_verification_architecture(to_validate)  # raises on failure
+    assert doc["checker"][0]["checker_domain"] == "REGISTER_CSR"
+    assert any(f["kind"] == "CSR_CHECKER_WRONG_TARGET_DOMAIN" for f in doc["placement_conflicts"])
+
+
+# ===========================================================================
 # detect_intra_subsystem_duplicates()
 # ===========================================================================
 

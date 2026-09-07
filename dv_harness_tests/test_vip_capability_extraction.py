@@ -101,7 +101,13 @@ def test_classifies_demo_vip_into_four_ir_types_from_naming_and_inheritance(demo
     assert mon.analysis_ports == []           # real fixture declares none -- never fabricated
 
     assert vce.IR_VIP_COVERAGE_CAPABILITY not in report.counts_by_ir_type
-    assert set(report.unclassified_class_names) == {"svt_demo_driver", "svt_demo_agent"}
+    # svt_demo_report_cb (added for the sixth VIPCallbackHookIR capability,
+    # see dv_harness/vip_callback_hook_extraction.py) is correctly left
+    # unclassified by THIS five-capability module: its name suffix ("cb")
+    # and its inheritance base ("uvm_callback") match neither of the five
+    # naming suffixes nor the five inheritance markers this module tracks.
+    assert set(report.unclassified_class_names) == {
+        "svt_demo_driver", "svt_demo_agent", "svt_demo_report_cb"}
     assert report.counts_by_ir_type == {
         vce.IR_VIP_CONFIG: 1, vce.IR_VIP_TRANSACTION: 1,
         vce.IR_VIP_SCENARIO_PATTERN: 1, vce.IR_VIP_CHECKER_CAPABILITY: 1,

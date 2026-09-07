@@ -531,3 +531,213 @@ def test_this_repos_own_store_reports_an_honest_state_not_a_fabricated_one():
         untiered = sum(report["corpus"]["records_without_recognized_tier"].values())
         assert (report["corpus"]["records_with_recognized_tier"] + untiered
                 == report["corpus"]["records_scanned"])
+
+
+# --------------------------------------------------------------------------
+# Confidence-Calibration Feedback Loop: draft_reweighted_confidence_proposal()
+# --------------------------------------------------------------------------
+def test_score_confidence_constants_self_check_passes_against_the_real_formula():
+    """The self-check this module runs at import must also be callable on
+    demand and must pass against the real, unmodified inference.score_confidence()."""
+    cc.assert_score_confidence_constants_current()   # must not raise
+
+
+def test_a_drifted_constant_is_caught_loudly(monkeypatch):
+    """The same detection-power discipline
+    test_a_tier_invented_here_or_dropped_from_inference_fails_loudly() already
+    holds one level up: a constant that no longer describes the real formula
+    must fail LOUDLY, not silently produce a wrong proposal."""
+    monkeypatch.setitem(cc.SCORE_CONFIDENCE_CONSTANTS, "high_threshold", 99)
+    with pytest.raises(AssertionError):
+        cc.assert_score_confidence_constants_current()
+
+
+def test_no_inversion_drafts_no_proposal(root):
+    """Negative control: a CALIBRATED report (or one with no
+    INVERTED_TIER_ORDER finding at all) must never fabricate a re-weighting
+    proposal out of nothing."""
+    store = MemoryStore(root)
+    populate(store, "HIGH", verified=9, rejected=1)      # 90%
+    populate(store, "MEDIUM", verified=5, rejected=5)     # 50%
+    report = cc.calibrate(root)
+    assert report["status"] == cc.STATUS_CALIBRATED
+
+    proposal = cc.draft_reweighted_confidence_proposal(report)
+    assert proposal["status"] == cc.REWEIGHT_PROPOSAL_NO_INVERSION
+    assert proposal["proposed_constants"] is None
+    assert proposal["changed_constants"] == []
+    assert proposal["current_constants"] == cc.SCORE_CONFIDENCE_CONSTANTS
+
+
+def test_a_high_over_medium_inversion_drafts_a_tightened_high_threshold(root):
+    """The real, worked example: HIGH holding up materially less often than
+    MEDIUM proposes tightening HIGH's own entry bar by exactly one
+    source_weight -- never a live change, never applied here."""
+    store = MemoryStore(root)
+    populate(store, "HIGH", verified=3, rejected=7)       # 30%
+    populate(store, "MEDIUM", verified=9, rejected=1)     # 90%
+    report = cc.calibrate(root)
+    assert report["status"] == cc.STATUS_MISCALIBRATED
+
+    # Never a live code change: drafting a proposal writes nothing at all --
+    # snapshotted around the ONE call this test is actually about.
+    before = sorted((root / ".dv-harness").rglob("*"))
+    proposal = cc.draft_reweighted_confidence_proposal(report)
+    after = sorted((root / ".dv-harness").rglob("*"))
+    assert before == after
+    inference_src_before = (Path(cc.__file__).parent / "inference.py").read_bytes()
+
+    assert proposal["status"] == cc.REWEIGHT_PROPOSAL_DRAFTED
+    assert len(proposal["changed_constants"]) == 1
+    entry = proposal["changed_constants"][0]
+    assert entry["constant"] == "high_threshold"
+    assert entry["current_value"] == cc.SCORE_CONFIDENCE_CONSTANTS["high_threshold"]
+    assert entry["proposed_value"] == (
+        cc.SCORE_CONFIDENCE_CONSTANTS["high_threshold"]
+        + cc.SCORE_CONFIDENCE_CONSTANTS["source_weight"])
+    assert entry["delta"] == cc.SCORE_CONFIDENCE_CONSTANTS["source_weight"]
+    assert len(entry["cited_findings"]) == 1
+    assert entry["cited_findings"][0]["higher_tier"] == "HIGH"
+    assert entry["cited_findings"][0]["lower_tier"] == "MEDIUM"
+
+    # Only the ONE cited constant moved; everything else is untouched.
+    proposed = proposal["proposed_constants"]
+    for name, value in proposal["current_constants"].items():
+        if name != "high_threshold":
+            assert proposed[name] == value
+
+    assert proposal["addressable_inversions"] == [proposal["changed_constants"][0]["cited_findings"][0]]
+    assert proposal["unaddressable_inversions"] == []
+    assert "DATA PROPOSAL ONLY" in proposal["disclosure"]
+    assert "never" in proposal["disclosure"].lower()
+    assert "capability_evolution" in proposal["disclosure"]
+
+    # inference.py's own real file on disk is byte-for-byte unchanged.
+    assert (Path(cc.__file__).parent / "inference.py").read_bytes() == inference_src_before
+
+
+def test_a_medium_over_low_inversion_tightens_medium_threshold(root):
+    store = MemoryStore(root)
+    populate(store, "HIGH", verified=9, rejected=1)       # 90%, holds fine
+    populate(store, "MEDIUM", verified=3, rejected=7)     # 30%
+    populate(store, "LOW", verified=9, rejected=1)        # 90%
+    report = cc.calibrate(root)
+    assert report["status"] == cc.STATUS_MISCALIBRATED
+
+    proposal = cc.draft_reweighted_confidence_proposal(report)
+    assert proposal["status"] == cc.REWEIGHT_PROPOSAL_DRAFTED
+    names = {e["constant"] for e in proposal["changed_constants"]}
+    assert names == {"medium_threshold"}
+    entry = proposal["changed_constants"][0]
+    assert entry["proposed_value"] == (
+        cc.SCORE_CONFIDENCE_CONSTANTS["medium_threshold"]
+        + cc.SCORE_CONFIDENCE_CONSTANTS["source_weight"])
+
+
+def test_two_findings_on_the_same_constant_bump_it_only_once(root):
+    """HIGH underperforming BOTH MEDIUM and LOW produces two real
+    INVERTED_TIER_ORDER findings that both name HIGH as the over-ranked tier.
+    They must tighten high_threshold ONCE, citing both -- never sum the bumps,
+    which would manufacture a bigger change than any one finding alone
+    supports."""
+    store = MemoryStore(root)
+    populate(store, "HIGH", verified=3, rejected=7)       # 30%
+    populate(store, "MEDIUM", verified=9, rejected=1)     # 90%
+    populate(store, "LOW", verified=10, rejected=0)       # 100%
+    report = cc.calibrate(root)
+    pairs = {(f["higher_tier"], f["lower_tier"]) for f in report["findings"]
+             if f["kind"] == cc.FINDING_INVERTED_TIER_ORDER}
+    assert ("HIGH", "MEDIUM") in pairs and ("HIGH", "LOW") in pairs
+
+    proposal = cc.draft_reweighted_confidence_proposal(report)
+    assert proposal["status"] == cc.REWEIGHT_PROPOSAL_DRAFTED
+    assert len(proposal["changed_constants"]) == 1
+    entry = proposal["changed_constants"][0]
+    assert entry["constant"] == "high_threshold"
+    assert entry["proposed_value"] == (
+        cc.SCORE_CONFIDENCE_CONSTANTS["high_threshold"]
+        + cc.SCORE_CONFIDENCE_CONSTANTS["source_weight"])   # ONE bump, not two
+    assert len(entry["cited_findings"]) == 2
+
+
+def test_confirmed_only_inversion_is_reported_not_addressable(root):
+    """CONFIRMED is minted by MemoryConsolidator.from_closed_finding() behind a
+    procedural bar, never by score_confidence()'s formula -- so an inversion
+    naming ONLY CONFIRMED as over-ranked must never draft a proposal that
+    could not possibly fix what it cites."""
+    store = MemoryStore(root)
+    populate(store, "CONFIRMED", verified=2, rejected=8)   # 20%
+    populate(store, "HIGH", verified=9, rejected=1)        # 90%
+    report = cc.calibrate(root)
+    inversions = [f for f in report["findings"] if f["kind"] == cc.FINDING_INVERTED_TIER_ORDER]
+    assert len(inversions) == 1 and inversions[0]["higher_tier"] == "CONFIRMED"
+
+    proposal = cc.draft_reweighted_confidence_proposal(report)
+    assert proposal["status"] == cc.REWEIGHT_PROPOSAL_NOT_ADDRESSABLE
+    assert proposal["proposed_constants"] is None
+    assert proposal["changed_constants"] == []
+    assert len(proposal["unaddressable_inversions"]) == 1
+    assert proposal["unaddressable_inversions"][0]["higher_tier"] == "CONFIRMED"
+    assert "CONFIRMED" in proposal["reason"]
+    assert "procedural bar" in proposal["reason"]
+
+
+def test_a_mixed_report_drafts_a_proposal_and_still_names_the_unaddressable_ones(root):
+    """CONFIRMED-over-LOW (unaddressable) alongside HIGH-over-MEDIUM
+    (addressable) in the SAME report: the proposal is still drafted from the
+    addressable finding, and the unaddressable one is carried, not dropped."""
+    store = MemoryStore(root)
+    populate(store, "CONFIRMED", verified=2, rejected=8)   # 20%
+    populate(store, "HIGH", verified=3, rejected=7)        # 30%
+    populate(store, "LOW", verified=9, rejected=1)         # 90%
+    # MEDIUM deliberately left uncalibrated (no records), so the only two
+    # findings are CONFIRMED>LOW (unaddressable) and HIGH>LOW (addressable) --
+    # nothing else muddies which constants this test expects to move.
+    report = cc.calibrate(root)
+    findings = [f for f in report["findings"] if f["kind"] == cc.FINDING_INVERTED_TIER_ORDER]
+    pairs = {(f["higher_tier"], f["lower_tier"]) for f in findings}
+    assert pairs == {("CONFIRMED", "LOW"), ("HIGH", "LOW")}
+
+    proposal = cc.draft_reweighted_confidence_proposal(report)
+    assert proposal["status"] == cc.REWEIGHT_PROPOSAL_DRAFTED
+    addressable_pairs = {(f["higher_tier"], f["lower_tier"]) for f in proposal["addressable_inversions"]}
+    unaddressable_pairs = {(f["higher_tier"], f["lower_tier"]) for f in proposal["unaddressable_inversions"]}
+    assert ("HIGH", "LOW") in addressable_pairs
+    assert ("CONFIRMED", "LOW") in unaddressable_pairs
+    assert {e["constant"] for e in proposal["changed_constants"]} == {"high_threshold"}
+
+
+def test_medium_threshold_never_crosses_high_threshold(monkeypatch, root):
+    """A disclosed, real clamp rather than a silent numeric fudge: if bumping
+    medium_threshold would put it at or above the proposed high_threshold, it
+    is clamped to stay strictly below, and the clamp is recorded."""
+    monkeypatch.setitem(cc.SCORE_CONFIDENCE_CONSTANTS, "medium_threshold", 5)
+    monkeypatch.setitem(cc.SCORE_CONFIDENCE_CONSTANTS, "high_threshold", 6)
+    # assert_score_confidence_constants_current() would now fail against the
+    # real formula, so build a report by hand rather than calling calibrate()
+    # against these hypothetical constants -- this test is about the CLAMP
+    # arithmetic, not about re-deriving a real inversion under altered
+    # constants.
+    finding = {
+        "kind": cc.FINDING_INVERTED_TIER_ORDER,
+        "higher_tier": "MEDIUM", "lower_tier": "LOW",
+        "higher_observed_reliability": 0.3, "lower_observed_reliability": 0.9,
+        "margin": 0.6, "tolerance": 0.1,
+        "detail": "MEDIUM held up 30% ... LOW held up 90% ...",
+    }
+    monkeypatch.setattr(cc, "assert_score_confidence_constants_current", lambda: None)
+    proposal = cc.draft_reweighted_confidence_proposal({"findings": [finding]})
+    assert proposal["status"] == cc.REWEIGHT_PROPOSAL_DRAFTED
+    entry = next(e for e in proposal["changed_constants"] if e["constant"] == "medium_threshold")
+    assert entry.get("clamped") is True
+    assert entry["proposed_value"] < proposal["proposed_constants"]["high_threshold"]
+    assert proposal["proposed_constants"]["medium_threshold"] < proposal["proposed_constants"]["high_threshold"]
+
+
+def test_draft_proposal_re_runs_the_constants_self_check(monkeypatch):
+    """A drifted constant must be caught even when a caller only calls
+    draft_reweighted_confidence_proposal() directly, never the import-time
+    check on its own."""
+    monkeypatch.setitem(cc.SCORE_CONFIDENCE_CONSTANTS, "counter_evidence_penalty", 1)
+    with pytest.raises(AssertionError):
+        cc.draft_reweighted_confidence_proposal({"findings": []})

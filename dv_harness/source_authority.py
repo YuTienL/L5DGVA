@@ -76,6 +76,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from .human_correction_lesson import has_prior_correction
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: The real markdown paragraph this module's order is kept in sync with.
@@ -393,6 +395,57 @@ def resolve_conflict(claims: Sequence[SourceClaim]) -> dict:
             "rule": (f"{_BY_ID[winner.source].doc_phrase} (tier {winner.rank}) outranks "
                      f"{_BY_ID[best_loser.source].doc_phrase} (tier {best_loser.rank}) -- "
                      f"authority order, highest first.")}
+
+
+#: The `mistake_category` this module's own correction-check queries
+#: `human_correction_lesson.py` under. A distinct, stable string so a
+#: correction filed against a conflict-resolution judgment can never be
+#: confused with one filed elsewhere against the same `subject`.
+CONFLICT_RESOLUTION_MISTAKE_CATEGORY = "source_conflict_resolution"
+
+
+def resolve_conflict_checked(claims: Sequence[SourceClaim], *, root, subject: str) -> dict:
+    """Additive, opt-in sibling of `resolve_conflict()` that ALSO checks
+    whether a human has already corrected THIS EXACT conflict resolution
+    before this function recomputes and re-emits it -- via
+    `human_correction_lesson.has_prior_correction()`, reused verbatim, never
+    re-derived. `resolve_conflict()` itself, its 9-level ordering, its
+    verdict vocabulary and every existing caller of it are completely
+    UNCHANGED by this function.
+
+    `subject` names the specific fact the conflict is about (the same
+    parameter name/meaning `escalate_conflict()` already uses one function
+    below), so the before-claim checked -- `"<subject>: resolved to
+    <winner.source> claim: <winner.claim>"` -- can never be confused with a
+    different conflict over a different fact that happens to resolve to the
+    same source/claim text. Only a real RESOLVED verdict (a real winner) is
+    checked; a NO_CONFLICT or UNDECIDABLE_SAME_AUTHORITY verdict asserts no
+    single winning judgment for a human to have corrected in the first
+    place, so neither is looked up.
+
+    Never overrides `resolve_conflict()`'s own winner with a prior
+    correction's own free-text `after_claim` -- this module's own
+    ARBITRATION boundary (deciding a value is never a substitute for
+    escalating a genuine disagreement, see `escalate_conflict()`) applies
+    here identically: a real prior correction is surfaced on the returned
+    dict's own `prior_human_correction` key, never silently substituted for
+    the ranked verdict this function just computed.
+
+    `root` and `subject` are required keyword-only arguments, so this
+    checked variant can never be called with the check silently skipped by
+    a missing default; a caller with no project root or no stable subject
+    identity should call the plain `resolve_conflict()` instead."""
+    result = resolve_conflict(claims)
+    winner = result.get("winner")
+    if winner is not None and subject and str(subject).strip():
+        before_claim = f"{subject}: resolved to {winner['source']} claim: {winner['claim']}"
+        report = has_prior_correction(
+            root, before_claim=before_claim, mistake_category=CONFLICT_RESOLUTION_MISTAKE_CATEGORY,
+        )
+        if report.get("found"):
+            result = dict(result)
+            result["prior_human_correction"] = report
+    return result
 
 
 # ---------------------------------------------------------------------------

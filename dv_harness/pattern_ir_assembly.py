@@ -63,6 +63,36 @@ launched after `branch_b*` needs it, verdict placed before `branch_b*`
 completes) rather than a single generic "differs" verdict, plus a dedicated,
 separately-triggerable `JOIN_ANY_WITH_BRANCH_FW` risk for section 2's trap
 regardless of whether the declared order itself matches the default.
+
+FW LAUNCH-TIMING WINDOW, AUDITED AND CLOSED (2026-09-07)
+----------------------------------------------------------
+Audit finding, confirmed against `pattern-architecture/SKILL.md` section 1
+before writing anything here: `FW_POLICY_AFTER_VIP` and the declared-order
+check above operate on a single ORDINAL POSITION per layer in a 5-element
+list. That granularity can only ever answer "is `fw_policy` positioned
+before or after `vip`/`global`/`check`" -- it has no way to represent, and
+therefore cannot catch, a `branch_fw` whose launch STATEMENT sits after a
+*blocking* `join` on `branch_a*`'s own per-port bring-up rather than
+immediately alongside `branch_a*`'s own non-blocking dispatch. Both the
+correct pattern (launched concurrently, while bring-up is still in flight)
+and the buggy one (launched only once bring-up has fully joined/completed)
+read as the identical `dut` -> `fw_policy` ordinal pair, so the coarse check
+is structurally blind to this trap -- confirmed as a real, distinct gap
+rather than already covered.
+
+The skill's own rule is explicit and load-bearing: `branch_fw` "must be
+launched before any branch that could possibly need it" (section 1), backed
+by the USB illustration's own stated reason -- "port 0 can attach and need a
+responder while port 1's bring-up is still running" (`common/soc_run.svh
+:118-124`). A `branch_fw` dispatched only after `branch_a*` joins can never
+service that in-flight need; the coarse order check would still report it
+clean, since `dut` still precedes `fw_policy` in the ordinal list either
+way. `validate_layer_ordering()`'s new, optional `fw_launch_timing` keyword
+(closed vocabulary: `FW_TIMING_CONCURRENT_WITH_DUT_START` /
+`FW_TIMING_AFTER_DUT_COMPLETION` / `FW_TIMING_UNKNOWN`) is the narrower,
+additive check this confirmed gap calls for -- evaluated only when a caller
+supplies real evidence about the relative launch timing, never inferred
+from the ordinal `declared_order` alone, and never guessed when absent.
 """
 from __future__ import annotations
 
@@ -136,6 +166,33 @@ def _canonical_layer(name):
 
 JOIN_MODE_JOIN = "join"
 JOIN_MODE_JOIN_ANY = "join_any"
+
+# ===========================================================================
+# branch_fw-vs-branch_a* relative launch-timing vocabulary
+# (pattern-architecture SKILL.md section 1 -- "launched before any branch
+# that could possibly need it", i.e. while branch_a* bring-up is still in
+# flight, never only after it fully joins/completes). Caller-supplied only
+# -- this module has no evidence of its own about a real command.txt's
+# fork/join structure and never infers this fact from `declared_order`.
+# ===========================================================================
+
+#: branch_fw dispatched non-blocking, concurrently with branch_a*'s own
+#: non-blocking bring-up (the documented-correct shape) -- no risk.
+FW_TIMING_CONCURRENT_WITH_DUT_START = "concurrent_with_dut_start"
+#: branch_fw's launch statement sits after a blocking join on branch_a* --
+#: the confirmed trap this check exists to catch.
+FW_TIMING_AFTER_DUT_COMPLETION = "after_dut_completion"
+#: the caller explicitly does not know the relative timing -- honestly
+#: flagged, never silently treated as either safe or unsafe.
+FW_TIMING_UNKNOWN = "unknown"
+
+#: The closed set of recognized `fw_launch_timing` values -- anything else
+#: supplied is a malformed/unrecognized value, flagged rather than ignored.
+FW_LAUNCH_TIMING_VALUES: frozenset = frozenset({
+    FW_TIMING_CONCURRENT_WITH_DUT_START,
+    FW_TIMING_AFTER_DUT_COMPLETION,
+    FW_TIMING_UNKNOWN,
+})
 
 # ===========================================================================
 # Honest-status sentinels (Evidence Truth Rule)
@@ -329,9 +386,16 @@ def _merge_passthrough_commands(layer, supplied, buckets, unclassified):
 # ===========================================================================
 
 def validate_layer_ordering(declared_order=None, *, vip_join_mode=None,
-                             branch_fw_present=None) -> dict:
+                             branch_fw_present=None,
+                             fw_launch_timing=None) -> dict:
     """Validate a project-declared layer order against `DEFAULT_LAYER_ORDER`,
-    plus the independent join/fork trap from section 2. Returns a dict:
+    plus the independent join/fork trap from section 2, plus the independent
+    branch_fw-vs-branch_a* relative launch-timing window from section 1
+    (`fw_launch_timing`, see module docstring "FW LAUNCH-TIMING WINDOW" --
+    the coarse ordinal order check above cannot see this: a `branch_fw`
+    launched only after a blocking join on `branch_a*` still reads as
+    `dut` before `fw_policy` in `declared_order`, identically to the
+    documented-correct concurrent-launch case). Returns a dict:
 
         status        -- one of ORDER_STATUS_DEFAULT_ASSUMED / _PASS /
                           _DEVIATION_RISK / _AMBIGUOUS
@@ -450,6 +514,41 @@ def validate_layer_ordering(declared_order=None, *, vip_join_mode=None,
                                         "composition changes (pattern-architecture SKILL.md "
                                         "section 2), even with branch_fw absent"})
 
+    if fw_launch_timing is not None:
+        timing = str(fw_launch_timing).strip().lower()
+        if branch_fw_present is False:
+            risks.append({"risk": "FW_LAUNCH_TIMING_CONTRADICTS_ABSENT_BRANCH_FW",
+                          "detail": f"fw_launch_timing={fw_launch_timing!r} was declared but "
+                                    "branch_fw_present=False says no branch_fw branch exists to "
+                                    "have a launch timing at all -- flagged as a contradiction "
+                                    "between two caller-supplied facts rather than one silently "
+                                    "overriding the other"})
+        elif timing == FW_TIMING_AFTER_DUT_COMPLETION:
+            risks.append({"risk": "FW_LAUNCHED_AFTER_DUT_COMPLETION",
+                          "detail": "branch_fw must be launched non-blocking while branch_a* "
+                                    "bring-up is still in flight, not only after branch_a* "
+                                    "fully joins/completes (pattern-architecture SKILL.md "
+                                    "section 1, 'launched before any branch that could possibly "
+                                    "need it'; USB illustration: 'port 0 can attach and need a "
+                                    "responder while port 1's bring-up is still running', "
+                                    "common/soc_run.svh:118-124) -- a narrower, distinct trap "
+                                    "from FW_POLICY_AFTER_VIP above: the five-layer ordinal "
+                                    "declared_order alone cannot see a blocking join placed "
+                                    "between branch_a*'s own non-blocking dispatch and "
+                                    "branch_fw's launch statement, since both still read as "
+                                    "'dut before fw_policy' at that granularity"})
+        elif timing == FW_TIMING_UNKNOWN:
+            risks.append({"risk": "FW_LAUNCH_TIMING_UNKNOWN",
+                          "detail": "whether branch_fw launches while branch_a* bring-up is "
+                                    f"still in flight or only after it completes is {UNKNOWN} "
+                                    "-- cannot confirm or rule out the section-1 timing trap "
+                                    "without that fact"})
+        elif timing != FW_TIMING_CONCURRENT_WITH_DUT_START:
+            risks.append({"risk": "FW_LAUNCH_TIMING_UNRECOGNIZED_VALUE",
+                          "detail": f"got fw_launch_timing={fw_launch_timing!r}, expected one "
+                                    f"of {sorted(FW_LAUNCH_TIMING_VALUES)} -- flagged "
+                                    "conservatively rather than silently ignored"})
+
     return {"status": status, "declared_order": declared_order,
             "order_used": order_used, "risks": risks}
 
@@ -506,7 +605,8 @@ class PatternIR:
 
 def assemble_pattern_ir(scenario_ir, *, global_commands=None, dut_commands=None,
                          fw_policy_commands=None, declared_order=None,
-                         vip_join_mode=None, branch_fw_present=None) -> PatternIR:
+                         vip_join_mode=None, branch_fw_present=None,
+                         fw_launch_timing=None) -> PatternIR:
     """Assemble a `PatternIR` from a generic, duck-typed ScenarioIR-shaped
     `scenario_ir` (a list of items, or a dict carrying an `items`/
     `scenarios`/`scenario_items`/`scenario_list` key, or a single item dict).
@@ -516,8 +616,10 @@ def assemble_pattern_ir(scenario_ir, *, global_commands=None, dut_commands=None,
     module never invents content for (see module docstring); if omitted here
     they are also looked up as same-named top-level keys on `scenario_ir`
     when it is a dict, so a single config dict can carry both the scenario
-    items and the pattern-level layer content. `declared_order` and
-    `vip_join_mode` follow the same fallback rule.
+    items and the pattern-level layer content. `declared_order`,
+    `vip_join_mode` and `fw_launch_timing` (the branch_fw-vs-branch_a*
+    relative launch-timing window, see module docstring) all follow the
+    same fallback rule.
 
     Raises `PatternIrAssemblyError` only when `scenario_ir` itself (or a
     declared items list inside it) is not iterable to a list of items --
@@ -538,6 +640,8 @@ def assemble_pattern_ir(scenario_ir, *, global_commands=None, dut_commands=None,
         vip_join_mode = top.get("vip_join_mode")
     if branch_fw_present is None and isinstance(top, dict) and "branch_fw_present" in top:
         branch_fw_present = top.get("branch_fw_present")
+    if fw_launch_timing is None and isinstance(top, dict):
+        fw_launch_timing = top.get("fw_launch_timing")
 
     buckets = {LAYER_GLOBAL: [], LAYER_DUT: [], LAYER_FW_POLICY: [],
                LAYER_VIP: [], LAYER_CHECK: []}
@@ -558,7 +662,8 @@ def assemble_pattern_ir(scenario_ir, *, global_commands=None, dut_commands=None,
         # honestly rather than assuming either safe or unsafe.
 
     ordering = validate_layer_ordering(declared_order, vip_join_mode=vip_join_mode,
-                                       branch_fw_present=branch_fw_present)
+                                       branch_fw_present=branch_fw_present,
+                                       fw_launch_timing=fw_launch_timing)
 
     return PatternIR(
         global_commands=buckets[LAYER_GLOBAL],

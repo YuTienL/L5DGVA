@@ -173,9 +173,13 @@ LOOP_STATE_WITHOUT_EVENT_REASON: Dict[str, str] = {
         "loop_contract.derive_loop_state() never returns CANCELLED, so nothing could "
         "emit one honestly.",
     LoopState.STALE.value:
-        "section 108 names no staleness event. Section 97's stale detection "
-        "(resume revalidating SHA/environment/tool versions) has no producer in this "
-        "harness, so a STALE event would have nothing behind it.",
+        "section 108 names no staleness event -- STALE is a section-86 STATE, and "
+        "section 108's nineteen names are a fixed, closed vocabulary this module "
+        "refuses to widen. Section 97's stale detection DOES have a real producer "
+        "since 2026-09-06 (dv_harness.loop_stale_detection.detect_loop_staleness(), "
+        "wired into loop_contract.derive_loop_state()'s own `stale` parameter), so a "
+        "session really can reach STALE now -- what is still missing is only a "
+        "dedicated event NAME for it in this file's own fixed taxonomy.",
 }
 
 

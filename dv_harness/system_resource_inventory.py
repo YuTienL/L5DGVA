@@ -1493,7 +1493,8 @@ def apply_active_driver_conflict_rule(relationships: Sequence[Mapping[str, Any]]
 
 def escalate_configuration_conflicts(relationships: Sequence[Mapping[str, Any]],
                                      resources_by_id: Mapping[str, Mapping[str, Any]],
-                                     ) -> List[Dict[str, Any]]:
+                                     *, question_store: Any = None,
+                                     now=None) -> List[Dict[str, Any]]:
     """Route each CONFIGURATION_CONFLICT through the EXISTING 9-level Source
     Authority Order rather than inventing a second conflict resolver.
 
@@ -1503,6 +1504,22 @@ def escalate_configuration_conflicts(relationships: Sequence[Mapping[str, Any]],
     the right one: the order cannot break a tie inside one level, so a human
     must. Producing a "winner" here would be the overreach `source_authority`
     exists to prevent.
+
+    `question_store` (a `question_queue.QuestionQueueStore` or a project-root
+    path): when supplied, every real conflict this produces is additionally
+    filed through `source_authority.escalate_conflict()` -- the SAME channel
+    `system_topology_analysis.escalate_address_conflicts()`,
+    `address_map_verifier.escalate_doc_disagreements()` and
+    `reference_pattern_audit.escalate_asymmetries()` already use, never a
+    second escalation mechanism. `source_authority.py`'s own docstring calls
+    escalating a RESOLVED or UNDECIDABLE_SAME_AUTHORITY verdict "mandatory,
+    not advisory" -- before this, this function only ever produced the first
+    half (the resolved verdict) and never actually escalated it. The
+    persisted record's own real id is carried back as this entry's
+    `question_id`, the exact field `system_phase1_report.
+    collect_open_questions()` already reads from this list and, before this,
+    never received. Omitting `question_store` (the default) keeps this
+    function's return value byte-identical to before.
     """
     out: List[Dict[str, Any]] = []
     for rel in relationships:
@@ -1528,11 +1545,24 @@ def escalate_configuration_conflicts(relationships: Sequence[Mapping[str, Any]],
                     detail={"subsystem": b["owner_subsystem"],
                             "resource_id": b["resource_id"]}),
             ]
-            out.append({
+            conflict = sa.resolve_conflict(claims)
+            record: Dict[str, Any] = {
                 "resource_a": rel["resource_a"], "resource_b": rel["resource_b"],
                 "field": entry["field"],
-                "conflict": sa.resolve_conflict(claims),
-            })
+                "conflict": conflict,
+            }
+            if question_store is not None:
+                filed = sa.escalate_conflict(
+                    question_store, conflict, domain="dut",
+                    subject=(f"SYS-11 configuration conflict on {entry['field']} between "
+                             f"{rel['resource_a']} and {rel['resource_b']}"),
+                    context_path=f"{rel['resource_a']}::{rel['resource_b']}::{entry['field']}",
+                    extra_context={"affects_spec_intent": True,
+                                   "sys11_configuration_conflict": True},
+                    now=now)
+                if filed is not None:
+                    record["question_id"] = filed.get("id")
+            out.append(record)
     return out
 
 
@@ -1734,15 +1764,21 @@ PHASE_BOUNDARY = (
 
 def build_cross_subsystem_resource_analysis(
         sources: Sequence[SubsystemResourceSources], *,
-        contract_set: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        contract_set: Optional[Mapping[str, Any]] = None,
+        question_store: Any = None, now=None) -> Dict[str, Any]:
     """SYS-9 -> SYS-10 -> SYS-11 -> SYS-12 -> SYS-13 -> SYS-14 over one
-    selected subsystem set. Reads only; writes nothing anywhere."""
+    selected subsystem set. Reads only; writes nothing anywhere -- UNLESS
+    `question_store` is supplied, in which case a real SYS-11 configuration
+    conflict is additionally filed into the question queue via
+    `escalate_configuration_conflicts()`'s own `question_store` argument.
+    Omitting it (the default) keeps this function's behavior unchanged."""
     inventory = build_cross_subsystem_inventory(sources, contract_set=contract_set)
     by_id = {r["resource_id"]: r for r in inventory["resources"]}
     comparisons = detect_duplicate_resources(inventory, contract_set=contract_set)
     relationships = classify_relationships(comparisons, by_id)
     conflict_rule = apply_active_driver_conflict_rule(relationships, inventory)
-    escalations = escalate_configuration_conflicts(relationships, by_id)
+    escalations = escalate_configuration_conflicts(
+        relationships, by_id, question_store=question_store, now=now)
     promotions = evaluate_shared_vip_promotion(relationships, by_id, conflict_rule)
     ownership = apply_ownership_preservation(inventory, promotions)
 
@@ -1783,6 +1819,8 @@ def analyze_selected_subsystem_resources(root, selected: Sequence[str], *,
                                          declared: Optional[Mapping[str, Any]] = None,
                                          knowledge_center_client: Any = None,
                                          inventory_overlay_path=None,
+                                         question_store: Any = None,
+                                         now=None,
                                          ) -> Dict[str, Any]:
     """Front door: SYS-1 selection -> SYS-5..8 per-subsystem analyses ->
     SYS-9..14 cross-subsystem resource analysis.
@@ -1791,6 +1829,12 @@ def analyze_selected_subsystem_resources(root, selected: Sequence[str], *,
     resolves each subsystem's environment root and env.manifest.json, enforces
     SYS-5's isolation rule, and produces the SYS-8 contract set this module
     needs for its driver-ownership signal.
+
+    `question_store`/`now` pass straight through to
+    `build_cross_subsystem_resource_analysis()`; omitted (the default), this
+    front door's own real callers -- the two SYSTEM_LEVEL gate scripts and the
+    SoC composer, via `real_cross_subsystem_findings()` below -- keep filing
+    nothing, exactly as before this parameter existed.
     """
     from . import subsystem_architecture_analysis as saa
     declared = dict(declared or {})
@@ -1807,7 +1851,8 @@ def analyze_selected_subsystem_resources(root, selected: Sequence[str], *,
                             .get("version_sha", "")})
         for result in analysis["synthesis"]["per_subsystem"]]
     resource_analysis = build_cross_subsystem_resource_analysis(
-        sources, contract_set=analysis["synthesis"]["contract_set"])
+        sources, contract_set=analysis["synthesis"]["contract_set"],
+        question_store=question_store, now=now)
     return {"selection": analysis["selection"], "synthesis": analysis["synthesis"],
             "resource_analysis": resource_analysis}
 
