@@ -21798,6 +21798,83 @@ existing one), so a project that has never triggered the FAILURE_RECOVERY/RE_AUD
 sees byte-identical behavior to before this session.
 
 
+## Adversarial Refutation Pass: Engine Wiring, Closing the Fourth "REACHED, not WIRED" Disclosure (2026-09-07)
+
+`react_loop.attempt_hypothesis_refutation()` and `qualified_conclusion.
+build_qualified_conclusion(refutation_result=, require_refutation_pass=)`
+(both built and independently tested earlier the same day -- see "Adversarial
+Refutation Pass: a Structurally-Forced Self-Critique Gate on
+QualifiedConclusion" above) had zero `engine.py` call site, confirmed by
+direct grep before this task began: both modules' own docstrings disclosed
+this exact residual verbatim ("`engine.py` was deliberately not modified
+given its size/risk/test-coverage profile and this task's own scope"). This
+closes it, alongside the three sibling Confidence/Inference-Layer wirings
+documented immediately above (confidence-reweight, hypothesis-bias, VOI
+ranking) -- the fourth and final item that same ranked audit named.
+
+**`DVHarness._attempt_root_cause_hypothesis_refutation()`** (new method,
+inserted immediately before `_score_root_cause_confidence()`) calls the real,
+unmodified `react_loop.attempt_hypothesis_refutation(self.adapter, self.root,
+hypothesis, evidence_refs=..., profiler=self.profiler, profile_id=...,
+agent_name=...)` -- using the SAME selected `root_cause` and its own real,
+already-gate-verified `supporting_evidence` citations `root_cause_evidence_
+gate.py` already validated, never inventing a hypothesis or evidence of its
+own. Returns `None` (never a fabricated `attempted=True/False` dict) when the
+block carries no `root_cause`, or on any exception -- a transport failure
+degrades exactly to `attempt_hypothesis_refutation()`'s own honest
+`attempted=False` contract, which `build_qualified_conclusion()` already
+treats identically to "no pass was run at all."
+
+**Gated behind a new, additive, OFF-by-default policy flag**
+(`policy.enable_adversarial_refutation_pass`, `config.py`'s `DEFAULT_CONFIG`,
+mirroring `enable_inner_react_loop`'s own escape-hatch convention) --
+deliberately NOT joining the other three siblings as an always-on best-effort
+write, because `attempt_hypothesis_refutation()` dispatches one real, LIVE
+`adapter.run()` call per gate-verified PASS attempt at RE_AUDIT/RCA_JOIN, a
+materially different cost from every other side effect in
+`_score_root_cause_confidence()`. Turning it on also makes the SAME flag
+value `build_qualified_conclusion()`'s own `require_refutation_pass` --
+never silently weaker: a project that opts in gets both the live pass AND the
+stricter "a completed, non-refuting attempt is now mandatory for
+`is_qualified`" rule that module's own construction already enforces,
+together, not one without the other. With the flag off (every existing
+project, unchanged), `_score_root_cause_confidence()` builds byte-identically
+to before this task -- `refutation_result=None`, `require_refutation_pass=
+False`, proven by a dedicated negative-control test asserting the wired hook
+is never even called.
+
+Best-effort throughout, matching every sibling side effect in this method: a
+real exception inside the hook records `ADVERSARIAL_REFUTATION_PASS_FAILED`
+and returns `None` rather than crashing the stage; every real attempt
+(succeeded or not) records one `ADVERSARIAL_REFUTATION_PASS_RUN` event
+naming the real `attempted`/`refuted` outcome, immediately before the
+existing `build_qualified_conclusion()` call and its own
+`QUALIFIED_CONCLUSION_BUILT`/`QUALIFIED_CONCLUSION_BUILD_FAILED` event.
+
+Proven by `dv_harness_tests/test_engine_adversarial_refutation_coupling.py`
+(7 tests): the flag-off negative control (the wired hook is never called,
+`qualified_conclusion.refutation` stays `None`); the flag-on positive path
+(the real hypothesis/evidence-refs/profile_id/agent_name reach the mocked
+hook, and its real result composes into the persisted `QualifiedConclusion`);
+the confirmed-refutation-disqualifies-unconditionally proof, driven directly
+through `build_qualified_conclusion()` at HIGH confidence; the required
+Evidence-Truth-Rule negative control (`attempted=False` under a required
+pass never qualifies); a real, injected transport failure inside the wired
+hook proving the whole stage still completes and its `qualified_conclusion`
+record still lands (with `is_qualified` structurally `False`); the
+no-root-cause-never-calls-the-live-adapter guard; and the
+list-vs-dict-vs-absent `supporting_evidence` extraction proof. Re-run
+alongside the full pre-existing `test_engine_gates_and_routing.py` /
+`test_inference_engine_wiring.py` / `test_qualified_conclusion.py` /
+`test_react_loop.py` / `test_react_inference_wiring.py` suites plus the three
+sibling coupling test files (367 tests combined) -- zero regressions.
+
+**Disclosed residual**: nothing in this harness's real graph/gate machinery
+ever sets `policy.enable_adversarial_refutation_pass` to `True` on its own --
+turning it on is a deliberate, human-made project config decision, exactly
+the same posture `enable_inner_react_loop`/`adaptive_react_budget.enabled`
+already establish for this file's other opt-in behavior flags.
+
 ## Dashboard Wiring: Question-Queue Clarification, Intake Baseline, Pattern-Coverage-Contribution, Build/Remote/LSF Intake Cards -- Coverage/Pattern + Intake Lifecycle Area (2026-09-07)
 
 An audit phase identified four real, already-tested, but dashboard-unreachable capabilities and

@@ -37,6 +37,20 @@ DEFAULT_CONFIG = {
         "enable_inner_react_loop": True,
         "inner_react_max_iterations": 3,
         "inner_react_max_adapter_calls": 2,
+        # Adversarial Refutation Pass (2026-09-07, adversarial_refutation_pass
+        # engine-wiring gap-close) -- see dv_harness/react_loop.py's
+        # attempt_hypothesis_refutation() and dv_harness/qualified_conclusion.py's
+        # build_qualified_conclusion(refutation_result=, require_refutation_pass=).
+        # OFF by default, same explicit-opt-in convention as
+        # adaptive_react_budget above -- unlike every other side effect
+        # engine.py's _score_root_cause_confidence() performs on a
+        # gate-verified RE_AUDIT/RCA_JOIN PASS, this one issues one real,
+        # LIVE adapter.run() call per attempt (a materially different cost),
+        # and turning it on ALSO makes a completed, non-refuting pass
+        # mandatory before a QualifiedConclusion may report is_qualified=True
+        # -- a stricter production-scoring behavior change a project opts
+        # into deliberately, never silently.
+        "enable_adversarial_refutation_pass": False,
         # Adaptive, complexity-sensitive ReAct iteration/adapter-call budget
         # (2026-09-07, adaptive_react_budget gap-close -- see
         # dv_harness/react_loop.py's compute_adaptive_react_budget() for the

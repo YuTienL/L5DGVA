@@ -2635,8 +2635,61 @@ class DVHarness:
                 pass
             return None
 
+    def _attempt_root_cause_hypothesis_refutation(self, stage: str, block: dict,
+                                                    profile_id=None, agent_name: str = "") -> Optional[Dict[str, Any]]:
+        """Wires react_loop.attempt_hypothesis_refutation() into the same
+        RE_AUDIT/RCA_JOIN root_cause_evidence_gate PASS
+        _score_root_cause_confidence() below already scores -- closes the
+        "Adversarial Refutation Pass" REACHED-not-WIRED disclosure
+        qualified_conclusion.py's own module docstring names (its
+        `require_refutation_pass` parameter had no engine call site before
+        this).
+
+        Gated behind the SAME policy.enable_adversarial_refutation_pass flag
+        the caller below checks before invoking this method at all -- this
+        method itself performs no gating of its own, and is never called
+        when that flag is off. Turning it on issues one real, LIVE
+        adapter.run() call per gate-verified PASS attempt at this stage, a
+        materially different cost/behavior change from every other
+        best-effort side effect in _score_root_cause_confidence(), which is
+        why the whole pass stays off by default rather than joining those
+        as an always-on write.
+
+        Uses the SAME selected root_cause and its own real, already-cited
+        supporting_evidence root_cause_evidence_gate.py already validated --
+        never invents a hypothesis or evidence of its own. Returns None
+        (never a fabricated attempted=True/False dict) on any exception or
+        when the gate's own block carries no root_cause at all, so a
+        transport failure here degrades to "no refutation pass ran" exactly
+        like attempt_hypothesis_refutation()'s own honest attempted=False
+        contract -- build_qualified_conclusion() already treats a None
+        refutation_result identically to one carrying attempted=False."""
+        try:
+            from . import react_loop as _rl
+            hypothesis = block.get("root_cause")
+            if not hypothesis:
+                return None
+            supporting = block.get("supporting_evidence")
+            if isinstance(supporting, dict):
+                evidence_refs = [str(v) for v in supporting.values() if v]
+            elif isinstance(supporting, (list, tuple)):
+                evidence_refs = [str(v) for v in supporting if v]
+            elif supporting:
+                evidence_refs = [str(supporting)]
+            else:
+                evidence_refs = []
+            return _rl.attempt_hypothesis_refutation(
+                self.adapter, self.root, hypothesis, evidence_refs=evidence_refs,
+                profiler=self.profiler, profile_id=profile_id, agent_name=agent_name)
+        except Exception as exc:
+            self.store.event({"ts": now(), "stage": stage,
+                              "event": "ADVERSARIAL_REFUTATION_PASS_FAILED",
+                              "error": f"{type(exc).__name__}: {exc}"})
+            return None
+
     def _score_root_cause_confidence(self, stage: str, evidence_blocks: dict,
-                                      verdict: str = "PASS") -> None:
+                                      verdict: str = "PASS",
+                                      profile_id=None, agent_name: str = "") -> None:
         """Wires dv_harness/inference.py's score_confidence/identify_gap/
         next_best_action/promote_if_high_confidence into the ONE real stage
         that produces a root-cause hypothesis with cited supporting/counter
@@ -2793,8 +2846,31 @@ class DVHarness:
         # verdict a consumer should actually gate trust on). Best-effort,
         # same as every other side effect in this method -- a persistence
         # failure must never downgrade an already-earned stage PASS.
+        # Adversarial Refutation Pass (adversarial_refutation_pass
+        # engine-wiring gap-close, 2026-09-07): opt-in, off by default
+        # (policy.enable_adversarial_refutation_pass) -- see
+        # _attempt_root_cause_hypothesis_refutation() above for why this one
+        # side effect is gated separately from every other best-effort write
+        # in this method (it dispatches a real, live adapter call). When on,
+        # the SAME flag also makes a completed, non-refuting pass mandatory
+        # for is_qualified via require_refutation_pass -- never silently
+        # weaker than that.
+        refutation_result = None
+        require_refutation = bool(
+            (self.cfg.get("policy") or {}).get("enable_adversarial_refutation_pass", False))
+        if require_refutation:
+            refutation_result = self._attempt_root_cause_hypothesis_refutation(
+                stage, block, profile_id=profile_id, agent_name=agent_name)
+            self.store.event({
+                "ts": now(), "stage": stage, "event": "ADVERSARIAL_REFUTATION_PASS_RUN",
+                "attempted": bool(refutation_result and refutation_result.get("attempted")),
+                "refuted": bool(refutation_result and refutation_result.get("refuted")),
+            })
+
         try:
-            qc = build_qualified_conclusion(verdict, confidence_result, block)
+            qc = build_qualified_conclusion(verdict, confidence_result, block,
+                                            refutation_result=refutation_result,
+                                            require_refutation_pass=require_refutation)
             self.blackboard.write("qualified_conclusion", qc.as_dict(), source=stage)
             self.store.event({
                 "ts": now(), "stage": stage, "event": "QUALIFIED_CONCLUSION_BUILT",
@@ -5189,7 +5265,9 @@ class DVHarness:
                     self._refresh_requirement_vplan_center_snapshot(stage, evidence_blocks)
                     self._export_signoff_bundle(stage)
                     self._compose_soc_environment_files(stage, evidence_blocks)
-                    self._score_root_cause_confidence(stage, evidence_blocks, verdict)
+                    self._score_root_cause_confidence(stage, evidence_blocks, verdict,
+                                                       profile_id=profile["profile_id"],
+                                                       agent_name=_resolved_agent_name)
                     self._append_coverage_history_sample(stage, evidence_blocks)
                     self._promote_project_topology_knowledge(
                         stage, evidence_blocks, producing_agent_profile=_resolved_agent_name)
