@@ -18972,28 +18972,17 @@ dv_harness_tests/test_vip_version_drift_detection.py -q` -> `31 passed`. A full-
 `pytest --collect-only` (12539 tests, zero errors) confirms no import-time collision was introduced
 elsewhere in the suite.
 
-## VIP Callback/Hook Extension-Point Classification -- Remains Open (2026-09-07)
+## [CLOSED, 2026-09-08] VIP Callback/Hook Extension-Point Classification
 
-This item's item-implementation agent for this batch produced no real output -- its result record
-carries only an `id`/`title` and nothing else (no `module_paths`, `test_paths`,
-`real_evidence_summary`, or `claude_md_section_markdown`). No file matching this concept exists on
-disk: a repo-wide search for `callback_hook`/`CallbackHook`/`extension_point`/`ExtensionPoint`
-across `dv_harness/*.py` and `dv_harness_tests/*.py` found nothing, and `vip_capability_
-extraction.py`'s own five capability IRs (config/transaction/scenario-pattern/checker/coverage) have
-no callback/hook/extension-point category at all -- the nearest real, adjacent concept in this
-codebase is `dv_harness/uvm_generator/bind_mechanism_generator.py`'s bind/hook-SKELETON emission,
-which generates a bind-location scaffold, never classifies a VIP's own declared
-callback/hook/extension-point surface (e.g. `uvm_callback`-derived classes, `virtual function`
-override points a project may plug into).
-
-Per this integration pass's own instructions, no fabricated module or CLAUDE.md section was written
-for this item. This entry records honestly that it is not implemented in this codebase as of
-2026-09-07, names the real reason (the upstream agent produced no work product), and identifies the
-real starting point for a future pass: `vip_capability_extraction.py`'s existing five-IR
-classification pipeline (naming heuristic + inheritance heuristic + qualification tag, see its own
-CLAUDE.md section above) is the established pattern a sixth `VIPCallbackHookIR` would need to follow
--- reusing `vip_symbol_index.py`'s declaration-level scan and never inventing a callback semantics
-this project has no evidence for.
+Was recorded, earlier the same day, as genuinely open ("Remains Open") because the
+item-implementation agent for that batch produced no real output and no matching file existed on
+disk at the time of that entry. Closed later the same day (confirmed still real and passing on
+2026-09-08 re-verification: `python -m pytest dv_harness_tests/test_vip_callback_hook_extraction.py
+-q` -> `18 passed`) by `dv_harness/vip_callback_hook_extraction.py` -- the exact sixth capability IR
+(`VIPCallbackHookIR`) this entry's own closing paragraph named as the real starting point. See "## VIP
+Callback/Hook Extraction: the Sixth Capability IR, VIPCallbackHookIR (2026-09-07)" below for the full
+closure record. This header is left as a short cross-reference (per this file's own convention for a
+superseded gap-claim) rather than deleted outright.
 
 ## VIP Erratum/Known-Limitations Correlation (2026-09-06/07, vip_erratum_correlation)
 
