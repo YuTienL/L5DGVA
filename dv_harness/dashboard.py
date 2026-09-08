@@ -1519,6 +1519,26 @@ card runs no build, simulation, or gate.</div>
 <div class="note" id="patternRuntimeStateNote" style="margin-top:8px"></div>
 </div>
 
+<div class="card" id="protocolSelectorCard"><h3>Protocol Selector</h3>
+<div class="note">Real <code>protocol_router.resolve_protocol()</code> output (GUI-02, GET
+/api/protocol-selector): distinguishes user-declared protocol from what the evidence alone
+auto-detects. Reads a caller-declared evidence document at
+<code>.dv-harness/protocol_selector/inputs.json</code> (<code>protocol_hint</code>/
+<code>failing_test_name</code>/<code>active_config</code>/<code>modified_files</code>/
+<code>subsystem_boundary</code>) -- a project with no such file honestly shows nothing here,
+never a fabricated protocol. <b>Backend protocol-router remains authoritative</b>: this card
+never arbitrates a real user-vs-evidence disagreement, it only surfaces it. <b>Read-only</b>:
+this card runs no build, simulation, or gate.</div>
+<div id="protocolSelectorTiles" class="tiles" style="margin-top:8px"></div>
+<div class="ctrlrow" style="margin-top:6px"><button onclick="loadProtocolSelector()">Refresh</button></div>
+<div style="overflow-x:auto"><table id="protocolSelectorTable" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+<thead><tr style="text-align:left;border-bottom:1px solid #d9e1ec">
+<th style="padding:4px">Source</th><th style="padding:4px">Protocol</th><th style="padding:4px">Matched Field</th>
+<th style="padding:4px">Evidence</th></tr></thead>
+<tbody id="protocolSelectorBody"></tbody></table></div>
+<div class="note" id="protocolSelectorNote" style="margin-top:8px"></div>
+</div>
+
 <div class="card" id="intakeBaselineCard"><h3>Intake Baseline</h3>
 <div class="note">Real <code>intake_baseline.py</code> freeze/list/status card (GET
 /api/intake-baseline): every recorded intake-freeze record under
@@ -4663,6 +4683,63 @@ function renderPatternRuntimeState(){
   ).join('; ')) : '';
 }
 
+// Protocol Selector card (GUI-02). Fetch-once + render, same shape as the
+// cards above -- renders only protocol_router.py's own real
+// resolve_protocol() output (called three times over one declared evidence
+// document: user_declared, auto_detected, authoritative), never a
+// dashboard-local re-derivation of protocol-router's own normalization or
+// tie-break logic.
+let _protocolSelectorData = null;
+async function loadProtocolSelector(){
+  _protocolSelectorData = await (await fetch('/api/protocol-selector')).json();
+  renderProtocolSelector();
+}
+function renderProtocolSelector(){
+  let r = _protocolSelectorData;
+  let tiles = document.getElementById('protocolSelectorTiles');
+  let body = document.getElementById('protocolSelectorBody');
+  let note = document.getElementById('protocolSelectorNote');
+  if(!r) return;
+  if(r.error){
+    tiles.innerHTML = tile('ERROR','Protocol Selector');
+    body.innerHTML = '<tr><td style="padding:4px" colspan="4" class="err">'+r.error.reason+': '+JSON.stringify(r.error.detail)+'</td></tr>';
+    note.innerHTML = '';
+    return;
+  }
+  if(!r.available){
+    tiles.innerHTML = tile('NO EVIDENCE','Protocol Selector');
+    body.innerHTML = '<tr><td style="padding:4px" colspan="4">No protocol-selector evidence declared yet at '+(r.inputs_path||'')+' -- never fabricated.</td></tr>';
+    note.innerHTML = '';
+    return;
+  }
+  let ud = r.user_declared, ad = r.auto_detected, au = r.authoritative;
+  tiles.innerHTML = [
+    tile(ud? (ud.display_name||'UNRESOLVED') : '-','User-Declared'),
+    tile(ad? (ad.display_name||'UNRESOLVED') : '-','Auto-Detected'),
+    tile(au? (au.display_name||'UNRESOLVED') : '-','Authoritative'),
+    tile(r.confidence||'-','Confidence'),
+    tile(r.conflict?'YES':'no','Conflict'),
+  ].join('');
+  let rows = [
+    ['User-Declared', ud],
+    ['Auto-Detected', ad],
+    ['Authoritative (protocol-router)', au],
+  ];
+  body.innerHTML = rows.map(function(pair){
+    let label = pair[0], res = pair[1];
+    if(!res){
+      return '<tr style="border-bottom:1px solid #edf1f5"><td style="padding:4px">'+label+'</td>'+
+        '<td style="padding:4px">-</td><td style="padding:4px">-</td><td style="padding:4px">not declared</td></tr>';
+    }
+    return '<tr style="border-bottom:1px solid #edf1f5">'+
+      '<td style="padding:4px">'+label+'</td>'+
+      '<td style="padding:4px">'+(res.display_name||'<span class="err">UNRESOLVED</span>')+'</td>'+
+      '<td style="padding:4px">'+(res.matched_field||'-')+'</td>'+
+      '<td style="padding:4px">'+(res.evidence||res.reason||'')+'</td></tr>';
+  }).join('');
+  note.innerHTML = r.conflict? '<span class="err">Conflict: user-declared and auto-detected protocols disagree -- protocol-router\\'s own tie-break order (Authoritative row above) decides; this card only surfaces the disagreement, it never arbitrates it.</span>' : '';
+}
+
 // Intake Baseline card. Fetch-once + render, same shape as the two cards
 // above -- renders only intake_baseline.py's own real list_intake_freezes()/
 // evaluate_all_intake_freezes() output, never a dashboard-local
@@ -5178,6 +5255,7 @@ async function load(){
  await loadScenarioPatternCorrespondence();
  await loadIntakeEvents();
  await loadPatternRuntimeState();
+ await loadProtocolSelector();
  await loadIntakeBaseline();
  await loadBuildRemoteLsfIntake();
  await loadMemoryQualityPolicy();
@@ -9023,6 +9101,103 @@ def _read_pattern_runtime_state_machine_state(root: Path) -> Dict[str, Any]:
     return {"available": True, "records": records or [], "states": states, "error": None}
 
 
+# --- Protocol Selector (GET /api/protocol-selector) --------------------------
+# GUI-02 (CLAUDE_L5_VIP_UVM_INTERACTIVE_INTAKE.md's PROTOCOL SELECTOR
+# requirement): the GUI must distinguish user-selected protocol, auto-detected
+# protocol, evidence, confidence, and conflict/ambiguity, with the backend
+# `protocol-router` remaining authoritative according to evidence and policy.
+# protocol_router.py's own real resolve_protocol() already implements that
+# router; nothing here re-derives its normalization/alias/tie-break logic.
+def _default_protocol_selector_inputs_path(root: Path) -> Path:
+    return root / ".dv-harness" / "protocol_selector" / "inputs.json"
+
+
+def _read_protocol_selector_state(root: Path,
+                                   inputs_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Reads a caller-declared evidence document at this project's own
+    conventional `.dv-harness/protocol_selector/inputs.json` path (mirroring
+    the `.dv-harness/multi_vip_cooperation/inputs.json` convention elsewhere in
+    this file) -- protocol_router.py discovers no project fact itself, per its
+    own FIELD_ORDER contract (`protocol_hint`/`failing_test_name`/
+    `active_config`/`modified_files`/`subsystem_boundary`), so this reader
+    never invents one either. No file on disk yet is the honest
+    `{"available": False, ...}` empty state, never a fabricated protocol.
+
+    `resolve_protocol()` is called THREE times over the same declared fields,
+    never re-derived a second way: (1) over `protocol_hint` alone, normalizing
+    whatever the user actually typed into a canonical protocol/display_name --
+    the real "user-selected protocol"; (2) over every OTHER declared field
+    (failing_test_name/active_config/modified_files/subsystem_boundary), which
+    is what the evidence alone resolves to independent of what the user
+    declared -- the real "auto-detected protocol"; (3) over every declared
+    field together, the real, unmodified authoritative tie-break SKILL.md's
+    own order specifies (user intent first) -- this is protocol-router's own
+    real answer, never a dashboard-local override of it. A genuine
+    disagreement between (1) and (2) is reported as `conflict: True` and is
+    never arbitrated here -- (3) already IS protocol-router's own
+    authoritative answer to that disagreement; this card only surfaces it.
+
+    `confidence` is this card's own presentation-only label (HIGH/MEDIUM/LOW/
+    UNKNOWN), derived purely from whether (1) and (2) resolved and whether
+    they agree -- protocol_router.py itself carries no confidence concept, so
+    this label is never presented as if it were that module's own output."""
+    from . import protocol_router as _pr
+
+    path = Path(inputs_path) if inputs_path else _default_protocol_selector_inputs_path(root)
+    empty = {"available": False, "inputs_path": str(path), "declared": None,
+             "user_declared": None, "auto_detected": None, "authoritative": None,
+             "conflict": None, "confidence": None, "error": None}
+    if not path.exists():
+        return empty
+
+    try:
+        declared = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": "MALFORMED_PROTOCOL_SELECTOR_INPUTS_FILE",
+                          "detail": {"message": str(e)}}}
+    if not isinstance(declared, dict):
+        return {**empty, "available": True,
+                "error": {"reason": "PROTOCOL_SELECTOR_INPUTS_NOT_A_DOCUMENT",
+                          "detail": {"message": "top-level JSON must be an object"}}}
+
+    try:
+        full_evidence = {k: declared.get(k) for k in _pr.FIELD_ORDER}
+        auto_evidence = {k: v for k, v in full_evidence.items() if k != "protocol_hint"}
+        user_raw = declared.get("protocol_hint")
+        user_declared = _pr.resolve_protocol({"protocol_hint": user_raw}) if user_raw else None
+        auto_detected = _pr.resolve_protocol(auto_evidence)
+        authoritative = _pr.resolve_protocol(full_evidence)
+    except Exception as e:
+        return {**empty, "available": True,
+                "error": {"reason": f"UNEXPECTED_ERROR: {type(e).__name__}",
+                          "detail": {"message": str(e)}}}
+
+    user_protocol = user_declared.get("protocol") if user_declared else None
+    auto_protocol = auto_detected.get("protocol") if auto_detected else None
+    conflict = bool(user_protocol and auto_protocol and user_protocol != auto_protocol)
+    if conflict:
+        confidence = "LOW"
+    elif user_protocol and auto_protocol and user_protocol == auto_protocol:
+        confidence = "HIGH"
+    elif user_protocol or auto_protocol:
+        confidence = "MEDIUM"
+    else:
+        confidence = "UNKNOWN"
+
+    return {
+        "available": True,
+        "inputs_path": str(path),
+        "declared": full_evidence,
+        "user_declared": user_declared,
+        "auto_detected": auto_detected,
+        "authoritative": authoritative,
+        "conflict": conflict,
+        "confidence": confidence,
+        "error": None,
+    }
+
+
 # --- Intake Baseline (GET /api/intake-baseline) ------------------------------
 # intake_baseline.py's own real per-project freeze/list/status card. Reuses
 # ONLY that module's own real, unmodified functions: list_intake_freezes()
@@ -10464,6 +10639,19 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 # pattern_runtime_state_machine.py's own real execute_verb()
                 # verbatim.
                 self._send_json(_read_pattern_runtime_state_machine_state(project_root))
+            elif self.path == "/api/protocol-selector" or self.path.startswith("/api/protocol-selector?"):
+                # Read-only by design -- see _read_protocol_selector_state()'s
+                # own comment: this never re-implements protocol_router.py's
+                # own resolve_protocol() normalization/tie-break logic, it
+                # calls that real function verbatim, three times, over the
+                # same declared evidence document.
+                qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                evidence_override = urllib.parse.unquote(params["evidence"]) if "evidence" in params else None
+                self._send_json(_read_protocol_selector_state(
+                    project_root,
+                    Path(evidence_override) if evidence_override else None,
+                ))
             elif self.path == "/api/intake-baseline" or self.path.startswith("/api/intake-baseline?"):
                 # Read-only by design -- see _read_intake_baseline_state()'s
                 # own comment: list_intake_freezes() is always called (real,
