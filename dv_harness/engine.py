@@ -5764,6 +5764,24 @@ class DVHarness:
             self.store.event({"ts": now(), "stage": completed_stage,
                                "event": "QUESTION_QUEUE_DIGEST_FAILED", "error": str(exc)})
             return None
+
+        # INTAKE-12 (2026-09-08): the digest itself was always passive
+        # (written to events.jsonl / decisions.md only) -- this is the one
+        # call site that turns a genuinely-emitted, genuinely-blocking batch
+        # into a real escalation_notify push, reusing the SAME
+        # EscalationNotifier/EscalationConfig machinery cli.py/
+        # regression_reporter.py already build from `self.cfg.get(
+        # "escalation")`. Best-effort and isolated in its own try/except --
+        # a notification failure must never be misreported as a
+        # QUESTION_QUEUE_DIGEST_FAILED (that event name means the digest
+        # computation itself failed, not that a push failed) and must never
+        # abort the stage transition this method is called from.
+        try:
+            from . import escalation_notify as _escalation
+            notifier = _escalation.notifier_from_config(self.cfg.get("escalation"))
+            notifier.question_queue_digest(digest)
+        except Exception:
+            pass
         # Recorded on EVERY boundary crossing, including emitted=False. A
         # metrics series with datapoints only on the cycles that happened to
         # have pending questions is not a series -- and "this cycle had

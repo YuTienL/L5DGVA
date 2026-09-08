@@ -124,6 +124,64 @@ def test_control_plane_real_session_produces_a_real_live_link(tmp_path):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# --- INTAKE-23: GUI VIP Coverage Wizard nav link ----------------------------
+
+def test_vip_coverage_wizard_not_running_reports_honestly_with_inert_href(tmp_path):
+    port = _free_port()
+    tmp = _mk_dashboard_project(port)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        _start_dashboard(tmp)
+        _wait_ready(base)
+
+        from dv_harness import gui_vip_coverage_wizard as gvcw
+        assert not (tmp / ".dv-harness" / gvcw.AUTH_SESSION_FILENAME).exists()
+
+        view_html = _get_html(base, "/view/dashboard")
+        assert "GUI VIP Coverage Wizard (not running)" in view_html
+        assert '<a href="#">GUI VIP Coverage Wizard (not running)</a>' in view_html
+        # And it must never leak onto the untouched root page.
+        assert "GUI VIP Coverage Wizard" not in _get_html(base, "/")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_vip_coverage_wizard_real_session_produces_a_real_live_link(tmp_path):
+    """A REAL `gui_vip_coverage_wizard` server's own real, persisted session
+    record (host/port/token, written by that module's own
+    `issue_session_token()` at real server start) must be read verbatim and
+    turned into a real, working link."""
+    from dv_harness import gui_vip_coverage_wizard as gvcw
+
+    dash_port = _free_port()
+    tmp = _mk_dashboard_project(dash_port)
+    try:
+        dash_base = f"http://127.0.0.1:{dash_port}"
+
+        gvcw_server, gvcw_token = gvcw.build_server(tmp, port=0)
+        gvcw_port = gvcw_server.server_address[1]
+        gvcw_thread = threading.Thread(target=gvcw_server.serve_forever, daemon=True)
+        gvcw_thread.start()
+        try:
+            session = tmp / ".dv-harness" / gvcw.AUTH_SESSION_FILENAME
+            assert session.exists()
+            rec = json.loads(session.read_text(encoding="utf-8"))
+            assert rec["port"] == gvcw_port
+            assert rec["token"] == gvcw_token
+
+            _start_dashboard(tmp)
+            _wait_ready(dash_base)
+
+            view_html = _get_html(dash_base, "/view/dashboard")
+            assert "GUI VIP Coverage Wizard (live)" in view_html
+            expected_href = f"http://127.0.0.1:{gvcw_port}/?token={gvcw_token}"
+            assert f'<a href="{expected_href}">' in view_html
+        finally:
+            gvcw_server.shutdown()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_wizard_not_detected_reports_honestly_with_inert_href(tmp_path):
     """No real listener bound at the wizard's own documented default port
     (127.0.0.1:8799) -> the honest "(not detected...)" label and an inert

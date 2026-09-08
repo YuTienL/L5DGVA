@@ -263,6 +263,30 @@ class EscalationNotifier:
         body = f"queue={queue}\ncommand={command}\nreason={reason}"
         return self._fire("job_submission_failure", True, title, body, reason)
 
+    def question_queue_digest(self, digest: Dict[str, Any]) -> EscalationEvent:
+        """`digest` is a real `question_queue.QuestionQueueStore.
+        build_digest()` return value (`{"emitted", "batch_id", "questions",
+        "by_owner"}`), passed through UNMODIFIED -- this method invents no
+        second notion of "the digest". Fires ONLY when the digest genuinely
+        emitted a real batch AND at least one of the batched questions is
+        real Tier-3/`blocking` (cannot be safely auto-assumed) -- an
+        all-Tier-2/assumed batch is left for the normal passive digest to
+        record; a human is not woken up for a batch nothing is actually
+        stuck waiting on. Closes the "Question-Queue Digest never triggers
+        any escalation_notify push" gap: this is the ONLY call site that
+        turns a digest into a real notification, and it fires no more often
+        than `build_digest()` itself already emits (never real-time,
+        matching this module's own "escalation only" contract)."""
+        questions = digest.get("questions") or []
+        blocking = [q for q in questions if q.get("blocking")]
+        condition = bool(digest.get("emitted")) and bool(blocking)
+        batch_id = digest.get("batch_id")
+        title = "DV Harness: question queue digest has blocking question(s)"
+        body = (f"batch {batch_id}: {len(blocking)} blocking / {len(questions)} total "
+                f"question(s) awaiting a human answer")
+        reason = f"{len(blocking)} blocking question(s) in digest {batch_id}"
+        return self._fire("question_queue_digest", condition, title, body, reason)
+
     def signoff_blocked(self, *, stage: str, reasons: Any) -> EscalationEvent:
         """Call ONLY from a real signoff-blocking condition (e.g.
         dv_harness.signoff_export.collect_signoff_bundle()'s own bundled

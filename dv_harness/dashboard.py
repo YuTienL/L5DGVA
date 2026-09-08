@@ -8086,6 +8086,37 @@ def _external_gui_server_nav_routes(root: Path) -> "List[tuple]":
         routes.append(("gui_intake_wizard",
                         f"GUI Intake Wizard (not detected at default port {wizard_port})",
                         "#"))
+
+    # --- GUI VIP Coverage Wizard (INTAKE-23, 2026-09-08) --------------------
+    # The third of the three real intake GUI servers, and the one covering
+    # the widest span (DUT/RTL discovery through functional coverage
+    # signoff) -- but the only one this nav function did not already link,
+    # leaving it discoverable only by a human already knowing to run
+    # `python -m dv_harness.gui_vip_coverage_wizard` by hand. Unlike the
+    # wizard above, this server's own `issue_session_token()` DOES persist
+    # its real bound host/port (plus the token) to
+    # `.dv-harness/gui_vip_coverage_wizard_session.json` at real server
+    # start, so this uses the SAME real-evidence-from-disk approach as the
+    # Control Plane entry above rather than a live TCP probe.
+    rec = None
+    try:
+        from . import gui_vip_coverage_wizard as _gvcw
+        session_path = root / ".dv-harness" / _gvcw.AUTH_SESSION_FILENAME
+        if session_path.exists():
+            rec = json.loads(session_path.read_text(encoding="utf-8"))
+    except Exception:
+        rec = None
+    port = rec.get("port") if isinstance(rec, dict) else None
+    if isinstance(port, int) and port > 0:
+        host = rec.get("host") if isinstance(rec.get("host"), str) and rec.get("host") else "127.0.0.1"
+        token = rec.get("token") if isinstance(rec.get("token"), str) and rec.get("token") else None
+        href = f"http://{host}:{port}/"
+        if token:
+            href += f"?token={urllib.parse.quote(token)}"
+        routes.append(("gui_vip_coverage_wizard", "GUI VIP Coverage Wizard (live)", href))
+    else:
+        routes.append(("gui_vip_coverage_wizard",
+                        "GUI VIP Coverage Wizard (not running)", "#"))
     return routes
 
 

@@ -168,6 +168,33 @@ class TestJobSubmissionFailureAlwaysFires:
         assert "bsub not found" in ev.body
 
 
+class TestQuestionQueueDigestFiresOnlyWithBlockingQuestions:
+    def test_does_not_fire_when_digest_did_not_emit(self):
+        fake = FakeTransport()
+        notifier = esc.EscalationNotifier(transport=fake)
+        ev = notifier.question_queue_digest({"emitted": False, "batch_id": None, "questions": []})
+        assert ev.fired is False
+        assert fake.calls == []
+
+    def test_does_not_fire_when_batch_is_all_assumed_none_blocking(self):
+        fake = FakeTransport()
+        notifier = esc.EscalationNotifier(transport=fake)
+        digest = {"emitted": True, "batch_id": "DIGEST-1",
+                   "questions": [{"id": "Q1", "blocking": False}]}
+        ev = notifier.question_queue_digest(digest)
+        assert ev.fired is False
+
+    def test_fires_when_batch_has_a_real_blocking_question(self):
+        fake = FakeTransport()
+        notifier = esc.EscalationNotifier(transport=fake)
+        digest = {"emitted": True, "batch_id": "DIGEST-2",
+                   "questions": [{"id": "Q1", "blocking": False}, {"id": "Q2", "blocking": True}]}
+        ev = notifier.question_queue_digest(digest)
+        assert ev.fired is True
+        assert "DIGEST-2" in ev.body
+        assert "1 blocking / 2 total" in ev.body
+
+
 class TestSignoffBlockedAlwaysFires:
     def test_fires(self):
         fake = FakeTransport()
