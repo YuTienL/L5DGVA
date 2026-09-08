@@ -208,6 +208,63 @@ def test_a_question_queue_failure_never_breaks_the_stage_transition(monkeypatch)
         shutil.rmtree(tmp)
 
 
+# --- INTAKE-12: a genuinely-emitted, genuinely-blocking digest also pushes a
+# real escalation_notify notification -----------------------------------------
+
+def test_a_blocking_digest_pushes_a_real_escalation_notification(monkeypatch):
+    from dv_harness import escalation_notify
+
+    calls = []
+    real_notifier = escalation_notify.EscalationNotifier(transport=escalation_notify.NullTransport())
+
+    class _RecordingNotifier:
+        def question_queue_digest(self, digest):
+            calls.append(digest)
+            return real_notifier.question_queue_digest(digest)
+
+    monkeypatch.setattr(escalation_notify, "notifier_from_config", lambda cfg: _RecordingNotifier())
+
+    tmp, h = _fresh_harness()
+    try:
+        store = QuestionQueueStore(tmp)
+        q = _ask_blocking(store)
+
+        h.set_stage("REGRESSION_MONITOR")
+        assert h.advance("goal") == "COVERAGE_CLOSURE"
+
+        assert len(calls) == 1
+        assert calls[0]["emitted"] is True
+        assert calls[0]["questions"][0]["id"] == q["id"]
+        # The digest itself is still recorded exactly as before -- the
+        # notification is an ADDITIONAL effect, never a replacement.
+        assert len(_events(tmp)) == 1
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_notifier_failure_never_breaks_the_stage_transition(monkeypatch):
+    from dv_harness import escalation_notify
+
+    def _boom(cfg):
+        raise RuntimeError("notifier misconfigured")
+
+    monkeypatch.setattr(escalation_notify, "notifier_from_config", _boom)
+
+    tmp, h = _fresh_harness()
+    try:
+        store = QuestionQueueStore(tmp)
+        _ask_blocking(store)
+
+        h.set_stage("REGRESSION_MONITOR")
+        # Must not raise, and the real digest event must still be recorded.
+        assert h.advance("goal") == "COVERAGE_CLOSURE"
+        evs = _events(tmp)
+        assert len(evs) == 1
+        assert evs[0]["emitted"] is True
+    finally:
+        shutil.rmtree(tmp)
+
+
 # --- the AUTONOMOUS path, not just a hand-called advance() -------------------
 
 def test_digest_fires_after_a_real_gate_verified_stage_pass():
