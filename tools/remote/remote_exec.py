@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 """remote_exec.py -- thin client for the persistent relay (remote_relay.py).
 
-THIS FILE NEVER READS VCPW. It talks only to a loopback relay process that
-a human started separately, in their own terminal, using remote_relay.py.
-This is the one file of the pair Claude Code is expected to invoke via a
-tool call.
+THIS FILE NEVER READS VCPW. It talks only to a loopback relay process
+started separately -- either by a human in their own terminal running
+remote_relay.py directly, or by a governed, authorized agent invocation
+of replay.ps1 (which itself invokes remote_relay.py under the sanctioned
+DV_HARNESS_RELAY_AUTORECONNECT_OK exemption; see remote_relay.py's own
+module docstring and v1/l5/execution/connectivity.py for the
+provider-neutral policy governing when that auto-start is permitted, if
+that file exists in this checkout -- see the M1 migration provenance
+record for its current cross-repo status). Either way, this file --
+remote_exec.py -- remains the one file of the pair Claude Code is
+expected to invoke via a tool call for actual command traffic.
 
 Usage:
   python tools/remote/remote_exec.py --status

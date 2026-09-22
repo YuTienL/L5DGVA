@@ -267,6 +267,17 @@ def main():
     sub.add_parser("advance")
     sub.add_parser("stats")
 
+    pdoctor = sub.add_parser(
+        "doctor",
+        help="M1 canonical composed health report: repository identity/root/mode, git "
+             "availability and root-consistency, execution-profile resolution, remote "
+             "transport capability, Knowledge/Memory/Obsidian status (delegates to the "
+             "existing `memory doctor` Phase-21 check), persistent storage, and "
+             "graph/agent/skill/OpenSpec/Intake availability. A reporter, never a gate -- "
+             "missing optional capability (git, Obsidian, a live relay) is reported "
+             "honestly, never raised as a hard failure. See dv_harness/dv_doctor.py.")
+    pdoctor.add_argument("--json", action="store_true", help="Print the full report as JSON instead of the plain-text table.")
+
     pset = sub.add_parser("set-stage")
     pset.add_argument("stage", choices=[s.value for s in Stage])
 
@@ -4168,7 +4179,14 @@ def main():
     h.store.event({"ts": cp_now(), "event": "CLI_ACCESS", "cmd": args.cmd,
                     "user": _access_user(), "host": _access_host()})
 
-    if args.cmd == "status":
+    if args.cmd == "doctor":
+        from . import dv_doctor
+        report = dv_doctor.run_doctor(h.root, h.cfg)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        else:
+            print(dv_doctor.render_doctor_report(report))
+    elif args.cmd == "status":
         if getattr(args, "status_view", None) is None:
             print(h.summary())
         else:

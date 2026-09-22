@@ -7,6 +7,22 @@ same reason (see remote_hop.py's own module docstring): a password
 composed into a Claude-issued command's literal text can end up persisted
 in Claude Code's own tool-approval history.
 
+R5-B6 note (reconciles this warning with the sanctioned auto-reconnect
+path, does not weaken it): this prohibition is about a caller composing a
+raw `python remote_relay.py --start VCPW=...` command itself, which would
+put the password in that literal, persisted command text -- exactly what
+running_inside_ai_agent() below still actively blocks (SECURITY BLOCK,
+exit 126) for any caller that has not set AUTORECONNECT_OVERRIDE_VAR. The
+already-existing, already-governed exception is `replay.ps1` (repository
+root -- see the M1 execution-profile extraction for how it now resolves
+its own host configuration), which sets that override itself (see its own
+source) and never composes VCPW into any literal command text an AI-agent
+tool call could see or persist -- see v1/l5/execution/connectivity.py for
+the provider-neutral policy governing when an agent may automatically
+invoke `replay.ps1` (never this script directly), if that file exists in
+this checkout -- see the M1 migration provenance record for its current
+cross-repo status.
+
 This script performs the telnet(VCHOST)->ssh(VCHOP)->cd(VCWORKDIR)->
 source(VCEDAENV) handshake ONCE, using remote_hop.py's own Session class
 unchanged, then keeps that authenticated session alive behind a
