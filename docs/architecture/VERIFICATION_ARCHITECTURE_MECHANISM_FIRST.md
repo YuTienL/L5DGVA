@@ -1,4 +1,4 @@
-> **The entry point is START_HERE.md.** This page is the detailed verification-workflow-order reference it links to -- see also SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md and FINAL_PACKAGE_INDEX.md.
+> **The entry point is START_HERE.md.** This page is the detailed verification-workflow-order reference it links to -- see also docs/architecture/SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md and docs/release/FINAL_PACKAGE_INDEX.md.
 
 # DV Agent Harness L5 — Verification Architecture & Mechanism Before Test Generation
 

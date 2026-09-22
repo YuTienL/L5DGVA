@@ -1,4 +1,4 @@
-> See START_HERE.md for the canonical entry point and current mechanism overview; this page covers the Engineering Memory system specifically. See also KNOWLEDGE_CENTER_GUIDE.md (the separate, cross-user shared store) and USAGE_MULTI_USER_SAFETY.md.
+> See START_HERE.md for the canonical entry point and current mechanism overview; this page covers the Engineering Memory system specifically. See also docs/knowledge/KNOWLEDGE_CENTER_GUIDE.md (the separate, cross-user shared store) and docs/workflow/USAGE_MULTI_USER_SAFETY.md.
 
 # AI Agent Harness L5 — Memory Architecture
 
@@ -34,7 +34,7 @@ in a normal text editor or (optionally, opportunistically) real Obsidian —
 see OBSIDIAN_INTEGRATION.md. The **Knowledge Center is a completely
 different, pre-existing thing**: a cross-user shared server-side store,
 not git/markdown, not this workstream's subject — see
-KNOWLEDGE_CENTER_GUIDE.md. A promotion to ENGINEERING_MEMORY or
+docs/knowledge/KNOWLEDGE_CENTER_GUIDE.md. A promotion to ENGINEERING_MEMORY or
 CORNER_CASE_LIBRARY can push to BOTH the Vault and the Knowledge Center
 independently; neither depends on the other.
 

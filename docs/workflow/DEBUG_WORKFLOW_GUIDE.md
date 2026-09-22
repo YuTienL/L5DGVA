@@ -1,8 +1,8 @@
 > See START_HERE.md for the canonical entry point. This page covers the
 > end-to-end loop for debugging a `UVM_ERROR` in a DE's own generated
 > VIP-based verification environment, driven from Claude Code on the PC.
-> See `REMOTE_LOGIN_GUIDE.md` for the underlying relay/`remote_exec.py`
-> mechanics this page builds on, and `USAGE_MULTI_USER_SAFETY.md` for why
+> See `docs/remote/REMOTE_LOGIN_GUIDE.md` for the underlying relay/`remote_exec.py`
+> mechanics this page builds on, and `docs/workflow/USAGE_MULTI_USER_SAFETY.md` for why
 > every path below is the DE's own, never the shared
 > `/home/svcacct/AI/Agent` tree.
 
@@ -24,16 +24,16 @@ where feasible) — but the specific gap class this audit went looking for
 closed for all 8 originally-audited claims.
 
 Prerequisite: the DE has completed onboarding
-(`REMOTE_LOGIN_GUIDE.md`'s "Onboarding a new PC user" section) — their own
+(`docs/remote/REMOTE_LOGIN_GUIDE.md`'s "Onboarding a new PC user" section) — their own
 `--project-root`, their own relay started with **their own `VCUSER`**
-(never the shared `svcacct` service account — see REMOTE_LOGIN_GUIDE.md's
+(never the shared `svcacct` service account — see docs/remote/REMOTE_LOGIN_GUIDE.md's
 "The permission model" section: the relay executes every command as a
 real Unix login, and `svcacct` has no standing access to a DE's own
 home-directory tree), `DVWORKDIR` pointing at their own generated
 environment's Linux-server deployment path (e.g.
 `/home/tmpacct/devuser/UVM/USB`). Debugging *someone else's* environment
 requires that other account's real permission grant or credentials — see
-REMOTE_LOGIN_GUIDE.md for the options; there is no way around real Unix
+docs/remote/REMOTE_LOGIN_GUIDE.md for the options; there is no way around real Unix
 file permissions.
 
 ## The loop, stage by stage
@@ -124,7 +124,7 @@ file permissions.
 The DE's environment lives at their own `DVWORKDIR`
 (e.g. `/home/tmpacct/devuser/UVM/USB`), never the shared
 `/home/svcacct/AI/Agent` tree. No new mechanism is needed — the same
-`remote_exec.py` bridge from `REMOTE_LOGIN_GUIDE.md` is used directly:
+`remote_exec.py` bridge from `docs/remote/REMOTE_LOGIN_GUIDE.md` is used directly:
 
 ```
 # DVWORKDIR already set once in the DE's terminal session
@@ -171,7 +171,7 @@ python tools/remote/remote_exec.py --cwd <DVWORKDIR> "tar xzf update.tgz"
 Windows path by Git Bash before Python sees them, `remote_exec.py` now
 fails loudly with an `MSYS_NO_PATHCONV` instruction instead of silently
 corrupting the transfer (real incident, 2026-09-02 — see
-`USAGE_MULTI_USER_SAFETY.md`'s changelog). If you hit that error, prefix
+`docs/workflow/USAGE_MULTI_USER_SAFETY.md`'s changelog). If you hit that error, prefix
 the command with `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'`.
 
 Then, **verify narrow before verifying broad**:

@@ -13,10 +13,10 @@
 #     (previously a separate, duplicate raw-JSON edge parser).
 # GraphState previously lived below, backing the now-deleted
 # dv_harness/graph_runtime.py's GraphRuntime -- reachable only via the
-# documented DV_GRAPH_STATUS.ps1 script, which read/wrote a permanently-
+# documented scripts/powershell/DV_GRAPH_STATUS.ps1 script, which read/wrote a permanently-
 # stale .dv-harness/graph/graph_state.json disconnected from the real
 # .dv-harness/state.json HarnessState engine.py actually drives. Per the
-# 2026-09-03 gap-close-engine audit, DV_GRAPH_STATUS.ps1 was retargeted to
+# 2026-09-03 gap-close-engine audit, scripts/powershell/DV_GRAPH_STATUS.ps1 was retargeted to
 # read the real live HarnessState (same as `dv-harness status`), and
 # graph_runtime.py/GraphState/the stray graph_state.json were removed as
 # nothing real referenced them any more. Original NOTICE text, now

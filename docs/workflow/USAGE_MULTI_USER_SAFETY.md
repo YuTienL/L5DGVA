@@ -28,8 +28,8 @@ the actual source (`tools/knowledge_center/broker.py`,
 
 | Layer | Path | Safe for concurrent multi-user access? | Why |
 |---|---|---|---|
-| **Knowledge Center** | `/home/svcacct/AI/DB` | **Yes** | `broker.py`'s `_ShardLock` (`fcntl.flock(LOCK_EX)` per `<category>__<protocol>` shard) + `_atomic_write_json()` (`os.replace()`). See `KNOWLEDGE_CENTER_GUIDE.md`. |
-| **Persistent relay** (per `vchost`/`vchop` pair) | one shared shell, reached via `remote_exec.py` | **Command execution: yes** (fixed 2026-09-02). **Shared shell state (cwd/env/`module load`): no, unless every caller uses `--cwd`** | `RelayServer.handle_request` now holds a lock (no interleaving); the underlying shell is still one continuous process whose `cd`/env changes persist across callers. See `REMOTE_LOGIN_GUIDE.md`. |
+| **Knowledge Center** | `/home/svcacct/AI/DB` | **Yes** | `broker.py`'s `_ShardLock` (`fcntl.flock(LOCK_EX)` per `<category>__<protocol>` shard) + `_atomic_write_json()` (`os.replace()`). See `docs/knowledge/KNOWLEDGE_CENTER_GUIDE.md`. |
+| **Persistent relay** (per `vchost`/`vchop` pair) | one shared shell, reached via `remote_exec.py` | **Command execution: yes** (fixed 2026-09-02). **Shared shell state (cwd/env/`module load`): no, unless every caller uses `--cwd`** | `RelayServer.handle_request` now holds a lock (no interleaving); the underlying shell is still one continuous process whose `cd`/env changes persist across callers. See `docs/remote/REMOTE_LOGIN_GUIDE.md`. |
 | **`.dv-harness/` runtime state** (per project — `state.json`, `blackboard/`, `react/`, `memory/`, `events.jsonl`, `control.json`) | wherever `--project-root` points | **No** | Plain read-modify-write, no locking at all — a real lost-update race for two concurrent writers on the same `--project-root`. This is *by design* the opposite of the Knowledge Center's design (see `dv_harness/memory.py`/`blackboard.py`'s own docstrings, which exist precisely because `broker.py` closes the class of bug they don't). |
 
 ## The concrete rule
@@ -64,14 +64,14 @@ the actual source (`tools/knowledge_center/broker.py`,
   ```
   This is a third, separate concept from `VCWORKDIR` (the relay's own
   shared shell cwd) and `--project-root` (the harness's own runtime-state
-  location) — see `REMOTE_LOGIN_GUIDE.md`'s three-way comparison table.
+  location) — see `docs/remote/REMOTE_LOGIN_GUIDE.md`'s three-way comparison table.
 - **Prefer one relay per user.** A relay started from your own machine
   (`%LOCALAPPDATA%` is already per-Windows-account) gives you your own real
   SSH login on the server with zero contention. If a relay genuinely must
   be shared (e.g. one long-lived automation account), the 2026-09-02 fix
   makes command *execution* safe (no interleaving) but shared shell *state*
   is still one global value — pass `--cwd` on every `remote_exec.py` call
-  in that scenario (see `REMOTE_LOGIN_GUIDE.md`).
+  in that scenario (see `docs/remote/REMOTE_LOGIN_GUIDE.md`).
 
 ## What changed 2026-09-02 (this fix)
 

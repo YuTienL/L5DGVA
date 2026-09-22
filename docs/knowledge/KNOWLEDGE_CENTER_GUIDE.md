@@ -11,7 +11,7 @@ remote_root = /home/svcacct/AI/DB
 ```
 
 on `vchost=vchost-b` / `vchop=host-c` (routed through the persistent relay — see
-REMOTE_LOGIN_GUIDE.md). This path was confirmed and 固化 (solidified) as a
+docs/remote/REMOTE_LOGIN_GUIDE.md). This path was confirmed and 固化 (solidified) as a
 standing policy this session: any confirmed harness gap/lesson must be
 distilled into a permanent skill/capability AND written back here so future
 sessions inherit it automatically, not just this conversation.
@@ -67,7 +67,7 @@ state that was never designed to be written by two processes at once.
   see `dv_harness/cli.py`'s `--project-root` / `DVHarness.__init__`) — never
   multiple people driving `dv-harness` commands directly inside the one
   shared `/home/svcacct/AI/Agent` deployment tree at the same time. See
-  `USAGE_MULTI_USER_SAFETY.md` for the full reasoning and the concrete
+  `docs/workflow/USAGE_MULTI_USER_SAFETY.md` for the full reasoning and the concrete
   recommended layout.
 
 ## Setup
@@ -81,7 +81,7 @@ prompts interactively (never guesses/hardcodes another user's server path,
 per CLAUDE.md's SSH/Remote Transport Connection Intake gate). Requires
 `VCHOST`/`VCHOP` env vars (or `knowledge_center.vchost`/`vchop` in
 `.dv-harness/config.json`) pointing at an already-running relay — see
-REMOTE_LOGIN_GUIDE.md.
+docs/remote/REMOTE_LOGIN_GUIDE.md.
 
 ## Everyday commands
 

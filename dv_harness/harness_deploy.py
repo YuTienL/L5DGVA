@@ -3,7 +3,7 @@ Linux Agent deployment path.
 
 WHY THIS EXISTS
 ---------------
-`USAGE_MULTI_USER_SAFETY.md:16-19` records as standing policy that "every
+`docs/workflow/USAGE_MULTI_USER_SAFETY.md:16-19` records as standing policy that "every
 harness update must sync to `/home/svcacct/AI/Agent`". A 2026-09-05 audit
 confirmed that half of the policy had a POLICY STATEMENT and no MECHANISM:
 
@@ -428,7 +428,7 @@ def classify_line_ending_only_differences(
     THIS IS NOT COSMETIC. This repo's `core.autocrlf` is `true`, so the Windows
     working copy holds CRLF while git's own blobs (and therefore a
     `git clone`-populated `/home/svcacct/AI/Agent`, which is exactly how
-    `USAGE_MULTI_USER_SAFETY.md:37-39` and `REMOTE_LOGIN_GUIDE.md:34-38`
+    `docs/workflow/USAGE_MULTI_USER_SAFETY.md:37-39` and `docs/remote/REMOTE_LOGIN_GUIDE.md:34-38`
     describe that tree being created) hold LF. Verified on this checkout:
     `dv_harness/engine.py` hashes to 020fb26f... as CRLF and a14df5e9... as LF.
     Without this step EVERY text file in the harness lands in `different` on

@@ -40,7 +40,7 @@ would be necessary.
    `/home/svcacct/AI/Agent` (that's a Linux-side path unrelated to where
    your local `dv-harness` process runs, and even if reachable it is
    shared code, not a place for your own `.dv-harness/` runtime state —
-   see `USAGE_MULTI_USER_SAFETY.md`). Use your own local directory, e.g.
+   see `docs/workflow/USAGE_MULTI_USER_SAFETY.md`). Use your own local directory, e.g.
    `dv-harness --project-root D:\DV\<your-project> status`.
 3. **Start your own relay**, from your own terminal, with your own
    account — `VCUSER` must be **your own** real Linux login, never the
@@ -54,7 +54,7 @@ would be necessary.
    ```
    Every real SSH login is independent even under a shared `vchost`/`vchop`
    pair — starting your own relay does not contend with anyone else's (see
-   `USAGE_MULTI_USER_SAFETY.md`'s "prefer one relay per user" guidance).
+   `docs/workflow/USAGE_MULTI_USER_SAFETY.md`'s "prefer one relay per user" guidance).
    `VCWORKDIR` may point at the shared `/home/svcacct/AI/Agent` code tree
    instead if this relay is dedicated to reading/syncing the shared engine
    (everyone reading that shared code is safe) — but for your own debug
@@ -120,7 +120,7 @@ account's home-directory tree — normal Unix defaults do **not** grant
 - **Never** try to work around a `Permission denied` by switching the
   relay to a more-privileged shared account "just to make it work" — that
   defeats the whole point of per-user accountability this harness's
-  multi-user model depends on (see `USAGE_MULTI_USER_SAFETY.md`).
+  multi-user model depends on (see `docs/workflow/USAGE_MULTI_USER_SAFETY.md`).
 
 A `Permission denied` from any `remote_exec.py` command surfaces as
 ordinary command output (real shell stderr text, same as any other command
@@ -173,7 +173,7 @@ Never attempt to start/restart `remote_relay.py` from a tool call yourself.
 | Which machine | The **Linux server**, inside the relay's one persistent shell | Wherever `dv-harness` (the Python engine) is actually invoked from — typically your local Windows client | Read locally by `remote_exec.py` (the client) |
 | What it controls | The relay's own default cwd, set **once at relay startup** | Which project's `.dv-harness/` **runtime state** (`state.json`, `blackboard/`, `react/`, `memory/`, `events.jsonl`, ...) `DVHarness` reads and writes (`dv_harness/cli.py:92`, `DVHarness.__init__`) | A **per-terminal/per-session default `--cwd`** — e.g. the Linux-server-side deployment path of the specific VIP-based verification environment you're working on (`/home/tmpacct/devuser/UVM/USB`) |
 | Set how often | Once, when the relay is started | Once per `dv-harness` invocation (or exported once per shell) | Once per terminal session (env var), applied to every `remote_exec.py` call automatically |
-| Shared safely across users? | The code tree it points at (e.g. `/home/svcacct/AI/Agent`) can be read by everyone — but the *cwd itself* is one shared mutable value for the whole relay, see the state-leakage note below | **No** — see `USAGE_MULTI_USER_SAFETY.md`; each user needs their own | Yes — it's per-caller/per-terminal, never persisted into the shared relay's own state (composed into the same non-leaking `(cd '<dir>' && <cmd>)` subshell as an explicit `--cwd` would be) |
+| Shared safely across users? | The code tree it points at (e.g. `/home/svcacct/AI/Agent`) can be read by everyone — but the *cwd itself* is one shared mutable value for the whole relay, see the state-leakage note below | **No** — see `docs/workflow/USAGE_MULTI_USER_SAFETY.md`; each user needs their own | Yes — it's per-caller/per-terminal, never persisted into the shared relay's own state (composed into the same non-leaking `(cd '<dir>' && <cmd>)` subshell as an explicit `--cwd` would be) |
 
 They are unrelated to each other by design — you can point `VCWORKDIR` at
 the shared deployment while every user still runs `dv-harness` with their
@@ -244,6 +244,6 @@ one logical stream of work:
   there's a real reason to (e.g. one long-lived automation account), and if
   you do, always pass `--cwd`.
 
-See `USAGE_MULTI_USER_SAFETY.md` for the full picture across the whole
+See `docs/workflow/USAGE_MULTI_USER_SAFETY.md` for the full picture across the whole
 deployment (Knowledge Center + relay + `.dv-harness/` runtime state
 together).

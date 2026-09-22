@@ -26,7 +26,7 @@ from dv_harness.uvm_generator.regression_list_manager import apply_verdict_to_fi
 # What was actually broken (gap-close pass, 2026-09-05): the two OTHER real
 # entry points into this same watch loop -- `python -m
 # dv_harness.regression_reporter --watch` (this module's own argparse) and
-# `DV_REGRESSION_SNAPSHOT.ps1 -Watch` -- both defaulted to 30 minutes, three
+# `scripts/powershell/DV_REGRESSION_SNAPSHOT.ps1 -Watch` -- both defaulted to 30 minutes, three
 # times slower than the #41 ceiling, so an operator using either of them got
 # a monitor that silently violated the spec. Every default now comes from
 # DEFAULT_INTERVAL_MINUTES, and any explicitly-requested interval slower than

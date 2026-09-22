@@ -565,7 +565,7 @@ def evaluate_auto_kill(state: JobState, policy: dict) -> dict:
     .dv-harness/lsf/early_fail_policy.json schema (uvm_error_threshold,
     kill_on_uvm_fatal, kill_on_uvm_error_above_threshold, kill_on_fatal_assertion,
     kill_on_simulator_crash, kill_on_explicit_fail_marker, allowlist) -- see
-    LSF_PER_JOB_AGENT_MONITORING_v16_1.md's "Early-Fail" section and the
+    docs/workflow/LSF_PER_JOB_AGENT_MONITORING_v16_1.md's "Early-Fail" section and the
     lsf-early-fail-stop skill for the documented terminal triggers this mirrors.
 
     Reads only fields already on JobState (uvm_fatal_count, uvm_error_count,

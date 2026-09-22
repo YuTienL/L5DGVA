@@ -5,7 +5,7 @@ runs, which of those steps have real side effects, and the three reliability
 modes layered on top of that lifecycle (dry-run, auto-checkpoint, DEGRADED).
 
 This is the lifecycle reference. It does **not** restate:
-- stage *telemetry metrics* -- see `STAGE_EXECUTION_PROFILE.md`;
+- stage *telemetry metrics* -- see `docs/workflow/STAGE_EXECUTION_PROFILE.md`;
 - the *memory tiers* a stage reads/writes -- see `docs/MEMORY_ARCHITECTURE.md`
   and CLAUDE.md's Engineering Memory Policy;
 - the *human control plane* verbs (PAUSE/TAKEOVER/APPROVE/...) -- see

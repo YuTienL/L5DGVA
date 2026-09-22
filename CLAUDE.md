@@ -2071,7 +2071,7 @@ for a human to notice the pattern.
 
 ## Harness-to-Remote-Agent-Path Deployment: `dv-harness harness-deploy` (2026-09-05)
 
-`USAGE_MULTI_USER_SAFETY.md:16-19` records as 固化 standing policy that "every
+`docs/workflow/USAGE_MULTI_USER_SAFETY.md:16-19` records as 固化 standing policy that "every
 harness update must sync to `/home/svcacct/AI/Agent`, and every confirmed
 gap/lesson must be distilled into a permanent skill/capability and written back
 to `/home/svcacct/AI/DB`." The Knowledge Center half has been real and wired
@@ -2091,7 +2091,7 @@ skipped. `dv_harness/harness_deploy.py` is that mechanism.
 `.claude/workflows`, `.claude/hooks`, `CLAUDE.md`, `pyproject.toml`, `justfile`),
 `exclude` (`.dv-harness/` per-project RUNTIME state above all — one user's
 `state.json`/`events.jsonl`/memory/evidence DB pushed over the shared tree would
-clobber everyone else's, which is `USAGE_MULTI_USER_SAFETY.md`'s own "never share
+clobber everyone else's, which is `docs/workflow/USAGE_MULTI_USER_SAFETY.md`'s own "never share
 a `--project-root`" rule applied to the sync direction) and `never_sync`. Extend
 the JSON for a project's own layout, never the Python.
 
@@ -3860,7 +3860,7 @@ driven end to end, including the `strict_vip_api` raise.
 Spec section 239 ("MULTI-USER COLLABORATION") closes with two rules: "Do not use chat history as
 the coordination mechanism" and "Concurrency conflicts remain explicit." The TRANSPORT and
 AUTHORIZATION half of its list was already real and is deliberately untouched here --
-`USAGE_MULTI_USER_SAFETY.md`'s standing policy (including the "never share a `--project-root`" rule),
+`docs/workflow/USAGE_MULTI_USER_SAFETY.md`'s standing policy (including the "never share a `--project-root`" rule),
 `dashboard_auth.py`'s GUI-19 token gate, `user_info.summarize_user_access()`'s per-root access trail,
 and `remote_relay.RelayServer.handle_request()`'s serialization lock. The DETECTION half was
 NEVER BUILT: a repo-wide grep for `stale_sha` / `duplicate_regression` / `edit_conflict` /
@@ -3938,7 +3938,7 @@ different scopes of the same spec concern, closed in two different places, neith
 the other.
 
 Proven by `dv_harness_tests/test_multi_user_coordination.py` (32 tests). Every test builds TWO (or
-three) REAL, SEPARATE project roots in the layout `USAGE_MULTI_USER_SAFETY.md` prescribes, each
+three) REAL, SEPARATE project roots in the layout `docs/workflow/USAGE_MULTI_USER_SAFETY.md` prescribes, each
 populated by the REAL producing mechanism: a REAL throwaway git repo with three real commits whose
 diffs are computed by the REAL `change_impact.compute_and_write()`, a REAL `requirements.csv`
 traceability registry so the PLANNED sets are what the real `select_regression()` selects, REAL

@@ -35,7 +35,7 @@ DVWORKDIR (env var) sets a default --cwd so you don't have to repeat it on
 every call -- set once per terminal/session, e.g. to the Linux-server-side
 deployment path of the VIP-based verification environment you are working
 on this session (distinct from VCWORKDIR, which is the relay's own shared
-shell cwd set once at relay start -- see REMOTE_LOGIN_GUIDE.md's "VCWORKDIR
+shell cwd set once at relay start -- see docs/remote/REMOTE_LOGIN_GUIDE.md's "VCWORKDIR
 vs. --project-root" section, and note DVWORKDIR is a third, different
 concept from both):
   DVWORKDIR=/home/tmpacct/devuser/UVM/USB python tools/remote/remote_exec.py "make WAVE=1"

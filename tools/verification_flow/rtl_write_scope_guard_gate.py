@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """rtl_write_scope_guard_gate.py -- closes a real enforcement gap found by a
-code-audit workflow comparing DEBUG_WORKFLOW_GUIDE.md's claims against the
+code-audit workflow comparing docs/workflow/DEBUG_WORKFLOW_GUIDE.md's claims against the
 actual wired pipeline (2026-09-02): the ONLY thing that ever stopped the
 harness from writing DUT/VIP RTL was a hand-added `.claude/settings.json`
 `deny` rule scoped to the Edit tool alone, for one project's hardcoded

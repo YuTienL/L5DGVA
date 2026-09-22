@@ -1,12 +1,12 @@
 """Regression coverage for the gap-close-engine cleanup (2026-09-03):
 dv_harness/graph_runtime.py -- previously carrying a NOTICE header claiming
 it was "NOT invoked by any executing code path" -- was in fact reachable
-from a real, documented entry point (DV_GRAPH_STATUS.ps1), but the module it
+from a real, documented entry point (scripts/powershell/DV_GRAPH_STATUS.ps1), but the module it
 drove (GraphState / .dv-harness/graph/graph_state.json) was a permanently
 stale record disconnected from the real HarnessState engine.py actually
 maintains. See .work/gap-close-engine-investigation.md item 1.
 
-Fix applied: DV_GRAPH_STATUS.ps1 was retargeted to read the SAME real, live
+Fix applied: scripts/powershell/DV_GRAPH_STATUS.ps1 was retargeted to read the SAME real, live
 status `dv-harness status` reads (DVHarness.summary() over HarnessState),
 then dv_harness/graph_runtime.py, its GraphState class in dv_harness/graph.py,
 and the stray .dv-harness/graph/graph_state.json artifact were all removed
@@ -69,7 +69,7 @@ def test_no_live_code_line_references_graph_runtime_or_graph_state_anymore():
 
 
 def test_dv_graph_status_script_no_longer_imports_graph_runtime():
-    lines = (ROOT / "DV_GRAPH_STATUS.ps1").read_text(encoding="utf-8").splitlines()
+    lines = (ROOT / "scripts" / "powershell" / "DV_GRAPH_STATUS.ps1").read_text(encoding="utf-8").splitlines()
     # Only the executable `python -c "..."` line matters here -- the leading
     # `#` NOTICE comment legitimately names graph_runtime/GraphRuntime to
     # document what was removed and why (same convention as the NOTICE

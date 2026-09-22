@@ -30,7 +30,7 @@ from . import self_tuning
 # confirmed (2026-08-28 architecture audit) to be correct but never imported
 # by any executing code path -- the now-deleted dv_harness/graph_runtime.py
 # (removed 2026-09-03, gap-close-engine cleanup: it was reachable only via
-# DV_GRAPH_STATUS.ps1, which drove a permanently-stale standalone GraphState
+# scripts/powershell/DV_GRAPH_STATUS.ps1, which drove a permanently-stale standalone GraphState
 # disconnected from the real HarnessState below, and has since been
 # retargeted to read live state directly) had once wired all of them together
 # (prepare_node/complete_node) but was itself never imported by engine.py or
@@ -3226,7 +3226,7 @@ class DVHarness:
                                         resolved_protocol: Optional[str] = None,
                                         producing_agent_profile: Optional[str] = None) -> None:
         """Closed-loop wiring (verified-fix-auto-promotion gap-closing pass,
-        2026-09-02): DEBUG_WORKFLOW_GUIDE.md's Knowledge Center push
+        2026-09-02): docs/workflow/DEBUG_WORKFLOW_GUIDE.md's Knowledge Center push
         previously only ever happened two ways -- _promote_experience_knowledge
         above (a bare "root_cause"/"debug_lesson" record, pushed on
         EXPERT_FEEDBACK_LOOP's experience_knowledge_gate PASS, BEFORE any fix

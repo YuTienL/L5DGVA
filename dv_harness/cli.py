@@ -2095,7 +2095,7 @@ def main():
                              help="Cross-check that this name matches the human who actually answered. "
                                   "Omit to check against whoever did.")
 
-    # USAGE_MULTI_USER_SAFETY.md:16-19 records as standing policy that "every
+    # docs/workflow/USAGE_MULTI_USER_SAFETY.md:16-19 records as standing policy that "every
     # harness update must sync to /home/svcacct/AI/Agent". The Knowledge
     # Center half of that policy has been real since knowledge_center.py; the
     # CODEBASE half had no verb here at all (2026-09-05 audit), so every sync

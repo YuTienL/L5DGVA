@@ -151,10 +151,10 @@ REJECT/STOP/TAKEOVER`).
 ## 10. Documentation (additive only — no file bodies rewritten or deleted)
 
 32 root `.md` files got prepended banners: 4 canonical files
-(`START_HERE.md`, `SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md`,
-`FINAL_PACKAGE_INDEX.md`, `VERIFICATION_ARCHITECTURE_MECHANISM_FIRST.md`)
+(`START_HERE.md`, `docs/architecture/SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md`,
+`docs/release/FINAL_PACKAGE_INDEX.md`, `docs/architecture/VERIFICATION_ARCHITECTURE_MECHANISM_FIRST.md`)
 cross-link each other; 17 legacy/edition files marked superseded; 9
-overlapping quick-start docs point to `CREATE_ENVIRONMENT.md`.
+overlapping quick-start docs point to `docs/workflow/CREATE_ENVIRONMENT.md`.
 `examples/NOTICE_SCAFFOLDING_ONLY.md` and
 `generated/NOTICE_SCAFFOLDING_ONLY.md` (new) state plainly that neither
 directory contains real simulation/DUT/signoff evidence.
@@ -163,7 +163,7 @@ directory contains real simulation/DUT/signoff evidence.
 
 Four separate subsystems with their own existing scaffolding were
 identified and deliberately left alone: environment generation
-(`CREATE_ENVIRONMENT.md`, `dv_harness/uvm_generator/`, `.dv-harness/
+(`docs/workflow/CREATE_ENVIRONMENT.md`, `dv_harness/uvm_generator/`, `.dv-harness/
 builder/`, `.dv-harness/environment-router/`), the `command.txt` catalog
 reorganization tool (`tools/command_catalog/`), new-protocol plugin
 onboarding (`.dv-harness/plugins/`), and Remote Control (a Claude Code

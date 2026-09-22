@@ -1,4 +1,4 @@
-> **The entry point is START_HERE.md.** This page is the detailed package index it links to -- see also SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md (architecture), VERIFICATION_ARCHITECTURE_MECHANISM_FIRST.md (workflow-order source).
+> **The entry point is START_HERE.md.** This page is the detailed package index it links to -- see also docs/architecture/SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md (architecture), docs/architecture/VERIFICATION_ARCHITECTURE_MECHANISM_FIRST.md (workflow-order source).
 
 # DV Agent Harness L5 — Final Senior-DV Package Index
 
@@ -31,4 +31,4 @@
 
 
 ## Canonical Flow Update — Mechanism Before Test Generation
-Requirement/Spec Intake (vPlan v0.1 draft starts here) → DUT Architecture Discovery & Calibration → Protocol Capability Discovery → vPlan (finalized/LOCKed) → Verification Architecture & Mechanism Planning → Test / Sequence / Scenario Generation → Regression → Coverage → Triage → Root Cause → Calibration → Expert Feedback → Experience Learning. (Corrected 2026-08-28 — see VERIFICATION_ARCHITECTURE_MECHANISM_FIRST.md; architecture discovery precedes vPlan finalization, not the reverse.)
+Requirement/Spec Intake (vPlan v0.1 draft starts here) → DUT Architecture Discovery & Calibration → Protocol Capability Discovery → vPlan (finalized/LOCKed) → Verification Architecture & Mechanism Planning → Test / Sequence / Scenario Generation → Regression → Coverage → Triage → Root Cause → Calibration → Expert Feedback → Experience Learning. (Corrected 2026-08-28 — see docs/architecture/VERIFICATION_ARCHITECTURE_MECHANISM_FIRST.md; architecture discovery precedes vPlan finalization, not the reverse.)

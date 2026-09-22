@@ -66,7 +66,7 @@ def test_shipped_manifest_loads_and_declares_the_real_deployment_path():
 
 
 def test_shipped_manifest_covers_the_four_things_policy_names():
-    """USAGE_MULTI_USER_SAFETY.md's policy is about the harness ENGINE plus its
+    """docs/workflow/USAGE_MULTI_USER_SAFETY.md's policy is about the harness ENGINE plus its
     skills/agents. A manifest that silently dropped one of them would sync a
     half-harness that imports but misbehaves."""
     m = hd.load_manifest()
@@ -77,7 +77,7 @@ def test_shipped_manifest_covers_the_four_things_policy_names():
 
 def test_shipped_manifest_excludes_per_project_runtime_state():
     """`.dv-harness/` is one user's run state (state.json, events.jsonl,
-    memory, evidence DB). USAGE_MULTI_USER_SAFETY.md's 'never share a
+    memory, evidence DB). docs/workflow/USAGE_MULTI_USER_SAFETY.md's 'never share a
     --project-root' rule means pushing it over the shared tree would clobber
     every other user's state."""
     m = hd.load_manifest()

@@ -198,7 +198,7 @@ class KnowledgeCenterClient:
     talking to a remote_relay.py process a human already started) every
     other real remote command in this project uses -- never a mounted
     network filesystem (see
-    PACKAGE/REMOTE_LOGIN_GUIDE.md and the design discussion this module came
+    PACKAGE/docs/remote/REMOTE_LOGIN_GUIDE.md and the design discussion this module came
     out of: no file-locking exists anywhere in this codebase, and NFS-style
     cross-client locking is not something this project can rely on, so every
     concurrency-unsafe read-modify-write happens in ONE process on the

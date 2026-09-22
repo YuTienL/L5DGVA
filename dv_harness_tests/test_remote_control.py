@@ -194,7 +194,7 @@ def test_get_status_is_read_only(project):
 
 
 def test_hypothesis_is_now_an_allowed_command():
-    # Audit finding: HYPOTHESIS is documented in REMOTE_CONTROL_MODE.md but
+    # Audit finding: HYPOTHESIS is documented in docs/remote/REMOTE_CONTROL_MODE.md but
     # was never added to ALLOWED_COMMANDS, so it failed before even reaching
     # a gate.
     assert "HYPOTHESIS" in rc.ALLOWED_COMMANDS

@@ -3,7 +3,7 @@ multi-user coordination CONFLICT DETECTION (2026-09-06).
 
 This is inherently a multi-session scenario, so nothing here is a
 single-function smoke test. Every test builds TWO (sometimes three) REAL,
-SEPARATE project roots -- exactly the layout USAGE_MULTI_USER_SAFETY.md's
+SEPARATE project roots -- exactly the layout docs/workflow/USAGE_MULTI_USER_SAFETY.md's
 "never share a `--project-root`" rule prescribes -- and each root is populated
 by the REAL producing mechanism, never by a hand-written dict shaped to look
 like one:
@@ -120,7 +120,7 @@ def repo(tmp_path):
 
 
 def _make_session_root(tmp_path, name):
-    """One user's OWN `--project-root`, per USAGE_MULTI_USER_SAFETY.md."""
+    """One user's OWN `--project-root`, per docs/workflow/USAGE_MULTI_USER_SAFETY.md."""
     root = tmp_path / name
     (root / ".dv-harness").mkdir(parents=True)
     (root / ".dv-harness" / "state.json").write_text(

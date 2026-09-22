@@ -13,7 +13,7 @@ explicit."
 
 The TRANSPORT and AUTHORIZATION half of that list is real and is NOT touched
 here:
-  * `USAGE_MULTI_USER_SAFETY.md` is the standing policy for the shared
+  * `docs/workflow/USAGE_MULTI_USER_SAFETY.md` is the standing policy for the shared
     `/home/svcacct/AI/Agent` deployment, including its "never share a
     `--project-root`" rule -- which is precisely WHY detection has to be a
     cross-ROOT comparison: each user has their own `.dv-harness/`, so no single

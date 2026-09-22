@@ -375,7 +375,7 @@ def test_re_audit_without_root_cause_evidence_block_is_also_a_no_op():
 
 
 # --- verified-fix-auto-promotion gap-closing pass (2026-09-02) -------------
-# DEBUG_WORKFLOW_GUIDE.md's Knowledge Center push was previously only ever
+# docs/workflow/DEBUG_WORKFLOW_GUIDE.md's Knowledge Center push was previously only ever
 # real via _promote_experience_knowledge (a bare "root_cause"/"debug_lesson"
 # record pushed on EXPERT_FEEDBACK_LOOP's experience_knowledge_gate PASS --
 # BEFORE any fix is proven to work) or a separate manual .work/persist_*.py

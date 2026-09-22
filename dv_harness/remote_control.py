@@ -155,7 +155,7 @@ from .inference import score_confidence, identify_gap, next_best_action
 # remains the enforcement authority.
 #
 # HYPOTHESIS (2026-08-31, poster-gap-closing round 2, Task 8): documented in
-# REMOTE_CONTROL_MODE.md ("STATUS / WHY / EVIDENCE / HYPOTHESIS / REVIEW /
+# docs/remote/REMOTE_CONTROL_MODE.md ("STATUS / WHY / EVIDENCE / HYPOTHESIS / REVIEW /
 # ...") since before this fix, but had zero implementation anywhere -- it was
 # not even in this set, so any client issuing it failed immediately with
 # INVALID_REMOTE_COMMAND before ever reaching a gate. It is now real: see

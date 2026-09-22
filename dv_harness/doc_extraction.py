@@ -4,7 +4,7 @@
 # needs_extract(), register() or normalize_register_record(), so any
 # WORKFLOW_MANIFEST.json capability flag referencing document extraction remains
 # aspirational rather than a statement that this code runs in the graph. See
-# CHANGELOG_v0_to_v50.md and the industrial-grade-deep-audit findings.
+# docs/release/CHANGELOG_v0_to_v50.md and the industrial-grade-deep-audit findings.
 #
 # What changed on 2026-09-04: build_research_evidence_card_skeleton() below gave
 # sha256_file()/DocumentIndex/evidence_ref() their first real caller -- the

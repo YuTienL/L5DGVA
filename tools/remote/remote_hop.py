@@ -299,7 +299,7 @@ def main():
         # PATH/license-server env set up. Optional: this whole block is a
         # no-op if VCEDAENV is unset, matching how this file worked before
         # this feature existed (per-invocation manual `source xxx.csh` in
-        # the trailing command list, as REMOTE_LOGIN_GUIDE.md section 3.5
+        # the trailing command list, as docs/remote/REMOTE_LOGIN_GUIDE.md section 3.5
         # used to be the only documented way to do this).
         for _f in [x.strip() for x in EDAENV.split(',') if x.strip()]:
             t.send('source ' + _f)

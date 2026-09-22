@@ -10,7 +10,7 @@ Two real defects this file locks shut:
 
 1. Three entry points fan into the same watch loop -- `dv-harness
    lsf-watch-start` (default 5), `python -m dv_harness.regression_reporter
-   --watch` (defaulted 30) and `DV_REGRESSION_SNAPSHOT.ps1 -Watch`
+   --watch` (defaulted 30) and `scripts/powershell/DV_REGRESSION_SNAPSHOT.ps1 -Watch`
    (defaulted 30). Two of the three shipped a cadence three times slower
    than #41's ceiling. Nothing tied them together, so nothing caught it.
 2. No test pinned ANY default: every existing test passes an explicit
@@ -116,7 +116,7 @@ class TestEveryEntryPointSharesTheDefault:
         assert m.group(1) == "DEFAULT_INTERVAL_MINUTES"
 
     def test_powershell_snapshot_script_default_matches_the_module_constant(self):
-        src = (ROOT / "DV_REGRESSION_SNAPSHOT.ps1").read_text(encoding="utf-8")
+        src = (ROOT / "scripts" / "powershell" / "DV_REGRESSION_SNAPSHOT.ps1").read_text(encoding="utf-8")
         m = re.search(r"\[int\]\$IntervalMinutes=(\d+)", src)
         assert m, "-IntervalMinutes param default not found"
         assert int(m.group(1)) == regression_reporter.DEFAULT_INTERVAL_MINUTES

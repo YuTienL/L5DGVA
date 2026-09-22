@@ -37,7 +37,7 @@ sequence-body semantics -- so a generic composer has no primary source to
 draw that content from. cross_subsystem_scenarios()/end_to_end_scoreboard()/
 system_coverage() below therefore always raise NotImplementedError with a
 clear explanation, rather than emit a plausible-looking placeholder body.
-See CREATE_ENVIRONMENT.md / SOC_SYSTEM_LEVEL_COMPOSER.md for how a future
+See docs/workflow/CREATE_ENVIRONMENT.md / docs/architecture/SOC_SYSTEM_LEVEL_COMPOSER.md for how a future
 per-composition-session agent is expected to supply that content from real
 per-subsystem VIP/DUT evidence once it exists; this module's job stops at
 the generic, protocol-blind structural composition.
