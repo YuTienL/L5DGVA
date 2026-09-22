@@ -1,0 +1,9 @@
+{
+  "_comment": "Schema-illustrating EXAMPLE only. Placeholder values -- canonical runtime behavior must never depend on any one of these literal strings. Copy this file to .dv-harness/execution_profile.json (gitignored) and replace every value with your own real, site-specific configuration. Never add a password/token/secret field here -- see dv_harness/execution_profile.py's FORBIDDEN_PROFILE_FIELDS; credentials stay environment-variable-only (VCPW).",
+  "gateway_host": "your-vc-gateway-hostname",
+  "remote_host": "your-eda-hop-hostname",
+  "remote_workdir": "/home/your-account/your-project/UVM",
+  "eda_environment": ["version.csh", "env.csh"],
+  "transport": "telnet_ssh",
+  "user": "your-account-name"
+}

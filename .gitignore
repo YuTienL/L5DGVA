@@ -12,9 +12,21 @@ __pycache__/
 # measurement. Per-run scratch, never a deliverable.
 .dv-harness/experiments/
 
-# Local-only credential script for relay auto-reconnect (CLAUDE.md 2026-09-03
-# amendment) -- must never be committed, this machine only.
-replay.ps1
+# replay.ps1 was previously ignored here because it hardcoded one user's
+# real gateway/EDA host, account and remote workdir directly in script
+# text (CLAUDE.md 2026-09-03 amendment). M1's execution-profile extraction
+# (dv_harness/execution_profile.py) removed all of that host identity from
+# the script itself -- it now only resolves a profile and invokes the
+# existing remote transport -- so replay.ps1 is generic/host-identity-free
+# and is committed as canonical content. The real per-checkout values that
+# used to live in replay.ps1 now live in the file ignored just below.
+
+# Real per-checkout execution profile (M1 configuration extraction,
+# dv_harness/execution_profile.py) -- may contain a real gateway host,
+# remote-EDA hop host, account and remote workdir. Never committed; the
+# canonical repository ships only the schema-illustrating placeholder at
+# config/execution_profiles/example.profile.json.
+.dv-harness/execution_profile.json
 
 # Local DuckDB evidence store (evidence-db-wiring, 2026-09-03, default-ON --
 # see dv_harness/config.py's evidence_db block and dv_harness/evidence_db.py).

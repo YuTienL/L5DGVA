@@ -41,8 +41,8 @@
     "max_age_days": 180,
     "configured_by": "peter.lin",
     "configured_at": 1788275781.9464128,
-    "vchost": "vc8",
-    "vchop": "icr93"
+    "vchost": "",
+    "vchop": ""
   },
   "memory": {
     "provider": "hybrid",
