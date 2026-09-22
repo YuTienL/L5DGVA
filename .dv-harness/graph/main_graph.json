@@ -417,7 +417,7 @@
       "id": "EXPERT_FEEDBACK_LOOP",
       "route": "review-route",
       "agent": "review-agent",
-      "skills": ["expert-feedback-closure"],
+      "skills": ["dv-expert-feedback-closure"],
       "blackboard_read": ["system_level"],
       "blackboard_write": ["expert_feedback"],
       "parallel_group": null,
