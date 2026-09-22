@@ -154,3 +154,9 @@ reference/USB_UVM_Handoff/
 # .work/_* scratch rule above.
 .work/gap-close-gui-gui-09
 .work/gap-close-gui-gui-19
+
+# Repository-hygiene audit 2026-09-22: close 3 confirmed root-level ignore gaps
+# (see .work/repository-hygiene-audit/16_GITIGNORE_HYGIENE_PLAN.md)
+.pytest_tmp/
+.pytest-tmp-*
+_tmp_*
