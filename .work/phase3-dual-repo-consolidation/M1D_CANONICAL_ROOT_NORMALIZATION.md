@@ -126,6 +126,15 @@ own completion (addendum below).
 
 ---
 
-## Closure-regression addendum (appended once the background run completes)
+## Closure-regression addendum
 
-*(pending)*
+Completed. Full evidence in `M1_FINAL_CLOSURE_REGRESSION_CLASSIFICATION.md`.
+Summary: final closure regression against normalized HEAD `9a5c3eeb2a894c86d9c85186d58aa46002c5ef9c`
+— 28 failed / 13728 passed / 28 skipped / 1 xfailed, exit code 1, no
+crash/timeout. `REGRESSION_CAUSED_BY_M1D = 0` (the only genuinely new
+failure since the pre-M1D reference, `test_gui_intake_control_plane.py`'s
+negative-control test, has zero code overlap with any M1D-moved/rewritten
+file and passes cleanly both isolated and as a whole file — a load-sensitive
+real-HTTP-server timing flake, not a normalization defect).
+`CAPABILITY_LOSS_FROM_NORMALIZATION` remains `0`. M1D confirmed closed;
+M1 overall closure recorded in `M1_FINAL_REPORT.md`'s Closure Addendum.

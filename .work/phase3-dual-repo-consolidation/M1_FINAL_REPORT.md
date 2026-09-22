@@ -1,9 +1,10 @@
 # M1 Final Report — Canonical Repository Bootstrap and V50 Baseline Qualification
 
-All 16 instructed items addressed. One item (full 13768-test suite regression)
-is honestly reported as still IN_PROGRESS at the time of this report, not
-claimed complete — see item 14 below and `M1_V50_BASELINE_QUALIFICATION.md`.
-Everything else is complete with real, verified evidence.
+**CLOSED.** All items complete with real, verified evidence, including M1D
+(Canonical Root Normalization) and the final closure regression against the
+normalized HEAD. See the Closure Addendum at the end of this document for
+the authoritative final state; sections 1-16 below are the original M1
+bootstrap record, preserved as written.
 
 ## 1. Canonical branch identity
 
@@ -188,6 +189,108 @@ M1_CAPABILITY_GATE = V50_BASELINE_PRESERVATION
 FINAL_CAPABILITY_GATE = STRICT_SUPERSET_OF_ALL_APPROVED_SOURCES
 ```
 
-**STOP. Not starting M3/M4/M5. Waiting for M1 review.** The full-suite
-regression will be checked again and its final result reported as a
-follow-up to this same report once it completes.
+*(Original sections 1-16 above were written before M1D and the final
+closure regression; superseded by the Closure Addendum below, kept here
+unedited for the historical record rather than rewritten in place.)*
+
+---
+
+## Closure Addendum — M1D + Final Closure Regression
+
+Since the original report above: **M1D — Canonical Root Normalization**
+executed and closed (`M1D_STATUS = PASS`,
+`M1D_CANONICAL_ROOT_NORMALIZATION.md`), and the **final M1-closure full-suite
+regression** ran to real, verified completion against the normalized HEAD
+(`M1_FINAL_CLOSURE_REGRESSION_CLASSIFICATION.md`) — including a caught and
+corrected `REGRESSION_HEAD_MISMATCH` (a stray commit landed mid-run; the run
+was killed and relaunched clean rather than accepted).
+
+```
+M1_STATUS = READY_FOR_APPROVAL
+
+CANONICAL_BRANCH = canonical/m1-bootstrap
+CANONICAL_HEAD = 9a5c3eeb2a894c86d9c85186d58aa46002c5ef9c
+M1_CANONICAL_CHECKPOINT_SHA = 9a5c3eeb2a894c86d9c85186d58aa46002c5ef9c
+
+FULL_REGRESSION_COLLECTED = 13785
+FULL_REGRESSION_PASSED = 13728
+FULL_REGRESSION_FAILED = 28
+FULL_REGRESSION_SKIPPED = 28
+FULL_REGRESSION_XFAILED = 1
+FULL_REGRESSION_EXIT_CODE = 1
+FULL_REGRESSION_DURATION = 4055.55s (1:07:35)
+FULL_REGRESSION_TIMEOUT_STATUS = NO
+FULL_REGRESSION_CRASH_STATUS = NO
+
+REGRESSION_CAUSED_BY_M1 = 0
+REGRESSION_CAUSED_BY_M1D = 0
+UNKNOWN_REGRESSION_FAILURES = 0
+  (21 PRE_EXISTING, unchanged from the frozen v50 baseline; 7 TEST_INFRASTRUCTURE
+   -- 6 previously diagnosed [gitignored USB_UVM_Handoff reference tree;
+   a fragile parents[2] directory-depth test assumption] + 1 newly diagnosed
+   this pass [a load-sensitive real-HTTP-server timing flake in
+   test_gui_intake_control_plane.py, zero code overlap with M1/M1D, passes
+   clean both isolated and whole-file]. Full evidence in
+   M1_FINAL_CLOSURE_REGRESSION_CLASSIFICATION.md.)
+
+CANONICAL_V50_BASELINE = QUALIFIED
+
+ROOT_TRACKED_FILES_BEFORE_M1D = 52
+ROOT_TRACKED_FILES_AFTER_M1D = 21
+ROOT_LAYOUT_GATE = PASS
+CAPABILITY_LOSS_FROM_NORMALIZATION = 0
+UNRESOLVED_ROOT_FILES = 0
+
+REPOSITORY_IDENTITY = PASS
+DV_DOCTOR = PASS
+EXECUTION_PROFILE_RESOLUTION = PASS
+EXISTING_REMOTE_TRANSPORT_PRESERVED = YES
+
+EXECUTION_SERVICE_OPERATIONALIZED = NO
+REMOTE_EDA_BACKEND_OPERATIONALIZED = NO
+
+KNOWLEDGE_BRAIN_PRESERVED = YES
+OBSIDIAN_CAPABILITY_PRESERVED = YES
+
+MULTI_AGENT_PROTECTED_CAPABILITY_RECORDED = YES
+MULTI_AGENT_DIRTY_DIFF_APPLIED = NO
+
+CANONICAL_SECURITY_FLOOR = PRESERVED
+
+KNOWN_SOURCE_B_DEFECT_STATUS = KNOWN_SOURCE_B_DEFECT_PRESERVED_FOR_LATER_FIX
+EXECUTION_CONFIG_CONSUMER_STATUS = EXECUTION_CONFIG_CONSUMER_MIGRATION_PENDING
+
+LOCATION_INDEPENDENT = YES
+REPOSITORY_RENAME_SUPPORTED = YES
+DEVELOPER_MODE_SUPPORTED = YES
+DEPLOYMENT_COPY_MODE_SUPPORTED = YES
+
+ABSOLUTE_BOOTSTRAP_PATH_RUNTIME_DEPENDENCIES = 0
+HISTORICAL_SOURCE_PATH_RUNTIME_DEPENDENCIES = 0
+HARDCODED_GATEWAY_HOST_IN_RUNTIME = 0
+HARDCODED_REMOTE_EDA_HOST_IN_RUNTIME = 0
+LOCAL_REMOTE_PATH_COUPLING = 0
+
+SOURCE_A_CHANGED_SINCE_M0 = NO
+SOURCE_B_CHANGED_SINCE_M0 = NO
+B7A_CHANGED = NO
+B7B_CHANGED = NO
+B8_CHANGED = NO
+
+PARENT_CAPABILITY_MIGRATION_STARTED = NO
+WORKTREE_CAPABILITY_MIGRATION_STARTED = NO
+
+REFERENCE_USB_ENV_CONSUMED = NO
+C6_STARTED = NO
+PLATFORM_UPGRADE_STARTED = NO
+
+M1_IS_FINAL_PRODUCT = NO
+M1_CAPABILITY_GATE = V50_BASELINE_PRESERVATION
+FINAL_CAPABILITY_GATE = STRICT_SUPERSET_OF_ALL_APPROVED_SOURCES
+```
+
+**M1_STATUS = READY_FOR_APPROVAL. M1_CANONICAL_CHECKPOINT_SHA = `9a5c3eeb2a894c86d9c85186d58aa46002c5ef9c`.**
+
+**STOP. Not starting M3, M4, M5, Parent capability migration, worktree
+capability migration, C6, Platform Upgrade, or USB Golden Qualification.
+Waiting for explicit approval.**
