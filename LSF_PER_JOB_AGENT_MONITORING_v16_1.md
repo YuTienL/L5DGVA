@@ -1,4 +1,4 @@
-> **Superseded.** This document describes an earlier edition. See START_HERE.md for the current canonical entry point and SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md for the current architecture.
+> **Current.** Listed as an accurate, current one-page mechanism guide in START_HERE.md, and cited by name in production code (`dv_harness/lsf_client.py`'s `evaluate_auto_kill()` docstring) as the source for its Early-Fail behavior -- not superseded.
 
 # LSF Per-Job Agent Monitoring v16.1
 
