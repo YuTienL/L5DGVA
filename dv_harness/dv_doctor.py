@@ -184,6 +184,16 @@ def _intake_status(root: Path) -> Dict[str, Any]:
     return {"status": "IMPLEMENTED" if hits else "MISSING", "module_count": len(hits)}
 
 
+def _root_layout_status(root: Path) -> Dict[str, Any]:
+    from . import root_hygiene_gate
+    violations = root_hygiene_gate.check_root_layout(root)
+    return {
+        "status": "PASS" if not violations else "FAIL",
+        "violation_count": len(violations),
+        "violations": [v.path for v in violations],
+    }
+
+
 def run_doctor(root: Union[str, Path], cfg: Optional[dict] = None) -> Dict[str, Any]:
     """Real, composed dv doctor report. Never raises -- every sub-check
     catches its own failure and reports an honest status instead."""
@@ -207,6 +217,7 @@ def run_doctor(root: Union[str, Path], cfg: Optional[dict] = None) -> Dict[str, 
     report["SKILL_STATUS"] = _skill_status(root)
     report["OPENSPEC_STATUS"] = _openspec_status(root)
     report["INTAKE_STATUS"] = _intake_status(root)
+    report["ROOT_LAYOUT_GATE"] = _root_layout_status(root)
     return report
 
 
