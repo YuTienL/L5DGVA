@@ -22,4 +22,4 @@ if($bad.Count){
  exit 1
 }
 Write-Host "DV workflow preflight PASS"
-Write-Host "7 agents present; core SoC/VIP/TB/command workflow present."
+Write-Host "7 core required agents present (23 physical agents total -- see .claude/agents/ROSTER.md); core SoC/VIP/TB/command workflow present."

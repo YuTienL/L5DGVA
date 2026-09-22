@@ -31,7 +31,14 @@ Ethernet
 CAN-FD
 AMBA: APB2/APB3/AHB/AHB-Lite/AXI3/AXI4/ACE-Lite/AXI-Stream
 
-## Seven agents
+## Core dispatched agents
+
+This harness has 23 real agents total -- see `.claude/agents/ROSTER.md` for
+the full roster and each one's real dispatch status. The 7 named below are
+the core `GRAPH_DISPATCHED` agents most directly involved in the
+command.txt-driven workflow described in this document; they are not the
+complete agent population.
+
 dv-lead
 analysis-agent
 implementation-agent

@@ -58,7 +58,8 @@ foreach ($s in $requiredSkills) {
   }
 }
 
-# Agents
+# Core required agents (a minimum-readiness subset, NOT the total agent
+# population -- this harness has 23 real agents; see .claude/agents/ROSTER.md)
 $requiredAgents = @(
   "dv-lead","analysis-agent","implementation-agent","build-agent",
   "debug-agent","regression-agent","review-agent"
@@ -90,7 +91,7 @@ Write-Host ""
 Write-Host "CLAUDE / DV WORKFLOW READINESS"
 Write-Host "=============================="
 Write-Host ("CLI        : " + $(if($claude){"FOUND"}else{"MISSING"}))
-Write-Host ("Agents     : " + (@($rows | Where-Object TYPE -eq "AGENT" | Where-Object FOUND -eq "yes").Count) + "/7")
+Write-Host ("Agents     : " + (@($rows | Where-Object TYPE -eq "AGENT" | Where-Object FOUND -eq "yes").Count) + "/7 core required (23 physical agents total -- see .claude/agents/ROSTER.md)")
 Write-Host ("Skills     : " + $allSkills.Count)
 Write-Host ("Inventory  : " + $csv)
 
