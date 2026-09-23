@@ -1,19 +1,28 @@
-# Master Blocker Register (v2, post-M4.6)
+# Master Blocker Register (v3, post-M4.5-Governing-Contract-Authority-closure + POOL-005 dedup)
 
-`P0_BLOCKERS = 8` (reconciled exactly against
-`MASTER_WAVE_OWNERSHIP_MATRIX.csv`'s `PRIORITY=P0` rows; was 7, +1 for
-`CAP-CE-018`, the `CONTINUOUS_PROJECT_EXPERIENCE_LEARNING` composite
-newly tracked per the follow-up reconciliation's instruction section E
-— same root cause as `CAP-M8-EXPLOOP-001`, tracked as its own named
-capability rather than folded silently into that row).
+**Disclosed correction (M5-0 P0-drift reconciliation, 2026-09-23)**: this
+file had gone stale after the M4.5 Governing Contract Authority Closure
+committed (`83cd4ba`/`a844b9c`) — it still carried `CAP-M4.5-004` as an
+open P0 `HUMAN_DECISION_REQUIRED` blocker, even though that closure's own
+final report and `MASTER_CAPABILITY_STATUS_MATRIX.csv`/
+`MASTER_WAVE_OWNERSHIP_MATRIX.csv` had already downgraded it to `P2`
+(`CLOSED_AS_EVIDENCE_ONLY` — the human decision is made and executed
+against; residual work is refinement, not a blocker). `MASTER_PROGRAM_
+STATUS.md` was corrected for this at the time (its own v3); this register
+was not, and stayed wrong until now. This v3 fixes that.
 
-**`CAP-M4.5-004` is the evidence-based `NEXT_RECOMMENDED_GATE`** (see
-`MASTER_PROGRAM_STATUS.md`) — the only P0 item whose owner wave is
-`M4.5` itself, still open after M4.6's own closure.
+`P0_BLOCKERS = 7`, structurally reconciled against `MASTER_WAVE_
+OWNERSHIP_MATRIX.csv`'s `PRIORITY=P0` rows (7, exact ID match) and
+`MASTER_CAPABILITY_STATUS_MATRIX.csv`'s `PRIORITY=='P0'` rows (also 7,
+after this same reconciliation qualified `CAP-POOL-005`'s PRIORITY value
+so it is no longer literally the bare string `P0` — that row has been a
+documented, non-counted cross-reference to `CAP-M5M6-VLEVEL-001` since
+its very first commit (`b8a573f`'s own NOTES: "Cross-referenced, not
+double-counted"); it was never a real 8th blocker, just a value a naive
+`PRIORITY==P0` parse would over-count).
 
 | CAPABILITY_ID | Blocker | Type | Blocks | Owner |
 |---|---|---|---|---|
-| CAP-M4.5-004 | 25-doc, 4.0MB, 106,132-line governing-contract corpus has never been migrated; whether/how is undecided | HUMAN_DECISION_REQUIRED | Contract Registry (S10), `l5dgva_contract_registry.py`/`l5dgva_requirement_dependency_closure.py` migration | M4.5 |
 | CAP-M5-ENV-001 | `env_manifest.py` N-way merge not symbol-diffed (44 fan-in) | ENGINEERING | 4 of the 5 MCP verbs' backing data model; most of M5 | M5 |
 | CAP-M5-VIP-001 | `vip_capability_extraction.py` N-way merge carries a known breaking signature-change risk (`classify_by_inheritance` 4→5-tuple) | ENGINEERING (real known regression risk) | VIP capability extraction correctness across all callers | M5 |
 | CAP-M6-DISPATCH-001 | `cli.py`/`dashboard.py` dispatch-mechanism conflict (`start_lifecycle(...)` vs `loop(goal)`/`run_stage(goal)`) has no chosen resolution | HUMAN_DECISION_REQUIRED | CAP-M3-001 wiring, CAP-M4.5-001 live routing, CAP-M6-LIFECYCLE-001, CAP-M6-CLARSVC-001 routing | M6 |
