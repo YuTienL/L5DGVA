@@ -82,19 +82,22 @@ DE/DV HITL reconciliation)**:
    proves a direct contradiction"), there is no such contradiction, so
    the gate is **preserved**, not re-derived from scratch.
 
-## P0_BLOCKERS (6, updated this wave -- M5 Cohort 1 closure, reconciled exactly against `MASTER_WAVE_OWNERSHIP_MATRIX.csv`)
+## P0_BLOCKERS (5, updated this wave -- M5 Cohort 3 closure, reconciled exactly against `MASTER_WAVE_OWNERSHIP_MATRIX.csv`)
 
 ```
-P0_BLOCKERS_BEFORE (M5 Cohort 1) = 7
-P0_BLOCKERS_AFTER  (M5 Cohort 1) = 6   -- CAP-M5-ENV-001 resolved and downgraded to P2
+P0_BLOCKERS_BEFORE (M5 Cohort 3) = 6
+P0_BLOCKERS_AFTER  (M5 Cohort 3) = 5   -- CAP-M5-VIP-001 resolved and downgraded to P2
 ```
 
-1. `CAP-M5-VIP-001` — `vip_capability_extraction.py` N-way merge, known signature-break risk (M5)
-2. `CAP-M6-DISPATCH-001` — `cli.py`/`dashboard.py` dispatch-mechanism decision (M6)
-3. `CAP-M6-CLARSVC-001` — `ClarificationService` design+build (M6)
-4. `CAP-M5M6-VLEVEL-001` — `verification_level.py`/IP_MODE genericity foundation (M6)
-5. `CAP-M8-EXPLOOP-001` — `EXPERIENCE_READY` event wiring, confirmed broken on every tree (M8)
-6. `CAP-CE-018` — `CONTINUOUS_PROJECT_EXPERIENCE_LEARNING` composite (M8; same root cause as #5)
+1. `CAP-M6-DISPATCH-001` — `cli.py`/`dashboard.py` dispatch-mechanism decision (M6)
+2. `CAP-M6-CLARSVC-001` — `ClarificationService` design+build (M6)
+3. `CAP-M5M6-VLEVEL-001` — `verification_level.py`/IP_MODE genericity foundation (M6)
+4. `CAP-M8-EXPLOOP-001` — `EXPERIENCE_READY` event wiring, confirmed broken on every tree (M8)
+5. `CAP-CE-018` — `CONTINUOUS_PROJECT_EXPERIENCE_LEARNING` composite (M8; same root cause as #4)
+
+`CAP-M5-VIP-001` no longer appears here — closed, downgraded to P2 this
+wave (M5 Cohort 3, see
+`M5_CAPABILITY_MERGE_QUEUE/COHORT_3/M5_COHORT_3_FINAL_REPORT.md`).
 
 `CAP-M4.5-004` no longer appears here — closed, downgraded to P2 (see
 `M4_5_GOVERNING_CONTRACT_FINAL_REPORT.md`). `CAP-M5-ENV-001` no longer

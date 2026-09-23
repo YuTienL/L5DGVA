@@ -1,4 +1,19 @@
-# Master Blocker Register (v4, post-M5-Cohort-1-closure)
+# Master Blocker Register (v5, post-M5-Cohort-3-closure)
+
+**v5 update (M5 Cohort 3, 2026-09-23)**: `CAP-M5-VIP-001` resolved this
+wave -- `vip_capability_extraction.py`'s VIP-04 ("transfer" naming
+suffix) + VIP-05/VIP-18 (`_VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY`
+vendor-base-class fallback) semantically merged from B7B, the known
+`classify_by_inheritance()` 4-to-5-tuple signature-break risk resolved
+with 0 real external callers found (full caller sweep performed first),
+17/17 focused tests + 53/53 downstream-caller tests + 108/108
+Cohort-1/2/TOPTB-001-preservation tests pass, Constitution PASS,
+downgraded to `P2`. Removed from the P0 blocker table below. See
+`M5_CAPABILITY_MERGE_QUEUE/COHORT_3/M5_COHORT_3_FINAL_REPORT.md`.
+`P0_BLOCKERS` drops from 6 to **5** (structurally reconciled the same
+way as every prior wave: raw `PRIORITY=='P0'` row count in both master
+CSVs, minus `CAP-POOL-005`'s documented non-counted cross-reference to
+`CAP-M5M6-VLEVEL-001`).
 
 **Disclosed correction (M5-0 P0-drift reconciliation, 2026-09-23)**: this
 file had gone stale after the M4.5 Governing Contract Authority Closure
@@ -19,17 +34,19 @@ in lockstep, 73/73 focused tests + 169/169 suite-wide keyword sweep pass,
 Constitution PASS, downgraded to `P2`. See
 `M5_CAPABILITY_MERGE_QUEUE/M5_CAPABILITY_MERGE_QUEUE.md`.
 
-`P0_BLOCKERS = 6`, structurally reconciled against `MASTER_WAVE_
+`P0_BLOCKERS = 5`, structurally reconciled against `MASTER_WAVE_
 OWNERSHIP_MATRIX.csv`'s `PRIORITY=P0` rows (6, exact ID match) and
-`MASTER_CAPABILITY_STATUS_MATRIX.csv`'s `PRIORITY=='P0'` rows (also 6).
-`CAP-POOL-005` remains a documented, non-counted cross-reference to
-`CAP-M5M6-VLEVEL-001` (since its very first commit `b8a573f`'s own NOTES:
-"Cross-referenced, not double-counted") -- never a real independent
-blocker, just a value a naive `PRIORITY==P0` parse would over-count.
+`MASTER_CAPABILITY_STATUS_MATRIX.csv`'s `PRIORITY=='P0'` rows (also 6),
+re-run this wave via `csv.DictReader` (never grep, to avoid
+embedded-comma double-counting). `CAP-POOL-005` remains a documented,
+non-counted cross-reference to `CAP-M5M6-VLEVEL-001` (since its very
+first commit `b8a573f`'s own NOTES: "Cross-referenced, not
+double-counted") -- never a real independent blocker, just a value a
+naive `PRIORITY==P0` parse would over-count. 6 raw rows − 1 cross-ref = 5
+real independent P0 blockers.
 
 | CAPABILITY_ID | Blocker | Type | Blocks | Owner |
 |---|---|---|---|---|
-| CAP-M5-VIP-001 | `vip_capability_extraction.py` N-way merge carries a known breaking signature-change risk (`classify_by_inheritance` 4→5-tuple) | ENGINEERING (real known regression risk) | VIP capability extraction correctness across all callers | M5 |
 | CAP-M6-DISPATCH-001 | `cli.py`/`dashboard.py` dispatch-mechanism conflict (`start_lifecycle(...)` vs `loop(goal)`/`run_stage(goal)`) has no chosen resolution | HUMAN_DECISION_REQUIRED | CAP-M3-001 wiring, CAP-M4.5-001 live routing, CAP-M6-LIFECYCLE-001, CAP-M6-CLARSVC-001 routing | M6 |
 | CAP-M6-CLARSVC-001 | `ClarificationService` design/build not started (architecture already decided, D2 — not reopened) | ENGINEERING | `CAP-M5M6-VLEVEL-001`, intake/clarification flow for all 3 verification levels | M6 |
 | CAP-M5M6-VLEVEL-001 | `verification_level.py` absent from canonical; canonical `environment_mode_router.py` has no `IP_MODE` concept at all | ENGINEERING (dependency-chain migration) | The entire IP-level verification flow's mode-selection foundation | M6 |

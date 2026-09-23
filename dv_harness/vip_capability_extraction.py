@@ -180,7 +180,12 @@ DEFAULT_BASE_LIBRARY_PREFIXES = vip_api_card.DEFAULT_BASE_LIBRARY_PREFIXES
 # asserted so at import.
 _NAME_SUFFIX_CATEGORY_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     (IR_VIP_CONFIG, ("cfg", "config", "configuration")),
-    (IR_VIP_TRANSACTION, ("item", "txn", "transaction", "packet", "frame")),
+    # "transfer" (VIP-04) was added after checking this table against a REAL
+    # vendor VIP's actual naming convention rather than only this repo's own
+    # synthetic fixture: Synopsys USB SVT's core transaction class is really
+    # named `svt_usb_transfer` (.work/intake-vip_examples-report.md), which
+    # none of the other suffixes below would have matched.
+    (IR_VIP_TRANSACTION, ("item", "txn", "transaction", "packet", "frame", "transfer")),
     (IR_VIP_SCENARIO_PATTERN, ("seq", "sequence", "vseq")),
     (IR_VIP_CHECKER_CAPABILITY, ("monitor", "mon", "checker", "scoreboard", "sb")),
     (IR_VIP_COVERAGE_CAPABILITY, ("cov", "coverage", "cg")),
@@ -197,6 +202,55 @@ _INHERITANCE_MARKER_TO_CATEGORY: Dict[str, str] = {
     "uvm_virtual_sequence": IR_VIP_SCENARIO_PATTERN,
     "uvm_monitor": IR_VIP_CHECKER_CAPABILITY,
     "uvm_scoreboard": IR_VIP_CHECKER_CAPABILITY,
+}
+
+# ---------------------------------------------------------------------------
+# VIP-05 / VIP-18: vendor own intermediate base-class markers.
+#
+# A real vendor VIP class chain climbs through the VENDOR's own base-class
+# library before it ever reaches a bare `uvm_*` base -- e.g. real Synopsys
+# USB SVT source is `svt_usb_transfer extends svt_transaction extends
+# uvm_sequence_item` (.work/intake-vip_source-report.md lists
+# svt_transaction.sv/svt_configuration.sv/svt_sequencer.sv/svt_agent.sv/
+# svt_xactor.sv as that whole intermediate layer). When every class in that
+# chain is indexed, `classify_by_inheritance()` below already walks straight
+# through it via `vip_api_card.inheritance_chain()` with no help needed here
+# -- multi-level chains over INDEXED intermediates were already correct.
+#
+# What was genuinely unhandled: the vendor's own base-class file is often
+# NOT indexed at all (excluded from the scanned roots, or opaque behind a
+# `pragma protect` block -- see vip_symbol_index's encrypted-region
+# handling). Then the chain is OPEN and `terminal_base` is a real name
+# (`svt_transaction`) that is neither an indexed class nor a bare `uvm_*`
+# marker, so it used to fall through to no classification at all even
+# though the vendor base name itself is a well-known, publicly-documented
+# convention.
+#
+# This table is the standardized, EXTENSIBLE fallback: known vendor
+# intermediate base-class names, mapped directly to the IR category they
+# unambiguously imply, used ONLY when the real chain does not already
+# resolve one via an indexed uvm_* terminal. A hit here is real evidence
+# (a specific, documented vendor base-class name -- never a generic
+# catch-all like `uvm_object`), but weaker than an indexed chain closing on
+# a bare UVM marker: `classify_by_inheritance()` reports it via a distinct
+# `via_vendor_marker=True` flag rather than silently blending it into the
+# same case as a fully-indexed, provably-closed chain.
+#
+# Extending this for another vendor (Cadence VIP Catalog / Mentor-Siemens
+# Questa VIP): add that vendor's own intermediate base-class names here,
+# each mapped to one of the five IR_VIP_* constants. This table -- not a
+# vendor-specific rewrite of classify_by_inheritance() -- is the intended
+# extension point.
+_VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY: Dict[str, str] = {
+    # Synopsys SVT base-class library.
+    "svt_transaction": IR_VIP_TRANSACTION,
+    "svt_sequence_item": IR_VIP_TRANSACTION,
+    "svt_sequence": IR_VIP_SCENARIO_PATTERN,
+    "svt_virtual_sequence": IR_VIP_SCENARIO_PATTERN,
+    "svt_configuration": IR_VIP_CONFIG,
+    "svt_config": IR_VIP_CONFIG,
+    "svt_monitor": IR_VIP_CHECKER_CAPABILITY,
+    "svt_scoreboard": IR_VIP_CHECKER_CAPABILITY,
 }
 
 
@@ -240,21 +294,39 @@ def classify_by_name(class_name: str) -> Optional[str]:
 def classify_by_inheritance(
     by_name: Dict[str, Dict[str, Any]], class_name: str,
     *, base_library_prefixes: Sequence[str] = DEFAULT_BASE_LIBRARY_PREFIXES,
-) -> Tuple[Optional[str], List[str], bool, Optional[str]]:
+) -> Tuple[Optional[str], List[str], bool, Optional[str], bool]:
     """The inheritance heuristic: walk the REAL chain (`vip_api_card.
     inheritance_chain()`, over the SAME index) and check whether it
     terminates at one of the small set of unambiguous UVM base-class-library
-    markers. Returns `(ir_type_or_None, chain, chain_closed, terminal_base)`.
+    markers. Returns
+    `(ir_type_or_None, chain, chain_closed, terminal_base, via_vendor_marker)`.
 
     `terminal_base` is the base of the last class in `chain` -- None for a
     real root (no `extends` at all), otherwise the identifier the chain
-    leaves the index on (a UVM marker, an unindexed non-UVM class, or a
-    cyclic index)."""
+    leaves the index on (a UVM marker, a known vendor intermediate
+    base-class marker, an unindexed/unrecognised class, or a cyclic index).
+
+    When the chain does not terminate at a bare `uvm_*` marker (either
+    because it is open, or because it is closed on a real root that is
+    itself unrecognised), `terminal_base` is also checked against
+    `_VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY` (VIP-05/VIP-18) -- a real,
+    specific vendor base-class name is still real evidence even when that
+    base class's own file was never indexed. `via_vendor_marker` is True
+    exactly when THAT fallback, rather than the direct UVM marker, produced
+    `ir_type_or_None`, so callers can keep the two evidence strengths
+    distinct rather than silently blending them."""
     chain, closed = vip_api_card.inheritance_chain(
         by_name, class_name, base_library_prefixes=base_library_prefixes)
     terminal_base = by_name[chain[-1]].get("base_class") if chain else None
-    category = _INHERITANCE_MARKER_TO_CATEGORY.get(terminal_base) if terminal_base else None
-    return category, chain, closed, terminal_base
+    if not terminal_base:
+        return None, chain, closed, terminal_base, False
+    category = _INHERITANCE_MARKER_TO_CATEGORY.get(terminal_base)
+    if category is not None:
+        return category, chain, closed, terminal_base, False
+    vendor_category = _VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY.get(terminal_base)
+    if vendor_category is not None:
+        return vendor_category, chain, closed, terminal_base, True
+    return None, chain, closed, terminal_base, False
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +453,13 @@ class VIPCapabilityRecord:
     chain_closed: Optional[bool] = None
     name_category: Optional[str] = None               # what naming ALONE suggested, if anything
     inheritance_category: Optional[str] = None         # what inheritance ALONE suggested, if anything
+    # True when `inheritance_category` was reached via a known VENDOR
+    # intermediate base-class marker (VIP-05/VIP-18) rather than a bare
+    # `uvm_*` terminal -- weaker evidence (a recognised vendor base-class
+    # NAME, not a provably-closed indexed chain) that stays visible rather
+    # than being blended into the ordinary INHERITANCE_ONLY/
+    # NAME_AND_INHERITANCE_AGREE case.
+    inheritance_via_vendor_marker: bool = False
     # Category-specific payload -- populated only for the relevant ir_type,
     # left at its empty/None default otherwise. Never fabricated: every value
     # here is copied verbatim from the real vip_symbol_index class entry.
@@ -461,7 +540,7 @@ def extract_vip_capabilities(
     for cls in index.get("classes", []):
         name = str(cls["name"])
         name_cat = classify_by_name(name)
-        inherit_cat, chain, closed, terminal_base = classify_by_inheritance(
+        inherit_cat, chain, closed, terminal_base, via_vendor_marker = classify_by_inheritance(
             by_name, name, base_library_prefixes=base_library_prefixes)
 
         base_evidence = [{
@@ -477,6 +556,7 @@ def extract_vip_capabilities(
                 basis="NAME_AND_INHERITANCE_DISAGREE", evidence=base_evidence,
                 inheritance_chain=chain, chain_closed=closed,
                 name_category=name_cat, inheritance_category=inherit_cat,
+                inheritance_via_vendor_marker=via_vendor_marker,
                 reason=(f"naming suggests {name_cat!r} but the inheritance chain "
                         f"(terminal base {terminal_base!r}) suggests {inherit_cat!r}; "
                         "classification withheld rather than guessed"),
@@ -491,12 +571,24 @@ def extract_vip_capabilities(
         basis = ("NAME_AND_INHERITANCE_AGREE" if (name_cat and inherit_cat)
                  else "NAME_ONLY" if name_cat else "INHERITANCE_ONLY")
 
+        evidence = list(base_evidence)
+        if via_vendor_marker:
+            evidence.append({
+                "kind": "VENDOR_BASE_LIBRARY_MARKER",
+                "source": cls["file"], "location": f"{cls['file']}:{cls['line']}",
+                "detail": (f"inheritance chain terminates at unindexed vendor base "
+                           f"{terminal_base!r}, a known vendor base-class marker for "
+                           f"{category!r} (see _VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY) "
+                           "rather than an indexed uvm_* terminal"),
+            })
+
         rec = VIPCapabilityRecord(
             ir_type=category, class_name=name, file=cls["file"], line=cls["line"],
             base_class=cls.get("base_class"), qualification=INFERRED_FROM_NAMING,
-            basis=basis, evidence=list(base_evidence),
+            basis=basis, evidence=evidence,
             inheritance_chain=chain, chain_closed=closed,
             name_category=name_cat, inheritance_category=inherit_cat,
+            inheritance_via_vendor_marker=via_vendor_marker,
         )
 
         if category in (IR_VIP_CONFIG, IR_VIP_TRANSACTION):

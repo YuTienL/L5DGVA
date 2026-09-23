@@ -1,7 +1,7 @@
 CAPABILITY_ID,CAPABILITY_NAME,PRIMARY_OWNER_WAVE,SECONDARY_DEPENDENCY,PRIORITY,BLOCKER_TYPE
 CAP-M4.5-004,GOVERNING_CONTRACT_AUTHORITY (25-doc corpus),M4.5,,P2,"ENGINEERING (residual duplication-check + registry-module adaptation, not a human decision anymore -- decision made and executed against this wave)"
 CAP-M5-ENV-001,env_manifest.py N-way merge,M5,,P2 (downgraded from P0 -- resolved M5 Cohort 1),"ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
-CAP-M5-VIP-001,vip_capability_extraction.py N-way merge,M5,,P0,ENGINEERING (known signature-break risk)
+CAP-M5-VIP-001,vip_capability_extraction.py N-way merge,M5,,P2 (downgraded from P0 -- resolved M5 Cohort 3),"ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
 CAP-M6-DISPATCH-001,cli.py/dashboard.py dispatch-mechanism decision,M6,,P0,HUMAN_DECISION_REQUIRED
 CAP-M6-CLARSVC-001,ClarificationService design+build,M6,M7,P0,ENGINEERING (design/build; architecture already decided)
 CAP-M5M6-VLEVEL-001,verification_level.py genericity foundation,M6,CAP-M6-CLARSVC-001;CAP-M5-ENV-001,P0,ENGINEERING (dependency-chain migration)

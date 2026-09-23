@@ -77,5 +77,6 @@ CAP-M5-ARCH-002 all resolved -- see
 `COHORT_2/ARCH_002/M5_COHORT_2_ARCH002_FINAL_REPORT.md`).
 `CAP-M5-TOPTB-001` (discovered during Cohort 2, given its own dedicated
 disposition/merge task) RESOLVED -- see
-`TOPTB_001/M5_TOPT_B001_FINAL_REPORT.md`. COHORT 3-5 NOT_STARTED. Next:
-CAP-M5-VIP-001 (Cohort 3, KNOWN RISK signature-break capability).
+`TOPTB_001/M5_TOPT_B001_FINAL_REPORT.md`. COHORT 3 CLOSED (CAP-M5-VIP-001
+resolved -- see `COHORT_3/M5_COHORT_3_FINAL_REPORT.md`). COHORT 4-5
+NOT_STARTED.

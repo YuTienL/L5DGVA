@@ -286,6 +286,102 @@ def test_naming_suffix_table_is_disjoint():
     assert len(table) == len(set(table))  # every key genuinely unique
 
 
+# ---------------------------------------------------------------------------
+# VIP-04 / VIP-05 / VIP-18: real vendor naming and vendor base-class markers
+# ---------------------------------------------------------------------------
+
+def test_real_synopsys_usb_svt_naming_convention_classifies_as_transaction(tmp_path):
+    """svt_usb_transfer -- the REAL Synopsys USB SVT core transaction class
+    name (.work/intake-vip_examples-report.md) -- matches none of the naming
+    suffixes this table had before VIP-04 (item/txn/transaction/packet/
+    frame). It must classify purely from the added 'transfer' suffix when no
+    inheritance evidence is present at all."""
+    d, _ = _write(tmp_path, "vip", "transfer.sv", textwrap.dedent("""\
+        package usb_pkg;
+          class svt_usb_transfer extends uvm_object;
+            bit [7:0] pid;
+          endclass
+        endpackage
+        """))
+    index = vsi.build_symbol_index([d], "usb")
+    report = vce.extract_vip_capabilities(index)
+    rec = _rec(report, "svt_usb_transfer")
+    assert rec.ir_type == vce.IR_VIP_TRANSACTION
+    assert rec.basis == "NAME_ONLY"
+
+
+def test_inheritance_walks_through_a_fully_indexed_vendor_intermediate_base(tmp_path):
+    """When the vendor's own intermediate base class IS indexed (both files
+    scanned), the existing multi-level chain walk already resolves the real
+    UVM terminal correctly with no vendor-marker fallback needed -- this is
+    the positive control the fallback below is contrasted against."""
+    d, _ = _write(tmp_path, "vip", "usb.sv", textwrap.dedent("""\
+        package usb_pkg;
+          class svt_transaction extends uvm_sequence_item;
+            bit dummy;
+          endclass
+          class svt_usb_transfer extends svt_transaction;
+            bit [7:0] pid;
+          endclass
+        endpackage
+        """))
+    index = vsi.build_symbol_index([d], "usb")
+    report = vce.extract_vip_capabilities(index)
+    rec = _rec(report, "svt_usb_transfer")
+    assert rec.ir_type == vce.IR_VIP_TRANSACTION
+    assert rec.basis == "NAME_AND_INHERITANCE_AGREE"
+    assert rec.inheritance_chain == ["svt_usb_transfer", "svt_transaction"]
+    assert rec.chain_closed is True
+    assert rec.inheritance_via_vendor_marker is False
+
+
+def test_inheritance_falls_back_to_vendor_marker_when_intermediate_base_is_unindexed(tmp_path):
+    """The genuinely unhandled case (VIP-05): `svt_transaction` is the
+    vendor's own base class but its file was never scanned (e.g. excluded
+    from the roots, or opaque behind pragma protect). The chain is OPEN and
+    `svt_transaction` is neither indexed nor a bare uvm_* marker -- but it IS
+    a known, documented vendor base-class name, so classification must still
+    succeed via the vendor-marker fallback rather than silently failing."""
+    d, _ = _write(tmp_path, "vip", "usb.sv", textwrap.dedent("""\
+        package usb_pkg;
+          class svt_usb_transfer extends svt_transaction;
+            bit [7:0] pid;
+          endclass
+        endpackage
+        """))
+    index = vsi.build_symbol_index([d], "usb")
+    cat, chain, closed, terminal_base, via_marker = vce.classify_by_inheritance(
+        vip_api_card_by_name := {c["name"]: c for c in index["classes"]}, "svt_usb_transfer")
+    assert cat == vce.IR_VIP_TRANSACTION
+    assert chain == ["svt_usb_transfer"]
+    assert closed is False                    # a real absence claim is NOT provable here
+    assert terminal_base == "svt_transaction"
+    assert via_marker is True
+
+    report = vce.extract_vip_capabilities(index)
+    rec = _rec(report, "svt_usb_transfer")
+    assert rec.ir_type == vce.IR_VIP_TRANSACTION
+    assert rec.inheritance_via_vendor_marker is True
+    assert rec.chain_closed is False
+    assert any(e["kind"] == "VENDOR_BASE_LIBRARY_MARKER" for e in rec.evidence)
+
+
+def test_vendor_marker_table_covers_the_real_synopsys_intermediate_base_layer(tmp_path):
+    """.work/intake-vip_source-report.md lists svt_transaction.sv/
+    svt_configuration.sv/svt_sequencer.sv/svt_agent.sv/svt_xactor.sv as the
+    real vendor intermediate base-class layer for this project's own VIP.
+    The extensible marker table must know the ones this module classifies
+    (transaction/config/sequence/checker), each mapped unambiguously."""
+    assert vce._VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY["svt_transaction"] == vce.IR_VIP_TRANSACTION
+    assert vce._VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY["svt_configuration"] == vce.IR_VIP_CONFIG
+    assert vce._VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY["svt_sequence"] == vce.IR_VIP_SCENARIO_PATTERN
+    assert vce._VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY["svt_virtual_sequence"] == vce.IR_VIP_SCENARIO_PATTERN
+    # Disjoint against the strict UVM marker table -- no name claims two
+    # different categories across the two tables.
+    overlap = set(vce._INHERITANCE_MARKER_TO_CATEGORY) & set(vce._VENDOR_BASE_LIBRARY_MARKER_TO_CATEGORY)
+    assert overlap == set()
+
+
 def test_missing_index_file_raises_rather_than_reporting_a_clean_result(tmp_path):
     with pytest.raises(vce.VipCapabilityExtractionError):
         vce.load_index_and_classify(tmp_path / "does_not_exist.json")
