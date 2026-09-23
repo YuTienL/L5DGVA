@@ -261,6 +261,13 @@ class RegisterFieldIR:
     access_in_current_schema: Optional[bool]
     reset_value: Optional[int]
     notes: Optional[str] = None
+    #: M4 foundation-schema closure (see M4_SCHEMA_CLOSURE.md): a pure
+    #: additive field this canonical module never populated before --
+    #: it exists here only so the schema is ready for the future M5
+    #: N-way merge (register_excel_extract.py + DUT-10 from worktree b7a)
+    #: that will teach an Excel-driven parser to populate it. Defaults to
+    #: None so every existing caller/behavior is completely unaffected.
+    enum_values: Optional[List[Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -271,6 +278,7 @@ class RegisterFieldIR:
             "access_in_current_schema": self.access_in_current_schema,
             "reset_value": (f"0x{self.reset_value:x}" if self.reset_value is not None else None),
             "notes": self.notes,
+            "enum_values": self.enum_values,
         }
 
 
@@ -662,6 +670,9 @@ def to_register_map_document(result: ExtractionResult, *, source_description: st
                 "access": f.access_type,
                 "reset_value": (f"0x{f.reset_value:x}" if f.reset_value is not None else None),
                 **({"description": f.notes} if f.notes else {}),
+                **({"enum_values": [
+                    {"name": ev["name"], "value": f"0x{ev['value']:x}"} for ev in f.enum_values
+                ]} if f.enum_values else {}),
             })
         block_name = reg.block or "default"
         block = blocks.setdefault(block_name, {"name": block_name, "base_address": "0x0", "registers": []})

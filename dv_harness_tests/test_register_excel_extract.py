@@ -352,3 +352,25 @@ def test_cli_exit_code_two_on_missing_file(tmp_path):
     )
     assert proc.returncode == 2
     assert "NOT_AVAILABLE" in proc.stdout
+
+
+def test_register_field_ir_enum_values_defaults_to_none_for_backward_compatibility():
+    """M4 foundation-schema closure (see M4_SCHEMA_CLOSURE.md): adds the
+    enum_values field RegisterFieldIR needs for the future DUT-10/M5
+    IP-XACT-import merge, as a pure additive dataclass field. Existing
+    callers that never pass enum_values must be completely unaffected --
+    this is the real backward-compatibility proof, not an assumption."""
+    field = rex.RegisterFieldIR(
+        name="MODE", bit_offset=0, bit_width=2, access_type="RW",
+        access_in_current_schema=True, reset_value=0,
+    )
+    assert field.enum_values is None
+
+
+def test_register_field_ir_enum_values_round_trips_through_to_dict():
+    values = [{"value": 0, "name": "OFF"}, {"value": 1, "name": "ON"}]
+    field = rex.RegisterFieldIR(
+        name="MODE", bit_offset=0, bit_width=2, access_type="RW",
+        access_in_current_schema=True, reset_value=0, enum_values=values,
+    )
+    assert field.to_dict()["enum_values"] == values

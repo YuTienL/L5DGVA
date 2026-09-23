@@ -64,7 +64,20 @@
         "bit_width": { "type": "integer", "minimum": 1 },
         "access": { "$ref": "#/$defs/access_kind" },
         "reset_value": { "type": ["string", "null"], "pattern": "^0x[0-9A-Fa-f]+$" },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "enum_values": {
+          "type": "array",
+          "description": "M4 foundation-schema closure: optional, not yet populated by to_register_map_document() -- reserved for the future M5 N-way merge (register_excel_extract.py + DUT-10 from worktree b7a) that teaches an Excel/IP-XACT-driven parser to populate legal field values here. A document that omits this property remains valid (not required); this is a pure additive readiness slot, not new schema-validated behavior.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "name"],
+            "properties": {
+              "value": { "type": "string", "pattern": "^0x[0-9A-Fa-f]+$" },
+              "name": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
       }
     },
     "access_kind": {
