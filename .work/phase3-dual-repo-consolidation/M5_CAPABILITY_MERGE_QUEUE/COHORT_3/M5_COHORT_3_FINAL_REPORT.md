@@ -6,7 +6,7 @@ M5_COHORT_3_STATUS = CLOSED
 CAP_M5_VIP_001_STATUS = RESOLVED
 
 START_HEAD = a7b1b998 (canonical/m4-dependency-closure)
-END_HEAD = <set by this Cohort's own commit, see git log>
+END_HEAD = f773f476d8241ebf7b83ba39e90f208ab3434abc (commit f773f47, this Cohort's own commit)
 
 PUBLIC_APIS_ANALYZED = 18 symbols (see M5_COHORT_3_VIP_SYMBOL_API_INVENTORY.csv)
 RUNTIME_CALLERS_ANALYZED = 11 (4 real production consumers + 7 test files;
