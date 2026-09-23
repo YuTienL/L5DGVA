@@ -188,9 +188,24 @@ Ingestion -> Distillation -> Claims/Method Extraction -> Evidence/Provenance
 -> Experiment/Validation -> Accept/Reject -> Canonical Capability Evolution.
 A research summary document alone does NOT qualify this capability as
 operational -- research must be capable of affecting validated future
-L5DGVA capability to qualify as a closed loop. (Real current status: see the
-Research Front Door / Cross-Loop Coupling / Self-Learning Readiness Matrix
-sections above and the capability matrix's RESEARCH_* rows.)
+L5DGVA capability to qualify as a closed loop. (Real current status: see
+`docs/architecture/canonical_detailed_governance/KNOWLEDGE_MEMORY_RESEARCH.md`
+-- Research Front Door / Cross-Loop Coupling / Self-Learning Readiness
+Matrix moved there during M4.6, and the capability matrix's RESEARCH_*
+rows.)
+
+**Research Front Door (kept ALWAYS_ON — discoverable without the master
+prompt in hand, per the same principle this file's own routing section
+states above)**: the entry point is `dv-harness research`, not
+`/research` — `.claude/commands/` does not exist in this repo. The route
+is fixed and it STOPS: `.claude/skills/research-ingestion/SKILL.md` ->
+prior-evidence lookup -> `.claude/agents/research-architect.md` ->
+Human Approval Gate. A research-capability-evolution change reaches
+production code only after
+`dv-harness approve RESEARCH_CAPABILITY_EVOLUTION --note ... --reviewer-id ...`
+(the real `HUMAN_APPROVAL_STAGE` the code imports — never a retyped
+command name). Full detail:
+`docs/architecture/canonical_detailed_governance/KNOWLEDGE_MEMORY_RESEARCH.md`.
 
 ## Continuous Project Experience Learning
 
