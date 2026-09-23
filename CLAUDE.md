@@ -7,7 +7,11 @@ above ordinary architecture rules, the Module Index, workflow rules,
 migration rules, implementation rules, and agent/skill rules below.** No
 `Repository Root Contract` section was found elsewhere in this file to
 preserve under that name (searched, not assumed absent); if one exists in a
-sibling document, this section does not supersede it. Full text, rationale,
+sibling document, this section does not supersede it. Likewise, no section
+literally named `Module Index` was found elsewhere in this file (searched,
+not assumed absent) -- the phrase above names where such an index would sit
+in the authority ordering, should one be added later; it is not a claim that
+a currently-resident section by that name exists today. Full text, rationale,
 and the milestone-scoping discussion also live in the canonical,
 non-resident document `docs/architecture/L5DGVA_CONSTITUTION.md` (kept in
 sync with this section, never contradicting it). Enforced in code:
