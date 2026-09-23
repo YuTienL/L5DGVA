@@ -1,0 +1,52 @@
+VERIFICATION_LEVEL,STAGE,AUTOMATION_OWNER,HUMAN_ROLE,HUMAN_GATE_REQUIRED,QUESTION_OWNER,CURRENT_STATUS,BLOCKER,PRIMARY_OWNER_WAVE
+IP_MODE,OpenSpec Intake,intake_routing.py / environment_mode_router.py,SHARED,NO,SHARED,BLOCKED,no IP_MODE router entry point at all,M6
+IP_MODE,Knowledge Retrieval,memory_router.py / governance_registry.py,NONE,NO,N/A,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Discovery,generation_readiness.py family,SHARED,NO,SHARED,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Clarification,ClarificationService (target) / question_queue.py,SHARED,YES,DESIGN|VERIFICATION|SHARED (per question),BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,vPlan,vplan_artifact.py / spec_vplan_readiness_gate.py,VERIFICATION,NO,VERIFICATION,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,VIP/UVM Generation,create_environment.py / ProtocolEnvGenerator,SHARED,NO,SHARED,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Sequence/Scenario/FW,scenario_sufficiency.py,VERIFICATION,NO,VERIFICATION,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Checker/Scoreboard/Assertion,verification_architecture.py,VERIFICATION,NO,VERIFICATION,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Execution,replay.ps1 / execution profile,NONE,NO,N/A,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Regression,regression_reporter.py,NONE,NO,N/A,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,RCA,inference.py / debug-agent,SHARED,NO,SHARED (see RCA_ROLE_ROUTING.md),BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Functional Coverage,coverage_analysis.py,VERIFICATION,NO,VERIFICATION,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Coverage Closure,coverage_hole_generation_candidate_queue.py,VERIFICATION,NO,VERIFICATION,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Traceability,requirement_traceability_registry.py,SHARED,NO,SHARED,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Waiver,"(target -- not yet built, M10)",VERIFICATION,YES,VERIFICATION,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Signoff,signoff_export.py / qualified_conclusion.py,SHARED,YES,SHARED,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+IP_MODE,Experience Consolidation,"memory_router.py (route_and_store, currently broken -- CAP-M8-EXPLOOP-001)",NONE,NO,N/A,BLOCKED (downstream of Intake),IP_MODE has no router entry point (CAP-M5M6-VLEVEL-001),M6
+SUBSYSTEM_MODE,OpenSpec Intake,intake_routing.py / environment_mode_router.py,SHARED,NO,SHARED,WIRED,none,complete
+SUBSYSTEM_MODE,Knowledge Retrieval,memory_router.py / governance_registry.py,NONE,NO,N/A,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Discovery,generation_readiness.py family,SHARED,NO,SHARED,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Clarification,ClarificationService (target) / question_queue.py,SHARED,YES,DESIGN|VERIFICATION|SHARED (per question),BLOCKED,ClarificationService not yet built (CAP-M6-CLARSVC-001),M6
+SUBSYSTEM_MODE,vPlan,vplan_artifact.py / spec_vplan_readiness_gate.py,VERIFICATION,NO,VERIFICATION,PARTIAL,downstream of Clarification gap; VPLAN_COVERAGE_TRACEABILITY_FOUNDATION=READY per M4,M6
+SUBSYSTEM_MODE,VIP/UVM Generation,create_environment.py / ProtocolEnvGenerator,SHARED,NO,SHARED,"WIRED, 1 latent defect",KNOWN_SOURCE_B_DEFECT re-confirmed unchanged (CAP-M5-ARCH-001),M5
+SUBSYSTEM_MODE,Sequence/Scenario/FW,scenario_sufficiency.py,VERIFICATION,NO,VERIFICATION,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Checker/Scoreboard/Assertion,verification_architecture.py,VERIFICATION,NO,VERIFICATION,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Execution,replay.ps1 / execution profile,NONE,NO,N/A,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Regression,regression_reporter.py,NONE,NO,N/A,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,RCA,inference.py / debug-agent,SHARED,NO,SHARED (see RCA_ROLE_ROUTING.md),NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Functional Coverage,coverage_analysis.py,VERIFICATION,NO,VERIFICATION,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Coverage Closure,coverage_hole_generation_candidate_queue.py,VERIFICATION,NO,VERIFICATION,PARTIAL,functional_coverage_signoff.py judgment call open (CAP-M5-COV-001),M5
+SUBSYSTEM_MODE,Traceability,requirement_traceability_registry.py,SHARED,NO,SHARED,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Waiver,"(target -- not yet built, M10)",VERIFICATION,YES,VERIFICATION,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Signoff,signoff_export.py / qualified_conclusion.py,SHARED,YES,SHARED,NOT_RE-AUDITED_THIS_WAVE,,
+SUBSYSTEM_MODE,Experience Consolidation,"memory_router.py (route_and_store, currently broken -- CAP-M8-EXPLOOP-001)",NONE,NO,N/A,ABSENT,SIGNOFF_EXPERIENCE_CONSOLIDATION confirmed absent on every tree (CAP-CE-014),M8
+SYSTEM_LEVEL_MODE,OpenSpec Intake,intake_routing.py / environment_mode_router.py,SHARED,NO,SHARED,WIRED,none,complete
+SYSTEM_LEVEL_MODE,Knowledge Retrieval,memory_router.py / governance_registry.py,NONE,NO,N/A,NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,Discovery,generation_readiness.py family,SHARED,NO,SHARED,NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,Clarification,ClarificationService (target) / question_queue.py,SHARED,YES,DESIGN|VERIFICATION|SHARED (per question),BLOCKED,ClarificationService not yet built (CAP-M6-CLARSVC-001),M6
+SYSTEM_LEVEL_MODE,vPlan,vplan_artifact.py / spec_vplan_readiness_gate.py,VERIFICATION,NO,VERIFICATION,PARTIAL,downstream of Clarification gap,M6
+SYSTEM_LEVEL_MODE,VIP/UVM Generation,create_environment.py / ProtocolEnvGenerator,SHARED,NO,SHARED,"WIRED, 1 unresolved foundation contract",soc_environment_composer.py ARCH-03 unresolved (CAP-M5-ARCH-002),M5
+SYSTEM_LEVEL_MODE,Sequence/Scenario/FW,scenario_sufficiency.py,VERIFICATION,NO,VERIFICATION,"PARTIAL, disclosed scope boundary",cross-subsystem behavioral content explicitly NotImplementedError by design,"unscheduled (design boundary, not a defect)"
+SYSTEM_LEVEL_MODE,Checker/Scoreboard/Assertion,verification_architecture.py,VERIFICATION,NO,VERIFICATION,"PARTIAL, disclosed scope boundary",same cross-subsystem content boundary,"unscheduled (design boundary, not a defect)"
+SYSTEM_LEVEL_MODE,Execution,replay.ps1 / execution profile,NONE,NO,N/A,NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,Regression,regression_reporter.py,NONE,NO,N/A,NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,RCA,inference.py / debug-agent,SHARED,NO,SHARED (see RCA_ROLE_ROUTING.md),NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,Functional Coverage,coverage_analysis.py,VERIFICATION,NO,VERIFICATION,NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,Coverage Closure,coverage_hole_generation_candidate_queue.py,VERIFICATION,NO,VERIFICATION,PARTIAL,same functional_coverage_signoff.py judgment call (CAP-M5-COV-001),M5
+SYSTEM_LEVEL_MODE,Traceability,requirement_traceability_registry.py,SHARED,NO,SHARED,NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,Waiver,"(target -- not yet built, M10)",VERIFICATION,YES,VERIFICATION,NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,Signoff,signoff_export.py / qualified_conclusion.py,SHARED,YES,SHARED,NOT_RE-AUDITED_THIS_WAVE,,
+SYSTEM_LEVEL_MODE,Experience Consolidation,"memory_router.py (route_and_store, currently broken -- CAP-M8-EXPLOOP-001)",NONE,NO,N/A,ABSENT,SIGNOFF_EXPERIENCE_CONSOLIDATION confirmed absent on every tree (CAP-CE-014),M8

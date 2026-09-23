@@ -72,3 +72,27 @@ VerificationLevel work is the more load-bearing near-term blocker.
 
 No stage at any level is claimed `OPERATIONAL` end-to-end — consistent
 with `CANONICAL_CAPABILITY_STRICT_SUPERSET = NOT_YET_QUALIFIED`.
+
+## DE/DV Role-Based HITL overlay (added by the DE/DV roadmap reconciliation)
+
+The 17-stage table above is extended with per-stage
+`AUTOMATION_OWNER`/`HUMAN_ROLE`/`HUMAN_GATE_REQUIRED`/`QUESTION_OWNER`
+columns in
+`.work/phase3-dual-repo-consolidation/M4_5_DE_DV_ROLE_BASED_HITL/DE_DV_E2E_ROLE_MATRIX.csv`
+(51 rows = 17 stages × 3 levels) — a genuinely one, generic role model
+applied identically across `IP_MODE`/`SUBSYSTEM_MODE`/`SYSTEM_LEVEL_MODE`,
+per the frozen architecture decision "DE and DV are not separate
+pipelines; they are human authority roles participating in the same
+end-to-end lifecycle" (`DE_DV_ROLE_BASED_HITL_ARCHITECTURE.md`). Only 3
+of the 17 stages (`Clarification`, `Waiver`, `Signoff`) carry
+`HUMAN_GATE_REQUIRED=YES` — role presence at a stage never implies a
+mandatory gate.
+
+This overlay does **not** change any `CURRENT_STATUS`/`BLOCKER`/
+`PRIMARY_OWNER_WAVE` value in the table above — it is a role/authority
+classification layered on top of the same evidence, not a re-audit. The
+`Clarification` stage's existing blocker (`CAP-M6-CLARSVC-001`) is now
+additionally the stage where `ROLE_BASED_HUMAN_IN_THE_LOOP`,
+`QUESTION_OWNER_ROUTING`, and `HUMAN_GATE_CONTRACT` (all owner M6, all
+new capability rows from this reconciliation) converge — reinforcing,
+not changing, M6's status as the load-bearing near-term wave.

@@ -1,0 +1,18 @@
+STAGE,DE_ROLE,DV_ROLE,PRIMARY_AUTHORITY,SHARED_TRIGGER_EXAMPLE
+INTAKE,Provide design information/intent,Provide verification requirements/assets,SHARED,"N/A -- both inputs required, not a decision conflict"
+DISCOVERY,Confirm design facts (RTL/register/reset/IRQ),Confirm verification facts (VIP/TB/existing env),SHARED,N/A -- parallel fact confirmation
+CLARIFICATION,Design Intent Authority,Verification Intent Authority,SHARED (per question),Spec/RTL contradiction; feature interpretation affecting closure
+VERIFICATION_ARCHITECTURE,Feasibility/intent review,Primary approval,VERIFICATION,Design limitation constrains achievable verification architecture
+VPLAN,Feature/design-intent confirmation,Primary approval,VERIFICATION,Requirement interpretation affecting vPlan scope
+GENERATION,Design-specific escalation (register/IRQ/reset semantics),Verification-specific escalation (VIP/bind/architecture),SHARED (per escalation),Design limitation requires a verification-side workaround
+SEQUENCE_SCENARIO_FW,Firmware/programming-intent confirmation,Sequence/scenario/constraint strategy,VERIFICATION,FW programming intent ambiguity affecting sequence design
+CHECKER_SCOREBOARD_ASSERTION,Design-behavior confirmation for checker intent,Checker/scoreboard/assertion strategy,VERIFICATION,Undocumented design behavior affecting checker correctness
+EXECUTION,N/A (automatic),N/A (automatic),NONE,N/A
+REGRESSION,N/A (automatic),N/A (automatic),NONE,N/A
+RCA,RTL/design-behavior escalation,TB/test/VIP/checker/coverage escalation,SHARED (per root cause -- see RCA_ROLE_ROUTING.md),Spec intent ambiguity discovered during RCA
+FUNCTIONAL_COVERAGE,Design/feature confirmation where needed,Coverage model ownership,VERIFICATION,Design limitation changes what coverage is achievable
+COVERAGE_CLOSURE,Design/feature confirmation where needed,Coverage-closure owner,VERIFICATION,Design limitation requires a coverage waiver
+TRACEABILITY,Design-side requirement confirmation,Verification-side requirement confirmation,SHARED,Requirement interpretation affecting traceability completeness
+WAIVER,Design-limitation evidence where relevant,Verification-waiver authority,VERIFICATION,Design limitation requiring a verification waiver
+SIGNOFF,Design closure / unresolved design-risk confirmation,Verification-signoff authority,"SHARED (DV owns verification signoff, DE owns design closure)",Requirement interpretation affecting signoff
+EXPERIENCE_CONSOLIDATION,"N/A (automatic, role-tagged)","N/A (automatic, role-tagged)",NONE,N/A
