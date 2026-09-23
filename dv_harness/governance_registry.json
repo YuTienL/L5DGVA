@@ -8,9 +8,9 @@
       "load_policy": "ALWAYS_ON",
       "trigger": "every task",
       "priority": "HIGH",
-      "token_class": "LARGE_REFERENCE",
+      "token_class": "COMPACT",
       "summary_path": "CLAUDE.md",
-      "notes": "Auto-loaded by the agent harness. Kept as ALWAYS_ON per the governing constraint that this set must stay minimal -- CLAUDE.md's own real size (2,066,390 bytes / 22,441 lines as of M4.5) is honestly disclosed as a known, larger-than-this-wave normalization need, not hidden."
+      "notes": "Auto-loaded by the agent harness. M4.6 CLAUDE Context Normalization (canonical migration program) reduced this file from 2,067,655 bytes / 22,461 lines to 112,262 bytes / 1,640 lines by moving ~345 detailed, domain-specific sections verbatim into the 7 TASK_SCOPED/EVIDENCE_ON_DEMAND documents registered below (docs/architecture/canonical_detailed_governance/*.md) -- zero content deleted, only re-routed. TOKEN_CLASS upgraded from LARGE_REFERENCE to COMPACT to reflect the real measured reduction; TOKEN_REDUCTION_MEASURED stays NO (this is a file-size fact, not a Claude-token telemetry claim)."
     },
     {
       "id": "L5DGVA_CONSTITUTION",
@@ -68,6 +68,82 @@
       "priority": "MEDIUM",
       "token_class": "MEDIUM",
       "summary_path": ".work/phase3-dual-repo-consolidation/CANONICAL_CAPABILITY_SUPERSET_MATRIX.md"
+    },
+    {
+      "id": "VIP_PROTOCOL_GENERATION",
+      "label": "VIP/UVM generation, protocol/register/RTL extraction, vPlan, coverage, AMBA, DE command architecture, checker/scoreboard/signoff",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "vip protocol generation register rtl dut phy vplan coverage amba axi command de-command branch pattern scenario checker scoreboard signoff waiver uvm",
+      "priority": "HIGH",
+      "token_class": "LARGE_REFERENCE",
+      "summary_path": "docs/architecture/canonical_detailed_governance/VIP_PROTOCOL_GENERATION.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/VIP_PROTOCOL_GENERATION.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (125 sections). No further distillation performed this wave -- summary_path equals full_spec_path (disclosed, not a fabricated shorter summary; MINIMUM_SUFFICIENT_CONTEXT stays PARTIAL for this reason)."
+    },
+    {
+      "id": "GUI_DASHBOARD_WEB",
+      "label": "Dashboard/web control plane, GUI cards/wizards, status bar, live events, REST endpoints",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "gui dashboard web control plane status bar live event rest api ui wizard",
+      "priority": "MEDIUM",
+      "token_class": "LARGE_REFERENCE",
+      "summary_path": "docs/architecture/canonical_detailed_governance/GUI_DASHBOARD_WEB.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/GUI_DASHBOARD_WEB.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (34 sections)."
+    },
+    {
+      "id": "EXECUTION_REMOTE_REGRESSION_RCA",
+      "label": "Remote/LSF execution, build/sim-script, waveform/FSDB, regression loop, RCA support mechanisms",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "remote lsf execution build sim-script waveform fsdb regression loop convergence root-cause rca",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/EXECUTION_REMOTE_REGRESSION_RCA.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/EXECUTION_REMOTE_REGRESSION_RCA.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (20 sections)."
+    },
+    {
+      "id": "INTAKE_CLARIFICATION_QUESTION",
+      "label": "OpenSpec/intake mechanics, question queue, clarification loop, answer validation",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "intake clarification question answer onboarding openspec",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/INTAKE_CLARIFICATION_QUESTION.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/INTAKE_CLARIFICATION_QUESTION.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (21 sections)."
+    },
+    {
+      "id": "KNOWLEDGE_MEMORY_RESEARCH",
+      "label": "5-tier Memory, Obsidian, research ingestion/distillation/applicability, confidence calibration, continuous-capability-evolution loops",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "memory knowledge obsidian research experience learning capability-evolution confidence",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/KNOWLEDGE_MEMORY_RESEARCH.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/KNOWLEDGE_MEMORY_RESEARCH.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (28 sections, incl. one manually-corrected keyword-collision reassignment -- Cross-Project Pattern Mining, S063 -- disclosed in M4_6_CONTEXT_CLASSIFICATION.csv)."
+    },
+    {
+      "id": "GOVERNANCE_SAFETY_AUDIT",
+      "label": "Safety-sandbox/rollback, dependency/supply-chain governance, change-impact/traceability, multi-agent policy, general governance catch-all",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "safety sandbox rollback governance audit accountability dependency supply-chain multi-agent parallelism security policy traceability",
+      "priority": "MEDIUM",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/GOVERNANCE_SAFETY_AUDIT.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/GOVERNANCE_SAFETY_AUDIT.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (79 sections, includes 14 lower-confidence keyword-fallback sections disclosed in M4_6_CONTEXT_CLASSIFICATION.csv)."
+    },
+    {
+      "id": "HISTORICAL_AUDIT_NOTES",
+      "label": "Retrospective [CLOSED]/Already-Satisfied status markers -- provenance only, non-normative",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about a past audit/verification pass's own closure status -- never loaded for ordinary task execution",
+      "priority": "LOW",
+      "token_class": "SOURCE_EVIDENCE_ONLY",
+      "summary_path": "docs/architecture/canonical_detailed_governance/HISTORICAL_AUDIT_NOTES.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (15 sections). Historical/non-normative per instruction -- never ALWAYS_ON, preserved for provenance only."
     }
   ]
 }

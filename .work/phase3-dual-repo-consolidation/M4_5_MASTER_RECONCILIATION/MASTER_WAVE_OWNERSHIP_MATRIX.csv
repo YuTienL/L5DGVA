@@ -8,7 +8,7 @@ CAP-M5M6-VLEVEL-001,verification_level.py genericity foundation,M6,CAP-M6-CLARSV
 CAP-M8-EXPLOOP-001,EXPERIENCE_READY event wiring (confirmed broken),M8,,P0,"ENGINEERING (pre-existing defect, all trees)"
 CAP-PLATFORM-000,Platform P1-P6 scope definition,PLATFORM_P1,,P1,PROCESS (no scoping wave has occurred)
 CAP-M4.5-003,L5DGVA Constitution full compliance qualification,M8,,P1,ENGINEERING (final-gate evidence not yet complete)
-CAP-M4.5-001,TASK_SCOPED_GOVERNANCE_RETRIEVAL live-routing integration,M6,CAP-M6-DISPATCH-001,P1,ENGINEERING (wiring)
+CAP-M4.5-001,TASK_SCOPED_GOVERNANCE_RETRIEVAL live-routing integration,M6,CAP-M6-DISPATCH-001,P2,ENGINEERING (residual: still no fully-automated non-CLAUDE.md-mediated task-routing call site; downgraded from P1 after M4.6 closed the live-routing gap)
 CAP-M3-001,lifecycle.py wiring into engine.py,M6,CAP-M6-DISPATCH-001,P1,ENGINEERING (wiring)
 CAP-M6-LIFECYCLE-001,lifecycle.py consumer wiring,M6,CAP-M6-DISPATCH-001,P1,ENGINEERING (wiring-point identification)
 CAP-M5-ARCH-001,create_environment.py ARCH-01 contract,M5,,P1,ENGINEERING
@@ -22,15 +22,15 @@ CAP-M3-002,debug_evidence_behavioral_firewall_gate.py wiring,M7,,P2,ENGINEERING 
 CAP-M3-005,coverage_hole_generation_candidate_queue.py wiring,M7,,P2,ENGINEERING (wiring)
 CAP-M5-DSI-001,design_source_inventory.py contract question,M5,,P2,ENGINEERING
 CAP-M4.5-002,MINIMUM_SUFFICIENT_CONTEXT (general claim),M8,CAP-M4.5-001,P2,ENGINEERING (measurement/verification)
-CAP-M4.5-006,CODEX_REVIEW_OFFLOAD migration + real reviewer integration,M8,,P2,ENGINEERING + EXTERNAL_RESOURCE (needs a real Codex tool)
-CAP-M4.5-010,TOKEN_USAGE_OBSERVABILITY combined with multi-model handoff,M8,CAP-M4.5-005;CAP-M4.5-006,P2,ENGINEERING
+CAP-M4.5-006,CODEX_REVIEW_OFFLOAD migration + real reviewer integration,M7,,P2,ENGINEERING + EXTERNAL_RESOURCE (needs a real Codex tool) (owner reassigned M8->M7 per M4.6 S21 instruction)
+CAP-M4.5-010,TOKEN_USAGE_OBSERVABILITY combined with multi-model handoff,M7,CAP-M4.5-005;CAP-M4.5-006,P2,ENGINEERING (owner reassigned M8->M7 per M4.6 S21 instruction)
 CAP-M8-MAKC-001,MULTI_AGENT_KNOWLEDGE_CONSUMPTION audit,M8,,P2,PROCESS (needs a dedicated audit)
 CAP-M9-EXEC-001,ExecutionService/RemoteEDABackend TARGET build,M9,,P2,"ENGINEERING (large, not started)"
 CAP-POOL-006,reference_irq_event_to_service_flow_discovery.py,M11,CAP-M11-REFUSB-001,P2,POLICY
 CAP-M3-003,l5dgva_v5_ss86 taxonomy wiring,M7,,P3,ENGINEERING (wiring)
 CAP-M3-004,diagnostic_bound_compatibility.py wiring,M7,,P3,ENGINEERING (wiring)
-CAP-M4.5-005,CHATGPT_PLANNING_OFFLOAD automation,M8,,P3,ENGINEERING (currently stale/abandoned)
-CAP-M4.5-007,STRUCTURED_AGENT_HANDOFF operationalization + task/planning schema,M8,CAP-M4.5-004,P3,ENGINEERING (design not started for task/planning half)
+CAP-M4.5-005,CHATGPT_PLANNING_OFFLOAD automation,M7,,P3,ENGINEERING (currently stale/abandoned) (owner reassigned M8->M7 per M4.6 S21 instruction)
+CAP-M4.5-007,STRUCTURED_AGENT_HANDOFF operationalization + task/planning schema,M7,CAP-M4.5-004,P3,ENGINEERING (design not started for task/planning half) (owner reassigned M8->M7 per M4.6 S21 instruction)
 CAP-M4.5-008,CONTEXT_DISTILLATION for multi-model handoff content,M8,,P3,ENGINEERING (not started)
 CAP-M4.5-009,SESSION_RESUME audit,M8,,P3,PROCESS (needs a dedicated audit)
 CAP-M4.5-011,Cross-model TOKEN_REDUCTION_MEASUREMENT,M8,CAP-M4.5-010,P3,ENGINEERING (not started)
@@ -45,3 +45,4 @@ CAP-POOL-010,falsified_hypothesis_ledger.py,M8,,P3,ENGINEERING (dependency chain
 CAP-POOL-011,eight_engine_telemetry_rollup.py,M5,,P3,ENGINEERING (dependency chain)
 CAP-POOL-012,rtl_filelist_parser.py,M5,,P3,PROCESS (dormancy question open)
 REMAINING_UNCLASSIFIED_POOL,~157 of 177 MIGRATE_REQUIRED closure members not yet individually triaged,M5,,P2,"PROCESS (bulk-tracked, per M3's own disclosed scope limitation)"
+CAP-M4.6-001,CLAUDE_ALWAYS_ON_CONTEXT_NORMALIZATION,M4.6,,P1 (closed),none (closed this wave)
