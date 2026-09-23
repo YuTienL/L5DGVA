@@ -38,6 +38,12 @@ from dv_harness.coverage_analysis import (
     classify_coverage_hole_taxonomy,
     build_hole_evidence_record,
     build_hole_evidence_records,
+    COVERAGE_KIND_FUNCTIONAL,
+    COVERAGE_KIND_CODE,
+    COVERAGE_KIND_CLASSES,
+    CODE_COVERAGE_METRIC_NAMES,
+    classify_coverage_kind,
+    tag_categories_by_kind,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -619,3 +625,61 @@ def test_build_hole_evidence_records_skips_non_dict_entries_and_batches(tmp_path
     assert len(records) == 2
     assert records[0]["taxonomy_classification"] == TAXONOMY_WAIVED_HOLE_EXCLUDED
     assert records[1]["taxonomy_classification"] == TAXONOMY_ILLEGAL_BIN_MISCLASSIFIED
+
+
+# ---- FUNCTIONAL vs CODE coverage-kind classification (M5 Cohort 5,
+# CAP-M5-COV-001, migrated from Parent) --------------------------------------
+
+def test_coverage_kind_classes_are_exactly_functional_and_code():
+    # No third kind (e.g. ASSERTION) exists in this codebase's own real
+    # producers/consumers today -- see the section docstring.
+    assert COVERAGE_KIND_CLASSES == (COVERAGE_KIND_FUNCTIONAL, COVERAGE_KIND_CODE)
+
+
+def test_code_coverage_metric_names_match_the_real_makefile_cm_opts():
+    # tools/coverage/urg_summary_reduce.py still locally re-declares an
+    # identical-value CODE_COVERAGE_METRICS constant rather than importing
+    # this one -- a disclosed, not-yet-closed consolidation opportunity (see
+    # coverage_analysis.py's own section docstring), not implied closed here.
+    assert CODE_COVERAGE_METRIC_NAMES == ("line", "cond", "fsm", "tgl", "branch")
+
+
+@pytest.mark.parametrize("name", ["line", "cond", "fsm", "tgl", "branch"])
+def test_classify_coverage_kind_recognises_every_code_coverage_metric(name):
+    assert classify_coverage_kind(name) == COVERAGE_KIND_CODE
+
+
+def test_classify_coverage_kind_is_case_insensitive_and_strips_whitespace():
+    assert classify_coverage_kind("LINE") == COVERAGE_KIND_CODE
+    assert classify_coverage_kind("  Branch  ") == COVERAGE_KIND_CODE
+
+
+@pytest.mark.parametrize("name", [
+    "functional", "cov_a", "usb3_link_state_cg", "fsm_state", "None", "", None,
+])
+def test_classify_coverage_kind_defaults_to_functional_for_everything_else(name):
+    # "fsm_state" (a real category name used elsewhere in this file's own
+    # _valid_summary() fixture) is deliberately included: it is NOT the
+    # literal code-coverage metric "fsm" and must not be misclassified by a
+    # substring/fuzzy match.
+    assert classify_coverage_kind(name) == COVERAGE_KIND_FUNCTIONAL
+
+
+def test_tag_categories_by_kind_adds_kind_without_mutating_input():
+    categories = [
+        {"name": "line", "percent": 100.0, "bins_total": 10, "bins_hit": 10},
+        {"name": "cov_a", "percent": 50.0, "bins_total": 4, "bins_hit": 2},
+    ]
+    original = [dict(c) for c in categories]
+    tagged = tag_categories_by_kind(categories)
+    assert categories == original  # input dicts untouched
+    assert tagged[0]["kind"] == COVERAGE_KIND_CODE
+    assert tagged[1]["kind"] == COVERAGE_KIND_FUNCTIONAL
+    # everything else is carried through unchanged
+    assert tagged[0]["percent"] == 100.0 and tagged[0]["bins_hit"] == 10
+    assert tagged[1]["percent"] == 50.0 and tagged[1]["bins_hit"] == 2
+
+
+def test_tag_categories_by_kind_empty_input_is_empty_output():
+    assert tag_categories_by_kind([]) == []
+    assert tag_categories_by_kind(None) == []

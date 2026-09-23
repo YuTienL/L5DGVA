@@ -113,6 +113,18 @@ script is invoked, no waiver is recorded or revoked, no question is asked or
 answered, and no approval is minted. It is a reader whose verdict is an input
 to a human's signoff decision, exactly like `golden_flow_readiness.py`'s own
 matrix and `platform_health.py`'s own health report.
+
+FUNCTIONAL-vs-CODE COVERAGE SEPARATION (M5 Cohort 5, CAP-M5-COV-001,
+migrated from Parent). Every declared coverage-goal name (from either scope
+above) is checked against `coverage_analysis.classify_coverage_kind()`'s
+sibling classifier -- a name literally matching one of the project's own
+real, Makefile-derived `CODE_COVERAGE_METRIC_NAMES` ("line"/"cond"/"fsm"/
+"tgl"/"branch") is CODE coverage, not functional, and is stripped out of the
+declared scope before Covered_bins/Total_declared_goal_bins is computed,
+whichever scope produced it. This is disclosed, never silently dropped:
+`excluded_code_coverage_bins` names every bin this happened to, so a
+code-coverage percentage can never silently offset, or stand in for, a real
+functional-coverage gap in the Closure formula above.
 """
 from __future__ import annotations
 
@@ -350,6 +362,21 @@ def analyze_functional_coverage_signoff(root, cfg: Optional[Dict[str, Any]] = No
         scope_source = "NONE"
         scope_reason = testplan_in.get("reason")
 
+    # FUNCTIONAL-vs-CODE coverage separation: a declared name that is
+    # structurally CODE coverage (ca.classify_coverage_kind(), the real
+    # Makefile-CM_OPTS-derived CODE_COVERAGE_METRIC_NAMES literals) is
+    # stripped out of the declared FUNCTIONAL-coverage goal before Closure is
+    # computed, whichever scope it came from -- a vPlan item mistakenly
+    # declaring "line" as its coverage_present, or the ALL_RECORDED_CATEGORIES
+    # fallback picking up a code-coverage row the evidence DB happens to
+    # carry, must never let a code-coverage percentage stand in for, or blend
+    # into, a functional-coverage closure number. Disclosed, never silently
+    # dropped: see `excluded_code_coverage_bins` below.
+    excluded_code_coverage_bins = [n for n in declared_names
+                                    if ca.classify_coverage_kind(n) == ca.COVERAGE_KIND_CODE]
+    if excluded_code_coverage_bins:
+        declared_names = [n for n in declared_names if n not in excluded_code_coverage_bins]
+
     base: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "root": str(root),
@@ -358,6 +385,7 @@ def analyze_functional_coverage_signoff(root, cfg: Optional[Dict[str, Any]] = No
         "evidence_db_input": {"status": recorded_in["status"], "reason": recorded_in.get("reason")},
         "declared_scope_source": scope_source,
         "declared_scope_reason": scope_reason,
+        "excluded_code_coverage_bins": excluded_code_coverage_bins,
     }
 
     def _not_available(reason: str) -> Dict[str, Any]:
@@ -372,7 +400,9 @@ def analyze_functional_coverage_signoff(root, cfg: Optional[Dict[str, Any]] = No
     if recorded_in["status"] != "AVAILABLE":
         return _not_available(recorded_in.get("reason") or "EVIDENCE_DATABASE_UNAVAILABLE")
     if not declared_names:
-        return _not_available("NO_DECLARED_COVERAGE_GOAL")
+        reason = ("ALL_DECLARED_CATEGORIES_ARE_CODE_COVERAGE" if excluded_code_coverage_bins
+                  else "NO_DECLARED_COVERAGE_GOAL")
+        return _not_available(reason)
 
     recorded = recorded_in["categories"]
     unrecorded_declared = [n for n in declared_names if n not in recorded]
@@ -567,6 +597,9 @@ def format_functional_coverage_signoff_report(report: Dict[str, Any]) -> str:
     if report.get("unrecorded_declared"):
         lines += ["", "## Declared bins with no recorded coverage evidence", ""]
         lines += [f"- {n}" for n in report["unrecorded_declared"]]
+    if report.get("excluded_code_coverage_bins"):
+        lines += ["", "## Excluded CODE-coverage bins (never counted toward functional Closure)", ""]
+        lines += [f"- {n}" for n in report["excluded_code_coverage_bins"]]
     if report.get("blocking_waivers"):
         lines += ["", "## Waivers blocking signoff (EXPIRED / REVOKED / UNKNOWN)", ""]
         lines += [f"- {b['coverage_id']}: waiver {b['waiver_id']} is {b['status']}"

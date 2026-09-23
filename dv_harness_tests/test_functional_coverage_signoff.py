@@ -409,3 +409,102 @@ def test_cli_entry_point_reports_not_available_and_signoff_ready(tmp_path):
     assert r3.returncode == 0, r3.stdout + r3.stderr
     assert "FUNCTIONAL COVERAGE SIGNOFF" in r3.stdout
     assert "authorizes nothing" in r3.stdout
+
+
+# ---------------------------------------------------------------------------
+# FUNCTIONAL-vs-CODE coverage separation: a high CODE-coverage number must
+# never offset, or stand in for, a real FUNCTIONAL-coverage gap in Closure.
+# (M5 Cohort 5, CAP-M5-COV-001, migrated from Parent)
+# ---------------------------------------------------------------------------
+
+def test_code_coverage_alone_never_masquerades_as_functional_signoff_ready(tmp_path):
+    """No testplan correspondence (the ALL_RECORDED_CATEGORIES fallback
+    scope) and the ONLY thing ever recorded is a real VCS code-coverage
+    category at 100%. Before this module classified coverage KIND, this
+    scenario reached STATUS_SIGNOFF_READY / functional_coverage_signoff_ready
+    == True purely off a code-coverage number, with zero functional coverage
+    ever measured -- exactly the false-pass the audit finding named. It must
+    now be excluded from the declared scope and reported as such, never
+    counted."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _insert_coverage(root, [{"name": "line", "percent": 100.0, "bins_total": 500, "bins_hit": 500}])
+
+    report = fcs.analyze_functional_coverage_signoff(root)
+    assert report["excluded_code_coverage_bins"] == ["line"]
+    assert report["status"] == fcs.STATUS_NOT_AVAILABLE
+    assert report["reason"] == "ALL_DECLARED_CATEGORIES_ARE_CODE_COVERAGE"
+    assert report["functional_coverage_signoff_ready"] is None
+    assert report["closure_percent"] is None
+    code, _, _ = fcs.execute(root)
+    assert code == 2
+
+
+def test_high_code_coverage_does_not_mask_a_real_functional_gap(tmp_path):
+    """Mixed evidence-DB contents, no testplan correspondence: a genuine
+    functional-coverage bin (cov_a) sits at a real 50% gap, alongside a
+    code-coverage category (line) sitting at a fully-covered 100%. Naively
+    blending them (105/510 measured bins) would report a misleadingly high
+    Closure and could mask the real functional gap; this must instead compute
+    Closure over cov_a ALONE and correctly report NOT signoff-ready."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _insert_coverage(root, [
+        {"name": "cov_a", "percent": 50.0, "bins_total": 10, "bins_hit": 5},
+        {"name": "line", "percent": 100.0, "bins_total": 500, "bins_hit": 500},
+    ])
+
+    report = fcs.analyze_functional_coverage_signoff(root)
+    assert report["declared_scope_source"] == "ALL_RECORDED_CATEGORIES"
+    assert report["excluded_code_coverage_bins"] == ["line"]
+    # Closure is computed over cov_a alone -- never blended with "line"'s
+    # measured bins/percent.
+    assert report["total_goal_bins"] == 10
+    assert report["covered_bins"] == 5
+    assert report["closure_percent"] == 50.0
+    assert report["status"] == fcs.STATUS_OPEN
+    assert report["functional_coverage_signoff_ready"] is False
+    assert [r["coverage_id"] for r in report["rows"]] == ["cov_a"]
+    code, _, _ = fcs.execute(root)
+    assert code == 1
+
+
+def test_testplan_declared_code_coverage_name_is_still_excluded(tmp_path):
+    """Same protection whichever declared-scope source resolves: a vPlan
+    item mistakenly declaring a code-coverage metric name ("branch") as its
+    own coverage_present goal (the intended TESTPLAN_CORRESPONDENCE path)
+    must not let that code-coverage percentage count toward, or substitute
+    for, the real functional bin's (cov_a) closure. Both real bins are also
+    fully recorded in the evidence DB, so the ALL_RECORDED_CATEGORIES
+    fallback scope (used whenever testplan correspondence itself is
+    unavailable in this environment) declares the identical {cov_a, branch}
+    set -- the exclusion protection this test targets holds either way, so
+    the scope-source assertion below accepts both real sources rather than
+    coupling this test to env.manifest.json resolution, which is unrelated
+    to the FUNCTIONAL-vs-CODE separation under test here."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_env_manifest(root, ["cov_a", "branch"])
+    _insert_coverage(root, [
+        {"name": "cov_a", "percent": 40.0, "bins_total": 10, "bins_hit": 4},
+        {"name": "branch", "percent": 100.0, "bins_total": 60, "bins_hit": 60},
+    ])
+
+    report = fcs.analyze_functional_coverage_signoff(root)
+    assert report["declared_scope_source"] in ("TESTPLAN_CORRESPONDENCE", "ALL_RECORDED_CATEGORIES")
+    assert report["excluded_code_coverage_bins"] == ["branch"]
+    assert report["total_goal_bins"] == 10
+    assert report["covered_bins"] == 4
+    assert report["closure_percent"] == 40.0
+    assert report["status"] == fcs.STATUS_OPEN
+    assert report["functional_coverage_signoff_ready"] is False
+
+
+def test_no_code_coverage_categories_present_excluded_list_is_empty(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_env_manifest(root, ["cov_a"])
+    _insert_coverage(root, [{"name": "cov_a", "percent": 100.0, "bins_total": 10, "bins_hit": 10}])
+    report = fcs.analyze_functional_coverage_signoff(root)
+    assert report["excluded_code_coverage_bins"] == []
+    assert report["functional_coverage_signoff_ready"] is True

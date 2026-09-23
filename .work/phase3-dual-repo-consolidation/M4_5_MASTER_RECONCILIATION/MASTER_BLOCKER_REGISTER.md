@@ -1,4 +1,19 @@
-# Master Blocker Register (v6, post-M5-Cohort-4-closure)
+# Master Blocker Register (v7, post-M5-Cohort-5-closure)
+
+**v7 update (M5 Cohort 5, 2026-09-23)**: `CAP-M5-COV-001` resolved
+CLOSED and `CAP-M5-DSI-001` resolved SUPERSEDED this wave -- neither was
+ever P0 (P1/P2), so `P0_BLOCKERS` is **unchanged at 5**. Full M5-owned
+capability reconciliation performed (`csv.DictReader`, not grep): 25
+rows found (not just the 2 named in this Cohort's own dispatch), all
+classified; 10 (`CAP-ATL-001/002/003/008`,
+`CAP-POOL-001/003/004/008/011/012`) reassigned `PRIMARY_OWNER_WAVE`
+`M5` -> `M6` (disclosed scope-closure decision, none was ever
+implemented by any M5 Cohort 0-5 dispatch). `UNRESOLVED_M5_CAPABILITIES
+= 0` for the 15 rows remaining M5-owned after reassignment. `M5_STATUS`
+remains `IN_PROGRESS` (a final closure regression against a stable
+qualified checkpoint has not run). See
+`M5_CAPABILITY_MERGE_QUEUE/COHORT_5/M5_COHORT_5_FINAL_REPORT.md` and
+`M5_PRE_CLOSURE_CAPABILITY_RECONCILIATION.md`.
 
 **v6 update (M5 Cohort 4, 2026-09-23)**: `CAP-ATL-004`
 (`TASK_SCOPE_CONTRACT`) and `CAP-ATL-007` (`TASK_EVIDENCE_CONTRACT`)

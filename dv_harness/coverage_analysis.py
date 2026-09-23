@@ -1032,3 +1032,88 @@ def build_hole_evidence_records(root, holes, *, cfg=None, registry=None,
             history_available=history_available, head=head,
             parsed_summary=parsed_summary))
     return out
+
+
+# ===========================================================================
+# Coverage Kind Classification: FUNCTIONAL vs CODE (M5 Cohort 5,
+# CAP-M5-COV-001, migrated from Parent's 2026-09-16
+# l5dgva-audit-domain-E "functional-vs-code coverage separation")
+# ===========================================================================
+#
+# GAP THIS CLOSES. This project's own `{"name","percent","bins_total",
+# "bins_hit"}` category shape carries exactly one real discriminating fact
+# for what KIND of coverage a category is -- its `name` string -- and until
+# now nothing read that fact. `tools/coverage/urg_summary_reduce.py`'s own
+# `CODE_COVERAGE_METRICS` local constant already carries the real answer for
+# this project's own toolchain (real Makefile evidence: `CM_OPTS :=
+# line+cond+fsm+tgl+branch` fixes VCS's `-cm` option to exactly 5
+# code-coverage metrics; `FCOV=1` gates a separate VIP-covergroup
+# functional-coverage category), but that answer lived only as a local
+# constant in that one script, never reused by the engine itself.
+# CODE_COVERAGE_METRIC_NAMES below is that same real, already-committed
+# 5-value tuple, moved here as the one canonical definition.
+#
+# DISCLOSED, NOT YET CLOSED: `tools/coverage/urg_summary_reduce.py` still
+# locally re-declares an identical-value `CODE_COVERAGE_METRICS` constant
+# rather than importing this one -- confirmed by direct read of that file
+# (it imports only `parse_coverage_summary`/`CoverageAnalysisError` from
+# this module). A real, disclosed consolidation opportunity, not implied
+# closed by this migration.
+#
+# WHY THIS IS A CLASSIFICATION BY EXCLUSION, NOT A GUESS. This project's own
+# tooling produces category names from exactly two real sources: VCS's `-cm`
+# option (fixed to these 5 literal metric names) for code coverage, and a
+# covergroup/vPlan-declared bin name (project- and protocol-specific,
+# therefore NOT enumerable here) for functional coverage. A name that is not
+# one of the 5 fixed code-coverage literals is, by elimination over this
+# project's own real producers, a functional-coverage bin name. Case-
+# insensitive match only (VCS's own metric names are lower-case; nothing
+# here does fuzzy/substring matching).
+#
+# WHERE THIS MATTERS FOR SIGNOFF. `functional_coverage_signoff.py`'s own
+# ALL_RECORDED_CATEGORIES fallback scope (used whenever no testplan
+# correspondence is available) widens the declared coverage goal to every
+# category the evidence database has ever recorded, with no `kind` column
+# to tell code-coverage and functional-coverage categories apart. Before
+# this section existed, a project whose recorded evidence ever carried a
+# code-coverage category could have that category's percent silently
+# blended into FUNCTIONAL_COVERAGE_SIGNOFF_READY's Closure arithmetic --
+# a code-coverage metric sitting at a high percent could offset a real
+# functional-coverage gap, or stand in for functional closure entirely with
+# no functional bin ever measured. classify_coverage_kind() is what
+# functional_coverage_signoff.py now calls to strip CODE-kind names out of
+# its declared scope before computing Closure -- see that module's own
+# `excluded_code_coverage_bins` field.
+
+#: The two real coverage kinds this codebase's own tooling actually
+#: distinguishes today. A third (e.g. ASSERTION) is deliberately not added:
+#: no real producer/consumer in this repo classifies assertion coverage as
+#: its own kind, and inventing one here would be exactly the fabricated
+#: taxonomy the Evidence Truth Rule forbids.
+COVERAGE_KIND_FUNCTIONAL = "FUNCTIONAL"
+COVERAGE_KIND_CODE = "CODE"
+COVERAGE_KIND_CLASSES = (COVERAGE_KIND_FUNCTIONAL, COVERAGE_KIND_CODE)
+
+#: The 5 real code-coverage metrics VCS's own `-cm` option is fixed to for
+#: this project (Makefile `CM_OPTS := line+cond+fsm+tgl+branch`) -- the
+#: single canonical definition.
+CODE_COVERAGE_METRIC_NAMES = ("line", "cond", "fsm", "tgl", "branch")
+
+
+def classify_coverage_kind(category_name: str) -> str:
+    """COVERAGE_KIND_CODE when `category_name` (case-insensitive, whitespace-
+    stripped) is literally one of CODE_COVERAGE_METRIC_NAMES;
+    COVERAGE_KIND_FUNCTIONAL otherwise -- see the section docstring above for
+    why "otherwise" is a real classification-by-elimination over this
+    project's own two real category-name producers, not an assumption."""
+    name = str(category_name or "").strip().lower()
+    return COVERAGE_KIND_CODE if name in CODE_COVERAGE_METRIC_NAMES else COVERAGE_KIND_FUNCTIONAL
+
+
+def tag_categories_by_kind(categories) -> list:
+    """Every real category dict in `categories` (any shape carrying a
+    `name`), each returned as a NEW dict with one added `kind` field from
+    classify_coverage_kind() -- never mutates an input dict, never touches
+    percent/bins_total/bins_hit. Purely additive reporting, the same
+    convention build_hole_evidence_records() above already uses."""
+    return [{**c, "kind": classify_coverage_kind(c.get("name"))} for c in (categories or [])]

@@ -15,13 +15,13 @@ CAP-M5-ARCH-001,create_environment.py ARCH-01 contract,M5,,P2 (downgraded from P
 CAP-M5-ARCH-002,soc_environment_composer.py ARCH-03 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-M5-TOPTB-001,soc_environment_composer.py existing-top-TB preservation (Parent V11 SS247),M5,CAP-M5-ARCH-002,P3 (downgraded from P2 -- resolved this wave),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-M5-ARCH-003,amba_fabric_generator.py ARCH-04/12 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
-CAP-M5-COV-001,functional_coverage_signoff.py judgment call,M5,,P1,HUMAN_DECISION_REQUIRED (DV-domain judgment)
+CAP-M5-COV-001,functional_coverage_signoff.py judgment call,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 5),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-M8-EXPLOOP-002,Absent internal-loop stages (Clarification/Generation/Signoff experience),M8,CAP-M8-EXPLOOP-001,P1,ENGINEERING (net-new mechanism)
 CAP-M11-REFUSB-001,Reference USB Environment consumption gate,M11,CAP-POOL-006,P1,POLICY (must stay unconsumed until M11)
 CAP-M4-002,ipxact_register_import.py wiring,M6,CAP-M4-001,P2,ENGINEERING (wiring)
 CAP-M3-002,debug_evidence_behavioral_firewall_gate.py wiring,M7,,P2,ENGINEERING (wiring)
 CAP-M3-005,coverage_hole_generation_candidate_queue.py wiring,M7,,P2,ENGINEERING (wiring)
-CAP-M5-DSI-001,design_source_inventory.py contract question,M5,,P2,ENGINEERING
+CAP-M5-DSI-001,design_source_inventory.py contract question,M5,,"P3 (downgraded from P2 -- SUPERSEDED, resolved M5 Cohort 5)",ENGINEERING (SUPERSEDED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-M4.5-002,MINIMUM_SUFFICIENT_CONTEXT (general claim),M8,CAP-M4.5-001,P2,ENGINEERING (measurement/verification)
 CAP-M4.5-006,CODEX_REVIEW_OFFLOAD migration + real reviewer integration,M7,,P2,ENGINEERING + EXTERNAL_RESOURCE (needs a real Codex tool) (owner reassigned M8->M7 per M4.6 S21 instruction)
 CAP-M4.5-010,TOKEN_USAGE_OBSERVABILITY combined with multi-model handoff,M7,CAP-M4.5-005;CAP-M4.5-006,P2,ENGINEERING (owner reassigned M8->M7 per M4.6 S21 instruction)
@@ -35,16 +35,16 @@ CAP-M4.5-007,STRUCTURED_AGENT_HANDOFF operationalization + task/planning schema,
 CAP-M4.5-008,CONTEXT_DISTILLATION for multi-model handoff content,M7,,P3,"ENGINEERING (not started) (owner reassigned ->M7, all 8 token-efficiency sub-capabilities normally owned by M7)"
 CAP-M4.5-009,SESSION_RESUME audit,M7,,P3,"PROCESS (needs a dedicated audit) (owner reassigned ->M7, all 8 token-efficiency sub-capabilities normally owned by M7)"
 CAP-M4.5-011,Cross-model TOKEN_REDUCTION_MEASUREMENT,M8,CAP-M4.5-010,P3,ENGINEERING (not started)
-CAP-POOL-001,engine_maturity_state.py,M5,,P3,ENGINEERING (dependency chain)
+CAP-POOL-001,engine_maturity_state.py,M6,CAP-M6-DISPATCH-001,P3,ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5
 CAP-POOL-002,l5dgva_ss570_claude_verdict_truth.py,M8,CAP-M4.5-006,P3,ENGINEERING (dependency chain)
-CAP-POOL-003,l5dgva_directive_blackboard_work_queue.py,M5,,P3,ENGINEERING (dependency chain)
-CAP-POOL-004,l5dgva_kc_extraction.py,M5,,P3,ENGINEERING (dependency chain)
+CAP-POOL-003,l5dgva_directive_blackboard_work_queue.py,M6,CAP-M6-DISPATCH-001,P3,ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5
+CAP-POOL-004,l5dgva_kc_extraction.py,M6,CAP-M6-DISPATCH-001,P3,ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5
 CAP-POOL-007,autonomous_resume_next_action_arbitration.py+independent_work_continuation.py,M7,,P3,ENGINEERING (dependency chain)
-CAP-POOL-008,l5dgva_v5_ss84_phase_entry_protocol_schema.py,M5,,P3,ENGINEERING (dependency chain)
+CAP-POOL-008,l5dgva_v5_ss84_phase_entry_protocol_schema.py,M6,CAP-M6-DISPATCH-001,P3,ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5
 CAP-POOL-009,irq_contradiction_change_impact.py,M6,CAP-M5M6-VLEVEL-001,P3,ENGINEERING (dependency chain)
 CAP-POOL-010,falsified_hypothesis_ledger.py,M8,,P3,ENGINEERING (dependency chain)
-CAP-POOL-011,eight_engine_telemetry_rollup.py,M5,,P3,ENGINEERING (dependency chain)
-CAP-POOL-012,rtl_filelist_parser.py,M5,,P3,PROCESS (dormancy question open)
+CAP-POOL-011,eight_engine_telemetry_rollup.py,M6,CAP-M6-DISPATCH-001,P3,ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5
+CAP-POOL-012,rtl_filelist_parser.py,M6,CAP-M6-DISPATCH-001,P3,PROCESS (dormancy question open) | REASSIGNED M5->M6 by M5 Cohort 5
 REMAINING_UNCLASSIFIED_POOL,~157 of 177 MIGRATE_REQUIRED closure members not yet individually triaged,M5,,P2,"PROCESS (bulk-tracked, per M3's own disclosed scope limitation)"
 CAP-M4.6-001,CLAUDE_ALWAYS_ON_CONTEXT_NORMALIZATION,M4.6,,P1 (closed),none (closed this wave)
 CAP-CE-018,"CONTINUOUS_PROJECT_EXPERIENCE_LEARNING (composite, internal loop)",M8,CAP-M8-EXPLOOP-001;CAP-M8-EXPLOOP-002,P0,"ENGINEERING (structural, all trees)"
@@ -69,14 +69,14 @@ CAP-HITL-009,KNOWLEDGE_DOMAIN_CLASSIFICATION,M8,,P2,"PROCESS (taxonomy only, met
 CAP-HITL-010,IP_SUBSYSTEM_SYSTEM_ROLE_MODEL,M9,CAP-M5M6-VLEVEL-001,P2,PROCESS (definition only; blocked upstream by CAP-M5M6-VLEVEL-001 for IP_MODE specifically)
 CAP-HITL-011,ROLE_AWARE_SIGNOFF_TRACEABILITY,M10,,P2,"ENGINEERING (schema extension defined, not built)"
 CAP-HITL-012,ROLE_BASED_ACTION_DASHBOARD,M12,,P3,"PROCESS (routing concept only, no owner UI exists yet)"
-CAP-ATL-001,AGENT_TASK_LIFECYCLE,M5,,P2,"PROCESS (join-layer concept only, no owner module built)"
-CAP-ATL-002,TASK_IDENTITY,M5,,P2,"PROCESS (3 primitives identified, not joined)"
-CAP-ATL-003,TASK_STATE_MODEL,M5,,P3,"ENGINEERING (2 enum values proposed, not added)"
+CAP-ATL-001,AGENT_TASK_LIFECYCLE,M6,CAP-M6-DISPATCH-001,P2,"PROCESS (join-layer concept only, no owner module built) | REASSIGNED M5->M6 by M5 Cohort 5"
+CAP-ATL-002,TASK_IDENTITY,M6,CAP-M6-DISPATCH-001,P2,"PROCESS (3 primitives identified, not joined) | REASSIGNED M5->M6 by M5 Cohort 5"
+CAP-ATL-003,TASK_STATE_MODEL,M6,CAP-M6-DISPATCH-001,P3,"ENGINEERING (2 enum values proposed, not added) | REASSIGNED M5->M6 by M5 Cohort 5"
 CAP-ATL-004,TASK_SCOPE_CONTRACT,M5,CAP-M6-DISPATCH-001,P2 (downgraded from P1 -- resolved M5 Cohort 4),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-ATL-005,TASK_PREFLIGHT_GATE,M5,,P3,PROCESS (proven working manually; no code-level gate yet)
 CAP-ATL-006,TASK_APPROVAL_GATE,M5,,P3,"PROCESS (already covered by question_queue.py, no gap)"
 CAP-ATL-007,TASK_EVIDENCE_CONTRACT,M5,CAP-M6-CLARSVC-001,P2 (unchanged -- resolved M5 Cohort 4),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
-CAP-ATL-008,TASK_FAILURE_RECOVERY,M5,,P2,"ENGINEERING (shape identified, taxonomy not authored)"
+CAP-ATL-008,TASK_FAILURE_RECOVERY,M6,CAP-M6-DISPATCH-001,P2,"ENGINEERING (shape identified, taxonomy not authored) | REASSIGNED M5->M6 by M5 Cohort 5"
 CAP-ATL-009,TASK_RESUME_REPLAY,M5,,P3,"PROCESS (2 of 3 scopes already covered, 3rd deferred)"
 CAP-ATL-010,TASK_KNOWLEDGE_PROMOTION_GATE,M5,,P3,"PROCESS (already covered by memory_router.py, no gap)"
 CAP-VELM-001,ENVIRONMENT_REOPEN_IMPORT,M10.5,CAP-VELM-002,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target -- no code

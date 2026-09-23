@@ -83,5 +83,14 @@ resolved -- see `COHORT_3/M5_COHORT_3_FINAL_REPORT.md`). COHORT 4 PARTIAL:
 "Canonical Contract / OpenSpec Semantic Merge" task explicitly scoped to
 just those two -- see `COHORT_4/M5_COHORT_4_FINAL_REPORT.md`.
 `CAP-M5-COV-001` and `CAP-M5-DSI-001` (also nominally Cohort 4 per this
-queue's own Section 3 grouping) were **not** in that task's scope and
-remain untouched/open. COHORT 5 NOT_STARTED.
+queue's own Section 3 grouping) were **not** in that task's scope this
+pass. COHORT 5 CLOSED: `CAP-M5-COV-001` RESOLVED (CLOSED) and
+`CAP-M5-DSI-001` RESOLVED (SUPERSEDED) -- see
+`COHORT_5/M5_COHORT_5_FINAL_REPORT.md`. A full M5-owned capability
+reconciliation performed as part of Cohort 5 found 10 additional items
+(`CAP-ATL-001/002/003/008`, `CAP-POOL-001/003/004/008/011/012`) never
+actually dispatched by any Cohort 0-5 instruction; reassigned
+`PRIMARY_OWNER_WAVE` M5->M6 this wave (disclosed scope-closure
+decision) -- see `COHORT_5/M5_COHORT_5_CAPABILITY_INVENTORY.md`.
+`UNRESOLVED_M5_CAPABILITIES = 0` for the 15 rows remaining M5-owned.
+`M5_STATUS` remains `IN_PROGRESS` pending a final closure regression.
