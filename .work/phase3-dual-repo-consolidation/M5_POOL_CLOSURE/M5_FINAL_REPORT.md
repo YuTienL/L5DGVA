@@ -4,10 +4,11 @@
 M5_STATUS = READY_FOR_APPROVAL
 
 M5_QUALIFIED_CHECKPOINT_SHA = 789be4d1665f6c70eab90d64e30cb17db61ca7f6
-M5_REPORT_HEAD = <to be filled by the follow-up commit that adds this
-                   report — this report-only commit is NOT itself
-                   regression-qualified; the qualified checkpoint is the
-                   SHA above, established BEFORE the regression ran>
+M5_REPORT_HEAD = 675792ef67365c5946190ba13cd7086ecb768060
+                 (the commit that added these 5 closure-report artifacts;
+                  this report-only commit is NOT itself regression-qualified
+                  -- the qualified checkpoint is M5_QUALIFIED_CHECKPOINT_SHA
+                  above, established and frozen BEFORE the regression ran)
 
 REGRESSION_HEAD = 789be4d1665f6c70eab90d64e30cb17db61ca7f6
 REGRESSION_HEAD_MISMATCH = NO

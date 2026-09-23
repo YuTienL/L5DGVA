@@ -136,3 +136,22 @@ on the Pool-closure dimension; `M5_STATUS` remains `IN_PROGRESS` until a
 separately-dispatched M5 Final Closure Regression task actually runs
 against a stable qualified checkpoint -- not started by Batch 2 itself, per
 its own explicit instruction.
+
+**M5 FINAL CLOSURE REGRESSION (2026-09-24)** ran the full
+`dv_harness_tests/` suite against a fresh, freeze-verified checkpoint
+(`REGRESSION_HEAD = 789be4d1665f6c70eab90d64e30cb17db61ca7f6`): 13318
+passed, 40 failed, 69 skipped, 1 xfailed in 3386.51s, watched continuously
+for a hang (none occurred). Every one of the 40 failures individually
+classified by real error text + `git log -1`: 0 overlap with any
+M5-touched file, every failing file's last commit predates M5's own start
+entirely -- 28 `ENVIRONMENT` (missing `duckdb`, unset `core.hooksPath`,
+real `pueue`/Obsidian-CLI machine-state dependencies, missing reference
+fixtures) + 12 `PRE_EXISTING` (real, pre-M5 gaps). `REGRESSION_CAUSED_BY_
+M5 = 0`. Also caught and corrected a real counting-script defect in
+Batch 2's own report: `AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT` is **5**, not
+6 (`CAP-POOL-005`'s own disclosed cross-ref to `CAP-M5M6-VLEVEL-001` was
+being double-counted by a naive prefix match). All 16 Section-16 closure
+conditions met -- see `M5_POOL_CLOSURE/M5_FINAL_REPORT.md`.
+
+**`M5_STATUS = READY_FOR_APPROVAL`.** M6/M10.5/M11/M12/M14 not started;
+Reference USB not consumed; Parent/v50/b7a/b7b/b8 unchanged throughout.
