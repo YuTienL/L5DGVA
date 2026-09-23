@@ -220,6 +220,34 @@ def _collect_clocks_resets(subsystems: List[Dict[str, Any]], manifest: Dict[str,
     return clocks or [{"name": "clk"}], resets or [{"name": "rst_n"}]
 
 
+def _subsystem_composition_mode(name: str, manifest: Dict[str, Any]):
+    """Real `system_virtual_sequencer.SubsystemVirtualSequencerComposition`
+    for one subsystem, when the composition manifest carries real VipBindIR
+    evidence for it (`manifest["subsystem_vip_binds"][<name>]` -- a list of
+    `verification_architecture.VipBindIR` records or their `.to_dict()`
+    shape). Returns None when no such evidence was supplied -- this module
+    never guesses a composition mode from nothing.
+
+    Closes the gap `system_virtual_sequencer.py`'s own CLAUDE.md entry
+    flagged: before this wire, `derive_composition_mode()`'s
+    DIRECT_HANDLE/ADAPTER_REQUIRED/COMPOSITION_UNDETERMINED verdict never
+    reached this function at all -- `_build_virtual_sequencer_fields()` below
+    emitted the identical plain `<protocol>_virtual_sequencer` field
+    regardless of whether that subsystem's own bind chain crosses a bridge.
+
+    Imported lazily for the same reason `_sv_id()` in system_virtual_
+    sequencer.py itself imports generator.sv_id() lazily: this composer is
+    reached by every SYSTEM_LEVEL_MODE composition, most of which supply no
+    `subsystem_vip_binds` at all, and should not pay for importing the
+    dataclass/vocabulary module on every one of those."""
+    binds_by_name = manifest.get("subsystem_vip_binds") or {}
+    vip_binds = binds_by_name.get(name)
+    if not vip_binds:
+        return None
+    from ..system_virtual_sequencer import build_subsystem_composition
+    return build_subsystem_composition(name, vip_binds)
+
+
 def _build_virtual_sequencer_fields(subsystems: List[Dict[str, Any]],
                                      manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Builds the "virtual_sequencer_fields" list UVMEnvironmentGenerator.vseq()
@@ -237,21 +265,50 @@ def _build_virtual_sequencer_fields(subsystems: List[Dict[str, Any]],
     present (same "explicit input wins" precedent as every other optional
     manifest key generator.py's own vseq()/env()/_connect_phase already
     support) -- a composition author who wants different field names/types
-    is never overridden."""
+    is never overridden.
+
+    When `manifest["subsystem_vip_binds"]` supplies real bind evidence for a
+    subsystem (see `_subsystem_composition_mode()`), that subsystem's real
+    `composition_mode` is folded into the field's `evidence` string: a
+    DIRECT_HANDLE subsystem is annotated as confirmed clean, while an
+    ADAPTER_REQUIRED/COMPOSITION_UNDETERMINED one gets an explicit warning
+    naming the real bridge/unresolved findings responsible -- so a
+    generated field that still assumes direct handle reuse (this module does
+    not synthesize an adapter class -- that is genuinely protocol-specific
+    content, same boundary as cross_subsystem_scenarios()) is never silently
+    indistinguishable from one the real evidence already confirmed clean."""
     override = manifest.get("virtual_sequencer_fields")
     if override:
         return override
     fields = []
     for s in subsystems:
         proto = sv_id(s["name"])
+        evidence = _cite(s) + (
+            f" -- class '{proto}_virtual_sequencer' is the same name "
+            "UVMEnvironmentGenerator.vseq() unconditionally emits for "
+            "this subsystem's own virtual sequencer."
+        )
+        composition = _subsystem_composition_mode(s["name"], manifest)
+        if composition is not None and composition.composition_mode != "DIRECT_HANDLE":
+            evidence += (
+                f" -- WARNING (system_virtual_sequencer.build_subsystem_composition): "
+                f"composition_mode={composition.composition_mode!r} for this subsystem "
+                f"({len(composition.bridge_findings)} bridge finding(s), "
+                f"{len(composition.unresolved_findings)} unresolved finding(s)) -- a plain "
+                "direct-handle field is emitted below anyway (an adapter class is genuinely "
+                "protocol-specific content this generic composer does not synthesize), but "
+                "this field must NOT be treated as a confirmed clean direct-handle composition "
+                "until that is resolved."
+            )
+        elif composition is not None:
+            evidence += (
+                " -- confirmed DIRECT_HANDLE by system_virtual_sequencer.build_subsystem_composition "
+                "(no bridge hop in this subsystem's own bind chain)."
+            )
         fields.append({
             "class_type": f"{proto}_virtual_sequencer",
             "field_name": f"{proto}_vseqr",
-            "evidence": _cite(s) + (
-                f" -- class '{proto}_virtual_sequencer' is the same name "
-                "UVMEnvironmentGenerator.vseq() unconditionally emits for "
-                "this subsystem's own virtual sequencer."
-            ),
+            "evidence": evidence,
         })
     return fields
 

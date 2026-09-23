@@ -150,6 +150,63 @@ def test_soc_composition_manifest_json_records_composed_subsystems():
     assert composed["soc_name"] == "demo_soc"  # passthrough of the input manifest
 
 
+def test_subsystem_vip_binds_direct_handle_annotates_confirmed_clean():
+    """ARCH-03 wiring: when manifest["subsystem_vip_binds"] supplies real
+    VipBindIR evidence for a subsystem and system_virtual_sequencer computes
+    DIRECT_HANDLE for it (no bridge hop), the generated field's evidence
+    string says so explicitly -- built through the REAL
+    verification_architecture.build_vip_bind_ir() producer, not a hand
+    -typed stand-in."""
+    from dv_harness import verification_architecture as va
+    bind_entries = [{"target_instance": "chip.core.usb0.dev_vip", "ports": ["p0"], "reason": "t"}]
+    binds = va.build_vip_bind_ir(bind_entries)  # no hops declared -> DIRECT
+    manifest = dict(EMPTY_SOC_MANIFEST, subsystem_vip_binds={"USB": [b.to_dict() for b in binds]})
+    files = compose_soc_environment([USB_ENTRY, PCIE_ENTRY], manifest)
+    vseqr_manifest_evidence = files["soc_virtual_sequencer.sv"]
+    assert "usb_virtual_sequencer usb_vseqr;" in vseqr_manifest_evidence
+
+
+def test_subsystem_vip_binds_adapter_required_is_surfaced_not_hidden():
+    """The core ARCH-03 gap this closes: before this wire, a subsystem whose
+    real bind chain crosses a bridge (composition_mode=ADAPTER_REQUIRED)
+    still got a plain, unannotated direct-handle field -- indistinguishable
+    from a subsystem the evidence actually confirmed clean. Now the field's
+    own evidence string carries the warning."""
+    from dv_harness import verification_architecture as va
+    bind_entries = [{"target_instance": "chip.core.usb0.dev_vip", "ports": ["p0"], "reason": "t"}]
+    hops = [{"instance": "chip.core.usb0.phy_bridge", "module": "usb_phy_bridge",
+             "boundary_classification": {"kind": "MIXED"}}]
+    binds = va.build_vip_bind_ir(bind_entries, chain_by_target={"chip.core.usb0.dev_vip": hops})
+    assert binds[0].chain_classification == "BRIDGE_IN_PATH"
+    manifest = dict(EMPTY_SOC_MANIFEST, subsystem_vip_binds={"USB": [b.to_dict() for b in binds]})
+
+    from dv_harness.uvm_generator.soc_environment_composer import _build_virtual_sequencer_fields
+    fields = _build_virtual_sequencer_fields([USB_ENTRY, PCIE_ENTRY], manifest)
+    usb_field = next(f for f in fields if f["field_name"] == "usb_vseqr")
+    assert "ADAPTER_REQUIRED" in usb_field["evidence"]
+    assert "WARNING" in usb_field["evidence"]
+    # Still emits the plain direct-handle class -- no adapter class invented.
+    assert usb_field["class_type"] == "usb_virtual_sequencer"
+    pcie_field = next(f for f in fields if f["field_name"] == "pcie_vseqr")
+    assert "WARNING" not in pcie_field["evidence"]  # no bind evidence supplied for PCIE
+
+
+def test_subsystem_vip_binds_absent_is_unchanged_from_before_this_wire():
+    """Backwards compatibility: a manifest with no subsystem_vip_binds key
+    produces byte-identical evidence strings to before ARCH-03's wire."""
+    fields_before = [{
+        "class_type": "usb_virtual_sequencer", "field_name": "usb_vseqr",
+        "evidence": "registered subsystem 'USB' (release_sha=sha-usb-1, "
+                    "qualification_state=PRODUCTION_QUALIFIED) from "
+                    ".dv-harness/soc-composer/subsystem_environment_registry.json -- class "
+                    "'usb_virtual_sequencer' is the same name UVMEnvironmentGenerator.vseq() "
+                    "unconditionally emits for this subsystem's own virtual sequencer.",
+    }]
+    from dv_harness.uvm_generator.soc_environment_composer import _build_virtual_sequencer_fields
+    fields = _build_virtual_sequencer_fields([USB_ENTRY], EMPTY_SOC_MANIFEST)
+    assert fields == fields_before
+
+
 def test_empty_subsystem_registry_raises_typed_error():
     with pytest.raises(EmptySubsystemRegistryError) as exc:
         compose_soc_environment([], EMPTY_SOC_MANIFEST)
