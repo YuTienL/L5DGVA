@@ -115,3 +115,45 @@ canonical's own `cli.py` shape finalized first, which is M7's job).
 | `rtl_filelist_parser.py` | N/A | ABSENT | IMPLEMENTED, dormancy/coverage question open (b7a, DUT-03) | open dormancy question, `M0_5_B7A_CAPABILITY_AUDIT.md` | unassigned (blocked on that question) |
 
 **Scope disclosure**: this cohort investigated ~20 of the 177 `MIGRATE_REQUIRED_DIRECT`/`MIGRATE_REQUIRED_TRANSITIVE` parent-only closure members (the smallest-LOC, tested subset), per the instruction's "prefer a conservative batch" guidance — not an exhaustive triage of all 177. The remaining ~157 are not yet individually classified; they remain in the general M3/M4 pool for future cohorts.
+
+## M4.5 — AI_ORCHESTRATION_TOKEN_OPTIMIZATION (new capability family)
+
+Real, evidence-based audit (background investigation) of the "believed"
+ChatGPT+Claude CLI+Codex multi-model token-efficiency capability. Full
+detail: `M4_5_MULTI_MODEL_ORCHESTRATION_AUDIT.md`,
+`M4_5_TOKEN_EFFICIENCY_CAPABILITY_MATRIX.csv`,
+`M4_5_CHATGPT_INTEGRATION_AUDIT.md`, `M4_5_CODEX_INTEGRATION_AUDIT.md`,
+`M4_5_STRUCTURED_HANDOFF_AUDIT.md`, `M4_5_TOKEN_OBSERVABILITY_AUDIT.md`.
+
+**Headline finding**: `TOKEN_EFFICIENT_MULTI_MODEL_ORCHESTRATION` (as a
+working automated loop) is `NOT_PRESENT` on any tree. `CHATGPT_INTEGRATION
+= HUMAN_MEDIATED_CHATGPT_HANDOFF` (stale, abandoned pipeline).
+`CODEX_INTEGRATION = HUMAN_MEDIATED_CODEX_REVIEW` (3 real, honest,
+self-blocking package-assembly modules, Parent-only, not migrated).
+`TOKEN_REDUCTION_MEASURED = NO`; real Claude-only token telemetry exists
+(`stage_profile.py`, confirmed present in canonical) but is never combined
+with any multi-model handoff.
+
+One real, new, canonical-only capability WAS built this same M4.5 wave,
+unrelated to the ChatGPT/Codex finding: `TASK_SCOPED_GOVERNANCE_RETRIEVAL`
+(`dv_harness/governance_registry.py`, `OPERATIONAL`, 10/10 real tests) --
+this is genuinely new infrastructure, not a preserved capability from
+either source (neither source has an equivalent mechanism, per direct
+verification against v50's real Phase-1-hygiene-audit evidence).
+
+| Sub-capability | Status | Wave |
+|---|---|---|
+| `TASK_SCOPED_GOVERNANCE_RETRIEVAL` | OPERATIONAL (new, canonical-only) | M4.5 (done) |
+| `MINIMUM_SUFFICIENT_CONTEXT` | PARTIAL | M4.5 (partial), M8+ (full) |
+| `CHATGPT_PLANNING_OFFLOAD` | HUMAN_MEDIATED, stale, unmigrated | unscheduled |
+| `CODEX_REVIEW_OFFLOAD` | HUMAN_MEDIATED, self-blocking, unmigrated | unscheduled |
+| `STRUCTURED_AGENT_HANDOFF` | PARTIAL (review schema real, never operationalized; task/planning schema not found) | unscheduled |
+| `CONTEXT_DISTILLATION` | PARTIAL (real for DUT/VIP evidence only) | unscheduled |
+| `SESSION_RESUME` | UNKNOWN (not investigated to sufficient depth this wave) | future audit needed |
+| `TOKEN_USAGE_OBSERVABILITY` | PARTIAL (real Claude-only telemetry, confirmed present in canonical) | unscheduled |
+
+None of these 8 items are fixed/implemented/migrated this wave, per
+instruction ("Do not implement missing multi-model integration during
+M4.5"). All assigned `unscheduled` rather than defaulted into any specific
+future wave number, consistent with the same discipline already applied
+to the governing-contract-corpus finding.
