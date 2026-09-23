@@ -13,7 +13,7 @@ CAP-M3-001,lifecycle.py wiring into engine.py,M6,CAP-M6-DISPATCH-001,P1,ENGINEER
 CAP-M6-LIFECYCLE-001,lifecycle.py consumer wiring,M6,CAP-M6-DISPATCH-001,P1,ENGINEERING (wiring-point identification)
 CAP-M5-ARCH-001,create_environment.py ARCH-01 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),"ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
 CAP-M5-ARCH-002,soc_environment_composer.py ARCH-03 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),"ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
-CAP-M5-TOPTB-001,soc_environment_composer.py existing-top-TB preservation (Parent V11 SS247),M5,CAP-M5-ARCH-002,P2,"ENGINEERING (newly registered this wave -- depends on a 3rd, previously-unregistered Parent-only module absent from canonical)"
+CAP-M5-TOPTB-001,soc_environment_composer.py existing-top-TB preservation (Parent V11 SS247),M5,CAP-M5-ARCH-002,P3 (downgraded from P2 -- resolved this wave),"ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
 CAP-M5-ARCH-003,amba_fabric_generator.py ARCH-04/12 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),"ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
 CAP-M5-COV-001,functional_coverage_signoff.py judgment call,M5,,P1,HUMAN_DECISION_REQUIRED (DV-domain judgment)
 CAP-M8-EXPLOOP-002,Absent internal-loop stages (Clarification/Generation/Signoff experience),M8,CAP-M8-EXPLOOP-001,P1,ENGINEERING (net-new mechanism)

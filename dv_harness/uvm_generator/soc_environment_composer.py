@@ -485,7 +485,10 @@ def cross_subsystem_findings(root: Any, subsystems: List[Dict[str, Any]]) -> Dic
 
 def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
                              manifest: Dict[str, Any],
-                             root: Any = None) -> Dict[str, str]:
+                             root: Any = None,
+                             *,
+                             existing_top_tb_declared_path: Any = None,
+                             force_fresh_top_tb: bool = False) -> Dict[str, str]:
     """Composes a Full-SoC/System-Level testbench scaffold from N already
     -registered subsystem environments. Same return shape as
     UVMEnvironmentGenerator.generate(): dict[filename -> generated SV/JSON
@@ -514,17 +517,48 @@ def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
         CrossSubsystemIntegrationBlockedError) and records the result in
         soc_composition_manifest.json's "cross_subsystem_analysis". None
         skips the consultation and composes exactly as before.
+      existing_top_tb_declared_path: a project-relative path to a known
+        existing top TB, when the caller already knows it -- beats the
+        name-convention discovery entirely (see `discover_existing_top_tb()`'s
+        own `declared_path` semantics). `None` (default) falls back to
+        discovery-by-naming-convention.
+      force_fresh_top_tb: `True` forces the pre-2026-09-20 always-fresh
+        behavior regardless of any existing top TB -- the explicit "user
+        requests replacement" escape hatch V11 SS247's own human design
+        decision (2026-09-20) names as one of the 3 legitimate reasons to
+        skip preservation. `False` (default) lets discovery/qualification
+        decide.
 
     Returns three files on the fully-generic, always-honorable path:
-      - soc_tb_top.sv: see _soc_tb_top().
+      - soc_tb_top.sv: **2026-09-20 (V11 SS247 human design decision)**:
+        when `root` is supplied and `force_fresh_top_tb` is `False`, this
+        now first calls `reference_uvm_dut_top_integration_manifest.
+        discover_existing_top_tb()` -- if a real, qualified existing top TB
+        is found (DUT-instantiation comparison against what `_soc_tb_top()`
+        would generate is not `DIVERGENT`), its REAL, UNCHANGED on-disk
+        content is returned here instead of freshly-generated content --
+        genuine PRESERVATION, not a relabeled regeneration. If no existing
+        top TB is found, or the found one's DUT instantiation genuinely
+        diverges (a real, proven incompatibility), or `force_fresh_top_tb`
+        is `True`, falls back to `_soc_tb_top()`'s own fresh generation,
+        exactly as before 2026-09-20. Every disposition (which path was
+        taken and why) is recorded in `soc_composition_manifest.json`'s new
+        `top_tb_composition` key -- never silent. **Scope boundary,
+        disclosed not hidden**: this closes PRESERVE only. EXTEND (splicing
+        new VIP/UVM integration hooks into a preserved existing top TB) is
+        a distinct, larger, NOT-yet-implemented follow-on -- a preserved
+        top TB's content is returned completely unchanged, with no VIP/UVM
+        hook insertion attempted. See _soc_tb_top() for the fresh-
+        generation path.
       - soc_virtual_sequencer.sv: UVMEnvironmentGenerator.vseq() reused
         UNCHANGED (not reimplemented -- literally the same function,
         called unbound since vseq() never touches `self`) against a
         virtual_sequencer_fields list built by
         _build_virtual_sequencer_fields() -- "don't invent new schema".
       - soc_composition_manifest.json: audit-trail record (composed
-        subsystem names + generated file list), same bookkeeping shape as
-        generate()'s own environment_manifest.json.
+        subsystem names + generated file list + `top_tb_composition`
+        disposition), same bookkeeping shape as generate()'s own
+        environment_manifest.json.
 
     Raises EmptySubsystemRegistryError / MissingSubsystemNameEvidenceError
     for structurally invalid input, CrossSubsystemIntegrationBlockedError
@@ -582,8 +616,62 @@ def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
     vseqr_manifest = {"virtual_sequencer_fields": _build_virtual_sequencer_fields(subsystems, manifest)}
     files["soc_virtual_sequencer.sv"] = UVMEnvironmentGenerator.vseq(None, vseqr_manifest, "soc")
 
-    # (1) soc_tb_top.sv
-    files["soc_tb_top.sv"] = _soc_tb_top(subsystems, manifest)
+    # (1) soc_tb_top.sv -- 2026-09-20 (V11 SS247 human design decision):
+    # DISCOVER an existing qualified DE top TB before defaulting to fresh
+    # generation. `root=None` or `force_fresh_top_tb=True` skip discovery
+    # entirely and compose exactly as before this decision (every unit
+    # fixture with no project root, and any caller explicitly requesting
+    # replacement, is unaffected). Lazy import: `reference_uvm_dut_top_
+    # integration_manifest.py` itself imports `_soc_tb_top` FROM this
+    # module (for its own `generated_top_tb_facts()`), so a module-level
+    # import here would be circular.
+    top_tb_composition: Dict[str, Any] = {
+        "mode": "GENERATED_FRESH",
+        "reason": "NO_PROJECT_ROOT_SUPPLIED",
+    }
+    preserved_top_tb_text = None
+    if force_fresh_top_tb:
+        top_tb_composition = {"mode": "GENERATED_FRESH", "reason": "FORCE_FRESH_TOP_TB_REQUESTED"}
+    elif root is not None:
+        from ..reference_uvm_dut_top_integration_manifest import (
+            discover_existing_top_tb, extract_existing_top_tb_facts,
+            generated_top_tb_facts, compare_against_generated_top, DIVERGENT,
+        )
+        discovery = discover_existing_top_tb(root, declared_path=existing_top_tb_declared_path)
+        if discovery["status"] == "FOUND":
+            candidate_rel = discovery["candidates"][0]
+            candidate_path = Path(root) / candidate_rel
+            existing_facts = extract_existing_top_tb_facts(candidate_path)
+            generated_facts = generated_top_tb_facts(subsystems, manifest)
+            comparison = compare_against_generated_top(existing_facts, generated_facts)
+            dut_verdict = comparison["dut_instantiation"]["verdict"]
+            if dut_verdict == DIVERGENT:
+                # A real, PROVEN incompatibility -- the one non-absence
+                # reason SS247's own human decision names for falling back
+                # to fresh generation.
+                top_tb_composition = {
+                    "mode": "GENERATED_FRESH",
+                    "reason": "EXISTING_TOP_TB_DUT_INSTANTIATION_DIVERGENT",
+                    "existing_candidate": candidate_rel,
+                    "comparison": comparison,
+                }
+            else:
+                preserved_top_tb_text = candidate_path.read_text(encoding="utf-8", errors="replace")
+                top_tb_composition = {
+                    "mode": "PRESERVED_EXISTING",
+                    "reason": "QUALIFIED_EXISTING_TOP_TB_FOUND",
+                    "existing_candidate": candidate_rel,
+                    "comparison": comparison,
+                }
+        else:
+            top_tb_composition = {
+                "mode": "GENERATED_FRESH",
+                "reason": f"NO_EXISTING_TOP_TB_FOUND ({discovery['status']}: {discovery['basis']})",
+            }
+    files["soc_tb_top.sv"] = (
+        preserved_top_tb_text if preserved_top_tb_text is not None
+        else _soc_tb_top(subsystems, manifest)
+    )
 
     # (3) genuinely protocol-specific content -- explicit, honest
     # NotImplementedError boundary. Only triggered when the manifest asks
@@ -607,6 +695,9 @@ def compose_soc_environment(subsystem_registry_entries: List[Dict[str, Any]],
     composed["cross_subsystem_analysis"] = (
         findings if findings else {"status": "NOT_CONSULTED",
                                    "reason": "NO_PROJECT_ROOT_SUPPLIED"})
+    # V11 SS247 (2026-09-20 human design decision): which soc_tb_top.sv path
+    # was actually taken this composition, and why -- never silent.
+    composed["top_tb_composition"] = top_tb_composition
     composed["generated_files"] = sorted(files.keys()) + ["soc_composition_manifest.json"]
     composed["composition_status"] = "SOC_TB_COMPOSED"
     files["soc_composition_manifest.json"] = json.dumps(composed, indent=2)
