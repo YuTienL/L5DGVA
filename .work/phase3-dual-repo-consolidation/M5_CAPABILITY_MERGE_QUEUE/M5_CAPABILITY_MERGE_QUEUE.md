@@ -71,4 +71,7 @@ No production code is touched by this file.
 - `DeclaredValue`/`AutoDiscoveredValue`/`DerivedValue`/`EffectiveValue`/`Confidence`/`ValidationState`/`ConfirmationState`/`EvidenceRefs` preserved where verified (Cohort 4).
 - After each cohort: focused tests, Constitution/Anti-Drift, provenance update, Master Capability Status Matrix update, `SOURCE_CAPABILITY_LOSS=0` check, no new mandatory UNKNOWN, Parent/v50/b7a/b7b/b8 unchanged re-check. Full regression deferred to M5 closure only.
 
-STATUS: COHORT 0 CLOSED. COHORT 1 next.
+STATUS: COHORT 0 CLOSED. COHORT 1 CLOSED (CAP-M5-ENV-001 resolved, see
+commit `a0650f4`). COHORT 2 PARTIAL (CAP-M5-ARCH-003 resolved this
+session; CAP-M5-ARCH-001/CAP-M5-ARCH-002 remain NOT_STARTED -- see
+`COHORT_2/M5_COHORT_2_FINAL_REPORT.md`). COHORT 3-5 NOT_STARTED.

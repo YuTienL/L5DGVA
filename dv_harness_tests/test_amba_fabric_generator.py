@@ -14,7 +14,9 @@ import pytest
 from dv_harness.uvm_generator.amba_fabric_generator import (
     AMBAFabricGenerator, AddressMapError, ScoreboardMatrixError,
     compute_address_regions, compute_id_width, build_scoreboard_matrix, parse_addr,
+    FabricGraphMismatchError, cross_check_fabric_graph,
 )
+from dv_harness.amba_fabric_graph_ir import build_amba_fabric_graph
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -152,6 +154,90 @@ def test_generate_emits_expected_files_with_real_values():
         assert manifest["qualification_status"] == "ENV_GENERATED"
         assert manifest["vip"]["binding_status"] == "PLACEHOLDER_UNTIL_CURRENT_VIP_EVIDENCE"
         assert manifest["id_width_out"] == 7
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_generate_without_fabric_graph_reports_not_supplied():
+    """The pre-existing, unaffected path (no t['fabric_graph'] declared):
+    fabric_graph_cross_check must be an honest NOT_SUPPLIED, never absent
+    and never a guessed/empty cross-check."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        files = AMBAFabricGenerator(tmp).generate(_sample_topology())
+        manifest = json.loads((tmp / "environment_manifest.json").read_text(encoding="utf-8"))
+        assert manifest["fabric_graph_cross_check"] == {
+            "status": "NOT_SUPPLIED", "reason": "NO_FABRIC_GRAPH_DECLARED_IN_TOPOLOGY"}
+        topology = json.loads((tmp / "fabric_topology.json").read_text(encoding="utf-8"))
+        assert "internal_fabric_nodes" not in topology
+    finally:
+        shutil.rmtree(tmp)
+
+
+# ---------------------------------------------------------------------------
+# ARCH-04/ARCH-12 wire: cross_check_fabric_graph() (real amba_fabric_graph_ir.py
+# input, never self-derived from RTL)
+# ---------------------------------------------------------------------------
+
+def _sample_fabric_graph_nodes():
+    return [
+        {"node_id": "m0", "kind": "master_endpoint", "evidence": ["topology declares m0"]},
+        {"node_id": "m1", "kind": "master_endpoint", "evidence": ["topology declares m1"]},
+        {"node_id": "s0", "kind": "slave_endpoint", "evidence": ["topology declares s0"]},
+        {"node_id": "s1", "kind": "slave_endpoint", "evidence": ["topology declares s1"]},
+        {"node_id": "xbar0", "kind": "crossbar", "evidence": ["RTL: soc_fabric_xbar instance"]},
+    ]
+
+
+def test_cross_check_fabric_graph_succeeds_when_endpoints_match():
+    t = _sample_topology()
+    graph = build_amba_fabric_graph(_sample_fabric_graph_nodes(), [])
+    result = cross_check_fabric_graph(t, graph)
+    assert result["master_endpoints_verified"] == ["m0", "m1"]
+    assert result["slave_endpoints_verified"] == ["s0", "s1"]
+    assert result["internal_nodes"] == [{"node_id": "xbar0", "kind": "crossbar"}]
+
+
+def test_cross_check_fabric_graph_raises_on_missing_endpoint():
+    t = _sample_topology()
+    # s1 is never declared as a slave_endpoint node -- a real graph/topology
+    # disagreement, not a soft-degraded warning.
+    nodes = [n for n in _sample_fabric_graph_nodes() if n["node_id"] != "s1"]
+    graph = build_amba_fabric_graph(nodes, [])
+    with pytest.raises(FabricGraphMismatchError) as exc:
+        cross_check_fabric_graph(t, graph)
+    assert exc.value.reason == "FABRIC_GRAPH_ENDPOINT_MISMATCH"
+    assert exc.value.detail["missing_slave_endpoints"] == ["s1"]
+    assert exc.value.detail["missing_master_endpoints"] == []
+
+
+def test_generate_with_fabric_graph_end_to_end():
+    """The regression this test exists to guarantee: generate() must not
+    raise when t['fabric_graph'] is supplied (env() itself takes no
+    fabric-graph parameter -- the cross-check is surfaced only via the two
+    JSON artifacts below, never threaded into env()'s own SV content)."""
+    t = _sample_topology()
+    t["fabric_graph"] = {"nodes": _sample_fabric_graph_nodes(), "edges": []}
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        files = AMBAFabricGenerator(tmp).generate(t)
+        manifest = json.loads((tmp / "environment_manifest.json").read_text(encoding="utf-8"))
+        assert manifest["fabric_graph_cross_check"]["master_endpoints_verified"] == ["m0", "m1"]
+        assert manifest["fabric_graph_cross_check"]["slave_endpoints_verified"] == ["s0", "s1"]
+        topology = json.loads((tmp / "fabric_topology.json").read_text(encoding="utf-8"))
+        assert topology["internal_fabric_nodes"] == [{"node_id": "xbar0", "kind": "crossbar"}]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_generate_with_fabric_graph_mismatch_raises_before_writing_files():
+    t = _sample_topology()
+    bad_nodes = [n for n in _sample_fabric_graph_nodes() if n["node_id"] != "m1"]
+    t["fabric_graph"] = {"nodes": bad_nodes, "edges": []}
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        with pytest.raises(FabricGraphMismatchError):
+            AMBAFabricGenerator(tmp).generate(t)
     finally:
         shutil.rmtree(tmp)
 
