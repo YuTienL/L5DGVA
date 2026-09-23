@@ -1,4 +1,4 @@
-# Master End-to-End DV Status — IP / SUBSYSTEM / SYSTEM_LEVEL (v2, post-M4.6)
+# Master End-to-End DV Status — IP / SUBSYSTEM / SYSTEM_LEVEL (v3, post-VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT reconciliation)
 
 Per reconciliation instruction section F: 17 named stages, evaluated
 separately per verification level, with the exact first non-operational
@@ -7,6 +7,25 @@ stage and its owner wave identified for each. Reused evidence only
 `intake_routing.py`); no new source audit performed. Where no accepted
 artifact independently covers a stage at this granularity, it is marked
 `NOT_RE-AUDITED_THIS_WAVE` rather than guessed.
+
+**v3 addition (`VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT` roadmap
+reconciliation)**: the 17-stage table below is `CREATE_LIFECYCLE` --
+this was always its real scope (OpenSpec Intake through Experience
+Consolidation, a from-scratch generation flow), simply never labeled as
+one half of a two-lifecycle model until this wave froze the product
+requirement that L5DGVA support both `CREATE_LIFECYCLE` and
+`MAINTAIN_LIFECYCLE` as first-class. This addition does not re-audit or
+change any `CREATE_LIFECYCLE` value below -- see
+`.work/phase3-dual-repo-consolidation/VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT/MAINTAIN_LIFECYCLE_E2E_MATRIX.csv`
+for the new, separate 12-stage `MAINTAIN_LIFECYCLE` table (stage-level
+`CURRENT_STATUS`/`DEPENDENCY`/`OWNER_WAVE`/`HUMAN_ROLE`/
+`AUTOMATION_OWNER`/`EVIDENCE`, same column discipline this file's own
+DE/DV HITL overlay already established) and
+`.work/phase3-dual-repo-consolidation/VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT/VERIFICATION_ENVIRONMENT_LIFECYCLE_ARCHITECTURE.md`
+for the full architecture. Every `MAINTAIN_LIFECYCLE` stage is
+`ROADMAP_DEFINED` or `PARTIAL` (narrow real precedent only) -- none
+`OPERATIONAL`, primary owner `M10.5` throughout except where a nearer
+wave (`M5`/`M8`/`M9`/`M10`) contributes a named `FOUNDATION`.
 
 ## IP_MODE
 

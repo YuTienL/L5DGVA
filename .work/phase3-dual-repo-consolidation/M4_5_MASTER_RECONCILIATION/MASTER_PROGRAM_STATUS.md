@@ -123,27 +123,54 @@ THE_LOOP`, `DESIGN_AUTHORITY`, `VERIFICATION_AUTHORITY`,
 `ROLE_BASED_ACTION_DASHBOARD` (owner M12, no existing UI owner found).
 None marked operational; none implemented.
 
-## Roadmap (updated per DE/DV HITL reconciliation Section 28)
+## Roadmap (updated per DE/DV HITL reconciliation Section 28; M10.5 added per VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT reconciliation, this wave)
 
 ```
-M5  -- N-Way Capability Semantic Merge; explicitly no duplicated DE/DV engines
-M6  -- Core Semantic Merge + VerificationLevel + ClarificationService +
-        Role-Based HITL + Question Owner Routing + HumanGate Contract +
-        RCA Role Routing
-M7  -- ChatGPT/Claude/Codex operationalization + Structured Handoff +
-        Context Distillation + Token Observability (AI roles orthogonal
-        to DE/DV human roles -- ChatGPT is never DE, Codex is never DV)
-M8  -- Knowledge Brain + Continuous Research Evolution + Continuous
-        Project Experience Learning + Role-Aware Experience Learning +
-        Knowledge Domain Classification (DESIGN/VERIFICATION/SHARED)
-M9  -- Generic IP/Subsystem/System-Level qualification + the same DE/DV
-        role model across all three levels (no per-level role variants)
-M10 -- vPlan -> Coverage Closure -> Traceability -> Waiver -> Signoff +
-        role-aware signoff evidence
-M11 -- USB Golden Qualification (REFERENCE_USB_ENV_CONSUMED stays NO until this wave)
-M12 -- Canonical Cutover/Productization + Role-Based Action Dashboard
-        (if no other owner is confirmed by then)
-M13 -- PCIe Zero-Core-Change + Strict Superset + Constitutional Compliance
+M5    -- N-Way Capability Semantic Merge; explicitly no duplicated DE/DV
+          engines; also the FOUNDATION owner for CAP-VELM-009/010
+          (Safe Incremental Regeneration / UVM Semantic Merge foundations
+          -- CAP-M5-TOPTB-001, CAP-M5-ARCH-002, this wave)
+M6    -- Core Semantic Merge + VerificationLevel + ClarificationService +
+          Role-Based HITL + Question Owner Routing + HumanGate Contract +
+          RCA Role Routing
+M7    -- ChatGPT/Claude/Codex operationalization + Structured Handoff +
+          Context Distillation + Token Observability (AI roles orthogonal
+          to DE/DV human roles -- ChatGPT is never DE, Codex is never DV)
+M8    -- Knowledge Brain + Continuous Research Evolution + Continuous
+          Project Experience Learning + Role-Aware Experience Learning +
+          Knowledge Domain Classification (DESIGN/VERIFICATION/SHARED);
+          also the FOUNDATION owner for CAP-VELM-015/016/017 (Maintenance/
+          Change-Impact-Prediction/Semantic-Merge Experience Learning)
+M9    -- Generic IP/Subsystem/System-Level qualification + the same DE/DV
+          role model across all three levels (no per-level role variants);
+          also the FOUNDATION owner for CAP-VELM-002 (Verification
+          Environment IR)
+M10   -- vPlan -> Coverage Closure -> Traceability -> Waiver -> Signoff +
+          role-aware signoff evidence; also the FOUNDATION owner for
+          CAP-VELM-012/014 (Coverage Delta / Incremental Re-Signoff)
+M10.5 -- **NEW this wave**: Verification Environment Lifecycle Management
+          -- PRIMARY owner of all 17 CAP-VELM-001..017 capabilities as
+          OPERATIONAL_LIFECYCLE_CAPABILITY (MAINTAIN_LIFECYCLE's 12
+          stages: Reopen/Import, Semantic Change Detection, Change Impact
+          Analysis, Change Plan, Controlled Modification, Safe
+          Incremental Regeneration, Semantic Merge, Selective Regression,
+          Coverage Delta, Evidence Invalidation, Incremental Re-Signoff,
+          Maintenance Experience Learning). See
+          `.work/phase3-dual-repo-consolidation/VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT/`
+          for the full architecture, capability matrix, ownership model,
+          and roadmap requirements. NOT STARTED.
+M11   -- USB Golden Qualification (REFERENCE_USB_ENV_CONSUMED stays NO
+          until this wave) -- **now dual-scoped this wave**: (A)
+          from-scratch generation (unchanged) AND (B) maintenance of an
+          existing qualified environment after RTL/spec change while
+          preserving user customization (new requirement -- see
+          `USB_GOLDEN_MAINTENANCE_QUALIFICATION_REQUIREMENTS.md`)
+M12   -- Canonical Cutover/Productization + Role-Based Action Dashboard
+          (if no other owner is confirmed by then) + productization/UX of
+          the maintenance workflow (new this wave)
+M13   -- PCIe Zero-Core-Change + Strict Superset + Constitutional
+          Compliance -- strict-superset qualification must now also
+          include lifecycle-management capability (new this wave)
   || PLATFORM_P1..P6 (scope definition needed first -- CAP-PLATFORM-000)
 ```
 
@@ -167,12 +194,54 @@ M5  (N-way semantic merge: env_manifest.py, vip_capability_extraction.py,
           Learning, Knowledge Domain Classification)
   -> M9  (ExecutionService/RemoteEDABackend TARGET, generic 3-level role model)
   -> M10 (vPlan-to-Signoff closure + role-aware signoff traceability)
-  -> M11 (Reference USB Environment consumption)
-  -> M12 (Cutover/Productization + Role-Based Action Dashboard)
+  -> M10.5 (Verification Environment Lifecycle Management -- MAINTAIN_
+          LIFECYCLE operational build, gated on M5/M8/M9/M10's own
+          foundations closing first; NOT STARTED, new this wave)
+  -> M11 (Reference USB Environment consumption -- now dual create+maintain
+          qualification)
+  -> M12 (Cutover/Productization + Role-Based Action Dashboard + maintenance-
+          workflow UX)
   -> M13 (final CANONICAL_CAPABILITY_STRICT_SUPERSET / L5DGVA_CONSTITUTIONAL_
-          COMPLIANCE gate)
+          COMPLIANCE gate, now including lifecycle-management capability)
   || PLATFORM_P1..P6 (scope definition needed first, then runs alongside M5+)
 ```
+
+## VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT — architecture summary (this wave)
+
+**Frozen product requirement**: L5DGVA SHALL support two first-class
+verification lifecycles, `CREATE_LIFECYCLE` (the existing 17-stage flow
+this file already tracks in full) and `MAINTAIN_LIFECYCLE` (new, 12
+stages: Reopen/Import -> Semantic Change Detection -> Change Impact
+Analysis -> Change Plan -> Controlled Modification -> Safe Incremental
+Regeneration -> Semantic Merge -> Selective Regression -> Coverage Delta
+-> Evidence Invalidation -> Incremental Re-Signoff -> Maintenance
+Experience Learning), both stages on the SAME one generic L5DGVA
+workflow -- never a second engine.
+
+17 new capability rows added (`CAP-VELM-001..017`), every one
+`ROADMAP_DEFINED`, `IMPLEMENTED=NO` this wave. A 5-class artifact
+ownership model (`L5_MANAGED`/`USER_MANAGED`/`SHARED_MANAGED`/
+`GENERATED_REGION`/`PROTECTED`) is frozen, grounded in real existing
+precedent rather than invented -- `USER_MANAGED` already has a real,
+working mechanism (`CAP-M5-TOPTB-001`, this session, commit `bd5c560`);
+the other four classes are roadmap-only. Full detail:
+`.work/phase3-dual-repo-consolidation/VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT/`.
+
+**This reconciliation does not change `CAP-M5-TOPTB-001`'s own M5
+disposition or implementation** (already `CLOSED`, commit `bd5c560`) --
+it is reviewed here only for its roadmap/dependency relationship to the
+new family (a real `FOUNDATION` dependency for `ARTIFACT_OWNERSHIP_MODEL`
+and `SAFE_INCREMENTAL_REGENERATION`; not a dependency for `UVM_SEMANTIC_
+MERGE`, which needs an actual merge mechanism `CAP-M5-TOPTB-001`'s
+whole-file preserve-or-replace logic does not provide).
+
+**Disclosed limitation**: the "Capability counts" section immediately
+below was already stale before this wave (last reconciled at 81 total
+rows, during the DE/DV HITL wave; the Agent Task Lifecycle wave added 10
+more reaching 91, and this wave's own 17 `CAP-VELM-*` rows bring the real
+total to 110) -- not re-audited or corrected in this pass, since this
+reconciliation's own scope is registering the new family, not a general
+capability-count audit. Flagged rather than silently left inconsistent.
 
 ## Capability counts (reconciled exactly to `MASTER_CAPABILITY_STATUS_MATRIX.csv`, 81 rows)
 
