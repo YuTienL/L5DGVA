@@ -1,4 +1,25 @@
-# Master Blocker Register (v8, post-M5.9-ownership-reconciliation)
+# Master Blocker Register (v9, post-M5-Pool-Closure-batch-1)
+
+**v9 update (M5 Capability Pool Closure, 2026-09-23)**: closure-debt
+recovery discovered by M5.9, not a new roadmap cohort. `CAP-POOL-008`
+(`l5dgva_v5_ss84_phase_entry_protocol_schema.py`) and `CAP-POOL-012`
+(`rtl_filelist_parser.py`) migrated and CLOSED this task -- both
+confirmed genuinely unblocked (their real dependencies already present
+in canonical), migrated verbatim/adapted, tested (9/9 + 28/28, the
+latter a brand-new suite since no test ever existed for that module
+anywhere). `P0_BLOCKERS` **unchanged at 5**. The remaining 4
+(`CAP-POOL-001/003/004/011`) stay `M5`-owned `OPEN` -- their real
+dependencies (`eight_engine_runtime_proof_matrix.py`,
+`l5dgva_gap_queue.py`, `l5dgva_workitem_projection.py`,
+`l5dgva_directive_registry.py`) are themselves un-migrated Parent
+modules outside this task's registered 6-item scope; migrating them was
+explicitly out of bounds ("do not absorb unrelated Parent modules"). New
+evidence this task: `CAP-POOL-001`/`CAP-POOL-011` share one blocker,
+`CAP-POOL-003`/`CAP-POOL-004` share another -- a future task scoped to
+include those 4 missing dependency modules could close all 4 remaining
+items together. `M5_CAPABILITIES_OPEN` drops from 6 to **4**;
+`M5_READY_FOR_FINAL_CLOSURE_REGRESSION` remains **NO**. See
+`M5_POOL_CLOSURE/M5_POOL_CLOSURE_FINAL_REPORT.md`.
 
 **v8 update (M5.9 Ownership Reconciliation, 2026-09-23)**: reviewed
 Cohort 5's 10-item `M5` -> `M6` reassignment and found it **partially
