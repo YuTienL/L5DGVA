@@ -307,6 +307,26 @@ the genericity challenge after USB, with the criterion
 profiles, adapters, data, and explicit extension points -- proving the core
 is generic rather than USB-specific.
 
+## Governance Document Routing (TASK_SCOPED_GOVERNANCE_RETRIEVAL)
+
+Detailed, task-specific governance belongs in categorized documents, not in
+this file — this file stays the compact, ALWAYS_ON router. Real registry:
+`dv_harness/governance_registry.py` + `dv_harness/governance_registry.json`
+(`get_entries_by_trigger()` routes a task's own keywords to the right
+document; `check_reachability()` proves every registered path is real,
+enforced by `dv_harness_tests/test_governance_registry.py`). Three tiers:
+**ALWAYS_ON** (this file only), **TASK_SCOPED** (loaded when the task's
+domain matches, e.g. `docs/architecture/L5DGVA_CONSTITUTION.md` for a full
+Article 0 rationale, `CANONICAL_CAPABILITY_SUPERSET_MATRIX.md` for a
+capability's live status), **EVIDENCE_ON_DEMAND** (large source material,
+read only for a specific cited question, never preloaded, never summarized
+into this file — the 25-document/106,132-line Parent-only "L5DGVA
+governing contract" corpus found during M4 is registered this way,
+`SOURCE_EVIDENCE_ONLY`, pending its own migration-authority decision).
+`MINIMUM_SUFFICIENT_CONTEXT` (Article 0 P3 KNOWLEDGE_DRIVEN): retrieve only
+what a task's own trigger matches — knowledge-driven never means
+load-all-knowledge.
+
 
 ## Core Operating Rules
 - Graph is the global workflow authority.

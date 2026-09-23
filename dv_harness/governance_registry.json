@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "description": "TASK_SCOPED_GOVERNANCE_RETRIEVAL registry (M4.5). Routes a task to the right governance document by TRIGGER/LOAD_POLICY instead of appending everything into CLAUDE.md. See dv_harness/governance_registry.py's module docstring for the field semantics and why this is a separate mechanism from dv_harness/context_budget.py (that one blocks/distills DUT/VIP evidence content by file glob; this one routes governance/knowledge documents by concept).",
+  "entries": [
+    {
+      "id": "CLAUDE_MD",
+      "label": "Project instructions (this file)",
+      "load_policy": "ALWAYS_ON",
+      "trigger": "every task",
+      "priority": "HIGH",
+      "token_class": "LARGE_REFERENCE",
+      "summary_path": "CLAUDE.md",
+      "notes": "Auto-loaded by the agent harness. Kept as ALWAYS_ON per the governing constraint that this set must stay minimal -- CLAUDE.md's own real size (2,066,390 bytes / 22,441 lines as of M4.5) is honestly disclosed as a known, larger-than-this-wave normalization need, not hidden."
+    },
+    {
+      "id": "L5DGVA_CONSTITUTION",
+      "label": "L5DGVA Constitution -- full Article 0 text and rationale",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "any architecture/migration/governance decision that needs the full constitutional rationale beyond CLAUDE.md's own compact Article 0 section",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/L5DGVA_CONSTITUTION.md",
+      "notes": "CLAUDE.md's own Article 0 section is the ALWAYS_ON compact form; this is the TASK_SCOPED full form -- read on demand, never both loaded for a task that only needs the compact one."
+    },
+    {
+      "id": "L5DGVA_GOVERNING_CONTRACT_CORPUS",
+      "label": "L5DGVA governing-contract corpus (V1-V23, Parent-only)",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a task that must resolve a specific, cited L5DGVA contract requirement (e.g. a numbered section like V21 SS636) -- never a general architecture question, which Article 0/the Constitution document already answer",
+      "priority": "MEDIUM",
+      "token_class": "SOURCE_EVIDENCE_ONLY",
+      "summary_path": ".work/phase3-dual-repo-consolidation/M4_M3_DEFERRED_CLOSURE.md",
+      "external_source_path": "D:\\DV\\Task\\DV_Agent_Harness_L5\\L5DGVA\\ (Parent working tree, git-untracked, 25 files, 4.0MB, 106132 lines -- NOT present in this canonical checkout; awaiting the M4.5_GOVERNING_CONTRACT_AUTHORITY decision)",
+      "notes": "SOURCE_EVIDENCE_ONLY per the explicit M4.5 requirement: never appended to CLAUDE.md, never loaded wholesale even once migrated. external_source_path is informational only (not reachability-checked, since it is deliberately outside this canonical repository until a migration decision is made)."
+    },
+    {
+      "id": "M1_FINAL_REPORT",
+      "label": "M1 canonical bootstrap + v50 baseline qualification closure",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about M1's own bootstrap decisions, execution-profile extraction, or root-normalization history",
+      "priority": "LOW",
+      "token_class": "LARGE_REFERENCE",
+      "summary_path": ".work/phase3-dual-repo-consolidation/M1_FINAL_REPORT.md"
+    },
+    {
+      "id": "M3_FINAL_REPORT",
+      "label": "M3 independent/leaf capability migration closure",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about which capabilities M3 migrated or deferred, and why",
+      "priority": "LOW",
+      "token_class": "MEDIUM",
+      "summary_path": ".work/phase3-dual-repo-consolidation/M3_FINAL_REPORT.md"
+    },
+    {
+      "id": "M4_FINAL_REPORT",
+      "label": "M4 dependency/schema/contract closure",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about M5/M6 foundation prerequisites or the governing-contract-authority finding",
+      "priority": "LOW",
+      "token_class": "MEDIUM",
+      "summary_path": ".work/phase3-dual-repo-consolidation/M4_FINAL_REPORT.md"
+    },
+    {
+      "id": "CANONICAL_CAPABILITY_SUPERSET_MATRIX",
+      "label": "Live capability-by-capability Parent/v50/worktree/canonical status",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "a question about whether a specific named capability is preserved/migrated/operational anywhere",
+      "priority": "MEDIUM",
+      "token_class": "MEDIUM",
+      "summary_path": ".work/phase3-dual-repo-consolidation/CANONICAL_CAPABILITY_SUPERSET_MATRIX.md"
+    }
+  ]
+}
