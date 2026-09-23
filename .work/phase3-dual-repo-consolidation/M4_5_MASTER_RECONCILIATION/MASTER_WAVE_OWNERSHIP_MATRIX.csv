@@ -11,7 +11,7 @@ CAP-M4.5-003,L5DGVA Constitution full compliance qualification,M8,,P1,ENGINEERIN
 CAP-M4.5-001,TASK_SCOPED_GOVERNANCE_RETRIEVAL live-routing integration,M6,CAP-M6-DISPATCH-001,P2,ENGINEERING (residual: still no fully-automated non-CLAUDE.md-mediated task-routing call site; downgraded from P1 after M4.6 closed the live-routing gap)
 CAP-M3-001,lifecycle.py wiring into engine.py,M6,CAP-M6-DISPATCH-001,P1,ENGINEERING (wiring)
 CAP-M6-LIFECYCLE-001,lifecycle.py consumer wiring,M6,CAP-M6-DISPATCH-001,P1,ENGINEERING (wiring-point identification)
-CAP-M5-ARCH-001,create_environment.py ARCH-01 contract,M5,,P1,ENGINEERING
+CAP-M5-ARCH-001,create_environment.py ARCH-01 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),"ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
 CAP-M5-ARCH-002,soc_environment_composer.py ARCH-03 contract,M5,,P1,ENGINEERING
 CAP-M5-ARCH-003,amba_fabric_generator.py ARCH-04/12 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),"ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
 CAP-M5-COV-001,functional_coverage_signoff.py judgment call,M5,,P1,HUMAN_DECISION_REQUIRED (DV-domain judgment)

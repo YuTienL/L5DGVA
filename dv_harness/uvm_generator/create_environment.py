@@ -100,6 +100,7 @@ from .protocol_model_layer import (
     plan_protocol_model,
 )
 from .soc_environment_composer import compose_soc_environment, soc_composition_out_dir
+from ..verification_architecture import assemble_verification_architecture
 
 
 class EnvironmentModeUnresolvedError(ValueError):
@@ -184,7 +185,127 @@ class VipApiUnprovableError(ValueError):
         self.detail = detail
 
 
+class VerificationArchitectureConflictError(ValueError):
+    """Raised only when the request opted in with `strict_verification_
+    architecture: true` AND the assembled VerificationArchitecture document
+    (see `_run_verification_architecture()`) reports at least one
+    HIGH-severity `placement_conflicts` finding -- a VIP bound behind a
+    bridge boundary that contradicts its own chain classification, a checker
+    mounted on the wrong side of one, an assertion declared against a clock
+    domain the DUT does not carry, or two VIPs claiming the same instance
+    (see `verification_architecture.detect_placement_conflicts()`).
+
+    Default behaviour is non-blocking, for the identical reason
+    StructuralLintFailedError's/VipApiUnprovableError's is: this check is new,
+    and a generation that worked yesterday must not start hard-failing today
+    without the caller asking for that. Carries the full assembled document on
+    `.detail`."""
+
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
 STRUCTURAL_LINT_REPORT_NAME = "uvm_structural_lint.json"
+VERIFICATION_ARCHITECTURE_REPORT_NAME = "verification_architecture.json"
+
+# The exact keyword-argument names assemble_verification_architecture()
+# accepts (see verification_architecture.py). A request's
+# `verification_architecture_inputs` sub-dict is filtered against this list
+# rather than splatted verbatim -- an unrecognized key in caller-supplied
+# JSON must be silently ignored here (it is almost certainly a typo or a key
+# meant for a different evidence block), never crash the generation entry
+# point with an unexpected-keyword TypeError.
+_VERIFICATION_ARCHITECTURE_INPUT_KEYS = (
+    "vip_config", "vip_release", "bind_tiers", "active_passive_by_instance",
+    "bind_entries", "boundary_by_target", "chain_by_target",
+    "protocol_check_entries", "checker_links",
+    "scoreboard_entries", "boundary_by_endpoint",
+    "assertion_candidates", "clock_reset",
+    "target_domain_by_instance",
+)
+
+
+def _run_verification_architecture(out_dir: Path, request: Dict[str, Any]) -> Dict[str, Any]:
+    """Assembles the real cross-module architecture-decision record (VIP
+    bind / checker / scoreboard / assertion placement, plus the two
+    placement-conflict and intra-subsystem-duplicate comparators --
+    `verification_architecture.assemble_verification_architecture()`) from
+    the evidence THIS request already carries, and records it alongside the
+    files this call just generated.
+
+    This closes the gap the module's own analysis flagged: before this wire,
+    `verification_architecture.py`'s five IR builders and two comparators had
+    no caller at all inside the real CREATE ENVIRONMENT entry point --
+    `dv-harness create-environment` produced the exact same output whether
+    that whole module existed or not, and every one of its findings was only
+    ever reachable by a human running it out-of-band. This does not change
+    that evidence discipline: every assemble_verification_architecture()
+    argument is still exactly what the caller supplied (bind entries,
+    boundary classifications, checker links, ...) -- this wire adds no new
+    inference, it only ensures the assembly the module was ALREADY able to do
+    actually runs on every real generation and its result is actually
+    recorded where the generated environment lives.
+
+    Runs only when the request carries a `verification_architecture_inputs`
+    dict (any subset of assemble_verification_architecture()'s keyword
+    arguments -- see `_VERIFICATION_ARCHITECTURE_INPUT_KEYS`). That is a
+    deliberate opt-in, for the same reason `_run_vip_api_validation()`'s
+    `vip_symbol_index` is: this module's IRs are built from bind/checker/
+    scoreboard/assertion evidence specific to the environment being
+    generated, and a caller that has not gathered any of that evidence yet
+    gets NOT_AVAILABLE rather than a document built from nothing (every
+    `assemble_verification_architecture()` argument already defaults to
+    empty, so an absent key never raises -- but a whole-document report
+    built from zero real inputs would misrepresent "not evaluated" as
+    "evaluated, found nothing").
+
+    The document (minus the non-JSON-serializable `_irs` convenience key) is
+    always written to <out_dir>/verification_architecture.json when it was
+    built, and always returned -- byte-for-byte the same shape
+    `verification_architecture.schema.json` and the dashboard's own
+    `_read_verification_architecture_state()` endpoint already use (no
+    synthetic wrapper key added here: the document's own `schema_version`
+    key already distinguishes an assembled document from the structurally
+    distinct NOT_AVAILABLE dict below, so a second "status" field would only
+    duplicate that and -- verified empirically this wave -- would violate
+    verification_architecture.schema.json's `additionalProperties: false`,
+    since `status` is not one of the schema's declared top-level
+    properties). Set `strict_verification_architecture: true` to make a
+    HIGH-severity `placement_conflicts` finding raise
+    VerificationArchitectureConflictError instead of being recorded and
+    returned."""
+    inputs = request.get("verification_architecture_inputs")
+    if not inputs:
+        return {
+            "status": "NOT_AVAILABLE",
+            "reason": "NO_VERIFICATION_ARCHITECTURE_INPUTS_DECLARED_IN_REQUEST",
+            "detail": ("set `verification_architecture_inputs: {...}` in the generation "
+                       "manifest (any subset of bind_entries/protocol_check_entries/"
+                       "scoreboard_entries/assertion_candidates/... -- see "
+                       "verification_architecture.assemble_verification_architecture()'s own "
+                       "keyword arguments) to have this generation's VIP bind/checker/"
+                       "scoreboard/assertion placement assembled and cross-checked for "
+                       "conflicts"),
+        }
+    kwargs = {k: inputs[k] for k in _VERIFICATION_ARCHITECTURE_INPUT_KEYS if k in inputs}
+    doc = assemble_verification_architecture(**kwargs)
+    payload = {k: v for k, v in doc.items() if k != "_irs"}
+    try:
+        (Path(out_dir) / VERIFICATION_ARCHITECTURE_REPORT_NAME).write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        payload["report_write_error"] = str(exc)
+    high_severity_conflicts = [c for c in payload.get("placement_conflicts", [])
+                                if c.get("severity") == "HIGH"]
+    if request.get("strict_verification_architecture") and high_severity_conflicts:
+        raise VerificationArchitectureConflictError("VERIFICATION_ARCHITECTURE_PLACEMENT_CONFLICT", {
+            "out_dir": str(out_dir),
+            "report": payload,
+            "high_severity_conflicts": high_severity_conflicts,
+        })
+    return payload
 
 
 def _run_structural_lint(out_dir: Path, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -318,11 +439,14 @@ def create_environment(root: Path, request: Dict[str, Any],
     code just generated (see _run_structural_lint()), and
     `vip_api_validation`, spec section 187's VIPApiCard check of every VIP API
     call in that code against the real VIP symbol index (see
-    _run_vip_api_validation()).
+    _run_vip_api_validation()), and `verification_architecture`, the
+    assembled VIP-bind/checker/scoreboard/assertion placement record and its
+    conflict/duplicate comparators (see _run_verification_architecture()).
 
     Raises EnvironmentModeUnresolvedError / MissingOutputDirectoryError /
     SubsystemModeRequiredError / StructuralLintFailedError /
-    VipApiUnprovableError (see their docstrings),
+    VipApiUnprovableError / VerificationArchitectureConflictError (see their
+    docstrings),
     protocol_model_layer.ProtocolModelLayerError when a supplied
     protocol_model_topology is refused by that protocol's own model, or
     propagates compose_soc_environment()'s own
@@ -377,7 +501,13 @@ def create_environment(root: Path, request: Dict[str, Any],
         generated = ProtocolEnvGenerator(out_dir).generate(manifest)
         add_protocol_model_to_filelist(out_dir, model_files)
         return {
-            "environment_mode": "SUBSYSTEM_MODE",
+            # decision["environment_mode"], not the literal "SUBSYSTEM_MODE":
+            # this branch's own condition currently guarantees the two are
+            # equal, so the value is unchanged today, but hard-coding it here
+            # would silently misreport reality the moment this dispatch
+            # condition is ever widened by a future wave (see
+            # M5_COHORT_2_ARCH001_MODE_DEFECT_ANALYSIS.md).
+            "environment_mode": decision["environment_mode"],
             "decision": decision,
             "out_dir": str(out_dir),
             "generated_files": generated,
@@ -385,6 +515,7 @@ def create_environment(root: Path, request: Dict[str, Any],
             "protocol_model_files": model_files,
             "structural_lint": _run_structural_lint(out_dir, request),
             "vip_api_validation": _run_vip_api_validation(Path(out_dir), request),
+            "verification_architecture": _run_verification_architecture(Path(out_dir), request),
         }
 
     # --- SYSTEM_LEVEL_MODE ---
@@ -415,7 +546,13 @@ def create_environment(root: Path, request: Dict[str, Any],
     for name, content in files.items():
         (target / name).write_text(content, encoding="utf-8")
     return {
-        "environment_mode": "SYSTEM_LEVEL_MODE",
+        # decision["environment_mode"], not the literal "SYSTEM_LEVEL_MODE":
+        # this branch has no condition of its own guaranteeing the two are
+        # equal (it is reached by unconditional fallthrough whenever the
+        # SUBSYSTEM_MODE branch above did not match) -- the mirror image of
+        # the SUBSYSTEM_MODE defect fixed above, same fix, same reasoning
+        # (see M5_COHORT_2_ARCH001_MODE_DEFECT_ANALYSIS.md).
+        "environment_mode": decision["environment_mode"],
         "decision": decision,
         "out_dir": str(target),
         "generated_files": sorted(files.keys()),
@@ -423,4 +560,5 @@ def create_environment(root: Path, request: Dict[str, Any],
         "soc_name": sv_id(request.get("soc_name") or "soc"),
         "structural_lint": _run_structural_lint(target, request),
         "vip_api_validation": _run_vip_api_validation(target, request),
+        "verification_architecture": _run_verification_architecture(target, request),
     }

@@ -72,6 +72,7 @@ No production code is touched by this file.
 - After each cohort: focused tests, Constitution/Anti-Drift, provenance update, Master Capability Status Matrix update, `SOURCE_CAPABILITY_LOSS=0` check, no new mandatory UNKNOWN, Parent/v50/b7a/b7b/b8 unchanged re-check. Full regression deferred to M5 closure only.
 
 STATUS: COHORT 0 CLOSED. COHORT 1 CLOSED (CAP-M5-ENV-001 resolved, see
-commit `a0650f4`). COHORT 2 PARTIAL (CAP-M5-ARCH-003 resolved this
-session; CAP-M5-ARCH-001/CAP-M5-ARCH-002 remain NOT_STARTED -- see
-`COHORT_2/M5_COHORT_2_FINAL_REPORT.md`). COHORT 3-5 NOT_STARTED.
+commit `a0650f4`). COHORT 2 PARTIAL (CAP-M5-ARCH-003 + CAP-M5-ARCH-001
+resolved; CAP-M5-ARCH-002 remains NOT_STARTED -- see
+`COHORT_2/ARCH_001/M5_COHORT_2_ARCH001_FINAL_REPORT.md`). COHORT 3-5
+NOT_STARTED.
