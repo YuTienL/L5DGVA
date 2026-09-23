@@ -1,5 +1,309 @@
 # AI Agent Harness L5 - Project Instructions
 
+# L5DGVA Constitution
+
+**This section is the highest product/architecture authority in this file --
+above ordinary architecture rules, the Module Index, workflow rules,
+migration rules, implementation rules, and agent/skill rules below.** No
+`Repository Root Contract` section was found elsewhere in this file to
+preserve under that name (searched, not assumed absent); if one exists in a
+sibling document, this section does not supersede it. Full text, rationale,
+and the milestone-scoping discussion also live in the canonical,
+non-resident document `docs/architecture/L5DGVA_CONSTITUTION.md` (kept in
+sync with this section, never contradicting it). Enforced in code:
+`dv_harness/constitution_gate.py`, tested in
+`dv_harness_tests/test_l5dgva_constitution.py`.
+
+No equivalent "L5DGVA Constitution" / "Highest Governing Principle" /
+"Article 0" section existed anywhere else in this file before this update
+(checked by grep, not assumed) -- this is a new top-level authority, not a
+consolidation of a prior one. Several existing detailed sections already
+implement pieces of what Article 0 names as the product's continuous-
+evolution capability; Article 0 cross-references them below rather than
+restating their content: **Research Front Door** (line ~1859), **Research
+Stage Boundaries** (line ~1902), **Cross-Loop Coupling: Repeated Failure ->
+Auto-Filed Capability Candidate** (line ~1988) and **...Coverage-Closure
+Stall -> ...** (line ~16068), **Controlled Experiments Are Executed, Not
+Attested** (line ~2207), **Confidence Calibration** (line ~3018),
+**Cross-Project Pattern Mining** (line ~3140), **Shadow / Digital-Twin
+Validation** (line ~3243), **Self-Learning Readiness Matrix** (line
+~15975), **User-Correction-Triggered Capability-Evolution Gap Detection**
+(line ~16147), **Human Correction Learning** (line ~16509), **Knowledge
+Conflict Resolver** (line ~15602), **Digital Thread / Full Traceability**
+(line ~15680), **Engineering Memory Policy** (line ~67).
+
+## Article 0 — Highest Governing Principle
+
+L5DGVA 是一個 location-independent、evidence-grounded、knowledge-driven、
+continuously evolving 的 Multi-Agent DV Platform。
+
+它能針對 IP、Subsystem、System-Level，自動完成從 OpenSpec Intake、DV
+Knowledge Retrieval、vPlan、VIP/UVM Verification Environment Generation、
+Remote EDA Execution、Regression、RCA、Functional Coverage Closure、
+Requirements Traceability 到 Signoff 的完整驗證閉環。
+
+它並同時從：
+
+1. 外部 DV Research / Papers / New Technologies
+
+以及：
+
+2. 內部 Project / User Interaction / Generation / Debug / RCA / Coverage
+   Closure / Signoff Experience
+
+持續萃取、驗證、晉升與重用工程知識，使下一次 Verification Generation 更準確、
+更自動、更高品質。
+
+**Normative English form:**
+
+> L5DGVA is a location-independent, evidence-grounded, knowledge-driven,
+> continuously evolving Multi-Agent DV Platform.
+>
+> Its purpose is to automatically support IP, Subsystem, and System-Level
+> verification from OpenSpec Intake through DV Knowledge Retrieval,
+> Discovery, vPlan, VIP/UVM Verification Environment Generation, Remote EDA
+> Execution, Regression, RCA, Functional Coverage Closure, Requirements
+> Traceability, Signoff, and Experience Consolidation.
+>
+> L5DGVA continuously improves by extracting, validating, promoting, and
+> reusing engineering knowledge from:
+>
+> A. external DV research, papers, methodologies, tools, and new
+>    technologies; and
+> B. internal project execution, user interaction, clarification,
+>    generation decisions, simulation, debug, RCA, regression, coverage
+>    closure, and signoff experience.
+
+**Every architecture, migration, implementation, agent, skill, workflow,
+graph, governance, testing, and product decision SHALL be evaluated against
+Article 0. No local optimization may silently weaken Article 0.**
+
+## The Five Constitutional Dimensions
+
+**P1 -- LOCATION_INDEPENDENT.** L5DGVA must support copy/clone/move/rename/
+archive-extract, different users, different repository paths, Windows
+bootstrap, WSL2, and Docker-mounted runtime. Canonical product identity must
+not depend on the absolute bootstrap path, the directory basename, a
+specific username, a specific gateway/remote-EDA hostname, or a specific
+personal Obsidian Vault path. Host/environment identities belong in
+configuration/execution profiles. (Enforced today: `dv_harness/l5dgva_repo.py`,
+`dv_harness/execution_profile.py`, `dv_harness/root_hygiene_gate.py`, the
+M1/M1D relocation + deployment-copy qualifications.)
+
+**P2 -- EVIDENCE_GROUNDED.** Important verification decisions must be
+grounded in evidence: Hypothesis -> Evidence -> Confidence -> Validation ->
+Action. This section does not replace the Evidence Truth Rule immediately
+below, which already contains this project's stronger, detailed evidence
+rules -- reference/reuse them rather than restating. AI inference alone is
+not sufficient evidence.
+
+**P3 -- KNOWLEDGE_DRIVEN.** L5DGVA must retrieve and evaluate applicable
+engineering knowledge before important generation/debug/coverage decisions
+where the workflow supports it, from the KC Engine, M1-M5 Memory, Obsidian
+integration, validated engineering knowledge, research-derived knowledge,
+and project-derived experience (see the Engineering Memory Policy section
+below). Knowledge is not operational merely because it is stored --
+operational knowledge requires evidence of retrieval -> applicability
+validation -> agent consumption -> decision/action impact -> recorded
+evidence.
+
+**P4 -- CONTINUOUS_EVOLUTION.** L5DGVA must support two learning loops:
+
+- **EXTERNAL LEARNING LOOP**: DV Research / Paper / New Technology ->
+  Research Intelligence -> Distillation -> Evidence / Provenance ->
+  Applicability -> Capability Candidate -> Experiment / Validation ->
+  Capability Evolution. (See Research Front Door / Research Stage
+  Boundaries / Confidence Calibration sections above.)
+- **INTERNAL LEARNING LOOP**: User Interaction / Project Execution ->
+  Generation / Simulation / RCA / Regression / Coverage / Signoff ->
+  Experience Extraction -> Evidence Grounding -> Applicability /
+  Generalization -> Knowledge Promotion -> Capability Evolution. (See
+  Cross-Loop Coupling / Self-Learning Readiness Matrix /
+  User-Correction-Triggered Capability-Evolution Gap Detection sections
+  above.)
+
+A single project observation must NOT automatically become a universal
+engineering rule.
+
+**P5 -- END_TO_END_DV_ALIGNMENT.** L5DGVA's product goal is not merely code
+generation. The intended verification lifecycle is: OpenSpec Intake -> DV
+Knowledge Retrieval -> Discovery -> Minimal Structured Clarification when
+necessary -> vPlan -> VIP/UVM Verification Environment Generation ->
+Sequence/Scenario/Firmware integration -> Checker/Scoreboard/Assertion ->
+Build/Smoke -> Local or Remote EDA Execution -> Regression -> RCA/Debug ->
+Functional Coverage Analysis -> Coverage-Hole Closure -> Requirements/
+Evidence Traceability -> Waiver handling where applicable -> SIGNOFF_READY
+-> Signoff -> Experience Consolidation -> COMPLETE.
+
+## Generic Verification Level Principle
+
+The same generic L5DGVA core serves IP, SUBSYSTEM, and SYSTEM_LEVEL scope --
+three independent duplicated orchestration engines must not become the
+default architecture. Differences are expressed through evidence-supported
+extension mechanisms (level profiles, protocol profiles, topology,
+capability adapters, registries, configuration) where appropriate. The
+final product must prove all three levels end-to-end.
+
+## Maximum Verified Capability Union
+
+The final Canonical L5DGVA is NOT a v50 copy, and NOT a Parent overwrite. It
+is the **Maximum Verified Capability Union** of all approved migration
+sources, followed by semantic-conflict resolution, defect correction,
+useful-capability operationalization, canonical architecture improvements,
+and new operational capabilities. Maximum capability union does NOT mean
+maximum file union -- duplicate, obsolete, generated, inferior, or
+non-operational duplicate implementations do not need to survive as
+duplicate files. No verified source capability may be silently lost. (See
+`.work/phase3-dual-repo-consolidation/CANONICAL_CAPABILITY_SUPERSET_MATRIX.md`
+for the live tracking artifact.)
+
+## Capability Operationalization Standard
+
+`IMPLEMENTED` / `WIRED` / `TRIGGERED` / `CONSUMED` / `OBSERVED` / `TESTED` --
+a module/file/method existing is NOT sufficient to claim an operational
+capability; telemetry existing is NOT equivalent to downstream consumption;
+tests existing are NOT by themselves proof of real workflow consumption.
+Preserve truthful PARTIAL/DORMANT/AUDIT_TELEMETRY states. Do not inflate
+completion status.
+
+## Continuous Research Evolution
+
+`CONTINUOUS_RESEARCH_EVOLUTION`: DV Paper / New Technology -> Research
+Ingestion -> Distillation -> Claims/Method Extraction -> Evidence/Provenance
+-> Applicability Analysis -> L5DGVA Capability Gap -> Capability Candidate
+-> Experiment/Validation -> Accept/Reject -> Canonical Capability Evolution.
+A research summary document alone does NOT qualify this capability as
+operational -- research must be capable of affecting validated future
+L5DGVA capability to qualify as a closed loop. (Real current status: see the
+Research Front Door / Cross-Loop Coupling / Self-Learning Readiness Matrix
+sections above and the capability matrix's RESEARCH_* rows.)
+
+## Continuous Project Experience Learning
+
+`CONTINUOUS_PROJECT_EXPERIENCE_LEARNING`: the system must learn, with
+evidence and applicability control, from Intake, User Interaction,
+Clarification, DUT/RTL/VIP/Topology Discovery, Generation Decisions, UVM
+Architecture, Sequence/Scenario Generation, Firmware/IRQ Integration, Build
+Failures, Simulation Failures, Debug, RCA, Fixes, Regression, Coverage
+Holes, Coverage Closure, Waivers, and Signoff -- via: Project/User
+Experience -> Experience Candidate -> Evidence -> Context -> Applicability
+-> Confidence -> Generalization -> Knowledge Promotion -> Future Retrieval
+-> Better Future Verification Generation.
+
+**Clarification Learning**: the future ClarificationService should learn
+from interaction -- question asked -> user answer -> later evidence proves
+the answer was auto-discoverable -> `QUESTION_AVOIDABLE` -> improve
+discovery strategy -> reduce unnecessary future clarification. This does
+NOT authorize guessing; auto-discovery must remain evidence-grounded.
+
+**Generation / RCA / Coverage learning**: preserve and evolve learning from
+(generation decision -> generated environment -> result -> failure ->
+correction -> successful outcome -> reusable generation experience),
+(failure -> hypothesis -> evidence -> root cause -> fix -> rerun ->
+validated RCA knowledge), and (vPlan feature -> coverage hole -> root cause
+-> stimulus/constraint/sequence/scenario change -> coverage delta ->
+closure -> reusable coverage-closure experience).
+
+**Experience Consolidation**: `SIGNOFF_READY -> SIGNOFF ->
+EXPERIENCE_CONSOLIDATION -> COMPLETE`. During execution, experience may
+accumulate in M2 Job Memory; at project consolidation, M2 Job -> M3 Project;
+cross-project validated engineering knowledge, M3 -> M4 Engineering;
+organization-reusable knowledge, M4 -> M5 Organizational -> Obsidian. Not
+claimed fully operational until M8/future qualification proves the closed
+loop.
+
+## Knowledge Authority Boundary
+
+OpenSpec/Intake = requirement authority. Git/canonical implementation =
+implementation authority. Runtime Evidence = execution truth. KC/Memory/
+Obsidian = engineering knowledge/rationale. Knowledge must not silently
+override authoritative requirement/runtime evidence -- a contradiction must
+trigger evidence resolution/clarification.
+
+## Canonical Platform Architecture (governance-level reference)
+
+**ZONE 1 -- LOCAL_CONTROL** (WSL2): Claude CLI/Multi-Agent, Git/Worktrees,
+OpenSpec/Intake, L5DGVA, Knowledge Brain, Generation, ExecutionService,
+LocalBackend, Docker, RemoteEDABackend client. **ZONE 2 -- ACCESS_GATEWAY**:
+access/transport only -- no L5 decision logic, no source-of-truth role.
+**ZONE 3 -- REMOTE_EDA**: VCS, LSF, Verdi/FSDB, ZeBu, HAPS, Coverage --
+execution plane, not implementation source of truth. Do NOT hard-code
+specific gateway/remote host names into generic architecture; host
+identities belong to execution profiles/configuration. This governance-only
+update does not redesign or implement any missing future platform
+component.
+
+**Execution abstraction target** (not yet implemented -- do not claim
+operational): L5 component -> ExecutionService -> ExecutionBackend
+(LocalBackend / RemoteEDABackend); remote target: RemoteEDABackend ->
+TelnetSSHTransport -> existing `remote_hop`/`remote_relay` -> Remote EDA.
+The existing known-good transport is wrapped first, never unnecessarily
+rewritten.
+
+**Knowledge Brain target**: KC Engine + M1 Working + M2 Job + M3 Project +
+M4 Engineering + M5 Organizational + KnowledgeService + Obsidian
+Adapter/CLI/Vault integration + Multi-Agent consumers. Agents should consume
+knowledge through the Knowledge architecture rather than each independently
+implementing direct Obsidian behavior; Obsidian must not be a competing
+requirement/implementation authority.
+
+## Constitutional Anti-Drift Rule
+
+No Agent, Skill, Workflow, Graph Node, Migration Wave, implementation task,
+optimization, cleanup, refactor, or local test fix may silently redefine or
+weaken Article 0. If a proposed change conflicts with Article 0 or one of
+the five constitutional dimensions: (1) identify the conflict; (2) preserve
+the current valid baseline; (3) report concrete evidence; (4) emit
+`ARCHITECTURE_CONFLICT`; (5) STOP the conflicting change; (6) require
+explicit architectural review. Do not weaken Article 0 merely to make
+implementation or tests easier.
+
+## Migration-Wave Compliance Reporting
+
+Every migration wave reports `HIGHEST_PRINCIPLE_COMPLIANCE`:
+`LOCATION_INDEPENDENT` / `EVIDENCE_GROUNDED` / `KNOWLEDGE_DRIVEN` /
+`CONTINUOUS_EVOLUTION` / `END_TO_END_DV_ALIGNMENT`, each `PASS`/`PARTIAL`/
+`FAIL` with evidence -- a wave may honestly report `PARTIAL` with a declared
+future owner wave (e.g. `KNOWLEDGE_DRIVEN = PARTIAL, DEFERRED_TO = M8`).
+Never report `PASS` without evidence.
+
+## Milestone Capability Gates
+
+`M1`: Canonical >= qualified v50 required baseline. `M8`: Canonical >=
+Maximum Verified Capability Union of approved migration sources. `M13`/
+Final: Canonical > Maximum Verified Capability Union of approved migration
+sources. The final strict-superset gate requires `SOURCE_CAPABILITY_LOSS =
+0`, `SOURCE_VERIFIED_CAPABILITIES_PRESERVED = 100%`,
+`CANONICAL_NEW_OPERATIONAL_CAPABILITIES > 0`,
+`CANONICAL_ENHANCED_CAPABILITIES > 0`, `CANONICAL_CAPABILITY_STRICT_SUPERSET
+= PASS` -- never claimed early.
+
+## Final Constitutional Acceptance
+
+`L5DGVA_CONSTITUTIONAL_COMPLIANCE = PASS` is a mandatory final-product-only
+acceptance requirement, additional to `CANONICAL_CAPABILITY_STRICT_SUPERSET
+= PASS`. Final completion must eventually prove at least:
+`LOCATION_INDEPENDENT = PASS`, `EVIDENCE_GROUNDED_DECISION_FLOW = PASS`,
+`KNOWLEDGE_DRIVEN_GENERATION = PASS`, `CONTINUOUS_RESEARCH_EVOLUTION =
+OPERATIONAL`, `CONTINUOUS_PROJECT_EXPERIENCE_LEARNING = OPERATIONAL`,
+`IP_END_TO_END = PASS`, `SUBSYSTEM_END_TO_END = PASS`,
+`SYSTEM_LEVEL_END_TO_END = PASS`, `VPLAN_TO_COVERAGE_SIGNOFF = PASS`,
+`REQUIREMENTS_TRACEABILITY = PASS`, `KNOWLEDGE_PROMOTION = PASS`,
+`AGENT_KNOWLEDGE_CONSUMPTION = OBSERVED`,
+`CANONICAL_CAPABILITY_STRICT_SUPERSET = PASS`. Do not claim L5DGVA COMPLETE
+before this constitutional gate passes. Neither this gate nor the
+strict-superset gate is claimed by any intermediate wave, including M3.
+
+## USB / PCIe Qualification Principle
+
+USB = first Golden end-to-end qualification; the Reference USB Environment
+must not be consumed before its approved qualification wave (M11). PCIe =
+the genericity challenge after USB, with the criterion
+`ZERO CORE ORCHESTRATION / GENERATION CHANGE` except approved protocol
+profiles, adapters, data, and explicit extension points -- proving the core
+is generic rather than USB-specific.
+
+
 ## Core Operating Rules
 - Graph is the global workflow authority.
 - Blackboard stores current verification truth.
