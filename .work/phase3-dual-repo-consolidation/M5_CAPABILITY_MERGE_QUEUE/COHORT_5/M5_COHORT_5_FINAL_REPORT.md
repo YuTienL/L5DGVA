@@ -7,7 +7,7 @@ M5_STATUS = IN_PROGRESS (per explicit instruction -- Cohort 5 closing
 M5_COHORT_5_STATUS = CLOSED
 
 START_HEAD = 6cc6e11
-END_HEAD = <set by this Cohort's own commit, see git log>
+END_HEAD = ecd6ddc469772ac1d2e1891254000ede86662d30 (commit ecd6ddc, this Cohort's own commit)
 
 CAP_M5_COV_001_STATUS = RESOLVED / CLOSED (real evidence resolved what
             the original M4 finding called a judgment call)
