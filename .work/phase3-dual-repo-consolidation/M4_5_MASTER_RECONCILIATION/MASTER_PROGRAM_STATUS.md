@@ -181,7 +181,13 @@ M11   -- USB Golden Qualification (REFERENCE_USB_ENV_CONSUMED stays NO
           `USB_GOLDEN_MAINTENANCE_QUALIFICATION_REQUIREMENTS.md`)
 M12   -- Canonical Cutover/Productization + Role-Based Action Dashboard
           (if no other owner is confirmed by then) + productization/UX of
-          the maintenance workflow
+          the maintenance workflow; also primary owner of Structured
+          Excel Intake PRODUCTIZATION (14 CAP-EXCEL-001..014
+          capabilities, ROADMAP_DEFINED this wave -- Excel is a frontend
+          to the same Canonical Intake/Field Resolution/OpenSpec engine
+          M6's ClarificationService wiring must exist before Excel can
+          integrate live; see
+          .work/phase3-dual-repo-consolidation/STRUCTURED_EXCEL_INTAKE/)
 M13   -- PCIe Zero-Core-Change + Strict Superset + Constitutional
           Compliance -- strict-superset qualification must now also
           include lifecycle-management capability AND Fast Path capability

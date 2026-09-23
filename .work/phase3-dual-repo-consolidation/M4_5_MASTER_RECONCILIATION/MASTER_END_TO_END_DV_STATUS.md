@@ -142,3 +142,18 @@ levels (`IP`/`SUBSYSTEM`/`SYSTEM_LEVEL` map to `CREATE_LIFECYCLE`;
 it does not change any stage's `CURRENT_STATUS` or `BLOCKER` in either
 table above, and no stage at any level becomes `OPERATIONAL` by virtue
 of this reconciliation.
+
+## Structured Excel Intake cross-reference (added by the L5DGVA Structured Excel Intake Integration reconciliation)
+
+Excel is a FRONTEND to the same Canonical Intake -> Field Resolution ->
+OpenSpec engine every stage's own `Clarification` row already depends
+on (`intake_field_resolution.py`, `FOUNDATION_CLOSED` since M5 Cohort
+4) — it does not change any stage's `CURRENT_STATUS`/`BLOCKER` in the
+tables above, and does not become `OPERATIONAL` by virtue of this
+reconciliation. `Clarification`'s existing blocker
+(`CAP-M6-CLARSVC-001`) is the same blocker all 14 new `CAP-EXCEL-*`
+capabilities cite as their own dependency — Excel cannot integrate live
+before that engine wiring exists, at any verification level. See
+`.work/phase3-dual-repo-consolidation/STRUCTURED_EXCEL_INTAKE/
+STRUCTURED_EXCEL_INTAKE_ARCHITECTURE.md`, `ROADMAP_DEFINED`, `NOT
+STARTED`, `PRODUCTION_IMPLEMENTATION_STARTED = NO`.

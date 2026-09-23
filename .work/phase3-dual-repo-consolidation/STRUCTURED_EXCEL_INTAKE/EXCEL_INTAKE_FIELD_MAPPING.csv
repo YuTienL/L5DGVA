@@ -1,0 +1,31 @@
+EXCEL_FIELD,CANONICAL_EQUIVALENT,CANONICAL_SOURCE,DIRECTION,NOTES
+FIELD_ID,FieldControl.field_id,dv_harness/intake_field_resolution.py,READ,"Direct 1:1, already a real field"
+CATEGORY,FieldControl.domain,dv_harness/intake_field_resolution.py,READ,"domain is one of ('dut','env','vip') today (QUESTION_DOMAINS); Excel CATEGORY may be a coarser presentation grouping over the same value, never a second taxonomy"
+DESCRIPTION,FieldControl.notes,dv_harness/intake_field_resolution.py,READ,Direct
+QUESTION_OWNER,DE/DV/SHARED role routing,DE_DV_ROLE_BASED_HITL_ARCHITECTURE.md (this session's own frozen role model),READ,"Rendered from the same role model CAP-HITL-* already established; no new role enum"
+DECLARED_VALUE,EffectiveValue._values_of(SourceKind.DECLARED) via to_openspec_record()['declared_value'],dv_harness/intake_field_resolution.py,READ,Direct
+AUTO_DISCOVERED_VALUE,to_openspec_record()['auto_discovered_value'],dv_harness/intake_field_resolution.py,READ,Direct
+DERIVED_VALUE,to_openspec_record()['derived_value'],dv_harness/intake_field_resolution.py,READ,Direct
+EFFECTIVE_VALUE,to_openspec_record()['effective_value'],dv_harness/intake_field_resolution.py,READ,"Direct; NEVER a write target for Excel import (see EXCEL_ROUND_TRIP_CONTRACT.md)"
+CONFIDENCE,to_openspec_record()['confidence'],dv_harness/intake_field_resolution.py,READ,"Direct; UNKNOWN/LOW/MEDIUM/HIGH, same vocabulary as canonical's own inference.CONFIDENCE_LEVELS"
+VALIDATION_STATE,to_openspec_record()['validation_state'],dv_harness/intake_field_resolution.py,READ,Direct
+CONFIRMATION_STATE,to_openspec_record()['confirmation_state'],dv_harness/intake_field_resolution.py,READ,Direct
+EVIDENCE_SUMMARY,EffectiveValue.evidence_refs (rendered as a human-readable summary),dv_harness/intake_field_resolution.py,READ,"Presentation layer over the real evidence_refs list; never fabricated text"
+USER_ACTION,new Excel-only presentation concept,N/A (Excel Import layer),WRITE (import-time),"One of NO_ACTION_REQUIRED/PROVIDE_VALUE/CONFIRM_VALUE/REJECT_VALUE/CORRECT_VALUE/SELECT_OPTION/REQUEST_EXPLANATION/DEFER/WAIVE_IF_ALLOWED -- see USER_ACTIONS mapping below"
+USER_VALUE,new Candidate(kind=SourceKind.DECLARED or CLARIFICATION_ANSWER),dv_harness/intake_field_resolution.py Candidate,WRITE (import-time),"Becomes a NEW candidate via resolve_field()/resolve_recorded(), never a direct EffectiveValue write"
+USER_COMMENT,Candidate.validation_note (or a future structured-clarification note field, per KNOWN_TECHNICAL_GAPS),dv_harness/intake_field_resolution.py,WRITE (import-time),"Carried as import provenance regardless of whether it maps cleanly to an existing Candidate field"
+REQUIRED,FieldControl.required,dv_harness/intake_field_resolution.py,READ,Direct
+BLOCKING,derived from evaluate_question_gate()'s own ask/ QuestionDecision.kind,dv_harness/intake_field_resolution.py,READ,"A field whose question gate says ask=True with kind CONFLICT/UNKNOWN is BLOCKING; CONFIRMATION-kind may or may not be, per policy"
+SOURCE_REFERENCE,Candidate.location / Candidate.evidence_refs,dv_harness/intake_field_resolution.py,READ,Direct
+
+# --- USER_ACTIONS -> Canonical semantics mapping ---
+USER_ACTION_VALUE,CANONICAL_EFFECT,NOTES
+NO_ACTION_REQUIRED,No new candidate created; field already resolved/not applicable,Default for READ_ONLY rows
+PROVIDE_VALUE,New Candidate(kind=DECLARED) submitted for a field with no prior value,Routes through resolve_field()'s normal arbitration -- not automatically the EffectiveValue
+CONFIRM_VALUE,"New Candidate(kind=CLARIFICATION_ANSWER, origin=HUMAN_EXPLICIT) OR a human_answer= override, per policy","CONFIRM on an already-discovered value is the CONFIRMATION_REQUIRED path (evaluate_question_gate()'s CONFIRMATION kind)"
+REJECT_VALUE,Marks the existing candidate INVALID via the validator callback; does not itself supply a replacement,Requires a follow-up PROVIDE_VALUE or CORRECT_VALUE to actually resolve the field
+CORRECT_VALUE,New Candidate(kind=DECLARED) that explicitly supersedes a rejected/wrong discovered value,Same arbitration as PROVIDE_VALUE -- correction is not automatic authority
+SELECT_OPTION,New Candidate chosen from a pre-researched conflict option set (file_clarification()'s own options shape),Used for the CONFLICT question kind's own 2-3 option list
+REQUEST_EXPLANATION,No candidate created; a real request routed to the question/evidence chain for more detail,Never silently ignored; must surface to a human reviewer
+DEFER,No candidate created; field remains UNRESOLVED for this pass,Distinct from REJECT_VALUE -- defer takes no position on the value's correctness
+WAIVE_IF_ALLOWED,"Policy/authority-gated -- only valid where the field's own control metadata permits a waiver (not a generic override)",Authority-driven per Canonical policy; Excel cannot grant a waiver Canonical policy does not already allow
