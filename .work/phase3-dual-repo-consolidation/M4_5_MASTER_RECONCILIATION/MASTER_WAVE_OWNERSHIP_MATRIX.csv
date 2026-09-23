@@ -31,8 +31,8 @@ CAP-M3-003,l5dgva_v5_ss86 taxonomy wiring,M7,,P3,ENGINEERING (wiring)
 CAP-M3-004,diagnostic_bound_compatibility.py wiring,M7,,P3,ENGINEERING (wiring)
 CAP-M4.5-005,CHATGPT_PLANNING_OFFLOAD automation,M7,,P3,ENGINEERING (currently stale/abandoned) (owner reassigned M8->M7 per M4.6 S21 instruction)
 CAP-M4.5-007,STRUCTURED_AGENT_HANDOFF operationalization + task/planning schema,M7,CAP-M4.5-004,P3,ENGINEERING (design not started for task/planning half) (owner reassigned M8->M7 per M4.6 S21 instruction)
-CAP-M4.5-008,CONTEXT_DISTILLATION for multi-model handoff content,M8,,P3,ENGINEERING (not started)
-CAP-M4.5-009,SESSION_RESUME audit,M8,,P3,PROCESS (needs a dedicated audit)
+CAP-M4.5-008,CONTEXT_DISTILLATION for multi-model handoff content,M7,,P3,"ENGINEERING (not started) (owner reassigned ->M7, all 8 token-efficiency sub-capabilities normally owned by M7)"
+CAP-M4.5-009,SESSION_RESUME audit,M7,,P3,"PROCESS (needs a dedicated audit) (owner reassigned ->M7, all 8 token-efficiency sub-capabilities normally owned by M7)"
 CAP-M4.5-011,Cross-model TOKEN_REDUCTION_MEASUREMENT,M8,CAP-M4.5-010,P3,ENGINEERING (not started)
 CAP-POOL-001,engine_maturity_state.py,M5,,P3,ENGINEERING (dependency chain)
 CAP-POOL-002,l5dgva_ss570_claude_verdict_truth.py,M8,CAP-M4.5-006,P3,ENGINEERING (dependency chain)
@@ -46,3 +46,12 @@ CAP-POOL-011,eight_engine_telemetry_rollup.py,M5,,P3,ENGINEERING (dependency cha
 CAP-POOL-012,rtl_filelist_parser.py,M5,,P3,PROCESS (dormancy question open)
 REMAINING_UNCLASSIFIED_POOL,~157 of 177 MIGRATE_REQUIRED closure members not yet individually triaged,M5,,P2,"PROCESS (bulk-tracked, per M3's own disclosed scope limitation)"
 CAP-M4.6-001,CLAUDE_ALWAYS_ON_CONTEXT_NORMALIZATION,M4.6,,P1 (closed),none (closed this wave)
+CAP-CE-018,"CONTINUOUS_PROJECT_EXPERIENCE_LEARNING (composite, internal loop)",M8,CAP-M8-EXPLOOP-001;CAP-M8-EXPLOOP-002,P0,"ENGINEERING (structural, all trees)"
+CAP-M4.6-002,GLOBAL_DISCOVERABILITY_CONTRACT,M8,CAP-M4.5-002,P1,PROCESS (no systematic re-audit of the other 300 TASK_SCOPED sections performed)
+CAP-CE-008,PROJECT_EXPERIENCE_EXTRACTION,M8,CAP-M8-EXPLOOP-002,P1,ENGINEERING (net-new unified record type)
+CAP-CE-010,CLARIFICATION_LEARNING,M8,CAP-M8-EXPLOOP-002,P1,ENGINEERING (net-new mechanism)
+CAP-CE-011,GENERATION_EXPERIENCE_LEARNING,M8,CAP-M8-EXPLOOP-002,P1,ENGINEERING (net-new mechanism)
+CAP-CE-014,SIGNOFF_EXPERIENCE_CONSOLIDATION,M8,CAP-M8-EXPLOOP-001;CAP-M8-EXPLOOP-002,P1,ENGINEERING (net-new mechanism)
+CAP-CE-012,RCA_EXPERIENCE_LEARNING,M8,CAP-M8-EXPLOOP-001,P2,"ENGINEERING (narrow today, needs full RCA-to-fix record)"
+CAP-M4.5-012,CLAUDE_FOCUSED_IMPLEMENTATION,M7,CAP-M4.5-005;CAP-M4.5-006,P3,"ENGINEERING (pipeline stage, no automated hand-off)"
+CAP-M4.5-013,TOKEN_EFFICIENT_MULTI_MODEL_ORCHESTRATION (composite),M7,CAP-M4.5-005;CAP-M4.5-006;CAP-M4.5-007;CAP-M4.5-008;CAP-M4.5-009;CAP-M4.5-010;CAP-M4.5-012,P2,ENGINEERING (composite of mostly-incomplete sub-capabilities)

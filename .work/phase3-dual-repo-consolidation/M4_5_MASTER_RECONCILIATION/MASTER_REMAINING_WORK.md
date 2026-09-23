@@ -21,11 +21,25 @@ part of producing this document.**
   capabilities migrated (CAP-M4-001/002), governing-contract-corpus
   finding disclosed, M5/M6 prerequisite matrices produced (8 and 2
   unresolved respectively).
-- M4.5 (in progress at the time of this reconciliation): governance
-  registry (`TASK_SCOPED_GOVERNANCE_RETRIEVAL`) built and OPERATIONAL as
-  an API; ChatGPT/Codex/multi-model orchestration audited and confirmed
+- M4.5 (B)/(C) sub-scope: governance registry (`TASK_SCOPED_GOVERNANCE_RETRIEVAL`)
+  built and now **OPERATIONAL** (upgraded from a merely-tested API once
+  M4.6 made CLAUDE.md's own routing table its real, live consumer);
+  ChatGPT/Codex/multi-model orchestration audited and confirmed
   `NOT_PRESENT` as a working loop; Constitution/Anti-Drift gate re-run
-  clean this wave (`PASS`, 0 reasons).
+  clean (`PASS`, 0 reasons). **M4.5 (A) — the governing-contract-corpus
+  decision — remains OPEN, P0, and is this reconciliation's own
+  evidence-based `NEXT_RECOMMENDED_GATE`** (see `MASTER_PROGRAM_STATUS.md`).
+- **M4.6 — CLAUDE Context Normalization: COMPLETE, APPROVED.** CLAUDE.md
+  2,067,655 -> 113,125 bytes (94.53%), 22,461 -> 1,655 lines; 321 detailed
+  sections relocated verbatim into 7 registered governance documents.
+  A real regression (`REGRESSION_CAUSED_BY_M4_6 = 3` at checkpoint
+  `030c4eb`) was found, root-caused (3 Research Front Door discoverability
+  facts had moved out of `ALWAYS_ON` content), and fixed (`c877944`) —
+  the fresh regression against the fix is byte-identical to the accepted
+  M4 baseline (`REGRESSION_CAUSED_BY_M4_6 = 0`). New architectural lesson
+  captured as `GLOBAL_DISCOVERABILITY_CONTRACT` (`CAP-M4.6-002`, `PARTIAL`
+  — only the one caught instance is closed, no systematic re-audit of the
+  other 300 `TASK_SCOPED` sections performed).
 
 ## What is PARTIAL
 

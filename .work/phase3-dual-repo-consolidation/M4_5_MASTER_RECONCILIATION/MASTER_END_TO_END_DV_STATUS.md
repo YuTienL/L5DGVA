@@ -1,68 +1,74 @@
-# Master End-to-End DV Status — IP / SUBSYSTEM / SYSTEM_LEVEL
+# Master End-to-End DV Status — IP / SUBSYSTEM / SYSTEM_LEVEL (v2, post-M4.6)
 
-Per instruction #11/S18: the full flow (`OpenSpec Intake → Knowledge
-Retrieval → Discovery → Minimal Clarification → vPlan → VIP/UVM
-Generation → Sequence/Scenario/FW → Checker/Scoreboard/Assertion →
-Execution → Regression → RCA → Coverage Closure →
-Traceability/Waiver → Signoff → Experience Consolidation`) evaluated
-separately for each verification level, using only accepted evidence.
-Where no accepted-evidence artifact independently covers a stage at
-per-level granularity, this is stated as `NOT_RE-AUDITED_THIS_WAVE`
-rather than assumed — per instruction, absence of evidence is not
-treated as evidence of absence, and a fresh audit was not launched to
-manufacture per-cell precision this reconciliation was not asked to
-produce from scratch.
+Per reconciliation instruction section F: 17 named stages, evaluated
+separately per verification level, with the exact first non-operational
+stage and its owner wave identified for each. Reused evidence only
+(M4/M4.5/M4.6 artifacts, `environment_mode_router.py`,
+`intake_routing.py`); no new source audit performed. Where no accepted
+artifact independently covers a stage at this granularity, it is marked
+`NOT_RE-AUDITED_THIS_WAVE` rather than guessed.
 
-## Mode-selection foundation (blocks everything downstream, per level)
+## IP_MODE
 
-```
-IP_MODE          = NOT_PRESENT as a router concept.
-                    environment_mode_router.py (canonical) supports
-                    SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE only, re-confirmed
-                    this M4 wave. verification_level.py itself (which
-                    would define IP_MODE's semantics) is Parent-only,
-                    absent from canonical (CAP-M5M6-VLEVEL-001, P0).
-SUBSYSTEM_MODE   = WIRED (tools/generate_protocol_uvm_environment.py ->
-                    create_environment.py -> ProtocolEnvGenerator,
-                    per CLAUDE.md's own current architecture description)
-                    but with a KNOWN_SOURCE_B_DEFECT still latent in
-                    create_environment.py (M1 disposition, re-confirmed
-                    unchanged by M4 -- CAP-M5-ARCH-001).
-SYSTEM_LEVEL_MODE = WIRED (compose_soc_environment(), real registered-
-                    subsystem-registry check + cross-subsystem
-                    pre-check) but soc_environment_composer.py's own
-                    ARCH-03 foundation contract is UNRESOLVED
-                    (CAP-M5-ARCH-002), and cross-subsystem behavioral
-                    scenario/scoreboard/coverage CONTENT is explicitly
-                    NotImplementedError by design (per the No
-                    Golden-Reference Content Mining rule) -- a disclosed
-                    scope boundary, not a defect.
-```
-
-## Per-stage-cluster status by level
-
-| Stage cluster | IP_MODE | SUBSYSTEM_MODE | SYSTEM_LEVEL_MODE |
+| # | Stage | Status | Notes |
 |---|---|---|---|
-| Intake/Knowledge/Discovery/Clarification | BLOCKED (no IP_MODE routing at all) | PARTIAL (ClarificationService not yet built — CAP-M6-CLARSVC-001; intake routing otherwise real per `intake_routing.py`) | PARTIAL (same ClarificationService gap; SYSTEM_LEVEL_MODE's own subsystem-registry check is real) |
-| vPlan / VIP-UVM Generation | BLOCKED (no mode entry point) | WIRED, with 1 latent defect (KNOWN_SOURCE_B_DEFECT) | WIRED, with 1 unresolved foundation contract (ARCH-03) + disclosed NotImplementedError content boundary |
-| Sequence/Scenario/FW, Checker/Scoreboard/Assertion | BLOCKED | NOT_RE-AUDITED_THIS_WAVE | NOT_RE-AUDITED_THIS_WAVE (content generation explicitly NotImplementedError for cross-subsystem behavior) |
-| Execution / Regression / RCA | BLOCKED (no IP-level artifact to execute) | READY per M4 (`EXECUTION_FOUNDATION = READY`); CURRENT `replay.ps1` path real, TARGET `ExecutionService` not operational (level-agnostic gap, CAP-M9-EXEC-001) | Same as SUBSYSTEM_MODE — execution architecture is level-agnostic |
-| Coverage Closure / Traceability / Signoff | BLOCKED | PARTIAL (`VPLAN_COVERAGE_TRACEABILITY_FOUNDATION = READY` per M4; `functional_coverage_signoff.py` judgment call open, CAP-M5-COV-001) | PARTIAL (same foundation; cross-subsystem coverage content boundary above) |
-| Experience Consolidation | BLOCKED | ABSENT (`SIGNOFF_EXPERIENCE_CONSOLIDATION` confirmed absent on every tree, level-agnostic) | ABSENT (same, level-agnostic) |
+| 1 | OpenSpec Intake | **BLOCKED (first non-operational stage)** | `environment_mode_router.py` has no `IP_MODE` concept at all; there is no entry point to reach IP-level intake in the first place |
+| 2–17 | Knowledge Retrieval … Experience Consolidation | BLOCKED (downstream of #1) | Every later stage is unreachable while #1 has no router entry point |
 
-## Reading this table
+```
+IP_MODE_FIRST_NON_OPERATIONAL_STAGE = "1. OpenSpec Intake" (mode-selection foundation itself)
+IP_MODE_OWNER_WAVE = M6 (CAP-M5M6-VLEVEL-001 -- verification_level.py / IP_MODE genericity foundation)
+```
 
-- **IP_MODE is `BLOCKED` end-to-end** — not because every individual
-  downstream mechanism is missing, but because there is no router entry
-  point that ever reaches them in IP mode. This is the single largest
-  concrete E2E gap this reconciliation surfaces: closing
-  `CAP-M5M6-VLEVEL-001` is a prerequisite for the entire IP-level column,
-  not an isolated foundation nit.
-- **SUBSYSTEM_MODE and SYSTEM_LEVEL_MODE are both further along than
-  IP_MODE** (real dispatch exists for both), but neither is claimed
-  `OPERATIONAL` end-to-end: each carries at least one open M5 foundation
-  contract, and both share the level-agnostic Execution-TARGET and
-  Experience-Consolidation gaps.
-- No stage cluster in this table is asserted `OPERATIONAL` for any level
-  — consistent with `CANONICAL_CAPABILITY_STRICT_SUPERSET = NOT_YET_QUALIFIED`
-  and this reconciliation's own instruction not to claim early completion.
+## SUBSYSTEM_MODE
+
+| # | Stage | Status | Notes |
+|---|---|---|---|
+| 1 | OpenSpec Intake | WIRED | `intake_routing.py` + `environment_mode_router.py` real dispatch confirmed |
+| 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | |
+| 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | |
+| 4 | Clarification | **BLOCKED (first non-operational stage)** | `ClarificationService` not yet built (architecture decided, D2; feature work not started — CAP-M6-CLARSVC-001) |
+| 5 | vPlan | PARTIAL (downstream of #4, but `VPLAN_COVERAGE_TRACEABILITY_FOUNDATION = READY` per M4) | |
+| 6 | VIP/UVM Generation | WIRED, 1 latent defect | `create_environment.py` -> `ProtocolEnvGenerator`; `KNOWN_SOURCE_B_DEFECT` re-confirmed unchanged (CAP-M5-ARCH-001) |
+| 7–17 | Sequence/Scenario/FW … Experience Consolidation | NOT_RE-AUDITED_THIS_WAVE except where already tracked (Coverage Closure PARTIAL per CAP-M5-COV-001; Experience Consolidation ABSENT per CAP-CE-014) | |
+
+```
+SUBSYSTEM_MODE_FIRST_NON_OPERATIONAL_STAGE = "4. Clarification"
+SUBSYSTEM_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
+```
+
+## SYSTEM_LEVEL_MODE
+
+| # | Stage | Status | Notes |
+|---|---|---|---|
+| 1 | OpenSpec Intake | WIRED | same router dispatch as SUBSYSTEM_MODE |
+| 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | |
+| 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | |
+| 4 | Clarification | **BLOCKED (first non-operational stage)** | same `ClarificationService` gap as SUBSYSTEM_MODE |
+| 5 | vPlan | PARTIAL | |
+| 6 | VIP/UVM Generation | WIRED, 1 unresolved foundation contract | `compose_soc_environment()` real registered-subsystem-registry check + cross-subsystem pre-check; `soc_environment_composer.py`'s ARCH-03 contract UNRESOLVED (CAP-M5-ARCH-002) |
+| 7 | Sequence/Scenario/FW | PARTIAL, disclosed scope boundary | cross-subsystem behavioral scenario content is explicitly `NotImplementedError` by design (No Golden-Reference Content Mining rule), not a defect |
+| 8 | Checker/Scoreboard/Assertion | PARTIAL, same disclosed boundary | |
+| 9–17 | Execution … Experience Consolidation | NOT_RE-AUDITED_THIS_WAVE except where already tracked (Coverage Closure PARTIAL; Experience Consolidation ABSENT) | |
+
+```
+SYSTEM_LEVEL_MODE_FIRST_NON_OPERATIONAL_STAGE = "4. Clarification"
+SYSTEM_LEVEL_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
+```
+
+## Cross-level reading
+
+`IP_MODE` is blocked at the very first stage (no router entry point at
+all) — a strictly earlier and more severe gap than `SUBSYSTEM_MODE`/
+`SYSTEM_LEVEL_MODE`, both of which reach real intake dispatch before
+hitting the shared `ClarificationService` gap at stage 4. **Closing
+`CAP-M5M6-VLEVEL-001` (owner M6) unblocks IP_MODE's stage 1;
+closing `CAP-M6-CLARSVC-001` (owner M6) unblocks stage 4 for all three
+levels.** Both are M6-owned, not M5 — reinforcing that M5's own N-way
+merge scope (env_manifest.py, vip_capability_extraction.py, etc.) is
+not what stands between today's state and a further-operational E2E
+flow at any level; M6's core-dispatch/ClarificationService/
+VerificationLevel work is the more load-bearing near-term blocker.
+
+No stage at any level is claimed `OPERATIONAL` end-to-end — consistent
+with `CANONICAL_CAPABILITY_STRICT_SUPERSET = NOT_YET_QUALIFIED`.
