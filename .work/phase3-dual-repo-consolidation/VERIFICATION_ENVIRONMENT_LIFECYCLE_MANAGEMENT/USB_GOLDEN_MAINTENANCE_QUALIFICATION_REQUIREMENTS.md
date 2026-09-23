@@ -121,3 +121,19 @@ USB_GOLDEN_FAST_TO_FULL_ESCALATION_QUALIFICATION = ROADMAP_DEFINED (new
 M11_STARTED = NO
 M10_5_STARTED = NO
 ```
+
+## Fifth scenario (USB Excel Qualification & KC Learning Integration reconciliation)
+
+`USB_EXCEL_KC_LEARNING_QUALIFICATION` is added as a fifth M11 scenario,
+alongside the quad above (A/B/C/D unchanged by this addition): USB
+Golden inputs -> Canonical Intake/Discovery/Field Resolution -> USB
+generation -> Excel V1 -> qualification -> gap/RCA -> Experience/KC ->
+promotion -> Knowledge Brain -> new independent generation -> KC
+retrieval/consumption -> Excel V2 -> re-qualify -> V1/V2 measurement.
+Reuses the real M8 Knowledge Brain (`memory.py`/`memory_router.py`/
+`memory_vault.py`, confirmed present and unchanged) and the real M5
+Cohort-4 `intake_field_resolution.py` engine -- no new engine. See
+`.work/phase3-dual-repo-consolidation/USB_EXCEL_KC_LEARNING/` for the
+full architecture, metrics, gap taxonomy, KC extraction/regeneration
+contracts, V1/V2 comparison requirements, and the closed-loop gate
+definition. `ROADMAP_DEFINED`, ZERO implementation, `M11_STARTED = NO`.

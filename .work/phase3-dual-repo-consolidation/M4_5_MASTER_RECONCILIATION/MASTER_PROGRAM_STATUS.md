@@ -178,7 +178,15 @@ M11   -- USB Golden Qualification (REFERENCE_USB_ENV_CONSUMED stays NO
           customization; (C) a bounded maintenance defect solved through
           Native Claude Fast Path; (D) a Fast Path task correctly
           escalating to Full L5DGVA with context/evidence preserved (see
-          `USB_GOLDEN_MAINTENANCE_QUALIFICATION_REQUIREMENTS.md`)
+          `USB_GOLDEN_MAINTENANCE_QUALIFICATION_REQUIREMENTS.md`);
+          **quintuple-scoped as of this wave**: (E)
+          USB_EXCEL_KC_LEARNING_QUALIFICATION -- Excel V1/V2 generation
+          qualification + closed-loop Experience/KC learning
+          (Generate->Excel V1->Qualify->Gap/RCA->KC->Promotion->
+          Knowledge Brain->New Generation->KC Retrieval/Consumption->
+          Excel V2->Re-qualify->V1/V2 Measurement), reusing M8's real
+          Knowledge Brain unchanged (see
+          `.work/phase3-dual-repo-consolidation/USB_EXCEL_KC_LEARNING/`)
 M12   -- Canonical Cutover/Productization + Role-Based Action Dashboard
           (if no other owner is confirmed by then) + productization/UX of
           the maintenance workflow; also primary owner of Structured

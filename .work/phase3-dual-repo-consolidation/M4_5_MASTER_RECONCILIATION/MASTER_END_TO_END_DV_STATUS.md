@@ -157,3 +157,18 @@ before that engine wiring exists, at any verification level. See
 `.work/phase3-dual-repo-consolidation/STRUCTURED_EXCEL_INTAKE/
 STRUCTURED_EXCEL_INTAKE_ARCHITECTURE.md`, `ROADMAP_DEFINED`, `NOT
 STARTED`, `PRODUCTION_IMPLEMENTATION_STARTED = NO`.
+
+## USB Excel Qualification & KC Learning cross-reference (added by the USB Excel Qualification & KC Learning Integration reconciliation)
+
+A fifth M11 scenario (`USB_EXCEL_KC_LEARNING_QUALIFICATION`) qualifies
+the Structured Excel Intake frontend against real USB Golden generation
+output and closes a real Experience -> KC -> Promotion -> Retrieval ->
+Consumption -> Re-generation -> Measurement loop, reusing M8's real
+Knowledge Brain unchanged (`ONE_KNOWLEDGE_BRAIN = YES`). Like the Excel
+cross-reference above, this does not change any stage's
+`CURRENT_STATUS`/`BLOCKER` in either lifecycle table and does not make
+any stage `OPERATIONAL`. See
+`.work/phase3-dual-repo-consolidation/USB_EXCEL_KC_LEARNING/
+USB_EXCEL_KC_LEARNING_QUALIFICATION_ARCHITECTURE.md`, `ROADMAP_DEFINED`,
+`NOT STARTED`, `PRODUCTION_IMPLEMENTATION_STARTED = NO`,
+`REFERENCE_USB_ENV_CONSUMED = NO`.
