@@ -8,7 +8,7 @@ M5_POOL_CLOSURE_STATUS = PARTIAL (2 of 6 closed; 4 remain OPEN,
             correctly not force-closed)
 
 START_HEAD = 4bf5080
-END_HEAD = <set by this task's own commit, see git log>
+END_HEAD = c6acde1576fb561b66c483ddcb445a4887c4f1b9 (commit c6acde1, this task's own commit)
 
 CAP_POOL_001 = OPEN (blocked on eight_engine_runtime_proof_matrix.py, out of scope)
 CAP_POOL_003 = OPEN (blocked on a 3-level chain, out of scope)
