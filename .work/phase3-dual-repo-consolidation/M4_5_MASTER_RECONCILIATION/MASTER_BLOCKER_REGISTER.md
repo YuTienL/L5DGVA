@@ -1,4 +1,22 @@
-# Master Blocker Register (v7, post-M5-Cohort-5-closure)
+# Master Blocker Register (v8, post-M5.9-ownership-reconciliation)
+
+**v8 update (M5.9 Ownership Reconciliation, 2026-09-23)**: reviewed
+Cohort 5's 10-item `M5` -> `M6` reassignment and found it **partially
+wrong**. The 4 `CAP-ATL-001/002/003/008` items are correctly `M6`
+(every foundation they build on -- `AgentTaskStore`, `question_queue.py`,
+`memory_router.py`, `session_snapshot.py`, `agent_checkpoint_check.py`,
+`task_return_model.py`, `models.Status` -- is already real and present
+in canonical; remaining work is wiring/dispatch-conditioned). The 6
+`CAP-POOL-001/003/004/008/011/012` items are **reverted M6 -> M5**: they
+are real, un-migrated Parent code (or blocked on a real, un-migrated
+Parent dependency), which the explicit ownership rule keeps M5-owned
+regardless of Cohort scheduling. `P0_BLOCKERS` **unchanged at 5** (none
+of the 10 items was ever P0). Honest result, not optimized for a clean
+number: `M5_CAPABILITIES_OPEN = 6` (the 6 reverted POOL items, all
+genuinely un-migrated) -- **`M5_READY_FOR_FINAL_CLOSURE_REGRESSION =
+NO`** until those 6 are resolved or given a different disposition by a
+future dedicated task. See
+`M5_9_OWNERSHIP_RECONCILIATION/M5_9_OWNERSHIP_RECONCILIATION.md`.
 
 **v7 update (M5 Cohort 5, 2026-09-23)**: `CAP-M5-COV-001` resolved
 CLOSED and `CAP-M5-DSI-001` resolved SUPERSEDED this wave -- neither was

@@ -92,5 +92,14 @@ reconciliation performed as part of Cohort 5 found 10 additional items
 actually dispatched by any Cohort 0-5 instruction; reassigned
 `PRIMARY_OWNER_WAVE` M5->M6 this wave (disclosed scope-closure
 decision) -- see `COHORT_5/M5_COHORT_5_CAPABILITY_INVENTORY.md`.
-`UNRESOLVED_M5_CAPABILITIES = 0` for the 15 rows remaining M5-owned.
-`M5_STATUS` remains `IN_PROGRESS` pending a final closure regression.
+**M5.9 OWNERSHIP RECONCILIATION (2026-09-23) reviewed that 10-item move
+and found it partially wrong**: the 4 `CAP-ATL-001/002/003/008` items
+are correctly `M6` (real, wiring/dispatch-conditioned work over
+already-present foundations); the 6 `CAP-POOL-*` items are reverted
+`M6` -> `M5` (real, un-migrated Parent code, which the explicit
+ownership rule keeps M5-owned) -- see
+`M5_9_OWNERSHIP_RECONCILIATION/M5_9_OWNERSHIP_RECONCILIATION.md`.
+`M5_CAPABILITIES_OPEN = 6` honestly (the reverted POOL items, all
+genuinely un-migrated) -- `M5_READY_FOR_FINAL_CLOSURE_REGRESSION = NO`
+until they are resolved or given a different disposition.
+`M5_STATUS` remains `IN_PROGRESS`.
