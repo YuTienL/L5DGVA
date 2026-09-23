@@ -208,3 +208,110 @@ not see. Removed rather than forced through, per "do not force it into M3."
   registry, would pass standalone, but per this cohort's "adequate test
   evidence to qualify" bar, the whole file is held rather than partially
   imported with 2 known-red tests).
+
+---
+
+# M3 — Cohort 2: Research/Experience-Learning Capability-Family Preservation Audit
+
+Per the explicit capability-preservation addendum. A dedicated read-only
+audit agent traced RESEARCH_INGESTION/DV_PAPER_DISTILLATION/... and
+PROJECT_EXPERIENCE_EXTRACTION/USER_INTERACTION_LEARNING/... across Parent,
+v50/canonical, and worktrees b7a/b7b/b8 -- modules, agents, skills,
+workflows, hooks, graph nodes, tests, CLAUDE.md, Obsidian/memory/KC
+integration. Full findings folded into `CANONICAL_CAPABILITY_SUPERSET_MATRIX.md`'s
+new capability-family section.
+
+## Headline finding
+
+**Canonical (cloned from v50) already had the overwhelming majority of both
+families' real implementation** -- v50 was materially ahead of Parent here,
+not behind it, at the time of this audit. Already present and preserved via
+the M1 bootstrap (re-verified present in this canonical repo just now, not
+assumed): `self_learning_readiness.py`, `memory_lineage.py`,
+`memory_quality_policy.py`, `user_correction_trigger.py`,
+`coverage_closure_hole_correlation.py`, the confidence-reweight functions in
+`confidence_calibration.py`/`capability_evolution.py`,
+`coverage_closure_action_utility.py`, `cross_project_mining.py`.
+
+## CAP-M3-005: `coverage_hole_generation_candidate_queue.py`
+
+```
+CAPABILITY_ID = CAP-M3-005
+CAPABILITY_NAME = Autonomous Hole-Driven Test Generation, DETECTION/RANKING half (V9 SS205)
+CAPABILITY_DOMAIN = COVERAGE_CLOSURE_LEARNING
+
+SOURCE_CLASS = MIGRATE_REQUIRED_DIRECT
+SOURCE_REPO = PARENT
+SOURCE_HEAD = 3e9dd7360f584078ed8f4b04120c9844acabd97b
+SOURCE_PATH = dv_harness/coverage_hole_generation_candidate_queue.py
+SOURCE_SYMBOLS = SCHEMA_VERSION + the real join logic over
+  coverage_analysis.classify_coverage_hole()'s eligibility classification
+  and coverage_closure_action_utility.rank_coverage_closure_actions()'s
+  ranking. Explicitly, by its own docstring, does NOT generate test
+  content -- detection/ranking only.
+
+SOURCE_OPERATIONALIZATION: IMPLEMENTED, TESTED. WIRED/TRIGGERED/CONSUMED/
+  OBSERVED not independently re-verified this cohort (would require
+  engine.py consumer evidence, out of M3 scope).
+
+DEPENDENCIES = .coverage_analysis (CLASSES_REQUIRING_HUMAN_ESCALATION,
+  CLASSES_REQUIRING_MORE_SEEDS, CLASSES_REQUIRING_TEST_REGENERATION,
+  classify_coverage_hole) + .coverage_closure_action_utility
+  (CoverageClosureRanking, format_ranking_report, rank_coverage_closure_actions)
+  -- IMPORTANT CORRECTION recorded here: an earlier pass in this same
+  session had deferred this file to M5 on the coarse-grained finding that
+  "coverage_analysis.py is diverged" (per 09_TRANSITIVE_DEPENDENCY_CLOSURE.md's
+  71-file diverged list). Re-checked at the SPECIFIC-SYMBOL level for this
+  cohort: canonical's coverage_analysis.py lacks only 2 unrelated functions
+  Parent added (classify_coverage_kind, tag_categories_by_kind) -- all 4
+  symbols this file actually imports are present and unchanged. The file-level
+  "diverged" flag was too coarse to correctly gate this specific migration;
+  the real test run (12/12 pass) is the evidence that resolved it, not the
+  file-level flag alone.
+
+CANONICAL_TARGET_PATH = dv_harness/coverage_hole_generation_candidate_queue.py
+CANONICAL_SYMBOLS = same as source (unmodified copy)
+
+MIGRATION_ACTION = straight copy, zero adaptation
+TESTS = dv_harness_tests/test_coverage_hole_generation_candidate_queue.py -- 12/12 real pass
+PROVENANCE = Parent, copied verbatim
+CANONICAL_OPERATIONALIZATION_AFTER_M3 = IMPLEMENTED, TESTED, not wired
+DEFERRED_WIRING = engine.py consumer wiring (M6)
+```
+
+## Investigated, deferred: `coverage_closure_loop_leg_matrix.py`
+
+Zero Python-import dependencies (a clean leaf by that measure), but 8 of
+its own real tests fail in canonical: the module self-checks against
+`cli.py`'s and CLAUDE.md's literal source text/shape (e.g. confirming a
+leg is "wired" by inspecting cli.py's actual dispatch source), and
+canonical's `cli.py`/CLAUDE.md structurally diverge from Parent's (M1's
+own router-style CLAUDE.md rewrite, different cli.py dispatch shape). A
+real, hidden TEXT-SHAPE dependency invisible to import-graph analysis --
+caught only by running its actual tests. `DEFERRED_TO_M6/M7` (needs
+canonical's own cli.py shape finalized first).
+
+## Confirmed-broken mechanism, common to every tree (a pre-existing defect, not a migration gap)
+
+The `EXPERIENCE_READY` promotion-gate mechanism
+(`tools/verification_flow/promotion_chain_audit_gate.py` requires it;
+`gates.py`/`prompts.py` never emit it; `memory_router.route_and_store()`
+has no caller in the prompt/gate pipeline) is confirmed identically broken
+on Parent, v50, AND this canonical repo -- re-verified fresh this cohort,
+not merely cited from the pre-existing `_tmp_experience_loop_design.txt`
+design note (itself present, byte-identical, on both Parent and v50/canonical).
+This is the concrete reason `SIGNOFF_EXPERIENCE_CONSOLIDATION` and the
+INTERNAL learning-loop half of `CONTINUOUS_CAPABILITY_EVOLUTION` are
+recorded `ABSENT`/`PARTIAL` in the capability matrix -- a real, disclosed,
+still-open gap this migration inherits, explicitly assigned to M8, not
+silently claimed closed and not fixed here (M3 must not expand into M8
+implementation, per the addendum's own explicit instruction).
+
+## Capabilities confirmed absent on every tree (not merely unwired)
+
+`CLARIFICATION_LEARNING` (`QUESTION_AVOIDABLE` or equivalent: zero hits
+anywhere), `GENERATION_EXPERIENCE_LEARNING` (no generation-decision ->
+build/sim-result -> reusable-experience mechanism found), and a literal
+unified `Experience`-shaped record type (zero hits anywhere) are all
+confirmed ABSENT by direct evidence, not merely unwired -- these are real
+future-build items for M8, not migration omissions.

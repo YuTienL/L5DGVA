@@ -14,6 +14,70 @@ during M3.
 | CAP-M3-002 | `debug_evidence_behavioral_firewall_gate.py` | IMPLEMENTED, TESTED | ABSENT | N/A | IMPLEMENTED, TESTED (not wired) | NEW | `M3_CAPABILITY_MIGRATION_RECORDS.md` | `test_debug_evidence_behavioral_firewall_gate.py` real pass | NOT_YET_QUALIFIED |
 | CAP-M3-003 | `l5dgva_v5_ss86_understanding_plan_contradiction_taxonomy.py` | IMPLEMENTED, TESTED | ABSENT | N/A | IMPLEMENTED, TESTED (not wired) | NEW | `M3_CAPABILITY_MIGRATION_RECORDS.md` | `test_l5dgva_v5_ss86_understanding_plan_contradiction_taxonomy.py` real pass | NOT_YET_QUALIFIED |
 | CAP-M3-004 | `diagnostic_bound_compatibility.py` | IMPLEMENTED, TESTED | ABSENT | N/A | IMPLEMENTED, TESTED (not wired) | NEW | `M3_CAPABILITY_MIGRATION_RECORDS.md` | `test_diagnostic_bound_compatibility.py` real pass | NOT_YET_QUALIFIED |
+| CAP-M3-005 | `coverage_hole_generation_candidate_queue.py` (COVERAGE_CLOSURE_LEARNING: detection/ranking join for autonomous hole-driven test generation, V9 SS205) | IMPLEMENTED, TESTED | ABSENT | N/A | IMPLEMENTED, TESTED (not wired) | NEW | `M3_CAPABILITY_MIGRATION_RECORDS.md` §Cohort 2 | `test_coverage_hole_generation_candidate_queue.py` real pass (12/12) | NOT_YET_QUALIFIED |
+
+## Capability families per the Research/Experience-Learning preservation addendum
+
+Real audit evidence (background investigation across Parent, v50/Canonical,
+worktrees — see `M3_CAPABILITY_MIGRATION_RECORDS.md` §Cohort 2 for the full
+citation trail). **Headline finding: canonical (cloned from v50) already had
+the overwhelming majority of both families' real implementation** — v50 was
+materially ahead of Parent here, not behind it. The migration risk runs the
+OTHER direction from what the addendum anticipated: Parent has 2 modules
+canonical lacks (both investigated above; 1 migrated as CAP-M3-005, 1
+deferred), not the reverse.
+
+| Capability ID | PARENT_STATUS | V50_STATUS | WORKTREE_STATUS | CANONICAL_STATUS | Real module(s) | Notes |
+|---|---|---|---|---|---|---|
+| RESEARCH_INGESTION | IMPLEMENTED,WIRED,TESTED | IMPLEMENTED,WIRED,TESTED | same as v50 (v50-lineage checkouts) | IMPLEMENTED,WIRED,TESTED | `router.py` (`resolve_research_intent`), `cli.py`'s `research` subparser, `.claude/skills/research-ingestion/SKILL.md` (byte-identical both sides), `.claude/agents/research-architect.md` | Already present via v50 bootstrap; both sides identical |
+| DV_PAPER_DISTILLATION | (part of research-ingestion skill's doc-extraction pipeline) | same | same | same | `research-ingestion` SKILL.md's claim-classification pipeline | No separate module; folded into RESEARCH_INGESTION |
+| NEW_TECHNOLOGY_EXTRACTION | (same skill) | same | same | same | same | No separate module found on either side |
+| RESEARCH_PROVENANCE | IMPLEMENTED,TESTED | IMPLEMENTED,TESTED | same | IMPLEMENTED,TESTED | `capability_evolution.compare_evidence_cards()`/`link_prior_research()` | Present, real (section 28 CONTRADICTS/overlap detection) |
+| RESEARCH_APPLICABILITY | IMPLEMENTED,TESTED | IMPLEMENTED,TESTED | same | IMPLEMENTED,TESTED | `capability_evolution.decide_recommendation()` | Real KEEP/ENHANCE/ADD/EXPERIMENT/REJECT/UNKNOWN classifier |
+| RESEARCH_TO_CAPABILITY_PROPOSAL | IMPLEMENTED,WIRED,TRIGGERED,TESTED | IMPLEMENTED,WIRED,TRIGGERED,TESTED | same | IMPLEMENTED,WIRED,TRIGGERED,TESTED | `capability_evolution.build_candidate()`/`persist_candidate()`, real caller `engine.py::_file_capability_evolution_candidates_from_repeated_failures()` | Confirmed real engine.py call site on all sides |
+| CAPABILITY_EXPERIMENT_VALIDATION | IMPLEMENTED,TESTED | IMPLEMENTED,TESTED | same | IMPLEMENTED,TESTED | `capability_evolution.run_controlled_experiment()`/`run_shadow_replication()`/`assert_stability_window()` | Real isolated before/after fixture execution, not attestation |
+| PROJECT_EXPERIENCE_EXTRACTION | ABSENT (as a unified concept) | PARTIAL (see below) | same as v50 | PARTIAL | `memory_lineage.py`, `memory_quality_policy.py`, `cross_project_mining.py` | No unified `Experience` record type exists anywhere (confirmed absent both sides); coverage is via several narrower real mechanisms instead |
+| USER_INTERACTION_LEARNING | ABSENT | IMPLEMENTED,TESTED | same as v50 | IMPLEMENTED,TESTED | `user_correction_trigger.py` (repeated-correction-pattern detection, reuses `capability_evolution.build_candidate()`) | v50-only; already in canonical via bootstrap |
+| CLARIFICATION_LEARNING | ABSENT | ABSENT | ABSENT | ABSENT | none (`QUESTION_AVOIDABLE` or equivalent: zero hits anywhere) | Confirmed absent on every side, not merely unwired |
+| GENERATION_EXPERIENCE_LEARNING | ABSENT | ABSENT | ABSENT | ABSENT | none found | No generation-decision -> build/sim-result -> reusable-experience mechanism found anywhere |
+| RCA_EXPERIENCE_LEARNING | PARTIAL | PARTIAL | same as v50 | PARTIAL | `capability_evolution.repeated_unresolved_failure_patterns()` (Job-Memory-sourced auto-discovery) | Real but narrow: repeated-failure detection only, not a full RCA-to-fix experience record |
+| COVERAGE_CLOSURE_LEARNING | IMPLEMENTED,TESTED (2 modules) | IMPLEMENTED,TESTED (1 different module) | same as v50 | IMPLEMENTED,TESTED (both, after this cohort) | Parent: `coverage_hole_generation_candidate_queue.py` + `coverage_closure_loop_leg_matrix.py`; v50/canonical: `coverage_closure_hole_correlation.py`; shared base `coverage_closure_action_utility.py` (byte-identical) | **CAP-M3-005 closes half this gap** (queue module migrated this cohort); `coverage_closure_loop_leg_matrix.py` investigated and DEFERRED (see below) |
+| SIGNOFF_EXPERIENCE_CONSOLIDATION | ABSENT | ABSENT | ABSENT | ABSENT | none (`signoff_export.py`/`qualified_conclusion.py` checked, zero "experience"/"consolidat" hits) | Confirmed absent on every side |
+| KNOWLEDGE_PROMOTION | IMPLEMENTED,TESTED | IMPLEMENTED,TESTED | same | IMPLEMENTED,TESTED | `memory_router.py::route_and_store()`/`promote_to_organizational()` (pre-existing, unrelated to this cohort) | Already documented under the M1 Knowledge Brain inventory |
+| CROSS_PROJECT_GENERALIZATION | IMPLEMENTED,TESTED | IMPLEMENTED,TESTED | same | IMPLEMENTED,TESTED | `cross_project_mining.py` (byte-identical both sides) | Already present via v50 bootstrap |
+| MULTI_AGENT_KNOWLEDGE_CONSUMPTION | NOT_VERIFIED | NOT_VERIFIED | NOT_VERIFIED | NOT_VERIFIED | — | Not independently audited this cohort; out of scope for M3's leaf-capability focus |
+| CONTINUOUS_CAPABILITY_EVOLUTION (composite) | PARTIAL | PARTIAL | PARTIAL | PARTIAL | (sum of the above) | Real for the EXTERNAL loop's research->candidate->experiment path (RESEARCH_* + CAPABILITY_EXPERIMENT_VALIDATION rows); the INTERNAL experience loop is confirmed structurally broken on every side today (see below) — composite cannot be OPERATIONAL while either half is PARTIAL/ABSENT |
+
+### Confirmed-broken mechanism common to Parent AND v50/Canonical (not a migration gap — a pre-existing defect on every side)
+
+`tools/verification_flow/promotion_chain_audit_gate.py` hard-requires an
+`EXPERIENCE_READY` event in its mandatory event list whenever
+`failure_detected` is false, but **no stage in `gates.py`'s `STAGE_GATES` or
+`prompts.py`'s `STAGE_INSTRUCTIONS` ever emits that event**, and
+`memory_router.route_and_store()` has no caller in the prompt/gate pipeline
+— confirmed identically broken on Parent, v50, and canonical (re-verified
+fresh, not merely cited from the pre-existing `_tmp_experience_loop_design.txt`
+design note, which independently documents the same gap). This is the
+concrete, current-evidence reason `SIGNOFF_EXPERIENCE_CONSOLIDATION` and the
+INTERNAL learning loop half of `CONTINUOUS_CAPABILITY_EVOLUTION` are
+`ABSENT`/`PARTIAL` rather than `OPERATIONAL` — not a migration omission, a
+real, pre-existing, still-open gap this migration inherits and must not
+silently claim closed. **M8's job, not M3's.**
+
+### `coverage_closure_loop_leg_matrix.py` — investigated, deferred (not migrated)
+
+Zero Python-import dependencies, but 8 of its own tests fail in canonical:
+the module performs literal-text self-checks against `cli.py`'s and
+CLAUDE.md's specific source shape (e.g. "is the vPlan-traceability leg
+really wired into cli.py", checked by inspecting cli.py's actual source
+text) — Parent's and canonical's `cli.py`/CLAUDE.md structurally diverge
+(different dispatch pattern, different module-index format per M1's own
+CLAUDE.md router rewrite), so this module's hardcoded expectations about
+*where* things appear in source text don't hold in canonical even though no
+Python import is missing. **A real, hidden text-shape dependency invisible
+to import-graph analysis alone** — caught only by running its actual tests,
+exactly as instruction #14 anticipated. `DEFERRED_TO_M6/M7` (needs
+canonical's own `cli.py` shape finalized first, which is M7's job).
 
 ## Investigated-but-not-migrated this cohort (recorded for traceability, not silence)
 
