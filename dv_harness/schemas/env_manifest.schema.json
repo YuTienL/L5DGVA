@@ -66,26 +66,28 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["status", "source", "reason", "designware_home", "packages"],
-          "description": "The INSTALLED VIP's own version/release-notes/feature-matrix facts, discovered by a real filesystem scan of $DESIGNWARE_HOME (dv_harness/env_manifest.py's scan_designware_home()). This answers 'which VIP release is this environment actually built against' from the install tree itself rather than from a version number someone typed into a document -- the same reasoning that makes the zero-time config dump above more trustworthy than a user guide. Nothing here is read INTO the manifest as content: release notes and feature matrices are recorded as path + sha256 + byte size only (see release_notes/feature_matrix below), never inlined.",
+          "description": "The INSTALLED VIP's own version/release-notes/feature-matrix facts, discovered by a real filesystem scan of a VIP-home environment variable (dv_harness/env_manifest.py's scan_designware_home()/build_vip_release()). This answers 'which VIP release is this environment actually built against' from the install tree itself rather than from a version number someone typed into a document -- the same reasoning that makes the zero-time config dump above more trustworthy than a user guide. Nothing here is read INTO the manifest as content: release notes and feature matrices are recorded as path + sha256 + byte size only (see release_notes/feature_matrix below), never inlined.",
           "properties": {
             "status": {
               "enum": ["SCANNED", "NOT_AVAILABLE"],
-              "description": "SCANNED: a real DESIGNWARE_HOME directory was walked and `packages` reflects what was genuinely found there (which may legitimately be an empty array if the tree contains no recognisable VIP package). NOT_AVAILABLE: DESIGNWARE_HOME was unset, or was set to a path that does not exist -- distinguished by `reason`."
+              "description": "SCANNED: a real VIP-home directory was walked and `packages` reflects what was genuinely found there (which may legitimately be an empty array if the tree contains no recognisable VIP package). NOT_AVAILABLE: no VIP-home variable was set, or the one that was set pointed at a path that does not exist -- distinguished by `reason`."
             },
             "source": { "$ref": "#/$defs/source_ref" },
             "reason": { "type": ["string", "null"] },
-            "designware_home": { "type": ["string", "null"], "description": "The real DESIGNWARE_HOME value this scan used, echoed back so a manifest generated against the wrong install is diagnosable. Null when unset." },
+            "vendor": { "type": ["string", "null"], "description": "Which vendor's VIP-home convention this scan actually used ('synopsys'/'cadence'/'mentor' -- see env_manifest._VENDOR_VIP_HOME_ENVS), or null when status=NOT_AVAILABLE because none of their home variables was set. $DESIGNWARE_HOME is always checked first; Cadence's $CDNS_VIP_HOME and Mentor/Siemens' $MGC_VIP_HOME are checked, in that order, only when it is unset -- so a Cadence- or Mentor-only project is discovered too, not just a Synopsys one." },
+            "designware_home": { "type": ["string", "null"], "description": "The real VIP-home path this scan used (whichever vendor variable resolved it -- see `vendor`), echoed back so a manifest generated against the wrong install is diagnosable. Null when none was set. Kept under this historical key name (rather than a vendor-neutral one) so every existing reader of this field keeps working unchanged." },
             "packages": {
               "type": "array",
-              "description": "One entry per installed VIP package/version directory actually found on disk, sorted by (name, version) for a stable diff.",
+              "description": "One entry per installed VIP package actually found on disk, sorted by (name, version) for a stable diff.",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["name", "version", "install_path", "release_notes", "feature_matrix"],
+                "required": ["name", "version", "install_path", "layout", "release_notes", "feature_matrix"],
                 "properties": {
-                  "name": { "type": "string", "description": "VIP package directory name as it really appears in the install tree, e.g. 'usb_svt'." },
-                  "version": { "type": ["string", "null"], "description": "Version directory name exactly as installed, e.g. 'R-2020.12'. Null when the package directory has no version level -- never a guessed version." },
-                  "install_path": { "type": "string", "description": "Real absolute path of the version directory that was scanned." },
+                  "name": { "type": "string", "description": "VIP package name as it really appears on disk, e.g. 'usb_svt'. For a flat_project_copy layout this is the VIP-home directory's own basename (or, when that is a generic name like 'VIP', its parent directory's name)." },
+                  "version": { "type": ["string", "null"], "description": "Version directory name exactly as installed, e.g. 'R-2020.12'. Null when the package directory has no version level, or the layout is flat_project_copy -- never a guessed version." },
+                  "install_path": { "type": "string", "description": "Real absolute path of the directory that was scanned as this package's install root." },
+                  "layout": { "enum": ["centralized", "flat_project_copy"], "description": "'centralized': found via the vendor's `<root>/<package>/<version>` nested convention (e.g. a `dw_vip_setup` install). 'flat_project_copy': the VIP-home directory itself was the single package's own install root (a project-local VIP checkout laid out as `{doc,examples,include,lib,src}` directly, never routed through a centralized installer) -- a real, distinct finding, not the absence of one." },
                   "release_notes": { "$ref": "#/$defs/doc_file_ref" },
                   "feature_matrix": { "$ref": "#/$defs/doc_file_ref" }
                 }

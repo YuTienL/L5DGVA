@@ -581,6 +581,41 @@ DESIGNWARE_HOME_ENV = "DESIGNWARE_HOME"
 #: is recorded once, keyed by its real install path.
 _DESIGNWARE_VIP_ROOTS = ("vip/svt", "vip")
 
+#: Other vendors' own VIP-home environment variables, checked (in this
+#: order, after Synopsys/$DESIGNWARE_HOME) when no explicit path is passed
+#: and $DESIGNWARE_HOME itself is unset -- so a Cadence- or Mentor/Siemens-
+#: only project gets a real scan instead of build_vip_release() reporting
+#: NOT_AVAILABLE purely because it never looked at the right variable
+#: (VIP-01). Layouts are this project's best real-world approximation of
+#: each vendor's own installed-package convention (Cadence VIP Catalog and
+#: Questa VIP both install directly as `<home>/<package>/<version>`, one
+#: level shallower than dw_vip_setup's `vip/svt` nesting) and, like
+#: _DESIGNWARE_VIP_ROOTS, are deliberately a list of relative roots rather
+#: than a single hardcoded one so a real install found in either shape is
+#: still discovered.
+_VENDOR_VIP_HOME_ENVS = (
+    ("synopsys", "DESIGNWARE_HOME", _DESIGNWARE_VIP_ROOTS),
+    ("cadence", "CDNS_VIP_HOME", ("vip",)),
+    ("mentor", "MGC_VIP_HOME", ("vip",)),
+)
+
+#: Marker sub-directories that identify a single VIP package's OWN install
+#: root directly (no `<root>/<package>/<version>` nesting at all) -- the
+#: flat, per-project private VIP copy layout real teams actually use
+#: (VIP-02), e.g. a project-local `VIP/{doc,examples,include,lib,src}`
+#: checkout that is not a centralized `dw_vip_setup` install. Two or more of
+#: these present directly under the scanned home is treated as "this
+#: directory IS a VIP package", never one alone (a single `src/` or `doc/`
+#: is too common a false positive on an arbitrary directory).
+_FLAT_VIP_LAYOUT_MARKER_DIRS = ("doc", "examples", "include", "lib", "src")
+_FLAT_VIP_LAYOUT_MIN_MARKERS = 2
+
+#: Directory basenames too generic to use as the package name when a flat
+#: VIP layout is detected -- the parent directory's name is used instead
+#: (e.g. `.../USB/VIP` yields package name "USB", not the uninformative
+#: "VIP").
+_FLAT_VIP_LAYOUT_GENERIC_BASENAMES = frozenset({"vip", "svt"})
+
 #: Filename fragments (lower-cased substring match) that identify a real
 #: release-notes / feature-matrix document inside an installed VIP package.
 #: Substring rather than exact name because vendors version and prefix these
@@ -640,23 +675,62 @@ def _find_doc_in_package(install_path: Path, fragments) -> Optional[Path]:
     return sorted(matches, key=lambda p: str(p))[0]
 
 
-def scan_designware_home(designware_home) -> list:
-    """Walk a REAL DesignWare install tree and return one record per
-    installed VIP package/version directory actually found, sorted by
-    (name, version) for a stable diff.
+def _detect_flat_vip_layout(home: Path) -> Optional[dict]:
+    """A single VIP package's OWN install root, scanned directly rather than
+    through the `<root>/<package>/<version>` nesting scan_designware_home()
+    otherwise assumes -- the flat, per-project private VIP copy layout real
+    DV teams actually use (VIP-02), e.g. a project-local
+    `VIP/{doc,examples,include,lib,src}` checkout that was never routed
+    through a centralized `dw_vip_setup` install. This is the layout the
+    project's OWN real Synopsys USB SVT VIP is in.
+
+    Returns None (never a guessed package) unless at least
+    _FLAT_VIP_LAYOUT_MIN_MARKERS of the marker directories sit directly
+    under `home` -- one alone (e.g. a bare `src/`) is too common on an
+    arbitrary directory to treat as proof it holds a VIP."""
+    if not home.is_dir():
+        return None
+    present = [d for d in _FLAT_VIP_LAYOUT_MARKER_DIRS if (home / d).is_dir()]
+    if len(present) < _FLAT_VIP_LAYOUT_MIN_MARKERS:
+        return None
+    name = home.name
+    if name.lower() in _FLAT_VIP_LAYOUT_GENERIC_BASENAMES and home.parent.name:
+        name = home.parent.name
+    return {
+        "name": name,
+        "version": None,
+        "install_path": str(home),
+        "layout": "flat_project_copy",
+        "release_notes": _file_ref(_find_doc_in_package(home, _RELEASE_NOTES_FRAGMENTS)),
+        "feature_matrix": _file_ref(_find_doc_in_package(home, _FEATURE_MATRIX_FRAGMENTS)),
+    }
+
+
+def scan_designware_home(designware_home, roots=_DESIGNWARE_VIP_ROOTS) -> list:
+    """Walk a REAL VIP install tree and return one record per installed VIP
+    package/version directory actually found, sorted by (name, version) for
+    a stable diff. `roots` defaults to the Synopsys `dw_vip_setup` layouts
+    (the function's historical name and signature); other vendors' own
+    layouts are passed in by build_vip_release() (VIP-01).
 
     A package directory containing no version sub-directory is recorded with
-    `version=None` -- never a guessed or synthesised version string. An
-    empty return is a real finding ("this DESIGNWARE_HOME contains no
-    recognisable VIP package"), not an error."""
+    `version=None` -- never a guessed or synthesised version string.
+
+    If neither nested layout under `roots` finds anything, this falls back
+    to treating `designware_home` itself as one VIP package's own install
+    root (see _detect_flat_vip_layout) -- a real per-project VIP copy is a
+    genuinely different, equally real answer to "what VIP is here", not the
+    same "nothing found" as an empty/unrelated directory (VIP-02). Only when
+    that also finds nothing is the empty list a real finding ("this
+    directory contains no recognisable VIP package"), not an error."""
     home = Path(designware_home)
-    # The two layouts nest: `vip` CONTAINS `vip/svt`. Without this, scanning
-    # the `vip` root would report the `svt` directory itself as a package
-    # named "svt" whose "versions" are the real package names -- a wrong
-    # answer that still looks structurally plausible in the manifest.
-    root_dirs = {(home / rel).resolve() for rel in _DESIGNWARE_VIP_ROOTS}
+    # The two Synopsys layouts nest: `vip` CONTAINS `vip/svt`. Without this,
+    # scanning the `vip` root would report the `svt` directory itself as a
+    # package named "svt" whose "versions" are the real package names -- a
+    # wrong answer that still looks structurally plausible in the manifest.
+    root_dirs = {(home / rel).resolve() for rel in roots}
     packages = {}
-    for rel in _DESIGNWARE_VIP_ROOTS:
+    for rel in roots:
         root = home / rel
         if not root.is_dir():
             continue
@@ -673,37 +747,80 @@ def scan_designware_home(designware_home) -> list:
                     "name": name,
                     "version": version,
                     "install_path": str(install),
+                    "layout": "centralized",
                     "release_notes": _file_ref(_find_doc_in_package(install, _RELEASE_NOTES_FRAGMENTS)),
                     "feature_matrix": _file_ref(_find_doc_in_package(install, _FEATURE_MATRIX_FRAGMENTS)),
                 }
+    if not packages:
+        flat = _detect_flat_vip_layout(home)
+        if flat is not None:
+            packages[flat["install_path"]] = flat
     return sorted(packages.values(), key=lambda p: (p["name"], p["version"] or ""))
 
 
-def build_vip_release(designware_home=None) -> dict:
+def build_vip_release(designware_home=None, vendor=None) -> dict:
     """`designware_home`: an explicit path, or None to read the real
-    $DESIGNWARE_HOME environment variable.
+    VIP-home environment variable. `vendor` names which entry of
+    _VENDOR_VIP_HOME_ENVS to scan with when `designware_home` is explicit
+    (default "synopsys", i.e. the historical $DESIGNWARE_HOME layouts) --
+    ignored when `designware_home` is None, since then the real environment
+    itself picks the vendor.
 
-    Three honestly-distinct outcomes, for the same reason build_vip_config()
-    distinguishes "no path supplied" from "supplied path missing": an unset
-    DESIGNWARE_HOME and a DESIGNWARE_HOME pointing at a stale/typo'd path are
-    different operator situations, and collapsing them hides a real, fixable
-    mistake behind a generic "not available"."""
-    resolved = designware_home if designware_home is not None else os.environ.get(DESIGNWARE_HOME_ENV)
-    if not resolved:
-        return {
-            "status": "NOT_AVAILABLE",
-            "source": {"kind": "designware_home_scan", "path": None},
-            "reason": f"${DESIGNWARE_HOME_ENV} is not set and no explicit path was supplied -- no VIP install "
-                      "tree to scan, so no VIP version/release-notes/feature-matrix facts exist for this "
-                      "environment yet",
-            "designware_home": None,
-            "packages": [],
-        }
+    When no explicit path is given, $DESIGNWARE_HOME is checked first (the
+    historical, still-primary path, kept as its own branch so existing
+    callers and manifests are unaffected byte-for-byte); if that is unset,
+    the other vendors' own home variables (Cadence, Mentor/Siemens -- see
+    _VENDOR_VIP_HOME_ENVS) are checked in turn, so a Cadence- or Mentor-only
+    project gets a real scan instead of a permanent, unexplained
+    NOT_AVAILABLE just because the code never looked at the variable that
+    vendor's own tooling actually sets (VIP-01).
+
+    Three honestly-distinct outcomes for whichever variable was actually
+    used, for the same reason build_vip_config() distinguishes "no path
+    supplied" from "supplied path missing": an unset home variable and one
+    pointing at a stale/typo'd path are different operator situations, and
+    collapsing them hides a real, fixable mistake behind a generic "not
+    available"."""
+    if designware_home is not None:
+        vendor_name = vendor or "synopsys"
+        env_name = DESIGNWARE_HOME_ENV
+        roots = _DESIGNWARE_VIP_ROOTS
+        for v_name, v_env, v_roots in _VENDOR_VIP_HOME_ENVS:
+            if v_name == vendor_name:
+                env_name, roots = v_env, v_roots
+                break
+        return _scan_vip_home_result(designware_home, vendor_name, env_name, roots)
+
+    other_envs = [f"${v_env}" for _, v_env, _ in _VENDOR_VIP_HOME_ENVS if v_env != DESIGNWARE_HOME_ENV]
+    for vendor_name, env_name, roots in _VENDOR_VIP_HOME_ENVS:
+        resolved = os.environ.get(env_name)
+        if not resolved:
+            continue
+        # The first vendor variable that IS set is used, whether it resolves
+        # to a real directory or not -- a typo'd $DESIGNWARE_HOME should
+        # never be silently masked by falling through to check Cadence/
+        # Mentor next; _scan_vip_home_result reports the stale-path case.
+        return _scan_vip_home_result(resolved, vendor_name, env_name, roots)
+
+    return {
+        "status": "NOT_AVAILABLE",
+        "source": {"kind": "designware_home_scan", "path": None},
+        "reason": f"${DESIGNWARE_HOME_ENV} is not set (nor " + ", ".join(other_envs) + ") and no explicit path "
+                  "was supplied -- no VIP install tree to scan, so no VIP version/release-notes/feature-matrix "
+                  "facts exist for this environment yet",
+        "vendor": None,
+        "designware_home": None,
+        "packages": [],
+    }
+
+
+def _scan_vip_home_result(resolved, vendor_name, env_name, roots) -> dict:
     if not Path(resolved).is_dir():
         return {
             "status": "NOT_AVAILABLE",
             "source": {"kind": "designware_home_scan", "path": str(resolved)},
-            "reason": f"${DESIGNWARE_HOME_ENV} is set to a path that is not an existing directory: {resolved}",
+            "reason": f"${env_name} is set to a path that is not an existing directory: {resolved}",
+            "vendor": vendor_name,
             "designware_home": str(resolved),
             "packages": [],
         }
@@ -711,8 +828,9 @@ def build_vip_release(designware_home=None) -> dict:
         "status": "SCANNED",
         "source": {"kind": "designware_home_scan", "path": str(resolved)},
         "reason": None,
+        "vendor": vendor_name,
         "designware_home": str(resolved),
-        "packages": scan_designware_home(resolved),
+        "packages": scan_designware_home(resolved, roots=roots),
     }
 
 

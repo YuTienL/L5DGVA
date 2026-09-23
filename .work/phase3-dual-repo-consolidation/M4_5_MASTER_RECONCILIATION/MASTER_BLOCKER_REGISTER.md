@@ -1,4 +1,4 @@
-# Master Blocker Register (v3, post-M4.5-Governing-Contract-Authority-closure + POOL-005 dedup)
+# Master Blocker Register (v4, post-M5-Cohort-1-closure)
 
 **Disclosed correction (M5-0 P0-drift reconciliation, 2026-09-23)**: this
 file had gone stale after the M4.5 Governing Contract Authority Closure
@@ -9,21 +9,26 @@ final report and `MASTER_CAPABILITY_STATUS_MATRIX.csv`/
 (`CLOSED_AS_EVIDENCE_ONLY` — the human decision is made and executed
 against; residual work is refinement, not a blocker). `MASTER_PROGRAM_
 STATUS.md` was corrected for this at the time (its own v3); this register
-was not, and stayed wrong until now. This v3 fixes that.
+was not, and stayed wrong until then (v3 fixed it).
 
-`P0_BLOCKERS = 7`, structurally reconciled against `MASTER_WAVE_
-OWNERSHIP_MATRIX.csv`'s `PRIORITY=P0` rows (7, exact ID match) and
-`MASTER_CAPABILITY_STATUS_MATRIX.csv`'s `PRIORITY=='P0'` rows (also 7,
-after this same reconciliation qualified `CAP-POOL-005`'s PRIORITY value
-so it is no longer literally the bare string `P0` — that row has been a
-documented, non-counted cross-reference to `CAP-M5M6-VLEVEL-001` since
-its very first commit (`b8a573f`'s own NOTES: "Cross-referenced, not
-double-counted"); it was never a real 8th blocker, just a value a naive
-`PRIORITY==P0` parse would over-count).
+**v4 update (M5 Cohort 1, 2026-09-23)**: `CAP-M5-ENV-001` resolved this
+wave -- `env_manifest.py`'s VIP-01 (multi-vendor CDNS_VIP_HOME/
+MGC_VIP_HOME fallback) + VIP-02 (flat project-local VIP layout detection)
+semantically merged from B7B, schema (`env_manifest.schema.json`) updated
+in lockstep, 73/73 focused tests + 169/169 suite-wide keyword sweep pass,
+Constitution PASS, downgraded to `P2`. See
+`M5_CAPABILITY_MERGE_QUEUE/M5_CAPABILITY_MERGE_QUEUE.md`.
+
+`P0_BLOCKERS = 6`, structurally reconciled against `MASTER_WAVE_
+OWNERSHIP_MATRIX.csv`'s `PRIORITY=P0` rows (6, exact ID match) and
+`MASTER_CAPABILITY_STATUS_MATRIX.csv`'s `PRIORITY=='P0'` rows (also 6).
+`CAP-POOL-005` remains a documented, non-counted cross-reference to
+`CAP-M5M6-VLEVEL-001` (since its very first commit `b8a573f`'s own NOTES:
+"Cross-referenced, not double-counted") -- never a real independent
+blocker, just a value a naive `PRIORITY==P0` parse would over-count.
 
 | CAPABILITY_ID | Blocker | Type | Blocks | Owner |
 |---|---|---|---|---|
-| CAP-M5-ENV-001 | `env_manifest.py` N-way merge not symbol-diffed (44 fan-in) | ENGINEERING | 4 of the 5 MCP verbs' backing data model; most of M5 | M5 |
 | CAP-M5-VIP-001 | `vip_capability_extraction.py` N-way merge carries a known breaking signature-change risk (`classify_by_inheritance` 4→5-tuple) | ENGINEERING (real known regression risk) | VIP capability extraction correctness across all callers | M5 |
 | CAP-M6-DISPATCH-001 | `cli.py`/`dashboard.py` dispatch-mechanism conflict (`start_lifecycle(...)` vs `loop(goal)`/`run_stage(goal)`) has no chosen resolution | HUMAN_DECISION_REQUIRED | CAP-M3-001 wiring, CAP-M4.5-001 live routing, CAP-M6-LIFECYCLE-001, CAP-M6-CLARSVC-001 routing | M6 |
 | CAP-M6-CLARSVC-001 | `ClarificationService` design/build not started (architecture already decided, D2 — not reopened) | ENGINEERING | `CAP-M5M6-VLEVEL-001`, intake/clarification flow for all 3 verification levels | M6 |

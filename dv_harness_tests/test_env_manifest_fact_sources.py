@@ -220,6 +220,109 @@ def test_build_vip_release_explicit_path_overrides_env(monkeypatch, fake_designw
     assert layer["designware_home"] == str(fake_designware_home)
 
 
+def test_build_vip_release_reports_vendor_and_layout(monkeypatch, fake_designware_home):
+    """Every real package found through the nested dw_vip_setup layout is
+    'centralized', and the release layer records which vendor convention was
+    actually used -- so a manifest reader never has to guess."""
+    monkeypatch.setenv(env_manifest.DESIGNWARE_HOME_ENV, str(fake_designware_home))
+    layer = build_vip_release()
+    assert layer["vendor"] == "synopsys"
+    assert {p["layout"] for p in layer["packages"]} == {"centralized"}
+
+
+# ---------------------------------------------------------------------------
+# 1b. vip_config.vip_release -- other vendors' VIP-home variables (VIP-01)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("vendor,env_var", [("cadence", "CDNS_VIP_HOME"), ("mentor", "MGC_VIP_HOME")])
+def test_build_vip_release_falls_back_to_other_vendor_home_vars(monkeypatch, tmp_path, vendor, env_var):
+    """With $DESIGNWARE_HOME unset, a Cadence- or Mentor/Siemens-only project
+    (their own home variable set instead) still gets a real SCANNED result
+    rather than a permanent, unexplained NOT_AVAILABLE (VIP-01)."""
+    monkeypatch.delenv(env_manifest.DESIGNWARE_HOME_ENV, raising=False)
+    home = tmp_path / "vendor_home"
+    pkg = home / "vip" / "some_ip_svt" / "1.0"
+    pkg.mkdir(parents=True)
+    monkeypatch.setenv(env_var, str(home))
+    layer = build_vip_release()
+    assert layer["status"] == "SCANNED"
+    assert layer["vendor"] == vendor
+    assert layer["designware_home"] == str(home)
+    assert [(p["name"], p["version"]) for p in layer["packages"]] == [("some_ip_svt", "1.0")]
+
+
+def test_build_vip_release_designware_home_wins_over_other_vendors(monkeypatch, fake_designware_home, tmp_path):
+    """$DESIGNWARE_HOME is checked first: when it is set, it is used even if
+    a Cadence/Mentor variable also happens to be set."""
+    monkeypatch.setenv(env_manifest.DESIGNWARE_HOME_ENV, str(fake_designware_home))
+    monkeypatch.setenv("CDNS_VIP_HOME", str(tmp_path / "ignored_cadence_home"))
+    layer = build_vip_release()
+    assert layer["vendor"] == "synopsys"
+    assert layer["designware_home"] == str(fake_designware_home)
+
+
+def test_build_vip_release_unset_reason_names_all_checked_vendor_vars(monkeypatch):
+    monkeypatch.delenv(env_manifest.DESIGNWARE_HOME_ENV, raising=False)
+    monkeypatch.delenv("CDNS_VIP_HOME", raising=False)
+    monkeypatch.delenv("MGC_VIP_HOME", raising=False)
+    layer = build_vip_release()
+    assert layer["status"] == "NOT_AVAILABLE"
+    assert layer["vendor"] is None
+    assert "CDNS_VIP_HOME" in layer["reason"]
+    assert "MGC_VIP_HOME" in layer["reason"]
+
+
+# ---------------------------------------------------------------------------
+# 1c. scan_designware_home -- flat, per-project VIP copy layout (VIP-02)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def fake_flat_vip_home(tmp_path):
+    """A REAL per-project private VIP copy, laid out flat as
+    `{doc,examples,include,lib,src}` directly under the VIP-home directory
+    itself -- never routed through a centralized `dw_vip_setup` install.
+    This is the real, on-disk shape of this project's own Synopsys USB SVT
+    VIP (see .work/intake-vip_source-report.md), which the nested-root-only
+    scan silently reported as empty before VIP-02 was closed."""
+    home = tmp_path / "USB" / "VIP"
+    (home / "doc").mkdir(parents=True)
+    (home / "examples").mkdir()
+    (home / "include").mkdir()
+    (home / "lib").mkdir()
+    (home / "src").mkdir()
+    (home / "doc" / "usb_svt_release_notes.txt").write_text("flat-layout release notes\n", encoding="utf-8")
+    return home
+
+
+def test_scan_designware_home_discovers_a_flat_project_vip_copy(fake_flat_vip_home):
+    packages = scan_designware_home(fake_flat_vip_home)
+    assert len(packages) == 1
+    pkg = packages[0]
+    # "VIP" itself is too generic a package name -- the parent ("USB")
+    # is used instead.
+    assert pkg["name"] == "USB"
+    assert pkg["version"] is None
+    assert pkg["layout"] == "flat_project_copy"
+    assert pkg["install_path"] == str(fake_flat_vip_home)
+    assert pkg["release_notes"]["path"].endswith("usb_svt_release_notes.txt")
+
+
+def test_scan_designware_home_flat_layout_needs_at_least_two_markers(tmp_path):
+    """A bare `src/` alone is too common on an arbitrary directory to be
+    treated as proof it holds a VIP -- this must stay a real empty finding,
+    not a false positive."""
+    lonely = tmp_path / "just_some_src_dir"
+    (lonely / "src").mkdir(parents=True)
+    assert scan_designware_home(lonely) == []
+
+
+def test_build_vip_release_with_flat_layout_end_to_end(monkeypatch, fake_flat_vip_home):
+    monkeypatch.setenv(env_manifest.DESIGNWARE_HOME_ENV, str(fake_flat_vip_home))
+    layer = build_vip_release()
+    assert layer["status"] == "SCANNED"
+    assert [p["layout"] for p in layer["packages"]] == ["flat_project_copy"]
+
+
 # ---------------------------------------------------------------------------
 # 2. vip_config.user_guide_refs -- offline distillation, pointers only
 # ---------------------------------------------------------------------------
