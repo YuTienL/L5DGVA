@@ -9,7 +9,7 @@ M5_COHORT_4_STATUS = CLOSED (for CAP-ATL-004 + CAP-ATL-007, this task's
             own full scope)
 
 START_HEAD = 3980908
-END_HEAD = <set by this Cohort's own commit, see git log>
+END_HEAD = d957c4b391f852bbda2202cb214d266fd3711521 (commit d957c4b, this Cohort's own commit)
 
 TASK_BOUNDARY_CAPABILITY_STATUS = RESOLVED (migrated as FOUNDATION;
             IMPLEMENTED=YES, TESTED=YES, WIRED=NO -- deferred to
