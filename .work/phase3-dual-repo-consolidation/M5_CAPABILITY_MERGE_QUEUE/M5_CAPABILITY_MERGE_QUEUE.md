@@ -78,5 +78,10 @@ CAP-M5-ARCH-002 all resolved -- see
 `CAP-M5-TOPTB-001` (discovered during Cohort 2, given its own dedicated
 disposition/merge task) RESOLVED -- see
 `TOPTB_001/M5_TOPT_B001_FINAL_REPORT.md`. COHORT 3 CLOSED (CAP-M5-VIP-001
-resolved -- see `COHORT_3/M5_COHORT_3_FINAL_REPORT.md`). COHORT 4-5
-NOT_STARTED.
+resolved -- see `COHORT_3/M5_COHORT_3_FINAL_REPORT.md`). COHORT 4 PARTIAL:
+`CAP-ATL-004` and `CAP-ATL-007` RESOLVED this pass, per a dedicated
+"Canonical Contract / OpenSpec Semantic Merge" task explicitly scoped to
+just those two -- see `COHORT_4/M5_COHORT_4_FINAL_REPORT.md`.
+`CAP-M5-COV-001` and `CAP-M5-DSI-001` (also nominally Cohort 4 per this
+queue's own Section 3 grouping) were **not** in that task's scope and
+remain untouched/open. COHORT 5 NOT_STARTED.

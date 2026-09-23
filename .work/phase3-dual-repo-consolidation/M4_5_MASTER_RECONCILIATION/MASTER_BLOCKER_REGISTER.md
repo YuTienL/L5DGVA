@@ -1,4 +1,20 @@
-# Master Blocker Register (v5, post-M5-Cohort-3-closure)
+# Master Blocker Register (v6, post-M5-Cohort-4-closure)
+
+**v6 update (M5 Cohort 4, 2026-09-23)**: `CAP-ATL-004`
+(`TASK_SCOPE_CONTRACT`) and `CAP-ATL-007` (`TASK_EVIDENCE_CONTRACT`)
+resolved this wave -- `task_boundary_conformance.py` and
+`intake_field_resolution.py` migrated (adapted, not blind-copied) from
+Parent as canonical FOUNDATION modules, 19/19 + 25/25 tests passing,
+Constitution PASS. Neither was ever a P0 blocker (P1/P2), so
+`P0_BLOCKERS` is **unchanged at 5** this wave. Per this Cohort's own
+instruction ("do not close an M6 blocker merely because its M5
+foundation is now available"), none of the three M6-owned P0 rows below
+(`CAP-M6-DISPATCH-001`, `CAP-M6-CLARSVC-001`, `CAP-M5M6-VLEVEL-001`) are
+touched -- both new FOUNDATION modules are real, disclosed DEPENDENCIES
+those M6 items can now build on (CLI/gate wiring for the former,
+`ClarificationService` reconciliation for the latter), not a closure of
+either blocker. See
+`M5_CAPABILITY_MERGE_QUEUE/COHORT_4/M5_COHORT_4_FINAL_REPORT.md`.
 
 **v5 update (M5 Cohort 3, 2026-09-23)**: `CAP-M5-VIP-001` resolved this
 wave -- `vip_capability_extraction.py`'s VIP-04 ("transfer" naming
