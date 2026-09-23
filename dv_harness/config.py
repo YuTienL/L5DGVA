@@ -5,6 +5,34 @@ from typing import Any, Dict
 
 DEFAULT_CONFIG = {
     "adapter": "cli",
+    # Three formal UX modes (dv_harness/ux_policy.py) -- an interaction-
+    # policy layer over the ONE existing L5DGVA workflow, never a second
+    # engine. Central config surface per that module's own Section 8: a
+    # project may declare a default here rather than passing --ux-mode on
+    # every `dv-harness start`. CLI flags (--ux-mode/--role/--authorization)
+    # override this block for the current invocation; neither this config
+    # nor the CLI flags are consulted by run_stage()/loop() yet -- see
+    # ux_policy.py's own module docstring for the disclosed current-vs-
+    # target boundary.
+    "ux": {
+        "mode": "ENGINEER_MODE",
+        "guided": {
+            "explain_why": True,
+            "progressive_disclosure": True,
+            "allow_i_dont_know": True,
+            "proactive_guidance": True,
+        },
+        "engineer": {
+            "explain_why": "on_request",
+            "auto_low_risk_actions": True,
+            "concise_evidence": True,
+        },
+        "expert": {
+            "explain_why": "on_request",
+            "expose_internal_state": True,
+            "advanced_controls": True,
+        },
+    },
     "claude": {
         "command": "claude",
         "max_turns": 40,

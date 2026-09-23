@@ -11,6 +11,7 @@ from .mutation_testing import (
     DEFAULT_TIMEOUT_SECONDS as MUTATION_DEFAULT_TIMEOUT,
 )
 from . import commands as _commands
+from . import ux_policy as _ux_policy
 
 
 def _access_user() -> str:
@@ -243,6 +244,32 @@ def main():
     pstart.add_argument("--goal", required=True)
     pstart.add_argument("--loop", action="store_true")
     pstart.add_argument("--dry-run", action="store_true", dest="dry_run", help=_DRY_RUN_HELP)
+    pstart.add_argument(
+        "--ux-mode", dest="ux_mode", default=None,
+        choices=[m.value for m in _ux_policy.UXMode] + ["guided", "engineer", "expert"],
+        help="GUIDED_MODE/ENGINEER_MODE/EXPERT_MODE -- an interaction-policy "
+             "layer over this same run (dv_harness/ux_policy.py), never a "
+             "second workflow. Persisted to .dv-harness/ux_policy.json; "
+             "omit to keep whatever was last set (default ENGINEER_MODE on "
+             "a project that never set one).")
+    pstart.add_argument("--role", dest="ux_role", default=None,
+                        help="Free-text job-function role for this session, e.g. DV, DE, DV_LEAD.")
+    pstart.add_argument("--authorization", dest="ux_authorization", default=None,
+                        choices=[a.value for a in _ux_policy.Authorization],
+                        help="JUNIOR/ENGINEER/SENIOR/SIGNOFF. Never inferred from --ux-mode.")
+
+    pux = sub.add_parser(
+        "ux-mode",
+        help="Show or set this project's persisted UX policy "
+             "(dv_harness/ux_policy.py) without starting a run.")
+    pux_sub = pux.add_subparsers(dest="ux_mode_cmd", required=True)
+    pux_sub.add_parser("show")
+    pux_set = pux_sub.add_parser("set")
+    pux_set.add_argument("--mode", required=True,
+                         choices=[m.value for m in _ux_policy.UXMode] + ["guided", "engineer", "expert"])
+    pux_set.add_argument("--role", default=None)
+    pux_set.add_argument("--authorization", default=None,
+                         choices=[a.value for a in _ux_policy.Authorization])
 
     prun = sub.add_parser("run-stage")
     prun.add_argument("--goal", required=True)
@@ -6317,6 +6344,21 @@ def main():
         print(r.text)
         raise SystemExit(0 if r.ok else 1)
     elif args.cmd == "start":
+        # UX policy: an interaction-policy layer over this SAME run -- never
+        # a second workflow. Only persisted/displayed here; it does not yet
+        # change run_stage()/loop()'s own internal behavior (disclosed, not
+        # claimed otherwise -- see dv_harness/ux_policy.py's module docstring
+        # and this program's own UX_POLICY_INTEGRATION.md for the honest
+        # current-vs-target boundary).
+        _ux_current = _ux_policy.load_ux_policy(h.root)
+        if args.ux_mode or args.ux_role or args.ux_authorization:
+            _ux_current = _ux_policy.UXPolicy(
+                mode=args.ux_mode or _ux_current.mode,
+                role=args.ux_role or _ux_current.role,
+                authorization=args.ux_authorization or _ux_current.authorization,
+            )
+            _ux_policy.save_ux_policy(h.root, _ux_current)
+        print(_ux_policy.render_status_banner(_ux_current))
         if args.loop:
             # loop(dry_run=True) plans the CURRENT stage and returns without
             # looping -- see DVHarness.loop()'s docstring for why a dry-run
@@ -6327,6 +6369,17 @@ def main():
             r = h.run_stage(args.goal, dry_run=args.dry_run)
             print(r.text)
             raise SystemExit(0 if r.ok else 1)
+    elif args.cmd == "ux-mode":
+        if args.ux_mode_cmd == "show":
+            print(_ux_policy.render_status_banner(_ux_policy.load_ux_policy(h.root)))
+        elif args.ux_mode_cmd == "set":
+            _current = _ux_policy.load_ux_policy(h.root)
+            _new = _ux_policy.UXPolicy(
+                mode=args.mode, role=args.role or _current.role,
+                authorization=args.authorization or _current.authorization,
+            )
+            _ux_policy.save_ux_policy(h.root, _new)
+            print(_ux_policy.render_status_banner(_new))
     elif args.cmd == "agent-checkpoint-check":
         # One shared implementation with `python -m
         # dv_harness.agent_checkpoint_check` -- same real
