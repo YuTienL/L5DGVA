@@ -57,6 +57,24 @@ capability.
    (`CAP-VELM-009`) generalizes this, it does not invent the concept from
    nothing.
 
+## Native Claude Fast Maintenance -- ownership applies identically in both modes
+
+Per the DV Verification Environment Lifecycle Integration reconciliation
+(this wave): Fast Path and Full L5DGVA execute against the SAME
+ownership records -- there is no Fast-Path-only ownership shortcut.
+`CONTROLLED_ENVIRONMENT_MODIFICATION` (`CAP-VELM-031`, Fast Path's own
+edit mechanism) is required to obey ownership exactly like
+`SAFE_INCREMENTAL_REGENERATION` (`CAP-VELM-009`, Full L5DGVA's own
+regeneration mechanism) already must. `USER_MODIFICATION_PRESERVATION`
+(`CAP-VELM-032`) generalizes `CAP-M5-TOPTB-001`'s real, working
+`USER_MANAGED` mechanism to every artifact type, not only a top TB --
+still the strongest real evidence in this whole capability family that
+`USER_MANAGED` semantics are achievable, not merely aspirational.
+
+```
+FAST_PATH_BYPASSES_ARTIFACT_OWNERSHIP = NO
+```
+
 ## Validation
 
 ```
