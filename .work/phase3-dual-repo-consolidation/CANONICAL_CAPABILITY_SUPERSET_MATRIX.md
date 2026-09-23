@@ -15,6 +15,21 @@ during M3.
 | CAP-M3-003 | `l5dgva_v5_ss86_understanding_plan_contradiction_taxonomy.py` | IMPLEMENTED, TESTED | ABSENT | N/A | IMPLEMENTED, TESTED (not wired) | NEW | `M3_CAPABILITY_MIGRATION_RECORDS.md` | `test_l5dgva_v5_ss86_understanding_plan_contradiction_taxonomy.py` real pass | NOT_YET_QUALIFIED |
 | CAP-M3-004 | `diagnostic_bound_compatibility.py` | IMPLEMENTED, TESTED | ABSENT | N/A | IMPLEMENTED, TESTED (not wired) | NEW | `M3_CAPABILITY_MIGRATION_RECORDS.md` | `test_diagnostic_bound_compatibility.py` real pass | NOT_YET_QUALIFIED |
 | CAP-M3-005 | `coverage_hole_generation_candidate_queue.py` (COVERAGE_CLOSURE_LEARNING: detection/ranking join for autonomous hole-driven test generation, V9 SS205) | IMPLEMENTED, TESTED | ABSENT | N/A | IMPLEMENTED, TESTED (not wired) | NEW | `M3_CAPABILITY_MIGRATION_RECORDS.md` §Cohort 2 | `test_coverage_hole_generation_candidate_queue.py` real pass (12/12) | NOT_YET_QUALIFIED |
+| CAP-M4-001 | `RegisterFieldIR.enum_values` schema field (register_excel_extract.py) — SCHEMA foundation closure, not a standalone capability import | N/A (no enum_values field on either HEAD at audit time) | N/A | b7a HAS it (DUT-10 lineage) | IMPLEMENTED, TESTED (pure additive dataclass + JSON-schema field; 44/44 + 121/121 downstream-consumer tests unaffected) | ENHANCED (an existing canonical module's schema, not a new file) | `M4_SCHEMA_CLOSURE.md` | `test_register_excel_extract.py` (2 new tests) | NOT_YET_QUALIFIED |
+| CAP-M4-002 | `ipxact_register_import.py` (DUT-04, b7a) | IMPLEMENTED, TESTED | ABSENT | IMPLEMENTED, TESTED (source) | IMPLEMENTED, TESTED (not wired) | NEW | `M4_SCHEMA_CLOSURE.md` | `test_ipxact_register_import.py` real pass (10/10) | NOT_YET_QUALIFIED |
+
+## M4 finding: `l5dgva_contract_registry.py` requires an unmigrated document corpus
+
+Investigated as the formal M3→M4 deferred item
+(`l5dgva_requirement_dependency_closure.py` → `l5dgva_contract_registry.py`).
+Real finding, not previously known: `l5dgva_contract_registry.py` depends on
+a real `L5DGVA/` directory (`DEFAULT_L5DGVA_DIR = ROOT / "L5DGVA"`) holding
+~20+ dated governing-contract `.md` files (V1–V23), absent from canonical
+entirely. This is a genuinely new, larger-than-M4 architectural scope
+question (whether/how to migrate the corpus), not a schema/contract gap —
+recorded as **unscheduled**, not defaulted into M5. Both
+`l5dgva_contract_registry.py` and `l5dgva_requirement_dependency_closure.py`
+remain unmigrated. Full detail: `M4_M3_DEFERRED_CLOSURE.md`.
 
 ## Capability families per the Research/Experience-Learning preservation addendum
 

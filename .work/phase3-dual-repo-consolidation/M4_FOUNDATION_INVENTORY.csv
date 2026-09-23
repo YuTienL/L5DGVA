@@ -1,0 +1,10 @@
+foundation_item,taxonomy_class,canonical_target_path,consumer,status
+RegisterFieldIR.enum_values,SCHEMA + DATA_MODEL,dv_harness/register_excel_extract.py,"dv_harness/ipxact_register_import.py (real, migrated)",MIGRATED
+register_map.schema.json field.enum_values,SCHEMA + SERIALIZATION_FORMAT,dv_harness/schemas/register_map.schema.json,to_register_map_document() bridge,MIGRATED
+engine.py 247-method capability contract,CAPABILITY_DESCRIPTOR + CONTRACT,(reference only -- 12_FINAL_ENGINE_CAPABILITY_CONTRACT.md),future M6 engine.py merge,"RE-CONFIRMED (pre-existing, not new)"
+question_queue.py vs intake_clarification.py decision,LIFECYCLE_CONTRACT,"N/A -- a decision record, not a file","engine.py Group A, cli.py dispatch merge",RE-CONFIRMED KNOWN_DECISION_PENDING_HUMAN_INPUT
+memory_vault.py Obsidian-probe security contract,VALIDATION_RULE,(reference only -- M1_SECURITY_PRESERVATION_GATE.md),future memory_vault.py M5 merge,RE-CONFIRMED (pre-existing from M1)
+create_environment.py mode-string defect contract,CONTRACT,(reference only -- M1_KNOWN_SOURCE_B_DEFECT_DISPOSITION.md),future create_environment.py M5 merge,RE-CONFIRMED (pre-existing from M1)
+loop_telemetry.py stale-detection factual claim,VALIDATION_RULE,(reference only -- this wave's M4_M5_PREREQUISITE_MATRIX.csv row),future loop_telemetry.py M5 merge,RESOLVED THIS WAVE (re-verified against live code)
+l5dgva_contract_registry.py L5DGVA/ document corpus dependency,OTHER_FOUNDATION,"N/A -- an architectural scope question, not a file",l5dgva_requirement_dependency_closure.py,"NEW FINDING, UNSCHEDULED (not M4, not cleanly M5)"
+verification_level.py absence,STATE_MODEL,N/A -- confirmed absent from canonical,future IP_MODE support,"GENERICITY_FOUNDATION_GAP, disclosed, not closed"
