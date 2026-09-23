@@ -126,3 +126,19 @@ additionally the stage where `ROLE_BASED_HUMAN_IN_THE_LOOP`,
 `QUESTION_OWNER_ROUTING`, and `HUMAN_GATE_CONTRACT` (all owner M6, all
 new capability rows from this reconciliation) converge — reinforcing,
 not changing, M6's status as the load-bearing near-term wave.
+
+## M14 cross-reference (added by the M14 Productivity & Expertise Amplification Benchmark reconciliation)
+
+Neither the 17-stage `CREATE_LIFECYCLE` table above nor the 18-stage
+`MAINTAIN_LIFECYCLE` table (`MAINTAIN_LIFECYCLE_E2E_MATRIX.csv`) is
+modified by this reconciliation — M14 is a benchmark PROGRAM that
+measures both lifecycles' real end-to-end performance and quality once
+they operate, not a new stage within either. `M14`'s 4 qualification
+levels (`IP`/`SUBSYSTEM`/`SYSTEM_LEVEL` map to `CREATE_LIFECYCLE`;
+`EXISTING_VERIFICATION_ENVIRONMENT_MAINTENANCE` maps to
+`MAINTAIN_LIFECYCLE`) are registered in
+`.work/phase3-dual-repo-consolidation/M14_PRODUCTIVITY_BENCHMARK/M14_BENCHMARK_MATRIX.csv`,
+`ROADMAP_DEFINED`, `NOT STARTED`. M14 starts only after M13 completes —
+it does not change any stage's `CURRENT_STATUS` or `BLOCKER` in either
+table above, and no stage at any level becomes `OPERATIONAL` by virtue
+of this reconciliation.

@@ -126,7 +126,7 @@ THE_LOOP`, `DESIGN_AUTHORITY`, `VERIFICATION_AUTHORITY`,
 `ROLE_BASED_ACTION_DASHBOARD` (owner M12, no existing UI owner found).
 None marked operational; none implemented.
 
-## Roadmap (updated per DE/DV HITL reconciliation Section 28; M10.5 added per VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT reconciliation; extended per DV Verification Environment Lifecycle Integration reconciliation, all this wave)
+## Roadmap (updated per DE/DV HITL reconciliation Section 28; M10.5 added per VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT reconciliation; extended per DV Verification Environment Lifecycle Integration reconciliation; M14 appended per M14 Productivity & Expertise Amplification Benchmark reconciliation, this wave)
 
 ```
 M5    -- N-Way Capability Semantic Merge; explicitly no duplicated DE/DV
@@ -185,6 +185,15 @@ M12   -- Canonical Cutover/Productization + Role-Based Action Dashboard
 M13   -- PCIe Zero-Core-Change + Strict Superset + Constitutional
           Compliance -- strict-superset qualification must now also
           include lifecycle-management capability AND Fast Path capability
+M14   -- L5DGVA Productivity & Expertise Amplification Benchmark (Junior
+          DV + Native Claude CLI vs. Junior DV + L5DGVA, across IP/
+          SUBSYSTEM/SYSTEM_LEVEL/MAINTENANCE qualification levels).
+          Starts only after M13 completes; not a prerequisite for
+          M5-M13. See
+          `.work/phase3-dual-repo-consolidation/M14_PRODUCTIVITY_BENCHMARK/`
+          for the full requirements, benchmark matrix, metric
+          definitions, fairness policy, and pre-M13 telemetry
+          obligations. ROADMAP-ONLY, NOT STARTED.
   || PLATFORM_P1..P6 (scope definition needed first -- CAP-PLATFORM-000)
 ```
 
@@ -217,6 +226,9 @@ M5  (N-way semantic merge: env_manifest.py, vip_capability_extraction.py,
           workflow UX)
   -> M13 (final CANONICAL_CAPABILITY_STRICT_SUPERSET / L5DGVA_CONSTITUTIONAL_
           COMPLIANCE gate, now including lifecycle-management capability)
+  -> M14 (Productivity & Expertise Amplification Benchmark -- Junior DV +
+          Native Claude CLI vs. Junior DV + L5DGVA; starts only after M13
+          completes; NOT a prerequisite for M5-M13; ROADMAP-ONLY this wave)
   || PLATFORM_P1..P6 (scope definition needed first, then runs alongside M5+)
 ```
 
