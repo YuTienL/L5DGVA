@@ -262,3 +262,40 @@ plane, extended (not replaced) this wave.
 
 **STOP. DE/DV Role-Based HITL roadmap reconciliation complete. Waiting
 for explicit review/approval before any future wave begins.**
+
+## Addendum: Agent Task Lifecycle roadmap wave
+
+Full detail: `.work/phase3-dual-repo-consolidation/M5_PREP_AGENT_TASK_LIFECYCLE/AGENT_TASK_LIFECYCLE_ANALYSIS.md`
+(directory named `M5_PREP_` rather than `M4_5_`, disclosed there, because this
+work preps the M5 gate rather than reopening the CLOSED M4.5 milestone).
+
+10 new capability rows added (`CAP-ATL-001`..`CAP-ATL-010`) to
+`MASTER_CAPABILITY_STATUS_MATRIX.csv` / `MASTER_WAVE_OWNERSHIP_MATRIX.csv`.
+Zero classified `NEW`; zero require a new engine
+(`AGENT_TASK_LIFECYCLE`=MERGE_WITH_EXISTING; `TASK_IDENTITY`/
+`TASK_STATE_MODEL`/`TASK_SCOPE_CONTRACT`/`TASK_EVIDENCE_CONTRACT`/
+`TASK_FAILURE_RECOVERY`=EXTEND_EXISTING; `TASK_PREFLIGHT_GATE`/
+`TASK_APPROVAL_GATE`/`TASK_RESUME_REPLAY`/`TASK_KNOWLEDGE_PROMOTION_GATE`
+=ALREADY_COVERED, in whole or in the scopes that already exist).
+
+Decisive finding this wave: Parent's `dv_harness/task_boundary_conformance.py`
+(real, git-evidence-grounded scope-boundary checker) and
+`dv_harness/intake_field_resolution.py` (real, tested `EffectiveValue`/
+`DeclaredValue`/`AutoDiscoveredValue`/`DerivedValue`/`ValidationState`/
+`ConfirmationState` vocabulary, OpenSpec contract section 2's own 8
+attributes) are both confirmed **absent from canonical** — real migration
+candidates for `TASK_SCOPE_CONTRACT` and `TASK_EVIDENCE_CONTRACT`
+respectively, cited as migration-evidence only per the M4.5 Governing
+Contract Authority Closure decision, never copied.
+
+P0 blocker count unchanged (81 -> 81; roadmap rows carry P1-P3 only).
+`PRODUCTION_FILES_CHANGED = 0`. `HISTORICAL_SOURCES_CHANGED (Parent/v50/
+b7a/b7b/b8) = 0` (2 Parent files read for citation, not edited).
+`REFERENCE_USB_ENV_CONSUMED = NO`. M5-M10 remain `NOT STARTED`. The
+separate UX-Modes uncommitted work (`ux_policy.py`, `test_ux_policy.py`,
+UX-related portions of `cli.py`/`config.py`) was left completely untouched,
+per explicit instruction, and is not evidence for this wave.
+
+**STOP. Agent Task Lifecycle roadmap/capability/governance reconciliation
+complete. Waiting for explicit review/approval before any future wave
+begins, including M5.**

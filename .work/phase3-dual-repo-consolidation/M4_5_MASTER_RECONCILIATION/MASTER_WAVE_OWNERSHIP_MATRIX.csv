@@ -68,3 +68,13 @@ CAP-HITL-009,KNOWLEDGE_DOMAIN_CLASSIFICATION,M8,,P2,"PROCESS (taxonomy only, met
 CAP-HITL-010,IP_SUBSYSTEM_SYSTEM_ROLE_MODEL,M9,CAP-M5M6-VLEVEL-001,P2,PROCESS (definition only; blocked upstream by CAP-M5M6-VLEVEL-001 for IP_MODE specifically)
 CAP-HITL-011,ROLE_AWARE_SIGNOFF_TRACEABILITY,M10,,P2,"ENGINEERING (schema extension defined, not built)"
 CAP-HITL-012,ROLE_BASED_ACTION_DASHBOARD,M12,,P3,"PROCESS (routing concept only, no owner UI exists yet)"
+CAP-ATL-001,AGENT_TASK_LIFECYCLE,M5,,P2,"PROCESS (join-layer concept only, no owner module built)"
+CAP-ATL-002,TASK_IDENTITY,M5,,P2,"PROCESS (3 primitives identified, not joined)"
+CAP-ATL-003,TASK_STATE_MODEL,M5,,P3,"ENGINEERING (2 enum values proposed, not added)"
+CAP-ATL-004,TASK_SCOPE_CONTRACT,M5,,P1,"ENGINEERING (Parent migration candidate identified, not migrated)"
+CAP-ATL-005,TASK_PREFLIGHT_GATE,M5,,P3,PROCESS (proven working manually; no code-level gate yet)
+CAP-ATL-006,TASK_APPROVAL_GATE,M5,,P3,"PROCESS (already covered by question_queue.py, no gap)"
+CAP-ATL-007,TASK_EVIDENCE_CONTRACT,M5,,P2,"ENGINEERING (Parent migration candidate identified, not migrated)"
+CAP-ATL-008,TASK_FAILURE_RECOVERY,M5,,P2,"ENGINEERING (shape identified, taxonomy not authored)"
+CAP-ATL-009,TASK_RESUME_REPLAY,M5,,P3,"PROCESS (2 of 3 scopes already covered, 3rd deferred)"
+CAP-ATL-010,TASK_KNOWLEDGE_PROMOTION_GATE,M5,,P3,"PROCESS (already covered by memory_router.py, no gap)"
