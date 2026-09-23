@@ -103,3 +103,36 @@ ownership rule keeps M5-owned) -- see
 genuinely un-migrated) -- `M5_READY_FOR_FINAL_CLOSURE_REGRESSION = NO`
 until they are resolved or given a different disposition.
 `M5_STATUS` remains `IN_PROGRESS`.
+
+**M5 POOL CLOSURE -- BATCH 1 (2026-09-23)** resolved `CAP-POOL-008`
+(`l5dgva_v5_ss84_phase_entry_protocol_schema.py`) and `CAP-POOL-012`
+(`rtl_filelist_parser.py`) via direct migration -- see
+`M5_POOL_CLOSURE/M5_POOL_CLOSURE_FINAL_REPORT.md`.
+`CAP-POOL-001/003/004/011` remained OPEN, correctly identified as blocked
+on 4 real, un-migrated Parent dependency modules outside that task's own
+6-item scope.
+
+**M5 POOL CLOSURE -- BATCH 2 (2026-09-24)** resolved the remaining 4:
+`CAP-POOL-001` (`engine_maturity_state.py`), `CAP-POOL-003`
+(`l5dgva_directive_blackboard_work_queue.py`), `CAP-POOL-004`
+(`l5dgva_kc_extraction.py`), `CAP-POOL-011`
+(`eight_engine_telemetry_rollup.py`) -- by migrating the 4-module
+dependency chain Batch 1 identified (`l5dgva_gap_queue.py` ->
+`l5dgva_workitem_projection.py` -> `l5dgva_directive_registry.py`;
+`eight_engine_runtime_proof_matrix.py`, migrated WITH ADAPTATION -- a
+disclosed 8-to-5-signal reduction on its `five_level_memory_engine` rule,
+reflecting canonical's own independently-evolved `engine.py`) first, in
+dependency order, across 5 reviewable commits
+(`canonical/m4-dependency-closure`, `a55735a`/`f4f165a`/`ec27675`/
+`303a58d`/`dd6b90d`). 107/107 tests pass across all 8 migrated modules,
+matching Parent's own pre-migration 8-suite regression count exactly.
+See `M5_POOL_CLOSURE/M5_POOL_BATCH2_FINAL_REPORT.md` for full evidence.
+
+**`CAP_POOL_OPEN = 0` / `M5_CAPABILITIES_OPEN = 0` as of Batch 2.** All 21
+M5-owned rows in `MASTER_CAPABILITY_STATUS_MATRIX.csv` now carry a closed
+disposition -- see `M5_POOL_CLOSURE/M5_FINAL_PRE_CLOSURE_AUDIT.md` (fully
+re-derived, not hand-patched). `M5_READY_FOR_FINAL_CLOSURE_REGRESSION = YES`
+on the Pool-closure dimension; `M5_STATUS` remains `IN_PROGRESS` until a
+separately-dispatched M5 Final Closure Regression task actually runs
+against a stable qualified checkpoint -- not started by Batch 2 itself, per
+its own explicit instruction.

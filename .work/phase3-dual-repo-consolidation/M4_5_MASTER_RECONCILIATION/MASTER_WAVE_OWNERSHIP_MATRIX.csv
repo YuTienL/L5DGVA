@@ -35,15 +35,15 @@ CAP-M4.5-007,STRUCTURED_AGENT_HANDOFF operationalization + task/planning schema,
 CAP-M4.5-008,CONTEXT_DISTILLATION for multi-model handoff content,M7,,P3,"ENGINEERING (not started) (owner reassigned ->M7, all 8 token-efficiency sub-capabilities normally owned by M7)"
 CAP-M4.5-009,SESSION_RESUME audit,M7,,P3,"PROCESS (needs a dedicated audit) (owner reassigned ->M7, all 8 token-efficiency sub-capabilities normally owned by M7)"
 CAP-M4.5-011,Cross-model TOKEN_REDUCTION_MEASUREMENT,M8,CAP-M4.5-010,P3,ENGINEERING (not started)
-CAP-POOL-001,engine_maturity_state.py,M5,,P3,"ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5 | M5.9: REVERTED M6->M5 (see MASTER_CAPABILITY_STATUS_MATRIX.csv) | M5 POOL CLOSURE: dependency recomputed, remains OPEN (see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
+CAP-POOL-001,engine_maturity_state.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-POOL-002,l5dgva_ss570_claude_verdict_truth.py,M8,CAP-M4.5-006,P3,ENGINEERING (dependency chain)
-CAP-POOL-003,l5dgva_directive_blackboard_work_queue.py,M5,,P3,"ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5 | M5.9: REVERTED M6->M5 (see MASTER_CAPABILITY_STATUS_MATRIX.csv) | M5 POOL CLOSURE: dependency recomputed, remains OPEN (see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
-CAP-POOL-004,l5dgva_kc_extraction.py,M5,,P3,"ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5 | M5.9: REVERTED M6->M5 (see MASTER_CAPABILITY_STATUS_MATRIX.csv) | M5 POOL CLOSURE: dependency recomputed, remains OPEN (see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
+CAP-POOL-003,l5dgva_directive_blackboard_work_queue.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-POOL-004,l5dgva_kc_extraction.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-POOL-007,autonomous_resume_next_action_arbitration.py+independent_work_continuation.py,M7,,P3,ENGINEERING (dependency chain)
 CAP-POOL-008,l5dgva_v5_ss84_phase_entry_protocol_schema.py,M5,,P3 (unchanged -- resolved M5 Pool Closure),ENGINEERING (RESOLVED this task -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-POOL-009,irq_contradiction_change_impact.py,M6,CAP-M5M6-VLEVEL-001,P3,ENGINEERING (dependency chain)
 CAP-POOL-010,falsified_hypothesis_ledger.py,M8,,P3,ENGINEERING (dependency chain)
-CAP-POOL-011,eight_engine_telemetry_rollup.py,M5,,P3,"ENGINEERING (dependency chain) | REASSIGNED M5->M6 by M5 Cohort 5 | M5.9: REVERTED M6->M5 (see MASTER_CAPABILITY_STATUS_MATRIX.csv) | M5 POOL CLOSURE: dependency recomputed, remains OPEN (see MASTER_CAPABILITY_STATUS_MATRIX.csv)"
+CAP-POOL-011,eight_engine_telemetry_rollup.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-POOL-012,rtl_filelist_parser.py,M5,,P3 (unchanged -- resolved M5 Pool Closure),ENGINEERING (RESOLVED this task -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 REMAINING_UNCLASSIFIED_POOL,~157 of 177 MIGRATE_REQUIRED closure members not yet individually triaged,M5,,P2,"PROCESS (bulk-tracked, per M3's own disclosed scope limitation)"
 CAP-M4.6-001,CLAUDE_ALWAYS_ON_CONTEXT_NORMALIZATION,M4.6,,P1 (closed),none (closed this wave)
