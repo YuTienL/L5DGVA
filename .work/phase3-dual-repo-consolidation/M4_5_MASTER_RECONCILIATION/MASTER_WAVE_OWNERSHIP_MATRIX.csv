@@ -1,5 +1,5 @@
 CAPABILITY_ID,CAPABILITY_NAME,PRIMARY_OWNER_WAVE,SECONDARY_DEPENDENCY,PRIORITY,BLOCKER_TYPE
-CAP-M4.5-004,GOVERNING_CONTRACT_AUTHORITY (25-doc corpus),M4.5,,P0,HUMAN_DECISION_REQUIRED
+CAP-M4.5-004,GOVERNING_CONTRACT_AUTHORITY (25-doc corpus),M4.5,,P2,"ENGINEERING (residual duplication-check + registry-module adaptation, not a human decision anymore -- decision made and executed against this wave)"
 CAP-M5-ENV-001,env_manifest.py N-way merge,M5,,P0,"ENGINEERING (high fan-in, not symbol-diffed)"
 CAP-M5-VIP-001,vip_capability_extraction.py N-way merge,M5,,P0,ENGINEERING (known signature-break risk)
 CAP-M6-DISPATCH-001,cli.py/dashboard.py dispatch-mechanism decision,M6,,P0,HUMAN_DECISION_REQUIRED
@@ -55,3 +55,4 @@ CAP-CE-014,SIGNOFF_EXPERIENCE_CONSOLIDATION,M8,CAP-M8-EXPLOOP-001;CAP-M8-EXPLOOP
 CAP-CE-012,RCA_EXPERIENCE_LEARNING,M8,CAP-M8-EXPLOOP-001,P2,"ENGINEERING (narrow today, needs full RCA-to-fix record)"
 CAP-M4.5-012,CLAUDE_FOCUSED_IMPLEMENTATION,M7,CAP-M4.5-005;CAP-M4.5-006,P3,"ENGINEERING (pipeline stage, no automated hand-off)"
 CAP-M4.5-013,TOKEN_EFFICIENT_MULTI_MODEL_ORCHESTRATION (composite),M7,CAP-M4.5-005;CAP-M4.5-006;CAP-M4.5-007;CAP-M4.5-008;CAP-M4.5-009;CAP-M4.5-010;CAP-M4.5-012,P2,ENGINEERING (composite of mostly-incomplete sub-capabilities)
+CAP-M5-CONTRACTREG-001,l5dgva_contract_registry.py MIGRATE_WITH_ADAPTATION (external-path parameterization),M5,CAP-M4.5-004,P2,ENGINEERING (parameterize DEFAULT_L5DGVA_DIR/cache_path away from a local-repo assumption)
