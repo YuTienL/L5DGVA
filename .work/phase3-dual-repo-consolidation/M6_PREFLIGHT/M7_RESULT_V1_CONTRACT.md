@@ -85,3 +85,27 @@ checked against the read boundary; `RETURNED_ARTIFACTS` are OUTPUT claims
 checked against ALLOWED_FILES only, plus the one caller-derived exemption
 for the result document's own path. `EXPECTED_OUTPUT_SCHEMA` must be the
 supported schema.
+
+## Ingestion semantics added by M7-V1-CODEX-REVIEW-003 remediation (GAP-V2-011/012/013)
+
+- **Canonical paths.** Every scope comparison (FILES_REFERENCED, RETURNED_ARTIFACTS,
+  evidence citations, governance refs, the own-result exemption) is done on the
+  canonical root-relative path (`..`/`.` collapsed; absolute, UNC, drive,
+  NTFS-stream, escaping or invalid-character paths are `UNSAFE_PATH`) and, for
+  paths that exist, on the true filesystem identity (case, trailing dots,
+  symlinks). Either view being out of bounds fails the result.
+- **Content identity.** A result is identified by the SHA-256 of the bytes that
+  were parsed (single read). State and registry record it; a retry with
+  different content is `CONSUMPTION_CONFLICT`; replaying a different file after
+  consumption is flagged `RESULT_CONTENT_DIFFERS_FROM_CONSUMED`.
+- **Document identity.** Exactly one canonical `# L5DGVA_MODEL_RESULT_V1` title
+  first; the escaped-encoding marker only in the slot after it; duplicate title
+  or marker is an error. In the escaped encoding None is `(none)` and the empty
+  string is `(empty)`.
+- **Interruption.** An exception during consumption persists
+  `AUTO_RETRY_INTERRUPTED_IMPORT` before propagating; imports of one task are
+  serialized by a lock.
+- **Automatic ingestion.** A returned RESULT_V1 placed at its registered
+  EXPECTED_RESULT_FILE is detected, stability-checked, hashed and imported by
+  the watcher / startup scan through the same `import_result()`; no import
+  command is part of the human's task (`M7_RESULT_WATCHER_ARCHITECTURE.md`).

@@ -79,3 +79,13 @@ Authoritative code: `dv_harness/model_handoff.py` (`read_boundary()`,
 - `RETURN_CONTRACT` states this rule to the target model verbatim.
 - Import is retry-safe: one question per `question_key`, one registry row
   per task, a conflicting retry is `CONSUMPTION_CONFLICT`.
+
+## Declaration rules added by M7-V1-CODEX-REVIEW-003 remediation (GAP-V2-013)
+
+`ALLOWED_FILES`, `FORBIDDEN_FILES` and `INPUT_EVIDENCE_REFS` must be safe AND
+already canonical root-relative paths: `..`/`.` segments, doubled slashes,
+trailing dots/spaces, absolute/UNC/drive paths and invalid characters are
+rejected at build (`UNSAFE_PATH_DECLARATION`) and at parse -- never silently
+rewritten, so what a reader sees is exactly what is enforced. The contradiction
+check (input evidence that is also forbidden) runs on canonical paths.
+Exporting a handoff registers its expected result for automatic ingestion.
