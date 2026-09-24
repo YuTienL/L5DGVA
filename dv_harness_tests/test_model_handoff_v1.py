@@ -26,10 +26,11 @@ from dv_harness.model_result import (
     ModelResultV1, to_markdown as result_to_markdown, from_markdown as result_from_markdown,
     ResultParseError, validate_result,
 )
+import dv_harness.model_handoff_workflow as model_handoff_workflow
 from dv_harness.model_handoff_workflow import (
     export_handoff, import_result, current_state, execute_verb,
     STATE_WAITING_FOR_HUMAN_TRANSPORT, STATE_RESULT_CONSUMED, STATE_RESULT_REJECTED,
-    _registry_path,
+    STATE_RESULT_ACCEPTED, _registry_path,
 )
 from dv_harness.question_queue import QuestionQueueStore
 from dv_harness.task_boundary_conformance import TaskBoundary
@@ -627,3 +628,25 @@ def test_embedded_heading_like_content_cannot_forge_result_status():
     r2 = result_from_markdown(md)
     assert r2.result_status == "FAIL"  # never overridden by the injected fake section
     assert r2.findings == (malicious,)
+
+
+# -- GAP-V2-011 / F5,F7: registry-write failure ordering -- if
+# _append_registry() itself fails, persisted state must be left at
+# RESULT_ACCEPTED (an honest "consumption did not finish"), never a false
+# RESULT_CONSUMED with no matching registry row --
+
+def test_registry_write_failure_leaves_state_at_accepted_not_a_false_consumed(repo, monkeypatch):
+    h = _handoff(repo)
+    export_handoff(repo, h)
+    result_path = repo / "RESULT.md"
+    result_path.write_text(result_to_markdown(_pass_result()), encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated registry write failure")
+
+    monkeypatch.setattr(model_handoff_workflow, "_append_registry", _boom)
+    with pytest.raises(OSError):
+        import_result(repo, "T-1", result_path)
+
+    assert current_state(repo, "T-1") == STATE_RESULT_ACCEPTED
+    assert not _registry_path(repo).exists()
