@@ -43,6 +43,7 @@ retrieval, and `INPUT_EVIDENCE_REFS` is always a caller-supplied, already
 from __future__ import annotations
 
 import json
+import re as _re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -232,13 +233,43 @@ _LIST_FIELDS = frozenset({
 })
 
 
+def _escape_md_line(s: str) -> str:
+    """GAP-V2-012 fix -- see model_result.py's own identical helper for
+    the full rationale (arbitrary section injection via an embedded
+    newline). Kept as an independent copy here rather than a shared
+    import, matching this module's own established pattern of not
+    sharing `_FIELD_ORDER`/`_parse_sections` with model_result.py
+    either -- each module's own serializer stays self-contained."""
+    return s.replace("\\", "\\\\").replace("\n", "\\n")
+
+
+def _unescape_md_line(s: str) -> str:
+    out: List[str] = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt == "n":
+                out.append("\n")
+                i += 2
+                continue
+            if nxt == "\\":
+                out.append("\\")
+                i += 2
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _render_value(field_name: str, value: Any) -> str:
     if field_name in _LIST_FIELDS:
         items = list(value or [])
-        return "\n".join(f"- {v}" for v in items) if items else "(none)"
+        return "\n".join(f"- {_escape_md_line(str(v))}" for v in items) if items else "(none)"
     if value is None or value == "":
         return "(none)"
-    return str(value)
+    return _escape_md_line(str(value))
 
 
 def to_markdown(handoff: ModelHandoffV1) -> str:
@@ -302,11 +333,11 @@ def _parse_value(field_name: str, raw: str) -> Any:
         for line in raw.splitlines():
             line = line.strip()
             if line.startswith("- "):
-                items.append(line[2:].strip())
+                items.append(_unescape_md_line(line[2:].strip()))
             elif line:
-                items.append(line)
+                items.append(_unescape_md_line(line))
         return items
-    return raw.strip()
+    return _unescape_md_line(raw.strip())
 
 
 def from_markdown(text: str) -> ModelHandoffV1:
@@ -321,9 +352,24 @@ def from_markdown(text: str) -> ModelHandoffV1:
         raise HandoffParseError("MISSING_REQUIRED_FIELDS", {"missing": missing})
     values = {f: _parse_value(f, sections[f]) for f in _FIELD_ORDER}
 
+    # GAP-V2-010 fix: the stored HANDOFF_V1.md is untrusted input (it is
+    # re-read from disk on every import, and could have been tampered
+    # with or corrupted between export and import) -- its own SCOPE
+    # section's serialized task_id= value is now ACTUALLY PARSED and
+    # checked for agreement with the top-level TASK_ID field, never
+    # silently discarded in favor of TASK_ID (the pre-fix behavior Codex's
+    # own F3 finding demonstrated: a real inconsistency was erased rather
+    # than reported).
+    handoff_task_id = values["TASK_ID"]
     scope_raw = values["SCOPE"] or ""
-    scope_task_id = handoff_task_id = values["TASK_ID"]
-    require_new_file = "require_new_file=True" in scope_raw
+    scope_match = _re.match(r"task_id=(.*?);\s*require_new_file=(True|False)", scope_raw)
+    if scope_match is None:
+        raise HandoffParseError("MALFORMED_SCOPE_FIELD", {"scope_raw": scope_raw})
+    scope_task_id = scope_match.group(1)
+    require_new_file = scope_match.group(2) == "True"
+    if scope_task_id != handoff_task_id:
+        raise HandoffParseError("TASK_ID_SCOPE_MISMATCH",
+                                {"task_id": handoff_task_id, "scope_task_id": scope_task_id})
     scope = TaskBoundary(
         task_id=scope_task_id,
         allowed_path_prefixes=tuple(values["ALLOWED_FILES"] or ()),

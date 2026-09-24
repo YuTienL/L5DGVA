@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional
 
 from . import model_handoff as _handoff_mod
 from . import model_result as _result_mod
-from .model_handoff import ModelHandoffV1
+from .model_handoff import ModelHandoffV1, HandoffParseError
 from .model_result import ModelResultV1, ResultParseError, ValidationOutcome
 from .question_queue import QuestionQueueStore
 from .task_boundary_conformance import TaskBoundary
@@ -170,17 +170,44 @@ class ImportOutcome:
 def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutcome:
     """The full Result Ingestion pipeline (architecture doc): RESULT_
     RETURNED -> PARSED -> {TASK_ID,PRODUCER,TASK_TYPE,SCOPE,SCHEMA,
-    EVIDENCE}_VALIDATED -> RESULT_CLASSIFIED -> CANONICAL_CONSUMER. A
-    parse failure or a failed validation transitions to RESULT_REJECTED
-    and STOPS -- it never reaches consumption. `root`'s own current
-    working tree is never mutated by a rejected result."""
+    EVIDENCE,GOVERNANCE}_VALIDATED -> RESULT_CLASSIFIED ->
+    CANONICAL_CONSUMER. A parse failure or a failed validation
+    transitions to RESULT_REJECTED and STOPS -- it never reaches
+    consumption. `root`'s own current working tree is never mutated by a
+    rejected result.
+
+    GAP-V2-011 fix, replay safety (dispatch's own required properties:
+    "DUPLICATE IMPORT -> ZERO duplicate semantic consumption",
+    "REPLAY -> deterministic result"): if this exact `task_id` is
+    ALREADY at `RESULT_CONSUMED`, a further call is a real, detected
+    no-op -- it returns the SAME, already-recorded outcome without
+    re-invoking `_consume_result()`/`_append_registry()` a second time,
+    regardless of what the newly-supplied `result_md_path` contains (a
+    consumed task is a closed transaction; re-importing a DIFFERENT
+    result for the same task_id is not a supported use of this function
+    -- callers needing to correct a bad import must use a new task_id,
+    matching HANDOFF_V1's own "same TASK_ID" round-trip identity
+    contract rather than inventing a silent mutation path for it)."""
     root = Path(root)
-    handoff = _load_handoff(root, task_id)
+    prior_state = _load_state(root, task_id)
+    if prior_state is not None and prior_state.get("state") == STATE_RESULT_CONSUMED:
+        return ImportOutcome(task_id=task_id, state=STATE_RESULT_CONSUMED,
+                             question_id=prior_state.get("question_id"))
+
+    # GAP-V2-011 fix: a damaged/malformed stored HANDOFF_V1.md must
+    # produce a real, structured RESULT_REJECTED outcome, never an
+    # uncaught exception escaping this function.
+    try:
+        handoff = _load_handoff(root, task_id)
+    except (OSError, HandoffParseError) as exc:
+        reason = exc.reason if isinstance(exc, HandoffParseError) else "STORED_HANDOFF_UNREADABLE"
+        return ImportOutcome(task_id=task_id, state=STATE_RESULT_REJECTED,
+                             parse_error=f"MALFORMED_STORED_HANDOFF:{reason}")
     if handoff is None:
         return ImportOutcome(task_id=task_id, state=STATE_RESULT_REJECTED,
                              parse_error="NO_MATCHING_HANDOFF")
 
-    state = _load_state(root, task_id) or {"task_id": task_id, "state": STATE_HANDOFF_READY}
+    state = prior_state or {"task_id": task_id, "state": STATE_HANDOFF_READY}
     state["state"] = STATE_RESULT_RETURNED
     _save_state(root, task_id, state)
 
@@ -197,7 +224,18 @@ def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutco
 
     state["state"] = STATE_RESULT_VALIDATING
     _save_state(root, task_id, state)
-    validation = _result_mod.validate_result(handoff, result)
+    # own_result_path: the real on-disk path the human actually pointed at,
+    # root-relative/POSIX-normalized -- a caller-derived fact, never a
+    # model-declared one, letting validate_result() exempt a self-
+    # referential RETURNED_ARTIFACTS entry (the result citing its own
+    # storage location) from scope enforcement without weakening the
+    # GAP-V2-010/F2 fix for any other path. Left None (no exemption) if
+    # result_md_path is not actually under root.
+    try:
+        own_result_path = str(result_md_path.resolve().relative_to(root.resolve())).replace("\\", "/")
+    except ValueError:
+        own_result_path = None
+    validation = _result_mod.validate_result(handoff, result, root=root, own_result_path=own_result_path)
 
     if not validation.accepted:
         state["state"] = STATE_RESULT_REJECTED
@@ -212,10 +250,17 @@ def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutco
 
     question_id = _consume_result(root, handoff, result, str(result_md_path))
 
+    # GAP-V2-011 fix, ordering (dispatch: "append the registry before
+    # asserting RESULT_CONSUMED"): the real, always-fires evidence-store
+    # consumer runs BEFORE the state file claims RESULT_CONSUMED, so a
+    # crash between the two leaves state at RESULT_ACCEPTED (a real,
+    # inspectable "consumption did not finish" fact) rather than a false
+    # RESULT_CONSUMED with no matching registry row.
+    _append_registry(root, handoff, result, str(result_md_path), question_id)
+
     state["state"] = STATE_RESULT_CONSUMED
     state["question_id"] = question_id
     _save_state(root, task_id, state)
-    _append_registry(root, handoff, result, str(result_md_path), question_id)
 
     return ImportOutcome(task_id=task_id, state=STATE_RESULT_CONSUMED,
                          validation=validation, question_id=question_id, result=result)
