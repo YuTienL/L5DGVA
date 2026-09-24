@@ -472,3 +472,58 @@ Waiting for explicit review/approval. Does not resume/start M6
 implementation (`CAP-M5M6-VLEVEL-001`) automatically, and does not start
 the disclosed cross-document staleness fix (item 2 above) automatically —
 both require a separate, explicit dispatch.**
+
+## Addendum: M6 Golden-Path Connectivity Closure C1 (`CAP-M6-C1-001`)
+
+Closed the two capability-island edges the Prime Directive adoption audit
+found (`EDGE_A`: production `field_controls` -> `ClarificationService`;
+`EDGE_B`: governed `start_lifecycle()` path -> generation dispatch), for
+one real production field (`protocol`), reachable from `cli.py`'s
+`start --generate` and `dashboard.py`'s `/api/start`. `ClarificationService`,
+Field Resolution, and `create_environment.py` all unmodified internally.
+Bookkeeping: `CAP-M6-DISPATCH-001`'s stale P0 row (item 2 above)
+corrected to `RESOLVED`/P2 — `AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT` drops
+from 4 to 3. Full detail:
+`M6_PREFLIGHT/M6_GOLDEN_PATH_CONNECTIVITY_C1_IMPLEMENTATION_REPORT.md`.
+`REGRESSION_CAUSED_BY_C1 = 0`. **STOP. Not auto-started
+`CAP-M5M6-VLEVEL-001`.**
+
+## Addendum: Integration Prime Directive V2 adoption + P5 remediation (`CAP-M6-INTPRIME-V2-001`)
+
+`L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2.md` adopted as
+`ACTIVE_DETAILED_AUTHORITY`; V1 marked `SUPERSEDED_HISTORICAL` (retained,
+not deleted). Re-verified 5 known findings from real production code
+rather than trusting the C1 report blindly, applying V2's own P5
+`FIND -> FIX -> VERIFY` discipline. Found and fixed one real current-scope
+correctness defect this task's own predecessor (C1) had left open:
+`start_lifecycle()`'s generation branch caught only 6 of
+`create_environment()`'s own 10 documented exception classes —
+`ProtocolModelLayerError`/`EmptySubsystemRegistryError`/
+`MissingSubsystemNameEvidenceError`/`CrossSubsystemIntegrationBlockedError`
+would have propagated uncaught instead of returning an ordinary
+`AgentResult(ok=False)`. Fixed, verified by a new focused test exercising
+the real failure path end to end.
+
+**One current-scope item deliberately left OPEN, not fixed and not hidden**:
+`tools/generate_protocol_uvm_environment.py` still calls
+`create_environment()` directly, fully ungoverned — classified
+`HUMAN_DECISION_REQUIRED` (not `REGISTER_AND_DEFER_WITH_OWNER`, a stricter
+disposition than this same finding received in C1) because its correct
+resolution genuinely depends on a fact only a human can confirm (whether
+the calling AI-agent skill already performs its own equivalent intake).
+Full detail, all 5 re-verified findings, and the 3 required V2 artifacts:
+`M6_PREFLIGHT/L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2_ADOPTION_REPORT.md`,
+`M6_PREFLIGHT/L5DGVA_CURRENT_SCOPE_GAP_REGISTER.csv`,
+`M6_PREFLIGHT/L5DGVA_FIND_FIX_VERIFY_EVIDENCE.md`,
+`M6_PREFLIGHT/L5DGVA_PRODUCTION_CONNECTIVITY_STATUS.md`.
+
+`REGRESSION_CAUSED_BY_REMEDIATION = 0`. `AUTHORITATIVE_MASTER_P0_BLOCKER_
+COUNT` unchanged at 3. `REFERENCE_USB_ENV_CONSUMED = NO`. Constitution
+gate re-run fresh this wave: `PASS`, 0 reasons. All 5 frozen sources
+re-verified unchanged.
+
+**STOP. V2 adoption and current-scope remediation complete. The governed
+generation workflow (CLI/dashboard) is closed and verified; the legacy
+script's own governance status (`GAP-V2-002`) is explicitly NOT closed,
+pending a separate human decision. Not auto-starting
+`CAP-M5M6-VLEVEL-001` or any later wave.**

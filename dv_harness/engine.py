@@ -39,6 +39,12 @@ from .uvm_generator.create_environment import (
     VerificationArchitectureConflictError,
     VipApiUnprovableError,
 )
+from .uvm_generator.protocol_model_layer import ProtocolModelLayerError
+from .uvm_generator.soc_environment_composer import (
+    CrossSubsystemIntegrationBlockedError,
+    EmptySubsystemRegistryError,
+    MissingSubsystemNameEvidenceError,
+)
 
 # --- Plan-and-Execute / Multi-Agent / Blackboard / ReAct wiring -------------
 # planner.py, react.py, router.py, multi_agent.py, skill_resolver.py were all
@@ -6689,6 +6695,8 @@ class DVHarness:
             except (EnvironmentModeUnresolvedError, MissingOutputDirectoryError,
                     SubsystemModeRequiredError, StructuralLintFailedError,
                     VipApiUnprovableError, VerificationArchitectureConflictError,
+                    ProtocolModelLayerError, EmptySubsystemRegistryError,
+                    MissingSubsystemNameEvidenceError, CrossSubsystemIntegrationBlockedError,
                     NotImplementedError) as exc:
                 reason = f"GENERATION_FAILED: {type(exc).__name__}: {exc}"
                 self.store.event({"ts": now(), "event": "LIFECYCLE_GENERATION_FAILED",

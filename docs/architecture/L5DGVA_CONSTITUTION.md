@@ -243,16 +243,26 @@ extension points — proving the core is generic rather than USB-specific.
 
 Article 0 above describes the FINAL product's end-to-end chain — a static
 target, not a sequencing instruction. `docs/architecture/
-L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md` is the separate, subordinate,
-current-integration-phase instruction for HOW progress toward that chain is
-sequenced and measured while it is still being connected
-(`CONNECT BEFORE EXPAND -> OPERATIONAL BEFORE CLAIMED -> CLOSE THE LOOP ->
-NO CAPABILITY ISLANDS`). It restates no constitutional dimension and adds
-no new one — its own `OPERATIONAL BEFORE CLAIMED` maturity ladder
+L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2.md` (**V2, ACTIVE_DETAILED_AUTHORITY**
+-- supersedes the original `L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md`, which
+remains `SUPERSEDED_HISTORICAL` evidence, not deleted, not active) is the
+separate, subordinate, current-integration-phase instruction for HOW
+progress toward that chain is sequenced, measured, and remediated while it
+is still being connected (`P1 CONNECT BEFORE EXPAND -> P2 OPERATIONAL
+BEFORE CLAIMED -> P3 CLOSE THE LOOP -> P4 NO CAPABILITY ISLANDS -> P5
+FIND -> FIX -> VERIFY`). It restates no constitutional dimension and adds
+no new one — its own `P2 OPERATIONAL BEFORE CLAIMED` maturity ladder
 (`ROADMAP_DEFINED -> FOUNDATION -> IMPLEMENTED -> WIRED -> TRIGGERED ->
-CONSUMED -> OPERATIONAL -> QUALIFIED`) is a finer-grained restatement of
-this document's own **Capability Operationalization Standard** above
+CONSUMED -> PRODUCTION_CONNECTED -> OPERATIONAL -> QUALIFIED`) is a
+finer-grained restatement of this document's own **Capability
+Operationalization Standard** above
 (`IMPLEMENTED`/`WIRED`/`TRIGGERED`/`CONSUMED`/`OBSERVED`/`TESTED`),
-reconciled rather than duplicated. CLAUDE.md carries only a compact
-ALWAYS_ON pointer to it (`Integration Prime Directive` section); this
-Constitution is not amended by it and does not duplicate its text.
+reconciled rather than duplicated. `P5 FIND -> FIX -> VERIFY` is new in V2:
+a current-scope integration defect discovered while connecting capabilities
+must be root-caused and fixed, not merely documented — this does not weaken
+Article 0's own Anti-Drift Rule above (a proposed change conflicting with
+Article 0 still STOPs for review); it strengthens the parallel expectation
+that a discovered DEFECT, as opposed to a proposed CHANGE, gets corrected
+rather than only reported. CLAUDE.md carries only a compact ALWAYS_ON
+pointer to it (`Integration Prime Directive V2` section); this Constitution
+is not amended by it and does not duplicate its text.

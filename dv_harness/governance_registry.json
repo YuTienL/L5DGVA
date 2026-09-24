@@ -136,15 +136,26 @@
       "notes": "M4.6: moved verbatim out of CLAUDE.md (79 sections, includes 14 lower-confidence keyword-fallback sections disclosed in M4_6_CONTEXT_CLASSIFICATION.csv)."
     },
     {
-      "id": "L5DGVA_INTEGRATION_PRIME_DIRECTIVE",
-      "label": "Integration Prime Directive -- CONNECT BEFORE EXPAND / OPERATIONAL BEFORE CLAIMED / CLOSE THE LOOP / NO CAPABILITY ISLANDS, Golden Operational Workflow, M6 slice, capability maturity/island policy, integration KPIs",
+      "id": "L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2",
+      "label": "Integration Prime Directive V2 (ACTIVE) -- P1 CONNECT BEFORE EXPAND / P2 OPERATIONAL BEFORE CLAIMED / P3 CLOSE THE LOOP / P4 NO CAPABILITY ISLANDS / P5 FIND->FIX->VERIFY, Golden Operational Workflow, M6 slice, structural-vs-production connectivity, capability maturity/island policy, current-scope remediation discipline",
       "load_policy": "TASK_SCOPED",
-      "trigger": "integration capability migration maturity architecture expansion roadmap reconciliation m6 m7 m8 m9 m10 m11 m12 m13 execution operational workflow vertical slice capability island runtime wiring status reporting golden workflow connect before expand",
+      "trigger": "integration capability migration maturity architecture expansion roadmap reconciliation remediation defect find fix verify m6 m7 m8 m9 m10 m11 m12 m13 execution operational workflow vertical slice capability island production connectivity runtime wiring status reporting golden workflow connect before expand",
       "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2.md",
+      "full_spec_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2.md",
+      "notes": "Adopted via CAP-M6-INTPRIME-V2-001, superseding L5DGVA_INTEGRATION_PRIME_DIRECTIVE_HISTORICAL (V1) as the active detailed authority -- V1's own registry entry, below, is retained as EVIDENCE_ON_DEMAND, never deleted. V2 adds P5 FIND->FIX->VERIFY (current-scope defects must be remediated, not merely documented) and the STRUCTURAL_CONNECTED_STAGES/PRODUCTION_CONNECTED_STAGES distinction. Companion task-scoped detail: L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md, L5DGVA_CAPABILITY_MATURITY_AND_ISLAND_POLICY.md, L5DGVA_INTEGRATION_KPI_REQUIREMENTS.md, L5DGVA_CURRENT_SCOPE_GAP_REGISTER.csv, L5DGVA_FIND_FIX_VERIFY_EVIDENCE.md, L5DGVA_PRODUCTION_CONNECTIVITY_STATUS.md, all under .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/. CLAUDE.md carries only the compact ALWAYS_ON P1-P5 pointer, never the full directive text."
+    },
+    {
+      "id": "L5DGVA_INTEGRATION_PRIME_DIRECTIVE_HISTORICAL",
+      "label": "Integration Prime Directive V1 (SUPERSEDED_HISTORICAL) -- retained as evidence only, never the active detailed authority",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about V1's own prior text, or about what V2 changed relative to it -- never loaded for ordinary task execution, which uses L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2 instead",
+      "priority": "LOW",
       "token_class": "MEDIUM",
       "summary_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md",
       "full_spec_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md",
-      "notes": "Adopted via CAP-M6-INTPRIME-001 (governance/roadmap reconciliation only, no new capability family, no M6 production implementation change). Companion task-scoped detail: L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md, L5DGVA_CAPABILITY_MATURITY_AND_ISLAND_POLICY.md, L5DGVA_INTEGRATION_KPI_REQUIREMENTS.md, all under .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/. CLAUDE.md carries only the compact ALWAYS_ON pointer (Integration Prime Directive section), never the full directive text."
+      "notes": "SUPERSEDED by L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2 (CAP-M6-INTPRIME-V2-001). File not deleted (V1 evidence preserved per that task's own explicit instruction); this registry entry's own id/load_policy changed from the original TASK_SCOPED L5DGVA_INTEGRATION_PRIME_DIRECTIVE to this HISTORICAL id so V1 is never the entry a fresh task-trigger match resolves to."
     },
     {
       "id": "HISTORICAL_AUDIT_NOTES",

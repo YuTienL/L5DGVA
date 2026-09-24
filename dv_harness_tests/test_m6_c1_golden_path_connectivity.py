@@ -49,6 +49,7 @@ from dv_harness.adapters.base import AgentResult
 from dv_harness.engine import DVHarness
 from dv_harness.lifecycle import LifecycleStore
 from dv_harness.question_queue import QuestionQueueStore
+from dv_harness.uvm_generator.protocol_model_layer import STATE_SIGNAL_KEY, TOPOLOGY_KEY
 
 
 @pytest.fixture()
@@ -265,6 +266,40 @@ def test_generation_dispatch_calls_create_environment_directly_never_recurses(ro
     # No lifecycle recursion: the ordinary Stage-graph adapter (what
     # loop()/run_stage() would call) was never invoked by the generation path.
     assert h.adapter.calls == 0
+
+
+# ---------------------------------------------------------------------------
+# V2 P5 FIND -> FIX -> VERIFY (CAP-M6-C1-002): a real current-scope defect
+# found during the V2 re-verification pass -- start_lifecycle()'s generation
+# branch caught only 6 of create_environment()'s own documented exceptions.
+# ProtocolModelLayerError (and soc_environment_composer.py's three own
+# exceptions) were NOT in the except tuple, so a real, documented
+# create_environment() failure mode would have propagated UNCAUGHT out of
+# start_lifecycle() instead of returning an ordinary AgentResult(ok=False),
+# breaking FAILURE_PATH_CORRECTNESS -- found by direct source inspection
+# (grep for every real "class ...Error" in create_environment.py's own
+# imports), not assumed absent.
+# ---------------------------------------------------------------------------
+
+def test_a_rejected_protocol_model_topology_returns_a_real_agent_result_not_an_uncaught_exception(root):
+    """Before the fix: ProtocolModelLayerError propagated uncaught out of
+    start_lifecycle(), crashing the caller (CLI/dashboard) instead of
+    returning the same kind of AgentResult(ok=False) every other
+    create_environment() failure mode already returns."""
+    bad_topology = {"name": "pcie_ep", "lane_width": 3, "gen_speed": "Gen3",
+                    "role": "EP", STATE_SIGNAL_KEY: "u_pcie_ctrl.ltssm_state_q"}
+    h = DVHarness(root)
+    h.adapter = _FakeAdapter()
+    r = h.start_lifecycle("build PCIe env", protocols=["PCIe"],
+                          generation_request=_pcie_manifest(**{TOPOLOGY_KEY: bad_topology}),
+                          generation_out_dir=root / "out")
+    assert r.ok is False
+    assert r.raw["blocked_by"] == "generation"
+    assert r.raw["error"] == "ProtocolModelLayerError"
+    # The model runs before the skeleton -- a refusal must leave nothing
+    # written, exactly as create_environment()'s own direct-call contract
+    # already guarantees (test_protocol_model_layer_wiring.py).
+    assert not (root / "out" / "tb").exists()
 
 
 def test_generation_request_none_takes_the_ordinary_dispatch_path(root, monkeypatch):
