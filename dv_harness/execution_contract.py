@@ -48,6 +48,7 @@ CANONICAL_STOP_REASONS = (
 #: report completion is real progress, not a licence to stop.
 INVALID_GENERIC_STOP_REASONS = (
     "WAITING_FOR_USER_TO_CONTINUE",
+    "WAITING_FOR_USER_TO_IMPORT",
     "WAITING_FOR_GENERIC_REVIEW",
     "WAITING_FOR_GENERIC_APPROVAL",
     "ASK_USER_IF_SHOULD_FIX",
@@ -200,10 +201,13 @@ def can_i_stop(signals: WorkflowSignals) -> StopDecision:
 # --- Gate reports (dispatch sections 10/11) --------------------------------
 
 def human_transport_report(task_id: str, target_model: str, handoff_file: str,
-                            expected_result_file: str, import_command: str) -> Dict[str, str]:
-    """Exact required report shape -- the human is never asked to decide
-    the post-import next action; `NEXT_ACTION_AFTER_IMPORT` is always
-    `AUTO_RESUME`."""
+                            expected_result_file: str,
+                            result_watcher: str = "ACTIVE_OR_RECOVERABLE") -> Dict[str, str]:
+    """Exact required report (Automatic External Result Ingestion contract).
+    The human ONLY transports the artifact across a boundary L5DGVA cannot
+    cross itself: no import command, no "continue", no next-action choice is
+    part of the report. Once RESULT_V1 appears at EXPECTED_RESULT_FILE,
+    L5DGVA detects, imports, validates, consumes/rejects and resumes."""
     return {
         "STATE": STATUS_WAITING_FOR_HUMAN_TRANSPORT,
         "STOP_REASON": "HUMAN_TRANSPORT_REQUIRED",
@@ -211,8 +215,10 @@ def human_transport_report(task_id: str, target_model: str, handoff_file: str,
         "TARGET_MODEL": target_model,
         "HANDOFF_FILE": handoff_file,
         "EXPECTED_RESULT_FILE": expected_result_file,
-        "IMPORT_COMMAND": import_command,
-        "NEXT_ACTION_AFTER_IMPORT": "AUTO_RESUME",
+        "HUMAN_ACTION_REQUIRED": "Transport HANDOFF and ensure returned RESULT_V1 is placed at EXPECTED_RESULT_FILE",
+        "RESULT_WATCHER": result_watcher,
+        "AUTO_IMPORT": "ENABLED",
+        "AUTO_RESUME": "ENABLED",
     }
 
 

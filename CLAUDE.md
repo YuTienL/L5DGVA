@@ -416,6 +416,23 @@ ingestion is fail-closed on raw external Markdown (`dv_harness/
 md_kv_codec.py`); see `M7_CODEX_REVIEW_002_*` under
 `.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`.
 
+**Automatic External Result Ingestion (new, 2026-09-24)**: for human-mediated
+external-model round trips the human only TRANSPORTS the artifact
+(`HUMAN_MANUAL_IMPORT_REQUIRED=NO`): a registered expected result is
+detected, stability-checked, SHA-256-identified, duplicate/quarantine-
+suppressed and imported through the one canonical
+`model_handoff_workflow.import_result()` (no second ingestion engine), then
+auto-resumed with a persisted next action. `HUMAN_TRANSPORT_REQUIRED` never
+means "run the import command". Detail:
+`docs/architecture/canonical_detailed_governance/
+L5DGVA_AUTOMATIC_EXTERNAL_RESULT_INGESTION_REQUIREMENTS.md` (registered
+`TASK_SCOPED`); code: `dv_harness/result_ingestion.py`
+(`python -m dv_harness.result_ingestion status|scan|ensure-watcher`); tests:
+`dv_harness_tests/test_result_ingestion.py`. The manual `import` verb remains
+for recovery/replay and shares the same ingestion path. Evidence:
+`M7_REVIEW_003_LIVE_INGESTION_EVIDENCE.md` under
+`.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`.
+
 ## Governance Document Routing (TASK_SCOPED_GOVERNANCE_RETRIEVAL)
 
 Detailed, task-specific governance belongs in categorized documents, not in

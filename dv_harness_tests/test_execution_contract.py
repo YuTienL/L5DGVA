@@ -229,10 +229,13 @@ def test_reading_a_never_persisted_task_is_a_real_none_not_a_crash(tmp_path: Pat
     assert read_persisted_stop(tmp_path, "NEVER-PERSISTED") is None
 
 
-def test_human_transport_report_never_asks_human_to_decide_next_action():
-    report = human_transport_report("T-1", "codex", "HANDOFF_V1.md", "RESULT_V1.md", "import ...")
-    assert report["NEXT_ACTION_AFTER_IMPORT"] == "AUTO_RESUME"
+def test_human_transport_report_asks_only_for_transport_never_an_import_or_a_decision():
+    report = human_transport_report("T-1", "codex", "HANDOFF_V1.md", "RESULT_V1.md")
     assert report["STOP_REASON"] == "HUMAN_TRANSPORT_REQUIRED"
+    assert report["HUMAN_ACTION_REQUIRED"].startswith("Transport HANDOFF")
+    assert report["AUTO_IMPORT"] == "ENABLED" and report["AUTO_RESUME"] == "ENABLED"
+    assert "IMPORT_COMMAND" not in report
+    assert "import" not in report["HUMAN_ACTION_REQUIRED"].lower().replace("returned", "")
 
 
 def test_human_authority_report_carries_a_resume_action_never_a_dead_end():

@@ -131,6 +131,10 @@ def export_handoff(root: Path, handoff: ModelHandoffV1) -> Path:
     state = _load_state(root, handoff.task_id)
     state["state"] = STATE_WAITING_FOR_HUMAN_TRANSPORT
     _save_state(root, handoff.task_id, state)
+    # Reaching HUMAN_TRANSPORT_REQUIRED registers the expected result: only
+    # registered paths are ever watched (Automatic External Result Ingestion).
+    from . import result_ingestion as _ri
+    _ri.register_expected_result(root, handoff.task_id)
     return handoff_path
 
 
@@ -478,13 +482,28 @@ def execute_verb(argv: Optional[List[str]] = None) -> int:
             print(json.dumps({"handoff_path": str(path), "state": STATE_WAITING_FOR_HUMAN_TRANSPORT,
                               **metrics}))
         else:
+            from . import result_ingestion as _ri
             print(f"HANDOFF_GENERATED: {path}")
             print(f"state={STATE_WAITING_FOR_HUMAN_TRANSPORT}")
             print(f"handoff_bytes={metrics['handoff_bytes']} (proxy, not a token count)")
+            watcher = _ri.ensure_watcher(args.root)
+            for k, v in _ri.transport_stop_report(args.root, args.task_id).items():
+                print(f"{k}={watcher if k == 'RESULT_WATCHER' else v}")
         return 0
 
     if args.verb == "import":
-        outcome = import_result(args.root, args.task_id, args.result_file)
+        # Recovery/debug/replay front door. Shares the ONE ingestion path
+        # (identity, duplicate/quarantine state, canonical import_result)
+        # with the automatic watcher; a human never needs this in normal flow.
+        from . import result_ingestion as _ri
+        ing = _ri.ingest_result_file(args.root, args.task_id, args.result_file, trigger="MANUAL")
+        outcome = ing.outcome
+        if outcome is None:
+            if ing.action == "DUPLICATE_SUPPRESSED":
+                outcome = ImportOutcome(task_id=args.task_id, state=current_state(args.root, args.task_id) or STATE_RESULT_REJECTED)
+            else:
+                outcome = ImportOutcome(task_id=args.task_id, state=STATE_RESULT_REJECTED,
+                                        parse_error=f"INGESTION_{ing.action}:{ing.detail}")
         if args.json:
             print(json.dumps(outcome.to_dict()))
         else:

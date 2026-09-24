@@ -53,3 +53,12 @@ def _no_live_resource_probe_in_tests():
         os.environ.pop(ENV_TRANSPORT_OVERRIDE, None)
     else:
         os.environ[ENV_TRANSPORT_OVERRIDE] = _PREVIOUS_TRANSPORT
+
+
+import pytest as _pytest_for_watcher_guard  # noqa: E402
+
+
+@_pytest_for_watcher_guard.fixture(autouse=True)
+def _no_background_result_watcher(monkeypatch):
+    """Tests never leave a detached result-watcher process behind."""
+    monkeypatch.setenv("L5DGVA_RESULT_WATCHER", "off")
