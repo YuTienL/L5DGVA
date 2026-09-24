@@ -59,3 +59,24 @@ NEXT_ACTION_AFTER_IMPORT=AUTO_RESUME
 
 Superseded stop: `M7-V1-CODEX-REVIEW-002` is now `COMPLETE/TASK_COMPLETE`
 (result consumed, findings remediated, successor issued).
+
+## Addendum: transport semantics after Automatic External Result Ingestion (REVIEW-004 live output)
+
+`HUMAN_TRANSPORT_REQUIRED` now means only that the human moves an artifact
+across a boundary L5DGVA cannot cross; it never means "run the import command".
+The `IMPORT_COMMAND` field quoted in the sections above is superseded (removed
+from the stop report; the manual verb remains only for recovery/replay).
+Real output of the production `export` verb for the current stop:
+
+```
+STATE=WAITING_FOR_HUMAN_TRANSPORT
+STOP_REASON=HUMAN_TRANSPORT_REQUIRED
+TASK_ID=M7-V1-CODEX-REVIEW-004
+TARGET_MODEL=codex
+HANDOFF_FILE=.dv-harness/model_handoffs/M7-V1-CODEX-REVIEW-004/HANDOFF_V1.md
+EXPECTED_RESULT_FILE=.dv-harness/model_handoffs/M7-V1-CODEX-REVIEW-004/RESULT_V1.md
+HUMAN_ACTION_REQUIRED=Transport HANDOFF and ensure returned RESULT_V1 is placed at EXPECTED_RESULT_FILE
+RESULT_WATCHER=ACTIVE
+AUTO_IMPORT=ENABLED
+AUTO_RESUME=ENABLED
+```

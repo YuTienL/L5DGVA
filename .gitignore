@@ -61,6 +61,11 @@ __pycache__/
 .dv-harness/blackboard/
 .dv-harness/state.json
 .dv-harness/events.jsonl
+# Automatic External Result Ingestion runtime state (watcher heartbeat/log/stop flag, per-task locks)
+.dv-harness/model_handoffs/result_watcher.json
+.dv-harness/model_handoffs/result_watcher.log
+.dv-harness/model_handoffs/result_watcher.stop
+.dv-harness/model_handoffs/*/*.lock
 
 # Stage-boundary progress reports (2026-09-04,
 # dv_harness/stage_progress_display.py -- save_stage_report()). Two markdown

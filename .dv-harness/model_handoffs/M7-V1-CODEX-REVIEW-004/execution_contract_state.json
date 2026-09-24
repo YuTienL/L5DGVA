@@ -1,0 +1,8 @@
+{
+  "HUMAN_ACTION_REQUIRED": "YES",
+  "NEXT_REQUIRED_ACTION": "Transport HANDOFF to Codex and place the returned RESULT_V1 at EXPECTED_RESULT_FILE; L5DGVA imports and resumes automatically",
+  "RESUME_ACTION": "AUTO_RESUME",
+  "STATE": "WAITING_FOR_HUMAN_TRANSPORT",
+  "STOP_EVIDENCE": "N1-N6 fixed and verified by author (commit a2dc1e1); REVIEW-004 handoff generated; expected result registered; watcher armed; stop is transport only",
+  "STOP_REASON": "HUMAN_TRANSPORT_REQUIRED"
+}
