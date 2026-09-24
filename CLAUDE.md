@@ -332,6 +332,36 @@ the genericity challenge after USB, with the criterion
 profiles, adapters, data, and explicit extension points -- proving the core
 is generic rather than USB-specific.
 
+## Integration Prime Directive (ALWAYS_ON pointer)
+
+Subordinate to, and never in conflict with, Article 0 above -- this is the
+current integration-phase operating instruction for how progress on Article
+0's own end-to-end chain gets measured and sequenced, not a competing
+authority. Full text: `docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md`
+(registered `TASK_SCOPED`, `dv_harness/governance_registry.json` id
+`L5DGVA_INTEGRATION_PRIME_DIRECTIVE` -- load on demand for any integration,
+capability-migration/maturity, architecture-expansion, roadmap
+reconciliation, M6-M13 execution, operational-workflow, vertical-slice,
+capability-island, runtime-wiring, or status-reporting task; never copied
+into this file in full).
+
+```
+CONNECT BEFORE EXPAND -> OPERATIONAL BEFORE CLAIMED -> CLOSE THE LOOP -> NO CAPABILITY ISLANDS
+```
+
+Prioritize connecting existing but fragmented capabilities into the first
+complete, executable, human-in-the-loop, evidence-grounded L5DGVA workflow
+before adding new capability count. `IMPLEMENTED != WIRED`,
+`TESTED != CONSUMED`, `MODULE_EXISTS != RUNTIME_USED` (Capability
+Operationalization Standard above, restated here as this phase's own
+measurement lens). See the detailed directive for the full Golden
+Operational Workflow, the M6 slice, KPI set, and capability-island policy;
+see `L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md`,
+`L5DGVA_CAPABILITY_MATURITY_AND_ISLAND_POLICY.md`, and
+`L5DGVA_INTEGRATION_KPI_REQUIREMENTS.md` (under
+`.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`) for the reconciled,
+task-scoped detail adopted from it.
+
 ## Governance Document Routing (TASK_SCOPED_GOVERNANCE_RETRIEVAL)
 
 Detailed, task-specific governance belongs in categorized documents, not in

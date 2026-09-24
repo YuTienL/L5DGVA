@@ -238,3 +238,21 @@ must not be consumed before its approved qualification wave (M11). PCIe =
 the genericity challenge after USB: `ZERO CORE ORCHESTRATION / GENERATION
 CHANGE` except approved protocol profiles, adapters, data, and explicit
 extension points — proving the core is generic rather than USB-specific.
+
+## Integration Prime Directive Cross-Reference
+
+Article 0 above describes the FINAL product's end-to-end chain — a static
+target, not a sequencing instruction. `docs/architecture/
+L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md` is the separate, subordinate,
+current-integration-phase instruction for HOW progress toward that chain is
+sequenced and measured while it is still being connected
+(`CONNECT BEFORE EXPAND -> OPERATIONAL BEFORE CLAIMED -> CLOSE THE LOOP ->
+NO CAPABILITY ISLANDS`). It restates no constitutional dimension and adds
+no new one — its own `OPERATIONAL BEFORE CLAIMED` maturity ladder
+(`ROADMAP_DEFINED -> FOUNDATION -> IMPLEMENTED -> WIRED -> TRIGGERED ->
+CONSUMED -> OPERATIONAL -> QUALIFIED`) is a finer-grained restatement of
+this document's own **Capability Operationalization Standard** above
+(`IMPLEMENTED`/`WIRED`/`TRIGGERED`/`CONSUMED`/`OBSERVED`/`TESTED`),
+reconciled rather than duplicated. CLAUDE.md carries only a compact
+ALWAYS_ON pointer to it (`Integration Prime Directive` section); this
+Constitution is not amended by it and does not duplicate its text.

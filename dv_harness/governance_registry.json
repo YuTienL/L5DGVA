@@ -136,6 +136,17 @@
       "notes": "M4.6: moved verbatim out of CLAUDE.md (79 sections, includes 14 lower-confidence keyword-fallback sections disclosed in M4_6_CONTEXT_CLASSIFICATION.csv)."
     },
     {
+      "id": "L5DGVA_INTEGRATION_PRIME_DIRECTIVE",
+      "label": "Integration Prime Directive -- CONNECT BEFORE EXPAND / OPERATIONAL BEFORE CLAIMED / CLOSE THE LOOP / NO CAPABILITY ISLANDS, Golden Operational Workflow, M6 slice, capability maturity/island policy, integration KPIs",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "integration capability migration maturity architecture expansion roadmap reconciliation m6 m7 m8 m9 m10 m11 m12 m13 execution operational workflow vertical slice capability island runtime wiring status reporting golden workflow connect before expand",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md",
+      "full_spec_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md",
+      "notes": "Adopted via CAP-M6-INTPRIME-001 (governance/roadmap reconciliation only, no new capability family, no M6 production implementation change). Companion task-scoped detail: L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md, L5DGVA_CAPABILITY_MATURITY_AND_ISLAND_POLICY.md, L5DGVA_INTEGRATION_KPI_REQUIREMENTS.md, all under .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/. CLAUDE.md carries only the compact ALWAYS_ON pointer (Integration Prime Directive section), never the full directive text."
+    },
+    {
       "id": "HISTORICAL_AUDIT_NOTES",
       "label": "Retrospective [CLOSED]/Already-Satisfied status markers -- provenance only, non-normative",
       "load_policy": "EVIDENCE_ON_DEMAND",

@@ -423,3 +423,52 @@ per explicit instruction, and is not evidence for this wave.
 **STOP. Agent Task Lifecycle roadmap/capability/governance reconciliation
 complete. Waiting for explicit review/approval before any future wave
 begins, including M5.**
+
+## Addendum: Integration Prime Directive adoption (governance/roadmap reconciliation only)
+
+`docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md` adopted and
+registered (`TASK_SCOPED`, `dv_harness/governance_registry.json`). CLAUDE.md
+gained a compact `ALWAYS_ON` pointer only (no full-text duplication).
+Companion detail: `L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md`,
+`L5DGVA_CAPABILITY_MATURITY_AND_ISLAND_POLICY.md`,
+`L5DGVA_INTEGRATION_KPI_REQUIREMENTS.md`
+(`.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`), plus a new
+machine-checkable anti-drift test,
+`dv_harness_tests/test_l5dgva_integration_prime_directive_discoverability.py`
+(4/4 pass).
+
+**Disclosed cross-document staleness found this wave, not fixed here (out
+of this task's own scope — governance/roadmap reconciliation of the Prime
+Directive, not a general Master-document refresh)**:
+
+1. This file's own `NEXT_RECOMMENDED_GATE` (above, v3:
+   `M5_N_WAY_CAPABILITY_SEMANTIC_MERGE`) is stale relative to
+   `MASTER_BLOCKER_REGISTER.md` v9, which reflects the real, later M5
+   Cohort 0-5 / Pool Closure work and M6's own `CAP-M6-DISPATCH-001`/
+   `CAP-M6-CLARSVC-001` closures. This file was not updated at each of
+   those closures the way the Blocker Register was. Real current
+   evidence (reused from `MASTER_BLOCKER_REGISTER.md` v9,
+   `M6_CLARSVC_001_IMPLEMENTATION_REPORT.md`, and this wave's own fresh
+   CSV recount): `AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT = 4`
+   (`CAP-M6-DISPATCH-001` [see #2 below], `CAP-M5M6-VLEVEL-001`,
+   `CAP-M8-EXPLOOP-001`, `CAP-CE-018`); the real next M6-execution gate is
+   `CAP-M5M6-VLEVEL-001` (`VerificationLevel`/IP_MODE foundation).
+2. `MASTER_CAPABILITY_STATUS_MATRIX.csv`'s own `CAP-M6-DISPATCH-001` row
+   was never downgraded from `P0`/`PARTIAL (conflict named and
+   understood)` when that capability closed (commit `17f244f`) — a real,
+   pre-existing bookkeeping gap disclosed in
+   `M6_CLARSVC_001_IMPLEMENTATION_REPORT.md`, still open, not corrected
+   by this task (out of its own explicit scope: this task's update script
+   was assertion-scoped to only the `CAP-M6-CLARSVC-001`/
+   `CAP-M5M6-VLEVEL-001` rows).
+
+Neither correction implements any missing work, changes M6 production
+code, or starts M10.5/M11/M12/M13/M14. `REFERENCE_USB_ENV_CONSUMED = NO`.
+Constitution/Anti-Drift gate re-run fresh this wave: `PASS`, 0 reasons.
+All 5 frozen sources (Parent/v50/b7a/b7b/b8) re-verified unchanged.
+
+**STOP. Integration Prime Directive adoption reconciliation complete.
+Waiting for explicit review/approval. Does not resume/start M6
+implementation (`CAP-M5M6-VLEVEL-001`) automatically, and does not start
+the disclosed cross-document staleness fix (item 2 above) automatically —
+both require a separate, explicit dispatch.**

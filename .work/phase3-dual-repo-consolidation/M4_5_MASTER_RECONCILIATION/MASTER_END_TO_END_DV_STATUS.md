@@ -57,7 +57,7 @@ IP_MODE_OWNER_WAVE = M6 (CAP-M5M6-VLEVEL-001 -- verification_level.py / IP_MODE 
 | 1 | OpenSpec Intake | WIRED | `intake_routing.py` + `environment_mode_router.py` real dispatch confirmed |
 | 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | |
 | 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | |
-| 4 | Clarification | **BLOCKED (first non-operational stage)** | `ClarificationService` not yet built (architecture decided, D2; feature work not started — CAP-M6-CLARSVC-001) |
+| 4 | Clarification | **BLOCKED (first non-operational stage), updated this wave** | `ClarificationService` itself is now real — `CAP-M6-CLARSVC-001` CLOSED, `IMPLEMENTED/WIRED/TRIGGERED/TESTED` inside `start_lifecycle()`'s own dispatch path. Stage stays BLOCKED for a different, now-precise reason: `create_environment.py`'s own SUBSYSTEM/SYSTEM_LEVEL generation dispatch does not call `start_lifecycle()` at all (confirmed by direct grep of `engine.py`), so this stage's real entry point never reaches the real `ClarificationService` — a disclosed capability island, see `L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md` |
 | 5 | vPlan | PARTIAL (downstream of #4, but `VPLAN_COVERAGE_TRACEABILITY_FOUNDATION = READY` per M4) | |
 | 6 | VIP/UVM Generation | WIRED, 1 latent defect | `create_environment.py` -> `ProtocolEnvGenerator`; `KNOWN_SOURCE_B_DEFECT` re-confirmed unchanged (CAP-M5-ARCH-001) |
 | 7–17 | Sequence/Scenario/FW … Experience Consolidation | NOT_RE-AUDITED_THIS_WAVE except where already tracked (Coverage Closure PARTIAL per CAP-M5-COV-001; Experience Consolidation ABSENT per CAP-CE-014) | |
@@ -74,7 +74,7 @@ SUBSYSTEM_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
 | 1 | OpenSpec Intake | WIRED | same router dispatch as SUBSYSTEM_MODE |
 | 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | |
 | 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | |
-| 4 | Clarification | **BLOCKED (first non-operational stage)** | same `ClarificationService` gap as SUBSYSTEM_MODE |
+| 4 | Clarification | **BLOCKED (first non-operational stage), updated this wave** | same as SUBSYSTEM_MODE row above — `ClarificationService` itself is now real and closed (`CAP-M6-CLARSVC-001`); the blocker is the unconnected `create_environment.py` dispatch path, not a missing `ClarificationService` |
 | 5 | vPlan | PARTIAL | |
 | 6 | VIP/UVM Generation | WIRED, 1 unresolved foundation contract | `compose_soc_environment()` real registered-subsystem-registry check + cross-subsystem pre-check; `soc_environment_composer.py`'s ARCH-03 contract UNRESOLVED (CAP-M5-ARCH-002) |
 | 7 | Sequence/Scenario/FW | PARTIAL, disclosed scope boundary | cross-subsystem behavioral scenario content is explicitly `NotImplementedError` by design (No Golden-Reference Content Mining rule), not a defect |
@@ -91,14 +91,22 @@ SYSTEM_LEVEL_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
 `IP_MODE` is blocked at the very first stage (no router entry point at
 all) — a strictly earlier and more severe gap than `SUBSYSTEM_MODE`/
 `SYSTEM_LEVEL_MODE`, both of which reach real intake dispatch before
-hitting the shared `ClarificationService` gap at stage 4. **Closing
-`CAP-M5M6-VLEVEL-001` (owner M6) unblocks IP_MODE's stage 1;
-closing `CAP-M6-CLARSVC-001` (owner M6) unblocks stage 4 for all three
-levels.** Both are M6-owned, not M5 — reinforcing that M5's own N-way
-merge scope (env_manifest.py, vip_capability_extraction.py, etc.) is
-not what stands between today's state and a further-operational E2E
-flow at any level; M6's core-dispatch/ClarificationService/
-VerificationLevel work is the more load-bearing near-term blocker.
+hitting the shared Clarification gap at stage 4. **Closing
+`CAP-M5M6-VLEVEL-001` (owner M6) unblocks IP_MODE's stage 1.**
+`CAP-M6-CLARSVC-001` (owner M6) is now CLOSED — `ClarificationService`
+itself is real, wired and tested — but this **disclosed correction**
+(Integration Prime Directive adoption reconciliation, this wave)
+supersedes the prior claim that closing it alone would unblock stage 4:
+it does not, because `create_environment.py`'s own SUBSYSTEM/SYSTEM_LEVEL
+generation dispatch is a separate call path that never reaches
+`start_lifecycle()`'s dispatch (a disclosed capability island, see
+`L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md`). Both are M6-owned, not M5 —
+reinforcing that M5's own N-way merge scope (env_manifest.py,
+vip_capability_extraction.py, etc.) is not what stands between today's
+state and a further-operational E2E flow at any level; M6's core-dispatch/
+ClarificationService/VerificationLevel work, now including converging the
+generation dispatch path onto `start_lifecycle()`, remains the more
+load-bearing near-term blocker.
 
 No stage at any level is claimed `OPERATIONAL` end-to-end — consistent
 with `CANONICAL_CAPABILITY_STRICT_SUPERSET = NOT_YET_QUALIFIED`.
@@ -150,10 +158,10 @@ OpenSpec engine every stage's own `Clarification` row already depends
 on (`intake_field_resolution.py`, `FOUNDATION_CLOSED` since M5 Cohort
 4) — it does not change any stage's `CURRENT_STATUS`/`BLOCKER` in the
 tables above, and does not become `OPERATIONAL` by virtue of this
-reconciliation. `Clarification`'s existing blocker
-(`CAP-M6-CLARSVC-001`) is the same blocker all 14 new `CAP-EXCEL-*`
-capabilities cite as their own dependency — Excel cannot integrate live
-before that engine wiring exists, at any verification level. See
+reconciliation. `Clarification`'s blocker is now the `create_environment.py`
+dispatch-path capability island described above (`CAP-M6-CLARSVC-001`
+itself CLOSED) — Excel cannot integrate live before that wiring exists,
+at any verification level. See
 `.work/phase3-dual-repo-consolidation/STRUCTURED_EXCEL_INTAKE/
 STRUCTURED_EXCEL_INTAKE_ARCHITECTURE.md`, `ROADMAP_DEFINED`, `NOT
 STARTED`, `PRODUCTION_IMPLEMENTATION_STARTED = NO`.
@@ -172,3 +180,19 @@ any stage `OPERATIONAL`. See
 USB_EXCEL_KC_LEARNING_QUALIFICATION_ARCHITECTURE.md`, `ROADMAP_DEFINED`,
 `NOT STARTED`, `PRODUCTION_IMPLEMENTATION_STARTED = NO`,
 `REFERENCE_USB_ENV_CONSUMED = NO`.
+
+## Integration Prime Directive adoption cross-reference (added this wave)
+
+`docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md` was adopted this
+wave (governance/roadmap reconciliation only, `CAP-M6-CLARSVC-001` and
+`CAP-M6-DISPATCH-001` both preserved CLOSED, no M6 production code
+changed). Two `Clarification` row corrections above are this adoption's
+direct, disclosed by-product: `CAP-M6-CLARSVC-001` closing did **not**
+unblock stage 4 as this document previously (incorrectly, before this
+wave) predicted it would once closed — the real blocker is a capability
+island between `start_lifecycle()`'s dispatch and `create_environment.py`'s
+own generation dispatch, not a missing `ClarificationService`. Full
+classification: `L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md` and
+`L5DGVA_CAPABILITY_MATURITY_AND_ISLAND_POLICY.md`
+(`.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`). No other row in
+either lifecycle table was changed by this wave.
