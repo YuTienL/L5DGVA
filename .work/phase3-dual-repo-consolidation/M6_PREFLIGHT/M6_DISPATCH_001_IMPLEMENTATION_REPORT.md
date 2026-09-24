@@ -11,7 +11,7 @@ canonical's own real `lifecycle.py`/`intake_field_resolution.py`/
 CAP_M6_DISPATCH_001_STATUS = IMPLEMENTED
 
 START_HEAD = ae4a797c34c33b4db9789df4b1379ecb69e7976d
-END_HEAD   = <filled by the commit this report is included in>
+END_HEAD   = 17f244f70b45a1707087fe9215725eba4710952a
 
 START_LIFECYCLE_ENTRY = WIRED
 CLI_LIFECYCLE_CONVERGENCE = YES
