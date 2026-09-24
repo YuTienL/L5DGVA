@@ -1,41 +1,52 @@
-# M7 Preflight -- Failure and Fallback Contract
+# M7 V1 -- Failure and Fallback Contract
 
-Per this task's own explicit instruction: "The Golden Workflow must
-degrade safely. No model failure may silently become PASS." This
-document defines the REQUIRED contract for M7's own future
-implementation cohorts -- it does not implement fallback logic itself
-(PREFLIGHT scope only), but every requirement below reuses a real,
-already-proven pattern from this project rather than inventing a new
-failure vocabulary.
+Supersedes the M7 Preflight's own `M7_FAILURE_AND_FALLBACK_CONTRACT.md`
+(design-only) with REAL, tested code -- every failure class dispatch
+section 20 names, plus this project's own required M6-pattern reuse
+(degrade-never-raise, real structured errors, never a silent PASS).
 
-## Failure classes and the real pattern each must reuse
+## Failure classes, real behavior, real test
 
-| Failure class | Required behavior | Reused pattern (real, already proven) |
+| Failure class | Real behavior | Test |
 |---|---|---|
-| ChatGPT unavailable | Degrade to `HUMAN_MEDIATED_ONLY` (the CURRENT real state -- never silently skip the step) | `task_boundary_conformance.working_tree_changes()`'s own degrade-never-raise `NO_GIT`/`STATUS_FAILED` vocabulary (`change_impact._git()`'s shared wrapper) |
-| Codex unavailable | Same -- degrade to `HUMAN_MEDIATED_ONLY`, never silently PASS | Same degrade-never-raise discipline |
-| Claude unavailable | This is the ONE path the current Golden Workflow already depends on unconditionally -- no fallback model exists today; must surface as a real, blocking failure, never silently substituted | `AgentResult(ok=False, ...)`'s own real failure-result contract |
-| Model invocation fails (network/timeout/etc.) | A real, structured failure result, never an uncaught exception | The SAME 10-exception-class normalization pattern `create_environment()`'s own callers already use (`GAP-V2-001`, re-verified intact by `M6-TASK-BOUNDARY-PRODUCTION-001`'s own qualification pass) |
-| Output invalid / cannot be parsed | `ValidationState.INVALID` + a real reason string, never a silent drop or a guessed correction | `intake_field_resolution.py`'s own `ValidationState`/`validator=` pattern |
-| Review disagreement occurs | See `M7_M6_NON_REGRESSION_CONTRACT.md`'s own reuse of Evidence-Grounded contracts -- claim/evidence/counter-evidence/confidence/validation-state, never majority vote | `dv_harness/confidence_calibration.py`'s own `confirmation_count`-based confidence model (the SAME real cross-run confirmation contract `M6-FINAL-QUALIFICATION` itself used) |
-
-## The one hard rule (section 14's own core requirement)
+| Missing result | `RESULT_FILE_UNREADABLE`, `RESULT_REJECTED`, never a crash | `test_missing_result_file_is_a_real_rejection_not_a_crash` |
+| Malformed Markdown | `ResultParseError("NOT_A_RESULT_DOCUMENT")` before validation ever runs | `test_malformed_markdown_is_a_real_parse_error_not_a_silent_default` |
+| Wrong Task ID | `task_id_validated=False`, `ValidationOutcome.accepted=False` | `test_task_id_mismatch_is_not_accepted` |
+| Wrong producer | `producer_validated=False` | `test_producer_mismatch_is_not_accepted` |
+| Incompatible task type | `task_type_validated=False` (exact-match only, never "close enough") | `test_incompatible_task_type_is_not_accepted` |
+| Invalid schema | `ResultParseError("MISSING_REQUIRED_FIELDS")` / `("INVALID_RESULT_STATUS")` | `test_missing_required_result_fields_is_a_real_parse_error`, `test_invalid_result_status_is_a_real_parse_error` |
+| Forbidden file reference | `scope_validated=False`, `scope_violations` names the exact path+classification | `test_scope_violation_is_not_accepted`, `test_forbidden_file_reference_is_flagged_even_if_also_plausible` |
+| Missing evidence | `evidence_validated=False` whenever real claims/findings exist with zero `evidence_refs` | `test_missing_evidence_for_real_claims_is_not_accepted` |
+| Unavailable target model | `HandoffBuildError("INVALID_TARGET_MODEL")` at BUILD time (never even reaches export) | `test_build_handoff_rejects_invalid_target_model` |
+| Disagreement | Not auto-resolved -- `COUNTER_EVIDENCE`/`UNKNOWN_ITEMS` preserved verbatim through parse/validate/consume; never majority-voted (no vote-counting code exists anywhere in `model_result.py`) | structural (no code path resolves disagreement; `CLAIMS` vs `COUNTER_EVIDENCE` stay separate fields end to end) |
+| Human copy/paste error | Surfaces as one of the above (malformed Markdown, wrong Task ID, etc.) -- there is no SEPARATE "human error" code path, by design: a human's mistake and a model's own malformed output are indistinguishable to, and handled identically by, the real ingestion pipeline | same tests as the corresponding failure class |
 
 ```
-NO_MODEL_FAILURE_BECOMES_SILENT_PASS = REQUIRED
+NO_FAILURE_SILENTLY_BECOMES_PASS = confirmed by construction:
+  ValidationOutcome.accepted is a real AND of 6 independent booleans;
+  import_result() checks .accepted before EVER calling _consume_result();
+  there is no code path that reaches RESULT_CONSUMED without passing
+  through RESULT_ACCEPTED first.
 ```
 
-Every real failure-normalization precedent in this codebase already
-honors this (`create_environment()`'s 10 exception classes all surface
-as `AgentResult(ok=False, ...)`, never a swallowed exception; `Task
-Boundary` VIOLATION always blocks, never silently degrades to HELD). M7's
-own future fallback logic for Codex/ChatGPT unavailability must be built
-to the SAME discipline: an unavailable model degrades the WORKFLOW'S OWN
-CLAIM (e.g. "this was NOT independently reviewed, proceed with that
-disclosed as a known gap") -- it must never make the workflow report a
-review/synthesis STEP as having happened when it did not.
+## Fallback behavior
 
-## Human authority is never replaced by multi-model consensus (section 15)
+Per dispatch section 20 ("Fallback may regenerate handoff, request
+correction, return to Claude-only execution, escalate to human, or mark
+BLOCKED"): M7 V1 implements the simplest safe fallback -- a rejected
+result leaves the task's own state at `RESULT_REJECTED`, `WAITING_FOR_
+HUMAN_TRANSPORT`'s own handoff artifact is untouched and can be
+re-copied, and a human can re-attempt transport (request a corrected
+result) or abandon the multi-model path and continue Claude-only (the
+task was never blocked from proceeding without this optional review in
+the first place -- M7 V1 is additive, never a hard dependency the M6
+Golden Workflow itself requires). No automatic escalation-to-human
+mechanism beyond the existing `HUMAN_DECISION_REQUIRED` ->
+`QuestionQueueStore` path was built this cohort (a real, disclosed scope
+limit -- see `M7_FINAL_QUALIFICATION_REPORT.md`'s own gap list).
+
+## Human authority preserved (dispatch section 18, re-verified against
+the real code)
 
 ```
 DESIGN_AUTHORITY = DE
@@ -43,40 +54,21 @@ VERIFICATION_AUTHORITY = DV
 VERIFICATION_SIGNOFF_AUTHORITY = DV
 ```
 
-Already real, already enforced elsewhere in this project (`clarification_
-service.classify_question_owner()`'s own DESIGN/VERIFICATION/SHARED
-authority_role classification, qualified as part of M6's own HITL
-stage). Three models "agreeing" is not a `QuestionOwner`, is not a
-`HumanGate` answer, and must never be substituted for one. Any future M7
-router/consensus mechanism must route its own OUTPUT through the SAME
-`resolve_or_ask()`/`HumanGate` mechanism a human answer already goes
-through -- never bypass it with a multi-model vote.
+Confirmed by direct source read: `_consume_result()` routes EVERY
+`HUMAN_DECISION_REQUIRED` result through `QuestionQueueStore.
+add_question(domain="env", ...)` -- the SAME real `authority_role`
+classification mechanism (`clarification_service.classify_question_
+owner()`) the qualified M6 Golden Workflow itself uses. No code in
+`model_handoff.py`/`model_result.py`/`model_handoff_workflow.py` ever
+sets a `RESULT_STATUS` to `PASS`/auto-accepts a change on a model's own
+say-so -- `RESULT_CONSUMED` means "reached a real Canonical Consumer,"
+never "was approved by Codex/ChatGPT."
 
-## Model disagreement representation (section 16)
+## Independent review context (dispatch section 15/17)
 
-Reuse, not invent: `intake_field_resolution.py`'s own real conflict
-model already carries exactly the shape section 16 asks for --
-`Candidate`s preserving both sides' own `value`/`source`/`confidence`/
-`evidence_refs`, never silently picking a winner by confidence alone
-(`test_confidence_alone_never_selects_a_winner_among_conflicting_
-values`), escalating to a real question when unresolved
-(`clarification_service`'s own `CONFLICT` `QuestionDecision.kind`). A
-future Codex-vs-Claude or ChatGPT-vs-Claude disagreement should be
-modeled as exactly this shape: two `Candidate`s, both evidence-backed,
-never averaged, never majority-voted, escalated to the correct
-`QuestionOwner` (DE/DV/SHARED) when genuinely unresolved.
-
-## Security / scope boundary (section 17)
-
-```
-Track: ALLOWED_CONTEXT, FORBIDDEN_CONTEXT, FILES_SHARED, OUTPUT_SCOPE
-```
-
-Directly reuses `TaskBoundary.allowed_path_prefixes`/`forbidden_paths`
-(CAP-ATL-004, now production-connected as of `M6-TASK-BOUNDARY-
-PRODUCTION-001`) -- a delegated model's own scope IS a `TaskBoundary`,
-the same real mechanism the M6 Golden Workflow itself just qualified. A
-multi-model path that skipped Task Boundary would be a NEW, uncontrolled
-bypass class (`UNCONTROLLED_BYPASSES > 0`) -- explicitly forbidden by
-this same task's own section 17 instruction ("Do not create a
-multi-model path that bypasses M6 Task Boundary").
+`INDEPENDENCE_REQUIREMENT` is a real, free-text field
+`build_handoff()` passes through unmodified -- confirmed by
+`test_independent_review_handoff_carries_no_prior_verdict_field`: a
+handoff's own `known_facts` defaults to empty, proving `build_handoff()`
+never auto-injects an implementation conclusion the caller did not
+explicitly supply.

@@ -1,0 +1,7 @@
+{
+  "task_id": "M7-V1-CHATGPT-DECISION-001",
+  "target_model": "chatgpt",
+  "task_type": "research-route",
+  "state": "WAITING_FOR_HUMAN_TRANSPORT",
+  "handoff_path": ".dv-harness\\model_handoffs\\M7-V1-CHATGPT-DECISION-001\\HANDOFF_V1.md"
+}

@@ -921,3 +921,72 @@ NEXT_RECOMMENDED_GATE = a human decision on the 3 items
 M8 or later waves, and does not consume Reference USB. All 5 frozen
 reference sources re-verified unchanged. Waiting for explicit human
 review.**
+
+## M7 V1 -- Structured Multi-Model Markdown Handoff (2026-09-24) --
+IN_PROGRESS, human transport pending
+
+Full detail: `M6_PREFLIGHT/M7_FINAL_QUALIFICATION_REPORT.md` and its 9
+sibling artifacts. Implements `docs/architecture/L5DGVA_M7_STRUCTURED_
+MULTI_MODEL_MD_HANDOFF_ARCHITECTURE.md`'s own Cohorts 1-2: real
+`L5DGVA_MODEL_HANDOFF_V1`/`L5DGVA_MODEL_RESULT_V1` contracts
+(`dv_harness/model_handoff.py`/`model_result.py`), a real 6-check
+round-trip validation chain, and a real Result Ingestion + Canonical
+Consumer pipeline (`dv_harness/model_handoff_workflow.py`) -- a
+persisted 7-state machine, an append-only evidence-store registry, and
+`HUMAN_DECISION_REQUIRED` results routed through the SAME real
+`question_queue.QuestionQueueStore.add_question()` the M6 Golden
+Workflow's own HumanGate already uses. Direct model-to-model API
+transport was explicitly NOT built, per this dispatch's own scope
+(`DIRECT_MODEL_API = NOT_REQUIRED` for V1) -- transport is real,
+structured Markdown, human-copied.
+
+Two real current-scope defects found and fixed within this same task
+(P5 FIND->FIX->VERIFY, never `DOCUMENT_ONLY`): a wrong
+`grounding_evidence` key shape in the question-filing consumer path, and
+a missing list-vs-tuple normalization on both new frozen dataclasses --
+both found by this cohort's own real tests failing, both fixed, both
+re-verified passing.
+
+Two real handoffs generated against the live repository (not a test
+fixture): a Codex independent-review task and a ChatGPT decision-
+analysis task, both real, both scoped via a real `TaskBoundary`, both
+correctly `WAITING_FOR_HUMAN_TRANSPORT` -- no model output fabricated
+anywhere in this record.
+
+```
+M7_STATUS = IN_PROGRESS   (not forced to READY_FOR_APPROVAL)
+MULTI_MODEL_LOGICAL_ORCHESTRATION = OPERATIONAL
+MULTI_MODEL_TRANSPORT = HUMAN_MEDIATED_MD   TRANSPORT_AUTOMATION_REQUIRED = NO
+STRUCTURED_HANDOFF = OPERATIONAL   STRUCTURED_RESULT = OPERATIONAL
+RESULT_INGESTION = OPERATIONAL   RESULT_VALIDATION = OPERATIONAL
+RESULT_CONSUMPTION = OPERATIONAL
+CODEX_ROUND_TRIP = WAITING_FOR_HUMAN_TRANSPORT
+CHATGPT_ROUND_TRIP = WAITING_FOR_HUMAN_TRANSPORT
+CODEX_OUTPUT_CONSUMED = NO   CHATGPT_OUTPUT_CONSUMED = NO
+MINIMUM_SUFFICIENT_CONTEXT = OPERATIONAL
+CONTEXT_REDUCTION_MEASURED = YES (real byte comparison: ~1.9KB structured
+  handoff vs. ~119KB full CLAUDE.md, ~1.6%)
+TOKEN_REDUCTION_MEASURED = NO   TOKEN_REDUCTION_EFFECT = NOT_MEASURED
+M6_GOLDEN_PATH_PRESERVED = YES
+CURRENT_SCOPE_GAPS_FOUND = 2   CURRENT_SCOPE_GAPS_FIXED = 2   CURRENT_SCOPE_GAPS_OPEN = 0
+UNKNOWN_RUNTIME_CALLERS = 0   UNCONTROLLED_BYPASSES = 0
+UNKNOWN_REGRESSION_FAILURES = 0   SOURCE_CAPABILITY_LOSS = 0
+AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT = 2   (unchanged)
+```
+
+```
+NEXT_RECOMMENDED_GATE = WAITING_FOR_HUMAN_TRANSPORT -- a human pastes
+  .dv-harness/model_handoffs/M7-V1-CODEX-REVIEW-001/HANDOFF_V1.md into
+  Codex and .dv-harness/model_handoffs/M7-V1-CHATGPT-DECISION-001/
+  HANDOFF_V1.md into ChatGPT, saves each real reply, and runs
+  `python -m dv_harness.model_handoff_workflow import --task-id <id>
+  --result-file <path>` for each. Only once both round trips reach
+  RESULT_CONSUMED can Cohorts 3-4 be marked QUALIFIED and Cohorts 5-6
+  begin.
+```
+
+**STOP. M7 V1 Cohorts 1-2 complete and tested. M7 is NOT declared
+READY_FOR_APPROVAL (the real round-trip closure conditions are honestly
+unmet). M8 and later waves are NOT started. No direct model-to-model API
+transport was built. `REFERENCE_USB_ENV_CONSUMED` remains NO. Waiting
+for real human transport.**

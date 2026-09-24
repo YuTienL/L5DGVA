@@ -150,3 +150,4 @@ CAP-M6-GAPV2002-001,GAP-V2-002 remediation (PROTOCOL_BUILDERS convergence),M6,"C
 CAP-M6-TASKBOUNDARY-001,Task Boundary production connectivity (CLI + dashboard entry points),M6,"CAP-ATL-004, CAP-M5M6-VLEVEL-001",P2 (closure task),NONE (RESOLVED)
 CAP-M6-FINALQUAL-001,M6 Final Operational Slice Qualification,M6,"CAP-M5M6-VLEVEL-001, CAP-M6-TASKBOUNDARY-001, CAP-ATL-004",P2 (qualification/closure task),NONE (READY_FOR_APPROVAL)
 CAP-M7-PREFLIGHT-001,M7 Closure Freeze + Preflight,M7,CAP-M6-FINALQUAL-001,P2 (preflight/planning task),"NONE (preflight complete, implementation not started)"
+CAP-M7-V1-001,M7 V1 Structured Multi-Model Markdown Handoff,M7,"CAP-M7-PREFLIGHT-001, CAP-ATL-004, CAP-M6-FINALQUAL-001","P2 (implementation cohort, in progress)","WAITING_FOR_HUMAN_TRANSPORT (real handoffs generated, round trip pending)"
