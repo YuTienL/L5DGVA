@@ -378,6 +378,22 @@ connectivity, capability-island policy, and the P5 remediation ladder; see
 `.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`) for the reconciled,
 task-scoped detail adopted from it.
 
+**P6 (new, 2026-09-24) -- RESULT -> ACTION -> AUTONOMOUS CLOSURE**: once a
+returned model result is validated/consumed, classify and execute the
+next permitted action (RCA -> Fix -> Verify -> Regression -> Re-review)
+autonomously, without asking to continue an already-authorized
+remediation; human intervention is reserved for a real HumanGate, a
+Human Transport boundary, or a genuine blocker
+(`HUMAN_IS_TRANSPORT_AND_AUTHORITY=YES`,
+`HUMAN_IS_WORKFLOW_SCHEDULER=NO`). Full text: the same
+`L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2.md`'s own "P6" section; detailed
+requirements: `docs/architecture/canonical_detailed_governance/
+L5DGVA_RESULT_DRIVEN_AUTONOMOUS_CLOSED_LOOP_REQUIREMENTS.md`;
+provider-independent router/eligibility/loop-budget/evidence-trace code:
+`dv_harness/result_action_router.py` (`PRODUCTION_CALL_SITE_WIRING=
+NOT_YET_WIRED` -- see `M7_AUTONOMOUS_REMEDIATION_EVIDENCE.md` under
+`.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`).
+
 ## Governance Document Routing (TASK_SCOPED_GOVERNANCE_RETRIEVAL)
 
 Detailed, task-specific governance belongs in categorized documents, not in
