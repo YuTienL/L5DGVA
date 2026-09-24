@@ -43,3 +43,19 @@ than reconstructing the stop from conversation memory.
 ## Status
 
 `HUMAN_TRANSPORT_GATE_STATUS=WIRED_TESTED_AND_APPLIED_TO_LIVE_CASE`.
+
+## Addendum: REVIEW-003 (live output, this task)
+
+```
+STATE=WAITING_FOR_HUMAN_TRANSPORT
+STOP_REASON=HUMAN_TRANSPORT_REQUIRED
+TASK_ID=M7-V1-CODEX-REVIEW-003
+TARGET_MODEL=codex
+HANDOFF_FILE=.dv-harness/model_handoffs/M7-V1-CODEX-REVIEW-003/HANDOFF_V1.md
+EXPECTED_RESULT_FILE=.dv-harness/model_handoffs/M7-V1-CODEX-REVIEW-003/RESULT_V1.md
+IMPORT_COMMAND=python -m dv_harness.model_handoff_workflow import --task-id M7-V1-CODEX-REVIEW-003 --result-file .dv-harness/model_handoffs/M7-V1-CODEX-REVIEW-003/RESULT_V1.md --root .
+NEXT_ACTION_AFTER_IMPORT=AUTO_RESUME
+```
+
+Superseded stop: `M7-V1-CODEX-REVIEW-002` is now `COMPLETE/TASK_COMPLETE`
+(result consumed, findings remediated, successor issued).

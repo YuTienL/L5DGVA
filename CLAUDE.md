@@ -408,11 +408,13 @@ L5DGVA_HUMAN_NON_SCHEDULER_EXECUTION_CONTRACT.md`; code:
 `signals_from_model_handoff_state()` -- reuses `model_handoff_workflow.py`'s
 own state, never a second lifecycle engine); tests:
 `dv_harness_tests/test_execution_contract.py` (41 tests, the full named
-anti-drift list). `PRODUCTION_CALL_SITE_WIRING=PARTIAL` -- applied for
-real to the live M7-V1-CODEX-REVIEW-002 case
-(`WAITING_FOR_HUMAN_TRANSPORT`/`HUMAN_TRANSPORT_REQUIRED`, persisted);
-no engine/CLI call site invokes it automatically yet on every
-state-changing operation.
+anti-drift list, 47 tests). `PRODUCTION_CALL_SITE_WIRING=PARTIAL` --
+`model_handoff_workflow.import_result()` persists the resolved
+NEXT_ACTION for every outcome (rejected results included); the Can-I-Stop
+Gate itself is still applied by explicit call, not an engine hook. Result
+ingestion is fail-closed on raw external Markdown (`dv_harness/
+md_kv_codec.py`); see `M7_CODEX_REVIEW_002_*` under
+`.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`.
 
 ## Governance Document Routing (TASK_SCOPED_GOVERNANCE_RETRIEVAL)
 

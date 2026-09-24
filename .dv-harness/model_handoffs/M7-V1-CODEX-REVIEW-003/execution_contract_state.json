@@ -1,0 +1,8 @@
+{
+  "HUMAN_ACTION_REQUIRED": "YES",
+  "NEXT_REQUIRED_ACTION": "Human carries HANDOFF_V1.md to Codex and returns RESULT_V1.md; then run IMPORT_COMMAND (auto-resume follows).",
+  "RESUME_ACTION": "AUTO_RESUME",
+  "STATE": "WAITING_FOR_HUMAN_TRANSPORT",
+  "STOP_EVIDENCE": "R1-R8 + GAP-V2-013 fixed and verified by author (commit 9bd4da2, 210 tests); re-review handoff generated at head f3c5878",
+  "STOP_REASON": "HUMAN_TRANSPORT_REQUIRED"
+}

@@ -68,3 +68,27 @@ call `resolve_next_action()`/`can_i_stop()` automatically, and to
 persist the result via `persist_stop()`, is the concrete next step --
 registered here rather than silently left implicit, per the Methodology
 Consolidation Rule.
+
+## Addendum: REJECTED / clean / human-decision outcomes and live wiring (REVIEW-002 task)
+
+The resolver table was missing every REJECTED outcome: after
+`M7-V1-CODEX-REVIEW-002` came back `RESULT_REJECTED`, the workflow simply
+stopped in that state and nothing persisted what should happen next -- a
+real gap against "after every state-changing operation persist
+NEXT_ACTION". Added events:
+
+| Event | Next action | Auto |
+|---|---|---|
+| `RESULT_REJECTED_SCOPE_VIOLATION` | `AUTO_CLASSIFY_SCOPE_VIOLATION` | yes |
+| `RESULT_REJECTED_VALIDATION` | `AUTO_DIAGNOSE_VALIDATION_FAILURE` | yes |
+| `RESULT_REJECTED_MALFORMED` | `AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF` | yes |
+| `RESULT_CONSUMED_CLEAN` | `EVALUATE_CANONICAL_TASK_COMPLETION` | yes |
+| `RESULT_CONSUMED_HUMAN_DECISION` | `HUMAN_AUTHORITY_REQUIRED` | no (stop) |
+
+`model_handoff_workflow.import_result()` now calls
+`execution_contract.event_for_import_outcome()` +
+`persist_next_action()` on every outcome (`next_action.json` beside
+`state.json`); replay of a consumed FAIL keeps `AUTO_REMEDIATE_CONFIRMED_FINDINGS`.
+Six tests in `test_execution_contract.py` (47 total). Status moves from
+`NOT_YET_WIRED` to `WIRED_FOR_RESULT_IMPORT`; the Can-I-Stop Gate is still
+applied by explicit call, not by an engine hook.

@@ -84,3 +84,29 @@ this contract recognizes -- `WAITING_FOR_USER_TO_CONTINUE` and the other
 place to pause," it is the one gate-verified legitimate stop for this
 task. See `M7_HUMAN_TRANSPORT_GATE_EVIDENCE.md` and
 `M7_CODEX_AUTONOMOUS_REMEDIATION_TRACE.md`.
+
+## REVIEW-003 (successor of the rejected-then-consumed REVIEW-002)
+
+`M7-V1-CODEX-REVIEW-002` returned `FAIL` and was first `RESULT_REJECTED
+(SCOPE_VIOLATION)`. Analysis and fixes: `M7_CODEX_REVIEW_002_RESULT_REJECTION_ANALYSIS.md`,
+`M7_CODEX_REVIEW_002_FINDINGS_REMEDIATION_REPORT.md`. The unmodified result
+was re-imported and consumed (FAIL preserved), and a new re-review handoff
+with a new Task ID was generated through the production export CLI on the
+corrected scope-derivation mechanism:
+
+- `TASK_ID=M7-V1-CODEX-REVIEW-003`, `TARGET_MODEL=codex`, pinned to head
+  `f3c5878`
+- `ALLOWED_FILES` (6): `md_kv_codec.py`, `model_handoff.py`, `model_result.py`,
+  `model_handoff_workflow.py`, `test_model_handoff_v1.py`,
+  `test_model_handoff_review002_remediation.py`
+- `INPUT_EVIDENCE_REFS` (14) include 8 read-only files outside ALLOWED_FILES
+  (execution_contract + its tests, the REVIEW-002 RESULT_V1, the reports,
+  both contract docs, the gap register) -- authorized by explicit listing, and
+  the handoff `RETURN_CONTRACT` now states that rule to the model
+- `FORBIDDEN_FILES`: `engine.py`, `cli.py`, `task_boundary_conformance.py`,
+  `question_queue.py` (build-time check: no input ref is forbidden)
+- Objective asks for raw hand-authored input probing and new-defect hunting
+  in the new codec, evidence grammar, read boundary and idempotent consumption
+- `state=WAITING_FOR_HUMAN_TRANSPORT`; `STOP_REASON=HUMAN_TRANSPORT_REQUIRED`
+  persisted in `execution_contract_state.json`; `next_action.json` =
+  `HUMAN_TRANSPORT_REQUIRED`
