@@ -52,3 +52,36 @@ mismatch, producer mismatch, scope violation (including a file that is
 BOTH plausible-sounding and forbidden), missing evidence for real
 claims, and the negative case (no claims/findings needs no evidence) --
 all real, passing tests, not merely described.
+
+## Ingestion semantics added by M7-V1-CODEX-REVIEW-002 remediation (GAP-V2-009/012/013)
+
+Authoritative code: `dv_harness/md_kv_codec.py`, `dv_harness/model_result.py`.
+
+**Two encodings, explicit marker.** A document carrying
+`<!-- L5DGVA_VALUE_ENCODING=escaped-v1 -->` (every `to_markdown()` output)
+is an exact, lossless encoding of any string (CR, LF, Unicode line
+boundaries, edge whitespace, leading `#`, empty items, literal `(none)`).
+A document without the marker is RAW (what an external model writes by
+hand): values are taken verbatim and are never unescaped, so `a\rb` or
+`C:\new` in external text is never silently transformed.
+
+**Fail-closed structure (both encodings).** Duplicate section, unknown
+section, stray non-title content before the first section, and a wrapped
+(non-bullet) line inside a list section are `ResultParseError`s. A
+document is never "last header wins".
+
+**Evidence grammar.** A path token is a repo-style path with a recognised
+extension, optionally `:line`/`:start-end`. An `EVIDENCE_REFS` entry is a
+*citation* when, after an optional `EVIDENCE:`/`COUNTER_EVIDENCE:` label,
+it begins with a path token: every path token in it must exist and lie in
+the read boundary. Any other entry is *narrative*: disclosed
+(`evidence_unverifiable`, `evidence_narrative_mentions`), never
+verification. A result with status PASS/FAIL/PARTIAL that makes claims or
+findings needs at least one verified citation
+(`NO_VERIFIED_EVIDENCE_FOR_VERDICT`).
+
+**Scope.** `FILES_REFERENCED` and evidence citations are READ claims
+checked against the read boundary; `RETURNED_ARTIFACTS` are OUTPUT claims
+checked against ALLOWED_FILES only, plus the one caller-derived exemption
+for the result document's own path. `EXPECTED_OUTPUT_SCHEMA` must be the
+supported schema.

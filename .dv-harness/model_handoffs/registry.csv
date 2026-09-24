@@ -1,2 +1,3 @@
 task_id,target_model,task_type,state,result_status,handoff_path,result_path,consumed_at_head,question_id
 M7-V1-CODEX-REVIEW-001,codex,review-route,RESULT_CONSUMED,FAIL,.dv-harness\model_handoffs\M7-V1-CODEX-REVIEW-001\HANDOFF_V1.md,.dv-harness\model_handoffs\M7-V1-CODEX-REVIEW-001\RESULT_V1.md,67389ddf5f590a557ca28265838c308ea62d70aa,
+M7-V1-CODEX-REVIEW-002,codex,review-route,RESULT_CONSUMED,FAIL,.dv-harness\model_handoffs\M7-V1-CODEX-REVIEW-002\HANDOFF_V1.md,.dv-harness\model_handoffs\M7-V1-CODEX-REVIEW-002\RESULT_V1.md,584588a5c14080f13f8a066638fd497fa3ceb18b,

@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import governance_registry as _governance_registry
+from . import md_kv_codec as _codec
 from .change_impact import _git
 from .task_boundary_conformance import TaskBoundary
 
@@ -65,6 +66,42 @@ TARGET_MODELS = ("codex", "chatgpt")
 #: HANDOFF_CONTRACT.md's own finding).
 EXPECTED_OUTPUT_TYPES = ("review_findings", "research_synthesis", "code_change",
                           "decision_analysis", "structured_issue")
+
+
+#: Canonical statement of what each list authorizes (GAP-V2-013). Carried
+#: verbatim into every handoff's RETURN_CONTRACT so the target model is told
+#: the same rule `model_result.validate_result()` enforces.
+DEFAULT_RETURN_CONTRACT = (
+    "L5DGVA_MODEL_RESULT_V1 markdown, same TASK_ID; FILES_REFERENCED and "
+    "path citations in EVIDENCE_REFS may cite only ALLOWED_FILES and "
+    "INPUT_EVIDENCE_REFS (never FORBIDDEN_FILES); RETURNED_ARTIFACTS may "
+    "name only ALLOWED_FILES or this result document itself"
+)
+
+_LINE_SUFFIX_RE = _re.compile(r":\d+(?:-\d+)?$")
+
+
+def _strip_line_suffix(ref: str) -> str:
+    return _LINE_SUFFIX_RE.sub("", ref)
+
+
+def read_boundary(handoff: "ModelHandoffV1") -> TaskBoundary:
+    """READ authorization = ALLOWED_FILES + INPUT_EVIDENCE_REFS (the files
+    the handoff explicitly shares with the model), minus FORBIDDEN_FILES
+    (forbidden always wins). ALLOWED_FILES alone remains the MODIFICATION
+    boundary. Authorization comes only from these explicit declarations --
+    never from a file merely being relevant to the task."""
+    allowed = list(handoff.scope.allowed_path_prefixes)
+    for ref in handoff.input_evidence_refs:
+        p = _strip_line_suffix(ref)
+        if p not in allowed:
+            allowed.append(p)
+    return TaskBoundary(
+        task_id=handoff.scope.task_id,
+        allowed_path_prefixes=tuple(allowed),
+        forbidden_paths=tuple(handoff.scope.forbidden_paths),
+        require_new_file=False,
+    )
 
 
 class HandoffBuildError(ValueError):
@@ -102,7 +139,7 @@ class ModelHandoffV1:
     expected_output_schema: str = "L5DGVA_MODEL_RESULT_V1"
     validation_requirements: Sequence[str] = ()
     human_decision_required: bool = False
-    return_contract: str = "L5DGVA_MODEL_RESULT_V1 markdown, same TASK_ID"
+    return_contract: str = DEFAULT_RETURN_CONTRACT
 
     _LIST_FIELD_NAMES = (
         "input_evidence_refs", "required_governance_refs", "known_facts",
@@ -150,7 +187,7 @@ def build_handoff(
     expected_output_schema: str = "L5DGVA_MODEL_RESULT_V1",
     validation_requirements: Sequence[str] = (),
     human_decision_required: bool = False,
-    return_contract: str = "L5DGVA_MODEL_RESULT_V1 markdown, same TASK_ID",
+    return_contract: str = DEFAULT_RETURN_CONTRACT,
 ) -> ModelHandoffV1:
     """The Handoff Builder (dispatch section 8): derives Minimum
     Sufficient Context from real Canonical task/evidence/governance
@@ -174,6 +211,19 @@ def build_handoff(
         raise HandoffBuildError("MISSING_TASK_ID", {})
     if not objective or not str(objective).strip():
         raise HandoffBuildError("MISSING_OBJECTIVE", {"task_id": task_id})
+    # GAP-V2-010 (R4): the identity inside SCOPE must agree with TASK_ID at
+    # construction time too, not only when a stored document is re-parsed.
+    if scope.task_id != str(task_id):
+        raise HandoffBuildError("TASK_ID_SCOPE_MISMATCH",
+                                {"task_id": str(task_id), "scope_task_id": scope.task_id})
+    # GAP-V2-013: a handoff that both shares a file as input evidence and
+    # forbids it contradicts itself -- rejected at build time.
+    from .task_boundary_conformance import classify_path, CLASS_FORBIDDEN
+    contradictory = [r for r in input_evidence_refs
+                     if classify_path(_strip_line_suffix(r), scope, "MODIFIED") == CLASS_FORBIDDEN]
+    if contradictory:
+        raise HandoffBuildError("INPUT_EVIDENCE_REFS_FORBIDDEN",
+                                {"task_id": str(task_id), "refs": contradictory})
 
     root = Path(root)
     head = _current_head(root)
@@ -233,45 +283,6 @@ _LIST_FIELDS = frozenset({
 })
 
 
-def _escape_md_line(s: str) -> str:
-    """GAP-V2-012 fix -- see model_result.py's own identical helper for
-    the full rationale (arbitrary section injection via an embedded
-    newline). Kept as an independent copy here rather than a shared
-    import, matching this module's own established pattern of not
-    sharing `_FIELD_ORDER`/`_parse_sections` with model_result.py
-    either -- each module's own serializer stays self-contained."""
-    return s.replace("\\", "\\\\").replace("\n", "\\n")
-
-
-def _unescape_md_line(s: str) -> str:
-    out: List[str] = []
-    i = 0
-    while i < len(s):
-        c = s[i]
-        if c == "\\" and i + 1 < len(s):
-            nxt = s[i + 1]
-            if nxt == "n":
-                out.append("\n")
-                i += 2
-                continue
-            if nxt == "\\":
-                out.append("\\")
-                i += 2
-                continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-def _render_value(field_name: str, value: Any) -> str:
-    if field_name in _LIST_FIELDS:
-        items = list(value or [])
-        return "\n".join(f"- {_escape_md_line(str(v))}" for v in items) if items else "(none)"
-    if value is None or value == "":
-        return "(none)"
-    return _escape_md_line(str(value))
-
-
 def to_markdown(handoff: ModelHandoffV1) -> str:
     """Real Markdown serialization -- the exact artifact a human copies
     into the target model's own UI."""
@@ -298,12 +309,7 @@ def to_markdown(handoff: ModelHandoffV1) -> str:
         "HUMAN_DECISION_REQUIRED": str(handoff.human_decision_required),
         "RETURN_CONTRACT": handoff.return_contract,
     }
-    lines = ["# L5DGVA_MODEL_HANDOFF_V1", ""]
-    for name in _FIELD_ORDER:
-        lines.append(f"## {name}")
-        lines.append(_render_value(name, values[name]))
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+    return _codec.render_document("L5DGVA_MODEL_HANDOFF_V1", _FIELD_ORDER, values, _LIST_FIELDS)
 
 
 class HandoffParseError(ValueError):
@@ -313,44 +319,24 @@ class HandoffParseError(ValueError):
         self.detail = detail or {}
 
 
-def _parse_sections(text: str) -> Dict[str, str]:
-    sections: Dict[str, List[str]] = {}
-    current: Optional[str] = None
-    for line in text.splitlines():
-        if line.startswith("## "):
-            current = line[3:].strip()
-            sections[current] = []
-        elif current is not None:
-            sections[current].append(line)
-    return {k: "\n".join(v).strip() for k, v in sections.items()}
-
-
-def _parse_value(field_name: str, raw: str) -> Any:
-    if raw == "(none)" or raw == "":
-        return [] if field_name in _LIST_FIELDS else None
-    if field_name in _LIST_FIELDS:
-        items = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if line.startswith("- "):
-                items.append(_unescape_md_line(line[2:].strip()))
-            elif line:
-                items.append(_unescape_md_line(line))
-        return items
-    return _unescape_md_line(raw.strip())
-
-
 def from_markdown(text: str) -> ModelHandoffV1:
     """Real, strict parser -- the exact inverse of `to_markdown()`. Every
     required field must be present; a missing one is a real
     `HandoffParseError`, never a silently-defaulted value."""
     if "L5DGVA_MODEL_HANDOFF_V1" not in text:
         raise HandoffParseError("NOT_A_HANDOFF_DOCUMENT", {})
-    sections = _parse_sections(text)
-    missing = [f for f in _FIELD_ORDER if f not in sections]
-    if missing:
-        raise HandoffParseError("MISSING_REQUIRED_FIELDS", {"missing": missing})
-    values = {f: _parse_value(f, sections[f]) for f in _FIELD_ORDER}
+    try:
+        sections, escaped = _codec.split_sections(text, _FIELD_ORDER)
+        missing = [f for f in _FIELD_ORDER if f not in sections]
+        if missing:
+            raise HandoffParseError("MISSING_REQUIRED_FIELDS", {"missing": missing})
+        values = {
+            f: (_codec.parse_list(sections[f], escaped) if f in _LIST_FIELDS
+                else _codec.parse_scalar(sections[f], escaped))
+            for f in _FIELD_ORDER
+        }
+    except _codec.MdKvError as exc:
+        raise HandoffParseError(exc.reason, exc.detail) from exc
 
     # GAP-V2-010 fix: the stored HANDOFF_V1.md is untrusted input (it is
     # re-read from disk on every import, and could have been tampered
@@ -362,7 +348,7 @@ def from_markdown(text: str) -> ModelHandoffV1:
     # than reported).
     handoff_task_id = values["TASK_ID"]
     scope_raw = values["SCOPE"] or ""
-    scope_match = _re.match(r"task_id=(.*?);\s*require_new_file=(True|False)", scope_raw)
+    scope_match = _re.fullmatch(r"task_id=(.*); require_new_file=(True|False)", scope_raw)
     if scope_match is None:
         raise HandoffParseError("MALFORMED_SCOPE_FIELD", {"scope_raw": scope_raw})
     scope_task_id = scope_match.group(1)

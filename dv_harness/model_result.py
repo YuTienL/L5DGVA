@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .task_boundary_conformance import TaskBoundary, classify_path, CLASS_WITHIN_BOUNDARY
-from .model_handoff import ModelHandoffV1, TARGET_MODELS
+from . import md_kv_codec as _codec
+from .model_handoff import ModelHandoffV1, TARGET_MODELS, read_boundary
 
 RESULT_VERSION = "1.0"
 
@@ -100,72 +101,6 @@ class ResultParseError(ValueError):
         self.detail = detail or {}
 
 
-def _escape_md_line(s: str) -> str:
-    """GAP-V2-012 fix: every rendered field value/list item occupies
-    EXACTLY one physical line -- a literal backslash or newline inside the
-    real value is escaped so it can never (a) be split across multiple
-    parsed list items, or (b) produce a continuation line that itself
-    starts with '## ' and gets misread as a new section header (the
-    concrete PASS-verdict-injection Codex's own F6 finding demonstrated:
-    a FINDING containing '...\\n## RESULT_STATUS\\nPASS' could silently
-    override the real RESULT_STATUS on round-trip before this fix)."""
-    return s.replace("\\", "\\\\").replace("\n", "\\n")
-
-
-def _unescape_md_line(s: str) -> str:
-    """Exact inverse of `_escape_md_line()` -- scans left to right so an
-    escaped backslash immediately followed by a literal 'n' is never
-    confused with an escaped newline."""
-    out: List[str] = []
-    i = 0
-    while i < len(s):
-        c = s[i]
-        if c == "\\" and i + 1 < len(s):
-            nxt = s[i + 1]
-            if nxt == "n":
-                out.append("\n")
-                i += 2
-                continue
-            if nxt == "\\":
-                out.append("\\")
-                i += 2
-                continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-def _parse_sections(text: str) -> Dict[str, str]:
-    sections: Dict[str, List[str]] = {}
-    current: Optional[str] = None
-    for line in text.splitlines():
-        if line.startswith("## "):
-            current = line[3:].strip()
-            sections[current] = []
-        elif current is not None:
-            sections[current].append(line)
-    return {k: "\n".join(v).strip() for k, v in sections.items()}
-
-
-def _parse_value(field_name: str, raw: str) -> Any:
-    if raw == "(none)" or raw == "":
-        return [] if field_name in _RESULT_LIST_FIELDS else None
-    if field_name in _RESULT_LIST_FIELDS:
-        items = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if line.startswith("- "):
-                items.append(_unescape_md_line(line[2:].strip()))
-            elif line:
-                # A real continuation line should never occur once every
-                # item is escaped onto one physical line -- kept as a
-                # defensive fallback for pre-fix-era stored content, never
-                # silently merged into the prior item.
-                items.append(_unescape_md_line(line))
-        return items
-    return _unescape_md_line(raw.strip())
-
-
 def from_markdown(text: str) -> ModelResultV1:
     """Real, strict parser. A missing required field, or a document that
     is not even a RESULT_V1 document at all, is a real `ResultParseError`
@@ -174,11 +109,18 @@ def from_markdown(text: str) -> ModelResultV1:
     real, distinguishable outcome from 'a valid but FAILing result.'"""
     if "L5DGVA_MODEL_RESULT_V1" not in text:
         raise ResultParseError("NOT_A_RESULT_DOCUMENT", {})
-    sections = _parse_sections(text)
-    missing = [f for f in _RESULT_FIELD_ORDER if f not in sections]
-    if missing:
-        raise ResultParseError("MISSING_REQUIRED_FIELDS", {"missing": missing})
-    values = {f: _parse_value(f, sections[f]) for f in _RESULT_FIELD_ORDER}
+    try:
+        sections, escaped = _codec.split_sections(text, _RESULT_FIELD_ORDER)
+        missing = [f for f in _RESULT_FIELD_ORDER if f not in sections]
+        if missing:
+            raise ResultParseError("MISSING_REQUIRED_FIELDS", {"missing": missing})
+        values = {
+            f: (_codec.parse_list(sections[f], escaped) if f in _RESULT_LIST_FIELDS
+                else _codec.parse_scalar(sections[f], escaped))
+            for f in _RESULT_FIELD_ORDER
+        }
+    except _codec.MdKvError as exc:
+        raise ResultParseError(exc.reason, exc.detail) from exc
 
     if values["RESULT_STATUS"] not in RESULT_STATUSES:
         raise ResultParseError("INVALID_RESULT_STATUS",
@@ -201,15 +143,6 @@ def from_markdown(text: str) -> ModelResultV1:
     )
 
 
-def _render_value(field_name: str, value: Any) -> str:
-    if field_name in _RESULT_LIST_FIELDS:
-        items = list(value or [])
-        return "\n".join(f"- {_escape_md_line(str(v))}" for v in items) if items else "(none)"
-    if value is None or value == "":
-        return "(none)"
-    return _escape_md_line(str(value))
-
-
 def to_markdown(result: ModelResultV1) -> str:
     """The inverse of `from_markdown()` -- used by this module's own
     round-trip tests, and available to a caller building a synthetic
@@ -228,12 +161,7 @@ def to_markdown(result: ModelResultV1) -> str:
         "SCOPE_EXCEPTIONS": list(result.scope_exceptions),
         "RETURNED_ARTIFACTS": list(result.returned_artifacts),
     }
-    lines = ["# L5DGVA_MODEL_RESULT_V1", ""]
-    for name in _RESULT_FIELD_ORDER:
-        lines.append(f"## {name}")
-        lines.append(_render_value(name, values[name]))
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+    return _codec.render_document("L5DGVA_MODEL_RESULT_V1", _RESULT_FIELD_ORDER, values, _RESULT_LIST_FIELDS)
 
 
 # --- Round-trip validation ---------------------------------------------------
@@ -250,32 +178,47 @@ V_MISSING_EVIDENCE = "MISSING_EVIDENCE"
 V_UNSUPPORTED_RESULT_VERSION = "UNSUPPORTED_RESULT_VERSION"
 V_FABRICATED_EVIDENCE_PATH = "FABRICATED_EVIDENCE_PATH"
 V_INVALID_GOVERNANCE_REF = "INVALID_GOVERNANCE_REF"
+V_UNSUPPORTED_EXPECTED_SCHEMA = "UNSUPPORTED_EXPECTED_OUTPUT_SCHEMA"
+V_NO_VERIFIED_EVIDENCE = "NO_VERIFIED_EVIDENCE_FOR_VERDICT"
 
-#: A file-path-shaped SUBSTRING inside an evidence_ref -- matches this
-#: project's own established "path:line" / "path:range" citation
-#: convention (e.g. "dv_harness/model_result.py:129-160"). GAP-V2-009/F2
-#: fix: any such CLAIMED path must resolve to a real, existing file, or
-#: the whole evidence_ref is rejected as fabricated. An evidence_ref that
-#: contains NO such substring at all (pure prose, e.g. a probe-output
-#: description) makes no file claim to verify -- accepted as free-form,
-#: but tracked separately in `ValidationOutcome.evidence_unverifiable` so
-#: a consumer can see the difference, never silently treated as
-#: equally strong as a file-grounded citation. This does not claim to
-#: authenticate arbitrary prose (no realistic mechanical check could);
-#: it closes the specific, demonstrated gap that a claimed file citation
-#: was never checked against the real filesystem at all.
-_PATH_LIKE_RE = _re.compile(r"[\w][\w./-]*\.[A-Za-z0-9]{1,10}(?::\d+(?:-\d+)?)?")
+#: RESULT_V1 evidence grammar (GAP-V2-009/013, Codex R2/R3).
+#:
+#: A PATH TOKEN is a repo-style file path with a recognised source/doc
+#: extension, optionally followed by ":line" / ":start-end", bounded so it is
+#: never a fragment of a longer identifier (`handoff.expected_output_schema`,
+#: `e.g.`, `1.0` are not path tokens).
+#:
+#: An EVIDENCE_REFS entry is a CITATION when, after an optional
+#: `EVIDENCE:` / `COUNTER_EVIDENCE:` label, it BEGINS with a path token.
+#: Every path token in a citation must exist on disk AND lie inside the
+#: handoff's read boundary (ALLOWED_FILES + INPUT_EVIDENCE_REFS - FORBIDDEN).
+#: Any other entry is NARRATIVE: its path mentions are disclosed
+#: (`evidence_narrative_mentions`) but never verify anything and never
+#: reject the result -- a reviewer describing a probe that used a forbidden
+#: or nonexistent path is not thereby citing it as evidence.
+_EVIDENCE_EXTENSIONS = (
+    "py|md|csv|json|jsonl|txt|sv|svh|v|vh|yaml|yml|toml|ps1|sh|tcl|mk|cfg|ini|xml|html|js|ts|log|f|vcs|lst"
+)
+_PATH_TOKEN = (
+    r"(?<![\w./\\-])[\w][\w./-]*\.(?:" + _EVIDENCE_EXTENSIONS + r")(?::\d+(?:-\d+)?)?(?![\w])"
+)
+_PATH_TOKEN_RE = _re.compile(_PATH_TOKEN)
+_CITATION_RE = _re.compile(r"^\s*(?:(?:COUNTER_)?EVIDENCE:\s*)?" + _PATH_TOKEN)
+
+SUPPORTED_EXPECTED_OUTPUT_SCHEMA = "L5DGVA_MODEL_RESULT_V1"
+
+#: Result statuses that assert a verdict about the reviewed subject; such a
+#: result must be backed by at least one VERIFIED citation.
+_VERDICT_STATUSES = ("PASS", "FAIL", "PARTIAL")
 
 
 def _evidence_ref_file_claims(evidence_ref: str) -> List[str]:
-    """Every path-like substring found in one evidence_ref string, path
-    portion only (the optional ':line'/':start-end' suffix stripped)."""
-    claims = []
-    for m in _PATH_LIKE_RE.finditer(evidence_ref):
-        token = m.group(0)
-        path_part = token.split(":", 1)[0] if ":" in token else token
-        claims.append(path_part)
-    return claims
+    """Every path token in one evidence_ref string, path portion only."""
+    return [m.group(0).split(":", 1)[0] for m in _PATH_TOKEN_RE.finditer(evidence_ref)]
+
+
+def _is_citation(evidence_ref: str) -> bool:
+    return _CITATION_RE.match(evidence_ref) is not None
 
 
 @dataclass
@@ -292,6 +235,8 @@ class ValidationOutcome:
     scope_violations: List[Dict[str, str]] = field(default_factory=list)
     evidence_unverifiable: List[str] = field(default_factory=list)
     fabricated_evidence: List[Dict[str, str]] = field(default_factory=list)
+    verified_evidence_refs: List[str] = field(default_factory=list)
+    evidence_narrative_mentions: List[Dict[str, str]] = field(default_factory=list)
 
     @property
     def accepted(self) -> bool:
@@ -315,6 +260,8 @@ class ValidationOutcome:
             "scope_violations": self.scope_violations,
             "evidence_unverifiable": self.evidence_unverifiable,
             "fabricated_evidence": self.fabricated_evidence,
+            "verified_evidence_refs": self.verified_evidence_refs,
+            "evidence_narrative_mentions": self.evidence_narrative_mentions,
         }
 
 
@@ -364,61 +311,88 @@ def validate_result(handoff: ModelHandoffV1, result: ModelResultV1, root: Option
     # RESULT_VERSION -- before this fix, any string (e.g. "9.9") passed
     # silently as long as producer_model matched.
     version_ok = (result.result_version == RESULT_VERSION)
-    schema_ok = (result.producer_model in TARGET_MODELS) and version_ok
     if not version_ok:
         findings.append(V_UNSUPPORTED_RESULT_VERSION)
+    # GAP-V2-009 (R7): the handoff's own EXPECTED_OUTPUT_SCHEMA must be one
+    # this ingestion path can actually validate against.
+    expected_schema_ok = (handoff.expected_output_schema == SUPPORTED_EXPECTED_OUTPUT_SCHEMA)
+    if not expected_schema_ok:
+        findings.append(V_UNSUPPORTED_EXPECTED_SCHEMA)
+    schema_ok = (result.producer_model in TARGET_MODELS) and version_ok and expected_schema_ok
 
-    # GAP-V2-010/F2 fix: RETURNED_ARTIFACTS is scope-checked the SAME way
-    # as FILES_REFERENCED -- before this fix, a forbidden path named only
-    # in RETURNED_ARTIFACTS was invisible to scope enforcement entirely.
-    # The one caller-derived exemption is `own_result_path` (see
-    # docstring) -- a self-reference to this exact result document, never
-    # a model-declared bypass.
+    # GAP-V2-010/013: two boundaries. FILES_REFERENCED and path citations in
+    # EVIDENCE_REFS are READ claims -> the read boundary (ALLOWED_FILES +
+    # INPUT_EVIDENCE_REFS - FORBIDDEN_FILES; authorization only from those
+    # explicit declarations). RETURNED_ARTIFACTS are OUTPUT claims -> the
+    # handoff's own (modification) scope, with one caller-derived exemption:
+    # `own_result_path`, the real path of this result document.
+    read_scope = read_boundary(handoff)
     own_result_norm = Path(own_result_path).as_posix() if own_result_path is not None else None
     scope_violations: List[Dict[str, str]] = []
     for f in result.files_referenced:
-        cls = classify_path(f, handoff.scope, "MODIFIED")
+        cls = classify_path(f, read_scope, "MODIFIED")
         if cls != CLASS_WITHIN_BOUNDARY:
-            scope_violations.append({"path": f, "classification": cls})
+            scope_violations.append({"field": "FILES_REFERENCED", "path": f, "classification": cls})
     for f in result.returned_artifacts:
         if own_result_norm is not None and Path(f).as_posix() == own_result_norm:
             continue
         cls = classify_path(f, handoff.scope, "MODIFIED")
         if cls != CLASS_WITHIN_BOUNDARY:
-            scope_violations.append({"path": f, "classification": cls})
-    scope_ok = not scope_violations
-    if not scope_ok:
-        findings.append(V_SCOPE_VIOLATION)
+            scope_violations.append({"field": "RETURNED_ARTIFACTS", "path": f, "classification": cls})
 
-    # EVIDENCE_VALIDATED: a result that makes real CLAIMS/FINDINGS but
-    # cites zero evidence_refs is not acceptable -- "a model result is
-    # not evidence merely because a model produced it" (architecture
-    # doc). A result with no claims/findings at all (e.g. a genuine
-    # BLOCKED/INSUFFICIENT_EVIDENCE status) is not required to cite
-    # evidence for a claim it never made.
+    # EVIDENCE_VALIDATED (see the evidence grammar above).
     has_assertions = bool(result.claims) or bool(result.findings)
     evidence_present_ok = (not has_assertions) or bool(result.evidence_refs)
     if not evidence_present_ok:
         findings.append(V_MISSING_EVIDENCE)
 
-    # GAP-V2-009/F2 fix: a claimed file-path citation must exist for
-    # real -- before this fix, evidence_refs=("fabricated:anything",) was
-    # accepted purely because the tuple was non-empty.
     evidence_unverifiable: List[str] = []
     fabricated_evidence: List[Dict[str, str]] = []
+    verified_evidence_refs: List[str] = []
+    narrative_mentions: List[Dict[str, str]] = []
     if root is not None:
         for ref in result.evidence_refs:
             claims = _evidence_ref_file_claims(ref)
-            if not claims:
+            if _is_citation(ref):
+                missing = [c for c in claims if not (Path(root) / c).is_file()]
+                if missing:
+                    fabricated_evidence.append({"evidence_ref": ref, "claimed_paths": ", ".join(claims),
+                                                "missing_paths": ", ".join(missing)})
+                    continue
+                out_of_scope = False
+                for c in claims:
+                    cls = classify_path(c, read_scope, "MODIFIED")
+                    if cls != CLASS_WITHIN_BOUNDARY:
+                        out_of_scope = True
+                        scope_violations.append({"field": "EVIDENCE_REFS", "path": c, "classification": cls})
+                if not out_of_scope:
+                    verified_evidence_refs.append(ref)
+            else:
                 evidence_unverifiable.append(ref)
-                continue
-            if not any((Path(root) / c).is_file() for c in claims):
-                fabricated_evidence.append({"evidence_ref": ref, "claimed_paths": ", ".join(claims)})
+                for c in claims:
+                    narrative_mentions.append({
+                        "evidence_ref": ref[:120], "path": c,
+                        "exists": str((Path(root) / c).is_file()),
+                        "read_scope": classify_path(c, read_scope, "MODIFIED"),
+                    })
     else:
         evidence_unverifiable = list(result.evidence_refs)
-    evidence_ok = evidence_present_ok and not fabricated_evidence
+
+    scope_ok = not scope_violations
+    if not scope_ok:
+        findings.append(V_SCOPE_VIOLATION)
     if fabricated_evidence:
         findings.append(V_FABRICATED_EVIDENCE_PATH)
+    # Acceptance policy for unverifiable free-form evidence: it is disclosed
+    # and tolerated, but a result that asserts a verdict (PASS/FAIL/PARTIAL)
+    # about real claims must be backed by at least one VERIFIED citation --
+    # free-form text alone (e.g. "fabricated:anything") never satisfies it.
+    verdict_backed_ok = True
+    if root is not None and has_assertions and result.result_status in _VERDICT_STATUSES:
+        verdict_backed_ok = bool(verified_evidence_refs)
+        if not verdict_backed_ok:
+            findings.append(V_NO_VERIFIED_EVIDENCE)
+    evidence_ok = evidence_present_ok and not fabricated_evidence and verdict_backed_ok
 
     # GAP-V2-009 governance-validation fix: represent the condition
     # honestly rather than silently omitting it. Empty REQUIRED_
@@ -447,4 +421,5 @@ def validate_result(handoff: ModelHandoffV1, result: ModelResultV1, root: Option
         governance_validated=governance_ok, governance_validation_status=governance_status,
         findings=findings, scope_violations=scope_violations,
         evidence_unverifiable=evidence_unverifiable, fabricated_evidence=fabricated_evidence,
+        verified_evidence_refs=verified_evidence_refs, evidence_narrative_mentions=narrative_mentions,
     )

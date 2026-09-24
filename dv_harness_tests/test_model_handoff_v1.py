@@ -68,8 +68,10 @@ def _scope(**overrides) -> TaskBoundary:
 def _handoff(repo, **overrides) -> ModelHandoffV1:
     base = dict(task_id="T-1", task_type="review-route", target_model="codex",
                 project_id="L5_DGVA", objective="Independent review of module_a.py",
-                scope=_scope(), input_evidence_refs=["dv_harness/module_a.py"])
+                input_evidence_refs=["dv_harness/module_a.py"])
     base.update(overrides)
+    # SCOPE's own task_id must agree with TASK_ID (GAP-V2-010/R4).
+    base.setdefault("scope", _scope(task_id=str(base["task_id"])))
     return build_handoff(repo, **base)
 
 
@@ -452,7 +454,7 @@ def test_unsupported_result_version_is_not_schema_validated(repo):
 
 def test_fabricated_evidence_ref_is_rejected_when_root_supplied(repo):
     h = _handoff(repo)
-    r = _pass_result(evidence_refs=["fabricated:anything.py"])
+    r = _pass_result(evidence_refs=["no/such/file.py:3 shows the defect"])
     v = validate_result(h, r, root=repo)
     assert v.evidence_validated is False
     assert v.accepted is False
@@ -468,12 +470,12 @@ def test_real_evidence_ref_file_is_accepted_when_root_supplied(repo):
     assert not v.fabricated_evidence
 
 
-def test_free_form_evidence_with_no_path_claim_is_unverifiable_not_fabricated(repo):
+def test_free_form_evidence_alongside_a_verified_citation_is_disclosed_not_rejected(repo):
     h = _handoff(repo)
-    r = _pass_result(evidence_refs=["EVIDENCE: a focused in-memory probe observed X"])
+    r = _pass_result(evidence_refs=["dv_harness/module_a.py:1", "EVIDENCE: a focused in-memory probe observed X"])
     v = validate_result(h, r, root=repo)
-    assert v.evidence_validated is True  # accepted, but disclosed as unverifiable
-    assert v.evidence_unverifiable
+    assert v.evidence_validated is True
+    assert v.evidence_unverifiable == ["EVIDENCE: a focused in-memory probe observed X"]
     assert not v.fabricated_evidence
 
 

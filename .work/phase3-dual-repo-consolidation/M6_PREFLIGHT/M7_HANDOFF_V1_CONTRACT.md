@@ -61,3 +61,21 @@ module's own tests, never a production path) -- it:
 (`handoff_bytes`, `governance_context_bytes_proxy`, `files_referenced`)
 -- explicitly labeled proxies, never a fabricated token count. See
 `M7_MINIMUM_SUFFICIENT_CONTEXT_BASELINE.md`.
+
+## Scope semantics added by M7-V1-CODEX-REVIEW-002 remediation (GAP-V2-010/013)
+
+Authoritative code: `dv_harness/model_handoff.py` (`read_boundary()`,
+`DEFAULT_RETURN_CONTRACT`).
+
+- `ALLOWED_FILES` = the MODIFICATION boundary (and the permitted
+  `RETURNED_ARTIFACTS`).
+- READ authorization = `ALLOWED_FILES` + `INPUT_EVIDENCE_REFS` -
+  `FORBIDDEN_FILES` (forbidden always wins). Authorization comes only from
+  these explicit lists, never from a file merely being relevant.
+- `build_handoff()` rejects `scope.task_id != task_id`
+  (`TASK_ID_SCOPE_MISMATCH`) and any `INPUT_EVIDENCE_REFS` entry that is
+  also forbidden (`INPUT_EVIDENCE_REFS_FORBIDDEN`), so a handoff cannot
+  contradict itself.
+- `RETURN_CONTRACT` states this rule to the target model verbatim.
+- Import is retry-safe: one question per `question_key`, one registry row
+  per task, a conflicting retry is `CONSUMPTION_CONFLICT`.

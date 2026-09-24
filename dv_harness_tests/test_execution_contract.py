@@ -270,3 +270,80 @@ def test_signals_from_model_handoff_state_defaults_to_caller_supplied_pending_fl
                                                required_regression_pending=True)
     assert signals.human_transport_required is False
     assert signals.required_regression_pending is True
+
+
+# --- 8. Ingestion outcomes persist a machine-actionable NEXT_ACTION (never a
+# --- bare "rejected"/"consumed" that waits for someone to schedule the next step)
+
+from dv_harness.execution_contract import event_for_import_outcome, read_next_action  # noqa: E402
+from dv_harness.model_handoff_workflow import import_result  # noqa: E402
+from dv_harness.model_result import ModelResultV1, to_markdown as _result_md  # noqa: E402
+
+
+def _exported(repo: Path, task_id: str = "T-1"):
+    h = build_handoff(repo, task_id=task_id, task_type="review-route", target_model="codex",
+                      project_id="P", objective="x",
+                      scope=TaskBoundary(task_id=task_id, allowed_path_prefixes=("dv_harness/module_a.py",)),
+                      input_evidence_refs=["dv_harness/module_a.py"])
+    export_handoff(repo, h)
+
+
+def _res(task_id="T-1", **kw) -> ModelResultV1:
+    base = dict(result_version="1.0", task_id=task_id, producer_model="codex", task_type="review-route",
+                result_status="FAIL", claims=["c"], findings=["f"],
+                evidence_refs=["dv_harness/module_a.py:1"], files_referenced=["dv_harness/module_a.py"])
+    base.update(kw)
+    return ModelResultV1(**base)
+
+
+def test_consumed_fail_result_persists_auto_remediation_as_next_action(repo: Path):
+    _exported(repo)
+    rp = repo / "R.md"
+    rp.write_text(_result_md(_res()), encoding="utf-8")
+    assert import_result(repo, "T-1", rp).consumed
+    rec = read_next_action(repo, "T-1")
+    assert rec["next_action"] == "AUTO_REMEDIATE_CONFIRMED_FINDINGS"
+    assert rec["auto_actionable"] is True and rec["human_action_required"] == "NO"
+
+
+def test_replay_of_a_consumed_fail_result_keeps_the_same_next_action(repo: Path):
+    _exported(repo)
+    rp = repo / "R.md"
+    rp.write_text(_result_md(_res()), encoding="utf-8")
+    import_result(repo, "T-1", rp)
+    import_result(repo, "T-1", rp)
+    assert read_next_action(repo, "T-1")["next_action"] == "AUTO_REMEDIATE_CONFIRMED_FINDINGS"
+
+
+def test_scope_rejected_result_persists_an_auto_classification_next_action_not_a_wait(repo: Path):
+    _exported(repo)
+    rp = repo / "R.md"
+    rp.write_text(_result_md(_res(files_referenced=["dv_harness/module_b.py"])), encoding="utf-8")
+    assert import_result(repo, "T-1", rp).state == "RESULT_REJECTED"
+    rec = read_next_action(repo, "T-1")
+    assert rec["next_action"] == "AUTO_CLASSIFY_SCOPE_VIOLATION"
+    assert rec["auto_actionable"] is True and rec["stop_reason"] is None
+    assert can_i_stop(WorkflowSignals(auto_actionable_pending=rec["auto_actionable"])).should_continue is True
+
+
+def test_malformed_result_persists_an_auto_correction_request_next_action(repo: Path):
+    _exported(repo)
+    rp = repo / "R.md"
+    rp.write_text("not a result document", encoding="utf-8")
+    assert import_result(repo, "T-1", rp).state == "RESULT_REJECTED"
+    assert read_next_action(repo, "T-1")["next_action"] == "AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF"
+
+
+def test_human_decision_result_persists_a_real_authority_stop(repo: Path):
+    _exported(repo)
+    rp = repo / "R.md"
+    rp.write_text(_result_md(_res(result_status="HUMAN_DECISION_REQUIRED", human_decisions_required=["ok?"])),
+                  encoding="utf-8")
+    import_result(repo, "T-1", rp)
+    rec = read_next_action(repo, "T-1")
+    assert rec["stop_reason"] == "HUMAN_AUTHORITY_REQUIRED" and rec["human_action_required"] == "YES"
+
+
+def test_event_mapping_rejects_a_state_with_no_event():
+    with pytest.raises(ValueError):
+        event_for_import_outcome("RESULT_VALIDATING")

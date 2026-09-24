@@ -1,8 +1,8 @@
 {
   "HUMAN_ACTION_REQUIRED": "YES",
-  "NEXT_REQUIRED_ACTION": "Human carries HANDOFF_V1.md to Codex; run the IMPORT_COMMAND once RESULT_V1.md is returned to auto-resume action routing.",
-  "RESUME_ACTION": "AUTO_RESUME",
-  "STATE": "WAITING_FOR_HUMAN_TRANSPORT",
-  "STOP_EVIDENCE": "",
-  "STOP_REASON": "HUMAN_TRANSPORT_REQUIRED"
+  "NEXT_REQUIRED_ACTION": "",
+  "RESUME_ACTION": "",
+  "STATE": "COMPLETE",
+  "STOP_EVIDENCE": "REVIEW-002 result imported+consumed (FAIL preserved); R1-R8 independently reproduced and remediated; superseded by re-review task M7-V1-CODEX-REVIEW-003",
+  "STOP_REASON": "TASK_COMPLETE"
 }

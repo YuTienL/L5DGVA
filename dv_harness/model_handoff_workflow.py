@@ -167,7 +167,7 @@ class ImportOutcome:
         }
 
 
-def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutcome:
+def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> ImportOutcome:
     """The full Result Ingestion pipeline (architecture doc): RESULT_
     RETURNED -> PARSED -> {TASK_ID,PRODUCER,TASK_TYPE,SCOPE,SCHEMA,
     EVIDENCE,GOVERNANCE}_VALIDATED -> RESULT_CLASSIFIED ->
@@ -248,7 +248,24 @@ def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutco
     state["result_status"] = result.result_status
     _save_state(root, task_id, state)
 
+    # GAP-V2-011 (R5), retry-safe consumption. Every side effect below is
+    # idempotent for one task_id, so a retry after ANY partial failure
+    # (question filed but registry append failed; registry appended but the
+    # final state save failed) converges on exactly one question and exactly
+    # one registry row:
+    #   * a conflicting registry row (same task, different result) is a real
+    #     CONSUMPTION_CONFLICT rejection, never silently adopted;
+    #   * the question is looked up by its stable question_key before filing;
+    #   * the registry row is appended only if none exists for the task.
+    existing_row = _registry_row(root, task_id)
+    if existing_row is not None and (existing_row.get("result_status") != result.result_status
+                                     or Path(existing_row.get("result_path", "")).resolve() != Path(result_md_path).resolve()):
+        return ImportOutcome(task_id=task_id, state=STATE_RESULT_REJECTED,
+                             parse_error="CONSUMPTION_CONFLICT", validation=validation, result=result)
+
     question_id = _consume_result(root, handoff, result, str(result_md_path))
+    state["question_id"] = question_id
+    _save_state(root, task_id, state)
 
     # GAP-V2-011 fix, ordering (dispatch: "append the registry before
     # asserting RESULT_CONSUMED"): the real, always-fires evidence-store
@@ -266,6 +283,30 @@ def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutco
                          validation=validation, question_id=question_id, result=result)
 
 
+def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutcome:
+    """Public entry point. Runs the full ingestion pipeline
+    (`_import_result_inner`) and then persists the resolved NEXT_ACTION for
+    every state-changing outcome (Human Non-Scheduler Execution Contract:
+    "after every state-changing operation persist NEXT_ACTION") -- a
+    REJECTED or CONSUMED result never leaves the workflow waiting for
+    someone to decide what happens next. An idempotent replay of an
+    already-CONSUMED task re-persists the same record."""
+    outcome = _import_result_inner(root, task_id, result_md_path)
+    if _task_dir(Path(root), task_id).is_dir():
+        from . import execution_contract as _ec
+        findings = list(outcome.validation.findings) if outcome.validation is not None else []
+        if outcome.parse_error == "CONSUMPTION_CONFLICT":
+            event = "RESULT_REJECTED_VALIDATION"
+        else:
+            event = _ec.event_for_import_outcome(
+                outcome.state,
+                result_status=(outcome.result.result_status if outcome.result is not None
+                               else (_load_state(Path(root), task_id) or {}).get("result_status")),
+                findings=findings, parse_error=outcome.parse_error)
+        _ec.persist_next_action(Path(root), task_id, _ec.resolve_next_action(event))
+    return outcome
+
+
 def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
                     result_path: str) -> Optional[str]:
     """The real Canonical Consumer (dispatch section 12/17). A result
@@ -281,6 +322,10 @@ def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
     if not needs_human:
         return None
     store = QuestionQueueStore(root)
+    question_key = f"model_handoff:{handoff.task_id}"
+    for existing in store.list_questions():
+        if existing.get("question_key") == question_key:
+            return existing["id"]
     decisions = list(result.human_decisions_required) or [
         f"Model result for {handoff.task_id} ({handoff.target_model}) requires a human decision "
         f"(status={result.result_status})."]
@@ -297,12 +342,23 @@ def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
         options=["accept", "reject", "request_correction"],
         recommendation="accept" if result.result_status == "PASS" else "request_correction",
         assumption_if_unanswered="request_correction",
-        question_key=f"model_handoff:{handoff.task_id}",
+        question_key=question_key,
         grounding_evidence=grounding_evidence,
         context={"task_id": handoff.task_id, "target_model": handoff.target_model,
                  "task_type": handoff.task_type, "result_status": result.result_status},
     )
     return question["id"]
+
+
+def _registry_row(root: Path, task_id: str) -> Optional[Dict[str, str]]:
+    path = _registry_path(root)
+    if not path.is_file():
+        return None
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if row.get("task_id") == task_id:
+                return row
+    return None
 
 
 def _append_registry(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
@@ -312,6 +368,8 @@ def _append_registry(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
     whether it also needed a human decision -- the "evidence store" /
     "capability-status update" consumer path the architecture doc names."""
     from .change_impact import _git
+    if _registry_row(root, handoff.task_id) is not None:
+        return  # idempotent: one consumed result -> exactly one registry row
     path = _registry_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     is_new = not path.exists()

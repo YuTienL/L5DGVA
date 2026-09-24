@@ -237,11 +237,21 @@ def human_authority_report(authority_type: str, question: str, evidence: str, im
 #: abstract event name, never by which model/tool produced the event.
 NEXT_ACTION_TABLE: Dict[str, str] = {
     "RESULT_CONSUMED": "AUTO_REMEDIATE_CONFIRMED_FINDINGS",
+    "RESULT_CONSUMED_CLEAN": "EVALUATE_CANONICAL_TASK_COMPLETION",
+    "RESULT_CONSUMED_HUMAN_DECISION": "HUMAN_AUTHORITY_REQUIRED",
+    # A REJECTED result is never a stop waiting for someone to schedule the
+    # next step: the cause determines a machine-actionable next action.
+    "RESULT_REJECTED_SCOPE_VIOLATION": "AUTO_CLASSIFY_SCOPE_VIOLATION",
+    "RESULT_REJECTED_VALIDATION": "AUTO_DIAGNOSE_VALIDATION_FAILURE",
+    "RESULT_REJECTED_MALFORMED": "AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF",
     "FIX_COMPLETE": "RUN_FOCUSED_VALIDATION",
     "VALIDATION_PASS": "RUN_REQUIRED_REGRESSION",
     "REGRESSION_PASS": "PREPARE_REQUIRED_RE_REVIEW",
     "RE_REVIEW_HANDOFF_READY": "HUMAN_TRANSPORT_REQUIRED",
 }
+
+#: Next actions that are themselves one of the canonical stop reasons.
+_STOP_ACTIONS = ("HUMAN_TRANSPORT_REQUIRED", "HUMAN_AUTHORITY_REQUIRED")
 
 
 @dataclass(frozen=True)
@@ -264,16 +274,56 @@ def resolve_next_action(event: str) -> NextActionRecord:
     if event not in NEXT_ACTION_TABLE:
         raise ValueError(f"UNKNOWN_EVENT:{event}")
     next_action = NEXT_ACTION_TABLE[event]
-    is_transport = next_action == "HUMAN_TRANSPORT_REQUIRED"
+    is_stop = next_action in _STOP_ACTIONS
     return NextActionRecord(
         event=event,
         next_action=next_action,
         next_action_reason=f"provider-independent routing table: {event} -> {next_action}",
-        next_action_owner="HUMAN" if is_transport else "L5DGVA",
-        auto_actionable=not is_transport,
-        human_action_required="YES" if is_transport else "NO",
-        stop_reason="HUMAN_TRANSPORT_REQUIRED" if is_transport else None,
+        next_action_owner="HUMAN" if is_stop else "L5DGVA",
+        auto_actionable=not is_stop,
+        human_action_required="YES" if is_stop else "NO",
+        stop_reason=next_action if is_stop else None,
     )
+
+
+def event_for_import_outcome(state: str, result_status: Optional[str] = None,
+                             findings: Sequence[str] = (), parse_error: Optional[str] = None) -> str:
+    """Maps a real `model_handoff_workflow.import_result()` outcome onto
+    this table's provider-independent events. `state` is the workflow's own
+    state string; `findings` are `ValidationOutcome.findings`."""
+    if state == "RESULT_CONSUMED":
+        if result_status == "HUMAN_DECISION_REQUIRED":
+            return "RESULT_CONSUMED_HUMAN_DECISION"
+        if result_status in ("FAIL", "PARTIAL"):
+            return "RESULT_CONSUMED"
+        return "RESULT_CONSUMED_CLEAN"
+    if state == "RESULT_REJECTED":
+        if parse_error and not findings:
+            return "RESULT_REJECTED_MALFORMED"
+        if "SCOPE_VIOLATION" in findings:
+            return "RESULT_REJECTED_SCOPE_VIOLATION"
+        return "RESULT_REJECTED_VALIDATION"
+    raise ValueError(f"NO_EVENT_FOR_STATE:{state}")
+
+
+def _next_action_path(root: Path, task_id: str) -> Path:
+    return Path(root) / ".dv-harness" / "model_handoffs" / task_id / "next_action.json"
+
+
+def persist_next_action(root: Path, task_id: str, record: NextActionRecord) -> Path:
+    """After every state-changing operation the next action is persisted, so
+    nobody has to reconstruct or schedule it."""
+    path = _next_action_path(root, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def read_next_action(root: Path, task_id: str) -> Optional[Dict[str, Any]]:
+    path = _next_action_path(root, task_id)
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 # --- Persist / Resume (dispatch section 16) --------------------------------
