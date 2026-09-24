@@ -21,11 +21,12 @@ from __future__ import annotations
 import re as _re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .task_boundary_conformance import TaskBoundary, classify_path, CLASS_WITHIN_BOUNDARY
 from . import md_kv_codec as _codec
-from .model_handoff import ModelHandoffV1, TARGET_MODELS, read_boundary
+from .model_handoff import (ModelHandoffV1, TARGET_MODELS, read_boundary, canonical_repo_path,
+                            canonical_boundary, real_repo_relative)
 
 RESULT_VERSION = "1.0"
 
@@ -107,10 +108,8 @@ def from_markdown(text: str) -> ModelResultV1:
     -- never a silently-defaulted/partially-guessed result. This is what
     makes 'malformed Markdown' (dispatch's own required failure test) a
     real, distinguishable outcome from 'a valid but FAILing result.'"""
-    if "L5DGVA_MODEL_RESULT_V1" not in text:
-        raise ResultParseError("NOT_A_RESULT_DOCUMENT", {})
     try:
-        sections, escaped = _codec.split_sections(text, _RESULT_FIELD_ORDER)
+        sections, escaped = _codec.split_sections(text, _RESULT_FIELD_ORDER, "L5DGVA_MODEL_RESULT_V1")
         missing = [f for f in _RESULT_FIELD_ORDER if f not in sections]
         if missing:
             raise ResultParseError("MISSING_REQUIRED_FIELDS", {"missing": missing})
@@ -120,7 +119,7 @@ def from_markdown(text: str) -> ModelResultV1:
             for f in _RESULT_FIELD_ORDER
         }
     except _codec.MdKvError as exc:
-        raise ResultParseError(exc.reason, exc.detail) from exc
+        raise ResultParseError("NOT_A_RESULT_DOCUMENT" if exc.reason == "NOT_THIS_DOCUMENT" else exc.reason, exc.detail) from exc
 
     if values["RESULT_STATUS"] not in RESULT_STATUSES:
         raise ResultParseError("INVALID_RESULT_STATUS",
@@ -219,6 +218,33 @@ def _evidence_ref_file_claims(evidence_ref: str) -> List[str]:
 
 def _is_citation(evidence_ref: str) -> bool:
     return _CITATION_RE.match(evidence_ref) is not None
+
+
+CLASS_UNSAFE_PATH = "UNSAFE_PATH"
+
+
+def _classify_canonical(raw: str, boundary: TaskBoundary, root: Optional[Path]) -> Tuple[str, Optional[str]]:
+    """Scope classification on the CANONICAL path (REVIEW-003 N1): `..`
+    segments are collapsed first, absolute/escaping paths are UNSAFE_PATH,
+    and -- when a real `root` is available and the path exists -- the true
+    filesystem identity (case, trailing dots, short names, symlinks) is
+    classified too, so an alias of a forbidden file cannot pass on a lexical
+    match against an allowed prefix. Fail-closed: either view failing fails."""
+    canon = canonical_repo_path(raw)
+    if canon is None:
+        return CLASS_UNSAFE_PATH, None
+    cls = classify_path(canon, boundary, "MODIFIED")
+    if cls != CLASS_WITHIN_BOUNDARY:
+        return cls, canon
+    if root is not None:
+        real = real_repo_relative(Path(root), canon)
+        if real == "":
+            return CLASS_UNSAFE_PATH, canon
+        if real is not None and real != canon:
+            cls2 = classify_path(real, boundary, "MODIFIED")
+            if cls2 != CLASS_WITHIN_BOUNDARY:
+                return cls2, real
+    return CLASS_WITHIN_BOUNDARY, canon
 
 
 @dataclass
@@ -327,16 +353,17 @@ def validate_result(handoff: ModelHandoffV1, result: ModelResultV1, root: Option
     # handoff's own (modification) scope, with one caller-derived exemption:
     # `own_result_path`, the real path of this result document.
     read_scope = read_boundary(handoff)
-    own_result_norm = Path(own_result_path).as_posix() if own_result_path is not None else None
+    write_scope = canonical_boundary(handoff.scope)
+    own_result_canon = canonical_repo_path(own_result_path) if own_result_path is not None else None
     scope_violations: List[Dict[str, str]] = []
     for f in result.files_referenced:
-        cls = classify_path(f, read_scope, "MODIFIED")
+        cls, _ = _classify_canonical(f, read_scope, root)
         if cls != CLASS_WITHIN_BOUNDARY:
             scope_violations.append({"field": "FILES_REFERENCED", "path": f, "classification": cls})
     for f in result.returned_artifacts:
-        if own_result_norm is not None and Path(f).as_posix() == own_result_norm:
+        if own_result_canon is not None and canonical_repo_path(f) == own_result_canon:
             continue
-        cls = classify_path(f, handoff.scope, "MODIFIED")
+        cls, _ = _classify_canonical(f, write_scope, root)
         if cls != CLASS_WITHIN_BOUNDARY:
             scope_violations.append({"field": "RETURNED_ARTIFACTS", "path": f, "classification": cls})
 
@@ -354,14 +381,18 @@ def validate_result(handoff: ModelHandoffV1, result: ModelResultV1, root: Option
         for ref in result.evidence_refs:
             claims = _evidence_ref_file_claims(ref)
             if _is_citation(ref):
-                missing = [c for c in claims if not (Path(root) / c).is_file()]
+                missing = []
+                for c in claims:
+                    canon = canonical_repo_path(c)
+                    if canon is not None and not (Path(root) / canon).is_file():
+                        missing.append(c)
                 if missing:
                     fabricated_evidence.append({"evidence_ref": ref, "claimed_paths": ", ".join(claims),
                                                 "missing_paths": ", ".join(missing)})
                     continue
                 out_of_scope = False
                 for c in claims:
-                    cls = classify_path(c, read_scope, "MODIFIED")
+                    cls, _ = _classify_canonical(c, read_scope, root)
                     if cls != CLASS_WITHIN_BOUNDARY:
                         out_of_scope = True
                         scope_violations.append({"field": "EVIDENCE_REFS", "path": c, "classification": cls})
@@ -372,8 +403,8 @@ def validate_result(handoff: ModelHandoffV1, result: ModelResultV1, root: Option
                 for c in claims:
                     narrative_mentions.append({
                         "evidence_ref": ref[:120], "path": c,
-                        "exists": str((Path(root) / c).is_file()),
-                        "read_scope": classify_path(c, read_scope, "MODIFIED"),
+                        "exists": str((Path(root) / (canonical_repo_path(c) or "__unsafe__")).is_file()),
+                        "read_scope": _classify_canonical(c, read_scope, root)[0],
                     })
     else:
         evidence_unverifiable = list(result.evidence_refs)
@@ -408,7 +439,8 @@ def validate_result(handoff: ModelHandoffV1, result: ModelResultV1, root: Option
         governance_ok = True
         governance_status = "UNVERIFIED_NO_ROOT"
     else:
-        invalid_refs = [r for r in handoff.required_governance_refs if not (Path(root) / r).is_file()]
+        invalid_refs = [r for r in handoff.required_governance_refs
+                        if canonical_repo_path(r) is None or not (Path(root) / canonical_repo_path(r)).is_file()]
         governance_ok = not invalid_refs
         governance_status = "VALIDATED" if governance_ok else "INVALID_REF"
         if invalid_refs:

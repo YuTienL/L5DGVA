@@ -46,7 +46,7 @@ import json
 import re as _re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import governance_registry as _governance_registry
 from . import md_kv_codec as _codec
@@ -85,21 +85,105 @@ def _strip_line_suffix(ref: str) -> str:
     return _LINE_SUFFIX_RE.sub("", ref)
 
 
+_DRIVE_RE = _re.compile(r"^[A-Za-z]:")
+_BAD_COMPONENT_CHARS = frozenset('<>:"|?*\x00')
+
+
+def canonical_repo_path(ref: str) -> Optional[str]:
+    """Canonical root-relative POSIX form of a repository path, or None when
+    the path is unsafe (REVIEW-003 N1/N5). Scope comparison must always be
+    done on THIS form, never on the raw string: `dv_harness/../README.md`
+    and `dv_harness/model_result.py/../../dv_harness/engine.py` begin with an
+    allowed prefix lexically but denote something else.
+
+    Rejected (None): empty, NUL/other invalid Windows filename characters in
+    a component (incl. NTFS `name:stream`), absolute paths (leading `/`,
+    `\\`, drive letter, UNC), and any path that escapes the root after `.`/
+    `..` collapsing. Windows semantics are applied conservatively: trailing
+    dots/spaces of a component are dropped (`engine.py.` == `engine.py`
+    there), which can only make a classification stricter for forbidden
+    paths; case is compared literally here and re-checked against the real
+    filesystem identity by `real_repo_relative()`."""
+    s = str(ref).strip().replace("\\", "/")
+    if not s or _DRIVE_RE.match(s) or s.startswith("/"):
+        return None
+    stack: List[str] = []
+    for part in s.split("/"):
+        part = part.rstrip(". ") if part not in (".", "..") else part
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not stack:
+                return None
+            stack.pop()
+            continue
+        if any(c in _BAD_COMPONENT_CHARS for c in part):
+            return None
+        stack.append(part)
+    return "/".join(stack) if stack else None
+
+
+def real_repo_relative(root: Path, canonical: str) -> Optional[str]:
+    """For a path that EXISTS under `root`: its true-cased, symlink-resolved,
+    root-relative POSIX form (defeats case/short-name/symlink aliases of a
+    forbidden file). Returns "" if the real target lies outside `root`
+    (symlink escape) and None if the path does not exist."""
+    p = Path(root) / canonical
+    if not p.exists():
+        return None
+    try:
+        return p.resolve().relative_to(Path(root).resolve()).as_posix()
+    except ValueError:
+        return ""
+
+
+def canonical_boundary(scope: TaskBoundary) -> TaskBoundary:
+    """`scope` with every declared path canonicalized. An unsafe ALLOWED
+    entry is dropped (nothing is authorized by it); an unsafe FORBIDDEN entry
+    cannot match any in-root path and is dropped."""
+    def canon(paths: Sequence[str]) -> Tuple[str, ...]:
+        out: List[str] = []
+        for p in paths:
+            c = canonical_repo_path(_strip_line_suffix(p))
+            if c is not None and c not in out:
+                out.append(c)
+        return tuple(out)
+    return TaskBoundary(task_id=scope.task_id, allowed_path_prefixes=canon(scope.allowed_path_prefixes),
+                        forbidden_paths=canon(scope.forbidden_paths), require_new_file=scope.require_new_file)
+
+
+def unsafe_declarations(scope: TaskBoundary, input_evidence_refs: Sequence[str]) -> List[Dict[str, str]]:
+    """Boundary declarations that are unsafe (absolute / escaping / invalid
+    characters) OR not already in canonical form (`..`/`.` segments, doubled
+    slashes, trailing dots). They are rejected rather than silently rewritten:
+    a reader of the handoff must see exactly the path that is enforced."""
+    bad: List[Dict[str, str]] = []
+    for name, values in (("ALLOWED_FILES", scope.allowed_path_prefixes), ("FORBIDDEN_FILES", scope.forbidden_paths),
+                         ("INPUT_EVIDENCE_REFS", input_evidence_refs)):
+        for v in values:
+            declared = _strip_line_suffix(str(v)).strip().replace("\\", "/").rstrip("/")
+            if canonical_repo_path(declared) != declared:
+                bad.append({"field": name, "value": v})
+    return bad
+
+
 def read_boundary(handoff: "ModelHandoffV1") -> TaskBoundary:
     """READ authorization = ALLOWED_FILES + INPUT_EVIDENCE_REFS (the files
     the handoff explicitly shares with the model), minus FORBIDDEN_FILES
     (forbidden always wins). ALLOWED_FILES alone remains the MODIFICATION
     boundary. Authorization comes only from these explicit declarations --
-    never from a file merely being relevant to the task."""
-    allowed = list(handoff.scope.allowed_path_prefixes)
+    never from a file merely being relevant to the task. Every declared path
+    is canonicalized first (N5)."""
+    base = canonical_boundary(handoff.scope)
+    allowed = list(base.allowed_path_prefixes)
     for ref in handoff.input_evidence_refs:
-        p = _strip_line_suffix(ref)
-        if p not in allowed:
+        p = canonical_repo_path(_strip_line_suffix(ref))
+        if p is not None and p not in allowed:
             allowed.append(p)
     return TaskBoundary(
         task_id=handoff.scope.task_id,
         allowed_path_prefixes=tuple(allowed),
-        forbidden_paths=tuple(handoff.scope.forbidden_paths),
+        forbidden_paths=base.forbidden_paths,
         require_new_file=False,
     )
 
@@ -216,11 +300,19 @@ def build_handoff(
     if scope.task_id != str(task_id):
         raise HandoffBuildError("TASK_ID_SCOPE_MISMATCH",
                                 {"task_id": str(task_id), "scope_task_id": scope.task_id})
+    # REVIEW-003 N5: every boundary declaration must be a safe, canonical
+    # repository path -- traversal-bearing declarations are rejected, never
+    # silently normalized into a different authorization.
+    bad = unsafe_declarations(scope, input_evidence_refs)
+    if bad:
+        raise HandoffBuildError("UNSAFE_PATH_DECLARATION", {"task_id": str(task_id), "declarations": bad})
     # GAP-V2-013: a handoff that both shares a file as input evidence and
-    # forbids it contradicts itself -- rejected at build time.
+    # forbids it contradicts itself -- rejected at build time, on CANONICAL
+    # paths (`a.py/../engine.py` is `engine.py`).
     from .task_boundary_conformance import classify_path, CLASS_FORBIDDEN
+    canon_scope = canonical_boundary(scope)
     contradictory = [r for r in input_evidence_refs
-                     if classify_path(_strip_line_suffix(r), scope, "MODIFIED") == CLASS_FORBIDDEN]
+                     if classify_path(canonical_repo_path(_strip_line_suffix(r)), canon_scope, "MODIFIED") == CLASS_FORBIDDEN]
     if contradictory:
         raise HandoffBuildError("INPUT_EVIDENCE_REFS_FORBIDDEN",
                                 {"task_id": str(task_id), "refs": contradictory})
@@ -323,10 +415,8 @@ def from_markdown(text: str) -> ModelHandoffV1:
     """Real, strict parser -- the exact inverse of `to_markdown()`. Every
     required field must be present; a missing one is a real
     `HandoffParseError`, never a silently-defaulted value."""
-    if "L5DGVA_MODEL_HANDOFF_V1" not in text:
-        raise HandoffParseError("NOT_A_HANDOFF_DOCUMENT", {})
     try:
-        sections, escaped = _codec.split_sections(text, _FIELD_ORDER)
+        sections, escaped = _codec.split_sections(text, _FIELD_ORDER, "L5DGVA_MODEL_HANDOFF_V1")
         missing = [f for f in _FIELD_ORDER if f not in sections]
         if missing:
             raise HandoffParseError("MISSING_REQUIRED_FIELDS", {"missing": missing})
@@ -336,7 +426,7 @@ def from_markdown(text: str) -> ModelHandoffV1:
             for f in _FIELD_ORDER
         }
     except _codec.MdKvError as exc:
-        raise HandoffParseError(exc.reason, exc.detail) from exc
+        raise HandoffParseError("NOT_A_HANDOFF_DOCUMENT" if exc.reason == "NOT_THIS_DOCUMENT" else exc.reason, exc.detail) from exc
 
     # GAP-V2-010 fix: the stored HANDOFF_V1.md is untrusted input (it is
     # re-read from disk on every import, and could have been tampered
@@ -362,6 +452,9 @@ def from_markdown(text: str) -> ModelHandoffV1:
         forbidden_paths=tuple(values["FORBIDDEN_FILES"] or ()),
         require_new_file=require_new_file,
     )
+    bad = unsafe_declarations(scope, values["INPUT_EVIDENCE_REFS"] or ())
+    if bad:
+        raise HandoffParseError("UNSAFE_PATH_DECLARATION", {"declarations": bad})
 
     return ModelHandoffV1(
         handoff_version=values["HANDOFF_VERSION"], task_id=handoff_task_id,

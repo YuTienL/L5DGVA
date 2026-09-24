@@ -1,0 +1,2 @@
+{"event": "EXPECTED_RESULT_REGISTERED", "expected_result_file": ".dv-harness/model_handoffs/M7-V1-CHATGPT-DECISION-001/RESULT_V1.md", "task_id": "M7-V1-CHATGPT-DECISION-001", "ts": "2026-09-24T13:35:14.036566+00:00"}
+{"event": "WATCH_STARTED", "pid": 11476, "task_id": "M7-V1-CHATGPT-DECISION-001", "ts": "2026-09-24T13:35:17.215854+00:00"}

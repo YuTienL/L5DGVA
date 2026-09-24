@@ -189,34 +189,16 @@ def _save_ing(root: Path, task_id: str, st: Dict[str, Any]) -> None:
 
 @contextmanager
 def _task_lock(root: Path, task_id: str, policy: IngestionPolicy) -> Iterator[bool]:
-    """Single-writer per task across a watcher and any other poller. A
-    stale lock (crashed holder) is broken after `lock_stale_seconds`."""
+    """Single-writer per task across a watcher and any other poller / manual
+    front door (the workflow's own O_EXCL lock primitive; a separate lock
+    file from the import lock so poll -> import never self-blocks)."""
     lock = _task_dir(root, task_id) / "ingestion.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    acquired = False
-    for _ in range(2):
-        try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-            acquired = True
-            break
-        except FileExistsError:
-            try:
-                if time.time() - lock.stat().st_mtime > policy.lock_stale_seconds:
-                    lock.unlink()
-                    continue
-            except OSError:
-                pass
-            break
+    acquired = _wf._acquire_lock(lock, policy.lock_stale_seconds)
     try:
         yield acquired
     finally:
         if acquired:
-            try:
-                lock.unlink()
-            except OSError:
-                pass
+            _wf._release_lock(lock)
 
 
 # --- expected result registration --------------------------------------------
@@ -316,7 +298,7 @@ def _log_suppression_once(root: Path, task_id: str, st: Dict[str, Any], sha: str
 
 def ingest_result_file(root: Path, task_id: str, path: Path, *, trigger: str = "AUTO",
                        authorized_replay: bool = False,
-                       policy: Optional[IngestionPolicy] = None) -> IngestionResult:
+                       policy: Optional[IngestionPolicy] = None, _locked: bool = False) -> IngestionResult:
     """The ONE ingestion entry point for automatic and manual imports.
     Identity, duplicate suppression and quarantine wrap the Canonical
     `import_result()`; nothing here parses, validates or consumes.
@@ -326,6 +308,16 @@ def ingest_result_file(root: Path, task_id: str, path: Path, *, trigger: str = "
     suppressed -- consumption is at-most-once per (task, sha256)."""
     root = Path(root)
     policy = policy or load_policy(root)
+    if _locked:  # the watcher already holds the task's ingestion lock
+        return _ingest_locked(root, task_id, Path(path), trigger, authorized_replay, policy)
+    with _task_lock(root, task_id, policy) as got:  # manual front door / direct callers: same single writer
+        if not got:
+            return IngestionResult(task_id, "LOCKED", detail="INGESTION_IN_PROGRESS")
+        return _ingest_locked(root, task_id, Path(path), trigger, authorized_replay, policy)
+
+
+def _ingest_locked(root: Path, task_id: str, path: Path, trigger: str, authorized_replay: bool,
+                   policy: IngestionPolicy) -> IngestionResult:
     path = Path(path)
     st = _load_ing(root, task_id)
     try:
@@ -395,11 +387,11 @@ def ingest_result_file(root: Path, task_id: str, path: Path, *, trigger: str = "
         return IngestionResult(task_id, "TRANSIENT_ERROR", sha, detail=type(exc).__name__)
 
     st = _load_ing(root, task_id)
-    try:
-        if _sha256_bytes(path.read_bytes()) != sha:
-            _emit(root, task_id, "RESULT_CHANGED_DURING_IMPORT", result_sha256=sha)
-    except OSError:
-        pass
+    imported_sha = outcome.result_sha256 or sha
+    if imported_sha != sha:  # the file changed between our hash and the canonical read
+        _emit(root, task_id, "RESULT_CHANGED_DURING_IMPORT", detected_sha256=sha, imported_sha256=imported_sha)
+        st["results"][imported_sha] = st["results"].pop(sha)
+        sha = imported_sha
     entry = st["results"][sha]
     if outcome.consumed:
         entry.update(import_state=H_CONSUMED, consumed_at=_now_iso(), question_id=outcome.question_id)
@@ -518,7 +510,7 @@ def poll_once(root: Path, *, policy: Optional[IngestionPolicy] = None,
             status = _observe(root, task_id, path, policy, now)
             row = {"task_id": task_id, "status": status}
             if status == "STABLE":
-                res = ingest_result_file(root, task_id, path, trigger="AUTO", policy=policy)
+                res = ingest_result_file(root, task_id, path, trigger="AUTO", policy=policy, _locked=True)
                 row.update(action=res.action, sha256=res.sha256,
                            state=res.outcome.state if res.outcome else _wf.current_state(root, task_id))
             report.append(row)

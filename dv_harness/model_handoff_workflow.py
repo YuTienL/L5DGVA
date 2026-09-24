@@ -38,7 +38,10 @@ consumption.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -68,7 +71,7 @@ _HANDOFF_DIR = ".dv-harness/model_handoffs"
 _REGISTRY_CSV = "registry.csv"
 _REGISTRY_FIELDS = [
     "task_id", "target_model", "task_type", "state", "result_status",
-    "handoff_path", "result_path", "consumed_at_head", "question_id",
+    "handoff_path", "result_path", "consumed_at_head", "question_id", "result_sha256",
 ]
 
 
@@ -151,7 +154,8 @@ def _load_handoff(root: Path, task_id: str) -> Optional[ModelHandoffV1]:
 class ImportOutcome:
     def __init__(self, *, task_id: str, state: str, validation: Optional[ValidationOutcome] = None,
                  parse_error: Optional[str] = None, question_id: Optional[str] = None,
-                 result: Optional[ModelResultV1] = None):
+                 result: Optional[ModelResultV1] = None, result_sha256: Optional[str] = None):
+        self.result_sha256 = result_sha256
         self.task_id = task_id
         self.state = state
         self.validation = validation
@@ -195,8 +199,19 @@ def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> Impo
     root = Path(root)
     prior_state = _load_state(root, task_id)
     if prior_state is not None and prior_state.get("state") == STATE_RESULT_CONSUMED:
-        return ImportOutcome(task_id=task_id, state=STATE_RESULT_CONSUMED,
-                             question_id=prior_state.get("question_id"))
+        cached = ImportOutcome(task_id=task_id, state=STATE_RESULT_CONSUMED,
+                               question_id=prior_state.get("question_id"),
+                               result_sha256=prior_state.get("result_sha256"))
+        recorded = prior_state.get("result_sha256")
+        if recorded:
+            try:
+                if hashlib.sha256(Path(result_md_path).read_bytes()).hexdigest() != recorded:
+                    # a consumed task is a closed transaction, but a DIFFERENT file is never
+                    # silently reported as the consumed result (REVIEW-003 N2)
+                    cached.parse_error = "RESULT_CONTENT_DIFFERS_FROM_CONSUMED"
+            except OSError:
+                pass
+        return cached
 
     # GAP-V2-011 fix: a damaged/malformed stored HANDOFF_V1.md must
     # produce a real, structured RESULT_REJECTED outcome, never an
@@ -212,19 +227,42 @@ def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> Impo
                              parse_error="NO_MATCHING_HANDOFF")
 
     state = prior_state or {"task_id": task_id, "state": STATE_HANDOFF_READY}
-    state["state"] = STATE_RESULT_RETURNED
-    _save_state(root, task_id, state)
+    accepted_sha = state.get("accepted_result_sha256")
 
     result_md_path = Path(result_md_path)
+    # Read the file ONCE: the bytes that are hashed are the bytes that are parsed,
+    # validated and consumed (no check-then-use window; REVIEW-003 N2).
     try:
-        text = result_md_path.read_text(encoding="utf-8")
-        result = _result_mod.from_markdown(text)
-    except (OSError, ResultParseError) as exc:
-        reason = exc.reason if isinstance(exc, ResultParseError) else "RESULT_FILE_UNREADABLE"
+        data = result_md_path.read_bytes()
+        result_sha = hashlib.sha256(data).hexdigest()
+        result = _result_mod.from_markdown(data.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ResultParseError) as exc:
+        reason = (exc.reason if isinstance(exc, ResultParseError)
+                  else "RESULT_NOT_UTF8" if isinstance(exc, UnicodeDecodeError) else "RESULT_FILE_UNREADABLE")
         state["state"] = STATE_RESULT_REJECTED
         state["result_status"] = None
         _save_state(root, task_id, state)
         return ImportOutcome(task_id=task_id, state=STATE_RESULT_REJECTED, parse_error=reason)
+
+    # Consumption identity is the CONTENT digest, not status+pathname: content that
+    # differs from what was already accepted or registered for this task is a real
+    # CONSUMPTION_CONFLICT and mutates nothing (a corrected result needs a new task_id).
+    existing_row = _registry_row(root, task_id)
+    conflict = bool(accepted_sha and accepted_sha != result_sha)
+    if existing_row is not None:
+        row_sha = existing_row.get("result_sha256") or ""
+        if row_sha:
+            conflict = conflict or row_sha != result_sha
+        else:  # legacy row written before digests existed: best available identity
+            conflict = conflict or existing_row.get("result_status") != result.result_status \
+                or Path(existing_row.get("result_path", "")).resolve() != result_md_path.resolve()
+    if conflict:
+        return ImportOutcome(task_id=task_id, state=STATE_RESULT_REJECTED, parse_error="CONSUMPTION_CONFLICT",
+                             result=result, result_sha256=result_sha)
+
+    state["state"] = STATE_RESULT_RETURNED
+    state["result_sha256"] = result_sha
+    _save_state(root, task_id, state)
 
     state["state"] = STATE_RESULT_VALIDATING
     _save_state(root, task_id, state)
@@ -246,27 +284,16 @@ def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> Impo
         state["result_status"] = result.result_status
         _save_state(root, task_id, state)
         return ImportOutcome(task_id=task_id, state=STATE_RESULT_REJECTED,
-                             validation=validation, result=result)
+                             validation=validation, result=result, result_sha256=result_sha)
 
     state["state"] = STATE_RESULT_ACCEPTED
     state["result_status"] = result.result_status
+    state["accepted_result_sha256"] = result_sha
     _save_state(root, task_id, state)
 
-    # GAP-V2-011 (R5), retry-safe consumption. Every side effect below is
-    # idempotent for one task_id, so a retry after ANY partial failure
-    # (question filed but registry append failed; registry appended but the
-    # final state save failed) converges on exactly one question and exactly
-    # one registry row:
-    #   * a conflicting registry row (same task, different result) is a real
-    #     CONSUMPTION_CONFLICT rejection, never silently adopted;
-    #   * the question is looked up by its stable question_key before filing;
-    #   * the registry row is appended only if none exists for the task.
-    existing_row = _registry_row(root, task_id)
-    if existing_row is not None and (existing_row.get("result_status") != result.result_status
-                                     or Path(existing_row.get("result_path", "")).resolve() != Path(result_md_path).resolve()):
-        return ImportOutcome(task_id=task_id, state=STATE_RESULT_REJECTED,
-                             parse_error="CONSUMPTION_CONFLICT", validation=validation, result=result)
-
+    # GAP-V2-011 (R5), retry-safe consumption: question filing is looked up by its
+    # stable question_key, the registry row is appended only if none exists, and a
+    # retry with different content was already rejected above as CONSUMPTION_CONFLICT.
     question_id = _consume_result(root, handoff, result, str(result_md_path))
     state["question_id"] = question_id
     _save_state(root, task_id, state)
@@ -277,38 +304,86 @@ def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> Impo
     # crash between the two leaves state at RESULT_ACCEPTED (a real,
     # inspectable "consumption did not finish" fact) rather than a false
     # RESULT_CONSUMED with no matching registry row.
-    _append_registry(root, handoff, result, str(result_md_path), question_id)
+    _append_registry(root, handoff, result, str(result_md_path), question_id, result_sha)
 
     state["state"] = STATE_RESULT_CONSUMED
     state["question_id"] = question_id
     _save_state(root, task_id, state)
 
-    return ImportOutcome(task_id=task_id, state=STATE_RESULT_CONSUMED,
-                         validation=validation, question_id=question_id, result=result)
+    return ImportOutcome(task_id=task_id, state=STATE_RESULT_CONSUMED, validation=validation,
+                         question_id=question_id, result=result, result_sha256=result_sha)
+
+
+_LOCK_STALE_SECONDS = 120.0
+
+
+def _acquire_lock(lock: Path, stale_seconds: float = _LOCK_STALE_SECONDS) -> bool:
+    """O_EXCL lock file; a stale lock (crashed holder) is broken once."""
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > stale_seconds:
+                    lock.unlink()
+                    continue
+            except OSError:
+                pass
+            return False
+    return False
+
+
+def _release_lock(lock: Path) -> None:
+    try:
+        lock.unlink()
+    except OSError:
+        pass
 
 
 def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutcome:
     """Public entry point. Runs the full ingestion pipeline
-    (`_import_result_inner`) and then persists the resolved NEXT_ACTION for
-    every state-changing outcome (Human Non-Scheduler Execution Contract:
-    "after every state-changing operation persist NEXT_ACTION") -- a
-    REJECTED or CONSUMED result never leaves the workflow waiting for
-    someone to decide what happens next. An idempotent replay of an
+    (`_import_result_inner`) under a per-task import lock and persists the
+    resolved NEXT_ACTION for EVERY outcome -- including an exception raised
+    part-way through consumption (REVIEW-003 N6), which persists
+    `AUTO_RETRY_INTERRUPTED_IMPORT` before propagating. A concurrent import
+    of the same task is refused with `IMPORT_IN_PROGRESS` and no side effects
+    (REVIEW-003 UNKNOWN: check-then-act races). An idempotent replay of an
     already-CONSUMED task re-persists the same record."""
-    outcome = _import_result_inner(root, task_id, result_md_path)
-    if _task_dir(Path(root), task_id).is_dir():
-        from . import execution_contract as _ec
-        findings = list(outcome.validation.findings) if outcome.validation is not None else []
-        if outcome.parse_error == "CONSUMPTION_CONFLICT":
-            event = "RESULT_REJECTED_VALIDATION"
-        else:
-            event = _ec.event_for_import_outcome(
-                outcome.state,
-                result_status=(outcome.result.result_status if outcome.result is not None
-                               else (_load_state(Path(root), task_id) or {}).get("result_status")),
-                findings=findings, parse_error=outcome.parse_error)
-        _ec.persist_next_action(Path(root), task_id, _ec.resolve_next_action(event))
-    return outcome
+    root = Path(root)
+    lock = _task_dir(root, task_id) / "import.lock"
+    if not _acquire_lock(lock):
+        return ImportOutcome(task_id=task_id, state=current_state(root, task_id) or STATE_RESULT_REJECTED,
+                             parse_error="IMPORT_IN_PROGRESS")
+    try:
+        try:
+            outcome = _import_result_inner(root, task_id, result_md_path)
+        except Exception:
+            if _task_dir(root, task_id).is_dir():
+                from . import execution_contract as _ec0
+                try:
+                    _ec0.persist_next_action(root, task_id, _ec0.resolve_next_action("IMPORT_INTERRUPTED"))
+                except Exception:  # secondary failure must never mask the original error
+                    pass
+            raise
+        if _task_dir(root, task_id).is_dir():
+            from . import execution_contract as _ec
+            findings = list(outcome.validation.findings) if outcome.validation is not None else []
+            if outcome.parse_error in ("CONSUMPTION_CONFLICT", "RESULT_CONTENT_DIFFERS_FROM_CONSUMED"):
+                event = "RESULT_REJECTED_VALIDATION" if outcome.state != STATE_RESULT_CONSUMED else "RESULT_CONSUMED"
+            else:
+                event = _ec.event_for_import_outcome(
+                    outcome.state,
+                    result_status=(outcome.result.result_status if outcome.result is not None
+                                   else (_load_state(root, task_id) or {}).get("result_status")),
+                    findings=findings, parse_error=outcome.parse_error)
+            _ec.persist_next_action(root, task_id, _ec.resolve_next_action(event))
+        return outcome
+    finally:
+        _release_lock(lock)
 
 
 def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
@@ -354,6 +429,26 @@ def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
     return question["id"]
 
 
+def _ensure_registry_schema(path: Path) -> None:
+    """Additive migration: rows written before the digest column existed keep an
+    empty result_sha256 (identity falls back to status+path for them)."""
+    if not path.is_file():
+        return
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        fields = list(reader.fieldnames or [])
+        rows = list(reader)
+    if fields == _REGISTRY_FIELDS:
+        return
+    tmp = path.with_name(path.name + ".migrate.tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=_REGISTRY_FIELDS)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") or "" for k in _REGISTRY_FIELDS})
+    os.replace(tmp, path)
+
+
 def _registry_row(root: Path, task_id: str) -> Optional[Dict[str, str]]:
     path = _registry_path(root)
     if not path.is_file():
@@ -366,7 +461,7 @@ def _registry_row(root: Path, task_id: str) -> Optional[Dict[str, str]]:
 
 
 def _append_registry(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
-                     result_path: str, question_id: Optional[str]) -> None:
+                     result_path: str, question_id: Optional[str], result_sha256: str = "") -> None:
     """The second, always-fires Canonical Consumer: a real, structural,
     append-only registry row for EVERY consumed result, regardless of
     whether it also needed a human decision -- the "evidence store" /
@@ -376,6 +471,7 @@ def _append_registry(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
         return  # idempotent: one consumed result -> exactly one registry row
     path = _registry_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_registry_schema(path)
     is_new = not path.exists()
     rc, head, _ = _git(Path(root), ["rev-parse", "HEAD"])
     with open(path, "a", newline="", encoding="utf-8") as f:
@@ -389,6 +485,7 @@ def _append_registry(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
             "result_path": result_path,
             "consumed_at_head": head.strip() if rc == 0 else "",
             "question_id": question_id or "",
+            "result_sha256": result_sha256 or "",
         })
 
 
@@ -499,7 +596,10 @@ def execute_verb(argv: Optional[List[str]] = None) -> int:
         ing = _ri.ingest_result_file(args.root, args.task_id, args.result_file, trigger="MANUAL")
         outcome = ing.outcome
         if outcome is None:
-            if ing.action == "DUPLICATE_SUPPRESSED":
+            if ing.action == "LOCKED":
+                outcome = ImportOutcome(task_id=args.task_id, state=current_state(args.root, args.task_id) or STATE_RESULT_REJECTED,
+                                        parse_error="IMPORT_IN_PROGRESS")
+            elif ing.action == "DUPLICATE_SUPPRESSED":
                 outcome = ImportOutcome(task_id=args.task_id, state=current_state(args.root, args.task_id) or STATE_RESULT_REJECTED)
             else:
                 outcome = ImportOutcome(task_id=args.task_id, state=STATE_RESULT_REJECTED,

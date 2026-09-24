@@ -36,6 +36,7 @@ ENCODING_MARKER = "<!-- L5DGVA_VALUE_ENCODING=escaped-v1 -->"
 _OTHER_LINE_BREAKS = "\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 
 NONE_TOKEN = "(none)"
+EMPTY_TOKEN = "(empty)"  # ESCAPED encoding only: an empty string, distinct from None
 
 
 class MdKvError(ValueError):
@@ -80,7 +81,7 @@ def escape_value(s: str) -> str:
         text = "".join(chars)
     if text.startswith("#"):
         text = _u("#") + text[1:]
-    if text == NONE_TOKEN:
+    if text in (NONE_TOKEN, EMPTY_TOKEN):
         text = _u("(") + text[1:]
     return text
 
@@ -123,8 +124,12 @@ def unescape_value(s: str) -> str:
 # --- rendering --------------------------------------------------------------
 
 def render_scalar(value: Any) -> str:
-    if value is None or value == "":
+    """None -> `(none)`; the empty string -> `(empty)`: the two are distinct
+    values and stay distinct on round trip (REVIEW-003 N3)."""
+    if value is None:
         return NONE_TOKEN
+    if value == "":
+        return EMPTY_TOKEN
     return escape_value(str(value))
 
 
@@ -152,19 +157,30 @@ def render_document(title: str, field_order: Sequence[str], values: Dict[str, An
 
 # --- parsing ----------------------------------------------------------------
 
-def split_sections(text: str, allowed_fields: Sequence[str]) -> Tuple[Dict[str, str], bool]:
-    """Returns (sections, escaped). Fail-closed: duplicate section,
-    unknown section, or non-title/non-marker content before the first
-    section all raise. Line boundaries follow `str.splitlines()` (every
-    Unicode boundary) so a viewer and this parser never disagree about
-    where a `## ` header starts."""
+def split_sections(text: str, allowed_fields: Sequence[str], title: str) -> Tuple[Dict[str, str], bool]:
+    """Returns (sections, escaped). Fail-closed: the document must open with
+    exactly ONE canonical `# {title}` line (a schema token appearing in some
+    other title or in content does not make a document of that schema); the
+    encoding marker, if any, must be the single line right after it; duplicate
+    or unknown sections, and any other content before the first section,
+    raise. Line boundaries follow `str.splitlines()` (every Unicode boundary)
+    so a viewer and this parser never disagree about where a `## ` header
+    starts."""
     allowed = frozenset(allowed_fields)
+    canonical_title = f"# {title}"
     sections: Dict[str, List[str]] = {}
     current: Optional[str] = None
     escaped = False
-    for line in text.splitlines():
+    seen_title = False
+    marker_slot_open = False  # only the first non-blank line after the title may be the marker
+    lines = text.splitlines()
+    if not any(l.strip() == canonical_title for l in lines):
+        raise MdKvError("NOT_THIS_DOCUMENT", {"expected_title": canonical_title})
+    for line in lines:
         if line.startswith("## "):
             name = line[3:].strip()
+            if not seen_title:
+                raise MdKvError("UNEXPECTED_PREAMBLE", {"line": line[:120]})
             if name in sections:
                 raise MdKvError("DUPLICATE_SECTION", {"section": name})
             if name not in allowed:
@@ -173,10 +189,24 @@ def split_sections(text: str, allowed_fields: Sequence[str]) -> Tuple[Dict[str, 
             sections[name] = []
         elif current is None:
             stripped = line.strip()
-            if stripped == ENCODING_MARKER:
+            if not stripped:
+                continue
+            if not seen_title:
+                if stripped != canonical_title:
+                    raise MdKvError("UNEXPECTED_PREAMBLE", {"line": stripped[:120]})
+                seen_title = True
+                marker_slot_open = True
+            elif stripped == ENCODING_MARKER:
+                if not marker_slot_open:
+                    raise MdKvError("DUPLICATE_ENCODING_MARKER" if escaped else "MISPLACED_ENCODING_MARKER", {})
                 escaped = True
-            elif stripped and not stripped.startswith("# "):
+                marker_slot_open = False
+            elif stripped == canonical_title or stripped.startswith("# "):
+                raise MdKvError("DUPLICATE_TITLE", {"line": stripped[:120]})
+            else:
                 raise MdKvError("UNEXPECTED_PREAMBLE", {"line": stripped[:120]})
+            if stripped != ENCODING_MARKER:
+                marker_slot_open = seen_title and stripped == canonical_title
         else:
             sections[current].append(line)
     return {k: "\n".join(v).strip() for k, v in sections.items()}, escaped
@@ -185,6 +215,8 @@ def split_sections(text: str, allowed_fields: Sequence[str]) -> Tuple[Dict[str, 
 def parse_scalar(raw: str, escaped: bool) -> Optional[str]:
     if raw == NONE_TOKEN or raw == "":
         return None
+    if escaped and raw == EMPTY_TOKEN:
+        return ""
     if escaped:
         if "\n" in raw:
             raise MdKvError("MALFORMED_SCALAR", {"value": raw[:120]})

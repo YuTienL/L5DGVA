@@ -1,9 +1,9 @@
 {
-  "auto_actionable": false,
-  "event": "RE_REVIEW_HANDOFF_READY",
-  "human_action_required": "YES",
-  "next_action": "HUMAN_TRANSPORT_REQUIRED",
-  "next_action_owner": "HUMAN",
-  "next_action_reason": "provider-independent routing table: RE_REVIEW_HANDOFF_READY -> HUMAN_TRANSPORT_REQUIRED",
-  "stop_reason": "HUMAN_TRANSPORT_REQUIRED"
+  "auto_actionable": true,
+  "event": "RESULT_CONSUMED",
+  "human_action_required": "NO",
+  "next_action": "AUTO_REMEDIATE_CONFIRMED_FINDINGS",
+  "next_action_owner": "L5DGVA",
+  "next_action_reason": "provider-independent routing table: RESULT_CONSUMED -> AUTO_REMEDIATE_CONFIRMED_FINDINGS",
+  "stop_reason": null
 }
