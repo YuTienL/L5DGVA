@@ -128,6 +128,10 @@
         "source_path": { "type": "string", "minLength": 1, "description": "Where in that producer's own output the value was read, e.g. 'env.manifest.json#vip_config.vip_release.version' or 'design_source_inventory#usb3_regmap.version'. Never fabricated -- must cite something the caller actually supplied." },
         "rationale": { "type": "string", "description": "Optional free-text note on why this evidence suggests this value." }
       }
+    },
+    "authority_role": {
+      "enum": ["DESIGN", "VERIFICATION", "SHARED", null],
+      "description": "CAP-M6-CLARSVC-001 (HUMAN_GATE_CONTRACT.md's own 'HumanGate generalizes question_queue.HUMAN_DECISION_SOURCE, adding AUTHORITY_ROLE as new routing metadata'): which DE/DV/DE+DV Role-Based HITL authority this question belongs to, per dv_harness.clarification_service.classify_question_owner() -- DESIGN (DE): intended DUT behavior/register semantics/reset-IRQ-clock intent/RTL-spec discrepancy from a design-intent perspective. VERIFICATION (DV): verification architecture/vPlan/scenario/checker/coverage/waiver/signoff. SHARED (DE+DV): a genuine cross-domain contradiction only -- never a fallback for an ordinary unresolved/unknown field. Additive (2026-09-24) -- optional, so every pre-existing question record, which simply omits this field, still validates unchanged; no schema_version bump. `null`/absent for a question filed by a caller that does not classify an authority role (this module's own question_queue.py callers predate CAP-M6-CLARSVC-001 and are unaffected)."
     }
   },
   "allOf": [

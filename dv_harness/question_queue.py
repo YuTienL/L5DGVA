@@ -1462,7 +1462,8 @@ class QuestionQueueStore:
                        context: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None,
                        enforce_do_not_ask: bool = False,
                        grounding_evidence: Optional[Dict[str, str]] = None,
-                       suggested_answer: Optional[Dict[str, str]] = None) -> dict:
+                       suggested_answer: Optional[Dict[str, str]] = None,
+                       authority_role: Optional[str] = None) -> dict:
         """Ask one question. NEVER pings/notifies -- it only persists the
         record (see build_digest() for the only aggregation/reporting path,
         per Part B: "never real-time pings"). Returns the full persisted
@@ -1519,11 +1520,23 @@ class QuestionQueueStore:
         question() below, since a suggestion IS the recommendation, cited)
         -- the caller is expected to build `options`/`recommendation` around
         the suggested value (e.g. via build_suggest_then_confirm_options())
-        rather than pass a `suggested_answer` that disagrees with them."""
+        rather than pass a `suggested_answer` that disagrees with them.
+
+        `authority_role` (default None, disclosed-default like this module's
+        other opt-in fields, added 2026-09-24 for CAP-M6-CLARSVC-001): one of
+        "DESIGN"/"VERIFICATION"/"SHARED", per
+        `dv_harness.clarification_service.classify_question_owner()` -- see
+        `schemas/question.schema.json`'s own `authority_role` property for
+        the full DE/DV Role-Based HITL rationale. HumanGate generalizes this
+        module's own Tier-3 mechanism with this one new routing field rather
+        than replacing it (HUMAN_GATE_CONTRACT.md)."""
         context = dict(context or {})
         options = normalize_options(options)
         grounding_evidence = normalize_grounding_evidence(grounding_evidence)
         suggested_answer = normalize_suggested_answer(suggested_answer)
+        if authority_role is not None and authority_role not in ("DESIGN", "VERIFICATION", "SHARED"):
+            raise QuestionValidationError(
+                f"authority_role must be one of DESIGN/VERIFICATION/SHARED or None, got {authority_role!r}")
         question_key = question_key or make_question_key(domain, question, context_path)
         if enforce_do_not_ask:
             redundant = find_redundant_decision(self.find_decision(question_key), context)
@@ -1587,6 +1600,7 @@ class QuestionQueueStore:
             "digest_batch_id": None, "digest_emitted_at": None,
             "grounding_evidence": grounding_evidence,
             "suggested_answer": suggested_answer,
+            "authority_role": authority_role,
         }
 
         # Attached on EVERY tier when one exists, not only when it resolved

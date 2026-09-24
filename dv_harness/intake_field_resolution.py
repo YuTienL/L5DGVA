@@ -644,14 +644,21 @@ def _option_rationale(value: str, candidates: Sequence[Candidate]) -> str:
 
 def file_clarification(root_or_store: Any, control: FieldControl, ev: EffectiveValue,
                        decision: QuestionDecision, *, context_path: str = "intake workbook",
-                       downstream_impact: str = "") -> Optional[Dict[str, Any]]:
+                       downstream_impact: str = "",
+                       authority_role: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """File the question into the real question queue (idempotent per field).
     Returns None when the gate says nobody should be asked.
 
     This renders everything into the question text (see
     `KNOWN_TECHNICAL_GAPS["STRUCTURED_CLARIFICATION_CONTEXT_NOT_PERSISTED"]`
     above for the honest, canonical-specific status of a structured
-    alternative)."""
+    alternative) -- `authority_role` (added 2026-09-24, CAP-M6-CLARSVC-001)
+    is the one exception: a real, persisted, structured field rather than
+    only rendered text, threaded straight through to
+    `question_queue.add_question()`. Callers normally pass this via
+    `dv_harness.clarification_service.classify_question_owner(control,
+    decision)` rather than deciding it here -- this function stays a thin,
+    reused pass-through, never a second QuestionOwner classifier."""
     if not decision.ask:
         return None
     store = root_or_store if isinstance(root_or_store, QuestionQueueStore) \
@@ -714,4 +721,4 @@ def file_clarification(root_or_store: Any, control: FieldControl, ev: EffectiveV
         domain=control.domain, question=question, context_path=context_path, question_key=key,
         options=options, recommendation=recommendation,
         assumption_if_unanswered=f"The step that needs '{control.field_id}' does not run until it is resolved.",
-        context=ctx)
+        context=ctx, authority_role=authority_role)

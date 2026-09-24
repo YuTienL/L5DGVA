@@ -1,0 +1,23 @@
+MODULE,SYMBOL,CALLER,CALLER_KIND,CHANGE_TYPE,STATUS
+question_queue.py,QuestionQueueStore.add_question(),cli.py,production,ADDITIVE (new optional authority_role kwarg),"compatible, 166/166 tests pass"
+question_queue.py,QuestionQueueStore.add_question(),connectivity.py,production,ADDITIVE,"compatible, unaffected (keyword-only param, default None)"
+question_queue.py,QuestionQueueStore.add_question(),coverage_analysis.py,production,ADDITIVE,"compatible, unaffected"
+question_queue.py,QuestionQueueStore.add_question(),gui_intake_wizard.py,production,ADDITIVE,"compatible, unaffected"
+question_queue.py,QuestionQueueStore.add_question(),gui_vip_coverage_wizard.py,production,ADDITIVE,"compatible, unaffected"
+question_queue.py,QuestionQueueStore.add_question(),intake_field_resolution.py,production,ADDITIVE (now threads authority_role through),"compatible, 25/25 tests pass"
+question_queue.py,QuestionQueueStore.add_question(),intake_state.py,production,ADDITIVE,"compatible, unaffected (read-only find_decision() caller, never calls add_question itself -- re-checked)"
+question_queue.py,QuestionQueueStore.add_question(),live_event_model.py,production,ADDITIVE,"compatible, unaffected"
+question_queue.py,QuestionQueueStore.add_question(),low_confidence_human_checkpoint.py,production,ADDITIVE,"compatible, unaffected"
+question_queue.py,QuestionQueueStore.add_question(),source_authority.py,production,ADDITIVE,"compatible, unaffected"
+question_queue.py,QuestionQueueStore.add_question(),verification_strategy.py,production,ADDITIVE,"compatible, unaffected"
+question_queue.py,QuestionQueueStore.add_question(),waveform_dump_gate.py,production,ADDITIVE,"compatible, unaffected"
+intake_field_resolution.py,file_clarification(),clarification_service.py (new),production,ADDITIVE (new optional authority_role kwarg),"compatible, new real caller"
+intake_field_resolution.py,resolve_field(),clarification_service.py (new),production,"REUSED verbatim, no signature change",compatible
+intake_field_resolution.py,evaluate_question_gate(),clarification_service.py (new),production,"REUSED verbatim, no signature change",compatible
+intake_field_resolution.py,field_is_sufficient(),clarification_service.py (new),production,"REUSED verbatim, no signature change",compatible
+clarification_service.py,resolve_or_ask(),engine.py (start_lifecycle()),production,"NEW module, first and only real caller","wired, tested"
+clarification_service.py,classify_question_owner(),clarification_service.resolve_or_ask() (internal),internal,NEW,tested directly + via resolve_or_ask()
+clarification_service.py,human_gate_state(),(no production caller yet),none,NEW,"tested directly; disclosed 0 production callers -- a real, honest FOUNDATION state, matching CAP-ATL-004/007's own precedent"
+engine.py,start_lifecycle(),cli.py (start),production,MODIFIED this batch: field_controls loop now delegates to clarification_service.resolve_or_ask(),"compatible, 23/23 dispatch tests + 13/13 clarification tests pass"
+engine.py,start_lifecycle(),dashboard.py (_start_background_run),production,unchanged signature,compatible
+schemas/question.schema.json,authority_role property,question_queue.validate_question(),production (schema validation),"ADDITIVE, optional, nullable",compatible -- every pre-existing question record (which omits it) still validates unchanged

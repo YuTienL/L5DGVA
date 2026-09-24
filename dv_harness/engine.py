@@ -27,6 +27,8 @@ from . import self_tuning
 from . import lifecycle
 from . import intake_field_resolution
 from . import task_boundary_conformance
+from . import clarification_service
+from .question_queue import QuestionQueueStore
 
 # --- Plan-and-Execute / Multi-Agent / Blackboard / ReAct wiring -------------
 # planner.py, react.py, router.py, multi_agent.py, skill_resolver.py were all
@@ -6485,13 +6487,17 @@ class DVHarness:
         (item 18 of DEC-M6-DISPATCH-001's approval); a future
         CAP-M5M6-VLEVEL-001 migration has a proven place to read them from.
 
-        `field_controls` reuses CAP-ATL-007's real `intake_field_resolution.
-        resolve_field()`/`evaluate_question_gate()`/`file_clarification()`
-        verbatim (never reimplemented here, per item 8) -- an unresolved
-        field is handed to the real, existing question queue and the
-        lifecycle parks at its current milestone with `WAIT_USER`, exposing
-        exactly the interface boundary item 17 allows without building
-        ClarificationService itself.
+        `field_controls` now delegates to CAP-M6-CLARSVC-001's real
+        `clarification_service.resolve_or_ask()` (which itself composes
+        CAP-ATL-007's `resolve_field()`/`evaluate_question_gate()`/
+        `file_clarification()`, never reimplemented a second time here) --
+        an unresolved field is handed to the real, existing question queue
+        with a real `authority_role` (DESIGN/VERIFICATION/SHARED)
+        classification, and the lifecycle parks at its current milestone
+        with `WAIT_USER`. On a LATER call, once a real human answer is on
+        file, `resolve_or_ask()` re-resolves WITH it (the mandatory
+        Answer->Field-Resolution loop) rather than re-filing the same
+        question forever.
 
         `task_boundary` reuses CAP-ATL-004's real `task_boundary_
         conformance.check_working_tree_conformance()` verbatim (item 6/8) --
@@ -6539,15 +6545,21 @@ class DVHarness:
 
         field_controls = list(field_controls)
         if lc.milestone.value not in _POST_INTAKE_MILESTONES:
+            # CAP-M6-CLARSVC-001: delegates to clarification_service.
+            # resolve_or_ask() rather than re-inlining resolve_field()/
+            # evaluate_question_gate()/file_clarification() here a second
+            # time (item 8's own "do not duplicate" spirit) -- this also
+            # means start_lifecycle() now gets the real Answer->Field-
+            # Resolution loop (item 10) for free: a field whose question was
+            # already answered on a prior call re-resolves WITH that answer
+            # here, rather than re-filing the same question forever.
+            qstore = QuestionQueueStore(self.root)
             unresolved_ids: List[str] = []
             for control in field_controls:
-                ev = intake_field_resolution.resolve_field(control, declared=None)
-                if intake_field_resolution.field_is_sufficient(control, ev):
-                    continue
-                decision = intake_field_resolution.evaluate_question_gate(control, ev)
-                q = intake_field_resolution.file_clarification(self.root, control, ev, decision)
-                if q is not None and q.get("answer") is None:
-                    unresolved_ids.append(q["id"])
+                outcome = clarification_service.resolve_or_ask(qstore, control)
+                if not outcome.resolved and outcome.question is not None \
+                        and outcome.question.get("answer") is None:
+                    unresolved_ids.append(outcome.question["id"])
 
             if unresolved_ids:
                 lc.update_facts(intake_clarification_ids=unresolved_ids)
