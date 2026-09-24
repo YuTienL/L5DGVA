@@ -1981,3 +1981,9 @@
 {"ts": "2026-09-24T05:28:08.542284+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-09-24T05:28:09.565921+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-09-24T05:28:10.637467+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-24T06:26:52.484424+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-24T06:27:02.427418+00:00", "event": "CLI_ACCESS", "cmd": "self-audit", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-24T06:37:14.994172+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-24T06:37:15.971606+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-24T06:37:16.994931+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-24T06:37:18.042188+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}

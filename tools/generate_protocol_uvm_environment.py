@@ -1,13 +1,42 @@
 #!/usr/bin/env python3
+# GAP-V2-002 remediation (CAP-M6-GAPV2002-001, DEC-GAP-V2-002 = OPTION_B):
+# reclassified INTERNAL_GENERATION_PRIMITIVE. This script is no longer an
+# independent, qualified CREATE ENVIRONMENT workflow entry point -- it is
+# unmodified generation capability, still fully real and still directly
+# runnable, but now reachable through TWO paths instead of one:
+#
+#   (governed, canonical) dv-harness start --generate
+#     -> engine.DVHarness.start_lifecycle() resolves protocol/role through
+#        real Field Resolution/Clarification/HumanGate, then calls
+#        dv_harness.uvm_generator.create_environment.create_environment()
+#        directly (the SAME function this script calls below) --
+#        see dv_harness/generation_field_controls.py.
+#   (internal primitive, this script) direct invocation, no lifecycle/
+#     Field-Resolution/Clarification/HumanGate involvement at all -- kept
+#     for the 2 real subprocess-level regression tests that exercise the
+#     primitive directly (dv_harness_tests/test_protocol_env_generator.py,
+#     test_system_level_soc_composition_wiring.py) and for any low-level/
+#     CI/offline use that genuinely needs a lifecycle-free call, the same
+#     way run_stage()/.loop() remain reachable internal primitives beneath
+#     start_lifecycle() per CAP-M6-DISPATCH-001's own policy.
+#
+# All 11 .claude/skills/PROTOCOL_BUILDERS/*/SKILL.md now converge on the
+# governed path above (GAP_V2_002_GENERATOR_ENTRY_DECISION.md /
+# GAP_V2_002_FIELD_CONTROL_DERIVATION.md /
+# GAP_V2_002_IMPLEMENTATION_REPORT.md, under
+# .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/), never this script
+# directly. Its own generation logic (below) is completely unmodified --
+# only its role in the architecture, and who is expected to call it, has
+# changed.
+#
 # Mirrors tools/generate_uvm_environment.py's / generate_amba_fabric_environment.py's
 # exact shape -- a standalone script, not a dv-harness CLI subcommand.
 #
-# 2026-09-04 (AI-mechanism re-audit gap #14): this script is the CREATE
-# ENVIRONMENT entry point every .claude/skills/PROTOCOL_BUILDERS/*/SKILL.md
-# invokes, and it used to call ProtocolEnvGenerator directly -- so CLAUDE.md's
-# "Before CREATE ENVIRONMENT, select: SUBSYSTEM_MODE / SYSTEM_LEVEL_MODE"
-# gate had no effect here at all, and a genuine multi-subsystem request
-# silently produced one subsystem environment. It now goes through
+# 2026-09-04 (AI-mechanism re-audit gap #14): this script used to call
+# ProtocolEnvGenerator directly -- so CLAUDE.md's "Before CREATE
+# ENVIRONMENT, select: SUBSYSTEM_MODE / SYSTEM_LEVEL_MODE" gate had no
+# effect here at all, and a genuine multi-subsystem request silently
+# produced one subsystem environment. It now goes through
 # dv_harness.uvm_generator.create_environment.create_environment(), which
 # resolves the mode with the real environment_mode_router and dispatches to
 # ProtocolEnvGenerator or to the real SoC composer accordingly. A

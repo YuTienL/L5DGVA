@@ -527,3 +527,49 @@ generation workflow (CLI/dashboard) is closed and verified; the legacy
 script's own governance status (`GAP-V2-002`) is explicitly NOT closed,
 pending a separate human decision. Not auto-starting
 `CAP-M5M6-VLEVEL-001` or any later wave.**
+
+## Addendum: GAP-V2-002 remediation (`CAP-M6-GAPV2002-001`)
+
+`DEC-GAP-V2-002 = OPTION_B` (approved): `tools/generate_protocol_uvm_
+environment.py` reclassified `INTERNAL_GENERATION_PRIMITIVE`. Derived the
+real generic field set from all 11 `.claude/skills/PROTOCOL_BUILDERS/*/
+SKILL.md`'s own discovery lists plus every downstream generation
+consumer's real manifest-key usage (never assumed) -- added one new real
+field, `role` (`NEW_GENERIC_CANONICAL_FIELD`), alongside the existing
+`protocol` field. All 11 skills migrated to the governed
+`dv-harness start --generate` entry point; the CLI now prints the same
+structured JSON envelope the standalone script's own stdout always
+provided, so no migrated caller loses parseable output. Full detail:
+`M6_PREFLIGHT/GAP_V2_002_GENERATOR_ENTRY_DECISION.md`,
+`M6_PREFLIGHT/GAP_V2_002_FIELD_CONTROL_DERIVATION.md`,
+`M6_PREFLIGHT/GAP_V2_002_IMPLEMENTATION_REPORT.md`.
+
+```
+CAPABILITY_ISLAND (generation edge) = 0   (was 1)
+CURRENT_SCOPE_GAPS_OPEN = 0   (for the current pre-VLEVEL Golden
+  Workflow scope -- GAP-V2-002 was the only open one; GAP-V2-003 stays
+  correctly DEFERRED/future-scope, not counted here)
+AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT = 3   (unchanged)
+STRUCTURAL_CONNECTED_STAGES = 8, PRODUCTION_CONNECTED_STAGES = 8
+  (unchanged counts; the same 8 stages now reachable from 13 real
+  production/internal-primitive-test callers instead of 2)
+```
+
+Regression: 5 failed / 1524 passed / 11 skipped across the 47
+dispatch-caller files + 14 directly-touched-module files -- all 5
+failures byte-identical to the already-classified pre-existing set.
+`REGRESSION_CAUSED_BY_REMEDIATION = 0`. Constitution gate: `PASS`, 0
+reasons. All 5 frozen sources re-verified unchanged.
+
+Per `DEC-GAP-V2-002`'s own explicit condition ("If and only if
+`CURRENT_SCOPE_GAPS_OPEN = 0` for the current pre-VLEVEL Golden Workflow
+scope, set `NEXT_RECOMMENDED_GATE = CAP-M5M6-VLEVEL-001`"):
+
+```
+NEXT_RECOMMENDED_GATE = CAP-M5M6-VLEVEL-001
+```
+
+**STOP. GAP-V2-002 remediation complete, CLOSED. Naming
+`CAP-M5M6-VLEVEL-001` as the next recommended gate is reporting, not
+starting it -- not auto-started, waiting for a separate, explicit
+dispatch.**

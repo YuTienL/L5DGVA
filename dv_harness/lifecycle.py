@@ -95,6 +95,11 @@ _FACT_KEYS = frozenset({
     "environment_mode", "protocol_route", "goal", "resume_stage",
     "adopted_from_legacy", "level_question_id", "protocol_source",
     "intake_package", "intake_clarification_ids",
+    # GAP-V2-002 remediation (CAP-M6-GAPV2002-001): which role the DUT
+    # plays in the protocol a generation request targets (host/device,
+    # RC/EP, TX/RX, ...) -- see generation_field_controls.py's own
+    # ROLE_FIELD_ID for the real Field Resolution wiring this persists.
+    "role",
 })
 
 EventSink = Callable[[str, Dict[str, Any]], None]

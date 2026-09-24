@@ -99,3 +99,37 @@ ungoverned call to `create_environment()` (out of C1's own named scope);
 this closure is deliberately narrow (one field), not a general claim that
 Field Resolution is now production-connected for every possible intake
 fact.
+
+## Update after `GAP-V2-002` remediation (`CAP-M6-GAPV2002-001`)
+
+Island (1) above is now CLOSED. `DEC-GAP-V2-002 = OPTION_B` (approved):
+`tools/generate_protocol_uvm_environment.py` reclassified
+`INTERNAL_GENERATION_PRIMITIVE`; all 11 `.claude/skills/PROTOCOL_BUILDERS/
+*/SKILL.md` now converge on `start_lifecycle(generation_request=...)`,
+the same governed path CLI/dashboard already use. A second real,
+generic field, `role`, was added alongside `protocol` (derived from all
+11 skills' own discovery lists + real downstream consumer evidence, never
+assumed -- `GAP_V2_002_FIELD_CONTROL_DERIVATION.md`).
+
+```
+M6_VERTICAL_SLICE_CONNECTED_STAGES = 8   (unchanged, structural)
+M6_PRODUCTION_CONNECTED_STAGES     = 8   (unchanged count; the SAME 8
+  stages now additionally reachable from 11 more real production entry
+  points, not a new stage becoming connected)
+CAPABILITY_ISLANDS (this program's own generation-edge count) = 0
+  (was 1 before this remediation)
+```
+
+Island (2) (every field other than `protocol`/`role`) remains open by
+disclosed design, not oversight -- see `L5DGVA_CURRENT_SCOPE_GAP_
+REGISTER.csv`'s `GAP-V2-003`, `REGISTER_AND_DEFER_WITH_OWNER`.
+
+Real evidence: `dv_harness_tests/test_gap_v2_002_protocol_builder_
+convergence.py` (5/5, new) -- all 11 skills verified converged (regex),
+none still call the script directly, the script's own header self-
+declares `INTERNAL_GENERATION_PRIMITIVE`, and an AST-based (not
+text-grep) check confirms `create_environment()`'s real call-site set is
+still exactly the 2 expected ones (the governed `engine.py` path and this
+script). `dv_harness_tests/test_m6_c1_golden_path_connectivity.py`
+(19/19) extended with the `role` field's own 7 test families,
+independently of `protocol`'s.

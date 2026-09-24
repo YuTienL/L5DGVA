@@ -87,11 +87,19 @@ EVIDENCE            = test_m6_c1_golden_path_connectivity.py::
 
 ## Edges explicitly NOT claimed production-connected
 
-- `tools/generate_protocol_uvm_environment.py` → `create_environment()`:
-  a real, live, ungoverned edge (GAP-V2-002, `HUMAN_DECISION_REQUIRED`,
-  OPEN). Not counted toward `PRODUCTION_CONNECTED_STAGES` above.
-- Any intake field other than `protocol` → Field Resolution: zero
-  production producer exists (GAP-V2-003, `REGISTER_AND_DEFER_WITH_OWNER`).
+- ~~`tools/generate_protocol_uvm_environment.py` → `create_environment()`:
+  a real, live, ungoverned edge~~ -- **CLOSED this wave** (GAP-V2-002,
+  `CAP-M6-GAPV2002-001`, `DEC-GAP-V2-002 = OPTION_B`): the script is
+  reclassified `INTERNAL_GENERATION_PRIMITIVE`; all 11
+  `.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` now converge on
+  `start_lifecycle(generation_request=...)`, adding 11 more real
+  production entry points onto the same 8 already-counted stages (not a
+  new stage; see `M6_VERTICAL_SLICE_STATUS.md`'s own update section).
+- Any intake field other than `protocol`/`role` → Field Resolution: zero
+  production producer exists (GAP-V2-003, `REGISTER_AND_DEFER_WITH_OWNER`
+  -- `role` added this wave alongside `protocol`, derived from all 11
+  skills' own discovery lists + real downstream consumer evidence, see
+  `GAP_V2_002_FIELD_CONTROL_DERIVATION.md`).
 - Task Boundary (stage 8): no CLI flag or dashboard JSON field supplies a
   `TaskBoundary` today — unchanged by this task, honestly excluded from
   the production count.

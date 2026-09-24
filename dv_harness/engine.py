@@ -6481,6 +6481,7 @@ class DVHarness:
 
     def start_lifecycle(self, user_goal: str, *, loop: bool = False, dry_run: bool = False,
                         level: Optional[str] = None, protocols: Iterable[str] = (),
+                        role: Optional[str] = None,
                         field_controls: Iterable[intake_field_resolution.FieldControl] = (),
                         task_boundary: Optional[task_boundary_conformance.TaskBoundary] = None,
                         advanced: bool = False,
@@ -6523,24 +6524,28 @@ class DVHarness:
         checked, matching CAP-ATL-004's own pre-existing zero-caller state
         for every caller that does not yet pass one.
 
-        M6 GOLDEN-PATH CONNECTIVITY CLOSURE C1 (`CAP-M6-C1-001`): a real
-        `protocol` `FieldControl` (`generation_field_controls.
-        protocol_field_control()`) is now ALWAYS added to `field_controls`
-        for the pre-INTAKE_READY resolution loop below -- the one piece of
-        real production intake `protocols` already carries but that never
-        reached `ClarificationService` before this closure. `generation_
-        request`, when supplied, is this call's OPT-IN declaration that,
-        once every field resolves and Task Boundary passes, this
-        `start_lifecycle()` invocation should govern a verification-
-        environment-GENERATION request rather than (or in addition to,
-        depending on `loop`) the ordinary Stage-graph dispatch:
-        `create_environment.create_environment()` is called with the
-        resolved `protocol` EffectiveValue substituted into
-        `generation_request["protocol"]`, never the reverse direction
-        (`create_environment.py` itself is unmodified and still knows
-        nothing about lifecycles). Omitting `generation_request` (the
-        default) leaves `_start_dispatch()`'s own ordinary Stage-graph path
-        as the only outcome, exactly as before this closure.
+        M6 GOLDEN-PATH CONNECTIVITY CLOSURE C1 (`CAP-M6-C1-001`) + GAP-V2-002
+        REMEDIATION (`CAP-M6-GAPV2002-001`): real `protocol`/`role`
+        `FieldControl`s (`generation_field_controls.py`) are added to
+        `field_controls` for the pre-INTAKE_READY resolution loop below
+        ONLY when `generation_request` is supplied -- the derived,
+        evidence-grounded field set a generation request actually needs
+        (see `generation_field_controls.py`'s own module docstring for the
+        full derivation: which fields are `EXISTING_CANONICAL_FIELD`,
+        `NEW_GENERIC_CANONICAL_FIELD`, `PROTOCOL_SPECIFIC_EXTENSION`, or
+        deliberately not governed here). `generation_request`, when
+        supplied, is this call's OPT-IN declaration that, once every field
+        resolves and Task Boundary passes, this `start_lifecycle()`
+        invocation should govern a verification-environment-GENERATION
+        request rather than (or in addition to, depending on `loop`) the
+        ordinary Stage-graph dispatch: `create_environment.
+        create_environment()` is called with the resolved `protocol`/`role`
+        EffectiveValues substituted into `generation_request["protocol"]`/
+        `["role"]`, never the reverse direction (`create_environment.py`
+        itself is unmodified and still knows nothing about lifecycles).
+        Omitting `generation_request` (the default) leaves `_start_
+        dispatch()`'s own ordinary Stage-graph path as the only outcome,
+        exactly as before either closure.
 
         Returns an AgentResult for a single-stage start (or a block), None
         after a loop completes."""
@@ -6564,6 +6569,8 @@ class DVHarness:
             facts: Dict[str, Any] = {"goal": user_goal}
             if declared_protocols:
                 facts["protocols"] = declared_protocols
+            if role is not None:
+                facts["role"] = str(role)
             if level is not None:
                 facts.update(verification_level=str(level), level_source="cli_flag")
             lc.create(trigger="dv-harness start (lifecycle-first)", producer="start_lifecycle",
@@ -6581,26 +6588,44 @@ class DVHarness:
         # else RESUME: the existing lifecycle record is left exactly as is.
 
         field_controls = list(field_controls)
-        # M6 C1 (CAP-M6-C1-001): the protocol field is added to the
-        # resolution loop ONLY when this call declares generation_request --
-        # an ordinary (non-generation) start_lifecycle() call must stay a
-        # byte-identical no-op when it declares no field_controls of its
-        # own, exactly as before this closure (a real capability-island
-        # connection requires a real production TRIGGER; asking every
-        # caller about a field only generation ever consumes would not be
-        # that, it would be an unconditional new friction point). Once a
-        # caller DOES ask for generation, resolution/persistence work
-        # exactly as any other field: declared_protocols is this call's own
-        # DECLARED candidate; protocol_evidence_producers() is the
-        # AUTO_DISCOVERY_FIRST producer reading .dv-harness/lifecycle.json's
-        # own already-recorded protocols fact.
-        protocol_control = generation_field_controls.protocol_field_control()
-        field_controls_for_resolution = (
-            field_controls + [protocol_control] if generation_request is not None else field_controls
-        )
-        protocol_declared = generation_field_controls.declared_protocol_value(declared_protocols)
-        protocol_producers = generation_field_controls.protocol_evidence_producers(self.root)
-        resolved_protocol_value: Optional[str] = None
+        # M6 C1 (CAP-M6-C1-001) + GAP-V2-002 remediation
+        # (CAP-M6-GAPV2002-001): the generation field set (protocol, role)
+        # is added to the resolution loop ONLY when this call declares
+        # generation_request -- an ordinary (non-generation) start_
+        # lifecycle() call must stay a byte-identical no-op when it
+        # declares no field_controls of its own, exactly as before either
+        # closure (a real capability-island connection requires a real
+        # production TRIGGER; asking every caller about a field only
+        # generation ever consumes would not be that, it would be an
+        # unconditional new friction point). Once a caller DOES ask for
+        # generation, resolution/persistence work exactly as any other
+        # field: `generation_declared`/`generation_producers` supply each
+        # generation field's own DECLARED candidate and AUTO_DISCOVERY_
+        # FIRST producer (reading .dv-harness/lifecycle.json's own
+        # already-recorded fact) -- see generation_field_controls.py's own
+        # module docstring for how this exact field set (not a larger or
+        # smaller one) was derived.
+        generation_controls: List[intake_field_resolution.FieldControl] = []
+        generation_declared: Dict[str, Optional[str]] = {}
+        generation_producers: Dict[str, List[intake_field_resolution.EvidenceProducer]] = {}
+        if generation_request is not None:
+            protocol_control = generation_field_controls.protocol_field_control()
+            role_control = generation_field_controls.role_field_control()
+            generation_controls = [protocol_control, role_control]
+            generation_declared = {
+                generation_field_controls.PROTOCOL_FIELD_ID:
+                    generation_field_controls.declared_protocol_value(declared_protocols),
+                generation_field_controls.ROLE_FIELD_ID:
+                    generation_field_controls.declared_role_value(role),
+            }
+            generation_producers = {
+                generation_field_controls.PROTOCOL_FIELD_ID:
+                    generation_field_controls.protocol_evidence_producers(self.root),
+                generation_field_controls.ROLE_FIELD_ID:
+                    generation_field_controls.role_evidence_producers(self.root),
+            }
+        field_controls_for_resolution = field_controls + generation_controls
+        resolved_generation_values: Dict[str, str] = {}
         if lc.milestone.value not in _POST_INTAKE_MILESTONES:
             # CAP-M6-CLARSVC-001: delegates to clarification_service.
             # resolve_or_ask() rather than re-inlining resolve_field()/
@@ -6613,23 +6638,27 @@ class DVHarness:
             qstore = QuestionQueueStore(self.root)
             unresolved_ids: List[str] = []
             for control in field_controls_for_resolution:
-                if control.field_id == generation_field_controls.PROTOCOL_FIELD_ID:
+                if control.field_id in generation_declared:
                     outcome = clarification_service.resolve_or_ask(
-                        qstore, control, declared=protocol_declared, producers=protocol_producers)
+                        qstore, control, declared=generation_declared[control.field_id],
+                        producers=generation_producers[control.field_id])
                     if outcome.resolved:
-                        resolved_protocol_value = outcome.effective_value.value
+                        resolved_generation_values[control.field_id] = outcome.effective_value.value
                 else:
                     outcome = clarification_service.resolve_or_ask(qstore, control)
                 if not outcome.resolved and outcome.question is not None \
                         and outcome.question.get("answer") is None:
                     unresolved_ids.append(outcome.question["id"])
 
-            if resolved_protocol_value:
-                # Close the Auto-Discovery loop: once resolved (by a
-                # declared value or a real human answer), persist it as a
-                # lifecycle fact so the NEXT call's own producer finds it
-                # without asking again.
-                lc.update_facts(protocols=[p.strip() for p in resolved_protocol_value.split(",") if p.strip()])
+            # Close the Auto-Discovery loop: once resolved (by a declared
+            # value or a real human answer), persist each generation field
+            # as a lifecycle fact so the NEXT call's own producer finds it
+            # without asking again.
+            if generation_field_controls.PROTOCOL_FIELD_ID in resolved_generation_values:
+                v = resolved_generation_values[generation_field_controls.PROTOCOL_FIELD_ID]
+                lc.update_facts(protocols=[p.strip() for p in v.split(",") if p.strip()])
+            if generation_field_controls.ROLE_FIELD_ID in resolved_generation_values:
+                lc.update_facts(role=resolved_generation_values[generation_field_controls.ROLE_FIELD_ID])
 
             if unresolved_ids:
                 lc.update_facts(intake_clarification_ids=unresolved_ids)
@@ -6650,7 +6679,8 @@ class DVHarness:
 
             lc.transition(
                 lifecycle.Milestone.INTAKE_READY,
-                trigger="all declared intake fields resolved (protocol field always included, M6 C1)",
+                trigger="all declared intake fields resolved (protocol/role fields included "
+                        "when generation_request is set, M6 C1 + GAP-V2-002)",
                 producer="start_lifecycle", consumer="DISPATCH",
                 evidence=[f"{len(field_controls_for_resolution)} field(s) checked"])
 
@@ -6674,21 +6704,33 @@ class DVHarness:
             # directly, once every governed field is resolved and Task
             # Boundary has passed; create_environment.py never calls back
             # into start_lifecycle() (no recursion, no inversion).
-            effective_protocol = resolved_protocol_value
-            if effective_protocol is None:
+            def _effective(field_id: str, fact_key: str) -> Optional[str]:
+                value = resolved_generation_values.get(field_id)
+                if value is not None:
+                    return value
                 # A RESUME call past INTAKE_READY: this call's own
                 # resolution loop above did not run, so read the value a
                 # prior call already resolved and persisted.
-                effective_protocol = lc.load().get("protocols")
-                if isinstance(effective_protocol, (list, tuple)):
-                    effective_protocol = ",".join(str(p) for p in effective_protocol) or None
+                recorded = lc.load().get(fact_key)
+                if isinstance(recorded, (list, tuple)):
+                    return ",".join(str(p) for p in recorded) or None
+                return str(recorded).strip() or None if recorded else None
+
+            effective_protocol = _effective(generation_field_controls.PROTOCOL_FIELD_ID, "protocols")
+            effective_role = _effective(generation_field_controls.ROLE_FIELD_ID, "role")
             if not effective_protocol:
                 reason = ("GENERATION_BLOCKED: generation_request was supplied but no "
                           "protocol has been resolved for this project yet.")
                 return AgentResult(ok=False, text=reason, session_id=None,
                                    raw={"blocked_by": "generation_protocol_unresolved"})
+            if not effective_role:
+                reason = ("GENERATION_BLOCKED: generation_request was supplied but no "
+                          "role has been resolved for this project yet.")
+                return AgentResult(ok=False, text=reason, session_id=None,
+                                   raw={"blocked_by": "generation_role_unresolved"})
             request = dict(generation_request)
             request["protocol"] = effective_protocol
+            request["role"] = effective_role
             try:
                 result = _create_environment_module.create_environment(
                     self.root, request, out_dir=generation_out_dir)
@@ -6698,11 +6740,22 @@ class DVHarness:
                     ProtocolModelLayerError, EmptySubsystemRegistryError,
                     MissingSubsystemNameEvidenceError, CrossSubsystemIntegrationBlockedError,
                     NotImplementedError) as exc:
-                reason = f"GENERATION_FAILED: {type(exc).__name__}: {exc}"
+                # Every one of create_environment.py's/protocol_model_layer.py's/
+                # soc_environment_composer.py's own real exception classes
+                # follows the same "SCREAMING_SNAKE_CASE reason + concrete
+                # detail dict" convention (confirmed by direct read of all
+                # 10 class definitions) -- surfaced here generically rather
+                # than re-matched per exception type, so the CLI/dashboard
+                # JSON envelope carries the same reason/detail the standalone
+                # script's own JSON output always did.
+                exc_reason = getattr(exc, "reason", type(exc).__name__)
+                exc_detail = getattr(exc, "detail", {})
+                text = f"GENERATION_FAILED: {type(exc).__name__}: {exc}"
                 self.store.event({"ts": now(), "event": "LIFECYCLE_GENERATION_FAILED",
-                                  "error": type(exc).__name__, "reason": str(exc)})
-                return AgentResult(ok=False, text=reason, session_id=None,
-                                   raw={"blocked_by": "generation", "error": type(exc).__name__})
+                                  "error": type(exc).__name__, "reason": exc_reason})
+                return AgentResult(ok=False, text=text, session_id=None,
+                                   raw={"blocked_by": "generation", "error": type(exc).__name__,
+                                        "status": exc_reason, "detail": exc_detail})
             self.store.event({"ts": now(), "event": "LIFECYCLE_GENERATION_COMPLETE",
                               "environment_mode": result.get("environment_mode"),
                               "out_dir": str(result.get("out_dir"))})

@@ -57,7 +57,7 @@ IP_MODE_OWNER_WAVE = M6 (CAP-M5M6-VLEVEL-001 -- verification_level.py / IP_MODE 
 | 1 | OpenSpec Intake | WIRED | `intake_routing.py` + `environment_mode_router.py` real dispatch confirmed |
 | 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | |
 | 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | |
-| 4 | Clarification | **PARTIAL, closure path connected (updated this wave, `CAP-M6-C1-001`)** | `ClarificationService` is real (`CAP-M6-CLARSVC-001`) AND now production-reachable: `start_lifecycle(generation_request=...)` resolves a real `protocol` `FieldControl` (`generation_field_controls.py`) through it, then calls `create_environment.create_environment()` directly -- a real, tested, CLI-reachable (`start --generate`) and dashboard-reachable (`/api/start`) governed path (`M6_GOLDEN_PATH_CONNECTIVITY_C1_IMPLEMENTATION_REPORT.md`, 13/13 tests). Stays `PARTIAL`, not `WIRED`, for two disclosed reasons: (1) `tools/generate_protocol_uvm_environment.py` still calls `create_environment()` directly, ungoverned, unchanged by this task -- a real, pre-existing, still-open second entry point; (2) stages 2-3 above this one remain `NOT_RE-AUDITED_THIS_WAVE`, so this table cannot yet claim stage 4 is the true first-reachable point of an audited chain |
+| 4 | Clarification | **WIRED for all real production callers (updated this wave, `CAP-M6-C1-001` + `GAP-V2-002`)** | `ClarificationService` is real (`CAP-M6-CLARSVC-001`) AND now production-reachable from every real caller of generation: `start_lifecycle(generation_request=...)` resolves real `protocol`/`role` `FieldControl`s (`generation_field_controls.py`) through it, then calls `create_environment.create_environment()` directly -- CLI (`start --generate`), dashboard (`/api/start`), AND all 11 `.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` now converge on this one governed path (`GAP_V2_002_IMPLEMENTATION_REPORT.md`). `tools/generate_protocol_uvm_environment.py` reclassified `INTERNAL_GENERATION_PRIMITIVE`, no longer an independent workflow entry -- `CAPABILITY_ISLAND = NO` for this edge, closed. Not claimed `OPERATIONAL` end-to-end, for one remaining disclosed reason: stages 2-3 above this one remain `NOT_RE-AUDITED_THIS_WAVE`, so this table cannot yet claim stage 4 is the true first-reachable point of an audited chain |
 | 5 | vPlan | PARTIAL (downstream of #4, but `VPLAN_COVERAGE_TRACEABILITY_FOUNDATION = READY` per M4) | |
 | 6 | VIP/UVM Generation | WIRED, 1 latent defect | `create_environment.py` -> `ProtocolEnvGenerator`; `KNOWN_SOURCE_B_DEFECT` re-confirmed unchanged (CAP-M5-ARCH-001); now also reachable from the governed path above, not only `tools/generate_protocol_uvm_environment.py` |
 | 7–17 | Sequence/Scenario/FW … Experience Consolidation | NOT_RE-AUDITED_THIS_WAVE except where already tracked (Coverage Closure PARTIAL per CAP-M5-COV-001; Experience Consolidation ABSENT per CAP-CE-014) | |
@@ -78,7 +78,7 @@ SUBSYSTEM_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001, CAP-M6-C1-001 -- both CLOSED
 | 1 | OpenSpec Intake | WIRED | same router dispatch as SUBSYSTEM_MODE |
 | 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | |
 | 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | |
-| 4 | Clarification | **PARTIAL, closure path connected (updated this wave, `CAP-M6-C1-001`)** | same as `SUBSYSTEM_MODE` row above — `create_environment()` itself resolves `SYSTEM_LEVEL_MODE` internally from the same governed request, so the C1 closure covers both modes identically |
+| 4 | Clarification | **WIRED for all real production callers (updated this wave, `CAP-M6-C1-001` + `GAP-V2-002`)** | same as `SUBSYSTEM_MODE` row above — `create_environment()` itself resolves `SYSTEM_LEVEL_MODE` internally from the same governed request, so both closures cover both modes identically |
 | 5 | vPlan | PARTIAL | |
 | 6 | VIP/UVM Generation | WIRED, 1 unresolved foundation contract | `compose_soc_environment()` real registered-subsystem-registry check + cross-subsystem pre-check; `soc_environment_composer.py`'s ARCH-03 contract UNRESOLVED (CAP-M5-ARCH-002) |
 | 7 | Sequence/Scenario/FW | PARTIAL, disclosed scope boundary | cross-subsystem behavioral scenario content is explicitly `NotImplementedError` by design (No Golden-Reference Content Mining rule), not a defect |
@@ -105,16 +105,21 @@ this wave)**: the Integration Prime Directive adoption reconciliation's
 own prior correction (above the code blocks) found `CAP-M6-CLARSVC-001`
 closing alone did NOT unblock stage 4, because `create_environment.py`'s
 generation dispatch never reached `start_lifecycle()`. `CAP-M6-C1-001`
-(this wave) closes exactly that governed connection for the CLI
-(`start --generate`) and dashboard (`/api/start`) entry points — a real,
-tested (13/13), production-reachable path now exists:
-`start_lifecycle(generation_request=...)` resolves the `protocol` field
-through the real `ClarificationService` and then calls
-`create_environment.create_environment()` directly. Two things this
-closure does **not** claim: (1) `tools/generate_protocol_uvm_environment.py`
-still calls `create_environment()` directly and ungoverned — a real,
-disclosed, still-open second entry point, out of C1's own scope (its
-own dispatch named only CLI/dashboard); (2) stages 2-3
+closed exactly that governed connection for the CLI (`start --generate`)
+and dashboard (`/api/start`) entry points, disclosing at the time that
+`tools/generate_protocol_uvm_environment.py` still called
+`create_environment()` directly and ungoverned — a real, disclosed,
+then-still-open second entry point.
+
+**Third update (GAP-V2-002 remediation, this wave)**: that disclosed gap
+is now closed. `DEC-GAP-V2-002 = OPTION_B` (approved): the script is
+reclassified `INTERNAL_GENERATION_PRIMITIVE`, and all 11
+`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` — the real, derived field
+set (`protocol` + the newly-added `role`, see
+`GAP_V2_002_FIELD_CONTROL_DERIVATION.md`) — now converge on the same
+governed path. `CAPABILITY_ISLAND = NO` for the generation edge, for
+every one of the 13 real production/test callers this task traced.
+The one thing this closure does **not** claim: stages 2-3
 (Knowledge Retrieval, Discovery) remain `NOT_RE-AUDITED_THIS_WAVE`, so
 this table cannot yet claim any stage `OPERATIONAL` end-to-end, and the
 "first non-operational stage" claim for both `SUBSYSTEM_MODE` and

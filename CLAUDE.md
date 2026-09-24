@@ -1021,13 +1021,13 @@ If a required subsystem is missing in SYSTEM_LEVEL_MODE, build it through SUBSYS
 **Dispatched in code at the generation entry point (2026-09-04), not left to the agent.**
 `environment_mode_router.resolve_environment_mode()` had computed this decision on every stage
 since 2026-09-01, but its result landed only in `route_info["environment_mode_decision"]` — the
-prompt and the ReAct record. Nothing branched on it: the one official CREATE ENVIRONMENT entry
-point, `tools/generate_protocol_uvm_environment.py` (the script all ten
-`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` invoke), called `ProtocolEnvGenerator`
+prompt and the ReAct record. Nothing branched on it: at the time, the one CREATE ENVIRONMENT
+entry point, `tools/generate_protocol_uvm_environment.py` (then invoked directly by all eleven
+`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md`), called `ProtocolEnvGenerator`
 unconditionally, so a genuine two-subsystem request silently produced ONE subsystem environment
 and `soc_environment_composer.compose_soc_environment()` fired only if an agent happened to know
 to hand-assemble a `system_level_validator` evidence block for the SYSTEM_LEVEL stage instead.
-That script now routes through `dv_harness/uvm_generator/create_environment.py`, which:
+That script routes through `dv_harness/uvm_generator/create_environment.py`, which:
 - resolves the mode with the real router and dispatches to `ProtocolEnvGenerator` (SUBSYSTEM_MODE)
   or `compose_soc_environment()` (SYSTEM_LEVEL_MODE) — a branch in FRONT of the existing path, so
   a single-protocol manifest still generates byte-identically;
@@ -1048,6 +1048,26 @@ drives a real `DVHarness.run_stage("SYSTEM_LEVEL")` through all 14 real
 `STAGE_GATES["SYSTEM_LEVEL"]` scripts to a real PASS and asserts the real `SOC_ENVIRONMENT_COMPOSED`
 event and real generated `soc_tb_top.sv` content, plus the negative case (an unregistered
 subsystem fails the stage and composes nothing).
+
+**GAP-V2-002 remediation (2026-09-24, `CAP-M6-GAPV2002-001`,
+`DEC-GAP-V2-002 = OPTION_B`)**: `tools/generate_protocol_uvm_environment.py`
+is reclassified `INTERNAL_GENERATION_PRIMITIVE` — no longer an independent,
+qualified CREATE ENVIRONMENT workflow entry. All eleven
+`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` now converge on
+`dv-harness start --generate` (`engine.DVHarness.start_lifecycle()`), which
+resolves the real, derived `protocol`/`role` fields through Field
+Resolution/Clarification/HumanGate (`dv_harness/
+generation_field_controls.py`) before calling the SAME
+`create_environment()` this script calls, never the reverse. The script
+itself is unmodified and still directly runnable (kept for the 2 real
+subprocess-level regression tests and any genuinely lifecycle-free
+low-level/CI use), exactly the same "internal primitive, not deleted"
+disposition `run_stage()`/`.loop()` already have beneath `start_lifecycle()`
+under `CAP-M6-DISPATCH-001`. Full derivation/decision/implementation
+record: `GAP_V2_002_GENERATOR_ENTRY_DECISION.md` /
+`GAP_V2_002_FIELD_CONTROL_DERIVATION.md` /
+`GAP_V2_002_IMPLEMENTATION_REPORT.md`
+(`.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`).
 
 **Two limits, disclosed rather than implied closed.** (1) `cross_subsystem_scenarios()` /
 `end_to_end_scoreboard()` / `system_coverage()` still raise `NotImplementedError` on purpose:

@@ -262,13 +262,27 @@ def main():
                              "Field Resolution/Clarification when --generate is also given, "
                              "so an unset value is asked for rather than silently skipped.")
     pstart.add_argument(
+        "--dut-role", dest="dut_role", default=None,
+        help="GAP-V2-002 remediation (CAP-M6-GAPV2002-001): which role the DUT plays in the "
+             "protocol (host/device, RC/EP, TX/RX, master/slave, ... -- protocol-specific "
+             "vocabulary, generic slot). Named --dut-role, not --role, to avoid colliding "
+             "with this command's existing --role (the human's own UX job-function role, "
+             "e.g. DV/DE/DV_LEAD -- a different concept). Routes through real Field "
+             "Resolution/Clarification when --generate is also given, exactly like --protocols.")
+    pstart.add_argument(
         "--generate", action="store_true",
         help="M6 C1 (CAP-M6-C1-001): govern a verification-environment-GENERATION request "
              "through this lifecycle-first entry point instead of the ordinary Stage-graph "
-             "dispatch -- start_lifecycle() resolves the protocol field (declared via "
-             "--protocols, auto-discovered from a prior run, or asked for) and then calls "
-             "uvm_generator.create_environment.create_environment() directly. Requires "
-             "--generate-out for SUBSYSTEM_MODE (create_environment()'s own requirement).")
+             "dispatch -- start_lifecycle() resolves the protocol/role fields (declared via "
+             "--protocols/--role, auto-discovered from a prior run, or asked for) and then "
+             "calls uvm_generator.create_environment.create_environment() directly. Requires "
+             "--generate-out for SUBSYSTEM_MODE (create_environment()'s own requirement). "
+             "Prints a structured JSON envelope on stdout (status/environment_mode/"
+             "generated_files/out/...), the same contract tools/generate_protocol_uvm_"
+             "environment.py's own stdout always provided -- this is now the CANONICAL "
+             "GOVERNED entry point every .claude/skills/PROTOCOL_BUILDERS/*/SKILL.md "
+             "converges on (GAP-V2-002); that script itself is reclassified as an internal "
+             "generation primitive, still reachable directly for low-level/test use.")
     pstart.add_argument(
         "--generate-out", dest="generate_out", default=None,
         help="Output directory for --generate (create_environment()'s own out_dir).")
@@ -6407,7 +6421,14 @@ def main():
                 authorization=args.ux_authorization or _ux_current.authorization,
             )
             _ux_policy.save_ux_policy(h.root, _ux_current)
-        print(_ux_policy.render_status_banner(_ux_current))
+        if not args.generate:
+            # GAP-V2-002 remediation: --generate's own stdout contract is a
+            # single structured JSON envelope (see below), the same
+            # contract tools/generate_protocol_uvm_environment.py's own
+            # stdout always provided -- a caller parsing that JSON (a
+            # migrated SKILL.md, or any other script) must not have to
+            # skip a human-readable banner line first.
+            print(_ux_policy.render_status_banner(_ux_current))
         # CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A -- approved):
         # `start` converges on the one canonical lifecycle-first entry point
         # instead of calling loop()/run_stage() directly (item 1/2 of the
@@ -6422,8 +6443,9 @@ def main():
         # declaration that start_lifecycle() should govern a generation
         # request (EDGE_B) rather than the ordinary Stage-graph dispatch.
         # --generate-manifest supplies the rest of create_environment()'s
-        # own request shape; its own "protocol" key, if any, is overridden
-        # by the governed, resolved value inside start_lifecycle() itself.
+        # own request shape; its own "protocol"/"role" keys, if any, are
+        # overridden by the governed, resolved values inside
+        # start_lifecycle() itself.
         generation_request = None
         generation_out_dir = None
         if args.generate:
@@ -6435,6 +6457,7 @@ def main():
                 generation_out_dir = Path(args.generate_out)
         r = h.start_lifecycle(args.goal, loop=args.loop, dry_run=args.dry_run,
                               level=args.level, protocols=declared_protocols,
+                              role=args.dut_role,
                               advanced=args.advanced,
                               generation_request=generation_request,
                               generation_out_dir=generation_out_dir)
@@ -6445,6 +6468,40 @@ def main():
             # own pre-existing docstring on why a dry-run never speculates
             # past one real stage).
             print(h.summary())
+        elif args.generate:
+            # GAP-V2-002 remediation: preserve the exact JSON-on-stdout
+            # contract tools/generate_protocol_uvm_environment.py's own
+            # stdout always provided (status/environment_mode/
+            # generated_files/out/environment_mode_decision/...), so a
+            # migrated SKILL.md caller that parses this output loses
+            # nothing by converging on this governed entry point instead
+            # of the standalone script.
+            if r.ok:
+                envelope = {
+                    "status": "OK",
+                    "environment_mode": r.raw.get("environment_mode"),
+                    "generated_files": r.raw.get("generated_files"),
+                    "out": r.raw.get("out_dir"),
+                    "environment_mode_decision": r.raw.get("decision"),
+                }
+                if "protocol_model" in r.raw:
+                    envelope["protocol_model"] = r.raw["protocol_model"]
+                    envelope["protocol_model_files"] = r.raw.get("protocol_model_files")
+                if "structural_lint" in r.raw:
+                    envelope["structural_lint"] = r.raw["structural_lint"]
+            elif r.raw.get("blocked_by") == "generation":
+                envelope = {"status": r.raw.get("status", "GENERATION_FAILED"),
+                           "detail": r.raw.get("detail", {})}
+            else:
+                # blocked_by clarification/task_boundary/generation_*_unresolved:
+                # not a create_environment() failure, so there is no legacy
+                # JSON envelope shape to match -- fall back to the same
+                # text+exit-code contract every other start_lifecycle()
+                # refusal already uses.
+                print(r.text)
+                raise SystemExit(0 if r.ok else 1)
+            print(json.dumps(envelope))
+            raise SystemExit(0 if r.ok else 1)
         else:
             # r is not None: either the lifecycle-first gate/clarification/
             # task-boundary check refused dispatch before loop()/run_stage()

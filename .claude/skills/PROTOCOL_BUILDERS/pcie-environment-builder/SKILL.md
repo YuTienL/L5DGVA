@@ -21,7 +21,7 @@ VIP manual/examples/source/class reference, and current project configuration.
 pattern registry, bind skeleton, or regression bookkeeping from scratch.**
 `dv_harness/uvm_generator/protocol_env_generator.py` (`ProtocolEnvGenerator`) emits
 the USB_UVM_Handoff-shaped subdirectory layout (`tb/agents,env,seq,tests,top,filelist`)
-from a manifest JSON (`tools/generate_protocol_uvm_environment.py --manifest <m.json> --out <dir>`);
+from a manifest JSON via the governed lifecycle entry point (`dv-harness start --goal "<goal>" --protocols <protocol> --dut-role <role> --generate --generate-out <dir> --generate-manifest <m.json>` -- GAP-V2-002: this converges on the same real, tested Field Resolution/Clarification path CLI/dashboard already use for `protocol`/`role`, resolving them from real intake (declared here, auto-discovered from a prior run, or asked for) before generation runs; prints the same structured JSON envelope (status/environment_mode/generated_files/out/...) `tools/generate_protocol_uvm_environment.py`'s own stdout always provided. That script itself is now an INTERNAL_GENERATION_PRIMITIVE beneath this governed entry point (still directly usable for low-level/test invocation), not a second, ungoverned workflow entry -- see `tools/generate_protocol_uvm_environment.py`'s own header);
 `dv_harness/uvm_generator/pattern_registry_generator.py` + `pattern_registry_completeness_gate.py`
 build/validate the pattern-suite registry + Makefile dispatch
 (`tools/generate_pattern_registry.py`); `dv_harness/uvm_generator/bind_mechanism_generator.py`
@@ -39,8 +39,8 @@ transition model) instead of hand-authoring link-training state logic — it
 already implements the transition model this section's "LTSSM/link training"
 bullet asks for.
 
-**Since 2026-09-04 that model is layered by the SAME
-`tools/generate_protocol_uvm_environment.py` run, not a second command.**
+**Since 2026-09-04 that model is layered by the SAME governed
+`dv-harness start --generate` run above (GAP-V2-002), not a second command.**
 Add a `protocol_model_topology` block to the manifest and the LTSSM package,
 its state-register module and a real transition-legality SVA in
 `tb/env/pcie_assertions.sv` are generated with the skeleton (see

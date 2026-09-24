@@ -8816,6 +8816,7 @@ def _is_running(root: Path) -> bool:
 def _start_background_run(root: Path, goal: str, loop: bool,
                            adapter_factory: Optional[Callable[[], Any]] = None,
                            protocols: Sequence[str] = (),
+                           role: Optional[str] = None,
                            generation_request: Optional[Dict[str, Any]] = None,
                            generation_out_dir: Optional[Path] = None) -> None:
     """Launches DVHarness(root).start_lifecycle(goal, loop=loop) on a
@@ -8830,13 +8831,12 @@ def _start_background_run(root: Path, goal: str, loop: bool,
     field-resolution/task-boundary checks pass, so this is additive, not a
     new execution path.
 
-    `protocols`/`generation_request`/`generation_out_dir` (M6 C1,
-    CAP-M6-C1-001) are the dashboard's own additive counterpart to cli.py's
-    `--protocols`/`--generate`/`--generate-out`/`--generate-manifest` flags
-    -- all three default to their pre-C1 empty/None values, so a caller that
-    supplies none of them (still true of `/api/start`'s own UI today, a
-    real, disclosed follow-up) gets byte-identical behavior to before this
-    closure.
+    `protocols`/`role`/`generation_request`/`generation_out_dir` (M6 C1,
+    CAP-M6-C1-001; `role` added by GAP-V2-002 remediation) are the
+    dashboard's own additive counterpart to cli.py's `--protocols`/`--role`/
+    `--generate`/`--generate-out`/`--generate-manifest` flags -- all
+    default to their pre-C1 empty/None values, so a caller that supplies
+    none of them gets byte-identical behavior to before either closure.
 
     adapter_factory is a test-only seam: when given, the background
     thread's freshly-constructed DVHarness has its .adapter replaced with
@@ -8862,7 +8862,7 @@ def _start_background_run(root: Path, goal: str, loop: bool,
             # dashboard's own launcher converges on the same lifecycle-first
             # entry point cli.py's "start" uses (item 2 of the approval),
             # instead of calling loop()/run_stage() directly.
-            h.start_lifecycle(goal, loop=loop, protocols=protocols,
+            h.start_lifecycle(goal, loop=loop, protocols=protocols, role=role,
                               generation_request=generation_request,
                               generation_out_dir=generation_out_dir)
         except Exception:
@@ -11330,12 +11330,15 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 self._send_json({"error": "BAD_REQUEST", "message": "goal is required"}, status=400)
                 return
             loop = bool(body.get("loop", False))
-            # M6 C1 (CAP-M6-C1-001): additive, optional counterpart to
-            # cli.py's --protocols/--generate/--generate-out/
+            # M6 C1 (CAP-M6-C1-001) + GAP-V2-002 remediation
+            # (CAP-M6-GAPV2002-001): additive, optional counterpart to
+            # cli.py's --protocols/--role/--generate/--generate-out/
             # --generate-manifest. Omitted (the pre-C1 shape) -> identical
-            # to before this closure.
+            # to before either closure.
             protocols_raw = body.get("protocols") or []
             protocols = tuple(str(p).strip() for p in protocols_raw if str(p).strip())
+            role_raw = body.get("role")
+            role = str(role_raw).strip() or None if role_raw else None
             generation_request = body.get("generation_request") if body.get("generate") else None
             if body.get("generate") and generation_request is None:
                 generation_request = {}
@@ -11343,7 +11346,7 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
             generation_out_dir = Path(generate_out) if generate_out else None
             try:
                 _start_background_run(project_root, str(goal), loop, adapter_factory=adapter_factory,
-                                      protocols=protocols, generation_request=generation_request,
+                                      protocols=protocols, role=role, generation_request=generation_request,
                                       generation_out_dir=generation_out_dir)
             except RuntimeError as e:
                 self._send_json({"error": "ALREADY_RUNNING", "message": str(e)}, status=409)
