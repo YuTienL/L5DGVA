@@ -1,0 +1,353 @@
+"""dv_harness/execution_contract.py -- the L5DGVA Human Non-Scheduler
+Execution Contract as real, runtime-enforced code
+(`docs/architecture/canonical_detailed_governance/
+L5DGVA_HUMAN_NON_SCHEDULER_EXECUTION_CONTRACT.md`), extending Prime
+Directive V2 P6.
+
+`HUMAN_IS_TRANSPORT_AND_AUTHORITY=YES`, `HUMAN_IS_WORKFLOW_SCHEDULER=NO`:
+this module is the one real, importable place that decides whether
+autonomous execution may continue or must stop, so that invariant is
+enforced by code a test can call, not merely stated in prose. It reuses
+`dv_harness/model_handoff_workflow.py`'s own real state machine and
+`dv_harness/result_action_router.py`'s own action classification --
+`signals_from_model_handoff_state()` TRANSLATES their real state into
+this module's canonical vocabulary; it never shadows, re-implements, or
+competes with either as a second state/lifecycle authority.
+
+Five canonical stop reasons only (`CANONICAL_STOP_REASONS`); a long list
+of generic-sounding stop strings is explicitly REJECTED
+(`INVALID_GENERIC_STOP_REASONS`) by `validate_stop_reason()`, which every
+real stop path in `can_i_stop()` runs through -- a caller cannot persist
+"waiting for review" as if it were a real stop reason even by accident.
+
+`canonical_task_complete` is always a caller-asserted fact, never
+inferred from "no known pending work" -- the Can-I-Stop Gate's own final
+`ELSE: CONTINUE` fallback means the safe default, when completeness has
+not been independently established, is to keep going, not to stop.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional, Sequence
+
+# --- Canonical vocabulary --------------------------------------------------
+
+CANONICAL_STOP_REASONS = (
+    "HUMAN_AUTHORITY_REQUIRED",
+    "HUMAN_TRANSPORT_REQUIRED",
+    "SAFE_EXECUTION_BLOCKED",
+    "TERMINATION_POLICY_TRIGGERED",
+    "TASK_COMPLETE",
+)
+
+#: Named generic stops the contract explicitly forbids treating as a real
+#: stop reason by themselves (dispatch section 5 / requirements doc
+#: "Invalid Generic Stops"). Subtask/cohort/import/fix/test/regression/
+#: report completion is real progress, not a licence to stop.
+INVALID_GENERIC_STOP_REASONS = (
+    "WAITING_FOR_USER_TO_CONTINUE",
+    "WAITING_FOR_GENERIC_REVIEW",
+    "WAITING_FOR_GENERIC_APPROVAL",
+    "ASK_USER_IF_SHOULD_FIX",
+    "ASK_USER_IF_SHOULD_TEST",
+    "ASK_USER_IF_SHOULD_RERUN",
+    "ASK_USER_IF_SHOULD_PROCEED",
+    "COHORT_COMPLETED",
+    "SUBTASK_COMPLETED",
+    "RESULT_IMPORTED",
+    "RESULT_CONSUMED",
+    "FIX_COMPLETED",
+    "TEST_COMPLETED",
+    "REGRESSION_COMPLETED",
+    "REPORT_COMPLETED",
+)
+
+STATUS_AUTO_RUNNING = "AUTO_RUNNING"
+STATUS_WAITING_FOR_HUMAN_TRANSPORT = "WAITING_FOR_HUMAN_TRANSPORT"
+STATUS_WAITING_FOR_HUMAN_AUTHORITY = "WAITING_FOR_HUMAN_AUTHORITY"
+STATUS_BLOCKED = "BLOCKED"
+STATUS_COMPLETE = "COMPLETE"
+
+STATUS_VALUES = (
+    STATUS_AUTO_RUNNING, STATUS_WAITING_FOR_HUMAN_TRANSPORT,
+    STATUS_WAITING_FOR_HUMAN_AUTHORITY, STATUS_BLOCKED, STATUS_COMPLETE,
+)
+
+
+class InvalidStopReasonError(ValueError):
+    def __init__(self, reason: str):
+        super().__init__(f"INVALID_STOP_REASON:{reason}")
+        self.reason = reason
+
+
+def validate_stop_reason(reason: str) -> None:
+    """Raises `InvalidStopReasonError` for any of the named generic
+    stops, or for any string that is not one of the 5 canonical
+    reasons. Every real stop path in `can_i_stop()` runs through this --
+    it is not merely advisory."""
+    if reason in INVALID_GENERIC_STOP_REASONS:
+        raise InvalidStopReasonError(reason)
+    if reason not in CANONICAL_STOP_REASONS:
+        raise InvalidStopReasonError(reason)
+
+
+# --- Workflow signals (real, caller-supplied facts) -------------------------
+
+@dataclass(frozen=True)
+class WorkflowSignals:
+    """Real, caller-supplied facts about the current task's pending
+    work -- never inferred by this module. A caller (e.g. an adapter
+    reading model_handoff_workflow's own state, or a remediation loop
+    tracking result_action_router's own ACTION_* classifications) is
+    responsible for setting each field from real evidence."""
+    human_authority_required: bool = False
+    human_transport_required: bool = False
+    safe_execution_blocked: bool = False
+    termination_policy_triggered: bool = False
+    auto_actionable_pending: bool = False
+    required_remediation_pending: bool = False
+    required_verification_pending: bool = False
+    required_regression_pending: bool = False
+    required_rereview_preparation_pending: bool = False
+    #: Never inferred from "no known pending work" -- only True when a
+    #: caller has independently established real Canonical completion.
+    canonical_task_complete: bool = False
+
+    stop_evidence: str = ""
+    next_required_action: str = ""
+    resume_action: str = ""
+
+    # Human Transport Gate detail (dispatch section 10)
+    task_id: Optional[str] = None
+    target_model: Optional[str] = None
+    handoff_file: Optional[str] = None
+    expected_result_file: Optional[str] = None
+    import_command: Optional[str] = None
+
+    # Human Authority Gate detail (dispatch section 11)
+    authority_type: Optional[str] = None
+    question: Optional[str] = None
+    options: Sequence[str] = ()
+    evidence: Optional[str] = None
+    impact: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class StopDecision:
+    should_continue: bool
+    status: str
+    stop_reason: Optional[str] = None
+    stop_evidence: str = ""
+    next_required_action: str = ""
+    human_action_required: str = "NO"
+    resume_action: str = ""
+
+    def __post_init__(self) -> None:
+        if self.status not in STATUS_VALUES:
+            raise ValueError(f"INVALID_STATUS:{self.status}")
+        if self.stop_reason is not None:
+            validate_stop_reason(self.stop_reason)
+        if self.should_continue and self.stop_reason is not None:
+            raise ValueError("CONTINUE_DECISION_MUST_NOT_CARRY_A_STOP_REASON")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "STATE": self.status,
+            "STOP_REASON": self.stop_reason,
+            "STOP_EVIDENCE": self.stop_evidence,
+            "NEXT_REQUIRED_ACTION": self.next_required_action,
+            "HUMAN_ACTION_REQUIRED": self.human_action_required,
+            "RESUME_ACTION": self.resume_action,
+        }
+
+
+def _stop(signals: WorkflowSignals, status: str, reason: str) -> StopDecision:
+    return StopDecision(
+        should_continue=False, status=status, stop_reason=reason,
+        stop_evidence=signals.stop_evidence,
+        next_required_action=signals.next_required_action,
+        human_action_required="YES", resume_action=signals.resume_action,
+    )
+
+
+def can_i_stop(signals: WorkflowSignals) -> StopDecision:
+    """The real Can-I-Stop Gate -- the exact decision order both the
+    requirements doc and the integration prompt specify, run against
+    real `WorkflowSignals`, never prose heuristics. `AUTO_RUNNING` always
+    carries `HUMAN_ACTION_REQUIRED=NO` (`test_auto_actionable_result_
+    does_not_stop_for_user` and siblings check this directly)."""
+    if signals.human_authority_required:
+        return _stop(signals, STATUS_WAITING_FOR_HUMAN_AUTHORITY, "HUMAN_AUTHORITY_REQUIRED")
+    if signals.human_transport_required:
+        return _stop(signals, STATUS_WAITING_FOR_HUMAN_TRANSPORT, "HUMAN_TRANSPORT_REQUIRED")
+    if signals.safe_execution_blocked:
+        return _stop(signals, STATUS_BLOCKED, "SAFE_EXECUTION_BLOCKED")
+    if signals.termination_policy_triggered:
+        return _stop(signals, STATUS_BLOCKED, "TERMINATION_POLICY_TRIGGERED")
+    if (signals.auto_actionable_pending or signals.required_remediation_pending
+            or signals.required_verification_pending or signals.required_regression_pending
+            or signals.required_rereview_preparation_pending):
+        return StopDecision(True, STATUS_AUTO_RUNNING, None, "",
+                            signals.next_required_action, "NO", "")
+    if signals.canonical_task_complete:
+        return _stop(signals, STATUS_COMPLETE, "TASK_COMPLETE")
+    return StopDecision(True, STATUS_AUTO_RUNNING, None, "",
+                        signals.next_required_action, "NO", "")
+
+
+# --- Gate reports (dispatch sections 10/11) --------------------------------
+
+def human_transport_report(task_id: str, target_model: str, handoff_file: str,
+                            expected_result_file: str, import_command: str) -> Dict[str, str]:
+    """Exact required report shape -- the human is never asked to decide
+    the post-import next action; `NEXT_ACTION_AFTER_IMPORT` is always
+    `AUTO_RESUME`."""
+    return {
+        "STATE": STATUS_WAITING_FOR_HUMAN_TRANSPORT,
+        "STOP_REASON": "HUMAN_TRANSPORT_REQUIRED",
+        "TASK_ID": task_id,
+        "TARGET_MODEL": target_model,
+        "HANDOFF_FILE": handoff_file,
+        "EXPECTED_RESULT_FILE": expected_result_file,
+        "IMPORT_COMMAND": import_command,
+        "NEXT_ACTION_AFTER_IMPORT": "AUTO_RESUME",
+    }
+
+
+def human_authority_report(authority_type: str, question: str, evidence: str, impact: str,
+                            resume_action: str, options: Sequence[str] = ()) -> Dict[str, Any]:
+    return {
+        "STATE": STATUS_WAITING_FOR_HUMAN_AUTHORITY,
+        "STOP_REASON": "HUMAN_AUTHORITY_REQUIRED",
+        "AUTHORITY_TYPE": authority_type,
+        "QUESTION": question,
+        "OPTIONS": list(options),
+        "EVIDENCE": evidence,
+        "IMPACT": impact,
+        "RESUME_ACTION": resume_action,
+    }
+
+
+# --- Next Action Resolver (dispatch section 8, provider-independent) ------
+
+#: The exact worked examples both the requirements doc and the
+#: integration prompt name. Provider-independent: keyed only by an
+#: abstract event name, never by which model/tool produced the event.
+NEXT_ACTION_TABLE: Dict[str, str] = {
+    "RESULT_CONSUMED": "AUTO_REMEDIATE_CONFIRMED_FINDINGS",
+    "FIX_COMPLETE": "RUN_FOCUSED_VALIDATION",
+    "VALIDATION_PASS": "RUN_REQUIRED_REGRESSION",
+    "REGRESSION_PASS": "PREPARE_REQUIRED_RE_REVIEW",
+    "RE_REVIEW_HANDOFF_READY": "HUMAN_TRANSPORT_REQUIRED",
+}
+
+
+@dataclass(frozen=True)
+class NextActionRecord:
+    event: str
+    next_action: str
+    next_action_reason: str
+    next_action_owner: str
+    auto_actionable: bool
+    human_action_required: str
+    stop_reason: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def resolve_next_action(event: str) -> NextActionRecord:
+    """Real, table-driven resolution -- an unrecognized event is a real
+    `ValueError`, never a silently-guessed default next action."""
+    if event not in NEXT_ACTION_TABLE:
+        raise ValueError(f"UNKNOWN_EVENT:{event}")
+    next_action = NEXT_ACTION_TABLE[event]
+    is_transport = next_action == "HUMAN_TRANSPORT_REQUIRED"
+    return NextActionRecord(
+        event=event,
+        next_action=next_action,
+        next_action_reason=f"provider-independent routing table: {event} -> {next_action}",
+        next_action_owner="HUMAN" if is_transport else "L5DGVA",
+        auto_actionable=not is_transport,
+        human_action_required="YES" if is_transport else "NO",
+        stop_reason="HUMAN_TRANSPORT_REQUIRED" if is_transport else None,
+    )
+
+
+# --- Persist / Resume (dispatch section 16) --------------------------------
+
+def _contract_state_path(root: Path, task_id: str) -> Path:
+    # Same per-task directory model_handoff_workflow.py already owns
+    # (`.dv-harness/model_handoffs/<task_id>/`) -- this file is additive
+    # (records only this module's own stop decisions), never a
+    # replacement for that module's own state.json.
+    return Path(root) / ".dv-harness" / "model_handoffs" / task_id / "execution_contract_state.json"
+
+
+def persist_stop(root: Path, task_id: str, decision: StopDecision) -> Path:
+    """The human must not reconstruct workflow state: every stop is
+    written to a real file a resuming caller can read back exactly."""
+    path = _contract_state_path(root, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(decision.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def read_persisted_stop(root: Path, task_id: str) -> Optional[Dict[str, Any]]:
+    path = _contract_state_path(root, task_id)
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+# --- Adapter: derive real signals from model_handoff_workflow's own state -
+
+def signals_from_model_handoff_state(
+    root: Path, task_id: str, *,
+    auto_actionable_pending: bool = False,
+    required_remediation_pending: bool = False,
+    required_verification_pending: bool = False,
+    required_regression_pending: bool = False,
+    required_rereview_preparation_pending: bool = False,
+    canonical_task_complete: bool = False,
+) -> WorkflowSignals:
+    """Translates `model_handoff_workflow`'s own real, persisted state
+    for `task_id` into this module's canonical `WorkflowSignals` -- the
+    ONE real state authority for a handoff/result task; this function
+    never re-implements or shadows it. When that state is
+    `WAITING_FOR_HUMAN_TRANSPORT`, every Human Transport Gate field is
+    filled from the real, currently-persisted `HANDOFF_V1.md`. The five
+    `*_PENDING` / `canonical_task_complete` keyword args describe
+    follow-on work model_handoff_workflow itself does not track (e.g.
+    whether an accepted result's findings still have open remediation)
+    -- a caller supplies them from real evidence; this function never
+    fabricates them from state alone."""
+    from . import model_handoff_workflow as _wf
+
+    state = _wf.current_state(root, task_id)
+    if state == _wf.STATE_WAITING_FOR_HUMAN_TRANSPORT:
+        handoff = _wf._load_handoff(root, task_id)
+        task_dir = _wf._task_dir(root, task_id)
+        return WorkflowSignals(
+            human_transport_required=True,
+            task_id=task_id,
+            target_model=handoff.target_model if handoff is not None else None,
+            handoff_file=str(task_dir / "HANDOFF_V1.md"),
+            expected_result_file=str(task_dir / "RESULT_V1.md"),
+            import_command=(
+                f"python -m dv_harness.model_handoff_workflow import "
+                f"--task-id {task_id} --result-file "
+                f"{task_dir / 'RESULT_V1.md'} --root {root}"
+            ),
+            resume_action="AUTO_RESUME",
+        )
+    return WorkflowSignals(
+        auto_actionable_pending=auto_actionable_pending,
+        required_remediation_pending=required_remediation_pending,
+        required_verification_pending=required_verification_pending,
+        required_regression_pending=required_regression_pending,
+        required_rereview_preparation_pending=required_rereview_preparation_pending,
+        canonical_task_complete=canonical_task_complete,
+    )

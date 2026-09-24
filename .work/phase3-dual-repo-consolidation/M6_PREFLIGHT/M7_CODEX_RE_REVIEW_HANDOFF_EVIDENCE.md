@@ -63,3 +63,24 @@ python -m dv_harness.model_handoff_workflow import \
 ```
 
 The ChatGPT round trip and M8 are explicitly NOT started by this task.
+
+## Addendum (Human Non-Scheduler Execution Contract task, reconciled not duplicated)
+
+This same stop is now independently confirmed by the real, callable
+`dv_harness/execution_contract.py::can_i_stop()` gate, not only by
+narrative:
+
+```
+signals_from_model_handoff_state(root, "M7-V1-CODEX-REVIEW-002")
+-> can_i_stop() -> STATE=WAITING_FOR_HUMAN_TRANSPORT, STOP_REASON=HUMAN_TRANSPORT_REQUIRED
+```
+
+Persisted for real to
+`.dv-harness/model_handoffs/M7-V1-CODEX-REVIEW-002/execution_contract_state.json`.
+`HUMAN_TRANSPORT_REQUIRED` is one of exactly 5 canonical stop reasons
+this contract recognizes -- `WAITING_FOR_USER_TO_CONTINUE` and the other
+14 named generic stops are structurally rejected
+(`validate_stop_reason()`), so this stop is not merely "a reasonable
+place to pause," it is the one gate-verified legitimate stop for this
+task. See `M7_HUMAN_TRANSPORT_GATE_EVIDENCE.md` and
+`M7_CODEX_AUTONOMOUS_REMEDIATION_TRACE.md`.

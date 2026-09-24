@@ -394,6 +394,26 @@ provider-independent router/eligibility/loop-budget/evidence-trace code:
 NOT_YET_WIRED` -- see `M7_AUTONOMOUS_REMEDIATION_EVIDENCE.md` under
 `.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`).
 
+**Human Non-Scheduler Execution Contract (new, 2026-09-24)**: P6's
+`HUMAN_IS_WORKFLOW_SCHEDULER=NO` invariant enforced as real, callable
+code, not documentation alone -- exactly 5 canonical stop reasons
+(`HUMAN_AUTHORITY_REQUIRED`/`HUMAN_TRANSPORT_REQUIRED`/
+`SAFE_EXECUTION_BLOCKED`/`TERMINATION_POLICY_TRIGGERED`/`TASK_COMPLETE`);
+a real Can-I-Stop Gate that rejects generic stops
+("waiting for review/approval/continue" etc.) outright; a provider-
+independent Next Action Resolver; real STOP-state persist/resume.
+Detailed requirements: `docs/architecture/canonical_detailed_governance/
+L5DGVA_HUMAN_NON_SCHEDULER_EXECUTION_CONTRACT.md`; code:
+`dv_harness/execution_contract.py` (`can_i_stop()`, `resolve_next_action()`,
+`signals_from_model_handoff_state()` -- reuses `model_handoff_workflow.py`'s
+own state, never a second lifecycle engine); tests:
+`dv_harness_tests/test_execution_contract.py` (41 tests, the full named
+anti-drift list). `PRODUCTION_CALL_SITE_WIRING=PARTIAL` -- applied for
+real to the live M7-V1-CODEX-REVIEW-002 case
+(`WAITING_FOR_HUMAN_TRANSPORT`/`HUMAN_TRANSPORT_REQUIRED`, persisted);
+no engine/CLI call site invokes it automatically yet on every
+state-changing operation.
+
 ## Governance Document Routing (TASK_SCOPED_GOVERNANCE_RETRIEVAL)
 
 Detailed, task-specific governance belongs in categorized documents, not in
