@@ -257,7 +257,26 @@ def main():
                              "is out of CAP-M6-DISPATCH-001's own scope).")
     pstart.add_argument("--protocols", default=None,
                         help="Comma-separated protocol names, stored as a real lifecycle "
-                             "fact; not interpreted by this command.")
+                             "fact. Not interpreted for VerificationLevel/mode branching by "
+                             "this command; but M6 C1 (CAP-M6-C1-001) routes it through real "
+                             "Field Resolution/Clarification when --generate is also given, "
+                             "so an unset value is asked for rather than silently skipped.")
+    pstart.add_argument(
+        "--generate", action="store_true",
+        help="M6 C1 (CAP-M6-C1-001): govern a verification-environment-GENERATION request "
+             "through this lifecycle-first entry point instead of the ordinary Stage-graph "
+             "dispatch -- start_lifecycle() resolves the protocol field (declared via "
+             "--protocols, auto-discovered from a prior run, or asked for) and then calls "
+             "uvm_generator.create_environment.create_environment() directly. Requires "
+             "--generate-out for SUBSYSTEM_MODE (create_environment()'s own requirement).")
+    pstart.add_argument(
+        "--generate-out", dest="generate_out", default=None,
+        help="Output directory for --generate (create_environment()'s own out_dir).")
+    pstart.add_argument(
+        "--generate-manifest", dest="generate_manifest", default=None,
+        help="Path to a JSON file with the rest of the generation request "
+             "(clocks/resets/smoke_tests/etc. -- create_environment()'s own request shape). "
+             "Its own 'protocol' key, if any, is overridden by the governed, resolved value.")
     pstart.add_argument(
         "--ux-mode", dest="ux_mode", default=None,
         choices=[m.value for m in _ux_policy.UXMode] + ["guided", "engineer", "expert"],
@@ -6399,9 +6418,26 @@ def main():
         declared_protocols = tuple(
             p.strip() for p in (args.protocols or "").split(",") if p.strip()
         )
+        # M6 C1 (CAP-M6-C1-001): --generate is this call's own opt-in
+        # declaration that start_lifecycle() should govern a generation
+        # request (EDGE_B) rather than the ordinary Stage-graph dispatch.
+        # --generate-manifest supplies the rest of create_environment()'s
+        # own request shape; its own "protocol" key, if any, is overridden
+        # by the governed, resolved value inside start_lifecycle() itself.
+        generation_request = None
+        generation_out_dir = None
+        if args.generate:
+            generation_request = {}
+            if args.generate_manifest:
+                generation_request = json.loads(
+                    Path(args.generate_manifest).read_text(encoding="utf-8"))
+            if args.generate_out:
+                generation_out_dir = Path(args.generate_out)
         r = h.start_lifecycle(args.goal, loop=args.loop, dry_run=args.dry_run,
                               level=args.level, protocols=declared_protocols,
-                              advanced=args.advanced)
+                              advanced=args.advanced,
+                              generation_request=generation_request,
+                              generation_out_dir=generation_out_dir)
         if args.loop and r is None:
             # start_lifecycle() reached _start_dispatch() and loop=True, so
             # loop() actually ran (its own dry_run=True prints the CURRENT

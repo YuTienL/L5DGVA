@@ -48,3 +48,54 @@ explicitly the next, separately-dispatched gate).
   `level`/`protocols` are accepted parameters on `start_lifecycle()` — they
   are stored, never interpreted, exactly as `CAP-M6-DISPATCH-001`'s own
   implementation report already disclosed.
+
+## Update after `CAP-M6-C1-001` (M6 Golden-Path Connectivity Closure C1)
+
+`M6_VERTICAL_SLICE_CONNECTED_STAGES` (the STRUCTURAL metric above, "a real
+test proves the mechanism works when given a field control") is
+**unchanged at 8** — C1 added no new structurally-connected stage; it
+closed a different, distinct gap the Integration Prime Directive adoption
+audit named: whether any REAL production caller (not only a test calling
+the Python API directly) ever actually supplies that field control.
+
+```
+M6_VERTICAL_SLICE_CONNECTED_STAGES = 8   (unchanged, structural)
+M6_PRODUCTION_CONNECTED_STAGES     = 8   (new this wave -- NOT the same 8 stages)
+```
+
+`M6_PRODUCTION_CONNECTED_STAGES` counts stages reachable starting from a
+real CLI argv (`dv-harness start --protocols ... --generate --generate-out
+...`) or a real dashboard HTTP `/api/start` JSON body — never a test
+calling `start_lifecycle()` directly in Python. The stage SET differs from
+the structural one, deliberately:
+
+| # | Stage | Structural (8) | Production (8) | Why |
+|---|---|---|---|---|
+| 1 | Intake | Yes | Yes | Both: CLI/dashboard always create/resume a lifecycle |
+| 2 | Field Resolution | Yes | **Yes (new)** | `--protocols`/`--generate` now really reach `resolve_or_ask()` |
+| 3 | Clarification hand-off | Yes | **Yes (new)** | same real path, when unresolved |
+| 4 | QuestionOwner | Yes | **Yes (new)** | `classify_question_owner()` runs unconditionally inside the same call |
+| 5 | HumanGate | Yes | **Yes (new)** | blocks/resumes exactly as tested via real CLI/dashboard round-trips |
+| 6 | EffectiveValue | Yes | **Yes (new)** | resolved value persisted as a real lifecycle fact |
+| 7 | Dispatch | Yes | **Yes (new)** | `start_lifecycle()`'s own dispatch decision now genuinely reachable from CLI/dashboard input, not only a direct Python call |
+| 8 | Task Boundary | Yes | **No** | no CLI flag or dashboard JSON field supplies a `TaskBoundary` today (pre-existing gap, unchanged by C1) — still test-only |
+| 9 | VerificationLevel | No (ABSENT) | No (ABSENT) | unchanged, explicit seam per item 11 |
+| 10 | IP/SUBSYSTEM/SYSTEM_LEVEL | No ("separate, unconnected") | **Yes (new)** | `create_environment()`'s own internal mode resolution is now reached from the same governed, production-triggered call |
+
+Real evidence: `dv_harness_tests/test_m6_c1_golden_path_connectivity.py`
+(13/13) — `test_cli_start_generate_propagates_protocol_and_manifest_into_
+start_lifecycle` (CLI argv -> `start_lifecycle()` kwargs, asserted
+directly) and `test_dashboard_start_background_run_propagates_generation_
+fields` (dashboard HTTP-payload-shaped call -> a real filed/persisted
+outcome) are the two production-entry-point proofs; the remaining 11
+tests confirm each stage's own real behavior along that path.
+
+`CLARIFICATION_CAPABILITY_ISLAND` reassessment (dispatch section 13):
+`NO` for this specific edge (protocol field, CLI/dashboard entry points).
+Two real, disclosed, NOT-closed islands remain: (1)
+`tools/generate_protocol_uvm_environment.py`'s own direct,
+ungoverned call to `create_environment()` (out of C1's own named scope);
+(2) any field OTHER than `protocol` still has zero production producer —
+this closure is deliberately narrow (one field), not a general claim that
+Field Resolution is now production-connected for every possible intake
+fact.

@@ -28,7 +28,17 @@ from . import lifecycle
 from . import intake_field_resolution
 from . import task_boundary_conformance
 from . import clarification_service
+from . import generation_field_controls
 from .question_queue import QuestionQueueStore
+from .uvm_generator import create_environment as _create_environment_module
+from .uvm_generator.create_environment import (
+    EnvironmentModeUnresolvedError,
+    MissingOutputDirectoryError,
+    StructuralLintFailedError,
+    SubsystemModeRequiredError,
+    VerificationArchitectureConflictError,
+    VipApiUnprovableError,
+)
 
 # --- Plan-and-Execute / Multi-Agent / Blackboard / ReAct wiring -------------
 # planner.py, react.py, router.py, multi_agent.py, skill_resolver.py were all
@@ -6467,7 +6477,9 @@ class DVHarness:
                         level: Optional[str] = None, protocols: Iterable[str] = (),
                         field_controls: Iterable[intake_field_resolution.FieldControl] = (),
                         task_boundary: Optional[task_boundary_conformance.TaskBoundary] = None,
-                        advanced: bool = False) -> Optional[AgentResult]:
+                        advanced: bool = False,
+                        generation_request: Optional[Dict[str, Any]] = None,
+                        generation_out_dir: Optional[Path] = None) -> Optional[AgentResult]:
         """`dv-harness start`: the canonical, lifecycle-first dispatch entry
         point cli.py's `start` command and dashboard.py's launcher both
         converge on (DEC-M6-DISPATCH-001, OPTION_A -- approved).
@@ -6504,6 +6516,25 @@ class DVHarness:
         `None` (the default) means no boundary was declared, so nothing is
         checked, matching CAP-ATL-004's own pre-existing zero-caller state
         for every caller that does not yet pass one.
+
+        M6 GOLDEN-PATH CONNECTIVITY CLOSURE C1 (`CAP-M6-C1-001`): a real
+        `protocol` `FieldControl` (`generation_field_controls.
+        protocol_field_control()`) is now ALWAYS added to `field_controls`
+        for the pre-INTAKE_READY resolution loop below -- the one piece of
+        real production intake `protocols` already carries but that never
+        reached `ClarificationService` before this closure. `generation_
+        request`, when supplied, is this call's OPT-IN declaration that,
+        once every field resolves and Task Boundary passes, this
+        `start_lifecycle()` invocation should govern a verification-
+        environment-GENERATION request rather than (or in addition to,
+        depending on `loop`) the ordinary Stage-graph dispatch:
+        `create_environment.create_environment()` is called with the
+        resolved `protocol` EffectiveValue substituted into
+        `generation_request["protocol"]`, never the reverse direction
+        (`create_environment.py` itself is unmodified and still knows
+        nothing about lifecycles). Omitting `generation_request` (the
+        default) leaves `_start_dispatch()`'s own ordinary Stage-graph path
+        as the only outcome, exactly as before this closure.
 
         Returns an AgentResult for a single-stage start (or a block), None
         after a loop completes."""
@@ -6544,6 +6575,26 @@ class DVHarness:
         # else RESUME: the existing lifecycle record is left exactly as is.
 
         field_controls = list(field_controls)
+        # M6 C1 (CAP-M6-C1-001): the protocol field is added to the
+        # resolution loop ONLY when this call declares generation_request --
+        # an ordinary (non-generation) start_lifecycle() call must stay a
+        # byte-identical no-op when it declares no field_controls of its
+        # own, exactly as before this closure (a real capability-island
+        # connection requires a real production TRIGGER; asking every
+        # caller about a field only generation ever consumes would not be
+        # that, it would be an unconditional new friction point). Once a
+        # caller DOES ask for generation, resolution/persistence work
+        # exactly as any other field: declared_protocols is this call's own
+        # DECLARED candidate; protocol_evidence_producers() is the
+        # AUTO_DISCOVERY_FIRST producer reading .dv-harness/lifecycle.json's
+        # own already-recorded protocols fact.
+        protocol_control = generation_field_controls.protocol_field_control()
+        field_controls_for_resolution = (
+            field_controls + [protocol_control] if generation_request is not None else field_controls
+        )
+        protocol_declared = generation_field_controls.declared_protocol_value(declared_protocols)
+        protocol_producers = generation_field_controls.protocol_evidence_producers(self.root)
+        resolved_protocol_value: Optional[str] = None
         if lc.milestone.value not in _POST_INTAKE_MILESTONES:
             # CAP-M6-CLARSVC-001: delegates to clarification_service.
             # resolve_or_ask() rather than re-inlining resolve_field()/
@@ -6555,11 +6606,24 @@ class DVHarness:
             # here, rather than re-filing the same question forever.
             qstore = QuestionQueueStore(self.root)
             unresolved_ids: List[str] = []
-            for control in field_controls:
-                outcome = clarification_service.resolve_or_ask(qstore, control)
+            for control in field_controls_for_resolution:
+                if control.field_id == generation_field_controls.PROTOCOL_FIELD_ID:
+                    outcome = clarification_service.resolve_or_ask(
+                        qstore, control, declared=protocol_declared, producers=protocol_producers)
+                    if outcome.resolved:
+                        resolved_protocol_value = outcome.effective_value.value
+                else:
+                    outcome = clarification_service.resolve_or_ask(qstore, control)
                 if not outcome.resolved and outcome.question is not None \
                         and outcome.question.get("answer") is None:
                     unresolved_ids.append(outcome.question["id"])
+
+            if resolved_protocol_value:
+                # Close the Auto-Discovery loop: once resolved (by a
+                # declared value or a real human answer), persist it as a
+                # lifecycle fact so the NEXT call's own producer finds it
+                # without asking again.
+                lc.update_facts(protocols=[p.strip() for p in resolved_protocol_value.split(",") if p.strip()])
 
             if unresolved_ids:
                 lc.update_facts(intake_clarification_ids=unresolved_ids)
@@ -6580,10 +6644,9 @@ class DVHarness:
 
             lc.transition(
                 lifecycle.Milestone.INTAKE_READY,
-                trigger=("all declared intake fields resolved" if field_controls
-                         else "no intake fields declared -- nothing to resolve"),
+                trigger="all declared intake fields resolved (protocol field always included, M6 C1)",
                 producer="start_lifecycle", consumer="DISPATCH",
-                evidence=[f"{len(field_controls)} field(s) checked"])
+                evidence=[f"{len(field_controls_for_resolution)} field(s) checked"])
 
         if task_boundary is not None:
             tb_result = task_boundary_conformance.check_working_tree_conformance(self.root, task_boundary)
@@ -6598,4 +6661,45 @@ class DVHarness:
         if plan["action"] not in ("RESUME", "ADOPT_LEGACY"):
             self.state.current_stage = plan["stage"]
             self.store.save(self.state)
+
+        if generation_request is not None:
+            # M6 C1 (CAP-M6-C1-001), EDGE_B: start_lifecycle() ORCHESTRATES
+            # generation -- it calls create_environment.create_environment()
+            # directly, once every governed field is resolved and Task
+            # Boundary has passed; create_environment.py never calls back
+            # into start_lifecycle() (no recursion, no inversion).
+            effective_protocol = resolved_protocol_value
+            if effective_protocol is None:
+                # A RESUME call past INTAKE_READY: this call's own
+                # resolution loop above did not run, so read the value a
+                # prior call already resolved and persisted.
+                effective_protocol = lc.load().get("protocols")
+                if isinstance(effective_protocol, (list, tuple)):
+                    effective_protocol = ",".join(str(p) for p in effective_protocol) or None
+            if not effective_protocol:
+                reason = ("GENERATION_BLOCKED: generation_request was supplied but no "
+                          "protocol has been resolved for this project yet.")
+                return AgentResult(ok=False, text=reason, session_id=None,
+                                   raw={"blocked_by": "generation_protocol_unresolved"})
+            request = dict(generation_request)
+            request["protocol"] = effective_protocol
+            try:
+                result = _create_environment_module.create_environment(
+                    self.root, request, out_dir=generation_out_dir)
+            except (EnvironmentModeUnresolvedError, MissingOutputDirectoryError,
+                    SubsystemModeRequiredError, StructuralLintFailedError,
+                    VipApiUnprovableError, VerificationArchitectureConflictError,
+                    NotImplementedError) as exc:
+                reason = f"GENERATION_FAILED: {type(exc).__name__}: {exc}"
+                self.store.event({"ts": now(), "event": "LIFECYCLE_GENERATION_FAILED",
+                                  "error": type(exc).__name__, "reason": str(exc)})
+                return AgentResult(ok=False, text=reason, session_id=None,
+                                   raw={"blocked_by": "generation", "error": type(exc).__name__})
+            self.store.event({"ts": now(), "event": "LIFECYCLE_GENERATION_COMPLETE",
+                              "environment_mode": result.get("environment_mode"),
+                              "out_dir": str(result.get("out_dir"))})
+            return AgentResult(
+                ok=True, session_id=None, raw=result,
+                text=f"generation complete: {result.get('environment_mode')} -> {result.get('out_dir')}")
+
         return self._start_dispatch(user_goal, loop, dry_run)

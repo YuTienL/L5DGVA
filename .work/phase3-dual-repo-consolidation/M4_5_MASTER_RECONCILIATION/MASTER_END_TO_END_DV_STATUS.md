@@ -57,14 +57,18 @@ IP_MODE_OWNER_WAVE = M6 (CAP-M5M6-VLEVEL-001 -- verification_level.py / IP_MODE 
 | 1 | OpenSpec Intake | WIRED | `intake_routing.py` + `environment_mode_router.py` real dispatch confirmed |
 | 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | |
 | 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | |
-| 4 | Clarification | **BLOCKED (first non-operational stage), updated this wave** | `ClarificationService` itself is now real — `CAP-M6-CLARSVC-001` CLOSED, `IMPLEMENTED/WIRED/TRIGGERED/TESTED` inside `start_lifecycle()`'s own dispatch path. Stage stays BLOCKED for a different, now-precise reason: `create_environment.py`'s own SUBSYSTEM/SYSTEM_LEVEL generation dispatch does not call `start_lifecycle()` at all (confirmed by direct grep of `engine.py`), so this stage's real entry point never reaches the real `ClarificationService` — a disclosed capability island, see `L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md` |
+| 4 | Clarification | **PARTIAL, closure path connected (updated this wave, `CAP-M6-C1-001`)** | `ClarificationService` is real (`CAP-M6-CLARSVC-001`) AND now production-reachable: `start_lifecycle(generation_request=...)` resolves a real `protocol` `FieldControl` (`generation_field_controls.py`) through it, then calls `create_environment.create_environment()` directly -- a real, tested, CLI-reachable (`start --generate`) and dashboard-reachable (`/api/start`) governed path (`M6_GOLDEN_PATH_CONNECTIVITY_C1_IMPLEMENTATION_REPORT.md`, 13/13 tests). Stays `PARTIAL`, not `WIRED`, for two disclosed reasons: (1) `tools/generate_protocol_uvm_environment.py` still calls `create_environment()` directly, ungoverned, unchanged by this task -- a real, pre-existing, still-open second entry point; (2) stages 2-3 above this one remain `NOT_RE-AUDITED_THIS_WAVE`, so this table cannot yet claim stage 4 is the true first-reachable point of an audited chain |
 | 5 | vPlan | PARTIAL (downstream of #4, but `VPLAN_COVERAGE_TRACEABILITY_FOUNDATION = READY` per M4) | |
-| 6 | VIP/UVM Generation | WIRED, 1 latent defect | `create_environment.py` -> `ProtocolEnvGenerator`; `KNOWN_SOURCE_B_DEFECT` re-confirmed unchanged (CAP-M5-ARCH-001) |
+| 6 | VIP/UVM Generation | WIRED, 1 latent defect | `create_environment.py` -> `ProtocolEnvGenerator`; `KNOWN_SOURCE_B_DEFECT` re-confirmed unchanged (CAP-M5-ARCH-001); now also reachable from the governed path above, not only `tools/generate_protocol_uvm_environment.py` |
 | 7–17 | Sequence/Scenario/FW … Experience Consolidation | NOT_RE-AUDITED_THIS_WAVE except where already tracked (Coverage Closure PARTIAL per CAP-M5-COV-001; Experience Consolidation ABSENT per CAP-CE-014) | |
 
 ```
-SUBSYSTEM_MODE_FIRST_NON_OPERATIONAL_STAGE = "4. Clarification"
-SUBSYSTEM_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
+SUBSYSTEM_MODE_FIRST_NON_OPERATIONAL_STAGE = UNKNOWN_PENDING_STAGE_2_3_RE_AUDIT
+  (no longer honestly "4. Clarification" -- that stage's governed closure path is now real,
+  CAP-M6-C1-001 -- but stages 2-3 have never been re-audited with real evidence to move the
+  claim there either, so this is reported as unknown rather than guessed)
+SUBSYSTEM_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001, CAP-M6-C1-001 -- both CLOSED; the next
+  real work here is auditing stages 2-3, not Clarification)
 ```
 
 ## SYSTEM_LEVEL_MODE
@@ -74,7 +78,7 @@ SUBSYSTEM_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
 | 1 | OpenSpec Intake | WIRED | same router dispatch as SUBSYSTEM_MODE |
 | 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | |
 | 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | |
-| 4 | Clarification | **BLOCKED (first non-operational stage), updated this wave** | same as SUBSYSTEM_MODE row above — `ClarificationService` itself is now real and closed (`CAP-M6-CLARSVC-001`); the blocker is the unconnected `create_environment.py` dispatch path, not a missing `ClarificationService` |
+| 4 | Clarification | **PARTIAL, closure path connected (updated this wave, `CAP-M6-C1-001`)** | same as `SUBSYSTEM_MODE` row above — `create_environment()` itself resolves `SYSTEM_LEVEL_MODE` internally from the same governed request, so the C1 closure covers both modes identically |
 | 5 | vPlan | PARTIAL | |
 | 6 | VIP/UVM Generation | WIRED, 1 unresolved foundation contract | `compose_soc_environment()` real registered-subsystem-registry check + cross-subsystem pre-check; `soc_environment_composer.py`'s ARCH-03 contract UNRESOLVED (CAP-M5-ARCH-002) |
 | 7 | Sequence/Scenario/FW | PARTIAL, disclosed scope boundary | cross-subsystem behavioral scenario content is explicitly `NotImplementedError` by design (No Golden-Reference Content Mining rule), not a defect |
@@ -82,8 +86,9 @@ SUBSYSTEM_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
 | 9–17 | Execution … Experience Consolidation | NOT_RE-AUDITED_THIS_WAVE except where already tracked (Coverage Closure PARTIAL; Experience Consolidation ABSENT) | |
 
 ```
-SYSTEM_LEVEL_MODE_FIRST_NON_OPERATIONAL_STAGE = "4. Clarification"
-SYSTEM_LEVEL_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
+SYSTEM_LEVEL_MODE_FIRST_NON_OPERATIONAL_STAGE = UNKNOWN_PENDING_STAGE_2_3_RE_AUDIT (same
+  reasoning as SUBSYSTEM_MODE above)
+SYSTEM_LEVEL_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001, CAP-M6-C1-001 -- both CLOSED)
 ```
 
 ## Cross-level reading
@@ -91,22 +96,30 @@ SYSTEM_LEVEL_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001)
 `IP_MODE` is blocked at the very first stage (no router entry point at
 all) — a strictly earlier and more severe gap than `SUBSYSTEM_MODE`/
 `SYSTEM_LEVEL_MODE`, both of which reach real intake dispatch before
-hitting the shared Clarification gap at stage 4. **Closing
-`CAP-M5M6-VLEVEL-001` (owner M6) unblocks IP_MODE's stage 1.**
-`CAP-M6-CLARSVC-001` (owner M6) is now CLOSED — `ClarificationService`
-itself is real, wired and tested — but this **disclosed correction**
-(Integration Prime Directive adoption reconciliation, this wave)
-supersedes the prior claim that closing it alone would unblock stage 4:
-it does not, because `create_environment.py`'s own SUBSYSTEM/SYSTEM_LEVEL
-generation dispatch is a separate call path that never reaches
-`start_lifecycle()`'s dispatch (a disclosed capability island, see
-`L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md`). Both are M6-owned, not M5 —
-reinforcing that M5's own N-way merge scope (env_manifest.py,
-vip_capability_extraction.py, etc.) is not what stands between today's
-state and a further-operational E2E flow at any level; M6's core-dispatch/
-ClarificationService/VerificationLevel work, now including converging the
-generation dispatch path onto `start_lifecycle()`, remains the more
-load-bearing near-term blocker.
+reaching the Clarification stage. **Closing `CAP-M5M6-VLEVEL-001`
+(owner M6) unblocks IP_MODE's stage 1** — still open, still the real
+remaining P0 M6 blocker.
+
+**Second disclosed correction (M6 Golden-Path Connectivity Closure C1,
+this wave)**: the Integration Prime Directive adoption reconciliation's
+own prior correction (above the code blocks) found `CAP-M6-CLARSVC-001`
+closing alone did NOT unblock stage 4, because `create_environment.py`'s
+generation dispatch never reached `start_lifecycle()`. `CAP-M6-C1-001`
+(this wave) closes exactly that governed connection for the CLI
+(`start --generate`) and dashboard (`/api/start`) entry points — a real,
+tested (13/13), production-reachable path now exists:
+`start_lifecycle(generation_request=...)` resolves the `protocol` field
+through the real `ClarificationService` and then calls
+`create_environment.create_environment()` directly. Two things this
+closure does **not** claim: (1) `tools/generate_protocol_uvm_environment.py`
+still calls `create_environment()` directly and ungoverned — a real,
+disclosed, still-open second entry point, out of C1's own scope (its
+own dispatch named only CLI/dashboard); (2) stages 2-3
+(Knowledge Retrieval, Discovery) remain `NOT_RE-AUDITED_THIS_WAVE`, so
+this table cannot yet claim any stage `OPERATIONAL` end-to-end, and the
+"first non-operational stage" claim for both `SUBSYSTEM_MODE` and
+`SYSTEM_LEVEL_MODE` is honestly `UNKNOWN_PENDING_STAGE_2_3_RE_AUDIT`
+rather than moved to a stage nobody has re-checked.
 
 No stage at any level is claimed `OPERATIONAL` end-to-end — consistent
 with `CANONICAL_CAPABILITY_STRICT_SUPERSET = NOT_YET_QUALIFIED`.

@@ -2,7 +2,7 @@ from __future__ import annotations
 import base64, binascii, json, os, re, tempfile, threading, time, traceback, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from .config import load_config, save_config
 from .regression_reporter import load_jobs, get_job
 from .gates import extract_evidence_blocks, JUDGMENT_FIELDS, CCL_SKIPPABLE, REVIEWER_CONFIDENCE_LEVELS, _iter_judgment_targets
@@ -8814,7 +8814,10 @@ def _is_running(root: Path) -> bool:
 
 
 def _start_background_run(root: Path, goal: str, loop: bool,
-                           adapter_factory: Optional[Callable[[], Any]] = None) -> None:
+                           adapter_factory: Optional[Callable[[], Any]] = None,
+                           protocols: Sequence[str] = (),
+                           generation_request: Optional[Dict[str, Any]] = None,
+                           generation_out_dir: Optional[Path] = None) -> None:
     """Launches DVHarness(root).start_lifecycle(goal, loop=loop) on a
     background daemon thread so the HTTP request returns immediately.
     Raises RuntimeError('ALREADY_RUNNING') instead of starting a second
@@ -8826,6 +8829,14 @@ def _start_background_run(root: Path, goal: str, loop: bool,
     delegates to exactly those two methods once the lifecycle-first gate/
     field-resolution/task-boundary checks pass, so this is additive, not a
     new execution path.
+
+    `protocols`/`generation_request`/`generation_out_dir` (M6 C1,
+    CAP-M6-C1-001) are the dashboard's own additive counterpart to cli.py's
+    `--protocols`/`--generate`/`--generate-out`/`--generate-manifest` flags
+    -- all three default to their pre-C1 empty/None values, so a caller that
+    supplies none of them (still true of `/api/start`'s own UI today, a
+    real, disclosed follow-up) gets byte-identical behavior to before this
+    closure.
 
     adapter_factory is a test-only seam: when given, the background
     thread's freshly-constructed DVHarness has its .adapter replaced with
@@ -8850,10 +8861,10 @@ def _start_background_run(root: Path, goal: str, loop: bool,
             # CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A -- approved):
             # dashboard's own launcher converges on the same lifecycle-first
             # entry point cli.py's "start" uses (item 2 of the approval),
-            # instead of calling loop()/run_stage() directly. No --advanced/
-            # --level/--protocols surface exists in the dashboard UI yet --
-            # a real, disclosed follow-up, not silently assumed unnecessary.
-            h.start_lifecycle(goal, loop=loop)
+            # instead of calling loop()/run_stage() directly.
+            h.start_lifecycle(goal, loop=loop, protocols=protocols,
+                              generation_request=generation_request,
+                              generation_out_dir=generation_out_dir)
         except Exception:
             # Background thread: an uncaught exception here has no HTTP
             # response to surface through (the POST /api/start request
@@ -11319,8 +11330,21 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 self._send_json({"error": "BAD_REQUEST", "message": "goal is required"}, status=400)
                 return
             loop = bool(body.get("loop", False))
+            # M6 C1 (CAP-M6-C1-001): additive, optional counterpart to
+            # cli.py's --protocols/--generate/--generate-out/
+            # --generate-manifest. Omitted (the pre-C1 shape) -> identical
+            # to before this closure.
+            protocols_raw = body.get("protocols") or []
+            protocols = tuple(str(p).strip() for p in protocols_raw if str(p).strip())
+            generation_request = body.get("generation_request") if body.get("generate") else None
+            if body.get("generate") and generation_request is None:
+                generation_request = {}
+            generate_out = body.get("generate_out")
+            generation_out_dir = Path(generate_out) if generate_out else None
             try:
-                _start_background_run(project_root, str(goal), loop, adapter_factory=adapter_factory)
+                _start_background_run(project_root, str(goal), loop, adapter_factory=adapter_factory,
+                                      protocols=protocols, generation_request=generation_request,
+                                      generation_out_dir=generation_out_dir)
             except RuntimeError as e:
                 self._send_json({"error": "ALREADY_RUNNING", "message": str(e)}, status=409)
                 return

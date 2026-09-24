@@ -13,17 +13,28 @@ before being trusted), wired capability there (9 real Parent-side callers:
 `intake_schema.py`, `intake_validation.py`, `intake_workbook.py`). This is
 an ADAPTATION, not a blind copy -- see the two deliberate departures below.
 
-FOUNDATION, NOT YET OPERATIONAL IN CANONICAL. Canonical already has its own,
-simpler intake-field model (`intake_state.IntakeFieldRecord`/
-`IntakeFieldStatus`: one flat record, one combined status enum covering
-discovery+validation+confirmation together). This module does not replace,
-wire into, or modify that existing system -- reconciling the two (or
-routing new intake work through this richer model) is explicitly M6's job,
-once `ClarificationService` is built. Per this Cohort's own instruction:
-"Cohort 4 only establishes the semantic foundation that M6 will use." This
-module has zero canonical callers as of this migration -- it is imported by
-its own test file only, exactly the same FOUNDATION status this project's
-`CAP-VELM-*` capabilities carry before their own owner wave builds on them.
+Canonical also has its own, separate, simpler intake-field model
+(`intake_state.IntakeFieldRecord`/`IntakeFieldStatus`: one flat record, one
+combined status enum covering discovery+validation+confirmation together).
+This module does not replace, wire into, or modify that existing system --
+the two are DELIBERATELY reconciled by staying separate
+(`CAP-M6-CLARSVC-001`'s own disclosed scope decision: `intake_state.py`
+answers a genuinely different question, UVM_GENERATION_READY over deep
+RTL/VIP/bind evidence, not this module's OpenSpec field-value model).
+
+OPERATIONAL STATUS (updated by `CAP-M6-CLARSVC-001`, then `CAP-M6-C1-001`):
+no longer FOUNDATION-only. `dv_harness/clarification_service.py`'s
+`resolve_or_ask()` is the real, tested production caller of `resolve_field()`/
+`evaluate_question_gate()`/`file_clarification()`; `engine.py`'s
+`start_lifecycle()` calls it for every declared `field_controls` entry, and
+(`CAP-M6-C1-001`) `dv_harness/generation_field_controls.py` is a second real
+caller building a `FieldControl` for a real production field
+(`protocol`), reachable from `cli.py`'s `start --generate` and `dashboard.
+py`'s `/api/start`. The original claim this paragraph replaced ("zero
+canonical callers... imported by its own test file only") is stale and no
+longer true -- corrected here rather than left to silently mislead the
+next reader (comment-hygiene, per this project's own Engineering Discipline
+Rules).
 
 TWO DELIBERATE DEPARTURES FROM PARENT (never silently propagated):
 
