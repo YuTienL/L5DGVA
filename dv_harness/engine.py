@@ -3,7 +3,7 @@ import json, os, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Iterable
 from .models import HarnessState, Stage, Status
 from .storage import StateStore
 from .config import load_config
@@ -24,6 +24,9 @@ from .stage_profile import StageExecutionProfiler, extract_provider_usage
 from .control_plane import ControlPlane, replan_stage, _find_latest_plan, describe_stage
 from .agent_profile import load_agent_profile
 from . import self_tuning
+from . import lifecycle
+from . import intake_field_resolution
+from . import task_boundary_conformance
 
 # --- Plan-and-Execute / Multi-Agent / Blackboard / ReAct wiring -------------
 # planner.py, react.py, router.py, multi_agent.py, skill_resolver.py were all
@@ -73,6 +76,20 @@ from .uvm_generator.soc_environment_composer import (
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+# CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A): the lifecycle.Milestone
+# values a project must have reached before a post-INTAKE stage is allowed to
+# run without an explicit bypass. Listed literally (not derived from
+# Milestone's own declaration order) so a future reordering of the enum can
+# never silently change which milestones count as "past intake" here.
+_POST_INTAKE_MILESTONES = frozenset({
+    lifecycle.Milestone.INTAKE_READY.value, lifecycle.Milestone.OPENSPEC_READY.value,
+    lifecycle.Milestone.PLAN_READY.value, lifecycle.Milestone.GENERATED.value,
+    lifecycle.Milestone.BUILD_PASS.value, lifecycle.Milestone.SIM_PASS.value,
+    lifecycle.Milestone.REGRESSION_PASS.value, lifecycle.Milestone.COVERAGE_READY.value,
+    lifecycle.Milestone.SIGNOFF_READY.value, lifecycle.Milestone.QUALIFICATION_COMPARE.value,
+    lifecycle.Milestone.KC_LEARNING.value, lifecycle.Milestone.COMPLETE.value,
+})
 
 
 # --- Cross-cycle debug-loop counter / Health Monitor dispatch (2026-09-01,
@@ -672,6 +689,12 @@ class DVHarness:
         # emits no loop telemetry at all -- which is why the Loop Engineering
         # Center never shows a row for a run that never iterated.
         self._loop_run: Optional[Dict[str, Any]] = None
+        # CAP-M6-DISPATCH-001: set only by start_lifecycle(advanced=True) or
+        # an explicit `run-stage --advanced` CLI call. Non-None means the
+        # NEXT _intake_first_guard() refusal is instead let through and
+        # recorded via LifecycleStore.record_bypass() -- never silent, never
+        # the default. See _intake_first_guard()'s own docstring.
+        self._lifecycle_bypass: Optional[str] = None
 
         # Plan-and-Execute / Multi-Agent / Blackboard / ReAct (see module
         # docstring above): constructed unconditionally -- all four are
@@ -4966,6 +4989,17 @@ class DVHarness:
         if dry_run:
             return self._dry_run_stage(user_goal, stage, cp_state)
 
+        # CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A): checked here,
+        # inside run_stage() itself, so EVERY caller of run_stage() -- the
+        # CLI `run-stage` subcommand, dashboard.py, start_lifecycle(), a
+        # test -- is gated the same way, rather than only calls that happen
+        # to go through start_lifecycle() first. A no-op whenever no
+        # lifecycle file exists (item 4: existing callers are unaffected)
+        # and for ENV_CHECK/INTAKE themselves. See _intake_first_guard().
+        intake_first_block = self._intake_first_guard(stage)
+        if intake_first_block is not None:
+            return intake_first_block
+
         # 降級路徑: enters/stays DEGRADED (collect data, make no judgment) or
         # falls through to normal operation once the condition clears. See
         # _degraded_gate() and dv_harness/degradation.py.
@@ -6346,3 +6380,210 @@ class DVHarness:
                     reason="OVERALL_STATUS_CLOSED",
                     machine_checkable_done="state.overall_status == CLOSED")
                 return
+
+    # ---------------------------------------------------------------------
+    # CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A): the one canonical
+    # lifecycle-first dispatch entry point. Ported from Parent's own real,
+    # working DVHarness.start_lifecycle()/_intake_first_guard() (engine.py
+    # ~8956-9059 there), adapted to canonical's real Stage/Milestone sets --
+    # never a blind whole-file copy. loop()/run_stage() remain the real
+    # execution primitives underneath (item 14 of the approved decision);
+    # this only adds the one gate + entry point neither had before.
+    # ---------------------------------------------------------------------
+
+    def _lifecycle_store(self) -> lifecycle.LifecycleStore:
+        def _sink(name: str, payload: Dict[str, Any]) -> None:
+            self.store.event({"ts": now(), "event": name, **payload})
+        return lifecycle.LifecycleStore(self.root, event_sink=_sink)
+
+    def _intake_first_guard(self, stage: str) -> Optional[AgentResult]:
+        """Refuse a post-INTAKE stage until the lifecycle reaches a
+        `_POST_INTAKE_MILESTONES` value. A real no-op (returns None) when:
+        `stage` is ENV_CHECK/INTAKE themselves (the two stages that
+        legitimately run before intake completes); no lifecycle file exists
+        at all (a project that never called `start_lifecycle()` -- CLI
+        `run-stage`, dashboard.py's pre-existing callers, and every one of
+        this repo's ~13,000 existing tests -- is completely unaffected, by
+        construction, matching item 4 of DEC-M6-DISPATCH-001); or an active
+        `self._lifecycle_bypass` is set, in which case the bypass is let
+        through but always recorded via `LifecycleStore.record_bypass()` --
+        never silent, matching item 15's bypass policy."""
+        if stage not in ORDER or ORDER.index(stage) <= ORDER.index(Stage.INTAKE.value):
+            return None
+        lc = self._lifecycle_store()
+        if not lc.exists():
+            return None
+        milestone = lc.milestone
+        if milestone.value in _POST_INTAKE_MILESTONES:
+            return None
+        if self._lifecycle_bypass:
+            lc.record_bypass(self._lifecycle_bypass, from_stage=self.state.current_stage,
+                             to_stage=stage, reason="explicit advanced/bypass command")
+            return None
+        reason = (f"INTAKE_FIRST_REQUIRED: stage {stage} is refused because the project "
+                  f"lifecycle is at milestone {milestone.value}, not INTAKE_READY (or later). "
+                  f"Complete intake (`dv-harness start`), or pass an explicit bypass "
+                  f"(`dv-harness run-stage --advanced` / `dv-harness start --advanced`), "
+                  f"which is recorded, never silent.")
+        ss = self.state.stages[stage]
+        ss["status"] = Status.WAIT_USER.value
+        ss["blocking_reason"] = reason
+        self.state.overall_status = Status.WAIT_USER.value
+        self.store.save(self.state)
+        self.store.event({"ts": now(), "stage": stage, "event": "INTAKE_FIRST_BLOCKED",
+                          "milestone": milestone.value})
+        return AgentResult(ok=False, text=reason, session_id=None,
+                           raw={"blocked_by": "intake_first", "stage": stage,
+                                "milestone": milestone.value})
+
+    def _lifecycle_entry_plan(self) -> Dict[str, Any]:
+        """CREATE / ADOPT_LEGACY / RESUME, decided from real evidence (an
+        existing lifecycle file, or state.json's own recorded INTAKE
+        status) -- never assumed. Canonical's own real first Stage is
+        ENV_CHECK (Parent's equivalent concept, INTAKE_ROUTING, does not
+        exist in canonical and is out of this task's own scope -- see
+        M6_OPERATIONAL_VERTICAL_SLICE.md's disclosed Intake-stage
+        correction)."""
+        lc = self._lifecycle_store()
+        if lc.exists():
+            return {"action": "RESUME", "stage": self.state.current_stage,
+                    "reason": f"lifecycle already exists at milestone {lc.milestone.value}"}
+        intake_status = self.state.stages.get(Stage.INTAKE.value, {}).get("status")
+        if intake_status == Status.PASS.value:
+            return {"action": "ADOPT_LEGACY", "stage": self.state.current_stage,
+                    "reason": "project predates the lifecycle; INTAKE already PASS in state.json"}
+        return {"action": "CREATE", "stage": Stage.ENV_CHECK.value,
+                "reason": "no lifecycle and no completed INTAKE -- fresh lifecycle-first start"}
+
+    def _start_dispatch(self, user_goal: str, loop: bool, dry_run: bool):
+        if loop:
+            self.loop(user_goal, dry_run=dry_run)
+            return None
+        return self.run_stage(user_goal, dry_run=dry_run)
+
+    def start_lifecycle(self, user_goal: str, *, loop: bool = False, dry_run: bool = False,
+                        level: Optional[str] = None, protocols: Iterable[str] = (),
+                        field_controls: Iterable[intake_field_resolution.FieldControl] = (),
+                        task_boundary: Optional[task_boundary_conformance.TaskBoundary] = None,
+                        advanced: bool = False) -> Optional[AgentResult]:
+        """`dv-harness start`: the canonical, lifecycle-first dispatch entry
+        point cli.py's `start` command and dashboard.py's launcher both
+        converge on (DEC-M6-DISPATCH-001, OPTION_A -- approved).
+
+        new project        -> create the lifecycle, enter ENV_CHECK
+        legacy project      -> adopt its existing progress, then resume
+        parked mid-intake    -> resume where it stopped
+        past INTAKE_READY    -> continue normal execution
+        advanced=True        -> declared bypass: behaves like the pre-
+                                lifecycle direct dispatch and is recorded as
+                                LIFECYCLE_BYPASS.
+
+        `level`/`protocols` are stored as real lifecycle facts (`lifecycle.
+        _FACT_KEYS` already reserves `verification_level`/`level_source`/
+        `protocols` for exactly this) but are never interpreted further --
+        VerificationLevel itself is explicitly out of this task's scope
+        (item 18 of DEC-M6-DISPATCH-001's approval); a future
+        CAP-M5M6-VLEVEL-001 migration has a proven place to read them from.
+
+        `field_controls` reuses CAP-ATL-007's real `intake_field_resolution.
+        resolve_field()`/`evaluate_question_gate()`/`file_clarification()`
+        verbatim (never reimplemented here, per item 8) -- an unresolved
+        field is handed to the real, existing question queue and the
+        lifecycle parks at its current milestone with `WAIT_USER`, exposing
+        exactly the interface boundary item 17 allows without building
+        ClarificationService itself.
+
+        `task_boundary` reuses CAP-ATL-004's real `task_boundary_
+        conformance.check_working_tree_conformance()` verbatim (item 6/8) --
+        `None` (the default) means no boundary was declared, so nothing is
+        checked, matching CAP-ATL-004's own pre-existing zero-caller state
+        for every caller that does not yet pass one.
+
+        Returns an AgentResult for a single-stage start (or a block), None
+        after a loop completes."""
+        if advanced:
+            self._lifecycle_bypass = "start --advanced"
+            self.store.event({"ts": now(), "event": "LIFECYCLE_BYPASS",
+                              "command": "start --advanced", "from_stage": self.state.current_stage,
+                              "reason": "explicit advanced mode: INTAKE_FIRST not enforced"})
+            return self._start_dispatch(user_goal, loop, dry_run)
+
+        plan = self._lifecycle_entry_plan()
+        if dry_run:
+            return AgentResult(
+                ok=True, session_id=None, raw={"dry_run": True, "entry_plan": plan},
+                text=(f"DRY_RUN start_lifecycle: {plan['action']} -> would enter "
+                      f"{plan['stage']} ({plan['reason']}); no lifecycle or state was written."))
+
+        lc = self._lifecycle_store()
+        declared_protocols = [str(p) for p in protocols]
+        if plan["action"] == "CREATE":
+            facts: Dict[str, Any] = {"goal": user_goal}
+            if declared_protocols:
+                facts["protocols"] = declared_protocols
+            if level is not None:
+                facts.update(verification_level=str(level), level_source="cli_flag")
+            lc.create(trigger="dv-harness start (lifecycle-first)", producer="start_lifecycle",
+                     consumer=plan["stage"], evidence=["no .dv-harness/lifecycle.json"], **facts)
+        elif plan["action"] == "ADOPT_LEGACY":
+            lc.create(trigger="dv-harness start on a project that predates the lifecycle",
+                     producer="start_lifecycle", consumer="FIELD_RESOLUTION",
+                     evidence=[f"state.json stages.INTAKE.status="
+                               f"{self.state.stages.get(Stage.INTAKE.value, {}).get('status')}"],
+                     adopted_from_legacy=True, goal=user_goal)
+            lc.transition(lifecycle.Milestone.INTAKE_READY,
+                         trigger="legacy INTAKE stage already PASS in state.json",
+                         producer="start_lifecycle", consumer="FIELD_RESOLUTION",
+                         evidence=["state.json stages.INTAKE.status=PASS"])
+        # else RESUME: the existing lifecycle record is left exactly as is.
+
+        field_controls = list(field_controls)
+        if lc.milestone.value not in _POST_INTAKE_MILESTONES:
+            unresolved_ids: List[str] = []
+            for control in field_controls:
+                ev = intake_field_resolution.resolve_field(control, declared=None)
+                if intake_field_resolution.field_is_sufficient(control, ev):
+                    continue
+                decision = intake_field_resolution.evaluate_question_gate(control, ev)
+                q = intake_field_resolution.file_clarification(self.root, control, ev, decision)
+                if q is not None and q.get("answer") is None:
+                    unresolved_ids.append(q["id"])
+
+            if unresolved_ids:
+                lc.update_facts(intake_clarification_ids=unresolved_ids)
+                reason = (f"CLARIFICATION_REQUIRED: {len(unresolved_ids)} intake field(s) "
+                          f"unresolved ({', '.join(unresolved_ids)}); answer via "
+                          f"`dv-harness question-queue answer`, then `dv-harness start` again.")
+                stage = plan["stage"]
+                ss = self.state.stages[stage]
+                ss["status"] = Status.WAIT_USER.value
+                ss["blocking_reason"] = reason
+                self.state.overall_status = Status.WAIT_USER.value
+                self.store.save(self.state)
+                self.store.event({"ts": now(), "stage": stage,
+                                  "event": "LIFECYCLE_CLARIFICATION_BLOCKED",
+                                  "question_ids": unresolved_ids})
+                return AgentResult(ok=False, text=reason, session_id=None,
+                                   raw={"blocked_by": "clarification", "question_ids": unresolved_ids})
+
+            lc.transition(
+                lifecycle.Milestone.INTAKE_READY,
+                trigger=("all declared intake fields resolved" if field_controls
+                         else "no intake fields declared -- nothing to resolve"),
+                producer="start_lifecycle", consumer="DISPATCH",
+                evidence=[f"{len(field_controls)} field(s) checked"])
+
+        if task_boundary is not None:
+            tb_result = task_boundary_conformance.check_working_tree_conformance(self.root, task_boundary)
+            if tb_result["verdict"] == task_boundary_conformance.VERDICT_VIOLATION:
+                reason = (f"TASK_BOUNDARY_VIOLATION: {task_boundary.task_id}'s declared scope "
+                          f"was exceeded by the current working tree.")
+                self.store.event({"ts": now(), "event": "TASK_BOUNDARY_BLOCKED",
+                                  "task_id": task_boundary.task_id, "findings": tb_result["findings"]})
+                return AgentResult(ok=False, text=reason, session_id=None,
+                                   raw={"blocked_by": "task_boundary", **tb_result})
+
+        if plan["action"] not in ("RESUME", "ADOPT_LEGACY"):
+            self.state.current_stage = plan["stage"]
+            self.store.save(self.state)
+        return self._start_dispatch(user_goal, loop, dry_run)

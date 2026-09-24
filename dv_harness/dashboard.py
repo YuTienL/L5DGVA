@@ -8815,14 +8815,21 @@ def _is_running(root: Path) -> bool:
 
 def _start_background_run(root: Path, goal: str, loop: bool,
                            adapter_factory: Optional[Callable[[], Any]] = None) -> None:
-    """Launches DVHarness(root).loop(goal) (loop=True) or .run_stage(goal)
-    (loop=False) on a background daemon thread so the HTTP request returns
-    immediately. Raises RuntimeError('ALREADY_RUNNING') instead of starting
-    a second concurrent run for the same project_root.
+    """Launches DVHarness(root).start_lifecycle(goal, loop=loop) on a
+    background daemon thread so the HTTP request returns immediately.
+    Raises RuntimeError('ALREADY_RUNNING') instead of starting a second
+    concurrent run for the same project_root.
+
+    CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A): converges on the
+    same lifecycle-first entry point cli.py's `start` uses, rather than
+    calling .loop()/.run_stage() directly -- start_lifecycle() itself still
+    delegates to exactly those two methods once the lifecycle-first gate/
+    field-resolution/task-boundary checks pass, so this is additive, not a
+    new execution path.
 
     adapter_factory is a test-only seam: when given, the background
     thread's freshly-constructed DVHarness has its .adapter replaced with
-    adapter_factory() before .loop()/.run_stage() is called, so tests can
+    adapter_factory() before start_lifecycle() is called, so tests can
     inject a fake adapter without spawning a real `claude` CLI subprocess.
     Production callers (dv_harness.dashboard.serve() with no factory
     argument, i.e. `python -m dv_harness.dashboard`) leave this None and get
@@ -8840,10 +8847,13 @@ def _start_background_run(root: Path, goal: str, loop: bool,
             h = DVHarness(root)
             if adapter_factory is not None:
                 h.adapter = adapter_factory()
-            if loop:
-                h.loop(goal)
-            else:
-                h.run_stage(goal)
+            # CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A -- approved):
+            # dashboard's own launcher converges on the same lifecycle-first
+            # entry point cli.py's "start" uses (item 2 of the approval),
+            # instead of calling loop()/run_stage() directly. No --advanced/
+            # --level/--protocols surface exists in the dashboard UI yet --
+            # a real, disclosed follow-up, not silently assumed unnecessary.
+            h.start_lifecycle(goal, loop=loop)
         except Exception:
             # Background thread: an uncaught exception here has no HTTP
             # response to surface through (the POST /api/start request

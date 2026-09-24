@@ -2,7 +2,7 @@ from __future__ import annotations
 import argparse, json, os, sys
 from pathlib import Path
 from typing import Any, Dict, Optional
-from .engine import DVHarness
+from .engine import DVHarness, now as _now_for_cli
 from .models import Stage, Status
 from .preflight import TRANSPORT_CHOICES
 from .router import RESEARCH_FOCUS_DOMAINS
@@ -245,6 +245,20 @@ def main():
     pstart.add_argument("--loop", action="store_true")
     pstart.add_argument("--dry-run", action="store_true", dest="dry_run", help=_DRY_RUN_HELP)
     pstart.add_argument(
+        "--advanced", action="store_true",
+        help="CAP-M6-DISPATCH-001: explicit, recorded bypass of the lifecycle-first "
+             "INTAKE_FIRST gate -- behaves like the pre-lifecycle direct dispatch. "
+             "Never the default; every use is written to lifecycle.json's own "
+             "bypasses list and emitted as a real LIFECYCLE_BYPASS event.")
+    pstart.add_argument("--level", default=None,
+                        help="Stored as a real lifecycle fact (verification_level/"
+                             "level_source) for a future CAP-M5M6-VLEVEL-001 to read -- "
+                             "not interpreted by this command (VerificationLevel itself "
+                             "is out of CAP-M6-DISPATCH-001's own scope).")
+    pstart.add_argument("--protocols", default=None,
+                        help="Comma-separated protocol names, stored as a real lifecycle "
+                             "fact; not interpreted by this command.")
+    pstart.add_argument(
         "--ux-mode", dest="ux_mode", default=None,
         choices=[m.value for m in _ux_policy.UXMode] + ["guided", "engineer", "expert"],
         help="GUIDED_MODE/ENGINEER_MODE/EXPERT_MODE -- an interaction-policy "
@@ -275,6 +289,11 @@ def main():
     prun.add_argument("--goal", required=True)
     prun.add_argument("--stage", choices=[s.value for s in Stage])
     prun.add_argument("--dry-run", action="store_true", dest="dry_run", help=_DRY_RUN_HELP)
+    prun.add_argument(
+        "--advanced", action="store_true",
+        help="CAP-M6-DISPATCH-001: explicit, recorded bypass of the lifecycle-first "
+             "INTAKE_FIRST gate for this one direct run-stage call. Never the default; "
+             "recorded the same way as `start --advanced`.")
 
     pstatus = sub.add_parser(
         "status",
@@ -6340,6 +6359,17 @@ def main():
         commands.cmd_mark(h, args.status, args.message)
         print(args.status)
     elif args.cmd == "run-stage":
+        # CAP-M6-DISPATCH-001: run_stage() now carries its own real
+        # _intake_first_guard() (item 3 of DEC-M6-DISPATCH-001 -- direct
+        # run_stage() must not be an ordinary bypass around it). --advanced
+        # is the one explicit, recorded way around that guard for this
+        # single call (item 15's bypass policy); every other invocation is
+        # gated exactly like start_lifecycle()'s own dispatch.
+        if args.advanced:
+            h._lifecycle_bypass = "run-stage --advanced"
+            h.store.event({"ts": _now_for_cli(), "event": "LIFECYCLE_BYPASS",
+                           "command": "run-stage --advanced", "from_stage": h.state.current_stage,
+                           "reason": "explicit advanced mode: INTAKE_FIRST not enforced"})
         r = h.run_stage(args.goal, args.stage, dry_run=args.dry_run)
         print(r.text)
         raise SystemExit(0 if r.ok else 1)
@@ -6359,14 +6389,31 @@ def main():
             )
             _ux_policy.save_ux_policy(h.root, _ux_current)
         print(_ux_policy.render_status_banner(_ux_current))
-        if args.loop:
-            # loop(dry_run=True) plans the CURRENT stage and returns without
-            # looping -- see DVHarness.loop()'s docstring for why a dry-run
-            # deliberately never speculates past one real stage.
-            h.loop(args.goal, dry_run=args.dry_run)
+        # CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A -- approved):
+        # `start` converges on the one canonical lifecycle-first entry point
+        # instead of calling loop()/run_stage() directly (item 1/2 of the
+        # approval). `--advanced` is the explicit, recorded bypass (item 15);
+        # `--level`/`--protocols` are stored as real lifecycle facts only,
+        # never interpreted here (VerificationLevel stays out of this task's
+        # scope, item 18).
+        declared_protocols = tuple(
+            p.strip() for p in (args.protocols or "").split(",") if p.strip()
+        )
+        r = h.start_lifecycle(args.goal, loop=args.loop, dry_run=args.dry_run,
+                              level=args.level, protocols=declared_protocols,
+                              advanced=args.advanced)
+        if args.loop and r is None:
+            # start_lifecycle() reached _start_dispatch() and loop=True, so
+            # loop() actually ran (its own dry_run=True prints the CURRENT
+            # stage's plan and returns without looping, matching loop()'s
+            # own pre-existing docstring on why a dry-run never speculates
+            # past one real stage).
             print(h.summary())
         else:
-            r = h.run_stage(args.goal, dry_run=args.dry_run)
+            # r is not None: either the lifecycle-first gate/clarification/
+            # task-boundary check refused dispatch before loop()/run_stage()
+            # ever ran, this is a dry-run entry-plan report, or loop=False
+            # and run_stage() returned its own real single-stage result.
             print(r.text)
             raise SystemExit(0 if r.ok else 1)
     elif args.cmd == "ux-mode":
