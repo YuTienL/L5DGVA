@@ -11,10 +11,15 @@ connectivity does not qualify.
 
 ```
 M6_VERTICAL_SLICE_TOTAL_REQUIRED_STAGES = 10
-M6_VERTICAL_SLICE_CONNECTED_STAGES (STRUCTURAL) = 8   (unchanged this task)
-M6_PRODUCTION_CONNECTED_STAGES = 8   (unchanged this task -- re-verified
-  fresh, not re-derived; a different stage SET than the structural 8, per
-  M6_VERTICAL_SLICE_STATUS.md's own table, reproduced below)
+M6_VERTICAL_SLICE_CONNECTED_STAGES (STRUCTURAL) = 10   (CAP-M5M6-VLEVEL-001,
+  2026-09-24: stages 9/10 closed -- verification_level.py now exists and
+  environment_mode_router.py now has a real IP_MODE branch, so the router
+  code genuinely contains all 3 modes, not 2)
+M6_PRODUCTION_CONNECTED_STAGES = 9   (CAP-M5M6-VLEVEL-001: stage 9 closed
+  the same way; stage 8, Task Boundary, remains the one honestly open
+  production edge -- unchanged by this task, pre-existing, out of this
+  task's own declared scope. "Do not force 10/10": this number is reported
+  as 9, not rounded up.)
 ```
 
 | # | Stage | Structural | Production | Supported entry point |
@@ -26,9 +31,64 @@ M6_PRODUCTION_CONNECTED_STAGES = 8   (unchanged this task -- re-verified
 | 5 | HumanGate | Yes | Yes | same (block/resume, real CLI/dashboard round-trip tested) |
 | 6 | EffectiveValue | Yes | Yes | same, persisted as a real lifecycle fact |
 | 7 | Dispatch | Yes | Yes | same |
-| 8 | Task Boundary | Yes | **No** | no CLI flag or dashboard JSON field supplies a `TaskBoundary` today |
-| 9 | VerificationLevel | No (ABSENT) | No (ABSENT) | explicit seam, unimplemented by design |
-| 10 | IP/SUBSYSTEM/SYSTEM_LEVEL | No ("separate, unconnected" before C1) | **Yes** | `create_environment()`'s own internal mode resolution, reached from the same governed call |
+| 8 | Task Boundary | Yes | **No** | no CLI flag or dashboard JSON field supplies a `TaskBoundary` today -- still true, re-confirmed fresh this task by direct grep of cli.py/dashboard.py, not assumed unchanged |
+| 9 | VerificationLevel | **Yes** (was ABSENT) | **Yes** (was ABSENT) | CLI `--level`/dashboard `level` JSON -> `generation_field_controls.verification_level_field_control()` -> `clarification_service.resolve_or_ask()` -> `request["verification_level"]` |
+| 10 | IP/SUBSYSTEM/SYSTEM_LEVEL | **Yes** (was No: router had only 2 of 3 modes) | Yes (unchanged Yes for SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE; now ALSO proven for IP_MODE specifically) | `environment_mode_router.resolve_environment_mode()`'s real `_resolve_with_level()` branch, reached from the same governed call |
+
+### CAP-M5M6-VLEVEL-001 (2026-09-24) — stages 9 and 10 closed
+
+`verification_level.py` (new, adapted from Parent's real, tested module --
+one deliberate departure, see that module's own docstring) supplies the
+domain vocabulary (`VerificationLevel`, `LEVEL_SEMANTICS`, `parse_level()`,
+`suggest_level()`). `generation_field_controls.
+verification_level_field_control()` is a THIRD real generation `FieldControl`
+(alongside `protocol`/`role`), resolved through the exact same
+`clarification_service.resolve_or_ask()` engine, with its own stricter
+schema validator (`_verification_level_validator()`: IP/SUBSYSTEM/
+SYSTEM_LEVEL only, never a bare non-blank check).
+`environment_mode_router.resolve_environment_mode()` gained one new,
+optional, backward-compatible evidence key (`verification_level`) --
+absent, byte-identical to before (`_resolve_by_subsystem_count()`,
+unchanged); present, `_resolve_with_level()` selects the mode directly,
+adding the one mode the subsystem-count-only decision could never produce:
+`IP_MODE`. `create_environment()` now builds `router_evidence[
+"verification_level"]` from `request["verification_level"]` when present,
+and its SUBSYSTEM_MODE dispatch branch condition widened to
+`decision["environment_mode"] in ("SUBSYSTEM_MODE", "IP_MODE")` -- the SAME
+`ProtocolEnvGenerator` code path for both.
+
+Full, explicit per-level (IP/SUBSYSTEM/SYSTEM_LEVEL) production-path proof,
+through the real `start_lifecycle()` -> `create_environment()` entry point,
+asserting real generated files/lifecycle facts/router decisions at every
+named link (PRODUCER -> FIELD_CONTROL -> FIELD_RESOLUTION -> EFFECTIVE_VALUE
+-> DISPATCH -> TASK_BOUNDARY -> VERIFICATION_LEVEL_ROUTING ->
+GENERATION_CONSUMER -> EVIDENCE):
+`dv_harness_tests/test_m5m6_vlevel_001_production_connectivity.py` (6/6).
+Field-resolution-family parity with protocol/role (declared/auto-resolved/
+unresolved/QuestionOwner/HumanGate/answer-loop/EffectiveValue-persistence):
+`dv_harness_tests/test_m6_c1_golden_path_connectivity.py` (20/20, extended).
+Domain vocabulary: `dv_harness_tests/test_verification_level.py` (22/22,
+new). Router-level IP_MODE cases: `dv_harness_tests/
+test_environment_mode_router.py` (16/16, extended). All 11
+`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` now pass `--level SUBSYSTEM`
+(this project's own established precedent -- `environment_mode_policy.json`'s
+SUBSYSTEM_MODE examples list PCIe/USB/etc. as one-protocol builds).
+`dashboard.py`'s `_start_background_run()`/`_handle_start()` gained the same
+additive `level` parameter/JSON field CLI's `--level` already had.
+
+DISCLOSED, deferred (not a defect, see Gap Register GAP-V2-006): a
+SYSTEM_LEVEL_MODE composition request still needs `protocol`/`role` to
+resolve, even though `create_environment()`'s own SYSTEM_LEVEL_MODE branch
+never reads the resolved protocol value for its own dispatch logic (the
+composition's real subsystem set comes from the manifest's own
+`requested_subsystems`/`soc_name`). DISCLOSED, deferred (not a defect, see
+Gap Register GAP-V2-007): `_persist_subsystem_registry_entry()` (the SIGNOFF-
+stage subsystem-registration writer, a separate mechanism this task did not
+modify) has no awareness of `verification_level`/`environment_mode` -- an
+IP_MODE-generated environment could in principle still be registered into
+the subsystem registry later via that separate flow, since the registration
+gate validates only identity/qualification fields, not the mode the
+environment was actually built under.
 
 ## Per-edge evidence (every claimed production-connected edge)
 
@@ -95,14 +155,27 @@ EVIDENCE            = test_m6_c1_golden_path_connectivity.py::
   `start_lifecycle(generation_request=...)`, adding 11 more real
   production entry points onto the same 8 already-counted stages (not a
   new stage; see `M6_VERTICAL_SLICE_STATUS.md`'s own update section).
-- Any intake field other than `protocol`/`role` → Field Resolution: zero
-  production producer exists (GAP-V2-003, `REGISTER_AND_DEFER_WITH_OWNER`
-  -- `role` added this wave alongside `protocol`, derived from all 11
-  skills' own discovery lists + real downstream consumer evidence, see
-  `GAP_V2_002_FIELD_CONTROL_DERIVATION.md`).
+- Any intake field other than `protocol`/`role`/`verification_level` →
+  Field Resolution: zero production producer exists (GAP-V2-003,
+  `REGISTER_AND_DEFER_WITH_OWNER` -- `role` added by GAP-V2-002,
+  `verification_level` added by CAP-M5M6-VLEVEL-001 this wave, each derived
+  from real discovery/consumer evidence, never assumed).
 - Task Boundary (stage 8): no CLI flag or dashboard JSON field supplies a
-  `TaskBoundary` today — unchanged by this task, honestly excluded from
-  the production count.
+  `TaskBoundary` today — unchanged by this task (re-confirmed fresh, not
+  assumed, by direct grep of cli.py/dashboard.py this wave), honestly
+  excluded from the production count. This is the one remaining stage
+  keeping `M6_PRODUCTION_CONNECTED_STAGES` at 9/10 rather than 10/10.
+- SYSTEM_LEVEL_MODE composition still requiring `protocol`/`role` to
+  resolve even though its own dispatch logic never reads them
+  (GAP-V2-006, `REGISTER_AND_DEFER_WITH_OWNER` -- not a defect, the
+  composition still succeeds; a design refinement for a future wave).
+- `_persist_subsystem_registry_entry()` (SIGNOFF-stage writer, a separate,
+  unmodified mechanism) having no `verification_level`/`environment_mode`
+  awareness (GAP-V2-007, `REGISTER_AND_DEFER_WITH_OWNER` -- a real,
+  disclosed risk that an IP_MODE-generated environment could later be
+  registered as a reusable subsystem through that separate flow; requires
+  a SIGNOFF/registration-hardening wave to close, out of CAP-M5M6-VLEVEL-001's
+  own declared scope).
 
 ## Full 24-stage Golden Workflow — beyond the M6 slice
 

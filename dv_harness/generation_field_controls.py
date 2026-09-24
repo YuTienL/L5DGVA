@@ -57,19 +57,31 @@ module actually governs, and why the others investigated are NOT here:
     (`bind_mechanism_generator.py`/`tools/generate_bind_mechanism.py`).
     Wiring it into THIS module would misrepresent which tool actually
     uses it.
-  - `verification_level` (`EXISTING_CANONICAL_FIELD`, deliberately NOT
-    built here): `lifecycle._FACT_KEYS` already reserves it; resolving it
-    through Field Resolution is `CAP-M5M6-VLEVEL-001`'s own explicitly
-    separate, not-yet-authorized scope -- out of bounds for this module
-    by the same standing rule `CAP-M6-DISPATCH-001`/`CAP-M6-C1-001` both
-    already respected.
+  - `verification_level` (`CAP-M5M6-VLEVEL-001`, now a THIRD real
+    `FieldControl` -- see `verification_level_field_control()` below):
+    `lifecycle._FACT_KEYS` already reserved the fact key; this task wires
+    it through the SAME `resolve_or_ask()` engine `protocol`/`role`
+    already use, adapted (not blind-copied) from Parent's own real,
+    tested `dv_harness/verification_level.py` (owner ruling D2) -- see
+    that module's own docstring for the one deliberate departure (Parent's
+    bespoke `ask_verification_level()`/`resolve_verification_level()` are
+    NOT ported; this field goes through the one Canonical engine instead).
+    `environment_mode_router.resolve_environment_mode()` now accepts the
+    resolved value directly (`_resolve_with_level()`), adding the one real
+    mode (`IP_MODE`) the subsystem-count-only decision could never produce.
 
-WHY NOT level-based mode selection. `environment_mode_router.py` is not
-touched by this module. Governing `protocol`/`role` through Field
-Resolution/Clarification is a distinct, non-overlapping concern from
-IP/SUBSYSTEM/SYSTEM_LEVEL mode branching -- it only ensures a human is
-asked when neither the current call nor any prior lifecycle fact says
-which protocol/role a generation request targets.
+WHY level-based mode selection is now wired, and why it still does not
+redesign anything. `environment_mode_router.py` gained one new, optional,
+backward-compatible evidence key (`verification_level`) -- absent, the
+router is byte-identical to before this task; present, it selects the mode
+directly rather than only from subsystem count. Governing `protocol`/
+`role`/`verification_level` through Field Resolution/Clarification is
+still the same non-overlapping concern it always was: it only ensures a
+human is asked when neither the current call nor any prior lifecycle fact
+says which protocol/role/level a generation request targets -- the router
+extension and this module's own third `FieldControl` are additive, not a
+rewrite of either `environment_mode_router.py`'s existing tested branches
+or `intake_field_resolution.py`'s own resolution algorithm.
 
 AUTO_DISCOVERY_FIRST. Both fields' producers read
 `.dv-harness/lifecycle.json`'s own already-recorded facts (via
@@ -90,7 +102,9 @@ from .intake_field_resolution import (
     EvidenceProducer,
     FieldControl,
     SourceKind,
+    ValidationState,
 )
+from .verification_level import parse_level as _parse_verification_level
 
 #: Matches `create_environment()`'s own `request["protocol"]` key (see
 #: `_requested_subsystems()` in `dv_harness/uvm_generator/
@@ -100,6 +114,11 @@ PROTOCOL_FIELD_ID = "protocol"
 #: Matches `generator.py`'s own `m.get('role', 'UNKNOWN')` manifest key,
 #: reused unchanged by `ProtocolEnvGenerator.generate()`.
 ROLE_FIELD_ID = "role"
+
+#: Matches `lifecycle._FACT_KEYS`'s own pre-existing `verification_level`
+#: key and `environment_mode_router.py`'s new `verification_level`
+#: evidence key -- never a new name.
+VERIFICATION_LEVEL_FIELD_ID = "verification_level"
 
 
 def protocol_field_control() -> FieldControl:
@@ -133,6 +152,38 @@ def role_field_control() -> FieldControl:
     )
 
 
+def verification_level_field_control() -> FieldControl:
+    """`domain="env"` -- which verification level a generation request
+    targets is a verification-environment decision, and (owner ruling D2,
+    preserved from Parent) a HUMAN decision specifically -- never inferred
+    from a heuristic (see `verification_level.suggest_level()`'s own
+    docstring: a recommendation only, never wired as an evidence producer
+    below for exactly that reason)."""
+    return FieldControl(
+        field_id=VERIFICATION_LEVEL_FIELD_ID,
+        required=True,
+        domain="env",
+        notes="which verification level (IP / SUBSYSTEM / SYSTEM_LEVEL) this "
+              "generation request targets -- see dv_harness/verification_level.py",
+        downstream_consumers=("environment_mode_router.resolve_environment_mode",),
+    )
+
+
+def _verification_level_validator(field_id: str, cand: Candidate):
+    """Schema-level validation stricter than `default_validator()`'s bare
+    non-blank check: a `verification_level` candidate must be one of the
+    3 real, exact spellings `verification_level.parse_level()` accepts,
+    never merely non-blank -- otherwise a typo ('IPS', 'Subsytem') would
+    silently 'resolve' at Field Resolution only to fail later, more
+    confusingly, at the router (`INVALID_VERIFICATION_LEVEL`)."""
+    value = str(cand.value).strip()
+    if not value:
+        return ValidationState.INVALID, "blank value"
+    if _parse_verification_level(value) is None:
+        return ValidationState.INVALID, f"{value!r} is not one of IP / SUBSYSTEM / SYSTEM_LEVEL"
+    return ValidationState.VALID, "valid verification-level spelling"
+
+
 def declared_protocol_value(protocols: Sequence[str]) -> Optional[str]:
     """Projects a caller's own already-parsed `protocols` sequence (e.g.
     `cli.py`'s `start` command's `--protocols` flag, already split into a
@@ -155,6 +206,20 @@ def declared_role_value(role: Optional[str]) -> Optional[str]:
     if role is None:
         return None
     cleaned = str(role).strip()
+    return cleaned or None
+
+
+def declared_verification_level_value(level: Optional[str]) -> Optional[str]:
+    """Projects a caller's own already-parsed `level` string (`cli.py`'s
+    pre-existing `--level` flag, `CAP-M6-DISPATCH-001`) into
+    `resolve_field()`'s `declared=` parameter shape. Deliberately does NOT
+    normalize/parse the spelling here (that is `_verification_level_
+    validator()`'s own job, at schema-validation time, so an invalid
+    spelling is reported as a real `ValidationState.INVALID` candidate,
+    never silently dropped before it can be)."""
+    if level is None:
+        return None
+    cleaned = str(level).strip()
     return cleaned or None
 
 
@@ -198,3 +263,21 @@ def role_evidence_producers(root: Path) -> List[EvidenceProducer]:
         return _lifecycle_fact_candidate(root, "role")
 
     return [EvidenceProducer(step="existing_files", name="lifecycle_recorded_role", fn=_fn)]
+
+
+def verification_level_evidence_producers(root: Path) -> List[EvidenceProducer]:
+    """Same shape as `protocol_evidence_producers()` -- reads
+    `.dv-harness/lifecycle.json`'s own already-recorded `verification_level`
+    fact (the SAME fact key `CAP-M6-DISPATCH-001`'s own `--level` flag
+    already writes there, `lifecycle._FACT_KEYS`). Deliberately does NOT
+    also wire `verification_level.suggest_level()`'s own protocol-count
+    heuristic as a producer here -- that would let the harness silently
+    AUTO_DISCOVER (and therefore auto-resolve, for a field with no other
+    candidate) a HUMAN decision from a bare guess, exactly what owner
+    ruling D2 forbids. A recommendation is not evidence."""
+    root = Path(root)
+
+    def _fn(field_id: str, context: Dict[str, Any]) -> List[Candidate]:
+        return _lifecycle_fact_candidate(root, "verification_level")
+
+    return [EvidenceProducer(step="existing_files", name="lifecycle_recorded_verification_level", fn=_fn)]

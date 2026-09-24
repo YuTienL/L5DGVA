@@ -251,15 +251,17 @@ def main():
              "Never the default; every use is written to lifecycle.json's own "
              "bypasses list and emitted as a real LIFECYCLE_BYPASS event.")
     pstart.add_argument("--level", default=None,
-                        help="Stored as a real lifecycle fact (verification_level/"
-                             "level_source) for a future CAP-M5M6-VLEVEL-001 to read -- "
-                             "not interpreted by this command (VerificationLevel itself "
-                             "is out of CAP-M6-DISPATCH-001's own scope).")
+                        help="IP / SUBSYSTEM / SYSTEM_LEVEL (dv_harness/verification_level.py). "
+                             "Stored as a real lifecycle fact (verification_level/level_source); "
+                             "when --generate is also given, CAP-M5M6-VLEVEL-001 routes it through "
+                             "the same real Field Resolution/Clarification/HumanGate path as "
+                             "--protocols/--dut-role, then selects the real generation mode "
+                             "(environment_mode_router.py's IP_MODE/SUBSYSTEM_MODE/"
+                             "SYSTEM_LEVEL_MODE) -- an unset value is asked for, never guessed.")
     pstart.add_argument("--protocols", default=None,
                         help="Comma-separated protocol names, stored as a real lifecycle "
-                             "fact. Not interpreted for VerificationLevel/mode branching by "
-                             "this command; but M6 C1 (CAP-M6-C1-001) routes it through real "
-                             "Field Resolution/Clarification when --generate is also given, "
+                             "fact; M6 C1 (CAP-M6-C1-001) routes it through real Field "
+                             "Resolution/Clarification when --generate is also given, "
                              "so an unset value is asked for rather than silently skipped.")
     pstart.add_argument(
         "--dut-role", dest="dut_role", default=None,
@@ -6432,10 +6434,12 @@ def main():
         # CAP-M6-DISPATCH-001 (DEC-M6-DISPATCH-001, OPTION_A -- approved):
         # `start` converges on the one canonical lifecycle-first entry point
         # instead of calling loop()/run_stage() directly (item 1/2 of the
-        # approval). `--advanced` is the explicit, recorded bypass (item 15);
-        # `--level`/`--protocols` are stored as real lifecycle facts only,
-        # never interpreted here (VerificationLevel stays out of this task's
-        # scope, item 18).
+        # approval). `--advanced` is the explicit, recorded bypass (item 15).
+        # `--level` is passed straight through to start_lifecycle()'s own
+        # `level` parameter; when `--generate` is also given, start_lifecycle()
+        # (CAP-M5M6-VLEVEL-001) treats it as this call's DECLARED
+        # verification_level candidate for the same generation Field
+        # Resolution loop --protocols/--dut-role already go through.
         declared_protocols = tuple(
             p.strip() for p in (args.protocols or "").split(",") if p.strip()
         )

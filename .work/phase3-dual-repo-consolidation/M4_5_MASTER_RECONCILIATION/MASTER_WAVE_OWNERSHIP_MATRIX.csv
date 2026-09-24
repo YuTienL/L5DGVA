@@ -4,7 +4,7 @@ CAP-M5-ENV-001,env_manifest.py N-way merge,M5,,P2 (downgraded from P0 -- resolve
 CAP-M5-VIP-001,vip_capability_extraction.py N-way merge,M5,,P2 (downgraded from P0 -- resolved M5 Cohort 3),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-M6-DISPATCH-001,cli.py/dashboard.py dispatch-mechanism decision,M6,,"P2 (downgraded from P0 -- stale row, capability closed prior to this task)",NONE (RESOLVED -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-M6-CLARSVC-001,ClarificationService design+build,M6,M7,P2 (downgraded from P0 -- resolved this task),ENGINEERING (RESOLVED -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
-CAP-M5M6-VLEVEL-001,verification_level.py genericity foundation,M6,CAP-M6-CLARSVC-001;CAP-M5-ENV-001,P0,ENGINEERING (dependency-chain migration)
+CAP-M5M6-VLEVEL-001,verification_level.py genericity foundation,M6,CAP-M6-CLARSVC-001;CAP-M5-ENV-001,P2 (downgraded from P0 -- resolved this task),"NONE (RESOLVED, CAP-M5M6-VLEVEL-001)"
 CAP-M8-EXPLOOP-001,EXPERIENCE_READY event wiring (confirmed broken),M8,,P0,"ENGINEERING (pre-existing defect, all trees)"
 CAP-PLATFORM-000,Platform P1-P6 scope definition,PLATFORM_P1,,P1,PROCESS (no scoping wave has occurred)
 CAP-M4.5-003,L5DGVA Constitution full compliance qualification,M8,,P1,ENGINEERING (final-gate evidence not yet complete)
@@ -41,7 +41,7 @@ CAP-POOL-003,l5dgva_directive_blackboard_work_queue.py,M5,,P3 (unchanged -- reso
 CAP-POOL-004,l5dgva_kc_extraction.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-POOL-007,autonomous_resume_next_action_arbitration.py+independent_work_continuation.py,M7,,P3,ENGINEERING (dependency chain)
 CAP-POOL-008,l5dgva_v5_ss84_phase_entry_protocol_schema.py,M5,,P3 (unchanged -- resolved M5 Pool Closure),ENGINEERING (RESOLVED this task -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
-CAP-POOL-009,irq_contradiction_change_impact.py,M6,CAP-M5M6-VLEVEL-001,P3,ENGINEERING (dependency chain)
+CAP-POOL-009,irq_contradiction_change_impact.py,M6,CAP-M5M6-VLEVEL-001,P3,"ENGINEERING (dependency chain -- CAP-M5M6-VLEVEL-001 now RESOLVED, this dependency satisfied; still depends on question_queue.py per its own MASTER_CAPABILITY_STATUS_MATRIX.csv row)"
 CAP-POOL-010,falsified_hypothesis_ledger.py,M8,,P3,ENGINEERING (dependency chain)
 CAP-POOL-011,eight_engine_telemetry_rollup.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
 CAP-POOL-012,rtl_filelist_parser.py,M5,,P3 (unchanged -- resolved M5 Pool Closure),ENGINEERING (RESOLVED this task -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
@@ -66,7 +66,7 @@ CAP-HITL-006,HUMAN_GATE_CONTRACT,M6,CAP-M6-CLARSVC-001,P1,"ENGINEERING (schema d
 CAP-HITL-007,RCA_ROLE_ROUTING,M6,,P2,"ENGINEERING (routing table defined, dispatcher not wired)"
 CAP-HITL-008,ROLE_AWARE_EXPERIENCE_LEARNING,M8,CAP-M8-EXPLOOP-001,P1,ENGINEERING (blocked by CAP-M8-EXPLOOP-001)
 CAP-HITL-009,KNOWLEDGE_DOMAIN_CLASSIFICATION,M8,,P2,"PROCESS (taxonomy only, metadata field not added to schema yet)"
-CAP-HITL-010,IP_SUBSYSTEM_SYSTEM_ROLE_MODEL,M9,CAP-M5M6-VLEVEL-001,P2,PROCESS (definition only; blocked upstream by CAP-M5M6-VLEVEL-001 for IP_MODE specifically)
+CAP-HITL-010,IP_SUBSYSTEM_SYSTEM_ROLE_MODEL,M9,CAP-M5M6-VLEVEL-001,P2,PROCESS (definition only; CAP-M5M6-VLEVEL-001's own IP_MODE upstream block is now RESOLVED)
 CAP-HITL-011,ROLE_AWARE_SIGNOFF_TRACEABILITY,M10,,P2,"ENGINEERING (schema extension defined, not built)"
 CAP-HITL-012,ROLE_BASED_ACTION_DASHBOARD,M12,,P3,"PROCESS (routing concept only, no owner UI exists yet)"
 CAP-ATL-001,AGENT_TASK_LIFECYCLE,M6,CAP-M6-DISPATCH-001,P2,"PROCESS (join-layer concept only, no owner module built) | REASSIGNED M5->M6 by M5 Cohort 5"

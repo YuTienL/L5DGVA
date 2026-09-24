@@ -6501,10 +6501,15 @@ class DVHarness:
 
         `level`/`protocols` are stored as real lifecycle facts (`lifecycle.
         _FACT_KEYS` already reserves `verification_level`/`level_source`/
-        `protocols` for exactly this) but are never interpreted further --
-        VerificationLevel itself is explicitly out of this task's scope
-        (item 18 of DEC-M6-DISPATCH-001's approval); a future
-        CAP-M5M6-VLEVEL-001 migration has a proven place to read them from.
+        `protocols` for exactly this). CAP-M5M6-VLEVEL-001 (production
+        connectivity, superseding DEC-M6-DISPATCH-001 item 18's prior
+        "not interpreted further" scope limit): when `generation_request`
+        is also supplied, `level` becomes this call's DECLARED
+        verification_level candidate for the SAME generation Field
+        Resolution loop `protocols`/`role` already go through -- see
+        `generation_field_controls.verification_level_field_control()` and
+        the `resolved_generation_values`/`request["verification_level"]`
+        wiring below.
 
         `field_controls` now delegates to CAP-M6-CLARSVC-001's real
         `clarification_service.resolve_or_ask()` (which itself composes
@@ -6606,23 +6611,39 @@ class DVHarness:
         # module docstring for how this exact field set (not a larger or
         # smaller one) was derived.
         generation_controls: List[intake_field_resolution.FieldControl] = []
-        generation_declared: Dict[str, Optional[str]] = {}
-        generation_producers: Dict[str, List[intake_field_resolution.EvidenceProducer]] = {}
+        generation_field_specs: Dict[str, Dict[str, Any]] = {}
         if generation_request is not None:
-            protocol_control = generation_field_controls.protocol_field_control()
-            role_control = generation_field_controls.role_field_control()
-            generation_controls = [protocol_control, role_control]
-            generation_declared = {
-                generation_field_controls.PROTOCOL_FIELD_ID:
-                    generation_field_controls.declared_protocol_value(declared_protocols),
-                generation_field_controls.ROLE_FIELD_ID:
-                    generation_field_controls.declared_role_value(role),
-            }
-            generation_producers = {
-                generation_field_controls.PROTOCOL_FIELD_ID:
-                    generation_field_controls.protocol_evidence_producers(self.root),
-                generation_field_controls.ROLE_FIELD_ID:
-                    generation_field_controls.role_evidence_producers(self.root),
+            generation_controls = [
+                generation_field_controls.protocol_field_control(),
+                generation_field_controls.role_field_control(),
+                generation_field_controls.verification_level_field_control(),
+            ]
+            generation_field_specs = {
+                generation_field_controls.PROTOCOL_FIELD_ID: {
+                    "declared": generation_field_controls.declared_protocol_value(declared_protocols),
+                    "producers": generation_field_controls.protocol_evidence_producers(self.root),
+                    "validator": None,
+                    "fact_key": "protocols",
+                },
+                generation_field_controls.ROLE_FIELD_ID: {
+                    "declared": generation_field_controls.declared_role_value(role),
+                    "producers": generation_field_controls.role_evidence_producers(self.root),
+                    "validator": None,
+                    "fact_key": "role",
+                },
+                # CAP-M5M6-VLEVEL-001: verification_level reuses the SAME
+                # pre-existing `level` parameter CAP-M6-DISPATCH-001 already
+                # accepted (previously stored-but-uninterpreted); it is now
+                # ALSO a required generation field, resolved through the
+                # identical resolve_or_ask() engine as protocol/role, with
+                # its own stricter schema validator (IP/SUBSYSTEM/
+                # SYSTEM_LEVEL only, never merely non-blank).
+                generation_field_controls.VERIFICATION_LEVEL_FIELD_ID: {
+                    "declared": generation_field_controls.declared_verification_level_value(level),
+                    "producers": generation_field_controls.verification_level_evidence_producers(self.root),
+                    "validator": generation_field_controls._verification_level_validator,
+                    "fact_key": "verification_level",
+                },
             }
         field_controls_for_resolution = field_controls + generation_controls
         resolved_generation_values: Dict[str, str] = {}
@@ -6638,10 +6659,11 @@ class DVHarness:
             qstore = QuestionQueueStore(self.root)
             unresolved_ids: List[str] = []
             for control in field_controls_for_resolution:
-                if control.field_id in generation_declared:
+                spec = generation_field_specs.get(control.field_id)
+                if spec is not None:
                     outcome = clarification_service.resolve_or_ask(
-                        qstore, control, declared=generation_declared[control.field_id],
-                        producers=generation_producers[control.field_id])
+                        qstore, control, declared=spec["declared"], producers=spec["producers"],
+                        validator=spec["validator"])
                     if outcome.resolved:
                         resolved_generation_values[control.field_id] = outcome.effective_value.value
                 else:
@@ -6659,6 +6681,11 @@ class DVHarness:
                 lc.update_facts(protocols=[p.strip() for p in v.split(",") if p.strip()])
             if generation_field_controls.ROLE_FIELD_ID in resolved_generation_values:
                 lc.update_facts(role=resolved_generation_values[generation_field_controls.ROLE_FIELD_ID])
+            if generation_field_controls.VERIFICATION_LEVEL_FIELD_ID in resolved_generation_values:
+                lc.update_facts(
+                    verification_level=resolved_generation_values[
+                        generation_field_controls.VERIFICATION_LEVEL_FIELD_ID],
+                    level_source="field_resolution")
 
             if unresolved_ids:
                 lc.update_facts(intake_clarification_ids=unresolved_ids)
@@ -6718,6 +6745,8 @@ class DVHarness:
 
             effective_protocol = _effective(generation_field_controls.PROTOCOL_FIELD_ID, "protocols")
             effective_role = _effective(generation_field_controls.ROLE_FIELD_ID, "role")
+            effective_level = _effective(
+                generation_field_controls.VERIFICATION_LEVEL_FIELD_ID, "verification_level")
             if not effective_protocol:
                 reason = ("GENERATION_BLOCKED: generation_request was supplied but no "
                           "protocol has been resolved for this project yet.")
@@ -6728,9 +6757,15 @@ class DVHarness:
                           "role has been resolved for this project yet.")
                 return AgentResult(ok=False, text=reason, session_id=None,
                                    raw={"blocked_by": "generation_role_unresolved"})
+            if not effective_level:
+                reason = ("GENERATION_BLOCKED: generation_request was supplied but no "
+                          "verification_level has been resolved for this project yet.")
+                return AgentResult(ok=False, text=reason, session_id=None,
+                                   raw={"blocked_by": "generation_verification_level_unresolved"})
             request = dict(generation_request)
             request["protocol"] = effective_protocol
             request["role"] = effective_role
+            request["verification_level"] = effective_level
             try:
                 result = _create_environment_module.create_environment(
                     self.root, request, out_dir=generation_out_dir)

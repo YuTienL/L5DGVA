@@ -1012,11 +1012,37 @@ Never expose SSH private keys or credentials to Web/App or long-term memory.
 
 ## Environment Generation Mode
 
-Before CREATE ENVIRONMENT, select:
+Before CREATE ENVIRONMENT, select one of three official, semantically distinct
+verification levels (`dv_harness/verification_level.py`, `VerificationLevel`,
+`CAP-M5M6-VLEVEL-001`) — a HUMAN decision, never inferred from a heuristic:
+- IP_MODE: one IP/DUT with its VIP; no subsystem registry is involved.
 - SUBSYSTEM_MODE: build a protocol/subsystem environment.
 - SYSTEM_LEVEL_MODE: select/reuse completed subsystem environments and compose Full-SoC/System-Level environment.
 
 If a required subsystem is missing in SYSTEM_LEVEL_MODE, build it through SUBSYSTEM_MODE then return to composition.
+
+**`verification_level` is now a real, production-connected generation `FieldControl` (2026-09-24,
+`CAP-M5M6-VLEVEL-001`), the same status `protocol`/`role` already had.** `dv-harness start --level
+<IP|SUBSYSTEM|SYSTEM_LEVEL> --generate ...` resolves it through the identical Field Resolution/
+Clarification/HumanGate engine (`generation_field_controls.verification_level_field_control()`,
+validated against `verification_level.parse_level()`'s exact 3 spellings, never a bare non-blank
+check); an unresolved level blocks generation and files a real question exactly like an unresolved
+protocol/role does. `environment_mode_router.resolve_environment_mode()` gained one new, optional,
+backward-compatible evidence key (`verification_level`) — absent, the router is byte-identical to
+before this task (the original subsystem-count-only decision, `_resolve_by_subsystem_count()`);
+present, it selects the mode directly (`_resolve_with_level()`), adding the one mode the
+subsystem-count-only decision could never produce on its own: IP_MODE. All eleven
+`.claude/skills/PROTOCOL_BUILDERS/*/SKILL.md` pass `--level SUBSYSTEM` (this project's own
+established precedent: `environment_mode_policy.json`'s SUBSYSTEM_MODE examples list PCIe/USB/etc.
+as one-protocol builds, not IP-level ones). Full per-level (IP/SUBSYSTEM/SYSTEM_LEVEL) real
+end-to-end production-path proof, through the real `start_lifecycle()` → `create_environment()`
+entry point: `dv_harness_tests/test_m5m6_vlevel_001_production_connectivity.py`; field-resolution-
+family parity with protocol/role: `dv_harness_tests/test_m6_c1_golden_path_connectivity.py`; domain
+vocabulary: `dv_harness_tests/test_verification_level.py`; router-level IP_MODE cases:
+`dv_harness_tests/test_environment_mode_router.py`. DISCLOSED, deferred (not a defect): a
+SYSTEM_LEVEL_MODE composition request still needs `protocol`/`role` to resolve even though
+`create_environment()`'s own SYSTEM_LEVEL_MODE branch never reads the resolved protocol value for
+its dispatch logic — see that test file's own module docstring for the recorded design note.
 
 **Dispatched in code at the generation entry point (2026-09-04), not left to the agent.**
 `environment_mode_router.resolve_environment_mode()` had computed this decision on every stage

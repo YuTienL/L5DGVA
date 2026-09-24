@@ -573,3 +573,104 @@ NEXT_RECOMMENDED_GATE = CAP-M5M6-VLEVEL-001
 `CAP-M5M6-VLEVEL-001` as the next recommended gate is reporting, not
 starting it -- not auto-started, waiting for a separate, explicit
 dispatch.**
+
+## CAP-M5M6-VLEVEL-001 (2026-09-24) -- production-connects VerificationLevel
+
+Dispatched under Prime Directive V2 with an explicit objective beyond
+"implement `verification_level.py`": prove the complete production path
+Task Boundary -> VerificationLevel -> IP/SUBSYSTEM/SYSTEM_LEVEL -> real
+generation consumer, for all 3 levels, before closing. Full detail:
+`M6_PREFLIGHT/M6_VLEVEL_001_IMPLEMENTATION_REPORT.md`,
+`M6_PREFLIGHT/L5DGVA_PRODUCTION_CONNECTIVITY_STATUS.md`.
+
+`verification_level.py` (new, adapted from Parent's real, tested module)
+supplies the domain vocabulary. `verification_level` became a THIRD real
+generation `FieldControl` (alongside `protocol`/`role`), resolved through
+the identical `clarification_service.resolve_or_ask()` engine, with its own
+stricter schema validator. `environment_mode_router.resolve_environment_mode()`
+gained one new, optional, backward-compatible evidence key -- absent,
+byte-identical to before; present, it selects the mode directly, adding the
+one mode a subsystem-count-only decision could never produce: `IP_MODE`.
+`create_environment()`'s SUBSYSTEM_MODE dispatch branch widened to also
+accept `IP_MODE` -- the SAME `ProtocolEnvGenerator` path for both. All 11
+`PROTOCOL_BUILDERS` skills pass `--level SUBSYSTEM`; `dashboard.py` gained
+the same additive `level` parameter/JSON field CLI's pre-existing `--level`
+flag already had (`dashboard.py` was the one real gap CLI already covered).
+
+Real, disclosed, deferred findings (not defects, out of this task's own
+declared scope): a SYSTEM_LEVEL_MODE composition request still needs
+`protocol`/`role` to resolve even though the composition's own dispatch
+logic never reads them (GAP-V2-006); `_persist_subsystem_registry_entry()`
+(a separate, unmodified SIGNOFF-stage mechanism) has no
+`verification_level`/`environment_mode` awareness, so an IP_MODE-generated
+environment could in principle still be registered as a reusable subsystem
+later through that separate flow (GAP-V2-007). Both `REGISTER_AND_DEFER_
+WITH_OWNER`, `L5DGVA_CURRENT_SCOPE_GAP_REGISTER.csv`.
+
+```
+STRUCTURAL_CONNECTED_STAGES = 10   (was 8 -- stages 9/10 closed)
+PRODUCTION_CONNECTED_STAGES = 9   (was 8 -- stage 9 closed; stage 8, Task
+  Boundary, remains the one honest open production edge, pre-existing,
+  unchanged, out of this task's own scope. NOT forced to 10/10.)
+HITL_CONNECTED_STAGES = 5   (Clarification hand-off/QuestionOwner/
+  HumanGate/EffectiveValue-after-answer/answer->Field-Resolution -- the
+  same 5 human-decision-point stages already counted for protocol/role,
+  now also proven for verification_level: test_m6_c1_golden_path_
+  connectivity.py's HumanGate/answer-loop tests, extended this task)
+EVIDENCE_CONNECTED_STAGES = 9   (every stage in PRODUCTION_CONNECTED_STAGES
+  has a real, cited automated test asserting real evidence, not merely
+  "no exception raised" -- same count as PRODUCTION_CONNECTED_STAGES,
+  since every production-connected stage here happens to also be
+  evidence-connected; this is a coincidence of this task's own scope, not
+  a claimed general equivalence)
+QUALIFIED_CONNECTED_STAGES = 0   (QUALIFIED is the L5DGVA engine maturity
+  ladder's own top rung -- HIGH-confidence + re-derived independent
+  confirmation_count>=2 + organizational_admission_gate(), per the
+  Engineering Memory Policy above this file's own scope; this task proved
+  PRODUCTION_CONNECTED and EVIDENCE_CONNECTED, not QUALIFIED -- reported
+  honestly as 0, not conflated with the other 4 metrics)
+CURRENT_SCOPE_GAPS_OPEN = 0
+UNKNOWN_RUNTIME_CALLERS = 0
+UNCONTROLLED_BYPASSES = 0
+UNKNOWN_REGRESSION_FAILURES = 0
+AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT = 2   (was 3 -- CAP-M5M6-VLEVEL-001
+  resolved this task; CAP-CE-018 and CAP-M8-EXPLOOP-001 remain)
+```
+
+Regression: real caller-population sweep for the modules THIS task actually
+touched (`environment_mode_router.py`, `generation_field_controls.py`,
+`verification_level.py` [new], `clarification_service.py`, `engine.py`,
+`create_environment.py`, `dashboard.py`, `cli.py`) -- 27 files, 649/649
+pass, 0 failures, 0 regressions. Disclosed methodological note: this is a
+freshly-derived set (`grep -rl` for each touched module across
+`dv_harness_tests/`), narrower than the "47 dispatch-caller files" figure
+cited by GAP-V2-002/CLARSVC/C1/V2-adoption's own reports -- those tasks
+each touched `question_queue.py` directly, a much more widely-imported
+module; this task did not modify `question_queue.py`, so its own real
+caller population is genuinely smaller, not a reduced-rigor shortcut.
+Constitution gate: `PASS`, 0 reasons. All 5 frozen sources re-verified
+unchanged immediately before commit.
+
+Per this task's own explicit condition ("If STRUCTURAL_CONNECTED_STAGES =
+10/10 AND PRODUCTION_CONNECTED_STAGES = 10/10 AND CURRENT_SCOPE_GAPS_OPEN
+= 0 AND UNKNOWN_RUNTIME_CALLERS = 0 AND UNCONTROLLED_BYPASSES = 0 AND
+UNKNOWN_REGRESSION_FAILURES = 0, THEN NEXT_RECOMMENDED_GATE =
+M6_FINAL_OPERATIONAL_SLICE_QUALIFICATION; otherwise the exact remaining
+current-scope remediation gate") -- `PRODUCTION_CONNECTED_STAGES = 9/10`,
+not 10/10:
+
+```
+NEXT_RECOMMENDED_GATE = M6-TASK-BOUNDARY-PRODUCTION-001
+  (wire a real CLI --task-boundary flag / dashboard JSON field into
+  start_lifecycle()'s existing, real task_boundary= parameter -- the one
+  remaining stage-8 production gap, pre-existing and unrelated to
+  VerificationLevel)
+```
+
+**STOP. CAP-M5M6-VLEVEL-001 complete, CLOSED -- IP/SUBSYSTEM/SYSTEM_LEVEL
+all proven production-connected. M6 is explicitly NOT declared closed
+solely because VLEVEL closed (Task Boundary's own production gap remains
+open, per this task's own instruction). Naming `M6-TASK-BOUNDARY-
+PRODUCTION-001` as the next recommended gate is reporting, not starting
+it. M6 Final Qualification, M7, and later waves are NOT auto-started.
+`REFERENCE_USB_ENV_CONSUMED` remains NO.**

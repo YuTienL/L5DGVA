@@ -4,8 +4,8 @@ remediation (CAP-M6-GAPV2002-001).
 Confirms, with real production code (never mock-only/unit-only paths, per
 this task's own explicit instruction), that the two capability-island edges
 the Integration Prime Directive adoption audit found are now genuinely
-connected, for the real, derived field set (`protocol`, `role`) rather than
-a single field:
+connected, for the real, derived field set (`protocol`, `role`,
+`verification_level` -- CAP-M5M6-VLEVEL-001) rather than a single field:
 
   EDGE_A: production intake/field-controls -> ClarificationService
           (`generation_field_controls.py` projects `start_lifecycle()`'s
@@ -37,6 +37,22 @@ section 12), one section each below:
   13. ordinary (non-generation) calls stay a byte-identical no-op
       (REGRESSION_CAUSED_BY_C1 = 0 for every existing caller)
   14. (GAP-V2-002) role field: same 7 families as protocol, independently
+  15. (CAP-M5M6-VLEVEL-001) verification_level field: same 7 families as
+      protocol/role, independently -- see test_m5m6_vlevel_001_production_
+      connectivity.py for the dedicated per-level (IP/SUBSYSTEM/SYSTEM_LEVEL)
+      production-path proofs this file's own PCIe fixtures cannot cover.
+      Every HAPPY-PATH test below (one that expects `r.ok is True` or a
+      specific protocol/role-only unresolved-question set) now also declares
+      `level="subsystem"` (the real, established single-protocol-build
+      precedent -- environment_mode_policy.json's own SUBSYSTEM_MODE
+      examples list PCIe/USB/etc. as one-protocol builds), so the
+      pre-existing protocol/role assertions stay exactly what they were
+      testing before verification_level became a third required generation
+      field. The two single-field-unresolved tests (`..._no_declared_
+      protocol...`/`..._no_declared_role...`) deliberately leave `level`
+      undeclared too and assert membership rather than an exact question
+      set, so the incidental extra unresolved verification_level question
+      does not change what they prove.
 """
 from __future__ import annotations
 
@@ -97,7 +113,7 @@ def _wait_until_idle(dashboard_mod, root):
 def test_declared_protocol_and_role_resolve_silently_no_question_filed(root):
     h = DVHarness(root)
     h.adapter = _FakeAdapter()
-    r = h.start_lifecycle("build PCIe env", protocols=["pcie"], role="ep",
+    r = h.start_lifecycle("build PCIe env", protocols=["pcie"], role="ep", level="subsystem",
                           generation_request=_pcie_manifest(),
                           generation_out_dir=root / "out")
     assert r.ok is True, r.text
@@ -131,7 +147,8 @@ def test_no_declared_role_and_no_prior_fact_files_a_real_unresolved_question(roo
 def test_both_unresolved_files_two_real_questions_not_one(root):
     h = DVHarness(root)
     h.adapter = _FakeAdapter()
-    r = h.start_lifecycle("build a protocol env", generation_request=_pcie_manifest())
+    r = h.start_lifecycle("build a protocol env", level="subsystem",
+                          generation_request=_pcie_manifest())
     assert r.ok is False
     qs = QuestionQueueStore(root).list_questions()
     keys = {q["question_key"] for q in qs}
@@ -139,10 +156,27 @@ def test_both_unresolved_files_two_real_questions_not_one(root):
                     f"intake:{generation_field_controls.ROLE_FIELD_ID}"}
 
 
+def test_all_three_unresolved_files_three_real_questions(root):
+    """CAP-M5M6-VLEVEL-001: verification_level joins protocol/role as a
+    third real generation FieldControl -- declaring none of the three files
+    exactly three real unresolved questions, not two."""
+    h = DVHarness(root)
+    h.adapter = _FakeAdapter()
+    r = h.start_lifecycle("build a protocol env", generation_request=_pcie_manifest())
+    assert r.ok is False
+    qs = QuestionQueueStore(root).list_questions()
+    keys = {q["question_key"] for q in qs}
+    assert keys == {f"intake:{generation_field_controls.PROTOCOL_FIELD_ID}",
+                    f"intake:{generation_field_controls.ROLE_FIELD_ID}",
+                    f"intake:{generation_field_controls.VERIFICATION_LEVEL_FIELD_ID}"}
+    assert h.adapter.calls == 0
+
+
 def test_previously_recorded_protocol_and_role_auto_resolve_a_later_generation_call(root):
     h1 = DVHarness(root)
     h1.adapter = _FakeAdapter()
-    r1 = h1.start_lifecycle("declare protocol/role only", protocols=["usb"], role="device")
+    r1 = h1.start_lifecycle("declare protocol/role only", protocols=["usb"], role="device",
+                            level="subsystem")
     assert r1 is not None
 
     h2 = DVHarness(root)
@@ -164,7 +198,8 @@ def test_protocol_and_role_question_owner_is_verification(root):
     h.start_lifecycle("build env", generation_request=_pcie_manifest())
     qs = QuestionQueueStore(root).list_questions()
     by_key = {q["question_key"]: q for q in qs}
-    for field_id in (generation_field_controls.PROTOCOL_FIELD_ID, generation_field_controls.ROLE_FIELD_ID):
+    for field_id in (generation_field_controls.PROTOCOL_FIELD_ID, generation_field_controls.ROLE_FIELD_ID,
+                     generation_field_controls.VERIFICATION_LEVEL_FIELD_ID):
         q = by_key[f"intake:{field_id}"]
         assert q["authority_role"] == "VERIFICATION"
         assert q["domain"] == "env"
@@ -184,10 +219,12 @@ def test_human_answers_unblock_generation_and_are_persisted_as_lifecycle_facts(r
     by_key = {q["question_key"]: q for q in qs}
     protocol_qid = by_key[f"intake:{generation_field_controls.PROTOCOL_FIELD_ID}"]["id"]
     role_qid = by_key[f"intake:{generation_field_controls.ROLE_FIELD_ID}"]["id"]
+    level_qid = by_key[f"intake:{generation_field_controls.VERIFICATION_LEVEL_FIELD_ID}"]["id"]
 
     store = QuestionQueueStore(root)
     store.answer_question(protocol_qid, answer="pcie", basis="confirmed", decided_by="dv_engineer_1")
     store.answer_question(role_qid, answer="ep", basis="confirmed", decided_by="dv_engineer_1")
+    store.answer_question(level_qid, answer="SUBSYSTEM", basis="confirmed", decided_by="dv_engineer_1")
 
     h2 = DVHarness(root)
     h2.adapter = _FakeAdapter()
@@ -199,6 +236,8 @@ def test_human_answers_unblock_generation_and_are_persisted_as_lifecycle_facts(r
     data = LifecycleStore(root).load()
     assert data.get("protocols") == ["pcie"]
     assert data.get("role") == "ep"
+    assert data.get("verification_level") == "SUBSYSTEM"
+    assert data.get("level_source") == "field_resolution"
 
 
 def test_only_one_field_answered_still_blocks_on_the_other(root):
@@ -248,8 +287,8 @@ def test_cli_start_generate_propagates_protocol_role_and_manifest_into_start_lif
     monkeypatch.setattr(DVHarness, "__init__", _patched_init)
     monkeypatch.setattr(sys, "argv", [
         "dv-harness", "--project-root", str(root), "start", "--goal", "build PCIe env",
-        "--protocols", "pcie", "--dut-role", "ep", "--generate", "--generate-out", str(out_dir),
-        "--generate-manifest", str(manifest_path),
+        "--protocols", "pcie", "--dut-role", "ep", "--level", "SUBSYSTEM", "--generate",
+        "--generate-out", str(out_dir), "--generate-manifest", str(manifest_path),
     ])
     with pytest.raises(SystemExit) as exc:
         cli_mod.main()
@@ -257,6 +296,7 @@ def test_cli_start_generate_propagates_protocol_role_and_manifest_into_start_lif
     kw = calls["kwargs"]
     assert kw["protocols"] == ("pcie",)
     assert kw["role"] == "ep"
+    assert kw["level"] == "SUBSYSTEM"
     assert kw["generation_request"]["clocks"] == [{"name": "refclk"}]
     assert kw["generation_out_dir"] == out_dir
 
@@ -284,8 +324,8 @@ def test_cli_start_generate_prints_a_structured_json_envelope_matching_the_legac
     monkeypatch.setattr(DVHarness, "__init__", _patched_init)
     monkeypatch.setattr(sys, "argv", [
         "dv-harness", "--project-root", str(root), "start", "--goal", "build PCIe env",
-        "--protocols", "pcie", "--dut-role", "ep", "--generate", "--generate-out", str(out_dir),
-        "--generate-manifest", str(manifest_path),
+        "--protocols", "pcie", "--dut-role", "ep", "--level", "SUBSYSTEM", "--generate",
+        "--generate-out", str(out_dir), "--generate-manifest", str(manifest_path),
     ])
     with pytest.raises(SystemExit) as exc:
         cli_mod.main()
@@ -314,7 +354,7 @@ def test_cli_start_generate_failure_prints_a_structured_json_envelope_with_statu
     # No --generate-out for a SUBSYSTEM_MODE request -> MissingOutputDirectoryError.
     monkeypatch.setattr(sys, "argv", [
         "dv-harness", "--project-root", str(root), "start", "--goal", "build PCIe env",
-        "--protocols", "pcie", "--dut-role", "ep", "--generate",
+        "--protocols", "pcie", "--dut-role", "ep", "--level", "SUBSYSTEM", "--generate",
         "--generate-manifest", str(manifest_path),
     ])
     with pytest.raises(SystemExit) as exc:
@@ -335,13 +375,14 @@ def test_dashboard_start_background_run_propagates_generation_fields(root):
     assert not dashboard_mod._is_running(root)
     dashboard_mod._start_background_run(
         root, "build PCIe env", loop=False, adapter_factory=lambda: _FakeAdapter(),
-        protocols=("pcie",), role="ep", generation_request=_pcie_manifest(),
+        protocols=("pcie",), role="ep", level="subsystem", generation_request=_pcie_manifest(),
         generation_out_dir=root / "dash_out")
     _wait_until_idle(dashboard_mod, root)
     assert QuestionQueueStore(root).list_questions() == []
     data = LifecycleStore(root).load()
     assert data.get("protocols") == ["pcie"]
     assert data.get("role") == "ep"
+    assert data.get("verification_level") == "subsystem"
 
 
 def test_dashboard_start_background_run_with_no_generation_fields_is_unchanged(root):
@@ -377,13 +418,14 @@ def test_generation_dispatch_calls_create_environment_directly_never_recurses(ro
 
     h = DVHarness(root)
     h.adapter = _FakeAdapter()
-    r = h.start_lifecycle("build PCIe env", protocols=["pcie"], role="ep",
+    r = h.start_lifecycle("build PCIe env", protocols=["pcie"], role="ep", level="subsystem",
                           generation_request=_pcie_manifest(),
                           generation_out_dir=root / "out")
     assert r.ok is True, r.text
     assert calls["n"] == 1
     assert calls["request"]["protocol"] == "pcie"
     assert calls["request"]["role"] == "ep"
+    assert calls["request"]["verification_level"] == "subsystem"
     # No lifecycle recursion: the ordinary Stage-graph adapter (what
     # loop()/run_stage() would call) was never invoked by the generation path.
     assert h.adapter.calls == 0
@@ -411,7 +453,7 @@ def test_a_rejected_protocol_model_topology_returns_a_real_agent_result_not_an_u
                     "role": "EP", STATE_SIGNAL_KEY: "u_pcie_ctrl.ltssm_state_q"}
     h = DVHarness(root)
     h.adapter = _FakeAdapter()
-    r = h.start_lifecycle("build PCIe env", protocols=["PCIe"], role="ep",
+    r = h.start_lifecycle("build PCIe env", protocols=["PCIe"], role="ep", level="subsystem",
                           generation_request=_pcie_manifest(**{TOPOLOGY_KEY: bad_topology}),
                           generation_out_dir=root / "out")
     assert r.ok is False
@@ -445,7 +487,7 @@ def test_generation_failure_is_a_real_agent_result_not_an_uncaught_exception(roo
     h.adapter = _FakeAdapter()
     # No out_dir supplied for a SUBSYSTEM_MODE request -> create_environment()'s
     # own documented MissingOutputDirectoryError.
-    r = h.start_lifecycle("build PCIe env", protocols=["pcie"], role="ep",
+    r = h.start_lifecycle("build PCIe env", protocols=["pcie"], role="ep", level="subsystem",
                           generation_request=_pcie_manifest())
     assert r.ok is False
     assert r.raw["blocked_by"] == "generation"

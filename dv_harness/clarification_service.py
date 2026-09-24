@@ -73,11 +73,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .intake_field_resolution import (
+    Candidate,
     Confidence,
     EffectiveValue,
     EvidenceProducer,
     FieldControl,
     QuestionDecision,
+    ValidationState,
     evaluate_question_gate,
     field_is_sufficient,
     file_clarification,
@@ -162,6 +164,7 @@ def resolve_or_ask(
     min_confidence: Confidence = Confidence.LOW,
     context_path: str = "intake workbook",
     downstream_impact: str = "",
+    validator: Optional[Callable[[str, "Candidate"], "tuple[ValidationState, str]"]] = None,
 ) -> ClarificationOutcome:
     """The one real `ClarificationService` entry point: consume unresolved
     Field Resolution results, determine whether human clarification is
@@ -180,9 +183,24 @@ def resolve_or_ask(
     required condition -- says so. A field with `AutoDiscoveredValue`/
     `DerivedValue` sufficient to resolve it never reaches the question path
     at all (see `test_no_question_when_automatically_resolved`).
+
+    `validator` (`CAP-M5M6-VLEVEL-001`, additive): an optional pass-through
+    to `resolve_field()`'s own pre-existing `validator=` parameter (real,
+    already there since `intake_field_resolution.py`'s own foundation --
+    this module simply never exposed it before). `None` (the default)
+    means `resolve_field()`'s own `default_validator` (a bare non-blank
+    check) -- byte-identical to every call site that predates this
+    parameter. A caller with a real, narrower value domain (e.g.
+    `generation_field_controls.py`'s own `verification_level`, which must
+    be exactly IP/SUBSYSTEM/SYSTEM_LEVEL, never merely non-blank) can now
+    supply a stricter schema-level check without a second Field Resolution
+    engine or a second validation mechanism -- still the same one real
+    `_validated()`/`_decide()` pipeline every other field already runs
+    through.
     """
     ev = resolve_field(control, declared=declared, producers=producers,
-                       context=context, min_confidence=min_confidence)
+                       context=context, min_confidence=min_confidence,
+                       validator=validator)
     if field_is_sufficient(control, ev):
         return ClarificationOutcome(ev, resolved=True, asked=False, answered=False,
                                     question=None, question_owner=None)
@@ -207,7 +225,8 @@ def resolve_or_ask(
     existing = store.get_question(qid)
     if existing is not None and existing.get("answer") is not None:
         ev2 = resolve_field(control, declared=declared, producers=producers, context=context,
-                            min_confidence=min_confidence, human_answer=existing["answer"])
+                            min_confidence=min_confidence, human_answer=existing["answer"],
+                            validator=validator)
         return ClarificationOutcome(
             ev2, resolved=field_is_sufficient(control, ev2), asked=False, answered=True,
             question=existing, question_owner=existing.get("authority_role") or owner)

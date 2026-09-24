@@ -37,7 +37,7 @@ Since 2026-09-04 that same topology can instead be carried as a
 governed generation entry point layers the fabric model onto the generic
 skeleton in one run (see `dv_harness/uvm_generator/protocol_model_layer.py`):
 `dv-harness start --goal "<goal>" --protocols amba4 --dut-role <role>
---generate --generate-out <dir> --generate-manifest <m.json>`
+--level SUBSYSTEM --generate --generate-out <dir> --generate-manifest <m.json>`
 (GAP-V2-002: same governed Field Resolution/Clarification path every other
 `PROTOCOL_BUILDERS` skill converges on; `tools/generate_protocol_uvm_
 environment.py` itself, which this used to call directly, is now an

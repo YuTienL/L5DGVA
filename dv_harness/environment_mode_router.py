@@ -108,18 +108,109 @@ def _norm_list(values: Any) -> List[str]:
 
 
 def resolve_environment_mode(evidence: Dict[str, Any]) -> Dict[str, Any]:
-    """Resolves SUBSYSTEM_MODE vs SYSTEM_LEVEL_MODE from structured
-    evidence (module docstring above has the full ruling). `evidence` keys:
+    """Resolves the environment mode from structured evidence (module
+    docstring above has the SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE ruling).
+    `evidence` keys:
       - requested_subsystems: list[str] -- what this run wants built/verified.
       - existing_registered_subsystems: list[str] -- real registry contents
         (see read_registered_subsystem_names() above); an absent/empty list
         is treated as "nothing registered yet", not an error.
+      - verification_level: optional str (IP / SUBSYSTEM / SYSTEM_LEVEL,
+        `dv_harness/verification_level.py`, `CAP-M5M6-VLEVEL-001`). Absent
+        (the default) -> byte-identical to before this parameter existed,
+        the subsystem-count decision below. Present -> the declared level
+        selects the mode directly (see `_resolve_with_level()`), adding the
+        one mode the count-only decision can never produce on its own:
+        `IP_MODE` (`VerificationLevel.IP` -- "one IP/DUT with its VIP; no
+        subsystem registry is involved," `verification_level.
+        LEVEL_SEMANTICS`). Ported from Parent's own real, tested
+        `_resolve_with_level()`/`_resolve_by_subsystem_count()` split
+        (`D:\\DV\\Task\\DV_Agent_Harness_L5\\dv_harness\\
+        environment_mode_router.py`), adapted to this module's own real
+        `_norm_list()`/`read_registered_subsystem_names()` helpers rather
+        than blind-copied.
 
     Two structurally different evidence dicts (one requested_subsystems
     entry vs. two-or-more) are guaranteed to land on a different
     environment_mode here -- this is what makes the decision genuinely
     input-driven rather than the harness only ever falling back to reading
     the static environment_mode_policy.json file."""
+    if evidence.get("verification_level") is not None:
+        return _resolve_with_level(evidence)
+    return _resolve_by_subsystem_count(evidence)
+
+
+def _resolve_with_level(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """`verification_level` was declared -- it selects the mode directly.
+
+      - IP            -> IP_MODE; no subsystem-count requirement at all
+                        (LEVEL_SEMANTICS[IP].min_subsystems == 0).
+      - SYSTEM_LEVEL  -> SYSTEM_LEVEL_MODE, but still needs 2+ requested
+                        subsystems (SYSTEM_LEVEL_NEEDS_TWO_OR_MORE_
+                        SUBSYSTEMS otherwise -- a declared level does not
+                        excuse the real composition-arity requirement).
+      - SUBSYSTEM     -> SUBSYSTEM_MODE for 1+ requested; falls through to
+                        the ordinary count-based decision (which still
+                        requires at least one) when none is requested yet.
+      - anything else -> unresolved INVALID_VERIFICATION_LEVEL, never
+                        guessed (parse_level() is an exact-spelling parser)."""
+    from .verification_level import VerificationLevel, parse_level
+    level = parse_level(evidence.get("verification_level"))
+    requested = _norm_list(evidence.get("requested_subsystems"))
+    if level is None:
+        return {
+            "resolved": False, "environment_mode": None, "verification_level": None,
+            "requested_subsystems": requested, "missing_subsystems": [],
+            "reused_subsystems": [], "needs_subsystem_mode_first": False,
+            "reason": "INVALID_VERIFICATION_LEVEL",
+            "evidence": (f"verification_level {evidence.get('verification_level')!r} is not "
+                         "one of IP / SUBSYSTEM / SYSTEM_LEVEL"),
+        }
+    if level is VerificationLevel.IP:
+        return {
+            "resolved": True, "environment_mode": "IP_MODE", "verification_level": "IP",
+            "requested_subsystems": requested, "missing_subsystems": [],
+            "reused_subsystems": [], "needs_subsystem_mode_first": False,
+            "candidate_subsystems": _norm_list(evidence.get("candidate_subsystems")),
+            "unselected_candidates": [],
+            "next_action": "generate the single-IP protocol environment",
+            "evidence": "verification_level=IP selected by the user -> IP_MODE "
+                        "(no subsystem registry is involved)",
+        }
+    if level is VerificationLevel.SYSTEM_LEVEL and len(requested) < 2:
+        return {
+            "resolved": False, "environment_mode": None, "verification_level": level.value,
+            "requested_subsystems": requested, "missing_subsystems": [],
+            "reused_subsystems": [], "needs_subsystem_mode_first": False,
+            "reason": "SYSTEM_LEVEL_NEEDS_TWO_OR_MORE_SUBSYSTEMS",
+            "evidence": (f"verification_level=SYSTEM_LEVEL composes completed subsystems, "
+                         f"but {len(requested)} requested"),
+        }
+    if level is VerificationLevel.SUBSYSTEM and requested:
+        existing = {s.lower() for s in _norm_list(evidence.get("existing_registered_subsystems"))}
+        return {
+            "resolved": True, "environment_mode": "SUBSYSTEM_MODE", "verification_level": "SUBSYSTEM",
+            "requested_subsystems": requested,
+            "missing_subsystems": [s for s in requested if s.lower() not in existing],
+            "reused_subsystems": [s for s in requested if s.lower() in existing],
+            "needs_subsystem_mode_first": False,
+            "candidate_subsystems": _norm_list(evidence.get("candidate_subsystems")),
+            "unselected_candidates": [],
+            "next_action": "build/register the subsystem via SUBSYSTEM_MODE",
+            "evidence": "verification_level=SUBSYSTEM selected by the user -> SUBSYSTEM_MODE",
+        }
+    decision = _resolve_by_subsystem_count(evidence)
+    decision["verification_level"] = level.value
+    return decision
+
+
+def _resolve_by_subsystem_count(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """The original (pre-`CAP-M5M6-VLEVEL-001`) SUBSYSTEM_MODE-vs-
+    SYSTEM_LEVEL_MODE decision, unchanged -- reached directly when
+    `verification_level` is absent (byte-identical to every caller that
+    predates this module's own `verification_level` parameter), and as the
+    fallback inside `_resolve_with_level()` for a declared `SUBSYSTEM`
+    level with nothing yet requested."""
     requested = _norm_list(evidence.get("requested_subsystems"))
     existing = {s.lower() for s in _norm_list(evidence.get("existing_registered_subsystems"))}
     # SYS-1 ("USER CONTROLS SYSTEM COMPOSITION"): the discovered candidate

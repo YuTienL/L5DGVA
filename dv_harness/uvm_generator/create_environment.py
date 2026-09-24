@@ -417,17 +417,25 @@ def create_environment(root: Path, request: Dict[str, Any],
         written (generated/soc_composition/<soc_name>/, the SAME path
         engine.py's _compose_soc_environment_files() uses -- both call
         soc_composition_out_dir()).
-      request: the generation manifest. SUBSYSTEM_MODE passes it through to
-        ProtocolEnvGenerator.generate() unchanged; SYSTEM_LEVEL_MODE passes
-        it through to compose_soc_environment() as the composition
-        `manifest` (soc_name/shared_clocks/shared_resets/
+      request: the generation manifest. An optional `verification_level`
+        key (`CAP-M5M6-VLEVEL-001`, IP/SUBSYSTEM/SYSTEM_LEVEL) selects the
+        mode directly through `resolve_environment_mode()` when present;
+        absent, the mode is still resolved purely from
+        `requested_subsystems`/registry state, byte-identical to before
+        this key existed. SUBSYSTEM_MODE and IP_MODE both pass the request
+        through to ProtocolEnvGenerator.generate() unchanged (the SAME
+        generation mechanism -- IP_MODE differs only in the reported
+        `environment_mode` label and its own downstream registry-
+        eligibility implications, never a second generator);
+        SYSTEM_LEVEL_MODE passes it through to compose_soc_environment() as
+        the composition `manifest` (soc_name/shared_clocks/shared_resets/
         cross_subsystem_scenarios/... -- soc_composition_manifest_template
         .json's own schema), reusing the one dict rather than inventing a
         second request schema.
-      out_dir: explicit output directory. REQUIRED for SUBSYSTEM_MODE (there
-        is no project-wide convention for where one protocol environment
-        lands -- the caller has always chosen it, via the tool's --out);
-        optional for SYSTEM_LEVEL_MODE.
+      out_dir: explicit output directory. REQUIRED for SUBSYSTEM_MODE and
+        IP_MODE (there is no project-wide convention for where one
+        protocol/IP environment lands -- the caller has always chosen it,
+        via the tool's --out); optional for SYSTEM_LEVEL_MODE.
 
     Returns a dict carrying `environment_mode`, the full router `decision`
     (so a caller can log WHY this mode was chosen, not just which), the
@@ -456,10 +464,19 @@ def create_environment(root: Path, request: Dict[str, Any],
     root = Path(root)
     requested = _requested_subsystems(request)
     registered_entries = read_registered_subsystem_entries(root)
-    decision = resolve_environment_mode({
+    router_evidence = {
         "requested_subsystems": requested,
         "existing_registered_subsystems": [e["name"] for e in registered_entries],
-    })
+    }
+    # CAP-M5M6-VLEVEL-001: an explicit verification_level in the request
+    # (the governed, resolved EffectiveValue -- see engine.py's
+    # start_lifecycle()) selects the mode directly, adding the one real
+    # mode the subsystem-count-only decision can never produce on its own,
+    # IP_MODE. Absent (every caller that predates this) -> byte-identical
+    # to before this key existed.
+    if request.get("verification_level") is not None:
+        router_evidence["verification_level"] = request["verification_level"]
+    decision = resolve_environment_mode(router_evidence)
 
     if not decision.get("resolved"):
         raise EnvironmentModeUnresolvedError(decision.get("reason", "MODE_UNRESOLVED"), {
@@ -467,7 +484,7 @@ def create_environment(root: Path, request: Dict[str, Any],
             "request_keys": sorted(request.keys()),
         })
 
-    if decision["environment_mode"] == "SUBSYSTEM_MODE":
+    if decision["environment_mode"] in ("SUBSYSTEM_MODE", "IP_MODE"):
         if out_dir is None:
             raise MissingOutputDirectoryError("SUBSYSTEM_MODE_REQUIRES_OUT_DIR", {
                 "decision": decision,

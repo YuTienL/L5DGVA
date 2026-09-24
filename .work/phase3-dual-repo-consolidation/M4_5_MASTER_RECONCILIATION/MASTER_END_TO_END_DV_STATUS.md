@@ -40,14 +40,30 @@ nearer wave (`M5`/`M6`/`M7`/`M8`/`M9`/`M10`) contributes a named
 
 ## IP_MODE
 
+**Unblocked (2026-09-24, `CAP-M5M6-VLEVEL-001`)**: `verification_level.py`
+now exists and `environment_mode_router.resolve_environment_mode()` now has
+a real `IP_MODE` branch (`_resolve_with_level()`); `create_environment()`'s
+SUBSYSTEM_MODE dispatch branch widened to `("SUBSYSTEM_MODE", "IP_MODE")`.
+
 | # | Stage | Status | Notes |
 |---|---|---|---|
-| 1 | OpenSpec Intake | **BLOCKED (first non-operational stage)** | `environment_mode_router.py` has no `IP_MODE` concept at all; there is no entry point to reach IP-level intake in the first place |
-| 2–17 | Knowledge Retrieval … Experience Consolidation | BLOCKED (downstream of #1) | Every later stage is unreachable while #1 has no router entry point |
+| 1 | OpenSpec Intake | **WIRED for all real production callers** | `dv-harness start --level IP --generate ...` (CLI) / dashboard `level:"IP"` JSON resolve `verification_level` through the SAME `ClarificationService`/Field-Resolution engine `protocol`/`role` already use, then `environment_mode_router.resolve_environment_mode()` selects `IP_MODE` directly. Full per-level production-path proof: `dv_harness_tests/test_m5m6_vlevel_001_production_connectivity.py::test_ip_level_full_production_path` |
+| 2 | Knowledge Retrieval | NOT_RE-AUDITED_THIS_WAVE | out of `CAP-M5M6-VLEVEL-001`'s own declared scope (Task Boundary -> VerificationLevel -> IP/SUBSYSTEM/SYSTEM_LEVEL -> generation consumer, ending at `create_environment()`'s own output) |
+| 3 | Discovery | NOT_RE-AUDITED_THIS_WAVE | same |
+| 4 | Clarification | **WIRED, same mechanism as stage 1** | `verification_level_field_control()`'s own resolution IS the Clarification stage for this field -- proven jointly with stage 1 |
+| 5 | vPlan | PARTIAL (downstream of #4, same as SUBSYSTEM_MODE) | |
+| 6 | VIP/UVM Generation | **WIRED** | `create_environment()` dispatches IP_MODE to the SAME `ProtocolEnvGenerator` SUBSYSTEM_MODE uses -- real generated files confirmed, `test_ip_level_full_production_path` |
+| 7–17 | Sequence/Scenario/FW … Experience Consolidation | NOT_RE-AUDITED_THIS_WAVE except where already tracked for SUBSYSTEM_MODE (same generator, same disclosed boundaries) | |
 
 ```
-IP_MODE_FIRST_NON_OPERATIONAL_STAGE = "1. OpenSpec Intake" (mode-selection foundation itself)
-IP_MODE_OWNER_WAVE = M6 (CAP-M5M6-VLEVEL-001 -- verification_level.py / IP_MODE genericity foundation)
+IP_MODE_FIRST_NON_OPERATIONAL_STAGE = UNKNOWN_PENDING_STAGE_2_3_RE_AUDIT
+  (no longer "1. OpenSpec Intake" -- that stage's real router/Field-
+  Resolution entry point now exists and is production-connected,
+  CAP-M5M6-VLEVEL-001; stages 2-3 have never been re-audited with real
+  evidence, same disclosed unknown SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE
+  already carry, not claimed OPERATIONAL by omission)
+IP_MODE_OWNER_WAVE = M6 (CAP-M5M6-VLEVEL-001 -- CLOSED; the next real work
+  here is auditing stages 2-3, same as the other two modes)
 ```
 
 ## SUBSYSTEM_MODE
@@ -93,12 +109,14 @@ SYSTEM_LEVEL_MODE_OWNER_WAVE = M6 (CAP-M6-CLARSVC-001, CAP-M6-C1-001 -- both CLO
 
 ## Cross-level reading
 
-`IP_MODE` is blocked at the very first stage (no router entry point at
-all) — a strictly earlier and more severe gap than `SUBSYSTEM_MODE`/
-`SYSTEM_LEVEL_MODE`, both of which reach real intake dispatch before
-reaching the Clarification stage. **Closing `CAP-M5M6-VLEVEL-001`
-(owner M6) unblocks IP_MODE's stage 1** — still open, still the real
-remaining P0 M6 blocker.
+**Updated 2026-09-24 (`CAP-M5M6-VLEVEL-001`, CLOSED)**: `IP_MODE`'s prior
+first-stage block (no router entry point at all) is resolved -- all three
+modes now reach the identical real intake/Field-Resolution/Clarification
+dispatch before stage 2, and each has its own real per-level production-path
+proof (`dv_harness_tests/test_m5m6_vlevel_001_production_connectivity.py`).
+All three modes now share the SAME first honestly-unknown point (stages 2-3,
+Knowledge Retrieval/Discovery, `NOT_RE-AUDITED_THIS_WAVE`) rather than
+`IP_MODE` being a strictly earlier, more severe gap than the other two.
 
 **Second disclosed correction (M6 Golden-Path Connectivity Closure C1,
 this wave)**: the Integration Prime Directive adoption reconciliation's
@@ -126,8 +144,12 @@ this table cannot yet claim any stage `OPERATIONAL` end-to-end, and the
 `SYSTEM_LEVEL_MODE` is honestly `UNKNOWN_PENDING_STAGE_2_3_RE_AUDIT`
 rather than moved to a stage nobody has re-checked.
 
-No stage at any level is claimed `OPERATIONAL` end-to-end — consistent
-with `CANONICAL_CAPABILITY_STRICT_SUPERSET = NOT_YET_QUALIFIED`.
+**Fourth update (`CAP-M5M6-VLEVEL-001`, 2026-09-24)**: `IP_MODE`'s own
+first-stage block is now closed (see the updated `## IP_MODE` table and
+`## Cross-level reading` above) -- all three modes reach the identical real
+dispatch point before stage 2. No stage at any level is claimed
+`OPERATIONAL` end-to-end — consistent with
+`CANONICAL_CAPABILITY_STRICT_SUPERSET = NOT_YET_QUALIFIED`.
 
 ## DE/DV Role-Based HITL overlay (added by the DE/DV roadmap reconciliation)
 
