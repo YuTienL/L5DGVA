@@ -106,6 +106,45 @@ HUMAN_DECISION_REQUIRED
 
 `DOCUMENT_ONLY` is invalid for a current-scope correctness defect.
 
+## P6 --- Result → Action → Autonomous Closure
+
+`HUMAN_IS_TRANSPORT_AND_AUTHORITY=YES`, `HUMAN_IS_WORKFLOW_SCHEDULER=NO`.
+
+Once a returned model result is validated and consumed, the system
+classifies and executes the next permitted action autonomously:
+
+``` text
+RESULT VALIDATED → RESULT CONSUMED → FINDINGS/STATUS CLASSIFIED
+→ ACTION ROUTER → {AUTO_ACTIONABLE | HUMAN_GATE_REQUIRED
+                    | REGISTER_AND_DEFER | CLOSE_WITH_EVIDENCE}
+```
+
+`AUTO_ACTIONABLE` runs the full P5 FIND → FIX → VERIFY loop
+(RCA → Fix → Verify → Regression → Re-review) without asking "should I
+continue/fix this" between stages. Full detail (Result-to-Action Router,
+Auto-Remediation Eligibility, Loop Termination/Budget, Evidence
+Traceability): `dv_harness/result_action_router.py`,
+`docs/architecture/canonical_detailed_governance/
+L5DGVA_RESULT_DRIVEN_AUTONOMOUS_CLOSED_LOOP_REQUIREMENTS.md`.
+
+Human intervention is reserved for genuine boundaries only:
+
+``` text
+HumanGate (a real HUMAN_DECISION_REQUIRED result, or a fix requiring
+  Human Authority / a protected-architecture change / scope expansion /
+  security expansion / a frozen-source modification / a new human
+  decision not already covered by this directive)
+Human Transport (a handoff ready for a human to physically carry to an
+  external model/system)
+A genuine blocker preventing safe continuation
+```
+
+Asking "should I continue this already-authorized remediation" is not
+one of these three and must not happen. Loop-budget exhaustion,
+no-progress, repeated-failure/repeated-finding, or scope/regression
+expansion is a real `HUMAN_ESCALATION_THRESHOLD` HumanGate, never a
+silent PASS.
+
 ## Correctness and Closure
 
 Unit tests alone are insufficient. Evaluate as applicable:
