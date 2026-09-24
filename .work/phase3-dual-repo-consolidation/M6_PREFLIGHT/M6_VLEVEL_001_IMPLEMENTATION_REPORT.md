@@ -1,5 +1,10 @@
 # CAP-M5M6-VLEVEL-001 Implementation Report
 
+```
+START_HEAD = 66d7c0da7770cba6770a5fbf89f162a3e25209cb
+END_HEAD   = 183dd7f7f4f001611a4a15be714737f10ca1e0cd
+```
+
 Dispatched under Prime Directive V2. Objective (verbatim from the dispatch,
 not paraphrased down): not merely "implement `verification_level.py`" but
 production-connect Task Boundary -> VerificationLevel -> IP/SUBSYSTEM/
