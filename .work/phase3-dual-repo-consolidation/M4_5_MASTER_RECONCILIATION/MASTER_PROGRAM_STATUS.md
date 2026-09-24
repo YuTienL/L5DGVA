@@ -743,3 +743,67 @@ connected. This report NAMES `M6_FINAL_OPERATIONAL_SLICE_QUALIFICATION` as
 the next recommended gate -- it does NOT start it. M6 is NOT declared
 CLOSED by this report. M7 and later waves are NOT started.
 `REFERENCE_USB_ENV_CONSUMED` remains NO.**
+
+## M6 Final Operational Slice Qualification (2026-09-24) -- READY_FOR_APPROVAL
+
+Full detail: `M6_PREFLIGHT/M6_FINAL_OPERATIONAL_SLICE_REPORT.md` and its 9
+sibling artifacts. A QUALIFICATION/CORRECTNESS/CLOSURE task, not
+capability development -- no new feature was added merely to improve the
+result.
+
+Frozen candidate `M6_QUALIFICATION_CANDIDATE_SHA =
+2bd986f5e05fb5ee0c01d1c5c29d41a44c5b859f` (the HEAD both prior M6 closure
+tasks left). All 10 M6 stages independently re-evaluated against a real
+9-dimension contract (structural/production/input-provenance/output-
+consumed/evidence/failure-path/HITL-or-N/A/human-authority-or-N/A/
+regression) -- not credited merely for having a test file.
+
+The HITL metric was corrected per this task's own instruction: the prior
+`5/10` used the wrong denominator (counting stages where HITL genuinely
+does not apply). Recomputed as `HITL_APPLICABLE_STAGES = 4`,
+`HITL_QUALIFIED_STAGES = 4`, `HITL_QUALIFICATION = PASS`. A real, disclosed
+scope finding surfaced during this correction: DE/DESIGN and SHARED
+QuestionOwner authority are real, independently-tested MECHANISM
+(`clarification_service.classify_question_owner()`), but
+`NOT_APPLICABLE` to M6's own current 3-field generation scope -- every
+real M6 `FieldControl` (`protocol`/`role`/`verification_level`) is
+`domain="env"`, never `domain="dut"`. Not fabricated to complete the
+matrix, per this task's own explicit instruction.
+
+The project's own real cross-run confirmation contract
+(`memory_router.py`'s `confirmation_count >= ORGANIZATIONAL_MIN_
+CONFIRMATIONS`, `=2`) was identified and actually performed for this
+checkpoint: 2 independent `python -m pytest` executions against the
+identical frozen candidate, 881/881 passing identically both times (task
+`bcag6ey11`, `bwjof0zvx`). `QUALIFIED_CONNECTED_STAGES` was recomputed to
+`10/10` on that basis -- earned, not inherited from 0, not forced.
+
+Zero new current-scope defects found during this qualification's own
+post-pass gap audit (generation-failure-exception-normalization re-check,
+AST-based Protocol Builder governance re-check, Master CSV structural
+re-parse all clean; GAP-V2-006/GAP-V2-007 re-verified unchanged, not
+pulled forward).
+
+```
+STRUCTURAL_CONNECTED_STAGES = 10/10   PRODUCTION_CONNECTED_STAGES = 10/10
+EVIDENCE_CONNECTED_STAGES   = 10/10   QUALIFIED_CONNECTED_STAGES  = 10/10
+HITL_QUALIFICATION = PASS (4/4 applicable stages)
+CURRENT_SCOPE_GAPS_OPEN = 0   CAPABILITY_ISLANDS = 0
+UNKNOWN_RUNTIME_CALLERS = 0   UNCONTROLLED_BYPASSES = 0
+REGRESSION_CAUSED_BY_M6 = 0   UNKNOWN_REGRESSION_FAILURES = 0
+SOURCE_CAPABILITY_LOSS = 0    QUALIFICATION_HEAD_MISMATCH = NO
+CONSTITUTION_GATE = PASS      AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT = 2
+```
+
+Every closure condition in this task's own section 31 is met:
+
+```
+M6_FINAL_QUALIFICATION_STATUS = READY_FOR_APPROVAL
+```
+
+**STOP. `READY_FOR_APPROVAL` is named, not acted on. M6 is not
+unilaterally declared CLOSED by this report -- that remains a separate,
+explicit human decision. M7 is NOT started automatically (`M7_STARTED =
+NO`). `REFERENCE_USB_ENV_CONSUMED` remains NO throughout. All 5 frozen
+reference sources (Parent, v50, b7a, b7b, b8) re-verified unchanged before
+and after both qualification regression runs.**

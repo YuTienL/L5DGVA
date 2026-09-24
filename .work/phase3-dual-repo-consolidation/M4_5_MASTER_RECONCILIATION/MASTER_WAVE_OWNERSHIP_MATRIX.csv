@@ -148,3 +148,4 @@ CAP-M6-C1-001,M6 Golden-Path Connectivity Closure C1,M6,"CAP-M6-DISPATCH-001, CA
 CAP-M6-INTPRIME-V2-001,Integration Prime Directive V2 adoption + P5 remediation,M6,"CAP-M6-DISPATCH-001, CAP-M6-CLARSVC-001, CAP-M6-C1-001",P2 (closure task),NONE (RESOLVED; GAP-V2-002 tracked separately in L5DGVA_CURRENT_SCOPE_GAP_REGISTER.csv)
 CAP-M6-GAPV2002-001,GAP-V2-002 remediation (PROTOCOL_BUILDERS convergence),M6,"CAP-M6-DISPATCH-001, CAP-M6-CLARSVC-001, CAP-M6-C1-001",P2 (closure task),NONE (RESOLVED)
 CAP-M6-TASKBOUNDARY-001,Task Boundary production connectivity (CLI + dashboard entry points),M6,"CAP-ATL-004, CAP-M5M6-VLEVEL-001",P2 (closure task),NONE (RESOLVED)
+CAP-M6-FINALQUAL-001,M6 Final Operational Slice Qualification,M6,"CAP-M5M6-VLEVEL-001, CAP-M6-TASKBOUNDARY-001, CAP-ATL-004",P2 (qualification/closure task),NONE (READY_FOR_APPROVAL)
