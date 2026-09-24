@@ -13,7 +13,7 @@ Resolution, and `create_environment.py` are all unmodified internally.
 M6_C1_STATUS = CLOSED
 
 START_HEAD = 315bdbabdd8f6ed7bff92857cbfc2ddab7975e2d
-END_HEAD   = <filled in follow-up commit>
+END_HEAD   = 3b59c01eeafe420ce808f406e2260c5e34206be0
 ```
 
 ## 2. Confirming the two reported broken edges (real production code, not trust)
