@@ -40,20 +40,18 @@ WHAT THIS DOES NOT DO (stated rather than implied closed):
     input (typically transcribed from the dispatch prompt that scoped the
     task), not derived. A caller who declares an over-broad boundary gets a
     weaker check; this module does not second-guess that declaration.
- 3. As of this migration, it is NOT wired into canonical's `cli.py`, any
-    stage gate, or `engine.py`. This is a real, disclosed difference from
-    this module's own Parent-source history (`D:\\DV\\Task\\
-    DV_Agent_Harness_L5`), where a `task-boundary-conformance` CLI verb
-    already dispatches to this module's own functions (`cli.py`, real,
-    tested) -- a fact this migration's own caller sweep found and does not
-    propagate uncritically. Canonical CLI wiring is deliberately deferred
-    here rather than added: `CAP-M6-DISPATCH-001` (`cli.py`'s own
-    dispatch-mechanism decision) is an open, `HUMAN_DECISION_REQUIRED` M6
-    blocker in this project's Master Capability Status Matrix, and adding a
-    new verb to `cli.py` now would pre-empt that not-yet-made decision
-    rather than build on it. This module lands as a FOUNDATION capability
-    (importable, tested, structurally sound) whose CLI/gate wiring is a
-    named, disclosed M6 dependency, not a silently-skipped step.
+ 3. **Wired into `engine.py`'s `start_lifecycle()` since CAP-ATL-004
+    (item 6/8), and into `cli.py`'s `start --task-boundary-*` flags /
+    `dashboard.py`'s POST `/api/start` `task_boundary` JSON field since
+    `M6-TASK-BOUNDARY-PRODUCTION-001` (2026-09-24).** Not wired into any
+    stage GATE (this remains a pre-dispatch check inside `start_lifecycle()`
+    itself, never a `STAGE_GATES` entry) or into a standalone
+    `task-boundary-conformance` CLI verb the way Parent's own source
+    (`D:\\DV\\Task\\DV_Agent_Harness_L5`) has one -- canonical exposes the
+    SAME real contract (`TaskBoundary.from_dict()`, reused verbatim) through
+    `start`'s own flags/JSON field instead, converging on the ONE
+    lifecycle-first entry point `CAP-M6-DISPATCH-001` already established,
+    rather than adding a second, parallel CLI verb.
 
 REUSE, NOT DUPLICATION. `change_impact._git()` is imported directly (the
 exact same degrade-never-raise git subprocess wrapper `change_impact.py` and
@@ -273,6 +271,21 @@ def committed_range_changes(root: Path, base_sha: str, head_sha: str = "HEAD") -
     return {"status": "REAL_DIFF", "entries": entries, "detail": None}
 
 
+def _filter_exempt(evidence: Dict[str, Any], exempt_path_prefixes: Sequence[str]) -> Dict[str, Any]:
+    """Drops entries matching `exempt_path_prefixes` from the evidence
+    BEFORE classification -- an exempt path is invisible to the boundary
+    check entirely, not merely "allowed" (so it is never subject to a
+    declared `forbidden_paths` or `require_new_file=True` either). Additive,
+    `()` (the default everywhere) is a true no-op, byte-identical to before
+    this parameter existed."""
+    if not exempt_path_prefixes or not evidence.get("entries"):
+        return evidence
+    kept = [e for e in evidence["entries"] if not _matches_prefix(e["path"], exempt_path_prefixes)]
+    if len(kept) == len(evidence["entries"]):
+        return evidence
+    return {**evidence, "entries": kept}
+
+
 def _conform(boundary: TaskBoundary, evidence: Dict[str, Any]) -> Dict[str, Any]:
     ok_statuses = {"GIT_STATUS_OK", "REAL_DIFF"}
     if evidence["status"] not in ok_statuses:
@@ -303,17 +316,32 @@ def _conform(boundary: TaskBoundary, evidence: Dict[str, Any]) -> Dict[str, Any]
     }
 
 
-def check_working_tree_conformance(root: Path, boundary: TaskBoundary) -> Dict[str, Any]:
+def check_working_tree_conformance(
+    root: Path, boundary: TaskBoundary, exempt_path_prefixes: Sequence[str] = (),
+) -> Dict[str, Any]:
     """The check a mid-task/pre-commit reviewer runs: did the CURRENT
     working tree stay inside `boundary`? See `working_tree_changes()` for
-    the real evidence source."""
-    return _conform(boundary, working_tree_changes(root))
+    the real evidence source.
+
+    `exempt_path_prefixes` (additive, default `()`): repo-relative path
+    prefixes to drop from the evidence BEFORE classification -- for a
+    caller-owned control-plane directory that is not part of the task's own
+    work (e.g. engine.py's `start_lifecycle()` exempts `.dv-harness`, its
+    own bookkeeping directory, which it writes to on every call regardless
+    of task content) and must not be forced into every declared
+    `TaskBoundary.allowed_path_prefixes` by every real caller. An exempt
+    path is invisible to the check entirely, distinct from `allowed_
+    path_prefixes` (still subject to `forbidden_paths`/`require_new_file`)."""
+    return _conform(boundary, _filter_exempt(working_tree_changes(root), exempt_path_prefixes))
 
 
 def check_committed_range_conformance(
     root: Path, boundary: TaskBoundary, base_sha: str, head_sha: str = "HEAD",
+    exempt_path_prefixes: Sequence[str] = (),
 ) -> Dict[str, Any]:
     """The check a post-commit/PR reviewer runs: did `base_sha..head_sha`
     stay inside `boundary`? See `committed_range_changes()` for the real
-    evidence source."""
-    return _conform(boundary, committed_range_changes(root, base_sha, head_sha))
+    evidence source. `exempt_path_prefixes`: see `check_working_tree_
+    conformance()` above."""
+    return _conform(boundary, _filter_exempt(
+        committed_range_changes(root, base_sha, head_sha), exempt_path_prefixes))

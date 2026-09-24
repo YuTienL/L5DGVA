@@ -674,3 +674,72 @@ open, per this task's own instruction). Naming `M6-TASK-BOUNDARY-
 PRODUCTION-001` as the next recommended gate is reporting, not starting
 it. M6 Final Qualification, M7, and later waves are NOT auto-started.
 `REFERENCE_USB_ENV_CONSUMED` remains NO.**
+
+## M6-TASK-BOUNDARY-PRODUCTION-001 (2026-09-24) -- production-connects
+Task Boundary, closing the M6 Operational Slice's last open stage
+
+Full detail: `M6_PREFLIGHT/M6_TASK_BOUNDARY_PRODUCTION_001_FINAL_REPORT.md`,
+`_ANALYSIS.md`, `_PATH_PROOF.md`, `_TEST_EVIDENCE.md`,
+`_CALLER_SWEEP.csv`.
+
+`cli.py`'s `--task-boundary-id/-allow/-forbid/-new-file-only` and
+`dashboard.py`'s `task_boundary` JSON field now construct a real
+`TaskBoundary.from_dict()` (CAP-ATL-004, reused verbatim, never
+re-implemented) and pass it to `start_lifecycle()`'s own, already-real
+`check_working_tree_conformance()` call. Task Boundary was ALREADY
+structurally connected and correctly ordered before VerificationLevel
+routing (re-confirmed, not assumed) -- what was missing was purely a
+production entry point, now closed.
+
+A real current-scope defect (**GAP-V2-008**) was found and fixed within
+this same task: `start_lifecycle()`'s own `.dv-harness/` bookkeeping
+writes, which happen earlier in the SAME call, always spuriously VIOLATED
+a real declared boundary -- no prior test had ever exercised a genuine
+PASS path (only the trivial FAIL path existed before this task). Fixed via
+an additive `exempt_path_prefixes=` parameter on `task_boundary_
+conformance.py`'s two public conformance functions (default `()`, true
+no-op for every pre-existing caller).
+
+```
+STRUCTURAL_CONNECTED_STAGES = 10/10   (unchanged -- stage 8 was already
+  structurally connected; only its production entry point was missing)
+PRODUCTION_CONNECTED_STAGES = 10/10   (was 9/10 -- stage 8, Task Boundary,
+  closed. ALL 10 M6 Operational Slice stages are now both structurally
+  AND production connected, for the first time.)
+HITL_CONNECTED_STAGES = 5/10   (unchanged -- Task Boundary has no
+  QuestionOwner/HumanGate by design, a structural git-evidence check;
+  classified N/A per this task's own "do not manufacture a human
+  interaction" instruction, not silently omitted)
+EVIDENCE_CONNECTED_STAGES = 10/10   (was 9/10)
+QUALIFIED_CONNECTED_STAGES = 0/10   (unchanged, deliberately -- QUALIFIED
+  requires this project's own organizational_admission_gate()/
+  confirmation_count>=2, not a single task's own test pass)
+CURRENT_SCOPE_GAPS_OPEN = 0
+UNKNOWN_RUNTIME_CALLERS = 0
+UNCONTROLLED_BYPASSES = 0
+UNKNOWN_REGRESSION_FAILURES = 0
+AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT = 2   (unchanged)
+```
+
+Regression: real caller-population sweep for every module this task and
+`CAP-M5M6-VLEVEL-001` together touched -- 29 files, **690/690 pass, 0
+failures, 0 regressions**. Constitution gate `PASS`, 0 reasons. All 5
+frozen sources re-verified unchanged immediately before commit.
+
+Per this task's own explicit STOP condition -- `STRUCTURAL_CONNECTED_
+STAGES = 10/10` AND `PRODUCTION_CONNECTED_STAGES = 10/10` AND
+`CURRENT_SCOPE_GAPS_OPEN = 0` AND `UNKNOWN_RUNTIME_CALLERS = 0` AND
+`UNCONTROLLED_BYPASSES = 0` AND `UNKNOWN_REGRESSION_FAILURES = 0` -- ALL
+SIX are true, for the first time in the M6 Operational Slice's own
+history:
+
+```
+NEXT_RECOMMENDED_GATE = M6_FINAL_OPERATIONAL_SLICE_QUALIFICATION
+```
+
+**STOP. M6-TASK-BOUNDARY-PRODUCTION-001 complete, CLOSED -- all 10 M6
+Operational Slice stages are now both structurally and production
+connected. This report NAMES `M6_FINAL_OPERATIONAL_SLICE_QUALIFICATION` as
+the next recommended gate -- it does NOT start it. M6 is NOT declared
+CLOSED by this report. M7 and later waves are NOT started.
+`REFERENCE_USB_ENV_CONSUMED` remains NO.**

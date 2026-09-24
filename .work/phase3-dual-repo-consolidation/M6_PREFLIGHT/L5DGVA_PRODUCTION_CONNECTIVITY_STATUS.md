@@ -11,15 +11,15 @@ connectivity does not qualify.
 
 ```
 M6_VERTICAL_SLICE_TOTAL_REQUIRED_STAGES = 10
-M6_VERTICAL_SLICE_CONNECTED_STAGES (STRUCTURAL) = 10   (CAP-M5M6-VLEVEL-001,
-  2026-09-24: stages 9/10 closed -- verification_level.py now exists and
-  environment_mode_router.py now has a real IP_MODE branch, so the router
-  code genuinely contains all 3 modes, not 2)
-M6_PRODUCTION_CONNECTED_STAGES = 9   (CAP-M5M6-VLEVEL-001: stage 9 closed
-  the same way; stage 8, Task Boundary, remains the one honestly open
-  production edge -- unchanged by this task, pre-existing, out of this
-  task's own declared scope. "Do not force 10/10": this number is reported
-  as 9, not rounded up.)
+M6_VERTICAL_SLICE_CONNECTED_STAGES (STRUCTURAL) = 10   (unchanged since
+  CAP-M5M6-VLEVEL-001; stage 8, Task Boundary, was ALREADY structurally
+  connected before M6-TASK-BOUNDARY-PRODUCTION-001 -- the mechanism itself
+  was real, only its production entry point was missing)
+M6_PRODUCTION_CONNECTED_STAGES = 10   (M6-TASK-BOUNDARY-PRODUCTION-001,
+  2026-09-24: stage 8 closed -- CLI --task-boundary-*/dashboard task_boundary
+  JSON field now construct a real TaskBoundary and reach the same,
+  already-real check_working_tree_conformance() call. All 10 M6 Operational
+  Slice stages are now BOTH structurally and production connected.)
 ```
 
 | # | Stage | Structural | Production | Supported entry point |
@@ -31,9 +31,36 @@ M6_PRODUCTION_CONNECTED_STAGES = 9   (CAP-M5M6-VLEVEL-001: stage 9 closed
 | 5 | HumanGate | Yes | Yes | same (block/resume, real CLI/dashboard round-trip tested) |
 | 6 | EffectiveValue | Yes | Yes | same, persisted as a real lifecycle fact |
 | 7 | Dispatch | Yes | Yes | same |
-| 8 | Task Boundary | Yes | **No** | no CLI flag or dashboard JSON field supplies a `TaskBoundary` today -- still true, re-confirmed fresh this task by direct grep of cli.py/dashboard.py, not assumed unchanged |
-| 9 | VerificationLevel | **Yes** (was ABSENT) | **Yes** (was ABSENT) | CLI `--level`/dashboard `level` JSON -> `generation_field_controls.verification_level_field_control()` -> `clarification_service.resolve_or_ask()` -> `request["verification_level"]` |
-| 10 | IP/SUBSYSTEM/SYSTEM_LEVEL | **Yes** (was No: router had only 2 of 3 modes) | Yes (unchanged Yes for SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE; now ALSO proven for IP_MODE specifically) | `environment_mode_router.resolve_environment_mode()`'s real `_resolve_with_level()` branch, reached from the same governed call |
+| 8 | Task Boundary | Yes | **Yes** (was No) | CLI `--task-boundary-id/-allow/-forbid/-new-file-only`, dashboard `task_boundary` JSON -> `TaskBoundary.from_dict()` (CAP-ATL-004, reused verbatim) -> `start_lifecycle()`'s own, already-real check |
+| 9 | VerificationLevel | Yes | Yes | CLI `--level`/dashboard `level` JSON -> `generation_field_controls.verification_level_field_control()` -> `clarification_service.resolve_or_ask()` -> `request["verification_level"]` |
+| 10 | IP/SUBSYSTEM/SYSTEM_LEVEL | Yes | Yes | `environment_mode_router.resolve_environment_mode()`'s real `_resolve_with_level()` branch, reached from the same governed call |
+
+### M6-TASK-BOUNDARY-PRODUCTION-001 (2026-09-24) — stage 8 closed
+
+IMPORTANT DESIGN FACT: unlike `protocol`/`role`/`verification_level`,
+`TaskBoundary` is NOT a required generation field -- CAP-ATL-004's own
+module docstring is explicit that a `TaskBoundary` is "a plain,
+caller-declared input... never derived." Omitting it (`task_boundary=None`,
+the pre-existing default, unchanged) is the module's own documented,
+correct "nothing declared, nothing checked" behavior, not a residual gap.
+Production connectivity for this closure means: WHEN a real caller
+supplies one through a real supported entry point, the result genuinely
+gates the downstream path -- proven for CLI, dashboard, and the
+PROTOCOL_BUILDERS invocation shape, for both PASS and FAIL, for all three
+levels. See `M6_TASK_BOUNDARY_PRODUCTION_001_ANALYSIS.md`/`_PATH_PROOF.md`/
+`_TEST_EVIDENCE.md`/`_FINAL_REPORT.md` for the full record.
+
+A real current-scope defect (GAP-V2-008) was found and fixed during this
+closure: `start_lifecycle()`'s own `.dv-harness/` bookkeeping writes
+(`lifecycle.json`, `state.json`, `events.jsonl`, `agents/...`), which
+happen earlier in the SAME call, always spuriously VIOLATED a real
+declared boundary -- invisible before this task because the only prior
+Task Boundary test inside `start_lifecycle()` exercised the FAIL path
+only, never a genuine PASS path with real evidence present. Fixed via an
+additive `exempt_path_prefixes=` parameter on `task_boundary_conformance.
+check_working_tree_conformance()`/`check_committed_range_conformance()`
+(default `()`, true no-op for every pre-existing caller); `engine.py`'s
+own call site passes `exempt_path_prefixes=(".dv-harness",)`.
 
 ### CAP-M5M6-VLEVEL-001 (2026-09-24) — stages 9 and 10 closed
 
@@ -160,11 +187,12 @@ EVIDENCE            = test_m6_c1_golden_path_connectivity.py::
   `REGISTER_AND_DEFER_WITH_OWNER` -- `role` added by GAP-V2-002,
   `verification_level` added by CAP-M5M6-VLEVEL-001 this wave, each derived
   from real discovery/consumer evidence, never assumed).
-- Task Boundary (stage 8): no CLI flag or dashboard JSON field supplies a
-  `TaskBoundary` today — unchanged by this task (re-confirmed fresh, not
-  assumed, by direct grep of cli.py/dashboard.py this wave), honestly
-  excluded from the production count. This is the one remaining stage
-  keeping `M6_PRODUCTION_CONNECTED_STAGES` at 9/10 rather than 10/10.
+- ~~Task Boundary (stage 8): no CLI flag or dashboard JSON field supplies a
+  `TaskBoundary`~~ -- **CLOSED this wave** (`M6-TASK-BOUNDARY-PRODUCTION-001`):
+  `cli.py`'s `--task-boundary-*` flags and `dashboard.py`'s `task_boundary`
+  JSON field both now construct a real `TaskBoundary` and reach the same,
+  already-real `check_working_tree_conformance()` call. `M6_PRODUCTION_
+  CONNECTED_STAGES` is now 10/10.
 - SYSTEM_LEVEL_MODE composition still requiring `protocol`/`role` to
   resolve even though its own dispatch logic never reads them
   (GAP-V2-006, `REGISTER_AND_DEFER_WITH_OWNER` -- not a defect, the

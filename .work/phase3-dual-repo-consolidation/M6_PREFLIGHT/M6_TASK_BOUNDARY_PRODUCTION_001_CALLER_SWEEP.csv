@@ -1,0 +1,13 @@
+MODULE,SYMBOL,CALLER,CALLER_KIND,CHANGE_TYPE,STATUS
+task_boundary_conformance.py,TaskBoundary,engine.py start_lifecycle(),production,"PRE-EXISTING (CAP-ATL-004, unchanged shape)","compatible, unaffected"
+task_boundary_conformance.py,TaskBoundary.from_dict(),"cli.py 'start' (NEW, M6-TASK-BOUNDARY-PRODUCTION-001)",production,NEW CALLER,"compatible, 22/22 new tests pass"
+task_boundary_conformance.py,TaskBoundary.from_dict(),dashboard.py _handle_start() (NEW),production,NEW CALLER,"compatible, 22/22 new tests pass"
+task_boundary_conformance.py,check_working_tree_conformance(),engine.py start_lifecycle(),production,"ADDITIVE (new exempt_path_prefixes= kwarg, default ())","compatible, all pre-existing callers unaffected (default preserves old behavior)"
+task_boundary_conformance.py,check_working_tree_conformance(),test_task_boundary_conformance.py,test,UNCHANGED CALL SHAPE,"19/19 pass, unaffected (no exempt_path_prefixes passed)"
+task_boundary_conformance.py,check_working_tree_conformance(),test_start_lifecycle_dispatch.py,test,"UNCHANGED CALL SHAPE (indirect, via start_lifecycle())","23/23 pass, unaffected"
+task_boundary_conformance.py,check_committed_range_conformance(),test_task_boundary_conformance.py,test,"ADDITIVE (new exempt_path_prefixes= kwarg, default ())","compatible, unaffected"
+task_boundary_conformance.py,check_committed_range_conformance(),(no production caller),n/a,n/a,"confirmed: zero production callers, same as before this task (pre-existing, disclosed in the module's own docstring point 3)"
+engine.py,start_lifecycle(task_boundary=...),cli.py 'start' (NEW propagation),production,"NEW CALLER PATH (parameter already existed, CLI never populated it before)","compatible, 22/22 new tests"
+engine.py,start_lifecycle(task_boundary=...),dashboard.py _start_background_run()/_handle_start() (NEW propagation),production,NEW CALLER PATH,"compatible, 22/22 new tests"
+engine.py,start_lifecycle(task_boundary=...),"test_m5m6_vlevel_001_production_connectivity.py (VLEVEL task, pre-existing)",test,UNCHANGED CALL SHAPE,"6/6 pass, unaffected"
+cli.py,--task-boundary-id/-allow/-forbid/-new-file-only,"PROTOCOL_BUILDERS skill invocation shape (opt-in, not mandated per-skill)","production (available, not required)","NEW FLAGS, additive, default None/False","compatible; the 11 SKILL.md files are NOT modified this task (Task Boundary is optional by CAP-ATL-004's own design, unlike protocol/role/verification_level) -- connectivity proven via the SAME CLI shape the skills use, see test_protocol_builder_invocation_shape_reaches_task_boundary_and_generation"

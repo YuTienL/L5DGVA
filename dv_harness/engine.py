@@ -6712,7 +6712,29 @@ class DVHarness:
                 evidence=[f"{len(field_controls_for_resolution)} field(s) checked"])
 
         if task_boundary is not None:
-            tb_result = task_boundary_conformance.check_working_tree_conformance(self.root, task_boundary)
+            # M6-TASK-BOUNDARY-PRODUCTION-001 P5 FIND->FIX->VERIFY: a real
+            # current-scope defect found while re-verifying CAP-ATL-004's
+            # PASS path for the first time (every pre-existing test only
+            # ever exercised the FAIL path) -- by this point in the SAME
+            # call, lc.create()/field-resolution's own fact persistence has
+            # already written real files under .dv-harness/ (lifecycle.json,
+            # state.json, events.jsonl, agents/...), so a real caller's own
+            # declared boundary would ALWAYS spuriously VIOLATE unless they
+            # remembered to declare ".dv-harness" themselves -- the harness's
+            # own control-plane bookkeeping is not part of what a task
+            # boundary is meant to police (module docstring: "whether the
+            # FILES a change actually touched stayed inside a task's
+            # DECLARED boundary"; the harness's own required-every-call
+            # state writes are not the task's own work, and unlike a real
+            # allowed_path_prefixes entry, must not be subject to a
+            # declared require_new_file=True either -- .dv-harness/state.json
+            # is legitimately MODIFIED, not ADDED, on every call after the
+            # first). `exempt_path_prefixes` (task_boundary_conformance.py,
+            # additive, default ()) filters matching entries out of the
+            # evidence entirely, before classification -- the caller's own
+            # TaskBoundary object is passed through unmodified.
+            tb_result = task_boundary_conformance.check_working_tree_conformance(
+                self.root, task_boundary, exempt_path_prefixes=(".dv-harness",))
             if tb_result["verdict"] == task_boundary_conformance.VERDICT_VIOLATION:
                 reason = (f"TASK_BOUNDARY_VIOLATION: {task_boundary.task_id}'s declared scope "
                           f"was exceeded by the current working tree.")

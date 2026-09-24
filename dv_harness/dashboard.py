@@ -8818,6 +8818,7 @@ def _start_background_run(root: Path, goal: str, loop: bool,
                            protocols: Sequence[str] = (),
                            role: Optional[str] = None,
                            level: Optional[str] = None,
+                           task_boundary: Optional[Any] = None,
                            generation_request: Optional[Dict[str, Any]] = None,
                            generation_out_dir: Optional[Path] = None) -> None:
     """Launches DVHarness(root).start_lifecycle(goal, loop=loop) on a
@@ -8832,13 +8833,19 @@ def _start_background_run(root: Path, goal: str, loop: bool,
     field-resolution/task-boundary checks pass, so this is additive, not a
     new execution path.
 
-    `protocols`/`role`/`level`/`generation_request`/`generation_out_dir` (M6
-    C1, CAP-M6-C1-001; `role` added by GAP-V2-002 remediation; `level` wired
-    by CAP-M5M6-VLEVEL-001) are the dashboard's own additive counterpart to
-    cli.py's `--protocols`/`--dut-role`/`--level`/`--generate`/
-    `--generate-out`/`--generate-manifest` flags -- all default to their
-    pre-C1 empty/None values, so a caller that supplies none of them gets
-    byte-identical behavior to before any of these closures.
+    `protocols`/`role`/`level`/`task_boundary`/`generation_request`/
+    `generation_out_dir` (M6 C1, CAP-M6-C1-001; `role` added by GAP-V2-002
+    remediation; `level` wired by CAP-M5M6-VLEVEL-001; `task_boundary`
+    wired by M6-TASK-BOUNDARY-PRODUCTION-001) are the dashboard's own
+    additive counterpart to cli.py's `--protocols`/`--dut-role`/`--level`/
+    `--task-boundary-*`/`--generate`/`--generate-out`/`--generate-manifest`
+    flags -- all default to their pre-C1 empty/None values, so a caller
+    that supplies none of them gets byte-identical behavior to before any
+    of these closures. `task_boundary` is a real
+    `task_boundary_conformance.TaskBoundary` (CAP-ATL-004, reused verbatim)
+    or `None` -- `None` (the default) means start_lifecycle()'s own
+    pre-existing Task Boundary check never runs, exactly as before this
+    parameter existed.
 
     adapter_factory is a test-only seam: when given, the background
     thread's freshly-constructed DVHarness has its .adapter replaced with
@@ -8865,6 +8872,7 @@ def _start_background_run(root: Path, goal: str, loop: bool,
             # entry point cli.py's "start" uses (item 2 of the approval),
             # instead of calling loop()/run_stage() directly.
             h.start_lifecycle(goal, loop=loop, protocols=protocols, role=role, level=level,
+                              task_boundary=task_boundary,
                               generation_request=generation_request,
                               generation_out_dir=generation_out_dir)
         except Exception:
@@ -11333,9 +11341,10 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 return
             loop = bool(body.get("loop", False))
             # M6 C1 (CAP-M6-C1-001) + GAP-V2-002 remediation
-            # (CAP-M6-GAPV2002-001) + CAP-M5M6-VLEVEL-001: additive,
-            # optional counterpart to cli.py's --protocols/--dut-role/
-            # --level/--generate/--generate-out/--generate-manifest.
+            # (CAP-M6-GAPV2002-001) + CAP-M5M6-VLEVEL-001 +
+            # M6-TASK-BOUNDARY-PRODUCTION-001: additive, optional
+            # counterpart to cli.py's --protocols/--dut-role/--level/
+            # --task-boundary-*/--generate/--generate-out/--generate-manifest.
             # Omitted (the pre-C1 shape) -> identical to before any of
             # these closures.
             protocols_raw = body.get("protocols") or []
@@ -11349,9 +11358,19 @@ def serve(project_root: Path, adapter_factory: Optional[Callable[[], Any]] = Non
                 generation_request = {}
             generate_out = body.get("generate_out")
             generation_out_dir = Path(generate_out) if generate_out else None
+            # M6-TASK-BOUNDARY-PRODUCTION-001: a real TaskBoundary is built
+            # ONLY when the caller's JSON body carries a "task_boundary"
+            # object -- omitted (the pre-existing shape), task_boundary
+            # stays None, byte-identical to before this task.
+            task_boundary_raw = body.get("task_boundary")
+            task_boundary = None
+            if task_boundary_raw:
+                from . import task_boundary_conformance as _tbc
+                task_boundary = _tbc.TaskBoundary.from_dict(task_boundary_raw)
             try:
                 _start_background_run(project_root, str(goal), loop, adapter_factory=adapter_factory,
                                       protocols=protocols, role=role, level=level,
+                                      task_boundary=task_boundary,
                                       generation_request=generation_request,
                                       generation_out_dir=generation_out_dir)
             except RuntimeError as e:

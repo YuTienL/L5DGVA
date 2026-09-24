@@ -294,6 +294,35 @@ def main():
              "(clocks/resets/smoke_tests/etc. -- create_environment()'s own request shape). "
              "Its own 'protocol' key, if any, is overridden by the governed, resolved value.")
     pstart.add_argument(
+        "--task-boundary-id", dest="task_boundary_id", default=None,
+        help="M6-TASK-BOUNDARY-PRODUCTION-001: this call's own declared task_id for "
+             "dv_harness/task_boundary_conformance.py's TaskBoundary (CAP-ATL-004, reused "
+             "verbatim, never re-implemented). Any one of --task-boundary-id/-allow/-forbid/"
+             "-new-file-only being set builds a real TaskBoundary and passes it to "
+             "start_lifecycle()'s own, already-real task_boundary= parameter -- a real, "
+             "caller-DECLARED scope (never inferred from --protocols/--level/goal, per "
+             "task_boundary_conformance.py's own 'never inferred' design). Omitting all "
+             "four flags (the pre-existing default) leaves task_boundary=None, byte-"
+             "identical to every caller before this task.")
+    pstart.add_argument(
+        "--task-boundary-allow", dest="task_boundary_allow", default=None,
+        help="Comma-separated repo-relative path prefixes this task is authorized to "
+             "touch (TaskBoundary.allowed_path_prefixes). Checked against the REAL "
+             "current git working tree (task_boundary_conformance.check_working_tree_"
+             "conformance()) before generation dispatch -- a path outside every allowed "
+             "prefix, or inside a --task-boundary-forbid path, blocks with blocked_by="
+             "task_boundary and generation never runs.")
+    pstart.add_argument(
+        "--task-boundary-forbid", dest="task_boundary_forbid", default=None,
+        help="Comma-separated repo-relative paths this task must never touch "
+             "(TaskBoundary.forbidden_paths) -- wins over --task-boundary-allow even for "
+             "a forbidden path nested under an allowed prefix.")
+    pstart.add_argument(
+        "--task-boundary-new-file-only", dest="task_boundary_new_file_only",
+        action="store_true",
+        help="TaskBoundary.require_new_file: every in-boundary path must be a real git "
+             "ADDED status, never a modification of a pre-existing tracked file.")
+    pstart.add_argument(
         "--ux-mode", dest="ux_mode", default=None,
         choices=[m.value for m in _ux_policy.UXMode] + ["guided", "engineer", "expert"],
         help="GUIDED_MODE/ENGINEER_MODE/EXPERT_MODE -- an interaction-policy "
@@ -6459,10 +6488,30 @@ def main():
                     Path(args.generate_manifest).read_text(encoding="utf-8"))
             if args.generate_out:
                 generation_out_dir = Path(args.generate_out)
+        # M6-TASK-BOUNDARY-PRODUCTION-001: a real TaskBoundary is built ONLY
+        # when the caller declares at least one of the 4 flags above -- the
+        # pre-existing default (task_boundary=None, no flags given) stays
+        # byte-identical to every caller before this task. CAP-ATL-004's own
+        # TaskBoundary.from_dict() is reused verbatim, never re-implemented.
+        task_boundary = None
+        if (args.task_boundary_id or args.task_boundary_allow or
+                args.task_boundary_forbid or args.task_boundary_new_file_only):
+            from . import task_boundary_conformance as _tbc
+            task_boundary = _tbc.TaskBoundary.from_dict({
+                "task_id": args.task_boundary_id or args.goal,
+                "allowed_path_prefixes": [
+                    p.strip() for p in (args.task_boundary_allow or "").split(",") if p.strip()
+                ],
+                "forbidden_paths": [
+                    p.strip() for p in (args.task_boundary_forbid or "").split(",") if p.strip()
+                ],
+                "require_new_file": args.task_boundary_new_file_only,
+            })
         r = h.start_lifecycle(args.goal, loop=args.loop, dry_run=args.dry_run,
                               level=args.level, protocols=declared_protocols,
                               role=args.dut_role,
                               advanced=args.advanced,
+                              task_boundary=task_boundary,
                               generation_request=generation_request,
                               generation_out_dir=generation_out_dir)
         if args.loop and r is None:
