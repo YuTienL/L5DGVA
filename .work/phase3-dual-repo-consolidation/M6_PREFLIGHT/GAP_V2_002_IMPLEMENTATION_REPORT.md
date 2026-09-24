@@ -12,7 +12,7 @@ Canonical `FieldControl`s.
 GENERATE_PROTOCOL_TOOL_ROLE = INTERNAL_GENERATION_PRIMITIVE
 
 START_HEAD = 3b70feb627848061942238503827fae366490d33
-END_HEAD   = <filled in follow-up commit>
+END_HEAD   = 4f0b5b24ca2d10b99c0a8def5381b379436f4d9b
 ```
 
 ## Field derivation (not assumed)
