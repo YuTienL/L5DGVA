@@ -807,3 +807,117 @@ explicit human decision. M7 is NOT started automatically (`M7_STARTED =
 NO`). `REFERENCE_USB_ENV_CONSUMED` remains NO throughout. All 5 frozen
 reference sources (Parent, v50, b7a, b7b, b8) re-verified unchanged before
 and after both qualification regression runs.**
+
+## M6 CLOSURE FREEZE (2026-09-24) -- M6_STATUS = CLOSED
+
+Human approval received for `M6_FINAL_OPERATIONAL_SLICE_QUALIFICATION`.
+Full detail: `M6_PREFLIGHT/M6_CLOSURE_FREEZE.md`. The qualification
+evidence was re-verified fresh (not trusted blindly) against the real,
+committed artifacts before this freeze was recorded: `M6_FINAL_
+OPERATIONAL_SLICE_QUALIFICATION_MATRIX.csv`'s own 10 rows re-parsed
+(STRUCTURAL/PRODUCTION/EVIDENCE/QUALIFIED_CONNECTED all `YES` for all 10
+stages); `M6_FINAL_HITL_QUALIFICATION.md`'s own `HITL_APPLICABLE_STAGES
+= 4`/`HITL_QUALIFIED_STAGES = 4` re-confirmed; `MASTER_CAPABILITY_
+STATUS_MATRIX.csv` re-parsed fresh (`P0` re-derived: `CAP-M8-EXPLOOP-001`,
+`CAP-CE-018`, unchanged at 2); constitution gate re-run (`PASS`); all 5
+frozen reference sources re-verified unchanged.
+
+```
+M6_STATUS = CLOSED
+M6_QUALIFIED_CHECKPOINT_SHA = 2bd986f5e05fb5ee0c01d1c5c29d41a44c5b859f
+M6_GOLDEN_PATH_PRESERVED = YES (frozen at this checkpoint; M7's own
+  preservation contract, M7_M6_NON_REGRESSION_CONTRACT.md, is what keeps
+  it YES going forward)
+```
+
+Historical M6 evidence is preserved as-is -- this freeze does not
+reinterpret any prior finding, only records the human approval and
+updates `CANONICAL_STATE`/`NOTES` on the relevant Master rows.
+`M7_PREFLIGHT` is dispatched as a separate, explicit next task
+(analysis/planning only) -- see the M7 Preflight section below.
+
+## M7 Preflight (2026-09-24) -- analysis/planning only, no implementation
+started
+
+Full detail: `M6_PREFLIGHT/M7_PREFLIGHT_STATUS.md` and its 8 sibling
+artifacts. Re-verified (not repeated) the M4.5 multi-model-orchestration
+research fresh against current canonical state -- every cited finding
+(`CHATGPT_INTEGRATION = HUMAN_MEDIATED_CHATGPT_HANDOFF`,
+`CODEX_INTEGRATION = HUMAN_MEDIATED_CODEX_REVIEW`,
+`CHATGPT_OUTPUT_CONSUMED = NO`, `CODEX_OUTPUT_CONSUMED = NO`) confirmed
+still accurate: zero ChatGPT reference and zero Codex shell-out/API call
+anywhere in canonical `dv_harness/`/`tools/`, fresh repo-wide grep, not
+assumed.
+
+One real, previously-uncited foundation discovered:
+`dv_harness/model_agent_tool_router.py` (2026-09-06) -- a real, tested
+intra-Claude agent/model/tool router with fallback chains and a
+worst-wins verdict, the exact STRUCTURAL PATTERN a future cross-provider
+Model Task Router should extend, though its current scope is
+Claude-internal only (agent/model/tool selection WITHIN the Claude
+ecosystem, never Claude-vs-Codex-vs-ChatGPT).
+
+All 14 pre-existing `PRIMARY_OWNER_WAVE = M7` Master-matrix rows
+reconciled (`M7_EXISTING_CAPABILITY_AUDIT.md`): 4 real foundations
+available, 6 implementation gaps, 2 wiring gaps, 1 output-consumption
+gap, 1 measurement gap. A likely pre-existing wave-mis-tag flagged
+(`CAP-M3-002/003/004/005`, `CAP-M14-004` -- debug-governance/benchmark
+capabilities unrelated to multi-model orchestration), not reassigned by
+this preflight.
+
+14 of the 16 required Structured Handoff fields (`M7_STRUCTURED_
+HANDOFF_CONTRACT.md`) mapped onto real existing Canonical contracts
+(`TaskBoundary`, the `evidence_refs` pattern already real across 28
+modules, `governance_registry.py`, `AgentResult`'s own status
+vocabulary) -- only 2 fields are genuinely net-new.
+
+Output consumption honestly assessed (`M7_OUTPUT_CONSUMPTION_
+ARCHITECTURE.md`): Claude CLI is the only model path with a complete
+PRODUCED->PARSED->VALIDATED->CONSUMED chain. Codex is 0/4 in canonical.
+ChatGPT is a partial, unproven ~0.5/4 (one observed outbound staging
+artifact, zero inbound capture ever).
+
+A 7-cohort dependency-ordered implementation plan produced
+(`M7_IMPLEMENTATION_COHORT_PLAN.md`), revised from the dispatch's own
+suggested 6-cohort order after finding a real dependency problem: Codex
+"automated review consumption" cannot be Cohort 2 when Codex has no real
+PRODUCE/PARSE step yet (0/4) -- Cohort 1 now builds the Structured
+Handoff contract itself, Cohort 2 builds the minimal Codex PRODUCE/PARSE
+round-trip, and CONSUMPTION becomes Cohort 3.
+
+```
+M6_STATUS = CLOSED   M6_GOLDEN_PATH_PRESERVED = YES
+M7_STATUS = PREFLIGHT   M7_PRODUCTION_IMPLEMENTATION_STARTED = NO
+PARALLEL_MODEL_WORKFLOWS_CREATED = NO   ONE_GOLDEN_WORKFLOW = YES
+UNKNOWN_M7_CAPABILITIES = 0
+M7_CAPABILITIES_REVIEWED = 14 (+1 newly-discovered foundation, disclosed)
+M7_FOUNDATIONS_AVAILABLE = 4   M7_IMPLEMENTATION_GAPS = 6
+M7_WIRING_GAPS = 2   M7_OUTPUT_CONSUMPTION_GAPS = 1
+M7_MEASUREMENT_GAPS = 1   M7_HUMAN_DECISIONS_REQUIRED = 3
+M7_COHORTS_DEFINED = 7
+TOKEN_EFFICIENT_MULTI_MODEL_ORCHESTRATION = NOT_PRESENT (unchanged)
+CHATGPT_INTEGRATION = HUMAN_MEDIATED_CHATGPT_HANDOFF (unchanged)
+CODEX_INTEGRATION = HUMAN_MEDIATED_CODEX_REVIEW (unchanged)
+CHATGPT_OUTPUT_CONSUMED = NO   CODEX_OUTPUT_CONSUMED = NO
+STRUCTURED_AGENT_HANDOFF = PARTIAL (unchanged)
+MINIMUM_SUFFICIENT_CONTEXT = PARTIAL (unchanged)
+TOKEN_USAGE_OBSERVABILITY = PARTIAL (unchanged)
+TOKEN_REDUCTION_MEASURED = NO (unchanged)
+MASTER_CAPABILITY_MATRIX_MALFORMED_ROWS = 0
+MASTER_CAPABILITY_MATRIX_DUPLICATE_IDS = 0
+AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT = 2 (unchanged)
+```
+
+```
+NEXT_RECOMMENDED_GATE = a human decision on the 3 items
+  M7_IMPLEMENTATION_COHORT_PLAN.md names (Codex access authorization,
+  ChatGPT API access authorization, the CAP-M3-*/CAP-M14-004 wave-mis-tag
+  correction) -- then M7 Cohort 1 (Structured Handoff + Result Contract),
+  which needs no new access authorization and can start independently of
+  the other two human decisions.
+```
+
+**STOP. This preflight does not start M7 implementation, does not start
+M8 or later waves, and does not consume Reference USB. All 5 frozen
+reference sources re-verified unchanged. Waiting for explicit human
+review.**
