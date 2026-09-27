@@ -450,8 +450,14 @@ built); tests: `dv_harness_tests/test_agent_execution_backend.py`.
 `CLAUDE_CLI_VERSION=2.1.283`; real invocation and mutation-scope
 qualification transcripts: `M7_CLAUDE_WORKER_LIVE_QUALIFICATION.md` under
 `.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`. Wired into the Next
-Action Resolver's own table (`AGENT_RUN_*` events) -- not yet triggered by
-a real pending M7 result as of this task (REVIEW-004 has not returned).
+Action Resolver's own table (`AGENT_RUN_*` events). A real production
+launch was attempted against the real `M7-V1-CODEX-REVIEW-004` FAIL and was
+refused by this Claude Code installation's own auto-mode permission
+classifier (`"Create Unsafe Agents"`) before any subprocess started -- a
+genuine `SAFE_EXECUTION_BLOCKED` condition (disclosed in the same
+qualification doc), not something this project's own governance controls;
+the underlying findings were remediated directly by the orchestrating
+session instead.
 
 ## Governance Document Routing (TASK_SCOPED_GOVERNANCE_RETRIEVAL)
 
