@@ -57,6 +57,7 @@ itself is the only thing shared, not the staleness policy.
 from __future__ import annotations
 
 import ctypes
+import shutil
 import json
 import os
 import subprocess
@@ -313,6 +314,26 @@ class AgentRunResult:
 
 # --- Claude Execution Backend: real argv construction ------------------------
 
+def _resolve_claude_executable() -> str:
+    """The bare string `"claude"` is an npm shim on Windows (`claude`,
+    `claude.cmd`, `claude.ps1` -- no native `.exe`), and Windows'
+    `CreateProcess` (what `subprocess.Popen(..., shell=False)` calls
+    directly) does not do the PATH/PATHEXT resolution a shell does --
+    passing the bare name fails with a real `FileNotFoundError` before any
+    process starts (found and reproduced during this task's own permission
+    investigation: a foreground, read-only, non-backgrounded launch hit
+    this exact error, independent of and unrelated to any permission
+    classifier). `shutil.which()` performs the same resolution a shell
+    would (confirmed live: resolves to the real `claude.CMD` path) and the
+    resolved absolute path runs correctly under `shell=False` with no
+    shell-injection exposure, since the objective prompt/schema are passed
+    as separate argv elements, never through a shell string."""
+    resolved = shutil.which("claude")
+    if resolved is None:
+        raise AgentExecutionError("CLAUDE_CLI_NOT_FOUND", {})
+    return resolved
+
+
 def build_worker_argv(request: AgentRunRequest) -> List[str]:
     """The exact, live-verified `claude` CLI invocation (see module
     docstring). No shell, no interactive terminal, no injected keystrokes --
@@ -321,7 +342,7 @@ def build_worker_argv(request: AgentRunRequest) -> List[str]:
         raise AgentExecutionError("UNSUPPORTED_BACKEND", {"backend": request.backend})
     profile = get_profile(request.tool_execution_profile)
     prompt = _render_objective_prompt(request)
-    argv = ["claude", "-p", prompt, "--output-format", "json",
+    argv = [_resolve_claude_executable(), "-p", prompt, "--output-format", "json",
            "--json-schema", json.dumps(AGENT_RUN_RESULT_SCHEMA)]
     argv += profile.cli_args()
     argv += ["--add-dir", request.working_directory]
@@ -342,14 +363,20 @@ def _render_objective_prompt(request: AgentRunRequest) -> str:
         lines.append(f"EXPECTED_OUTPUT: {request.expected_output}")
     if request.validation_requirements:
         lines.append("VALIDATION_REQUIREMENTS: " + "; ".join(request.validation_requirements))
-    lines.append(
-        "When you finish, report using the required JSON schema: run_status must be "
-        f"one of {RUN_STATUS_PASS}/{RUN_STATUS_FAIL}/{RUN_STATUS_ERROR}/{RUN_STATUS_BLOCKED}/"
-        f"{RUN_STATUS_HUMAN_DECISION_REQUIRED}; list every file you changed, every test you ran, "
-        "your regression result, evidence references, gaps found/fixed, and any human decision "
-        "genuinely required. Stay strictly within ALLOWED_FILES; never touch FORBIDDEN_FILES or "
-        "FROZEN_SOURCES."
-    )
+    # Deliberately does NOT describe the JSON schema in prose -- rely on
+    # `--json-schema` alone; a redundant prose description is at best
+    # useless and at worst confusing. DISCLOSED OPEN GAP (GAP-V2-015,
+    # found this task, NOT fixed by this simplification alone): a real,
+    # reproduced defect where the multi-field `OBJECTIVE:\nTASK_ID:\n
+    # ALLOWED_FILES:\n...` prompt SHAPE ITSELF (not the schema-prose
+    # sentence, which was tested in isolation and ruled out; not
+    # `--restricted`/`--tools`/`--permission-mode`, all tested and ruled
+    # out too) makes the model reply in matching plain "key: value" prose
+    # instead of the `--json-schema`-shaped `structured_output` a
+    # single-sentence prompt reliably returns. Root cause not yet
+    # isolated further -- see `M7_CLAUDE_WORKER_LIVE_QUALIFICATION.md`'s
+    # permission-investigation addendum for the full real repro matrix.
+    lines.append("Stay strictly within ALLOWED_FILES; never touch FORBIDDEN_FILES or FROZEN_SOURCES.")
     return "\n".join(lines)
 
 

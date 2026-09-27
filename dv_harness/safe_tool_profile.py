@@ -67,25 +67,45 @@ class ToolExecutionProfile:
 
 
 #: Pure review/analysis: no code-execution tool exists in the allowlist at
-#: all, so `bypassPermissions` cannot bypass into anything -- verified live
-#: (`README.md` read, no Bash/Edit/Write ever offered to the model).
+#: all. `permission_mode="dontAsk"`, not `"bypassPermissions"` -- a real,
+#: reproduced defect this project's own permission-qualification task found:
+#: `--restricted` unconditionally REJECTS `--permission-mode bypassPermissions`
+#: (`claude` CLI's own hard error: "bypassPermissions not supported in
+#: restricted mode", exit code 1, confirmed live) -- every prior launch under
+#: this profile therefore never even started. `dontAsk` was verified live as
+#: a real, working, semantically-correct substitute for a profile with no
+#: mutation/execution tool to ever prompt about in the first place.
 CLAUDE_READONLY_PROFILE = ToolExecutionProfile(
     name="CLAUDE_READONLY_PROFILE",
     tools=("Read", "Glob", "Grep"),
     restricted=True,
-    permission_mode="bypassPermissions",
+    permission_mode="dontAsk",
 )
 
 #: Task-authorized mutation + safe tests + local regression + evidence
 #: writes -- the FIX_NOW_* remediation profile. `PowerShell` is granted only
-#: for the two safe, read/verify-shaped command families named in
+#: for the four safe, read/verify-shaped command families named in
 #: `allowed_tool_patterns`; anything else the model tries under that tool
 #: name is still refused by `--allowedTools`'s own pattern match (verified:
 #: `claude --help`'s own `"Bash(git *) Edit"` example is the same mechanism).
+#:
+#: `Edit`/`Write` are ALSO listed here explicitly, not left to
+#: `--permission-mode acceptEdits` alone (real, reproduced defect this
+#: project's own permission-qualification task found: once `--allowedTools`
+#: is passed at all, a tool not named in it falls through to an interactive
+#: approval prompt that a headless `-p` worker can never answer, silently
+#: overriding `acceptEdits` for that tool even though it was present in
+#: `--tools` -- confirmed by a real side-by-side repro: identical invocation
+#: with only the `PowerShell(...)` patterns in `--allowedTools` left a real
+#: `Write` action unapproved ("permission to write the file wasn't
+#: granted"); adding `"Edit", "Write"` to this same list fixed it, verified
+#: by a real file actually being created with `run_status=PASS`).
 CLAUDE_IMPLEMENTATION_PROFILE = ToolExecutionProfile(
     name="CLAUDE_IMPLEMENTATION_PROFILE",
     tools=("Read", "Glob", "Grep", "Edit", "Write", "PowerShell"),
     allowed_tool_patterns=(
+        "Edit",
+        "Write",
         "PowerShell(python -m pytest *)",
         "PowerShell(git status)",
         "PowerShell(git diff*)",

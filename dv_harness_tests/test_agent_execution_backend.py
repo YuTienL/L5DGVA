@@ -143,10 +143,25 @@ def _launch_and_monitor(repo, request, *, process_kwargs=None, poll_interval=0.0
 
 # --- 1. Real CLI invocation (no mocking here) --------------------------------
 
+def test_objective_prompt_never_describes_the_json_schema_in_prose(repo):
+    """`--json-schema` alone must carry the output contract; a redundant
+    prose description in the prompt is at best noise (GAP-V2-015: a real,
+    reproduced, still-open defect where a multi-field prompt can make the
+    model reply in plain "key: value" text instead of real structured
+    output -- see `_render_objective_prompt()`'s own disclosure)."""
+    req = _request(repo)
+    prompt = aeb._render_objective_prompt(req)
+    assert "required JSON schema" not in prompt
+    assert "run_status must be" not in prompt
+
+
 def test_build_worker_argv_matches_the_real_verified_invocation_shape(repo):
     req = _request(repo)
     argv = aeb.build_worker_argv(req)
-    assert argv[0] == "claude" and argv[1] == "-p"
+    # argv[0] is the RESOLVED executable path (a bare "claude" fails under
+    # Windows CreateProcess for an npm shim with no native .exe -- see
+    # _resolve_claude_executable()'s own docstring for the real reproduction).
+    assert Path(argv[0]).stem.lower() == "claude" and argv[1] == "-p"
     assert "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json"
     assert "--json-schema" in argv
     assert "--restricted" in argv
@@ -160,12 +175,16 @@ def request_cwd(req: aeb.AgentRunRequest) -> str:
     return req.working_directory
 
 
-def test_readonly_profile_uses_bypass_permissions_with_no_code_tool(repo):
+def test_readonly_profile_uses_dont_ask_with_no_code_tool(repo):
+    # "bypassPermissions" is invalid under --restricted (the real claude CLI
+    # rejects that exact combination outright -- see safe_tool_profile.py's
+    # own docstring for the reproduced error); "dontAsk" is the real,
+    # verified-working substitute for a profile with no tool to prompt about.
     req = _request(repo, tool_execution_profile=CLAUDE_READONLY_PROFILE.name, mutation_allowed=False)
     argv = aeb.build_worker_argv(req)
     tools = argv[argv.index("--tools") + 1]
     assert "Edit" not in tools and "PowerShell" not in tools
-    assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
 
 
 def test_unsupported_backend_is_rejected():
@@ -174,6 +193,27 @@ def test_unsupported_backend_is_rejected():
             agent_run_id="x", task_id="T", parent_workflow_id="P", action_id="A", action_type="X",
             backend="gpt5", role="implementation", objective="o", current_head="h", working_directory=".",
             task_scope=_scope()))
+
+
+def test_claude_executable_is_resolved_to_a_real_absolute_path_not_a_bare_name(repo):
+    """The real, reproduced Windows defect this task found: `Popen(["claude", ...])`
+    with a bare name fails under `CreateProcess` (no PATH/PATHEXT resolution)
+    because `claude` on Windows is an npm shim (`claude`, `claude.cmd`,
+    `claude.ps1`; no native `.exe`) -- confirmed independent of any
+    permission classifier via a direct, foreground, read-only repro."""
+    req = _request(repo)
+    argv = aeb.build_worker_argv(req)
+    resolved = argv[0]
+    assert Path(resolved).is_absolute()
+    assert shutil.which("claude") is not None  # this test environment actually has it installed
+    assert resolved == shutil.which("claude")
+
+
+def test_missing_claude_cli_is_a_real_error_not_a_silent_bare_name_fallback(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(aeb.AgentExecutionError) as exc:
+        aeb._resolve_claude_executable()
+    assert exc.value.reason == "CLAUDE_CLI_NOT_FOUND"
 
 
 # --- 2/3. Controlled worker launch, never terminal injection -----------------
@@ -301,8 +341,13 @@ def test_worker_uses_safe_tool_profile(repo):
     argv = aeb.build_worker_argv(req)
     tools = argv[argv.index("--tools") + 1].split(",")
     assert set(tools) == set(CLAUDE_IMPLEMENTATION_PROFILE.tools)
-    patterns = argv[argv.index("--allowedTools") + 1:]
-    assert all(p.startswith("PowerShell(") for p in patterns[:len(CLAUDE_IMPLEMENTATION_PROFILE.allowed_tool_patterns)])
+    patterns = argv[argv.index("--allowedTools") + 1:argv.index("--permission-mode")]
+    assert set(patterns) == set(CLAUDE_IMPLEMENTATION_PROFILE.allowed_tool_patterns)
+    # Edit/Write are explicitly pre-approved (real, reproduced defect this
+    # profile fixes: without this, acceptEdits alone did not auto-approve
+    # them once --allowedTools was present at all for the PowerShell patterns).
+    assert "Edit" in patterns and "Write" in patterns
+    assert any(p.startswith("PowerShell(") for p in patterns)
 
 
 # --- 8/9. Result ingestion / failure never becomes PASS -----------------------
