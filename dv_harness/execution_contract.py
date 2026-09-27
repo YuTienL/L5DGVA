@@ -164,12 +164,20 @@ class StopDecision:
         }
 
 
+#: TASK_COMPLETE needs nothing further from anyone -- unlike the other 4
+#: canonical stop reasons, it never sets HUMAN_ACTION_REQUIRED=YES (a real
+#: defect found and fixed this task: a completed REVIEW-003 task was
+#: reporting HUMAN_ACTION_REQUIRED=YES in status_report()).
+_NO_HUMAN_ACTION_REASONS = frozenset({"TASK_COMPLETE"})
+
+
 def _stop(signals: WorkflowSignals, status: str, reason: str) -> StopDecision:
     return StopDecision(
         should_continue=False, status=status, stop_reason=reason,
         stop_evidence=signals.stop_evidence,
         next_required_action=signals.next_required_action,
-        human_action_required="YES", resume_action=signals.resume_action,
+        human_action_required=("NO" if reason in _NO_HUMAN_ACTION_REASONS else "YES"),
+        resume_action=signals.resume_action,
     )
 
 
@@ -257,6 +265,15 @@ NEXT_ACTION_TABLE: Dict[str, str] = {
     "VALIDATION_PASS": "RUN_REQUIRED_REGRESSION",
     "REGRESSION_PASS": "PREPARE_REQUIRED_RE_REVIEW",
     "RE_REVIEW_HANDOFF_READY": "HUMAN_TRANSPORT_REQUIRED",
+
+    # Autonomous Agent Execution Backend events (a real Claude worker run's
+    # own outcome, never a second Next Action Resolver -- same table).
+    "AGENT_RUN_SUCCEEDED": "PREPARE_REQUIRED_RE_REVIEW",
+    "AGENT_RUN_FAILED_RETRY_ELIGIBLE": "AUTO_RETRY_AGENT_RUN",
+    "AGENT_RUN_FAILED_ESCALATE": "HUMAN_AUTHORITY_REQUIRED",
+    "AGENT_RUN_HUMAN_DECISION_REQUIRED": "HUMAN_AUTHORITY_REQUIRED",
+    "AGENT_RUN_TIMEOUT_RETRY_ELIGIBLE": "AUTO_RETRY_AGENT_RUN",
+    "AGENT_RUN_TIMEOUT_ESCALATE": "HUMAN_AUTHORITY_REQUIRED",
 }
 
 #: Next actions that are themselves one of the canonical stop reasons.

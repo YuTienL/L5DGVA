@@ -433,6 +433,26 @@ for recovery/replay and shares the same ingestion path. Evidence:
 `M7_REVIEW_003_LIVE_INGESTION_EVIDENCE.md` under
 `.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`.
 
+**Autonomous Agent Execution Backend (new, 2026-09-27)**: when the Next
+Action Resolver selects an action requiring an AI implementation agent,
+L5DGVA launches a real, controlled `claude` CLI subprocess itself
+(`--restricted`, a named tool profile, `--json-schema`-shaped structured
+output) -- it never injects keystrokes into an interactive terminal and
+never requires a human "continue". Governed by one repo-wide Canonical
+Mutation Lease (broken only on stale heartbeat AND a provably-dead owner
+PID, never elapsed time alone) and the real Task Boundary (worker-claimed
+`FILES_CHANGED` are re-classified against scope + frozen sources, never
+trusted). Detail: `docs/architecture/canonical_detailed_governance/
+L5DGVA_AUTONOMOUS_AGENT_EXECUTION_BACKEND_REQUIREMENTS.md` (registered
+`TASK_SCOPED`); code: `dv_harness/agent_execution_backend.py`,
+`dv_harness/safe_tool_profile.py` (Preauthorized Safe Tool Execution, newly
+built); tests: `dv_harness_tests/test_agent_execution_backend.py`.
+`CLAUDE_CLI_VERSION=2.1.283`; real invocation and mutation-scope
+qualification transcripts: `M7_CLAUDE_WORKER_LIVE_QUALIFICATION.md` under
+`.work/phase3-dual-repo-consolidation/M6_PREFLIGHT/`. Wired into the Next
+Action Resolver's own table (`AGENT_RUN_*` events) -- not yet triggered by
+a real pending M7 result as of this task (REVIEW-004 has not returned).
+
 ## Governance Document Routing (TASK_SCOPED_GOVERNANCE_RETRIEVAL)
 
 Detailed, task-specific governance belongs in categorized documents, not in

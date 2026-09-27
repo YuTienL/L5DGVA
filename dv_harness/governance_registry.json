@@ -180,6 +180,17 @@
       "notes": "Code: dv_harness/result_ingestion.py (delegates every import to model_handoff_workflow.import_result -- no second ingestion engine)."
     },
     {
+      "id": "L5DGVA_AUTONOMOUS_AGENT_EXECUTION_BACKEND",
+      "label": "Autonomous Agent Execution Backend -- L5DGVA launches and governs a controlled Claude CLI worker subprocess itself (never interactive-terminal injection); Canonical Mutation Lease, Agent Run Request/Result, Next Action Resolver wiring, safe tool profiles",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "autonomous agent execution backend claude execution backend agent run request mutation lease agent worker launch controlled claude worker preauthorized safe tool execution agent run recovery m7 external result triggers claude worker",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/L5DGVA_AUTONOMOUS_AGENT_EXECUTION_BACKEND_REQUIREMENTS.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/L5DGVA_AUTONOMOUS_AGENT_EXECUTION_BACKEND_REQUIREMENTS.md",
+      "notes": "Code: dv_harness/agent_execution_backend.py (Claude worker launch/monitor/lease/recovery), dv_harness/safe_tool_profile.py (Preauthorized Safe Tool Execution, newly built -- no prior mechanism existed)."
+    },
+    {
       "id": "L5DGVA_INTEGRATION_PRIME_DIRECTIVE_HISTORICAL",
       "label": "Integration Prime Directive V1 (SUPERSEDED_HISTORICAL) -- retained as evidence only, never the active detailed authority",
       "load_policy": "EVIDENCE_ON_DEMAND",
