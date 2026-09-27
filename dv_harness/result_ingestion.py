@@ -193,12 +193,12 @@ def _task_lock(root: Path, task_id: str, policy: IngestionPolicy) -> Iterator[bo
     front door (the workflow's own O_EXCL lock primitive; a separate lock
     file from the import lock so poll -> import never self-blocks)."""
     lock = _task_dir(root, task_id) / "ingestion.lock"
-    acquired = _wf._acquire_lock(lock, policy.lock_stale_seconds)
+    token = _wf._acquire_lock(lock, policy.lock_stale_seconds)
     try:
-        yield acquired
+        yield token is not None
     finally:
-        if acquired:
-            _wf._release_lock(lock)
+        if token is not None:
+            _wf._release_lock(lock, token)
 
 
 # --- expected result registration --------------------------------------------
@@ -297,7 +297,7 @@ def _log_suppression_once(root: Path, task_id: str, st: Dict[str, Any], sha: str
 
 
 def ingest_result_file(root: Path, task_id: str, path: Path, *, trigger: str = "AUTO",
-                       authorized_replay: bool = False,
+                       authorized_replay: bool = False, allow_unregistered_path: bool = False,
                        policy: Optional[IngestionPolicy] = None, _locked: bool = False) -> IngestionResult:
     """The ONE ingestion entry point for automatic and manual imports.
     Identity, duplicate suppression and quarantine wrap the Canonical
@@ -305,20 +305,57 @@ def ingest_result_file(root: Path, task_id: str, path: Path, *, trigger: str = "
 
     `trigger="MANUAL"` (or `authorized_replay=True`) is authorized recovery:
     it may re-import a quarantined hash. An already-CONSUMED hash is always
-    suppressed -- consumption is at-most-once per (task, sha256)."""
+    suppressed -- consumption is at-most-once per (task, sha256).
+
+    `allow_unregistered_path` (REVIEW-004 R004-1, default False): by
+    default `path` MUST resolve to the task's own real, registered
+    `_expected_path()` (a genuine `expected_result.json` must exist, and
+    `path` must actually name it) -- a caller-supplied path is untrusted
+    input, never accepted merely because it names the right `task_id`. A
+    caller that genuinely needs to ingest from elsewhere (e.g. a documented
+    disaster-recovery procedure) must pass this explicitly True -- a real,
+    separate, auditable override, never the default."""
     root = Path(root)
     policy = policy or load_policy(root)
     if _locked:  # the watcher already holds the task's ingestion lock
-        return _ingest_locked(root, task_id, Path(path), trigger, authorized_replay, policy)
+        return _ingest_locked(root, task_id, Path(path), trigger, authorized_replay, policy, allow_unregistered_path)
     with _task_lock(root, task_id, policy) as got:  # manual front door / direct callers: same single writer
         if not got:
             return IngestionResult(task_id, "LOCKED", detail="INGESTION_IN_PROGRESS")
-        return _ingest_locked(root, task_id, Path(path), trigger, authorized_replay, policy)
+        return _ingest_locked(root, task_id, Path(path), trigger, authorized_replay, policy, allow_unregistered_path)
+
+
+def _synchronous_stability_check(path: Path, policy: IngestionPolicy) -> bool:
+    """A real, bounded, synchronous two-snapshot stability check for a
+    caller-supplied path that did NOT come through the watcher's own
+    multi-observation `_observe()` pre-check (REVIEW-004 R004-1) -- used
+    only for non-`AUTO` (manual/recovery) ingestion. The `AUTO` watcher path
+    is already stability-verified by `poll_once()`/`_observe()` before this
+    function is ever reached, so re-checking there would only double real
+    latency for no safety benefit."""
+    try:
+        s1 = path.stat()
+        h1 = _sha256_bytes(path.read_bytes())
+    except OSError:
+        return False
+    if policy.quiet_seconds > 0:
+        time.sleep(policy.quiet_seconds)
+    try:
+        s2 = path.stat()
+        h2 = _sha256_bytes(path.read_bytes())
+    except OSError:
+        return False
+    return (s1.st_size, s1.st_mtime_ns, h1) == (s2.st_size, s2.st_mtime_ns, h2)
 
 
 def _ingest_locked(root: Path, task_id: str, path: Path, trigger: str, authorized_replay: bool,
-                   policy: IngestionPolicy) -> IngestionResult:
+                   policy: IngestionPolicy, allow_unregistered_path: bool = False) -> IngestionResult:
     path = Path(path)
+    if not allow_unregistered_path:
+        reason = _unsafe_manual_path_reason(root, task_id, path, trigger, policy)
+        if reason is not None:
+            _emit(root, task_id, "RESULT_UNSAFE_PATH", path=str(path), reason=reason)
+            return IngestionResult(task_id, "UNREGISTERED_PATH_REFUSED", detail=reason)
     st = _load_ing(root, task_id)
     try:
         data = path.read_bytes()
@@ -339,8 +376,26 @@ def _ingest_locked(root: Path, task_id: str, path: Path, trigger: str, authorize
     if wf_state == _wf.STATE_RESULT_CONSUMED:
         consumed = [s for s, e in st["results"].items() if e["import_state"] == H_CONSUMED]
         if not consumed:  # consumed through a path that predates ingestion records: reconcile
+            # REVIEW-004 R004-4: never label the CURRENTLY SUPPLIED bytes as
+            # CONSUMED on faith -- compare against the real, already-persisted
+            # consumed digest (workflow state, else the registry row) when
+            # one is available. A caller with no persisted digest to compare
+            # against (pre-digest-era state) is reconciled as before, honestly
+            # disclosed as such.
+            real_digest = _real_consumed_digest(root, task_id)
+            if real_digest is not None and real_digest != sha:
+                st["results"][sha] = {"import_state": H_QUARANTINED, "result_path": str(path),
+                                      "rejection_reason": "RECONCILIATION_DIGEST_MISMATCH",
+                                      "retry_eligibility": RETRY_ON_CHANGE, "quarantined_at": _now_iso()}
+                _emit(root, task_id, "RESULT_CHANGED_AFTER_CONSUMPTION", result_sha256=sha,
+                      real_consumed_digest=real_digest)
+                _emit(root, task_id, "RESULT_QUARANTINED", result_sha256=sha, reason="RECONCILIATION_DIGEST_MISMATCH")
+                _save_ing(root, task_id, st)
+                return IngestionResult(task_id, "LATE_CHANGE_QUARANTINED", sha)
             st["results"][sha] = {"import_state": H_CONSUMED, "result_path": str(path), "imported_at": None,
-                                  "consumed_at": None, "note": "RECONCILED_FROM_WORKFLOW_STATE"}
+                                  "consumed_at": None,
+                                  "note": ("RECONCILED_FROM_WORKFLOW_STATE" if real_digest is None
+                                          else "RECONCILED_DIGEST_VERIFIED")}
             _log_suppression_once(root, task_id, st, sha, "TASK_ALREADY_CONSUMED_RECONCILED")
             _save_ing(root, task_id, st)
             return IngestionResult(task_id, "DUPLICATE_SUPPRESSED", sha, detail="RECONCILED")
@@ -447,6 +502,52 @@ def resume_after_import(root: Path, task_id: str) -> Dict[str, Any]:
     st["auto_resume_status"] = "DONE"
     _save_ing(root, task_id, st)
     return decision.to_dict()
+
+
+def _real_consumed_digest(root: Path, task_id: str) -> Optional[str]:
+    """The real, already-persisted consumed content digest for `task_id`,
+    if one exists (REVIEW-004 R004-4) -- `model_handoff_workflow`'s own
+    state first (`result_sha256`/`accepted_result_sha256`), else the
+    registry row's `result_sha256` column. `None` when no real digest was
+    ever recorded (pre-digest-era state), never a fabricated placeholder."""
+    state = _wf._load_state(root, task_id) or {}
+    digest = state.get("result_sha256") or state.get("accepted_result_sha256")
+    if digest:
+        return digest
+    row = _wf._registry_row(root, task_id) or {}
+    return row.get("result_sha256") or None
+
+
+def _unsafe_manual_path_reason(root: Path, task_id: str, path: Path, trigger: str,
+                               policy: IngestionPolicy) -> Optional[str]:
+    """The real registration/identity/safety gate `_ingest_locked()` applies
+    to a caller-supplied path by default (REVIEW-004 R004-1). Returns a real
+    reason string when the path is untrusted, `None` when it is safe to
+    ingest. Mirrors `_observe()`'s own symlink/non-file/resolved-parent/
+    non-empty checks and additionally requires the path to actually BE the
+    task's registered expected path -- naming the right `task_id` is never
+    sufficient on its own."""
+    reg = _read_json(_task_dir(root, task_id) / "expected_result.json")
+    if reg is None:
+        return "NO_REGISTRATION"
+    expected = _expected_path(root, task_id)
+    try:
+        if path.resolve() != expected.resolve():
+            return "PATH_NOT_REGISTERED_EXPECTED_PATH"
+    except OSError:
+        return "PATH_NOT_REGISTERED_EXPECTED_PATH"
+    if path.is_symlink() or not path.is_file():
+        return "UNSAFE_FILE"
+    try:
+        if path.resolve().parent != _task_dir(root, task_id).resolve():
+            return "UNSAFE_FILE"
+        if path.stat().st_size == 0:
+            return "EMPTY_FILE"
+    except OSError:
+        return "UNSAFE_FILE"
+    if trigger != "AUTO" and not _synchronous_stability_check(path, policy):
+        return "NOT_STABLE"
+    return None
 
 
 # --- arrival detection + stability ---------------------------------------------

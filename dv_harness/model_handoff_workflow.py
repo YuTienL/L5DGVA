@@ -40,8 +40,11 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import ctypes
 import os
 import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -317,29 +320,85 @@ def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> Impo
 _LOCK_STALE_SECONDS = 120.0
 
 
-def _acquire_lock(lock: Path, stale_seconds: float = _LOCK_STALE_SECONDS) -> bool:
-    """O_EXCL lock file; a stale lock (crashed holder) is broken once."""
+def _pid_alive(pid: int) -> bool:
+    """Real OS-level liveness check (REVIEW-004 R004-2) -- the same
+    primitive `agent_execution_backend.py` uses for its own Canonical
+    Mutation Lease, reimplemented locally here rather than imported, since
+    that module is a higher layer (imports `execution_contract.py`) and
+    this one must not depend on it."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _lock_owner_pid(lock: Path) -> int:
+    try:
+        content = lock.read_text(encoding="utf-8").strip()
+    except OSError:
+        return -1
+    tail = content.rsplit(":", 1)[-1]  # "<token>:<pid>" (new) or bare "<pid>" (pre-fix content)
+    try:
+        return int(tail)
+    except ValueError:
+        return -1
+
+
+def _acquire_lock(lock: Path, stale_seconds: float = _LOCK_STALE_SECONDS) -> Optional[str]:
+    """O_EXCL lock file carrying a real, unique ownership token
+    (`<uuid4>:<pid>`), never a bare pid (REVIEW-004 R004-2). Returns the
+    caller's own token on success, `None` on failure -- the caller MUST
+    pass that same token back to `_release_lock()`, so a release can never
+    remove a lock a different holder has since acquired.
+
+    A lock is only ever broken when BOTH its age exceeds `stale_seconds`
+    AND its recorded owner pid is provably dead (`_pid_alive()`) -- elapsed
+    time alone is never sufficient, closing the takeover race Codex's own
+    REVIEW-004 R004-2 demonstrated (age-only unlink + owner-blind release
+    could admit a third writer)."""
     lock.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(2):
+        token = f"{uuid.uuid4().hex}:{os.getpid()}"
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
+            os.write(fd, token.encode())
             os.close(fd)
-            return True
+            return token
         except FileExistsError:
             try:
-                if time.time() - lock.stat().st_mtime > stale_seconds:
+                stale = (time.time() - lock.stat().st_mtime) > stale_seconds
+            except OSError:
+                stale = False
+            if stale and not _pid_alive(_lock_owner_pid(lock)):
+                try:
                     lock.unlink()
                     continue
-            except OSError:
-                pass
-            return False
-    return False
+                except OSError:
+                    pass
+            return None
+    return None
 
 
-def _release_lock(lock: Path) -> None:
+def _release_lock(lock: Path, token: str) -> None:
+    """Unlinks the lock file ONLY if its content still matches the
+    caller's own token (REVIEW-004 R004-2) -- never a blind unlink by
+    pathname, which could remove a lock a different holder already
+    re-acquired after a stale-takeover race."""
     try:
-        lock.unlink()
+        if lock.read_text(encoding="utf-8").strip() == token:
+            lock.unlink()
     except OSError:
         pass
 
@@ -355,7 +414,8 @@ def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutco
     already-CONSUMED task re-persists the same record."""
     root = Path(root)
     lock = _task_dir(root, task_id) / "import.lock"
-    if not _acquire_lock(lock):
+    lock_token = _acquire_lock(lock)
+    if lock_token is None:
         return ImportOutcome(task_id=task_id, state=current_state(root, task_id) or STATE_RESULT_REJECTED,
                              parse_error="IMPORT_IN_PROGRESS")
     try:
@@ -383,7 +443,7 @@ def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutco
             _ec.persist_next_action(root, task_id, _ec.resolve_next_action(event))
         return outcome
     finally:
-        _release_lock(lock)
+        _release_lock(lock, lock_token)
 
 
 def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
@@ -429,9 +489,46 @@ def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
     return question["id"]
 
 
+_REGISTRY_LOCK_STALE_SECONDS = 30.0
+_REGISTRY_LOCK_TIMEOUT_SECONDS = 10.0
+
+
+def _registry_lock_path(root: Path) -> Path:
+    return _registry_path(root).parent / (_REGISTRY_CSV + ".lock")
+
+
+@contextmanager
+def _registry_lock(root: Path):
+    """Serializes EVERY write to the shared `registry.csv` -- both the
+    additive schema migration and the row append -- across concurrently
+    importing tasks (REVIEW-004 R004-3: per-task import locks never
+    serialized this one shared resource, so two different task_ids could
+    race on the same migration temp file or corrupt/lose rows). Reuses the
+    same ownership-token lock primitive as the import/ingestion locks, with
+    a short bounded retry (this is ordinary mutual exclusion between
+    legitimately concurrent DIFFERENT-task writers, not a "second importer
+    for the same task" business refusal, so it waits briefly rather than
+    failing immediately)."""
+    lock = _registry_lock_path(root)
+    deadline = time.time() + _REGISTRY_LOCK_TIMEOUT_SECONDS
+    token = None
+    while token is None:
+        token = _acquire_lock(lock, stale_seconds=_REGISTRY_LOCK_STALE_SECONDS)
+        if token is None:
+            if time.time() >= deadline:
+                raise OSError(f"REGISTRY_LOCK_TIMEOUT:{lock}")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        _release_lock(lock, token)
+
+
 def _ensure_registry_schema(path: Path) -> None:
     """Additive migration: rows written before the digest column existed keep an
-    empty result_sha256 (identity falls back to status+path for them)."""
+    empty result_sha256 (identity falls back to status+path for them). Caller
+    must hold `_registry_lock()` -- the migration read/replace is not itself
+    concurrency-safe."""
     if not path.is_file():
         return
     with open(path, newline="", encoding="utf-8") as f:
@@ -440,7 +537,9 @@ def _ensure_registry_schema(path: Path) -> None:
         rows = list(reader)
     if fields == _REGISTRY_FIELDS:
         return
-    tmp = path.with_name(path.name + ".migrate.tmp")
+    # A unique per-process/per-call temp name (REVIEW-004 R004-3): a fixed
+    # ".migrate.tmp" name shared by every writer could itself collide.
+    tmp = path.with_name(f"{path.name}.migrate.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     with open(tmp, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=_REGISTRY_FIELDS)
         w.writeheader()
@@ -465,28 +564,35 @@ def _append_registry(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
     """The second, always-fires Canonical Consumer: a real, structural,
     append-only registry row for EVERY consumed result, regardless of
     whether it also needed a human decision -- the "evidence store" /
-    "capability-status update" consumer path the architecture doc names."""
+    "capability-status update" consumer path the architecture doc names.
+    The idempotency re-check and the write are both performed under the
+    SAME registry-scoped lock (REVIEW-004 R004-3), closing the
+    check-then-act race a per-task-only lock left open across different
+    task_ids."""
     from .change_impact import _git
-    if _registry_row(root, handoff.task_id) is not None:
-        return  # idempotent: one consumed result -> exactly one registry row
-    path = _registry_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _ensure_registry_schema(path)
-    is_new = not path.exists()
-    rc, head, _ = _git(Path(root), ["rev-parse", "HEAD"])
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=_REGISTRY_FIELDS)
-        if is_new:
-            w.writeheader()
-        w.writerow({
-            "task_id": handoff.task_id, "target_model": handoff.target_model,
-            "task_type": handoff.task_type, "state": STATE_RESULT_CONSUMED,
-            "result_status": result.result_status, "handoff_path": str(_task_dir(root, handoff.task_id) / "HANDOFF_V1.md"),
-            "result_path": result_path,
-            "consumed_at_head": head.strip() if rc == 0 else "",
-            "question_id": question_id or "",
-            "result_sha256": result_sha256 or "",
-        })
+    root = Path(root)
+    with _registry_lock(root):
+        if _registry_row(root, handoff.task_id) is not None:
+            return  # idempotent: one consumed result -> exactly one registry row
+        path = _registry_path(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_registry_schema(path)
+        is_new = not path.exists()
+        rc, head, _ = _git(root, ["rev-parse", "HEAD"])
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=_REGISTRY_FIELDS)
+            if is_new:
+                w.writeheader()
+            w.writerow({
+                "task_id": handoff.task_id, "target_model": handoff.target_model,
+                "task_type": handoff.task_type, "state": STATE_RESULT_CONSUMED,
+                "result_status": result.result_status,
+                "handoff_path": str(_task_dir(root, handoff.task_id) / "HANDOFF_V1.md"),
+                "result_path": result_path,
+                "consumed_at_head": head.strip() if rc == 0 else "",
+                "question_id": question_id or "",
+                "result_sha256": result_sha256 or "",
+            })
 
 
 # --- Human Transport UX (dispatch section 9) ---------------------------------

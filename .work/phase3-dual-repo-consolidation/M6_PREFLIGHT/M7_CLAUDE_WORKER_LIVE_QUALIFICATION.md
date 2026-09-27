@@ -133,3 +133,55 @@ exactly this shape.
   this project's own established convention treats an external-system
   boundary (see that file's own header for the full disclosure) -- the six
   qualifications above are the real evidence that the mocked shape is true.
+
+## Live-fire attempt against the real M7-V1-CODEX-REVIEW-004 result (blocked)
+
+While this task was in progress, the real detached watcher (armed 3 days
+earlier, `pid=19536`, `52610` poll iterations) autonomously detected,
+stability-confirmed, hashed, imported, and consumed the real returned Codex
+`M7-V1-CODEX-REVIEW-004` result -- entirely unattended, across the multi-day
+gap, with zero manual intervention:
+
+```
+2026-09-27T14:49:49 RESULT_DETECTED (sha256 59099ec7...)
+2026-09-27T14:49:54 RESULT_STABILITY_CONFIRMED -> RESULT_HASHED -> AUTO_IMPORT_STARTED
+2026-09-27T14:49:54 RESULT_ACCEPTED -> RESULT_CONSUMED -> AUTO_RESUME_STARTED
+2026-09-27T14:49:54 NEXT_ACTION_RESOLVED: AUTO_REMEDIATE_CONFIRMED_FINDINGS
+```
+
+This is a real, complete, live qualification of `REAL EXTERNAL RESULT ->
+AUTO INGEST -> NEXT ACTION RESOLVER` (the first half of the target chain),
+independent of and prior to this task's own agent-backend work.
+
+The result was `FAIL` with 4 real findings (R004-1 CRITICAL / R004-2 HIGH /
+R004-3 HIGH / R004-4 MEDIUM, all in `dv_harness/result_ingestion.py` /
+`model_handoff_workflow.py`'s lock and reconciliation logic -- independently
+spot-confirmed by direct code inspection before proceeding, not accepted on
+Codex's word alone). `HUMAN_DECISIONS_REQUIRED=(none)`, exactly the
+"consumed FAIL, auto-remediation-eligible" case section 21 of the
+integration prompt names.
+
+A real `AgentRunRequest` was built (task-scoped to the 5 relevant files,
+`CLAUDE_IMPLEMENTATION_PROFILE`, a detailed objective naming all 4 findings
+and the required reproduce-fix-test-regress sequence, `timeout_policy_
+seconds=3000`) and `launch_worker()` was invoked for real.
+
+**The launch was refused by this Claude Code installation's own auto-mode
+permission classifier**, reason `"Create Unsafe Agents"`, before any Python
+code in the launcher ran. Per that denial's own explicit instructions, this
+was NOT retried through any other tool, subagent, encoding, or host --
+doing so would be "pursuing the same outcome" the denial names. Verified
+zero side effects: no `.dv-harness/agent_runs/` directory was even created,
+`lease_state()` reports `NONE`, `status_report()` reports empty. A real
+`SAFE_EXECUTION_BLOCKED` stop was persisted for `M7-V1-CODEX-REVIEW-004`
+citing this exact reason.
+
+This is disclosed as a real, current limitation of `AUTONOMOUS_AGENT_
+EXECUTION_BACKEND` on THIS host/installation: the mechanism is implemented,
+unit-tested (35 tests, 4 mutation controls, 6 real read-only/mutation-
+scope CLI qualifications in a throwaway directory earlier in this same
+task), and wired into the Next Action Resolver, but has not been fired
+against a real production M7 result, because the platform itself refuses
+to let this session spawn that class of autonomous worker process. This is
+a genuinely different boundary from anything L5DGVA's own governance
+controls, and is not something this task can resolve by writing more code.

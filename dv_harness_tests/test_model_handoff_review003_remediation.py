@@ -437,14 +437,15 @@ def test_concurrent_import_is_refused_with_no_side_effects(repo):
     rp = _export(repo)
     rp.write_text(r_to(_res(result_status="HUMAN_DECISION_REQUIRED", human_decisions_required=["q?"])), encoding="utf-8")
     lock = repo / ".dv-harness/model_handoffs/T-1/import.lock"
-    assert wf._acquire_lock(lock)  # another importer holds the task
+    token = wf._acquire_lock(lock)  # another importer holds the task
+    assert token is not None
     try:
         out = wf.import_result(repo, "T-1", rp)
         assert out.parse_error == "IMPORT_IN_PROGRESS" and not out.consumed
         assert _rows(repo) == [] and QuestionQueueStore(repo).list_questions() == []
         assert wf.current_state(repo, "T-1") == wf.STATE_WAITING_FOR_HUMAN_TRANSPORT
     finally:
-        wf._release_lock(lock)
+        wf._release_lock(lock, token)
     assert wf.import_result(repo, "T-1", rp).state == wf.STATE_RESULT_CONSUMED  # released -> proceeds
 
 
@@ -472,14 +473,15 @@ def test_manual_ingestion_is_refused_while_the_task_ingestion_lock_is_held(repo)
     rp = _export(repo)
     rp.write_text(r_to(_res()), encoding="utf-8")
     lock = repo / ".dv-harness/model_handoffs/T-1/ingestion.lock"
-    assert wf._acquire_lock(lock)
+    token = wf._acquire_lock(lock)
+    assert token is not None
     try:
         res = ri.ingest_result_file(repo, "T-1", rp, trigger="MANUAL")
         assert res.action == "LOCKED" and wf.current_state(repo, "T-1") == wf.STATE_WAITING_FOR_HUMAN_TRANSPORT
         rc = wf.execute_verb(["import", "--task-id", "T-1", "--result-file", str(rp), "--root", str(repo)])
         assert rc == 1
     finally:
-        wf._release_lock(lock)
+        wf._release_lock(lock, token)
 
 
 # ================================================================ production artifacts keep working
