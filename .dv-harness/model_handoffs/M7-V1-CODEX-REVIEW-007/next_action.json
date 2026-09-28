@@ -1,9 +1,9 @@
 {
   "auto_actionable": true,
-  "event": "RESULT_REJECTED_MALFORMED",
+  "event": "RESULT_CONSUMED_CLEAN",
   "human_action_required": "NO",
-  "next_action": "AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF",
+  "next_action": "EVALUATE_CANONICAL_TASK_COMPLETION",
   "next_action_owner": "L5DGVA",
-  "next_action_reason": "provider-independent routing table: RESULT_REJECTED_MALFORMED -> AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF",
+  "next_action_reason": "provider-independent routing table: RESULT_CONSUMED_CLEAN -> EVALUATE_CANONICAL_TASK_COMPLETION",
   "stop_reason": null
 }

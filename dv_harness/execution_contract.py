@@ -378,6 +378,153 @@ def read_persisted_stop(root: Path, task_id: str) -> Optional[Dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# --- Canonical Task Completion Evaluator (P3/P4/P6 gap-close) ---------------
+# EVALUATE_CANONICAL_TASK_COMPLETION was a named target in NEXT_ACTION_TABLE
+# (RESULT_CONSUMED_CLEAN's own route) with no producer anywhere in the
+# codebase -- found live when M7-V1-CODEX-REVIEW-007 consumed cleanly
+# (PASS, zero findings) and nothing evaluated what that actually meant for
+# the Codex branch or the wider M7 program. Read-only: never itself
+# generates a handoff or files a question -- a caller (the current-session
+# executor) acts on `next_approved_gate`, the same evaluate/act separation
+# `model_handoff_workflow.build_correction_request_handoff()` (GAP-V2-016)
+# already established.
+
+TASK_COMPLETE = "TASK_COMPLETE"
+TASK_FAILED_REMEDIATION_PENDING = "TASK_FAILED_REMEDIATION_PENDING"
+TASK_STATUS_UNKNOWN = "TASK_STATUS_UNKNOWN"
+
+BRANCH_READY_FOR_CLOSURE = "BRANCH_READY_FOR_CLOSURE"
+BRANCH_NOT_READY = "BRANCH_NOT_READY"
+
+GATE_GENERATE_CHATGPT_HANDOFF = "GENERATE_CHATGPT_ARCHITECTURE_GOVERNANCE_HANDOFF"
+GATE_AWAIT_CHATGPT_RESULT = "AWAIT_CHATGPT_RESULT"
+GATE_REMEDIATE_FINDINGS = "AUTO_REMEDIATE_CONFIRMED_FINDINGS"
+GATE_M7_FULL_CLOSURE_REVIEW_REQUIRED = "M7_FULL_CLOSURE_REVIEW_REQUIRED"
+
+
+@dataclass(frozen=True)
+class CanonicalCompletionEvaluation:
+    task_id: str
+    #: This ONE task's own review outcome -- never conflated with program completion.
+    task_completion: str
+    #: Is the Codex review BRANCH (the current round of findings) settled.
+    branch_closure_readiness: str
+    #: Real, currently-OPEN question_queue ids -- e.g. R005-2/R006-4's
+    #: HumanGate. Outstanding does not necessarily mean BLOCKING (a caller
+    #: cross-checks against its own disposition record for that).
+    outstanding_human_authority_items: Sequence[str]
+    #: M7 program-level completion. NEVER "M7_COMPLETE" merely because one
+    #: task passed -- requires the ChatGPT round trip too, at minimum.
+    program_completion: str
+    next_approved_gate: str
+    evidence_refs: Sequence[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task_id": self.task_id, "task_completion": self.task_completion,
+            "branch_closure_readiness": self.branch_closure_readiness,
+            "outstanding_human_authority_items": list(self.outstanding_human_authority_items),
+            "program_completion": self.program_completion,
+            "next_approved_gate": self.next_approved_gate,
+            "evidence_refs": list(self.evidence_refs),
+        }
+
+
+def _chatgpt_round_trip_consumed(root: Path) -> bool:
+    """Real scan of every registered task's own persisted state.json --
+    never a hardcoded task_id -- for ANY chatgpt-target task that reached
+    RESULT_CONSUMED."""
+    from . import model_handoff_workflow as _wf
+    base = Path(root) / _wf._HANDOFF_DIR
+    if not base.is_dir():
+        return False
+    for d in sorted(base.iterdir()):
+        if not d.is_dir():
+            continue
+        state = _wf._load_state(root, d.name)
+        if state and state.get("target_model") == "chatgpt" and state.get("state") == _wf.STATE_RESULT_CONSUMED:
+            return True
+    return False
+
+
+def evaluate_canonical_task_completion(root: Path, task_id: str) -> CanonicalCompletionEvaluation:
+    """The real, previously-missing executor for
+    `EVALUATE_CANONICAL_TASK_COMPLETION`. Every field is derived from real
+    persisted Canonical state (this task's own consumed result, the real
+    question_queue store, a real scan for a consumed ChatGPT round trip)
+    -- never guessed, never inferred from "no known pending work"."""
+    root = Path(root)
+    from . import model_handoff_workflow as _wf
+    from . import model_result as _result_mod
+    from .question_queue import QuestionQueueStore
+
+    state = _wf._load_state(root, task_id)
+    if state is None or state.get("state") != _wf.STATE_RESULT_CONSUMED:
+        raise ValueError(f"NOT_CONSUMED:{task_id}:{state.get('state') if state else 'NO_STATE'}")
+
+    result_status = state.get("result_status")
+    result_path = _wf._task_dir(root, task_id) / "RESULT_V1.md"
+    findings: Sequence[str] = ()
+    try:
+        findings = _result_mod.from_markdown(result_path.read_text(encoding="utf-8")).findings
+    except Exception:
+        pass  # an unparseable-now result still has a real persisted result_status to fall back on
+
+    if result_status == "PASS" and not findings:
+        task_completion = TASK_COMPLETE
+        branch = BRANCH_READY_FOR_CLOSURE
+    elif findings or result_status in ("FAIL", "PARTIAL"):
+        task_completion = TASK_FAILED_REMEDIATION_PENDING
+        branch = BRANCH_NOT_READY
+    else:
+        task_completion = TASK_STATUS_UNKNOWN
+        branch = BRANCH_NOT_READY
+
+    store = QuestionQueueStore(root)
+    outstanding = tuple(q["id"] for q in store.list_questions(status="OPEN"))
+    chatgpt_done = _chatgpt_round_trip_consumed(root)
+
+    if branch != BRANCH_READY_FOR_CLOSURE:
+        next_gate = GATE_REMEDIATE_FINDINGS
+        program = "M7_NOT_COMPLETE:CODEX_BRANCH_NOT_READY"
+    elif not chatgpt_done:
+        next_gate = GATE_GENERATE_CHATGPT_HANDOFF
+        program = "M7_NOT_COMPLETE:CHATGPT_ROUND_TRIP_NOT_CONSUMED"
+    else:
+        next_gate = GATE_M7_FULL_CLOSURE_REVIEW_REQUIRED
+        program = "M7_NOT_COMPLETE:FULL_CLOSURE_CRITERIA_REVIEW_REQUIRED"
+
+    return CanonicalCompletionEvaluation(
+        task_id=task_id, task_completion=task_completion, branch_closure_readiness=branch,
+        outstanding_human_authority_items=outstanding, program_completion=program,
+        next_approved_gate=next_gate,
+        evidence_refs=(str(result_path), f"question_queue_open_count={len(outstanding)}",
+                      f"chatgpt_round_trip_consumed={chatgpt_done}"),
+    )
+
+
+def _completion_evaluation_path(root: Path, task_id: str) -> Path:
+    return Path(root) / ".dv-harness" / "model_handoffs" / task_id / "canonical_completion_evaluation.json"
+
+
+def persist_completion_evaluation(root: Path, task_id: str, evaluation: CanonicalCompletionEvaluation) -> Path:
+    """Real persisted evidence -- P3 CLOSE THE LOOP: an evaluation that
+    only ever lived in a return value would be exactly the kind of
+    unconsumed/unpersisted output this same gap-close is meant to stop
+    happening again."""
+    path = _completion_evaluation_path(root, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(evaluation.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def read_persisted_completion_evaluation(root: Path, task_id: str) -> Optional[Dict[str, Any]]:
+    path = _completion_evaluation_path(root, task_id)
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 # --- Adapter: derive real signals from model_handoff_workflow's own state -
 
 def signals_from_model_handoff_state(
