@@ -46,7 +46,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import model_handoff as _handoff_mod
 from . import model_result as _result_mod
@@ -345,15 +345,88 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _lock_owner_pid(lock: Path) -> int:
+    """Retained for any external caller expecting the old `-1`-on-unparseable
+    contract (none found in this codebase as of REVIEW-005; see
+    `_parse_lock_owner_pid()`, which `_acquire_lock()` itself now uses
+    instead). Do not use this for a takeover decision -- `-1` collapses
+    "provably no owner" and "content unreadable/malformed" into the same
+    value, which is exactly the REVIEW-005 R005-1 flaw."""
     try:
         content = lock.read_text(encoding="utf-8").strip()
     except OSError:
         return -1
-    tail = content.rsplit(":", 1)[-1]  # "<token>:<pid>" (new) or bare "<pid>" (pre-fix content)
+    pid = _parse_lock_owner_pid(content)
+    return -1 if pid is None else pid
+
+
+def _parse_lock_owner_pid(content: str) -> Optional[int]:
+    """Parses already-read lock CONTENT (never re-reads the file -- the
+    caller must pass the exact bytes it will also use for the compare-and-
+    delete in `_content_verified_takeover()`, or the two checks could
+    silently apply to two different observations). Returns `None` --
+    OWNERSHIP UNKNOWN -- for empty, truncated, or otherwise unparseable
+    content, and for a non-positive pid. `None` is never eligible for
+    stale takeover (Codex REVIEW-005 R005-1: the old `_lock_owner_pid()`
+    returned `-1` for anything unparseable, and `_pid_alive(-1)` returns
+    `False`, silently turning "I can't tell who owns this" into "the
+    owner is dead")."""
+    tail = content.rsplit(":", 1)[-1]  # "<token>:<pid>" (new) or bare "<pid>" (pre-REVIEW-004 content)
     try:
-        return int(tail)
+        pid = int(tail)
     except ValueError:
-        return -1
+        return None
+    return pid if pid > 0 else None
+
+
+def _read_lock_snapshot(lock: Path) -> Tuple[str, float]:
+    """Reads a lock's content and age as ONE snapshot -- its own function
+    (rather than inlined in `_acquire_lock()`) so a regression test can
+    force two concurrent contenders to observe the exact same snapshot
+    before racing at the takeover step, reproducing Codex REVIEW-005
+    R005-1's real two-contender scenario deterministically instead of
+    hoping real thread timing happens to collide."""
+    content = lock.read_text(encoding="utf-8").strip()
+    age = time.time() - lock.stat().st_mtime
+    return content, age
+
+
+def _content_verified_takeover(lock: Path, observed_content: str) -> bool:
+    """R005-1 fix: removes `lock` ONLY if, at the moment of removal, it
+    still holds exactly the `observed_content` the caller already judged
+    stale-and-dead -- never a bare unlink-by-pathname, which Codex's real
+    two-thread REVIEW-005 probe used to remove a DIFFERENT, LIVE lock that
+    a legitimate new owner had created at the same path between the
+    caller's observation and its unlink.
+
+    Built from `os.replace()`, which is atomic on both POSIX and Windows
+    (unlike `os.rename()`, which refuses to overwrite an existing
+    destination on Windows): the CURRENT file at `lock`'s path is stolen
+    into a private staging name first (this can only succeed against
+    whatever the path currently holds, live or stale), its content is then
+    checked against what was observed, and on any mismatch the staged file
+    is put back byte-for-byte and this call reports failure -- a contender
+    that loses this race only ever gives up, it never destroys another
+    holder's real lock."""
+    staging = lock.with_name(f"{lock.name}.takeover.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        os.replace(str(lock), str(staging))
+    except OSError:
+        return False  # already gone or already taken by a concurrent takeover
+    try:
+        current_content = staging.read_text(encoding="utf-8").strip()
+    except OSError:
+        current_content = None
+    if current_content == observed_content:
+        try:
+            staging.unlink()
+        except OSError:
+            pass
+        return True
+    try:
+        os.replace(str(staging), str(lock))  # not ours to remove -- restore it unchanged
+    except OSError:
+        pass
+    return False
 
 
 def _acquire_lock(lock: Path, stale_seconds: float = _LOCK_STALE_SECONDS) -> Optional[str]:
@@ -367,7 +440,10 @@ def _acquire_lock(lock: Path, stale_seconds: float = _LOCK_STALE_SECONDS) -> Opt
     AND its recorded owner pid is provably dead (`_pid_alive()`) -- elapsed
     time alone is never sufficient, closing the takeover race Codex's own
     REVIEW-004 R004-2 demonstrated (age-only unlink + owner-blind release
-    could admit a third writer)."""
+    could admit a third writer). Malformed/truncated content is OWNERSHIP
+    UNKNOWN, never proof of death (REVIEW-005 R005-1), and the takeover
+    itself is content-verified (`_content_verified_takeover()`), never a
+    bare unlink-by-pathname (REVIEW-005 R005-1's real two-contender race)."""
     lock.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(2):
         token = f"{uuid.uuid4().hex}:{os.getpid()}"
@@ -378,15 +454,15 @@ def _acquire_lock(lock: Path, stale_seconds: float = _LOCK_STALE_SECONDS) -> Opt
             return token
         except FileExistsError:
             try:
-                stale = (time.time() - lock.stat().st_mtime) > stale_seconds
+                observed_content, age = _read_lock_snapshot(lock)
             except OSError:
-                stale = False
-            if stale and not _pid_alive(_lock_owner_pid(lock)):
-                try:
-                    lock.unlink()
-                    continue
-                except OSError:
-                    pass
+                return None
+            stale = age > stale_seconds
+            owner_pid = _parse_lock_owner_pid(observed_content)
+            if not (stale and owner_pid is not None and not _pid_alive(owner_pid)):
+                return None
+            if _content_verified_takeover(lock, observed_content):
+                continue
             return None
     return None
 

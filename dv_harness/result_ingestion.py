@@ -203,11 +203,49 @@ def _task_lock(root: Path, task_id: str, policy: IngestionPolicy) -> Iterator[bo
 
 # --- expected result registration --------------------------------------------
 
+#: The complete registration schema `register_expected_result()` itself
+#: writes. Used by `_valid_registration()` (REVIEW-005 R005-3) to require
+#: every field present, never merely "some JSON object decoded".
+_REGISTRATION_SCHEMA_FIELDS = (
+    "TASK_ID", "TARGET_MODEL", "HANDOFF_FILE", "EXPECTED_RESULT_FILE",
+    "EXPECTED_RESULT_CONTRACT", "EXPECTED_PRODUCER", "EXPECTED_TASK_TYPE",
+    "CURRENT_HEAD", "WAIT_STATE", "CREATED_AT",
+)
+
+
+def _valid_registration(reg: Any, root: Path, task_id: str) -> bool:
+    """REVIEW-005 R005-3 fix: a successfully-decoded JSON object at
+    `expected_result.json` is never, on its own, a genuine registration
+    (Codex's own finding: `{}` or a tampered/copied record previously
+    satisfied both `register_expected_result()`'s "already registered"
+    short-circuit and `_unsafe_manual_path_reason()`'s presence-only gate).
+    Requires the COMPLETE schema (every key `register_expected_result()`
+    itself writes) AND the two correlation fields that actually bind this
+    record to THIS task -- `TASK_ID` and `EXPECTED_RESULT_FILE` -- to be
+    correct, never merely present."""
+    if not isinstance(reg, dict):
+        return False
+    if any(k not in reg for k in _REGISTRATION_SCHEMA_FIELDS):
+        return False
+    if reg.get("TASK_ID") != task_id:
+        return False
+    try:
+        expected_rel = _expected_path(root, task_id).relative_to(root).as_posix()
+    except ValueError:
+        return False
+    return reg.get("EXPECTED_RESULT_FILE") == expected_rel
+
+
 def register_expected_result(root: Path, task_id: str) -> Dict[str, Any]:
     """Persist the expected-result registration for a task that reached
     HUMAN_TRANSPORT_REQUIRED. Idempotent. Only a registered path is ever
     watched. A second pending task claiming the same expected path is a
-    real conflict, never silently shared."""
+    real conflict, never silently shared.
+
+    A malformed, empty, or mismatched EXISTING record at this task's
+    registration path (REVIEW-005 R005-3) is never trusted/returned as-is
+    -- it is treated exactly like "no registration yet" and replaced with a
+    fresh, genuine one derived from the task's own real handoff."""
     root = Path(root)
     handoff = _wf._load_handoff(root, task_id)
     if handoff is None:
@@ -219,7 +257,7 @@ def register_expected_result(root: Path, task_id: str) -> Dict[str, Any]:
                 "EXPECTED_RESULT_FILE") == rel and (_wf.current_state(root, other) in PENDING_WORKFLOW_STATES):
             raise IngestionError("EXPECTED_RESULT_FILE_CONFLICT", {"task_id": task_id, "other": other})
     existing = _read_json(_task_dir(root, task_id) / "expected_result.json")
-    if existing is not None:
+    if existing is not None and _valid_registration(existing, root, task_id):
         return existing
     reg = {
         "TASK_ID": task_id,
@@ -323,6 +361,47 @@ def ingest_result_file(root: Path, task_id: str, path: Path, *, trigger: str = "
         if not got:
             return IngestionResult(task_id, "LOCKED", detail="INGESTION_IN_PROGRESS")
         return _ingest_locked(root, task_id, Path(path), trigger, authorized_replay, policy, allow_unregistered_path)
+
+
+def _sealed_manifest_path(path: Path) -> Path:
+    """Sidecar path for an OPTIONAL sealed-manifest completion signal
+    (REVIEW-005 R005-2's own recommended fix: "an explicit sealed/manifest
+    marker binding size and SHA-256"). A producer that writes this file
+    ATOMICALLY, LAST -- only after its real result content is completely
+    and finally written -- gives ingestion a positive completion proof that
+    replaces quiet-interval INFERENCE with quiet-interval-free VERIFICATION,
+    closing the slow-writer race Codex's own probe demonstrated for any
+    producer that adopts it. Optional and fully backward compatible: a
+    producer that never writes this sidecar gets the pre-existing
+    quiet-interval behavior, unchanged (still narrower than required, as
+    disclosed and regression-tested)."""
+    return path.with_name(path.name + ".manifest.json")
+
+
+def _read_sealed_manifest(path: Path) -> Optional[Dict[str, Any]]:
+    manifest = _read_json(_sealed_manifest_path(path))
+    if not isinstance(manifest, dict):
+        return None
+    if not isinstance(manifest.get("sha256"), str) or not isinstance(manifest.get("size"), int):
+        return None
+    return manifest
+
+
+def _sealed_manifest_confirms_completion(path: Path) -> bool:
+    """True only when a sealed manifest exists AND its recorded sha256/size
+    match the file's REAL current bytes -- never trusted on the manifest's
+    own say-so alone (a stale manifest written against an earlier
+    intermediate snapshot must fall back to ordinary quiet-interval
+    inference, not wrongly authorize early consumption of a newer,
+    unfinished write)."""
+    manifest = _read_sealed_manifest(path)
+    if manifest is None:
+        return False
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    return len(data) == manifest["size"] and _sha256_bytes(data) == manifest["sha256"]
 
 
 def _synchronous_stability_check(path: Path, policy: IngestionPolicy) -> bool:
@@ -530,6 +609,8 @@ def _unsafe_manual_path_reason(root: Path, task_id: str, path: Path, trigger: st
     reg = _read_json(_task_dir(root, task_id) / "expected_result.json")
     if reg is None:
         return "NO_REGISTRATION"
+    if not _valid_registration(reg, root, task_id):
+        return "MALFORMED_REGISTRATION"
     expected = _expected_path(root, task_id)
     try:
         if path.resolve() != expected.resolve():
@@ -545,7 +626,8 @@ def _unsafe_manual_path_reason(root: Path, task_id: str, path: Path, trigger: st
             return "EMPTY_FILE"
     except OSError:
         return "UNSAFE_FILE"
-    if trigger != "AUTO" and not _synchronous_stability_check(path, policy):
+    if trigger != "AUTO" and not _sealed_manifest_confirms_completion(path) \
+            and not _synchronous_stability_check(path, policy):
         return "NOT_STABLE"
     return None
 

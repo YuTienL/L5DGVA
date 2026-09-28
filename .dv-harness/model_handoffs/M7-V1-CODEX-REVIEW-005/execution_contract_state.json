@@ -1,8 +1,8 @@
 {
-  "HUMAN_ACTION_REQUIRED": "YES",
-  "NEXT_REQUIRED_ACTION": "Transport HANDOFF to Codex and place the returned RESULT_V1 at EXPECTED_RESULT_FILE; L5DGVA imports and resumes automatically",
-  "RESUME_ACTION": "AUTO_RESUME",
-  "STATE": "WAITING_FOR_HUMAN_TRANSPORT",
-  "STOP_EVIDENCE": "R004-1..R004-4 fixed and verified by author; REVIEW-005 handoff generated; expected result registered; watcher armed; stop is transport only",
-  "STOP_REASON": "HUMAN_TRANSPORT_REQUIRED"
+  "HUMAN_ACTION_REQUIRED": "NO",
+  "NEXT_REQUIRED_ACTION": "AUTO_REMEDIATE_CONFIRMED_FINDINGS",
+  "RESUME_ACTION": "",
+  "STATE": "AUTO_RUNNING",
+  "STOP_EVIDENCE": "",
+  "STOP_REASON": null
 }
