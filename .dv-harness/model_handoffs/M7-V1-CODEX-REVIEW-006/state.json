@@ -2,6 +2,10 @@
   "task_id": "M7-V1-CODEX-REVIEW-006",
   "target_model": "codex",
   "task_type": "review-route",
-  "state": "WAITING_FOR_HUMAN_TRANSPORT",
-  "handoff_path": "D:\\DV\\Task\\L5_DGVA\\.dv-harness\\model_handoffs\\M7-V1-CODEX-REVIEW-006\\HANDOFF_V1.md"
+  "state": "RESULT_CONSUMED",
+  "handoff_path": "D:\\DV\\Task\\L5_DGVA\\.dv-harness\\model_handoffs\\M7-V1-CODEX-REVIEW-006\\HANDOFF_V1.md",
+  "result_sha256": "93e5a82f2f11d31d22843b4c812abe4414e5d3c68da7345cce5d01e21a5abe43",
+  "result_status": "FAIL",
+  "accepted_result_sha256": "93e5a82f2f11d31d22843b4c812abe4414e5d3c68da7345cce5d01e21a5abe43",
+  "question_id": null
 }

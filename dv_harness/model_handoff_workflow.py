@@ -44,6 +44,10 @@ import ctypes
 import os
 import time
 import uuid
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -178,7 +182,8 @@ class ImportOutcome:
         }
 
 
-def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> ImportOutcome:
+def _import_result_inner(root: Path, task_id: str, result_md_path: Path,
+                         pre_read_bytes: Optional[bytes] = None) -> ImportOutcome:
     """The full Result Ingestion pipeline (architecture doc): RESULT_
     RETURNED -> PARSED -> {TASK_ID,PRODUCER,TASK_TYPE,SCOPE,SCHEMA,
     EVIDENCE,GOVERNANCE}_VALIDATED -> RESULT_CLASSIFIED ->
@@ -186,6 +191,18 @@ def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> Impo
     transitions to RESULT_REJECTED and STOPS -- it never reaches
     consumption. `root`'s own current working tree is never mutated by a
     rejected result.
+
+    `pre_read_bytes` (REVIEW-006 R006-2 fix): when the caller
+    (`result_ingestion._ingest_locked()`) already ran a manifest/stability
+    check that verified a specific byte buffer, it passes that EXACT buffer
+    here so it is hashed/parsed/consumed with zero further reads of
+    `result_md_path` -- a real, reproduced race let an external writer
+    replace the file's content between that earlier check and this
+    function's own (previously independent) read, so the bytes actually
+    consumed were never the ones any check had verified. `None` (the
+    default) preserves the original single-fresh-read behavior, used for
+    the `AUTO` watcher trigger and any other caller with no pre-verified
+    buffer of its own.
 
     GAP-V2-011 fix, replay safety (dispatch's own required properties:
     "DUPLICATE IMPORT -> ZERO duplicate semantic consumption",
@@ -208,7 +225,8 @@ def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> Impo
         recorded = prior_state.get("result_sha256")
         if recorded:
             try:
-                if hashlib.sha256(Path(result_md_path).read_bytes()).hexdigest() != recorded:
+                check_bytes = pre_read_bytes if pre_read_bytes is not None else Path(result_md_path).read_bytes()
+                if hashlib.sha256(check_bytes).hexdigest() != recorded:
                     # a consumed task is a closed transaction, but a DIFFERENT file is never
                     # silently reported as the consumed result (REVIEW-003 N2)
                     cached.parse_error = "RESULT_CONTENT_DIFFERS_FROM_CONSUMED"
@@ -233,10 +251,13 @@ def _import_result_inner(root: Path, task_id: str, result_md_path: Path) -> Impo
     accepted_sha = state.get("accepted_result_sha256")
 
     result_md_path = Path(result_md_path)
-    # Read the file ONCE: the bytes that are hashed are the bytes that are parsed,
-    # validated and consumed (no check-then-use window; REVIEW-003 N2).
+    # Read the file ONCE (or use the caller's own already-verified buffer,
+    # REVIEW-006 R006-2): the bytes that are hashed are the bytes that are
+    # parsed, validated and consumed (no check-then-use window; REVIEW-003
+    # N2, extended to also cover the gap BETWEEN a caller's own pre-check
+    # and this function's read).
     try:
-        data = result_md_path.read_bytes()
+        data = pre_read_bytes if pre_read_bytes is not None else result_md_path.read_bytes()
         result_sha = hashlib.sha256(data).hexdigest()
         result = _result_mod.from_markdown(data.decode("utf-8"))
     except (OSError, UnicodeDecodeError, ResultParseError) as exc:
@@ -378,55 +399,88 @@ def _parse_lock_owner_pid(content: str) -> Optional[int]:
     return pid if pid > 0 else None
 
 
-def _read_lock_snapshot(lock: Path) -> Tuple[str, float]:
-    """Reads a lock's content and age as ONE snapshot -- its own function
-    (rather than inlined in `_acquire_lock()`) so a regression test can
-    force two concurrent contenders to observe the exact same snapshot
-    before racing at the takeover step, reproducing Codex REVIEW-005
-    R005-1's real two-contender scenario deterministically instead of
-    hoping real thread timing happens to collide."""
-    content = lock.read_text(encoding="utf-8").strip()
-    age = time.time() - lock.stat().st_mtime
+def _try_lock_fd_exclusive(fd: int) -> bool:
+    """A real, non-blocking OS advisory lock on an already-open fd
+    (`fcntl.flock()` on POSIX; a 1-byte `msvcrt.locking()` region at offset
+    0 on Windows -- both stdlib, no new dependency). Guards two concurrent
+    STALE-TAKEOVER evaluations of the SAME already-existing lock file
+    against each other. Never involved in the initial `O_CREAT|O_EXCL`
+    fast path -- that path's own atomicity already prevents two fresh
+    creators from both succeeding."""
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        if os.name == "nt":
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock_fd(fd: int) -> None:
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        if os.name == "nt":
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def _read_lock_snapshot_from_fd(fd: int) -> Tuple[str, float]:
+    """Reads content+age from an ALREADY-OPEN, ALREADY-`_try_lock_fd_
+    exclusive()`-held fd -- its own function so a regression test can force
+    two concurrent takeover evaluations to interleave at a precise point,
+    reproducing Codex REVIEW-005 R005-1's real two-contender scenario
+    deterministically instead of hoping real thread timing collides."""
+    os.lseek(fd, 0, os.SEEK_SET)
+    content = os.read(fd, 4096).decode("utf-8", errors="replace").strip()
+    age = time.time() - os.fstat(fd).st_mtime
     return content, age
 
 
-def _content_verified_takeover(lock: Path, observed_content: str) -> bool:
-    """R005-1 fix: removes `lock` ONLY if, at the moment of removal, it
-    still holds exactly the `observed_content` the caller already judged
-    stale-and-dead -- never a bare unlink-by-pathname, which Codex's real
-    two-thread REVIEW-005 probe used to remove a DIFFERENT, LIVE lock that
-    a legitimate new owner had created at the same path between the
-    caller's observation and its unlink.
+def _try_stale_takeover_in_place(lock: Path, stale_seconds: float) -> Optional[str]:
+    """REVIEW-006 R006-1 fix: takeover NEVER unlinks/replaces the lock's
+    canonical pathname -- Codex's real REVIEW-006 finding against the prior
+    REVIEW-005 `_content_verified_takeover()` fix was that moving the
+    canonical path away (even briefly, even to "verify and put back")
+    creates a window where the path is genuinely absent, letting a THIRD,
+    perfectly normal `O_CREAT|O_EXCL` acquirer succeed there -- and the
+    prior fix's own mismatch-restore path (`os.replace(staging, lock)`)
+    could then silently overwrite that third acquirer's real, live lock.
 
-    Built from `os.replace()`, which is atomic on both POSIX and Windows
-    (unlike `os.rename()`, which refuses to overwrite an existing
-    destination on Windows): the CURRENT file at `lock`'s path is stolen
-    into a private staging name first (this can only succeed against
-    whatever the path currently holds, live or stale), its content is then
-    checked against what was observed, and on any mismatch the staged file
-    is put back byte-for-byte and this call reports failure -- a contender
-    that loses this race only ever gives up, it never destroys another
-    holder's real lock."""
-    staging = lock.with_name(f"{lock.name}.takeover.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    This version opens the EXISTING file in place (no unlink, no rename,
+    no window where the path does not exist), takes the real OS advisory
+    lock above so no second takeover evaluator can act on the same file
+    concurrently, and -- only if still genuinely eligible -- overwrites its
+    content with the new owner's token on the SAME fd via truncate+write.
+    Because the canonical pathname is never vacated, a normal
+    `O_CREAT|O_EXCL` acquirer can never observe it as absent during this
+    entire operation, structurally closing R006-1's staging-window race
+    rather than trying to detect it after the fact."""
     try:
-        os.replace(str(lock), str(staging))
+        fd = os.open(str(lock), os.O_RDWR)
     except OSError:
-        return False  # already gone or already taken by a concurrent takeover
+        return None  # already gone -- a normal creator may have just won it
     try:
-        current_content = staging.read_text(encoding="utf-8").strip()
-    except OSError:
-        current_content = None
-    if current_content == observed_content:
+        if not _try_lock_fd_exclusive(fd):
+            return None  # another takeover evaluation is in progress on this same lock
         try:
-            staging.unlink()
-        except OSError:
-            pass
-        return True
-    try:
-        os.replace(str(staging), str(lock))  # not ours to remove -- restore it unchanged
-    except OSError:
-        pass
-    return False
+            content, age = _read_lock_snapshot_from_fd(fd)
+            owner_pid = _parse_lock_owner_pid(content)
+            if not (age > stale_seconds and owner_pid is not None and not _pid_alive(owner_pid)):
+                return None
+            new_token = f"{uuid.uuid4().hex}:{os.getpid()}"
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, new_token.encode())
+            os.ftruncate(fd, len(new_token.encode()))
+            return new_token
+        finally:
+            _unlock_fd(fd)
+    finally:
+        os.close(fd)
 
 
 def _acquire_lock(lock: Path, stale_seconds: float = _LOCK_STALE_SECONDS) -> Optional[str]:
@@ -441,45 +495,62 @@ def _acquire_lock(lock: Path, stale_seconds: float = _LOCK_STALE_SECONDS) -> Opt
     time alone is never sufficient, closing the takeover race Codex's own
     REVIEW-004 R004-2 demonstrated (age-only unlink + owner-blind release
     could admit a third writer). Malformed/truncated content is OWNERSHIP
-    UNKNOWN, never proof of death (REVIEW-005 R005-1), and the takeover
-    itself is content-verified (`_content_verified_takeover()`), never a
-    bare unlink-by-pathname (REVIEW-005 R005-1's real two-contender race)."""
+    UNKNOWN, never proof of death (REVIEW-005 R005-1). The takeover itself
+    (`_try_stale_takeover_in_place()`) never unlinks or renames the
+    canonical pathname (REVIEW-006 R006-1: a prior stage-then-compare
+    design created exactly the absent-path window it was trying to avoid)
+    -- it overwrites content in place on an already-open fd, guarded by a
+    real OS advisory lock."""
     lock.parent.mkdir(parents=True, exist_ok=True)
-    for _ in range(2):
-        token = f"{uuid.uuid4().hex}:{os.getpid()}"
-        try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, token.encode())
-            os.close(fd)
-            return token
-        except FileExistsError:
-            try:
-                observed_content, age = _read_lock_snapshot(lock)
-            except OSError:
-                return None
-            stale = age > stale_seconds
-            owner_pid = _parse_lock_owner_pid(observed_content)
-            if not (stale and owner_pid is not None and not _pid_alive(owner_pid)):
-                return None
-            if _content_verified_takeover(lock, observed_content):
-                continue
-            return None
-    return None
+    token = f"{uuid.uuid4().hex}:{os.getpid()}"
+    try:
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, token.encode())
+        os.close(fd)
+        return token
+    except FileExistsError:
+        return _try_stale_takeover_in_place(lock, stale_seconds)
+
+
+_RELEASE_UNLINK_RETRY_SECONDS = 1.0
 
 
 def _release_lock(lock: Path, token: str) -> None:
     """Unlinks the lock file ONLY if its content still matches the
     caller's own token (REVIEW-004 R004-2) -- never a blind unlink by
     pathname, which could remove a lock a different holder already
-    re-acquired after a stale-takeover race."""
+    re-acquired after a stale-takeover race.
+
+    Retries the unlink briefly on a transient sharing failure. Real,
+    reproduced flake found alongside the REVIEW-006 R006-1 fix: Windows
+    refuses to delete a file that another handle still has open without
+    `FILE_SHARE_DELETE` (neither `os.open()` nor `Path.read_text()`'s own
+    `io.open()` request it), and `_try_stale_takeover_in_place()`'s brief
+    open-flock-read-close evaluation window is exactly such a handle --
+    long enough, under real concurrent retry pressure, to intermittently
+    make a live, legitimate release's unlink fail and get silently
+    swallowed, stranding the lock. POSIX has no such restriction and this
+    loop typically succeeds on its very first iteration there; the bound
+    is short because the blocking window is always a few OS calls, never
+    an unbounded hold."""
     try:
-        if lock.read_text(encoding="utf-8").strip() == token:
-            lock.unlink()
+        if lock.read_text(encoding="utf-8").strip() != token:
+            return
     except OSError:
-        pass
+        return
+    deadline = time.time() + _RELEASE_UNLINK_RETRY_SECONDS
+    while True:
+        try:
+            lock.unlink()
+            return
+        except OSError:
+            if time.time() >= deadline:
+                return
+            time.sleep(0.005)
 
 
-def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutcome:
+def import_result(root: Path, task_id: str, result_md_path: Path, *,
+                  pre_read_bytes: Optional[bytes] = None) -> ImportOutcome:
     """Public entry point. Runs the full ingestion pipeline
     (`_import_result_inner`) under a per-task import lock and persists the
     resolved NEXT_ACTION for EVERY outcome -- including an exception raised
@@ -487,7 +558,10 @@ def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutco
     `AUTO_RETRY_INTERRUPTED_IMPORT` before propagating. A concurrent import
     of the same task is refused with `IMPORT_IN_PROGRESS` and no side effects
     (REVIEW-003 UNKNOWN: check-then-act races). An idempotent replay of an
-    already-CONSUMED task re-persists the same record."""
+    already-CONSUMED task re-persists the same record.
+
+    `pre_read_bytes` (REVIEW-006 R006-2 fix): forwarded verbatim to
+    `_import_result_inner()` -- see its own docstring."""
     root = Path(root)
     lock = _task_dir(root, task_id) / "import.lock"
     lock_token = _acquire_lock(lock)
@@ -496,7 +570,7 @@ def import_result(root: Path, task_id: str, result_md_path: Path) -> ImportOutco
                              parse_error="IMPORT_IN_PROGRESS")
     try:
         try:
-            outcome = _import_result_inner(root, task_id, result_md_path)
+            outcome = _import_result_inner(root, task_id, result_md_path, pre_read_bytes=pre_read_bytes)
         except Exception:
             if _task_dir(root, task_id).is_dir():
                 from . import execution_contract as _ec0

@@ -43,7 +43,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from . import execution_contract as _ec
 from . import model_handoff_workflow as _wf
@@ -213,27 +213,74 @@ _REGISTRATION_SCHEMA_FIELDS = (
 )
 
 
+#: Real, known workflow-state vocabulary (never a hardcoded string copy --
+#: sourced from `model_handoff_workflow`'s own `STATE_*` constants) used by
+#: `_valid_registration()`'s WAIT_STATE domain check.
+_KNOWN_WORKFLOW_STATES = (
+    _wf.STATE_HANDOFF_READY, _wf.STATE_WAITING_FOR_HUMAN_TRANSPORT, _wf.STATE_RESULT_RETURNED,
+    _wf.STATE_RESULT_VALIDATING, _wf.STATE_RESULT_ACCEPTED, _wf.STATE_RESULT_REJECTED,
+    _wf.STATE_RESULT_CONSUMED,
+)
+
+
 def _valid_registration(reg: Any, root: Path, task_id: str) -> bool:
-    """REVIEW-005 R005-3 fix: a successfully-decoded JSON object at
-    `expected_result.json` is never, on its own, a genuine registration
-    (Codex's own finding: `{}` or a tampered/copied record previously
-    satisfied both `register_expected_result()`'s "already registered"
-    short-circuit and `_unsafe_manual_path_reason()`'s presence-only gate).
-    Requires the COMPLETE schema (every key `register_expected_result()`
-    itself writes) AND the two correlation fields that actually bind this
-    record to THIS task -- `TASK_ID` and `EXPECTED_RESULT_FILE` -- to be
-    correct, never merely present."""
+    """REVIEW-005 R005-3 / REVIEW-006 R006-3 fix: a successfully-decoded
+    JSON object at `expected_result.json` is never, on its own, a genuine
+    registration. REVIEW-005's own fix required the complete schema and
+    correlated only `TASK_ID`/`EXPECTED_RESULT_FILE` -- Codex's real
+    REVIEW-006 probe then tampered `TARGET_MODEL`, `EXPECTED_PRODUCER`,
+    `EXPECTED_TASK_TYPE` and `CURRENT_HEAD` while keeping every key present
+    and those two fields correct, and the REVIEW-005 version wrongly
+    accepted it. This version correlates every field that has a real,
+    independently-derivable ground truth against the task's own current,
+    persisted handoff -- `TARGET_MODEL`/`EXPECTED_PRODUCER`/
+    `EXPECTED_TASK_TYPE`/`HANDOFF_FILE`/`EXPECTED_RESULT_CONTRACT`/
+    `CURRENT_HEAD` must equal exactly what `register_expected_result()`
+    itself would derive right now.
+
+    `WAIT_STATE` and `CREATED_AT` are DELIBERATELY NOT compared for exact
+    equality against live state (disclosed, not silently narrower):
+    `WAIT_STATE` legitimately reflects the workflow's state AT
+    REGISTRATION TIME, which by design differs from the CURRENT state by
+    the time this function runs during real ingestion (registration
+    happens at `WAITING_FOR_HUMAN_TRANSPORT`; this check runs once a
+    result has already arrived) -- comparing it to `current_state()` would
+    reject every real, legitimate registration. It is instead validated as
+    a real, known workflow-state value (a domain check). `CREATED_AT` has
+    no independent ground truth to recompute at all; it is validated as a
+    non-empty string only. Both are real, if narrower, checks -- never
+    silently skipped."""
     if not isinstance(reg, dict):
         return False
     if any(k not in reg for k in _REGISTRATION_SCHEMA_FIELDS):
         return False
     if reg.get("TASK_ID") != task_id:
         return False
+    handoff = _wf._load_handoff(root, task_id)
+    if handoff is None:
+        return False
     try:
         expected_rel = _expected_path(root, task_id).relative_to(root).as_posix()
+        handoff_rel = (_task_dir(root, task_id) / "HANDOFF_V1.md").relative_to(root).as_posix()
     except ValueError:
         return False
-    return reg.get("EXPECTED_RESULT_FILE") == expected_rel
+    if reg.get("EXPECTED_RESULT_FILE") != expected_rel:
+        return False
+    if reg.get("TARGET_MODEL") != handoff.target_model:
+        return False
+    if reg.get("EXPECTED_PRODUCER") != handoff.target_model:
+        return False
+    if reg.get("EXPECTED_TASK_TYPE") != handoff.task_type:
+        return False
+    if reg.get("HANDOFF_FILE") != handoff_rel:
+        return False
+    if reg.get("EXPECTED_RESULT_CONTRACT") != handoff.expected_output_schema:
+        return False
+    if reg.get("CURRENT_HEAD") != handoff.current_head:
+        return False
+    if reg.get("WAIT_STATE") not in _KNOWN_WORKFLOW_STATES:
+        return False
+    return isinstance(reg.get("CREATED_AT"), str) and bool(reg.get("CREATED_AT"))
 
 
 def register_expected_result(root: Path, task_id: str) -> Dict[str, Any]:
@@ -387,60 +434,83 @@ def _read_sealed_manifest(path: Path) -> Optional[Dict[str, Any]]:
     return manifest
 
 
-def _sealed_manifest_confirms_completion(path: Path) -> bool:
-    """True only when a sealed manifest exists AND its recorded sha256/size
-    match the file's REAL current bytes -- never trusted on the manifest's
-    own say-so alone (a stale manifest written against an earlier
-    intermediate snapshot must fall back to ordinary quiet-interval
-    inference, not wrongly authorize early consumption of a newer,
-    unfinished write)."""
+def _sealed_manifest_confirms_completion(path: Path) -> Optional[bytes]:
+    """Returns the manifest-VERIFIED bytes on success, `None` otherwise --
+    never a bare Boolean (REVIEW-006 R006-2 fix). The prior Boolean-only
+    contract let `_ingest_locked()` independently re-read `path` afterward
+    for the real import: a real, reproduced race let an external writer
+    replace the file's content AFTER this check returned True but BEFORE
+    that later read, so the bytes actually consumed were never the ones the
+    manifest verified. The caller MUST import exactly the bytes returned
+    here, never re-read the path."""
     manifest = _read_sealed_manifest(path)
     if manifest is None:
-        return False
+        return None
     try:
         data = path.read_bytes()
     except OSError:
-        return False
-    return len(data) == manifest["size"] and _sha256_bytes(data) == manifest["sha256"]
+        return None
+    if len(data) == manifest["size"] and _sha256_bytes(data) == manifest["sha256"]:
+        return data
+    return None
 
 
-def _synchronous_stability_check(path: Path, policy: IngestionPolicy) -> bool:
+def _synchronous_stability_check(path: Path, policy: IngestionPolicy) -> Optional[bytes]:
     """A real, bounded, synchronous two-snapshot stability check for a
     caller-supplied path that did NOT come through the watcher's own
     multi-observation `_observe()` pre-check (REVIEW-004 R004-1) -- used
     only for non-`AUTO` (manual/recovery) ingestion. The `AUTO` watcher path
     is already stability-verified by `poll_once()`/`_observe()` before this
     function is ever reached, so re-checking there would only double real
-    latency for no safety benefit."""
+    latency for no safety benefit.
+
+    Returns the STABLE bytes (the second, confirming read) on success,
+    `None` on failure -- never a bare Boolean (REVIEW-006 R006-2 fix, same
+    class of defect as the sealed-manifest check above): the caller must
+    import exactly these bytes, never re-read the path afterward, or a
+    writer that changes the file between this check and a later
+    independent read can swap in content that was never actually
+    confirmed stable."""
     try:
         s1 = path.stat()
-        h1 = _sha256_bytes(path.read_bytes())
+        b1 = path.read_bytes()
     except OSError:
-        return False
+        return None
     if policy.quiet_seconds > 0:
         time.sleep(policy.quiet_seconds)
     try:
         s2 = path.stat()
-        h2 = _sha256_bytes(path.read_bytes())
+        b2 = path.read_bytes()
     except OSError:
-        return False
-    return (s1.st_size, s1.st_mtime_ns, h1) == (s2.st_size, s2.st_mtime_ns, h2)
+        return None
+    if (s1.st_size, s1.st_mtime_ns, b1) != (s2.st_size, s2.st_mtime_ns, b2):
+        return None
+    return b2
 
 
 def _ingest_locked(root: Path, task_id: str, path: Path, trigger: str, authorized_replay: bool,
                    policy: IngestionPolicy, allow_unregistered_path: bool = False) -> IngestionResult:
     path = Path(path)
+    # REVIEW-006 R006-2 fix: `verified_bytes`, when the gate below already
+    # confirmed a specific buffer stable/manifest-matched, is what gets
+    # imported -- never a fresh, independent re-read of `path` (that
+    # re-read is exactly what let a writer swap in un-verified content
+    # between the check and the import in the pre-fix code).
+    verified_bytes: Optional[bytes] = None
     if not allow_unregistered_path:
-        reason = _unsafe_manual_path_reason(root, task_id, path, trigger, policy)
+        reason, verified_bytes = _unsafe_manual_path_reason(root, task_id, path, trigger, policy)
         if reason is not None:
             _emit(root, task_id, "RESULT_UNSAFE_PATH", path=str(path), reason=reason)
             return IngestionResult(task_id, "UNREGISTERED_PATH_REFUSED", detail=reason)
     st = _load_ing(root, task_id)
-    try:
-        data = path.read_bytes()
-    except OSError as exc:
-        _emit(root, task_id, "WATCH_TRANSIENT_ERROR", error=type(exc).__name__, path=str(path))
-        return IngestionResult(task_id, "TRANSIENT_ERROR", detail=type(exc).__name__)
+    if verified_bytes is not None:
+        data = verified_bytes
+    else:
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            _emit(root, task_id, "WATCH_TRANSIENT_ERROR", error=type(exc).__name__, path=str(path))
+            return IngestionResult(task_id, "TRANSIENT_ERROR", detail=type(exc).__name__)
     sha = _sha256_bytes(data)
     st["last_detected_result_sha256"] = sha
     _emit(root, task_id, "RESULT_HASHED", result_sha256=sha, trigger=trigger, result_path=str(path))
@@ -514,8 +584,12 @@ def _ingest_locked(root: Path, task_id: str, path: Path, trigger: str, authorize
     _emit(root, task_id, "AUTO_IMPORT_STARTED", result_sha256=sha, import_attempt_id=attempt_id, trigger=trigger)
 
     # --- the Canonical import path (unchanged manual authority) --------------
+    # REVIEW-006 R006-2 fix: pass the ALREADY-VERIFIED buffer (`data`, which
+    # is `verified_bytes` when one exists) through so import_result() never
+    # performs its own independent re-read of `path` -- closing the gap
+    # between this gate's own check and the Canonical parser's read.
     try:
-        outcome = _wf.import_result(root, task_id, path)
+        outcome = _wf.import_result(root, task_id, path, pre_read_bytes=verified_bytes)
     except OSError as exc:  # registry / state write failure etc.: transient, retried, bounded above
         _emit(root, task_id, "AUTO_IMPORT_FAILED_TRANSIENT", result_sha256=sha, error=type(exc).__name__)
         return IngestionResult(task_id, "TRANSIENT_ERROR", sha, detail=type(exc).__name__)
@@ -598,38 +672,52 @@ def _real_consumed_digest(root: Path, task_id: str) -> Optional[str]:
 
 
 def _unsafe_manual_path_reason(root: Path, task_id: str, path: Path, trigger: str,
-                               policy: IngestionPolicy) -> Optional[str]:
+                               policy: IngestionPolicy) -> Tuple[Optional[str], Optional[bytes]]:
     """The real registration/identity/safety gate `_ingest_locked()` applies
-    to a caller-supplied path by default (REVIEW-004 R004-1). Returns a real
-    reason string when the path is untrusted, `None` when it is safe to
-    ingest. Mirrors `_observe()`'s own symlink/non-file/resolved-parent/
-    non-empty checks and additionally requires the path to actually BE the
-    task's registered expected path -- naming the right `task_id` is never
-    sufficient on its own."""
+    to a caller-supplied path by default (REVIEW-004 R004-1). Returns
+    `(reason, verified_bytes)`: `reason` is a real refusal string when the
+    path is untrusted, `None` when it is safe to ingest. Mirrors
+    `_observe()`'s own symlink/non-file/resolved-parent/non-empty checks and
+    additionally requires the path to actually BE the task's registered
+    expected path -- naming the right `task_id` is never sufficient on its
+    own.
+
+    `verified_bytes` (REVIEW-006 R006-2 fix) is the EXACT byte buffer a
+    non-`AUTO` manifest/stability check already confirmed -- the caller
+    MUST import this buffer verbatim, never re-read `path` afterward (the
+    prior Boolean-only contract let a writer replace the file between this
+    check and the caller's own later independent read, so content the
+    check never actually verified could still be imported). `None` for any
+    rejection, and for the `AUTO` trigger (whose own stability evidence
+    lives in `_observe()`/`poll_once()`, a separate, unaffected mechanism)."""
     reg = _read_json(_task_dir(root, task_id) / "expected_result.json")
     if reg is None:
-        return "NO_REGISTRATION"
+        return "NO_REGISTRATION", None
     if not _valid_registration(reg, root, task_id):
-        return "MALFORMED_REGISTRATION"
+        return "MALFORMED_REGISTRATION", None
     expected = _expected_path(root, task_id)
     try:
         if path.resolve() != expected.resolve():
-            return "PATH_NOT_REGISTERED_EXPECTED_PATH"
+            return "PATH_NOT_REGISTERED_EXPECTED_PATH", None
     except OSError:
-        return "PATH_NOT_REGISTERED_EXPECTED_PATH"
+        return "PATH_NOT_REGISTERED_EXPECTED_PATH", None
     if path.is_symlink() or not path.is_file():
-        return "UNSAFE_FILE"
+        return "UNSAFE_FILE", None
     try:
         if path.resolve().parent != _task_dir(root, task_id).resolve():
-            return "UNSAFE_FILE"
+            return "UNSAFE_FILE", None
         if path.stat().st_size == 0:
-            return "EMPTY_FILE"
+            return "EMPTY_FILE", None
     except OSError:
-        return "UNSAFE_FILE"
-    if trigger != "AUTO" and not _sealed_manifest_confirms_completion(path) \
-            and not _synchronous_stability_check(path, policy):
-        return "NOT_STABLE"
-    return None
+        return "UNSAFE_FILE", None
+    if trigger == "AUTO":
+        return None, None
+    verified = _sealed_manifest_confirms_completion(path)
+    if verified is None:
+        verified = _synchronous_stability_check(path, policy)
+    if verified is None:
+        return "NOT_STABLE", None
+    return None, verified
 
 
 # --- arrival detection + stability ---------------------------------------------

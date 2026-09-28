@@ -87,77 +87,21 @@ def test_empty_lock_content_is_ownership_unknown_never_proof_of_death(repo, monk
     assert token is None
 
 
-def test_content_verified_takeover_refuses_and_restores_a_live_lock_that_changed_underneath_it(repo):
-    """Direct, deterministic reproduction of Codex's real two-contender
-    finding: a contender that computed its takeover decision against OLD
-    (stale, dead-owner) content must not delete whatever now actually sits
-    at that path if it changed in the meantime -- and must restore it
-    byte-for-byte, never leaving the path empty or corrupted."""
-    lock = repo / "x.lock"
-    lock.write_text("old-stale-token:111", encoding="utf-8")
-    observed_by_late_contender = "old-stale-token:111"
-    # Simulate a legitimate winner (B) having already replaced the lock
-    # with its own live token before the late contender (C) acts.
-    lock.write_text("bs-new-live-token:222", encoding="utf-8")
-
-    took_over = wf._content_verified_takeover(lock, observed_by_late_contender)
-
-    assert took_over is False
-    assert lock.exists()
-    assert lock.read_text(encoding="utf-8") == "bs-new-live-token:222"  # B's real lock, untouched
-
-
-def test_content_verified_takeover_succeeds_when_content_is_unchanged(repo):
-    lock = repo / "x.lock"
-    lock.write_text("stale-token:111", encoding="utf-8")
-    took_over = wf._content_verified_takeover(lock, "stale-token:111")
-    assert took_over is True
-    assert not lock.exists()  # removed -- the caller's own O_CREAT|O_EXCL claims the freed path
-
-
-def test_real_two_contender_race_never_admits_a_third_writer_or_lock_loss(repo, monkeypatch):
-    """Codex REVIEW-005 R005-1's own real two-thread probe, reproduced with
-    real threads and a real barrier forcing both contenders to observe the
-    identical stale snapshot before racing at the takeover step -- the
-    exact interleaving Codex used to make B and C both return a
-    "successful" token with the pre-fix code. After the fix: exactly one
-    contender wins, and the lock's final on-disk content matches that
-    winner's own token -- never corrupted, never lost, never double-owned."""
-    lock = repo / "x.lock"
-    token_a = wf._acquire_lock(lock)
-    assert token_a is not None
-    os.utime(lock, (1_000_000_000, 1_000_000_000))
-    monkeypatch.setattr(wf, "_pid_alive", lambda pid: False)  # A's recorded owner is provably dead
-
-    barrier = threading.Barrier(2)
-    real_snapshot = wf._read_lock_snapshot
-
-    def gated_snapshot(path):
-        result = real_snapshot(path)
-        barrier.wait(timeout=5)  # force B and C to have BOTH read before either races the takeover
-        return result
-
-    monkeypatch.setattr(wf, "_read_lock_snapshot", gated_snapshot)
-
-    results = {}
-
-    def contender(name):
-        results[name] = wf._acquire_lock(lock, stale_seconds=1.0)
-
-    tb = threading.Thread(target=contender, args=("B",))
-    tc = threading.Thread(target=contender, args=("C",))
-    tb.start()
-    tc.start()
-    tb.join(timeout=10)
-    tc.join(timeout=10)
-
-    winners = {n: t for n, t in results.items() if t is not None}
-    assert len(winners) == 1, f"exactly one contender must win the takeover, got {results}"
-    (winner_name, winner_token), = winners.items()
-    assert lock.exists()
-    assert lock.read_text(encoding="utf-8") == winner_token
-    wf._release_lock(lock, winner_token)
-    assert not lock.exists()
+# The 3 tests formerly here (`test_content_verified_takeover_refuses_and_
+# restores_a_live_lock_that_changed_underneath_it`,
+# `test_content_verified_takeover_succeeds_when_content_is_unchanged`,
+# `test_real_two_contender_race_never_admits_a_third_writer_or_lock_loss`)
+# exercised `_content_verified_takeover()`/`_read_lock_snapshot()` directly.
+# Codex's real REVIEW-006 R006-1 finding showed that stage-then-compare
+# design itself had a real staging-window race (a third, perfectly normal
+# acquirer could win the canonical path while it was briefly vacated for
+# staging). Both functions were REMOVED, not patched, by the REVIEW-006 fix
+# (`_try_stale_takeover_in_place()`, which never vacates the canonical
+# path at all) -- their equivalent, stronger regression coverage now lives
+# in `test_model_handoff_review006_remediation.py`
+# (`test_third_normal_acquirer_cannot_win_while_a_stale_takeover_evaluation_
+# is_in_progress`, `test_real_two_contender_race_admits_exactly_one_winner_
+# never_corrupts_the_lock`).
 
 
 # ================================================================ R005-2: quiet-interval slow-writer race
@@ -249,7 +193,7 @@ def test_stale_sealed_manifest_never_authorizes_early_consumption_of_a_newer_unf
     expected.write_text(r_to(_res(claims=["final"], result_status="PASS", findings=[])),
                         encoding="utf-8")  # content changed; manifest now stale/mismatched
 
-    assert ri._sealed_manifest_confirms_completion(expected) is False
+    assert ri._sealed_manifest_confirms_completion(expected) is None
     res = ri.ingest_result_file(repo, "T-1", expected, trigger="MANUAL", policy=FAST_POLICY)
     # Falls back to the ordinary (unaffected) quiet-interval path and still
     # succeeds once the file is genuinely quiescent -- the mismatched
