@@ -77,12 +77,27 @@ def _request(repo, **kw) -> aeb.AgentRunRequest:
     )
 
 
+class _FakeStdin:
+    """Records what launch_worker() writes for the GAP-V2-015 stdin-prompt
+    fix (see build_worker_argv()'s own docstring), without a real pipe."""
+
+    def __init__(self):
+        self.written = b""
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.written += data
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class FakeProcess:
     """A `subprocess.Popen`-shaped double. `outcomes` controls poll()/exit
     behavior across successive calls, driven by an injectable clock so
     timeout tests never actually sleep in wall-clock time."""
 
-    def __init__(self, argv, cwd=None, stdout=None, stderr=None, *, returncode=0,
+    def __init__(self, argv, cwd=None, stdout=None, stderr=None, stdin=None, *, returncode=0,
                 stdout_text: str = "", never_exits: bool = False, pid: int = None):
         # A genuinely-alive PID by default (this test process itself) so the
         # production code's own real _pid_alive() liveness check -- which
@@ -92,6 +107,7 @@ class FakeProcess:
         self.argv = argv
         self.cwd = cwd
         self.pid = pid
+        self.stdin = _FakeStdin()
         self._returncode = returncode
         self._never_exits = never_exits
         self.terminated = False
@@ -127,8 +143,8 @@ def _envelope(run_status: str, **extra) -> str:
 
 
 def _fake_popen_factory(**process_kwargs):
-    def factory(argv, cwd=None, stdout=None, stderr=None):
-        return FakeProcess(argv, cwd=cwd, stdout=stdout, stderr=stderr, **process_kwargs)
+    def factory(argv, cwd=None, stdout=None, stderr=None, stdin=None):
+        return FakeProcess(argv, cwd=cwd, stdout=stdout, stderr=stderr, stdin=stdin, **process_kwargs)
     return factory
 
 
@@ -145,10 +161,9 @@ def _launch_and_monitor(repo, request, *, process_kwargs=None, poll_interval=0.0
 
 def test_objective_prompt_never_describes_the_json_schema_in_prose(repo):
     """`--json-schema` alone must carry the output contract; a redundant
-    prose description in the prompt is at best noise (GAP-V2-015: a real,
-    reproduced, still-open defect where a multi-field prompt can make the
-    model reply in plain "key: value" text instead of real structured
-    output -- see `_render_objective_prompt()`'s own disclosure)."""
+    prose description in the prompt is at best noise (ruled out as
+    GAP-V2-015's actual cause -- see build_worker_argv()'s own docstring for
+    the real root cause and fix)."""
     req = _request(repo)
     prompt = aeb._render_objective_prompt(req)
     assert "required JSON schema" not in prompt
@@ -168,7 +183,28 @@ def test_build_worker_argv_matches_the_real_verified_invocation_shape(repo):
     assert "--tools" in argv
     assert "--permission-mode" in argv and argv[argv.index("--permission-mode") + 1] == "acceptEdits"
     assert "--add-dir" in argv and argv[argv.index("--add-dir") + 1] == request_cwd(req)
-    assert req.objective in argv[2]
+    # GAP-V2-015 fix, closed: the objective prompt must NEVER be an argv
+    # element -- a multi-line argv element is corrupted by this Windows
+    # npm-shim `.CMD`'s implicit `cmd.exe` wrapping (live-reproduced; see
+    # build_worker_argv()'s own docstring). `-p` carries no positional
+    # prompt; launch_worker() pipes it over stdin instead.
+    assert argv[2] == "--output-format"
+    assert req.objective not in " ".join(argv)
+
+
+def test_launch_worker_sends_objective_prompt_over_stdin_not_argv(repo):
+    """GAP-V2-015 fix, direct proof: launch_worker() writes the real
+    rendered objective prompt to the worker's stdin and closes it -- never
+    bakes it into argv (see build_worker_argv()'s own docstring for the
+    real, reproduced Windows `.CMD`/`cmd.exe` argv-corruption root cause)."""
+    req = _request(repo)
+    popen = _fake_popen_factory(stdout_text=_envelope(aeb.RUN_STATUS_PASS))
+    out = aeb.launch_worker(repo, req, _popen=popen)
+    proc = out["_process"]
+    assert proc.stdin.closed is True
+    sent = proc.stdin.written.decode("utf-8")
+    assert sent == aeb._render_objective_prompt(req)
+    assert req.objective in sent
 
 
 def request_cwd(req: aeb.AgentRunRequest) -> str:
@@ -233,7 +269,7 @@ def test_agent_action_does_not_inject_existing_terminal(repo):
     injection, no PID search for an existing claude.exe/PowerShell -- the
     ONLY process-related call is a fresh subprocess.Popen this module owns."""
     calls = []
-    popen = lambda argv, cwd=None, stdout=None, stderr=None: (calls.append((argv, cwd)), FakeProcess(argv, cwd, stdout, stderr, stdout_text=_envelope(aeb.RUN_STATUS_PASS)))[1]
+    popen = lambda argv, cwd=None, stdout=None, stderr=None, stdin=None: (calls.append((argv, cwd)), FakeProcess(argv, cwd, stdout, stderr, stdin, stdout_text=_envelope(aeb.RUN_STATUS_PASS)))[1]
     req = _request(repo)
     out = aeb.launch_worker(repo, req, _popen=popen)
     assert len(calls) == 1

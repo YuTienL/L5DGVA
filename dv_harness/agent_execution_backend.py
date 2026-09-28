@@ -337,12 +337,31 @@ def _resolve_claude_executable() -> str:
 def build_worker_argv(request: AgentRunRequest) -> List[str]:
     """The exact, live-verified `claude` CLI invocation (see module
     docstring). No shell, no interactive terminal, no injected keystrokes --
-    a single subprocess with a real argv list."""
+    a single subprocess with a real argv list.
+
+    The objective prompt is deliberately NEVER an argv element here -- `-p`
+    is passed with no positional prompt argument, and `launch_worker()`
+    pipes the real prompt text (`_render_objective_prompt()`) over the
+    child's stdin instead. This is the real, reproduced fix for GAP-V2-015
+    (was: OPEN "structured-output reliability gap"; now: CLOSED). Root
+    cause, isolated live by holding the schema/--restricted/--tools/
+    --permission-mode fixed and varying ONLY prompt shape: `claude` on
+    Windows is an npm shim with no native `.exe` (only `claude`/`claude.cmd`/
+    `claude.ps1`), so `subprocess.Popen` can only run it by implicitly
+    wrapping the call through `cmd.exe` -- and a multi-line argv element
+    gets corrupted at that `cmd.exe` argument-parsing layer. A single-line
+    prompt (labeled or not) survived every time as an argv element; a
+    two-or-more-line prompt (labeled or not) failed every time, always
+    degrading to plain "key: value" prose instead of real
+    `--json-schema`-shaped `structured_output`. The identical multi-line
+    content survived byte-for-byte when sent over stdin instead (`claude -p`
+    with no positional prompt reads from stdin -- its own documented
+    pipe-friendly mode). Never a model/prompt-engineering issue -- a
+    Windows-shim transport defect."""
     if request.backend not in SUPPORTED_BACKENDS:
         raise AgentExecutionError("UNSUPPORTED_BACKEND", {"backend": request.backend})
     profile = get_profile(request.tool_execution_profile)
-    prompt = _render_objective_prompt(request)
-    argv = [_resolve_claude_executable(), "-p", prompt, "--output-format", "json",
+    argv = [_resolve_claude_executable(), "-p", "--output-format", "json",
            "--json-schema", json.dumps(AGENT_RUN_RESULT_SCHEMA)]
     argv += profile.cli_args()
     argv += ["--add-dir", request.working_directory]
@@ -365,17 +384,14 @@ def _render_objective_prompt(request: AgentRunRequest) -> str:
         lines.append("VALIDATION_REQUIREMENTS: " + "; ".join(request.validation_requirements))
     # Deliberately does NOT describe the JSON schema in prose -- rely on
     # `--json-schema` alone; a redundant prose description is at best
-    # useless and at worst confusing. DISCLOSED OPEN GAP (GAP-V2-015,
-    # found this task, NOT fixed by this simplification alone): a real,
-    # reproduced defect where the multi-field `OBJECTIVE:\nTASK_ID:\n
-    # ALLOWED_FILES:\n...` prompt SHAPE ITSELF (not the schema-prose
-    # sentence, which was tested in isolation and ruled out; not
-    # `--restricted`/`--tools`/`--permission-mode`, all tested and ruled
-    # out too) makes the model reply in matching plain "key: value" prose
-    # instead of the `--json-schema`-shaped `structured_output` a
-    # single-sentence prompt reliably returns. Root cause not yet
-    # isolated further -- see `M7_CLAUDE_WORKER_LIVE_QUALIFICATION.md`'s
-    # permission-investigation addendum for the full real repro matrix.
+    # useless and at worst confusing (ruled out as GAP-V2-015's cause,
+    # confirmed by further isolation). This multi-line, multi-field text
+    # is exactly what previously corrupted when passed as an argv element
+    # (GAP-V2-015, now CLOSED) -- it is unaffected by that fix because
+    # `build_worker_argv()` no longer puts it in argv at all;
+    # `launch_worker()` pipes this same rendered text over the worker's
+    # stdin instead. See `build_worker_argv()`'s own docstring for the real
+    # isolation evidence and root cause.
     lines.append("Stay strictly within ALLOWED_FILES; never touch FORBIDDEN_FILES or FROZEN_SOURCES.")
     return "\n".join(lines)
 
@@ -579,7 +595,16 @@ def launch_worker(root: Path, request: AgentRunRequest, *, _argv_builder=build_w
     (run_dir / "stdout.log").parent.mkdir(parents=True, exist_ok=True)
     stdout_f = open(run_dir / "stdout.log", "w", encoding="utf-8")
     stderr_f = open(run_dir / "stderr.log", "w", encoding="utf-8")
-    proc = _popen(argv, cwd=request.working_directory, stdout=stdout_f, stderr=stderr_f)
+    proc = _popen(argv, cwd=request.working_directory, stdout=stdout_f, stderr=stderr_f,
+                 stdin=subprocess.PIPE)
+    # GAP-V2-015 fix: the objective prompt travels over stdin, never as an
+    # argv element -- see build_worker_argv()'s own docstring for the real,
+    # reproduced Windows npm-shim `.CMD`/`cmd.exe` argv-corruption evidence
+    # this closes. Written and closed immediately (never left open across
+    # the poll loop below) so the worker never idles on the CLI's own
+    # "no stdin data received" fallback timer.
+    proc.stdin.write(_render_objective_prompt(request).encode("utf-8"))
+    proc.stdin.close()
     state = {
         "run_state": RUN_STATE_RUNNING, "pid": proc.pid, "start_time_epoch": time.time(),
         "start_time": _now_iso(), "lease_id": lease_id, "attempt_number": request.attempt_number,
