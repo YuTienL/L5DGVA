@@ -525,6 +525,39 @@ def read_persisted_completion_evaluation(root: Path, task_id: str) -> Optional[D
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def record_completion_evaluation_next_action(
+    root: Path, task_id: str, evaluation: CanonicalCompletionEvaluation, *,
+    downstream_task_id: Optional[str] = None,
+) -> Path:
+    """P3 CLOSE THE LOOP fix, found live: after this session first shipped
+    `evaluate_canonical_task_completion()` and acted on its recommendation
+    for `M7-V1-CODEX-REVIEW-007`, `persist_completion_evaluation()` wrote
+    the real evaluation -- but `task_id`'s OWN `next_action.json` was left
+    exactly as `resolve_next_action()` had originally written it
+    (`next_action=EVALUATE_CANONICAL_TASK_COMPLETION`,
+    `auto_actionable=true`), stale and indistinguishable from "not yet
+    executed" to a later reader. This persists a real, terminal
+    `NextActionRecord` for the SOURCE task showing the action WAS
+    executed and what it resolved to -- closing the exact gap this
+    module's own `EVALUATE_CANONICAL_TASK_COMPLETION` fix was built to
+    stop happening again, applied to its own output this time."""
+    record = NextActionRecord(
+        event="EVALUATE_CANONICAL_TASK_COMPLETION",
+        next_action=f"EXECUTED:{evaluation.next_approved_gate}",
+        next_action_reason=(
+            f"canonical_completion_evaluation persisted ({evaluation.task_completion}, "
+            f"{evaluation.branch_closure_readiness}); acted on next_approved_gate="
+            f"{evaluation.next_approved_gate}"
+            + (f"; downstream_task_id={downstream_task_id}" if downstream_task_id else "")
+        ),
+        next_action_owner="L5DGVA",
+        auto_actionable=False,
+        human_action_required="NO",
+        stop_reason=None,
+    )
+    return persist_next_action(root, task_id, record)
+
+
 # --- Adapter: derive real signals from model_handoff_workflow's own state -
 
 def signals_from_model_handoff_state(

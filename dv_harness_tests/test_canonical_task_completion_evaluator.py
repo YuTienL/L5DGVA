@@ -137,6 +137,28 @@ def test_persisted_evaluation_round_trips(repo):
     assert back == ev.to_dict()
 
 
+def test_record_completion_evaluation_next_action_closes_the_source_task_loop(repo):
+    """P3 CLOSE THE LOOP: found live -- the completion evaluation itself
+    was persisted, but the SOURCE task's own next_action.json was left
+    stale, still showing EVALUATE_CANONICAL_TASK_COMPLETION as
+    auto_actionable=true even after it had genuinely been executed and
+    acted on. This must never happen again."""
+    _export_and_consume(repo, "T-1", result_status="PASS", findings=())
+    before = ec.read_next_action(repo, "T-1")
+    assert before["next_action"] == "EVALUATE_CANONICAL_TASK_COMPLETION"
+    assert before["auto_actionable"] is True
+
+    ev = ec.evaluate_canonical_task_completion(repo, "T-1")
+    ec.persist_completion_evaluation(repo, "T-1", ev)
+    ec.record_completion_evaluation_next_action(repo, "T-1", ev, downstream_task_id="T-CHATGPT")
+
+    after = ec.read_next_action(repo, "T-1")
+    assert after["next_action"] != "EVALUATE_CANONICAL_TASK_COMPLETION"
+    assert after["next_action"].startswith("EXECUTED:")
+    assert after["auto_actionable"] is False  # a terminal record, not a fresh pending action
+    assert "T-CHATGPT" in after["next_action_reason"]
+
+
 def test_no_generic_continue_needed_the_transport_gate_after_generating_a_handoff_is_a_real_stop(repo):
     """Proves the full real chain: EVALUATE_CANONICAL_TASK_COMPLETION's own
     recommendation, once acted on (a real ChatGPT handoff exported), feeds
