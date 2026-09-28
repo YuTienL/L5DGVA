@@ -23,53 +23,44 @@ M6_GOLDEN_PATH_PRESERVED           = YES (no M6-owned file touched this session;
                                      see Regression section)
 ```
 
-## Why `CODEX_BRANCH_READY_FOR_CLOSURE` is `NO`
+## Why `CODEX_BRANCH_READY_FOR_CLOSURE` is now `YES`
 
-REVIEW-006 (the most recent formally CONSUMED result) reported
-`RESULT_STATUS=FAIL` with 3 real current-scope findings (R006-1 CRITICAL,
-R006-2 CRITICAL, R006-3 MEDIUM). All three were independently reproduced
-and fixed this session (see
-`M7_CODEX_REVIEW_006_FINDINGS_REMEDIATION_REPORT.md`), which is exactly
-why the four blocker counts above are honestly `0` right now -- but per
-this program's own established, evidence-based discipline, a fix is not
-"closed" until an INDEPENDENT re-review confirms it.
+REVIEW-006 (`RESULT_STATUS=FAIL`, 3 findings: R006-1 CRITICAL, R006-2
+CRITICAL, R006-3 MEDIUM) was remediated; REVIEW-007's first submission
+was correctly quarantined (`MALFORMED_ESCAPE`), exposing and closing two
+further real gaps live (GAP-V2-016: `AUTO_GENERATE_CORRECTION_REQUEST_
+HANDOFF` had no producer; GAP-V2-017: R007-1, a real new defect in
+REVIEW-006's own release-retry fix, independently re-verified from the
+quarantined-but-readable content before being fixed -- never accepted on
+the quarantined document's say-so alone).
 
-**A real REVIEW-007 result DID arrive** (a genuine `HUMAN_TRANSPORT_EVENT`)
-but was correctly **quarantined** by the real parser with `MALFORMED_ESCAPE`
--- the document declared the `escaped-v1` encoding but contained a literal,
-un-doubled backslash inside a Windows path. Its findings were never
-formally consumed as Canonical evidence. This exposed a real, previously
-undiscovered gap: `AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF` was a named
-`NEXT_ACTION` in the routing table with no implementation anywhere in the
-codebase -- fixed live this session
-(`model_handoff_workflow.build_correction_request_handoff()`, GAP-V2-016)
-and applied for real: a correction-request handoff was generated and
-exported, asking Codex to resubmit to the same registered path.
+**A real, corrected REVIEW-007 resubmission then arrived and was formally
+CONSUMED**: `STATE=RESULT_CONSUMED`, `RESULT_STATUS=PASS`,
+`ACCEPTED_RESULT_SHA256=e14c2ef27fdeb4d800b5f96c9be543f508189c8af859a162914ead3c1d2a1b28`,
+zero findings. Its own `CLAIMS` independently re-confirmed R006-1, R007-1,
+R006-2, and R006-3 all closed in current code, and explicitly re-verified
+R005-2/R006-4's disclosure remains accurate with no new regression. This
+is the fifth real Codex round (REVIEW-003 through REVIEW-007) and the
+FIRST to return zero new findings.
 
-The quarantined document's RAW TEXT was still human-readable, and its
-R007-1 claim (a new CRITICAL defect in the REVIEW-006 R006-1 release-retry
-fix: `_release_lock()` checked the caller token once before its retry
-loop, so a retry could blindly delete a legitimate new owner's lock) was
-independently re-verified against current code by direct inspection --
-never accepted on the quarantined document's say-so alone -- confirmed
-real, and fixed (GAP-V2-017). The updated correction-request handoff
-discloses this fix and asks Codex to verify it too in its resubmission.
-
-`M7-V1-CODEX-REVIEW-007` is at `WAITING_FOR_HUMAN_TRANSPORT` again,
-awaiting a corrected, escaping-valid resubmission -- no formally-consumed
-result exists for it yet.
-
-`CODEX_RESULT_CONSUMPTION=LIVE` and `CODEX_REVIEW_INDEPENDENCE=PROVEN` are
-CAPABILITY-level facts (the mechanism works, repeatedly, live) and remain
-true regardless of REVIEW-007's outcome. `CODEX_BRANCH_READY_FOR_CLOSURE`
-is a BRANCH-STATE fact (is the CURRENT open review round settled) and is
-`NO` until REVIEW-007 returns a result that itself needs no further fix.
+`execution_contract.evaluate_canonical_task_completion()` (built and
+applied live in the M7 convergence pass, its own output loop-closed in
+this dispatch -- see `M7_NEXT_ACTION_REACHABILITY_CLOSURE_REPORT.md` and
+`M7_COMPLETION_EVALUATION_EVIDENCE.md`) independently confirms this from
+real persisted state: `task_completion=TASK_COMPLETE`,
+`branch_closure_readiness=BRANCH_READY_FOR_CLOSURE`.
 
 ``` text
-CODEX_BRANCH_READY_FOR_CLOSURE = NO
-CODEX_ROUND_TRIP (capability)  = LIVE_QUALIFIED (4 real round trips proven)
+CODEX_BRANCH_READY_FOR_CLOSURE = YES
+CODEX_ROUND_TRIP (capability)  = LIVE_QUALIFIED (5 real round trips proven)
+CODEX_BRANCH_STATUS            = CLOSED (5 rounds, 0 open findings, 0
+                                  current-scope blockers, independently
+                                  re-confirmed by the round that closed it)
 NEXT_GATE                      = HUMAN_TRANSPORT_REQUIRED for
-                                  M7-V1-CODEX-REVIEW-007
+                                  M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001
+                                  (real, already exported per the
+                                  completion evaluator's own
+                                  next_approved_gate)
 ```
 
 ## Non-blocking items carried forward (explicit owner/disposition, not silently expanded into new blockers)
