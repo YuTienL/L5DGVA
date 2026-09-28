@@ -25,18 +25,39 @@ M6_GOLDEN_PATH_PRESERVED           = YES (no M6-owned file touched this session;
 
 ## Why `CODEX_BRANCH_READY_FOR_CLOSURE` is `NO`
 
-REVIEW-006 (the most recent CONSUMED result) reported `RESULT_STATUS=FAIL`
-with 3 real current-scope findings (R006-1 CRITICAL, R006-2 CRITICAL,
-R006-3 MEDIUM). All three were independently reproduced and fixed this
-session (see `M7_CODEX_REVIEW_006_FINDINGS_REMEDIATION_REPORT.md`), which
-is exactly why the four blocker counts above are honestly `0` right now --
-but per this program's own established, evidence-based discipline (and
-per this prompt's own section 4: "Start another re-review only when a
-current-scope blocker was remediated and independent re-review is
-required"), a fix is not "closed" until an INDEPENDENT re-review confirms
-it. That re-review (`M7-V1-CODEX-REVIEW-007`) has been exported
-(`d8536d6`) and is at `WAITING_FOR_HUMAN_TRANSPORT` -- no real result
-exists for it yet.
+REVIEW-006 (the most recent formally CONSUMED result) reported
+`RESULT_STATUS=FAIL` with 3 real current-scope findings (R006-1 CRITICAL,
+R006-2 CRITICAL, R006-3 MEDIUM). All three were independently reproduced
+and fixed this session (see
+`M7_CODEX_REVIEW_006_FINDINGS_REMEDIATION_REPORT.md`), which is exactly
+why the four blocker counts above are honestly `0` right now -- but per
+this program's own established, evidence-based discipline, a fix is not
+"closed" until an INDEPENDENT re-review confirms it.
+
+**A real REVIEW-007 result DID arrive** (a genuine `HUMAN_TRANSPORT_EVENT`)
+but was correctly **quarantined** by the real parser with `MALFORMED_ESCAPE`
+-- the document declared the `escaped-v1` encoding but contained a literal,
+un-doubled backslash inside a Windows path. Its findings were never
+formally consumed as Canonical evidence. This exposed a real, previously
+undiscovered gap: `AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF` was a named
+`NEXT_ACTION` in the routing table with no implementation anywhere in the
+codebase -- fixed live this session
+(`model_handoff_workflow.build_correction_request_handoff()`, GAP-V2-016)
+and applied for real: a correction-request handoff was generated and
+exported, asking Codex to resubmit to the same registered path.
+
+The quarantined document's RAW TEXT was still human-readable, and its
+R007-1 claim (a new CRITICAL defect in the REVIEW-006 R006-1 release-retry
+fix: `_release_lock()` checked the caller token once before its retry
+loop, so a retry could blindly delete a legitimate new owner's lock) was
+independently re-verified against current code by direct inspection --
+never accepted on the quarantined document's say-so alone -- confirmed
+real, and fixed (GAP-V2-017). The updated correction-request handoff
+discloses this fix and asks Codex to verify it too in its resubmission.
+
+`M7-V1-CODEX-REVIEW-007` is at `WAITING_FOR_HUMAN_TRANSPORT` again,
+awaiting a corrected, escaping-valid resubmission -- no formally-consumed
+result exists for it yet.
 
 `CODEX_RESULT_CONSUMPTION=LIVE` and `CODEX_REVIEW_INDEPENDENCE=PROVEN` are
 CAPABILITY-level facts (the mechanism works, repeatedly, live) and remain
@@ -59,3 +80,5 @@ NEXT_GATE                      = HUMAN_TRANSPORT_REQUIRED for
 | GAP-V2-014 (pre-existing question-queue digest test failure) | `PRE_EXISTING_OWNED_GAP` | `REGISTER_AND_DEFER_WITH_OWNER` (unchanged; re-confirmed still reproducing, still unrelated to any file this session touched) | NO |
 | GAP-V2-015 (production multi-field structured-worker-output reliability) | `HOST_DEPENDENT_LIMITATION`-adjacent (fixed for the argv-corruption root cause; forbidden-file scope means Codex could not independently re-verify) | `CLOSED` per this session's own fix + tests; Codex's REVIEW-006 UNKNOWN item notes it could not independently confirm since backend files were out of its review scope | NO |
 | AUTO-watcher analogue of R006-2's check-then-reread pattern | `FUTURE_HARDENING` (structurally similar, not demonstrated as a live defect by either review round) | `REGISTER_AND_DEFER_WITH_OWNER` (see `M7_R005_2_FINAL_DISPOSITION.md`, "Considered and deferred") | NO |
+| GAP-V2-016 (AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF had no producer) | `CURRENT_SCOPE_CORRECTNESS_BLOCKER` (a named, real, auto-actionable NEXT_ACTION with no implementation) | `FIXED` this session, applied live to the real REVIEW-007 quarantine | NO (already closed) |
+| GAP-V2-017 (R007-1, `_release_lock()` retry did not revalidate ownership) | `CURRENT_SCOPE_CORRECTNESS_BLOCKER` | `FIXED` this session, independently re-verified from quarantined-but-readable content before fixing | NO (already closed; formal Codex re-confirmation still pending, tracked with REVIEW-007's resubmission) |

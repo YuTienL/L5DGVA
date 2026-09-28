@@ -54,7 +54,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import model_handoff as _handoff_mod
 from . import model_result as _result_mod
-from .model_handoff import ModelHandoffV1, HandoffParseError
+from .model_handoff import ModelHandoffV1, HandoffParseError, HandoffBuildError
 from .model_result import ModelResultV1, ResultParseError, ValidationOutcome
 from .question_queue import QuestionQueueStore
 from .task_boundary_conformance import TaskBoundary
@@ -521,25 +521,29 @@ def _release_lock(lock: Path, token: str) -> None:
     pathname, which could remove a lock a different holder already
     re-acquired after a stale-takeover race.
 
-    Retries the unlink briefly on a transient sharing failure. Real,
-    reproduced flake found alongside the REVIEW-006 R006-1 fix: Windows
-    refuses to delete a file that another handle still has open without
-    `FILE_SHARE_DELETE` (neither `os.open()` nor `Path.read_text()`'s own
-    `io.open()` request it), and `_try_stale_takeover_in_place()`'s brief
-    open-flock-read-close evaluation window is exactly such a handle --
-    long enough, under real concurrent retry pressure, to intermittently
-    make a live, legitimate release's unlink fail and get silently
-    swallowed, stranding the lock. POSIX has no such restriction and this
-    loop typically succeeds on its very first iteration there; the bound
-    is short because the blocking window is always a few OS calls, never
-    an unbounded hold."""
-    try:
-        if lock.read_text(encoding="utf-8").strip() != token:
-            return
-    except OSError:
-        return
+    Retries the unlink briefly on a transient sharing failure (real,
+    reproduced Windows flake alongside the REVIEW-006 R006-1 fix: Windows
+    refuses to delete a file another handle still has open without
+    `FILE_SHARE_DELETE`, and `_try_stale_takeover_in_place()`'s brief
+    open-flock-read-close evaluation window is exactly such a handle).
+    REVIEW-007 R007-1 fix: the token is re-read and re-validated on EVERY
+    retry iteration, immediately before that iteration's own unlink
+    attempt -- the pre-fix version checked the token ONCE before the
+    retry loop, so once inside it every `OSError` was treated as
+    "transient, keep trying" with no re-check; a real, reproduced probe
+    showed a legitimate new owner's lock (written in place by
+    `_try_stale_takeover_in_place()` between two retry attempts, after
+    this caller's own ownership had genuinely gone stale) could be
+    deleted by a retry that never re-confirmed it still owned anything to
+    delete. Each iteration now independently earns the right to call
+    unlink() at all."""
     deadline = time.time() + _RELEASE_UNLINK_RETRY_SECONDS
     while True:
+        try:
+            if lock.read_text(encoding="utf-8").strip() != token:
+                return  # no longer ours (or never was) -- never delete
+        except OSError:
+            return  # gone or unreadable -- nothing of ours left to remove
         try:
             lock.unlink()
             return
@@ -743,6 +747,92 @@ def _append_registry(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
                 "question_id": question_id or "",
                 "result_sha256": result_sha256 or "",
             })
+
+
+# --- Correction Request Handoff (execution_contract's own RESULT_REJECTED_
+# MALFORMED -> AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF next action) ---------
+# A real, found-live gap (P4 NO CAPABILITY ISLANDS): AUTO_GENERATE_
+# CORRECTION_REQUEST_HANDOFF was a named NEXT_ACTION in
+# `execution_contract.NEXT_ACTION_TABLE` with no producer anywhere in the
+# codebase until this function -- found when a real Codex RESULT_V1.md
+# (M7-V1-CODEX-REVIEW-007) was quarantined with a real `MALFORMED_ESCAPE`
+# (a literal, un-doubled backslash inside a Windows path, written under
+# the document's own declared `escaped-v1` marker).
+
+def build_correction_request_handoff(root: Path, task_id: str) -> ModelHandoffV1:
+    """Re-parses the quarantined `RESULT_V1.md` directly -- the exact
+    failure detail (offending value, position) is not persisted in
+    `ingestion_state.json`, only the bare reason string, so recovering it
+    means re-deriving it from the real file, never guessing -- and builds
+    a real correction request: the ORIGINAL objective, preserved in full
+    (Codex still owes the same real review), prefixed with the exact
+    parse failure and the exact escaping rule
+    (`md_kv_codec.escape_value()`'s own contract) that was violated.
+
+    Targets the SAME already-registered `task_id`/expected path: REJECTED
+    (unlike CONSUMED) stays in `result_ingestion.PENDING_WORKFLOW_STATES`,
+    so a corrected resubmission to the identical path is the EXISTING,
+    already-supported recovery mechanism (`RETRY_ON_CHANGE`), not a new
+    registration this function would have to invent."""
+    root = Path(root)
+    state = _load_state(root, task_id)
+    if state is None or state.get("state") != STATE_RESULT_REJECTED:
+        raise HandoffBuildError("NOT_REJECTED", {"task_id": task_id,
+                                                  "state": state.get("state") if state else None})
+    original_handoff = _load_handoff(root, task_id)
+    if original_handoff is None:
+        raise HandoffBuildError("NO_ORIGINAL_HANDOFF", {"task_id": task_id})
+
+    result_path = _task_dir(root, task_id) / "RESULT_V1.md"
+    try:
+        data = result_path.read_bytes()
+        _result_mod.from_markdown(data.decode("utf-8"))
+        raise HandoffBuildError("RESULT_NOT_ACTUALLY_MALFORMED", {"task_id": task_id})
+    except (OSError, UnicodeDecodeError, ResultParseError) as exc:
+        if isinstance(exc, ResultParseError):
+            reason = exc.reason
+            offending_value = exc.detail.get("value")
+            at = exc.detail.get("at")
+        else:
+            reason = "RESULT_NOT_UTF8" if isinstance(exc, UnicodeDecodeError) else "RESULT_FILE_UNREADABLE"
+            offending_value = None
+            at = None
+
+    correction_lines = [f"REJECTION_REASON={reason}"]
+    if offending_value is not None:
+        correction_lines.append(f"OFFENDING_VALUE={offending_value!r}")
+    if at is not None:
+        correction_lines.append(f"POSITION_IN_VALUE={at}")
+    if reason == "MALFORMED_ESCAPE":
+        correction_lines.append(
+            "This document declares `<!-- L5DGVA_VALUE_ENCODING=escaped-v1 -->`, which requires "
+            "every literal backslash in a value to be written doubled (two backslash characters), "
+            "every literal newline as backslash-n, every literal carriage return as backslash-r -- "
+            "no other backslash sequence is valid and an unrecognized one fails the whole document "
+            "closed, never guessed. A Windows path such as D:\\DV\\Task\\X must be written with each "
+            "backslash doubled. If correct escaping cannot be guaranteed, omit the encoding marker "
+            "line entirely and write RAW values instead: taken verbatim, no escaping required, no "
+            "unescaping ever applied."
+        )
+
+    objective = (
+        f"CORRECTION REQUIRED for your own previous RESULT_V1.md (TASK_ID={task_id}): it was "
+        "rejected as MALFORMED before any of its content could be evaluated -- your findings were "
+        "never read. " + " ".join(correction_lines) + " Resubmit a corrected RESULT_V1.md to the "
+        "SAME expected path (do not change TASK_ID). Your ORIGINAL objective, unchanged, still "
+        "applies in full:\n\n" + original_handoff.objective
+    )
+    return _handoff_mod.build_handoff(
+        root, task_id=task_id, task_type=original_handoff.task_type,
+        target_model=original_handoff.target_model, project_id=original_handoff.project_id,
+        objective=objective, scope=original_handoff.scope,
+        input_evidence_refs=original_handoff.input_evidence_refs,
+        known_facts=(f"This is an AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF re-issue of {task_id} "
+                    f"after a real MALFORMED_ESCAPE quarantine.",) + tuple(original_handoff.known_facts),
+        independence_requirement=original_handoff.independence_requirement,
+        expected_output_type=original_handoff.expected_output_type,
+        expected_output_schema=original_handoff.expected_output_schema,
+    )
 
 
 # --- Human Transport UX (dispatch section 9) ---------------------------------
