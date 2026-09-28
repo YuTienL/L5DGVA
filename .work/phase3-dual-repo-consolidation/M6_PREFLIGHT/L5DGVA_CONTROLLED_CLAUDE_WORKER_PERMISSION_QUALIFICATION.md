@@ -295,3 +295,76 @@ task:
   `NOT_PROVEN`, exactly as reported at the end of the prior task, now with
   a precise root cause and a narrow, bounded authorization request instead
   of a vague "it was blocked."
+
+## 9. ADDENDUM -- Human Authority Decision received; permission NOT yet installed
+
+A Human Authority Decision was received approving the HumanGate's first
+`EXACT_USER_ACTION` (`AUTHORIZE_MINIMUM_SCOPED_CONTROLLED_CLAUDE_WORKER_
+LAUNCH = YES`), scoped exactly to the invocation `agent_execution_backend.py`
+constructs, explicitly excluding the withdrawn environment-construction-code
+edit and every broader grant named in that decision.
+
+Before installing anything, this session verified whether `.claude/
+settings.json` (this repo's project-level Claude Code permission file --
+the only project-local permission surface that exists) is actually the
+mechanism the Auto Mode classifier reads. Real evidence against that:
+
+- The current `.claude/settings.json` `permissions.allow` list contains
+  only `Bash(...)` command-prefix patterns (`ls`, `find`, `grep`, `wc`,
+  etc.) -- there is no `Edit`/`Write` allow-list mechanism in this file at
+  all, because Edit/Write are not normally permission-gated the way
+  arbitrary Bash commands are.
+- Yet one of the two real denials this task (Section 1c) was on an **Edit**
+  tool call, not a Bash call -- a tool type this settings file has no
+  allow/deny mechanism for in the first place.
+- The classifier's own denial wording is identical across both the Bash
+  and the Edit denial ("Create Unsafe Agents"), which is consistent with a
+  single, tool-agnostic, intent-based safety layer, not a per-tool
+  allow-list consulted from this repo's settings file.
+
+**Finding**: `.claude/settings.json`'s `permissions.allow` Bash-pattern
+list and the Auto Mode classifier are two DIFFERENT mechanisms. The
+settings file pre-approves specific command patterns so the LOCAL
+permission-prompt step is skipped; the Auto Mode classifier is a separate,
+tool-agnostic layer that evaluates semantic intent and can deny an action
+(as it did here, twice, across two different tool types) independent of
+what the local settings file allows or denies. There is no evidence in
+this repo that any project-local file controls the Auto Mode classifier's
+decision.
+
+**Consequence for this session**: this session has no discovered,
+project-local, self-serviceable way to install the approved permission.
+Editing `.claude/settings.json` to add a Bash pattern for the resolved
+`claude` executable would (a) not be verified to change the Auto Mode
+classifier's behavior, given the finding above, and (b) is itself, by its
+own construction (a change whose only purpose is to make future autonomous
+non-interactive Claude-worker launches easier to approve), a plausible
+target for the exact same "Create Unsafe Agents" classification this task
+has now hit twice on two different tool types -- meaning attempting it
+would not be a safe, low-cost probe, and would not be distinguishable from
+the self-permission-escalation pattern the classifier appears designed to
+catch, regardless of the Human Authority Decision's text. This session
+declined to attempt it.
+
+**MINIMUM_REQUIRED_PERMISSION is therefore corrected**: it is not a
+repo-local settings edit. It is whatever out-of-band, host/account-level
+Claude Code control (if any) governs the Auto Mode classifier's "Create
+Unsafe Agents" category -- a control this session has no visibility into
+and cannot enumerate, edit, or verify from inside a Claude Code session.
+Locating and applying it is necessarily a human action taken directly in
+the Claude Code application/account surface (not a file in this
+repository), because this session cannot see or reach that surface.
+
+Per the decision's own step 1 ("independently verify the installed
+permission matches exactly the approved HumanGate scope"): there is
+nothing installed yet to verify. Steps 2-7 (requalify read-only, requalify
+mutation, resume the real Canonical workflow, use the next real Codex FAIL
+as production qualification) are not yet unblocked.
+
+`GAP-V2-015` remains `OPEN` -- unaffected by and unrelated to this
+addendum, not force-closed.
+
+`STOP_REASON = HUMAN_AUTHORITY_REQUIRED` continues to apply, now scoped to
+a narrower, corrected ask: identify and apply whatever real, out-of-band
+Claude Code control (if one exists) governs the Auto Mode classifier for
+this category, since this session found no repository-local lever for it.
