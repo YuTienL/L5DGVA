@@ -579,3 +579,57 @@ def test_human_gate_constraints_match_the_requirements_doc_list():
         "VERIFICATION_SIGNOFF_REQUIRED", "ARCHITECTURE_AUTHORITY_REQUIRED", "SECURITY_SCOPE_EXPANSION",
         "ACCESS_AUTHORIZATION_REQUIRED",
     }
+
+
+# --- M7 convergence section 7: Execution Backend Fallback Reconciliation -----
+
+def _equivalence(**overrides) -> dict:
+    base = dict(same_task=True, same_scope=True, equivalent_task_boundary=True,
+               equivalent_safe_tool_profile=True, equivalent_evidence_contract=True,
+               human_authority_decision_required=False)
+    base.update(overrides)
+    return base
+
+
+def test_fallback_authorized_only_when_every_equivalence_condition_holds():
+    res = aeb.resolve_execution_backend(**_equivalence())
+    assert res.selected_backend == aeb.CURRENT_SESSION_EXECUTOR
+    assert res.fallback_authorized is True
+    assert res.human_action_required is False
+    assert res.backend_block_reason == aeb.NATIVE_CONTROLLED_CLAUDE_WORKER_STATUS
+
+
+def test_current_session_execution_is_never_represented_as_detached_worker():
+    res = aeb.resolve_execution_backend(**_equivalence())
+    assert res.requested_backend == aeb.DETACHED_CLAUDE_WORKER
+    assert res.selected_backend != res.requested_backend
+    assert res.selected_backend == aeb.CURRENT_SESSION_EXECUTOR
+
+
+def test_fallback_refused_on_a_missing_equivalence_condition_routes_to_waiting():
+    for missing in ("same_task", "same_scope", "equivalent_task_boundary",
+                   "equivalent_safe_tool_profile", "equivalent_evidence_contract"):
+        res = aeb.resolve_execution_backend(**_equivalence(**{missing: False}))
+        assert res.selected_backend == aeb.WAITING_FOR_EXECUTION_BACKEND, missing
+        assert res.fallback_authorized is False, missing
+
+
+def test_a_required_human_authority_decision_refuses_automatic_fallback():
+    res = aeb.resolve_execution_backend(**_equivalence(human_authority_decision_required=True))
+    assert res.selected_backend == aeb.WAITING_FOR_EXECUTION_BACKEND
+    assert res.fallback_authorized is False
+    assert res.human_action_required is True
+
+
+def test_waiting_for_execution_backend_is_never_a_generic_waiting_state():
+    """Distinct from a generic "waiting for user" -- it names the real
+    blocking fact and the real candidate fallback, never just "blocked"."""
+    res = aeb.resolve_execution_backend(**_equivalence(same_task=False))
+    assert res.selected_backend == aeb.WAITING_FOR_EXECUTION_BACKEND
+    assert res.backend_block_reason == aeb.NATIVE_CONTROLLED_CLAUDE_WORKER_STATUS
+    assert res.fallback_backend == aeb.CURRENT_SESSION_EXECUTOR
+
+
+def test_unsupported_requested_backend_is_rejected():
+    with pytest.raises(aeb.AgentExecutionError):
+        aeb.resolve_execution_backend(requested_backend="gpt5", **_equivalence())

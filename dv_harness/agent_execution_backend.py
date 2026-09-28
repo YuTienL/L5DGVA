@@ -171,6 +171,82 @@ def read_audit_trace(root: Path, agent_run_id: str) -> List[Dict[str, Any]]:
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
+# --- Execution Backend Fallback Reconciliation (M7 convergence, section 7) ---
+# Reconciles WHICH backend actually runs a Claude remediation action, given
+# the real, already-evidenced, preserved fact that the detached worker is
+# host-blocked (L5DGVA_CONTROLLED_CLAUDE_WORKER_PERMISSION_QUALIFICATION.md)
+# -- this module does NOT re-investigate that finding, only reacts to it.
+# A small policy function over EXISTING architecture (AgentRunRequest's own
+# TaskBoundary/tool_execution_profile/evidence fields), never a new
+# orchestration engine.
+
+DETACHED_CLAUDE_WORKER = "DETACHED_CLAUDE_WORKER"
+CURRENT_SESSION_EXECUTOR = "CURRENT_SESSION_EXECUTOR"
+WAITING_FOR_EXECUTION_BACKEND = "WAITING_FOR_EXECUTION_BACKEND"
+
+#: Preserved verbatim from the real qualification evidence -- never
+#: re-derived, never re-investigated, per the M7 convergence prompt's own
+#: explicit "do not reopen the host-permission workaround investigation".
+NATIVE_CONTROLLED_CLAUDE_WORKER_STATUS = "IMPLEMENTED_AND_TESTED_BLOCKED_BY_HOST_POLICY"
+
+
+@dataclass(frozen=True)
+class BackendResolution:
+    requested_backend: str
+    selected_backend: str
+    backend_status: str
+    backend_block_reason: Optional[str]
+    fallback_backend: Optional[str]
+    fallback_authorized: bool
+    human_action_required: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def resolve_execution_backend(
+    *, requested_backend: str = DETACHED_CLAUDE_WORKER, same_task: bool, same_scope: bool,
+    equivalent_task_boundary: bool, equivalent_safe_tool_profile: bool,
+    equivalent_evidence_contract: bool, human_authority_decision_required: bool,
+) -> BackendResolution:
+    """Prefers the detached Claude worker for Claude remediation; since it
+    is currently host-blocked, a current-session executor is offered ONLY
+    as an explicit, auditable FALLBACK -- never silently represented as
+    detached-worker execution (`selected_backend` and `fallback_backend`
+    are always distinguishable from `requested_backend` in the result).
+
+    The fallback is authorized automatically ONLY when every named
+    equivalence condition holds: `same_task`, `same_scope`, an equivalent
+    `TaskBoundary`, an equivalent Safe Tool profile, an equivalent evidence
+    contract, and no Human Authority decision required. Any one missing
+    condition routes to `WAITING_FOR_EXECUTION_BACKEND` -- never a generic
+    "waiting for user" state, and never automatically escalated to
+    `HUMAN_AUTHORITY_REQUIRED` by this function itself (that is a distinct,
+    separate stop reason a caller raises on its own evidence, not something
+    this policy function invents)."""
+    if requested_backend != DETACHED_CLAUDE_WORKER:
+        raise AgentExecutionError("UNSUPPORTED_REQUESTED_BACKEND", {"requested_backend": requested_backend})
+
+    fallback_ok = (
+        same_task and same_scope and equivalent_task_boundary
+        and equivalent_safe_tool_profile and equivalent_evidence_contract
+        and not human_authority_decision_required
+    )
+    if not fallback_ok:
+        return BackendResolution(
+            requested_backend=requested_backend, selected_backend=WAITING_FOR_EXECUTION_BACKEND,
+            backend_status="BLOCKED", backend_block_reason=NATIVE_CONTROLLED_CLAUDE_WORKER_STATUS,
+            fallback_backend=CURRENT_SESSION_EXECUTOR, fallback_authorized=False,
+            human_action_required=human_authority_decision_required,
+        )
+    return BackendResolution(
+        requested_backend=requested_backend, selected_backend=CURRENT_SESSION_EXECUTOR,
+        backend_status="FALLBACK_ACTIVE", backend_block_reason=NATIVE_CONTROLLED_CLAUDE_WORKER_STATUS,
+        fallback_backend=CURRENT_SESSION_EXECUTOR, fallback_authorized=True,
+        human_action_required=False,
+    )
+
+
 # --- Agent Run Request -------------------------------------------------------
 
 @dataclass(frozen=True)
