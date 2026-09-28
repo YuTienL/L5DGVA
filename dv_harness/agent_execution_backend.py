@@ -298,6 +298,29 @@ class AgentRunRequest:
         return None
 
 
+def build_retry_agent_run_request(previous: AgentRunRequest, *, retry_reason: str) -> AgentRunRequest:
+    """`AUTO_RETRY_AGENT_RUN`'s real executor (ChatGPT REVIEW-001 CG-1: this
+    action had no production executor anywhere in the codebase). Pure
+    mechanical reuse of the existing `AgentRunRequest` shape -- never a new
+    retry engine: a fresh `agent_run_id`, `attempt_number` incremented,
+    `previous_attempt`/`retry_reason` recorded, every other field carried
+    forward unchanged (same scope, same profile, same evidence, same
+    lease/mutation posture). Bounded by the SAME `retry_policy_max_
+    attempts` the original request already declared -- raises rather than
+    silently retrying forever."""
+    if previous.attempt_number >= previous.retry_policy_max_attempts:
+        raise AgentExecutionError("RETRY_POLICY_EXHAUSTED", {
+            "agent_run_id": previous.agent_run_id, "attempt_number": previous.attempt_number,
+            "retry_policy_max_attempts": previous.retry_policy_max_attempts,
+        })
+    from dataclasses import replace
+    return replace(
+        previous, agent_run_id=str(uuid.uuid4()),
+        attempt_number=previous.attempt_number + 1,
+        previous_attempt=previous.agent_run_id, retry_reason=retry_reason,
+    )
+
+
 def _current_head(root: Path) -> str:
     from .change_impact import _git
     rc, out, _ = _git(Path(root), ["rev-parse", "HEAD"])

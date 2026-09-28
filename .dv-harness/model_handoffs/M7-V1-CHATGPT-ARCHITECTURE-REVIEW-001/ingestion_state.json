@@ -1,0 +1,28 @@
+{
+  "auto_import_status": "DONE",
+  "auto_resume_status": "DONE",
+  "import_attempts": {
+    "f9ce626c9f9367b617a1d452ea6b03566680a81f64c724e9c0614a8948f58c73": 1
+  },
+  "last_detected_result_sha256": "f9ce626c9f9367b617a1d452ea6b03566680a81f64c724e9c0614a8948f58c73",
+  "observation": {
+    "first_seen_at": 1790617933.3956025,
+    "mtime_ns": 1790617891375289100,
+    "observations": 2,
+    "sha256": "f9ce626c9f9367b617a1d452ea6b03566680a81f64c724e9c0614a8948f58c73",
+    "size": 12407,
+    "stability_logged": true
+  },
+  "results": {
+    "f9ce626c9f9367b617a1d452ea6b03566680a81f64c724e9c0614a8948f58c73": {
+      "consumed_at": "2026-09-28T17:52:19.165774+00:00",
+      "import_attempt_id": "M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001:f9ce626c9f93:1196e5da",
+      "import_state": "CONSUMED",
+      "imported_at": "2026-09-28T17:52:18.460928+00:00",
+      "question_id": "Q-ENV-CF3FB9CC",
+      "result_path": ".dv-harness\\model_handoffs\\M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001\\RESULT_V1.md"
+    }
+  },
+  "suppression_logged": [],
+  "task_id": "M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001"
+}

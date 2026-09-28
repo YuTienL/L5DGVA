@@ -13,3 +13,15 @@ Persisted answers to question-queue questions (dv_harness/question_queue.py, spe
 - **Source:** tier2_auto_assumption
 - **Ever a Tier-2 auto-assumption:** yes
 - **Overturned a prior assumption:** no
+
+## model_handoff:M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001
+- **Q-ID:** Q-ENV-CF3FB9CC
+- **Domain / Owner:** env / DV-owner
+- **Question:** Q-ENV-57D420FA: Project owner must choose ACCEPT_AS_NON_BLOCKING for LEGACY_UNSEALED_PUBLICATION/COMPATIBILITY_MODE, or BLOCK_M7_PENDING_SEALED_TRANSPORT_WAVE.
+- **Answer:** request_correction
+- **Basis:** tier2_safe_to_assume_default (worst case: one wasted, cheaply re-run regression)
+- **Decided by:** dv_harness.question_queue(auto)
+- **Decided at:** 2026-09-28T17:52:18.541840+00:00
+- **Source:** tier2_auto_assumption
+- **Ever a Tier-2 auto-assumption:** yes
+- **Overturned a prior assumption:** no

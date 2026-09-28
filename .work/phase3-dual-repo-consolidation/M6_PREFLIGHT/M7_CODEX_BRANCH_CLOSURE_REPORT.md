@@ -2,6 +2,22 @@
 
 Per the M7 Convergence prompt, section 4.
 
+## Scope clarification (ChatGPT REVIEW-001 CG-3 gap-close)
+
+**"Codex branch CLOSED" below refers specifically to the REVIEW-004 ->
+005 -> 006 -> 007 chain's own scope**: `dv_harness/model_handoff_
+workflow.py` and `dv_harness/result_ingestion.py`'s lock/registration/
+ingestion mechanisms. `L5DGVA_CURRENT_SCOPE_GAP_REGISTER.csv` still
+correctly lists GAP-V2-009 through GAP-V2-013 as `PENDING_INDEPENDENT_
+REREVIEW` -- these are real, separate items (`model_result.py`/
+`model_handoff.py` validation/parsing, from earlier REVIEW-003/005
+rounds) that were never inside REVIEW-004..007's own `ALLOWED_FILES`
+scope, so REVIEW-007's clean PASS does not and cannot independently
+verify them. Both authorities are correct simultaneously once the scope
+distinction is explicit -- ChatGPT's own finding (CG-3) was right that
+the prior version of this report did not make that distinction clear
+enough to read as consistent from the two documents alone.
+
 ## Closure gate, evaluated against real current state
 
 ``` text

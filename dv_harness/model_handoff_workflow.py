@@ -42,6 +42,7 @@ import hashlib
 import json
 import ctypes
 import os
+import re
 import time
 import uuid
 if os.name == "nt":
@@ -600,6 +601,34 @@ def import_result(root: Path, task_id: str, result_md_path: Path, *,
         _release_lock(lock, lock_token)
 
 
+#: A real question's own id shape (question_queue.make_question_id()'s
+#: output, e.g. "Q-ENV-57D420FA"). Used only to detect a model result
+#: CITING an already-tracked question -- never to fabricate a match.
+_QUESTION_ID_RE = re.compile(r"\bQ-[A-Z0-9]+-[A-F0-9]{6,}\b")
+
+
+def _cited_existing_question_id(decisions: List[str], store: QuestionQueueStore) -> Optional[str]:
+    """REVIEW-001 (M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001) CG-5 gap-close:
+    a model result's own `HUMAN_DECISIONS_REQUIRED` text can cite an
+    ALREADY-TRACKED question by its real id -- ChatGPT's own REVIEW-001
+    result literally did this ("Q-ENV-57D420FA: Project owner must
+    choose..."), and the pre-fix `_consume_result()` filed a SECOND, new,
+    lower-tier question for the exact same cited decision anyway
+    (Q-ENV-CF3FB9CC), which got auto-assumed at Tier 2 -- a real, live
+    duplicate-HumanGate defect, though this specific instance was harmless
+    (it never answered the real, still-OPEN Q-ENV-57D420FA). Reuses the
+    cited id instead of filing a duplicate, but ONLY when it genuinely
+    exists in the store already -- never fabricates a match, and never
+    invents a NEW cross-reference field on the existing record (which
+    would mean silently rewriting a persisted decision)."""
+    existing_ids = {q["id"] for q in store.list_questions()}
+    for text in decisions:
+        for candidate in _QUESTION_ID_RE.findall(text):
+            if candidate in existing_ids:
+                return candidate
+    return None
+
+
 def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
                     result_path: str) -> Optional[str]:
     """The real Canonical Consumer (dispatch section 12/17). A result
@@ -610,7 +639,10 @@ def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
     result_status of that same name) routes to the SAME real
     `QuestionQueueStore.add_question()` mechanism the M6 Golden Workflow's
     own HumanGate stage already uses -- never a second, parallel
-    human-decision channel."""
+    human-decision channel. If the result's own declared decisions cite an
+    EXISTING tracked question by id, that id is reused directly rather than
+    filing a duplicate (`_cited_existing_question_id()`, closing REVIEW-001
+    CG-5)."""
     needs_human = bool(result.human_decisions_required) or result.result_status == "HUMAN_DECISION_REQUIRED"
     if not needs_human:
         return None
@@ -622,6 +654,9 @@ def _consume_result(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
     decisions = list(result.human_decisions_required) or [
         f"Model result for {handoff.task_id} ({handoff.target_model}) requires a human decision "
         f"(status={result.result_status})."]
+    cited = _cited_existing_question_id(decisions, store)
+    if cited is not None:
+        return cited
     # normalize_grounding_evidence() only accepts the real
     # {"summary": str, "evidence_path": str} shape, both required
     # together -- never a caller-invented key.

@@ -312,6 +312,143 @@ def resolve_next_action(event: str) -> NextActionRecord:
     )
 
 
+def classify_scope_violation(validation: Any) -> Dict[str, Any]:
+    """`AUTO_CLASSIFY_SCOPE_VIOLATION`'s real executor -- ChatGPT REVIEW-001
+    (M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001) CG-1 found this action had no
+    production executor anywhere in the codebase. Purely mechanical:
+    `ValidationOutcome.scope_violations` is ALREADY a real, structured list
+    (`{"field", "path", "classification"}` per violation), computed by
+    `model_result.py`'s own `validate_result()` -- this function formats it
+    as the action's real, callable output. No new judgment is added; a
+    caller with a real `RESULT_REJECTED_SCOPE_VIOLATION` outcome in hand
+    calls this immediately with its own `.validation`."""
+    violations = list(getattr(validation, "scope_violations", None) or [])
+    return {
+        "classification": "SCOPE_VIOLATION" if violations else "NO_SCOPE_VIOLATION",
+        "violation_count": len(violations),
+        "violations": violations,
+    }
+
+
+def diagnose_validation_failure(validation: Any) -> Dict[str, Any]:
+    """`AUTO_DIAGNOSE_VALIDATION_FAILURE`'s real executor -- same reasoning
+    as `classify_scope_violation()` above: `ValidationOutcome`'s own
+    per-check booleans and `findings` are already real, computed facts;
+    this function structures WHICH checks failed, adding no new
+    judgment."""
+    checks = {
+        "task_id_validated": bool(getattr(validation, "task_id_validated", True)),
+        "producer_validated": bool(getattr(validation, "producer_validated", True)),
+        "task_type_validated": bool(getattr(validation, "task_type_validated", True)),
+        "scope_validated": bool(getattr(validation, "scope_validated", True)),
+        "schema_validated": bool(getattr(validation, "schema_validated", True)),
+        "evidence_validated": bool(getattr(validation, "evidence_validated", True)),
+        "governance_validated": bool(getattr(validation, "governance_validated", True)),
+    }
+    failed_checks = [name for name, ok in checks.items() if not ok]
+    return {
+        "failed_checks": failed_checks,
+        "findings": list(getattr(validation, "findings", None) or []),
+        "governance_validation_status": getattr(validation, "governance_validation_status", "NOT_APPLICABLE"),
+    }
+
+
+# --- Action Dispatcher (ChatGPT REVIEW-001 CG-1/CG-2 gap-close) -------------
+# NEXT_ACTION_TABLE resolves and persists an action, but nothing in
+# production code actually consumed next_action.json and routed to a real
+# executor -- confirmed live: M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001 itself
+# consumed with next_action=AUTO_REMEDIATE_CONFIRMED_FINDINGS and NO
+# downstream execution occurred. This is the real, minimal Action
+# Dispatcher -- never a second orchestration engine: for actions with a
+# real, callable executor it invokes them directly; for actions requiring
+# code-authorship/test-running judgment it resolves the EXECUTION BACKEND
+# (agent_execution_backend.resolve_execution_backend()'s first genuine
+# production call site -- CG-2's own specific finding) rather than
+# performing that judgment itself.
+
+#: Actions this dispatcher can invoke directly from persisted state alone
+#: (root + task_id) -- their real executor needs no additional
+#: caller-supplied context.
+_DISPATCH_STATE_ONLY_EXECUTORS = (
+    "EVALUATE_CANONICAL_TASK_COMPLETION",
+    "AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF",
+)
+
+#: Actions that inherently require code-authorship or test-running
+#: judgment -- this dispatcher never performs these itself (that would be
+#: a second, competing autonomous code-fixing engine). It resolves the
+#: real execution backend for them instead.
+_DISPATCH_CURRENT_SESSION_EXECUTOR_ACTIONS = (
+    "AUTO_REMEDIATE_CONFIRMED_FINDINGS", "RUN_FOCUSED_VALIDATION",
+    "RUN_REQUIRED_REGRESSION", "PREPARE_REQUIRED_RE_REVIEW",
+)
+
+DISPATCH_EXECUTED = "EXECUTED"
+DISPATCH_BACKEND_RESOLVED = "BACKEND_RESOLVED"
+DISPATCH_REQUIRES_CALLER_CONTEXT = "REQUIRES_CALLER_CONTEXT"
+DISPATCH_GATE = "GATE"
+
+
+@dataclass(frozen=True)
+class DispatchOutcome:
+    task_id: str
+    next_action: str
+    dispatch_status: str
+    detail: Dict[str, Any]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"task_id": self.task_id, "next_action": self.next_action,
+                "dispatch_status": self.dispatch_status, "detail": self.detail}
+
+
+def dispatch_next_action(root: Path, task_id: str) -> DispatchOutcome:
+    """Reads the real persisted next-action record for `task_id` and
+    routes it: a `_DISPATCH_STATE_ONLY_EXECUTORS` action is invoked
+    directly, its real output persisted where that executor already
+    persists it. A `_DISPATCH_CURRENT_SESSION_EXECUTOR_ACTIONS` action
+    resolves the real execution backend and reports the result -- never
+    silently represented as executed. A real gate
+    (`HUMAN_AUTHORITY_REQUIRED`/`HUMAN_TRANSPORT_REQUIRED`/etc.) is
+    reported as a gate. Anything else (an action needing caller-supplied
+    context this function cannot derive from persisted state alone, e.g.
+    `AUTO_CLASSIFY_SCOPE_VIOLATION`, which needs the real `ValidationOutcome`
+    only the ingestion call site has in hand) is reported honestly as
+    `REQUIRES_CALLER_CONTEXT`, never silently skipped or claimed done."""
+    root = Path(root)
+    record = read_next_action(root, task_id)
+    if record is None:
+        raise ValueError(f"NO_PERSISTED_NEXT_ACTION:{task_id}")
+    action = record["next_action"]
+
+    if action in CANONICAL_STOP_REASONS:
+        return DispatchOutcome(task_id, action, DISPATCH_GATE, {"stop_reason": action})
+
+    if action == "EVALUATE_CANONICAL_TASK_COMPLETION":
+        evaluation = evaluate_canonical_task_completion(root, task_id)
+        persist_completion_evaluation(root, task_id, evaluation)
+        return DispatchOutcome(task_id, action, DISPATCH_EXECUTED, evaluation.to_dict())
+
+    if action == "AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF":
+        from . import model_handoff_workflow as _wf
+        correction = _wf.build_correction_request_handoff(root, task_id)
+        path = _wf.export_handoff(root, correction)
+        return DispatchOutcome(task_id, action, DISPATCH_EXECUTED, {"handoff_path": str(path)})
+
+    if action in _DISPATCH_CURRENT_SESSION_EXECUTOR_ACTIONS:
+        from . import agent_execution_backend as _aeb
+        resolution = _aeb.resolve_execution_backend(
+            same_task=True, same_scope=True, equivalent_task_boundary=True,
+            equivalent_safe_tool_profile=True, equivalent_evidence_contract=True,
+            human_authority_decision_required=False,
+        )
+        return DispatchOutcome(task_id, action, DISPATCH_BACKEND_RESOLVED, resolution.to_dict())
+
+    return DispatchOutcome(task_id, action, DISPATCH_REQUIRES_CALLER_CONTEXT, {
+        "reason": "this action needs real caller-supplied context (e.g. a ValidationOutcome or "
+                  "AgentRunRequest) not derivable from persisted next_action state alone",
+    })
+
+
 def event_for_import_outcome(state: str, result_status: Optional[str] = None,
                              findings: Sequence[str] = (), parse_error: Optional[str] = None) -> str:
     """Maps a real `model_handoff_workflow.import_result()` outcome onto

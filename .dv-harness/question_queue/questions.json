@@ -76,6 +76,47 @@
       },
       "suggested_answer": null,
       "authority_role": null
+    },
+    {
+      "schema_version": "1.0",
+      "id": "Q-ENV-CF3FB9CC",
+      "question_key": "model_handoff:M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001",
+      "blocking": false,
+      "domain": "env",
+      "owner": "DV-owner",
+      "question": "Q-ENV-57D420FA: Project owner must choose ACCEPT_AS_NON_BLOCKING for LEGACY_UNSEALED_PUBLICATION/COMPATIBILITY_MODE, or BLOCK_M7_PENDING_SEALED_TRANSPORT_WAVE.",
+      "context_path": ".dv-harness\\model_handoffs\\M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001\\RESULT_V1.md",
+      "options": [
+        {
+          "label": "accept"
+        },
+        {
+          "label": "reject"
+        },
+        {
+          "label": "request_correction"
+        }
+      ],
+      "recommendation": "request_correction",
+      "assumption_if_unanswered": "request_correction",
+      "tier": 2,
+      "tier_reason": "no_hard_trigger_low_blast_radius",
+      "status": "ASSUMED",
+      "created_at": "2026-09-28T17:52:18.541145+00:00",
+      "answered_at": "2026-09-28T17:52:18.541145+00:00",
+      "answer": "request_correction",
+      "basis": "tier2_safe_to_assume_default (worst case: one wasted, cheaply re-run regression)",
+      "decided_by": "dv_harness.question_queue(auto)",
+      "overturned": false,
+      "resolved_from_decision_id": null,
+      "digest_batch_id": null,
+      "digest_emitted_at": null,
+      "grounding_evidence": {
+        "summary": "Q-ENV-57D420FA: Project owner must choose ACCEPT_AS_NON_BLOCKING for LEGACY_UNSEALED_PUBLICATION/COMPATIBILITY_MODE, or BLOCK_M7_PENDING_SEALED_TRANSPORT_WAVE.",
+        "evidence_path": "dv_harness/execution_contract.py:247-311"
+      },
+      "suggested_answer": null,
+      "authority_role": null
     }
   ]
 }

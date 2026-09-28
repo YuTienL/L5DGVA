@@ -1,0 +1,7 @@
+{
+  "task_id": "M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002",
+  "target_model": "chatgpt",
+  "task_type": "architecture-governance-review",
+  "state": "WAITING_FOR_HUMAN_TRANSPORT",
+  "handoff_path": "D:\\DV\\Task\\L5_DGVA\\.dv-harness\\model_handoffs\\M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002\\HANDOFF_V1.md"
+}
