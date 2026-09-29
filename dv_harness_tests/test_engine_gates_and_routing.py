@@ -1579,11 +1579,36 @@ def test_requirements_traceability_waiver_revalidation_gate_three_flags():
     assert any("WAIVER_EXPIRED" in r for r in reasons3), reasons3
 
 
-def test_promotion_readiness_feature_continuity_gate_context_and_evidence_flag():
+def test_promotion_readiness_feature_continuity_gate_context_and_evidence_flag(tmp_path):
     # feature_continuity_gate.py mixes a ContextFlag (--root: the real repo
     # root, supplied by the harness so an agent can't point the check
     # somewhere it would trivially pass) with an EvidenceFlag (--required:
     # the agent-attested list of paths that must still exist this revision).
+    #
+    # Isolated under tmp_path (GAP-M8-001 / M8 Cohort 1 follow-on): this
+    # stage's own chain evidence claims EXPERIENCE_READY, which
+    # promotion_chain_audit_gate.py now cross-verifies against a real
+    # promotion event in THIS project's own .dv-harness/events.jsonl (see
+    # test_promotion_chain_audit_gate_* below) -- running this test against
+    # the real live repo ROOT would make its PASS/FAIL outcome depend on
+    # whatever this repo's own real event history happens to contain at
+    # test time. tmp_path keeps it deterministic and mirrors the isolation
+    # every other tmp_path-based gate test in this file already uses.
+    from dv_harness.storage import StateStore
+    # evaluate_stage_evidence(root, ...) resolves each real gate SCRIPT from
+    # root/tools/verification_flow/ too (gates.py's own documented deployment
+    # model: "a real deployed project copies just the tools/verification_
+    # flow/*.py scripts under its own root") -- tmp_path needs its own real
+    # copy for all 8 PROMOTION_READINESS gates to resolve at all.
+    shutil.copytree(ROOT / "tools" / "verification_flow", tmp_path / "tools" / "verification_flow")
+    (tmp_path / "dv_harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "dv_harness" / "gates.py").write_text("# placeholder\n", encoding="utf-8")
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m1"},
+    })
+
     readiness = {"critical_dimensions": {"coverage": "READY"}, "active_failure_count": 0,
                  "signoff_bundle_complete": True, "evidence_fresh": True}
     chain = {"failure_detected": False, "events": [
@@ -1621,18 +1646,227 @@ def test_promotion_readiness_feature_continuity_gate_context_and_evidence_flag()
             f"```dv-harness-evidence:feature_continuity_gate\n{json.dumps(required_block)}\n```\n"
         )
 
-    # PASS: a real file that genuinely exists under this repo's root -- the
+    # PASS: a real file that genuinely exists under the project root -- the
     # harness-supplied --root (not an agent-supplied one) is what makes this
     # resolve correctly.
     ok = {"required": {"required_paths": ["dv_harness/gates.py"]}}
-    verdict, reasons = evaluate_stage_evidence(ROOT, "PROMOTION_READINESS", build(ok))
+    verdict, reasons = evaluate_stage_evidence(tmp_path, "PROMOTION_READINESS", build(ok))
     assert verdict == "PASS", reasons
 
-    # FAIL: a path that does not exist under the real repo root.
+    # FAIL: a path that does not exist under the project root.
     bad = {"required": {"required_paths": ["dv_harness/gates.py", "does/not/exist.py"]}}
-    verdict2, reasons2 = evaluate_stage_evidence(ROOT, "PROMOTION_READINESS", build(bad))
+    verdict2, reasons2 = evaluate_stage_evidence(tmp_path, "PROMOTION_READINESS", build(bad))
     assert verdict2 == "GATE_FAIL", reasons2
     assert any("FEATURE_CONTINUITY_REGRESSION" in r for r in reasons2), reasons2
+
+
+def _run_gate_script_with_project_root(rel_path, flag, payload, project_root):
+    # Same shape as _run_gate_script (above), but sets DV_HARNESS_PROJECT_ROOT
+    # the way dv_harness/gates.py's real _gate_env() always does for every
+    # production gate subprocess -- needed here because promotion_chain_
+    # audit_gate.py's GAP-M8-001 cross-check (M8 Cohort 1) reads that env var
+    # to find the project's own .dv-harness/events.jsonl, exactly like the
+    # existing waiver_*_gate.py scripts' own project_root() helper already
+    # does. Neither _run_gate_script nor _run_gate_script_2flag sets env, so
+    # this is the smallest addition that lets a test control it.
+    import subprocess, sys
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        infile = tmp / "in.json"
+        infile.write_text(json.dumps(payload), encoding="utf-8")
+        script = ROOT / "tools" / rel_path
+        env = dict(os.environ)
+        env["DV_HARNESS_PROJECT_ROOT"] = str(project_root)
+        r = subprocess.run(
+            [sys.executable, str(script), flag, str(infile)],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        out = json.loads((r.stdout or "").strip() or "{}")
+        return r.returncode, out
+    finally:
+        shutil.rmtree(tmp)
+
+
+def _promotion_chain_audit_payload(*, extra_stages=()):
+    events = [
+        {"stage": "INTAKE_READY", "evidence": "e"},
+        {"stage": "VPLAN_READY", "evidence": "e"},
+        {"stage": "ARCHITECTURE_READY", "evidence": "e"},
+        {"stage": "MECHANISM_READY", "evidence": "e"},
+        {"stage": "TESTS_READY", "evidence": "e"},
+        {"stage": "TRACEABILITY_READY", "evidence": "e"},
+        {"stage": "EXECUTION_EVIDENCE_READY", "evidence": "e"},
+        {"stage": "COVERAGE_QUALITY_READY", "evidence": "e"},
+        {"stage": "EXPERT_REVIEW_READY", "evidence": "e"},
+        {"stage": "EXPERIENCE_READY", "evidence": "e"},
+        {"stage": "PROMOTABLE", "evidence": "e"},
+    ]
+    events.extend(extra_stages)
+    return {"failure_detected": False, "events": events}
+
+
+def test_promotion_chain_audit_gate_rejects_bare_experience_ready_self_attestation(tmp_path):
+    # GAP-M8-001 core negative case: no .dv-harness/events.jsonl exists at all
+    # for this project -- a bare self-attested EXPERIENCE_READY claim, with
+    # zero independent corroboration, must be rejected, not accepted the way
+    # it always was before this fix.
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+def test_promotion_chain_audit_gate_accepts_verified_experience_ready(tmp_path):
+    # GAP-M8-001 core positive case: a real EXPERIENCE_KNOWLEDGE_PROMOTED
+    # event with a real, non-failed destination -- the exact shape
+    # engine.py's _promote_experience_knowledge() already writes via
+    # route_and_store()+self.store.event() -- makes the same claim PASS.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m1"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PASS", out
+
+
+def test_promotion_chain_audit_gate_accepts_any_real_promotion_event_kind(tmp_path):
+    # Not hardcoded to just EXPERIENCE_KNOWLEDGE_PROMOTED -- any of engine.py's
+    # 5 real route_and_store() call sites corroborates the claim, e.g. the
+    # RE_AUDIT-stage _promote_verified_fix_knowledge()'s own event name.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "RE_AUDIT",
+        "event": "VERIFIED_FIX_PROMOTED",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m2"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PASS", out
+
+
+def test_promotion_chain_audit_gate_rejects_failed_promotion_as_evidence(tmp_path):
+    # Invalid evidence: a real route_and_store() call happened but FAILED
+    # (engine.py's own except-branch: promotion={"destination":
+    # "PROMOTION_FAILED", ...}) -- that is not proof anything was actually
+    # promoted, so it must not corroborate the claim either.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "PROMOTION_FAILED", "error": "disk full"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+def test_promotion_chain_audit_gate_ignores_unrelated_event_names(tmp_path):
+    # Invalid evidence, second shape: a real, successfully-written event
+    # exists, but under a name outside REAL_PROMOTION_EVENTS entirely (not a
+    # route_and_store()-backed promotion at all) -- must not corroborate.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "SOME_UNRELATED_TELEMETRY_EVENT", "detail": "noise",
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+def test_promotion_chain_audit_gate_rejects_wrong_project_correlation(tmp_path):
+    # Wrong task/project correlation: a real, successful promotion event
+    # exists, but in a DIFFERENT project's events.jsonl -- the project
+    # actually being audited (audited_root) has none of its own. The
+    # DV_HARNESS_PROJECT_ROOT scoping (same convention run_gate() always
+    # supplies from the real caller's own root) must not let one project's
+    # evidence corroborate another project's claim.
+    from dv_harness.storage import StateStore
+    audited_root = tmp_path / "project_a"
+    other_root = tmp_path / "project_b"
+    audited_root.mkdir()
+    other_root.mkdir()
+    StateStore(other_root).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m3"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), audited_root,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+def test_promotion_chain_audit_gate_duplicate_promotion_events_still_pass_once(tmp_path):
+    # Duplicate-promotion/idempotency: two real corroborating events (e.g. a
+    # retried stage promoting the same knowledge twice, engine.py's own
+    # disclosed accepted tradeoff at the _promote_experience_knowledge()
+    # call site) must not confuse the check into misbehaving -- it still
+    # simply PASSes once real evidence is present, duplicates or not.
+    from dv_harness.storage import StateStore
+    store = StateStore(tmp_path)
+    for i in range(2):
+        store.event({
+            "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+            "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+            "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": f"m{i}"},
+        })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PASS", out
+
+
+def test_promotion_chain_audit_gate_applies_uniformly_on_the_failure_path(tmp_path):
+    # EXPERIENCE_READY is unconditionally mandatory in BOTH of this gate's
+    # own mandatory-stage sets (ORDER[:8]+[...,"EXPERIENCE_READY",...] when
+    # failure_detected is False, the full ORDER -- which also contains
+    # EXPERIENCE_READY -- when it's True): there is no PASS-eligible chain
+    # that omits it. So the new check must apply on the failure_detected=True
+    # branch too, not only the default branch the tests above cover.
+    payload = {"failure_detected": True, "events": [
+        {"stage": "INTAKE_READY", "evidence": "e"},
+        {"stage": "VPLAN_READY", "evidence": "e"},
+        {"stage": "ARCHITECTURE_READY", "evidence": "e"},
+        {"stage": "MECHANISM_READY", "evidence": "e"},
+        {"stage": "TESTS_READY", "evidence": "e"},
+        {"stage": "TRACEABILITY_READY", "evidence": "e"},
+        {"stage": "EXECUTION_EVIDENCE_READY", "evidence": "e"},
+        {"stage": "COVERAGE_QUALITY_READY", "evidence": "e"},
+        {"stage": "RCA_READY", "evidence": "e"},
+        {"stage": "RERUN_READY", "evidence": "e"},
+        {"stage": "EXPERT_REVIEW_READY", "evidence": "e"},
+        {"stage": "EXPERIENCE_READY", "evidence": "e"},
+        {"stage": "PROMOTABLE", "evidence": "e"},
+    ]}
+    # failure_detected=True still requires the full ORDER including
+    # EXPERIENCE_READY (unchanged pre-existing behavior) -- so this remains a
+    # claim under test, not a case where the new check is bypassable via the
+    # failure path. No events.jsonl exists under tmp_path: must still FAIL.
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        payload, tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
 
 
 def test_expert_feedback_loop_requires_experience_knowledge_gate():
