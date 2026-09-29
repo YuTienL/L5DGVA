@@ -2,6 +2,10 @@
   "task_id": "M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002",
   "target_model": "chatgpt",
   "task_type": "architecture-governance-review",
-  "state": "WAITING_FOR_HUMAN_TRANSPORT",
-  "handoff_path": "D:\\DV\\Task\\L5_DGVA\\.dv-harness\\model_handoffs\\M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002\\HANDOFF_V1.md"
+  "state": "RESULT_CONSUMED",
+  "handoff_path": "D:\\DV\\Task\\L5_DGVA\\.dv-harness\\model_handoffs\\M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002\\HANDOFF_V1.md",
+  "result_sha256": "d681587f45267d4965e465afe9b70488c95286e3c2ff2171261e04500763587b",
+  "result_status": "FAIL",
+  "accepted_result_sha256": "d681587f45267d4965e465afe9b70488c95286e3c2ff2171261e04500763587b",
+  "question_id": null
 }

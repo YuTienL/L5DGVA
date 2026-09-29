@@ -28,9 +28,14 @@ not been independently established, is to keep going, not to stop.
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
+
+from .task_boundary_conformance import TaskBoundary
 
 # --- Canonical vocabulary --------------------------------------------------
 
@@ -481,12 +486,340 @@ def dispatch_next_action(root: Path, task_id: str) -> DispatchOutcome:
             equivalent_safe_tool_profile=True, equivalent_evidence_contract=True,
             human_authority_decision_required=False,
         )
-        return DispatchOutcome(task_id, action, DISPATCH_BACKEND_RESOLVED, resolution.to_dict())
+        detail = resolution.to_dict()
+        # CURRENT_SESSION_EXECUTOR activation gap-close: BACKEND_RESOLVED
+        # alone gave no production mechanism for a /loop wakeup to
+        # discover, claim and execute the work -- only a human manually
+        # reading this report and doing it by hand. When the fallback is
+        # genuinely authorized, a real, persisted, claimable Canonical
+        # assignment is created here (never executed here -- see
+        # create_execution_assignment()'s own docstring for why
+        # BACKEND_RESOLVED still != EXECUTED).
+        if resolution.selected_backend == _aeb.CURRENT_SESSION_EXECUTOR and resolution.fallback_authorized:
+            assignment = create_execution_assignment(root, task_id, action)
+            detail["assignment_id"] = assignment.assignment_id
+            detail["claim_state"] = assignment.claim_state
+        return DispatchOutcome(task_id, action, DISPATCH_BACKEND_RESOLVED, detail)
 
     return DispatchOutcome(task_id, action, DISPATCH_REQUIRES_CALLER_CONTEXT, {
         "reason": "this action needs real caller-supplied context (e.g. a ValidationOutcome or "
                   "AgentRunRequest) not derivable from persisted next_action state alone",
     })
+
+
+# --- Current-Session Execution Assignment (CURRENT_SESSION_EXECUTOR activation gap-close) ---
+#
+# The real live gap ChatGPT's own REVIEW-002 re-review (M7-V1-CHATGPT-
+# ARCHITECTURE-REVIEW-002, third corrected result, RESULT_SHA256=
+# d681587f...) exposed: dispatch_next_action() correctly reports
+# BACKEND_RESOLVED/CURRENT_SESSION_EXECUTOR for a code-authorship action,
+# but nothing let a /loop wakeup -- a genuinely separate, timer-fired
+# invocation, not a human typing continue -- discover that assignment and
+# claim it. This closes that gap the SAME way the two prior production-
+# caller gaps were closed: a real, persisted, atomically-claimable
+# Canonical record, never a second scheduler and never terminal/keystroke
+# injection of any kind.
+#
+# Reuses, never reinvents: `agent_execution_backend.AgentRunRequest`/
+# `build_agent_run_request()` (the work-order shape), `agent_execution_
+# backend.acquire_mutation_lease()`/`release_mutation_lease()` (the SAME
+# SINGLE_CANONICAL_MUTATION_LEASE a detached worker run already holds --
+# so a current-session claim and a detached worker can never both mutate
+# the repo at once), `model_handoff_workflow._acquire_lock()`/
+# `_release_lock()` (the claim race's own atomicity primitive, the exact
+# one `result_ingestion._task_lock()`/the watcher role lock already
+# reuse), and `agent_execution_backend.AgentRunResult`'s own shape for the
+# persisted execution outcome (never a second result schema).
+#
+# IMPORTANT: a finding in a consumed RESULT_V1.md is PRIOR CLAIM, never
+# CURRENT EVIDENCE (the Evidence Truth Rule this entire program is built
+# on). REVIEW-002's own real CG2-1/CG2-2 findings ("no production caller
+# of dispatch_next_action is established") were independently re-verified
+# against current evidence before this module was written and found to be
+# STALE: `git show 6083ae6:dv_harness/result_ingestion.py` already
+# contained the real `_ec.dispatch_next_action(root, task_id)` call inside
+# `resume_after_import()` at that exact CURRENT_HEAD -- the finding is an
+# artifact of an incomplete INPUT_EVIDENCE_REFS list (result_ingestion.py
+# was never included), not a real current code gap. `_build_remediation_
+# objective()` below therefore REQUIRES independent re-verification of
+# every finding against current evidence before any change is made -- a
+# claiming session must never blindly implement a stale claim.
+
+ASSIGNMENT_READY = "ASSIGNMENT_READY"
+ASSIGNMENT_CLAIMED = "ASSIGNMENT_CLAIMED"
+ASSIGNMENT_EXECUTING = "EXECUTING"
+ASSIGNMENT_EXECUTION_COMPLETED = "EXECUTION_COMPLETED"
+ASSIGNMENT_EXECUTION_FAILED = "EXECUTION_FAILED"
+
+
+class ExecutionAssignmentError(ValueError):
+    def __init__(self, reason: str, detail: Optional[Dict[str, Any]] = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail or {}
+
+
+@dataclass(frozen=True)
+class ExecutionAssignment:
+    assignment_id: str
+    task_id: str
+    action_id: str
+    next_action: str
+    selected_backend: str
+    repo_root_identity: str
+    repo_root_matched: bool
+    source_head_at_creation: str
+    runtime_generation_at_creation: Optional[int]
+    claim_state: str
+    created_at: str
+    agent_run_request: Dict[str, Any]
+    claimed_at: Optional[str] = None
+    claimed_by: Optional[str] = None
+    lease_id: Optional[str] = None
+    execution_outcome: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _assignment_path(root: Path, task_id: str) -> Path:
+    from . import model_handoff_workflow as _wf
+    return _wf._task_dir(Path(root), task_id) / "execution_assignment.json"
+
+
+def _assignment_lock_path(root: Path, task_id: str) -> Path:
+    return _assignment_path(root, task_id).with_name("execution_assignment.lock")
+
+
+def _read_json(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _current_watcher_generation(root: Path) -> Optional[int]:
+    """Best-effort: the result watcher's own current `runtime_generation`,
+    if a watcher heartbeat file exists at all. `None` when no watcher has
+    ever run in this repo -- not itself an error."""
+    from . import result_ingestion as _ri
+    rec = _ri._read_json(_ri._watcher_file(Path(root)))
+    return rec.get("runtime_generation") if rec else None
+
+
+def _build_remediation_objective(root: Path, task_id: str, action: str) -> Sequence[str]:
+    """The real objective text for a CURRENT_SESSION_EXECUTOR assignment,
+    derived from the task's own real, consumed RESULT_V1.md when one
+    exists -- never invented findings. Every FINDINGS/RECOMMENDED_ACTIONS
+    line is quoted verbatim so a claiming session works from the real
+    claim text, but is explicitly instructed to re-verify each one against
+    CURRENT evidence before changing anything (see this section's own
+    module-level docstring for the real, confirmed-stale CG2-1/CG2-2
+    precedent this instruction exists because of)."""
+    from . import model_handoff_workflow as _wf
+    result_path = _wf._task_dir(root, task_id) / "RESULT_V1.md"
+    findings: Sequence[str] = ()
+    recommended: Sequence[str] = ()
+    if action == "AUTO_REMEDIATE_CONFIRMED_FINDINGS" and result_path.is_file():
+        try:
+            from . import model_result as _result_mod
+            result = _result_mod.from_markdown(result_path.read_text(encoding="utf-8"))
+            findings = result.findings
+            recommended = result.recommended_actions
+        except Exception:
+            pass
+    lines = [
+        f"CURRENT_SESSION_EXECUTOR assignment for {task_id}, action={action}.",
+        "MANDATORY FIRST STEP: independently re-verify EVERY finding below against the CURRENT "
+        "codebase before making any change -- a finding is a prior claim, never current evidence. "
+        "A finding that does not reproduce against current evidence (already fixed, evidence "
+        "incomplete when it was made, or otherwise stale) must be reported as NOT_REPRODUCIBLE with "
+        "the exact current evidence that shows so -- never blindly implemented. Only a finding that "
+        "genuinely reproduces against current evidence gets a real code fix, with tests and a commit.",
+    ]
+    if findings:
+        lines.append("FINDINGS (verbatim from the real consumed result):")
+        lines.extend(f"- {f}" for f in findings)
+    if recommended:
+        lines.append("RECOMMENDED_ACTIONS (verbatim from the real consumed result):")
+        lines.extend(f"- {r}" for r in recommended)
+    return lines
+
+
+def create_execution_assignment(root: Path, task_id: str, action: str) -> ExecutionAssignment:
+    """The real, persisted, claimable Canonical work order a CURRENT_
+    SESSION_EXECUTOR backend resolution creates. BACKEND_RESOLVED still
+    != EXECUTED: this only makes the resolved work order discoverable and
+    claimable -- it never performs the code-authorship work itself (that
+    would be a second, competing autonomous code-fixing engine, exactly
+    what `dispatch_next_action()`'s own docstring already forbids)."""
+    from . import agent_execution_backend as _aeb
+    from . import controlled_process_executor as _cpe
+    from . import model_handoff_workflow as _wf
+    root = Path(root)
+    identity = _cpe.verify_canonical_repository_identity(root)
+    handoff = _wf._load_handoff(root, task_id)
+    scope = handoff.scope if handoff is not None else TaskBoundary(task_id=task_id, allowed_path_prefixes=())
+    evidence_refs = handoff.input_evidence_refs if handoff is not None else ()
+    objective = "\n".join(_build_remediation_objective(root, task_id, action))
+    request = _aeb.build_agent_run_request(
+        root, task_id=task_id, parent_workflow_id=task_id, action_id=f"A:{task_id}:{action}",
+        action_type=action, role="implementation", objective=objective, scope=scope,
+        input_evidence_refs=evidence_refs, expected_output="code fix + tests + regression evidence, "
+        "or a NOT_REPRODUCIBLE report with current evidence",
+    )
+    assignment = ExecutionAssignment(
+        assignment_id=str(uuid.uuid4()), task_id=task_id, action_id=request.action_id, next_action=action,
+        selected_backend=_aeb.CURRENT_SESSION_EXECUTOR, repo_root_identity=identity.resolved_root,
+        repo_root_matched=identity.matched, source_head_at_creation=identity.head or "",
+        runtime_generation_at_creation=_current_watcher_generation(root),
+        claim_state=ASSIGNMENT_READY, created_at=_now_iso(), agent_run_request=request.to_dict(),
+    )
+    _atomic_write_json(_assignment_path(root, task_id), assignment.to_dict())
+    return assignment
+
+
+def read_execution_assignment(root: Path, task_id: str) -> Optional[ExecutionAssignment]:
+    rec = _read_json(_assignment_path(Path(root), task_id))
+    return ExecutionAssignment(**rec) if rec else None
+
+
+def discover_eligible_current_session_assignments(root: Path) -> List[ExecutionAssignment]:
+    """What a /loop wakeup calls to inspect the Canonical assignment
+    queue/state -- read-only, never claims anything itself. A Human
+    Authority/Transport gate task never appears here: an assignment is
+    only ever created inside `dispatch_next_action()`'s CURRENT_SESSION_
+    EXECUTOR branch, a code path a gate action (`DISPATCH_GATE`) never
+    reaches at all."""
+    from . import result_ingestion as _ri
+    root = Path(root)
+    out = []
+    for t in _ri._registered_task_ids(root):
+        a = read_execution_assignment(root, t)
+        if a is not None and a.claim_state == ASSIGNMENT_READY:
+            out.append(a)
+    return out
+
+
+def claim_execution_assignment(root: Path, task_id: str, claimant_id: str) -> ExecutionAssignment:
+    """Atomic claim: at-most-one active claimant. Reuses `model_handoff_
+    workflow._acquire_lock()`'s O_EXCL primitive for the claim race itself,
+    AND `agent_execution_backend.acquire_mutation_lease()` -- the SAME
+    Canonical Mutation Lease a detached worker run already holds -- so a
+    current-session claim and a detached worker can never both mutate the
+    repo at once. Fails closed on: assignment not found; not READY
+    (already claimed/executing/done -- no double-claim); repo identity no
+    longer matches (a wrong-repo claim, e.g. a nested throwaway probe
+    dir); or a STALE runtime generation (the watcher has restarted --
+    meaning the control plane may have changed -- since this assignment
+    was created; the caller must let a fresh `resume_after_import()`
+    re-create a current assignment rather than act on a possibly-outdated
+    one)."""
+    from . import agent_execution_backend as _aeb
+    from . import controlled_process_executor as _cpe
+    from . import model_handoff_workflow as _wf
+    root = Path(root)
+    lock = _assignment_lock_path(root, task_id)
+    token = _wf._acquire_lock(lock, 60.0)
+    if token is None:
+        raise ExecutionAssignmentError("CLAIM_IN_PROGRESS", {"task_id": task_id})
+    try:
+        assignment = read_execution_assignment(root, task_id)
+        if assignment is None:
+            raise ExecutionAssignmentError("NOT_FOUND", {"task_id": task_id})
+        if assignment.claim_state != ASSIGNMENT_READY:
+            raise ExecutionAssignmentError("NOT_READY", {"task_id": task_id, "claim_state": assignment.claim_state})
+        identity = _cpe.verify_canonical_repository_identity(root)
+        if not identity.matched or identity.resolved_root != assignment.repo_root_identity:
+            raise ExecutionAssignmentError("REPO_IDENTITY_MISMATCH", {
+                "task_id": task_id, "assignment_repo": assignment.repo_root_identity,
+                "current_repo": identity.resolved_root})
+        current_gen = _current_watcher_generation(root)
+        if (assignment.runtime_generation_at_creation is not None and current_gen is not None
+                and current_gen > assignment.runtime_generation_at_creation):
+            raise ExecutionAssignmentError("STALE_RUNTIME_GENERATION", {
+                "task_id": task_id, "assignment_generation": assignment.runtime_generation_at_creation,
+                "current_generation": current_gen})
+        lease = _aeb.acquire_mutation_lease(root, task_id, assignment.agent_run_request["agent_run_id"])
+        if not lease.acquired:
+            raise ExecutionAssignmentError("MUTATION_LEASE_BUSY",
+                                          {"task_id": task_id, "owner": lease.owner_agent_run_id})
+        claimed = ExecutionAssignment(**{**assignment.to_dict(), "claim_state": ASSIGNMENT_CLAIMED,
+                                        "claimed_at": _now_iso(), "claimed_by": claimant_id,
+                                        "lease_id": lease.lease_id})
+        _atomic_write_json(_assignment_path(root, task_id), claimed.to_dict())
+        return claimed
+    finally:
+        _wf._release_lock(lock, token)
+
+
+def loop_wakeup_check_and_claim(root: Path, claimant_id: str) -> Optional[ExecutionAssignment]:
+    """The single entry point a normal /loop wakeup calls (never terminal
+    injection, never SendKeys, never clipboard automation -- purely
+    Canonical-state-based, per this dispatch's own explicit prohibition):
+    discovers eligible CURRENT_SESSION_EXECUTOR assignments and claims the
+    first one atomically. Returns `None` -- remains quiet, no side effect
+    at all -- when nothing is eligible, so a wakeup with no assigned work
+    never invents any."""
+    root = Path(root)
+    eligible = discover_eligible_current_session_assignments(root)
+    if not eligible:
+        return None
+    return claim_execution_assignment(root, eligible[0].task_id, claimant_id)
+
+
+def mark_execution_assignment_executing(root: Path, task_id: str) -> ExecutionAssignment:
+    root = Path(root)
+    assignment = read_execution_assignment(root, task_id)
+    if assignment is None or assignment.claim_state != ASSIGNMENT_CLAIMED:
+        raise ExecutionAssignmentError("NOT_CLAIMED", {"task_id": task_id})
+    updated = ExecutionAssignment(**{**assignment.to_dict(), "claim_state": ASSIGNMENT_EXECUTING})
+    _atomic_write_json(_assignment_path(root, task_id), updated.to_dict())
+    return updated
+
+
+def complete_execution_assignment(root: Path, task_id: str, outcome: Dict[str, Any], *,
+                                  success: bool) -> ExecutionAssignment:
+    """Persists the real execution outcome (an `agent_execution_backend.
+    AgentRunResult`-shaped dict -- the SAME shape a detached worker run
+    produces, never a second result schema), releases the Canonical
+    Mutation Lease this claim was holding, and closes the Canonical
+    next-action loop (the same OUTPUT_UNCONSUMED class of gap already
+    closed for `EVALUATE_CANONICAL_TASK_COMPLETION`/`AUTO_GENERATE_
+    CORRECTION_REQUEST_HANDOFF` -- never left for a manual follow-up
+    call)."""
+    from . import agent_execution_backend as _aeb
+    root = Path(root)
+    assignment = read_execution_assignment(root, task_id)
+    if assignment is None or assignment.claim_state not in (ASSIGNMENT_CLAIMED, ASSIGNMENT_EXECUTING):
+        raise ExecutionAssignmentError("NOT_CLAIMED", {"task_id": task_id})
+    if assignment.lease_id:
+        _aeb.release_mutation_lease(root, assignment.lease_id)
+    final_state = ASSIGNMENT_EXECUTION_COMPLETED if success else ASSIGNMENT_EXECUTION_FAILED
+    updated = ExecutionAssignment(**{**assignment.to_dict(), "claim_state": final_state,
+                                    "execution_outcome": outcome})
+    _atomic_write_json(_assignment_path(root, task_id), updated.to_dict())
+    persist_next_action(root, task_id, NextActionRecord(
+        event=assignment.next_action,
+        next_action=f"EXECUTED:{final_state}",
+        next_action_reason=(f"current-session execution {final_state.lower()}; outcome persisted to "
+                            "execution_assignment.json"),
+        next_action_owner="L5DGVA", auto_actionable=False, human_action_required="NO", stop_reason=None,
+    ))
+    return updated
 
 
 def event_for_import_outcome(state: str, result_status: Optional[str] = None,
