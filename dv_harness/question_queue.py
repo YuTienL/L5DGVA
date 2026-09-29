@@ -1737,6 +1737,40 @@ class QuestionQueueStore:
         target["answered_at"] = _now_iso(now)
         target["overturned"] = overturned
         self._save_questions(data)
+
+        # M8 Cohort 2 (CAP-M8-EXPLOOP-002 / GAP-M8-002): CLARIFICATION_
+        # LEARNING's real producer. answer_question() is the one real
+        # production point where a human resolves a Q-ID (dv-harness
+        # question-queue answer, intake_resume.py's answer-by-Q-ID flow),
+        # so this is the real "clarification learning" event -- not a
+        # separate polling/inference mechanism. Best-effort, exactly like
+        # every engine.py _promote_* call site's own try/except: a
+        # promotion failure must never break the real answer-persistence
+        # flow above, which has already succeeded by this point.
+        try:
+            from .experience_record import build_experience_record
+            from .memory_router import route_and_store
+            from .storage import StateStore
+            from .config import load_config
+            record = build_experience_record(
+                experience_type="CLARIFICATION_LEARNING",
+                title=f"Clarification answered: {target['domain']}",
+                pattern=target["question"],
+                lesson=f"Answer: {answer}",
+                evidence=f"basis={basis}; decided_by={decided_by}; overturned={overturned}",
+                applicability_constraints=target.get("context_path", ""),
+            )
+            promotion = route_and_store(self.root, record, cfg=load_config(self.root))
+        except Exception as exc:
+            promotion = {"destination": "PROMOTION_FAILED", "error": str(exc)}
+        try:
+            StateStore(self.root).event({
+                "ts": _now_iso(now), "stage": "INTAKE", "event": "CLARIFICATION_LEARNING_PROMOTED",
+                "question_id": question_id, "promotion": promotion,
+            })
+        except Exception:
+            pass
+
         return target
 
     # -- expired exemptions -> real blocking questions -----------------------

@@ -12,6 +12,7 @@ from .policy import ORDER, next_stage, graph_next, can_signoff
 from .gates import evaluate_stage_evidence, extract_evidence_blocks, STAGE_GATES, JUDGMENT_FIELDS
 from .react_loop import InnerReactLoop, evaluate_stage_evidence_with_detail
 from .memory_router import route_and_store, promote_to_organizational
+from .experience_record import build_experience_record
 from .memory_vault import build_failure_signature, search_related_memory_for_debug
 from .inference import (score_confidence, identify_gap, next_best_action, promote_if_high_confidence,
                         build_deeper_investigation_signal)
@@ -3661,6 +3662,84 @@ class DVHarness:
             "promotion": promotion,
         })
 
+    def _promote_generation_experience_knowledge(self, stage: str, evidence_blocks: dict,
+                                                  producing_agent_profile: Optional[str] = None) -> None:
+        """M8 Cohort 2 (CAP-M8-EXPLOOP-002 / GAP-M8-002): GENERATION_
+        EXPERIENCE_LEARNING's real producer. CANONICAL_CAPABILITY_SUPERSET_
+        MATRIX.md's own definition: "generation-decision -> build/sim-result
+        -> reusable-experience". IMPLEMENT is the real stage where a
+        generation decision (which pattern/registry/checker approach was
+        used) is made and gated; this method only runs from the caller's
+        own `verdict == "PASS"` branch, so a real IMPLEMENT-stage PASS IS
+        the "build/sim-result" signal this producer captures a lesson from.
+        Fires only on IMPLEMENT, mirroring every sibling _promote_* method's
+        own stage-scoped self-guard (never a blanket every-stage write).
+        Honest no-op (no route_and_store() call at all) when neither of the
+        two real generation-decision evidence blocks is present -- never
+        fabricates a lesson from absent evidence."""
+        if stage != Stage.IMPLEMENT.value:
+            return
+        intent_block = evidence_blocks.get("verification_intent_gate")
+        registry_block = evidence_blocks.get("pattern_registry_completeness_gate")
+        if not isinstance(intent_block, dict) and not isinstance(registry_block, dict):
+            return
+        record = build_experience_record(
+            experience_type="GENERATION_EXPERIENCE_LEARNING",
+            title=f"IMPLEMENT PASS generation decision ({stage})",
+            pattern=json.dumps(intent_block or {}, ensure_ascii=False)[:500],
+            lesson=("This generation approach (verification_intent_gate/"
+                    "pattern_registry_completeness_gate evidence) reached a "
+                    "real IMPLEMENT-stage PASS."),
+            evidence=json.dumps(registry_block or {}, ensure_ascii=False)[:500],
+            producing_agent_profile=producing_agent_profile,
+        )
+        try:
+            promotion = route_and_store(self.root, record, cfg=self.cfg)
+        except Exception as exc:
+            promotion = {"destination": "PROMOTION_FAILED", "error": str(exc)}
+        self.store.event({
+            "ts": now(), "stage": stage, "event": "GENERATION_EXPERIENCE_PROMOTED",
+            "promotion": promotion,
+        })
+
+    def _promote_signoff_experience_consolidation(self, stage: str, evidence_blocks: dict,
+                                                   producing_agent_profile: Optional[str] = None) -> None:
+        """M8 Cohort 2 (CAP-M8-EXPLOOP-002 / GAP-M8-002): SIGNOFF_
+        EXPERIENCE_CONSOLIDATION's real producer. CANONICAL_CAPABILITY_
+        SUPERSET_MATRIX.md's own confirmed-broken-mechanism note ties this
+        capability directly to the EXPERIENCE_READY self-attestation gap
+        Cohort 1 already fixed under PROMOTION_READINESS; this producer
+        closes the OTHER, SIGNOFF-scoped half by giving the real SIGNOFF
+        stage (a distinct, later, terminal Stage -- never conflated with
+        PROMOTION_READINESS, and Cohort 1's own trust-boundary/self-
+        attestation cross-check in promotion_chain_audit_gate.py is left
+        completely untouched by this method) its own real consolidation
+        write on PASS. Mirrors every sibling _promote_* method's own
+        stage-scoped self-guard and honest-no-op-on-absent-evidence rule."""
+        if stage != Stage.SIGNOFF.value:
+            return
+        bundle_block = evidence_blocks.get("signoff_bundle_completeness_gate")
+        proof_block = evidence_blocks.get("false_pass_resistance_gate")
+        if not isinstance(bundle_block, dict) and not isinstance(proof_block, dict):
+            return
+        record = build_experience_record(
+            experience_type="SIGNOFF_EXPERIENCE_CONSOLIDATION",
+            title=f"SIGNOFF PASS consolidated experience ({stage})",
+            pattern=json.dumps(bundle_block or {}, ensure_ascii=False)[:500],
+            lesson=("This task reached a real SIGNOFF-stage PASS with a "
+                    "complete evidence bundle and false-pass-resistance proof."),
+            evidence=json.dumps(proof_block or {}, ensure_ascii=False)[:500],
+            producing_agent_profile=producing_agent_profile,
+        )
+        try:
+            promotion = route_and_store(self.root, record, cfg=self.cfg)
+        except Exception as exc:
+            promotion = {"destination": "PROMOTION_FAILED", "error": str(exc)}
+        self.store.event({
+            "ts": now(), "stage": stage, "event": "SIGNOFF_EXPERIENCE_CONSOLIDATED",
+            "promotion": promotion,
+        })
+
     def _file_capability_evolution_candidates_from_repeated_failures(
             self, stage: str) -> Optional[Dict[str, Any]]:
         """CROSS-LOOP COUPLING (2026-09-05): the Verification Closure Loop
@@ -5328,6 +5407,10 @@ class DVHarness:
                     self._promote_verified_fix_knowledge(stage, evidence_blocks,
                                                          resolved_protocol=_promotion_protocol,
                                                          producing_agent_profile=_resolved_agent_name)
+                    self._promote_generation_experience_knowledge(
+                        stage, evidence_blocks, producing_agent_profile=_resolved_agent_name)
+                    self._promote_signoff_experience_consolidation(
+                        stage, evidence_blocks, producing_agent_profile=_resolved_agent_name)
                     self._arm_rca_evidence_fanout(stage, evidence_blocks)
             elif verdict == "NEEDS_USER_INPUT":
                 # BUG FIX (2026-08-28, plan-interactive-intake-completeness

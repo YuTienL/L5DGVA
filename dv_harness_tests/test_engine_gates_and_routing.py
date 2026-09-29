@@ -7179,3 +7179,186 @@ def test_self_tuning_review_run_stage_end_to_end_defers_low_confidence():
         assert pending[0]["confidence"] == "LOW"
     finally:
         shutil.rmtree(tmp)
+
+
+# --- M8 Cohort 2 (CAP-M8-EXPLOOP-002 / GAP-M8-002): GENERATION_EXPERIENCE_
+# LEARNING / SIGNOFF_EXPERIENCE_CONSOLIDATION real producers --------------
+
+def _implement_evidence_blocks():
+    return {
+        "verification_intent_gate": {"intent": "cover DMA burst path", "testcase": "t_dma_burst"},
+        "pattern_registry_completeness_gate": {"registry_entries": ["t_dma_burst"], "coverage": "PARTIAL"},
+    }
+
+
+def _signoff_evidence_blocks():
+    return {
+        "signoff_bundle_completeness_gate": {"bundle_id": "B1", "complete": True},
+        "false_pass_resistance_gate": {"proof": "negative-control mutation FAILed as expected"},
+    }
+
+
+def _last_event(tmp_path, event_name):
+    lines = (tmp_path / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    matches = [json.loads(l) for l in lines if json.loads(l).get("event") == event_name]
+    assert matches, f"no {event_name} event found in events.jsonl"
+    return matches[-1]
+
+
+def test_promote_generation_experience_knowledge_positive_end_to_end(tmp_path):
+    from dv_harness.engine import DVHarness
+    from dv_harness.memory import MemoryStore, MemoryRetriever
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(
+        _Stage.IMPLEMENT.value, _implement_evidence_blocks(), producing_agent_profile="agentA")
+    ev = _last_event(tmp_path, "GENERATION_EXPERIENCE_PROMOTED")
+    assert ev["promotion"]["destination"] == "ENGINEERING_MEMORY", ev
+    # KNOWLEDGE_DISCOVERABLE/RETRIEVED: the real, pre-existing MemoryRetriever
+    # -- not a new consumer -- actually finds it. search()'s own text match
+    # is title/root_cause only (memory.py:636), so query on real content of
+    # those two fields (this producer's own title/lesson text), not pattern.
+    store = MemoryStore(tmp_path)
+    hits = MemoryRetriever(store).search({"text": "generation decision"})
+    assert any(h["memory"].get("memory_id") == ev["promotion"]["memory_id"] for h in hits), hits
+
+
+def test_promote_signoff_experience_consolidation_positive_end_to_end(tmp_path):
+    from dv_harness.engine import DVHarness
+    from dv_harness.memory import MemoryStore, MemoryRetriever
+    h = DVHarness(tmp_path)
+    h._promote_signoff_experience_consolidation(
+        _Stage.SIGNOFF.value, _signoff_evidence_blocks(), producing_agent_profile="agentA")
+    ev = _last_event(tmp_path, "SIGNOFF_EXPERIENCE_CONSOLIDATED")
+    assert ev["promotion"]["destination"] == "ENGINEERING_MEMORY", ev
+    store = MemoryStore(tmp_path)
+    hits = MemoryRetriever(store).search({"text": "consolidated experience"})
+    assert any(h["memory"].get("memory_id") == ev["promotion"]["memory_id"] for h in hits), hits
+
+
+def test_promote_generation_experience_knowledge_wrong_stage_is_honest_noop(tmp_path):
+    # Rollback-boundary/no-false-success guard: fires only on IMPLEMENT --
+    # calling it with any other stage must be a true no-op (no event, no
+    # route_and_store() call at all), never a promotion under the wrong stage.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(_Stage.SIGNOFF.value, _implement_evidence_blocks())
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    assert not events_file.exists() or "GENERATION_EXPERIENCE_PROMOTED" not in events_file.read_text()
+
+
+def test_promote_signoff_experience_consolidation_wrong_stage_is_honest_noop(tmp_path):
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_signoff_experience_consolidation(_Stage.IMPLEMENT.value, _signoff_evidence_blocks())
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    assert not events_file.exists() or "SIGNOFF_EXPERIENCE_CONSOLIDATED" not in events_file.read_text()
+
+
+def test_promote_generation_experience_knowledge_missing_evidence_is_honest_noop(tmp_path):
+    # Invalid/missing knowledge: neither real generation-decision evidence
+    # block is present -- must never fabricate a lesson from nothing.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, {})
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    assert not events_file.exists() or "GENERATION_EXPERIENCE_PROMOTED" not in events_file.read_text()
+
+
+def test_promote_signoff_experience_consolidation_invalid_evidence_shape_is_honest_noop(tmp_path):
+    # Invalid knowledge, second shape: the keys exist but are not dicts
+    # (e.g. a malformed/partial agent response) -- treated as absent, never
+    # coerced into a promotion.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_signoff_experience_consolidation(
+        _Stage.SIGNOFF.value,
+        {"signoff_bundle_completeness_gate": "not-a-dict", "false_pass_resistance_gate": None})
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    assert not events_file.exists() or "SIGNOFF_EXPERIENCE_CONSOLIDATED" not in events_file.read_text()
+
+
+def test_promote_generation_experience_knowledge_persistence_failure_never_false_success(tmp_path, monkeypatch):
+    # Persistence/routing failure: route_and_store() raises -- the producer
+    # must still write its own event (visibility), with a promotion that
+    # honestly reports failure, exactly like the 5 pre-existing engine.py
+    # promotion call sites' own except-branch shape. Never silently drops
+    # the event, never reports success.
+    from dv_harness.engine import DVHarness
+    import dv_harness.engine as engine_mod
+
+    def _boom(*a, **kw):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(engine_mod, "route_and_store", _boom)
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, _implement_evidence_blocks())
+    ev = _last_event(tmp_path, "GENERATION_EXPERIENCE_PROMOTED")
+    assert ev["promotion"]["destination"] == "PROMOTION_FAILED", ev
+    assert "disk full" in ev["promotion"]["error"]
+
+
+def test_promote_signoff_experience_consolidation_persistence_failure_never_false_success(tmp_path, monkeypatch):
+    from dv_harness.engine import DVHarness
+    import dv_harness.engine as engine_mod
+
+    def _boom(*a, **kw):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(engine_mod, "route_and_store", _boom)
+    h = DVHarness(tmp_path)
+    h._promote_signoff_experience_consolidation(_Stage.SIGNOFF.value, _signoff_evidence_blocks())
+    ev = _last_event(tmp_path, "SIGNOFF_EXPERIENCE_CONSOLIDATED")
+    assert ev["promotion"]["destination"] == "PROMOTION_FAILED", ev
+    assert "disk full" in ev["promotion"]["error"]
+
+
+def test_promote_generation_experience_knowledge_duplicate_promotion_idempotency(tmp_path):
+    # Duplicate-promotion/idempotency: two real IMPLEMENT PASSes (e.g. a
+    # retried stage) each produce their own real event/memory_id -- matches
+    # the pre-existing 5 call sites' own disclosed accepted tradeoff
+    # (_promote_experience_knowledge's own comment: "a stage retried after a
+    # PARTIAL elsewhere can promote the same knowledge twice as two
+    # memory_ids") rather than silently deduping or crashing.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, _implement_evidence_blocks())
+    h._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, _implement_evidence_blocks())
+    lines = (tmp_path / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    matches = [json.loads(l) for l in lines if json.loads(l).get("event") == "GENERATION_EXPERIENCE_PROMOTED"]
+    assert len(matches) == 2
+    ids = {m["promotion"]["memory_id"] for m in matches}
+    assert len(ids) == 2, "each promotion should get its own real memory_id, not silently merge"
+
+
+def test_promote_generation_and_signoff_do_not_cross_project_correlate(tmp_path):
+    # Wrong-project correlation guard: two separate DVHarness roots each get
+    # their own fully independent event/memory record -- no leakage between
+    # projects (mirrors Cohort 1's own project-scoping discipline).
+    from dv_harness.engine import DVHarness
+    root_a = tmp_path / "project_a"
+    root_b = tmp_path / "project_b"
+    root_a.mkdir()
+    root_b.mkdir()
+    h_a = DVHarness(root_a)
+    h_a._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, _implement_evidence_blocks())
+    assert not (root_b / ".dv-harness" / "events.jsonl").exists()
+    ev_a = _last_event(root_a, "GENERATION_EXPERIENCE_PROMOTED")
+    assert ev_a["promotion"]["destination"] == "ENGINEERING_MEMORY"
+
+
+def test_promote_generation_experience_knowledge_existing_call_sites_unaffected(tmp_path):
+    # Existing-valid-path compatibility / Cohort-1 rollback boundary: the
+    # new call sites are additive lines in the same PASS branch as the 5
+    # pre-existing ones -- calling a pre-existing sibling directly still
+    # behaves exactly as it always has, byte-for-byte, with the new methods
+    # present alongside it.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_experience_knowledge(_Stage.EXPERT_FEEDBACK_LOOP.value, {}, resolved_protocol=None,
+                                    producing_agent_profile=None)
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    # experience_knowledge_gate IS registered under EXPERT_FEEDBACK_LOOP, but
+    # no evidence_blocks entry for it was supplied here -- the pre-existing
+    # method's own "not isinstance(block, dict): return" honest no-op,
+    # unchanged by Cohort 2's additions.
+    assert not events_file.exists() or "EXPERIENCE_KNOWLEDGE_PROMOTED" not in events_file.read_text()

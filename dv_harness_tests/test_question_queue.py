@@ -2193,3 +2193,87 @@ class TestFileSignoffEvidenceQuestion:
         # only the real, sanctioned answer_question() path may record a
         # decider -- and it is a materially different person than raised_by.
         assert answered["decided_by"] == "dv-lead"
+
+
+# --- M8 Cohort 2 (CAP-M8-EXPLOOP-002 / GAP-M8-002): CLARIFICATION_LEARNING
+# real producer, hooked into answer_question() itself ------------------------
+
+def _events(tmp_path):
+    ev_file = tmp_path / ".dv-harness" / "events.jsonl"
+    if not ev_file.exists():
+        return []
+    import json as _json
+    return [_json.loads(l) for l in ev_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def test_answer_question_promotes_clarification_learning_experience(tmp_path):
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is register R0 write-1-to-clear?", context_path="dut.regs.R0",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+    )
+    store.answer_question(q["id"], answer="Yes, W1C.", basis="RTL reg_map.sv line 42",
+                            decided_by="designer@example.com")
+
+    events = [e for e in _events(tmp_path) if e.get("event") == "CLARIFICATION_LEARNING_PROMOTED"]
+    assert len(events) == 1, events
+    assert events[0]["question_id"] == q["id"]
+    assert events[0]["promotion"]["destination"] == "ENGINEERING_MEMORY", events[0]
+
+    # KNOWLEDGE_DISCOVERABLE/RETRIEVED via the real, pre-existing
+    # MemoryRetriever -- search()'s own text match is title/root_cause only
+    # (memory.py:636); this producer's title includes the real domain.
+    from dv_harness.memory import MemoryStore, MemoryRetriever
+    hits = MemoryRetriever(MemoryStore(tmp_path)).search({"text": "clarification answered"})
+    assert any(h["memory"].get("memory_id") == events[0]["promotion"]["memory_id"] for h in hits), hits
+
+
+def test_answer_question_promotion_failure_never_breaks_the_real_answer(tmp_path, monkeypatch):
+    # No false success / persistence-failure isolation: a route_and_store()
+    # failure inside the new best-effort hook must never break the real,
+    # already-succeeded answer-persistence flow above it -- answer_question()
+    # still returns the answered record exactly as before this producer
+    # existed, matching every engine.py _promote_* call site's own
+    # try/except-wrapped, never-downgrade-a-real-result discipline.
+    import dv_harness.memory_router as mr_mod
+
+    def _boom(*a, **kw):
+        raise RuntimeError("disk full")
+
+    # answer_question() does `from .memory_router import route_and_store`
+    # LOCALLY, at call time -- patching the memory_router module's own
+    # attribute is what a fresh local import actually resolves against.
+    monkeypatch.setattr(mr_mod, "route_and_store", _boom)
+
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is register R1 write-1-to-clear?", context_path="dut.regs.R1",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+    )
+    answered = store.answer_question(q["id"], answer="Yes, W1C.", basis="RTL reg_map.sv line 9",
+                                       decided_by="designer@example.com")
+    assert answered["status"] == "ANSWERED"
+    assert answered["answer"] == "Yes, W1C."
+
+    events = [e for e in _events(tmp_path) if e.get("event") == "CLARIFICATION_LEARNING_PROMOTED"]
+    assert len(events) == 1
+    assert events[0]["promotion"]["destination"] == "PROMOTION_FAILED"
+    assert "disk full" in events[0]["promotion"]["error"]
+
+
+def test_answer_question_clarification_learning_does_not_cross_project_correlate(tmp_path):
+    # Wrong-project correlation guard, mirroring the engine.py producers:
+    # two separate QuestionQueueStore roots stay fully independent.
+    root_a = tmp_path / "project_a"
+    root_b = tmp_path / "project_b"
+    root_a.mkdir()
+    root_b.mkdir()
+    store_a = QuestionQueueStore(root_a)
+    q = store_a.add_question(
+        domain="dut", question="Is register R2 write-1-to-clear?", context_path="dut.regs.R2",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+    )
+    store_a.answer_question(q["id"], answer="Yes.", basis="RTL", decided_by="designer@example.com")
+    assert not (root_b / ".dv-harness" / "events.jsonl").exists()
+    events_a = [e for e in _events(root_a) if e.get("event") == "CLARIFICATION_LEARNING_PROMOTED"]
+    assert len(events_a) == 1
