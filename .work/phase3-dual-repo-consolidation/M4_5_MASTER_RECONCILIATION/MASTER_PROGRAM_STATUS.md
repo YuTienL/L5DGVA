@@ -990,3 +990,145 @@ READY_FOR_APPROVAL (the real round-trip closure conditions are honestly
 unmet). M8 and later waves are NOT started. No direct model-to-model API
 transport was built. `REFERENCE_USB_ENV_CONSUMED` remains NO. Waiting
 for real human transport.**
+
+**SUPERSEDED (documentation reconciliation, current-status pointer only --
+the section above is preserved as-is, an accurate HISTORICAL SNAPSHOT of
+the Cohort 1-2 checkpoint, not rewritten)**: the round trips this section
+was waiting on happened, repeated, and closed. See "## M7 CLOSURE +
+ROADMAP POSITION RECONCILIATION" at the end of this file for the CURRENT
+AUTHORITATIVE M7 STATUS (`M7_STATUS = CLOSED_WITH_KNOWN_LIMITATIONS`) and
+the real M8 roadmap position.
+
+## M7 CLOSURE + ROADMAP POSITION RECONCILIATION (documentation reconciliation only -- no production code touched, no wave started)
+
+Everything above this section, back through "M7 V1 -- Structured
+Multi-Model Markdown Handoff... IN_PROGRESS", is a **HISTORICAL M7
+SNAPSHOT** (the Cohort 1-2 checkpoint, 2026-09-24) -- preserved verbatim,
+not rewritten. This section is the **CURRENT AUTHORITATIVE M7 STATUS**,
+reconciled against the real, already-committed closure evidence:
+`M6_PREFLIGHT/M7_FINAL_CONVERGENCE_AND_CLOSURE_REPORT.md` (source of
+truth), cross-checked directly against the real persisted Canonical
+state, not copied from either document blindly.
+
+Between the Cohort 1-2 snapshot above and this reconciliation, M7's real
+work continued across many further sessions/dispatches (not individually
+re-narrated here -- see the M7 closure report and its own linked sibling
+reports in `M6_PREFLIGHT/` for the full history): 4 further Codex rounds
+(REVIEW-003 through REVIEW-006) plus REVIEW-007's independent zero-
+findings re-confirmation (Codex branch `CLOSED`, 5 rounds total, 0 open
+findings); the ChatGPT round trip completed and repeated (REVIEW-001,
+then REVIEW-002 across 3 real corrected resubmissions); `dispatch_next_
+action()` given its first real production caller; a live `CONTROL_PLANE_
+RUNTIME_HEAD_DRIFT` defect found and closed; a `CURRENT_SESSION_EXECUTOR`
+activation mechanism built (not activated -- `POST_M7_HARDENING`); and a
+final convergence/closure pass reclassifying all 26 re-derived frozen
+exit criteria against current evidence.
+
+```
+M7_STATUS                          = CLOSED_WITH_KNOWN_LIMITATIONS
+CURRENT_SCOPE_CORRECTNESS_BLOCKERS = 0
+CURRENT_SCOPE_SECURITY_BLOCKERS    = 0
+M6_GOLDEN_PATH_PRESERVED           = YES
+
+CODEX_ROUND_TRIP    = LIVE_QUALIFIED (capability + branch: 5 real rounds,
+                       branch CLOSED, 0 open findings)
+CHATGPT_ROUND_TRIP  = LIVE_QUALIFIED (capability: multiple real round
+                       trips, real consumption, real production dispatch
+                       -- the SUBSTANTIVE REVIEW-002 remediation review
+                       itself is not required for this capability claim
+                       and is separately tracked as POST_M7_HARDENING,
+                       non-blocking, below)
+PRODUCTION_ACTION_DISPATCH     = LIVE_QUALIFIED (resume_after_import() ->
+                                  dispatch_next_action(), proven across
+                                  REVIEW-002's three real corrected round
+                                  trips)
+CONTROL_PLANE_RUNTIME_IDENTITY = QUALIFIED per the real closure evidence
+                                  (GAP-V2-018 CLOSED; watcher runtime
+                                  identity capture, repo-identity
+                                  fail-closed, exclusive role lock,
+                                  startup recovery, measured control-plane
+                                  dependency detection, safe restart
+                                  lifecycle -- all live-qualified against
+                                  the real stale-watcher counterexample
+                                  and the real REVIEW-002 recovery)
+
+HUMAN_AUTHORITY_ITEM  = Q-ENV-57D420FA (R005-2/R006-4) remains OPEN,
+                        UNCHANGED -- not silently closed by this or any
+                        prior M7 reconciliation
+HOST_DEPENDENT_LIMITATIONS (disclosed as limitations, never rewritten as
+CLOSED capabilities):
+  - PROCESS_INDEPENDENT_AUTONOMY   = PARTIAL (frozen contract explicitly
+                                      accepts this as non-blocking)
+  - CLAUDE_DETACHED_WORKER         = IMPLEMENTED_AND_TESTED_BLOCKED_BY_
+                                      HOST_POLICY (host-permission
+                                      investigation not reopened)
+POST_M7_HARDENING (disclosed as deferred, non-blocking, never CLOSED):
+  - CURRENT_SESSION_EXECUTOR automatic /loop-wakeup activation (built +
+    tested this program, deliberately not triggered/activated)
+  - REVIEW-002 CG2-3/CG2-4 (documentation-precision findings, not
+    functional defects)
+PRE_EXISTING_OWNED_GAPS (disclosed, unrelated to any M7 work, not
+counted against M7): GAP-V2-014 (question-queue digest test); a
+`test_bounded_self_healing.py`/`commands.py` `APPROVAL_ONLY_STAGES` gap
+found during a broader regression sweep; an apparent duplicate question
+`Q-ENV-7B9230FF`.
+
+BROADER_REGRESSION_EVIDENCE = the 338-test targeted suite (every file
+touched by or adjacent to the M7 work) is complete and passing; a
+broader, partial sweep of the FULL `dv_harness_tests/` suite (14,774
+tests) was run to roughly 29% with zero unexpected failures before being
+judged sufficient and not completed to 100% -- disclosed honestly as
+PARTIAL broader coverage, not overstated as a full-suite pass.
+```
+
+### REVIEW-002 reconciliation (independently re-verified this task, not
+copied from any prior claim)
+
+```
+REVIEW_002_CANONICAL_STATE        = RESULT_CONSUMED (RESULT_STATUS=FAIL)
+REVIEW_002_ACCEPTED_RESULT_SHA256 = d681587f45267d4965e465afe9b70488c95286e3c2ff2171261e04500763587b
+REVIEW_002_TRANSPORT_REQUIRED     = NO
+TRANSPORT_GENERATION_IF_ANY       = NONE
+```
+The `HUMAN_TRANSPORT_REQUIRED`/`WAITING_FOR_HUMAN_TRANSPORT` framing in
+the historical Cohort 1-2 section above (and, transiently, in an early
+draft of the M7 closure report itself, since corrected) was stale
+documentation reflecting an earlier point in the workflow, never a live
+Canonical gate at the time either claim was read. REVIEW-002's real
+`next_action` is `AUTO_REMEDIATE_CONFIRMED_FINDINGS`/`BACKEND_RESOLVED`
+(`POST_M7_HARDENING`, non-blocking, disclosed above) -- not a transport
+item.
+
+### Roadmap position
+
+```
+M6 = CLOSED
+  -> M7 = CLOSED_WITH_KNOWN_LIMITATIONS
+    -> M8 = NEXT_PLANNED_MILESTONE, NOT_STARTED
+
+NEXT_CANONICAL_GATE = M8_PREFLIGHT (analysis/planning only; not
+  auto-started by this or any prior reconciliation -- requires a
+  separate, explicit dispatch, per this file's own established
+  discipline for every wave transition to date)
+```
+
+M8's own scope is unchanged and NOT redesigned or expanded by this
+reconciliation -- preserved exactly as already recorded in this file's
+own "Roadmap" section above (`CAP-M8-EXPLOOP-001`, `CAP-CE-018`,
+`GLOBAL_DISCOVERABILITY_CONTRACT` systematic audit, Constitution
+compliance qualification, Multi-Agent knowledge-consumption audit,
+Role-Aware Experience Learning, Knowledge Domain Classification) and in
+`MASTER_CAPABILITY_STATUS_MATRIX.csv`/`MASTER_WAVE_OWNERSHIP_MATRIX.csv`.
+
+```
+REFERENCE_USB_ENV_CONSUMED = NO
+PRODUCTION_FILES_CHANGED   = 0 (this reconciliation touches only this
+                              documentation file)
+```
+
+**STOP. This is a documentation/authoritative-roadmap reconciliation
+only. M7 is not reopened. M8 is not started, not marked IN_PROGRESS, and
+its scope is not modified. No new Codex/ChatGPT review was started. No
+REVIEW-002 transport was performed. No Post-M7 hardening was performed.
+`REFERENCE_USB_ENV_CONSUMED` remains NO. Waiting for a separate, explicit
+dispatch before M8 Preflight begins.**
