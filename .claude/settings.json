@@ -19,16 +19,27 @@
       "Bash(stat:*)"
     ],
     "deny": [
-      "Write(//d/DV/Task/USB/DUT/**)",
       "Edit(//d/DV/Task/USB/DUT/**)",
-      "Write(//d/DV/Task/USB/VIP/**)",
-      "Edit(//d/DV/Task/USB/VIP/**)"
+      "Edit(//d/DV/Task/USB/VIP/**)",
+      "Write(//d/DV/Task/USB/DUT/**)",
+      "Write(//d/DV/Task/USB/VIP/**)"
     ]
   },
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/context-resident-pack.ps1",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|PowerShell",
@@ -36,6 +47,16 @@
           {
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-destructive.ps1",
+            "shell": "powershell"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Bash|PowerShell|NotebookRead",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/context-budget-guard.ps1",
             "shell": "powershell"
           }
         ]

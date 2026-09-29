@@ -1,0 +1,97 @@
+# SYNTHETIC WORKED EXAMPLE -- the asset-processing table's row-9 artifact.
+#
+# Not a real DUT's controller document. Fabricated deliberately and labeled as
+# such; the "DEMO Controller Databook" cited below does not exist. A real
+# project replaces this file wholesale with content transcribed from its own
+# controller documentation.
+#
+# Per CLAUDE.md's Evidence Truth Rule, nothing here is evidence about any real
+# DUT. Note especially that every legal-drop condition carries a basis
+# citation: an uncited drop condition is an instruction to the scoreboard to
+# ignore a real dropped packet, so the schema refuses to validate without one.
+
+schema_version: "1.0"
+dut_name: demo_usb_controller
+
+source:
+  document: "DEMO Controller Databook (SYNTHETIC -- no such document exists)"
+  section: "1 Overview"
+  version: "0.1"
+
+modes:
+  - name: high_speed
+    description: Full-rate operating mode with all endpoints active.
+    basis: { document: "DEMO Controller Databook", section: "3.1 Operating Modes" }
+  - name: low_power
+    description: Reduced-rate mode; the controller may stall to save power.
+    basis: { document: "DEMO Controller Databook", section: "3.2 Low Power" }
+
+state_machine:
+  states:
+    - name: RESET
+      description: Held in reset; no traffic accepted.
+      is_initial: true
+    - name: IDLE
+      description: Configured and clocked, awaiting traffic.
+    - name: ACTIVE
+      description: Transferring packets.
+    - name: SUSPEND
+      description: Clock gated after an idle timeout.
+  transitions:
+    - from: RESET
+      to: IDLE
+      trigger: reset released and clock enable observed high
+      basis: { document: "DEMO Controller Databook", section: "4.1 Bring-up" }
+    - from: IDLE
+      to: ACTIVE
+      trigger: first packet accepted on any endpoint
+      basis: { document: "DEMO Controller Databook", section: "4.2 Transfer" }
+    - from: ACTIVE
+      to: IDLE
+      trigger: all endpoint queues drained
+      basis: { document: "DEMO Controller Databook", section: "4.2 Transfer" }
+    - from: IDLE
+      to: SUSPEND
+      trigger: idle for longer than the suspend timeout
+      basis: { document: "DEMO Controller Databook", section: "4.3 Suspend" }
+    - from: SUSPEND
+      to: IDLE
+      trigger: resume signalling detected
+      basis: { document: "DEMO Controller Databook", section: "4.3 Suspend" }
+
+legal_drop_conditions:
+  - id: DROP-001
+    description: >-
+      A packet received while the controller is in SUSPEND is discarded
+      without error. The scoreboard must not report a missing transaction.
+    applies_when: state == SUSPEND at the time the packet arrives
+    mode: null
+    basis: { document: "DEMO Controller Databook", section: "4.3 Suspend" }
+  - id: DROP-002
+    description: >-
+      In low_power mode a packet arriving while the RX FIFO is full is
+      dropped rather than backpressured.
+    applies_when: mode == low_power and rx_fifo_full asserted on arrival
+    mode: low_power
+    basis: { document: "DEMO Controller Databook", section: "3.2 Low Power" }
+
+backpressure_conditions:
+  - id: BP-001
+    description: >-
+      In high_speed mode a full RX FIFO causes backpressure, not a drop. The
+      transaction is delayed but must still arrive intact.
+    applies_when: mode == high_speed and rx_fifo_full asserted
+    mode: high_speed
+    basis: { document: "DEMO Controller Databook", section: "5.1 Flow Control" }
+
+ordering_rules:
+  - scope: per endpoint
+    guarantee: strict_in_order
+    basis: { document: "DEMO Controller Databook", section: "5.2 Ordering" }
+    notes: Packets on a single endpoint are delivered in the order received.
+  - scope: across endpoints
+    guarantee: unordered
+    basis: { document: "DEMO Controller Databook", section: "5.2 Ordering" }
+    notes: >-
+      No ordering is guaranteed between endpoints; a scoreboard comparing
+      across endpoints sequentially would produce false mismatches.

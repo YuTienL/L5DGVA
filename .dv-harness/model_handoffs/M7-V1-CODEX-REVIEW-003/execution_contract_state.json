@@ -1,0 +1,8 @@
+{
+  "HUMAN_ACTION_REQUIRED": "YES",
+  "NEXT_REQUIRED_ACTION": "",
+  "RESUME_ACTION": "",
+  "STATE": "COMPLETE",
+  "STOP_EVIDENCE": "REVIEW-003 result auto-ingested and consumed (FAIL preserved); N1-N6 remediated; successor M7-V1-CODEX-REVIEW-004 issued",
+  "STOP_REASON": "TASK_COMPLETE"
+}

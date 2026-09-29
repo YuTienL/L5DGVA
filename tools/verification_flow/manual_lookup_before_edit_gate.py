@@ -20,6 +20,24 @@
 #     named source is now its own required field.
 import argparse, json, pathlib, sys
 
+# BUG FIX (2026-08-31, final whole-branch review, Critical finding): B1's
+# reference-tree barrier used to live ONLY in protocol_isolation_gate.py,
+# which reads its OWN separate `protocol_isolation_gate` evidence block --
+# not this gate's `vip_evidence_refs`/`dut_rtl_evidence_refs`, which is the
+# block an agent is actually FORCED to supply for a VIP/DUT edit (that other
+# gate's own block is agent-optional and PASSes empty by design). An agent
+# could therefore cite USB_UVM_Handoff content right here, in the evidence
+# this gate itself verifies, and still pass IMPLEMENT as long as it left the
+# separate isolation-gate block empty. Importing the same forbidden-tree
+# check protocol_isolation_gate.py already defines and applying it inside
+# _verify_evidence_refs() below closes that: it now runs on the real refs,
+# not a parallel block nothing forces an agent to fill in. This gate script
+# and protocol_isolation_gate.py live in the same directory
+# (tools/verification_flow/), and Python auto-adds a directly-run script's
+# own directory to sys.path[0], so this plain import resolves without any
+# path manipulation.
+from protocol_isolation_gate import FORBIDDEN_REFERENCE_TREES, _cites_forbidden_tree  # noqa: E402
+
 # BUG FIX (2026-08-29, poster-compliance-audit "gate 只驗證格式，不反查 RTL"
 # finding): every boolean flag below (vip_examples_checked, dut_rtl_checked,
 # ...) was previously a bare, self-reported claim -- an agent that fabricated
@@ -45,6 +63,15 @@ def _verify_evidence_refs(refs, field_name):
     for i, ref in enumerate(refs):
         if not isinstance(ref, dict) or not ref.get("path"):
             return {"reason": "EVIDENCE_REF_MISSING_PATH", "field": field_name, "index": i}
+        # Checked BEFORE file-existence: a confident citation into a
+        # forbidden reference-environment tree (e.g. USB_UVM_Handoff) is
+        # worse than an honest missing/nonexistent file, and must FAIL even
+        # if the cited path happens not to exist on disk -- matching
+        # protocol_isolation_gate.py's own no-existence-check design.
+        forbidden = _cites_forbidden_tree(ref["path"])
+        if forbidden:
+            return {"reason": "REFERENCE_TREE_CITATION_FORBIDDEN", "field": field_name,
+                     "path": ref["path"], "forbidden_tree": forbidden}
         p = pathlib.Path(ref["path"])
         if not p.is_file():
             return {"reason": "EVIDENCE_FILE_NOT_FOUND", "field": field_name, "path": ref["path"]}

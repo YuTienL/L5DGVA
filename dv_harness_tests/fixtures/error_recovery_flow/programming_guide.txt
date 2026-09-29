@@ -1,0 +1,25 @@
+Synthetic fixture programming-guide text for
+dv_harness_tests/test_error_recovery_flow_extraction.py -- not any real
+DUT's document.
+
+3.1 Register Map
+
+This chapter describes register offsets and is unrelated to error handling.
+
+4.2 Error Handling and Recovery
+
+A CRC error requires a soft reset before normal operation can recover.
+
+On a timeout error, the DMA engine automatically retries the transfer up to 3 times.
+
+Parity errors are recoverable only if software issues a manual re-initialize sequence.
+
+The single-bit ECC error condition automatically recovers via an internal retry within 2 cycles.
+
+5 Power Management
+
+This chapter is unrelated to error handling.
+
+6 Fault Recovery Procedures
+
+See chapter 4 for the applicable procedures.

@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "subsystems": [],
+  "entries": [],
+  "summary": {
+    "entry_count": 0,
+    "member_resource_count": 0,
+    "collapsed_resource_count": 0,
+    "shared_entry_count": 0
+  },
+  "authority_scope": "PLANNING_ONLY",
+  "artifacts_modified": false,
+  "phase_boundary": "SYSTEM-LEVEL IMPLEMENTATION NOT STARTED -- SYS-15's registry is a PLANNING artifact. Every owner and reuse_decision in it is a RECOMMENDATION for a human. No entry may be auto-applied into a bind, UVM or command.txt artifact; that is SYS-40 and requires a separate explicit human approval."
+}

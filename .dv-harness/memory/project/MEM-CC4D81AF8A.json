@@ -1,0 +1,22 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB31 device-mode power-on bring-up sequence -- Table 4-1 exact register/command order",
+  "summary": "DWC_usb31_programming.txt Ch.4 'Programming DWC_usb31 in Device Mode', Sec 4.1.1 'Device Power-On or Soft Reset' (p.559-561, txt lines 28259-28361), Table 4-1. The guide states verbatim (txt:28265-28266): 'When the controller is first powered on, software initializes the following registers. The order of operations is not important, except for the first and last steps (DCTL.CSftRst=1 and DCTL.RunStop=1).' Table 4-1 row order, condensed: (1) DCTL.CSftRst=1, poll for readback 0 [FIRST step, mandatory position, txt:28272]; (2) GSBUSCFG0/1, GTXTHRCFG/GRXTHRCFG, USB31_VER_NUMBER read, GUID, GUSB2PHYCFG (incl. ULPIAutoRes=GUSB2PHYCFG[15] must be 0 in device mode), GTXFIFOSIZn, GRXFIFOSIZ0, GCTL scaledown/clkgating; (3) GEVNTADRn/GEVNTSIZn/GEVNTCOUNTn event buffer setup (txt:28309-28313, warns 'USB operation stops if the Event Buffer memory is insufficient'); (4) DCFG.DevSpd programmed (txt:28318-28320); (5) DEVTEN: 'at a minimum, enable USB Reset, Connection Done, and USB/Link State Change events' (txt:28322-28323) = bits 1,2,3 = value 0x0E; (6) DEPCMD0: issue DEPSTARTCFG with XferRscIdx=0, CmdIOC=0, poll CmdAct (txt:28325-28328); (7) DEPCFG for physical EP0 then EP1 (EP0 FIRST, explicit ordering note, txt:28329-28337) with FIFONum=0, XferNRdyEn=1, XferCmplEn=1, MaxPacketSize=512, BurstSize=0, EPType=2'b00 Control; (8) DEPXFERCFG for EP0 then EP1 (EP0 first again, DEPCMDPAR0=1, txt:28339-28341); (9) DEPCMD0: prepare setup-packet buffer + setup TRB + DEPSTRTXFER on EP0 pointing to it (txt:28350-28355); (10) DALEPENA=0x3 to enable physical EP0+EP1 (txt:28357) -- this is step 10 of 11, strictly AFTER DEPSTARTCFG+DEPCFG(EP0)+DEPCFG(EP1)+DEPXFERCFG(EP0)+DEPXFERCFG(EP1)+setup-TRB-DEPSTRTXFER; (11) DCTL.RunStop=1 [LAST step, mandatory position, txt:28359-28361]. After this, software waits for DEVT.USBReset then DEVT.ConnectionDone events (txt:28363-28370, -> Sec 4.1.2 p.562 and 4.1.3 p.562 respectively). DIRECT RELEVANCE: this table is the documentary basis for two live harness findings: (a) none of 24 original BFM patterns issue DCTL.CSftRst as the first init step -- confirmed wrong, since the guide explicitly calls out CSftRst as a MANDATORY-position first step, not just recommended; (b) 3 patterns write DALEPENA before any endpoint is configured -- confirmed wrong, since DALEPENA is documented step 10 of 11, requiring DEPSTARTCFG+DEPCFG(EP0)+DEPCFG(EP1)+DEPXFERCFG(EP0/EP1)+setup-TRB-DEPSTRTXFER to precede it. IMPORTANT SCOPING NOTE: this DALEPENA-after-DEPCFG rule applies to the POWER-ON bring-up table specifically. Sec 4.1.5 'Initialization on SetConfiguration' (p.563-564, txt:28439-28485, Table 4-5) legitimately writes DALEPENA=0x3 BEFORE new DEPCFG commands too (to disable old endpoints), then again AFTER (to enable the new set) -- so a checker must distinguish which lifecycle phase (power-on vs SetConfiguration) a given DALEPENA write belongs to before flagging it as a violation. Also found: Sec 4.1.2 'Initialization on USB Reset' (p.562, txt:28372-28395, Table 4-2): on DEVT.USBReset, complete in-progress control transfer on EP0, DEPENDXFER for other active transfers, DEPCSTALL clear for stalled endpoints, DCFG.DevAddr=0; EP0/EP1 are NOT reconfigured via DEPCFG here -- 'Resources can only be assigned to the default control endpoint once after a power-on or soft reset.' Sec 4.1.3 'Initialization on Connect Done' (p.562, txt:28397-28419, Table 4-3): read DSTS for speed, reprogram GCTL.RAMClkSel (resets to 0 after USB reset so must be rewritten each Connect Done), issue DEPCFG Config-Action=Modify for EP0/EP1 to update MaxPacketSize to the negotiated speed's value (512/64/8-16-32-64/8).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_programming.txt",
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_programming.pdf"
+  ],
+  "category": "programming_guide",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-CC4D81AF8A",
+  "level": "project",
+  "created_at": 1788366812.0012062,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

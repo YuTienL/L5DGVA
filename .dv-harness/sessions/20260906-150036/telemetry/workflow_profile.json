@@ -1,0 +1,12 @@
+{
+  "stage_count": 13,
+  "total_stage_wall_clock_sec": 1029.9831309318542,
+  "total_aggregate_agent_runtime_sec": 1025.5640229624696,
+  "total_parallel_saving_sec": 0,
+  "overall_parallelism_efficiency": -0.0043089537761079955,
+  "total_tokens": 64074,
+  "tool_calls": 0,
+  "retries": 0,
+  "finding_count": 0,
+  "closed_finding_count": 0
+}

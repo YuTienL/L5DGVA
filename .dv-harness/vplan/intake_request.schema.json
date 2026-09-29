@@ -23,7 +23,9 @@
     "coverage_reports": [],
     "known_unsupported_features": [],
     "known_waivers": [],
-    "system_level_use_cases": []
+    "system_level_use_cases": [],
+    "fabric_topology_spec": [],
+    "uhs_tuning_spec": []
   },
   "readiness": "NOT_STARTED|COLLECTING|READY_FOR_VPLAN|BLOCKED"
 }

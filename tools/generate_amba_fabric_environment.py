@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # Mirrors tools/generate_uvm_environment.py's exact shape -- same integration
-# level as the existing (orphaned) single-agent generator: a standalone
-# script, not a dv-harness CLI subcommand.
+# level as generator.py's deprecated flat-orchestration single-agent
+# generator (generator.py's own per-class emit methods remain live and
+# authoritative; only its top-level generate() orchestration is deprecated,
+# in favor of ProtocolEnvGenerator -- see generator.py's NOTICE): a
+# standalone script, not a dv-harness CLI subcommand.
 import argparse, json, pathlib, sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

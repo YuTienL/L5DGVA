@@ -1,0 +1,45 @@
+`define AUDTOP_BD
+//`define AUDTOP_ON
+
+`define FMTOP_BD
+//`define FMTOP_ON
+
+`define CQTOP_BD
+//`define CQTOP_ON
+
+`define DMATOP_BD
+//`define DMATOP_ON
+
+`define PERITOP_BD
+//`define PERITOP_ON
+
+`define HSMTOP_BD
+//`define HSMTOP_ON
+
+`define UCIE_BD
+//`define UCIE_BD
+
+`define SS_CDEC_BD
+//`define SS_CDEC_ON
+
+`define SS_CMP_BD
+//`define SS_CMP_ON
+
+`define SS_CON_BD
+//`define SS_CON_ON
+
+`define SS_CPU_BD
+//`define SS_CPU_ON
+
+`define SS_VIS_BD
+//`define SS_VIS_ON
+
+`define SS_MEM_BD
+//`define SS_MEM_ON
+
+`define SS_SF_BD
+//`define SS_SF_ON
+
+`define SS_VOUT_BD
+//`define SS_VOUT_ON
+

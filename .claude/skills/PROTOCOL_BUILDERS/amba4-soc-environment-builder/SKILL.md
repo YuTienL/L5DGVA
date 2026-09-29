@@ -32,6 +32,20 @@ Read that module's own docstring "WHAT THIS DOES NOT DO" section first — it do
 invent AXI/AHB/APB channel/handshake signal names or VIP bindings; those still come
 from current evidence, supplied into the topology JSON, never fabricated.
 
+Since 2026-09-04 that same topology can instead be carried as a
+`protocol_model_topology` block inside the environment manifest, and the
+governed generation entry point layers the fabric model onto the generic
+skeleton in one run (see `dv_harness/uvm_generator/protocol_model_layer.py`):
+`dv-harness start --goal "<goal>" --protocols amba4 --dut-role <role>
+--level SUBSYSTEM --generate --generate-out <dir> --generate-manifest <m.json>`
+(GAP-V2-002: same governed Field Resolution/Clarification path every other
+`PROTOCOL_BUILDERS` skill converges on; `tools/generate_protocol_uvm_
+environment.py` itself, which this used to call directly, is now an
+INTERNAL_GENERATION_PRIMITIVE beneath it). Use that when the fabric is
+part of an environment being generated; the standalone
+`generate_amba_fabric_environment.py` command above stays correct for
+generating the fabric model on its own, unaffected by this remediation.
+
 - master/slave registries
 - Concurrent multi-branch bus arbitration: when block-level traffic and multiple branch_a{N} DUT-side
   branches run concurrently on the same AMBA bus, treat each branch's driver as an independent AMBA

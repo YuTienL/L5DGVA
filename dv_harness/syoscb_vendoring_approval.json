@@ -1,0 +1,10 @@
+{
+  "approved": true,
+  "component": "uvm_syoscb",
+  "version": "1.0.2.4",
+  "approved_by": "peter.lin",
+  "approved_at": "2026-09-06T00:00:00+00:00",
+  "l5_destination": "reference/uvm_syoscb-1.0.2.4",
+  "source_reference": "D:/DV/Scoreboard/uvm_syoscb-1.0.2.4",
+  "note": "SYOSCB-2/SYOSCB-33 Phase-2 vendoring, explicitly approved by the project owner in-session. Vendored verbatim, read-only reference material under reference/ (same convention as reference/USB_UVM_Handoff) -- never modified, never content-mined for protocol-behavior generation per the No Golden-Reference Content Mining rule. License Apache-2.0, copyright SyoSil ApS, LICENSE.txt/NOTICE.txt/VERSION.txt/RELEASE_NOTES.txt preserved verbatim."
+}

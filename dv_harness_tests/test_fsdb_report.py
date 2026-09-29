@@ -70,11 +70,141 @@ class TestRunFsdbreport:
             result = fsdb_report.run_fsdbreport(str(self.fsdb), timeout=60)
         assert result == {"ok": False, "error": "FSDBREPORT_TIMEOUT"}
 
-    def test_success_returns_report_text(self):
+    @staticmethod
+    def _run_writing_report(text):
+        """Real fsdbreport writes its report to the file named by `-o`,
+        never to stdout (2026-09-01 distillation finding) -- this fake
+        subprocess.run mimics that by writing `text` to whatever path
+        follows `-o` in the argv it's called with."""
+        def _run(cmd, **kwargs):
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            out_path.write_text(text, encoding="utf-8")
+            return _completed(stdout="", stderr="")
+        return _run
+
+    def test_success_returns_report_text_read_from_o_file_not_stdout(self):
         with patch("dv_harness.fsdb_report.subprocess.run",
-                   return_value=_completed(stdout="signal report here", stderr="")):
+                   side_effect=self._run_writing_report("signal report here")):
             result = fsdb_report.run_fsdbreport(str(self.fsdb))
         assert result == {"ok": True, "report_text": "signal report here", "stderr": ""}
+
+    def test_run_fsdbreport_ignores_stdout_even_when_populated(self):
+        # A real fsdbreport process may still print incidental text to
+        # stdout/stderr -- the report content must come from the -o file
+        # regardless, never from proc.stdout.
+        def _run(cmd, **kwargs):
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            out_path.write_text("real report content", encoding="utf-8")
+            return _completed(stdout="unrelated stdout noise", stderr="")
+        with patch("dv_harness.fsdb_report.subprocess.run", side_effect=_run):
+            result = fsdb_report.run_fsdbreport(str(self.fsdb))
+        assert result["report_text"] == "real report content"
+
+    def test_run_fsdbreport_synthesizes_o_flag_and_cleans_up_temp_file(self):
+        captured = {}
+
+        def _run(cmd, **kwargs):
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            captured["out_path"] = out_path
+            out_path.write_text("x", encoding="utf-8")
+            return _completed(stdout="", stderr="")
+
+        with patch("dv_harness.fsdb_report.subprocess.run", side_effect=_run):
+            fsdb_report.run_fsdbreport(str(self.fsdb))
+        assert not captured["out_path"].exists()  # cleaned up, since we didn't supply -o ourselves
+
+    def test_run_fsdbreport_honors_caller_supplied_o_and_leaves_it_in_place(self):
+        caller_out = self.tmp / "caller_named.txt"
+
+        def _run(cmd, **kwargs):
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            assert out_path == caller_out
+            out_path.write_text("caller-owned report", encoding="utf-8")
+            return _completed(stdout="", stderr="")
+
+        with patch("dv_harness.fsdb_report.subprocess.run", side_effect=_run):
+            result = fsdb_report.run_fsdbreport(str(self.fsdb), extra_args=["-o", str(caller_out)])
+        assert result == {"ok": True, "report_text": "caller-owned report", "stderr": ""}
+        assert caller_out.exists()  # left in place -- caller owns it
+
+    def test_run_fsdbreport_empty_output_file_is_honest_empty_evidence(self):
+        with patch("dv_harness.fsdb_report.subprocess.run",
+                   side_effect=self._run_writing_report("")):
+            result = fsdb_report.run_fsdbreport(str(self.fsdb))
+        assert result == {"ok": True, "report_text": "", "stderr": ""}
+
+    def test_extra_args_placed_after_file_matching_confirmed_invocation_order(self):
+        # Confirmed-real invocation (dv-workflow/SKILL.md's 2026-08-29
+        # "Confirmed drift" entry): `fsdbreport f.fsdb -period <T> -level 1
+        # -csv` -- file path BEFORE the flags. Asserts the actual argv
+        # built by run_fsdbreport() matches that real order (with an
+        # auto-synthesized `-o <tmp>` appended at the end, since this
+        # invocation did not supply its own), not the flags-before-file
+        # order this had prior to that confirmed usage.
+        with patch("dv_harness.fsdb_report.subprocess.run",
+                   return_value=_completed(stdout="", stderr="")) as m:
+            fsdb_report.run_fsdbreport(str(self.fsdb), extra_args=["-period", "100ns", "-level", "1", "-csv"])
+        argv = m.call_args[0][0]
+        assert argv[:7] == ["fsdbreport", str(self.fsdb), "-period", "100ns", "-level", "1", "-csv"]
+        assert argv[7] == "-o"
+        assert len(argv) == 9
+
+
+class TestBuildFsdbreportCmd:
+    def test_builds_confirmed_flag_grammar_in_order(self):
+        args = fsdb_report.build_fsdbreport_cmd(
+            "f.fsdb", bt="712000", et="714400", signals=["top.a.b", "top.a.c"],
+            out_path="/tmp/out.txt", fmt="verilog",
+        )
+        assert args == ["-bt", "712000", "-et", "714400",
+                         "-s", "top.a.b", "-s", "top.a.c",
+                         "-verilog", "-o", "/tmp/out.txt"]
+
+    def test_csv_format_flag(self):
+        args = fsdb_report.build_fsdbreport_cmd("f.fsdb", signals=["s"], fmt="csv")
+        assert "-csv" in args
+
+    def test_hex_format_flag_is_two_tokens(self):
+        args = fsdb_report.build_fsdbreport_cmd("f.fsdb", signals=["s"], fmt="hex")
+        assert "-of" in args and "h" in args
+
+    def test_none_format_omits_format_flag(self):
+        args = fsdb_report.build_fsdbreport_cmd("f.fsdb", signals=["s"], fmt=None)
+        assert "-verilog" not in args and "-csv" not in args and "-of" not in args
+
+    def test_unknown_format_raises(self):
+        with pytest.raises(fsdb_report.FsdbReportError):
+            fsdb_report.build_fsdbreport_cmd("f.fsdb", fmt="bogus")
+
+    def test_missing_fsdb_raises(self):
+        with pytest.raises(fsdb_report.FsdbReportError):
+            fsdb_report.build_fsdbreport_cmd("")
+
+
+class TestWriteTopicReport:
+    def setup_method(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.fsdb = self.tmp / "dump.fsdb"
+        self.fsdb.write_bytes(b"")
+        self.out_dir = self.tmp / "report"
+        self.out_dir.mkdir()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_writes_named_topic_file_and_reports_out_file(self):
+        def _run(cmd, **kwargs):
+            Path(cmd[cmd.index("-o") + 1]).write_text("topic report body", encoding="utf-8")
+            return _completed(stdout="", stderr="")
+        with patch("dv_harness.fsdb_report.subprocess.run", side_effect=_run):
+            result = fsdb_report.write_topic_report(
+                str(self.fsdb), "apb_timing", str(self.out_dir),
+                bt="712000", et="714400", signals=["top.a.psel"],
+            )
+        expected_path = self.out_dir / "apb_timing.txt"
+        assert result["ok"] is True
+        assert result["out_file"] == str(expected_path)
+        assert expected_path.read_text(encoding="utf-8") == "topic report body"
 
 
 class TestParseFsdbreportOutput:
@@ -83,6 +213,66 @@ class TestParseFsdbreportOutput:
         assert result["raw_text"] == "some report text"
         assert result["parsed"] is False
         assert "not verified" in result["note"]
+
+    def test_parse_fsdbreport_csv_output_produces_structured_records(self):
+        # Real-shaped CSV sample matching the confirmed `fsdbreport f.fsdb
+        # -period <T> -level 1 -csv` invocation from dv-workflow/SKILL.md's
+        # 2026-08-29 confirmed-drift entry -- that entry confirms the
+        # invocation and that -csv output is CSV-shaped, but does not
+        # record fsdbreport's real column header names, so this fixture's
+        # header (signal,timestamp,value) is this test's own illustrative
+        # choice, not a claim about the real tool's exact header text.
+        # parse_fsdbreport_output() must parse it structurally -- via
+        # whatever header the CSV actually declares -- not by hardcoding
+        # these particular names, so a real run with different real column
+        # names would still parse correctly.
+        csv_text = (
+            "signal,timestamp,value\n"
+            "top.dut.clk,0,0\n"
+            "top.dut.clk,5,1\n"
+            "top.dut.rst_n,0,0\n"
+            "top.dut.rst_n,12,1\n"
+        )
+        result = fsdb_report.parse_fsdbreport_output(csv_text)
+        assert result["parsed"] is True
+        assert result["fieldnames"] == ["signal", "timestamp", "value"]
+        assert len(result["records"]) == 4
+        assert result["records"][0] == {"signal": "top.dut.clk", "timestamp": "0", "value": "0"}
+        assert result["records"][3] == {"signal": "top.dut.rst_n", "timestamp": "12", "value": "1"}
+
+    def test_parse_fsdbreport_csv_output_is_header_agnostic(self):
+        # Proves the parser doesn't hardcode signal/timestamp/value --
+        # different real column names still parse into real records, since
+        # the exact real header text is unconfirmed (see module docstring).
+        csv_text = "hier_path,time_ns,val\nA.B,1,X\nA.C,2,Z\n"
+        result = fsdb_report.parse_fsdbreport_output(csv_text)
+        assert result["parsed"] is True
+        assert result["fieldnames"] == ["hier_path", "time_ns", "val"]
+        assert result["records"] == [
+            {"hier_path": "A.B", "time_ns": "1", "val": "X"},
+            {"hier_path": "A.C", "time_ns": "2", "val": "Z"},
+        ]
+
+    def test_parse_fsdbreport_output_still_handles_unparseable_input_honestly(self):
+        result = fsdb_report.parse_fsdbreport_output("not csv at all, garbage text")
+        assert result["parsed"] is False
+        assert "raw_text" in result
+
+    def test_parse_fsdbreport_output_header_only_is_honestly_unparsed(self):
+        # A header line with no data rows below it isn't real evidence yet.
+        result = fsdb_report.parse_fsdbreport_output("signal,timestamp,value\n")
+        assert result["parsed"] is False
+
+    def test_parse_fsdbreport_output_ragged_rows_are_honestly_unparsed(self):
+        # A row with a different column count than the header doesn't look
+        # like real, well-formed fsdbreport -csv output.
+        csv_text = "signal,timestamp,value\ntop.dut.clk,0,0\ntop.dut.clk,5\n"
+        result = fsdb_report.parse_fsdbreport_output(csv_text)
+        assert result["parsed"] is False
+
+    def test_parse_fsdbreport_output_empty_string_is_honestly_unparsed(self):
+        result = fsdb_report.parse_fsdbreport_output("")
+        assert result["parsed"] is False
 
 
 class TestCliFsdbReport:

@@ -10,9 +10,11 @@ tools/verification_flow/fabric_topology_completeness_gate.py is a real
 VALIDATOR for a supplied topology JSON -- but nothing took M/N as parameters
 and actually emitted UVM/SV files for a multi-master/multi-slave
 interconnect. The only real SV-emitting generator in the repo (generator.py,
-this module's sibling) is orphaned AND structurally single-agent (one
-env/config/scoreboard/vseqr set per invocation) -- incapable of M x N output
-even if wired up.
+this module's sibling) has live per-class emit methods used by
+ProtocolEnvGenerator (for USB/protocol generation), but is not wired for
+AMBA M x N generation -- structurally single-agent (one env/config/
+scoreboard/vseqr set per invocation) and incapable of M x N output even if
+reused here.
 
 This module computes the REAL algorithms (address-decode overlap/gap/
 full-coverage check, the ID-width formula, per-pair scoreboard-matrix
@@ -47,6 +49,10 @@ from pathlib import Path
 
 from .generator import sv_id
 from ..qualification import QualificationTier
+from ..amba_fabric_graph_ir import (
+    FABRIC_NODE_KINDS,
+    build_amba_fabric_graph,
+)
 
 
 def parse_addr(v):
@@ -133,6 +139,77 @@ def compute_address_regions(slaves, reserved_regions, addr_width: int):
     return entries
 
 
+class FabricGraphMismatchError(ValueError):
+    """Raised when `t["fabric_graph"]` is supplied but the graph's declared
+    endpoint nodes do not account for every id in `t["masters"]`/
+    `t["slaves"]` -- see `cross_check_fabric_graph()`."""
+
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+def cross_check_fabric_graph(t: dict, graph) -> dict:
+    """ARCH-04/ARCH-12 wire: closes the gap between the AMBA topology-
+    derivation family (`amba_fabric_graph_ir.py`'s own `AMBAFabricGraphIR` --
+    12 node kinds, bridge/width-converter classification, grounded-evidence-only
+    reconfigurable claims) and this module, the one generator that actually
+    emits AMBA fabric SV content. Before this wire the two were completely
+    decoupled (`amba_fabric_generator.py` imported neither
+    `amba_fabric_graph_ir` nor any sibling of that family): a topology's
+    internal-fabric structure could be analyzed in arbitrary detail and it
+    would change nothing about what got generated.
+
+    This is a CROSS-CHECK, not a new inference -- the graph is still built
+    entirely from `t["fabric_graph"]`'s own caller-declared nodes/edges
+    (`amba_fabric_graph_ir.build_amba_fabric_graph()`, unmodified), never
+    derived from RTL here. The one convention this function requires: a
+    `master_endpoint`/`slave_endpoint` node's `node_id` equals the matching
+    `t["masters"]`/`t["slaves"]` entry's own `id` -- the same identifier this
+    generator already uses for every emitted port/case-statement/covergroup
+    bin, so a graph and a topology describing the same fabric can always be
+    matched without guessing a correspondence from names.
+
+    Raises `FabricGraphMismatchError` when a declared master/slave id has no
+    matching endpoint node in the graph -- the graph and the topology
+    disagree about what the fabric's own ports are, which is exactly the
+    "recompute in two disconnected places -- IR precise, generation blind"
+    risk this wire closes; it does not soft-degrade that mismatch into a
+    warning. Returns a summary of every internal fabric node the graph
+    declares (bridge/crossbar/width_converter/... -- anything not an
+    endpoint), for the caller to record and render."""
+    master_ids = sorted({m["id"] for m in t["masters"]})
+    slave_ids = sorted({s["id"] for s in t["slaves"]})
+
+    missing_master_endpoints = [
+        mid for mid in master_ids
+        if graph.node(mid) is None or graph.node(mid).kind != "master_endpoint"
+    ]
+    missing_slave_endpoints = [
+        sid for sid in slave_ids
+        if graph.node(sid) is None or graph.node(sid).kind != "slave_endpoint"
+    ]
+    if missing_master_endpoints or missing_slave_endpoints:
+        raise FabricGraphMismatchError("FABRIC_GRAPH_ENDPOINT_MISMATCH", {
+            "missing_master_endpoints": missing_master_endpoints,
+            "missing_slave_endpoints": missing_slave_endpoints,
+            "hint": "every t['masters']/t['slaves'] id must appear in fabric_graph as a node "
+                    "whose node_id is that same id and whose kind is master_endpoint/"
+                    "slave_endpoint -- see amba_fabric_graph_ir.py",
+        })
+
+    internal_nodes = [
+        {"node_id": n.node_id, "kind": n.kind}
+        for n in graph.nodes if n.kind in FABRIC_NODE_KINDS
+    ]
+    return {
+        "master_endpoints_verified": master_ids,
+        "slave_endpoints_verified": slave_ids,
+        "internal_nodes": internal_nodes,
+    }
+
+
 class ScoreboardMatrixError(ValueError):
     def __init__(self, reason: str, detail: dict):
         super().__init__(reason)
@@ -193,6 +270,23 @@ class AMBAFabricGenerator:
         matrix = build_scoreboard_matrix(t["masters"], t["slaves"], t.get("connectivity"),
                                           t.get("assume_full_connectivity", False))
 
+        # ARCH-04/ARCH-12 wire: t["fabric_graph"] = {"nodes": [...], "edges":
+        # [...]} is the caller-declared AMBAFabricGraphIR input (see
+        # amba_fabric_graph_ir.py) for THIS topology. Optional and additive --
+        # absent, generation is unchanged from before this wire. Present, the
+        # real graph is built and cross-checked against this topology's own
+        # masters/slaves (cross_check_fabric_graph()), and its real internal
+        # fabric nodes (bridge/crossbar/width_converter/...) are surfaced into
+        # the generated env content instead of staying an unreachable,
+        # independently-computed report. `env()` itself does not take this as
+        # a parameter (its SV content has no fabric-graph-shaped section to
+        # fill) -- it is surfaced only via the two JSON artifacts below.
+        fabric_graph_info = None
+        fg = t.get("fabric_graph")
+        if fg:
+            graph = build_amba_fabric_graph(fg.get("nodes", []), fg.get("edges", []))
+            fabric_graph_info = cross_check_fabric_graph(t, graph)
+
         files = {}
         files[f"{fabric}_addr_decoder.sv"] = self.addr_decoder(t, fabric, regions)
         files[f"{fabric}_env_pkg.sv"] = self.env_pkg(t, fabric, w_id)
@@ -215,6 +309,8 @@ class AMBAFabricGenerator:
         manifest["generated_files"] = sorted(files.keys()) + ["environment_manifest.json", "fabric_topology.json"]
         manifest["qualification_status"] = QualificationTier.ENV_GENERATED.value
         manifest.setdefault("vip", {})["binding_status"] = "PLACEHOLDER_UNTIL_CURRENT_VIP_EVIDENCE"
+        manifest["fabric_graph_cross_check"] = fabric_graph_info or {
+            "status": "NOT_SUPPLIED", "reason": "NO_FABRIC_GRAPH_DECLARED_IN_TOPOLOGY"}
         files["environment_manifest.json"] = json.dumps(manifest, indent=2)
 
         fabric_topology = {
@@ -227,6 +323,8 @@ class AMBAFabricGenerator:
                 for r in regions
             ],
         }
+        if fabric_graph_info is not None:
+            fabric_topology["internal_fabric_nodes"] = fabric_graph_info["internal_nodes"]
         files["fabric_topology.json"] = json.dumps(fabric_topology, indent=2)
 
         for name, content in files.items():

@@ -1,0 +1,425 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-harness.local/schemas/system_scheduling_plan.schema.json",
+  "title": "System Scheduling, Parallelism, Scoreboard and Checking Plan (SYS-23..SYS-27)",
+  "description": "The Phase-1 planning deliverable for SYS-23 (initialization deduplication classification), SYS-24 (shared resource scheduling), SYS-25 (parallelism model), SYS-26 (scoreboard integration) and SYS-27 (cross-subsystem checking). This document DESCRIBES a System-Level schedule; it never builds one. A shared access point's status is pinned to PLANNED_NOT_IMPLEMENTED, a deduplication action is restricted to KEEP or DEDUPLICATION_CANDIDATE (there is no REMOVE), a subsystem scoreboard cannot be reported modified or replaced, and every flow's check content is pinned to NOT_GENERATED_SYS40_REQUIRES_HUMAN_APPROVAL -- so a document that had removed a command, built a sequencer, replaced a scoreboard or emitted a check could not validate against this schema at all. Building any of them is SYS-40 and requires a separate explicit human approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "selected_subsystems",
+    "initialization_deduplication",
+    "shared_resource_scheduling",
+    "global_serialization_check",
+    "resource_contention_gate_input",
+    "parallelism_model",
+    "scoreboard_integration",
+    "cross_subsystem_checking",
+    "composer_boundary",
+    "summary",
+    "artifacts_generated",
+    "phase_boundary"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "selected_subsystems": { "type": "array", "items": { "type": "string" } },
+    "artifacts_generated": {
+      "type": "array",
+      "maxItems": 0,
+      "description": "Always empty. SYS-23..27 is discovery/analysis/planning/reporting; generating a shared sequencer/driver/queue, a System Scoreboard, a correlation layer or a cross-subsystem check is SYS-40."
+    },
+    "phase_boundary": { "type": "string", "minLength": 1 },
+
+    "initialization_deduplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "classes", "entries", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "classes": {
+          "type": "array",
+          "description": "SYS-23's five-value vocabulary, verbatim and in its own order.",
+          "items": { "type": "string" },
+          "minItems": 5,
+          "maxItems": 5
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "system_command_id", "source_subsystem", "source_command",
+              "command_category", "scope_class", "scope_basis",
+              "deduplication_action", "deduplication_action_reason",
+              "duplicate_collision_id", "contended_resources", "repeat_evidence",
+              "evidence_by_subsystem"
+            ],
+            "properties": {
+              "system_command_id": { "type": "string", "minLength": 1 },
+              "source_subsystem": { "type": "string", "minLength": 1 },
+              "source_command": { "type": "string", "minLength": 1 },
+              "command_category": { "type": "string" },
+              "scope_class": {
+                "type": "string",
+                "enum": ["SYSTEM_ONCE", "SUBSYSTEM_ONCE", "SCENARIO_ONCE",
+                         "REPEATABLE", "SHARED_RESOURCE_COMMAND"]
+              },
+              "scope_basis": { "type": "string", "minLength": 1 },
+              "deduplication_action": {
+                "type": "string",
+                "description": "There is deliberately no REMOVE, MERGE or REORDER value. SYS-23: 'Do not remove commands without evidence', and editing a real command.txt is SYS-40.",
+                "enum": ["KEEP", "DEDUPLICATION_CANDIDATE_PENDING_HUMAN_DECISION"]
+              },
+              "deduplication_action_reason": { "type": "string", "minLength": 1 },
+              "duplicate_collision_id": { "type": "string" },
+              "contended_resources": { "type": "array", "items": { "type": "string" } },
+              "repeat_evidence": { "type": "object" },
+              "evidence_by_subsystem": {
+                "type": "object",
+                "description": "One real citation list PER side. A deduplication candidate needs at least two, because a duplicate is a statement about two sides.",
+                "additionalProperties": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "shared_resource_scheduling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "entries", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "shared_resource_key", "resource_type", "protocol", "evidence_axes",
+              "registry_entry_id", "command_resource_ids", "consumer_subsystems",
+              "writing_subsystems", "routed_commands", "routed_commands_reason",
+              "scheduling_disposition", "scheduling_reason", "scheduling_constraints",
+              "arbitration_policy_required", "shared_access_point",
+              "access_point_status", "registry_reuse_decision", "evidence"
+            ],
+            "properties": {
+              "shared_resource_key": { "type": "string", "minLength": 1 },
+              "resource_type": { "type": "string" },
+              "protocol": { "type": "string" },
+              "evidence_axes": {
+                "type": "array",
+                "items": { "type": "string",
+                           "enum": ["SYSTEM_RESOURCE_REGISTRY", "SUBSYSTEM_COMMAND_CONTRACT"] },
+                "minItems": 1
+              },
+              "registry_entry_id": { "type": "string" },
+              "command_resource_ids": { "type": "array", "items": { "type": "string" } },
+              "consumer_subsystems": { "type": "array", "items": { "type": "string" } },
+              "writing_subsystems": { "type": "array", "items": { "type": "string" } },
+              "routed_commands": { "type": "array", "items": { "type": "string" } },
+              "routed_commands_reason": { "type": "string" },
+              "scheduling_disposition": {
+                "type": "string",
+                "enum": ["ROUTE_THROUGH_SINGLE_SHARED_ACCESS_POINT",
+                         "KEEP_SUBSYSTEM_LOCAL_NO_CROSS_SUBSYSTEM_USER",
+                         "PASSIVE_OBSERVERS_NEED_NO_ARBITRATION",
+                         "NOT_SCHEDULABLE_PENDING_OWNERSHIP_RESOLUTION",
+                         "UNKNOWN_PENDING_EVIDENCE"]
+              },
+              "scheduling_reason": { "type": "string", "minLength": 1 },
+              "scheduling_constraints": {
+                "type": "array",
+                "description": "SYS-24: 'Scheduling must derive from actual resource/protocol constraints'. Each entry names the real field it was read from.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["constraint", "from_field", "value"],
+                  "properties": {
+                    "constraint": { "type": "string", "minLength": 1 },
+                    "from_field": { "type": "string", "minLength": 1 },
+                    "value": { "type": "string" }
+                  }
+                }
+              },
+              "arbitration_policy_required": { "type": "boolean" },
+              "shared_access_point": { "type": "string", "minLength": 1 },
+              "access_point_status": {
+                "type": "string",
+                "description": "Pinned. A sequencer/driver/queue is code, and code is SYS-40.",
+                "const": "PLANNED_NOT_IMPLEMENTED"
+              },
+              "registry_reuse_decision": { "type": "string" },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "global_serialization_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "independent_subsystem_pairs", "coupled_subsystem_pairs",
+                   "violations", "basis"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["NO_GLOBAL_SERIALIZATION", "GLOBAL_SERIALIZATION_DETECTED"]
+        },
+        "independent_subsystem_pairs": {
+          "type": "array", "items": { "type": "array", "items": { "type": "string" } }
+        },
+        "coupled_subsystem_pairs": {
+          "type": "array", "items": { "type": "array", "items": { "type": "string" } }
+        },
+        "violations": { "type": "array", "items": { "type": "object" } },
+        "basis": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "resource_contention_gate_input": {
+      "type": "object",
+      "description": "The shared_resources half of the evidence block the already-wired tools/verification_flow/system_level_resource_contention_gate.py reads, derived from real registry/contract evidence rather than agent prose.",
+      "additionalProperties": false,
+      "required": ["shared_resources", "scenarios", "scenarios_not_derived_reason",
+                   "derived_from"],
+      "properties": {
+        "shared_resources": { "type": "array", "items": { "type": "string" } },
+        "scenarios": {
+          "type": "array",
+          "maxItems": 0,
+          "description": "Always empty at Phase 1. A scenario carries contention_testcase_ids naming real testcases; inventing them would fabricate verification evidence."
+        },
+        "scenarios_not_derived_reason": { "type": "string", "minLength": 1 },
+        "derived_from": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "parallelism_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "relationships", "precedence", "pairs", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "relationships": {
+          "type": "array",
+          "description": "SYS-25's six-value vocabulary, verbatim and in its own order.",
+          "items": { "type": "string" },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "precedence": { "type": "array", "items": { "type": "string" },
+                        "minItems": 6, "maxItems": 6 },
+        "pairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pair_id", "command_a", "command_b", "subsystem_a", "subsystem_b",
+                         "relationship", "basis", "from_field", "also_matched", "signals",
+                         "serialization_groups_a", "serialization_groups_b"],
+            "properties": {
+              "pair_id": { "type": "string", "minLength": 1 },
+              "command_a": { "type": "string", "minLength": 1 },
+              "command_b": { "type": "string", "minLength": 1 },
+              "subsystem_a": { "type": "string", "minLength": 1 },
+              "subsystem_b": { "type": "string", "minLength": 1 },
+              "relationship": {
+                "type": "string",
+                "enum": ["PARALLEL_SAFE", "SERIALIZE_RESOURCE", "ORDER_DEPENDENT",
+                         "INTERRUPT_DEPENDENT", "CLOCK_DOMAIN_DEPENDENT", "UNKNOWN"]
+              },
+              "basis": { "type": "string", "minLength": 1 },
+              "from_field": { "type": "string" },
+              "also_matched": { "type": "array", "items": { "type": "string" } },
+              "signals": { "type": "array", "items": { "type": "object" } },
+              "serialization_groups_a": { "type": "array", "items": { "type": "string" } },
+              "serialization_groups_b": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "scoreboard_integration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "subsystems", "system_correlation_layer", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "subsystems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subsystem_id", "disposition", "subsystem_scoreboards",
+                         "subsystem_scoreboard_modified",
+                         "replaced_by_monolithic_scoreboard", "reason"],
+            "properties": {
+              "subsystem_id": { "type": "string", "minLength": 1 },
+              "disposition": {
+                "type": "string",
+                "enum": ["REUSE_EXISTING_SUBSYSTEM_SCOREBOARD",
+                         "NO_SUBSYSTEM_SCOREBOARD_IN_EVIDENCE"]
+              },
+              "subsystem_scoreboards": { "type": "array", "items": { "type": "object" } },
+              "subsystem_scoreboard_modified": {
+                "type": "boolean",
+                "description": "Pinned false. SYS-26 defaults to reuse and this layer is read-only over every subsystem environment.",
+                "const": false
+              },
+              "replaced_by_monolithic_scoreboard": {
+                "type": "boolean",
+                "description": "Pinned false. SYS-26: 'Do not replace known-good subsystem scoreboards with one monolithic scoreboard'.",
+                "const": false
+              },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "system_correlation_layer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "status", "sits_above", "replaces_subsystem_scoreboards",
+                       "purpose", "blocked_by", "topology_descriptor_requirement",
+                       "content_boundary"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "status": { "type": "string", "const": "PLANNED_NOT_IMPLEMENTED" },
+            "sits_above": { "type": "array", "items": { "type": "string" } },
+            "replaces_subsystem_scoreboards": { "type": "boolean", "const": false },
+            "purpose": { "type": "string", "minLength": 1 },
+            "blocked_by": { "type": "string", "minLength": 1 },
+            "topology_descriptor_requirement": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["part", "status", "describes", "evidence", "reason"],
+                "properties": {
+                  "part": { "type": "string",
+                            "enum": ["address_map", "interrupt_map", "dma_map"] },
+                  "status": { "type": "string",
+                              "enum": ["EVIDENCE_PRESENT_IN_SELECTION",
+                                       "NO_EVIDENCE_IN_SELECTION"] },
+                  "describes": { "type": "string", "minLength": 1 },
+                  "evidence": { "type": "array", "items": { "type": "string" } },
+                  "reason": { "type": "string" }
+                }
+              }
+            },
+            "content_boundary": { "type": "string", "minLength": 1 }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "cross_subsystem_checking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "flows", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "flows": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "description": "SYS-27's own six candidate flows. Every one is evaluated for architectural support; none is turned into a check.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["flow_id", "flow", "verdict", "reason", "participating_subsystems",
+                         "matched_endpoints", "missing_endpoint_groups",
+                         "satisfied_intermediate_resources",
+                         "missing_intermediate_resource_groups", "check_content_status",
+                         "required_check_inputs", "cross_subsystem",
+                         "composition_gate_note"],
+            "properties": {
+              "flow_id": { "type": "string", "minLength": 1 },
+              "flow": { "type": "string", "minLength": 1 },
+              "verdict": {
+                "type": "string",
+                "enum": ["SUPPORTED_BY_ARCHITECTURE",
+                         "NOT_SUPPORTED_ENDPOINT_SUBSYSTEM_ABSENT",
+                         "NOT_SUPPORTED_INTERMEDIATE_RESOURCE_ABSENT",
+                         "UNKNOWN_INSUFFICIENT_EVIDENCE"]
+              },
+              "reason": { "type": "string", "minLength": 1 },
+              "participating_subsystems": { "type": "array", "items": { "type": "string" } },
+              "matched_endpoints": { "type": "array", "items": { "type": "object" } },
+              "missing_endpoint_groups": {
+                "type": "array", "items": { "type": "array", "items": { "type": "string" } }
+              },
+              "satisfied_intermediate_resources": {
+                "type": "array", "items": { "type": "object" }
+              },
+              "missing_intermediate_resource_groups": {
+                "type": "array", "items": { "type": "array", "items": { "type": "string" } }
+              },
+              "check_content_status": {
+                "type": "string",
+                "description": "Pinned. Cross-subsystem checking CONTENT is protocol-behaviour content with no primary source in registry metadata.",
+                "const": "NOT_GENERATED_SYS40_REQUIRES_HUMAN_APPROVAL"
+              },
+              "required_check_inputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["input", "describes", "availability", "reason"],
+                  "properties": {
+                    "input": { "type": "string", "minLength": 1 },
+                    "describes": { "type": "string", "minLength": 1 },
+                    "availability": { "type": "string", "const": "NOT_AVAILABLE" },
+                    "reason": { "type": "string", "minLength": 1 }
+                  }
+                }
+              },
+              "cross_subsystem": { "type": "boolean" },
+              "composition_gate_note": { "type": "string" }
+            }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "composer_boundary": {
+      "type": "object",
+      "description": "A live probe of soc_environment_composer's three cross-subsystem stubs, so SYS-26/27's 'content is out of scope' claim is a checked fact rather than a comment.",
+      "additionalProperties": false,
+      "required": ["module", "probes", "boundary_intact", "meaning"],
+      "properties": {
+        "module": { "type": "string", "minLength": 1 },
+        "probes": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["function", "raises", "reason"],
+            "properties": {
+              "function": { "type": "string", "minLength": 1 },
+              "raises": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "boundary_intact": { "type": "boolean" },
+        "meaning": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "summary": { "type": "object" }
+  }
+}

@@ -1,0 +1,215 @@
+{
+  "schema_version": "1.0",
+  "description": "DV Agent Harness L5's 3-tier context budget. Tier 1 (never_load) is enforced as a real PreToolUse deny by .claude/hooks/context-budget-guard.ps1; tier 2 (always_resident) is injected by .claude/hooks/context-resident-pack.ps1 on SessionStart; tier 3 (load_on_demand) is documentation plus the MCP verbs that make targeted lookups cheap. Edit this file, not dv_harness/context_budget.py, to extend the rules for a specific project's DUT/VIP roots.",
+
+  "never_load": [
+    {
+      "rule_id": "NEVER-VIP-SOURCE",
+      "label": "VIP source full text",
+      "reason": "A Synopsys-class VIP source tree is hundreds of thousands of lines of encrypted/obfuscated or generated SystemVerilog. Reading it whole buys nothing an already-resolved config dump does not give you, and it evicts the DUT facts you actually need. Ask the VIP what it resolved to, do not read what it is made of. Carve-outs (allow_globs): VIP Examples/ reference testbenches and .f filelists are small, are the sanctioned reference material, and are already covered by a real Read allow entry in .claude/settings.local.json -- denying them would be a false positive that gets this whole gate switched off.",
+      "path_globs": [
+        "**/vip",
+        "**/vip/src",
+        "**/vip/**/*.sv",
+        "**/vip/**/*.svh",
+        "**/vip/**/*.svp",
+        "**/vip/**/*.v",
+        "**/vip/**/*.vh",
+        "**/vip/**/*.vp",
+        "**/vip/**/*.so",
+        "**/svt_*/**/*.sv",
+        "**/svt_*/**/*.svh"
+      ],
+      "allow_globs": [
+        "**/.dv-harness/**",
+        "**/vip_ref/**",
+        "**/.work/**",
+        "**/vip/examples/**",
+        "**/vip/**/*.f"
+      ],
+      "mcp_redirect": "get_vip_config",
+      "distiller": "dv_harness/vip_symbol_index.py",
+      "distiller_note": "CORRECTED 2026-09-04: a VIP-source distiller now exists. dv_harness/vip_symbol_index.py reads a VIP source tree and retains DECLARATIONS AND LOCATIONS ONLY -- class names, base classes, method signatures, config field names, and the file:line of each -- never a method body; assert_no_bodies_retained() makes that a checkable invariant and a real test exercises it. That is what makes indexing a tree this rule otherwise denies legitimate: the index answers 'what exists and where', and 'what does it do' is then ONE targeted read of a cited file:line rather than paging the tree into context. It also renders the tier-3 vip_ref/<protocol>.md, which previously did not exist. Still true, and still the reason this rule does not point at it: dv_harness/vip_distill.py is named suggestively but is an evidence-envelope normaliser for sim logs / job records / fsdb reports (distill_sim_log/distill_job_record/distill_fsdbreport) and does not read VIP source at all. get_vip_config remains the right route for an already-resolved config value."
+    },
+    {
+      "rule_id": "NEVER-RAW-PDF",
+      "label": "Raw PDF originals (user guides, protocol specs, programming guides)",
+      "reason": "A protocol spec or VIP user guide PDF is tens of megabytes of layout-mangled text. Converting one with pdftotext and reading the result is the single most expensive thing an agent can do to its own context. Distil it once into a bounded artifact, then read the artifact.",
+      "path_globs": ["**/*.pdf"],
+      "command_patterns": [
+        "(?i)\\bpdftotext\\b",
+        "(?i)\\bpdfimages\\b",
+        "(?i)\\bpdftoppm\\b"
+      ],
+      "mcp_redirect": null,
+      "distiller": "dv_harness/vip_user_guide_distill.py",
+      "distiller_note": "Run it as `dv-harness vip-user-guide distill --source <doc.pdf> --out-dir <dir>`. It extracts the text with the real pypdf library OFFLINE and writes three artifacts: <stem>.fulltext.txt (the targeted-read target), <stem>.reference.md (a bounded section index -- headings, pages, character offsets, no prose) and <stem>.reference.json (the record `env-manifest generate --user-guide-ref` records as a POINTER, never as content). CORRECTION (2026-09-04): this field previously named dv_harness/doc_extraction.py and claimed it 'really does handle .pdf (see its SUPPORTED set)'. That was false -- doc_extraction.py merely LISTS '.pdf' in a suffix set; all 71 of its lines are sha256/index/record-normalisation and it contains no PDF text extraction whatsoever. So this rule's route forward pointed at a script that could not perform it. vip_user_guide_distill.py is the real one."
+    },
+    {
+      "rule_id": "NEVER-WHOLE-CHIP-DB",
+      "label": "Whole-chip design/waveform/evidence databases",
+      "reason": "Waveform dumps, simv build databases and the evidence SQLite store are binary or machine-scale artifacts. They are meant to be QUERIED, never streamed into a context window; reading one raw produces megabytes of noise and zero engineering facts.",
+      "path_globs": [
+        "**/*.fsdb",
+        "**/*.vpd",
+        "**/*.vcd",
+        "**/*.trn",
+        "**/*.dsn",
+        "**/*.sqlite",
+        "**/*.sqlite3",
+        "**/*.db",
+        "**/simv.daidir/**",
+        "**/csrc/**",
+        "**/*.shm/**",
+        "**/novas_dump.log",
+        "**/wave.txt"
+      ],
+      "allow_globs": ["**/.work/**"],
+      "mcp_redirect": "query_regression",
+      "distiller": "dv_harness/fsdb_report.py"
+    },
+    {
+      "rule_id": "NEVER-REGRESSION-LOGS",
+      "label": "Complete simulation / regression logs",
+      "reason": "A single sim.log is routinely 10^5-10^7 lines. The engineering content in it is a handful of UVM_ERROR/UVM_FATAL lines and a pass/fail verdict, which the analyser already extracts and the evidence DB already indexes. Grepping a raw log directly is exactly the bypass this budget exists to stop.",
+      "path_globs": [
+        "**/sim.log",
+        "**/simv.log",
+        "**/comp.log",
+        "**/compile.log",
+        "**/elab.log",
+        "**/vcs.log",
+        "**/run.log",
+        "**/regress*/**/*.log",
+        "**/regression*/**/*.log",
+        "**/sim/**/*.log"
+      ],
+      "allow_globs": [
+        "**/.dv-harness/**",
+        "**/.work/**"
+      ],
+      "command_patterns": [
+        "(?i)\\b(cat|less|more|head|tail|grep|egrep|sed|awk|type|get-content)\\b[^\\r\\n]*\\b(sim|simv|comp|compile|elab|vcs|run)\\.log\\b"
+      ],
+      "mcp_redirect": "query_regression",
+      "distiller": "dv_harness/sim_log_analysis.py"
+    }
+  ],
+
+  "always_resident": [
+    {
+      "artifact_id": "claude_md_index",
+      "path": "CLAUDE.md",
+      "purpose": "Project operating rules and the index of every other rule surface. The only tier-2 artifact whose residency the agent harness itself guarantees.",
+      "produced_by": "hand-maintained",
+      "residency": "harness_auto_load",
+      "mcp_verb": null,
+      "max_resident_bytes": 65536
+    },
+    {
+      "artifact_id": "env_manifest",
+      "path": ".dv-harness/env.manifest.json",
+      "alt_paths": ["env.manifest.json"],
+      "purpose": "The 3-layer environment fact file (vip_config / dut_facts / env_topology), including env_topology.component_hierarchy -- the design-hierarchy summary this budget's tier 2 is really asking for.",
+      "produced_by": "python -m dv_harness env-manifest generate --out .dv-harness/env.manifest.json",
+      "residency": "session_start_hook",
+      "mcp_verb": "get_topology",
+      "max_resident_bytes": 4096
+    },
+    {
+      "artifact_id": "run_profile",
+      "path": ".dv-harness/run_profile.json",
+      "alt_paths": ["run_profile.json"],
+      "purpose": "The machine-readable IR of the environment's real execution verb (compile options, defines, plusargs, UVM_TESTNAME), reverse-derived from a real Makefile/command.txt -- never hand-composed.",
+      "produced_by": "python -m dv_harness run-profile extract --makefile <path> --out .dv-harness/run_profile.json",
+      "residency": "session_start_hook",
+      "mcp_verb": null,
+      "max_resident_bytes": 4096
+    },
+    {
+      "artifact_id": "hierarchy",
+      "path": ".dv-workflow/hierarchy.json",
+      "purpose": "Standalone DUT/SoC hierarchy + protocol-instance inventory, at the path the hierarchy-discovery skill already declares as its output.",
+      "produced_by": ".claude/skills/CORE/hierarchy-discovery/SKILL.md (declares this exact output path; no non-agent extractor exists yet)",
+      "residency": "session_start_hook",
+      "mcp_verb": "get_topology",
+      "max_resident_bytes": 4096
+    },
+    {
+      "artifact_id": "phy_boundary",
+      "path": ".dv-workflow/phy_boundary.json",
+      "purpose": "Where the controller stops and the PHY starts: the boundary signal/interface set a bind or VIP connection must land on.",
+      "produced_by": "dv_harness/phy_boundary.py -- extract_from_env_manifest(manifest, phy_module, controller_module), then save_phy_boundary(doc, '.dv-workflow/phy_boundary.json'). CORRECTED 2026-09-04: this field used to read 'NOT IMPLEMENTED -- no extractor exists', which was true on 2026-09-03 and false the next day; because build_resident_pack() prints produced_by VERBATIM to every session, that stale sentence was actively telling every agent a real extractor did not exist. It consumes the port table env_manifest.build_dut_facts_rtl() already produces (no second RTL parser) and needs the project to DECLARE which module is the PHY -- never guessed from a module name. Library-level: there is no dv-harness CLI subcommand; tools/generate_bind_mechanism.py --phy-boundary is the real consumer. Worked example: examples/asset_processing/generated/phy_boundary.json (and phy_boundary_serial.json for the NOT-bindable case).",
+      "residency": "session_start_hook",
+      "mcp_verb": "get_dut_port",
+      "max_resident_bytes": 4096
+    }
+  ],
+
+  "load_on_demand": [
+    {
+      "artifact_id": "regmap_single_lookup",
+      "path": ".dv-harness/register_map.json",
+      "alt_paths": ["register_map.json"],
+      "purpose": "Register facts, addressed ONE register (or one block) at a time through the get_register verb -- never by loading a whole system regmap into context.",
+      "produced_by": "RAL export / IP-XACT conversion into dv_harness/schemas/register_map.schema.json shape",
+      "residency": "mcp_verb",
+      "mcp_verb": "get_register"
+    },
+    {
+      "artifact_id": "vip_ref",
+      "path": "docs/vip_ref",
+      "purpose": "Per-protocol distilled VIP reference (docs/vip_ref/<protocol>.md): the bounded replacement for reading VIP source or the VIP user guide PDF.",
+      "produced_by": "dv_harness/vip_symbol_index.py -- write_vip_ref(build_symbol_index(<vip source roots>, <protocol>), 'docs'). CORRECTED 2026-09-04: this field used to cite dv_harness/vip_distill.py, the same miscitation the NEVER-VIP-SOURCE rule's own distiller_note already disclaims by name -- vip_distill.py normalises sim-log/job/fsdb evidence envelopes and never reads VIP source. Only the never_load half of that correction was applied at the time; this half was missed. The index retains DECLARATIONS AND LOCATIONS ONLY (assert_no_bodies_retained() makes that checkable), which is what makes distilling a tree NEVER-VIP-SOURCE otherwise denies legitimate. Worked example: examples/asset_processing/generated/vip_ref/demo.md from examples/asset_processing/inputs/vip_src/.",
+      "residency": "on_demand_read",
+      "mcp_verb": "get_vip_config"
+    },
+    {
+      "artifact_id": "intent",
+      "path": "docs/intent.md",
+      "purpose": "The verification intent statement -- what this environment is trying to prove, read when a judgment needs the why rather than the what.",
+      "produced_by": "dv_harness/design_intent.py -- write_intent(load_intent(<dut_intent.yaml>), 'docs'). CORRECTED 2026-09-04: this field used to read 'NOT IMPLEMENTED -- no generator exists', which build_resident_pack() would have reported verbatim. The generator is real and renders from a SCHEMA-VALIDATED structured source (dut_intent.schema.json), not from prose, so every legal-drop/backpressure condition must carry a document+section citation and an uncited (i.e. possibly invented) condition cannot validate. Library-level; no dv-harness CLI subcommand. Worked example: examples/asset_processing/generated/docs/intent.md from examples/asset_processing/inputs/dut_intent.yaml.",
+      "residency": "on_demand_read",
+      "mcp_verb": null
+    },
+    {
+      "artifact_id": "constraints",
+      "path": "docs/constraints.md",
+      "purpose": "Timing/electrical/protocol constraints and the untestable-item set, read when a judgment needs to know what this environment may NOT conclude. Its untestable items convert into real waiver entries via write_exemptions_from_constraints(), so an untestable item becomes an audited exemption rather than a silently-unchecked assumption.",
+      "produced_by": "dv_harness/design_intent.py -- write_constraints(load_constraints(<constraints.yaml>), 'docs'). Library-level; no dv-harness CLI subcommand. Worked example: examples/asset_processing/generated/docs/constraints.md from examples/asset_processing/inputs/constraints.yaml.",
+      "residency": "on_demand_read",
+      "mcp_verb": null
+    },
+    {
+      "artifact_id": "sys_regmap",
+      "path": ".dv-workflow/sys_regmap.json",
+      "alt_paths": ["examples/asset_processing/inputs/sys_regmap.json"],
+      "purpose": "The GLOBAL/chip-level register file's clock/reset/mux/pinmux control bits -- the mode-determining bits register_map.schema.json's flat, undifferentiated `blocks` array cannot express. Read one block's control bits when a Gate-2 precondition is in question; never load a whole system regmap into context (that is exactly what get_register exists to avoid).",
+      "produced_by": "Hand-transcribed from a real chip-level programming guide, or exported from a real system RAL model, into dv_harness/schemas/sys_regmap.schema.json shape; validated and classified by dv_harness/sys_regmap.py (validate_sys_regmap / mode_determining_bits / required_preconditions). An undocumented required_value stays null rather than being guessed.",
+      "residency": "on_demand_read",
+      "mcp_verb": "get_register"
+    },
+    {
+      "artifact_id": "init_seq",
+      "path": ".dv-workflow/init_seq.yaml",
+      "alt_paths": ["examples/asset_processing/inputs/init_seq.yaml"],
+      "purpose": "Register write order and wait conditions from the IP programming guide. Supplies the Gate-2 register-enable precondition connectivity.py never had, so a dead clock caused by an unwritten clock-enable reads as PRECONDITION_NOT_MET rather than as a connectivity failure against a bind that was correct all along.",
+      "produced_by": "Hand-transcribed from a real IP programming guide into dv_harness/schemas/init_seq.schema.json shape; validated and consumed by dv_harness/init_seq.py (validate_init_seq / directed_test_steps / evaluate_zero_time_connectivity_gated). Worked example: examples/asset_processing/inputs/init_seq.yaml.",
+      "residency": "on_demand_read",
+      "mcp_verb": null
+    }
+  ],
+
+  "exemptions": [],
+
+  "mcp": {
+    "module": "dv_harness.mcp",
+    "verbs": [
+      "get_vip_config",
+      "get_dut_port",
+      "get_register",
+      "get_topology",
+      "query_regression"
+    ]
+  }
+}

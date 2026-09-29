@@ -1,0 +1,57 @@
+{
+  "profile_id": "STAGE-D2B44930",
+  "stage_id": "DISCOVERY",
+  "stage_name": "DISCOVERY",
+  "graph_node": "DISCOVERY",
+  "start_time_epoch": 1788275460.84407,
+  "end_time_epoch": 1788275551.5043423,
+  "stage_wall_clock_sec": 90.66027235984802,
+  "aggregate_agent_runtime_sec": 90.01853680610657,
+  "parallel_saving_sec": 0.0,
+  "parallelism_efficiency": 0.0,
+  "input_tokens": 2,
+  "output_tokens": 7407,
+  "cache_read_tokens": 106097,
+  "cache_write_tokens": 17294,
+  "total_tokens": 7409,
+  "tool_calls": 0,
+  "retries": 0,
+  "finding_count": 0,
+  "closed_finding_count": 0,
+  "status": "PASS",
+  "agents": [
+    {
+      "agent": "analysis-agent",
+      "runtime_sec": 90.01853680610657,
+      "model": "",
+      "job_id": "",
+      "input_tokens": 2,
+      "output_tokens": 7407,
+      "cache_read_tokens": 106097,
+      "cache_write_tokens": 17294,
+      "tool_calls": 0,
+      "retries": 0,
+      "status": "PASS",
+      "total_tokens": 7409
+    }
+  ],
+  "metadata": {
+    "git_sha": "358565c1ee711812f8c286abae3b684d324da6bd"
+  },
+  "entry_checklist": {
+    "items": [],
+    "present_count": 0,
+    "total_count": 0,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "exit_checklist": {
+    "items": [],
+    "present_count": 0,
+    "total_count": 0,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "tokens_per_finding": null,
+  "tokens_per_closed_finding": null
+}

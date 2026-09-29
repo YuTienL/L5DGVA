@@ -1,0 +1,153 @@
+CAPABILITY_ID,CAPABILITY_NAME,PRIMARY_OWNER_WAVE,SECONDARY_DEPENDENCY,PRIORITY,BLOCKER_TYPE
+CAP-M4.5-004,GOVERNING_CONTRACT_AUTHORITY (25-doc corpus),M4.5,,P2,"ENGINEERING (residual duplication-check + registry-module adaptation, not a human decision anymore -- decision made and executed against this wave)"
+CAP-M5-ENV-001,env_manifest.py N-way merge,M5,,P2 (downgraded from P0 -- resolved M5 Cohort 1),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M5-VIP-001,vip_capability_extraction.py N-way merge,M5,,P2 (downgraded from P0 -- resolved M5 Cohort 3),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M6-DISPATCH-001,cli.py/dashboard.py dispatch-mechanism decision,M6,,"P2 (downgraded from P0 -- stale row, capability closed prior to this task)",NONE (RESOLVED -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M6-CLARSVC-001,ClarificationService design+build,M6,M7,P2 (downgraded from P0 -- resolved this task),ENGINEERING (RESOLVED -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M5M6-VLEVEL-001,verification_level.py genericity foundation,M6,CAP-M6-CLARSVC-001;CAP-M5-ENV-001,P2 (downgraded from P0 -- resolved this task),"NONE (RESOLVED, CAP-M5M6-VLEVEL-001)"
+CAP-M8-EXPLOOP-001,EXPERIENCE_READY event wiring (confirmed broken),M8,,P0,"ENGINEERING (pre-existing defect, all trees)"
+CAP-PLATFORM-000,Platform P1-P6 scope definition,PLATFORM_P1,,P1,PROCESS (no scoping wave has occurred)
+CAP-M4.5-003,L5DGVA Constitution full compliance qualification,M8,,P1,ENGINEERING (final-gate evidence not yet complete)
+CAP-M4.5-001,TASK_SCOPED_GOVERNANCE_RETRIEVAL live-routing integration,M6,CAP-M6-DISPATCH-001,P2,ENGINEERING (residual: still no fully-automated non-CLAUDE.md-mediated task-routing call site; downgraded from P1 after M4.6 closed the live-routing gap)
+CAP-M3-001,lifecycle.py wiring into engine.py,M6,CAP-M6-DISPATCH-001,P1,ENGINEERING (wiring)
+CAP-M6-LIFECYCLE-001,lifecycle.py consumer wiring,M6,CAP-M6-DISPATCH-001,P1,ENGINEERING (wiring-point identification)
+CAP-M5-ARCH-001,create_environment.py ARCH-01 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M5-ARCH-002,soc_environment_composer.py ARCH-03 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M5-TOPTB-001,soc_environment_composer.py existing-top-TB preservation (Parent V11 SS247),M5,CAP-M5-ARCH-002,P3 (downgraded from P2 -- resolved this wave),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M5-ARCH-003,amba_fabric_generator.py ARCH-04/12 contract,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 2),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M5-COV-001,functional_coverage_signoff.py judgment call,M5,,P2 (downgraded from P1 -- resolved M5 Cohort 5),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M8-EXPLOOP-002,Absent internal-loop stages (Clarification/Generation/Signoff experience),M8,CAP-M8-EXPLOOP-001,P1,ENGINEERING (net-new mechanism)
+CAP-M11-REFUSB-001,Reference USB Environment consumption gate,M11,CAP-POOL-006,P1,POLICY (must stay unconsumed until M11)
+CAP-M4-002,ipxact_register_import.py wiring,M6,CAP-M4-001,P2,ENGINEERING (wiring)
+CAP-M3-002,debug_evidence_behavioral_firewall_gate.py wiring,M7,,P2,ENGINEERING (wiring)
+CAP-M3-005,coverage_hole_generation_candidate_queue.py wiring,M7,,P2,ENGINEERING (wiring)
+CAP-M5-DSI-001,design_source_inventory.py contract question,M5,,"P3 (downgraded from P2 -- SUPERSEDED, resolved M5 Cohort 5)",ENGINEERING (SUPERSEDED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-M4.5-002,MINIMUM_SUFFICIENT_CONTEXT (general claim),M8,CAP-M4.5-001,P2,ENGINEERING (measurement/verification)
+CAP-M4.5-006,CODEX_REVIEW_OFFLOAD migration + real reviewer integration,M7,,P2,ENGINEERING + EXTERNAL_RESOURCE (needs a real Codex tool) (owner reassigned M8->M7 per M4.6 S21 instruction)
+CAP-M4.5-010,TOKEN_USAGE_OBSERVABILITY combined with multi-model handoff,M7,CAP-M4.5-005;CAP-M4.5-006,P2,ENGINEERING (owner reassigned M8->M7 per M4.6 S21 instruction)
+CAP-M8-MAKC-001,MULTI_AGENT_KNOWLEDGE_CONSUMPTION audit,M8,,P2,PROCESS (needs a dedicated audit)
+CAP-M9-EXEC-001,ExecutionService/RemoteEDABackend TARGET build,M9,,P2,"ENGINEERING (large, not started)"
+CAP-POOL-006,reference_irq_event_to_service_flow_discovery.py,M11,CAP-M11-REFUSB-001,P2,POLICY
+CAP-M3-003,l5dgva_v5_ss86 taxonomy wiring,M7,,P3,ENGINEERING (wiring)
+CAP-M3-004,diagnostic_bound_compatibility.py wiring,M7,,P3,ENGINEERING (wiring)
+CAP-M4.5-005,CHATGPT_PLANNING_OFFLOAD automation,M7,,P3,ENGINEERING (currently stale/abandoned) (owner reassigned M8->M7 per M4.6 S21 instruction)
+CAP-M4.5-007,STRUCTURED_AGENT_HANDOFF operationalization + task/planning schema,M7,CAP-M4.5-004,P3,ENGINEERING (design not started for task/planning half) (owner reassigned M8->M7 per M4.6 S21 instruction)
+CAP-M4.5-008,CONTEXT_DISTILLATION for multi-model handoff content,M7,,P3,"ENGINEERING (not started) (owner reassigned ->M7, all 8 token-efficiency sub-capabilities normally owned by M7)"
+CAP-M4.5-009,SESSION_RESUME audit,M7,,P3,"PROCESS (needs a dedicated audit) (owner reassigned ->M7, all 8 token-efficiency sub-capabilities normally owned by M7)"
+CAP-M4.5-011,Cross-model TOKEN_REDUCTION_MEASUREMENT,M8,CAP-M4.5-010,P3,ENGINEERING (not started)
+CAP-POOL-001,engine_maturity_state.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-POOL-002,l5dgva_ss570_claude_verdict_truth.py,M8,CAP-M4.5-006,P3,ENGINEERING (dependency chain)
+CAP-POOL-003,l5dgva_directive_blackboard_work_queue.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-POOL-004,l5dgva_kc_extraction.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-POOL-007,autonomous_resume_next_action_arbitration.py+independent_work_continuation.py,M7,,P3,ENGINEERING (dependency chain)
+CAP-POOL-008,l5dgva_v5_ss84_phase_entry_protocol_schema.py,M5,,P3 (unchanged -- resolved M5 Pool Closure),ENGINEERING (RESOLVED this task -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-POOL-009,irq_contradiction_change_impact.py,M6,CAP-M5M6-VLEVEL-001,P3,"ENGINEERING (dependency chain -- CAP-M5M6-VLEVEL-001 now RESOLVED, this dependency satisfied; still depends on question_queue.py per its own MASTER_CAPABILITY_STATUS_MATRIX.csv row)"
+CAP-POOL-010,falsified_hypothesis_ledger.py,M8,,P3,ENGINEERING (dependency chain)
+CAP-POOL-011,eight_engine_telemetry_rollup.py,M5,,P3 (unchanged -- resolved M5 Pool Closure Batch 2),ENGINEERING (RESOLVED M5 Pool Closure Batch 2 -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-POOL-012,rtl_filelist_parser.py,M5,,P3 (unchanged -- resolved M5 Pool Closure),ENGINEERING (RESOLVED this task -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+REMAINING_UNCLASSIFIED_POOL,~157 of 177 MIGRATE_REQUIRED closure members not yet individually triaged,M5,,P2,"PROCESS (bulk-tracked, per M3's own disclosed scope limitation)"
+CAP-M4.6-001,CLAUDE_ALWAYS_ON_CONTEXT_NORMALIZATION,M4.6,,P1 (closed),none (closed this wave)
+CAP-CE-018,"CONTINUOUS_PROJECT_EXPERIENCE_LEARNING (composite, internal loop)",M8,CAP-M8-EXPLOOP-001;CAP-M8-EXPLOOP-002,P0,"ENGINEERING (structural, all trees)"
+CAP-M4.6-002,GLOBAL_DISCOVERABILITY_CONTRACT,M8,CAP-M4.5-002,P1,PROCESS (no systematic re-audit of the other 300 TASK_SCOPED sections performed)
+CAP-CE-008,PROJECT_EXPERIENCE_EXTRACTION,M8,CAP-M8-EXPLOOP-002,P1,ENGINEERING (net-new unified record type)
+CAP-CE-010,CLARIFICATION_LEARNING,M8,CAP-M8-EXPLOOP-002,P1,ENGINEERING (net-new mechanism)
+CAP-CE-011,GENERATION_EXPERIENCE_LEARNING,M8,CAP-M8-EXPLOOP-002,P1,ENGINEERING (net-new mechanism)
+CAP-CE-014,SIGNOFF_EXPERIENCE_CONSOLIDATION,M8,CAP-M8-EXPLOOP-001;CAP-M8-EXPLOOP-002,P1,ENGINEERING (net-new mechanism)
+CAP-CE-012,RCA_EXPERIENCE_LEARNING,M8,CAP-M8-EXPLOOP-001,P2,"ENGINEERING (narrow today, needs full RCA-to-fix record)"
+CAP-M4.5-012,CLAUDE_FOCUSED_IMPLEMENTATION,M7,CAP-M4.5-005;CAP-M4.5-006,P3,"ENGINEERING (pipeline stage, no automated hand-off)"
+CAP-M4.5-013,TOKEN_EFFICIENT_MULTI_MODEL_ORCHESTRATION (composite),M7,CAP-M4.5-005;CAP-M4.5-006;CAP-M4.5-007;CAP-M4.5-008;CAP-M4.5-009;CAP-M4.5-010;CAP-M4.5-012,P2,ENGINEERING (composite of mostly-incomplete sub-capabilities)
+CAP-M5-CONTRACTREG-001,l5dgva_contract_registry.py MIGRATE_WITH_ADAPTATION (external-path parameterization),M5,CAP-M4.5-004,P2,ENGINEERING (parameterize DEFAULT_L5DGVA_DIR/cache_path away from a local-repo assumption)
+CAP-HITL-001,ROLE_BASED_HUMAN_IN_THE_LOOP,M6,,P1,PROCESS (architecture reconciliation only; real build is M6 engineering work)
+CAP-HITL-002,DESIGN_AUTHORITY,M6,,P1,PROCESS (definition only)
+CAP-HITL-003,VERIFICATION_AUTHORITY,M6,,P1,PROCESS (definition only)
+CAP-HITL-004,SHARED_AUTHORITY,M6,,P2,PROCESS (definition only)
+CAP-HITL-005,QUESTION_OWNER_ROUTING,M6,CAP-M6-CLARSVC-001,P1,"ENGINEERING (schema defined, routing not built)"
+CAP-HITL-006,HUMAN_GATE_CONTRACT,M6,CAP-M6-CLARSVC-001,P1,"ENGINEERING (schema defined, mechanism not built)"
+CAP-HITL-007,RCA_ROLE_ROUTING,M6,,P2,"ENGINEERING (routing table defined, dispatcher not wired)"
+CAP-HITL-008,ROLE_AWARE_EXPERIENCE_LEARNING,M8,CAP-M8-EXPLOOP-001,P1,ENGINEERING (blocked by CAP-M8-EXPLOOP-001)
+CAP-HITL-009,KNOWLEDGE_DOMAIN_CLASSIFICATION,M8,,P2,"PROCESS (taxonomy only, metadata field not added to schema yet)"
+CAP-HITL-010,IP_SUBSYSTEM_SYSTEM_ROLE_MODEL,M9,CAP-M5M6-VLEVEL-001,P2,PROCESS (definition only; CAP-M5M6-VLEVEL-001's own IP_MODE upstream block is now RESOLVED)
+CAP-HITL-011,ROLE_AWARE_SIGNOFF_TRACEABILITY,M10,,P2,"ENGINEERING (schema extension defined, not built)"
+CAP-HITL-012,ROLE_BASED_ACTION_DASHBOARD,M12,,P3,"PROCESS (routing concept only, no owner UI exists yet)"
+CAP-ATL-001,AGENT_TASK_LIFECYCLE,M6,CAP-M6-DISPATCH-001,P2,"PROCESS (join-layer concept only, no owner module built) | REASSIGNED M5->M6 by M5 Cohort 5"
+CAP-ATL-002,TASK_IDENTITY,M6,CAP-M6-DISPATCH-001,P2,"PROCESS (3 primitives identified, not joined) | REASSIGNED M5->M6 by M5 Cohort 5"
+CAP-ATL-003,TASK_STATE_MODEL,M6,CAP-M6-DISPATCH-001,P3,"ENGINEERING (2 enum values proposed, not added) | REASSIGNED M5->M6 by M5 Cohort 5"
+CAP-ATL-004,TASK_SCOPE_CONTRACT,M5,"NONE (CAP-M6-DISPATCH-001 resolved, its own dependency satisfied)",P2 (downgraded from P1 -- resolved M5 Cohort 4; production-wired M6-TASK-BOUNDARY-PRODUCTION-001),NONE (RESOLVED and WIRED -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-ATL-005,TASK_PREFLIGHT_GATE,M5,,P3,PROCESS (proven working manually; no code-level gate yet)
+CAP-ATL-006,TASK_APPROVAL_GATE,M5,,P3,"PROCESS (already covered by question_queue.py, no gap)"
+CAP-ATL-007,TASK_EVIDENCE_CONTRACT,M5,CAP-M6-CLARSVC-001,P2 (unchanged -- resolved M5 Cohort 4),ENGINEERING (RESOLVED this wave -- see MASTER_CAPABILITY_STATUS_MATRIX.csv)
+CAP-ATL-008,TASK_FAILURE_RECOVERY,M6,CAP-M6-DISPATCH-001,P2,"ENGINEERING (shape identified, taxonomy not authored) | REASSIGNED M5->M6 by M5 Cohort 5"
+CAP-ATL-009,TASK_RESUME_REPLAY,M5,,P3,"PROCESS (2 of 3 scopes already covered, 3rd deferred)"
+CAP-ATL-010,TASK_KNOWLEDGE_PROMOTION_GATE,M5,,P3,"PROCESS (already covered by memory_router.py, no gap)"
+CAP-VELM-001,ENVIRONMENT_REOPEN_IMPORT,M10.5,CAP-VELM-002,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target -- no code
+CAP-VELM-002,VERIFICATION_ENVIRONMENT_IR,M9 (foundation) / M10.5 (operational),,P3,FOUNDATION-then-OPERATIONAL
+CAP-VELM-003,GENERATED_ARTIFACT_PROVENANCE,M10.5,,P3,FOUNDATION exists (narrow); OPERATIONAL does not
+CAP-VELM-004,ARTIFACT_OWNERSHIP_MODEL,M10.5,CAP-M5-TOPTB-001,P2,FOUNDATION exists (USER_MANAGED only)
+CAP-VELM-005,QUALIFIED_ENVIRONMENT_SNAPSHOT,M10.5,,P3,FOUNDATION exists (subsystem-scoped only)
+CAP-VELM-006,SEMANTIC_CHANGE_DETECTION,M10.5,CAP-M5-TOPTB-001,P2,"FOUNDATION exists (narrow, one file)"
+CAP-VELM-007,VERIFICATION_CHANGE_IMPACT_ANALYSIS,M10.5,,P2,FOUNDATION exists (adjacent scope)
+CAP-VELM-008,VERIFICATION_CHANGE_PLAN,M10.5,CAP-VELM-006;CAP-VELM-007,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target -- no code
+CAP-VELM-009,SAFE_INCREMENTAL_REGENERATION,M5 (foundation) / M10.5 (operational),CAP-M5-TOPTB-001,P2,FOUNDATION exists (3-file precedent)
+CAP-VELM-010,UVM_SEMANTIC_MERGE,M5 (foundation) / M10.5 (operational),,P2,FOUNDATION exists (methodology only)
+CAP-VELM-011,SELECTIVE_REGRESSION,M10.5,,P2,FOUNDATION exists (methodology only)
+CAP-VELM-012,COVERAGE_DELTA_ANALYSIS,M10 (foundation) / M10.5 (operational),,P3,named concept only -- no code
+CAP-VELM-013,EVIDENCE_INVALIDATION,M10.5,,P3,adjacent concept only -- no code
+CAP-VELM-014,INCREMENTAL_RESIGNOFF,M10 (foundation) / M10.5 (operational),CAP-VELM-013,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target -- no code
+CAP-VELM-015,MAINTENANCE_EXPERIENCE_LEARNING,M8 (foundation) / M10.5 (operational),,P3,"reuses memory_router.py infra, no producer"
+CAP-VELM-016,CHANGE_IMPACT_PREDICTION_LEARNING,M8 (foundation) / M10.5 (operational),CAP-VELM-007,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target -- no code
+CAP-VELM-017,SEMANTIC_MERGE_EXPERIENCE_LEARNING,M8 (foundation) / M10.5 (operational),CAP-VELM-010,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target -- no code
+CAP-VELM-018,DV_VERIFICATION_ENVIRONMENT_LIFECYCLE_MANAGEMENT,M10.5,CAP-VELM-001..017;CAP-VELM-019..035,P2,UMBRELLA (OPERATIONAL_LIFECYCLE_CAPABILITY target)
+CAP-VELM-019,NATIVE_CLAUDE_FAST_MAINTENANCE,M10.5,CAP-VELM-021;CAP-VELM-022;CAP-VELM-023;CAP-VELM-024,P2,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-020,MINIMUM_SUFFICIENT_EXECUTION,M10.5,,P2,FOUNDATION exists (methodology only); OPERATIONAL does not
+CAP-VELM-021,FAST_PATH_ELIGIBILITY,M10.5,CAP-VELM-004;CAP-VELM-006,P2,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-022,FAST_PATH_ESCALATION_TO_L5DGVA,M10.5,CAP-VELM-021,P2,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-023,FAST_TO_FULL_CONTEXT_HANDOFF,"M7 (foundation, structured-handoff infrastructure) / M10.5 (operational)",CAP-M4.5-007,P2,FOUNDATION exists (adjacent); OPERATIONAL does not
+CAP-VELM-024,PROJECT_ATTACH_AND_REHYDRATION,M10.5,CAP-VELM-025;CAP-VELM-026;CAP-VELM-005,P2,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-025,PROJECT_LOCAL_IDENTITY,M10.5,,P2,FOUNDATION exists (adjacent); OPERATIONAL does not
+CAP-VELM-026,PROJECT_CONTEXT_BOOTSTRAP,M10.5,CAP-VELM-025,P2,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-027,DEBUG_EXISTING_ENVIRONMENT,M10.5,CAP-VELM-028,P3,FOUNDATION exists (methodology only); OPERATIONAL does not
+CAP-VELM-028,FAILURE_EVIDENCE_COLLECTION,M10.5,,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-029,RCA_TO_CHANGE_REQUEST,"M6 (foundation, root-cause routing -- CAP-HITL-006 RCA_ROLE_ROUTING) / M10.5 (operational)",CAP-HITL-006,P2,FOUNDATION exists (RCA methodology); OPERATIONAL does not
+CAP-VELM-030,CHANGE_WORKSPACE,M10.5,CAP-VELM-029;CAP-VELM-008,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-031,CONTROLLED_ENVIRONMENT_MODIFICATION,M5 (foundation) / M10.5 (operational),CAP-M5-TOPTB-001;CAP-VELM-030,P2,"FOUNDATION exists (adjacent, read-side only); OPERATIONAL does not"
+CAP-VELM-032,USER_MODIFICATION_PRESERVATION,"M5 (foundation) / M10.5 (operational, generalized)",CAP-M5-TOPTB-001,P2,"FOUNDATION exists (real, working, narrow scope); OPERATIONAL (general, any artifact) does not"
+CAP-VELM-033,CHANGE_REVIEW_APPLY,M10.5,CAP-VELM-030;CAP-VELM-031,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-034,CHANGE_ROLLBACK,M10.5,CAP-VELM-033,P3,OPERATIONAL_LIFECYCLE_CAPABILITY target
+CAP-VELM-035,MAINTENANCE_TRACEABILITY,"M10 (foundation, traceability) / M10.5 (operational, extended)",dv_harness/requirement_traceability_registry.py,P3,FOUNDATION exists (CREATE-side only); OPERATIONAL (extended MAINTAIN chain) does not
+CAP-M14-001,M14_PRODUCTIVITY_BENCHMARK,M14,M13,P3,"ROADMAP_DEFINED -- benchmark program, not started until M13 completes"
+CAP-M14-002,DV_EXPERTISE_AMPLIFICATION,M14,CAP-M14-001,P3,ROADMAP_DEFINED_NOT_MEASURED -- must never be reported as proven pre-M14
+CAP-M14-003,NATIVE_AI_COMPARATIVE_BENCHMARK,M14,CAP-M14-001;CAP-M14-005,P3,ROADMAP_DEFINED -- A-vs-B comparative harness
+CAP-M14-004,BENCHMARK_TELEMETRY_FOUNDATION,M7,dv_harness/loop_telemetry.py (reuse target),P3,ROADMAP_DEFINED -- non-invasive telemetry only; M7-M13 MUST NOT run M14 early
+CAP-M14-005,BENCHMARK_QUALITY_PARITY_GATE,M14,CAP-M14-001,P3,"DEFINED -- quality-parity policy, no code gate yet"
+CAP-M14-006,MAINTENANCE_PRODUCTIVITY_BENCHMARK,M14,M10.5;M11,P3,ROADMAP_DEFINED -- maintenance benchmark level
+CAP-EXCEL-001,STRUCTURED_EXCEL_INTAKE,M12,CAP-M6-CLARSVC-001,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-002,EXCEL_TEMPLATE_GENERATION,M12,CAP-EXCEL-001;CAP-M6-CLARSVC-001,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-003,EXCEL_INTAKE_IMPORT,M12,CAP-EXCEL-001;CAP-M6-CLARSVC-001,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-004,EXCEL_SCHEMA_VALIDATION,M12,CAP-EXCEL-003,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-005,EXCEL_FIELD_CONFLICT_DETECTION,M12,CAP-EXCEL-003;CAP-M6-CLARSVC-001,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-006,EXCEL_ROUND_TRIP,M12,CAP-EXCEL-001,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-007,ROLE_BASED_EXCEL_INTAKE,M12,CAP-EXCEL-001,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-008,EXCEL_STALE_WORKBOOK_DETECTION,M12,CAP-EXCEL-003;CAP-EXCEL-006,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-009,EXCEL_PROVENANCE,M12,CAP-EXCEL-003,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-010,EXCEL_VPLAN_VIEW,M12,CAP-EXCEL-001;M10 vPlan authority,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-011,EXCEL_TOPOLOGY_VIEW,M12,CAP-EXCEL-001,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-012,EXCEL_COVERAGE_CLOSURE_VIEW,M12,CAP-EXCEL-001;M10 coverage authority,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-013,EXCEL_SIGNOFF_VIEW,M12,CAP-EXCEL-001;M10 signoff authority,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-EXCEL-014,EXCEL_CHANGE_IMPACT_VIEW,M12,CAP-EXCEL-001;M10.5 MAINTAIN_LIFECYCLE,P3,"ROADMAP_DEFINED -- Excel frontend, not started"
+CAP-USBKC-001,USB_EXCEL_KC_LEARNING_QUALIFICATION,M11,"CAP-EXCEL-001;M8 Knowledge Brain (memory.py/memory_router.py/memory_vault.py, real, reused unchanged)",P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-002,USB_EXCEL_GENERATION_QUALIFICATION,M11,CAP-USBKC-001;CAP-EXCEL-001,P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-003,EXCEL_COMPLETENESS_ANALYSIS,M11,CAP-USBKC-002,P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-004,EXCEL_EVIDENCE_COVERAGE_ANALYSIS,M11,CAP-USBKC-002,P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-005,EXCEL_REDUNDANT_QUESTION_ANALYSIS,M11,CAP-USBKC-002,P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-006,EXCEL_ROLE_ROUTING_QUALIFICATION,M11,CAP-USBKC-002,P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-007,EXCEL_GAP_TO_KC_EXTRACTION,M11,"CAP-USBKC-001;M8 engineering_admission_gate()/organizational_admission_gate() (real, reused)",P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-008,KC_TO_EXCEL_REGENERATION,M11,"CAP-USBKC-007;M8 MemoryRetriever.search() (real, reused)",P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-009,EXCEL_GENERATION_IMPROVEMENT_MEASUREMENT,M11,CAP-USBKC-008,P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-USBKC-010,CLOSED_LOOP_KNOWLEDGE_LEARNING_QUALIFICATION,M11,CAP-USBKC-001;CAP-USBKC-007;CAP-USBKC-008;CAP-USBKC-009,P3,"ROADMAP_DEFINED -- future M11 scenario, not started"
+CAP-M6-C1-001,M6 Golden-Path Connectivity Closure C1,M6,"CAP-M6-DISPATCH-001, CAP-M6-CLARSVC-001",P2 (closure task),NONE (RESOLVED)
+CAP-M6-INTPRIME-V2-001,Integration Prime Directive V2 adoption + P5 remediation,M6,"CAP-M6-DISPATCH-001, CAP-M6-CLARSVC-001, CAP-M6-C1-001",P2 (closure task),NONE (RESOLVED; GAP-V2-002 tracked separately in L5DGVA_CURRENT_SCOPE_GAP_REGISTER.csv)
+CAP-M6-GAPV2002-001,GAP-V2-002 remediation (PROTOCOL_BUILDERS convergence),M6,"CAP-M6-DISPATCH-001, CAP-M6-CLARSVC-001, CAP-M6-C1-001",P2 (closure task),NONE (RESOLVED)
+CAP-M6-TASKBOUNDARY-001,Task Boundary production connectivity (CLI + dashboard entry points),M6,"CAP-ATL-004, CAP-M5M6-VLEVEL-001",P2 (closure task),NONE (RESOLVED)
+CAP-M6-FINALQUAL-001,M6 Final Operational Slice Qualification,M6,"CAP-M5M6-VLEVEL-001, CAP-M6-TASKBOUNDARY-001, CAP-ATL-004",P2 (qualification/closure task),NONE (READY_FOR_APPROVAL)
+CAP-M7-PREFLIGHT-001,M7 Closure Freeze + Preflight,M7,CAP-M6-FINALQUAL-001,P2 (preflight/planning task),"NONE (preflight complete, implementation not started)"
+CAP-M7-V1-001,M7 V1 Structured Multi-Model Markdown Handoff,M7,"CAP-M7-PREFLIGHT-001, CAP-ATL-004, CAP-M6-FINALQUAL-001","P2 (implementation cohort, in progress)","WAITING_FOR_HUMAN_TRANSPORT (real handoffs generated, round trip pending)"

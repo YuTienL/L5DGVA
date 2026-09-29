@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/dut_intent.schema.json",
+  "title": "dut_intent",
+  "description": "INPUT CONTRACT for the asset-processing table's row-9 artifact ('DUT controller doc -> intent.md: state machine, modes, legal drop/backpressure conditions -> scoreboard's ordering and exemption conditions'). Authored as YAML/JSON transcribed from a real DUT controller document; dv_harness/design_intent.py validates it and RENDERS docs/intent.md from it, so the markdown a human reads and the structure the scoreboard consumes can never drift apart. The structured file is the source of truth, not the prose. Nothing here may be inferred by an agent from protocol general knowledge: a 'legal drop condition' the DUT document does not actually state is a licence for the scoreboard to ignore a real dropped packet, which is precisely how a false PASS gets manufactured. Every condition therefore REQUIRES a basis citation naming the real document and section it came from.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dut_name", "source", "modes", "state_machine", "legal_drop_conditions", "backpressure_conditions", "ordering_rules"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "dut_name": { "type": "string", "minLength": 1 },
+    "source": { "$ref": "#/$defs/basis" },
+    "modes": {
+      "type": "array",
+      "description": "Operating modes the controller document defines (e.g. a speed/width/power mode). A scoreboard's expectations are usually mode-dependent, so the mode set is part of the intent.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "description", "basis"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "basis": { "$ref": "#/$defs/basis" }
+        }
+      }
+    },
+    "state_machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["states", "transitions"],
+      "properties": {
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "description"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "description": { "type": "string" },
+              "is_initial": { "type": "boolean" }
+            }
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to", "trigger"],
+            "properties": {
+              "from": { "type": "string", "minLength": 1 },
+              "to": { "type": "string", "minLength": 1 },
+              "trigger": { "type": "string", "minLength": 1 },
+              "basis": { "$ref": "#/$defs/basis" }
+            }
+          }
+        }
+      }
+    },
+    "legal_drop_conditions": {
+      "type": "array",
+      "description": "Conditions under which the DUT is DOCUMENTED to legally drop a transaction. A scoreboard must not report a mismatch when one of these holds -- and must report one when none does.",
+      "items": { "$ref": "#/$defs/condition" }
+    },
+    "backpressure_conditions": {
+      "type": "array",
+      "description": "Conditions under which the DUT legally applies backpressure/stalls. These relax TIMING expectations, never CONTENT expectations -- a stalled transaction must still eventually arrive intact.",
+      "items": { "$ref": "#/$defs/condition" }
+    },
+    "ordering_rules": {
+      "type": "array",
+      "description": "Documented ordering guarantees, consumed directly by a scoreboard to decide whether it may compare in-order or must compare as a bag.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scope", "guarantee", "basis"],
+        "properties": {
+          "scope": { "type": "string", "minLength": 1, "description": "What the guarantee applies across, e.g. 'per endpoint', 'per virtual channel', 'whole interface'." },
+          "guarantee": {
+            "enum": ["strict_in_order", "unordered", "ordered_within_scope_only"],
+            "description": "strict_in_order: the scoreboard may compare sequentially. unordered: it must compare as an unordered bag; a sequential compare would produce false mismatches. ordered_within_scope_only: sequential within `scope`, unordered across scopes."
+          },
+          "basis": { "$ref": "#/$defs/basis" },
+          "notes": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document", "section"],
+      "description": "Where this fact actually came from. REQUIRED on every condition and rule, because an uncited 'legal drop condition' is indistinguishable from an invented one.",
+      "properties": {
+        "document": { "type": "string", "minLength": 1 },
+        "section": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" },
+        "page": { "type": "string" }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "applies_when", "basis"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Stable id a scoreboard exemption can cite, e.g. DROP-001." },
+        "description": { "type": "string", "minLength": 1 },
+        "applies_when": { "type": "string", "minLength": 1, "description": "The real observable precondition, stated concretely enough that a checker could evaluate it -- not a vague 'under congestion'." },
+        "mode": { "type": ["string", "null"], "description": "Operating mode this is scoped to; null when it applies in every mode." },
+        "basis": { "$ref": "#/$defs/basis" }
+      }
+    }
+  }
+}

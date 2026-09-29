@@ -1,0 +1,17 @@
+{
+  "topic": "environment",
+  "value": {
+    "execution_mode": "PURE_LOCAL_READ_ANALYSIS",
+    "actions": [
+      "read .claude/settings.json / settings.local.json",
+      "glob .claude/agents",
+      "glob .claude/skills (CORE/USB)",
+      "grep settings.local.json for password/token/secret",
+      "generate .dv-workflow/claude_environment_inventory.csv",
+      "verify JSON syntax via python json module"
+    ],
+    "session_id": "ee43211c-42f2-427c-9b97-d3b6ea90d0e8"
+  },
+  "source": "ENV_CHECK",
+  "confidence": "HIGH"
+}

@@ -1,0 +1,23 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB RTL module hierarchy -- lan063/ss_vout/u_usbtop dual-instance array, two HAPS-vs-ASIC configs",
+  "summary": "Real RTL hierarchy confirmed on remote server /home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/RTLCAT/: lan063 (TOP_ALL.v:23023, SoC top) instantiates u_ss_vout (TOP_ALL.v:25528; module ss_vout defined SS_VOUT_ALL.v:8), a sub-system container multiplexing Ethernet MAC0/MAC1, PCIe, USB (dual instance), MIPI-TX, a packet engine (PKT), a trace ring buffer (TRB) and its own CTL block behind one APB/AXI crossbar built from dozens of Arteris/ARM NIC-400-generated modules (SS_VOUT_ALL.v:19328 onward). ss_vout instantiates USB via the 'usbtop' module in TWO mutually-exclusive `ifdef HAPS` branches that a naive grep conflates: (1) `ifdef HAPS` (FPGA/emulation) branch, SS_VOUT_ALL.v:4503-4515, a SINGLE usbtop instance named u_usbtop driving only usb0 -- every usb1_* output is tied to 'h0 (SS_VOUT_ALL.v:4915-4917 for usb1_irq/fiq/esmerr and dozens more for AXI/JTAG/scan ports); usb1 does not exist in this config. (2) `else` (real ASIC/VCS simulation, i.e. this project's SIMV_GIT build) branch, SS_VOUT_ALL.v:5060, a TRUE dual-instance array `usbtop ... ) u_usbtop[1:0] (` with concatenated ports e.g. .usb_irq({usb1_irq,usb0_irq}), .usb_fiq({usb1_fiq,usb0_fiq}), .usb_esmerr({usb1_esmerr,usb0_esmerr}) (SS_VOUT_ALL.v:5069-5071) -- both u_usbtop[0] and [1] are real, independent IP instances here. Per-instance usbtop parameters (identical in both branches, SS_VOUT_ALL.v:4504-4515): APBAW=SMPAW, AXIAW=AMAW, AXIIW=4, AXILW=AMLW, AXIUW=AMUW, AXIDW=AMDW, QN=QN, ESM=8, INTN=1, TKN=1, CN=3 -- each usbtop has exactly 1 IRQ line, 1 FIQ line, 8 ESM error bits (only 2 meaningful, see the ESMERR-drop project_fact), 1 token bit, 3-wire clock group. The real usbtop module body lives in SS_VOUT_USB.v (17,677 lines; confirmed by its matching ESM=8/INTN=1/TKN=1 param block at line 14474). Internally confirmed usbtop content: an AXI4 master-side parity/ECC checker+generator block (~SS_VOUT_USB.v:15690-15761, gated `ifdef AXI4_PARITY_PORT_EN`, with a .mstpty_errevt(axi_parity_irq) output at :15718 feeding the ESM bit) and an APB slave-side parity checker (~15990-16016, gated `ifdef APB4_PARITY_PORT_EN`, .o_esmerr(apb_parity_irq) output at :16010, already OR-collapsing a CTL-type and DATA-type fault per its own comment) followed immediately by an axiwrps_size AXI-data-width-scaling instance (DW=128) confirming usbtop's internal AXI datapath runs at 128 bits before conversion to the SoC-facing AXIDW width -- not a straight pass-through. Full internal usbtop submodule enumeration (UDC/XHCI core names, SS_VOUT_USB_CTRL.v [185,975 lines] and SS_VOUT_USB_PHY.v [73,485 lines] internal module names) was NOT completed -- remote relay stalled mid-session (see companion 'session constraints' note in the full report) before those greps returned.",
+  "source_paths": [
+    "RTLCAT/TOP_ALL.v",
+    "RTLCAT/SS_VOUT_ALL.v",
+    "RTLCAT/SS_VOUT_USB.v"
+  ],
+  "category": "dut_rtl_model",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-B8BDD99895",
+  "level": "project",
+  "created_at": 1788368322.6824179,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

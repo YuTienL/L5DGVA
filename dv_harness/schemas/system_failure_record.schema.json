@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-harness.local/schemas/system_failure_record.schema.json",
+  "title": "System-Level Failure Record (SYS-31)",
+  "description": "One SYSTEM SCENARIO's failure, kept as N per-subsystem sub-records rather than collapsed into one generic System failure. Each sub-record carries all ten of SYS-31's mandated dimensions as DISTINCT keys -- SYSTEM SCENARIO / SUBSYSTEM / COMMAND / VIP-AGENT / RESOURCE / UVM_ERROR / LOG / WAVEFORM / ROOT-CAUSE HYPOTHESIS / CONFIDENCE -- so a document that had merged them into one string, or dropped one, cannot validate. `generic_system_failure_records` is pinned to 0: SYS-31's closing rule is 'Never collapse all failures into generic System failure'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "system_scenario_id", "dimensions",
+               "participating_subsystems", "per_subsystem", "qualified_conclusion",
+               "collapse_rule", "summary", "phase_boundary"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "system_scenario_id": { "type": "string", "minLength": 1 },
+    "dimensions": {
+      "type": "array",
+      "description": "SYS-31's ten dimensions, verbatim and in its own order.",
+      "items": { "type": "string" },
+      "minItems": 10,
+      "maxItems": 10
+    },
+    "participating_subsystems": { "type": "array", "items": { "type": "string" } },
+    "qualified_conclusion": { "type": ["object", "null"] },
+    "collapse_rule": { "type": "string", "minLength": 1 },
+    "phase_boundary": { "type": "string", "minLength": 1 },
+    "per_subsystem": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["system_scenario", "subsystem", "command", "vip_agent", "resource",
+                     "uvm_error", "log", "waveform", "root_cause_hypothesis", "confidence",
+                     "protocol", "pattern", "job_id", "lsf_status", "failure_signature",
+                     "is_failure", "prior_evidence"],
+        "properties": {
+          "system_scenario": { "type": "string", "minLength": 1 },
+          "subsystem": { "type": "string", "minLength": 1 },
+          "command": { "type": "string" },
+          "vip_agent": { "type": "string" },
+          "resource": { "type": "string" },
+          "uvm_error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["uvm_error_count", "uvm_fatal_count", "assertion_failure",
+                         "simulator_crash", "terminal_signature"],
+            "properties": {
+              "uvm_error_count": { "type": "integer", "minimum": 0 },
+              "uvm_fatal_count": { "type": "integer", "minimum": 0 },
+              "assertion_failure": { "type": "boolean" },
+              "simulator_crash": { "type": "boolean" },
+              "terminal_signature": { "type": "string" }
+            }
+          },
+          "log": { "type": "string" },
+          "waveform": { "type": "string" },
+          "root_cause_hypothesis": { "type": "string" },
+          "confidence": {
+            "type": "object",
+            "required": ["level", "source"],
+            "properties": {
+              "level": {
+                "enum": ["HIGH", "MEDIUM", "LOW", "UNKNOWN"],
+                "description": "inference.score_confidence()'s own levels, plus the honest UNKNOWN a record gets when neither a computed confidence nor the evidence counts were supplied. Never a level invented in the triage layer."
+              },
+              "source": { "type": "string", "minLength": 1 }
+            }
+          },
+          "protocol": { "type": "string" },
+          "pattern": { "type": "string" },
+          "job_id": { "type": "string" },
+          "lsf_status": { "type": "string" },
+          "failure_signature": {
+            "type": "object",
+            "description": "memory_vault.build_failure_signature()'s output verbatim. This layer defines no second symptom shape.",
+            "required": ["protocol", "pattern", "symptom", "root_cause_hint",
+                         "uvm_error_count", "uvm_fatal_count", "assertion_failure",
+                         "simulator_crash", "terminal_signature", "lsf_status",
+                         "abnormal_termination", "extra_text"]
+          },
+          "is_failure": { "type": "boolean" },
+          "prior_evidence": {
+            "type": "object",
+            "required": ["searched", "reason", "related_cases"],
+            "properties": {
+              "searched": { "type": "boolean" },
+              "reason": { "type": "string" },
+              "related_cases": { "type": "array" }
+            }
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subsystem_record_count", "failing_subsystems", "failing_record_count",
+                   "subsystems_reporting", "subsystems_declared_but_not_reporting",
+                   "generic_system_failure_records", "confidence_levels"],
+      "properties": {
+        "subsystem_record_count": { "type": "integer", "minimum": 0 },
+        "failing_subsystems": { "type": "array", "items": { "type": "string" } },
+        "failing_record_count": { "type": "integer", "minimum": 0 },
+        "subsystems_reporting": { "type": "array", "items": { "type": "string" } },
+        "subsystems_declared_but_not_reporting": { "type": "array", "items": { "type": "string" } },
+        "generic_system_failure_records": {
+          "const": 0,
+          "description": "SYS-31: never collapse all failures into generic System failure."
+        },
+        "confidence_levels": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

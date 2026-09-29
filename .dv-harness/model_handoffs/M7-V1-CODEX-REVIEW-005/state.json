@@ -1,0 +1,11 @@
+{
+  "task_id": "M7-V1-CODEX-REVIEW-005",
+  "target_model": "codex",
+  "task_type": "review-route",
+  "state": "RESULT_CONSUMED",
+  "handoff_path": ".dv-harness\\model_handoffs\\M7-V1-CODEX-REVIEW-005\\HANDOFF_V1.md",
+  "result_sha256": "f85bbffe7952f6fe6dd43052e149acc065e05c3901128caf63bde39224b009e5",
+  "result_status": "FAIL",
+  "accepted_result_sha256": "f85bbffe7952f6fe6dd43052e149acc065e05c3901128caf63bde39224b009e5",
+  "question_id": null
+}

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-harness.local/schemas/system_failure_triage.schema.json",
+  "title": "System Failure Triage (SYS-32)",
+  "description": "One SYS-31 System failure record classified into SYS-32's own seven named outcomes plus an honest residual, with the upstream row every verdict was decided from cited by id. `sources_consulted` records, per cause, whether the document that decides it was supplied -- NOT_CONSULTED is deliberately distinct from consulted-and-empty, because without that distinction an unexamined failure would silently read as a GENUINE_SOC_INTEGRATION_BUG. `root_cause_decided` is pinned to false: SYS-32 determines a LOCUS, not a root cause. `failures_fixed` and `failures_waived` are pinned to 0: this layer reports and changes nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "triage_id", "system_scenario_id", "classifications",
+               "precedence", "locus", "locus_basis", "classification", "basis",
+               "cited_row", "from_source", "also_matched", "signals",
+               "failing_subsystems", "sources_consulted", "sources_not_consulted",
+               "cause_sources", "prior_evidence_by_subsystem", "root_cause_decided",
+               "root_cause_note", "failures_fixed", "failures_waived", "phase_boundary"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "triage_id": { "type": "string", "minLength": 1 },
+    "system_scenario_id": { "type": "string", "minLength": 1 },
+    "classifications": {
+      "type": "array",
+      "description": "SYS-32's seven named outcomes plus UNKNOWN.",
+      "items": { "type": "string" },
+      "minItems": 8,
+      "maxItems": 8
+    },
+    "precedence": { "type": "array", "items": { "type": "string" }, "minItems": 8, "maxItems": 8 },
+    "locus": {
+      "enum": ["LOCAL", "CROSS_SUBSYSTEM", "UNKNOWN"],
+      "description": "SYS-32's first determination, kept as its own field so it stays readable even when the mechanism is UNKNOWN."
+    },
+    "locus_basis": { "type": "string", "minLength": 1 },
+    "classification": {
+      "enum": ["LOCAL_SUBSYSTEM_DEFECT", "SHARED_RESOURCE_CAUSE", "COMMAND_ORDERING_CAUSE",
+               "DUPLICATE_DRIVER_CAUSE", "ADDRESS_CONFLICT_CAUSE", "CLOCK_RESET_CAUSE",
+               "GENUINE_SOC_INTEGRATION_BUG", "UNKNOWN"]
+    },
+    "basis": { "type": "string", "minLength": 1 },
+    "cited_row": { "type": "string" },
+    "from_source": { "type": "string", "minLength": 1 },
+    "also_matched": { "type": "array", "items": { "type": "string" } },
+    "signals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["classification", "basis", "from_source", "cited_row", "subsystems"],
+        "properties": {
+          "classification": { "type": "string" },
+          "basis": { "type": "string", "minLength": 1 },
+          "from_source": { "type": "string", "minLength": 1 },
+          "cited_row": { "type": "string" },
+          "subsystems": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "failing_subsystems": { "type": "array", "items": { "type": "string" } },
+    "sources_consulted": {
+      "type": "object",
+      "additionalProperties": { "enum": ["CONSULTED", "NOT_CONSULTED"] }
+    },
+    "sources_not_consulted": { "type": "array", "items": { "type": "string" } },
+    "cause_sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["classification", "source", "decided_by"],
+        "properties": {
+          "classification": { "type": "string" },
+          "source": { "type": "string" },
+          "decided_by": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "prior_evidence_by_subsystem": { "type": "object" },
+    "root_cause_decided": {
+      "const": false,
+      "description": "SYS-32 determines local vs cross-subsystem and which mechanism to look at. Deciding a root cause requires current evidence, per the Evidence Truth Rule."
+    },
+    "root_cause_note": { "type": "string", "minLength": 1 },
+    "failures_fixed": { "const": 0 },
+    "failures_waived": { "const": 0 },
+    "phase_boundary": { "type": "string", "minLength": 1 }
+  }
+}

@@ -1,0 +1,4 @@
+# SYNTHETIC test fixture -- not derived from any real protocol specification.
+This document describes the register map and general operation of the
+interface. Addresses are byte-aligned and all transfers use a fixed-size
+descriptor. Refer to the appendix for the full register list.

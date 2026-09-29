@@ -1,0 +1,562 @@
+
+
+`ifndef GUARD_SVT_AXI_MASTER_BIND_IF_SVI
+`define GUARD_SVT_AXI_MASTER_BIND_IF_SVI
+
+`include "svt_axi_defines.svi"
+//=======================================================================
+
+interface svt_axi_master_bind_if #( int AWADDR_WIDTH_PARAM   =                    `SVT_AXI_MAX_ADDR_WIDTH,
+                                    int ARADDR_WIDTH_PARAM   =                    `SVT_AXI_MAX_ADDR_WIDTH,
+                                    int AWLEN_WIDTH_PARAM     =                `SVT_AXI_MAX_BURST_LENGTH_WIDTH,
+                                    int ARLEN_WIDTH_PARAM     =                `SVT_AXI_MAX_BURST_LENGTH_WIDTH,  
+                                    int ARSIZE_WIDTH_PARAM                 =   `SVT_AXI_SIZE_WIDTH,
+                                    int AWSIZE_WIDTH_PARAM                 =   `SVT_AXI_SIZE_WIDTH,
+                                    int AWBURST_WIDTH_PARAM                =   `SVT_AXI_BURST_WIDTH,
+                                    int ARBURST_WIDTH_PARAM                =   `SVT_AXI_BURST_WIDTH,
+                                    int ARLOCK_WIDTH_PARAM                 =   `SVT_AXI_LOCK_WIDTH,
+                                    int AWLOCK_WIDTH_PARAM                 =   `SVT_AXI_LOCK_WIDTH,
+                                    int ARCACHE_WIDTH_PARAM                =   `SVT_AXI_CACHE_WIDTH,
+                                    int ARPROT_WIDTH_PARAM                 =   `SVT_AXI_PROT_WIDTH,
+                                    int ARID_WIDTH_PARAM               =       `SVT_AXI_MAX_ID_WIDTH,
+                                    int RID_WIDTH_PARAM               =       `SVT_AXI_MAX_ID_WIDTH,
+                                    int ARDOMAIN_WIDTH_PARAM           =       `SVT_AXI_ACE_DOMAIN_WIDTH,
+                                    int BID_WIDTH_PARAM               =       `SVT_AXI_MAX_ID_WIDTH,
+                                    int WID_WIDTH_PARAM               =       `SVT_AXI_MAX_ID_WIDTH,
+                                    int AWDOMAIN_WIDTH_PARAM           =       `SVT_AXI_ACE_DOMAIN_WIDTH,
+                                    int AWSNOOP_WIDTH_PARAM           =        `SVT_AXI_ACE_WSNOOP_WIDTH,
+                                    int AWBAR_WIDTH_PARAM          =           `SVT_AXI_ACE_BARRIER_WIDTH,
+                                    int RDATA_WIDTH_PARAM             =        `SVT_AXI_MAX_DATA_WIDTH,
+                                    int WSTRB_WIDTH_PARAM             =        `SVT_AXI_MAX_DATA_WIDTH/8,
+                                    int RRESP_WIDTH_PARAM                 =    `SVT_AXI_RESP_WIDTH,
+                                    int AWREGION_WIDTH_PARAM               =   `SVT_AXI_REGION_WIDTH,         
+                                    int AWQOS_WIDTH_PARAM                  =   `SVT_AXI_QOS_WIDTH,            
+                                    int AWCACHE_WIDTH_PARAM                =   `SVT_AXI_CACHE_WIDTH,
+                                    int AWPROT_WIDTH_PARAM                 =   `SVT_AXI_PROT_WIDTH,
+                                    int AWID_WIDTH_PARAM               =       `SVT_AXI_MAX_ID_WIDTH,
+                                    int DOMAIN_WIDTH_PARAM           =         `SVT_AXI_ACE_DOMAIN_WIDTH,
+                                    int WSNOOP_WIDTH_PARAM           =         `SVT_AXI_ACE_WSNOOP_WIDTH,
+                                    int ARBAR_WIDTH_PARAM          =           `SVT_AXI_ACE_BARRIER_WIDTH,
+                                    int WDATA_WIDTH_PARAM             =        `SVT_AXI_MAX_DATA_WIDTH,
+                                    int BRESP_WIDTH_PARAM                 =    `SVT_AXI_RESP_WIDTH,
+                                    int ARREGION_WIDTH_PARAM               =   `SVT_AXI_REGION_WIDTH,         
+                                    int ARQOS_WIDTH_PARAM                  =   `SVT_AXI_QOS_WIDTH,            
+                                    int ARUSER_WIDTH_PARAM        =            `SVT_AXI_MAX_ADDR_USER_WIDTH,  
+                                    int WUSER_WIDTH_PARAM        =             `SVT_AXI_MAX_DATA_USER_WIDTH,
+                                    int AWUSER_WIDTH_PARAM        =            `SVT_AXI_MAX_ADDR_USER_WIDTH,  
+                                    int RUSER_WIDTH_PARAM        =             `SVT_AXI_MAX_DATA_USER_WIDTH,
+                                    int BUSER_WIDTH_PARAM       =              `SVT_AXI_MAX_BRESP_USER_WIDTH,      			    
+                                    int ACADDR_WIDTH_PARAM       =             `SVT_AXI_ACE_SNOOP_ADDR_WIDTH,
+                                    int ACSNOOP_WIDTH_PARAM       =            `SVT_AXI_ACE_SNOOP_TYPE_WIDTH,
+                                    int ACPROT_WIDTH_PARAM       =             `SVT_AXI_ACE_SNOOP_PROT_WIDTH,
+                                    int CRRESP_WIDTH_PARAM       =             `SVT_AXI_ACE_SNOOP_RESP_WIDTH,
+                                    int CDDATA_WIDTH_PARAM       =             `SVT_AXI_ACE_SNOOP_DATA_WIDTH,
+                                    int TDATA_WIDTH_PARAM            =         `SVT_AXI_MAX_TDATA_WIDTH,      
+                                    int TSTRB_WIDTH_PARAM                =     `SVT_AXI_TSTRB_WIDTH,          
+                                    int TDEST_WIDTH_PARAM            =         `SVT_AXI_MAX_TDEST_WIDTH,      
+                                    int TKEEP_WIDTH_PARAM                =     `SVT_AXI_TKEEP_WIDTH,          
+                                    int TID_WIDTH_PARAM              =         `SVT_AXI_MAX_TID_WIDTH,      
+                                    int TUSER_WIDTH_PARAM             =        `SVT_AXI_MAX_TUSER_WIDTH,
+                                    int ARSNOOP_WIDTH_PARAM           =       `SVT_AXI_ACE_RSNOOP_WIDTH,
+                                    int AWMMUSID_WIDTH_PARAM          = `SVT_AXI_MAX_MMUSID_WIDTH,
+                                    int AWMMUSSID_WIDTH_PARAM         = `SVT_AXI_MAX_MMUSSID_WIDTH,
+                                    int AWATOP_WIDTH_PARAM            = `SVT_ACE5_ATOMIC_TYPE_WIDTH,
+                                    int AWSTASHNID_WIDTH_PARAM        = `SVT_AXI_STASH_NID_WIDTH,
+                                    int AWSTASHLPID_WIDTH_PARAM       = `SVT_AXI_STASH_LPID_WIDTH,
+                                    int ARMMUSID_WIDTH_PARAM          = `SVT_AXI_MAX_MMUSID_WIDTH,
+                                    int ARMMUSSID_WIDTH_PARAM         = `SVT_AXI_MAX_MMUSSID_WIDTH,
+                                    int WDATACHK_WIDTH_PARAM          = `SVT_AXI_MAX_DATA_WIDTH/8,
+                                    int WPOISON_WIDTH_PARAM           = `SVT_AXI_MAX_DATA_WIDTH/64,
+                                    int CDDATACHK_WIDTH_PARAM         = `SVT_AXI_ACE_SNOOP_DATA_WIDTH/8,
+                                    int CDPOISON_WIDTH_PARAM          = `SVT_AXI_ACE_SNOOP_DATA_WIDTH/64,
+                                    int ACVMIDEXT_WIDTH_PARAM         = `SVT_AXI_MAX_VMIDEXT_WIDTH,
+                                    int RDATACHK_WIDTH_PARAM          = `SVT_AXI_MAX_DATA_WIDTH/8,
+                                    int RPOISON_WIDTH_PARAM           = `SVT_AXI_MAX_DATA_WIDTH/64
+)                       
+(
+  inout                                   awvalid,
+  inout [AWADDR_WIDTH_PARAM-1:0]            awaddr,
+  inout [AWLEN_WIDTH_PARAM-1:0]    awlen,
+  inout [AWSIZE_WIDTH_PARAM-1:0]                awsize,
+  inout [AWBURST_WIDTH_PARAM-1:0]               awburst,
+  inout [AWLOCK_WIDTH_PARAM-1:0]                awlock,
+  inout [AWCACHE_WIDTH_PARAM-1:0]               awcache,
+  inout [AWPROT_WIDTH_PARAM-1:0]                awprot,
+  inout [AWID_WIDTH_PARAM-1:0]              awid,
+  input                                  awready,
+  inout [AWDOMAIN_WIDTH_PARAM-1:0]	         awdomain,	
+  inout [AWSNOOP_WIDTH_PARAM-1:0]	         awsnoop,	
+  inout [AWBAR_WIDTH_PARAM-1:0]	 awbar,
+  inout         			 awunique, 
+  inout                                  arvalid,
+  inout [ARADDR_WIDTH_PARAM-1:0]            araddr,
+  inout [ARLEN_WIDTH_PARAM-1:0]    arlen,
+  inout [ARSIZE_WIDTH_PARAM-1:0]                arsize,
+  inout [ARBURST_WIDTH_PARAM-1:0]               arburst,
+  inout [ARLOCK_WIDTH_PARAM-1:0]                arlock,
+  inout [ARCACHE_WIDTH_PARAM-1:0]               arcache,
+  inout [ARPROT_WIDTH_PARAM-1:0]                arprot,
+  inout [ARID_WIDTH_PARAM-1:0]              arid,
+  input                                  arready,
+  inout [ARDOMAIN_WIDTH_PARAM-1:0]	  	 ardomain,	
+  inout [ARSNOOP_WIDTH_PARAM-1:0]	  	 arsnoop,	
+  inout [ARBAR_WIDTH_PARAM-1:0]	 arbar,
+  input                              rvalid,
+  input                              rlast,
+  input [RDATA_WIDTH_PARAM-1:0]            rdata,
+  input [RRESP_WIDTH_PARAM-1:0]                rresp,
+  input [RID_WIDTH_PARAM-1:0]              rid,
+  inout                                  rready,
+  inout         			 rack,
+  inout                                  wvalid,
+  inout                                  wlast,
+  inout [WDATA_WIDTH_PARAM-1:0]            wdata,
+  inout [(`SVT_AXI_MAX_DATA_WIDTH/8)-1:0]  wdatachk,
+  inout [WSTRB_WIDTH_PARAM-1:0]          wstrb,
+  inout [WID_WIDTH_PARAM-1:0]              wid,
+  input                                  wready,
+  input                                  bvalid,
+  
+  input [BRESP_WIDTH_PARAM-1:0]                bresp,
+  input [BID_WIDTH_PARAM-1:0]              bid,
+  // AXI ACE5 Extension of Write Response channel 
+  inout 					awakeup,	
+  inout                                  bready,
+  inout	        		         wack,
+  inout [AWREGION_WIDTH_PARAM-1:0]              awregion,
+  inout [AWQOS_WIDTH_PARAM-1:0]                 awqos,
+  inout [AWUSER_WIDTH_PARAM-1:0]       awuser,
+  inout [ARREGION_WIDTH_PARAM-1:0]              arregion,
+  inout [ARQOS_WIDTH_PARAM-1:0]                 arqos,
+  inout [ARUSER_WIDTH_PARAM-1:0]       aruser,
+  inout [WUSER_WIDTH_PARAM-1:0]       wuser,
+  input [RUSER_WIDTH_PARAM-1:0]       ruser,
+  input [BUSER_WIDTH_PARAM-1:0]      buser,
+  input         			 acvalid,
+  inout         		         acready,	
+  input [ACADDR_WIDTH_PARAM-1:0]	 acaddr,	        
+  input [ACSNOOP_WIDTH_PARAM-1:0]	 acsnoop,	
+  input [ACPROT_WIDTH_PARAM-1:0]	 acprot,		
+  inout         			 crvalid,	
+  input         		         crready,	
+  inout [CRRESP_WIDTH_PARAM-1:0]	 crresp,		
+  inout         			 cdvalid,	
+  input         		         cdready,	
+  inout [CDDATA_WIDTH_PARAM-1:0]	 cddata,		
+  inout [(`SVT_AXI_ACE_SNOOP_DATA_WIDTH/8)-1:0]	cddatachk,
+  inout         		  	 cdlast,
+  inout                                  tvalid,
+  input                                  tready,
+  inout [TDATA_WIDTH_PARAM-1:0]           tdata,
+  inout [TSTRB_WIDTH_PARAM-1:0]               tstrb,
+  inout [TDEST_WIDTH_PARAM-1:0]           tdest,
+  inout [TKEEP_WIDTH_PARAM-1:0]               tkeep,
+  inout                                  tlast,
+  inout [TID_WIDTH_PARAM-1:0]             tid,
+ `ifdef SVT_AXI_QVN_ENABLE  
+  inout  [3:0] arvnet , 
+  inout  [3:0] awvnet , 
+  inout  [3:0] wvnet  , 
+  inout  [3:0] varqosvn3  , 
+  inout        varvalidvn3, 
+  input        varreadyvn3, 
+  inout  [3:0] vawqosvn3  , 
+  inout        vawvalidvn3, 
+  input         vawreadyvn3, 
+  inout        vwvalidvn3 , 
+  input         vwreadyvn3 , 
+  inout  [3:0] varqosvn2  , 
+  inout        varvalidvn2, 
+  input         varreadyvn2, 
+  inout  [3:0] vawqosvn2  , 
+  inout        vawvalidvn2, 
+  input         vawreadyvn2, 
+  inout        vwvalidvn2 , 
+  input         vwreadyvn2 , 
+  inout  [3:0] varqosvn1  , 
+  inout        varvalidvn1, 
+  input         varreadyvn1, 
+  inout  [3:0] vawqosvn1  , 
+  inout        vawvalidvn1, 
+  input         vawreadyvn1, 
+  inout        vwvalidvn1 , 
+  input         vwreadyvn1 , 
+  inout  [3:0] varqosvn0  , 
+  inout        varvalidvn0, 
+  input         varreadyvn0, 
+  inout  [3:0] vawqosvn0  , 
+  inout        vawvalidvn0, 
+  input         vawreadyvn0, 
+  inout        vwvalidvn0 , 
+  input         vwreadyvn0 , 
+`endif 
+  output                                awtrace,
+  output	                              awmmusecsid,
+  output	[AWMMUSID_WIDTH_PARAM-1:0]	  awmmusid,
+  output	                              awmmussidv,
+  output	[AWMMUSSID_WIDTH_PARAM-1:0]	  awmmussid,
+  output	                              awmmuatst,
+  output	[AWATOP_WIDTH_PARAM-1:0]	    awatop,
+  output	[AWSTASHNID_WIDTH_PARAM-1:0]	awstashnid,
+  output	[AWSTASHLPID_WIDTH_PARAM-1:0]	awstashlpid,
+  output	                              awstashnid_en,
+  output	                              awstashlpid_en,
+  output	                              artrace,
+  output	                              armmusecsid,
+  output	[ARMMUSID_WIDTH_PARAM-1:0]	  armmusid,
+  output	                              armmussidv,
+  output	[ARMMUSSID_WIDTH_PARAM-1:0]	  armmussid,
+  output	                              armmuatst,
+  output	                              wtrace,
+  output	[WPOISON_WIDTH_PARAM-1:0]	    wpoison,
+  output	[CDPOISON_WIDTH_PARAM-1:0]	  cdpoison,
+  output	                              cdtrace,
+  input	  [ACVMIDEXT_WIDTH_PARAM-1:0]	  acvmidext,
+  input                                 acwakeup,
+  input                                 actrace,
+  input                                 btrace,
+  input	  [RDATACHK_WIDTH_PARAM-1:0]	    rdatachk,
+  input	  [RPOISON_WIDTH_PARAM-1:0]	      rpoison,
+  input                                 rtrace,
+  output                                crtrace,
+  inout [TUSER_WIDTH_PARAM-1:0]           tuser
+);
+endinterface
+
+//=======================================================================
+module svt_axi_master_connector #(is_active=1) (svt_axi_master_if master_if, svt_axi_master_bind_if master_bind_if);
+
+`ifdef SVT_MULTI_SIM_PROCEDURAL_COMBINATORIAL_DRIVE
+
+  always @(*) 
+  begin
+  // Inputs
+    master_if.awready  = master_bind_if.awready;
+    master_if.arready  = master_bind_if.arready;
+    master_if.rvalid   = master_bind_if.rvalid;
+    master_if.rlast    = master_bind_if.rlast;
+    master_if.rdata    = master_bind_if.rdata;
+    master_if.rdatachk    = master_bind_if.rdatachk;
+    master_if.rresp    = master_bind_if.rresp;
+    master_if.rid      = master_bind_if.rid;
+    master_if.wready   = master_bind_if.wready;
+    master_if.bvalid   = master_bind_if.bvalid;
+    master_if.bresp    = master_bind_if.bresp;
+    master_if.bid      = master_bind_if.bid;
+    master_if.ruser    = master_bind_if.ruser;
+    master_if.buser    = master_bind_if.buser;
+    master_if.acvalid  = master_bind_if.acvalid;
+    master_if.acwakeup  = master_bind_if.acwakeup;
+    master_if.acaddr   = master_bind_if.acaddr;
+    master_if.acsnoop  = master_bind_if.acsnoop;
+    master_if.acprot   = master_bind_if.acprot;
+    master_if.crready  = master_bind_if.crready;
+    master_if.cdready  = master_bind_if.cdready;
+    master_if.tready   = master_bind_if.tready; 
+  `ifdef SVT_AXI_QVN_ENABLE
+    master_if.varreadyvn3 =master_bind_if.varreadyvn3 ;
+    master_if.vawreadyvn3 =master_bind_if.vawreadyvn3 ;
+    master_if.vwreadyvn3  =master_bind_if.vwreadyvn3  ;
+    master_if.varreadyvn2 =master_bind_if.varreadyvn2 ;
+    master_if.vawreadyvn2 =master_bind_if.vawreadyvn2 ;
+    master_if.vwreadyvn2  =master_bind_if.vwreadyvn2  ;
+    master_if.varreadyvn1 =master_bind_if.varreadyvn1 ;
+    master_if.vawreadyvn1 =master_bind_if.vawreadyvn1 ;
+    master_if.vwreadyvn1  =master_bind_if.vwreadyvn1  ;
+    master_if.varreadyvn0 =master_bind_if.varreadyvn0 ;
+    master_if.vawreadyvn0 =master_bind_if.vawreadyvn0 ;
+    master_if.vwreadyvn0  =master_bind_if.vwreadyvn0  ;
+   `endif
+    master_if.acvmidext = master_bind_if.acvmidext;
+    master_if.acwakeup  = master_bind_if.acwakeup;
+    master_if.actrace   = master_bind_if.actrace;
+    master_if.btrace    = master_bind_if.btrace;
+    master_if.rdatachk  = master_bind_if.rdatachk ;
+    master_if.rpoison   = master_bind_if.rpoison;
+    master_if.rtrace    = master_bind_if.rtrace; 
+  end
+`else
+  // Inputs
+  assign master_if.awready  = master_bind_if.awready;
+  assign master_if.arready  = master_bind_if.arready;
+  assign master_if.rvalid   = master_bind_if.rvalid;
+  assign master_if.rlast    = master_bind_if.rlast;
+  assign master_if.rdata    = master_bind_if.rdata;
+  assign master_if.rdatachk    = master_bind_if.rdatachk;
+  assign master_if.rresp    = master_bind_if.rresp;
+  assign master_if.rid      = master_bind_if.rid;
+  assign master_if.wready   = master_bind_if.wready;
+  assign master_if.bvalid   = master_bind_if.bvalid;
+  assign master_if.bresp    = master_bind_if.bresp;
+  assign master_if.bid      = master_bind_if.bid;
+  assign master_if.ruser    = master_bind_if.ruser;
+  assign master_if.buser    = master_bind_if.buser;
+  assign master_if.acvalid  = master_bind_if.acvalid;
+  assign master_if.acwakeup  = master_bind_if.acwakeup;
+  assign master_if.acaddr   = master_bind_if.acaddr;
+  assign master_if.acsnoop  = master_bind_if.acsnoop;
+  assign master_if.acprot   = master_bind_if.acprot;
+  assign master_if.crready  = master_bind_if.crready;
+  assign master_if.cdready  = master_bind_if.cdready;
+  assign master_if.tready   = master_bind_if.tready;   
+ `ifdef SVT_AXI_QVN_ENABLE
+  assign  master_if.varreadyvn3 =master_bind_if.varreadyvn3 ;
+  assign  master_if.vawreadyvn3 =master_bind_if.vawreadyvn3 ;
+  assign  master_if.vwreadyvn3  =master_bind_if.vwreadyvn3  ;
+  assign  master_if.varreadyvn2 =master_bind_if.varreadyvn2 ;
+  assign  master_if.vawreadyvn2 =master_bind_if.vawreadyvn2 ;
+  assign  master_if.vwreadyvn2  =master_bind_if.vwreadyvn2  ;
+  assign  master_if.varreadyvn1 =master_bind_if.varreadyvn1 ;
+  assign  master_if.vawreadyvn1 =master_bind_if.vawreadyvn1 ;
+  assign  master_if.vwreadyvn1  =master_bind_if.vwreadyvn1  ;
+  assign  master_if.varreadyvn0 =master_bind_if.varreadyvn0 ;
+  assign  master_if.vawreadyvn0 =master_bind_if.vawreadyvn0 ;
+  assign  master_if.vwreadyvn0  =master_bind_if.vwreadyvn0  ;
+ `endif
+  assign master_if.acvmidext = master_bind_if.acvmidext;
+  assign master_if.actrace   = master_bind_if.actrace;
+  assign master_if.btrace    = master_bind_if.btrace;
+  assign master_if.rpoison   = master_bind_if.rpoison;
+  assign master_if.rtrace    = master_bind_if.rtrace; 
+`endif 
+  // inouts
+  // If master is Active
+ initial begin
+   if (is_active) begin
+     force master_bind_if.awvalid   = master_if.awvalid;
+     force master_bind_if.awaddr    = master_if.awaddr;
+     force master_bind_if.awlen     = master_if.awlen;
+     force master_bind_if.awsize    = master_if.awsize;
+     force master_bind_if.awburst   = master_if.awburst;
+     force master_bind_if.awlock    = master_if.awlock;
+     force master_bind_if.awcache   = master_if.awcache;
+     force master_bind_if.awprot    = master_if.awprot;
+     force master_bind_if.awid      = master_if.awid;
+     force master_bind_if.awdomain  = master_if.awdomain;
+     force master_bind_if.awsnoop   = master_if.awsnoop;
+     force master_bind_if.awbar     = master_if.awbar;
+     force master_bind_if.awunique  = master_if.awunique;
+     force master_bind_if.arvalid   = master_if.arvalid;
+     force master_bind_if.araddr    = master_if.araddr;
+     force master_bind_if.arlen     = master_if.arlen;
+     force master_bind_if.arsize    = master_if.arsize;
+     force master_bind_if.arburst   = master_if.arburst;
+     force master_bind_if.arlock    = master_if.arlock;
+     force master_bind_if.arcache   = master_if.arcache;
+     force master_bind_if.arprot    = master_if.arprot;
+     force master_bind_if.arid      = master_if.arid;
+     force master_bind_if.ardomain  = master_if.ardomain;
+     force master_bind_if.arsnoop   = master_if.arsnoop;
+     force master_bind_if.arbar     = master_if.arbar;
+     force master_bind_if.rready    = master_if.rready;
+     force master_bind_if.rack      = master_if.rack;
+     force master_bind_if.wvalid    = master_if.wvalid;
+     force master_bind_if.wlast     = master_if.wlast;
+     force master_bind_if.wdata     = master_if.wdata;
+     force master_bind_if.wdatachk     = master_if.wdatachk;
+     force master_bind_if.wstrb     = master_if.wstrb;
+     force master_bind_if.wid       = master_if.wid;
+     force master_bind_if.bready    = master_if.bready;
+     force master_bind_if.wack      = master_if.wack;
+     force master_bind_if.awakeup     = master_if.awakeup;
+     force master_bind_if.awregion  = master_if.awregion;
+     force master_bind_if.awqos     = master_if.awqos;
+     force master_bind_if.awuser    = master_if.awuser;
+     force master_bind_if.arregion  = master_if.arregion;
+     force master_bind_if.arqos     = master_if.arqos;
+     force master_bind_if.aruser    = master_if.aruser;
+     force master_bind_if.wuser     = master_if.wuser;
+     force master_bind_if.acready   = master_if.acready;
+     force master_bind_if.crvalid   = master_if.crvalid;
+     force master_bind_if.crresp	  = master_if.crresp;
+     force master_bind_if.cdvalid   = master_if.cdvalid;
+     force master_bind_if.cddata	  = master_if.cddata;
+     force master_bind_if.cddatachk	  = master_if.cddatachk;
+     force master_bind_if.cdlast    = master_if.cdlast;
+     force master_bind_if.tvalid    = master_if.tvalid;
+     force master_bind_if.tdata     = master_if.tdata;
+     force master_bind_if.tstrb     = master_if.tstrb;
+     force master_bind_if.tdest     = master_if.tdest;
+     force master_bind_if.tkeep     = master_if.tkeep;
+     force master_bind_if.tlast     = master_if.tlast;
+     force master_bind_if.tid       = master_if.tid;
+     force master_bind_if.tuser     = master_if.tuser;  
+ `ifdef SVT_AXI_QVN_ENABLE
+     force  master_bind_if.arvnet     = master_if.arvnet     ;
+     force  master_bind_if.awvnet     = master_if.awvnet     ;
+     force  master_bind_if.wvnet      = master_if.wvnet      ;
+     force  master_bind_if.varqosvn3  = master_if.varqosvn3   ;
+     force  master_bind_if.varvalidvn3= master_if.varvalidvn3 ;
+     force  master_bind_if.vawqosvn3  = master_if.vawqosvn3   ;
+     force  master_bind_if.vawvalidvn3= master_if.vawvalidvn3 ;
+     force  master_bind_if.vwvalidvn3 = master_if.vwvalidvn3  ;
+     force  master_bind_if.varqosvn2  = master_if.varqosvn2   ;
+     force  master_bind_if.varvalidvn2= master_if.varvalidvn2 ;
+     force  master_bind_if.vawqosvn2  = master_if.vawqosvn2   ;
+     force  master_bind_if.vawvalidvn2= master_if.vawvalidvn2 ;
+     force  master_bind_if.vwvalidvn2 = master_if.vwvalidvn2  ;
+     force  master_bind_if.varqosvn1   =  master_if.varqosvn1   ;
+     force  master_bind_if.varvalidvn1 =  master_if.varvalidvn1 ;
+     force  master_bind_if.vawqosvn1   =  master_if.vawqosvn1   ;
+     force  master_bind_if.vawvalidvn1 =  master_if.vawvalidvn1 ;
+     force  master_bind_if.vwvalidvn1  =  master_if.vwvalidvn1  ;
+     force  master_bind_if.varqosvn0   =  master_if.varqosvn0   ;
+     force  master_bind_if.varvalidvn0 =  master_if.varvalidvn0 ;
+     force  master_bind_if.vawqosvn0   =  master_if.vawqosvn0   ;
+     force  master_bind_if.vawvalidvn0 =  master_if.vawvalidvn0 ;
+     force  master_bind_if.vwvalidvn0  =  master_if.vwvalidvn0  ;
+ `endif
+     force master_bind_if.awtrace   = master_if.awtrace;
+     force master_bind_if.awmmusecsid   = master_if.awmmusecsid;
+     force master_bind_if.awmmusid   = master_if.awmmusid;
+     force master_bind_if.awmmussidv   = master_if.awmmussidv;
+     force master_bind_if.awmmussid   = master_if.awmmussid;
+     force master_bind_if.awmmuatst   = master_if.awmmuatst;
+     force master_bind_if.awatop   = master_if.awatop;
+     force master_bind_if.awstashnid   = master_if.awstashnid;
+     force master_bind_if.awstashlpid   = master_if.awstashlpid;
+     force master_bind_if.awstashnid_en   = master_if.awstashnid_en;
+     force master_bind_if.awstashlpid_en   = master_if.awstashlpid_en;
+     force master_bind_if.artrace   = master_if.artrace;
+     force master_bind_if.armmusecsid   = master_if.armmusecsid;
+     force master_bind_if.armmusid   = master_if.armmusid;
+     force master_bind_if.armmussidv   = master_if.armmussidv;
+     force master_bind_if.armmussid   = master_if.armmussid;
+     force master_bind_if.armmuatst   = master_if.armmuatst;
+     force master_bind_if.wdatachk   = master_if.wdatachk;
+     force master_bind_if.wtrace   = master_if.wtrace;
+     force master_bind_if.wpoison   = master_if.wpoison;
+     force master_bind_if.cddatachk   = master_if.cddatachk;
+     force master_bind_if.cdpoison   = master_if.cdpoison;
+     force master_bind_if.cdtrace   = master_if.cdtrace;
+     force master_bind_if.awakeup   = master_if.awakeup;
+     force master_bind_if.crtrace   = master_if.crtrace;
+   end 
+ end
+
+ always @(*) 
+    begin
+  // If master is Passive
+     if(is_active == 0) begin
+       master_if.awvalid   = master_bind_if.awvalid;
+       master_if.awaddr    = master_bind_if.awaddr;
+       master_if.awlen     = master_bind_if.awlen;
+       master_if.awsize    = master_bind_if.awsize;
+       master_if.awburst   = master_bind_if.awburst;
+       master_if.awlock    = master_bind_if.awlock;
+       master_if.awcache   = master_bind_if.awcache;
+       master_if.awprot    = master_bind_if.awprot;
+       master_if.awid      = master_bind_if.awid;
+       master_if.awdomain  = master_bind_if.awdomain;
+       master_if.awsnoop   = master_bind_if.awsnoop;
+       master_if.awbar     = master_bind_if.awbar;
+       master_if.awunique  = master_bind_if.awunique;
+       master_if.arvalid   = master_bind_if.arvalid;
+       master_if.araddr    = master_bind_if.araddr;
+       master_if.arlen     = master_bind_if.arlen;
+       master_if.arsize    = master_bind_if.arsize;
+       master_if.arburst   = master_bind_if.arburst;
+       master_if.arlock    = master_bind_if.arlock;
+       master_if.arcache   = master_bind_if.arcache;
+       master_if.arprot    = master_bind_if.arprot;
+       master_if.arid      = master_bind_if.arid;
+       master_if.ardomain  = master_bind_if.ardomain;
+       master_if.arsnoop   = master_bind_if.arsnoop;
+       master_if.arbar     = master_bind_if.arbar;
+       master_if.rready    = master_bind_if.rready;
+       master_if.rack      = master_bind_if.rack;
+       master_if.wvalid    = master_bind_if.wvalid;
+       master_if.wlast     = master_bind_if.wlast;
+       master_if.wdata     = master_bind_if.wdata;
+       master_if.wdatachk     = master_bind_if.wdatachk;
+       master_if.wstrb     = master_bind_if.wstrb;
+       master_if.wid       = master_bind_if.wid;
+       master_if.bready    = master_bind_if.bready;
+       master_if.wack      = master_bind_if.wack;
+       master_if.awakeup     = master_bind_if.awakeup;
+       master_if.awregion  = master_bind_if.awregion;
+       master_if.awqos     = master_bind_if.awqos;
+       master_if.awuser    = master_bind_if.awuser;
+       master_if.arregion  = master_bind_if.arregion;
+       master_if.arqos     = master_bind_if.arqos;
+       master_if.aruser    = master_bind_if.aruser;
+       master_if.wuser     = master_bind_if.wuser;
+       master_if.acready   = master_bind_if.acready;
+       master_if.crvalid   = master_bind_if.crvalid;
+       master_if.crresp    = master_bind_if.crresp;
+       master_if.cdvalid   = master_bind_if.cdvalid;
+       master_if.cddata    = master_bind_if.cddata;
+       master_if.cddatachk    = master_bind_if.cddatachk;
+       master_if.cdlast    = master_bind_if.cdlast;
+       master_if.tvalid    = master_bind_if.tvalid;
+       master_if.tdata     = master_bind_if.tdata;
+       master_if.tstrb     = master_bind_if.tstrb;
+       master_if.tdest     = master_bind_if.tdest;
+       master_if.tkeep     = master_bind_if.tkeep;
+       master_if.tlast     = master_bind_if.tlast;
+       master_if.tid       = master_bind_if.tid;
+       master_if.tuser     = master_bind_if.tuser;
+    `ifdef SVT_AXI_QVN_ENABLE
+       master_if.arvnet      = master_if.arvnet     ;
+       master_if.awvnet      = master_if.awvnet     ;
+       master_if.wvnet       = master_if.wvnet      ;
+                                                   
+       master_if.varqosvn3   = master_if.varqosvn3   ;
+       master_if.varvalidvn3 = master_if.varvalidvn3 ;
+       master_if.vawqosvn3   = master_if.vawqosvn3   ;
+       master_if.vawvalidvn3 = master_if.vawvalidvn3 ;
+       master_if.vwvalidvn3  = master_if.vwvalidvn3  ;
+                                                   
+       master_if.varqosvn2   = master_if.varqosvn2   ;
+       master_if.varvalidvn2 = master_if.varvalidvn2 ;
+       master_if.vawqosvn2   = master_if.vawqosvn2   ;
+       master_if.vawvalidvn2 = master_if.vawvalidvn2 ;
+       master_if.vwvalidvn2  = master_if.vwvalidvn2  ;
+                                                   
+       master_if.varqosvn1   = master_if.varqosvn1   ;
+       master_if.varvalidvn1 = master_if.varvalidvn1 ;
+       master_if.vawqosvn1   = master_if.vawqosvn1   ;
+       master_if.vawvalidvn1 = master_if.vawvalidvn1 ;
+       master_if.vwvalidvn1  = master_if.vwvalidvn1  ;
+                                                   
+       master_if.varqosvn0   = master_if.varqosvn0   ;
+       master_if.varvalidvn0 = master_if.varvalidvn0 ;
+       master_if.vawqosvn0   = master_if.vawqosvn0   ;
+       master_if.vawvalidvn0 = master_if.vawvalidvn0 ;
+       master_if.vwvalidvn0  = master_if.vwvalidvn0  ;
+    `endif
+       master_if.awtrace         =  master_bind_if.awtrace;
+       master_if.awmmusecsid     =  master_bind_if.awmmusecsid;
+       master_if.awmmusid        =  master_bind_if.awmmusid;
+       master_if.awmmussidv      =  master_bind_if.awmmussidv;
+       master_if.awmmussid       =  master_bind_if.awmmussid;
+       master_if.awmmuatst       =  master_bind_if.awmmuatst;
+       master_if.awatop          =  master_bind_if.awatop;
+       master_if.awstashnid      =  master_bind_if.awstashnid;
+       master_if.awstashlpid     =  master_bind_if.awstashlpid;
+       master_if.awstashnid_en   =  master_bind_if.awstashnid_en;
+       master_if.awstashlpid_en  =  master_bind_if.awstashlpid_en;
+       master_if.artrace         =  master_bind_if.artrace;
+       master_if.armmusecsid     =  master_bind_if.armmusecsid;
+       master_if.armmusid        =  master_bind_if.armmusid;
+       master_if.armmussidv      =  master_bind_if.armmussidv;
+       master_if.armmussid       =  master_bind_if.armmussid;
+       master_if.armmuatst       =  master_bind_if.armmuatst;
+       master_if.wdatachk        =  master_bind_if.wdatachk;
+       master_if.wtrace          =  master_bind_if.wtrace;
+       master_if.wpoison         =  master_bind_if.wpoison;
+       master_if.cddatachk       =  master_bind_if.cddatachk;
+       master_if.cdpoison        =  master_bind_if.cdpoison;
+       master_if.cdtrace         =  master_bind_if.cdtrace;
+       master_if.awakeup         =  master_bind_if.awakeup;
+       master_if.crtrace         =  master_bind_if.crtrace;
+     end
+    end
+endmodule
+
+`endif // GUARD_SVT_AXI_MASTER_BIND_IF_SVI
+
+
+
+
+

@@ -23,3 +23,13 @@ git push -u origin <branch>
 或 project-defined push command。
 
 禁止自動 force push。
+
+## PR-Only Merge Policy (main/master)
+
+禁止 agent 直接 push 或 merge 進 `main`/`master`。Agent 可以 branch/commit/
+開 PR (`gh pr create`)，但合併必須經過 human review 才是最後 gate -- 見
+CLAUDE.md「gh CLI + PR-Only Governance Policy」章節。實際 enforcement 是
+`tools/git-hooks/pre-push` + `pre-merge-commit`（呼叫 `dv-harness
+git-guard`，邏輯在 `dv_harness/git_governance.py`），不是只有這份文件的
+文字約束 -- 每次判斷都會記錄到 `.dv-harness/events.jsonl` 的
+`GIT_GUARD_DECISION` 事件，供 `audit-change-governance-agent` 事後追溯。

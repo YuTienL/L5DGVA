@@ -18,7 +18,19 @@
       "blackboard_read": ["environment"],
       "blackboard_write": ["project"],
       "parallel_group": null,
-      "join_group": null
+      "join_group": null,
+      "expected_evidence": [
+        { "item_id": "environment", "description": "ENV_CHECK's execution_mode/actions readiness record that INTAKE reads before starting intake (node.blackboard_read)", "kind": "blackboard_key" }
+      ],
+      "expected_outputs": [
+        { "item_id": "intake_readiness", "description": "prompts.STAGE_INSTRUCTIONS[INTAKE]'s dv-harness-evidence:intake_readiness block", "kind": "evidence_field" },
+        { "item_id": "intake_readiness.mode", "description": "declared project mode (SUBSYSTEM or SYSTEM_LEVEL)", "kind": "evidence_field" },
+        { "item_id": "intake_readiness.target_name", "description": "target_name field of intake_readiness", "kind": "evidence_field" },
+        { "item_id": "intake_readiness.protocols", "description": "protocols list of intake_readiness", "kind": "evidence_field" },
+        { "item_id": "intake_readiness.required_artifacts.protocol_spec", "description": "required_artifacts.protocol_spec confirmed present (SUBSYSTEM mode)", "kind": "evidence_field" },
+        { "item_id": "intake_readiness.required_artifacts.dut_design_spec", "description": "required_artifacts.dut_design_spec confirmed present (SUBSYSTEM mode)", "kind": "evidence_field" },
+        { "item_id": "intake_readiness.required_artifacts.rtl_top_or_interface_files", "description": "required_artifacts.rtl_top_or_interface_files confirmed present (SUBSYSTEM mode)", "kind": "evidence_field" }
+      ]
     },
     {
       "id": "DISCOVERY",
@@ -55,7 +67,7 @@
       "route": "analysis-route",
       "agent": "analysis-agent",
       "skills": ["hierarchy-discovery"],
-      "blackboard_read": ["baseline"],
+      "blackboard_read": ["baseline", "env_manifest"],
       "blackboard_write": ["architecture"],
       "parallel_group": null,
       "join_group": null
@@ -75,7 +87,7 @@
       "route": "analysis-route",
       "agent": "analysis-agent",
       "skills": ["project-model"],
-      "blackboard_read": ["architecture"],
+      "blackboard_read": ["architecture", "env_manifest"],
       "blackboard_write": ["project_model"],
       "parallel_group": null,
       "join_group": null
@@ -161,7 +173,7 @@
       "route": "implementation-route",
       "agent": "implementation-agent",
       "skills": ["workflow-closure-loop"],
-      "blackboard_read": ["findings", "vplan", "patterns", "verification_architecture"],
+      "blackboard_read": ["findings", "vplan", "patterns", "verification_architecture", "env_manifest", "open_questions_decisions"],
       "blackboard_write": ["implementation"],
       "parallel_group": null,
       "join_group": null
@@ -214,14 +226,22 @@
       "blackboard_read": ["server_state"],
       "blackboard_write": ["build_state"],
       "parallel_group": null,
-      "join_group": null
+      "join_group": null,
+      "expected_evidence": [
+        { "item_id": "server_state", "description": "SERVER_SYNC's server-side identity record BUILD reads before compiling (node.blackboard_read; BASE prompt: 'Server build 前確認 exact pushed Git SHA')", "kind": "blackboard_key" }
+      ],
+      "expected_outputs": [
+        { "item_id": "shared_elaboration_collision_gate", "description": "gates.STAGE_GATES[BUILD]'s shared_elaboration_collision_gate evidence block (STAGE_INSTRUCTIONS[BUILD] has no named fence of its own -- this is the real registered gate the harness checks for this stage)", "kind": "evidence_field" },
+        { "item_id": "stop_after_simv_policy_gate", "description": "gates.STAGE_GATES[BUILD]'s stop_after_simv_policy_gate evidence block", "kind": "evidence_field" },
+        { "item_id": "build_state", "description": "the build_state blackboard record STAGE_INSTRUCTIONS[BUILD]'s '保存 evidence' resolves to (node.blackboard_write)", "kind": "blackboard_key" }
+      ]
     },
     {
       "id": "BUILD_DEBUG",
       "route": "build-route",
       "agent": "build-agent",
       "skills": ["vcs-build"],
-      "blackboard_read": ["build_state"],
+      "blackboard_read": ["build_state", "connectivity_gates"],
       "blackboard_write": ["build_state"],
       "parallel_group": null,
       "join_group": null
@@ -231,10 +251,20 @@
       "route": "build-route",
       "agent": "build-agent",
       "skills": ["verification-signoff"],
-      "blackboard_read": [],
+      "blackboard_read": ["connectivity_gates"],
       "blackboard_write": ["verification_state"],
       "parallel_group": null,
-      "join_group": null
+      "join_group": null,
+      "expected_evidence": [
+        { "item_id": "command.txt", "description": "STAGE_INSTRUCTIONS[VERIFY]'s 'command.txt <-> sim.log Semantic Verification' -- the command.txt scenario file VERIFY must cross-check sim.log against", "kind": "file_path" }
+      ],
+      "expected_outputs": [
+        { "item_id": "simulation_semantic_validation_gate", "description": "STAGE_INSTRUCTIONS[VERIFY]'s dv-harness-evidence:simulation_semantic_validation_gate block", "kind": "evidence_field" },
+        { "item_id": "simulation_semantic_validation_gate.simulation_passed", "description": "simulation_passed field of simulation_semantic_validation_gate", "kind": "evidence_field" },
+        { "item_id": "test_result_provenance_gate.results", "description": "results list of test_result_provenance_gate", "kind": "evidence_field" },
+        { "item_id": "false_pass_resistance_gate.oracle_independent", "description": "oracle_independent field of false_pass_resistance_gate", "kind": "evidence_field" },
+        { "item_id": "false_pass_resistance_gate.negative_test_detects_fault", "description": "negative_test_detects_fault field of false_pass_resistance_gate (FALSE PASS Defense)", "kind": "evidence_field" }
+      ]
     },
     {
       "id": "WAVE_ANALYSIS",
@@ -264,7 +294,15 @@
       "blackboard_read": [],
       "blackboard_write": [],
       "parallel_group": null,
-      "join_group": null
+      "join_group": null,
+      "expected_evidence": [
+        { "item_id": "REGRESSION_SELECT:regression_selection_completeness_gate.targeted_tests", "description": "REGRESSION_SELECT's TARGETED test selection (STAGE_INSTRUCTIONS[REGRESSION_SELECT]) that REGRESSION submits", "kind": "evidence_field" },
+        { "item_id": "REGRESSION_SELECT:regression_selection_completeness_gate.mandatory_signoff_tests", "description": "REGRESSION_SELECT's mandatory signoff test selection that REGRESSION submits", "kind": "evidence_field" }
+      ],
+      "expected_outputs": [
+        { "item_id": "regression_submission_policy_gate", "description": "STAGE_INSTRUCTIONS[REGRESSION]'s dv-harness-evidence:regression_submission_policy_gate block", "kind": "evidence_field" },
+        { "item_id": "regression_submission_policy_gate.jobs", "description": "jobs list (one LSF job = one isolated Job Agent context, WAVE/PA/Coverage default 0/0/false)", "kind": "evidence_field" }
+      ]
     },
     {
       "id": "REGRESSION_MONITOR",
@@ -284,7 +322,16 @@
       "blackboard_read": ["regression_state"],
       "blackboard_write": ["coverage"],
       "parallel_group": null,
-      "join_group": null
+      "join_group": null,
+      "expected_evidence": [
+        { "item_id": "regression_state", "description": "REGRESSION_MONITOR's per-job/result record COVERAGE_CLOSURE reads before crediting coverage (node.blackboard_read)", "kind": "blackboard_key" }
+      ],
+      "expected_outputs": [
+        { "item_id": "coverage_signoff_verdict_gate.coverage_credit_percent", "description": "coverage_credit_percent field of coverage_signoff_verdict_gate", "kind": "evidence_field" },
+        { "item_id": "coverage_signoff_verdict_gate.true_pass", "description": "true_pass field of coverage_signoff_verdict_gate (no credit against an active failure)", "kind": "evidence_field" },
+        { "item_id": "coverage_credit_consistency_gate.items", "description": "items list of coverage_credit_consistency_gate (credit only for active-checker-backed items)", "kind": "evidence_field" },
+        { "item_id": "coverage_quality_gate.coverage_items", "description": "coverage_items list of coverage_quality_gate", "kind": "evidence_field" }
+      ]
     },
     {
       "id": "INFRA_RECOVERY",
@@ -301,10 +348,50 @@
       "route": "debug-route",
       "agent": "debug-agent",
       "skills": ["failure-triage", "systematic-debug", "workflow-closure-loop"],
-      "blackboard_read": ["findings", "regression_state", "coverage"],
+      "blackboard_read": ["findings", "regression_state", "coverage", "open_questions_decisions"],
       "blackboard_write": ["findings"],
       "parallel_group": null,
       "join_group": null
+    },
+    {
+      "id": "RCA_RTL_EVIDENCE",
+      "route": "debug-route",
+      "agent": "rtl-evidence-agent",
+      "skills": ["issue-triage-and-deep-rca", "hierarchy-discovery"],
+      "blackboard_read": ["findings"],
+      "blackboard_write": ["rca_rtl_evidence"],
+      "parallel_group": "RCA_G1",
+      "join_group": null
+    },
+    {
+      "id": "RCA_LOG_EVIDENCE",
+      "route": "debug-route",
+      "agent": "log-evidence-agent",
+      "skills": ["issue-triage-and-deep-rca", "per-job-simlog-analysis"],
+      "blackboard_read": ["findings"],
+      "blackboard_write": ["rca_log_evidence"],
+      "parallel_group": "RCA_G1",
+      "join_group": null
+    },
+    {
+      "id": "RCA_VIP_SPEC_EVIDENCE",
+      "route": "debug-route",
+      "agent": "vip-spec-evidence-agent",
+      "skills": ["issue-triage-and-deep-rca", "vip-scenario-branch"],
+      "blackboard_read": ["findings"],
+      "blackboard_write": ["rca_vip_spec_evidence"],
+      "parallel_group": "RCA_G1",
+      "join_group": null
+    },
+    {
+      "id": "RCA_JOIN",
+      "route": "debug-route",
+      "agent": "analysis_debug",
+      "skills": ["independent-evidence-synthesis", "counter-evidence-review", "issue-triage-and-deep-rca"],
+      "blackboard_read": ["rca_rtl_evidence", "rca_log_evidence", "rca_vip_spec_evidence", "findings"],
+      "blackboard_write": ["rca_evidence_fusion"],
+      "parallel_group": null,
+      "join_group": "RCA_G1"
     },
     {
       "id": "RE_AUDIT",
@@ -330,7 +417,7 @@
       "id": "EXPERT_FEEDBACK_LOOP",
       "route": "review-route",
       "agent": "review-agent",
-      "skills": ["expert-feedback-closure"],
+      "skills": ["dv-expert-feedback-closure"],
       "blackboard_read": ["system_level"],
       "blackboard_write": ["expert_feedback"],
       "parallel_group": null,
@@ -341,7 +428,7 @@
       "route": "review-route",
       "agent": "review-agent",
       "skills": ["requirements-traceability", "verification-signoff"],
-      "blackboard_read": ["requirements", "reaudit", "system_level", "expert_feedback"],
+      "blackboard_read": ["requirements", "reaudit", "system_level", "expert_feedback", "qualified_conclusion"],
       "blackboard_write": [],
       "parallel_group": null,
       "join_group": null
@@ -351,7 +438,7 @@
       "route": "review-route",
       "agent": "review-agent",
       "skills": ["verification-signoff"],
-      "blackboard_read": ["requirements", "reaudit", "system_level", "expert_feedback"],
+      "blackboard_read": ["requirements", "reaudit", "system_level", "expert_feedback", "qualified_conclusion"],
       "blackboard_write": ["promotion"],
       "parallel_group": null,
       "join_group": null
@@ -361,10 +448,22 @@
       "route": "review-route",
       "agent": "review-agent",
       "skills": ["verification-signoff"],
-      "blackboard_read": ["requirements", "reaudit", "git_state", "server_state", "regression_state", "promotion"],
+      "blackboard_read": ["requirements", "reaudit", "git_state", "server_state", "regression_state", "promotion", "connectivity_gates", "open_questions_decisions", "qualified_conclusion"],
       "blackboard_write": [],
       "parallel_group": null,
-      "join_group": null
+      "join_group": null,
+      "expected_evidence": [
+        { "item_id": "promotion", "description": "PROMOTION_READINESS's readiness record (node.blackboard_read) -- 'Promotion Readiness'-approved before SIGNOFF may run", "kind": "blackboard_key" },
+        { "item_id": "reaudit", "description": "RE_AUDIT's closure record (node.blackboard_read)", "kind": "blackboard_key" },
+        { "item_id": "regression_state", "description": "REGRESSION_MONITOR's result record (node.blackboard_read)", "kind": "blackboard_key" },
+        { "item_id": "qualified_conclusion", "description": "RE_AUDIT's composed QualifiedConclusion -- gate verdict AND independently recomputed inference confidence as one is_qualified verdict (node.blackboard_read); policy.can_signoff() refuses SIGNOFF while a recorded one says is_qualified=false", "kind": "blackboard_key" }
+      ],
+      "expected_outputs": [
+        { "item_id": "false_pass_resistance_gate.oracle_independent", "description": "oracle_independent field of SIGNOFF's dv-harness-evidence:false_pass_resistance_gate block", "kind": "evidence_field" },
+        { "item_id": "signoff_bundle_completeness_gate.bundle_hash", "description": "bundle_hash field of signoff_bundle_completeness_gate", "kind": "evidence_field" },
+        { "item_id": "signoff_bundle_completeness_gate.final_verdict", "description": "final_verdict field of signoff_bundle_completeness_gate", "kind": "evidence_field" },
+        { "item_id": "subsystem_environment_registration_gate", "description": "STAGE_INSTRUCTIONS[SIGNOFF]'s subsystem_environment_registration_gate block (or its registration_applicable=false variant)", "kind": "evidence_field" }
+      ]
     },
     {
       "id": "WAIT_USER",
@@ -419,7 +518,15 @@
     { "source": "INFRA_RECOVERY", "target": "FAILURE_RECOVERY", "condition": "FAIL" },
     { "source": "COVERAGE_CLOSURE", "target": "RE_AUDIT", "condition": "PASS" },
     { "source": "COVERAGE_CLOSURE", "target": "FAILURE_RECOVERY", "condition": "FAIL" },
-    { "source": "FAILURE_RECOVERY", "target": "CHANGE_IMPACT", "condition": "PASS" },
+    { "source": "FAILURE_RECOVERY", "target": "CHANGE_IMPACT", "condition": "PASS", "priority": 10 },
+    { "source": "FAILURE_RECOVERY", "target": "RCA_RTL_EVIDENCE", "condition": "PASS", "priority": 100 },
+    { "source": "FAILURE_RECOVERY", "target": "RCA_LOG_EVIDENCE", "condition": "PASS", "priority": 100 },
+    { "source": "FAILURE_RECOVERY", "target": "RCA_VIP_SPEC_EVIDENCE", "condition": "PASS", "priority": 100 },
+    { "source": "RCA_RTL_EVIDENCE", "target": "RCA_JOIN", "condition": "PASS" },
+    { "source": "RCA_LOG_EVIDENCE", "target": "RCA_JOIN", "condition": "PASS" },
+    { "source": "RCA_VIP_SPEC_EVIDENCE", "target": "RCA_JOIN", "condition": "PASS" },
+    { "source": "RCA_JOIN", "target": "CHANGE_IMPACT", "condition": "PASS" },
+    { "source": "RCA_JOIN", "target": "WAIT_USER", "condition": "BLOCKED" },
     { "source": "FAILURE_RECOVERY", "target": "WAIT_USER", "condition": "BLOCKED" },
     { "source": "RE_AUDIT", "target": "SYSTEM_LEVEL", "condition": "PASS" },
     { "source": "RE_AUDIT", "target": "IMPLEMENT", "condition": "FAIL" },

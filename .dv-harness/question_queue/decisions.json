@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "decisions": {
+    "m7:r005-2-r006-4:legacy-unsealed-publication-risk-acceptance": {
+      "question_key": "m7:r005-2-r006-4:legacy-unsealed-publication-risk-acceptance",
+      "domain": "env",
+      "owner": "DV-owner",
+      "question": "Accept LEGACY_UNSEALED_PUBLICATION/COMPATIBILITY_MODE (R005-2/R006-4: default quiet-interval result-arrival inference, no sealed manifest by default) as sufficient for M7 sign-off, or block M7 pending a dedicated sealed-transport-contract wave?",
+      "current": {
+        "question_id_of_answer": "Q-ENV-7B9230FF",
+        "answer": "BLOCK_M7_PENDING_SEALED_TRANSPORT_WAVE",
+        "basis": "tier2_safe_to_assume_default (worst case: one wasted, cheaply re-run regression)",
+        "decided_by": "dv_harness.question_queue(auto)",
+        "decided_at": "2026-09-28T16:29:33.632518+00:00",
+        "source": "tier2_auto_assumption"
+      },
+      "ever_tier2_assumed": true,
+      "overturned": false,
+      "history": [
+        {
+          "question_id_of_answer": "Q-ENV-7B9230FF",
+          "answer": "BLOCK_M7_PENDING_SEALED_TRANSPORT_WAVE",
+          "basis": "tier2_safe_to_assume_default (worst case: one wasted, cheaply re-run regression)",
+          "decided_by": "dv_harness.question_queue(auto)",
+          "decided_at": "2026-09-28T16:29:33.632518+00:00",
+          "source": "tier2_auto_assumption"
+        }
+      ]
+    },
+    "model_handoff:M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001": {
+      "question_key": "model_handoff:M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001",
+      "domain": "env",
+      "owner": "DV-owner",
+      "question": "Q-ENV-57D420FA: Project owner must choose ACCEPT_AS_NON_BLOCKING for LEGACY_UNSEALED_PUBLICATION/COMPATIBILITY_MODE, or BLOCK_M7_PENDING_SEALED_TRANSPORT_WAVE.",
+      "current": {
+        "question_id_of_answer": "Q-ENV-CF3FB9CC",
+        "answer": "request_correction",
+        "basis": "tier2_safe_to_assume_default (worst case: one wasted, cheaply re-run regression)",
+        "decided_by": "dv_harness.question_queue(auto)",
+        "decided_at": "2026-09-28T17:52:18.541840+00:00",
+        "source": "tier2_auto_assumption"
+      },
+      "ever_tier2_assumed": true,
+      "overturned": false,
+      "history": [
+        {
+          "question_id_of_answer": "Q-ENV-CF3FB9CC",
+          "answer": "request_correction",
+          "basis": "tier2_safe_to_assume_default (worst case: one wasted, cheaply re-run regression)",
+          "decided_by": "dv_harness.question_queue(auto)",
+          "decided_at": "2026-09-28T17:52:18.541840+00:00",
+          "source": "tier2_auto_assumption"
+        }
+      ]
+    }
+  }
+}

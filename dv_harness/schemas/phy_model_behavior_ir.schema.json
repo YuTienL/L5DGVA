@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/phy_model_behavior_ir.schema.json",
+  "title": "phy_model_behavior_ir",
+  "description": "GENERATED artifact: dv_harness/phy_model_behavior_ir.py extracts PHY architecture facts (training/link-startup flow stage names, TX/RX capability statements, power-state names) from a real PHY specification/model document that has already been offline-distilled by dv_harness.vip_user_guide_distill.distill_user_guide() into a .reference.json + .fulltext.txt pair -- this module never opens a raw PDF itself. Every item carries a real document+line citation; nothing is invented from protocol knowledge. `boundary_context` optionally carries dv_harness.phy_boundary.py's own serial/parallel bind-location decision when the caller supplies one, so the structural (RTL-derived) and the documentary (spec-derived) PHY facts sit in one artifact. `disclosure` is always present and always states that nothing here proves analog/electrical (silicon) correctness -- a digital PHY model and spec prose are architectural descriptions, not a measurement of a real PHY implementation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "generator", "status", "reason", "disclosure", "source",
+    "boundary_context", "training_link_startup_stages", "tx_capabilities",
+    "rx_capabilities", "power_states"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "version"],
+      "properties": {
+        "tool": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "status": {
+      "enum": ["EXTRACTED", "NOT_AVAILABLE"],
+      "description": "EXTRACTED when a real PHY spec/model reference record (and its full-text extract) was read. NOT_AVAILABLE (with a real `reason`) when no PHY document was supplied, or the supplied record/full-text could not be read -- never a fabricated fact."
+    },
+    "reason": { "type": ["string", "null"] },
+    "disclosure": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Fixed standing disclaimer: PHY MODEL BEHAVIOR IS NOT SILICON. Present on every document, EXTRACTED or NOT_AVAILABLE alike."
+    },
+    "source": {
+      "type": ["object", "null"],
+      "description": "null only when status is NOT_AVAILABLE because no document was supplied at all.",
+      "properties": {
+        "doc_kind": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] },
+        "reference_record_path": { "type": ["string", "null"] },
+        "source_document": { "type": ["object", "null"] },
+        "fulltext_path": { "type": ["string", "null"] },
+        "fulltext_sha256_verified": {
+          "type": ["boolean", "null"],
+          "description": "True when the full-text file's current sha256 matches the value the distiller recorded at distillation time; false on a mismatch (the file changed since distillation); null when not applicable."
+        }
+      }
+    },
+    "boundary_context": { "$ref": "#/$defs/boundary_context" },
+    "training_link_startup_stages": { "$ref": "#/$defs/named_fact_field" },
+    "tx_capabilities": { "$ref": "#/$defs/text_fact_field" },
+    "rx_capabilities": { "$ref": "#/$defs/text_fact_field" },
+    "power_states": { "$ref": "#/$defs/named_fact_field" }
+  },
+  "$defs": {
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document", "fulltext_path", "line"],
+      "properties": {
+        "document": { "type": "string", "minLength": 1 },
+        "fulltext_path": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1, "description": "1-based line number in the real full-text extract file -- a reader can open that exact file and line to verify the fact." }
+      }
+    },
+    "named_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "evidence_text", "citation"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "evidence_text": { "type": "string", "minLength": 1, "description": "Literal (possibly truncated) text of the cited line -- never paraphrased or invented." },
+        "citation": { "$ref": "#/$defs/citation" }
+      }
+    },
+    "text_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_text", "citation"],
+      "properties": {
+        "evidence_text": { "type": "string", "minLength": 1 },
+        "citation": { "$ref": "#/$defs/citation" }
+      }
+    },
+    "named_fact_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "items"],
+      "properties": {
+        "status": { "enum": ["FOUND", "MARKER_SECTION_FOUND_NO_ITEMS", "NO_MARKER_SECTION_DETECTED", "NOT_AVAILABLE"] },
+        "reason": { "type": ["string", "null"] },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/named_item" } }
+      }
+    },
+    "text_fact_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "items"],
+      "properties": {
+        "status": { "enum": ["FOUND", "MARKER_SECTION_FOUND_NO_ITEMS", "NO_MARKER_SECTION_DETECTED", "NOT_AVAILABLE"] },
+        "reason": { "type": ["string", "null"] },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/text_item" } }
+      }
+    },
+    "boundary_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "reason", "phy_module", "controller_module", "boundary_status", "classification_kind", "mount_layer", "bindable"],
+      "properties": {
+        "available": { "type": "boolean", "description": "True only when a real phy_boundary.json-shaped document (dv_harness.phy_boundary.extract_phy_boundary()'s own output) was supplied and passed its own schema validation. False does not mean the boundary is bad; it means none was supplied to this extraction, or what was supplied did not validate." },
+        "reason": { "type": ["string", "null"] },
+        "phy_module": { "type": ["string", "null"] },
+        "controller_module": { "type": ["string", "null"] },
+        "boundary_status": { "type": ["string", "null"], "description": "The supplied phy_boundary document's own top-level `status` (EXTRACTED/NOT_AVAILABLE), carried through verbatim." },
+        "classification_kind": { "type": ["string", "null"], "description": "The supplied document's own classification.kind (SERIAL/PARALLEL/MIXED/UNDECIDABLE), carried through verbatim." },
+        "mount_layer": { "type": ["string", "null"] },
+        "bindable": { "type": ["boolean", "null"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "VIP bind-location correctness was asserted via real RTL-citation reasoning (T1/T2-tier per the Harness's own confidence system) but was NEVER actually run through the Harness's own 3-machine-gate verification standard (elaboration / static connectivity / transaction activity) -- because that tooling (dv_harness/connectivity.py) did not exist for most of this build's life, and once it existed nobody retroactively applied it",
+  "scope": "process",
+  "symptoms": [
+    "usb31_dev_uvm's own CLAUDE.md (31-entry trap catalogue, extensive bind-architecture documentation) has zero references to connectivity.py or 'Gate 1/2/3' -- this build's bind decisions were made and documented entirely before that verification tooling existed",
+    "Gate 3 (transaction activity -- 'the only method that catches a path that's syntactically legal but wired to the wrong instance') requires a live simv to deliver >=1 real transaction to a VIP monitor; this build has never gotten past initial link bring-up (the TCA NC->USB hang), so Gate 3 is structurally impossible to have passed yet"
+  ],
+  "root_cause": "The 3-gate connectivity verification standard was built as new Harness infrastructure mid-session, by a concurrently-running workflow, with no mechanism to retroactively flag or re-verify already-in-progress builds against the new standard once it landed. A new verification capability landing in the Harness does not automatically get applied to work already underway.",
+  "fix": "Not yet fixed at the time of this record -- multi-agent implementation work to (a) make the 3 gates a mandatory, checked step in the IP_UVM_DV_Gen build workflow going forward, and (b) formally track Gate 3's current PENDING (not FAILED, not PASSED) status for this build until a pattern actually completes, is being launched immediately following this analysis.",
+  "verification": {
+    "single_sim": "N/A -- process/methodology finding",
+    "regression": "N/A",
+    "reaudit": "Independently investigated via a dedicated fork, which confirmed via direct grep of usb31_dev_uvm/CLAUDE.md that zero mentions of connectivity.py/Gate 1/2/3 exist, and confirmed via the build's own status reports that no pattern has ever completed (TCA hang blocks all HS patterns to date)."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: 'the bind target is justified by a real RTL citation' and 'the bind is verified correct' are different claims, and the Harness's own T1-T4 confidence-tier system already encodes this distinction (T1/T2 = high confidence from real evidence, but still not the same as a live Gate-3 transaction-activity pass) -- yet without an explicit, mandatory checkpoint requiring Gate 3 status to be reported (PASSED/FAILED/PENDING, never silently omitted) for every bind claim, a well-reasoned T1/T2 justification can be mistaken for a completed verification. New verification infrastructure landing in the Harness needs an explicit retroactive-applicability check against in-flight work, not just future work.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, deep comparative analysis (fork a1745a6171cc312a9).",
+  "memory_id": "MEM-809B74A548",
+  "level": "engineering",
+  "created_at": 1788437385.5100513,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

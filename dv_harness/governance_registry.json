@@ -1,0 +1,215 @@
+{
+  "schema_version": "1.0",
+  "description": "TASK_SCOPED_GOVERNANCE_RETRIEVAL registry (M4.5). Routes a task to the right governance document by TRIGGER/LOAD_POLICY instead of appending everything into CLAUDE.md. See dv_harness/governance_registry.py's module docstring for the field semantics and why this is a separate mechanism from dv_harness/context_budget.py (that one blocks/distills DUT/VIP evidence content by file glob; this one routes governance/knowledge documents by concept).",
+  "entries": [
+    {
+      "id": "CLAUDE_MD",
+      "label": "Project instructions (this file)",
+      "load_policy": "ALWAYS_ON",
+      "trigger": "every task",
+      "priority": "HIGH",
+      "token_class": "COMPACT",
+      "summary_path": "CLAUDE.md",
+      "notes": "Auto-loaded by the agent harness. M4.6 CLAUDE Context Normalization (canonical migration program) reduced this file from 2,067,655 bytes / 22,461 lines to 112,262 bytes / 1,640 lines by moving ~345 detailed, domain-specific sections verbatim into the 7 TASK_SCOPED/EVIDENCE_ON_DEMAND documents registered below (docs/architecture/canonical_detailed_governance/*.md) -- zero content deleted, only re-routed. TOKEN_CLASS upgraded from LARGE_REFERENCE to COMPACT to reflect the real measured reduction; TOKEN_REDUCTION_MEASURED stays NO (this is a file-size fact, not a Claude-token telemetry claim)."
+    },
+    {
+      "id": "L5DGVA_CONSTITUTION",
+      "label": "L5DGVA Constitution -- full Article 0 text and rationale",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "any architecture/migration/governance decision that needs the full constitutional rationale beyond CLAUDE.md's own compact Article 0 section",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/L5DGVA_CONSTITUTION.md",
+      "notes": "CLAUDE.md's own Article 0 section is the ALWAYS_ON compact form; this is the TASK_SCOPED full form -- read on demand, never both loaded for a task that only needs the compact one."
+    },
+    {
+      "id": "L5DGVA_GOVERNING_CONTRACT_CORPUS",
+      "label": "L5DGVA governing-contract corpus (V1-V23, Parent-only)",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a task that must resolve a specific, cited L5DGVA contract requirement (e.g. a numbered section like V21 SS636) -- never a general architecture question, which Article 0/the Constitution document already answer",
+      "priority": "MEDIUM",
+      "token_class": "SOURCE_EVIDENCE_ONLY",
+      "summary_path": ".work/phase3-dual-repo-consolidation/M4_M3_DEFERRED_CLOSURE.md",
+      "external_source_path": "D:\\DV\\Task\\DV_Agent_Harness_L5\\L5DGVA\\ (Parent working tree, git-untracked, 25 files, 4.0MB, 106132 lines -- NOT present in this canonical checkout; awaiting the M4.5_GOVERNING_CONTRACT_AUTHORITY decision)",
+      "notes": "SOURCE_EVIDENCE_ONLY per the explicit M4.5 requirement: never appended to CLAUDE.md, never loaded wholesale even once migrated. external_source_path is informational only (not reachability-checked, since it is deliberately outside this canonical repository until a migration decision is made)."
+    },
+    {
+      "id": "M1_FINAL_REPORT",
+      "label": "M1 canonical bootstrap + v50 baseline qualification closure",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about M1's own bootstrap decisions, execution-profile extraction, or root-normalization history",
+      "priority": "LOW",
+      "token_class": "LARGE_REFERENCE",
+      "summary_path": ".work/phase3-dual-repo-consolidation/M1_FINAL_REPORT.md"
+    },
+    {
+      "id": "M3_FINAL_REPORT",
+      "label": "M3 independent/leaf capability migration closure",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about which capabilities M3 migrated or deferred, and why",
+      "priority": "LOW",
+      "token_class": "MEDIUM",
+      "summary_path": ".work/phase3-dual-repo-consolidation/M3_FINAL_REPORT.md"
+    },
+    {
+      "id": "M4_FINAL_REPORT",
+      "label": "M4 dependency/schema/contract closure",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about M5/M6 foundation prerequisites or the governing-contract-authority finding",
+      "priority": "LOW",
+      "token_class": "MEDIUM",
+      "summary_path": ".work/phase3-dual-repo-consolidation/M4_FINAL_REPORT.md"
+    },
+    {
+      "id": "CANONICAL_CAPABILITY_SUPERSET_MATRIX",
+      "label": "Live capability-by-capability Parent/v50/worktree/canonical status",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "a question about whether a specific named capability is preserved/migrated/operational anywhere",
+      "priority": "MEDIUM",
+      "token_class": "MEDIUM",
+      "summary_path": ".work/phase3-dual-repo-consolidation/CANONICAL_CAPABILITY_SUPERSET_MATRIX.md"
+    },
+    {
+      "id": "VIP_PROTOCOL_GENERATION",
+      "label": "VIP/UVM generation, protocol/register/RTL extraction, vPlan, coverage, AMBA, DE command architecture, checker/scoreboard/signoff",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "vip protocol generation register rtl dut phy vplan coverage amba axi command de-command branch pattern scenario checker scoreboard signoff waiver uvm",
+      "priority": "HIGH",
+      "token_class": "LARGE_REFERENCE",
+      "summary_path": "docs/architecture/canonical_detailed_governance/VIP_PROTOCOL_GENERATION.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/VIP_PROTOCOL_GENERATION.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (125 sections). No further distillation performed this wave -- summary_path equals full_spec_path (disclosed, not a fabricated shorter summary; MINIMUM_SUFFICIENT_CONTEXT stays PARTIAL for this reason)."
+    },
+    {
+      "id": "GUI_DASHBOARD_WEB",
+      "label": "Dashboard/web control plane, GUI cards/wizards, status bar, live events, REST endpoints",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "gui dashboard web control plane status bar live event rest api ui wizard",
+      "priority": "MEDIUM",
+      "token_class": "LARGE_REFERENCE",
+      "summary_path": "docs/architecture/canonical_detailed_governance/GUI_DASHBOARD_WEB.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/GUI_DASHBOARD_WEB.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (34 sections)."
+    },
+    {
+      "id": "EXECUTION_REMOTE_REGRESSION_RCA",
+      "label": "Remote/LSF execution, build/sim-script, waveform/FSDB, regression loop, RCA support mechanisms",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "remote lsf execution build sim-script waveform fsdb regression loop convergence root-cause rca",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/EXECUTION_REMOTE_REGRESSION_RCA.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/EXECUTION_REMOTE_REGRESSION_RCA.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (20 sections)."
+    },
+    {
+      "id": "INTAKE_CLARIFICATION_QUESTION",
+      "label": "OpenSpec/intake mechanics, question queue, clarification loop, answer validation",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "intake clarification question answer onboarding openspec",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/INTAKE_CLARIFICATION_QUESTION.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/INTAKE_CLARIFICATION_QUESTION.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (21 sections)."
+    },
+    {
+      "id": "KNOWLEDGE_MEMORY_RESEARCH",
+      "label": "5-tier Memory, Obsidian, research ingestion/distillation/applicability, confidence calibration, continuous-capability-evolution loops",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "memory knowledge obsidian research experience learning capability-evolution confidence",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/KNOWLEDGE_MEMORY_RESEARCH.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/KNOWLEDGE_MEMORY_RESEARCH.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (28 sections, incl. one manually-corrected keyword-collision reassignment -- Cross-Project Pattern Mining, S063 -- disclosed in M4_6_CONTEXT_CLASSIFICATION.csv)."
+    },
+    {
+      "id": "GOVERNANCE_SAFETY_AUDIT",
+      "label": "Safety-sandbox/rollback, dependency/supply-chain governance, change-impact/traceability, multi-agent policy, general governance catch-all",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "safety sandbox rollback governance audit accountability dependency supply-chain multi-agent parallelism security policy traceability",
+      "priority": "MEDIUM",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/GOVERNANCE_SAFETY_AUDIT.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/GOVERNANCE_SAFETY_AUDIT.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (79 sections, includes 14 lower-confidence keyword-fallback sections disclosed in M4_6_CONTEXT_CLASSIFICATION.csv)."
+    },
+    {
+      "id": "L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2",
+      "label": "Integration Prime Directive V2 (ACTIVE) -- P1 CONNECT BEFORE EXPAND / P2 OPERATIONAL BEFORE CLAIMED / P3 CLOSE THE LOOP / P4 NO CAPABILITY ISLANDS / P5 FIND->FIX->VERIFY, Golden Operational Workflow, M6 slice, structural-vs-production connectivity, capability maturity/island policy, current-scope remediation discipline",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "integration capability migration maturity architecture expansion roadmap reconciliation remediation defect find fix verify m6 m7 m8 m9 m10 m11 m12 m13 execution operational workflow vertical slice capability island production connectivity runtime wiring status reporting golden workflow connect before expand",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2.md",
+      "full_spec_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2.md",
+      "notes": "Adopted via CAP-M6-INTPRIME-V2-001, superseding L5DGVA_INTEGRATION_PRIME_DIRECTIVE_HISTORICAL (V1) as the active detailed authority -- V1's own registry entry, below, is retained as EVIDENCE_ON_DEMAND, never deleted. V2 adds P5 FIND->FIX->VERIFY (current-scope defects must be remediated, not merely documented) and the STRUCTURAL_CONNECTED_STAGES/PRODUCTION_CONNECTED_STAGES distinction. Companion task-scoped detail: L5DGVA_GOLDEN_OPERATIONAL_WORKFLOW.md, L5DGVA_CAPABILITY_MATURITY_AND_ISLAND_POLICY.md, L5DGVA_INTEGRATION_KPI_REQUIREMENTS.md, L5DGVA_CURRENT_SCOPE_GAP_REGISTER.csv, L5DGVA_FIND_FIX_VERIFY_EVIDENCE.md, L5DGVA_PRODUCTION_CONNECTIVITY_STATUS.md, all under .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/. CLAUDE.md carries only the compact ALWAYS_ON P1-P5 pointer, never the full directive text."
+    },
+    {
+      "id": "L5DGVA_RESULT_DRIVEN_AUTONOMOUS_CLOSED_LOOP",
+      "label": "P6 RESULT -> ACTION -> AUTONOMOUS CLOSURE requirements (Result-to-Action Router, auto-remediation eligibility, loop termination/budget, evidence traceability)",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "result driven autonomous closed loop p6 result action routing auto remediation eligibility loop termination budget evidence traceability re-review external model result consumption findings remediation m7",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/L5DGVA_RESULT_DRIVEN_AUTONOMOUS_CLOSED_LOOP_REQUIREMENTS.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/L5DGVA_RESULT_DRIVEN_AUTONOMOUS_CLOSED_LOOP_REQUIREMENTS.md",
+      "notes": "Code: dv_harness/result_action_router.py. Registered retroactively (the requirement document was adopted in an earlier task but never registered)."
+    },
+    {
+      "id": "L5DGVA_HUMAN_NON_SCHEDULER_EXECUTION_CONTRACT",
+      "label": "Human Non-Scheduler Execution Contract -- HUMAN_IS_WORKFLOW_SCHEDULER=NO: five canonical stop reasons, Can-I-Stop gate, Next Action Resolver, persist/resume",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "human non scheduler execution contract orchestration autonomous remediation stop resume workflow status human gate transport authority can i stop next action resolver waiting for user generic stop",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/L5DGVA_HUMAN_NON_SCHEDULER_EXECUTION_CONTRACT.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/L5DGVA_HUMAN_NON_SCHEDULER_EXECUTION_CONTRACT.md",
+      "notes": "Code: dv_harness/execution_contract.py. Registered retroactively."
+    },
+    {
+      "id": "L5DGVA_AUTOMATIC_EXTERNAL_RESULT_INGESTION",
+      "label": "Automatic External Result Ingestion -- HUMAN_MANUAL_IMPORT_REQUIRED=NO: expected-result registration, arrival watcher, stability, SHA-256 identity, duplicate suppression, quarantine, startup scan, auto import/resume",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "automatic external result ingestion result watcher expected result registration stability sha256 duplicate suppression quarantine startup pending result scan auto import auto resume human transport external model codex chatgpt result return multi model review",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/L5DGVA_AUTOMATIC_EXTERNAL_RESULT_INGESTION_REQUIREMENTS.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/L5DGVA_AUTOMATIC_EXTERNAL_RESULT_INGESTION_REQUIREMENTS.md",
+      "notes": "Code: dv_harness/result_ingestion.py (delegates every import to model_handoff_workflow.import_result -- no second ingestion engine)."
+    },
+    {
+      "id": "L5DGVA_AUTONOMOUS_AGENT_EXECUTION_BACKEND",
+      "label": "Autonomous Agent Execution Backend -- L5DGVA launches and governs a controlled Claude CLI worker subprocess itself (never interactive-terminal injection); Canonical Mutation Lease, Agent Run Request/Result, Next Action Resolver wiring, safe tool profiles",
+      "load_policy": "TASK_SCOPED",
+      "trigger": "autonomous agent execution backend claude execution backend agent run request mutation lease agent worker launch controlled claude worker preauthorized safe tool execution agent run recovery m7 external result triggers claude worker",
+      "priority": "HIGH",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/canonical_detailed_governance/L5DGVA_AUTONOMOUS_AGENT_EXECUTION_BACKEND_REQUIREMENTS.md",
+      "full_spec_path": "docs/architecture/canonical_detailed_governance/L5DGVA_AUTONOMOUS_AGENT_EXECUTION_BACKEND_REQUIREMENTS.md",
+      "notes": "Code: dv_harness/agent_execution_backend.py (Claude worker launch/monitor/lease/recovery), dv_harness/safe_tool_profile.py (Preauthorized Safe Tool Execution, newly built -- no prior mechanism existed)."
+    },
+    {
+      "id": "L5DGVA_INTEGRATION_PRIME_DIRECTIVE_HISTORICAL",
+      "label": "Integration Prime Directive V1 (SUPERSEDED_HISTORICAL) -- retained as evidence only, never the active detailed authority",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about V1's own prior text, or about what V2 changed relative to it -- never loaded for ordinary task execution, which uses L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2 instead",
+      "priority": "LOW",
+      "token_class": "MEDIUM",
+      "summary_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md",
+      "full_spec_path": "docs/architecture/L5DGVA_INTEGRATION_PRIME_DIRECTIVE.md",
+      "notes": "SUPERSEDED by L5DGVA_INTEGRATION_PRIME_DIRECTIVE_V2 (CAP-M6-INTPRIME-V2-001). File not deleted (V1 evidence preserved per that task's own explicit instruction); this registry entry's own id/load_policy changed from the original TASK_SCOPED L5DGVA_INTEGRATION_PRIME_DIRECTIVE to this HISTORICAL id so V1 is never the entry a fresh task-trigger match resolves to."
+    },
+    {
+      "id": "HISTORICAL_AUDIT_NOTES",
+      "label": "Retrospective [CLOSED]/Already-Satisfied status markers -- provenance only, non-normative",
+      "load_policy": "EVIDENCE_ON_DEMAND",
+      "trigger": "a question about a past audit/verification pass's own closure status -- never loaded for ordinary task execution",
+      "priority": "LOW",
+      "token_class": "SOURCE_EVIDENCE_ONLY",
+      "summary_path": "docs/architecture/canonical_detailed_governance/HISTORICAL_AUDIT_NOTES.md",
+      "notes": "M4.6: moved verbatim out of CLAUDE.md (15 sections). Historical/non-normative per instruction -- never ALWAYS_ON, preserved for provenance only."
+    }
+  ]
+}

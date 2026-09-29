@@ -1,0 +1,12 @@
+/**
+ * Abstract: 
+ * The dv_util.svi file contains general purpose macros and utilities
+ */
+
+`ifndef GUARD_DV_UTIL_SV
+`define GUARD_DV_UTIL_SV
+
+/** Macro to convert macro contents to a string */
+`define DV_STRINGIFY(x) `"x`"
+
+`endif // GUARD_DV_UTIL_SV

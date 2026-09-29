@@ -21,7 +21,7 @@ VIP manual/examples/source/class reference, and current project configuration.
 pattern registry, bind skeleton, or regression bookkeeping from scratch.**
 `dv_harness/uvm_generator/protocol_env_generator.py` (`ProtocolEnvGenerator`) emits
 the USB_UVM_Handoff-shaped subdirectory layout (`tb/agents,env,seq,tests,top,filelist`)
-from a manifest JSON (`tools/generate_protocol_uvm_environment.py --manifest <m.json> --out <dir>`);
+from a manifest JSON via the governed lifecycle entry point (`dv-harness start --goal "<goal>" --protocols <protocol> --dut-role <role> --level SUBSYSTEM --generate --generate-out <dir> --generate-manifest <m.json>` -- GAP-V2-002: this converges on the same real, tested Field Resolution/Clarification path CLI/dashboard already use for `protocol`/`role`, resolving them from real intake (declared here, auto-discovered from a prior run, or asked for) before generation runs; prints the same structured JSON envelope (status/environment_mode/generated_files/out/...) `tools/generate_protocol_uvm_environment.py`'s own stdout always provided. That script itself is now an INTERNAL_GENERATION_PRIMITIVE beneath this governed entry point (still directly usable for low-level/test invocation), not a second, ungoverned workflow entry -- see `tools/generate_protocol_uvm_environment.py`'s own header);
 `dv_harness/uvm_generator/pattern_registry_generator.py` + `pattern_registry_completeness_gate.py`
 build/validate the pattern-suite registry + Makefile dispatch
 (`tools/generate_pattern_registry.py`); `dv_harness/uvm_generator/bind_mechanism_generator.py`
@@ -32,6 +32,38 @@ scaffolding only -- none invent protocol-specific register maps, VIP class names
 checker/scoreboard semantics; those must still come from current evidence (previous
 section), supplied into the manifest/topology JSON, never fabricated. Read each
 module's own docstring "WHAT THIS DOES NOT DO" section before assuming more than this.
+
+For LTSSM/link-training content specifically, use
+`dv_harness/uvm_generator/pcie_ltssm_generator.py` (a real LTSSM
+transition model) instead of hand-authoring link-training state logic — it
+already implements the transition model this section's "LTSSM/link training"
+bullet asks for.
+
+**Since 2026-09-04 that model is layered by the SAME governed
+`dv-harness start --generate` run above (GAP-V2-002), not a second command.**
+Add a `protocol_model_topology` block to the manifest and the LTSSM package,
+its state-register module and a real transition-legality SVA in
+`tb/env/pcie_assertions.sv` are generated with the skeleton (see
+`dv_harness/uvm_generator/protocol_model_layer.py`):
+
+```json
+"protocol_model_topology": {
+  "name": "pcie_ep",
+  "lane_width": 4,
+  "gen_speed": "Gen3",
+  "role": "EP",
+  "ltssm_state_signal": "u_pcie_ctrl.ltssm_state_q"
+}
+```
+
+Every field is DUT evidence from the "Discover Before Generate" list above and
+none is defaulted: omit the block and the tool reports
+`PROTOCOL_MODEL_TOPOLOGY_NOT_SUPPLIED` in its `protocol_model` output (and in
+the generated `environment_manifest.json`) rather than quietly producing a
+skeleton that looks modelled; omit only `ltssm_state_signal` and the model
+still layers but no assertion is emitted against an unconfirmed signal. The
+standalone `tools/generate_pcie_ltssm_environment.py` still exists for
+generating the LTSSM model on its own, outside an environment.
 - VIP topology
 - LTSSM/link training
 - configuration space

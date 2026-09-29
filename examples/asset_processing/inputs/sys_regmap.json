@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0",
+  "source": {
+    "kind": "programming_guide_transcription",
+    "description": "SYNTHETIC WORKED EXAMPLE -- not a real chip's register map. Fabricated deliberately and labeled as such so dv_harness/sys_regmap.py and dv_harness/init_seq.py have something real to be exercised against without any project's confidential programming guide entering this repo. A real project replaces this file wholesale with content transcribed from its own chip-level programming guide. Per CLAUDE.md's Evidence Truth Rule, nothing here is evidence about any real DUT."
+  },
+  "blocks": [
+    {
+      "name": "CRU",
+      "base_address": "0x40000000",
+      "kind": "clock_control",
+      "description": "Clock and reset unit.",
+      "registers": [
+        {
+          "name": "CLK_ENABLE",
+          "address_offset": "0x010",
+          "width": 32,
+          "access": "RW",
+          "reset_value": "0x00000000",
+          "description": "Per-interface functional clock enables.",
+          "fields": [
+            {
+              "name": "usb0_clk_en",
+              "bit_offset": 3,
+              "bit_width": 1,
+              "access": "RW",
+              "reset_value": "0x0",
+              "control_kind": "clock_enable",
+              "required_value": "0x1",
+              "governs_interfaces": ["usb0"],
+              "description": "Gates usb0's functional clock. With this at 0 the usb0 clock never toggles, which a Gate-2 zero-time connectivity check would otherwise report as a connectivity failure."
+            },
+            {
+              "name": "revision_id",
+              "bit_offset": 24,
+              "bit_width": 8,
+              "access": "RO",
+              "control_kind": "not_mode_determining",
+              "description": "Read-only revision field sharing this register; transcribed for fidelity, explicitly not a mode bit."
+            }
+          ]
+        },
+        {
+          "name": "RESET_CTRL",
+          "address_offset": "0x020",
+          "width": 32,
+          "access": "RW",
+          "reset_value": "0x00000000",
+          "fields": [
+            {
+              "name": "usb0_rst_release",
+              "bit_offset": 3,
+              "bit_width": 1,
+              "access": "RW",
+              "reset_value": "0x0",
+              "control_kind": "reset_release",
+              "required_value": "0x1",
+              "governs_interfaces": ["usb0"],
+              "description": "Releases usb0 from reset. Must be written AFTER usb0_clk_en per the init sequence -- releasing reset on an unclocked block leaves it in an undefined state."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PINMUX",
+      "base_address": "0x40010000",
+      "kind": "pinmux",
+      "registers": [
+        {
+          "name": "PAD_SEL0",
+          "address_offset": "0x004",
+          "width": 32,
+          "access": "RW",
+          "reset_value": "0x00000000",
+          "fields": [
+            {
+              "name": "usb0_pad_sel",
+              "bit_offset": 0,
+              "bit_width": 2,
+              "access": "RW",
+              "reset_value": "0x0",
+              "control_kind": "pinmux_select",
+              "required_value": "0x2",
+              "governs_interfaces": ["usb0"],
+              "description": "Selects usb0 onto the shared pads. At its 0x0 reset value the pads are owned by a different function and usb0 sees no external activity at all."
+            },
+            {
+              "name": "global_pad_ie",
+              "bit_offset": 16,
+              "bit_width": 1,
+              "access": "RW",
+              "reset_value": "0x0",
+              "control_kind": "power_enable",
+              "required_value": null,
+              "governs_interfaces": [],
+              "description": "Global pad input enable. Deliberately carries required_value null and an EMPTY governs_interfaces list -- this exercises the two honesty paths in sys_regmap.py: an unscoped mode bit applies to EVERY interface, and an undocumented required value is reported as unverifiable rather than guessed."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

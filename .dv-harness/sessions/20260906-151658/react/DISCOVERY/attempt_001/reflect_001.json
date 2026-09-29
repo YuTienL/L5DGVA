@@ -1,0 +1,35 @@
+{
+  "signatures": [
+    {
+      "gate_id": "evidence_source_priority_gate",
+      "ok": false,
+      "detail": {
+        "status": "FAIL",
+        "reason": "NO_EVIDENCE_BLOCK_SUPPLIED"
+      }
+    },
+    {
+      "gate_id": "input_source_contract_gate",
+      "ok": false,
+      "detail": {
+        "status": "FAIL",
+        "reason": "NO_EVIDENCE_BLOCK_SUPPLIED"
+      }
+    }
+  ],
+  "menu": [
+    {
+      "option_id": "CONVERGE_TERMINATE",
+      "kind": "CONVERGE_TERMINATE",
+      "target": null,
+      "rationale": "Accept the current verdict as final; no further constrained action is available or warranted given the real evidence gathered so far.",
+      "source": "control"
+    }
+  ],
+  "decision": {
+    "chosen_option_id": "CONVERGE_TERMINATE",
+    "conclusion": "No evidence block was supplied for this DISCOVERY-stage inner iteration; evidence_source_priority_gate and input_source_contract_gate both FAIL with reason NO_EVIDENCE_BLOCK_SUPPLIED, and MISSING_EVIDENCE is the only supported verdict given the real gate signatures. No other constrained option is available, so terminating and accepting this verdict as final.",
+    "params": {},
+    "converged": true
+  }
+}

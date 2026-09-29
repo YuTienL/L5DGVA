@@ -1,0 +1,29 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "Real credential leak pattern: permission-allow rules embedding secrets + blocking_reason echoing them unredacted",
+  "scope": "engine",
+  "symptoms": [
+    "A real plaintext password appears inside .dv-harness/state.json's blocking_reason field after a run-stage attempt",
+    "Claude Code's own permission-rule validator rejects a Bash/PowerShell allow-list rule as 'has a wildcard before the rest of the command', and its denial message echoes the full rejected command verbatim"
+  ],
+  "root_cause": "This project's .claude/settings.local.json (local-only, gitignored) had 658 Bash/PowerShell permission-allow rules with a real VC password embedded directly in the rule text (from real prior remote-debugging sessions), including one PowerShell rule literally calling [Environment]::SetEnvironmentVariable('VCPW','<password>','User') -- the likely real origin of the incident CLAUDE.md's own 'Remote Linux Execution' section already documents from 2026-08-31. Separately, ~600 of those same rules had a literal `*` not at the trailing position, which Claude Code's own validator rejects outright -- and its rejection message echoes the FULL matched command (including any embedded credential) back into stderr, which dv_harness/engine.py's ADAPTER_FAIL branch (line ~1749, `ss['blocking_reason'] = result.raw.get('stderr','')[:2000]`) persists verbatim into a real, git-tracked state.json file -- directly violating CLAUDE.md's own rule that a password must never be written into any state file/log.",
+  "fix": "PARTIAL, by explicit user decision this session ('先不修,直接重試'): the 658 leaked passwords in settings.local.json were redacted in place (local-only file, never git-tracked, backups kept); the malformed wildcard rules were bulk-removed (858 total across 2 passes) via a local, never-committed maintenance script. NOT YET FIXED: dv_harness/engine.py's blocking_reason capture path still has no credential-shaped-substring redaction (e.g. a VCPW=/PASSWORD=/TOKEN=/SECRET= regex scrub) before persisting stderr content -- this is a real, confirmed, still-open code gap, not a hypothetical one, and it can recur any time a future permission-rule denial happens to echo a credential.",
+  "verification": {
+    "single_sim": "N/A",
+    "regression": "N/A -- no test exists yet for the blocking_reason redaction gap since it was explicitly not fixed this session",
+    "reaudit": "The state.json leak was confirmed and redacted twice (2 separate real recurrences during retries); the settings.local.json leak was confirmed and redacted once (658 occurrences)"
+  },
+  "confidence": "CONFIRMED",
+  "note": "ACTION ITEM for a future session: add a real, permanent redaction step to dv_harness/engine.py's blocking_reason assignment (both the ADAPTER_FAIL branch and the GATE_FAIL/PARTIAL branches, which join agent-supplied `reasons` text that could theoretically also echo something sensitive) using a regex scrubbing common credential-assignment shapes (KEY='value', KEY=value, SetEnvironmentVariable('KEY','value',...)) before the [:2000] truncate-and-persist. This was explicitly deferred, not forgotten -- track it against this memory record.",
+  "provenance": "dv-agent-harness-l5-7a session, 2026-09-01, live dv-harness run-stage debugging",
+  "memory_id": "MEM-78AD6C32EB",
+  "level": "engineering",
+  "created_at": 1788276508.3244898,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

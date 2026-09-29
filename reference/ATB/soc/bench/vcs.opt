@@ -1,0 +1,243 @@
+//+vcs+initreg+config+/home/dluj061/SIMV/inicfg.txt
+//+warn=noTFIPC,noNTCDNC
++lint=TFIPC-L
++define+DV_SYNTHSIS
++define+RTL
++define+FASTRST
+//+define+ARM_UD_MODEL
++define+GSIAPB
+//+define+NOTECHLIB
+//+define+PRINTCMD
++define+CQ_APB_DIRECT_ACCESS
++define+LPDDR4=800
++define+tDQS2DQ_0B_T=0.25
++define+tDQS2DQ_1B_T=0.25
++define+tDQS2DQ_2B_T=0.25
++define+tDQS2DQ_3B_T=0.25
+//+define+den8192Mb
+//+define+NOSENSOR
++define+NO_ISPMODEL
++define+DRAMMODEL_EN
++notimingcheck
++define+no_warning
+//+define+PATTERN
+//+define+I2CAPB
+//For DDR macro -------------  
++define+RUN_SIP_MODE
+//For USB PHY ---------------
++define+Turbo
++define+M31_NO_PG_PORT
+//---------------------------
++define+OVL_ASSERT_ON
++define+OVL_MAX_REPORT_ERROR=100
++libext+.v+.vlib
++neg_tchk
++v2k
+//DW
++incdir+/eda/synopsys/latest/dw/sim_ver
+//M31(PLL+SARADC)
++define+M31_NO_PG_PORT
+//SS_CPU
+//+incdir+/home/dwaq062/dwaq062/RTL/SS_CPU/include/gic600
+//+incdir+/home/dwaq062/dwaq062/RTL/SS_CPU/include/nic400
+//+incdir+/home/dwaq062/dwaq062/RTL/SS_CPU/include/cortexa55
+//PVT Sensor
++define+PVT_USER_DEFINED+MRS_VM_NUM=1+MRS_TS_NUM=1+MRS_PD_NUM=1
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/PVT/include
++incdir+/home/dwaq062/dwaq062/RTLCAT/PVT_include
+//LPDDR54 Controller
++incdir+/home/dwaq062/dwaq062/MODEL/include
++incdir+/home/dwaq062/dwaq062/MODEL/include/INNO
++incdir+/home/dwaq062/dwaq062/MODEL/include/LPDDR4
++incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/LPDDR54_MCTL/i_DWC_ddrctl_lpddr54/src
+//MIPI TX
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/MIPI_DSI2_V2_HOST/i_DWC_mipi_dsi2_v2_host/src
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/MIPI_CSI2_V4_DEVICE/i_DWC_mipi_csi2_v4_device/src
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/MIPI_CDPHY_TX/latest/macro/include
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/MIPI_CDPHY_TX/latest/core/include
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/DPTX/i_DWC_dptx/src
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/USBC31_DPTX_PHY/latest/phy/include
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/USBC31_DPTX_PHY/latest/upcs/include
+//VIS-ISP
+//+incdir+/home/dwaq062/dwaq062/MODEL/include/ISP
+//+incdir+/home/dwaq062/dwaq062/RTL/SS_VIS/include
+//PERI-OTP
++define+NVM_XHF_RED
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/DWC_NVM/latest/include/
+//FM
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/DWC_ssi/latest/include/
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/DWC_mshc/latest/include/
++incdir+/home/dwaq062/dwaq062/RTLCAT/
+
+-y /eda/synopsys/latest/dw/sim_ver
+-y /eda/synopsys/latest/packages/gtech/src_ver
+
+//--TSMC6NM lib-------------------------------------------------
+-f /home/dwaq062/dwaq062/SIMV/fab.opt
+
+//--Model----------------------------------------------------
+-f /home/dwaq062/dwaq062/MODEL/model.opt
+
+//--MACRO----------------------------------------------------
+-f /home/dwaq062/dwaq062/MACRO/macro.opt
+
+//--SRAM-----------------------------------------------------
+-f /home/dwaq062/dwaq062/MACRO/SRAM/sram.opt
+
+//OK--GLOBAL------------------------------------------------------
+//-f /home/dwaq062/dwaq062/RTL/global.opt
+-v /home/dwaq062/dwaq062/RTLCAT/MISC_ALL.v
+
+//OK--TOP------------------------------------------------------
+//-f /home/dwaq062/dwaq062/RTL/top.opt
+/home/dwaq062/dwaq062/RTLCAT/TOP_ALL.v
+
+//--Audio----------------------------------------------------
+/home/dwaq062/dwaq062/DUMMY_TOP/audtop_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/audtop.opt
+
+//OK--SS_CPU------------------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/ss_cpu_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/ss_cpu.opt
+
++incdir+/home/dwaq062/dwaq062/RTLCAT/SS_CPU_include
+/home/dwaq062/dwaq062/RTLCAT/SS_CPU_MISC.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CPU_ALL.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CPU_CA55.v
+
+//OK--SS_SF------------------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/ss_sf_dummy.v
+// -f /home/dwaq062/dwaq062/RTL/ss_sf.opt
+
+//+incdir+/home/dwaq062/dwaq062/IP/ARM/R52/RTLCAT/R52_include
+//+incdir+/home/dwaq062/dwaq062/RTL/SS_SF/SF_FM/include
+
++incdir+/home/dwaq062/dwaq062/RTLCAT/SS_SF_include
+/home/dwaq062/dwaq062/RTLCAT/SS_SF_ALL.v
+/home/dwaq062/dwaq062/RTLCAT/SS_SF_R52.v
+
+//OK--CQ-------------------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/cqtop_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/cq.opt
+/home/dwaq062/dwaq062/RTLCAT/CQ_ALL.v
+
+//OK--SS_VIS------------------------------------------------------
+// +define+OFF_SS_VIS
+// /home/dwaq062/dwaq062/RTL/SS_VIS/ss_vis.v
+//-f /home/dwaq062/dwaq062/RTL/ss_vis.opt
+
+//+incdir+/home/snpsips/install/synopsys/dwc_mipi_cd_12_21_rx_3t4l_tsmc6ff18ns/7.08a/macro/include
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/MIPI_CSI2_V4_HOST/latest/src
+
++incdir+/home/dwaq062/dwaq062/RTLCAT/SS_VIS_include
+/home/dwaq062/dwaq062/RTLCAT/SS_VIS_ALL.v
+/home/dwaq062/dwaq062/RTLCAT/SS_VIS_MIPIRX_PHY.v
+/home/dwaq062/dwaq062/RTLCAT/SS_VIS_MIPIRX_CTRL.v
+
+//OK--SS_VOUT-----------------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/ss_vout_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/ss_vout.opt
+
++incdir+/home/dwaq062/dwaq062/RTLCAT/SS_VOUT_include
+/home/dwaq062/dwaq062/RTLCAT/SS_VOUT_ALL.v
+/home/dwaq062/dwaq062/RTLCAT/SS_VOUT_MIPITX_CSIC.v
+/home/dwaq062/dwaq062/RTLCAT/SS_VOUT_MIPITX_DSIC.v
+/home/dwaq062/dwaq062/RTLCAT/SS_VOUT_MIPITX_PHY.v
+/home/dwaq062/dwaq062/RTLCAT/SS_VOUT_DP_CTRL.v
+/home/dwaq062/dwaq062/RTLCAT/SS_VOUT_DP_PHY.v
+
+//OK--SS_CON------------------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/ss_con_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/ss_con.opt
+
+//+incdir+/home/dwaq062/dwaq062/RTL/SS_CON/include
+//+incdir+/home/dwaq062/dwaq062/IP/SYNOPSYS/DWC_ether_qos/latest/include_mac
+
++define+OFF_SS_CON_USB
++incdir+/home/dwaq062/dwaq062/RTLCAT/SS_CON_include
+// /home/dwaq062/dwaq062/RTLCAT/SS_CON_USB.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CON_USB_CTRL.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CON_USB_PHY.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_TOP.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_CTRL.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_PHY.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CON_PCIE_MISC.v
+/home/dwaq062/dwaq062/RTLCAT/SS_CON_ALL.v
+
+//--SS_CMP------------------------------------------------------
+/home/dwaq062/dwaq062/DUMMY_TOP/ss_cmp_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/ss_cmp.opt
+
+//OK--FM-------------------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/fmtop_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/fm.opt
+
++incdir+/home/dwaq062/dwaq062/RTLCAT/FM_include
+/home/dwaq062/dwaq062/RTLCAT/FM_ALL.v
+
+//OK--PERI-----------------------------------------------------
+///home/dwaq062/dwaq062/DUMMY_TOP/peri_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/peri.opt
+
++incdir+/home/dwaq062/dwaq062/RTLCAT/PERI_include
+/home/dwaq062/dwaq062/RTLCAT/PERI_ALL.v
+
+//OK--DMA------------------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/dmatop_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/dma.opt
+
+/home/dwaq062/dwaq062/RTLCAT/DMA_ALL.v
+
+// /home/ziptmp1/yuanlong/SOC_GEN5/SIM/SS_MEM/RTL_SIM/MASTER_SIM/LOCAL/RTL/MASTER/master_dmatop.v
+// -f /home/ziptmp1/yuanlong/SOC_GEN5/SIM/SS_MEM/RTL_SIM/MASTER_SIM/LOCAL/RTL/master.opt
+
+
+//OK--UCIe--------------------------------------------------
+///home/dwaq062/dwaq062/DUMMY_TOP/ucie_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/ucie.opt
+
+//For RTL UCIE-PHY only (Zebu needs to use +DV_SYNTHESIS)
+// +incdir+/home/dwaq062/dwaq062/IP/IPT/UCIE/latest/PHY/mdl_rtl
+// /home/dwaq062/dwaq062/IP/IPT/UCIE/latest/PHY/mdl_rtl/IPTUCIE_PHYMODULE.cat_temp.svp
+// /home/dwaq062/dwaq062/IP/IPT/UCIE/latest/PHY/mdl_rtl/analog.cat_temp.svp
+
+//For UCIE Controller
++incdir+/home/dwaq062/dwaq062/RTLCAT/UCIE_include
++define+IPTDLIB_CELLWRAP_BEHAVIOR
++define+IPTUCIEPHY_CELLWRAP_BEHAVIOR
+//+define+ICATCH_2P2CSRAMBIST
+
+/home/dwaq062/dwaq062/RTLCAT/UCIE_ALL.v
+
+//--SS_CDEC------------------------------------------------------
+/home/dwaq062/dwaq062/DUMMY_TOP/ss_cdec_dummy.v
+// -f /home/dwaq062/dwaq062/RTL/hvm.opt
+
+//--HSM-----------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/hsm_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/hsmtop.opt
+
++incdir+/home/dwaq062/dwaq062/RTLCAT/HSM_include
++define+ASIC_RAM
+/home/dwaq062/dwaq062/RTLCAT/HSM_ALL.v
+
+
+//OK--SS_MEM-----------------------------------------------------
+// /home/dwaq062/dwaq062/DUMMY_TOP/ss_mem_dummy.v
+//-f /home/dwaq062/dwaq062/RTL/ss_mem.opt
+
++define+EW_DWC_DDRPHY_DFI1_EXISTS    //for ddr_chip.v
++define+DWC_PUB_RID_GE103            //`define DWC_PUB_RID_GE103            //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
++define+DWC_PUB_RID_GE210            //`define DWC_PUB_RID_GE210            //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
++define+EW_DWC_DDRPHY_PG_PINS        //`define DWC_DDRPHY_PG_PINS           //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
++define+EW_DWC_DDRPHY_TOP_PG_PINS    //`define DWC_DDRPHY_TOP_PG_PINS       //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
++define+DWC_DDRPHY_PG_PINS
++define+DWC_DDRPHY_TOP_PG_PINS
+//+define+LPDDR54_PHY                //`define LPDDR54_PHY                  //copy from  i_DWC_ddrctl_lpddr54_250211/sim//testbench/models/phy/lpddr54_phy/dwc_ddrphy_VDEFINES_tb.v
+-f /home/dwaq062/dwaq062/IP/SYNOPSYS/LPDDR54_MCTL/i_DWC_ddrctl_lpddr54/src/DWC_ddrctl_mod.lst
+-f /home/dwaq062/dwaq062/IP/SYNOPSYS/LPDDR54_PHY_EW/PHY_EW_latest/export/dwc_ddrphy_top.lst
+-f /home/dwaq062/dwaq062/IP/SYNOPSYS/LPDDR54_PHY_EW/PHY_EW_latest/export/dwc_ddrphy_hardmacro.lst
+/home/dwaq062/dwaq062/MODEL/ss_mem_model.v
+
+/home/dwaq062/dwaq062/RTLCAT/SS_MEM_ALL.v
+// /home/dwaq062/dwaq062/RTLCAT/SS_MEM_ALL_DV.v

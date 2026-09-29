@@ -1,0 +1,25 @@
+
+/**
+ * Abstract:
+ * The coretop_testbench_if interface provides testbench read access to clock
+ * and reset signals.
+ */
+`ifndef GUARD_CORETOP_TESTBENCH_IF_SV
+`define GUARD_CORETOP_TESTBENCH_IF_SV
+
+interface coretop_testbench_if (
+);
+
+  // Testbench clock signal
+
+  // Testbench reset signal
+
+
+  modport tb_coretop (
+
+ 
+  );
+
+endinterface
+
+`endif // GUARD_CORETOP_TESTBENCH_IF_SV

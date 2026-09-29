@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "human_correction_lesson.schema.json",
+  "title": "Human Correction Lesson",
+  "description": "A structured, before/after shape for a memory.py kind=\"debug_lesson\" record that captures a real human's correction of a real agent mistake -- section 227 of the Research_Capability_Evolution master prompt. Distinct from a self-derived debug_lesson (engine._promote_experience_knowledge()'s own free-text 'captures what this class of problem looks like' kind): this schema requires BOTH sides of the correction (what the agent wrongly believed/did, and what the human corrected it to, with the human's own cited evidence and identity) plus a stable, exact-match mistake_signature_key so a future session can query whether this exact mistake has already been corrected once, instead of re-deriving the same wrong answer and needing a second human correction. Matching is deliberately EXACT (a sha256 of normalized mistake_category + before.claim text), never fuzzy -- the same discipline this project's other exact-equality signature keys (evidence_db.signature_key(), user_correction_trigger.correction_signature_key()) already apply, for the identical reason: a fuzzy join would silently group two unrelated mistakes as \"the same one\", manufacturing a false sense that a mistake class was already handled.",
+  "type": "object",
+  "required": [
+    "kind", "mistake_category", "correction", "mistake_signature_key",
+    "lesson", "evidence", "confidence", "verified", "reusable"
+  ],
+  "properties": {
+    "kind": {
+      "const": "debug_lesson",
+      "description": "The existing memory.py/memory_router.py kind this record is a structured extension of -- never a new sixth kind."
+    },
+    "title": {"type": ["string", "null"]},
+    "protocol": {"type": ["string", "null"]},
+    "scope": {"type": ["string", "null"]},
+    "mistake_category": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What class of mistake this is (e.g. hallucinated_vip_api, wrong_bind_location, fabricated_evidence, misidentified_root_cause). Free text, but never empty -- a correction record with no stated mistake class has nothing for query_prior_correction() to group future occurrences of the same mistake against."
+    },
+    "mistake_signature_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of {mistake_category, before.claim}, both whitespace/case-normalized -- the exact-match key find_prior_corrections()/has_prior_correction() query against. Computed by mistake_signature_key(), never hand-typed by a caller."
+    },
+    "lesson": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The reusable, human-readable claim this record carries for memory_router.engineering_admission_gate()'s REUSABLE check (root_cause/fix/lesson) -- synthesized from before/after, never left blank."
+    },
+    "evidence": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Top-level mirror of correction.after.evidence, satisfying engineering_admission_gate()'s EVIDENCE check -- the same field every other engineering-tier record is admitted on."
+    },
+    "confidence": {
+      "enum": ["HIGH", "CONFIRMED"],
+      "description": "memory_router.ENGINEERING_ADMISSION_CONFIDENCE_LEVELS -- a real human's direct correction is, by this project's own existing confidence vocabulary, at minimum HIGH."
+    },
+    "verified": {
+      "const": true,
+      "description": "A human correction that actually happened is, by definition, verified -- never a caller-settable false claim about an unconfirmed mistake."
+    },
+    "reusable": {
+      "const": true,
+      "description": "A captured lesson is explicitly reusable by future sessions -- the whole point of this record."
+    },
+    "correction": {
+      "type": "object",
+      "required": ["before", "after", "correction_source"],
+      "properties": {
+        "correction_source": {
+          "const": "human",
+          "description": "Distinguishes this record from a self-derived debug_lesson (engine._promote_experience_knowledge()'s own kind); never inferred, always the literal fact of who produced the 'after' side."
+        },
+        "before": {
+          "type": "object",
+          "required": ["claim"],
+          "properties": {
+            "claim": {
+              "type": "string",
+              "minLength": 1,
+              "description": "What the agent wrongly asserted or did -- the mistake itself, in the agent's own words/action, never paraphrased by the human's correction."
+            },
+            "reasoning": {
+              "type": ["string", "null"],
+              "description": "Why the agent believed the mistaken claim, when known -- optional context, never required (an agent's own reasoning is not always recoverable after the fact)."
+            }
+          },
+          "additionalProperties": true
+        },
+        "after": {
+          "type": "object",
+          "required": ["claim", "evidence", "corrected_by", "corrected_at"],
+          "properties": {
+            "claim": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The corrected fact/action, as the human stated it."
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The human's own cited basis for the correction (e.g. an RTL file:line, a VIP manual section, a spec citation) -- an uncited correction is an opinion, not evidence, and this project's Evidence Truth Rule forbids treating the two alike."
+            },
+            "corrected_by": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Who made the correction -- never anonymous; a correction attributed to nobody cannot be distinguished from the agent correcting itself."
+            },
+            "corrected_at": {
+              "type": "number",
+              "description": "Unix timestamp of the correction."
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

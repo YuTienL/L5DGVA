@@ -1,0 +1,567 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/env_manifest.schema.json",
+  "title": "env_manifest",
+  "description": "Machine-readable, git-tracked fact file for a generated verification environment: env.manifest.json. It has exactly three top-level layers -- vip_config (the VIP's own already-resolved config object, dumped by a zero-time UVM callback at end_of_elaboration_phase -- more reliable than a user guide because it reflects actually-applied values), dut_facts (ports/params reverse-derived from real verible --export_json RTL parsing, plus registers from a structured RAL/IP-XACT-style source), and env_topology (component hierarchy + config_db set/get pairing captured from a real uvm_top.print_topology() + +UVM_CONFIG_DB_TRACE run). Generated only -- dv_harness/env_manifest.py is the sole writer; this file is never hand-edited. Every layer that requires a real captured artifact (a VIP config dump, a topology dump, a config_db trace log) reports status=NOT_AVAILABLE with a `reason` when that artifact does not yet exist, rather than fabricating example content -- an agent reading this file must be able to tell 'genuinely captured from a real run' apart from 'not yet captured' at a glance. Deterministic key ordering and no timestamp/nondeterministic fields are baked into the content itself, so re-running the generator against unchanged real inputs produces a byte-identical file (a real diff means a real underlying change) -- this is why the schema deliberately has no 'generated_at'-style field. Schema 1.2 (2026-09-06) narrows that contract deliberately and honestly: `generator` now carries spec section 210's per-artifact generation provenance tuple, including the real harness git SHA, so a manifest regenerated after the HARNESS ITSELF moved to a new commit differs in generator.repository_sha.harness -- which is a real underlying change (a different generator produced the artifact), not clock noise. Unchanged inputs AND an unchanged harness commit still produce a byte-identical file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generator", "vip_config", "dut_facts", "env_topology"],
+  "properties": {
+    "schema_version": { "const": "1.2" },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "version", "tool_version", "agent", "input_ir", "repository_sha"],
+      "description": "Spec section 210's per-artifact GENERATION PROVENANCE TUPLE: which TOOL, at which TOOL VERSION and SCHEMA VERSION, driven by WHICH INPUT, produced by WHICH AGENT/SKILL, from WHICH COMMIT. Added in schema 1.2 (2026-09-06) INSIDE this existing block rather than as a second provenance record beside it. Every sub-object always carries every key with an explicit status, so 'this was not declared' and 'this key was omitted' can never look alike. Nothing here is ever fabricated: an undeclared agent is NOT_DECLARED, a declared identifier matching no real profile is DECLARED with resolution NOT_FOUND, and an unresolvable git HEAD is NOT_AVAILABLE with its real reason.",
+      "properties": {
+        "tool": { "const": "dv_harness.env_manifest" },
+        "version": { "type": "string", "description": "env_manifest.py's own SCHEMA_VERSION at generation time, not a build timestamp -- kept diffable. This is the SCHEMA's version; the harness build that produced the file is tool_version below. Before schema 1.2 there was no such field, so 'which harness produced this' was answerable only by misreading this one." },
+        "tool_version": { "type": "string", "description": "The real dv_harness package version (dv_harness.__version__) at generation time, e.g. '15.0.0'. Deliberately distinct from `version` above." },
+        "agent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "identifier", "resolution", "reason"],
+          "description": "Which agent or skill produced this artifact, in the convention the profiles themselves use to self-identify: the YAML front-matter `name:` of a .claude/agents/*.md profile or a .claude/skills/**/SKILL.md skill. A declared identifier is CHECKED against the real profiles on disk by env_manifest.known_generation_identifiers().",
+          "properties": {
+            "status": { "enum": ["DECLARED", "NOT_DECLARED"], "description": "DECLARED: the caller named a producing agent/skill. NOT_DECLARED: nobody claimed authorship -- recorded honestly rather than attributed to a default." },
+            "identifier": { "type": ["string", "null"], "description": "The declared profile name verbatim; null when NOT_DECLARED. Never invented." },
+            "resolution": { "enum": ["AGENT_PROFILE", "SKILL", "NOT_FOUND", "PROFILE_TREE_NOT_AVAILABLE", "NOT_DECLARED"], "description": "AGENT_PROFILE/SKILL: a real profile in this checkout really declares this name. NOT_FOUND: a name was declared and no profile carries it -- recorded as declared, never accepted as verified. PROFILE_TREE_NOT_AVAILABLE: no .claude tree beside this harness, so nobody could check -- deliberately distinct from NOT_FOUND." },
+            "reason": { "type": ["string", "null"] }
+          }
+        },
+        "input_ir": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "kind", "reference", "source", "contract_schema_version", "requirement_status", "downstream_consumable", "reason"],
+          "description": "What drove this generation. Two declared forms: a section 184 requirement CONTRACT (kind=requirement_contract), located in a real requirements document and cross-checked through requirement_contract.validate_requirement_contract() and downstream_consumable() -- so a manifest that cites a requirement also records whether that requirement was actually fit to generate from, rather than merely naming it; or a plain input FILE (kind=file) recorded as path + real sha256 + byte size, never content.",
+          "properties": {
+            "status": { "enum": ["NOT_DECLARED", "RESOLVED", "NOT_FOUND", "INVALID"], "description": "RESOLVED: the declared input really exists and (for a contract) really validates. NOT_FOUND: declared but absent or unlocatable. INVALID: located but not a schema-valid requirement contract. NOT_DECLARED: nobody named an input." },
+            "kind": { "enum": ["requirement_contract", "file", null], "description": "null only when NOT_DECLARED." },
+            "reference": { "type": ["string", "null"], "description": "The requirement_id (contract form) or the declared file path (file form)." },
+            "source": { "$ref": "#/$defs/doc_file_ref" },
+            "contract_schema_version": { "type": ["string", "null"], "description": "The cited requirement record's own contract_schema_version; null for the file form." },
+            "requirement_status": { "type": ["string", "null"], "description": "The cited requirement's own five-value status (COMPLETE/PARTIAL/AMBIGUOUS/CONTRADICTORY/UNKNOWN); null for the file form." },
+            "downstream_consumable": { "type": ["boolean", "null"], "description": "requirement_contract.downstream_consumable()'s real verdict on the cited requirement -- whether a generator was entitled to build from it at all. Null for the file form and whenever the record did not validate." },
+            "reason": { "type": ["string", "null"] }
+          }
+        },
+        "repository_sha": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["harness", "project"],
+          "description": "The real current git SHA(s) this artifact was generated at, read by the EXISTING change_impact.resolve_sha() (a real `git rev-parse --verify HEAD^{commit}`) -- there is no second git reader in this package. No absolute repository path is recorded, so the manifest stays diffable across machines.",
+          "properties": {
+            "harness": { "$ref": "#/$defs/repository_sha_ref", "description": "HEAD of the checkout containing dv_harness/env_manifest.py -- the GENERATOR's own identity. Always attempted, and always read from this file's own location rather than from a caller-supplied path, so it cannot be pointed at a different repository." },
+            "project": { "$ref": "#/$defs/repository_sha_ref", "description": "HEAD of the project root this manifest belongs to. NOT_DECLARED unless the caller named one." }
+          }
+        }
+      }
+    },
+    "vip_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "source", "vip_instances", "vip_release", "user_guide_refs"],
+      "properties": {
+        "vip_release": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "designware_home", "packages"],
+          "description": "The INSTALLED VIP's own version/release-notes/feature-matrix facts, discovered by a real filesystem scan of a VIP-home environment variable (dv_harness/env_manifest.py's scan_designware_home()/build_vip_release()). This answers 'which VIP release is this environment actually built against' from the install tree itself rather than from a version number someone typed into a document -- the same reasoning that makes the zero-time config dump above more trustworthy than a user guide. Nothing here is read INTO the manifest as content: release notes and feature matrices are recorded as path + sha256 + byte size only (see release_notes/feature_matrix below), never inlined.",
+          "properties": {
+            "status": {
+              "enum": ["SCANNED", "NOT_AVAILABLE"],
+              "description": "SCANNED: a real VIP-home directory was walked and `packages` reflects what was genuinely found there (which may legitimately be an empty array if the tree contains no recognisable VIP package). NOT_AVAILABLE: no VIP-home variable was set, or the one that was set pointed at a path that does not exist -- distinguished by `reason`."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "vendor": { "type": ["string", "null"], "description": "Which vendor's VIP-home convention this scan actually used ('synopsys'/'cadence'/'mentor' -- see env_manifest._VENDOR_VIP_HOME_ENVS), or null when status=NOT_AVAILABLE because none of their home variables was set. $DESIGNWARE_HOME is always checked first; Cadence's $CDNS_VIP_HOME and Mentor/Siemens' $MGC_VIP_HOME are checked, in that order, only when it is unset -- so a Cadence- or Mentor-only project is discovered too, not just a Synopsys one." },
+            "designware_home": { "type": ["string", "null"], "description": "The real VIP-home path this scan used (whichever vendor variable resolved it -- see `vendor`), echoed back so a manifest generated against the wrong install is diagnosable. Null when none was set. Kept under this historical key name (rather than a vendor-neutral one) so every existing reader of this field keeps working unchanged." },
+            "packages": {
+              "type": "array",
+              "description": "One entry per installed VIP package actually found on disk, sorted by (name, version) for a stable diff.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "version", "install_path", "layout", "release_notes", "feature_matrix"],
+                "properties": {
+                  "name": { "type": "string", "description": "VIP package name as it really appears on disk, e.g. 'usb_svt'. For a flat_project_copy layout this is the VIP-home directory's own basename (or, when that is a generic name like 'VIP', its parent directory's name)." },
+                  "version": { "type": ["string", "null"], "description": "Version directory name exactly as installed, e.g. 'R-2020.12'. Null when the package directory has no version level, or the layout is flat_project_copy -- never a guessed version." },
+                  "install_path": { "type": "string", "description": "Real absolute path of the directory that was scanned as this package's install root." },
+                  "layout": { "enum": ["centralized", "flat_project_copy"], "description": "'centralized': found via the vendor's `<root>/<package>/<version>` nested convention (e.g. a `dw_vip_setup` install). 'flat_project_copy': the VIP-home directory itself was the single package's own install root (a project-local VIP checkout laid out as `{doc,examples,include,lib,src}` directly, never routed through a centralized installer) -- a real, distinct finding, not the absence of one." },
+                  "release_notes": { "$ref": "#/$defs/doc_file_ref" },
+                  "feature_matrix": { "$ref": "#/$defs/doc_file_ref" }
+                }
+              }
+            }
+          }
+        },
+        "user_guide_refs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason", "documents"],
+          "description": "POINTERS to VIP user guides that were distilled OFFLINE by dv_harness/vip_user_guide_distill.py (`dv-harness vip-user-guide distill`), never the guides themselves. This layer records paths, sha256s, byte sizes, page count, section COUNT and which extractor ran -- and deliberately not section headings and not one word of document prose. That restraint is the requirement, not an optimisation: CLAUDE.md's Context Budget makes env.manifest.json a TIER-2 ALWAYS-RESIDENT artifact, so anything inlined here is pushed into every session's context window forever, which is exactly what 'distilled offline, never loaded into runtime context' forbids. env_manifest.assert_no_user_guide_body_in_manifest() enforces it as a checkable property.",
+          "properties": {
+            "status": {
+              "enum": ["INDEXED", "NOT_AVAILABLE"],
+              "description": "INDEXED: at least one real distilled reference record was supplied and read. NOT_AVAILABLE: none was -- `documents` is empty, and no user guide has been distilled for this environment yet."
+            },
+            "reason": { "type": ["string", "null"] },
+            "documents": {
+              "type": "array",
+              "description": "One entry per distilled document, sorted by title for a stable diff.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["title", "doc_kind", "source_document", "distilled_reference", "full_text_extract", "extraction", "section_count"],
+                "properties": {
+                  "title": { "type": "string" },
+                  "doc_kind": { "type": "string", "description": "What the document actually is: 'vip_user_guide', 'protocol_spec', 'programming_guide', ... so a reader never has to guess which document a pointer refers to." },
+                  "source_document": { "$ref": "#/$defs/doc_file_ref" },
+                  "distilled_reference": { "$ref": "#/$defs/doc_file_ref", "description": "The bounded tier-3 navigation index (.reference.md) -- read on demand, never preloaded." },
+                  "full_text_extract": { "$ref": "#/$defs/doc_file_ref", "description": "The complete extracted plain text: the TARGETED-READ target, never a context load." },
+                  "extraction": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["tool", "tool_version", "method"],
+                    "properties": {
+                      "tool": { "type": "string" },
+                      "tool_version": { "type": ["string", "null"] },
+                      "method": { "enum": ["pdf_text_extraction", "pre_extracted_text"], "description": "Which extraction really ran. 'pre_extracted_text' means someone handed us a .txt -- page numbers are honestly absent for that path rather than invented." }
+                    }
+                  },
+                  "section_count": { "type": "integer", "minimum": 0, "description": "How many numbered headings the distiller detected. A COUNT, not the headings -- the headings live in the .reference.md this entry points at." }
+                }
+              }
+            }
+          }
+        },
+        "status": {
+          "enum": ["CAPTURED", "NOT_AVAILABLE"],
+          "description": "CAPTURED: vip_instances below was parsed from a real dump file a live UVM simv actually produced. NOT_AVAILABLE: no such dump exists yet for this environment -- vip_instances is an empty array, never fabricated example content."
+        },
+        "source": { "$ref": "#/$defs/source_ref" },
+        "reason": { "type": ["string", "null"], "description": "Required explanation when status=NOT_AVAILABLE (e.g. 'no live simv exists yet for this environment'); null when CAPTURED." },
+        "vip_instances": {
+          "type": "array",
+          "description": "One entry per VIP config object the dump's end_of_elaboration_phase callback registered. Empty when status=NOT_AVAILABLE.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["instance_path", "vip_type", "config_fields"],
+            "properties": {
+              "instance_path": { "type": "string", "description": "Full hierarchical path of the VIP config object, exactly as get_full_name() reported it at dump time." },
+              "vip_type": { "type": "string", "description": "The VIP config class's own get_type_name()." },
+              "config_fields": {
+                "type": "object",
+                "description": "Field name -> stringified resolved value, exactly as the VIP's own config object reported them (never re-derived from documentation).",
+                "additionalProperties": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "dut_facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rtl", "registers", "address_map", "clock_reset"],
+      "properties": {
+        "address_map": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "entries", "disagreement_count"],
+          "description": "Decoded address regions, read from a soc_arch_map.schema.json input file produced by the project's own SoC spec pipeline. Each entry additionally carries a register_map_agreement cross-check computed against dut_facts.registers -- the two fact sources describe overlapping reality, and silently trusting whichever was loaded last is exactly the failure CLAUDE.md's Source Authority Order exists to prevent.",
+          "properties": {
+            "status": { "enum": ["LOADED", "NOT_AVAILABLE"] },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "entries": {
+              "type": "array",
+              "description": "Passthrough of the input's own `address_map` entries, sorted by base_address then name for a stable diff, each with register_map_agreement added.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "base_address", "size_bytes", "register_map_agreement"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "base_address": { "type": "string", "pattern": "^0x[0-9A-Fa-f]+$" },
+                  "size_bytes": { "type": "integer", "minimum": 1 },
+                  "target": { "type": ["string", "null"] },
+                  "bus": { "type": ["string", "null"] },
+                  "evidence": { "type": ["string", "null"] },
+                  "description": { "type": ["string", "null"] },
+                  "register_map_agreement": {
+                    "enum": ["AGREES", "DISAGREES", "NOT_IN_REGISTER_MAP", "NOT_AVAILABLE"],
+                    "description": "AGREES: a register-map block of the same name declares the same base address (compared as integers, so 0x1000 and 0x01000 agree). DISAGREES: same name, different base -- a real conflict for a human to resolve, never auto-resolved here. NOT_IN_REGISTER_MAP: the register map was loaded and has no block of this name, which is normal for a region with no software-visible registers. NOT_AVAILABLE: no register map was loaded at all, so no cross-check was possible -- deliberately distinct from NOT_IN_REGISTER_MAP, since 'nothing to compare against' is not the same finding as 'compared, and absent'."
+                  }
+                }
+              }
+            },
+            "disagreement_count": { "type": "integer", "minimum": 0, "description": "How many entries came back DISAGREES. Present so a consumer can act on the conflict without walking the array." }
+          }
+        },
+        "clock_reset": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "clocks", "resets"],
+          "description": "Clock-domain and reset topology from the same soc_arch_map.schema.json input. Reset `active_level` is required by that input contract and carried verbatim here: an assumed reset polarity is one of the cheapest ways to hold a DUT in reset for a whole run while every machine gate still reports PASS.",
+          "properties": {
+            "status": { "enum": ["LOADED", "NOT_AVAILABLE"] },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "clocks": {
+              "type": "array",
+              "description": "Sorted by name for a stable diff.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "frequency_mhz": { "type": ["number", "null"] },
+                  "source": { "type": ["string", "null"] },
+                  "domain": { "type": ["string", "null"] },
+                  "evidence": { "type": ["string", "null"] },
+                  "description": { "type": ["string", "null"] }
+                }
+              }
+            },
+            "resets": {
+              "type": "array",
+              "description": "Sorted by name for a stable diff.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "active_level", "clock_resolved"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "active_level": { "enum": ["high", "low"] },
+                  "synchronous": { "type": ["boolean", "null"] },
+                  "clock": { "type": ["string", "null"] },
+                  "clock_resolved": {
+                    "enum": ["RESOLVED", "UNKNOWN_CLOCK", "NOT_SPECIFIED"],
+                    "description": "RESOLVED: this reset's `clock` names a clock that really appears in `clocks`. UNKNOWN_CLOCK: it names one that does not -- a real inconsistency in the input, surfaced rather than carried silently. NOT_SPECIFIED: the input gave no clock for this reset."
+                  },
+                  "evidence": { "type": ["string", "null"] },
+                  "description": { "type": ["string", "null"] }
+                }
+              }
+            }
+          }
+        },
+        "rtl": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason", "files"],
+          "properties": {
+            "status": { "enum": ["PARSED", "NOT_AVAILABLE"] },
+            "reason": { "type": ["string", "null"], "description": "Required explanation when status=NOT_AVAILABLE (e.g. no rtl_files supplied); null when PARSED." },
+            "files": {
+              "type": "array",
+              "description": "One entry per RTL source file, sorted by file_path for a stable diff. Each entry is verible_parser.to_dict()'s own real, unmodified shape.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["file_path", "source_sha256", "verible_version", "modules"],
+                "properties": {
+                  "file_path": { "type": "string" },
+                  "source_sha256": { "type": "string" },
+                  "verible_version": { "type": ["string", "null"] },
+                  "modules": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name", "parameters", "ports", "signals"],
+                      "properties": {
+                        "name": { "type": ["string", "null"] },
+                        "parameters": {
+                          "type": "array",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["name", "type_text", "default_text"],
+                            "properties": {
+                              "name": { "type": ["string", "null"] },
+                              "type_text": { "type": ["string", "null"] },
+                              "default_text": { "type": ["string", "null"] },
+                              "line": { "type": ["integer", "null"] }
+                            }
+                          }
+                        },
+                        "ports": {
+                          "type": "array",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["name", "direction", "data_type"],
+                            "properties": {
+                              "name": { "type": ["string", "null"] },
+                              "direction": { "type": ["string", "null"] },
+                              "data_type": { "type": ["string", "null"] }
+                            }
+                          }
+                        },
+                        "signals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["name", "data_type", "unpacked_dims"],
+                            "properties": {
+                              "name": { "type": ["string", "null"] },
+                              "data_type": { "type": ["string", "null"] },
+                              "unpacked_dims": { "type": ["string", "null"] }
+                            }
+                          }
+                        },
+                        "instances": {
+                          "type": "array",
+                          "description": "Module instantiations inside this module's body, with their port connections. Added 2026-09-04 alongside verible_parser.py's instantiation extraction: this is the structural wiring a port-level connectivity graph is built from (dv_harness/amba_fabric_discovery.py's AMBA-7..14 endpoint tracing), which a declaration-only view cannot express. NOT in `required`, so a manifest written before that extraction existed still validates rather than being forced through a version bump for an additive fact.",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["instance_name", "module_name", "connections"],
+                            "properties": {
+                              "instance_name": { "type": ["string", "null"] },
+                              "module_name": { "type": ["string", "null"] },
+                              "connections": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object", "additionalProperties": false,
+                                  "required": ["port_name", "position", "expr_text", "nets"],
+                                  "properties": {
+                                    "port_name": {
+                                      "type": ["string", "null"],
+                                      "description": "null for a POSITIONAL connection -- resolving which formal port that slot names needs the instantiated module's own port list, which is a different file's fact."
+                                    },
+                                    "position": {
+                                      "type": "integer",
+                                      "description": "0-based slot in the port-actual list, counted from the comma separators (verible elides an omitted positional slot entirely)."
+                                    },
+                                    "expr_text": { "type": ["string", "null"] },
+                                    "nets": {
+                                      "type": "array", "items": { "type": "string" },
+                                      "description": "Base identifiers the connected expression references -- what a net-level graph joins on. Empty for an explicitly-unconnected port or a constant."
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "continuous_assigns": {
+                          "type": "array",
+                          "description": "Continuous `assign` statements in this module's body. AMBA-7 requires a trace to cross wire assignments and aliases; a 1:1 lhs/rhs pair is exactly such an alias. Added 2026-09-04, non-required for the same backward-compatibility reason as `instances`.",
+                          "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["lhs_text", "rhs_text", "lhs_nets", "rhs_nets"],
+                            "properties": {
+                              "lhs_text": { "type": ["string", "null"] },
+                              "rhs_text": { "type": ["string", "null"] },
+                              "lhs_nets": { "type": "array", "items": { "type": "string" } },
+                              "rhs_nets": { "type": "array", "items": { "type": "string" } }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "registers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "blocks"],
+          "properties": {
+            "status": {
+              "enum": ["LOADED", "NOT_AVAILABLE"],
+              "description": "LOADED: blocks below was read from a real register-map JSON file conforming to register_map.schema.json (dv_harness/schemas/register_map.schema.json is the input contract -- a RAL/IP-XACT export, never hand-invented content). NOT_AVAILABLE: no register-map input was supplied for this environment."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "blocks": {
+              "type": "array",
+              "description": "Passthrough of the register-map input's own `blocks` array, unmodified. Empty when status=NOT_AVAILABLE. See register_map.schema.json for the item shape -- deliberately not re-declared here so the two schemas cannot drift apart silently.",
+              "items": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "env_topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component_hierarchy", "config_db_trace", "testplan_correspondence"],
+      "properties": {
+        "testplan_correspondence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "axes_available", "items", "orphans", "summary"],
+          "description": "The computed three-way correspondence between the TESTLIST (what regression runs), the VPLAN ITEMS (what verification claims to verify, and which tests/coverage each claims), and the COVERAGE MODEL (what covergroups/coverpoints/assertions actually exist in written SV). Input contract: dv_harness/schemas/testplan_sources.schema.json. env_manifest.py never invents any of the three lists -- it JOINS them, which is the point: each list read alone always looks healthy, and only the join exposes a vPlan item claiming a test nobody runs, a covergroup no vPlan item references, or a regression test that maps to no stated verification intent. Matching is a literal name join, never fuzzy -- a fuzzy match would manufacture correspondence that does not exist.",
+          "properties": {
+            "status": {
+              "enum": ["COMPUTED", "PARTIAL", "NOT_AVAILABLE"],
+              "description": "COMPUTED: all three axes were supplied and fully joined. PARTIAL: at least one axis was supplied but not all three -- the checks that need a missing axis are honestly skipped (their per-item verdicts read NOT_CHECKED) rather than being scored as passing against nothing. NOT_AVAILABLE: no testplan-sources input was supplied at all."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "axes_available": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["testlist", "vplan_items", "coverage_model"],
+              "description": "Which of the three axes the input actually carried. This is what makes PARTIAL actionable -- 'incomplete' is useless without naming the missing side.",
+              "properties": {
+                "testlist": { "type": "boolean" },
+                "vplan_items": { "type": "boolean" },
+                "coverage_model": { "type": "boolean" }
+              }
+            },
+            "items": {
+              "type": "array",
+              "description": "One entry per vPlan item, sorted by id for a stable diff. Empty when no vplan_items axis was supplied.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "tests_claimed", "tests_present", "tests_missing", "coverage_claimed", "coverage_present", "coverage_missing", "verdict"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "tests_claimed": { "type": "integer", "minimum": 0 },
+                  "tests_present": { "type": "array", "items": { "type": "string" }, "description": "Claimed test names that really exist in the testlist." },
+                  "tests_missing": { "type": "array", "items": { "type": "string" }, "description": "Claimed test names that exist in NO testlist entry -- a vPlan item claiming coverage from a test nobody runs." },
+                  "coverage_claimed": { "type": "integer", "minimum": 0 },
+                  "coverage_present": { "type": "array", "items": { "type": "string" } },
+                  "coverage_missing": { "type": "array", "items": { "type": "string" }, "description": "Claimed coverage names that exist in NO coverage-model entry -- a vPlan item measured by a covergroup nobody wrote." },
+                  "verdict": {
+                    "enum": ["LINKED", "BROKEN_TEST_REF", "BROKEN_COVERAGE_REF", "BROKEN_TEST_AND_COVERAGE_REF", "UNCLAIMED", "NOT_CHECKED"],
+                    "description": "LINKED: every claim this item makes resolves against a real test/coverage entry. BROKEN_*_REF: at least one claim resolves against nothing. UNCLAIMED: the item claims no tests and no coverage at all -- verification intent with nothing attached to it, which a per-axis check alone can never surface. NOT_CHECKED: neither the testlist nor the coverage-model axis was supplied, so this item's claims could not be checked against anything and are deliberately NOT reported as LINKED."
+                  }
+                }
+              }
+            },
+            "orphans": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tests_not_in_any_vplan_item", "coverage_not_referenced_by_any_vplan_item"],
+              "description": "The reverse direction, which the per-item join above cannot see.",
+              "properties": {
+                "tests_not_in_any_vplan_item": { "type": "array", "items": { "type": "string" }, "description": "Tests the regression really runs that no vPlan item claims -- simulation time spent against no stated verification intent. Empty (not omitted) when both axes were supplied and there are none." },
+                "coverage_not_referenced_by_any_vplan_item": { "type": "array", "items": { "type": "string" }, "description": "Coverage constructs that really exist in SV but that no vPlan item references -- coverage being collected against no stated intent." }
+              }
+            },
+            "summary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["testlist_count", "vplan_item_count", "coverage_model_count", "linked_count", "broken_count", "unclaimed_count", "orphan_test_count", "orphan_coverage_count"],
+              "properties": {
+                "testlist_count": { "type": "integer", "minimum": 0 },
+                "vplan_item_count": { "type": "integer", "minimum": 0 },
+                "coverage_model_count": { "type": "integer", "minimum": 0 },
+                "linked_count": { "type": "integer", "minimum": 0 },
+                "broken_count": { "type": "integer", "minimum": 0 },
+                "unclaimed_count": { "type": "integer", "minimum": 0 },
+                "orphan_test_count": { "type": "integer", "minimum": 0 },
+                "orphan_coverage_count": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "component_hierarchy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "components"],
+          "properties": {
+            "status": {
+              "enum": ["CAPTURED", "NOT_AVAILABLE"],
+              "description": "CAPTURED: components below was parsed from a real hierarchy dump a live UVM run's end_of_elaboration_phase actually produced (walking uvm_top's real children -- see templates/uvm_env_manifest/dv_env_manifest_pkg.sv). NOT_AVAILABLE: no such dump exists yet."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["full_name", "type_name", "is_active"],
+                "properties": {
+                  "full_name": { "type": "string", "description": "get_full_name() exactly as reported." },
+                  "type_name": { "type": "string", "description": "get_type_name() exactly as reported." },
+                  "is_active": {
+                    "enum": ["UVM_ACTIVE", "UVM_PASSIVE", "NOT_APPLICABLE"],
+                    "description": "get_is_active() for a uvm_agent-derived component; NOT_APPLICABLE for a component with no active/passive concept -- an agent asking whether a component is active or passive reads this field instead of guessing from the component's name."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "config_db_trace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source", "reason", "parse_confidence", "entries"],
+          "properties": {
+            "status": {
+              "enum": ["CAPTURED", "NOT_AVAILABLE"],
+              "description": "CAPTURED: entries below was extracted from a real sim log produced by a run with +UVM_CONFIG_DB_TRACE set. NOT_AVAILABLE: no such log was supplied."
+            },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "reason": { "type": ["string", "null"] },
+            "parse_confidence": {
+              "enum": ["envelope_verified_message_opaque", null],
+              "description": "Honesty flag on how entries[].message was extracted: the outer UVM_INFO report envelope (file/line/time/reporter/id) is a stable, well-documented format and is fully parsed; the message BODY's own internal field/value sub-format is NOT further decomposed (never verified against a live UVM run in this repo) and is kept as opaque raw text in entries[].message rather than guessed apart into structured sub-fields. Null when status=NOT_AVAILABLE."
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "file", "line", "time", "reporter", "message"],
+                "properties": {
+                  "kind": { "enum": ["SET", "GET"], "description": "From the report's own [CFGDB/SET] / [CFGDB/GET] message id." },
+                  "file": { "type": ["string", "null"] },
+                  "line": { "type": ["integer", "null"] },
+                  "time": { "type": ["string", "null"] },
+                  "reporter": { "type": ["string", "null"] },
+                  "message": { "type": "string", "description": "Raw, unparsed message body -- see parse_confidence above." }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "repository_sha_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "sha", "reason"],
+      "description": "One repository's real HEAD commit, or an honest reason it could not be read. 'We could not check' (NOT_AVAILABLE) and 'nobody asked us to check' (NOT_DECLARED) stay distinct, because they are different operator problems with different fixes.",
+      "properties": {
+        "status": { "enum": ["RESOLVED", "NOT_AVAILABLE", "NOT_DECLARED"] },
+        "sha": { "type": ["string", "null"], "description": "Full commit hash exactly as git reported it; null unless RESOLVED. Never truncated and never invented." },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "doc_file_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "description": "A POINTER to a real file on disk, never its content. Identity (sha256) and size are recorded so a consumer can tell whether the file it finds is the one this manifest described, and so a stale reference is detectable -- but the bytes themselves stay out of this always-resident manifest by construction.",
+      "properties": {
+        "path": { "type": ["string", "null"], "description": "Real path to the file; null when this particular reference genuinely does not exist (e.g. a VIP package that ships no feature matrix)." },
+        "sha256": { "type": ["string", "null"], "description": "Content hash of the real file; null when path is null." },
+        "bytes": { "type": ["integer", "null"], "minimum": 0, "description": "Real byte size; null when path is null." },
+        "page_count": { "type": ["integer", "null"], "minimum": 0, "description": "Pages, for a paginated source document. Null for any non-paginated source -- never a fabricated count." }
+      }
+    },
+    "source_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "type": "string", "description": "What real artifact this layer was read from, e.g. vip_config_dump_json, register_map_json, topology_dump_json, sim_log_uvm_config_db_trace." },
+        "path": { "type": ["string", "null"], "description": "Path to the real source artifact this layer was extracted from, relative to the environment root; null when status=NOT_AVAILABLE (nothing was read)." }
+      }
+    }
+  }
+}

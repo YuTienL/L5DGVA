@@ -1,0 +1,310 @@
+"""Real, callable environment-generation-mode resolver -- closes the second
+half of the 2026-09-01 AI-mechanism architecture audit gap: CLAUDE.md's
+"Environment Generation Mode" gate and
+.dv-harness/environment-router/environment_mode_policy.json document real
+SUBSYSTEM_MODE vs SYSTEM_LEVEL_MODE semantics, but until this module existed
+nothing executable ever computed that decision from real per-run input --
+dv_harness/dashboard.py's own _environment_mode_selected() docstring (see
+its "HONEST STATUS" note) confirms no stage ever emitted the
+`environment_mode_selection` evidence block it scans for, because nothing
+ever produced one.
+
+This module computes the real decision from two structured evidence
+fields -- `requested_subsystems` (what this run is trying to build/verify)
+and `existing_registered_subsystems` (what is already registered as a
+BASELINE_READY subsystem environment, read from the REAL registry file by
+read_registered_subsystem_names() below, never fabricated) -- applying the
+same rules already documented in CLAUDE.md's "Environment Generation Mode"
+section and environment_mode_policy.json, transcribed here rather than
+reinvented:
+
+  - a single requested subsystem is a SUBSYSTEM_MODE build (policy.json
+    SUBSYSTEM_MODE goal: "Generate/build a subsystem verification
+    environment").
+  - two or more requested subsystems is a SYSTEM_LEVEL_MODE composition
+    (policy.json SYSTEM_LEVEL_MODE goal: "Select completed subsystem
+    environments and compose a System-Level/Full-SoC verification
+    environment").
+  - CLAUDE.md: "If a required subsystem is missing in SYSTEM_LEVEL_MODE,
+    build it through SUBSYSTEM_MODE then return to composition" --
+    surfaced here as `needs_subsystem_mode_first`/`missing_subsystems`
+    rather than silently ignored.
+  - CLAUDE.md: "Before CREATE ENVIRONMENT, select: SUBSYSTEM_MODE ... /
+    SYSTEM_LEVEL_MODE" (policy.json: "mode_must_be_explicit_before_
+    generation": true) -- with zero requested subsystems there is nothing
+    to select from, so resolve_environment_mode() returns an explicit
+    unresolved result rather than guessing a default mode.
+
+See dv_harness/engine.py's _environment_mode_router_evidence() for exactly
+which real per-run source populates each of these two fields, and
+tools/verification_flow/environment_mode_selection_gate.py (the new
+STAGE_GATES-registered PROJECT_MODEL check) for how an agent's own
+`environment_mode_selection` evidence block gets independently
+cross-checked against real registry content rather than trusted verbatim --
+see that gate script's header for the RULING on why it re-derives this same
+decision as a small, self-contained check instead of importing this module
+directly.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+def registry_path(root: Path) -> Path:
+    """The one real runtime subsystem-registry path, in one place.
+    engine.py's _persist_subsystem_registry_entry() (the writer), gates.py's
+    STAGE_GATES["SYSTEM_LEVEL"] system_level_validator ContextFlag (the
+    harness-supplied --registered cross-check) and the two readers below all
+    mean this same file -- deliberately NOT the empty
+    subsystem_environment_registry_template.json example next to it."""
+    return Path(root) / ".dv-harness" / "soc-composer" / "subsystem_environment_registry.json"
+
+
+def read_registered_subsystem_entries(root: Path) -> List[Dict[str, Any]]:
+    """Reads the REAL runtime subsystem registry (see registry_path above,
+    written by engine.py's _persist_subsystem_registry_entry() on an actual
+    SIGNOFF PASS) and returns the FULL registered entries -- name plus the
+    environment_manifest/release_sha/qualification_state/interface_
+    compatibility/clock_reset_compatibility fields
+    subsystem_environment_registration_gate.py validated before the entry was
+    ever persisted. This is the shape
+    uvm_generator.soc_environment_composer.compose_soc_environment() consumes
+    as its `subsystem_registry_entries`, so a SYSTEM_LEVEL_MODE composition
+    can be built from what the harness really registered rather than from
+    what a caller claims. Missing/unreadable file degrades to an empty list
+    (same defensive default _persist_subsystem_registry_entry() itself uses),
+    never a fabricated guess."""
+    import json
+    path = registry_path(root)
+    try:
+        registry = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        registry = {}
+    entries = []
+    for entry in (registry.get("subsystems") or []):
+        if isinstance(entry, dict) and entry.get("name"):
+            entries.append(entry)
+    return entries
+
+
+def read_registered_subsystem_names(root: Path) -> List[str]:
+    """The registered subsystem `name` values only -- derived from
+    read_registered_subsystem_entries() above rather than re-reading and
+    re-parsing the same file a second way, so the two readers can never
+    disagree about what counts as a registered entry."""
+    return [str(e["name"]) for e in read_registered_subsystem_entries(root)]
+
+
+def _norm_list(values: Any) -> List[str]:
+    if not values:
+        return []
+    out = []
+    for v in values:
+        s = str(v).strip()
+        if s and s.lower() not in {x.lower() for x in out}:
+            out.append(s)
+    return out
+
+
+def resolve_environment_mode(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolves the environment mode from structured evidence (module
+    docstring above has the SUBSYSTEM_MODE/SYSTEM_LEVEL_MODE ruling).
+    `evidence` keys:
+      - requested_subsystems: list[str] -- what this run wants built/verified.
+      - existing_registered_subsystems: list[str] -- real registry contents
+        (see read_registered_subsystem_names() above); an absent/empty list
+        is treated as "nothing registered yet", not an error.
+      - verification_level: optional str (IP / SUBSYSTEM / SYSTEM_LEVEL,
+        `dv_harness/verification_level.py`, `CAP-M5M6-VLEVEL-001`). Absent
+        (the default) -> byte-identical to before this parameter existed,
+        the subsystem-count decision below. Present -> the declared level
+        selects the mode directly (see `_resolve_with_level()`), adding the
+        one mode the count-only decision can never produce on its own:
+        `IP_MODE` (`VerificationLevel.IP` -- "one IP/DUT with its VIP; no
+        subsystem registry is involved," `verification_level.
+        LEVEL_SEMANTICS`). Ported from Parent's own real, tested
+        `_resolve_with_level()`/`_resolve_by_subsystem_count()` split
+        (`D:\\DV\\Task\\DV_Agent_Harness_L5\\dv_harness\\
+        environment_mode_router.py`), adapted to this module's own real
+        `_norm_list()`/`read_registered_subsystem_names()` helpers rather
+        than blind-copied.
+
+    Two structurally different evidence dicts (one requested_subsystems
+    entry vs. two-or-more) are guaranteed to land on a different
+    environment_mode here -- this is what makes the decision genuinely
+    input-driven rather than the harness only ever falling back to reading
+    the static environment_mode_policy.json file."""
+    if evidence.get("verification_level") is not None:
+        return _resolve_with_level(evidence)
+    return _resolve_by_subsystem_count(evidence)
+
+
+def _resolve_with_level(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """`verification_level` was declared -- it selects the mode directly.
+
+      - IP            -> IP_MODE; no subsystem-count requirement at all
+                        (LEVEL_SEMANTICS[IP].min_subsystems == 0).
+      - SYSTEM_LEVEL  -> SYSTEM_LEVEL_MODE, but still needs 2+ requested
+                        subsystems (SYSTEM_LEVEL_NEEDS_TWO_OR_MORE_
+                        SUBSYSTEMS otherwise -- a declared level does not
+                        excuse the real composition-arity requirement).
+      - SUBSYSTEM     -> SUBSYSTEM_MODE for 1+ requested; falls through to
+                        the ordinary count-based decision (which still
+                        requires at least one) when none is requested yet.
+      - anything else -> unresolved INVALID_VERIFICATION_LEVEL, never
+                        guessed (parse_level() is an exact-spelling parser)."""
+    from .verification_level import VerificationLevel, parse_level
+    level = parse_level(evidence.get("verification_level"))
+    requested = _norm_list(evidence.get("requested_subsystems"))
+    if level is None:
+        return {
+            "resolved": False, "environment_mode": None, "verification_level": None,
+            "requested_subsystems": requested, "missing_subsystems": [],
+            "reused_subsystems": [], "needs_subsystem_mode_first": False,
+            "reason": "INVALID_VERIFICATION_LEVEL",
+            "evidence": (f"verification_level {evidence.get('verification_level')!r} is not "
+                         "one of IP / SUBSYSTEM / SYSTEM_LEVEL"),
+        }
+    if level is VerificationLevel.IP:
+        return {
+            "resolved": True, "environment_mode": "IP_MODE", "verification_level": "IP",
+            "requested_subsystems": requested, "missing_subsystems": [],
+            "reused_subsystems": [], "needs_subsystem_mode_first": False,
+            "candidate_subsystems": _norm_list(evidence.get("candidate_subsystems")),
+            "unselected_candidates": [],
+            "next_action": "generate the single-IP protocol environment",
+            "evidence": "verification_level=IP selected by the user -> IP_MODE "
+                        "(no subsystem registry is involved)",
+        }
+    if level is VerificationLevel.SYSTEM_LEVEL and len(requested) < 2:
+        return {
+            "resolved": False, "environment_mode": None, "verification_level": level.value,
+            "requested_subsystems": requested, "missing_subsystems": [],
+            "reused_subsystems": [], "needs_subsystem_mode_first": False,
+            "reason": "SYSTEM_LEVEL_NEEDS_TWO_OR_MORE_SUBSYSTEMS",
+            "evidence": (f"verification_level=SYSTEM_LEVEL composes completed subsystems, "
+                         f"but {len(requested)} requested"),
+        }
+    if level is VerificationLevel.SUBSYSTEM and requested:
+        existing = {s.lower() for s in _norm_list(evidence.get("existing_registered_subsystems"))}
+        return {
+            "resolved": True, "environment_mode": "SUBSYSTEM_MODE", "verification_level": "SUBSYSTEM",
+            "requested_subsystems": requested,
+            "missing_subsystems": [s for s in requested if s.lower() not in existing],
+            "reused_subsystems": [s for s in requested if s.lower() in existing],
+            "needs_subsystem_mode_first": False,
+            "candidate_subsystems": _norm_list(evidence.get("candidate_subsystems")),
+            "unselected_candidates": [],
+            "next_action": "build/register the subsystem via SUBSYSTEM_MODE",
+            "evidence": "verification_level=SUBSYSTEM selected by the user -> SUBSYSTEM_MODE",
+        }
+    decision = _resolve_by_subsystem_count(evidence)
+    decision["verification_level"] = level.value
+    return decision
+
+
+def _resolve_by_subsystem_count(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """The original (pre-`CAP-M5M6-VLEVEL-001`) SUBSYSTEM_MODE-vs-
+    SYSTEM_LEVEL_MODE decision, unchanged -- reached directly when
+    `verification_level` is absent (byte-identical to every caller that
+    predates this module's own `verification_level` parameter), and as the
+    fallback inside `_resolve_with_level()` for a declared `SUBSYSTEM`
+    level with nothing yet requested."""
+    requested = _norm_list(evidence.get("requested_subsystems"))
+    existing = {s.lower() for s in _norm_list(evidence.get("existing_registered_subsystems"))}
+    # SYS-1 ("USER CONTROLS SYSTEM COMPOSITION"): the discovered candidate
+    # set this selection is being made FROM. Optional -- every pre-existing
+    # caller omits it and gets exactly the previous behaviour -- and it is
+    # never a substitute for `requested_subsystems`: a candidate list can
+    # only ever be OFFERED, never auto-selected, because SYS-1's own rule is
+    # "The user decides which subsystem environments participate. The Harness
+    # must NOT assume that all available subsystems should be integrated."
+    # See subsystem_discovery.discover_subsystem_candidates() for the real
+    # producer of this list.
+    candidates = _norm_list(evidence.get("candidate_subsystems"))
+    requested_lower = {s.lower() for s in requested}
+    unselected = [c for c in candidates if c.lower() not in requested_lower]
+
+    if not requested:
+        return {
+            "resolved": False,
+            "environment_mode": None,
+            "requested_subsystems": [],
+            "missing_subsystems": [],
+            "reused_subsystems": [],
+            "needs_subsystem_mode_first": False,
+            "candidate_subsystems": candidates,
+            "unselected_candidates": candidates,
+            "reason": "MODE_MUST_BE_EXPLICIT_BEFORE_GENERATION",
+            "evidence": (
+                "environment_mode_router.resolve_environment_mode received no "
+                "requested_subsystems; CLAUDE.md 'Environment Generation Mode': "
+                "'Before CREATE ENVIRONMENT, select: SUBSYSTEM_MODE / "
+                "SYSTEM_LEVEL_MODE' (environment_mode_policy.json: "
+                "mode_must_be_explicit_before_generation=true) -- there is "
+                "nothing to select a mode FROM yet."
+                + (f" {len(candidates)} discovered candidate(s) are available "
+                   f"to choose from ({candidates}); SYS-1 requires an explicit "
+                   "user selection and forbids assuming all of them "
+                   "participate." if candidates else "")
+            ),
+        }
+
+    missing = [s for s in requested if s.lower() not in existing]
+    reused = [s for s in requested if s.lower() in existing]
+
+    if len(requested) >= 2:
+        mode = "SYSTEM_LEVEL_MODE"
+        needs_subsystem_mode_first = bool(missing)
+        next_action = (
+            f"invoke SUBSYSTEM_MODE builder for missing required subsystem(s) "
+            f"{missing}, register it/them, then return to SYSTEM_LEVEL_MODE "
+            "(environment_mode_policy.json missing_subsystem_behavior)"
+            if needs_subsystem_mode_first else
+            "proceed directly to SYSTEM_LEVEL_MODE composition -- all "
+            "requested subsystems are already registered "
+            "(environment_mode_policy.json system_level_reuse_rule: "
+            "prefer BASELINE_READY/VERIFIED subsystem environments)"
+        )
+        evidence_str = (
+            f"environment_mode_router.resolve_environment_mode: {len(requested)} "
+            f"requested_subsystems ({requested}) >= 2 -> SYSTEM_LEVEL_MODE "
+            "(policy.json SYSTEM_LEVEL_MODE goal: compose a System-Level/"
+            f"Full-SoC verification environment); missing_from_registry={missing}"
+        )
+    else:
+        mode = "SUBSYSTEM_MODE"
+        needs_subsystem_mode_first = False
+        name = requested[0]
+        next_action = (
+            f"build/register subsystem '{name}' via SUBSYSTEM_MODE"
+            if missing else
+            f"subsystem '{name}' is already registered; a single-subsystem "
+            "request stays SUBSYSTEM_MODE by definition (policy.json "
+            "SUBSYSTEM_MODE goal is single-subsystem build/regeneration)"
+        )
+        evidence_str = (
+            f"environment_mode_router.resolve_environment_mode: exactly 1 "
+            f"requested subsystem ('{name}') -> SUBSYSTEM_MODE "
+            "(policy.json SUBSYSTEM_MODE goal: generate/build a subsystem "
+            f"verification environment); already_registered={not missing}"
+        )
+
+    return {
+        "resolved": True,
+        "environment_mode": mode,
+        "requested_subsystems": requested,
+        "missing_subsystems": missing,
+        "reused_subsystems": reused,
+        "needs_subsystem_mode_first": needs_subsystem_mode_first,
+        # SYS-1: a DELIBERATELY unselected candidate is reported, not
+        # silently dropped. Composing a subset is the correct behaviour --
+        # what would be wrong is doing it invisibly, so that nobody can tell
+        # afterwards whether "PCIe is not in this system environment" was a
+        # user decision or the harness losing track of it.
+        "candidate_subsystems": candidates,
+        "unselected_candidates": unselected,
+        "next_action": next_action,
+        "evidence": evidence_str,
+    }

@@ -1,0 +1,13 @@
+Synthetic fixture programming-guide text for
+dv_harness_tests/test_interrupt_dma_clock_reset_extraction.py -- not any real
+DUT's document.
+
+Interrupt Controller
+
+This device asserts interrupts on IRQ0..IRQ3. Priority order: IRQ0 > IRQ1 > IRQ2 > IRQ3.
+IRQ0 has the highest priority among all sources.
+
+Each interrupt can be masked via the INTR_MASK register; setting a bit disables the
+corresponding interrupt from reaching the CPU.
+
+The DMA controller supports 4 independent DMA channels, each with its own descriptor ring.

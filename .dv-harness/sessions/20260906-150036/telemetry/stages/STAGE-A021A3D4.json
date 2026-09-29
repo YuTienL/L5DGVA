@@ -1,0 +1,71 @@
+{
+  "profile_id": "STAGE-A021A3D4",
+  "stage_id": "DISCOVERY",
+  "stage_name": "DISCOVERY",
+  "graph_node": "DISCOVERY",
+  "start_time_epoch": 1788275033.0018754,
+  "end_time_epoch": 1788275332.0357215,
+  "stage_wall_clock_sec": 299.03384613990784,
+  "aggregate_agent_runtime_sec": 299.00142884254456,
+  "parallel_saving_sec": 0.0,
+  "parallelism_efficiency": 0.0,
+  "input_tokens": 26,
+  "output_tokens": 20525,
+  "cache_read_tokens": 788971,
+  "cache_write_tokens": 115114,
+  "total_tokens": 20551,
+  "tool_calls": 0,
+  "retries": 0,
+  "finding_count": 0,
+  "closed_finding_count": 0,
+  "status": "PARTIAL",
+  "agents": [
+    {
+      "agent": "analysis-agent",
+      "runtime_sec": 290.6868362426758,
+      "model": "",
+      "job_id": "",
+      "input_tokens": 24,
+      "output_tokens": 20335,
+      "cache_read_tokens": 763563,
+      "cache_write_tokens": 97854,
+      "tool_calls": 0,
+      "retries": 0,
+      "status": "PASS",
+      "total_tokens": 20359
+    },
+    {
+      "agent": "analysis-agent",
+      "runtime_sec": 8.314592599868774,
+      "model": "",
+      "job_id": "",
+      "input_tokens": 2,
+      "output_tokens": 190,
+      "cache_read_tokens": 25408,
+      "cache_write_tokens": 17260,
+      "tool_calls": 0,
+      "retries": 0,
+      "status": "PASS",
+      "total_tokens": 192
+    }
+  ],
+  "metadata": {
+    "git_sha": "cc5d396a941b1ecb6ce86e24289a98e06226f5bd"
+  },
+  "entry_checklist": {
+    "items": [],
+    "present_count": 0,
+    "total_count": 0,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "exit_checklist": {
+    "items": [],
+    "present_count": 0,
+    "total_count": 0,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "tokens_per_finding": null,
+  "tokens_per_closed_finding": null
+}

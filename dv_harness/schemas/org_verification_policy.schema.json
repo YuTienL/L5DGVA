@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-harness/schemas/org_verification_policy.schema.json",
+  "title": "Organizational Verification Policy Document",
+  "description": "An org-declarable set of EXECUTABLE verification-policy rules (dv_harness/org_verification_policy_engine.py). Each policy is DATA -- a condition over project facts plus an action to take when it matches -- never Python code. Precedence between conflicting policies is resolved by ORG_POLICY_PRECEDENCE_ORDER in the engine, never by which one happened to load last.",
+  "type": "object",
+  "required": ["schema_version", "policies"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "policies": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/policy"}
+    }
+  },
+  "$defs": {
+    "policy": {
+      "type": "object",
+      "required": [
+        "policy_id", "scope", "severity", "governs", "condition",
+        "action_if_matched", "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "policy_id": {"type": "string", "minLength": 1},
+        "title": {"type": "string"},
+        "scope": {
+          "description": "Who declared this policy. 'org' outranks 'project' in the documented precedence order, unless overridable_by_project is true.",
+          "enum": ["org", "project"]
+        },
+        "severity": {
+          "description": "MANDATORY outranks ADVISORY as the final precedence tiebreaker; it does not by itself change action_if_matched's meaning.",
+          "enum": ["MANDATORY", "ADVISORY"]
+        },
+        "precedence": {
+          "description": "Explicit numeric precedence, higher wins, within a tied scope. Never required -- an undeclared value is treated as 0, never as an unfair advantage or disadvantage nobody chose.",
+          "type": "integer"
+        },
+        "overridable_by_project": {
+          "description": "Only meaningful when scope is 'org'. True means this org policy explicitly yields to a matching project-scope policy on the same 'governs' topic, ranked below every project policy rather than above it.",
+          "type": "boolean"
+        },
+        "governs": {
+          "description": "The named topic/fact this policy is about. Two matched policies sharing one governs value with different action_if_matched values are a real conflict, resolved by precedence or reported unresolved -- never silently averaged.",
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {"$ref": "#/$defs/condition"},
+        "action_if_matched": {
+          "enum": ["BLOCK", "WARN", "ALLOW"]
+        },
+        "reason": {"type": "string", "minLength": 1},
+        "citation": {
+          "description": "Where this policy comes from (a standards document, a prior incident, an org directive) -- optional, but recorded verbatim when present rather than paraphrased.",
+          "type": "string"
+        }
+      }
+    },
+    "condition": {
+      "description": "A three-valued (True/False/UNRESOLVABLE) boolean expression over project facts. A leaf names one fact and an operator; all_of/any_of/not compose leaves. Recursive.",
+      "oneOf": [
+        {"$ref": "#/$defs/leaf_condition"},
+        {"$ref": "#/$defs/all_of_condition"},
+        {"$ref": "#/$defs/any_of_condition"},
+        {"$ref": "#/$defs/not_condition"}
+      ]
+    },
+    "leaf_condition": {
+      "type": "object",
+      "required": ["fact", "op"],
+      "additionalProperties": false,
+      "properties": {
+        "fact": {
+          "description": "Dotted path into the supplied facts mapping, e.g. 'waiver.status'.",
+          "type": "string",
+          "minLength": 1
+        },
+        "op": {
+          "enum": ["eq", "ne", "lt", "lte", "gt", "gte", "in", "not_in", "contains", "exists", "not_exists"]
+        },
+        "value": {
+          "description": "Required for every op except exists/not_exists."
+        }
+      }
+    },
+    "all_of_condition": {
+      "type": "object",
+      "required": ["all_of"],
+      "additionalProperties": false,
+      "properties": {
+        "all_of": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/condition"}}
+      }
+    },
+    "any_of_condition": {
+      "type": "object",
+      "required": ["any_of"],
+      "additionalProperties": false,
+      "properties": {
+        "any_of": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/condition"}}
+      }
+    },
+    "not_condition": {
+      "type": "object",
+      "required": ["not"],
+      "additionalProperties": false,
+      "properties": {
+        "not": {"$ref": "#/$defs/condition"}
+      }
+    }
+  }
+}

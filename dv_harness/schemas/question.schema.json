@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/question.schema.json",
+  "title": "question",
+  "description": "One entry in the 3-tier ask-a-human question queue (spec Part B). Standardized, one-question-per-entry shape so a question is never a free-text ping -- it always carries pre-researched options, a recommendation, and the exact fallback assumption a Tier-2 (safe-to-assume) case logs and continues with. Produced/consumed only by dv_harness/question_queue.py -- never hand-authored.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "id", "question_key", "blocking", "domain", "owner",
+    "question", "context_path", "options", "recommendation",
+    "assumption_if_unanswered", "tier", "tier_reason", "status", "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "id": {
+      "type": "string",
+      "pattern": "^Q-(VIP|DUT|ENV)-[0-9A-F]{8}$",
+      "description": "Q-ID. Domain-prefixed (matches `domain`, upper-cased) plus an 8-hex-char stable digest of `question_key`, so the SAME question asked twice mints the SAME id rather than a fresh one."
+    },
+    "question_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable dedup key for this exact question, independent of `id`'s derived hex -- what `dv_harness.question_queue`'s repeat-question-rate metric and decisions.md persistence are keyed on. Two asks with the same question_key are the SAME question; once a HUMAN has answered it, every later ask must self-resolve at Tier 1 from that persisted decision, never re-escalate. A persisted Tier-2 auto-assumption does NOT confer that -- it is the harness's own provisional guess, so a later ask of the same key that trips a Tier-3 hard trigger still escalates for real (see classify_tier's evaluation order)."
+    },
+    "blocking": {
+      "type": "boolean",
+      "description": "true iff tier == 3 (Cannot-Assume): the harness stops and waits for a human answer. false for tier == 1 (already self-resolved, nothing to wait on) or tier == 2 (Safe-to-Assume: logged and continued automatically, never blocks). The tier-3 half of this is MACHINE-ENFORCED by the allOf block below -- see its own comment for why prose alone was not enough."
+    },
+    "domain": {
+      "enum": ["vip", "dut", "env"],
+      "description": "vip: VIP configuration/behavior question -- routes to owner DV-owner/Synopsys-AE. dut: DUT RTL/port/register question -- routes to owner designer. env: environment/component-hierarchy/config_db question -- routes to owner DV-owner. Routing is a literal table (dv_harness.question_queue.route_owner), never inferred per-question."
+    },
+    "owner": {
+      "type": "string",
+      "description": "Must equal route_owner(domain) -- see the allOf block below, which pins the exact literal value per domain."
+    },
+    "question": { "type": "string", "minLength": 1 },
+    "context_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Where in the real evidence (e.g. an env.manifest.json JSON-pointer path, a file:line, a register/port name) this question concerns -- never a vague restatement of the question text itself."
+    },
+    "options": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "description": "2-3 PRE-RESEARCHED options -- never an open-ended free-text question. Each option must already be a real, evaluated possibility, not a placeholder the human has to invent from scratch. This object form is the single PERSISTED shape; callers may also hand add_question() a plain [\"option a\", \"option b\"] list, which question_queue.normalize_options() coerces to this shape at the door. That asymmetry is deliberate: accepting bare strings HERE would force every reader of a stored record (validate_question's recommendation-in-labels cross-check, decisions.md rendering, digest batching) to branch per element forever, to buy an input convenience that costs nothing to absorb once on the way in.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label"],
+        "properties": {
+          "label": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string", "description": "Why this option is plausible -- the pre-research evidence, one sentence." }
+        }
+      }
+    },
+    "recommendation": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Must equal one of options[].label -- dv_harness.question_queue.validate_question() checks this structurally (JSON Schema alone cannot cross-reference array values)."
+    },
+    "assumption_if_unanswered": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The exact assumption a Tier-2 (safe-to-assume) classification logs and proceeds with. Required on every question, even a Tier-3 one that will never silently use it, so a later relaxation of this question's tier never leaves the assumption undefined."
+    },
+    "tier": {
+      "enum": [1, 2, 3],
+      "description": "1 = Self-resolve (answered from env.manifest.json/MCP or a persisted prior decision -- no human involved). 2 = Safe-to-assume (logged, continues; worst case is one wasted, cheaply-detected, cheaply-rerun regression). 3 = Cannot-assume (hard-coded trigger: affects pass/fail verdict, spec intent, or whether a read-only file should change -- stop and escalate)."
+    },
+    "tier_reason": { "type": "string", "minLength": 1, "description": "Which classify_tier() rule fired -- e.g. 'decisions_store_hit', 'hard_trigger:affects_pass_fail_verdict', 'no_hard_trigger_low_blast_radius'. Never blank -- a tier is never assigned by unrecorded judgment." },
+    "status": {
+      "enum": ["OPEN", "SELF_RESOLVED", "ASSUMED", "ANSWERED"],
+      "description": "OPEN: tier 3, awaiting a human answer (blocking). SELF_RESOLVED: tier 1, answer came from a persisted decision or the manifest at ask time. ASSUMED: tier 2, assumption_if_unanswered was logged and execution continued. ANSWERED: a human has since supplied a real answer (via `answer`), whether this question started OPEN or ASSUMED."
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "answered_at": { "type": ["string", "null"], "format": "date-time" },
+    "answer": { "type": ["string", "null"] },
+    "basis": { "type": ["string", "null"], "description": "The evidence/reasoning basis for `answer` -- required alongside any non-null answer." },
+    "decided_by": { "type": ["string", "null"] },
+    "overturned": {
+      "type": "boolean",
+      "default": false,
+      "description": "true iff this question's answer replaced an earlier Tier-2 auto-assumption with a genuinely different value -- feeds the assumption-overturned-rate metric."
+    },
+    "resolved_from_decision_id": {
+      "type": ["string", "null"],
+      "description": "For a SELF_RESOLVED (tier 1) question: the id of the prior question whose persisted decision supplied this answer."
+    },
+    "exemption": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "check_id", "reason", "basis_document", "owner", "valid_until"],
+      "description": "The ACTIVE exemptions.yaml entry covering this question's context.check_id at ask time (dv_harness/exemptions.py find_active_exemption()), copied in as a citation. Present on EVERY tier when one exists, not only when it resolved the ask: at tier 1 (tier_reason 'active_exemption') it IS the answer's source, and at tier 3 it rides along so the human receiving the escalation is not re-deriving what this exemption's owner already decided and cited. Absent when no active exemption covers the check, or when the question carries no check_id. An EXPIRED exemption never appears here -- that is what valid_until is for, and it surfaces as its own blocking question via escalate_expired_exemptions() instead.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "check_id": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "basis_document": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "valid_until": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "format": "date" }
+      }
+    },
+    "digest_batch_id": { "type": ["string", "null"] },
+    "digest_emitted_at": { "type": ["string", "null"], "format": "date-time" },
+    "grounding_evidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["summary", "evidence_path"],
+      "description": "Optional, additive \"why am I being asked this\" citation -- distinct from `context_path` (WHERE the question concerns) and `tier_reason` (WHICH classify_tier() rule fired). Populated ONLY from real caller-supplied evidence (dv_harness.question_queue.add_question()'s `grounding_evidence=` argument, normalized by normalize_grounding_evidence()) -- never inferred or fabricated from the question text itself. `null` when no caller supplied one; both keys are required together when present, since a summary with no citation of where that finding lives (or a citation with no stated reason) is exactly the unsupported claim this field exists to prevent.",
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "description": "One-sentence WHY this question exists, e.g. 'found register X in the Excel register map but absent from the RTL port list'." },
+        "evidence_path": { "type": "string", "minLength": 1, "description": "Where the grounding finding actually lives -- a file:line, an env.manifest.json JSON-pointer, a register/port name, a spreadsheet cell reference. Never fabricated -- must cite something the caller actually supplied." }
+      }
+    },
+    "suggested_answer": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["value", "source_module", "source_path"],
+      "description": "The suggest-then-confirm mode's own evidence-cited candidate answer (2026-09-07, additive -- optional, so every pre-2026-09-07 question record, which simply omits this field, still validates unchanged; no schema_version bump). Populated ONLY from real, already-computed evidence via dv_harness.question_queue.normalize_suggested_answer() / derive_suggested_answer_from_env_manifest() / derive_suggested_answer_from_design_source_inventory() -- never inferred from the question text itself. `value` MUST equal `recommendation` (validate_question()'s own cross-check, since JSON Schema alone cannot express it) -- a suggested answer IS the recommendation, carrying its own real citation of exactly where it came from, so a human reviewing this question can confirm it (answer with the same value) or correct it (answer with a different one) rather than authoring an answer from scratch. `null`/absent when no caller supplied one (every question stays open-ended by default).",
+      "properties": {
+        "value": { "type": "string", "minLength": 1, "description": "The suggested answer itself -- must equal recommendation." },
+        "source_module": {
+          "enum": ["env_manifest", "design_source_inventory"],
+          "description": "Which real evidence producer this suggestion was derived from -- restricted to the two named, structured modules a reader can actually go check; never an open-ended string."
+        },
+        "source_path": { "type": "string", "minLength": 1, "description": "Where in that producer's own output the value was read, e.g. 'env.manifest.json#vip_config.vip_release.version' or 'design_source_inventory#usb3_regmap.version'. Never fabricated -- must cite something the caller actually supplied." },
+        "rationale": { "type": "string", "description": "Optional free-text note on why this evidence suggests this value." }
+      }
+    },
+    "authority_role": {
+      "enum": ["DESIGN", "VERIFICATION", "SHARED", null],
+      "description": "CAP-M6-CLARSVC-001 (HUMAN_GATE_CONTRACT.md's own 'HumanGate generalizes question_queue.HUMAN_DECISION_SOURCE, adding AUTHORITY_ROLE as new routing metadata'): which DE/DV/DE+DV Role-Based HITL authority this question belongs to, per dv_harness.clarification_service.classify_question_owner() -- DESIGN (DE): intended DUT behavior/register semantics/reset-IRQ-clock intent/RTL-spec discrepancy from a design-intent perspective. VERIFICATION (DV): verification architecture/vPlan/scenario/checker/coverage/waiver/signoff. SHARED (DE+DV): a genuine cross-domain contradiction only -- never a fallback for an ordinary unresolved/unknown field. Additive (2026-09-24) -- optional, so every pre-existing question record, which simply omits this field, still validates unchanged; no schema_version bump. `null`/absent for a question filed by a caller that does not classify an authority role (this module's own question_queue.py callers predate CAP-M6-CLARSVC-001 and are unaffected)."
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "domain": { "const": "vip" } } },
+      "then": { "properties": { "owner": { "const": "DV-owner/Synopsys-AE" } } } },
+    { "if": { "properties": { "domain": { "const": "dut" } } },
+      "then": { "properties": { "owner": { "const": "designer" } } } },
+    { "if": { "properties": { "domain": { "const": "env" } } },
+      "then": { "properties": { "owner": { "const": "DV-owner" } } } },
+    {
+      "$comment": "tier 3 => blocking true. Added 2026-09-03 after a review proved a hand-built {tier:3, blocking:false, status:'SELF_RESOLVED'} record passed validate_question() cleanly: `blocking`'s own description already said 'true iff tier == 3', but a description is not a constraint, so nothing stopped a non-blocking Tier-3 record -- a cannot-assume question that never stops for a human -- from being persisted as valid. The rule is one-directional on purpose: tier 3 pins blocking to true, while tier 1/2 are left to the `blocking` boolean itself rather than being pinned to false here, so this constraint only ever adds escalation and can never suppress it.",
+      "if": { "properties": { "tier": { "const": 3 } }, "required": ["tier"] },
+      "then": { "properties": { "blocking": { "const": true } }, "required": ["blocking"] }
+    }
+  ]
+}

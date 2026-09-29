@@ -1,9 +1,14 @@
-# NOTICE (added during industrial-grade audit, 2026-08-28): this module is
-# NOT invoked by any executing code path in dv_harness/ or .claude/agents/*.md
-# as of this audit -- it is standalone/orphaned code. Any WORKFLOW_MANIFEST.json
-# capability flag referencing this file's feature is aspirational, not a
-# statement that this code actually runs in the pipeline. See
-# CHANGELOG_v0_to_v50.md and the industrial-grade-deep-audit findings for detail.
+# NOTICE (corrected 2026-08-31, protocol-generalization-gap-closing Task 2):
+# the flat top-level generate() orchestration in this module is deprecated
+# -- ProtocolEnvGenerator (protocol_env_generator.py) is the one official
+# generation entry point, reachable via
+# tools/generate_protocol_uvm_environment.py. This module's per-class emit
+# methods (config/vseq/base_vseq/scoreboard/coverage/env/base_test/
+# smoke_test/tb_top/sv_id) remain live and authoritative for their DSL
+# schemas -- ProtocolEnvGenerator composes and reuses them unchanged, only
+# relocating their output into USB_UVM_Handoff's real subdirectory layout
+# instead of this module's own flat-file layout. Do not call this module's
+# top-level generate() directly; do not describe this module as orphaned.
 from pathlib import Path
 import json, re
 from ..qualification import QualificationTier
@@ -13,6 +18,16 @@ def sv_id(s):
     if not s or s[0].isdigit():
         s='p_'+s
     return s.lower()
+
+# Imported AFTER sv_id() is defined, deliberately: state_machine_checks.py
+# itself does `from .generator import sv_id` (same import shape
+# pcie_ltssm_generator.py already uses), which would otherwise be a circular
+# import (generator.py -> state_machine_checks.py -> generator.py) if this
+# import sat above sv_id's own definition -- Python's partial-module
+# semantics make this safe as long as sv_id is already bound on this
+# module's namespace by the time state_machine_checks.py's own top-level
+# import statement runs.
+from . import state_machine_checks
 
 
 class CircularDependencyError(ValueError):
@@ -126,6 +141,140 @@ class MalformedScoreboardCheckError(ValueError):
     structured scoreboard check is never silently compiled from a
     guessed/incomplete entry, and never silently falls back to the legacy
     comment-dump path once it has opted in via "check_name"."""
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+class MalformedTransactionScoreboardError(ValueError):
+    """Raised by UVMEnvironmentGenerator._validate_transaction_scoreboard /
+    _emit_transaction_scoreboard when a top-level "transaction_scoreboards"
+    manifest entry (see scoreboard()'s own docstring for the full schema) is
+    missing/malformed. This is the TRANSACTION_SCOREBOARDS DSL's sibling to
+    MalformedScoreboardCheckError above -- same typed-error convention (a
+    short SCREAMING_SNAKE_CASE `reason` code plus a concrete `detail` dict)
+    -- but for a genuinely different mechanism: a two-TLM-stream (predicted/
+    observed) queue-based transaction scoreboard (match/mismatch/orphan/
+    duplicate disposition), not SCOREBOARD_CHECKS's single-pair field
+    comparison. Never silently skipped, guessed, or partially compiled --
+    every entry in the manifest's "transaction_scoreboards" list is
+    validated before ANY of them is emitted (all-or-nothing, same posture as
+    _emit_scoreboard_check's per-entry raise).
+
+    Validation branches (one raise per branch, never combined/guessed):
+      - MISSING_SCOREBOARD_NAME (entry not a dict, or "scoreboard_name"
+        missing/empty)
+      - DUPLICATE_SCOREBOARD_NAME (two entries in one manifest whose
+        sv_id()-normalized "scoreboard_name" collide -- an ambiguous
+        generated-class-name collision, same spirit as
+        ConstructionCollisionError)
+      - MISSING_SCOREBOARD_EVIDENCE ("evidence" missing/empty -- this DSL
+        holds itself to the stronger "virtual_sequences"/"connections"-style
+        mandatory top-level evidence bar, not SCOREBOARD_CHECKS's narrower
+        enum_translation-only evidence requirement, per this task's own
+        evidence-required convention)
+      - MISSING_ITEM_CLASS ("item_class" missing/empty)
+      - MALFORMED_PORT_SPEC ("predicted_port"/"observed_port" missing, not a
+        dict, or missing/empty "port_name")
+      - DUPLICATE_PORT_NAME (predicted_port and observed_port resolve to the
+        identical "port_name" -- would emit two same-named class members;
+        not enumerated in the original design pass's reason-code list, added
+        here because a manifest that did this would otherwise silently
+        compile to broken, non-recompiling SystemVerilog, which this
+        generator's typed-refusal convention never permits)
+      - INVALID_ORDERING_POLICY (not one of "IN_ORDER"/"OUT_OF_ORDER")
+      - EMPTY_MATCH_KEY ("match_key" missing/empty/not a list)
+      - MALFORMED_MATCH_KEY_ENTRY (a "match_key" entry not a
+        {"field": <non-empty str>} dict)
+      - EMPTY_COMPARE_FIELDS ("compare_fields" missing/empty/not a list)
+      - MALFORMED_COMPARE_FIELD (a "compare_fields" entry not a dict, or
+        missing/empty "field")
+      - INVALID_COMPARE_OP (not one of SCOREBOARD_CHECKS's existing
+        eq|neq|lt|lte|gt|gte|mask_eq plus this DSL's one new "array_eq")
+      - MISSING_MASK_EQ_MASK (compare_op=="mask_eq" with no top-level "mask"
+        string on that compare_fields entry)
+      - MISSING_ON_MISMATCH / INVALID_ON_MISMATCH_SEVERITY /
+        MISSING_ON_MISMATCH_MESSAGE_TEMPLATE (a compare_fields entry's
+        "on_mismatch" missing/malformed -- same severity-set/message
+        validation _emit_scoreboard_check already performs, reused verbatim)
+      - MISSING_ON_ORPHAN_PREDICTED / INVALID_ON_ORPHAN_PREDICTED_SEVERITY /
+        MISSING_ON_ORPHAN_PREDICTED_MESSAGE_TEMPLATE (required top-level
+        disposition, same shape)
+      - MISSING_ON_ORPHAN_OBSERVED / INVALID_ON_ORPHAN_OBSERVED_SEVERITY /
+        MISSING_ON_ORPHAN_OBSERVED_MESSAGE_TEMPLATE (required top-level
+        disposition, same shape)
+      - INVALID_ON_DUPLICATE_SEVERITY / MISSING_ON_DUPLICATE_MESSAGE_TEMPLATE
+        (only checked when the OPTIONAL top-level "on_duplicate" key is
+        present at all -- its own severity/message_template shape is
+        identical to the other three dispositions but the design pass did
+        not enumerate its error codes explicitly since the key itself is
+        optional; this generator still never accepts a present-but-malformed
+        "on_duplicate" silently)."""
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+class MalformedCoveragePointError(ValueError):
+    """Raised by UVMEnvironmentGenerator.coverage/_compile_coverage_group when
+    a top-level "coverage_points" entry opts into the structured DSL
+    (identified, per coverage()'s own docstring, by the presence of a
+    "cg_name" key) but is missing/malformed. Same typed-error convention as
+    this module's other errors: a short SCREAMING_SNAKE_CASE `reason` code
+    plus a concrete `detail` dict -- a structured coverage group is never
+    silently compiled from a guessed/incomplete entry, and never silently
+    falls back to the legacy `// COVER: <json>` comment-dump path once it
+    has opted in via "cg_name" (same posture MalformedScoreboardCheckError
+    already holds for "check_name"-opted-in scoreboard_rules entries).
+
+    Validation branches (one raise per branch, never combined/guessed):
+      - MISSING_CG_NAME ("cg_name" missing/empty)
+      - MISSING_COVERAGE_EVIDENCE ("evidence" missing/empty -- same
+        mandatory-evidence bar "connections"/"virtual_sequences"/
+        "transaction_scoreboards" already hold themselves to)
+      - INVALID_SAMPLE_TRIGGER_KIND ("sample_trigger" not a dict, or its
+        "kind" not one of "subscriber_write"/"explicit_call")
+      - MISSING_ITEM_CLASS (sample_trigger.kind=="subscriber_write" with no
+        non-empty "item_class")
+      - CONFLICTING_ITEM_CLASS (two "subscriber_write" entries in the same
+        manifest name DIFFERENT item_class values -- the generated
+        "<p>_coverage" class can only extend ONE `uvm_subscriber #(T)`, so
+        two different T's from two entries in one manifest is unsatisfiable,
+        not something to silently resolve by picking one; not enumerated in
+        the original design pass's reason-code list, added here for the
+        same defect-prevention posture MalformedTransactionScoreboardError's
+        DUPLICATE_SCOREBOARD_NAME already applies elsewhere in this file)
+      - EMPTY_COVERPOINTS ("coverpoints" missing/empty)
+      - MALFORMED_COVERPOINT (a coverpoint not a dict, or missing/empty
+        "cp_name"/"expr")
+      - DUPLICATE_CP_NAME (two coverpoints in the same cg share a "cp_name"
+        after sv_id() normalization -- same ambiguous-generated-identifier
+        defect-prevention posture as DUPLICATE_SCOREBOARD_NAME/
+        DUPLICATE_ASSERTION_NAME elsewhere in this file; not enumerated in
+        the original design pass's reason-code list)
+      - EMPTY_BINS (a coverpoint's "bins" missing/empty)
+      - INVALID_BIN_KIND (a bin not a dict, or "kind" not one of
+        "bins"/"bins_array"/"ignore_bins"/"illegal_bins")
+      - MALFORMED_BIN (a bin missing/empty "name"; or missing/empty "range"
+        for kind=="bins_array"; or missing/empty "values" for
+        kind in "bins"/"ignore_bins"/"illegal_bins")
+      - MALFORMED_CROSS (a "crosses" entry not a dict, or missing/empty
+        "cross_name"/"of")
+      - UNDECLARED_CROSS_COVERPOINT (a cross's "of" list names a "cp_name"
+        not declared among this SAME cg entry's own "coverpoints")
+      - MALFORMED_CROSS_IGNORE_BIN (a cross's optional "ignore_bins" entry
+        missing/empty "name"/"expr"/"evidence" -- same evidence-required
+        discipline as every other cross-cutting evidence field in this
+        module)
+      - INVALID_REGISTER_DECODE / UNSUPPORTED_ENUM_TRANSLATION_KIND /
+        MISSING_ENUM_TRANSLATION_MAP / MISSING_ENUM_TRANSLATION_NOTE -- the
+        SAME register_decode (bit-slice) / enum_translation (value_map case
+        table) validation _emit_scoreboard_check's emit_side() already
+        performs for SCOREBOARD_CHECKS, reused verbatim via the shared
+        _decode_and_translate() helper against a coverpoint's own optional
+        "register_decode"/"enum_translation" fields."""
     def __init__(self, reason: str, detail: dict):
         super().__init__(reason)
         self.reason = reason
@@ -248,6 +397,7 @@ class UVMEnvironmentGenerator:
         files[p+'_base_vseq.sv']=self.base_vseq(m,p)
         files[p+'_scoreboard.sv']=self.scoreboard(m,p)
         files[p+'_coverage.sv']=self.coverage(m,p)
+        files[p+'_assertions.sv']=self.assertions(m,p)
         files[p+'_env.sv']=self.env(m,p)
         files[p+'_base_test.sv']=self.base_test(m,p)
         for t in smoke:
@@ -266,7 +416,7 @@ class UVMEnvironmentGenerator:
     def pkg(self,m,p,pkg,smoke):
         imports='\n'.join('  import '+x+'::*;' for x in m.get('vip',{}).get('package_imports',[]))
         incs=[p+'_config.sv',p+'_virtual_sequencer.sv',p+'_base_vseq.sv',
-              p+'_scoreboard.sv',p+'_coverage.sv',p+'_env.sv',p+'_base_test.sv']
+              p+'_scoreboard.sv',p+'_coverage.sv',p+'_assertions.sv',p+'_env.sv',p+'_base_test.sv']
         incs += [p+'_'+sv_id(t.get('name','smoke'))+'_test.sv' for t in smoke]
         inc='\n'.join('  `include "'+x+'"' for x in incs)
         return 'package '+pkg+';\n  import uvm_pkg::*;\n  `include "uvm_macros.svh"\n'+imports+'\n'+inc+'\nendpackage\n'
@@ -701,7 +851,159 @@ endclass
         verbatim; a manifest author's message_template must therefore use
         exactly 3 format specifiers, in check_name/lhs/rhs order.
 
-        See _emit_scoreboard_check for the exact per-check compiled shape."""
+        See _emit_scoreboard_check for the exact per-check compiled shape.
+
+        TRANSACTION_SCOREBOARDS DSL EXTENSION (additive, backward compatible
+        -- a manifest with no top-level "transaction_scoreboards" key, or an
+        empty list, is a complete no-op here: output above is returned
+        unchanged, byte-identical to before this extension existed).
+
+        SCOREBOARD_CHECKS (above) and this project's own vocabulary
+        (.claude/skills/CORE/dv-workflow/SKILL.md's "Scoreboard"/"DMA
+        Scoreboard" as infrastructure distinct from a plain checker) agree:
+        a single lhs/rhs field-equality check is a CHECKER, not a
+        transaction/data-integrity SCOREBOARD. A real scoreboard is two
+        independent TLM analysis-port streams (a "predicted" stream, from a
+        reference model, and an "observed" stream, from a real bus monitor),
+        an internal queue of not-yet-matched predicted transactions, a
+        match_key-based lookup finding the corresponding observed
+        transaction for each predicted one, a payload/field compare once
+        matched, and explicit disposition of the three failure classes a
+        single-pair checker cannot produce: an orphaned predicted
+        transaction (DUT dropped it), an orphaned observed transaction (DUT
+        fabricated/duplicated one), and (optionally) a duplicate match.
+        Confirmed absent anywhere in dv_harness/uvm_generator/ before this
+        extension: no uvm_tlm_analysis_fifo/uvm_analysis_imp-based
+        comparator, no transaction queue, no match/orphan state machine
+        exists anywhere in this package.
+
+        An optional top-level manifest key "transaction_scoreboards" -- a
+        list of dicts, each:
+
+          {"scoreboard_name": str (required, non-empty; becomes
+             "<p>_<scoreboard_name>_scoreboard" via sv_id()),
+           "evidence": str (required, non-empty -- citation of why THESE
+             match_key/compare_fields are the correct data-integrity check
+             for this protocol; this DSL holds itself to the STRONGER
+             mandatory-evidence bar "virtual_sequences"/"connections" use,
+             not SCOREBOARD_CHECKS's narrower enum_translation-only
+             requirement -- see MalformedTransactionScoreboardError),
+           "item_class": str (required, non-empty; the SV transaction item
+             type flowing on BOTH ports -- v1 requires the same item_class
+             on both sides, see scope-boundary notes below),
+           "predicted_port": {"port_name": str},
+           "observed_port": {"port_name": str},
+           "ordering_policy": "IN_ORDER" | "OUT_OF_ORDER" (required;
+             IN_ORDER inspects only predicted_q[0] -- strict FIFO;
+             OUT_OF_ORDER searches the whole queue for a match_key match),
+           "match_key": [{"field": str}, ...] (non-empty; ordered list of
+             item fields identifying "the same transaction" across the two
+             streams, e.g. tag/seq_id/addr -- compared with `===`),
+           "compare_fields": [
+             {"field": str,
+              "compare_op": "eq"|"neq"|"lt"|"lte"|"gt"|"gte"|"mask_eq"|
+                "array_eq" (this DSL's one new op beyond SCOREBOARD_CHECKS's
+                existing 6, for a dynamic-array/queue payload field),
+              "mask": str (required iff compare_op=="mask_eq"),
+              "on_mismatch": {"severity": "UVM_ERROR"|"UVM_WARNING"|
+                "UVM_INFO", "message_template": str (required, non-empty;
+                exactly 3 format specifiers, filled with
+                (field_name, expected_value, observed_value) -- the same
+                (identifying-name, lhs, rhs) convention
+                _emit_scoreboard_check's message_template already uses, with
+                "field_name" playing check_name's role since one
+                write_observed() call can run more than one compare_fields
+                check)}}, ...
+           ] (non-empty),
+           "on_orphan_predicted": {"severity": ..., "message_template": str
+             (exactly 2 format specifiers: (scoreboard_name,
+             predicted_q.size()) -- fired once, in report_phase, for the
+             WHOLE remaining queue, not once per leftover item, per this
+             DSL's deliberate v1 scope: end-of-test drain check only, no
+             live per-transaction timeout)},
+           "on_orphan_observed": {"severity": ..., "message_template": str
+             (exactly len(match_key) format specifiers, filled with the
+             observed transaction's match_key field values in match_key
+             order -- fired immediately in write_observed() when no
+             predicted_q entry, and no prior-match history entry when
+             "on_duplicate" is set, matches)},
+           "on_duplicate": {"severity": ..., "message_template": str (same
+             len(match_key) shape as on_orphan_observed)} (OPTIONAL -- only
+             when present does this generator emit the matched-transaction
+             history queue and duplicate-vs-orphan distinction at all; when
+             absent, a second observed transaction reusing an
+             already-matched key is indistinguishable from, and reported
+             as, an ordinary orphan_observed -- a deliberate simplicity/cost
+             tradeoff, not an oversight, so scoreboards that do not care
+             about duplicates do not pay for an unboundedly-growing history
+             queue they never asked for)}
+
+        "array_eq" compiles to `exp.<field> != obs.<field>` -- NOTE:
+        plain `!=`, not the `!==` this DSL's other compare_ops use.
+        RULING (deviation from this task's own design-report prose, which
+        was internally inconsistent -- its narrative text correctly states
+        real IEEE 1800 SystemVerilog gives `==`/`!=` element-wise semantics
+        on same-element-type dynamic arrays/queues, but its own compiled-code
+        sketch then showed `!==`): `===`/`!==` (4-state case (in)equality)
+        are defined only for packed/integral types, NOT for unpacked array
+        types (dynamic arrays, queues) -- using `!==` on a queue field is a
+        real VCS compile error, not merely non-idiomatic. This generator
+        never knowingly emits SystemVerilog that cannot compile, so
+        "array_eq" uses `!=` while every other compare_op keeps `!==`/`===`
+        verbatim per SCOREBOARD_CHECKS precedent.
+
+        Every entry is validated in full (_validate_transaction_scoreboard)
+        BEFORE any entry is emitted -- a malformed 3rd entry never leaves
+        the first two partially emitted, same all-or-nothing posture
+        _emit_scoreboard_check's per-entry raise already has. See
+        MalformedTransactionScoreboardError for the exact validation-branch
+        list.
+
+        Emission (_emit_transaction_scoreboard) appends one whole NEW
+        uvm_scoreboard-extending class per entry, using base_vseq()'s
+        class-append-splice technique (parts.append(...)) -- NOT
+        _emit_scoreboard_check's own function-append-into-one-class
+        technique -- because a TLM-port-bearing scoreboard needs its own
+        uvm_analysis_imp handles/build_phase/report_phase, so it cannot be a
+        function bolted onto the existing single-purpose "<p>_scoreboard"
+        class body. The `uvm_analysis_imp_decl(_predicted)`/
+        `uvm_analysis_imp_decl(_observed)` macro declarations (generic UVM
+        base-class-library scaffolding, same "no per-project evidence
+        needed for standard library mechanics" posture as
+        `::type_id::create()`/`uvm_config_db#()::get()` elsewhere in this
+        generator) are emitted exactly ONCE per file regardless of how many
+        "transaction_scoreboards" entries share them (the macro-generated
+        `uvm_analysis_imp_predicted#(TYPE,IMP)` template is generic over
+        TYPE/IMP, so one declaration serves every entry even when entries
+        use different item_class values).
+
+        Instantiating a generated "<p>_<scoreboard_name>_scoreboard" class
+        and wiring its two analysis-port handles to a real predictor's and
+        monitor's analysis ports needs ZERO changes anywhere else in this
+        generator -- it is an ordinary uvm_component, expressible via an
+        ordinary "vip_components" entry (default class_handle kind), and its
+        `.connect()` wiring is already exactly expressible via the existing
+        "connections" kind="call" shape (real evidence,
+        USB_UVM_Handoff usb_top_env.sv:531:
+        `dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export);`
+        is literally the same `<receiver>.<method>(<args>)` shape a
+        `.connect()` call needs). This design's scope is deliberately
+        narrow: only the scoreboard class body itself is new engine
+        capability.
+
+        Scope boundary (v1, deliberately deferred, not silently dropped --
+        see .work/scoreboard-generator-design-report.md's own "Scope
+        Boundary" section for the full reasoning): no register_decode/
+        enum_translation on compare_fields yet; predicted_q (and the
+        optional duplicate-history queue) can grow unboundedly against a
+        stuck/misbehaving DUT -- flagged, not solved; orphan-predicted
+        detection is report_phase-drain-only, not live per-transaction
+        timeout (no per-protocol clock/timescale evidence this generator
+        models generically); exactly 2 fixed named ports (predicted/
+        observed), no N-way match; both ports carry the same item_class,
+        no per-side item-class mapping; this DSL never synthesizes
+        reference-model prediction logic itself, only consumes an existing
+        predicted-side analysis port."""
         entries = m.get('scoreboard_rules') or []
         comment_entries = [x for x in entries
                             if not (isinstance(x, dict) and 'check_name' in x)]
@@ -725,7 +1027,154 @@ endclass
             check_text = '\n'.join(self._emit_scoreboard_check(x) for x in check_entries)
             assert out.endswith('endclass\n')
             out = out[:-len('endclass\n')] + check_text + '\nendclass\n'
+
+        tx_entries = m.get('transaction_scoreboards') or []
+        if tx_entries:
+            for tx in tx_entries:
+                self._validate_transaction_scoreboard(tx)
+            seen_names = {}
+            for tx in tx_entries:
+                key = sv_id(tx['scoreboard_name'])
+                if key in seen_names:
+                    raise MalformedTransactionScoreboardError("DUPLICATE_SCOREBOARD_NAME", {
+                        "scoreboard_name": tx['scoreboard_name'],
+                        "conflicts_with": seen_names[key],
+                    })
+                seen_names[key] = tx['scoreboard_name']
+
+            parts = [out, self._emit_transaction_scoreboard_macros()]
+            for tx in tx_entries:
+                parts.append(self._emit_transaction_scoreboard(p, tx))
+            out = '\n'.join(parts)
         return out
+
+    @staticmethod
+    def _decode_and_translate(base_expr, base_decl_type, register_decode, enum_translation,
+                               dest_var, error_context, error_cls, declare_dest):
+        """Shared register_decode (bit-slice) + enum_translation (value_map
+        case-statement) compiler, factored out of _emit_scoreboard_check's
+        own emit_side() closure (SCOREBOARD_CHECKS DSL) so the identical
+        validation and SV-emission logic is not reimplemented in parallel by
+        the coverage_points DSL's _compile_coverage_group -- see the
+        coverage-generator design report's "Real existing patterns to
+        reuse" section (point 1). Called once per SCOREBOARD_CHECKS
+        lhs_source/rhs_source AND once per coverage_points coverpoint,
+        regardless of whether that particular source/coverpoint actually
+        carries a "register_decode"/"enum_translation" key at all (both are
+        always optional; the plain pass-through branch below is the no-op
+        case for either caller).
+
+        base_expr / base_decl_type: the already-resolved SV expression/type
+          to read the raw value from when NO register_decode is present --
+          a scoreboard check's `int'(<param>)`-cast function-parameter read,
+          or a coverage coverpoint's own "expr" used verbatim (e.g.
+          "t.ep_type") with no cast. The two callers differ here (cast vs.
+          no cast, function parameter vs. object-field path), which is
+          exactly why this is a caller-supplied pair rather than derived
+          internally.
+
+        register_decode: optional {"bit_offset": int>=0, "bit_width":
+          int>0}. When present, `base_expr` is treated as the FULL raw
+          register value to bit-slice (`base_expr[msb:lsb]`) and
+          `base_decl_type` is ignored -- the resolved type becomes
+          `bit [bit_width-1:0]` instead. Raises error_cls("INVALID_REGISTER_
+          DECODE", ...) when bit_offset/bit_width are missing or not a
+          non-negative/positive int respectively.
+
+        enum_translation: optional {"kind": "value_map", "map": {...},
+          "note": str}. ALWAYS compiled into a real case statement, never
+          skipped -- see _emit_scoreboard_check's own docstring for why an
+          identity-looking map is still compiled at runtime rather than
+          optimized away. Raises error_cls with reason
+          "UNSUPPORTED_ENUM_TRANSLATION_KIND" (kind != "value_map"),
+          "MISSING_ENUM_TRANSLATION_MAP" (map missing/empty), or
+          "MISSING_ENUM_TRANSLATION_NOTE" (note missing/empty) -- the
+          evidence-citation discipline this generator already requires of
+          "connections"/"virtual_sequences" evidence strings, applied here
+          to why a cross-domain value mapping is correct.
+
+        dest_var: the SV identifier this compiles an assignment/declaration
+          INTO -- a scoreboard check's "lhs"/"rhs" local, or a coverage
+          coverpoint's "cp_<cp_name>" shadow class member.
+
+        declare_dest: True (SCOREBOARD_CHECKS' usage) declares dest_var as a
+          fresh function-local (`<type> <dest_var> = <expr>;`); False
+          (coverage_points' usage) assigns an ALREADY-declared class member
+          instead (`<dest_var> = <expr>;`, no type prefix) -- required
+          because a coverage covergroup's coverpoints reference the
+          persistent class member directly (a no-arg `cg.sample()` call can
+          only read symbols in scope at the class level, not a write()-local
+          variable), so re-declaring dest_var as a function-local inside
+          write() would silently shadow the member and the covergroup would
+          keep sampling stale/uninitialized data instead of the just-read
+          value.
+
+        error_context: dict merged into the raised error's `detail` --
+        caller supplies whatever identifying keys make sense for it
+        (check_name/side for scoreboard, cg_name/cp_name for coverage);
+        "error_id"/"error_name" (if present) are used verbatim as the
+        compiled case table's `uvm_error` tag/message-prefix, so each
+        caller's own identifying-name convention (SB_<CHECK_NAME> /
+        COV_<CG>_<CP>) is preserved exactly rather than this shared helper
+        inventing its own.
+
+        Returns (decl_lines: list[str], resolved_type: str). resolved_type
+        is 'int' when enum_translation ran (translated values are always
+        consumed as plain int, matching _emit_scoreboard_check's original
+        behavior) or the pre-translation raw type otherwise; coverage's
+        caller uses it to declare the "cp_<cp_name>" class member with the
+        right type -- scoreboard's caller does not need it, dest_var is
+        already declared inline in decl_lines."""
+        if register_decode:
+            bit_offset = register_decode.get('bit_offset')
+            bit_width = register_decode.get('bit_width')
+            valid_offset = isinstance(bit_offset, int) and not isinstance(bit_offset, bool) and bit_offset >= 0
+            valid_width = isinstance(bit_width, int) and not isinstance(bit_width, bool) and bit_width > 0
+            if not valid_offset or not valid_width:
+                raise error_cls("INVALID_REGISTER_DECODE", dict(error_context, register_decode=register_decode))
+            msb = bit_offset + bit_width - 1
+            lsb = bit_offset
+            raw_expr = '%s[%d:%d]' % (base_expr, msb, lsb)
+            raw_decl_type = 'bit [%d:0]' % (bit_width - 1)
+        else:
+            raw_expr = base_expr
+            raw_decl_type = base_decl_type
+
+        decl_lines = []
+        if enum_translation:
+            kind = enum_translation.get('kind')
+            if kind != 'value_map':
+                raise error_cls("UNSUPPORTED_ENUM_TRANSLATION_KIND", dict(error_context, kind=kind))
+            value_map = enum_translation.get('map')
+            if not isinstance(value_map, dict) or not value_map:
+                raise error_cls("MISSING_ENUM_TRANSLATION_MAP", dict(error_context))
+            note = enum_translation.get('note')
+            if not note or not str(note).strip():
+                raise error_cls("MISSING_ENUM_TRANSLATION_NOTE", dict(error_context))
+            raw_var = '%s_raw' % dest_var
+            decl_lines.append('    %s %s = %s; // %s' % (raw_decl_type, raw_var, raw_expr, note))
+            if declare_dest:
+                decl_lines.append('    int %s;' % dest_var)
+            decl_lines.append('    case (%s)' % raw_var)
+            for k, v in value_map.items():
+                decl_lines.append('      %s: %s = %s;' % (k, dest_var, v))
+            error_id = error_context.get('error_id', dest_var.upper())
+            error_name = error_context.get('error_name', dest_var)
+            decl_lines.append('      default: begin')
+            decl_lines.append('        %s = %s;' % (dest_var, raw_var))
+            decl_lines.append(
+                '        `uvm_error("%s", $sformatf("%s: unmapped enum_translation value %%0d on %s", %s))'
+                % (error_id, error_name, dest_var, raw_var))
+            decl_lines.append('      end')
+            decl_lines.append('    endcase')
+            resolved_type = 'int'
+        else:
+            if declare_dest:
+                decl_lines.append('    %s %s = %s;' % (raw_decl_type, dest_var, raw_expr))
+            else:
+                decl_lines.append('    %s = %s;' % (dest_var, raw_expr))
+            resolved_type = raw_decl_type
+        return decl_lines, resolved_type
 
     def _emit_scoreboard_check(self, check):
         """Compiles one "check_name"-carrying scoreboard_rules entry (see
@@ -787,57 +1236,21 @@ endclass
             enum_translation = source.get('enum_translation')
 
             if register_decode:
-                bit_offset = register_decode.get('bit_offset')
-                bit_width = register_decode.get('bit_width')
-                valid_offset = isinstance(bit_offset, int) and not isinstance(bit_offset, bool) and bit_offset >= 0
-                valid_width = isinstance(bit_width, int) and not isinstance(bit_width, bool) and bit_width > 0
-                if not valid_offset or not valid_width:
-                    raise MalformedScoreboardCheckError("INVALID_REGISTER_DECODE", {
-                        "check_name": check_name, "side": side_name, "register_decode": register_decode,
-                    })
-                msb = bit_offset + bit_width - 1
-                lsb = bit_offset
                 params.append('bit [31:0] %s' % param_name)
-                raw_expr = '%s[%d:%d]' % (param_name, msb, lsb)
-                raw_decl_type = 'bit [%d:0]' % (bit_width - 1)
+                base_expr = param_name
+                base_decl_type = None  # unused: register_decode branch derives its own type
             else:
                 sv_type = source.get('sv_type', 'int')
                 params.append('%s %s' % (sv_type, param_name))
-                raw_expr = 'int\'(%s)' % param_name
-                raw_decl_type = 'int'
+                base_expr = 'int\'(%s)' % param_name
+                base_decl_type = 'int'
 
-            if enum_translation:
-                kind = enum_translation.get('kind')
-                if kind != 'value_map':
-                    raise MalformedScoreboardCheckError("UNSUPPORTED_ENUM_TRANSLATION_KIND", {
-                        "check_name": check_name, "side": side_name, "kind": kind,
-                    })
-                value_map = enum_translation.get('map')
-                if not isinstance(value_map, dict) or not value_map:
-                    raise MalformedScoreboardCheckError("MISSING_ENUM_TRANSLATION_MAP", {
-                        "check_name": check_name, "side": side_name,
-                    })
-                note = enum_translation.get('note')
-                if not note or not str(note).strip():
-                    raise MalformedScoreboardCheckError("MISSING_ENUM_TRANSLATION_NOTE", {
-                        "check_name": check_name, "side": side_name,
-                    })
-                raw_var = '%s_raw' % side_name
-                decl_lines.append('    %s %s = %s; // %s' % (raw_decl_type, raw_var, raw_expr, note))
-                decl_lines.append('    int %s;' % side_name)
-                decl_lines.append('    case (%s)' % raw_var)
-                for k, v in value_map.items():
-                    decl_lines.append('      %s: %s = %s;' % (k, side_name, v))
-                check_id = ('SB_' + sv_id(check_name)).upper()
-                decl_lines.append('      default: begin')
-                decl_lines.append('        %s = %s;' % (side_name, raw_var))
-                decl_lines.append(
-                    '        `uvm_error("%s", $sformatf("%s: unmapped enum_translation value %%0d on %s", %s))'
-                    % (check_id, check_name, side_name, raw_var))
-                decl_lines.append('      end')
-                decl_lines.append('    endcase')
-            else:
-                decl_lines.append('    %s %s = %s;' % (raw_decl_type, side_name, raw_expr))
+            lines, _resolved_type = self._decode_and_translate(
+                base_expr, base_decl_type, register_decode, enum_translation, side_name,
+                {"check_name": check_name, "side": side_name,
+                 "error_id": ('SB_' + sv_id(check_name)).upper(), "error_name": check_name},
+                MalformedScoreboardCheckError, declare_dest=True)
+            decl_lines.extend(lines)
 
         emit_side(check['lhs_source'], 'lhs')
         emit_side(check['rhs_source'], 'rhs')
@@ -865,10 +1278,461 @@ endclass
             sv_id(check_name), ', '.join(params), '\n'.join(decl_lines),
             mismatch_expr, severity_macro, check_id, json.dumps(message_template), check_name)
 
+    _TX_VALID_SEVERITIES = {'UVM_ERROR', 'UVM_WARNING', 'UVM_INFO'}
+    _TX_VALID_COMPARE_OPS = {'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'mask_eq', 'array_eq'}
+
+    def _validate_tx_disposition(self, base_detail, disposition, prefix):
+        """Shared severity/message_template validator reused by every
+        transaction-scoreboard disposition block (on_mismatch per
+        compare_fields entry, on_orphan_predicted, on_orphan_observed, the
+        optional on_duplicate) -- one validated shape, four use sites, same
+        reuse posture point 7 of the design report calls for (mirrors
+        _emit_scoreboard_check's own on_mismatch severity/message_template
+        validation at generator.py's SCOREBOARD_CHECKS section verbatim).
+        `prefix` (e.g. "ON_MISMATCH") names the MalformedTransactionScoreboardError
+        reason-code family this call raises into: MISSING_<prefix> (not a
+        dict at all), INVALID_<prefix>_SEVERITY, MISSING_<prefix>_MESSAGE_TEMPLATE."""
+        if not isinstance(disposition, dict):
+            raise MalformedTransactionScoreboardError("MISSING_" + prefix, dict(base_detail))
+        severity = disposition.get('severity')
+        if severity not in self._TX_VALID_SEVERITIES:
+            raise MalformedTransactionScoreboardError("INVALID_" + prefix + "_SEVERITY", dict(
+                base_detail, severity=severity, valid_severities=sorted(self._TX_VALID_SEVERITIES)))
+        message_template = disposition.get('message_template')
+        if not message_template or not str(message_template).strip():
+            raise MalformedTransactionScoreboardError("MISSING_" + prefix + "_MESSAGE_TEMPLATE", dict(base_detail))
+
+    def _validate_transaction_scoreboard(self, entry):
+        """Validates one "transaction_scoreboards" manifest entry in full
+        (see scoreboard()'s own docstring for the complete field-by-field
+        schema), raising MalformedTransactionScoreboardError -- never
+        silently skipping or guessing -- on the first malformed piece found.
+        See that error class's own docstring for the exact reason-code list.
+        Called once per entry, for every entry, before any entry is emitted
+        (scoreboard()'s all-or-nothing posture)."""
+        if not isinstance(entry, dict):
+            raise MalformedTransactionScoreboardError("MISSING_SCOREBOARD_NAME", {"entry": entry})
+        name = entry.get('scoreboard_name')
+        if not name or not str(name).strip():
+            raise MalformedTransactionScoreboardError("MISSING_SCOREBOARD_NAME", {"entry": entry})
+
+        base_detail = {"scoreboard_name": name}
+
+        evidence = entry.get('evidence')
+        if not evidence or not str(evidence).strip():
+            raise MalformedTransactionScoreboardError("MISSING_SCOREBOARD_EVIDENCE", base_detail)
+
+        item_class = entry.get('item_class')
+        if not item_class or not str(item_class).strip():
+            raise MalformedTransactionScoreboardError("MISSING_ITEM_CLASS", base_detail)
+
+        predicted_port = entry.get('predicted_port')
+        observed_port = entry.get('observed_port')
+        for side, port in (('predicted_port', predicted_port), ('observed_port', observed_port)):
+            if not isinstance(port, dict) or not port.get('port_name') or not str(port['port_name']).strip():
+                raise MalformedTransactionScoreboardError("MALFORMED_PORT_SPEC", dict(
+                    base_detail, side=side, value=port))
+        if predicted_port['port_name'] == observed_port['port_name']:
+            raise MalformedTransactionScoreboardError("DUPLICATE_PORT_NAME", dict(
+                base_detail, port_name=predicted_port['port_name']))
+
+        ordering_policy = entry.get('ordering_policy')
+        if ordering_policy not in ('IN_ORDER', 'OUT_OF_ORDER'):
+            raise MalformedTransactionScoreboardError("INVALID_ORDERING_POLICY", dict(
+                base_detail, ordering_policy=ordering_policy))
+
+        match_key = entry.get('match_key')
+        if not match_key or not isinstance(match_key, list):
+            raise MalformedTransactionScoreboardError("EMPTY_MATCH_KEY", base_detail)
+        for mk in match_key:
+            if not isinstance(mk, dict) or not mk.get('field') or not str(mk['field']).strip():
+                raise MalformedTransactionScoreboardError("MALFORMED_MATCH_KEY_ENTRY", dict(
+                    base_detail, entry=mk))
+
+        compare_fields = entry.get('compare_fields')
+        if not compare_fields or not isinstance(compare_fields, list):
+            raise MalformedTransactionScoreboardError("EMPTY_COMPARE_FIELDS", base_detail)
+        for cf in compare_fields:
+            if not isinstance(cf, dict) or not cf.get('field') or not str(cf['field']).strip():
+                raise MalformedTransactionScoreboardError("MALFORMED_COMPARE_FIELD", dict(
+                    base_detail, entry=cf))
+            compare_op = cf.get('compare_op')
+            if compare_op not in self._TX_VALID_COMPARE_OPS:
+                raise MalformedTransactionScoreboardError("INVALID_COMPARE_OP", dict(
+                    base_detail, field=cf['field'], compare_op=compare_op,
+                    valid_ops=sorted(self._TX_VALID_COMPARE_OPS)))
+            if compare_op == 'mask_eq':
+                mask = cf.get('mask')
+                if not mask or not str(mask).strip():
+                    raise MalformedTransactionScoreboardError("MISSING_MASK_EQ_MASK", dict(
+                        base_detail, field=cf['field']))
+            self._validate_tx_disposition(dict(base_detail, field=cf['field']),
+                                           cf.get('on_mismatch'), "ON_MISMATCH")
+
+        self._validate_tx_disposition(base_detail, entry.get('on_orphan_predicted'), "ON_ORPHAN_PREDICTED")
+        self._validate_tx_disposition(base_detail, entry.get('on_orphan_observed'), "ON_ORPHAN_OBSERVED")
+
+        on_duplicate = entry.get('on_duplicate')
+        if on_duplicate is not None:
+            self._validate_tx_disposition(base_detail, on_duplicate, "ON_DUPLICATE")
+
+    @staticmethod
+    def _tx_field_mismatch_expr(field, compare_op, mask):
+        """Compiles one compare_fields entry's mismatch condition, comparing
+        the matched predicted item ("exp", the expected/reference value)
+        against the just-arrived observed item ("obs") -- reusing
+        SCOREBOARD_CHECKS's existing eq|neq|lt|lte|gt|gte|mask_eq mismatch-
+        condition shapes verbatim (generator.py's _emit_scoreboard_check),
+        plus this DSL's one new "array_eq".
+
+        RULING: "array_eq" uses plain `!=`, NOT `!==` -- see scoreboard()'s
+        own docstring for the full reasoning (IEEE 1800 `===`/`!==` case
+        (in)equality is undefined for unpacked array types such as dynamic
+        arrays/queues; only `==`/`!=` element-wise equality is legal there).
+        Every other compare_op keeps the exact `!==`/`===` case-(in)equality
+        SCOREBOARD_CHECKS already uses, unchanged."""
+        lhs = 'exp.%s' % field
+        rhs = 'obs.%s' % field
+        if compare_op == 'mask_eq':
+            return '(%s & (%s)) !== (%s & (%s))' % (lhs, mask, rhs, mask)
+        if compare_op == 'array_eq':
+            return '%s != %s' % (lhs, rhs)
+        return {
+            'eq': '%s !== %s' % (lhs, rhs),
+            'neq': '%s === %s' % (lhs, rhs),
+            'lt': '!(%s < %s)' % (lhs, rhs),
+            'lte': '!(%s <= %s)' % (lhs, rhs),
+            'gt': '!(%s > %s)' % (lhs, rhs),
+            'gte': '!(%s >= %s)' % (lhs, rhs),
+        }[compare_op]
+
+    def _emit_transaction_scoreboard_macros(self):
+        """Emits the `uvm_analysis_imp_decl(_predicted)`/
+        `uvm_analysis_imp_decl(_observed)` macro declarations exactly once
+        per file (see scoreboard()'s own docstring for why one declaration
+        safely serves every "transaction_scoreboards" entry regardless of
+        how many entries, or which item_class each uses)."""
+        return '`uvm_analysis_imp_decl(_predicted)\n`uvm_analysis_imp_decl(_observed)\n'
+
+    def _emit_transaction_scoreboard(self, p, entry):
+        """Compiles one already-validated "transaction_scoreboards" entry
+        (see scoreboard()'s own docstring for the full schema and the exact
+        message_template/$sformatf argument conventions this method
+        implements) into one complete uvm_scoreboard-extending class:
+        predicted/observed uvm_analysis_imp handles, a predicted_q queue,
+        a match_key equality helper (key_eq -- one shared private function,
+        reused by IN_ORDER's queue-head-only check, OUT_OF_ORDER's full-queue
+        search, and (when "on_duplicate" is set) the matched-transaction
+        history search -- this shared-helper shape is an implementation
+        detail filling in the design report's own "... match_key equality
+        search ..." ellipsis, not a schema change), compare_fields
+        disposition, and a report_phase drain check for anything left in
+        predicted_q at end of test.
+
+        Assumes `entry` already passed _validate_transaction_scoreboard --
+        this method does not re-validate."""
+        name = entry['scoreboard_name']
+        cls = '%s_%s_scoreboard' % (p, sv_id(name))
+        item_class = entry['item_class']
+        predicted_port = entry['predicted_port']['port_name']
+        observed_port = entry['observed_port']['port_name']
+        ordering_policy = entry['ordering_policy']
+        match_key = [mk['field'] for mk in entry['match_key']]
+        compare_fields = entry['compare_fields']
+        on_orphan_predicted = entry['on_orphan_predicted']
+        on_orphan_observed = entry['on_orphan_observed']
+        on_duplicate = entry.get('on_duplicate')
+
+        sb_id = ('SB_' + sv_id(name)).upper()
+        match_key_args = ', '.join('t.%s' % f for f in match_key)
+
+        key_eq_terms = ' && '.join('(a.%s === b.%s)' % (f, f) for f in match_key)
+        key_eq_fn = ('  local function bit key_eq(%s a, %s b);\n'
+                     '    return %s;\n'
+                     '  endfunction') % (item_class, item_class, key_eq_terms)
+
+        if ordering_policy == 'IN_ORDER':
+            search = '    if (predicted_q.size() > 0 && key_eq(predicted_q[0], t)) idx = 0;'
+        else:
+            search = ('    for (int i = 0; i < predicted_q.size(); i++) begin\n'
+                       '      if (key_eq(predicted_q[i], t)) begin\n'
+                       '        idx = i;\n'
+                       '        break;\n'
+                       '      end\n'
+                       '    end')
+
+        def sev_macro(disposition):
+            return '`uvm_%s' % disposition['severity'][len('UVM_'):].lower()
+
+        def sformatf_call(message_template, args_csv):
+            if args_csv:
+                return '$sformatf(%s, %s)' % (json.dumps(message_template), args_csv)
+            return '$sformatf(%s)' % json.dumps(message_template)
+
+        wo_lines = ['    int idx = -1;', search]
+        if on_duplicate:
+            wo_lines.append('    if (idx == -1) begin')
+            wo_lines.append('      int dup_idx = -1;')
+            wo_lines.append('      for (int k = 0; k < matched_history_q.size(); k++) begin')
+            wo_lines.append('        if (key_eq(matched_history_q[k], t)) begin dup_idx = k; break; end')
+            wo_lines.append('      end')
+            wo_lines.append('      if (dup_idx != -1) begin')
+            wo_lines.append('        num_duplicate++;')
+            wo_lines.append('        %s("%s_DUPLICATE", %s)' % (
+                sev_macro(on_duplicate), sb_id,
+                sformatf_call(on_duplicate['message_template'], match_key_args)))
+            wo_lines.append('      end else begin')
+            wo_lines.append('        num_orphan_observed++;')
+            wo_lines.append('        %s("%s_ORPHAN_OBSERVED", %s)' % (
+                sev_macro(on_orphan_observed), sb_id,
+                sformatf_call(on_orphan_observed['message_template'], match_key_args)))
+            wo_lines.append('      end')
+            wo_lines.append('      return;')
+            wo_lines.append('    end')
+        else:
+            wo_lines.append('    if (idx == -1) begin')
+            wo_lines.append('      num_orphan_observed++;')
+            wo_lines.append('      %s("%s_ORPHAN_OBSERVED", %s)' % (
+                sev_macro(on_orphan_observed), sb_id,
+                sformatf_call(on_orphan_observed['message_template'], match_key_args)))
+            wo_lines.append('      return;')
+            wo_lines.append('    end')
+
+        wo_lines.append('    begin')
+        wo_lines.append('      %s exp = predicted_q[idx];' % item_class)
+        wo_lines.append('      %s obs = t;' % item_class)
+        for cf in compare_fields:
+            field = cf['field']
+            mismatch_expr = self._tx_field_mismatch_expr(field, cf['compare_op'], cf.get('mask'))
+            mismatch_id = '%s_MISMATCH_%s' % (sb_id, sv_id(field).upper())
+            args_csv = '"%s", exp.%s, obs.%s' % (field, field, field)
+            wo_lines.append('      if (%s) begin' % mismatch_expr)
+            wo_lines.append('        num_mismatch++;')
+            wo_lines.append('        %s("%s", %s)' % (
+                sev_macro(cf['on_mismatch']), mismatch_id,
+                sformatf_call(cf['on_mismatch']['message_template'], args_csv)))
+            wo_lines.append('      end')
+        if on_duplicate:
+            wo_lines.append('      matched_history_q.push_back(exp);')
+        wo_lines.append('      predicted_q.delete(idx);')
+        wo_lines.append('      num_match++;')
+        wo_lines.append('    end')
+        write_observed_body = '\n'.join(wo_lines)
+
+        counters = 'int num_match, num_mismatch, num_orphan_predicted, num_orphan_observed'
+        if on_duplicate:
+            counters += ', num_duplicate'
+        counters += ';'
+
+        history_decl = ''
+        if on_duplicate:
+            history_decl = '\n  %s matched_history_q[$];' % item_class
+
+        orphan_predicted_args = '"%s", predicted_q.size()' % name
+
+        return '''class %s extends uvm_scoreboard;
+  `uvm_component_utils(%s)
+  uvm_analysis_imp_predicted #(%s, %s) %s;
+  uvm_analysis_imp_observed  #(%s, %s) %s;
+  %s predicted_q[$];
+  %s%s
+
+  function new(string name="%s", uvm_component parent=null);
+    super.new(name,parent);
+  endfunction
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    %s = new("%s", this);
+    %s = new("%s", this);
+  endfunction
+
+%s
+
+  function void write_predicted(%s t);
+    predicted_q.push_back(t);
+  endfunction
+
+  function void write_observed(%s t);
+%s
+  endfunction
+
+  function void report_phase(uvm_phase phase);
+    super.report_phase(phase);
+    if (predicted_q.size() > 0) begin
+      num_orphan_predicted = predicted_q.size();
+      %s("%s_ORPHAN_PREDICTED", %s)
+    end
+  endfunction
+endclass
+''' % (
+            cls, cls,
+            item_class, cls, predicted_port,
+            item_class, cls, observed_port,
+            item_class,
+            counters, history_decl,
+            cls,
+            predicted_port, predicted_port, observed_port, observed_port,
+            key_eq_fn,
+            item_class,
+            item_class, write_observed_body,
+            sev_macro(on_orphan_predicted), sb_id,
+            sformatf_call(on_orphan_predicted['message_template'], orphan_predicted_args),
+        )
+
+    _COVERAGE_SAMPLE_TRIGGER_KINDS = {'subscriber_write', 'explicit_call'}
+    _COVERAGE_BIN_KINDS = {'bins', 'bins_array', 'ignore_bins', 'illegal_bins'}
+
     def coverage(self,m,p):
-        cps='\n'.join('  // COVER: '+json.dumps(x) for x in m.get('coverage_points',[]))
-        if not cps: cps='  // Protocol-specific coverage comes from the semantic model.'
-        return '''class %s_coverage extends uvm_component;
+        """COVERAGE_POINTS DSL EXTENSION (additive, backward compatible -- a
+        "coverage_points" entry that is a dict AND carries a "cg_name" key
+        opts into this structured shape; every other entry falls through
+        unchanged to today's `// COVER: <json.dumps(x)>` comment line, same
+        "opt-in key" discriminator convention SCOREBOARD_CHECKS already uses
+        for "check_name" -- byte-identical output for every current manifest,
+        none of which use this key).
+
+        Before this extension, coverage() did nothing but comment-dump every
+        "coverage_points" entry into an otherwise-empty `uvm_component`
+        class body -- no real `covergroup`/`coverpoint`/`bins`/`cross` SV
+        was ever emitted, and the class had no analysis export or write()
+        hook at all, so a generated environment could never actually sample
+        functional coverage (confirmed, this task's own read-first pass,
+        and independently by
+        .work/coverage-generator-design-report.md's own "Gap" section).
+
+        An optional top-level manifest key "coverage_points" -- a list of
+        dicts, each:
+
+          {"cg_name": str (required, non-empty -> `covergroup cg_<cg_name>`),
+           "evidence": str (required, non-empty -- same mandatory-evidence
+             bar "connections"/"virtual_sequences"/"transaction_scoreboards"
+             already hold themselves to),
+           "sample_trigger": {
+             "kind": "subscriber_write" | "explicit_call",
+             "item_class": str (required, non-empty, only for
+               "subscriber_write" -- the SV transaction item type this
+               covergroup samples from)
+           },
+           "coverpoints": [
+             {"cp_name": str (required, non-empty),
+              "expr": str (required, non-empty; verbatim SV expression to
+                read the raw sampled value from -- e.g. "t.ep_type" for a
+                "subscriber_write" trigger; for "explicit_call" the
+                generated function derives its own parameter name from
+                cp_name instead, so "expr" there is accepted but
+                documentation-only, same "accepted but not itself rendered"
+                posture _connect_phase's "construct" kind already holds for
+                its optional "ctor_class" field),
+              "sv_type": str (optional, default "int" -- the coverpoint's
+                plain (non-register_decode) SV type, same "sv_type"
+                convention/default SCOREBOARD_CHECKS' lhs_source/rhs_source
+                already use),
+              "register_decode": {"bit_offset": int>=0, "bit_width": int>0}
+                (optional -- same shape/validation as SCOREBOARD_CHECKS,
+                shared via _decode_and_translate),
+              "enum_translation": {"kind": "value_map", "map": {...},
+                "note": str} (optional -- same shape/validation/"always
+                compiled, never skipped" posture as SCOREBOARD_CHECKS,
+                shared via _decode_and_translate),
+              "bins": [
+                {"kind": "bins", "name": str, "values": str} ->
+                  `bins <name> = <values>;` (values is a verbatim SV
+                  value-set expression, e.g. "{0, 1, 2, 3}"),
+                {"kind": "bins_array", "name": str, "range": str} ->
+                  `bins <name>[] = {<range>};` (range is the verbatim inner
+                  range expression, e.g. "[0:15]" -- same shape as the real,
+                  working amba_fabric_generator.py precedent,
+                  `bins m[] = {[0:N-1]};`),
+                {"kind": "ignore_bins"|"illegal_bins", "name": str,
+                 "values": str} -> `ignore_bins <name> = <values>;` /
+                  `illegal_bins <name> = <values>;`
+              ] (required, non-empty)
+             }, ...
+           ] (required, non-empty),
+           "crosses": [
+             {"cross_name": str (required, non-empty),
+              "of": [cp_name, cp_name, ...] (required, non-empty; every
+                entry must name a "cp_name" declared in THIS SAME cg
+                entry's own "coverpoints" -- UNDECLARED_CROSS_COVERPOINT
+                otherwise),
+              "ignore_bins": [{"name": str, "expr": str, "evidence": str}]
+                (optional -- each rendered as a `// evidence: ...` comment
+                above its `ignore_bins <name> = <expr>;` line, same
+                evidence-cited-comment convention _connect_phase's
+                "evidence" field already uses)}
+           ] (optional)}
+
+        RULING (sampling wiring -- the load-bearing fix this DSL exists
+        for): every coverpoint, regardless of trigger kind or whether it
+        carries register_decode/enum_translation, gets its own persistent
+        class member shadow variable "cp_<cp_name>" (via
+        _decode_and_translate, declare_dest=False), and the covergroup's own
+        coverpoints reference ONLY that member, never a caller-scope local
+        directly -- this is what makes a no-argument `cg_<cg_name>.sample()`
+        call (the shape both "subscriber_write"'s write() and
+        "explicit_call"'s generated function use) actually correct SV: a
+        covergroup coverpoint can only read symbols in scope at the class
+        level, not a write()-local `t` or a sample_<cg_name>()-local
+        parameter. This closes exactly the gap the design report's own
+        review of amba_fabric_generator.py's `cg_ms_cross` precedent flagged
+        ("master_idx/slave_idx are declared but never assigned, .sample()
+        never called -- proves syntax, not sampling wiring"): here every
+        declared shadow member IS assigned (in write() or the explicit
+        sample_<cg_name>() function) immediately before its covergroup's
+        .sample() call.
+
+        For "subscriber_write": the whole "<p>_coverage" class becomes
+        `class <p>_coverage extends uvm_subscriber #(<item_class>)` --
+        replacing today's fixed `uvm_component` base -- reusing
+        uvm_subscriber's own built-in `analysis_export`+`write()` hook
+        exactly as
+        .dv-harness/universal-protocol-platform/templates/coverage.sv.tpl's
+        (real, currently-unused) template already shows is the correct
+        base-class shape. Wiring a real VIP monitor's analysis port to
+        `cov.analysis_export` needs no new mechanism at all: an ordinary
+        top-level "connections" entry, kind="call", e.g.
+        {"call_style": "instance", "receiver": "<vip_agent>.monitor",
+         "method": "analysis_port.connect", "args": ["cov.analysis_export"],
+         "evidence": "..."} -- the identical `<receiver>.<method>(<args>)`
+        idiom _connect_phase already emits (real evidence,
+        USB_UVM_Handoff usb_top_env.sv:531). env()/_connect_phase need ZERO
+        changes for this. If every "coverage_points" entry uses
+        "explicit_call" (or the key is absent/empty), the class base stays
+        plain `uvm_component`, unchanged from today.
+
+        Every "subscriber_write" entry in one manifest MUST agree on the
+        SAME item_class (CONFLICTING_ITEM_CLASS otherwise) -- the class can
+        only extend one `uvm_subscriber #(T)`, so two different T's from two
+        entries in one manifest is unsatisfiable, not something to silently
+        resolve by picking one.
+
+        For "explicit_call": emits `function void sample_<cg_name>(<params>);`
+        for an external caller (a "connections" entry, or a scoreboard
+        check's post-action) to invoke directly -- one parameter per
+        coverpoint, same register_decode-driven `bit [31:0] <param>` vs.
+        `<sv_type> <param>` derivation SCOREBOARD_CHECKS' emit_side already
+        uses, just keyed off cp_name instead of component+field (coverage
+        coverpoints carry no "component" field to derive a name from).
+
+        Multiple "coverage_points" entries append multiple covergroups +
+        write()-body/explicit-function fragments into the SAME class --
+        additive splice, same technique scoreboard()/env() already use for
+        their own DSL extensions.
+
+        See MalformedCoveragePointError for the exact validation-branch
+        list and _compile_coverage_group for the exact per-group compiled
+        shape."""
+        entries = m.get('coverage_points') or []
+        legacy_entries = [x for x in entries if not (isinstance(x, dict) and 'cg_name' in x)]
+        structured_entries = [x for x in entries if isinstance(x, dict) and 'cg_name' in x]
+
+        cps = '\n'.join('  // COVER: ' + json.dumps(x) for x in legacy_entries)
+        if not cps and not structured_entries:
+            cps = '  // Protocol-specific coverage comes from the semantic model.'
+
+        if not structured_entries:
+            return '''class %s_coverage extends uvm_component;
   `uvm_component_utils(%s_coverage)
 %s
   function new(string name="%s_coverage", uvm_component parent=null);
@@ -876,6 +1740,286 @@ endclass
   endfunction
 endclass
 ''' % (p,p,cps,p)
+
+        compiled = [self._compile_coverage_group(g) for g in structured_entries]
+
+        item_classes = sorted({c['item_class'] for c in compiled if c['item_class']})
+        if len(item_classes) > 1:
+            raise MalformedCoveragePointError("CONFLICTING_ITEM_CLASS", {
+                "protocol": p, "item_classes": item_classes,
+            })
+        item_class = item_classes[0] if item_classes else None
+
+        member_lines = []
+        if cps.strip():
+            member_lines.append(cps)
+        ctor_lines = []
+        write_body_lines = []
+        explicit_fns = []
+
+        for c in compiled:
+            member_lines.append(c['members_text'])
+            ctor_lines.append('    cg_%s = new();' % c['cg_id'])
+            if c['kind'] == 'subscriber_write':
+                write_body_lines.extend(c['body_lines'])
+                write_body_lines.append('    cg_%s.sample();' % c['cg_id'])
+            else:
+                explicit_fns.append(c['explicit_fn_text'])
+
+        base_class = 'uvm_subscriber #(%s)' % item_class if item_class else 'uvm_component'
+        members_text = '\n'.join(member_lines)
+        ctor_text = '\n'.join(ctor_lines)
+
+        extra_parts = []
+        if write_body_lines:
+            extra_parts.append('  function void write(%s t);\n%s\n  endfunction' % (
+                item_class, '\n'.join(write_body_lines)))
+        extra_parts.extend(explicit_fns)
+        extra_text = '\n' + '\n'.join(extra_parts)
+
+        return '''class %s_coverage extends %s;
+  `uvm_component_utils(%s_coverage)
+%s
+  function new(string name="%s_coverage", uvm_component parent=null);
+    super.new(name,parent);
+%s
+  endfunction%s
+endclass
+''' % (p, base_class, p, members_text, p, ctor_text, extra_text)
+
+    def _compile_coverage_group(self, entry):
+        """Validates and compiles ONE structured "coverage_points" entry (a
+        dict carrying a "cg_name" key -- see coverage()'s own docstring for
+        the complete field-by-field schema) into a dict describing this
+        group's contribution to the "<p>_coverage" class body:
+
+          {"cg_name": str, "cg_id": sv_id(cg_name), "kind": sample_trigger
+             kind, "item_class": str|None (only for "subscriber_write"),
+           "members_text": the `covergroup cg_<cg_id>; ... endgroup` text
+             plus every coverpoint's "cp_<cp_id>" shadow-member declaration,
+           "body_lines": per-coverpoint assignment statements (via
+             _decode_and_translate) that must run immediately before this
+             group's `cg_<cg_id>.sample();` call,
+           "explicit_fn_text": (only for "explicit_call") the complete
+             `function void sample_<cg_id>(<params>); ... endfunction`
+             text, already including its own trailing `.sample();` call}
+
+        Raises MalformedCoveragePointError -- never silently skipping or
+        guessing -- on the first malformed piece found; see that error
+        class's own docstring for the exact reason-code list. Assumes the
+        caller (coverage()) already confirmed this entry carries a non-empty
+        "cg_name" key (the DSL's own opt-in discriminator) -- this method
+        re-validates that cg_name is non-empty (not merely present) but does
+        not re-check the discriminator itself."""
+        cg_name = entry.get('cg_name')
+        if not cg_name or not str(cg_name).strip():
+            raise MalformedCoveragePointError("MISSING_CG_NAME", {"entry": entry})
+        cg_id = sv_id(cg_name)
+
+        evidence = entry.get('evidence')
+        if not evidence or not str(evidence).strip():
+            raise MalformedCoveragePointError("MISSING_COVERAGE_EVIDENCE", {"cg_name": cg_name})
+
+        sample_trigger = entry.get('sample_trigger')
+        kind = sample_trigger.get('kind') if isinstance(sample_trigger, dict) else None
+        if kind not in self._COVERAGE_SAMPLE_TRIGGER_KINDS:
+            raise MalformedCoveragePointError("INVALID_SAMPLE_TRIGGER_KIND", {
+                "cg_name": cg_name, "sample_trigger": sample_trigger,
+                "valid_kinds": sorted(self._COVERAGE_SAMPLE_TRIGGER_KINDS),
+            })
+
+        item_class = None
+        if kind == 'subscriber_write':
+            item_class = sample_trigger.get('item_class')
+            if not item_class or not str(item_class).strip():
+                raise MalformedCoveragePointError("MISSING_ITEM_CLASS", {"cg_name": cg_name})
+
+        coverpoints = entry.get('coverpoints') or []
+        if not coverpoints:
+            raise MalformedCoveragePointError("EMPTY_COVERPOINTS", {"cg_name": cg_name})
+
+        cp_names = []
+        cp_lines = []
+        member_decl_lines = []
+        body_lines = []
+        params = []
+
+        for cp in coverpoints:
+            if not isinstance(cp, dict) or not cp.get('cp_name') or not cp.get('expr'):
+                raise MalformedCoveragePointError("MALFORMED_COVERPOINT", {
+                    "cg_name": cg_name, "coverpoint": cp,
+                })
+            cp_name = cp['cp_name']
+            if cp_name in cp_names:
+                raise MalformedCoveragePointError("DUPLICATE_CP_NAME", {
+                    "cg_name": cg_name, "cp_name": cp_name,
+                })
+            cp_names.append(cp_name)
+            cp_id = sv_id(cp_name)
+            dest_var = 'cp_%s' % cp_id
+
+            bins = cp.get('bins') or []
+            if not bins:
+                raise MalformedCoveragePointError("EMPTY_BINS", {
+                    "cg_name": cg_name, "cp_name": cp_name,
+                })
+            bin_lines = []
+            for b in bins:
+                if not isinstance(b, dict) or b.get('kind') not in self._COVERAGE_BIN_KINDS:
+                    raise MalformedCoveragePointError("INVALID_BIN_KIND", {
+                        "cg_name": cg_name, "cp_name": cp_name, "bin": b,
+                        "valid_kinds": sorted(self._COVERAGE_BIN_KINDS),
+                    })
+                bkind = b['kind']
+                bname = b.get('name')
+                if not bname or not str(bname).strip():
+                    raise MalformedCoveragePointError("MALFORMED_BIN", {
+                        "cg_name": cg_name, "cp_name": cp_name, "bin": b,
+                    })
+                if bkind == 'bins_array':
+                    brange = b.get('range')
+                    if not brange or not str(brange).strip():
+                        raise MalformedCoveragePointError("MALFORMED_BIN", {
+                            "cg_name": cg_name, "cp_name": cp_name, "bin": b,
+                        })
+                    bin_lines.append('    bins %s[] = {%s};' % (bname, brange))
+                else:
+                    bvalues = b.get('values')
+                    if not bvalues or not str(bvalues).strip():
+                        raise MalformedCoveragePointError("MALFORMED_BIN", {
+                            "cg_name": cg_name, "cp_name": cp_name, "bin": b,
+                        })
+                    bin_lines.append('    %s %s = %s;' % (bkind, bname, bvalues))
+
+            register_decode = cp.get('register_decode')
+            enum_translation = cp.get('enum_translation')
+            error_context = {
+                "cg_name": cg_name, "cp_name": cp_name,
+                "error_id": ('COV_' + cg_id + '_' + cp_id).upper(),
+                "error_name": '%s.%s' % (cg_name, cp_name),
+            }
+
+            if kind == 'subscriber_write':
+                base_expr = cp['expr']
+                base_decl_type = cp.get('sv_type', 'int')
+            else:
+                param_name = 'in_%s' % cp_id
+                if register_decode:
+                    params.append('bit [31:0] %s' % param_name)
+                else:
+                    params.append('%s %s' % (cp.get('sv_type', 'int'), param_name))
+                base_expr = param_name
+                base_decl_type = cp.get('sv_type', 'int')
+
+            lines, resolved_type = self._decode_and_translate(
+                base_expr, base_decl_type, register_decode, enum_translation,
+                dest_var, error_context, MalformedCoveragePointError, declare_dest=False)
+            member_decl_lines.append('  %s %s;' % (resolved_type, dest_var))
+            body_lines.extend(lines)
+
+            cp_lines.append('    %s: coverpoint %s {\n%s\n    }' % (
+                cp_id, dest_var, '\n'.join(bin_lines)))
+
+        cross_lines = []
+        for cr in (entry.get('crosses') or []):
+            if not isinstance(cr, dict) or not cr.get('cross_name') or not cr.get('of'):
+                raise MalformedCoveragePointError("MALFORMED_CROSS", {
+                    "cg_name": cg_name, "cross": cr,
+                })
+            cross_name = cr['cross_name']
+            of_list = cr['of']
+            for of_name in of_list:
+                if of_name not in cp_names:
+                    raise MalformedCoveragePointError("UNDECLARED_CROSS_COVERPOINT", {
+                        "cg_name": cg_name, "cross_name": cross_name, "cp_name": of_name,
+                        "declared_coverpoints": list(cp_names),
+                    })
+            of_ids = ', '.join(sv_id(x) for x in of_list)
+            ignore_lines = []
+            for ib in (cr.get('ignore_bins') or []):
+                if not isinstance(ib, dict) or not ib.get('name') or not ib.get('expr') or not ib.get('evidence'):
+                    raise MalformedCoveragePointError("MALFORMED_CROSS_IGNORE_BIN", {
+                        "cg_name": cg_name, "cross_name": cross_name, "ignore_bin": ib,
+                    })
+                ignore_lines.append('      // evidence: %s' % ib['evidence'])
+                ignore_lines.append('      ignore_bins %s = %s;' % (ib['name'], ib['expr']))
+            if ignore_lines:
+                cross_lines.append('    %s: cross %s {\n%s\n    }' % (
+                    sv_id(cross_name), of_ids, '\n'.join(ignore_lines)))
+            else:
+                cross_lines.append('    %s: cross %s;' % (sv_id(cross_name), of_ids))
+
+        cg_body = '\n'.join(cp_lines + cross_lines)
+        covergroup_text = '  covergroup cg_%s;\n%s\n  endgroup' % (cg_id, cg_body)
+        members_text = '\n'.join([covergroup_text] + member_decl_lines)
+
+        result = {
+            'cg_name': cg_name, 'cg_id': cg_id, 'kind': kind, 'item_class': item_class,
+            'members_text': members_text, 'body_lines': body_lines,
+        }
+        if kind == 'explicit_call':
+            fn_body = '\n'.join(body_lines + ['    cg_%s.sample();' % cg_id])
+            result['explicit_fn_text'] = '  function void sample_%s(%s);\n%s\n  endfunction' % (
+                cg_id, ', '.join(params), fn_body)
+        return result
+
+    def assertions(self,m,p):
+        """STATE_MACHINE_CHECKS DSL EXTENSION (additive -- see
+        dv_harness/uvm_generator/state_machine_checks.py's module docstring
+        for the full design rationale: this generalizes
+        pcie_ltssm_generator.py's hardcoded-to-PCIe LTSSM-legality pattern
+        into a manifest-driven DSL covering 3 idioms --
+        "valid_transition_table" (state-machine legality),
+        "mutual_exclusion" ($onehot/$onehot0), and "legal_value_set" -- for
+        `generate_observability_plan.py`'s ASSERTION branch, closing the
+        gap where every ASSERTION-classified requirement emitted a literal
+        unconditional `1'b1; // TODO` placeholder with zero generation
+        mechanics.
+
+        A manifest with no top-level "state_machine_checks" key, or an
+        empty list, gets exactly the one-line placeholder comment
+        SCOREBOARD_CHECKS's own comment-dump path already uses as its
+        "nothing to say yet" convention (see scoreboard()'s `rules`
+        fallback text) -- this new '<p>_assertions.sv' file is itself new
+        (this generator did not emit a dedicated assertions file before
+        this task), but its CONTENT is a complete no-op for every manifest
+        that does not use the new key, mirroring scoreboard()/coverage()'s
+        own always-emitted-file-with-placeholder-body shape exactly.
+
+        Clock/reset reuse this generator's EXISTING "clocks"/"resets"
+        manifest fields -- the same fields tb_top() already reads -- no new
+        per-check clock/reset field is introduced.
+
+        Every entry's "assertion_name" must be unique after sv_id()
+        normalization (StateMachineCheckError "DUPLICATE_ASSERTION_NAME"
+        otherwise -- two assert labels sharing one name is not valid
+        SystemVerilog; same defect-prevention posture
+        MalformedTransactionScoreboardError's own DUPLICATE_SCOREBOARD_NAME
+        check already applies to "transaction_scoreboards"). All other
+        per-entry validation (kind, evidence, and the per-idiom required
+        fields) is state_machine_checks.emit_check()'s own responsibility
+        -- never re-validated/guessed here."""
+        entries = m.get('state_machine_checks') or []
+        header = '// Protocol-specific SVA properties come from the semantic model.'
+        if not entries:
+            return header + '\n'
+
+        clk=(m.get('clocks') or [{'name':'clk'}])[0].get('name','clk')
+        rst=(m.get('resets') or [{'name':'rst_n'}])[0].get('name','rst_n')
+
+        seen = {}
+        parts = [header]
+        for entry in entries:
+            raw_name = entry.get('assertion_name') if isinstance(entry, dict) else None
+            key = sv_id(raw_name) if raw_name else None
+            if key:
+                if key in seen:
+                    raise state_machine_checks.StateMachineCheckError("DUPLICATE_ASSERTION_NAME", {
+                        "assertion_name": raw_name, "conflicts_with": seen[key],
+                    })
+                seen[key] = raw_name
+            parts.append(state_machine_checks.emit_check(entry, clk, rst))
+        return '\n'.join(parts)
 
     def env(self,m,p):
         # ADDITIVE schema extension (multi-component vip_components list):

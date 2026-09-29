@@ -23,6 +23,7 @@ from dv_harness.config import load_config, DEFAULT_CONFIG
 from dv_harness.memory import MemoryStore, MemoryGC, CornerCaseLibrary, CornerCaseLibraryConsolidator
 from dv_harness.memory_router import route_and_store
 from dv_harness.gates import _ccl_reuse_verified
+from dv_harness_tests.organizational_promotion_fixture import admitted_organizational_record
 from dv_harness.knowledge_center import KnowledgeCenterClient, RESULT_MARKER, maybe_push_to_shared
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -194,7 +195,9 @@ def test_route_and_store_with_knowledge_center_enabled_attempts_shared_push():
         cfg = {"knowledge_center": {"enabled": True, "sync_on_promote": True,
                                      "remote_root": "/srv/kc", "hop_script": "/nonexistent/remote_hop.py"}}
         result = route_and_store(tmp, {"kind": "root_cause", "verified": True, "title": "t",
-                                        "protocol": "usb"}, cfg=cfg)
+                                        "protocol": "usb", "root_cause": "ep0 fifo underrun",
+                                        "confidence": "HIGH",
+                                        "evidence": ["sim.log:8821 UVM_ERROR"]}, cfg=cfg)
         # No real server reachable in this test -- must degrade gracefully,
         # never raise, and never lose the LOCAL write (memory_id present).
         assert "memory_id" in result
@@ -236,10 +239,8 @@ def test_route_and_store_routes_organizational_memory_through_knowledge_center_c
     tmp = _tmp()
     try:
         cfg = {"knowledge_center": {"enabled": False, "remote_root": ""}}
-        result = route_and_store(tmp, {
-            "kind": "cross_project_lesson", "verified": True,
-            "title": "shared lesson", "protocol": "usb",
-        }, cfg=cfg)
+        result = route_and_store(tmp, admitted_organizational_record(
+            tmp, kind="cross_project_lesson", title="shared lesson", protocol="usb"), cfg=cfg)
         assert result["destination"] == "ORGANIZATIONAL_MEMORY"
         assert result["ok"] is False
         assert result["error"] == "NOT_CONFIGURED"
@@ -249,75 +250,226 @@ def test_route_and_store_routes_organizational_memory_through_knowledge_center_c
         shutil.rmtree(tmp)
 
 
-# --- knowledge_center.py client -------------------------------------------------
+# --- knowledge_center.py client (persistent-relay transport) ---------------
+#
+# REAL INCIDENT FIX (2026-09-01): KnowledgeCenterClient._invoke() used to
+# spawn its own tools/remote/remote_hop.py subprocess directly, which reads
+# VCPW from ITS OWN process environment -- the exact credential-exposure
+# pattern CLAUDE.md's "Remote Linux Execution" section already forbids for
+# remote_relay.py. All tests below were rewritten to exercise the new,
+# credential-free persistent-relay transport (tools/remote/remote_exec.py's
+# read_relay_info()/send_request()) instead of mocking subprocess.run() /
+# a hop_script path. The two tests for the now-deleted _resolve_hop_script()
+# method (test_resolve_hop_script_falls_back_to_tools_remote_when_explicit_
+# path_is_stale, test_resolve_hop_script_resolves_configured_repo_relative_
+# path) were removed along with the method itself -- that code path no
+# longer exists to test.
 
-def test_client_not_configured_returns_ok_false_without_subprocess_call():
+import socket as _socket
+import threading as _threading
+
+
+def _fake_relay_info(tmp_path, vchost="vchost-b", vchop="host-c", port=0, token="tok"):
+    """Writes a real relay-info JSON file (same shape/location
+    tools/remote/remote_relay.py's info_path() writes for a real running
+    relay) so read_relay_info() finds it, without a monkeypatch of the
+    resolver itself."""
+    import os as _os
+    remote_dir = str(ROOT / "tools" / "remote")
+    if remote_dir not in sys.path:
+        sys.path.insert(0, remote_dir)
+    from remote_relay import info_path
+    p = info_path(vchost, vchop)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"host": "127.0.0.1", "port": port, "token": token,
+                              "pid": 1, "started": "2026-09-01T00:00:00"}),
+                 encoding="utf-8")
+    return p
+
+
+class _FakeRelayServer:
+    """A real local TCP server standing in for remote_relay.py's own
+    request loop, handling exactly the request sequence
+    KnowledgeCenterClient._invoke() issues (one 'put', then one 'run') and
+    returning caller-supplied canned responses for each -- a true
+    socket round-trip against real send_request(), not a mocked transport."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.received = []
+        self.sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(len(responses))
+        self.port = self.sock.getsockname()[1]
+        self.thread = _threading.Thread(target=self._serve)
+
+    def _serve(self):
+        for resp in self.responses:
+            conn, _ = self.sock.accept()
+            buf = b""
+            while b"\n" not in buf:
+                buf += conn.recv(65536)
+            req = json.loads(buf.decode("utf-8"))
+            # Read the 'local' file's real content NOW, synchronously, while
+            # the client's send_request() call is still blocked waiting for
+            # our response -- _invoke()'s own finally-block deletes that temp
+            # file the moment send_request() returns, so reading it back
+            # from the test AFTER the roundtrip completes is a real race
+            # (confirmed live: FileNotFoundError).
+            if req.get("op") == "put":
+                try:
+                    req["_local_content"] = Path(req["local"]).read_text(encoding="utf-8")
+                except OSError:
+                    req["_local_content"] = None
+            self.received.append(req)
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+            conn.close()
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def join(self):
+        self.thread.join(timeout=5)
+        self.sock.close()
+
+
+def test_client_not_configured_returns_ok_false_without_relay_call():
     client = KnowledgeCenterClient({"knowledge_center": {"enabled": False, "remote_root": ""}})
-    with patch("subprocess.run") as mock_run:
-        result = client.search()
-        assert result == {"ok": False, "error": "NOT_CONFIGURED"}
-        mock_run.assert_not_called()
+    result = client.search()
+    assert result == {"ok": False, "error": "NOT_CONFIGURED"}
 
 
-def test_client_parses_result_marker_out_of_noisy_stdout():
-    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc", "hop_script": __file__}}
-    client = KnowledgeCenterClient(cfg)
-    noisy_stdout = (
-        "==========================================================================\n"
-        "$ python3 /srv/kc/broker.py search --root /srv/kc --payload-file /tmp/x.json\n"
-        "==========================================================================\n"
-        f'{RESULT_MARKER}{{"count": 1, "records": [{{"memory_id": "KC-1"}}]}}\n'
-        "[exit 0]\n"
-    )
-    fake = MagicMock(returncode=0, stdout=noisy_stdout, stderr="")
-    with patch("subprocess.run", return_value=fake) as mock_run:
-        result = client.search(category="usb")
-        assert result["ok"] is True
-        assert result["count"] == 1
-        assert result["records"][0]["memory_id"] == "KC-1"
-        mock_run.assert_called_once()
-
-
-def test_client_missing_hop_script_reports_clear_error():
-    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc", "hop_script": "/nonexistent/remote_hop.py"}}
+def test_client_missing_vc_host_hop_reports_clear_error(monkeypatch):
+    monkeypatch.delenv("VCHOST", raising=False)
+    monkeypatch.delenv("VCHOP", raising=False)
+    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc"}}
     client = KnowledgeCenterClient(cfg)
     result = client.test_connection()
     assert result["ok"] is False
-    assert result["error"] == "REMOTE_HOP_NOT_FOUND"
+    assert result["error"] == "VC_HOST_HOP_NOT_CONFIGURED"
 
 
-def test_client_no_result_marker_reports_clear_error():
-    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc", "hop_script": __file__}}
+def test_client_relay_not_ready_reports_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))  # empty -- no relay info file exists here
+    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                 "vchost": "vchost-b", "vchop": "host-c"}}
     client = KnowledgeCenterClient(cfg)
-    fake = MagicMock(returncode=1, stdout="some unrelated failure text\n", stderr="traceback...\n")
-    with patch("subprocess.run", return_value=fake):
+    result = client.test_connection()
+    assert result["ok"] is False
+    assert result["error"] == "RELAY_NOT_READY"
+
+
+def test_client_full_invoke_roundtrip_against_fake_relay_server(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    server = _FakeRelayServer([
+        {"ok": True, "exit_code": 0, "stdout": "", "error": ""},  # put
+        {"ok": True, "exit_code": 0,
+         "stdout": f'{RESULT_MARKER}{{"count": 1, "records": [{{"memory_id": "KC-1"}}]}}\n',
+         "error": ""},  # run
+    ]).start()
+    try:
+        _fake_relay_info(tmp_path, port=server.port)
+        cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                     "vchost": "vchost-b", "vchop": "host-c"}}
+        client = KnowledgeCenterClient(cfg)
+        result = client.search(category="usb")
+    finally:
+        server.join()
+
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert result["records"][0]["memory_id"] == "KC-1"
+    assert server.received[0]["op"] == "put"
+    assert server.received[1]["op"] == "run"
+    assert "broker.py search --root /srv/kc" in server.received[1]["cmd"]
+
+
+def test_client_no_result_marker_reports_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    server = _FakeRelayServer([
+        {"ok": True, "exit_code": 0, "stdout": "", "error": ""},
+        {"ok": True, "exit_code": 1, "stdout": "some unrelated failure text\n", "error": ""},
+    ]).start()
+    try:
+        _fake_relay_info(tmp_path, port=server.port)
+        cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                     "vchost": "vchost-b", "vchop": "host-c"}}
+        client = KnowledgeCenterClient(cfg)
         result = client.search()
-        assert result["ok"] is False
-        assert result["error"] == "NO_RESULT_MARKER"
+    finally:
+        server.join()
+
+    assert result["ok"] is False
+    assert result["error"] == "NO_RESULT_MARKER"
 
 
-def test_client_confirm_sends_configured_max_age_days():
+def test_client_transport_put_failure_reports_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    server = _FakeRelayServer([
+        {"ok": False, "exit_code": 1, "stdout": "", "error": "MD5_MISMATCH"},
+    ]).start()
+    try:
+        _fake_relay_info(tmp_path, port=server.port)
+        cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                     "vchost": "vchost-b", "vchop": "host-c"}}
+        client = KnowledgeCenterClient(cfg)
+        result = client.search()
+    finally:
+        server.join()
+
+    assert result["ok"] is False
+    assert result["error"] == "TRANSPORT_PUT_FAILED"
+    assert result["detail"] == "MD5_MISMATCH"
+
+
+def test_client_confirm_sends_configured_max_age_days(tmp_path, monkeypatch):
     # BUG FIX (2026-08-28, audit-knowledge-center-reality): confirm() used to
     # omit max_age_days entirely, so broker.py's cmd_confirm silently fell
     # back to its own hardcoded 180-day default every time, regardless of
-    # what the project actually configured -- a team running with e.g. 30
-    # days for fast-moving corner cases had that policy silently overridden
-    # back to 180 on the first confirm(). add() already sent this correctly;
-    # confirm() must send the exact same value.
-    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc", "hop_script": __file__,
-                                 "max_age_days": 30}}
-    client = KnowledgeCenterClient(cfg)
-    captured = {}
-
-    def fake_run(cmd, **kwargs):
-        local_tmp = cmd[3]  # [sys.executable, hop, "--put", local_tmp, remote_tmp, remote_cmd]
-        captured["payload"] = json.loads(Path(local_tmp).read_text(encoding="utf-8"))
-        return MagicMock(returncode=0, stdout=f'{RESULT_MARKER}{{"ok": true}}\n', stderr="")
-
-    with patch("subprocess.run", side_effect=fake_run):
+    # what the project actually configured. add() already sent this
+    # correctly; confirm() must send the exact same value. Still real and
+    # still worth guarding after the 2026-09-01 transport rewrite.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    server = _FakeRelayServer([
+        {"ok": True, "exit_code": 0, "stdout": "", "error": ""},  # put
+        {"ok": True, "exit_code": 0, "stdout": f'{RESULT_MARKER}{{"ok": true}}\n', "error": ""},  # run
+    ]).start()
+    try:
+        _fake_relay_info(tmp_path, port=server.port)
+        cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                     "vchost": "vchost-b", "vchop": "host-c", "max_age_days": 30}}
+        client = KnowledgeCenterClient(cfg)
         result = client.confirm("KC-1", "engineering", "usb", evidence={"resim": "pass"})
+    finally:
+        server.join()
+
     assert result["ok"] is True
-    assert captured["payload"]["max_age_days"] == 30
+    put_req = server.received[0]
+    payload = json.loads(put_req["_local_content"])
+    assert payload["max_age_days"] == 30
+
+
+def test_knowledge_center_source_never_reads_vcpw_env_var():
+    # Mirrors tools/remote/test_remote_exec.py's own
+    # test_remote_exec_source_never_reads_vcpw_env_var -- the real safety
+    # property the 2026-09-01 transport rewrite exists to guarantee.
+    source = (ROOT / "dv_harness" / "knowledge_center.py").read_text(encoding="utf-8")
+    assert "environ.get('VCPW'" not in source
+    assert 'environ.get("VCPW"' not in source
+    assert "environ['VCPW']" not in source
+    assert 'environ["VCPW"]' not in source
+    # The real safety property is "never imports the subprocess module"
+    # (that's what would let this file spawn remote_hop.py directly again,
+    # the credential-exposure risk) -- prose/comments mentioning
+    # "subprocess"/"remote_hop.py" by name while explaining what changed and
+    # why are expected and fine, so this checks the actual import statement,
+    # not any bare substring.
+    assert "import subprocess" not in source and "subprocess," not in source, (
+        "knowledge_center.py must never import the subprocess module again "
+        "(that's what let it invoke remote_hop.py directly) -- route "
+        "through tools/remote/remote_exec.py's relay client only"
+    )
 
 
 def test_maybe_push_to_shared_returns_none_when_disabled():

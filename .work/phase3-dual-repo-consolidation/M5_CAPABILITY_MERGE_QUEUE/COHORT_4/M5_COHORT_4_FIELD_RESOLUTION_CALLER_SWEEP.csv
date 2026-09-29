@@ -1,0 +1,19 @@
+CALLER,LOCATION,CLASSIFICATION,AFFECTED_BY_THIS_MERGE,EVIDENCE
+dv_harness/intake_contract.py (Parent),Parent D:\DV\Task\DV_Agent_Harness_L5,CANONICAL_RUNTIME (Parent-side only, out of scope),NO -- Parent frozen, not migrated (part of Parent's own separate intake pipeline family),"grep -rln intake_field_resolution dv_harness dv_harness_tests -- scoped, real match"
+dv_harness/intake_discovery.py (Parent),Parent,CANONICAL_RUNTIME (Parent-side only, out of scope),NO,same scoped grep
+dv_harness/intake_interfaces.py (Parent),Parent,CANONICAL_RUNTIME (Parent-side only, out of scope),NO,same scoped grep
+dv_harness/intake_loader.py (Parent),Parent,CANONICAL_RUNTIME (Parent-side only, out of scope),NO,same scoped grep
+dv_harness/intake_package.py (Parent),Parent,CANONICAL_RUNTIME (Parent-side only, out of scope),NO,same scoped grep
+dv_harness/intake_resume.py (Parent),Parent,CANONICAL_RUNTIME (Parent-side only, out of scope),NO,same scoped grep
+dv_harness/intake_schema.py (Parent),Parent,CANONICAL_RUNTIME (Parent-side only, out of scope),NO,same scoped grep
+dv_harness/intake_validation.py (Parent),Parent,CANONICAL_RUNTIME (Parent-side only, out of scope),NO,same scoped grep
+dv_harness/intake_workbook.py (Parent),Parent,CANONICAL_RUNTIME (Parent-side only, out of scope),NO,same scoped grep
+dv_harness_tests/test_intake_field_resolution.py (Parent),Parent,TEST (Parent-side, source of truth for migration),NO -- read-only, re-run in Parent's own tree,"24/24 pass, independently re-run before trusting"
+dv_harness_tests/test_intake_clarification.py;test_intake_known_gaps_and_index_rotation.py;test_intake_loader.py;test_intake_origin_confirmation.py;test_intake_package.py;test_intake_resume.py;test_intake_scope_semantics.py;test_intake_validation.py;test_intake_validation_result.py;test_intake_workbook.py (Parent),Parent,TEST (Parent-side only, out of scope),NO,"9 additional Parent test files reference the module, all exercising the out-of-scope sibling pipeline, not migrated"
+Canonical dv_harness/*.py (pre-migration),D:/DV/Task/L5_DGVA,NO_CALLER_FOUND,N/A (nothing existed to call),"grep -rl intake_field_resolution dv_harness -- zero matches before this Cohort's Write"
+Canonical dv_harness/intake_state.py,D:/DV/Task/L5_DGVA/dv_harness/intake_state.py,CANONICAL_RUNTIME (existing, parallel, NOT reconciled this Cohort),NO -- not modified, not wired to the new module,"Direct read: IntakeFieldRecord/IntakeFieldStatus confirmed as a real, separate, wired canonical system; reconciliation explicitly deferred to M6"
+Canonical dv_harness/source_authority.py,D:/DV/Task/L5_DGVA/dv_harness/source_authority.py,CANONICAL_RUNTIME (real dependency, not modified),YES -- confirmed compatible,"authority_rank()/SourceClaim/resolve_conflict() signatures verified by direct read, match exactly"
+Canonical dv_harness/question_queue.py,D:/DV/Task/L5_DGVA/dv_harness/question_queue.py,CANONICAL_RUNTIME (real dependency, not modified),YES -- confirmed compatible,"make_question_id()/QuestionQueueStore.add_question()/.get_question() signatures verified by direct read, match exactly"
+.claude/skills/* (canonical),D:/DV/Task/L5_DGVA/.claude,AGENT_SKILL,NO,"grep 'intake_field_resolution' .claude/ -- zero matches"
+dv_harness/graph.py;dv_harness/engine.py (canonical),D:/DV/Task/L5_DGVA,GRAPH,NO,"grep 'intake_field_resolution' on both -- zero matches"
+CAP-M6-CLARSVC-001 (future, not yet built),M6 (open P0 blocker),FUTURE_DEPENDENCY,N/A this Cohort,"Registered as the eventual consumer/reconciler of this FOUNDATION module -- explicitly deferred, per instruction item 6"

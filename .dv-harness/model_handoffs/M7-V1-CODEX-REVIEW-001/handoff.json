@@ -1,0 +1,56 @@
+{
+  "handoff_version": "1.0",
+  "task_id": "M7-V1-CODEX-REVIEW-001",
+  "task_type": "review-route",
+  "source_model": "claude",
+  "target_model": "codex",
+  "project_id": "L5_DGVA",
+  "current_head": "fb846e1ca992f0496626fce7b802f3e01398b65a",
+  "objective": "Independent review of the new M7 V1 structured multi-model handoff implementation (dv_harness/model_handoff.py, dv_harness/model_result.py, dv_harness/model_handoff_workflow.py): find real defects in the HANDOFF_V1/RESULT_V1 markdown parse/serialize round-trip, the round-trip validation chain (task_id/producer/task_type/scope/schema/evidence), and the Canonical Consumer wiring (question_queue.add_question integration, registry.csv append).",
+  "scope": {
+    "task_id": "M7-V1-CODEX-REVIEW-001",
+    "allowed_path_prefixes": [
+      "dv_harness/model_handoff.py",
+      "dv_harness/model_result.py",
+      "dv_harness/model_handoff_workflow.py",
+      "dv_harness_tests/test_model_handoff_v1.py"
+    ],
+    "forbidden_paths": [
+      "dv_harness/engine.py",
+      "dv_harness/cli.py",
+      "dv_harness/task_boundary_conformance.py",
+      "dv_harness/question_queue.py"
+    ],
+    "require_new_file": false
+  },
+  "input_evidence_refs": [
+    "dv_harness/model_handoff.py",
+    "dv_harness/model_result.py",
+    "dv_harness/model_handoff_workflow.py",
+    "dv_harness_tests/test_model_handoff_v1.py"
+  ],
+  "required_governance_refs": [],
+  "known_facts": [
+    "This module reuses TaskBoundary/evidence_refs/governance_registry.py/QuestionQueueStore verbatim per Prime Directive V2 REUSE_OVER_REINVENT; it does not implement direct model-to-model API transport (human-mediated Markdown only",
+    "per M7 V1 scope)"
+  ],
+  "open_questions": [],
+  "independence_requirement": "Do not assume the implementation is correct. Report defects independently with evidence. Do not be biased by the module docstrings own claims.",
+  "expected_output_type": "review_findings",
+  "expected_output_schema": "L5DGVA_MODEL_RESULT_V1",
+  "validation_requirements": [],
+  "human_decision_required": false,
+  "return_contract": "L5DGVA_MODEL_RESULT_V1 markdown, same TASK_ID",
+  "allowed_files": [
+    "dv_harness/model_handoff.py",
+    "dv_harness/model_result.py",
+    "dv_harness/model_handoff_workflow.py",
+    "dv_harness_tests/test_model_handoff_v1.py"
+  ],
+  "forbidden_files": [
+    "dv_harness/engine.py",
+    "dv_harness/cli.py",
+    "dv_harness/task_boundary_conformance.py",
+    "dv_harness/question_queue.py"
+  ]
+}

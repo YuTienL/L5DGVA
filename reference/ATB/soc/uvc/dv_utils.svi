@@ -1,0 +1,124 @@
+/**
+ * Abstract: 
+ * Defines utility methods which can be used by elements of the dv test environment
+ * but which have no natural home.
+ */
+
+`ifndef GUARD_DV_UTILS_SVI
+`define GUARD_DV_UTILS_SVI
+
+`include "dv_types.sv"
+
+/**
+ * Utility method to parse the supplied .cfg file and to populate the values struct with
+ * name / value pairs.  This can be used in the third-party VIP flow to assist with
+ * initialization of the configuration object for the third-party VIP.
+ */
+function bit populate_cfg_values(string filename, output dv_types::cfg_values_struct values[$]);
+  int file;
+  string line;
+
+  populate_cfg_values = 1;
+
+  // Open the file for read access
+  file = $fopen(filename,"r");
+  if (file == 0) begin
+    `uvm_error("populate_cfg_values", $sformatf("Unable to open %s", filename));
+    populate_cfg_values = 0;
+  end
+
+  // Iterate over the file and parse each line
+  while (!$feof(file) && $fgets(line, file) && populate_cfg_values) begin
+    string name, value;
+    bit status;
+
+    // Strip leading and trailing whitespace
+    if (line.len() > 0) begin
+      int first_ix;
+      int last_ix;
+      for (first_ix = 0; first_ix < line.len(); first_ix++) begin
+        if (line[first_ix] != " ") break;
+      end
+      for (last_ix = line.len()-1; last_ix > first_ix; last_ix--) begin
+        if (line[last_ix] != " " && line[last_ix] != "\n") break;
+      end
+      if ((first_ix > 0) || (last_ix < line.len()-1)) begin
+        if (last_ix >= first_ix) begin
+          line = line.substr(first_ix, last_ix);
+        end else begin
+          line = "";
+        end
+      end
+    end
+
+    // Skip any blank lines or commented lines
+    if (line.len() == 0 || line[0] == "#" || line.substr(0,1) == "//")
+      continue;
+
+    // Find the separator and split the line into the name / value pair
+    status = 0;
+    for(int i = 0; i < line.len(); i++) begin
+      if (line[i] == ":") begin
+        dv_types::cfg_values_struct entry;
+
+        entry.name = line.substr(0,i-1);
+        entry.value = line.substr(i+1, line.len()-1);
+
+        values.push_back(entry);
+        status = 1;
+        break;
+      end
+    end
+
+    if (!status)
+      `uvm_error("populate_cfg_values", $sformatf("Unable to process the following line: '%s'.", line))
+
+  end
+endfunction
+
+/**
+ * Utility method to parse the supplied name of the configuration property and to extract
+ * a base name from that if it contains hiearchy, and to strip the index value if the
+ * base name is an array element.
+ */
+function void split_cfg_name(string name, output string base_name, output string sub_name, output int index);
+  base_name = "";
+  sub_name = "";
+  index = -1;
+
+  // Look for a hiearchy separator, and if found split the name into the base name and
+  // sub-group name.
+  for(int i = 0; i < name.len(); i++) begin
+    if (name[i] == ".") begin
+      base_name = name.substr(0,i-1);
+      sub_name = name.substr(i+1,name.len()-1);
+      break;
+    end
+  end
+
+  // If no hiearchy separator found then use the name as the base name
+  if (base_name == "")
+    base_name = name;
+
+  // If it is an array element then extract the index value and strip from the base name
+  if (base_name[base_name.len()-1] == "]") begin
+    int left = -1;
+    for(int i = 0; i < base_name.len(); i++) begin
+      if (base_name[i] == "[") begin
+        left = i;
+        break;
+      end
+    end
+
+    if (left == -1)
+      `uvm_error("split_cfg_name", $sformatf("Unable to extract the array index or base name from the following name: '%s'", name))
+    else begin
+      string index_str;
+      index_str = base_name.substr(left+1,base_name.len()-2);
+      void'($sscanf(index_str, "%d", index));
+      base_name = base_name.substr(0,left-1);
+    end
+  end
+endfunction
+
+`endif // GUARD_DV_UTILS_SVI

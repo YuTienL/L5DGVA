@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-import argparse, json, pathlib, sys
+import argparse, json, os, pathlib, sys
+
+# M8 Cohort H (GAP-M8-010): this gate's own EXPERIENCE_READY corroboration
+# check moved into dv_harness/promotion_evidence.py, the one real, shared
+# implementation its sibling gate (closed_loop_promotion_gate.py) now also
+# imports -- Connect Before Expand, never two independently-maintained
+# copies of the same trust check. Same DV_HARNESS_PACKAGE_ROOT pattern
+# several other tools/verification_flow/*.py scripts already use (e.g.
+# qualification_matrix_consistency_gate.py).
+_env_root = os.environ.get("DV_HARNESS_PACKAGE_ROOT")
+_ROOT = pathlib.Path(_env_root) if _env_root else pathlib.Path(__file__).resolve().parents[2]  # dogfooding/legacy fallback
+sys.path.insert(0, str(_ROOT))
+from dv_harness.promotion_evidence import project_root_from_env, real_promotion_event_exists  # noqa: E402
 
 ORDER = [
     "INTAKE_READY",
@@ -16,6 +28,7 @@ ORDER = [
     "EXPERIENCE_READY",
     "PROMOTABLE"
 ]
+
 
 def main():
     ap=argparse.ArgumentParser()
@@ -52,6 +65,20 @@ def main():
     missing=[x for x in mandatory if x not in names]
     if missing:
         print(json.dumps({"status":"FAIL","reason":"MISSING_PROMOTION_STAGES","missing":missing})); return 7
+
+    # GAP-M8-001 (M8 Cohort 1): EXPERIENCE_READY is an agent-self-attested
+    # stage name in this same --audit JSON, checked structurally above like
+    # every other stage but never previously corroborated against anything
+    # real. Require a real backing promotion event now.
+    if "EXPERIENCE_READY" in names and not real_promotion_event_exists(project_root_from_env()):
+        print(json.dumps({
+            "status": "FAIL", "reason": "EXPERIENCE_READY_NOT_VERIFIED",
+            "detail": ("EXPERIENCE_READY was self-attested but no real promotion event "
+                       "(EXPERIENCE_KNOWLEDGE_PROMOTED or a sibling route_and_store() "
+                       "event) with a real, non-failed destination was found in this "
+                       "project's .dv-harness/events.jsonl"),
+        }))
+        return 8
 
     print(json.dumps({"status":"PASS","stages":seen,"failure_detected":failure}))
     return 0

@@ -1,0 +1,106 @@
+# Synthesis Report — DV Agent Harness L5, Intake-Extraction Validation Run (9 categories, real USB project material)
+
+## 1. All persisted project_fact memory_ids (45 total)
+
+| # | memory_id | Category | One-line description |
+|---|---|---|---|
+| 1 | MEM-181A55933A | vip_docs | Configuration object hierarchy (`svt_configuration→svt_usb_configuration→svt_usb_agent_configuration→host/device→endpoint→ustream_resource`) per UVM/HDL guide, incl. this project's real VIP=Host/DUT=Device topology |
+| 2 | MEM-57BA7FFA35 | vip_docs | Agent/component class hierarchy + full callback method inventory and Host-role callback/event-flow sequence, incl. HDL `cmd_callback_wait_for`/`proceed` |
+| 3 | MEM-3DDE3911DC | vip_docs | Sequence library organization: base classes, built-in error/scenario sequence naming grammar, HVP conventions |
+| 4 | MEM-F4510B2986 | vip_docs | Device-mode integration gotchas/FAQ digest (clocking, SOF-gen default-off, DP/DM signal-strength model, EOP tolerance, a documented UVM_FATAL fix, aligned-transfer footgun) |
+| 5 | MEM-0756C7EC31 | vip_source | Source-verified class hierarchy + `pragma protect` selective-encryption map (cleartext prototypes vs. encrypted bodies, per-file %) |
+| 6 | MEM-6CCCF1AD31 | vip_source | Fully-quoted cleartext API of `svt_usb_agent` / `svt_usb_virtual_sequencer` / `svt_usb_system_virtual_sequencer` |
+| 7 | MEM-4FD02D916E | vip_source | Configuration-family field taxonomy — corrects host/device/endpoint configs to be **siblings**, not subclasses, of `svt_usb_agent_configuration` |
+| 8 | MEM-E7F605F3CC | vip_source | `svt_usb_if.svi` interface-layer detail: 20+ sub-interfaces (PIPE3/4, USB4, UTMI/ULPI, SSIC, OTG) with two distinct not-yet-supported caveats |
+| 9 | MEM-7B30B07657 | vip_source | Transaction/types/xHCI-TRB/hub class detail — corrects transfer/packet/transaction to be siblings, not a subclass chain |
+| 10 | MEM-6A22FF9586 | vip_examples | One of 8 example-program deep dives (env/config/interface/scoreboard/sequence/coverage/callback architecture) |
+| 11 | MEM-E0BD46DB8B | vip_examples | ″ |
+| 12 | MEM-C8729132E6 | vip_examples | ″ |
+| 13 | MEM-DF757A3471 | vip_examples | ″ |
+| 14 | MEM-7B2E70A9AD | vip_examples | ″ |
+| 15 | MEM-198C44916C | vip_examples | ″ |
+| 16 | MEM-FD3BDF9359 | vip_examples | ″ |
+| 17 | MEM-EA4EBFE775 | vip_examples | ″ *(note: the source summary text did not give a 1:1 ID→example-name mapping; collectively these 8 cover `usb_basic_serial_env`, `usb_hub_basic_env`, `usb_intermediate_pipe4_env`, `usb_intermediate_sys`, router_sys, and 3 others — see `intake-vip_examples-report.md` for the per-example breakdown)* |
+| 18 | MEM-4878B9F66F | dut_registers | SoC address formula (`system=0x1000_0000\|local28`), DUT-007 port-1-base dispute, core-DWC_usb31-register gap claim — **see §2 finding #1: this "gap" is not real** |
+| 19 | MEM-014A39F4F9 | dut_registers | usbtop wrapper registers (regclk/axiclk/controller/sram/usb3phy/usb2phy/apb-parity pages; `usbswrst` confirmed at `0x1270_0034`) |
+| 20 | MEM-C6C572DFAF | dut_registers | SS_VOUT fabric-level registers (`cqint00en`, `mswrst`, `usb0/1_clken`) |
+| 21 | MEM-89C10198A8 | dut_registers | CQ engine (`rdytimeoutaddr` 19→25-bit erratum fix, `cqprot` register added v0.3/0.4) |
+| 22 | MEM-E1613E944D | dut_registers | SS_QDMA + DMA engine (7 register renames, `dst_rbc_thres` addition, missing AXI-PROT/CACHE fields in June docx) |
+| 23 | MEM-39D0444097 | dut_registers | RTL/VIP timing map |
+| 24 | MEM-9C72DD7438 | ip_docs | DWC_usb31 config parameters (port/speed/endpoint parameterization, gate costs) |
+| 25 | MEM-2449875D17 | ip_docs | Feature list + errata (Unsupported Configs/Features, Fixed ECNs incl. ECN009, GCTL[16] workaround) |
+| 26 | MEM-35896F1B22 | ip_docs | Release notes v2.10a (fixed defects, known sim/synthesis limitations) |
+| 27 | MEM-501DA584D1 | ip_docs | Install guide (pinned tool/VIP versions, version-drift history) |
+| 28 | MEM-B925DB4479 | ip_docs | Link-layer CSR register map cross-referenced to Databook config-time init parameters |
+| 29 | MEM-E4D79F14EF | ip_docs | User guide / Prime Profiles / PVE testbench flow |
+| 30 | MEM-CC4D81AF8A | programming_guide | Power-on device-mode bring-up sequence (Table 4-1, 11 ordered steps, CSftRst-first/RunStop-last) |
+| 31 | MEM-C7A17B6C47 | programming_guide | Event-buffer setup order (GEVNTADR→SIZ→COUNT) + register facts |
+| 32 | MEM-6B5F0751E6 | programming_guide | DEPCFG/DEPSTARTCFG/DEPXFERCFG command parameters and ordering rules |
+| 33 | MEM-3F662E86F0 | programming_guide | DCTL/DCFG/DEVTEN/DALEPENA/GCTL bit-maps + GCTL.RAMCLKSEL cross-reference tension |
+| 34 | MEM-B8BDD99895 | dut_rtl_model | Module hierarchy incl. dual-instance vs. HAPS-single-instance `usbtop` distinction |
+| 35 | MEM-8753BB72BE | dut_rtl_model | Bit-exact IRQ→GIC INTID derivation (usb0=169, usb1=170), independently re-derived from RTL |
+| 36 | MEM-9075F3820E | dut_rtl_model | Two RTL defects re-verified with corrected severity (FIQ truncation benign; ESMERR bit-1 `axi_parity_irq` genuinely lost) |
+| 37 | MEM-DF6A8FB18D | dut_rtl_model | JTAG/token mux + 73-bit IRQ/FIQ enable-register structure (open gap: no 1:1 map to the 16-bit IRQ bus) |
+| 38 | MEM-8B866732BE | top_tb_commandtxt | `vcs.opt` flag inventory, subsystem compile order, VCS-vs-ZEBU (`vcs_z.opt`) divergence |
+| 39 | MEM-3D8EA5A420 | top_tb_commandtxt | Real `command.txt` semantic deep-dive — it currently holds a 2006-vintage TOKEN_MISS/TOKEN_HIT security smoke test, not a USB scenario |
+| 40 | MEM-3840008524 | top_tb_commandtxt | Empirical finding: `command_semantic_expectation_parser.py` derives zero requirements from the real `command.txt` |
+| 41 | MEM-6378E630A1 | standard_specs | 9-protocol census — corrects the task premise that only USB has real local spec material |
+| 42 | MEM-ABA66B43D0 | standard_specs | USB2 chirp/reset FSM, PING flow control, 4 transfer types, descriptor tables |
+| 43 | MEM-E2EA94849A | standard_specs | USB3.2 12-state LTSSM + substates + Table 7-12 timeout table |
+| 44 | MEM-9075D45EB0 | standard_specs | UTMI+ signal encoding cross-referenced to the chirp FSM |
+| 45 | MEM-5D07E0E97F | standard_specs | xHCI operational register map + TRB Type enumeration |
+
+---
+
+## 2. Cross-category contradictions and gaps (verified this pass)
+
+**Finding #1 — `dut_registers` wrongly declared a key document "entirely absent"; `programming_guide` had already opened it. (real error, verified on disk)**
+`intake-dut_registers-report.md:183,194,788-789` states the DWC_usb31 Programming Guide (`DWC_usb31_programming.pdf`) is "not present anywhere under `D:\DV\Task\USB\DOC\` or its subdirectories" / "entirely absent," leaving DCTL/DCFG/DEVTEN/DALEPENA/GCTL/GEVNTCOUNT/GSTS undocumented. This is factually wrong: `programming_guide`'s own report (`intake-programming_guide-report.md:4`) cites and fully extracted `D:\DV\Task\USB\DOC\IP\DWC_usb31_programming.txt` (35,383 lines) — I confirmed both the `.pdf` (3.8MB) and `.txt` physically exist at that exact path. `dut_registers`' search simply missed the `IP\` subdirectory. Net effect: the "core-register gap" `dut_registers` reports as an intake limitation is **not a real gap** — `programming_guide`'s MEM-3F662E86F0/MEM-CC4D81AF8A already supply bit-level DCTL/DCFG/DEVTEN/DALEPENA/GCTL facts. What genuinely remains open (neither category closed it) is the **IP-relative-offset → SoC-absolute-address crosswalk**: `programming_guide` gives DWC_usb31-internal register offsets, `dut_registers` gives the SoC window (`0x1271_0000`–`0x1271_FFFF`) those registers presumably live in, but no document ties a specific offset (e.g. DCTL) to a specific absolute address inside that window.
+
+**Finding #2 — `vip_docs`' configuration diagram and `vip_source`'s verified hierarchy describe two different relationships (containment vs. inheritance), and only one report is source-grounded.**
+`vip_docs` (from the UVM/HDL user guides, `intake-vip_docs-report.md:21-42`) draws `svt_usb_host_configuration`/`svt_usb_device_configuration`/`svt_usb_endpoint_configuration` as children in a single `class X extends Y` tree rooted at `svt_usb_agent_configuration`. `vip_source` (from actual `class ... extends ...` declarations, `intake-vip_source-report.md:909-912`) explicitly corrects this: those three are **not** subclasses of `svt_usb_agent_configuration` or `svt_usb_configuration` — they are independent `svt_configuration` extensions referenced as fields/list-elements inside an agent configuration. This is a genuine doc-vs-source discrepancy (the user guide's "hierarchically ordered" prose in `intake-vip_docs-report.md:24-25` describes object-reference containment, which `vip_docs` then rendered as an inheritance tree — an artifact of the extraction, not the guide lying). Any future generator/config-audit logic must use `vip_source`'s class-extension facts for `is-a` reasoning and `vip_docs`'s tree only for object-containment/config-cloning reasoning — they answer different questions and should not be merged into one diagram.
+
+**Finding #3 — `standard_specs` flagged an open question that `vip_source`/`vip_examples` already answer.**
+`standard_specs` (`intake-standard_specs-report.md:292-298`) flags that the USB3.2 spec's newer `eSS.*`-prefixed LTSSM state names (`eSS.Inactive`, `eSS.Disabled`) may or may not match this project's VIP naming, and says this is "worth checking... before assuming." `vip_source` (`intake-vip_source-report.md:413-414`, confirmed cleartext) and `vip_examples` (`intake-vip_examples-report.md:699`) both independently show the VIP's `svt_usb_types::ltssm_state_enum` and test-level config fields use **bare, unprefixed** state names (`U0`, `POLLING`, etc.) — i.e. this codebase tracks the older USB3.0-generation naming, not the spec's newer `eSS.*` convention. No agent connected these two facts across categories; a downstream reader of `standard_specs` alone would still think this is unresolved.
+
+**Finding #4 (self-flagged gap, not a contradiction) — the Harness's own `command_inventory.csv` (24 USB scenario rows) is silently scoped to USB-only content, and the DUT's live `command.txt` slot currently holds something outside that scope entirely.** `top_tb_commandtxt` (`intake-top_tb_commandtxt-report.md:495-503`) found the real `command.txt` on the DUT tree holds a 2006-vintage TrustZone-style TOKEN_MISS/TOKEN_HIT register-security smoke test — a class of content `command_inventory.csv` has zero rows for. The report correctly characterizes this as a coverage gap in the inventory rather than a false claim by it, but it means any future agent reasoning from `command_inventory.csv` alone (as `vip_examples`/generator code implicitly does) would have no visibility into this content family.
+
+**Residual open item, not yet a contradiction:** `dut_rtl_model`'s 73-bit `ss_vout_irqen`/`ss_vout_fiqen` enable registers (`SS_VOUT_ALL.v:6754-6755`, offset `'h10`/`'h20`) and `dut_registers`' `cqint00en`/`mswrst` fields (offset `0x0050`/`0x0080`, from `register__ssvout_0806.xlsx`) both live in the same `ss_vout_ctl` register block but were extracted independently, at different offsets, describing what look like two distinct register purposes (irq/fiq *masking* vs. CQ-event *routing*). Neither report cross-checked the other's offset, so it is not confirmed whether these are genuinely two separate registers or whether one category mis-scoped a field — flagged in `dut_rtl_model:220-224` as its own open question, worth a targeted follow-up read of the `ss_vout_reg00` sheet against `SS_VOUT_ALL.v:6754-7013` specifically.
+
+---
+
+## 3. Honest completeness assessment
+
+**Genuinely deep, no material blockers hit:**
+- **vip_docs** — full read of all 5 real doc/companion files (8828+5910+646+1689+198 lines), citations to file+line throughout.
+- **vip_examples** — all 8 example programs mined past their previously-cited surface, 4 distinct env architectures and 3 distinct scoreboard architectures actually distinguished.
+- **programming_guide** — full 35K-line guide read, and it directly falsifies two other categories' claims (discussed above) rather than just restating them.
+
+**Deep, but working around a real technical limit:**
+- **vip_source** — VIP source is genuinely `pragma protect` encrypted; the session correctly identified encryption is *selective* (method bodies only) and wrote a real extraction script to prove per-file cleartext fractions rather than assuming either "fully readable" or "fully opaque." This is the most methodologically rigorous of the 9.
+- **ip_docs** — the top-level `DWC_usb31_databook_WM-25380.pdf` is genuinely password-encrypted (verified 3 different ways: pdftotext, pypdf, pymupdf); worked around with a byte-size/name argument that it's a watermarked duplicate of the unencrypted copy in `IP\`, not an independent gap.
+
+**Real limits that left genuine, acknowledged holes:**
+- **dut_registers** — DUT-007 (port-1 base) is a real, confirmed documentation gap (byte-identical duplicate table, not a hard-to-find fact), and the DWC_usb31 databook PDF really is password-locked in that tree too. But its "programming guide entirely absent" claim (§2 Finding #1) was a false negative, not a real limit — this is the one place completeness self-assessment in the original report should be revised downward for accuracy, upward for actual coverage once cross-referenced.
+- **dut_rtl_model** — the remote relay to `host-c` genuinely stopped responding for 20+ minutes; per protocol the session did not force a reconnect loop or touch `remote_relay.py`, and honestly reported the incomplete `usbtop` internal submodule enumeration and the un-reverified `MACRO_ALL.v` citation rather than assuming the prior session's finding still held.
+- **top_tb_commandtxt** — `runver.sh` (the actual CI entry point) was never read; a `git log` call left the relay blocked on an open pager. Nothing already-extracted depends on it, but it's a named, real hole.
+- **standard_specs** — the most unevenly-covered category by design: it correctly overturned the task's premise (all 9 protocols have real spec PDFs somewhere), but then only actually deep-extracted USB. AMBA, PCIe, MIPI-CSI2, MIPI-DSI, eMMC/MMC, SD/SDIO, CAN-FD, and Ethernet specs remain **entirely unopened** despite being confirmed present. This is presented honestly as a scope decision, not silently as "done."
+
+**Net picture:** 6 of 9 categories delivered genuinely deep, well-cited extraction; 2 (vip_source, ip_docs) hit real encryption limits and defensibly worked around them; 1 (dut_rtl_model) hit a real infra outage and correctly stopped rather than fabricating; and the single most consequential quality issue found in this synthesis is not encryption or remote access at all — it's a plain missed-subdirectory search miss in `dut_registers` that another category's success silently falsified.
+
+---
+
+## 4. Recommendation: make this a permanent Harness skill
+
+This should be consolidated now, per this project's own **Methodology Consolidation Rule** in `CLAUDE.md` ("a process/method/workflow used in a session is not done once it produces a result once... it must be consolidated into a permanent Harness asset"). Concretely:
+
+1. **New skill**: `.claude/skills/CORE/deep-intake-extraction/SKILL.md`, parameterized by target protocol/IP (USB here, but written generic per `ip-uvm-dv-gen`'s own "target IP is a parameter" pattern) and by material category (VIP docs / VIP source / VIP examples / DUT registers / IP docs / programming guide / DUT RTL / top TB+command.txt / standard specs — the 9 used here are a reasonable default taxonomy, not USB-specific). It should encode, as concrete mechanics with this run's worked examples (not restated abstract mandates):
+   - **`.txt`-companion-first policy** for PDFs, with `pdftotext -layout` as the documented fallback when no companion exists (used successfully in `standard_specs` and `ip_docs`).
+   - **Selective-encryption handling for VIP source**: never conclude "fully encrypted" from one grep hit — write a small script to measure cleartext fraction per file the way `vip_source` did, and prefer prototype/field cleartext over guessing bodies.
+   - **Latest-dated-version selection + diffing** for multi-copy DUT documents (`dut_registers`' CQ/DMA handling), always diffing against the prior copy for meaningful deltas rather than silently discarding it.
+   - **A mandatory "verify absence, don't declare it" step**: before any report states a referenced document is "not present"/"entirely absent," it must show the actual directory listing checked, and ideally cross-check sibling categories' citations — this run's #1 contradiction (§2) would have been caught for free if `dut_registers` had done this.
+   - **Remote-relay resilience policy** already partially codified in this CLAUDE.md's Remote Linux Execution section — `dut_rtl_model`'s correct "don't force-reconnect, report the hole honestly" behavior should be pointed to from the skill as the worked example.
+2. **New workflow step, not a one-off ask**: a final **cross-category synthesis pass** (exactly this report) should be a standing last stage of the multi-agent intake orchestration shape, not something requested only when a user happens to ask for it — per this project's own rule that a validated multi-phase orchestration shape belongs in `.claude/workflows/` as a reusable script. The synthesis pass earns its keep: it caught a real factual error (`dut_registers`) and resolved a self-flagged open question (`standard_specs`) purely by comparing already-completed reports, at near-zero additional extraction cost.
+3. **For future non-USB protocols**: the 9-category taxonomy and the specific techniques above transfer directly — nothing in this run's method (txt-companion reading, encryption-fraction measurement, version-diffing, absence-verification, relay-outage handling) is USB-specific. The one USB-specific artifact worth explicitly generalizing before reuse is the "VIP=Host/DUT=Device serial-interface, 2.0-only/SS-only variant" configuration example in `vip_docs`'s MEM-181A55933A — keep it as a labeled illustration only, consistent with this project's existing rule (see the CLAUDE.md "Non-USB topology variants" note) that USB content must never leak into the generic skill as if it were universal vocabulary.
+
+**File paths referenced in this synthesis** (all under `D:\DV\Task\DV_Agent_Harness_L5\v50\.work\`): `intake-vip_docs-report.md`, `intake-vip_source-report.md`, `intake-vip_examples-report.md`, `intake-dut_registers-report.md`, `intake-ip_docs-report.md`, `intake-programming_guide-report.md`, `intake-dut_rtl_model-report.md`, `intake-top_tb_commandtxt-report.md`, `intake-standard_specs-report.md`; also verified on disk: `D:\DV\Task\USB\DOC\IP\DWC_usb31_programming.pdf` and `.txt` (both exist, contradicting the `dut_registers` report's absence claim).

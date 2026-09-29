@@ -1,0 +1,21 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "rtl_vip_scaledown_mapping.xls -- RTL LTSSM/chirp timer constants mapped to SVT_USB VIP config",
+  "summary": "D:\\DV\\Task\\USB\\DOC\\rtl_vip_scaledown_mapping.xls cross-references the DUT RTL's ss_scaledown_mode-gated LTSSM/PRTSM/USB2-chirp timer constants against the corresponding Synopsys svt_usb_* VIP config fields, with concrete Default-vs-Scaled numeric pairs -- this is a timing/config cross-reference, not a register-address map, but is the primary source for 'what should this scaled-mode LTSSM/chirp timing value be' checker/scoreboard questions. 8 sheets, all read: 'RTL and VIP' (105 rows) pairs literal RTL Verilog snippets (e.g. ONE_MSEC = pwr_down_clk_en&&scale ? pwr_down_scale[12:2]+1 : scale?'d10:'d1000) against SVT_USB_* macro-driven VIP fields with Default/Scaled values -- notable: RX_DET_ATTEMPTS (RTL scales 7->2) maps to rx_detect_termination_detect_count which is 8.0 in BOTH Default and Scaled VIP columns (not actually scaled in the VIP despite the RTL having a scale-down path -- a real non-uniform-scaling case). Also captures the full LT_* LTSSM per-state timeout family (LT_RX_DET_QUIET_MS, LT_SSI_QUIET_MS, LT_POLL_LFPS_MS, LT_POLL_ACTIVE_MS, LT_POLL_CONFIG_MS, LT_POLL_IDLE_US, LT_RECOV_ACTIVE_MS, LT_RECOV_CONFIG_MS, LT_RECOV_IDLE_US, LT_HRESET_ACT_MS, LT_HRESET_EXIT_US) each with its VIP-side *_timeout knob. Contains an explicit in-sheet note: 'This is for USB3.0 ECN20, and is used only for a downstream port. The default behaviour does not use this. To enable this, set GUCTL.DS_RXDET_MAX_TOUT_CTRL' -- the only place in this whole extraction that names a specific DWC_usb31 core register+field (GUCTL.DS_RXDET_MAX_TOUT_CTRL) with functional meaning, though its address is not given here (see the GCTL/DCTL address-gap memory record). Sheet 'Scaled VIP Variables' (126 rows) lists two flat pre-scaled config columns: 'for SS operation' (credit_hp_timer=50us, hot_reset_active_timeout=130us, full lfps_t1x_t1x_uN_min/max family, ux_exit_timer_timeout=6000us, usb_ss_symbol_clock_period=400ps) and 'for 2.0 operation' (tattdb, tdchbit=750ns, tdchse0=1.5us, tdrst=115us-IF-DWC_USB3_FREECLK_USB2_EXISTS-else-15us, twtrsths=450us). Sheet 'USB2-Device' (File=DWC_usb3_u2dssr.v, 18 rows): device-mode chirp/reset timing mapped to spec params TDCHSE0/TDETRST/TWTRSTHS/TUCH/TWTFS/TFILT; notable footnote: 'If GUSB2PHYCFG[XCVRDLY] is set, then the chirp duration is reduced by 2.5us for both fullscale/scaledown modes' -- second core-register+field name (GUSB2PHYCFG.XCVRDLY) named with functional effect but no address. Sheet 'USB2-Host' (File=DWC_usb3_u2prtsm.v, 32 rows): host-mode chirp/reset (reset_duration/TDRSTR cites USB2.0 spec section 7.1.7.5 directly: 'resets from root ports have a duration of at least 50 ms'); revert_time(TWTREV) RTL fullscale=4ms is intentionally looser than the 3-3.125ms spec range, doc comment: 'This is ok to account for clock accuracy.' Sheets 'USB2-OTG' (102 rows), 'USB3-OTG3' (22 rows, a3_/b3_ port-A/port-B dual-role LTSSM timer pairs), 'USB3-LTSSM' (18 rows, a second state-name-labeled restatement of the LT_* timers: RxDetect.Quiet, Polling.LFPS, Polling.Active, etc.), 'USB3-SSIC' (58 rows, M-PHY/SSIC variant with a 3-way scaled/SNPS-M-PHY-sim-scaled/non-scaled value split, e.g. tRESET_DIFFN: 100us/400us/70ms, plus inline ifdef DWC_USB3_SNPS_MPHY_SIM_SUPPORT-conditioned RTL timer variants).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\rtl_vip_scaledown_mapping.xls"
+  ],
+  "category": "dut_registers",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-39D0444097",
+  "level": "project",
+  "created_at": 1788367805.5861623,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/phy_boundary.schema.json",
+  "title": "phy_boundary",
+  "description": "GENERATED artifact (unlike register_map.schema.json, which is an input contract): dv_harness/phy_boundary.py derives this from a real RTL port table -- the same verible-parsed dut_facts.rtl.files[].modules[] that env_manifest.py already produces -- plus a project-declared PHY/controller module pair. It answers exactly one question the asset-processing table assigns to it: at which layer may a bind be mounted, given where the serial/parallel boundary between PHY and controller actually falls. Nothing here is naming-derived: every classification carries the real port widths it was computed from, mirroring connectivity.py's determine_role_from_port_direction() discipline of taking structural evidence only. The declared module pair is a real project fact the project supplies (which module IS the PHY); this file never guesses it from a name.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generator", "status", "phy_module", "controller_module", "boundary_signals", "classification", "bind_decision"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "version"],
+      "properties": {
+        "tool": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "status": {
+      "enum": ["EXTRACTED", "NOT_AVAILABLE"],
+      "description": "EXTRACTED when a real RTL port table for both declared modules was parsed. NOT_AVAILABLE (with a real `reason`) when no RTL was supplied or a declared module is absent from it -- never a fabricated boundary."
+    },
+    "reason": { "type": ["string", "null"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "description": "e.g. 'env_manifest_rtl_modules' or 'verible_parse'." },
+        "files": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "phy_module": { "type": ["string", "null"] },
+    "controller_module": { "type": ["string", "null"] },
+    "boundary_signals": {
+      "type": "array",
+      "description": "Ports present on BOTH declared modules' port lists -- real structural evidence of a shared boundary signal set, not a name-similarity match.",
+      "items": { "$ref": "#/$defs/boundary_signal" }
+    },
+    "classification": { "$ref": "#/$defs/classification" },
+    "bind_decision": { "$ref": "#/$defs/bind_decision" }
+  },
+  "$defs": {
+    "boundary_signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "width", "phy_direction", "controller_direction", "width_source"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "width": { "type": ["integer", "null"], "minimum": 1, "description": "Real bit width parsed from the port's own declared data_type packed range; null when the declaration carries no resolvable literal range (e.g. a parameterized width) -- null is reported honestly, never defaulted to 1." },
+        "width_source": { "type": "string", "description": "The literal data_type text the width was parsed from, so a reviewer can re-derive it." },
+        "phy_direction": { "type": ["string", "null"] },
+        "controller_direction": { "type": ["string", "null"] },
+        "direction_opposed": { "type": ["boolean", "null"], "description": "True when the two modules declare opposite directions for this signal (input vs output) -- the expected shape of a real point-to-point boundary connection." }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "tier", "rationale"],
+      "properties": {
+        "kind": {
+          "enum": ["SERIAL", "PARALLEL", "MIXED", "UNDECIDABLE"],
+          "description": "SERIAL: the boundary's data-bearing signals are all narrow (<= SERIAL_MAX_WIDTH bits), i.e. a line-rate lane pair no VIP monitor can decode without a PHY model. PARALLEL: at least one data-bearing signal is a bus of >= PARALLEL_MIN_WIDTH bits, i.e. a PIPE/UTMI-style symbol boundary where transactions are observable. MIXED: both are genuinely present (a PHY exposing both its serial pins and its parallel controller-facing port). UNDECIDABLE: no resolvable widths -- routed to the question queue, never guessed."
+        },
+        "tier": {
+          "enum": ["B1_DECLARED", "B2_STRUCTURAL_WIDTH", "B3_UNDECIDABLE"],
+          "description": "B1_DECLARED: the project explicitly declared the boundary kind and this file records it. B2_STRUCTURAL_WIDTH: derived from real parsed port widths. B3_UNDECIDABLE: neither available."
+        },
+        "rationale": { "type": "string", "minLength": 1 },
+        "serial_signals": { "type": "array", "items": { "type": "string" } },
+        "parallel_signals": { "type": "array", "items": { "type": "string" } },
+        "unresolved_width_signals": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "bind_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mount_layer", "bindable", "rationale"],
+      "properties": {
+        "mount_layer": {
+          "enum": ["controller_phy_parallel_boundary", "serial_boundary_not_bindable", "requires_human_decision"],
+          "description": "controller_phy_parallel_boundary: mount the bind at the parallel controller<->PHY port set named in parallel_signals -- protocol transactions are observable there. serial_boundary_not_bindable: the only boundary is serial; a protocol VIP monitor bound there sees line-rate symbols it cannot decode without a PHY model, so this is reported as NOT bindable rather than emitting a bind that would silently monitor nothing. requires_human_decision: UNDECIDABLE classification -- goes to the question queue."
+        },
+        "bindable": { "type": "boolean" },
+        "rationale": { "type": "string", "minLength": 1 },
+        "recommended_bind_signals": { "type": "array", "items": { "type": "string" }, "description": "The concrete boundary signal names a bind at mount_layer would connect through its own port list -- per CLAUDE.md Bind-Location Rule 3, clock/reset and these signals go through the bind instance's port list, never a cross-level hierarchical reference." }
+      }
+    }
+  }
+}

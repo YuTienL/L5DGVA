@@ -1,11 +1,57 @@
 from __future__ import annotations
-import json, re, subprocess, sys, tempfile, time
+import json, os, re, subprocess, sys, tempfile, time
 from pathlib import Path
+from typing import Any, Dict
 from .config import load_config
 from .memory import CornerCaseLibrary
 from .control_plane import ControlPlane
+from . import evidence_provenance as _evidence_provenance
 
 TOOLS_DIR = "tools/verification_flow"
+
+# Finding I7 fix (2026-09-02 final-review follow-up): every STAGE_GATES script
+# runs as a standalone subprocess (not inside this already-running dv_harness
+# process) and therefore has no way to `import dv_harness` on its own without
+# guessing where the real package lives. 5 of those scripts guessed by
+# assuming the package sits exactly 2 directory levels above the script's own
+# file (`Path(__file__).resolve().parents[2]`) -- true only in this repo's own
+# dogfooding layout where tools/verification_flow/ and dv_harness/ are
+# siblings under the same root. A real deployed project copies just the
+# tools/verification_flow/*.py scripts under its OWN root (see run_gate()'s
+# `root / TOOLS_DIR / script_name` resolution below); the real dv_harness
+# ENGINE package the copied scripts need to import is wherever it was
+# installed (pip install, shared PYTHONPATH, ...) -- not necessarily 2
+# directories above the project's copy of the gate script. This process has
+# ALREADY successfully imported dv_harness (we're running inside it right
+# now), so it knows that real location with certainty regardless of how it
+# got there. Computed once here, not per run_gate() call, and handed to every
+# gate subprocess via the DV_HARNESS_PACKAGE_ROOT env var (see run_gate()
+# below) so the 5 scripts can prepend it to their own sys.path instead of
+# guessing.
+import dv_harness as _dv_harness_pkg
+DV_HARNESS_PACKAGE_ROOT = str(Path(_dv_harness_pkg.__file__).resolve().parent.parent)
+
+
+def _gate_env(root: Path) -> dict:
+    """The environment every gate subprocess runs with.
+
+    DV_HARNESS_PACKAGE_ROOT tells a gate script where the real dv_harness
+    ENGINE package is (see the comment above). DV_HARNESS_PROJECT_ROOT
+    (2026-09-06, waiver-store wiring) tells it which PROJECT it is judging --
+    a harness-supplied fact with the same trust property as a ContextFlag: it
+    is never read from the agent's evidence text, so a gate that consults a
+    durable per-project store (waiver_scope_consistency_gate,
+    waiver_revision_freshness_gate, waiver_revalidation_gate reading
+    dv_harness/waiver_store.py) cannot be pointed at a fabricated root to dodge
+    it. Supplied as env rather than as a ContextFlag because two of those three
+    scripts take a single whole-payload flag, and converting them to the
+    multi-flag form would change the evidence-block shape every existing
+    project's prompt already emits."""
+    return {
+        **os.environ,
+        "DV_HARNESS_PACKAGE_ROOT": DV_HARNESS_PACKAGE_ROOT,
+        "DV_HARNESS_PROJECT_ROOT": str(Path(root).resolve()),
+    }
 
 
 # --- multi-flag gate support -------------------------------------------------
@@ -64,6 +110,15 @@ STAGE_GATES = {
         ("intake_readiness", "../vplan/intake_readiness.py", "--intake"),
         ("generated_artifact_boundary_gate", "generated_artifact_boundary_gate.py", "--inventory"),
         ("interactive_evidence_intake_gate", "interactive_evidence_intake_gate.py", "--state"),
+        # NEW (2026-09-01, de-local-sim-env-intake design pass): additive --
+        # closes the previously-zero schema/code gap for DE-local-simulation-
+        # environment intake (compile/run/filelist/env-setup scripts a
+        # project may already have). OPTIONAL/non-blocking -- see the
+        # script's own module docstring RULING for why the agent must always
+        # emit this evidence block (using "{}" when not applicable) and how
+        # that stays a genuine no-op PASS for projects with no pre-existing
+        # DE-local environment.
+        ("de_local_sim_env_intake_gate", "de_local_sim_env_intake_gate.py", "--intake"),
     ],
     "DE_BASELINE_REPRODUCTION": [
         ("de_baseline_reproduction_gate", "de_baseline_reproduction_gate.py", "--baseline"),
@@ -93,6 +148,25 @@ STAGE_GATES = {
     ],
     "VPLAN": [
         ("spec_coverage_audit", "../vplan/spec_coverage_audit.py", "--vplan"),
+        # NEW (2026-09-01, vplan-doc-and-wiring-fix): spec_coverage_audit above
+        # checks a structurally different, incompatible JSON schema
+        # (requirements[] with VERIFIED/WAIVED/NOT_APPLICABLE status) and never
+        # calls the real dv_harness.vplan_writer.validate_items(). This second
+        # gate closes that gap by calling validate_items()/build_evidence_
+        # context() directly against real pattern-dir/dispatcher-file/task-
+        # declaration-source evidence on disk -- the same real evidence
+        # discipline `dv-harness vplan-export` itself uses. See
+        # tools/vplan/vplan_writer_validation_gate.py's header for the full
+        # rationale and why its JSON payload shape is not an invented schema.
+        ("vplan_writer_validation_gate", "../vplan/vplan_writer_validation_gate.py", "--vplan-validation"),
+        # NEW (2026-09-06, 23-agent gap-closure integration pass): checks the
+        # SPEC-TO-VPLAN TRANSFORM as a whole (zero-critical-omission,
+        # zero-unresolved-contradiction, zero-unresolved-ambiguity,
+        # zero-traceability-gap) -- deliberately separate from
+        # spec_to_vplan_requirement_quality_gate.py above, which checks
+        # PER-REQUIREMENT completeness only. See
+        # tools/verification_flow/spec_to_vplan_quality_gate.py's own header.
+        ("spec_to_vplan_quality_gate", "spec_to_vplan_quality_gate.py", "--vplan-quality"),
     ],
     "VERIFICATION_ARCHITECTURE": [
         ("mechanism_readiness_gate", "mechanism_readiness_gate.py", "--plan"),
@@ -102,12 +176,44 @@ STAGE_GATES = {
         ("branch_topology_gate", "branch_topology_gate.py", "--topology"),
         ("error_injection_coverage_gate", "error_injection_coverage_gate.py", "--plan"),
         ("observability_sufficiency_gate", "observability_sufficiency_gate.py", "--plan"),
+        # NEW (2026-09-01, checker-sva-generator task): observability_sufficiency_gate
+        # above only requires a requirement to NAME an ASSERTION/CHECKER
+        # evidence_point -- it cannot tell a real, DSL-generated assertion
+        # apart from one still carrying the ASSERTION branch's own
+        # `1'b1; // TODO` placeholder (tools/observability/
+        # generate_observability_plan.py, before this task's
+        # state_machine_checks DSL wiring). This gate closes that one
+        # specific remaining gap -- see
+        # tools/verification_flow/assertion_placeholder_closure_gate.py's
+        # own header for the full rationale and its deliberately narrow
+        # scope (only requirements the planner itself classified
+        # PROTOCOL_STATE_MACHINE_LEGALITY are checked; hand-authored
+        # INTERRUPT_RESPONSE_SEMANTIC/CROSS_CYCLE_TEMPORAL_INVARIANT
+        # assertions are untouched, per .work/checker-sva-generator-design-
+        # report.md's own scope boundary). Placed in this same
+        # VERIFICATION_ARCHITECTURE stage as observability_sufficiency_gate
+        # per that design report's own ruling (keep the two adjacent).
+        ("assertion_placeholder_closure_gate", "assertion_placeholder_closure_gate.py", "--implementation"),
         ("per_port_verification_matrix_gate", "per_port_verification_matrix_gate.py", "--matrix"),
         ("protocol_scheduler_gate", "protocol_scheduler_gate.py", "--scheduler"),
         ("reference_uvm_adaptation_gate", "reference_uvm_adaptation_gate.py", "--adaptation"),
         ("reference_uvm_compatibility_gate", "reference_uvm_compatibility_gate.py", "--reference"),
         ("reset_clock_power_sequence_gate", "reset_clock_power_sequence_gate.py", "--sequence"),
         ("scoreboard_reference_model_independence_gate", "scoreboard_reference_model_independence_gate.py", "--model"),
+        # NEW (2026-09-06, 23-agent gap-closure integration pass): three
+        # standalone generation-readiness gates over
+        # dv_harness/verification_architecture.py's assembled IR lists (see
+        # that module's own CLAUDE.md section for the VipBindIR/ScoreboardIR/
+        # AssertionIR shapes these check). Each takes the assembled
+        # verification_architecture JSON (minus its embedded `_irs`, i.e. the
+        # same evidence-block payload an agent already emits for this stage)
+        # via a single --architecture flag, matching this stage's existing
+        # single-flag convention. PASS only when every relevant IR record is
+        # RESOLVED/comparable/domain-matched and not named by a placement
+        # conflict; FAIL naming the specific unresolved records otherwise.
+        ("vip_bind_generation_gate", "vip_bind_generation_gate.py", "--architecture"),
+        ("scoreboard_generation_gate", "scoreboard_generation_gate.py", "--architecture"),
+        ("assertion_generation_gate", "assertion_generation_gate.py", "--architecture"),
     ],
     "IMPLEMENT": [
         ("traceability_consistency_gate", "traceability_consistency_gate.py", "--trace"),
@@ -116,6 +222,24 @@ STAGE_GATES = {
         ("verification_intent_gate", "verification_intent_gate.py", "--intent"),
         ("pattern_registry_completeness_gate", "pattern_registry_completeness_gate.py", "--registry"),
         ("manual_lookup_before_edit_gate", "manual_lookup_before_edit_gate.py", "--edit"),
+        ("protocol_isolation_gate", "protocol_isolation_gate.py", "--edit"),
+        # ADDED (2026-09-02, RTL-write-scope-guard gap-closure pass): the
+        # only real enforcement that ever stopped the harness from writing
+        # DUT/VIP RTL was a hand-added .claude/settings.json Edit-tool deny
+        # rule for one project's hardcoded paths -- nothing in dv_harness
+        # itself checked what an IMPLEMENT edit actually touched. This gate
+        # reads the agent-attested `touched_paths` list (every file path the
+        # edit touched) against the real project's rtl_protection.
+        # protected_paths (dv_harness/config.py) and FAILs
+        # RTL_WRITE_SCOPE_VIOLATION if any of them lands under a protected
+        # DUT/VIP root. --root is a ContextFlag (harness-supplied real
+        # project root), same convention as feature_continuity_gate/
+        # deep_rca_evidence_gate above -- an agent cannot point the check at
+        # a fabricated root to dodge it.
+        ("rtl_write_scope_guard_gate", "rtl_write_scope_guard_gate.py", (
+            EvidenceFlag("--edit", "edit"),
+            ContextFlag("--root", lambda root: str(root)),
+        )),
     ],
     "VERIFY": [
         ("simulation_semantic_validation_gate", "simulation_semantic_validation_gate.py", "--input"),
@@ -129,6 +253,7 @@ STAGE_GATES = {
         ("multi_port_fairness_qos_gate", "multi_port_fairness_qos_gate.py", "--ports"),
         ("negative_test_effectiveness_gate", "negative_test_effectiveness_gate.py", "--evidence"),
         ("per_port_queue_starvation_gate", "per_port_queue_starvation_gate.py", "--queues"),
+        ("remote_execution_provenance_gate", "remote_execution_provenance_gate.py", "--provenance"),
         ("rerun_determinism_gate", "rerun_determinism_gate.py", "--reruns"),
         ("run_environment_reproducibility_gate", "run_environment_reproducibility_gate.py", "--run"),
         ("scoreboard_transaction_liveness_gate", "scoreboard_transaction_liveness_gate.py", "--scoreboard"),
@@ -152,6 +277,51 @@ STAGE_GATES = {
         ("failure_signature_recurrence_gate", "failure_signature_recurrence_gate.py", "--failures"),
         ("issue_triage_classification_gate", "issue_triage_classification_gate.py", "--issue"),
         ("unknown_failure_escalation_gate", "unknown_failure_escalation_gate.py", "--failure"),
+        # ADDED (targeted-wave-debug-window-recovery-wiring, 2026-09-02):
+        # focused_wave_debug_window_gate was the one gate that precisely
+        # enforces CLAUDE.md's "First-Failure Waveform Rerun" (targeted,
+        # minimal-window waveform cut near the first failure, user-confirmed
+        # dump scope) but was wired ONLY to WAVE_ANALYSIS -- reachable only
+        # from VERIFY's PASS edge in main_graph.json, a pre-batch
+        # representative-testcase flow. FAILURE_RECOVERY is the real
+        # post-batch-failure debug path (VERIFY/BUILD_DEBUG/INFRA_RECOVERY's
+        # FAIL edges all land here) and had NO gate at all checking a
+        # targeted waveform rerun performed during failure debugging --
+        # added here so that path is validated by the same precise
+        # window/scope check regardless of which graph edge led into it.
+        # Made this genuinely usable as an always-mandatory FAILURE_RECOVERY
+        # gate (unlike WAVE_ANALYSIS, not every failure here needs a
+        # waveform -- CLAUDE.md's own "escalate evidence cost gradually,
+        # don't jump to FSDB" rule) by adding a real escape hatch to the
+        # script itself: an explicit deep_debug_required=false PASSes when
+        # paired with a non-empty deep_debug_not_required_reason, same
+        # "<x>_applicable:false + reason" shape already used by
+        # fabric_topology_completeness_gate and friends.
+        ("focused_wave_debug_window_gate", "focused_wave_debug_window_gate.py", "--rerun"),
+    ],
+    # RCA_G1 multi-agent evidence fan-out (2026-09-03, multi-agent-orchestrator
+    # gap closure). Only the JOIN stage is gated, deliberately:
+    #
+    #   - RCA_RTL_EVIDENCE / RCA_LOG_EVIDENCE / RCA_VIP_SPEC_EVIDENCE are
+    #     single-domain evidence GATHERERS. None of them is allowed to reach a
+    #     root cause on its own (each agent profile says so, and the fan-out's
+    #     whole point is that they run blind to each other), so there is no
+    #     root-cause claim for a gate to check at a branch. Gating a branch on
+    #     root_cause_evidence_gate would actively push it to invent the very
+    #     cross-domain conclusion RCA_JOIN exists to make. They stay
+    #     unmapped -- NO_GATE_REQUIRED -- exactly like INFRA_RECOVERY and the
+    #     other Stage values with no entry here, and their real output is
+    #     still captured: each writes its own Blackboard topic from its own
+    #     evidence, which RCA_JOIN then has to actually read.
+    #   - RCA_JOIN is where the single root-cause claim is finally made, so it
+    #     gets the SAME already-real root_cause_evidence_gate RE_AUDIT uses --
+    #     reused, not duplicated under a new name. That reuse also switches on
+    #     engine.py's existing _score_root_cause_confidence() wiring for this
+    #     stage (it keys off this gate id being registered), which is what
+    #     lets multi_agent_consensus_count finally derive from real concurrent
+    #     agents here instead of the single-agent hypothesis proxy alone.
+    "RCA_JOIN": [
+        ("root_cause_evidence_gate", "root_cause_evidence_gate.py", "--root-cause"),
     ],
     "COVERAGE_CLOSURE": [
         ("coverage_signoff_verdict_gate", "coverage_signoff_verdict_gate.py", "--state"),
@@ -173,7 +343,15 @@ STAGE_GATES = {
     "RE_AUDIT": [
         ("root_cause_evidence_gate", "root_cause_evidence_gate.py", "--root-cause"),
         ("rca_replay_fix_closure_gate", "rca_replay_fix_closure_gate.py", "--closure"),
-        ("deep_rca_evidence_gate", "deep_rca_evidence_gate.py", "--rca"),
+        ("deep_rca_evidence_gate", "deep_rca_evidence_gate.py", (
+            EvidenceFlag("--rca", "rca"),
+            # Harness-supplied real project root (2026-09-02, RE_AUDIT
+            # evidence-gate audit follow-up) -- never agent-attested, so an
+            # agent's evidence_sources[].evidence_path can't be pointed at a
+            # fabricated tree. Same ContextFlag("--root", ...) convention as
+            # feature_continuity_gate/protocol_builder_registry_conformance_gate.
+            ContextFlag("--root", lambda root: str(root)),
+        )),
         ("dut_request_record_gate", "dut_request_record_gate.py", "--record"),
         ("fix_effectiveness_gate", "fix_effectiveness_gate.py", "--fix"),
         ("fix_regression_non_regression_gate", "fix_regression_non_regression_gate.py", "--closure"),
@@ -274,6 +452,7 @@ STAGE_GATES = {
     "BUILD": [
         ("shared_elaboration_collision_gate", "shared_elaboration_collision_gate.py", "--state"),
         ("stop_after_simv_policy_gate", "stop_after_simv_policy_gate.py", "--build"),
+        ("remote_execution_provenance_gate", "remote_execution_provenance_gate.py", "--provenance"),
     ],
     "CHANGE_IMPACT": [
         ("artifact_dependency_closure_gate", "artifact_dependency_closure_gate.py", "--graph"),
@@ -288,6 +467,7 @@ STAGE_GATES = {
     ],
     "COMMAND_PATTERN": [
         ("command_migration_integrity_gate", "command_migration_integrity_gate.py", "--migration"),
+        ("command_generation_gate", "command_generation_gate.py", "--command-request"),
     ],
     "DISCOVERY": [
         ("evidence_source_priority_gate", "evidence_source_priority_gate.py", "--trace"),
@@ -301,6 +481,7 @@ STAGE_GATES = {
     ],
     "PROTOCOL_CAPABILITY": [
         ("protocol_generator_binding_gate", "protocol_generator_binding_gate.py", "--binding"),
+        ("protocol_profile_binding_gate", "protocol_profile_binding_gate.py", "--binding"),
         ("protocol_onboarding_gate", "protocol_onboarding_gate.py", "--profile"),
         ("protocol_profile_version_gate", "protocol_profile_version_gate.py", "--profile"),
         ("protocol_qualification_status_gate", "protocol_qualification_status_gate.py", "--status"),
@@ -341,6 +522,34 @@ STAGE_GATES = {
     ],
     "PROJECT_MODEL": [
         ("project_model_topology_completeness_gate", "project_model_topology_completeness_gate.py", "--model"),
+        # ADDED (2026-09-01, route-skill-resolver-dynamic-implementation
+        # task): closes dashboard.py's own documented
+        # "no stage, no gate, no writer" gap for the environment_mode_
+        # selection evidence block -- see environment_mode_selection_gate.py's
+        # own header for the RULING on placing it here (PROJECT_MODEL
+        # already establishes verification_boundary/topology, one stage
+        # before PROTOCOL_CAPABILITY's per-protocol discovery) and why the
+        # gate re-derives its check independently rather than importing
+        # dv_harness.environment_mode_router. Deliberately single-flag (like
+        # execution_mode_validator.py), not a ContextFlag-carrying multi-flag
+        # gate: dashboard.py's _environment_mode_selected() reads
+        # payload.get("environment_mode") directly off this SAME evidence
+        # block with no sub-key nesting, so the agent-supplied JSON must stay
+        # flat -- the gate instead reads the real subsystem registry itself,
+        # relative to its own cwd (run_gate() always subprocess.run()s with
+        # cwd=str(root), harness-controlled, never agent-attested, the exact
+        # same trust boundary a ContextFlag would give it).
+        #
+        # gate_id is "environment_mode_selection" (NOT "..._gate", unlike
+        # every other entry in this table where gate_id == script filename
+        # stem) deliberately: this is the ONE evidence-block fence label
+        # dashboard.py's pre-existing _environment_mode_selected() already
+        # scans for (payload.get("environment_mode") on a block keyed
+        # exactly "environment_mode_selection") -- gate_id doubles as the
+        # evidence-block lookup key in _evaluate_stage_evidence_core() below,
+        # so it must match that consumer's contract exactly, independent of
+        # this script's own filename.
+        ("environment_mode_selection", "environment_mode_selection_gate.py", "--state"),
     ],
     "REGRESSION_SELECT": [
         ("regression_selection_completeness_gate", "regression_selection_completeness_gate.py", "--selection"),
@@ -352,6 +561,50 @@ STAGE_GATES = {
         ("server_sync_identity_gate", "server_sync_identity_gate.py", "--sync"),
     ],
 }
+
+
+def effective_stage_gates(stage: str, root: "Path") -> list:
+    """STAGE_GATES[stage] with the self-tuning overlay (.dv-harness/
+    self_tuning/stage_gate_overrides.json) applied. Protected (stage,
+    gate_id) pairs (dv_harness.self_tuning.PROTECTED_REMOVALS) can never be
+    removed here regardless of what the overlay file says -- enforced in
+    this function itself, not merely by the proposer that writes the
+    overlay, so a hand-edited or otherwise-produced overrides file can
+    never bypass the safety invariant.
+
+    An "add" override's gate_id is looked up against every other stage's
+    real STAGE_GATES entries first, so re-enabling a gate on a stage it
+    isn't normally attached to reuses that gate's own real script/flag
+    spec rather than inventing one. If no existing entry anywhere names
+    that gate_id, the override is still honored as a placeholder
+    (gate_id, "<gate_id>.py", "--evidence") entry -- membership proposed
+    through the overlay must stay visible here (this is the ONE real
+    evaluator every stage evaluation goes through, so silently dropping an
+    unrecognized add would make the overlay look like it worked while
+    doing nothing); a project with no such script on disk will correctly
+    surface that at run_gate() time as a GATE_TOOL_MISSING failure rather
+    than a silently-ignored override."""
+    from . import self_tuning
+    baseline = list(STAGE_GATES.get(stage, []))
+    overrides = self_tuning.read_overrides(root)
+    stage_overlay = overrides.get(stage, {})
+    remove_ids = set(stage_overlay.get("remove", [])) - {
+        gid for (s, gid) in self_tuning.PROTECTED_REMOVALS if s == stage
+    }
+    result = [entry for entry in baseline if entry[0] not in remove_ids]
+    existing_ids = {entry[0] for entry in result}
+    for gate_id in stage_overlay.get("add", []):
+        if gate_id in existing_ids:
+            continue
+        match = None
+        for other_entries in STAGE_GATES.values():
+            match = next((e for e in other_entries if e[0] == gate_id), None)
+            if match:
+                break
+        result.append(match if match else (gate_id, f"{gate_id}.py", "--evidence"))
+        existing_ids.add(gate_id)
+    return result
+
 
 # --- Content-driven inner ReAct loop support (2026-08-29, evidence-grounded-
 # react design pass): GATE_FAILURE_REROUTE is the ONE new, deliberately small,
@@ -706,9 +959,22 @@ def _ccl_reuse_verified(root: Path, ccl_id: str) -> bool:
     "high confidence" bar dv_harness/prompts.py's SOC_SCENARIO_PLANNER/
     COVERAGE_CLOSURE stage text already documents for agents: status must be
     ACTIVE, and the record must carry a real runtime_evidence_hash plus a
-    semantic_verdict of TRUE_PASS/TRUE_FAIL -- not merely exist."""
+    semantic_verdict of TRUE_PASS/TRUE_FAIL -- not merely exist.
+
+    current_evidence_required gate (2026-09-03, gap-close-engine cleanup):
+    a record whose current_evidence_required is still True (the default for
+    a bare CornerCaseLibrary.add() -- see that method's own comment) has
+    never been shown to come FROM genuine current evidence, so it is
+    rejected here even if status happens to be ACTIVE. Only a record created
+    via CornerCaseLibraryConsolidator.from_resolved_corner_case() (which
+    explicitly sets it False after requiring real test_mapping/
+    semantic_verdict/runtime_evidence_hash) passes this check -- CLAUDE.md's
+    "any current root cause must be revalidated with current evidence" rule,
+    made real here instead of the field sitting unread."""
     rec = CornerCaseLibrary(root).get(ccl_id)
     if not rec or rec.get("status") != "ACTIVE":
+        return False
+    if rec.get("current_evidence_required", True):
         return False
     # Shared-knowledge-center staleness gate (2026-08-28): a record that has
     # aged past its `revalidate_by` timestamp without being re-confirmed is
@@ -875,6 +1141,51 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
     if not script.exists():
         return GateResult(gate_id, False, {"status": "FAIL", "reason": "GATE_TOOL_MISSING", "tool": str(script)})
 
+    def _log_gate_history(ok: bool, detail: dict) -> None:
+        # Self-tuning gate-history feed (dv_harness/self_tuning.py,
+        # append_gate_history()) -- best-effort/never allowed to change
+        # run_gate()'s own return value or raise, so every call site is
+        # wrapped. Not logged for the GATE_TOOL_MISSING early return above:
+        # that's a project setup/config issue, not a real gate evaluation
+        # outcome the self-tuning engine should learn from.
+        #
+        # Finding I6 fix (2026-09-02 final-review fix wave): run_gate() is
+        # also called by dv_harness/self_audit.py (smoke-testing gate
+        # scripts against synthetic payloads -- explicitly documented there
+        # as "NOT a verdict on current harness state") and other
+        # non-stage-evaluation callers, always with no `stage` argument
+        # (defaults to None). Those calls used to still log here with
+        # stage="", polluting gate_history.jsonl with fabricated entries the
+        # self-tuning LLM would otherwise treat as real accumulated
+        # execution history. Only _evaluate_stage_evidence_core()'s real
+        # per-stage evaluation loop ever passes a real, truthy stage name --
+        # skip logging entirely for anything else.
+        if not stage:
+            return
+        from . import self_tuning as _self_tuning
+        try:
+            _self_tuning.append_gate_history(
+                root, gate_id, stage, bool(ok),
+                str(detail.get("reason", detail.get("status", ""))),
+                time.time(),
+            )
+        except Exception:
+            pass
+
+    # EVIDENCE PROVENANCE (2026-09-06, TH-9). Runs BEFORE the script, because
+    # this is a question about the payload's SOURCE, not about its content: a
+    # deadlock-freedom claim whose producer is undeclared must not be able to
+    # reach the script, pass its shape check, and be rendered exactly like a
+    # tool-derived one. Scoped to evidence_provenance.PROVENANCE_REQUIRED_GATES
+    # (six gates asserting measured dynamic behaviour over agent-typed
+    # numbers); every other gate returns None here and is byte-for-byte
+    # unaffected. See dv_harness/evidence_provenance.py for the full rationale
+    # and the disclosed bounds.
+    provenance_fail = _evidence_provenance.check_payload(root, gate_id, payload)
+    if provenance_fail is not None:
+        _log_gate_history(False, provenance_fail)
+        return GateResult(gate_id, False, provenance_fail)
+
     tmp_paths = []
     unresolved = []
     try:
@@ -892,11 +1203,14 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
                     args += [flag, value]
                     unresolved += u
             except _MissingSubpayload as e:
-                return GateResult(gate_id, False, {
+                missing_detail = {
                     "status": "FAIL", "reason": "MISSING_EVIDENCE_SUBPAYLOAD", "missing": e.key,
-                })
+                }
+                _log_gate_history(False, missing_detail)
+                return GateResult(gate_id, False, missing_detail)
             proc = subprocess.run(
                 args, cwd=str(root), capture_output=True, text=True, timeout=30,
+                env=_gate_env(root),
             )
         else:
             # --- unchanged one-flag path: byte-identical behavior/temp-file
@@ -911,10 +1225,25 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
             proc = subprocess.run(
                 [sys.executable, str(script), cli_flag, tmp.name],
                 cwd=str(root), capture_output=True, text=True, timeout=30,
+                env=_gate_env(root),
             )
     finally:
         for p in tmp_paths:
-            Path(p).unlink(missing_ok=True)
+            # REAL COMPAT BUG (found deploying to the real remote server,
+            # Python 3.7): Path.unlink()'s missing_ok kwarg was only added
+            # in Python 3.8. This single call site runs on EVERY real gate
+            # execution (run_gate() is the shared subprocess-cleanup path
+            # every STAGE_GATES script goes through), so this one line
+            # alone caused 142 of 200 real test failures on the actual
+            # remote deployment -- the single highest-leverage fix found in
+            # that compatibility pass. try/except degrades identically on
+            # every Python version (unlink() already only raises
+            # FileNotFoundError for "doesn't exist", never something this
+            # should mask).
+            try:
+                Path(p).unlink()
+            except FileNotFoundError:
+                pass
     try:
         detail = json.loads((proc.stdout or "").strip() or "{}")
     except Exception:
@@ -924,6 +1253,14 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
     # success-status value itself varies across scripts (PASS,
     # READY_FOR_TEST_GENERATION, READY_FOR_CLOSURE, TRUE_PASS-nested, ...).
     script_ok = proc.returncode == 0
+
+    # Carry the declared provenance and its caveat on the RESULT, so every
+    # downstream reader of a gate detail (control_plane.describe_stage() ->
+    # the dashboard's "Why (current stage)" card and the CLI's explain/
+    # evidence verbs, react_loop's GateSignature menu, engine.py's stage
+    # telemetry) sees who produced this claim without re-opening the evidence
+    # block. No-op for any gate outside PROVENANCE_REQUIRED_GATES.
+    detail = _evidence_provenance.annotate_gate_detail(gate_id, payload, detail)
 
     if unresolved:
         # The script already ran above against the unwrapped (bare-value)
@@ -936,8 +1273,10 @@ def run_gate(root: Path, script_name: str, cli_flag, payload: dict,
         detail["dv_review_unresolved_fields"] = unresolved
         if script_ok:
             detail["reason"] = "DV_REVIEW_REQUIRED"
+        _log_gate_history(False, detail)
         return GateResult(gate_id, False, detail)
 
+    _log_gate_history(script_ok, detail)
     return GateResult(gate_id, script_ok, detail)
 
 
@@ -959,7 +1298,44 @@ INTAKE_FIELD_QUESTIONS = {
     "system_level_use_cases": "這次 System-Level 驗證要涵蓋哪些使用情境（use case）？",
     "subsystem_identity_or_manifest": "有沒有既有的 UVM 環境或 manifest 可以參考已完成的 subsystem？",
     "valid_mode": "這次是要建立單一 subsystem 環境（SUBSYSTEM）還是 system-level 環境（SYSTEM_LEVEL）？",
+    "fabric_topology_evidence": "有沒有 AMBA fabric/topology 的規格文件（例如 master/slave 拓撲、互連架構）可以參考？請提供路徑或說明來源。",
+    "uhs_tuning_evidence": "有沒有 SD/SDIO UHS tuning 的規格文件（例如 tuning 流程、時序參數）可以參考？請提供路徑或說明來源。",
+    # BUG FIX (2026-09-01, commandtxt-vip-intake-gate-implementation): these
+    # two keys were never checked by tools/vplan/intake_readiness.py before
+    # this fix -- see that script's own header for the full rationale.
+    "command_txt": "有沒有既有的 command.txt pattern 檔案可以參考？請提供實際存在於磁碟上的檔案路徑（可多筆）。",
+    "command_txt_path_not_found": "提供的 command.txt 路徑目前在磁碟上找不到，請確認路徑是否正確、檔案是否真的存在。",
+    "vip_reference": "有沒有 VIP Reference 資料（VIP 文件/範例/Reference UVM）可以參考？請提供實際存在於磁碟上的檔案路徑（可多筆）。",
+    "vip_reference_path_not_found": "提供的 VIP Reference 路徑目前在磁碟上找不到，請確認路徑是否正確、檔案是否真的存在。",
 }
+
+
+def _waveform_dump_needs_user_input_reasons():
+    """The waveform-dump gate reasons that mean "a human must confirm dump
+    scope", imported lazily from the module that OWNS them
+    (dv_harness/waveform_dump_gate.py) rather than restated here -- a list
+    copied into this file could silently stop matching the gate the day a
+    reason is renamed. Lazy because gates.py is imported by nearly everything
+    and waveform_dump_gate pulls in question_queue."""
+    from .waveform_dump_gate import NEEDS_USER_INPUT_REASONS
+    return NEEDS_USER_INPUT_REASONS
+
+
+def _waveform_dump_user_question(detail: dict) -> str:
+    """The human-readable question rendered into WAIT_USER's blocking_reason
+    for a waveform-dump confirmation stall. Carries the real Q-ID and the
+    real remedy command the gate computed, so the human is told exactly what
+    to answer -- the same bar INTAKE_FIELD_QUESTIONS meets for INTAKE."""
+    scope = detail.get("scope") or "<未宣告 scope>"
+    qid = detail.get("question_id")
+    lines = [f"Waveform Dump User Gate：尚未有真人確認這次 targeted waveform rerun 的 "
+              f"dump scope／level_or_depth（scope={scope}）。"]
+    if qid:
+        lines.append(f"待回答的問題 ID：{qid}")
+    remedy = detail.get("remedy")
+    if remedy:
+        lines.append(remedy)
+    return "\n".join(lines)
 
 # BUG FIX (2026-08-29, poster-compliance-audit "INTAKE 問得太籠統" finding):
 # these fields are all "what technical material do you actually have" asks --
@@ -974,6 +1350,11 @@ INTAKE_FIELD_QUESTIONS = {
 _PROTOCOL_TECHNICAL_INTAKE_FIELDS = {
     "protocol_spec", "dut_design_spec", "rtl_top_or_interface_files",
     "clock_reset_spec", "phy_interface_spec", "interface_or_clock_reset_evidence",
+    # command_txt/vip_reference (2026-09-01, commandtxt-vip-intake-gate-
+    # implementation): same "what technical material do you actually have"
+    # shape as the fields above -- worth escalating into the same
+    # per-protocol checklist when one is available.
+    "command_txt", "vip_reference",
 }
 
 
@@ -1006,6 +1387,42 @@ def _protocol_discover_checklist(root: Path, protocols):
     return "\n".join(lines) if lines else None
 
 
+def _stage_completion_from_signatures(gates, signatures) -> Dict[str, Any]:
+    """Stage-scoped completion fraction derived from the exact per-gate
+    signatures list _evaluate_stage_evidence_core() already builds (one
+    entry per gate registered for the stage in STAGE_GATES, including a
+    synthetic FAIL entry for a gate the agent supplied no evidence for --
+    see that function's docstring). This is deliberately narrower than
+    dashboard.py's `_overall_progress()` (percent of ALL Stage enum values
+    at PASS/CLOSED across the whole run) -- this one is scoped to the
+    gates configured for a SINGLE stage, so it stays meaningful mid-stage,
+    before that stage itself has reached a terminal PASS/CLOSED verdict.
+
+    RULING (2026-09-01): a stage with zero registered gates in
+    STAGE_GATES (i.e. `gates` is falsy) has nothing to be "incomplete"
+    about -- there is no per-gate signature list to divide by, and
+    NO_GATE_REQUIRED already means the stage's own gate-evidence
+    requirement is fully satisfied trivially. Reporting 0% here would
+    read as "nothing done" for a stage that in fact has no gate blocking
+    it at all, so this reports 100% complete with an explanatory note
+    instead of a ZeroDivisionError or an arbitrary 0%."""
+    gates_total = len(gates) if gates else 0
+    if gates_total == 0:
+        return {
+            "gates_total": 0,
+            "gates_passed": 0,
+            "stage_completion_percent": 100,
+            "stage_completion_note": "stage has no registered gates; treated as fully complete",
+        }
+    gates_passed = sum(1 for _gate_id, ok, _detail in signatures if ok)
+    return {
+        "gates_total": gates_total,
+        "gates_passed": gates_passed,
+        "stage_completion_percent": round(100 * gates_passed / gates_total),
+        "stage_completion_note": None,
+    }
+
+
 def evaluate_stage_evidence(root: Path, stage: str, agent_text: str):
     """Returns (verdict, reasons). verdict is one of:
     NO_GATE_REQUIRED  -> stage has no mapped gate, behaves as before.
@@ -1017,15 +1434,18 @@ def evaluate_stage_evidence(root: Path, stage: str, agent_text: str):
     MISSING_EVIDENCE  -> stage has mapped gate(s) but the agent's response
                          contained no matching evidence block.
     NEEDS_USER_INPUT  -> (2026-08-28) every gate that ran failed, and every
-                         one of those failures was intake_readiness.py's
-                         "missing": [...] shape -- the agent isn't wrong,
-                         it genuinely needs information from a human before
-                         it can proceed. `reasons` for this verdict are
-                         already human-readable questions (INTAKE_FIELD_QUESTIONS
-                         above), not raw gate-reason strings. engine.run_stage
-                         maps this to Status.WAIT_USER, not PARTIAL -- a
-                         "waiting for you to answer" state, not a
-                         retry-worthy failure.
+                         one of those failures was one of the two shapes that
+                         mean "the agent isn't wrong, it genuinely needs an
+                         answer from a human before it can proceed":
+                         intake_readiness.py's "missing": [...], and
+                         (2026-09-04) focused_wave_debug_window_gate's
+                         needs_user_input dump-scope confirmation failures.
+                         `reasons` for this verdict are already human-readable
+                         questions (INTAKE_FIELD_QUESTIONS above,
+                         _waveform_dump_user_question()), not raw gate-reason
+                         strings. engine.run_stage maps this to
+                         Status.WAIT_USER, not PARTIAL -- a "waiting for you
+                         to answer" state, not a retry-worthy failure.
     DV_REVIEW_PENDING -> (Tier 5, opt-in only) every gate that ran would
                          otherwise have passed its own script's checks, but
                          at least one DV_JUDGMENT field (gates.JUDGMENT_FIELDS)
@@ -1042,29 +1462,48 @@ def evaluate_stage_evidence(root: Path, stage: str, agent_text: str):
     .dv-harness/config.json's policy.require_dv_review_cosign is explicitly
     true, this function's behavior is otherwise byte-for-byte identical to
     before Tier 5 existed."""
-    verdict, reasons, _signatures = _evaluate_stage_evidence_core(root, stage, agent_text)
+    verdict, reasons, _signatures, _completion = _evaluate_stage_evidence_core(root, stage, agent_text)
     return verdict, reasons
 
 
+def evaluate_stage_evidence_with_completion(root: Path, stage: str, agent_text: str):
+    """Same verdict/reasons contract as evaluate_stage_evidence() above, plus
+    the stage-scoped completion dict (see _stage_completion_from_signatures())
+    -- gates_total, gates_passed, stage_completion_percent,
+    stage_completion_note. Added for control_plane.describe_stage() (WHY +
+    "how close is this stage to done", not just why it's blocked) without
+    touching evaluate_stage_evidence()'s or react_loop.evaluate_stage_evidence_
+    with_detail()'s existing fixed-arity tuple contracts, both of which have
+    real callers/tests that unpack them at their current arity."""
+    verdict, reasons, _signatures, completion = _evaluate_stage_evidence_core(root, stage, agent_text)
+    return verdict, reasons, completion
+
+
 def _evaluate_stage_evidence_core(root: Path, stage: str, agent_text: str):
-    """Shared implementation behind BOTH evaluate_stage_evidence() (verdict,
-    reasons -- the pre-existing 2-tuple contract, untouched) and
-    dv_harness/react_loop.py's evaluate_stage_evidence_with_detail() (which
-    additionally wraps the third element into GateSignature objects). Single
-    source of truth so the two call sites can never see divergent gate
+    """Shared implementation behind evaluate_stage_evidence() (verdict,
+    reasons -- the pre-existing 2-tuple contract, untouched),
+    evaluate_stage_evidence_with_completion() (verdict, reasons, completion),
+    and dv_harness/react_loop.py's evaluate_stage_evidence_with_detail()
+    (which wraps the third element into GateSignature objects). Single
+    source of truth so all call sites can never see divergent gate
     results -- the exact per-gate run_gate() loop runs ONCE per call, not
     once per caller.
 
-    Returns (verdict, reasons, signatures) where signatures is a list of
-    (gate_id, ok, detail) plain tuples, one per gate NAMED in
-    STAGE_GATES[stage] (not only the ones that actually ran) -- a gate the
-    agent supplied no evidence block for still gets a synthetic
-    ('NO_EVIDENCE_BLOCK_SUPPLIED', False, {...}) entry so react_loop.py's
-    build_menu() always has one real signature per configured gate to reason
-    over, never a silent gap."""
-    gates = STAGE_GATES.get(stage)
+    Returns (verdict, reasons, signatures, completion):
+      - signatures is a list of (gate_id, ok, detail) plain tuples, one per
+        gate NAMED in STAGE_GATES[stage] (not only the ones that actually
+        ran) -- a gate the agent supplied no evidence block for still gets a
+        synthetic ('NO_EVIDENCE_BLOCK_SUPPLIED', False, {...}) entry so
+        react_loop.py's build_menu() always has one real signature per
+        configured gate to reason over, never a silent gap.
+      - completion is the dict _stage_completion_from_signatures() derives
+        from that same signatures list (gates_total, gates_passed,
+        stage_completion_percent, stage_completion_note) -- a stage-SCOPED
+        completion fraction, distinct from dashboard.py's whole-run
+        overall_progress_percent."""
+    gates = effective_stage_gates(stage, root)
     if not gates:
-        return "NO_GATE_REQUIRED", [], []
+        return "NO_GATE_REQUIRED", [], [], _stage_completion_from_signatures(gates, [])
     enforce_dv_review = bool(load_config(root).get("policy", {}).get("require_dv_review_cosign", False))
     blocks = extract_evidence_blocks(agent_text)
     reasons = []
@@ -1112,14 +1551,33 @@ def _evaluate_stage_evidence_core(root: Path, stage: str, agent_text: str):
                         needs_user_input_questions.append(base_q + "\n" + checklist)
                     else:
                         needs_user_input_questions.append(base_q)
+            # 2026-09-04 (AI-mechanism #12 "AI Debug Closed Loop"): the second
+            # genuine "stop and ask a human" shape. focused_wave_debug_window_gate
+            # now verifies CLAUDE.md's Waveform Dump User Gate against a real
+            # question-queue human answer instead of an agent-attested string
+            # (dv_harness/waveform_dump_gate.py), so its confirmation failures
+            # are precisely "nobody has confirmed dump scope yet" -- not agent
+            # error, and NOT retry-worthy: a headless `claude -p` subprocess
+            # cannot answer it however many times loop() re-dispatches it, so
+            # treating it as a plain GATE_FAIL burned max_stage_retries and
+            # then took the graph's FAIL edge with the question still open.
+            # Routed to WAIT_USER through the same mechanism INTAKE already
+            # uses. Scoped by gate id AND by the gate's own explicit
+            # needs_user_input flag, so an unrelated failure of this same gate
+            # (a bad FSDB window, a missing evidence hash) still fails normally.
+            elif (gate_id == "focused_wave_debug_window_gate"
+                    and gr.detail.get("needs_user_input")
+                    and gr.detail.get("reason") in _waveform_dump_needs_user_input_reasons()):
+                needs_user_input_questions.append(_waveform_dump_user_question(gr.detail))
             else:
                 all_failures_are_missing_input = False
+    completion = _stage_completion_from_signatures(gates, signatures)
     if not ran_any:
-        return "MISSING_EVIDENCE", reasons, signatures
+        return "MISSING_EVIDENCE", reasons, signatures, completion
     if gate_fail:
         if needs_user_input_questions and all_failures_are_missing_input:
-            return "NEEDS_USER_INPUT", needs_user_input_questions, signatures
-        return "GATE_FAIL", reasons, signatures
+            return "NEEDS_USER_INPUT", needs_user_input_questions, signatures, completion
+        return "GATE_FAIL", reasons, signatures, completion
     if review_pending:
-        return "DV_REVIEW_PENDING", reasons, signatures
-    return "PASS", reasons, signatures
+        return "DV_REVIEW_PENDING", reasons, signatures, completion
+    return "PASS", reasons, signatures, completion

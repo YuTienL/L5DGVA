@@ -1,0 +1,7 @@
+initial begin
+  $fsdbDumpfile("./FSDB/debug.fsdb");
+  $fsdbDumpvars(0,sysq062);
+
+#5000000 $finish;
+end
+

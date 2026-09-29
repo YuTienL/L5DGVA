@@ -21,6 +21,7 @@ from unittest.mock import patch, MagicMock
 from dv_harness.session_snapshot import (
     save_session, restore_session, list_sessions, delete_session, RESTORE_FILES,
     SourceIdentityMismatchError, _current_git_sha,
+    SESSION_EXTRA_DIRS, SESSION_ARTIFACT_REFERENCE_DIRS,
 )
 from dv_harness.storage import StateStore
 from dv_harness.user_info import summarize_user_access, ACCESS_EVENT_TYPES
@@ -89,15 +90,26 @@ def _git(root, *args):
 def _rmtree_git_safe(path):
     # git on Windows marks packed objects read-only; shutil.rmtree's default
     # error handler doesn't clear that bit before retrying, so a real git
-    # repo's temp dir needs an onexc that chmods-then-retries. onexc (not the
-    # older onerror) is the non-deprecated hook as of Python 3.12+.
+    # repo's temp dir needs an error handler that chmods-then-retries.
+    #
+    # REAL COMPAT BUG (found deploying to the real remote server, Python
+    # 3.7): this used to pass `onexc=` (the non-deprecated hook, but only
+    # added in Python 3.12) -- crashed with TypeError on the real 3.7
+    # interpreter. `onerror` (the older callback signature,
+    # `onerror(function, path, exc_info)` taking a 3-tuple rather than
+    # onexc's bare exception instance) is supported on every Python 3.x
+    # version from 3.3 through at least 3.14 -- deprecated as of 3.12 but
+    # not removed, so it's the one signature that actually works across
+    # this project's real version range (3.7 through this dev machine's
+    # 3.14), at the cost of one deprecation warning on the newest
+    # interpreters.
     import os as _os, stat as _stat
 
-    def _onexc(func, p, exc):
+    def _onerror(func, p, exc_info):
         _os.chmod(p, _stat.S_IWRITE)
         func(p)
 
-    shutil.rmtree(path, onexc=_onexc)
+    shutil.rmtree(path, onerror=_onerror)
 
 
 def _seed_git_sha(root: Path) -> str:
@@ -249,6 +261,620 @@ def test_save_session_excludes_memory_and_static_config():
         shutil.rmtree(tmp)
 
 
+# --- session_snapshot.py: SESSION_EXTRA_DIRS / SESSION_ARTIFACT_REFERENCE_DIRS
+# (session-snapshot-extension, 2026-09-01) --------------------------------
+
+def test_save_and_restore_session_round_trips_command_catalog_extra_dir():
+    assert SESSION_EXTRA_DIRS == ["generated/06_tests/command_catalog"]
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        catalog = tmp / "generated" / "06_tests" / "command_catalog"
+        catalog.mkdir(parents=True)
+        (catalog / "usb2_hs_basic.command.txt").write_text("RUN usb2_hs_basic\n", encoding="utf-8")
+
+        manifest = save_session(tmp, name="c1")
+        assert manifest["extra_dirs"] == ["generated/06_tests/command_catalog"]
+        snap_file = (tmp / ".dv-harness" / "sessions" / "c1" / "extra"
+                     / "generated" / "06_tests" / "command_catalog" / "usb2_hs_basic.command.txt")
+        assert snap_file.read_text(encoding="utf-8") == "RUN usb2_hs_basic\n"
+
+        # Mutate the live copy, then restore -- the snapshot's content comes back.
+        (catalog / "usb2_hs_basic.command.txt").write_text("RUN something_else\n", encoding="utf-8")
+        restore_session(tmp, "c1")
+        assert (catalog / "usb2_hs_basic.command.txt").read_text(encoding="utf-8") == "RUN usb2_hs_basic\n"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_never_copies_project_input_command_raw():
+    # RULING 1 (session_snapshot.py): project_input/08_command is durable
+    # project SOURCE material, not current-run state -- never copied, unlike
+    # generated/06_tests/command_catalog above. Ruling 4 (below) references
+    # it instead; this test guards the not-COPIED half specifically, so
+    # adding the reference cannot quietly become a copy.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        raw_dir = tmp / "project_input" / "08_command" / "raw"
+        raw_dir.mkdir(parents=True)
+        (raw_dir / "command.txt").write_text("RUN foo\n", encoding="utf-8")
+
+        manifest = save_session(tmp, name="c1")
+        assert "project_input/08_command" not in manifest["extra_dirs"]
+        snap = tmp / ".dv-harness" / "sessions" / "c1"
+        assert not (snap / "extra" / "project_input").exists()
+        assert not any(p.name == "command.txt" for p in snap.rglob("*"))
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_missing_extra_dir_is_silently_skipped():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert manifest["extra_dirs"] == []
+        assert manifest["artifact_references"] == {}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_records_fsdb_and_coverage_as_hash_references_not_copies():
+    assert SESSION_ARTIFACT_REFERENCE_DIRS == {
+        "fsdb": "generated/10_runtime/waveform",
+        "coverage": "generated/11_coverage",
+        "command_txt_source": "project_input/08_command",
+    }
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        wave_dir = tmp / "generated" / "10_runtime" / "waveform"
+        wave_dir.mkdir(parents=True)
+        fsdb_bytes = b"FAKE-FSDB-BINARY-CONTENT-0123456789"
+        (wave_dir / "run1.fsdb").write_bytes(fsdb_bytes)
+
+        cov_dir = tmp / "generated" / "11_coverage"
+        cov_dir.mkdir(parents=True)
+        cov_bytes = b"FAKE-UCDB-COVERAGE-CONTENT-abcdef"
+        (cov_dir / "merged.ucdb").write_bytes(cov_bytes)
+
+        manifest = save_session(tmp, name="c1")
+        refs = manifest["artifact_references"]
+
+        import hashlib
+        fsdb_ref = refs["fsdb"][0]
+        assert fsdb_ref["path"] == "generated/10_runtime/waveform/run1.fsdb"
+        assert fsdb_ref["size"] == len(fsdb_bytes)
+        assert fsdb_ref["sha256"] == hashlib.sha256(fsdb_bytes).hexdigest()
+
+        cov_ref = refs["coverage"][0]
+        assert cov_ref["path"] == "generated/11_coverage/merged.ucdb"
+        assert cov_ref["sha256"] == hashlib.sha256(cov_bytes).hexdigest()
+
+        # REFERENCE only -- the binary content itself is never duplicated
+        # into the snapshot directory.
+        snap_dir = tmp / ".dv-harness" / "sessions" / "c1"
+        assert not (snap_dir / "extra" / "generated" / "10_runtime").exists()
+        assert not (snap_dir / "extra" / "generated" / "11_coverage").exists()
+        assert not any(snap_dir.rglob("*.fsdb"))
+        assert not any(snap_dir.rglob("*.ucdb"))
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- session_snapshot.py: RULING 4, the raw command.txt source reference
+# (2026-09-04) ------------------------------------------------------------
+
+def test_save_session_references_raw_command_txt_source_with_a_real_hash():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        # write_bytes, not write_text: the reference hashes the bytes really
+        # on disk, and text mode would translate \n to \r\n on Windows -- the
+        # assertion must be about the file, not about the source literal.
+        body = b"RUN usb2_hs_basic\nRUN usb3_lfps\n"
+        (cmd_dir / "command.txt").write_bytes(body)
+
+        manifest = save_session(tmp, name="c1")
+        refs = manifest["artifact_references"]["command_txt_source"]
+        assert [r["path"] for r in refs] == ["project_input/08_command/command.txt"]
+        import hashlib
+        assert refs[0]["sha256"] == hashlib.sha256(body).hexdigest()
+        assert refs[0]["size"] == len(body)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_reports_match_for_an_unchanged_command_txt_source():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("RUN foo\n", encoding="utf-8")
+
+        save_session(tmp, name="c1")
+        result = restore_session(tmp, "c1")
+        v = result["artifact_reference_verification"]["command_txt_source"]
+        assert v["status"] == "MATCH"
+        assert v["files"][0]["saved_sha256"] == v["files"][0]["current_sha256"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_reports_missing_when_the_command_txt_source_was_deleted():
+    # Distinct from MODIFIED on purpose: "the source this run was driven by
+    # is gone" and "it is different now" call for different operator action.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("RUN foo\n", encoding="utf-8")
+
+        save_session(tmp, name="c1")
+        (cmd_dir / "command.txt").unlink()
+
+        result = restore_session(tmp, "c1")
+        v = result["artifact_reference_verification"]["command_txt_source"]
+        assert v["status"] == "MISSING"
+        assert v["files"][0]["current_sha256"] is None
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_reports_unverifiable_rather_than_match_without_a_saved_hash():
+    # An unknown comparison is never a passed one -- the same discipline
+    # restore_session()'s own sha_match=None already applies to the git SHA.
+    from dv_harness import session_snapshot as _snap
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("x" * 4096, encoding="utf-8")
+
+        with patch.object(_snap, "ARTIFACT_REFERENCE_HASH_SIZE_LIMIT_BYTES", 1024):
+            manifest = save_session(tmp, name="c1")
+        assert manifest["artifact_references"]["command_txt_source"][0]["sha256"] is None
+
+        result = restore_session(tmp, "c1")
+        v = result["artifact_reference_verification"]["command_txt_source"]
+        assert v["status"] == "UNVERIFIABLE"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_never_writes_back_into_project_input():
+    # A reference is not a restore target: restoring an old snapshot must
+    # never overwrite the operator's current raw source with older content.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("RUN old\n", encoding="utf-8")
+        save_session(tmp, name="c1")
+
+        (cmd_dir / "command.txt").write_text("RUN new\n", encoding="utf-8")
+        (cmd_dir / "extra_scenarios.txt").write_text("RUN added_later\n", encoding="utf-8")
+        restore_session(tmp, "c1")
+
+        assert (cmd_dir / "command.txt").read_text(encoding="utf-8") == "RUN new\n"
+        assert (cmd_dir / "extra_scenarios.txt").exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_absent_command_txt_source_is_an_absence_not_a_fabricated_match():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert "command_txt_source" not in manifest["artifact_references"]
+        result = restore_session(tmp, "c1")
+        assert "command_txt_source" not in result["artifact_reference_verification"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_verification_is_scoped_to_small_text_and_never_rehashes_fsdb():
+    # Ruling 2's whole point is that a multi-GB waveform is never walked on a
+    # frequent operation. Verification must not quietly undo that.
+    from dv_harness.session_snapshot import SESSION_VERIFIED_REFERENCE_KEYS
+    assert SESSION_VERIFIED_REFERENCE_KEYS == {"command_txt_source"}
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        wave = tmp / "generated" / "10_runtime" / "waveform"
+        wave.mkdir(parents=True)
+        (wave / "run1.fsdb").write_bytes(b"FAKE-FSDB")
+        save_session(tmp, name="c1")
+
+        (wave / "run1.fsdb").write_bytes(b"FAKE-FSDB-CHANGED")
+        result = restore_session(tmp, "c1")
+        assert "fsdb" not in result["artifact_reference_verification"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_cli_restore_session_surfaces_command_txt_drift_and_logs_it():
+    # The real production surface: `dv-harness restore-session` must both
+    # print the verification and record its roll-up on the audit trail.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cmd_dir = tmp / "project_input" / "08_command"
+        cmd_dir.mkdir(parents=True)
+        (cmd_dir / "command.txt").write_text("RUN original\n", encoding="utf-8")
+        r = _run_cli(tmp, "save-session", "--name", "c1")
+        assert r.returncode == 0, r.stderr
+
+        (cmd_dir / "command.txt").write_text("RUN drifted\n", encoding="utf-8")
+        r = _run_cli(tmp, "restore-session", "c1")
+        assert r.returncode == 0, r.stderr
+        printed = json.loads(r.stdout)
+        assert printed["artifact_reference_verification"]["command_txt_source"]["status"] == "MODIFIED"
+
+        events = [json.loads(line) for line
+                  in (tmp / ".dv-harness" / "events.jsonl").read_text(
+                      encoding="utf-8").splitlines() if line.strip()]
+        restored = [e for e in events if e.get("event") == "SESSION_RESTORED"]
+        assert restored, "restore-session must leave a SESSION_RESTORED event"
+        assert restored[-1]["artifact_reference_verification"] == {
+            "command_txt_source": "MODIFIED"}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_artifact_reference_skips_hash_for_oversized_file():
+    from dv_harness import session_snapshot as _snap
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        cov_dir = tmp / "generated" / "11_coverage"
+        cov_dir.mkdir(parents=True)
+        big = b"x" * 4096
+        (cov_dir / "huge.ucdb").write_bytes(big)
+
+        with patch.object(_snap, "ARTIFACT_REFERENCE_HASH_SIZE_LIMIT_BYTES", 1024):
+            manifest = save_session(tmp, name="c1")
+
+        ref = manifest["artifact_references"]["coverage"][0]
+        assert ref["size"] == 4096
+        assert ref["sha256"] is None
+        assert "hash_skipped_reason" in ref
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_session_never_touches_artifact_reference_directories():
+    # There is nothing to restore for a reference-only entry -- restoring an
+    # older session must not delete/replace whatever FSDB/coverage the LIVE
+    # tree currently has under generated/10_runtime/waveform or
+    # generated/11_coverage.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        wave_dir = tmp / "generated" / "10_runtime" / "waveform"
+        wave_dir.mkdir(parents=True)
+        (wave_dir / "old.fsdb").write_bytes(b"old-run-bytes")
+        save_session(tmp, name="c1")
+
+        (wave_dir / "old.fsdb").unlink()
+        (wave_dir / "new.fsdb").write_bytes(b"new-run-bytes")
+
+        restore_session(tmp, "c1")
+        assert not (wave_dir / "old.fsdb").exists()
+        assert (wave_dir / "new.fsdb").exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- session_snapshot.py RULING 3: the evidence store (.dv-harness/evidence/,
+# evidence_db.py's real evidence_id-keyed DuckDB) is captured and restored
+# (2026-09-04). The gap these close: `evidence` was in NONE of the four
+# capture lists, so every save silently dropped the one field the user's
+# required list names as "Evidence IDs" -- confirmed by deleting the live
+# directory, calling the real restore_session(), and watching it stay gone.
+# ------------------------------------------------------------------------
+
+def _evidence_row(evidence_id: str) -> dict:
+    """One real vip_distill-shaped Normalized Evidence envelope -- the exact
+    dict shape evidence_db.insert_normalized_evidence() ingests in
+    production (regression_reporter.py), not an invented test record."""
+    return {
+        "schema_version": "1.0", "evidence_id": evidence_id,
+        "source_kind": "sim_log", "job_id": 4242, "pattern": "usb2_hs_basic",
+        "protocol": "usb", "run_dir": "/proj/run/usb2_hs_basic",
+        "verdict": "FAIL", "distilled_at": 1788269755.0, "distiller": "vip_distill",
+        "counts": {"uvm_error": 3, "uvm_fatal": 0},
+        "detail": {"first_error": "APB write timeout"},
+        "provenance": {"source_path": "/proj/run/usb2_hs_basic/sim.log"},
+    }
+
+
+def _duckdb_or_skip():
+    try:
+        import duckdb  # noqa: F401
+    except ImportError:
+        import pytest
+        pytest.skip("duckdb not installed in this environment")
+
+
+def test_evidence_db_survives_save_delete_restore_round_trip_by_evidence_id():
+    # The exact reproduction that proved the gap, now asserting the fix: write
+    # a REAL evidence_id row through the real EvidenceStore, save, DELETE the
+    # live evidence directory, restore, and read the same evidence_id back
+    # through a real read-only EvidenceStore.
+    _duckdb_or_skip()
+    from dv_harness import evidence_db
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        db_path = evidence_db.default_db_path(tmp)
+        with evidence_db.EvidenceStore(db_path) as store:
+            store.insert_normalized_evidence(_evidence_row("EV-ROUNDTRIP-1"))
+
+        manifest = save_session(tmp, name="c1")
+        assert "evidence" in manifest["dirs"]
+        assert manifest["dirs_copy_skipped"] == {}
+        assert (tmp / ".dv-harness" / "sessions" / "c1" / "evidence" / "evidence.duckdb").exists()
+
+        # Destroy the live store outright -- restore must bring it back, not
+        # merely re-read something that was never gone.
+        shutil.rmtree(tmp / ".dv-harness" / "evidence")
+        assert not db_path.exists()
+
+        result = restore_session(tmp, "c1")
+        assert result["dirs_restore_skipped"] == {}
+        assert db_path.exists()
+        with evidence_db.EvidenceStore(db_path, read_only=True) as store:
+            rows = store.query(
+                "SELECT evidence_id, pattern, verdict FROM normalized_evidence "
+                "WHERE evidence_id = ?", ["EV-ROUNDTRIP-1"])
+        assert rows == [("EV-ROUNDTRIP-1", "usb2_hs_basic", "FAIL")]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_overwrites_a_diverged_evidence_db_rather_than_merging_it():
+    # Restore is a rollback, not a merge: a row written AFTER the checkpoint
+    # is gone afterwards, and the checkpoint's own row is back. (The newer
+    # store is not lost -- the _pre_restore_ auto-backup below holds it,
+    # which is what makes this rewind reversible.)
+    _duckdb_or_skip()
+    from dv_harness import evidence_db
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        db_path = evidence_db.default_db_path(tmp)
+        with evidence_db.EvidenceStore(db_path) as store:
+            store.insert_normalized_evidence(_evidence_row("EV-AT-CHECKPOINT"))
+        save_session(tmp, name="c1")
+
+        with evidence_db.EvidenceStore(db_path) as store:
+            store.insert_normalized_evidence(_evidence_row("EV-AFTER-CHECKPOINT"))
+
+        result = restore_session(tmp, "c1")
+        with evidence_db.EvidenceStore(db_path, read_only=True) as store:
+            ids = {r[0] for r in store.query("SELECT evidence_id FROM normalized_evidence")}
+        assert ids == {"EV-AT-CHECKPOINT"}
+
+        # The discarded row is recoverable from the automatic pre-restore backup.
+        backup_db = (tmp / ".dv-harness" / "sessions" / result["auto_backup"]
+                     / "evidence" / "evidence.duckdb")
+        with evidence_db.EvidenceStore(backup_db, read_only=True) as store:
+            backup_ids = {r[0] for r in store.query("SELECT evidence_id FROM normalized_evidence")}
+        assert backup_ids == {"EV-AT-CHECKPOINT", "EV-AFTER-CHECKPOINT"}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_auto_checkpoint_the_engine_actually_calls_captures_the_evidence_db():
+    # The production path is engine.run_stage() -> _auto_checkpoint() ->
+    # save_auto_checkpoint(), NOT a hand-typed `dv-harness save-session`. The
+    # fix has to reach THAT entry point, so assert it there rather than only
+    # through save_session().
+    _duckdb_or_skip()
+    from dv_harness import evidence_db
+    from dv_harness.session_snapshot import save_auto_checkpoint
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        with evidence_db.EvidenceStore(evidence_db.default_db_path(tmp)) as store:
+            store.insert_normalized_evidence(_evidence_row("EV-AUTOCHECKPOINT"))
+
+        manifest = save_auto_checkpoint(tmp, stage="VERIFY", attempt=1)
+        assert "evidence" in manifest["dirs"]
+        snap_db = (tmp / ".dv-harness" / "sessions" / manifest["name"]
+                   / "evidence" / "evidence.duckdb")
+        with evidence_db.EvidenceStore(snap_db, read_only=True) as store:
+            rows = store.query("SELECT evidence_id FROM normalized_evidence")
+        assert rows == [("EV-AUTOCHECKPOINT",)]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_evidence_is_a_plain_session_dir_captured_like_blackboard_and_lsf():
+    # Same coverage lsf/blackboard already get: whenever .dv-harness/evidence/
+    # exists it appears in a fresh manifest's "dirs" list. Uses plain files so
+    # this assertion holds with or without duckdb installed.
+    from dv_harness.session_snapshot import SESSION_DIRS
+    assert "evidence" in SESSION_DIRS
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        (tmp / ".dv-harness" / "evidence").mkdir(parents=True, exist_ok=True)
+        (tmp / ".dv-harness" / "evidence" / "evidence.duckdb").write_bytes(b"not-a-real-db")
+
+        manifest = save_session(tmp, name="c1")
+        assert "evidence" in manifest["dirs"]
+        assert (tmp / ".dv-harness" / "sessions" / "c1" / "evidence"
+                / "evidence.duckdb").read_bytes() == b"not-a-real-db"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_with_no_evidence_dir_reports_it_absent_not_skipped():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert "evidence" not in manifest["dirs"]
+        assert manifest["dirs_copy_skipped"] == {}
+        assert "evidence" not in manifest["artifact_references"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_oversized_evidence_dir_is_referenced_with_a_real_hash_not_copied():
+    # RULING 3's size guard: save_auto_checkpoint() fires on every stage
+    # transition, so a pathologically large evidence store must not turn a
+    # cheap checkpoint into a disk-doubling one -- it is recorded as a real
+    # path+size+sha256 reference (Ruling 2's shape) with the reason stated.
+    import hashlib
+    from dv_harness import session_snapshot as _snap
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        ev = tmp / ".dv-harness" / "evidence"
+        ev.mkdir(parents=True, exist_ok=True)
+        payload = b"E" * 4096
+        (ev / "evidence.duckdb").write_bytes(payload)
+
+        original = _snap.EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES
+        _snap.EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES = 1024
+        try:
+            manifest = save_session(tmp, name="c1")
+        finally:
+            _snap.EVIDENCE_DIR_COPY_SIZE_LIMIT_BYTES = original
+
+        assert "evidence" not in manifest["dirs"]
+        assert "copy limit" in manifest["dirs_copy_skipped"]["evidence"]
+        assert not (tmp / ".dv-harness" / "sessions" / "c1" / "evidence").exists()
+
+        refs = manifest["artifact_references"]["evidence"]
+        assert [r["path"] for r in refs] == [".dv-harness/evidence/evidence.duckdb"]
+        assert refs[0]["size"] == 4096
+        assert refs[0]["sha256"] == hashlib.sha256(payload).hexdigest()
+
+        # Nothing to restore for a reference -- the live store stays untouched.
+        (ev / "evidence.duckdb").write_bytes(b"newer-bytes")
+        restore_session(tmp, "c1")
+        assert (ev / "evidence.duckdb").read_bytes() == b"newer-bytes"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_locked_evidence_db_records_why_and_never_fails_the_whole_save():
+    # The write-safety case: evidence.duckdb is a LIVE file real callers
+    # (regression_reporter.py) hold open, unlike every other plain-JSON
+    # SESSION_DIRS entry. A copy failure must cost that one directory, not
+    # the entire snapshot -- and must say why, rather than dropping the field
+    # a second, quieter way.
+    from dv_harness import session_snapshot as _snap
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        (tmp / ".dv-harness" / "evidence").mkdir(parents=True, exist_ok=True)
+        (tmp / ".dv-harness" / "evidence" / "evidence.duckdb").write_bytes(b"locked-db")
+        (tmp / ".dv-harness" / "blackboard").mkdir(parents=True, exist_ok=True)
+        (tmp / ".dv-harness" / "blackboard" / "t.json").write_text("{}", encoding="utf-8")
+
+        real_copytree = shutil.copytree
+
+        def _fail_on_evidence(src, dst, *a, **kw):
+            if Path(src).name == "evidence":
+                raise PermissionError("[WinError 32] file is in use by another process")
+            return real_copytree(src, dst, *a, **kw)
+
+        with patch.object(_snap.shutil, "copytree", _fail_on_evidence):
+            manifest = save_session(tmp, name="c1")
+
+        assert "evidence" not in manifest["dirs"]
+        assert "PermissionError" in manifest["dirs_copy_skipped"]["evidence"]
+        assert not (tmp / ".dv-harness" / "sessions" / "c1" / "evidence").exists()
+        # Everything else was still captured, and the skipped bytes identified.
+        assert "blackboard" in manifest["dirs"]
+        assert "state.json" in manifest["files"]
+        assert manifest["artifact_references"]["evidence"][0]["size"] == len(b"locked-db")
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_plain_json_session_dir_copy_failure_still_raises():
+    # The best-effort behaviour above is scoped to SESSION_BEST_EFFORT_DIRS
+    # ONLY. A snapshot silently missing blackboard would be worse than no
+    # snapshot, so that failure must still be loud.
+    from dv_harness import session_snapshot as _snap
+    assert _snap.SESSION_BEST_EFFORT_DIRS == {"evidence"}
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        (tmp / ".dv-harness" / "blackboard").mkdir(parents=True, exist_ok=True)
+        (tmp / ".dv-harness" / "blackboard" / "t.json").write_text("{}", encoding="utf-8")
+
+        def _always_fail(src, dst, *a, **kw):
+            raise PermissionError("boom")
+
+        with patch.object(_snap.shutil, "copytree", _always_fail):
+            try:
+                save_session(tmp, name="c1")
+            except PermissionError:
+                pass
+            else:
+                raise AssertionError("a blackboard copy failure must not be swallowed")
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_locked_evidence_db_never_aborts_a_restore_midway():
+    # Symmetric to the save case, and the reason matters more here: aborting
+    # partway through restore_session() would leave state.json/blackboard
+    # already overwritten and the rest not -- a partial rollback.
+    from dv_harness import session_snapshot as _snap
+
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        ev = tmp / ".dv-harness" / "evidence"
+        ev.mkdir(parents=True, exist_ok=True)
+        (ev / "evidence.duckdb").write_bytes(b"checkpoint-db")
+        bb = tmp / ".dv-harness" / "blackboard"
+        bb.mkdir(parents=True, exist_ok=True)
+        (bb / "t.json").write_text('{"v": "checkpoint"}', encoding="utf-8")
+
+        save_session(tmp, name="c1")
+        (bb / "t.json").write_text('{"v": "diverged"}', encoding="utf-8")
+
+        real_rmtree = shutil.rmtree
+
+        def _fail_on_evidence(path, *a, **kw):
+            if Path(path).name == "evidence" and ".dv-harness" in str(path):
+                raise PermissionError("[WinError 32] evidence.duckdb is in use")
+            return real_rmtree(path, *a, **kw)
+
+        with patch.object(_snap.shutil, "rmtree", _fail_on_evidence):
+            result = restore_session(tmp, "c1", backup_current=False)
+
+        assert "PermissionError" in result["dirs_restore_skipped"]["evidence"]
+        # The rest of the restore still completed.
+        assert json.loads((bb / "t.json").read_text(encoding="utf-8"))["v"] == "checkpoint"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_delete_session():
     tmp = _tmp()
     try:
@@ -384,6 +1010,161 @@ def test_summarize_user_access_empty_project_returns_no_users():
         shutil.rmtree(tmp)
 
 
+# --- session_snapshot.py Phase 14 extension (2026-09-03, obsidian-memory-
+# debugflow task, Workstream 3): current job / current hypothesis / current
+# evidence / current confidence / pending action / related memory (refs
+# only) + describe_resume_point(). See session_snapshot.py's own module-level
+# "Phase 14 addendum" comment for what each field is sourced from.
+
+def _seed_debug_context(tmp: Path, stage: str = "FAILURE_RECOVERY") -> None:
+    """Writes the same real files the harness itself would have produced
+    mid-debug: one react iteration record (react.ReactRecorder.record()'s
+    exact file shape) and one LSF JobState -- so save_session() has real
+    current-run facts to summarize, without needing a full engine run."""
+    react_dir = tmp / ".dv-harness" / "react" / stage
+    react_dir.mkdir(parents=True, exist_ok=True)
+    (react_dir / "iteration_001.json").write_text(json.dumps({
+        "iteration": 1, "node": stage,
+        "reason_summary": "ep0 FIFO underrun suspected from sim.log UVM_ERROR",
+        "action": {"adapter": "FakeAdapter"}, "tool": "ClaudeAdapter.run",
+        "observation": {"ok": True}, "evidence": {"symptom": "usb ep0 timeout"},
+        "confidence": "MEDIUM", "next_action": "retry_or_reroute",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    from dv_harness.lsf_client import JobState, save_job_state
+    save_job_state(tmp, JobState(job_id=101, pattern="usb_ep0_timeout",
+                                  lsf_status="EXIT", sim_status="FAIL"))
+
+    from dv_harness.memory import MemoryStore
+    MemoryStore(tmp).add("engineering", {
+        "title": "ep0 FIFO underrun", "protocol": "USB2",
+        "root_cause": "missing prefetch guard", "confidence": "HIGH",
+    })
+
+
+def test_save_session_captures_current_debug_context_not_just_current_stage():
+    tmp = _tmp()
+    try:
+        r = _run_cli(tmp, "set-stage", "FAILURE_RECOVERY")
+        assert r.returncode == 0, r.stderr
+        _seed_debug_context(tmp)
+
+        manifest = save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+        assert manifest["current_stage"] == "FAILURE_RECOVERY"
+        assert manifest["current_hypothesis"] == "ep0 FIFO underrun suspected from sim.log UVM_ERROR"
+        assert manifest["current_evidence"] == {"symptom": "usb ep0 timeout"}
+        assert manifest["current_confidence"] == "MEDIUM"
+        assert manifest["pending_action"] == "retry_or_reroute"
+
+        job = manifest["current_job"]
+        assert job["job_id"] == 101
+        assert job["lsf_status"] == "EXIT"
+        assert job["pattern"] == "usb_ep0_timeout"
+
+        related = manifest["related_memory"]
+        assert related, f"expected at least one related-memory reference, got {related!r}"
+        assert related[0]["memory_id"]
+        assert related[0]["root_cause"] == "missing prefetch guard"
+        # REFERENCES ONLY -- the durable Memory tier's full record content
+        # (e.g. a "verification"/"evidence" key a real engineering-tier
+        # record might carry) must never be duplicated into the snapshot.
+        assert set(related[0].keys()) == {"memory_id", "level", "title", "root_cause", "confidence"}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_save_session_debug_context_fields_are_honestly_absent_with_no_debug_activity():
+    # A project that never entered a debug flow (no react/ iteration files,
+    # no LSF jobs, no Memory) must get honest None/empty defaults, never a
+    # fabricated placeholder.
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert manifest["current_hypothesis"] is None
+        assert manifest["current_evidence"] is None
+        assert manifest["current_confidence"] is None
+        assert manifest["pending_action"] is None
+        assert manifest["current_job"] is None
+        assert manifest["related_memory"] == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_restore_session_resume_summary_answers_where_we_stopped_what_remains_unknown_and_next_action():
+    tmp = _tmp()
+    try:
+        r = _run_cli(tmp, "set-stage", "FAILURE_RECOVERY")
+        assert r.returncode == 0, r.stderr
+        _seed_debug_context(tmp)
+        save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+
+        result = restore_session(tmp, "c1")
+        summary = result["resume_summary"]
+        # "where we stopped"
+        assert "FAILURE_RECOVERY" in summary
+        # "what was proven" (the last real hypothesis/evidence this attempt had)
+        assert "ep0 FIFO underrun suspected from sim.log UVM_ERROR" in summary
+        assert "usb ep0 timeout" in summary
+        # "what remains unknown / what action should execute next"
+        assert "retry_or_reroute" in summary
+        # related memory surfaced as a re-fetchable reference, not inlined content
+        assert any(
+            r.get("memory_id") and r["memory_id"] in summary for r in result["manifest"]["related_memory"]
+        )
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_session_save_restore_round_trip_preserves_debug_context_fields():
+    # Explicit round-trip proof (Phase 22 test-list requirement): every
+    # Phase 14 field written by save_session() must come back byte-identical
+    # through restore_session()'s own manifest, not just exist at save time.
+    tmp = _tmp()
+    try:
+        r = _run_cli(tmp, "set-stage", "FAILURE_RECOVERY")
+        assert r.returncode == 0, r.stderr
+        _seed_debug_context(tmp)
+        saved = save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+
+        r = _run_cli(tmp, "set-stage", "BUILD")  # move the live state away
+        assert r.returncode == 0, r.stderr
+
+        restored = restore_session(tmp, "c1")["manifest"]
+        for key in ("current_stage", "current_hypothesis", "current_evidence",
+                    "current_confidence", "pending_action", "current_job", "related_memory"):
+            assert restored[key] == saved[key], f"{key} did not round-trip: {restored[key]!r} != {saved[key]!r}"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_describe_resume_point_degrades_safely_for_a_manifest_predating_phase14():
+    from dv_harness.session_snapshot import describe_resume_point
+    # A snapshot saved before this feature existed has none of the new keys
+    # -- must produce an honest fallback, never a KeyError.
+    summary = describe_resume_point({"current_stage": "BUILD", "overall_status": "PARTIAL"})
+    assert "BUILD" in summary
+    assert "PARTIAL" in summary
+    assert "No pending_action was recorded" in summary
+
+
+def test_collect_current_job_reference_picks_the_most_recently_changed_job():
+    from dv_harness.session_snapshot import _collect_current_job_reference
+    from dv_harness.lsf_client import JobState, save_job_state
+    tmp = _tmp()
+    try:
+        (tmp / ".dv-harness").mkdir(parents=True, exist_ok=True)
+        save_job_state(tmp, JobState(job_id=1, pattern="older_job", lsf_status="DONE"))
+        time.sleep(0.01)
+        save_job_state(tmp, JobState(job_id=2, pattern="newer_job", lsf_status="EXIT"))
+
+        ref = _collect_current_job_reference(tmp / ".dv-harness")
+        assert ref["job_id"] == 2
+        assert ref["pattern"] == "newer_job"
+    finally:
+        shutil.rmtree(tmp)
+
+
 # --- tools/knowledge_center/broker.py: cmd_db_info --------------------------
 
 def _run_broker(verb, root, payload):
@@ -454,17 +1235,67 @@ def test_broker_db_info_empty_db_reports_zero_not_error():
 
 
 # --- dv_harness/knowledge_center.py client: db_info() ------------------------
+#
+# REAL BUG FIX (2026-09-01, dv_harness/knowledge_center.py's _invoke()
+# rewrite, commit 7ae3a28): this test used to mock subprocess.run() against
+# the old hop_script-direct-invocation transport, which _invoke() no longer
+# uses at all (that transport read VCPW from its own process env -- a real
+# credential-exposure risk, replaced with the credential-free persistent
+# relay). Rewritten to exercise the new transport against a real local fake
+# relay server, mirroring dv_harness_tests/test_knowledge_center.py's own
+# _FakeRelayServer pattern (kept private to that file; duplicated minimally
+# here rather than cross-importing test internals between files).
 
-def test_client_db_info_parses_result():
-    cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc", "hop_script": __file__}}
-    from dv_harness.knowledge_center import KnowledgeCenterClient
-    client = KnowledgeCenterClient(cfg)
-    noisy = f'{RESULT_MARKER}{{"count": 2, "by_action": {{"CREATED": 2}}, "activity": []}}\n[exit 0]\n'
-    fake = MagicMock(returncode=0, stdout=noisy, stderr="")
-    with patch("subprocess.run", return_value=fake):
+def test_client_db_info_parses_result(tmp_path, monkeypatch):
+    import json as _json
+    import socket as _socket
+    import threading as _threading
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    remote_dir = str(ROOT / "tools" / "remote")
+    if remote_dir not in sys.path:
+        sys.path.insert(0, remote_dir)
+    from remote_relay import info_path
+
+    server_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    server_sock.bind(("127.0.0.1", 0))
+    server_sock.listen(2)
+    port = server_sock.getsockname()[1]
+    responses = [
+        {"ok": True, "exit_code": 0, "stdout": "", "error": ""},  # put
+        {"ok": True, "exit_code": 0,
+         "stdout": f'{RESULT_MARKER}{{"count": 2, "by_action": {{"CREATED": 2}}, "activity": []}}\n',
+         "error": ""},  # run
+    ]
+
+    def _serve():
+        for resp in responses:
+            conn, _ = server_sock.accept()
+            buf = b""
+            while b"\n" not in buf:
+                buf += conn.recv(65536)
+            conn.sendall((_json.dumps(resp) + "\n").encode("utf-8"))
+            conn.close()
+
+    t = _threading.Thread(target=_serve)
+    t.start()
+    try:
+        p = info_path("vchost-b", "host-c")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_json.dumps({"host": "127.0.0.1", "port": port, "token": "tok",
+                                   "pid": 1, "started": "2026-09-01T00:00:00"}), encoding="utf-8")
+
+        cfg = {"knowledge_center": {"enabled": True, "remote_root": "/srv/kc",
+                                     "vchost": "vchost-b", "vchop": "host-c"}}
+        from dv_harness.knowledge_center import KnowledgeCenterClient
+        client = KnowledgeCenterClient(cfg)
         result = client.db_info(limit=10)
-        assert result["ok"] is True
-        assert result["count"] == 2
+    finally:
+        t.join(timeout=5)
+        server_sock.close()
+
+    assert result["ok"] is True
+    assert result["count"] == 2
 
 
 # --- dashboard endpoints ------------------------------------------------------
@@ -492,8 +1323,18 @@ def _mk_dashboard_project(port: int) -> Path:
     return tmp
 
 
+# GUI-19: every POST is gated on the per-session token dashboard_auth.py mints
+# inside serve(), so these tests present a real one -- read back out of
+# .dv-harness/dashboard_session.json exactly as a real caller does. Keyed by
+# PORT, not by a "most recently started" global: this module leaves every
+# dashboard it starts running (daemon threads on serve_forever).
+_PROJECT_ROOT_BY_PORT: dict[int, Path] = {}
+
+
 def _start_dashboard(tmp: Path) -> threading.Thread:
     from dv_harness import dashboard
+    cfg = json.loads((tmp / ".dv-harness" / "config.json").read_text(encoding="utf-8"))
+    _PROJECT_ROOT_BY_PORT[int(cfg["dashboard"]["port"])] = tmp
     t = threading.Thread(target=dashboard.serve, args=(tmp,), daemon=True)
     t.start()
     return t
@@ -525,9 +1366,14 @@ def _get(base: str, path: str):
 
 
 def _post(base: str, path: str, body):
+    from dv_harness import dashboard_auth
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(base + path, data=data,
-                                  headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    root = _PROJECT_ROOT_BY_PORT.get(int(base.rsplit(":", 1)[1]))
+    tok = dashboard_auth.read_session_token(root) if root else None
+    if tok:
+        headers[dashboard_auth.TOKEN_HEADER] = tok
+    req = urllib.request.Request(base + path, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -614,3 +1460,161 @@ def test_dashboard_knowledge_db_info_not_configured():
         assert data["error"] == "NOT_CONFIGURED"
     finally:
         shutil.rmtree(tmp)
+
+
+# --- Phase 14 fidelity: `related_memory` is the memory the stage REALLY
+# consulted, not a save-time re-search (2026-09-04, gap-close-obsidian-memory
+# phase 13+14). See session_snapshot._resolve_related_memory_references() and
+# react.build_memory_context_references().
+
+def _seed_two_distinguishable_memories(tmp: Path):
+    """Two real engineering records: the one a save-time re-search over
+    stage+project+note would surface, and a different one the stage actually
+    cited. Returns (recomputed_id, really_consulted).
+    """
+    from dv_harness.memory import MemoryStore
+    store = MemoryStore(tmp)
+    recomputed = store.add("engineering", {
+        "title": "ep0 FIFO underrun", "protocol": "USB2",
+        "root_cause": "missing prefetch guard", "confidence": "HIGH",
+    })
+    really_consulted = store.add("engineering", {
+        "title": "USB3 LFPS handshake timeout", "protocol": "USB3",
+        "root_cause": "rx termination detected one polling cycle late",
+        "confidence": "HIGH", "evidence": ["fsdb: lfps_rx late by 1 cycle"],
+    })
+    return recomputed["memory_id"], really_consulted
+
+
+def _record_a_real_react_iteration(tmp: Path, stage: str, memory_context):
+    """Through the REAL ReactRecorder.record() -- not a hand-written JSON
+    file -- so this proves the production write path carries the field."""
+    from dv_harness.react import ReactRecorder
+    return ReactRecorder(tmp).record(
+        node=stage, iteration=1,
+        reason_summary="lfps handshake times out before rx termination is seen",
+        action={"adapter": "FakeAdapter"}, tool="ClaudeAdapter.run",
+        observation={"ok": False}, evidence={"symptom": "usb3 lfps timeout"},
+        confidence="MEDIUM", next_action="rerun_with_targeted_waveform",
+        memory_context=memory_context,
+    )
+
+
+def test_related_memory_is_what_the_stage_really_consulted_not_a_save_time_research():
+    """The fidelity gap this closes: the manifest used to report a
+    MemoryRetriever.search() re-run at SAVE time over stage+project+note,
+    which can surface memory the stage never saw. Here the two genuinely
+    differ, so only one of them can be right."""
+    from dv_harness.react import build_memory_context_references
+    tmp = _tmp()
+    try:
+        assert _run_cli(tmp, "set-stage", "FAILURE_RECOVERY").returncode == 0
+        recomputed_id, consulted = _seed_two_distinguishable_memories(tmp)
+        _record_a_real_react_iteration(tmp, "FAILURE_RECOVERY", build_memory_context_references(
+            relevant_memory=[consulted],
+            vault_related_cases=[{"note_id": "USB3-LFPS-0001", "path": "Engineering/usb3.md",
+                                   "score": 7.0, "source": "vault",
+                                   "frontmatter": {"protocol": "USB3"}}],
+        ))
+
+        manifest = save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+
+        assert manifest["related_memory_source"] == "react_iteration_memory_context"
+        ids = [r["memory_id"] for r in manifest["related_memory"]]
+        assert ids == [consulted["memory_id"]]
+        # The proof it is not the old behaviour: a save-time re-search over
+        # this stage/note really would have surfaced the OTHER record.
+        from dv_harness.session_snapshot import _collect_related_memory_references
+        would_have = _collect_related_memory_references(
+            tmp, "FAILURE_RECOVERY", None, "ep0 FIFO underrun regression")
+        assert recomputed_id in [r["memory_id"] for r in would_have]
+        assert recomputed_id not in ids
+
+        # The Vault half of what the stage cited survives too, instead of
+        # being flattened away into the local-memory list.
+        assert manifest["vault_related_cases"] == [
+            {"note_id": "USB3-LFPS-0001", "path": "Engineering/usb3.md",
+             "protocol": "USB3", "score": 7.0, "source": "vault"}]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_related_memory_falls_back_to_a_save_time_recompute_and_labels_it_as_one():
+    """A stage attempt recorded before this field existed (or one that
+    consulted nothing) still gets the proxy -- but the manifest says so, so a
+    resuming reader never mistakes it for what the stage really cited."""
+    tmp = _tmp()
+    try:
+        assert _run_cli(tmp, "set-stage", "FAILURE_RECOVERY").returncode == 0
+        _seed_debug_context(tmp)  # writes an iteration_NNN.json with no memory_context
+        manifest = save_session(tmp, name="c1", note="ep0 FIFO underrun regression")
+        assert manifest["related_memory_source"] == "recomputed_at_save_time"
+        assert manifest["related_memory"]
+        assert "vault_related_cases" not in manifest
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_project_with_no_memory_activity_at_all_says_none_not_recomputed():
+    tmp = _tmp()
+    try:
+        _run_cli(tmp, "status")
+        manifest = save_session(tmp, name="c1")
+        assert manifest["related_memory"] == []
+        assert manifest["related_memory_source"] == "none"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_the_recorded_memory_context_carries_references_never_record_bodies():
+    """`memory_context` rides on iteration_NNN.json, which every session
+    snapshot copies wholesale -- so a full record body there would duplicate
+    the durable Memory tier into the snapshot, exactly what this module's
+    design comment forbids."""
+    from dv_harness.react import build_memory_context_references
+    tmp = _tmp()
+    try:
+        assert _run_cli(tmp, "set-stage", "FAILURE_RECOVERY").returncode == 0
+        _recomputed, consulted = _seed_two_distinguishable_memories(tmp)
+        _record_a_real_react_iteration(tmp, "FAILURE_RECOVERY", build_memory_context_references(
+            relevant_memory=[consulted]))
+
+        on_disk = json.loads((tmp / ".dv-harness" / "react" / "FAILURE_RECOVERY"
+                              / "iteration_001.json").read_text(encoding="utf-8"))
+        reference = on_disk["memory_context"]["related_memory"][0]
+        assert set(reference) == {"memory_id", "level", "title", "root_cause", "confidence"}
+        # The source record really does carry more than that, so this is a
+        # projection, not an accident of a thin record.
+        assert "evidence" in consulted and "evidence" not in reference
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_resume_summary_states_whether_related_memory_was_consulted_or_re_searched():
+    from dv_harness.react import build_memory_context_references
+    tmp = _tmp()
+    try:
+        assert _run_cli(tmp, "set-stage", "FAILURE_RECOVERY").returncode == 0
+        _recomputed, consulted = _seed_two_distinguishable_memories(tmp)
+        _record_a_real_react_iteration(tmp, "FAILURE_RECOVERY", build_memory_context_references(
+            relevant_memory=[consulted],
+            vault_related_cases=[{"note_id": "USB3-LFPS-0001", "score": 7.0, "source": "vault"}]))
+        save_session(tmp, name="c1", note="usb3 lfps timeout")
+
+        summary = restore_session(tmp, "c1")["resume_summary"]
+        assert "the memory this stage really consulted" in summary
+        assert consulted["memory_id"] in summary
+        assert "USB3-LFPS-0001" in summary
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_recomputed_related_memory_list_is_never_described_as_really_consulted():
+    from dv_harness.session_snapshot import describe_resume_point
+    summary = describe_resume_point({
+        "current_stage": "FAILURE_RECOVERY", "overall_status": "PARTIAL",
+        "related_memory": [{"memory_id": "MEM-1"}],
+        "related_memory_source": "recomputed_at_save_time",
+    })
+    assert "may differ from what the stage consulted" in summary
+    assert "really consulted" not in summary

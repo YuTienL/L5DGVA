@@ -1,0 +1,50 @@
+{
+  "memory_id": "WM-REACT-INTAKE-002",
+  "kind": "react_reasoning_step",
+  "node": "INTAKE",
+  "iteration": 2,
+  "hypothesis": "Resolved via RouteResolver to agent=analysis-agent on route=analysis-route; executing plan PLAN-C31496E5 rev 2 (2 step(s)); blackboard priors read: ['environment']",
+  "evidence": {
+    "intake_readiness": {
+      "mode": "SUBSYSTEM",
+      "target_name": "USB2.0/USB3.1 Gen1/Gen2 dual-port Device subsystem (lan063.u_ss_vout.u_usbtop[0:1] / DWC_usb31 udc_usb31_top; DUT=Device role x2 ports, VIP=Host-role svt_usb_agent x2 ports)",
+      "protocols": [
+        "USB2.0",
+        "USB3.1_Gen1",
+        "USB3.1_Gen2"
+      ],
+      "required_artifacts": {
+        "protocol_spec": true,
+        "dut_design_spec": true,
+        "rtl_top_or_interface_files": true,
+        "command_txt": [
+          "D:/DV/Task/USB/command.txt",
+          "D:/DV/Task/USB/patterns/USB2_bulkin.txt",
+          "D:/DV/Task/USB/patterns/USB31_SSPbulkin.txt",
+          "D:/DV/Task/USB/uvm/tb/patterns/enumeration/usb20_enumeration.txt",
+          "D:/DV/Task/USB/uvm/tb/patterns/pattern_list.txt"
+        ],
+        "vip_reference": [
+          "D:/DV/Task/USB/VIP/doc/usb_svt_uvm_user_guide.txt",
+          "D:/DV/Task/USB/VIP/doc/usb_svt_hdl_user_guide.txt",
+          "D:/DV/Task/USB/VIP/examples/tb_usb_svt_uvm_20_phy",
+          "D:/DV/Task/USB/VIP/examples/tb_usb_svt_uvm_20_b2b_phy",
+          "D:/DV/Task/USB/uvm/tb/env/usb_top_env.sv",
+          "D:/DV/Task/USB/uvm/tb/env/usb_top_cfg.sv"
+        ]
+      }
+    },
+    "de_local_sim_env_intake_gate": {}
+  },
+  "next_action": "retry_or_reroute",
+  "confidence": "MEDIUM",
+  "level": "working",
+  "created_at": 1788274746.2810032,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

@@ -1,0 +1,20 @@
+CAPABILITY,STRUCTURAL,PRODUCTION_CONNECTED,EVIDENCE_CONNECTED,LIVE_OPERATIONAL,HITL_APPLICABLE,HITL_QUALIFIED,KNOWN_LIMITATION,EVIDENCE_REFS
+Structured Handoff (HANDOFF_V1.md),YES,YES,YES,YES,NO,N/A,(none),"model_handoff.py::build_handoff; 7 real exports this program (REVIEW-003..007, CHATGPT-DECISION-001)"
+Structured Result (RESULT_V1.md),YES,YES,YES,YES,NO,N/A,(none),model_result.py; 4 real consumed results REVIEW-003..006
+Minimum Sufficient Context (handoff sizing),YES,YES,PARTIAL,PARTIAL,NO,N/A,byte/token measurement not taken this pass -- see Context/Token Reporting,M7_CHATGPT_ARCHITECTURE_REVIEW_HANDOFF_EVIDENCE.md
+Codex transport/review round trip,YES,YES,YES,YES,YES (HUMAN_TRANSPORT),YES,"current branch (REVIEW-007) still open, pending human transport",4 real round trips REVIEW-003->004->005->006; M7_CODEX_BRANCH_CLOSURE_REPORT.md
+ChatGPT transport/review round trip,YES,NO,NO,NO,YES (HUMAN_TRANSPORT),NOT_YET,not started this session -- blocked behind Codex branch closure by design,M7_CHATGPT_ARCHITECTURE_REVIEW_HANDOFF_EVIDENCE.md; M7_CHATGPT_RESULT_CONSUMPTION_EVIDENCE.md
+Result Arrival Detection,YES,YES,YES,YES,NO,N/A,"quiet-interval inference, not positive completion proof, by default (R005-2/R006-4)",result_ingestion.py::_observe/poll_once; 4 real RESULT_DETECTED events
+Auto Import,YES,YES,YES,YES,NO,N/A,(none),result_ingestion.py::ingest_result_file; 4 real AUTO_IMPORT_STARTED events
+Validation (registration/path/symlink/schema),YES,YES,YES,YES,NO,N/A,"(none, post R005-3/R006-3 fixes)",result_ingestion.py::_unsafe_manual_path_reason/_valid_registration
+Consumption (Canonical consumer),YES,YES,YES,YES,NO,N/A,"(none, post R006-2 fix -- no independent re-read anywhere in the chain)",model_handoff_workflow.py::import_result/_consume_result/_append_registry
+Rejection/Quarantine,YES,YES,YES,PARTIAL,NO,N/A,real unit-test evidence exists; not yet exercised by a real Codex/ChatGPT FAIL-and-reject round trip,result_ingestion.py DUPLICATE_SUPPRESSED/LATE_CHANGE_QUARANTINED paths + test_result_ingestion.py
+Auto Resume,YES,YES,YES,YES,NO,N/A,(none),4 real AUTO_RESUME_STARTED events
+Result-to-Action (Next Action Resolver),YES,YES,YES,YES,NO,N/A,(none),"execution_contract.py::resolve_next_action; 4 real NEXT_ACTION_RESOLVED events, all AUTO_REMEDIATE_CONFIRMED_FINDINGS/human_action_required=NO"
+Human Transport,YES,YES,YES,YES,YES,YES,"inherently human-mediated by design (dispatch section 9), not an automation gap","4 real HUMAN_TRANSPORT_EVENTS, M7_HUMAN_NON_SCHEDULER_QUALIFICATION.md"
+Human Authority (HumanGate),YES,YES,YES,YES,YES,YES,(none),L5DGVA_CONTROLLED_CLAUDE_WORKER_PERMISSION_QUALIFICATION.md (2 real decisions this session); M7_R005_2_FINAL_DISPOSITION.md (1 new HumanGate filed)
+Human Non-Scheduler (HUMAN_IS_WORKFLOW_SCHEDULER=NO),YES,YES,YES,YES,N/A,N/A,"scoped to this session's own evidenced activity, not the full multi-session program history",M7_HUMAN_NON_SCHEDULER_QUALIFICATION.md
+Execution Backend Resolution,YES,PARTIAL,YES,PARTIAL,NO,N/A,"resolve_execution_backend() is a real, tested policy function but no production call site wires it into launch_worker()/remediation dispatch yet -- equivalence booleans are caller-supplied, not auto-derived",agent_execution_backend.py::resolve_execution_backend; M7_EXECUTION_BACKEND_FALLBACK_RECONCILIATION.md
+Current-Session Remediation (fallback executor),YES,YES,YES,YES,NO,N/A,"this IS the live production path today, not merely a fallback on paper -- every real REVIEW-003..006 fix used it",4 real remediation commits this program
+Detached Claude Worker,YES,NO,YES,NO,YES (HUMAN_AUTHORITY),BLOCKED,"IMPLEMENTED_AND_TESTED_BLOCKED_BY_HOST_POLICY -- real, evidenced, not reopened this pass",L5DGVA_CONTROLLED_CLAUDE_WORKER_PERMISSION_QUALIFICATION.md
+M6 Golden Path Preservation,YES,YES,YES,YES,NO,N/A,(none) -- no M6-owned file touched this session; constitution/gap-register gate 11/11 passed each commit,this session's own commit history + gate runs

@@ -112,7 +112,90 @@ def _index_register_doc(register_doc_entries):
     return index
 
 
-def verify_address_map(decoder_entries, bfm_access_histogram, register_doc_entries=None):
+#: Which authority level a `register_doc_entries` entry occupies in
+#: `dv_harness.source_authority.AUTHORITY_ORDER`. Tier 6 ("controller
+#: doc/programming guide") rather than tier 4 ("register file"), because this
+#: module's own contract calls it "a register document, read LAST, as
+#: corroboration only" -- a human-written programming document, not a
+#: machine-readable register description. The choice is disclosed rather than
+#: buried because it is a judgment: what it CANNOT change is the outcome, since
+#: the decoder is tier 3 ("DUT RTL") and outranks both candidates. Override via
+#: `escalate_doc_disagreements(..., doc_source=...)` for a project whose
+#: register_doc_entries really are a register file.
+DOC_AUTHORITY_SOURCE = "controller_doc"
+DECODER_AUTHORITY_SOURCE = "dut_rtl"
+
+
+def doc_disagreement_conflict(entry, *, doc_source: str = DOC_AUTHORITY_SOURCE):
+    """One DISAGREES entry from `verify_address_map` -> a `source_authority`
+    conflict between the decoder (tier 3) and the register document (tier 6).
+
+    Always RESOLVED in the decoder's favor -- which is exactly this module's
+    long-standing "the document corroborates, it never decides" rule, now
+    stated as the general authority order rather than as a rule local to this
+    file. Raises if handed an entry that does not actually disagree: a
+    conflict record for two sources that agree would be a fabricated one.
+    """
+    from ..source_authority import SourceClaim, resolve_conflict
+
+    if entry.get("doc_status") != "DISAGREES":
+        raise AddressMapVerificationError("NOT_A_DOC_DISAGREEMENT", {
+            "instance": entry.get("instance"), "doc_status": entry.get("doc_status"),
+        })
+    return resolve_conflict([
+        SourceClaim(source=DECODER_AUTHORITY_SOURCE,
+                    claim=f"{entry['instance']} base = {entry['base_hex']}",
+                    evidence_path=entry["decoder_evidence"]),
+        SourceClaim(source=doc_source,
+                    claim=f"{entry['instance']} base disagrees with the decoder-verified value",
+                    evidence_path=entry["doc_ref"]),
+    ])
+
+
+def escalate_doc_disagreements(verified_entries, question_store, *,
+                               doc_source: str = DOC_AUTHORITY_SOURCE, now=None):
+    """File every DISAGREES entry into the REAL question queue and return the
+    persisted records.
+
+    THIS DOES NOT MAKE A DOC DISAGREEMENT BLOCKING FOR COMMITTAL, and nothing
+    about `verify_address_map`/`emit_verified_base_addr_defines` changes: a
+    verified entry is still returned, and its `` `define `` is still emitted.
+    The two are different questions, and conflating them is what left this
+    gap open for so long:
+
+      * "Which base address do I use?" -- decided, mechanically, by the
+        authority order (decoder tier 3 > doc tier 6). Never blocks. This is
+        the question this module was already answering correctly.
+      * "Which of these two artifacts is wrong?" -- NOT decidable by the
+        authority order, and left entirely unasked until now. A stale
+        register document silently outlived every generation run because the
+        only record of the disagreement was a `//` comment in generated
+        Verilog that a reader had to already be looking at.
+
+    The queue's Tier-3 `affects_spec_intent` trigger fires on the second
+    question, so the resulting entry is blocking for SIGN-OFF (it appears in
+    `build_digest()` and the blocking-question metrics) while the generator
+    itself runs to completion.
+    """
+    from .. import source_authority as sa
+
+    records = []
+    for e in verified_entries or []:
+        if e.get("doc_status") != "DISAGREES":
+            continue
+        conflict = doc_disagreement_conflict(e, doc_source=doc_source)
+        rec = sa.escalate_conflict(
+            question_store, conflict, domain="dut",
+            subject=f"{e['instance']} register base address",
+            context_path=e["decoder_evidence"], now=now,
+        )
+        if rec is not None:
+            records.append(rec)
+    return records
+
+
+def verify_address_map(decoder_entries, bfm_access_histogram, register_doc_entries=None,
+                       question_store=None):
     """Cross-check every decoder-claimed register base address against the
     BFM-access histogram (mandatory) and a register document (corroboration
     only), per SKILL.md's three-independent-source method.
@@ -143,6 +226,16 @@ def verify_address_map(decoder_entries, bfm_access_histogram, register_doc_entri
     zero corroborating BFM accesses and no explicit override reason. A
     register-doc disagreement is recorded in "doc_status", never raised --
     the document corroborates, it does not decide.
+
+    `question_store` (a `question_queue.QuestionQueueStore` or a project-root
+    path): when supplied, every DISAGREES entry is ALSO escalated into the
+    real question queue by `escalate_doc_disagreements()` -- the "which of
+    these two artifacts is wrong" question the doc_status comment never
+    asked anyone. Still non-blocking here: the escalation runs AFTER every
+    entry is verified, and this function's return value is byte-identical
+    with or without it. See `escalate_doc_disagreements`' docstring for why
+    "not blocking for committal" and "not worth asking about" are not the
+    same claim.
     """
     histogram_index = _index_histogram(bfm_access_histogram)
     doc_index = _index_register_doc(register_doc_entries)
@@ -202,6 +295,9 @@ def verify_address_map(decoder_entries, bfm_access_histogram, register_doc_entri
             "doc_status": doc_status,
             "doc_ref": doc_ref,
         })
+
+    if question_store is not None:
+        escalate_doc_disagreements(verified, question_store)
 
     return verified
 

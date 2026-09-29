@@ -22,7 +22,7 @@ VIP manual/examples/source/class reference, and current project configuration.
 pattern registry, bind skeleton, or regression bookkeeping from scratch.**
 `dv_harness/uvm_generator/protocol_env_generator.py` (`ProtocolEnvGenerator`) emits
 the USB_UVM_Handoff-shaped subdirectory layout (`tb/agents,env,seq,tests,top,filelist`)
-from a manifest JSON (`tools/generate_protocol_uvm_environment.py --manifest <m.json> --out <dir>`);
+from a manifest JSON via the governed lifecycle entry point (`dv-harness start --goal "<goal>" --protocols <protocol> --dut-role <role> --level SUBSYSTEM --generate --generate-out <dir> --generate-manifest <m.json>` -- GAP-V2-002: this converges on the same real, tested Field Resolution/Clarification path CLI/dashboard already use for `protocol`/`role`, resolving them from real intake (declared here, auto-discovered from a prior run, or asked for) before generation runs; prints the same structured JSON envelope (status/environment_mode/generated_files/out/...) `tools/generate_protocol_uvm_environment.py`'s own stdout always provided. That script itself is now an INTERNAL_GENERATION_PRIMITIVE beneath this governed entry point (still directly usable for low-level/test invocation), not a second, ungoverned workflow entry -- see `tools/generate_protocol_uvm_environment.py`'s own header);
 `dv_harness/uvm_generator/pattern_registry_generator.py` + `pattern_registry_completeness_gate.py`
 build/validate the pattern-suite registry + Makefile dispatch
 (`tools/generate_pattern_registry.py`); `dv_harness/uvm_generator/bind_mechanism_generator.py`
@@ -33,6 +33,12 @@ scaffolding only -- none invent protocol-specific register maps, VIP class names
 checker/scoreboard semantics; those must still come from current evidence (previous
 section), supplied into the manifest/topology JSON, never fabricated. Read each
 module's own docstring "WHAT THIS DOES NOT DO" section before assuming more than this.
+
+For CMDQ/tuning content specifically, use
+`dv_harness/uvm_generator/emmc_cmdq_generator.py` instead of
+hand-authoring CMDQ queue-management or tuning-sequence logic — it already
+implements the mechanics this section's "CMDQ where applicable" and
+"tuning" bullets ask for.
 - command/data sequences
 - boot
 - partition

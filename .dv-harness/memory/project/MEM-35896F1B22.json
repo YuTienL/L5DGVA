@@ -1,0 +1,21 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "DWC_usb31 v2.10a Release Notes -- fixed defects list + Known Simulation/Synthesis Limitations",
+  "summary": "DWC_usb31_relnotes.pdf (v2.10a, Jan 2024, converted via pdftotext -layout, 383 lines) is a single-version changelog (no per-prior-version body; historical STARs live on the SolvNet web portal, not in this doc). SS1.2.1 'Changes from the Last Release -- Enhancements and Fixes' (line 111-178) lists ~30 specific defects fixed going INTO 2.10a (i.e. these were broken in the prior release) -- selected verification-relevant ones: 'coreConsultant Error when selecting more than 4 eSS host root ports' (the 4-port cap was ALSO previously a tooling bug, not purely a spec/RTL limit); TxDetectRxLoopback incorrectly de-asserted in D3+ss.Inactive during D3 exit; event-ring-full interrupt-line assert bug; ISOC PING protocol lint-caused failure in host mode; VTIO Feature Enhancement (cross-ref: VTIO was flagged elsewhere as 'not supported and should not be enabled in DWC_usb31 2.00a'); Host PTM time-adjustment fix; two DOCUMENTATION-ONLY fixes worth flagging -- 'GDBGLSPMUX.logic_analyzer_trace default value incorrect in Programming Guide' and 'DWC_usb31 controller supports only 32-bit mode of operation on USB3 PIPE Interface' (confirms the 32-bit-PIPE-only restriction was previously mis-documented); HCRST warm-reset behavior fix (Host: USBCMD.HCRST might not translate to warm reset absent far-end receiver termination); AXI CSR burst write with WSTRB=0 support added. SS1.5 'Known Issues and Limitations' (line 213-289) is the direct, currently-open errata list: SS1.5.1 Feature Limitations defers entirely to the Databook Unsupported-Features section (no separate list here). SS1.5.2 Known Simulation Environment Problems (directly actionable for PVE setup/debug): ONLY VCS simulator is supported (NCV and ModelSim explicitly NOT supported); gate-level simulation is NOT validated; PVE is not tested for all random parameter permutation/combinations (contact Support if a specific config fails); BIST loopback test may fail depending on config because the test monitors BBISTCTRL via the RAL model rather than the real AXI Completer interface -- 'will not be an issue if... monitored through the AXI Completer interface', fix promised 'in the next release' (still open as of 2.10a); Multi-port and Router configs do NOT support eusb2 tests; VC Spyglass CDC/RDC flow tested for only a few configs; PVE simulation with DWC_USB31_PCLK_AS_PHY_INPUT is NOT supported when DWC_USB31_EN_ROUTERIF=1 (concrete unsupported parameter-combination for simulation); in coreConsultant GUI Simulator Setup, 'Enable TCM' option must NOT be enabled; two named tests may fail with certain configs due to a PHY issue: router_if_host_usb_20_na_31_ssp_pipe4_xfer_pm_sus_res_xfer and router_if_host_usb_20_na_30_ss_pipe4_xfer_pm_sus_res_xfer. SS1.5.3 Known Synthesis/Formality Problems: scan coverage 99.7% with several EXPECTED (documented, non-bug) violations -- TEST-126 (clock-gating/mux latches not scannable), D14/C6 (negedge flops in clock-gating and suspend/resume save-restore, mitigated by using scan clocks {45 55} not {55 45}), TEST-504/505 (clock-mux latch always-0/1 in scan mode), C17/C18 (generated clock routed to ram_clk_out and logic_analyzer_trace output ports); coreConsultant GUI does NOT support FPGA-targeted Synplify synthesis runs; Formality for Host mode needs 100GB swap (1-port config) / 256GB swap (4-port config); DC Autoread mode is NOT supported. SS1.4 Quality Metrics: 'Both Host controller and Device controller are USB-IF certified' (only sentence given).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_relnotes.pdf"
+  ],
+  "category": "ip_docs",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-35896F1B22",
+  "level": "project",
+  "created_at": 1788367137.9944592,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

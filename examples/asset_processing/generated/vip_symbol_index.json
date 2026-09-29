@@ -1,0 +1,264 @@
+{
+  "schema_version": "1.0",
+  "generator": {
+    "tool": "dv_harness.vip_symbol_index",
+    "version": "1.0"
+  },
+  "protocol": "demo",
+  "roots": [
+    "vip_src"
+  ],
+  "stats": {
+    "files_scanned": 1,
+    "classes_indexed": 6,
+    "methods_indexed": 11,
+    "bytes_scanned": 2972
+  },
+  "classes": [
+    {
+      "name": "svt_demo_cfg",
+      "base_class": "uvm_object",
+      "is_virtual": false,
+      "file": "vip_src/svt_demo_pkg.sv",
+      "line": 18,
+      "methods": [
+        {
+          "name": "set_defaults",
+          "kind": "function",
+          "return_type": "void",
+          "is_virtual": true,
+          "is_extern": true,
+          "arguments": "()",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 24
+        },
+        {
+          "name": "apply_preset",
+          "kind": "function",
+          "return_type": "void",
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "(input int preset_id)",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 26
+        },
+        {
+          "name": "wait_for_ready",
+          "kind": "task",
+          "return_type": null,
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "(input int timeout_ns)",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 33
+        }
+      ],
+      "config_fields": [
+        {
+          "name": "enable_protocol_checks",
+          "data_type": "bit",
+          "is_rand": true,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 19
+        },
+        {
+          "name": "max_burst_length",
+          "data_type": "int",
+          "is_rand": true,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 20
+        },
+        {
+          "name": "coverage_enable",
+          "data_type": "bit",
+          "is_rand": false,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 21
+        },
+        {
+          "name": "interface_name",
+          "data_type": "string",
+          "is_rand": false,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 22
+        }
+      ]
+    },
+    {
+      "name": "svt_demo_transaction",
+      "base_class": "uvm_sequence_item",
+      "is_virtual": false,
+      "file": "vip_src/svt_demo_pkg.sv",
+      "line": 41,
+      "methods": [
+        {
+          "name": "convert2string",
+          "kind": "function",
+          "return_type": "string",
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "()",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 46
+        }
+      ],
+      "config_fields": [
+        {
+          "name": "address",
+          "data_type": "bit",
+          "is_rand": true,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 42
+        },
+        {
+          "name": "payload",
+          "data_type": "bit",
+          "is_rand": true,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 43
+        },
+        {
+          "name": "is_write",
+          "data_type": "bit",
+          "is_rand": true,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 44
+        }
+      ]
+    },
+    {
+      "name": "svt_demo_base_sequence",
+      "base_class": "uvm_sequence",
+      "is_virtual": false,
+      "file": "vip_src/svt_demo_pkg.sv",
+      "line": 51,
+      "methods": [
+        {
+          "name": "body",
+          "kind": "task",
+          "return_type": null,
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "()",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 54
+        },
+        {
+          "name": "pre_start",
+          "kind": "task",
+          "return_type": null,
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "()",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 60
+        }
+      ],
+      "config_fields": [
+        {
+          "name": "num_transactions",
+          "data_type": "int",
+          "is_rand": true,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 52
+        }
+      ]
+    },
+    {
+      "name": "svt_demo_driver",
+      "base_class": "uvm_driver",
+      "is_virtual": true,
+      "file": "vip_src/svt_demo_pkg.sv",
+      "line": 67,
+      "methods": [
+        {
+          "name": "build_phase",
+          "kind": "function",
+          "return_type": "void",
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "(uvm_phase phase)",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 68
+        },
+        {
+          "name": "run_phase",
+          "kind": "task",
+          "return_type": null,
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "(uvm_phase phase)",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 72
+        }
+      ],
+      "config_fields": []
+    },
+    {
+      "name": "svt_demo_monitor",
+      "base_class": "uvm_monitor",
+      "is_virtual": false,
+      "file": "vip_src/svt_demo_pkg.sv",
+      "line": 80,
+      "methods": [
+        {
+          "name": "run_phase",
+          "kind": "task",
+          "return_type": null,
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "(uvm_phase phase)",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 83
+        },
+        {
+          "name": "report_phase",
+          "kind": "function",
+          "return_type": "void",
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "(uvm_phase phase)",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 89
+        }
+      ],
+      "config_fields": [
+        {
+          "name": "checks_enable",
+          "data_type": "bit",
+          "is_rand": false,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 81
+        }
+      ]
+    },
+    {
+      "name": "svt_demo_agent",
+      "base_class": "uvm_agent",
+      "is_virtual": false,
+      "file": "vip_src/svt_demo_pkg.sv",
+      "line": 94,
+      "methods": [
+        {
+          "name": "build_phase",
+          "kind": "function",
+          "return_type": "void",
+          "is_virtual": true,
+          "is_extern": false,
+          "arguments": "(uvm_phase phase)",
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 97
+        }
+      ],
+      "config_fields": [
+        {
+          "name": "cfg",
+          "data_type": "svt_demo_cfg",
+          "is_rand": false,
+          "file": "vip_src/svt_demo_pkg.sv",
+          "line": 95
+        }
+      ]
+    }
+  ]
+}

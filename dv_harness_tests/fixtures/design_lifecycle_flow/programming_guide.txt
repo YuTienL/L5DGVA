@@ -1,0 +1,44 @@
+Synthetic test fixture for dv_harness/design_lifecycle_flow.py. It does not
+describe any real DUT.
+
+# Initialization Sequence
+
+Example generic form:
+
+```
+Reset
+-> Clock/PHY readiness
+-> Base configuration
+-> Mode configuration
+-> Buffer/DMA setup
+-> Interrupt setup
+-> Enable block
+-> Wait ready
+-> Start operation
+```
+
+Actual sequence must come from source evidence.
+
+# Shutdown Sequence
+
+1. Stop traffic
+2. Wait idle
+3. Disable engine
+4. Clear pending status
+5. Disable interrupts
+6. Reset if required
+
+# Error Recovery
+
+## Timeout Recovery
+
+- Disable engine
+- Reset block
+
+Protocol Error: disable engine -> reset link -> reinitialize
+
+## Link Loss Recovery
+
+1. Disable engine
+2. Wait idle
+3. Reset block

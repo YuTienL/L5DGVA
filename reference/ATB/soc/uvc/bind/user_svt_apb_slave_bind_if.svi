@@ -1,0 +1,106 @@
+
+`ifndef GUARD_SVT_APB_SLAVE_BIND_IF_SVI
+`define GUARD_SVT_APB_SLAVE_BIND_IF_SVI
+
+`include "svt_apb_defines.svi"
+
+`include "svt_apb_slave_if.svi"
+
+/**
+    @grouphdr Interfaces svt_apb_slave_bind_if APB SV Bind interface.
+ */
+
+/**
+ * @groupname svt_apb_slave_bind_if
+ * <b>General description:</b><p>
+ * Bind interface is an interface which contains directional signals for APB. 
+ * Users can connect DUT signals to these directional signals. 
+ * Bind interfaces provided with VIP are svt_apb_master_bind_if and svt_apb_slave_bind_if.
+ * To use bind interface, user still needs to instantiate the non-bind interface, 
+ * and then connect bind interface to the non-bind interface. 
+ * 
+ * VIP provides APB Master  and APB SLAVE connector modules to connect the VIP bind interface to VIP non-bind interface.
+ * User needs to instantiate a connector module corresponding to each instance of VIP Master and Slave, and pass
+ * the bind interface and non-bind interface instance to this connector module.
+ *
+ * The connector module is parameterized in order to distinguish between Active and Passive connection.
+ * Based on the value of the parameter(Active or Passive) passed from the TB while instantiating the 
+ * connector module the corresponding signal connections are made between APB SLAVE IF and APB SLAVE BIND IF.
+ *
+ * The slave  Bind interface svt_apb_slave_bind_if defines the APB signals, along with the Parametrized APB connector
+ * module (svt_apb_connector) which is used to connect the VIP bind interface to VIP non-bind interface in either 
+ * Active or Passive mode depending on the value of the parameter passed.
+ */
+
+interface svt_apb_slave_bind_if#(   int  PSEL_WIDTH_PARAM  = `SVT_APB_MAX_NUM_SLAVES,
+                                    int  PADDR_WIDTH_PARAM  = `SVT_APB_MAX_ADDR_WIDTH,
+                                    int  PWDATA_WIDTH_PARAM  = `SVT_APB_MAX_DATA_WIDTH,
+                                    int  PRDATA_WIDTH_PARAM  = `SVT_APB_MAX_DATA_WIDTH,
+                                    int  PSTRB_WIDTH_PARAM  = `SVT_APB_MAX_DATA_WIDTH/8,
+                                    int  CONTROL_PUSER_WIDTH_PARAM  = `SVT_APB_MAX_CONTROL_PUSER_WIDTH
+                                  )
+(
+ input  [(PSEL_WIDTH_PARAM -1):0]  psel,
+ input                                    penable,
+ input                                    pwrite,
+ input  [(PADDR_WIDTH_PARAM -1):0]  paddr,
+ input  [(PWDATA_WIDTH_PARAM -1):0]  pwdata,
+ input  [((PSTRB_WIDTH_PARAM)-1):0] pstrb,
+ input  [2:0]                              pprot,
+ input [(CONTROL_PUSER_WIDTH_PARAM -1):0] control_puser,
+ inout [(PRDATA_WIDTH_PARAM-1):0]   prdata,
+ inout                                 pready  ,
+ inout                                 pslverr
+ );
+
+endinterface :svt_apb_slave_bind_if
+//================================================================================================
+module svt_apb_slave_connector #(parameter is_active=1) (svt_apb_slave_if slave_if , svt_apb_slave_bind_if slave_bind_if);
+
+`ifdef SVT_MULTI_SIM_PROCEDURAL_COMBINATORIAL_DRIVE
+
+  // input (slave Inputs)
+  always @(*)
+  begin
+    slave_if.psel  =          slave_bind_if.psel;       
+    slave_if.penable  =       slave_bind_if.penable;
+    slave_if.pwrite  =        slave_bind_if.pwrite;             
+    slave_if.paddr   =        slave_bind_if.paddr;      
+    slave_if.pwdata  =        slave_bind_if.pwdata;     
+    slave_if.pstrb  =         slave_bind_if.pstrb;       
+    slave_if.pprot  =         slave_bind_if.pprot;      
+    slave_if.control_puser =  slave_bind_if.control_puser; 
+ end
+`else
+  assign  slave_if.psel  =          slave_bind_if.psel;       
+  assign  slave_if.penable  =       slave_bind_if.penable;
+  assign  slave_if.pwrite  =        slave_bind_if.pwrite;             
+  assign  slave_if.paddr   =        slave_bind_if.paddr;      
+  assign  slave_if.pwdata  =        slave_bind_if.pwdata;     
+  assign  slave_if.pstrb  =         slave_bind_if.pstrb;       
+  assign  slave_if.pprot  =         slave_bind_if.pprot;       
+  assign  slave_if.control_puser =  slave_bind_if.control_puser;
+`endif
+
+  //inout(slave outputs)
+  // if slave is active
+  initial begin
+    if (is_active) begin
+      force slave_bind_if.prdata  =  slave_if.prdata;
+      force slave_bind_if.pready  =  slave_if.pready;
+      force slave_bind_if.pslverr  =  slave_if.pslverr;
+	end  
+  end
+  
+  // if slave is passive
+  always @ (*)
+  begin
+    if(is_active == 0) begin
+      slave_if.prdata    = slave_bind_if.prdata;
+      slave_if.pready    = slave_bind_if.pready;
+      slave_if.pslverr   = slave_bind_if.pslverr;
+    end
+   end
+endmodule 
+
+`endif // GAURD_APB_slave_BIND_IF_SVI

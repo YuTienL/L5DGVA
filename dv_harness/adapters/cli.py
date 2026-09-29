@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, subprocess
+import json, shutil, subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, TYPE_CHECKING
 from .base import ClaudeAdapter, AgentResult
@@ -11,9 +11,61 @@ class ClaudeCLIAdapter(ClaudeAdapter):
     def __init__(self, config: Dict[str, Any]):
         self.cfg = config["claude"]
 
+    @staticmethod
+    def _resolve_command(configured: str) -> str:
+        """Resolve the configured claude command to a real, directly-executable
+        path before handing it to subprocess.run(..., shell=False).
+
+        HONEST BUG THIS FIXES (found via a real `dv-harness run-stage` run on
+        2026-09-01, not a hypothetical): on Windows, `npm install -g` puts
+        TWO files on PATH for one package -- a bare POSIX shell script named
+        exactly `claude` (only runnable by bash/sh, e.g. Git Bash) and a real
+        Windows launcher `claude.cmd`. subprocess.run() with shell=False (the
+        default, and what this adapter already uses -- see run() below) calls
+        Win32 CreateProcess directly, which does NOT do PATHEXT-based
+        resolution the way `where`/cmd.exe do -- it can only ever find
+        `claude`, the non-executable-on-Windows shell script, and fails with
+        FileNotFoundError (WinError 2). shutil.which() DOES perform PATHEXT
+        resolution on Windows (checking .COM/.EXE/.BAT/.CMD in order) and
+        correctly returns the real `claude.cmd` launcher. On POSIX, shutil.which()
+        is a no-op-equivalent PATH lookup that returns the same real script
+        subprocess.run() would have found anyway, so this is a pure
+        Windows-only fix with no POSIX behavior change.
+        """
+        resolved = shutil.which(configured)
+        return resolved or configured
+
     def run(self, prompt: str, cwd: str, resume_session: Optional[str] = None,
             agent_profile: "Optional[AgentProfile]" = None) -> AgentResult:
-        cmd = [self.cfg.get("command","claude"), "-p", prompt,
+        # THIRD real bug found via the same live `dv-harness run-stage` run
+        # this session, once the two fixes above let the subprocess actually
+        # launch and its config validate cleanly: `claude`'s own --help
+        # confirms `-p`/`--print` is a bare flag and `prompt` is a separate
+        # POSITIONAL argument ("Usage: claude [options] [command] [prompt]"),
+        # which this adapter used to pass as `["-p", prompt, ...]`. That
+        # structurally looks fine as a Python argv list -- but the resolved
+        # command here is `claude.cmd`, a Windows batch-file shim (npm's
+        # global-install layout, see _resolve_command()'s own docstring
+        # above), and cmd.exe's batch-file argument-forwarding (`%*`-style)
+        # is fundamentally line-oriented: a real stage prompt built by
+        # prompts.build_stage_prompt() is multi-line (confirmed via a real
+        # failing run: a 6227-char prompt containing embedded `\n`), and
+        # passing it as a single positional argv element through a .cmd
+        # wrapper truncates/breaks at the embedded newline, so the real
+        # underlying `claude` process ended up receiving an effectively
+        # empty prompt and failed with "Error: Input must be provided
+        # either through stdin or as a prompt argument when using
+        # --print" -- confirmed reproducible via a direct positional-arg
+        # invocation of the real multi-line prompt, and confirmed FIXED via
+        # a direct stdin-piped invocation of the same content (`claude.cmd
+        # -p ... < multiline-file` succeeds). `-p`'s own --help text
+        # documents stdin as the alternative input path for exactly this
+        # reason. Fixed by never putting `prompt` on the command line at
+        # all -- `-p` stays a bare flag, and `prompt` is piped via
+        # subprocess.run()'s `input=` parameter below instead, which has no
+        # batch-file/cmd.exe line-oriented parsing involved at all (it's a
+        # real OS pipe, not a copied argv string).
+        cmd = [self._resolve_command(self.cfg.get("command","claude")), "-p",
                "--output-format", self.cfg.get("output_format","json"),
                "--max-turns", str(self.cfg.get("max_turns",40))]
 
@@ -81,9 +133,27 @@ class ClaudeCLIAdapter(ClaudeAdapter):
         for tool in disallowed:
             cmd += ["--disallowedTools", tool]
 
-        p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
-        stdout = p.stdout.strip()
-        stderr = p.stderr.strip()
+        # HONEST BUG THIS FIXES (found via the same real `dv-harness run-stage`
+        # run this session that found the shutil.which() bug above, once that
+        # fix let the subprocess actually launch): text=True without an
+        # explicit `encoding` makes Python decode the child's stdout/stderr
+        # using locale.getpreferredencoding() -- on this Windows dev machine
+        # (config.json's policy.language is "zh-TW") that resolves to cp950
+        # (Traditional Chinese), not UTF-8. The real `claude` CLI's own
+        # --output-format json output is UTF-8 and contains real multi-byte
+        # sequences cp950 cannot decode, crashing subprocess.run()'s internal
+        # stderr-reader thread with UnicodeDecodeError -- which leaves
+        # p.stderr as None, so the very next line's unconditional
+        # `.strip()` call then raised AttributeError on top of that. Forcing
+        # encoding="utf-8" with errors="replace" (never silently drop bytes,
+        # but never crash the whole stage on one bad byte either) fixes the
+        # decode; `p.stdout or ""` / `p.stderr or ""` guards the (now
+        # unlikely, but still theoretically possible on other platforms)
+        # None case defensively rather than trusting text mode never fails.
+        p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True,
+                            encoding="utf-8", errors="replace", input=prompt)
+        stdout = (p.stdout or "").strip()
+        stderr = (p.stderr or "").strip()
         raw: Dict[str, Any] = {"returncode": p.returncode, "stderr": stderr}
 
         session_id = None

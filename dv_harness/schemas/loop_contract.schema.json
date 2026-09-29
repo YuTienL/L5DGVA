@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "loop_contract.schema.json",
+  "title": "LoopContract",
+  "description": "LOOP_ENGINEERING section 85's loop contract. One contract per important loop in this harness. Written only by dv_harness/loop_contract.py's builders, which read the real driver modules' own constants -- a contract is DERIVED from code, never hand-maintained, for the same reason protocol_capability's registry is.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "loop_id", "loop_type", "owner", "version", "trigger", "goal",
+    "machine_checkable_done", "driver_module", "driver_entry_point",
+    "verifier", "budgets", "budget_sources", "retry", "convergence",
+    "plateau", "oscillation", "termination", "schema_version"
+  ],
+  "properties": {
+    "loop_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9_]+$",
+      "description": "Stable id, matching the loop's constant in loop_contract.py."
+    },
+    "loop_type": {"type": "string", "minLength": 1},
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The real module/class that owns this loop, as a path a reader can open."
+    },
+    "version": {"type": "string", "minLength": 1},
+    "driver_module": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Importable module path. assert_driver_resolvable() imports it, so a contract cannot outlive the loop it documents."
+    },
+    "driver_entry_point": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Dotted attribute path resolved on driver_module (e.g. DVHarness.loop)."
+    },
+    "trigger": {"type": "string", "minLength": 1},
+    "goal": {"type": "string", "minLength": 1},
+    "machine_checkable_done": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Section 87: deterministic evidence only. Must name the real code/state that decides it, never an agent self-report."
+    },
+    "inputs": {"type": "array", "items": {"type": "string"}},
+    "state": {"type": "array", "items": {"type": "string"}},
+    "allowed_actions": {"type": "array", "items": {"type": "string"}},
+    "forbidden_actions": {"type": "array", "items": {"type": "string"}},
+    "verifier": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Section 87's Producer/Verifier separation: the independent thing that judges this loop's output."
+    },
+    "evidence_sources": {"type": "array", "items": {"type": "string"}},
+    "progress_metrics": {"type": "array", "items": {"type": "string"}},
+    "utility_metrics": {"type": "array", "items": {"type": "string"}},
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Section 85's eight budgets. null means NOT ENFORCED by any code in this harness; budget_sources must then carry the honest reason.",
+      "properties": {
+        "max_iterations": {"type": ["integer", "null"], "minimum": 1},
+        "max_wall_time_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "max_jobs": {"type": ["integer", "null"], "minimum": 1},
+        "max_compute": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "max_license_cost": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "max_token_cost": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "max_failed_attempts": {"type": ["integer", "null"], "minimum": 0},
+        "max_change_scope": {"type": ["string", "null"]}
+      }
+    },
+    "budget_sources": {
+      "type": "object",
+      "description": "Per budget field, either the real config key that enforces it or the honest reason nothing does. validate_contract() requires an entry for EVERY budget key, so 'unbounded' is always a stated decision rather than an omission.",
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_retries": {"type": ["integer", "null"], "minimum": 0},
+        "backoff": {"type": "string"},
+        "retryable_failures": {"type": "array", "items": {"type": "string"}},
+        "non_retryable_failures": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "convergence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {"type": "array", "items": {"type": "string"}},
+        "minimum_progress": {"type": ["number", "null"]},
+        "window": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "plateau": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "detection_window": {"type": ["integer", "null"], "minimum": 2},
+        "minimum_gain": {"type": ["number", "null"]}
+      }
+    },
+    "oscillation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fingerprint_fields": {"type": "array", "items": {"type": "string"}},
+        "repeat_threshold": {"type": ["integer", "null"], "minimum": 2},
+        "evidence_source": {
+          "type": "string",
+          "description": "The real persisted store the fingerprint fields are read from."
+        }
+      }
+    },
+    "termination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "failure", "budget", "no_progress", "human_stop"],
+      "properties": {
+        "success": {"type": "string", "minLength": 1},
+        "failure": {"type": "string", "minLength": 1},
+        "budget": {"type": "string", "minLength": 1},
+        "no_progress": {"type": "string", "minLength": 1},
+        "human_stop": {"type": "string", "minLength": 1}
+      }
+    },
+    "escalation": {"type": "string"},
+    "human_gate": {
+      "type": "string",
+      "description": "The real human-approval mechanism this loop stops at. Descriptive only: naming a gate here neither creates nor relaxes one."
+    },
+    "rollback": {"type": "string"},
+    "resume": {"type": "string"},
+    "audit": {"type": "string"},
+    "schema_version": {"type": "string", "const": "1.0"}
+  }
+}

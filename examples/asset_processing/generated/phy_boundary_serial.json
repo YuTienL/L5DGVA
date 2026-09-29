@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "generator": {
+    "tool": "dv_harness.phy_boundary",
+    "version": "1.0"
+  },
+  "status": "EXTRACTED",
+  "reason": null,
+  "phy_module": "demo_analog_phy",
+  "controller_module": "demo_serdes_controller",
+  "boundary_signals": [
+    {
+      "name": "por_n",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "input",
+      "controller_direction": "input",
+      "direction_opposed": false
+    },
+    {
+      "name": "refclk",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "input",
+      "controller_direction": "input",
+      "direction_opposed": false
+    },
+    {
+      "name": "serial_rxn",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "input",
+      "controller_direction": "output",
+      "direction_opposed": true
+    },
+    {
+      "name": "serial_rxp",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "input",
+      "controller_direction": "output",
+      "direction_opposed": true
+    },
+    {
+      "name": "serial_txn",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "output",
+      "controller_direction": "input",
+      "direction_opposed": true
+    },
+    {
+      "name": "serial_txp",
+      "width": 1,
+      "width_source": "logic",
+      "phy_direction": "output",
+      "controller_direction": "input",
+      "direction_opposed": true
+    }
+  ],
+  "classification": {
+    "kind": "SERIAL",
+    "tier": "B2_STRUCTURAL_WIDTH",
+    "rationale": "payload signals ['serial_rxn', 'serial_rxp', 'serial_txn', 'serial_txp'] are all <= 2 bits wide, a line-rate serial lane set",
+    "serial_signals": [
+      "serial_rxn",
+      "serial_rxp",
+      "serial_txn",
+      "serial_txp"
+    ],
+    "parallel_signals": [],
+    "unresolved_width_signals": []
+  },
+  "bind_decision": {
+    "mount_layer": "serial_boundary_not_bindable",
+    "bindable": false,
+    "rationale": "the only boundary between these modules is a line-rate serial lane set; a protocol VIP monitor bound here decodes nothing without a PHY model and would pass Gate 1 and Gate 2 while failing Gate 3 as a silent monitor. Supply a PHY model exposing its parallel controller-facing port, and re-extract.",
+    "recommended_bind_signals": []
+  },
+  "source": {
+    "kind": "verible_parse",
+    "files": [
+      "examples/asset_processing/inputs/phy_boundary_demo.sv"
+    ]
+  }
+}

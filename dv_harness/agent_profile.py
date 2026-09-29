@@ -35,6 +35,13 @@ class AgentProfile:
     tools: Optional[List[str]] = None          # None = agent declared no explicit tools: line
     disallowed_tools: List[str] = field(default_factory=list)
     system_prefix: str = ""                     # agent .md body (post-frontmatter), for optional reinforcement
+    # model (2026-09-06, model_agent_tool_router.py gap-close): the agent's
+    # own declared `model:` frontmatter scalar, e.g. "inherit" -- 17 of this
+    # repo's 24 real agent profiles declare it, but nothing before this
+    # parsed it. None means the agent's frontmatter carries no `model:` line
+    # at all (never guessed/defaulted here -- see model_agent_tool_router.py
+    # for the one place a fallback default is applied).
+    model: Optional[str] = None
 
 
 def _parse_frontmatter_list(fm_text: str, key: str) -> Optional[List[str]]:
@@ -43,6 +50,18 @@ def _parse_frontmatter_list(fm_text: str, key: str) -> Optional[List[str]]:
         if line.lower().startswith(key.lower() + ":"):
             val = line.split(":", 1)[1].strip()
             return [t.strip() for t in val.split(",") if t.strip()] or None
+    return None
+
+
+def _parse_frontmatter_scalar(fm_text: str, key: str) -> Optional[str]:
+    """Reads one `key: value` frontmatter line as a bare scalar (not a
+    comma-split list) -- e.g. `model: inherit`. Only the first matching line
+    counts, mirroring _parse_frontmatter_list's own single-match contract."""
+    for line in fm_text.splitlines():
+        line = line.strip()
+        if line.lower().startswith(key.lower() + ":"):
+            val = line.split(":", 1)[1].strip()
+            return val or None
     return None
 
 
@@ -67,4 +86,5 @@ def load_agent_profile(root, agent_name: Optional[str]) -> Optional[AgentProfile
         tools=_parse_frontmatter_list(fm, "tools"),
         disallowed_tools=_parse_frontmatter_list(fm, "disallowedTools") or [],
         system_prefix=body.strip(),
+        model=_parse_frontmatter_scalar(fm, "model"),
     )

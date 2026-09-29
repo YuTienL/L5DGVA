@@ -1,0 +1,23 @@
+{
+  "corner_id": "c-hand",
+  "protocol": "USB",
+  "category": "reset_power",
+  "risk_tier": "P1",
+  "status": "ACTIVE",
+  "evidence": {
+    "runtime_evidence_hash": "x1",
+    "semantic_verdict": "TRUE_PASS"
+  },
+  "ccl_id": "CCL-516AC8EF7A",
+  "created_at": 1788550724.0519094,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "VALIDATED",
+  "current_evidence_required": true,
+  "applicability_conditions": [],
+  "resolution": {},
+  "revalidate_by": null,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

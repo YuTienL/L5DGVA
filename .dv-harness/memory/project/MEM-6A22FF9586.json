@@ -1,0 +1,26 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB VIP example tb_usb_svt_uvm_20_phy -- sequence_item/constraint base class + callback error-injection catalogue",
+  "summary": "tb_usb_svt_uvm_20_phy is the richest single PHY-level example (60+ sequence files, 20+ callback files); its env/connect_phase was already cited elsewhere in the harness, so this record covers what was NOT yet mined: the sequence_item/constraint base class and the callback catalogue.\n\nSEQUENCE_ITEM/CONSTRAINT: env/cust_svt_usb_transfer.sv extends the VIP's svt_usb_transfer with 8 int weight fields (CONTROL_IN/OUT_TRANSFER_wt, BULK_IN/OUT_TRANSFER_wt, ISOC_IN/OUT_TRANSFER_wt, INTR_IN/OUT_TRANSFER_wt) feeding a `constraint xfer_type_distribution { xfer_type dist {...weight...} }` block, a matching setup_data_bmrequesttype_dir_distribution dist constraint gated by `(CONTROL_IN_TRANSFER_wt+CONTROL_OUT_TRANSFER_wt)>0 -> {...}`, and three payload-size-cap constraints gated on xfer_type/direction (payload_intended_byte_count_bulk_out <=1024, payload_intended_byte_count_control_out <=512, setup_data_w_length_control_in <=256) to bound sim time. This EXACT class (byte-for-byte, only default weight VALUES differ) is reused in 20_b2b_phy, 20_ulpi_phy, and (renamed usb_svt_basic_cust_transfer) cfg_validator -- 4 of 8 examples share this one constraint pattern verbatim. basic_sys/basic_program_sys extend it one level further as cust_svt_isoc_transfer (see the basic_sys record) adding ISOC-MULT weighted dist on endpoint_number.\n\nCALLBACK catalogue (all extend either svt_usb_protocol_callbacks [packet/transaction/transfer hooks: pre_usb_20_packet_out_port_put, pre_transaction, randomized_transfer_complete_response] or svt_usb_physical_callbacks [bit/symbol hooks: post_usb_20_link_data_in_port_get, pre_usb_20_physical_data_out_port_put]): (1) svt_usb_crc16_error_callbacks_hs.sv -- counts DATA packets leaving the protocol layer via static int packet_count, stamps the FIRST one with packet.exception_list.add_exception(exc) where exc.error_kind=CRC_ERROR, exc.crc_error=CRC16_ERROR; sibling files do CRC16 for fs/ls and CRC5/invert-CRC5 for tokens per speed. (2) bit_stuff_error_callbacks.sv -- THREE classes in one file: usb_rx_error_data_error_callbacks (svt_usb_physical_callbacks) watches raw svt_usb_data bytes in post_usb_20_link_data_in_port_get, detects DATA PID via macro SVT_LOCAL_DATA_PID checking 8'hC3/4B/87/0F, then forces data.data=8'hff + BIT_STUFF_ERROR exception on the next byte; usb_20_{host,dev}_bitstuff_error_callbacks (svt_usb_protocol_callbacks) override pre_transaction to force the OUT/IN payload to USER_DEFINED_ALGORITHM filled with 8'hFF bytes ('worst case bit-stuff condition'). (3) sync_phy_callbacks.sv -- on first SOP, zeroes every *_ERROR_wt field of a svt_usb_data_exception except SYNC_ERROR_wt=1000, sets error_kind=SYNC_ERROR/sync_error=SHORT_SYNC_ERROR -- the general 'zero every weight except the one you want, set it very high' idiom for forcing a specific error subtype out of a weighted exception-kind enum. Also present: usb_20_get_status_packet_for_hnp_callback.sv (HNP GET_STATUS field override), host_fixed_inter_pkt_usb_20_diff_source_delay_callbacks.sv (inter-packet-delay override), usb_host/device_objection_management_callbacks.sv (the objection raise/drop event pattern every env's objection_management task consumes).\n\nSEQUENCE catalogue: file names double as scenario index (e.g. attach_bulk_xfers_detach_fsls_serial_on_off_sequence.sv, lpm_l1_entry_remote_wakeup_sequence.sv, vbus_off_during_data_transfer_sequence.sv). Every sequence file follows the SAME UVM-version-guarded objection idiom: pre_start/post_start (UVM>=1.1) or pre_body/post_body (UVM 1.0), raising/dropping the phase objection ONLY when get_parent_sequence()==null (i.e. only the root sequence in a nested chain touches the objection) -- this exact skeleton repeats verbatim in ALL 8 examples' sequence files, confirmed identical byte-for-byte.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_phy\\env\\cust_svt_usb_transfer.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_phy\\env\\svt_usb_crc16_error_callbacks_hs.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_phy\\env\\bit_stuff_error_callbacks.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_phy\\env\\sync_phy_callbacks.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_phy\\env\\usb_20_phy_base_test.sv",
+    "D:\\DV\\Task\\USB\\VIP\\examples\\tb_usb_svt_uvm_20_phy\\env\\usb_20_phy_test_sequence_collection.sv"
+  ],
+  "category": "vip_examples",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-6A22FF9586",
+  "level": "project",
+  "created_at": 1788366913.404863,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

@@ -14,8 +14,11 @@ and the loop demonstrably picks a DIFFERENT next action as a result -- REROUTE
 vs. CONVERGE_TERMINATE -- not merely a different pass/fail outcome.
 """
 import json
+import os
 import re
 import shutil
+import stat
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -23,10 +26,12 @@ from dv_harness.gates import GATE_FAILURE_REROUTE
 from dv_harness.react_loop import (
     GateSignature, MenuOption, ReactDecision, InnerReactLoop,
     build_menu, reflect_and_decide, evaluate_stage_evidence_with_detail,
-    _signatures_equal,
+    _signatures_equal, attempt_hypothesis_refutation,
+    compute_adaptive_react_budget, _distinct_subsystems,
 )
 from dv_harness.graph import GraphDefinition, Node, Edge
 from dv_harness.adapters.base import AgentResult
+from dv_harness.stage_profile import StageExecutionProfiler
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -463,6 +468,312 @@ def test_retry_targeted_action_genuinely_re_invokes_adapter_with_targeted_prompt
         shutil.rmtree(tmp)
 
 
+# --- InnerReactLoop <-> StageExecutionProfiler wiring (per-agent-attribution
+# audit fix, 2026-09-01): before this fix, profiler/profile_id/agent_name
+# were never threaded into InnerReactLoop at all -- every real adapter.run()
+# call the inner loop made (reflection + RETRY_TARGETED retries) was
+# completely invisible to the stage profile's total_tokens/aggregate
+# runtime. -----------------------------------------------------------------
+
+class _TwoStepRetryAdapter:
+    """Drives InnerReactLoop through exactly 2 inner iterations against the
+    real reset_power_cdc_corner_gate script (tools/verification_flow/
+    reset_power_cdc_corner_gate.py, read before writing this): retry #1
+    supplies RESET+CLOCK domains only (still missing CDC -- genuinely NEW
+    information vs. the original all-3-domains-missing failure, so
+    RETRY_TARGETED is offered again rather than suppressed by the
+    no-new-information rule), retry #2 supplies all 3 domains -> PASS. Each
+    real adapter.run() call also carries real token usage so the profiler's
+    total_tokens genuinely grows call-to-call, not just its agents count."""
+
+    def __init__(self):
+        self.calls = 0
+        self.retry_n = 0
+
+    def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+        self.calls += 1
+        if "option_id=" in prompt:
+            m = re.search(r"option_id=(RETRY_TARGETED:\S+)", prompt)
+            chosen = m.group(1) if m else "CONVERGE_TERMINATE"
+            return AgentResult(ok=True, text=(
+                '```dv-harness-react-decision\n'
+                + json.dumps({"chosen_option_id": chosen, "conclusion": "retry targeted",
+                              "params": {}}) + '\n```'
+            ), raw={"response": {"usage": {"input_tokens": 5, "output_tokens": 2}}})
+        assert "reset_power_cdc_corner_gate" in prompt
+        self.retry_n += 1
+        corner_items = (
+            '{"corner_id": "c1", "domain": "RESET", "requirement_ids": ["R1"], '
+            '"mechanism_ids": ["M1"], "testcase_ids": ["T1"], '
+            '"async_or_partial_reset_covered": true}, '
+            '{"corner_id": "c2", "domain": "CLOCK", "requirement_ids": ["R2"], '
+            '"mechanism_ids": ["M2"], "testcase_ids": ["T2"]}'
+        )
+        if self.retry_n >= 2:
+            corner_items += (
+                ', {"corner_id": "c3", "domain": "CDC", "requirement_ids": ["R3"], '
+                '"mechanism_ids": ["M3"], "testcase_ids": ["T3"], '
+                '"cdc_observation_or_assertion": true}'
+            )
+        text = (
+            '```dv-harness-evidence:corner_risk_rank\n'
+            '{"cases": [{"corner_id": "c1", "risk_factors": ["x"]}]}\n```\n'
+            '```dv-harness-evidence:reset_power_cdc_corner_gate\n'
+            f'{{"corner_items": [{corner_items}]}}\n```\n'
+        )
+        return AgentResult(ok=True, text=text, session_id="s-retry",
+                            raw={"response": {"usage": {"input_tokens": 20, "output_tokens": 10}}})
+
+
+class _SingleConvergeAdapter:
+    """One reflection call, immediately CONVERGE_TERMINATE -- the ONE of
+    ARCH_CALIBRATION's 3 gates with no GATE_FAILURE_REROUTE mapping, no
+    matching graph edge, and no 'missing'/'protocol' structured field (see
+    _ARCH_CALIBRATION_GATE_FAILS_NO_REROUTE above), so the menu offers
+    nothing but CONVERGE_TERMINATE and this always fires in exactly 1 inner
+    iteration / 1 adapter call."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+        self.calls += 1
+        assert "option_id=" in prompt
+        return AgentResult(ok=True, text=(
+            '```dv-harness-react-decision\n'
+            '{"chosen_option_id": "CONVERGE_TERMINATE", '
+            '"conclusion": "no actionable option in the real menu.", "params": {}}\n```'
+        ), raw={"response": {"usage": {"input_tokens": 5, "output_tokens": 2}}})
+
+
+def test_inner_react_loop_with_2plus_iterations_records_more_agent_runs_than_single_iteration():
+    """The crux test for the profiler-wiring fix: a run that genuinely takes
+    2 inner ReAct iterations (2 reflections + 2 targeted retries = 4 real
+    adapter.run() calls) must leave 4 agent-run entries (and a correspondingly
+    larger total_tokens) on its stage profile, strictly more than a run that
+    converges in a single iteration (1 reflection = 1 real adapter.run() call
+    -> 1 agent-run entry) against the SAME profiler/agent_name plumbing."""
+    tmp = _mk_smoke_project()
+    try:
+        graph = _load_real_graph()
+        node = graph.nodes["ARCH_CALIBRATION"]
+        profiler = StageExecutionProfiler(tmp)
+
+        # --- multi-iteration run (2 inner iterations, 4 real adapter calls) --
+        stage_multi = "SOC_SCENARIO_PLANNER"
+        first_text_multi = (
+            '```dv-harness-evidence:corner_risk_rank\n'
+            '{"cases": [{"corner_id": "c1", "risk_factors": ["x"]}]}\n```\n'
+            '```dv-harness-evidence:reset_power_cdc_corner_gate\n'
+            '{"corner_items": []}\n```\n'
+        )
+        v1, r1, s1 = evaluate_stage_evidence_with_detail(tmp, stage_multi, first_text_multi)
+        assert v1 == "GATE_FAIL"
+        first_result_multi = AgentResult(ok=True, text=first_text_multi, raw={}, session_id="s0")
+        profile_multi = profiler.begin_stage(stage_multi, stage_multi)
+        adapter_multi = _TwoStepRetryAdapter()
+        outcome_multi = InnerReactLoop(
+            tmp, adapter_multi, react_recorder=None,
+            cfg={"policy": {"inner_react_max_iterations": 5, "inner_react_max_adapter_calls": 5}},
+            graph=None, profiler=profiler, profile_id=profile_multi["profile_id"],
+            agent_name="soc-scenario-agent",
+        ).run(
+            stage_multi, node=None, attempt=1, first_result=first_result_multi,
+            first_verdict=v1, first_reasons=r1, first_signatures=s1,
+            base_prompt="original stage prompt",
+        )
+        assert outcome_multi.verdict == "PASS"
+        assert outcome_multi.iterations >= 2
+        assert adapter_multi.calls == 4  # 2 reflections + 2 targeted retries
+
+        # --- single-iteration run (1 inner iteration, 1 real adapter call) --
+        stage_single = "ARCH_CALIBRATION"
+        v2, r2, s2 = evaluate_stage_evidence_with_detail(
+            tmp, stage_single, _ARCH_CALIBRATION_GATE_FAILS_NO_REROUTE)
+        assert v2 == "GATE_FAIL"
+        first_result_single = AgentResult(ok=True, text=_ARCH_CALIBRATION_GATE_FAILS_NO_REROUTE,
+                                           raw={}, session_id="s0")
+        profile_single = profiler.begin_stage(stage_single, stage_single)
+        adapter_single = _SingleConvergeAdapter()
+        outcome_single = InnerReactLoop(
+            tmp, adapter_single, react_recorder=None,
+            cfg={"policy": {"inner_react_max_iterations": 5, "inner_react_max_adapter_calls": 5}},
+            graph=graph, profiler=profiler, profile_id=profile_single["profile_id"],
+            agent_name="soc-scenario-agent",
+        ).run(
+            stage_single, node, attempt=1, first_result=first_result_single,
+            first_verdict=v2, first_reasons=r2, first_signatures=s2,
+            base_prompt="original stage prompt",
+        )
+        assert outcome_single.iterations == 1
+        assert adapter_single.calls == 1
+
+        # --- the actual profiler-wiring assertion ---------------------------
+        rec_multi = profiler._load(profile_multi["profile_id"])
+        rec_single = profiler._load(profile_single["profile_id"])
+        assert len(rec_multi["agents"]) == 4
+        assert len(rec_single["agents"]) == 1
+        assert len(rec_multi["agents"]) > len(rec_single["agents"])
+        assert all(a["agent"] == "soc-scenario-agent" for a in rec_multi["agents"])
+        assert all(a["agent"] == "soc-scenario-agent" for a in rec_single["agents"])
+        assert rec_multi["total_tokens"] > rec_single["total_tokens"]
+        assert rec_multi["aggregate_agent_runtime_sec"] > 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_inner_react_loop_omits_profiler_calls_as_a_genuine_no_op_by_default():
+    """profiler/profile_id default to None, None -- every pre-existing caller
+    of InnerReactLoop that never threads them through (every other test in
+    this module) must be completely unaffected; this asserts that explicitly
+    rather than only implicitly via the rest of the suite still passing."""
+    menu = [MenuOption("CONVERGE_TERMINATE", "CONVERGE_TERMINATE", None, "r", "control")]
+
+    class FakeAdapter:
+        def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+            return AgentResult(ok=True, text=(
+                '```dv-harness-react-decision\n'
+                '{"chosen_option_id": "CONVERGE_TERMINATE", "conclusion": "x", "params": {}}\n```'
+            ), raw={"response": {"usage": {"input_tokens": 1, "output_tokens": 1}}})
+
+    # No exception, no profiler/profile_id required -- a pure no-op.
+    decision = reflect_and_decide(FakeAdapter(), ROOT, "ARCH_CALIBRATION", {}, menu)
+    assert decision.chosen_option_id == "CONVERGE_TERMINATE"
+
+
+# --- attempt_hypothesis_refutation(): the adversarial self-critique step ---
+# --- (adversarial_refutation_pass task, brand-new standalone function, ----
+# --- nothing above this section is affected) --------------------------------
+
+def test_attempt_hypothesis_refutation_reports_a_confirmed_survival():
+    class SurvivesAdapter:
+        def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+            assert "Hypothesis under review: ep0 FIFO underrun" in prompt
+            assert "sim.log:4021" in prompt
+            return AgentResult(ok=True, text=(
+                '```dv-harness-refutation\n'
+                '{"refuted": false, "counter_evidence": [], '
+                '"rationale": "no contradicting evidence found"}\n```'
+            ), raw={})
+
+    outcome = attempt_hypothesis_refutation(
+        SurvivesAdapter(), ROOT, "ep0 FIFO underrun due to missing prefetch",
+        evidence_refs=["sim.log:4021"],
+    )
+    assert outcome == {
+        "attempted": True, "refuted": False, "counter_evidence": [],
+        "rationale": "no contradicting evidence found",
+    }
+
+
+def test_attempt_hypothesis_refutation_reports_a_confirmed_refutation_with_citations():
+    class RefutesAdapter:
+        def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+            return AgentResult(ok=True, text=(
+                '```dv-harness-refutation\n'
+                '{"refuted": true, "counter_evidence": ["rtl_top.sv:99: prefetch guard present"], '
+                '"rationale": "the cited RTL line contradicts the claimed missing guard"}\n```'
+            ), raw={})
+
+    outcome = attempt_hypothesis_refutation(RefutesAdapter(), ROOT, "some hypothesis")
+    assert outcome["attempted"] is True
+    assert outcome["refuted"] is True
+    assert outcome["counter_evidence"] == ["rtl_top.sv:99: prefetch guard present"]
+
+
+def test_attempt_hypothesis_refutation_reasks_once_then_honestly_reports_not_attempted():
+    calls = []
+
+    class GarbageAdapter:
+        def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+            calls.append(prompt)
+            return AgentResult(ok=True, text="I have thought about it deeply.", raw={})
+
+    outcome = attempt_hypothesis_refutation(GarbageAdapter(), ROOT, "some hypothesis")
+    assert outcome["attempted"] is False
+    assert outcome["refuted"] is False  # never guessed True either
+    assert len(calls) == 2  # asked once, re-asked once, then honestly gave up
+
+
+def test_attempt_hypothesis_refutation_transport_failure_reports_not_attempted():
+    class FailingAdapter:
+        def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+            return AgentResult(ok=False, text="", raw={})
+
+    outcome = attempt_hypothesis_refutation(FailingAdapter(), ROOT, "some hypothesis")
+    assert outcome["attempted"] is False
+    assert outcome["refuted"] is False
+
+
+def test_attempt_hypothesis_refutation_composes_directly_into_build_qualified_conclusion():
+    """End-to-end proof this is a real, callable mechanism -- not just a
+    function that returns a plausible-looking dict -- by feeding its real
+    output straight into qualified_conclusion.build_qualified_conclusion()
+    with require_refutation_pass=True."""
+    from dv_harness.qualified_conclusion import build_qualified_conclusion
+    from dv_harness.inference import score_confidence
+
+    class SurvivesAdapter:
+        def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+            return AgentResult(ok=True, text=(
+                '```dv-harness-refutation\n'
+                '{"refuted": false, "counter_evidence": [], "rationale": "withstands scrutiny"}\n```'
+            ), raw={})
+
+    refutation = attempt_hypothesis_refutation(
+        SurvivesAdapter(), ROOT, "ep0 FIFO underrun", evidence_refs=["sim.log:4021"])
+    confidence = score_confidence(independent_sources_count=3, evidence_refs_verified=True,
+                                   counter_evidence_count=0, multi_agent_consensus_count=2)
+    assert confidence["level"] == "HIGH"
+
+    qc = build_qualified_conclusion("PASS", confidence, {"root_cause": "ep0 FIFO underrun"},
+                                     refutation_result=refutation, require_refutation_pass=True)
+    assert qc.is_qualified is True
+    assert qc.refutation["attempted"] is True
+
+
+def test_attempt_hypothesis_refutation_no_op_profiler_args_never_required():
+    # Same "genuine no-op by default" contract as reflect_and_decide()'s
+    # equivalent test above -- profiler/profile_id/agent_name are optional.
+    class SurvivesAdapter:
+        def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+            return AgentResult(ok=True, text=(
+                '```dv-harness-refutation\n{"refuted": false}\n```'
+            ), raw={"response": {"usage": {"input_tokens": 1, "output_tokens": 1}}})
+
+    outcome = attempt_hypothesis_refutation(SurvivesAdapter(), ROOT, "x")
+    assert outcome["attempted"] is True
+    assert outcome["counter_evidence"] == []  # absent field normalizes to empty list
+
+
+def test_attempt_hypothesis_refutation_wires_real_stage_execution_profiler():
+    """Same profiler-wiring guarantee as InnerReactLoop's own reflection/retry
+    calls (see the SECOND DEVIATION note) -- this new function's real
+    adapter.run() call must not be invisible to StageExecutionProfiler when a
+    caller does thread profiler/profile_id/agent_name through."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        profiler = StageExecutionProfiler(tmp)
+        profile = profiler.begin_stage("RE_AUDIT", "RE_AUDIT")
+
+        class SurvivesAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=(
+                    '```dv-harness-refutation\n{"refuted": false}\n```'
+                ), raw={"response": {"usage": {"input_tokens": 7, "output_tokens": 3}}})
+
+        attempt_hypothesis_refutation(
+            SurvivesAdapter(), tmp, "x",
+            profiler=profiler, profile_id=profile["profile_id"], agent_name="rca-agent",
+        )
+        rec = profiler._load(profile["profile_id"])
+        assert len(rec["agents"]) == 1
+        assert rec["agents"][0]["agent"] == "rca-agent"
+        assert rec["total_tokens"] > 0
+    finally:
+        shutil.rmtree(tmp)
+
+
 # --- Engine integration: run_stage() wiring ---------------------------------
 
 def test_run_stage_sets_react_reroute_target_on_vip_api_drift_failure():
@@ -610,3 +921,299 @@ def test_loop_routes_via_react_reroute_hint_when_graph_has_no_fail_edge():
         assert h.state.current_stage == "ARCH_DISCOVERY"
     finally:
         shutil.rmtree(tmp)
+
+
+# --- compute_adaptive_react_budget(): opt-in complexity-scaled ReAct budget -
+# --- (adaptive_react_budget gap-close, 2026-09-07). Nothing above this -----
+# --- section is affected -- these are additive tests over an additive -----
+# --- change. -----------------------------------------------------------------
+
+def _rmtree_tolerant(path):
+    """shutil.rmtree() that survives a real .git tree's read-only object
+    files on Windows (WinError 5) -- the exact, already-documented failure
+    class CLAUDE.md's own Engineering Memory Policy section names ("a plain
+    shutil.rmtree() of a directory containing a real .git tree fails with
+    PermissionError on git's read-only object files"). Only the two new
+    git-backed InnerReactLoop integration tests below use this -- every
+    pre-existing test's own bare `shutil.rmtree(tmp)` (no git repo involved)
+    is left untouched."""
+    def _onexc(func, path_, exc):
+        try:
+            os.chmod(path_, stat.S_IWRITE)
+            func(path_)
+        except Exception:
+            pass
+    shutil.rmtree(path, onexc=_onexc)
+
+
+def _run_git(cmd, cwd):
+    subprocess.run(cmd, cwd=str(cwd), check=True, capture_output=True, text=True)
+
+
+def _init_git_repo(root: Path):
+    """Same real-git-repo convention test_safety_sandbox.py's own _init_repo()
+    already established -- reused here rather than a second helper with the
+    same shape."""
+    _run_git(["git", "init"], root)
+    _run_git(["git", "config", "user.email", "test@example.com"], root)
+    _run_git(["git", "config", "user.name", "Test"], root)
+
+
+def _git_commit_baseline(root: Path, relative_paths):
+    for rel in relative_paths:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("baseline\n", encoding="utf-8")
+    _run_git(["git", "add", "-A"], root)
+    _run_git(["git", "commit", "-m", "base"], root)
+
+
+def _git_touch_and_stage(root: Path, relative_paths):
+    """Real, evidence-grounded worktree changes `git diff --name-only HEAD`
+    will report: modifies each already-committed path (or creates + stages a
+    brand-new one, since `git diff --name-only HEAD` never reports a genuinely
+    untracked file -- confirmed directly against the real git binary before
+    writing this fixture)."""
+    for rel in relative_paths:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("touched\n", encoding="utf-8")
+    _run_git(["git", "add", "-A"], root)
+
+
+def test_distinct_subsystems_is_a_real_deduplicated_top_level_grouping():
+    assert _distinct_subsystems([
+        "dv_harness/a.py", "dv_harness/b.py", "tools/remote/x.py", "README.md",
+    ]) == ["dv_harness", "tools"]
+    assert _distinct_subsystems([]) == []
+
+
+def test_compute_adaptive_react_budget_default_disabled_is_byte_identical_to_the_old_fixed_reads(tmp_path, monkeypatch):
+    """No adaptive_react_budget block at all -- the exact two-.get() default
+    behavior InnerReactLoop.run() used before this function existed. No git
+    subprocess may be invoked in this branch (proven, not merely asserted)."""
+    def _forbidden(*a, **kw):
+        raise AssertionError("must not invoke git in fixed mode")
+    monkeypatch.setattr(subprocess, "check_output", _forbidden)
+
+    cfg = {"policy": {"inner_react_max_iterations": 7, "inner_react_max_adapter_calls": 9}}
+    result = compute_adaptive_react_budget(cfg, tmp_path)
+    assert result == {"mode": "fixed", "max_iterations": 7, "max_adapter_calls": 9}
+
+
+def test_compute_adaptive_react_budget_empty_or_none_cfg_uses_the_same_3_and_2_defaults(tmp_path):
+    assert compute_adaptive_react_budget(None, tmp_path) == {
+        "mode": "fixed", "max_iterations": 3, "max_adapter_calls": 2,
+    }
+    assert compute_adaptive_react_budget({}, tmp_path) == {
+        "mode": "fixed", "max_iterations": 3, "max_adapter_calls": 2,
+    }
+
+
+def test_compute_adaptive_react_budget_explicit_enabled_false_still_fixed(tmp_path):
+    """A project that declares the block but leaves it off must behave
+    exactly like a project that never declared it at all -- the presence of
+    adaptive_react_budget.min_iterations=99 here must never leak into the
+    fixed-mode result."""
+    cfg = {"policy": {"adaptive_react_budget": {"enabled": False, "min_iterations": 99}}}
+    assert compute_adaptive_react_budget(cfg, tmp_path) == {
+        "mode": "fixed", "max_iterations": 3, "max_adapter_calls": 2,
+    }
+
+
+def test_compute_adaptive_react_budget_enabled_no_git_repo_floors_at_the_declared_minimums(tmp_path):
+    """The required negative control: with real evidence unavailable (no git
+    repo at all), the module must never crash and must never treat absence of
+    evidence as 'unlimited complexity' -- it floors both budgets at their
+    declared min_* values, honestly."""
+    cfg = {"policy": {"adaptive_react_budget": {
+        "enabled": True, "min_iterations": 2, "max_iterations": 6,
+        "min_adapter_calls": 1, "max_adapter_calls": 4,
+    }}}
+    result = compute_adaptive_react_budget(cfg, tmp_path)
+    assert result["mode"] == "complexity_scaled"
+    assert result["distinct_file_count"] == 0
+    assert result["distinct_subsystem_count"] == 0
+    assert result["max_iterations"] == 2
+    assert result["max_adapter_calls"] == 1
+
+
+def test_compute_adaptive_react_budget_enabled_real_git_diff_scales_both_budgets(tmp_path):
+    """A real git repo with real modified files spanning 4 distinct top-level
+    subsystem directories -- the exact 'number of distinct files/subsystems
+    touched by the current investigation' signal this item names -- drives
+    the scaled formula, checked against hand-computed expected values."""
+    _init_git_repo(tmp_path)
+    _git_commit_baseline(tmp_path, [
+        "dv_harness/a.py", "tools/b.py", "tests/c.py",
+    ])
+    _git_touch_and_stage(tmp_path, [
+        "dv_harness/a.py", "tools/b.py", "tests/c.py", "docs/d.py",
+    ])
+    cfg = {"policy": {"adaptive_react_budget": {
+        "enabled": True,
+        "min_iterations": 2, "max_iterations": 6, "files_per_iteration_step": 2,
+        "min_adapter_calls": 1, "max_adapter_calls": 4, "subsystems_per_iteration_step": 2,
+    }}}
+    result = compute_adaptive_react_budget(cfg, tmp_path)
+    assert result["mode"] == "complexity_scaled"
+    assert result["distinct_file_count"] == 4
+    assert sorted(result["subsystems"]) == ["docs", "dv_harness", "tests", "tools"]
+    assert result["distinct_subsystem_count"] == 4
+    # min_iterations(2) + floor(4 files / 2 per step) = 4
+    assert result["max_iterations"] == 4
+    # min_adapter_calls(1) + floor(4 subsystems / 2 per step) = 3
+    assert result["max_adapter_calls"] == 3
+
+
+def test_compute_adaptive_react_budget_enabled_clamps_at_the_declared_ceiling(tmp_path):
+    """A large real investigation must never scale past the declared
+    ceilings -- the linear formula is clamped, never unbounded."""
+    _init_git_repo(tmp_path)
+    many_files = [f"subsys_{i}/f.py" for i in range(20)]
+    _git_commit_baseline(tmp_path, many_files)
+    _git_touch_and_stage(tmp_path, many_files)
+    cfg = {"policy": {"adaptive_react_budget": {
+        "enabled": True,
+        "min_iterations": 2, "max_iterations": 6, "files_per_iteration_step": 1,
+        "min_adapter_calls": 1, "max_adapter_calls": 4, "subsystems_per_iteration_step": 1,
+    }}}
+    result = compute_adaptive_react_budget(cfg, tmp_path)
+    assert result["distinct_file_count"] == 20
+    assert result["distinct_subsystem_count"] == 20
+    assert result["max_iterations"] == 6     # ceiling, not 2 + 20
+    assert result["max_adapter_calls"] == 4  # ceiling, not 1 + 20
+
+
+def test_compute_adaptive_react_budget_malformed_adaptive_block_falls_back_to_fixed_never_raises(tmp_path):
+    """A human-editable config.json is exactly the kind of input that can be
+    malformed -- this must degrade to the safe fixed-mode default rather than
+    ever raising out of InnerReactLoop.run() and failing a real stage."""
+    cfg = {"policy": {
+        "inner_react_max_iterations": 3, "inner_react_max_adapter_calls": 2,
+        "adaptive_react_budget": {"enabled": True, "min_iterations": "not-a-number"},
+    }}
+    result = compute_adaptive_react_budget(cfg, tmp_path)
+    assert result["mode"] == "fixed"
+    assert result["max_iterations"] == 3
+    assert result["max_adapter_calls"] == 2
+    assert "adaptive_react_budget_error" in result
+
+
+# --- InnerReactLoop.run() wiring: the budget genuinely governs the loop -----
+
+def test_inner_react_loop_default_cfg_reports_fixed_mode_in_budget_info():
+    """Every pre-existing caller's cfg (no adaptive_react_budget key) must
+    still report mode='fixed' on the outcome, and the fixed values it already
+    passed unchanged -- an observability-only additive field, never a
+    behavior change for a project that has not opted in."""
+    tmp = _mk_smoke_project()
+    try:
+        graph = _load_real_graph()
+        node = graph.nodes["ARCH_CALIBRATION"]
+        stage = "ARCH_CALIBRATION"
+        verdict, reasons, sigs = evaluate_stage_evidence_with_detail(
+            tmp, stage, _ARCH_CALIBRATION_GATE_FAILS_NO_REROUTE)
+        first_result = AgentResult(ok=True, text=_ARCH_CALIBRATION_GATE_FAILS_NO_REROUTE,
+                                    raw={}, session_id="s0")
+        outcome = InnerReactLoop(
+            tmp, _SingleConvergeAdapter(), react_recorder=None,
+            cfg={"policy": {"inner_react_max_iterations": 5, "inner_react_max_adapter_calls": 5}},
+            graph=graph,
+        ).run(stage, node, attempt=1, first_result=first_result, first_verdict=verdict,
+              first_reasons=reasons, first_signatures=sigs, base_prompt="original stage prompt")
+        assert outcome.budget_info == {"mode": "fixed", "max_iterations": 5, "max_adapter_calls": 5}
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_inner_react_loop_adaptive_budget_genuinely_constrains_the_real_loop(tmp_path):
+    """A real, small investigation (1 file, 1 subsystem) scales
+    max_adapter_calls down to 1 -- one below what _TwoStepRetryAdapter needs
+    to reach PASS (2 targeted retries) -- so the loop must genuinely stop
+    short of PASS: iteration 1 does 1 reflection + 1 targeted retry (real
+    adapter calls 1-2, spending the whole budget of 1 retry), and iteration 2
+    reflects once more (real adapter call 3) but the safety-backstop check
+    then refuses the second targeted retry before ever issuing it -- for a
+    real total of 3 adapter.run() calls, one fewer than the 4 the SAME
+    adapter/gate/cfg-shape needs to reach PASS in the unconstrained (fixed,
+    max_adapter_calls=5) test above. This is the real proof the new budget
+    mode actually governs InnerReactLoop.run(), not merely computes a number
+    nothing reads."""
+    tmp = _mk_smoke_project()
+    try:
+        _init_git_repo(tmp)
+        _git_commit_baseline(tmp, ["dv_harness/only.py"])
+        _git_touch_and_stage(tmp, ["dv_harness/only.py"])
+
+        stage = "SOC_SCENARIO_PLANNER"
+        first_text = (
+            '```dv-harness-evidence:corner_risk_rank\n'
+            '{"cases": [{"corner_id": "c1", "risk_factors": ["x"]}]}\n```\n'
+            '```dv-harness-evidence:reset_power_cdc_corner_gate\n'
+            '{"corner_items": []}\n```\n'
+        )
+        v1, r1, s1 = evaluate_stage_evidence_with_detail(tmp, stage, first_text)
+        assert v1 == "GATE_FAIL"
+        first_result = AgentResult(ok=True, text=first_text, raw={}, session_id="s0")
+        adapter = _TwoStepRetryAdapter()
+        cfg = {"policy": {"adaptive_react_budget": {
+            "enabled": True,
+            "min_iterations": 5, "max_iterations": 5, "files_per_iteration_step": 1,
+            "min_adapter_calls": 1, "max_adapter_calls": 1, "subsystems_per_iteration_step": 1,
+        }}}
+        outcome = InnerReactLoop(tmp, adapter, react_recorder=None, cfg=cfg, graph=None).run(
+            stage, node=None, attempt=1, first_result=first_result,
+            first_verdict=v1, first_reasons=r1, first_signatures=s1,
+            base_prompt="original stage prompt",
+        )
+        assert outcome.budget_info["mode"] == "complexity_scaled"
+        assert outcome.budget_info["max_adapter_calls"] == 1
+        assert outcome.verdict == "GATE_FAIL"  # never reached PASS -- the CDC domain retry was cut off
+        assert adapter.calls == 3  # 1 reflect + 1 retry, then 1 more reflect before the budget refuses the 2nd retry
+    finally:
+        _rmtree_tolerant(tmp)
+
+
+def test_inner_react_loop_adaptive_budget_scaled_up_still_reaches_pass(tmp_path):
+    """The converse of the constraining test above: a real investigation
+    touching enough distinct subsystems earns a large-enough
+    max_adapter_calls that the SAME _TwoStepRetryAdapter genuinely reaches
+    PASS -- proving the scaling formula grants MORE budget for a more
+    complex real investigation, not merely less."""
+    tmp = _mk_smoke_project()
+    try:
+        _init_git_repo(tmp)
+        _git_commit_baseline(tmp, [
+            "dv_harness/a.py", "tools/b.py", "tests/c.py", "docs/d.py",
+        ])
+        _git_touch_and_stage(tmp, [
+            "dv_harness/a.py", "tools/b.py", "tests/c.py", "docs/d.py",
+        ])
+
+        stage = "SOC_SCENARIO_PLANNER"
+        first_text = (
+            '```dv-harness-evidence:corner_risk_rank\n'
+            '{"cases": [{"corner_id": "c1", "risk_factors": ["x"]}]}\n```\n'
+            '```dv-harness-evidence:reset_power_cdc_corner_gate\n'
+            '{"corner_items": []}\n```\n'
+        )
+        v1, r1, s1 = evaluate_stage_evidence_with_detail(tmp, stage, first_text)
+        first_result = AgentResult(ok=True, text=first_text, raw={}, session_id="s0")
+        adapter = _TwoStepRetryAdapter()
+        cfg = {"policy": {"adaptive_react_budget": {
+            "enabled": True,
+            "min_iterations": 2, "max_iterations": 6, "files_per_iteration_step": 4,
+            "min_adapter_calls": 1, "max_adapter_calls": 4, "subsystems_per_iteration_step": 2,
+        }}}
+        outcome = InnerReactLoop(tmp, adapter, react_recorder=None, cfg=cfg, graph=None).run(
+            stage, node=None, attempt=1, first_result=first_result,
+            first_verdict=v1, first_reasons=r1, first_signatures=s1,
+            base_prompt="original stage prompt",
+        )
+        # min_adapter_calls(1) + floor(4 subsystems / 2 per step) = 3 >= 2 needed
+        assert outcome.budget_info["max_adapter_calls"] == 3
+        assert outcome.verdict == "PASS"
+        assert adapter.calls == 4  # 2 reflections + 2 targeted retries, exactly as the fixed-budget test
+    finally:
+        _rmtree_tolerant(tmp)

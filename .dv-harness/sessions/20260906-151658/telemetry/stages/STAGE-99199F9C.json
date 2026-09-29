@@ -1,0 +1,113 @@
+{
+  "profile_id": "STAGE-99199F9C",
+  "stage_id": "INTAKE",
+  "stage_name": "INTAKE",
+  "graph_node": "INTAKE",
+  "start_time_epoch": 1788274635.9524887,
+  "end_time_epoch": 1788274746.289311,
+  "stage_wall_clock_sec": 110.33682227134705,
+  "aggregate_agent_runtime_sec": 109.6932839374058,
+  "parallel_saving_sec": 0.0,
+  "parallelism_efficiency": 0.0,
+  "input_tokens": 12,
+  "output_tokens": 5970,
+  "cache_read_tokens": 462531,
+  "cache_write_tokens": 35108,
+  "total_tokens": 5982,
+  "tool_calls": 0,
+  "retries": 0,
+  "finding_count": 0,
+  "closed_finding_count": 0,
+  "status": "PARTIAL",
+  "agents": [
+    {
+      "agent": "analysis-agent",
+      "runtime_sec": 99.50162863731384,
+      "model": "",
+      "job_id": "",
+      "input_tokens": 10,
+      "output_tokens": 5628,
+      "cache_read_tokens": 437123,
+      "cache_write_tokens": 17713,
+      "tool_calls": 0,
+      "retries": 0,
+      "status": "PASS",
+      "total_tokens": 5638
+    },
+    {
+      "agent": "analysis-agent",
+      "runtime_sec": 10.191655300091952,
+      "model": "",
+      "job_id": "",
+      "input_tokens": 2,
+      "output_tokens": 342,
+      "cache_read_tokens": 25408,
+      "cache_write_tokens": 17395,
+      "tool_calls": 0,
+      "retries": 0,
+      "status": "PASS",
+      "total_tokens": 344
+    }
+  ],
+  "metadata": {
+    "git_sha": "45ff72b4f241f17965329aa16c6cf16a0538d473"
+  },
+  "entry_checklist": {
+    "items": [
+      {
+        "item_id": "environment",
+        "description": "ENV_CHECK's execution_mode/actions readiness record that INTAKE reads before starting intake (node.blackboard_read)",
+        "present": true
+      }
+    ],
+    "present_count": 1,
+    "total_count": 1,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "exit_checklist": {
+    "items": [
+      {
+        "item_id": "intake_readiness",
+        "description": "prompts.STAGE_INSTRUCTIONS[INTAKE]'s dv-harness-evidence:intake_readiness block",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.mode",
+        "description": "declared project mode (SUBSYSTEM or SYSTEM_LEVEL)",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.target_name",
+        "description": "target_name field of intake_readiness",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.protocols",
+        "description": "protocols list of intake_readiness",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.required_artifacts.protocol_spec",
+        "description": "required_artifacts.protocol_spec confirmed present (SUBSYSTEM mode)",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.required_artifacts.dut_design_spec",
+        "description": "required_artifacts.dut_design_spec confirmed present (SUBSYSTEM mode)",
+        "present": true
+      },
+      {
+        "item_id": "intake_readiness.required_artifacts.rtl_top_or_interface_files",
+        "description": "required_artifacts.rtl_top_or_interface_files confirmed present (SUBSYSTEM mode)",
+        "present": true
+      }
+    ],
+    "present_count": 7,
+    "total_count": 7,
+    "completeness_percent": 100.0,
+    "missing_item_ids": []
+  },
+  "tokens_per_finding": null,
+  "tokens_per_closed_finding": null
+}

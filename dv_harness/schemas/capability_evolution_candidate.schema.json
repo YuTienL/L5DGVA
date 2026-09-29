@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/capability_evolution_candidate.schema.json",
+  "title": "capability_evolution_candidate",
+  "description": "ONE proposed change to this harness's own capability, produced by the `research-architect` agent (Research-Capability Evolution master prompt sections 13/14/63/70). Section 63's own field list is carried verbatim; five further fields exist because section 14's ten mandatory questions need somewhere real to land (overlap_status for Q1/Q2, existing_files for Q3, enhance_insufficient_reason for Q10) and because a state machine needs its own identity and audit trail (schema_version, status_history). NOT a verification verdict of any kind: nothing in this object, and nothing in dv_harness/capability_evolution.py, can assert PASS/FAIL about a DUT, a testbench, a gate or a stage -- the recommendation and promotion_status vocabularies are deliberately disjoint from dv_harness.models.Status. Distinct from dv_harness/self_tuning.py's proposal dict, which tunes an ALREADY-EXISTING gate's ALREADY-EXISTING parameter and therefore never has to justify 'why not reuse'; this object's whole existence_* half is that justification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "candidate_id", "trigger_source", "trigger_type",
+    "source_provenance", "evidence_refs", "hypothesis", "affected_capability",
+    "current_status", "overlap_status", "existing_agent", "existing_skill",
+    "existing_graph_node", "existing_state", "existing_memory",
+    "existing_files", "exact_gap", "proposed_action", "recommendation",
+    "enhance_insufficient_reason", "expected_verification_benefit",
+    "evidence_strength", "confidence", "implementation_difficulty",
+    "integration_risk", "maintenance_cost", "experiment_required",
+    "experiment_plan", "benchmark_plan", "acceptance_criteria",
+    "rollback_plan", "approval_level", "final_decision", "promotion_status",
+    "status_history"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^CEC-[0-9a-f]{12}$",
+      "description": "Stable CROSS-CYCLE identity: 'CEC-' plus the first 12 hex chars of a sha256 over (affected_capability, hypothesis, proposed_action). This is the single field self_tuning.py has no counterpart for -- its review cycles are stateless with respect to 'have I proposed this before'. Deriving the id from the proposal's own content (rather than a counter or a uuid) is what makes a candidate re-derived in a later cycle land on the SAME record and accumulate evidence, instead of forking a duplicate. Minted only by dv_harness.capability_evolution.mint_candidate_id(); never hand-assigned."
+    },
+
+    "trigger_source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The concrete thing that raised this candidate, citable by a reader: a ResearchEvidenceCard's document_id (e.g. 'DOC-9f2c1a0b4de7'), a regression run id, a coverage report path, a named user correction. Never a category word -- trigger_type carries the category."
+    },
+
+    "trigger_type": { "$ref": "#/$defs/trigger_type" },
+
+    "source_provenance": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence_ref" },
+      "minItems": 1,
+      "description": "Where the external half of the evidence physically lives, in dv_harness.doc_extraction.evidence_ref()'s existing 5-key shape -- the same shape a ResearchEvidenceCard carries, so a candidate's provenance and its source card's provenance are directly comparable. Never empty: a candidate whose origin cannot be cited is not a candidate."
+    },
+
+    "evidence_refs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "The INTERNAL half: real, resolvable pointers into this repo and its stores -- a research card path, a MemoryStore memory_id, a Blackboard topic, a file:line. Read together with source_provenance these are the two independent-source counts that dv_harness.inference.score_confidence() is fed; padding either is padding a confidence score."
+    },
+
+    "hypothesis": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What this candidate claims would improve, stated so it could be wrong. Master prompt section 10's HYPOTHESIS step -- the harness's existing Autonomous Inference chain, not a research-specific one."
+    },
+
+    "affected_capability": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The one named harness capability this bears on, in this repo's own vocabulary (e.g. 'verification-change-impact', 'failure-triage', 'memory promotion'). Part of candidate_id's hash input, so renaming it forks a new candidate -- deliberate: a proposal about a different capability IS a different proposal."
+    },
+
+    "current_status": { "$ref": "#/$defs/promotion_state" },
+
+    "overlap_status": { "$ref": "#/$defs/overlap_status" },
+
+    "existing_agent": { "$ref": "#/$defs/l5_search_result" },
+    "existing_skill": { "$ref": "#/$defs/l5_search_result" },
+    "existing_graph_node": { "$ref": "#/$defs/l5_search_result" },
+    "existing_state": { "$ref": "#/$defs/l5_search_result" },
+    "existing_memory": { "$ref": "#/$defs/l5_search_result" },
+    "existing_files": { "$ref": "#/$defs/l5_search_result" },
+
+    "exact_gap": {
+      "type": "string",
+      "description": "Master prompt section 14 question 9: what capability is missing, precisely. Empty string is legitimate and means 'nothing is missing' -- which is what a KEEP recommendation rests on. A non-empty value must name a behaviour, not a file that does not exist yet."
+    },
+
+    "proposed_action": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The concrete change, at the granularity a reviewer could approve or refuse: which file gains which function, which SKILL.md gains which section, which graph node gains which gate. Part of candidate_id's hash input. For a KEEP this is the explicit 'no change; the existing mechanism already covers it' statement, never an empty string."
+    },
+
+    "recommendation": { "$ref": "#/$defs/recommendation" },
+
+    "decision_rationale": {
+      "type": "string",
+      "description": "Optional. Why decide_recommendation() reached this recommendation from this candidate's own evidence, written by that function and not by the agent. Optional rather than required because a candidate assembled by hand for a test or a replay legitimately has none; when present it is machine-authored, so an agent overwriting it is overwriting the record of a decision it did not make."
+    },
+
+    "enhance_insufficient_reason": {
+      "type": "string",
+      "description": "Master prompt section 14 question 10, and the single strongest REUSE-before-ADD enforcement point in this schema: why extending the named existing asset is NOT sufficient. Required non-empty whenever recommendation is ADD (enforced by the allOf below, not by review), empty otherwise. 'No existing asset was found' is not an answer here -- that belongs in the existing_* search_basis fields."
+    },
+
+    "expected_verification_benefit": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What verification outcome improves, in verification terms (escape rate, regression cost, triage time, coverage closure), not in AI terms ('better reasoning'). A benefit that cannot be stated as a verification outcome is a candidate to REJECT."
+    },
+
+    "evidence_strength": { "$ref": "#/$defs/evidence_strength" },
+
+    "confidence": { "$ref": "#/$defs/confidence_result" },
+
+    "implementation_difficulty": { "$ref": "#/$defs/cost_level" },
+    "integration_risk": { "$ref": "#/$defs/cost_level" },
+    "maintenance_cost": { "$ref": "#/$defs/cost_level" },
+
+    "experiment_required": {
+      "type": "boolean",
+      "description": "Whether this candidate must go through EXPERIMENT_APPROVED -> EXPERIMENTING -> BENCHMARKED before it may become a PROMOTION_CANDIDATE. False is the ONLY sanctioned way to reach PROMOTION_CANDIDATE straight from PROPOSED (see capability_evolution.LEGAL_TRANSITIONS); it does not shorten the human-approval half of the path by one step."
+    },
+
+    "experiment_plan": {
+      "type": "string",
+      "description": "Required non-empty when experiment_required is true (enforced by the allOf below). What would be run, against what, to decide this. Empty when experiment_required is false."
+    },
+
+    "benchmark_plan": {
+      "type": "string",
+      "description": "What is measured BEFORE and AFTER, and on what workload, so 'it helped' is a number rather than an impression. Required non-empty when experiment_required is true. This is the PLAN, authored before the experiment runs -- it is a written intention and nothing more. What was actually MEASURED lives in benchmark_result below, which no agent may type: capability_evolution.transition() refuses EXPERIMENTING -> BENCHMARKED unless benchmark_result names a real on-disk experiment record whose digest matches."
+    },
+
+    "benchmark_result": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/benchmark_result" }
+      ],
+      "description": "The MEASURED counterpart of benchmark_plan, produced only by capability_evolution.run_controlled_experiment() from a real isolated before/after run of the existing engine stage runner. null until an experiment has actually run. Not in `required` so a candidate minted before this field existed still validates -- but a candidate that has REACHED the BENCHMARKED state without one cannot exist, because transition() re-reads the referenced record off disk and compares its digest before allowing that edge."
+    },
+
+    "shadow_runs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/shadow_run" },
+      "description": "The REPLICATION half of master prompt section 134's shadow promotion flow -- 'a single successful shadow run is not sufficient proof'. Written only by capability_evolution.run_shadow_replication(), which re-runs the SAME two arms over the SAME stages for an already-BENCHMARKED candidate and changes no governance state at all. Each entry pins one further experiment record by digest, exactly as benchmark_result pins the first, so the stability window BENCHMARKED -> PROMOTION_CANDIDATE requires can only be satisfied by records that really exist, really hash to what the candidate carries, and really have two arm workspaces on disk behind them. Absent or empty until a replication has run."
+    },
+
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "The criteria that decide PROMOTE/REVISE/HOLD/REJECT after an experiment, written BEFORE it runs. Never empty -- a candidate with no stated criterion cannot fail, which makes its eventual success meaningless."
+    },
+
+    "rollback_plan": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Authored HERE, before anything is applied -- not computed at revert time. This is the field self_tuning.py deliberately does not have: its change space is homogeneous (always a JSON key write, so 'restore the prior value' is one generic mechanism), while a capability change may be a new file, a roster line, a graph node, or a skill section, each with its own undo. A rollback plan naming no concrete undo step is not a rollback plan."
+    },
+
+    "approval_level": { "$ref": "#/$defs/approval_level" },
+
+    "final_decision": { "$ref": "#/$defs/final_decision" },
+
+    "promotion_status": { "$ref": "#/$defs/promotion_state" },
+
+    "status_history": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/status_transition" },
+      "minItems": 1,
+      "description": "Append-only. Every state this candidate has been in, oldest first, each with why and who. The first entry is always the DISCOVERED one. Governance states cannot be skipped (capability_evolution.assert_legal_transition), and this array is the record that makes that checkable after the fact rather than only at write time."
+    }
+  },
+
+  "allOf": [
+    {
+      "if": { "properties": { "recommendation": { "const": "ADD" } }, "required": ["recommendation"] },
+      "then": {
+        "properties": { "enhance_insufficient_reason": { "type": "string", "minLength": 1 } },
+        "required": ["enhance_insufficient_reason"]
+      },
+      "$comment": "REUSE before EXTEND before ADD, enforced by the schema. An ADD that cannot say why ENHANCE is insufficient does not validate -- master prompt sections 2.2 and 14 question 10."
+    },
+    {
+      "if": { "properties": { "experiment_required": { "const": true } }, "required": ["experiment_required"] },
+      "then": {
+        "properties": {
+          "experiment_plan": { "type": "string", "minLength": 1 },
+          "benchmark_plan": { "type": "string", "minLength": 1 }
+        },
+        "required": ["experiment_plan", "benchmark_plan"]
+      },
+      "$comment": "Section 70: a successful experiment does not automatically imply HUMAN_APPROVED -- and an experiment with no plan and no benchmark cannot be successful in any checkable sense."
+    },
+    {
+      "if": { "properties": { "overlap_status": { "const": "UNKNOWN" } }, "required": ["overlap_status"] },
+      "then": {
+        "properties": {
+          "recommendation": { "const": "UNKNOWN" },
+          "current_status": { "enum": ["DISCOVERED", "EVIDENCE_GATHERING", "REJECTED"] }
+        },
+        "required": ["recommendation"]
+      },
+      "$comment": "The honesty rule this schema exists to enforce structurally: when the repository could not actually be searched, the answer is UNKNOWN, never a fabricated MISSING that would license an ADD. An UNKNOWN candidate cannot advance past EVIDENCE_GATHERING -- gathering the missing search IS its next action."
+    },
+    {
+      "if": { "properties": { "overlap_status": { "const": "MISSING" } }, "required": ["overlap_status"] },
+      "then": {
+        "properties": {
+          "existing_agent": { "$ref": "#/$defs/conclusive_search" },
+          "existing_skill": { "$ref": "#/$defs/conclusive_search" },
+          "existing_graph_node": { "$ref": "#/$defs/conclusive_search" },
+          "existing_state": { "$ref": "#/$defs/conclusive_search" },
+          "existing_memory": { "$ref": "#/$defs/conclusive_search" },
+          "existing_files": { "$ref": "#/$defs/conclusive_search" }
+        }
+      },
+      "$comment": "MISSING is a positive claim about absence and may only be made when every one of the six searches actually could have found a match. Otherwise the honest answer is UNKNOWN above."
+    }
+  ],
+
+  "$defs": {
+    "promotion_state": {
+      "enum": [
+        "DISCOVERED", "EVIDENCE_GATHERING", "PROPOSED", "EXPERIMENT_APPROVED",
+        "EXPERIMENTING", "BENCHMARKED", "PROMOTION_CANDIDATE",
+        "HUMAN_APPROVED", "PRODUCTION", "REJECTED", "ROLLED_BACK"
+      ],
+      "description": "Master prompt section 70's Promotion Policy, verbatim and complete. Deliberately shares no token with dv_harness.models.Status (the verification verdict vocabulary: NOT_STARTED/RUNNING/PASS/FAIL/PARTIAL/BLOCKED/RETRY/WAIT_USER/CLOSED/ACCEPTED_RISK) so that no reader, and no string comparison, can mistake a governance state for a verification result. Also deliberately richer than self_tuning.py's real 2-outcome classifier (AUTO_APPLY/DEFER) and 4-value status (PENDING/APPLIED/REJECTED/REVERTED): a gate parameter's experiment IS just watching the next slice of gate_history, while a new agent role's is not."
+    },
+
+    "overlap_status": {
+      "enum": ["EXISTS", "PARTIAL_MATCH", "MISSING", "UNKNOWN"],
+      "description": "Master prompt section 14 questions 1 and 2, plus the UNKNOWN this repo's own evidence discipline requires ('UNKNOWN remains UNKNOWN when evidence is insufficient'). EXISTS: a real existing asset already does this. PARTIAL_MATCH: one exists and covers part of it. MISSING: every one of the six searches was conclusive and found nothing. UNKNOWN: at least one search could not be completed, so absence is not established. PARTIAL_MATCH rather than PARTIAL specifically to avoid colliding with dv_harness.models.Status.PARTIAL."
+    },
+
+    "recommendation": {
+      "enum": ["KEEP", "ENHANCE", "ADD", "EXPERIMENT", "REJECT", "UNKNOWN"],
+      "description": "Master prompt section 14's five, plus UNKNOWN. UNKNOWN is not a sixth kind of decision -- it is the refusal to decide while overlap_status is UNKNOWN, and the allOf above binds the two together so one cannot be set without the other. Disjoint from dv_harness.models.Status by construction."
+    },
+
+    "final_decision": {
+      "enum": ["PROMOTE", "REVISE", "HOLD", "REJECT", "PENDING"],
+      "description": "Master prompt section 63's post-experiment decision. PENDING until one is actually taken -- there is no default and no implicit approval."
+    },
+
+    "approval_level": {
+      "enum": ["AUTO_LOW_RISK", "HUMAN_REVIEW_REQUIRED", "HUMAN_APPROVAL_REQUIRED"],
+      "description": "How far this candidate may travel without a human. AUTO_LOW_RISK is documentation-only and still cannot reach PRODUCTION without the ControlPlane approval capability_evolution.assert_human_approval() demands -- it lowers the review burden, never the approval requirement. Any candidate touching production verification-oracle semantics, signoff authority, or git/PR governance is HUMAN_APPROVAL_REQUIRED without exception (master prompt section 73, Self-Improvement Safety Boundary)."
+    },
+
+    "trigger_type": {
+      "enum": [
+        "EXTERNAL_RESEARCH", "REGRESSION_HISTORY", "FAILURE_PATTERN",
+        "COVERAGE_HOLE", "USER_CORRECTION", "INTERNAL_AUDIT"
+      ],
+      "description": "Master prompt section 64's gap-detection sources. USER_CORRECTION carries section 64's own warning in its meaning: a SINGLE correction is never sufficient evidence for a production architecture change -- it may raise a candidate, it may not carry one past EVIDENCE_GATHERING alone."
+    },
+
+    "cost_level": {
+      "enum": ["LOW", "MEDIUM", "HIGH", "UNKNOWN"],
+      "description": "Three separate axes the master prompt keeps separate on purpose (implementation_difficulty / integration_risk / maintenance_cost) -- self_tuning.py collapses all three into one binary risk_level, which is right for a JSON value write and wrong here. UNKNOWN is honest and common early; it is not a low score."
+    },
+
+    "confidence_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "score", "capped_by_counter_evidence", "inputs"],
+      "description": "The EXACT return shape of dv_harness.inference.score_confidence(), plus the inputs it was called with. Stored as the whole result rather than a bare level string on purpose: self_tuning.py's classify_proposal() trusts an LLM's self-reported \"confidence\": \"HIGH\" verbatim, which is a design defect this schema refuses to copy. capability_evolution.recompute_confidence() RE-DERIVES level from inputs and rejects a record whose stored level disagrees, following engine._score_root_cause_confidence()'s precedent of not trusting a self-reported confidence.",
+      "properties": {
+        "level": { "enum": ["HIGH", "MEDIUM", "LOW"] },
+        "score": { "type": "integer" },
+        "capped_by_counter_evidence": { "type": "boolean" },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["independent_sources_count", "evidence_refs_verified", "counter_evidence_count", "multi_agent_consensus_count"],
+          "properties": {
+            "independent_sources_count": { "type": "integer", "minimum": 0 },
+            "evidence_refs_verified": { "type": "boolean" },
+            "counter_evidence_count": { "type": "integer", "minimum": 0 },
+            "multi_agent_consensus_count": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+
+    "evidence_strength": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scale", "rationale"],
+      "description": "The same 1-5 axis research_evidence_card.schema.json already defines, reused rather than re-scaled: how much was actually demonstrated, kept separate from `confidence` (how sure we are we read it right).",
+      "properties": {
+        "scale": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "1 idea/assertion only; 2 small experiment; 3 controlled meaningful benchmark; 4 strong subsystem/engineering evidence; 5 production-proven or independently validated."
+        },
+        "rationale": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "l5_search_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matches", "search_basis", "search_conclusive"],
+      "description": "research_evidence_card.schema.json's l5_match shape plus the one field that lets a card-level 'found nothing' be told apart from 'could not look' -- which is exactly the difference between a defensible MISSING and a fabricated one.",
+      "properties": {
+        "matches": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Real, named, already-existing L5 assets -- e.g. 'dv_harness/change_impact.py select_regression()', 'CORE/verification-change-impact', 'REGRESSION_SELECT'. An entry naming a file that does not exist is worse than an empty list."
+        },
+        "search_basis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What was actually searched: the tree, the grep pattern, the file read. Required whether matches is empty or not, because an empty list is the claim that most needs its search shown."
+        },
+        "search_conclusive": {
+          "type": "boolean",
+          "description": "True only when this search really could have found a match had one existed. False when it could not be completed -- the tree was unavailable, the tool was denied, the search was too narrow to settle the question. A single false here forces overlap_status UNKNOWN and blocks ADD entirely."
+        }
+      }
+    },
+
+    "conclusive_search": {
+      "type": "object",
+      "properties": { "search_conclusive": { "const": true } },
+      "required": ["search_conclusive"]
+    },
+
+    "benchmark_stage_measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "gates_total", "gates_satisfied", "stage_completion_percent",
+                   "gate_reason_count", "gate_outcome_digest", "attempts"],
+      "description": "One stage's measurement in one arm, taken from control_plane.describe_stage() after a REAL engine stage run in the isolated workspace. Deliberately carries no verdict TOKEN: gate_outcome_digest is a hash of the verdict string, so before/after can be compared for CHANGE without this module ever storing a member of dv_harness.models.Status. The unhashed verdict stays where it was produced -- in the arm workspace's own harness state -- and the arm's project_root points at it.",
+      "properties": {
+        "stage": { "type": "string", "minLength": 1 },
+        "gates_total": { "type": "integer", "minimum": 0 },
+        "gates_satisfied": { "type": "integer", "minimum": 0 },
+        "stage_completion_percent": { "type": "number" },
+        "gate_reason_count": { "type": "integer", "minimum": 0 },
+        "gate_outcome_digest": { "type": "string", "minLength": 1 },
+        "attempts": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "benchmark_arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arm", "project_root", "stages", "totals"],
+      "description": "One side of the controlled experiment. `baseline` is the untouched copy of the fixture project; `treatment` is the copy the candidate's bounded change was applied to. Both ran the SAME stages through the SAME engine stage runner.",
+      "properties": {
+        "arm": { "enum": ["baseline", "treatment"] },
+        "project_root": { "type": "string", "minLength": 1 },
+        "stages": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/benchmark_stage_measurement" }
+        },
+        "totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gates_total", "gates_satisfied", "stage_completion_percent"],
+          "properties": {
+            "gates_total": { "type": "integer", "minimum": 0 },
+            "gates_satisfied": { "type": "integer", "minimum": 0 },
+            "stage_completion_percent": { "type": "number" }
+          }
+        }
+      }
+    },
+
+    "benchmark_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["produced_by", "run_id", "record_path", "record_digest", "workspace",
+                   "stages", "before", "after", "delta", "outcome", "measured_at",
+                   "changed_files", "acceptance_criteria_machine_evaluated"],
+      "description": "A real before/after measurement, never an assertion. produced_by is a const so a hand-written value cannot claim this provenance, and record_path/record_digest bind it to an experiment record on disk that capability_evolution.assert_benchmark_measured() re-reads and re-hashes before EXPERIMENTING -> BENCHMARKED is allowed. outcome is deliberately its own vocabulary, disjoint from dv_harness.models.Status: an experiment that improved a number is not a verification verdict, and reaching BENCHMARKED still authorizes nothing (master prompt section 70: a successful experiment does not imply HUMAN_APPROVED).",
+      "properties": {
+        "produced_by": { "const": "capability_evolution.run_controlled_experiment" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "record_path": { "type": "string", "minLength": 1 },
+        "record_digest": { "type": "string", "minLength": 1 },
+        "workspace": { "type": "string", "minLength": 1 },
+        "stages": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "before": { "$ref": "#/$defs/benchmark_arm" },
+        "after": { "$ref": "#/$defs/benchmark_arm" },
+        "delta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gates_satisfied", "stage_completion_percent", "changed_outcome_stages"],
+          "properties": {
+            "gates_satisfied": { "type": "integer" },
+            "stage_completion_percent": { "type": "number" },
+            "changed_outcome_stages": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "outcome": { "enum": ["IMPROVED", "UNCHANGED", "DEGRADED", "INCONCLUSIVE"] },
+        "measured_at": { "type": "string", "format": "date-time" },
+        "changed_files": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "acceptance_criteria_machine_evaluated": {
+          "const": false,
+          "description": "Stated explicitly rather than left to be assumed: acceptance_criteria are free text and this code does not judge them. The measurement is machine-produced; deciding whether it MEETS the criteria stays with the human at the PROMOTION_CANDIDATE -> HUMAN_APPROVED gate."
+        }
+      }
+    },
+
+    "status_transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_status", "to_status", "at", "by", "reason"],
+      "properties": {
+        "from_status": { "oneOf": [{ "$ref": "#/$defs/promotion_state" }, { "type": "null" }] },
+        "to_status": { "$ref": "#/$defs/promotion_state" },
+        "at": { "type": "string", "format": "date-time" },
+        "by": { "type": "string", "minLength": 1, "description": "Who or what caused it: an agent name, a CLI user, 'research-architect'. A transition into HUMAN_APPROVED additionally requires a real ControlPlane approval on disk naming a reviewer -- this field alone never establishes that a human acted." },
+        "reason": { "type": "string", "minLength": 1 },
+        "approval_ref": {
+          "type": "object",
+          "description": "Present only on a transition into HUMAN_APPROVED: the real .dv-harness/control.json approval record (reviewer_id / reviewer_confidence / approved_at) that authorized it, copied here so the candidate carries its own audit trail.",
+          "additionalProperties": true
+        },
+        "stability_window": {
+          "type": "object",
+          "description": "Present only on a BENCHMARKED -> PROMOTION_CANDIDATE transition: the stability window capability_evolution.assert_stability_window() cleared to allow it -- which run ids were counted, the outcome they all agreed on, and that no arm regressed. Copied here so the candidate carries its own evidence that section 134's 'a single successful shadow run is not sufficient proof' was satisfied by more than one real run.",
+          "additionalProperties": true
+        }
+      }
+    },
+
+    "shadow_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["produced_by", "run_kind", "run_id", "record_path", "record_digest",
+                   "stages", "outcome", "measured_at"],
+      "description": "One replication of an already-measured candidate's controlled experiment. produced_by is a const so a hand-written entry cannot claim this provenance, and record_path/record_digest bind it to an experiment record on disk that capability_evolution.stability_window_status() re-reads and re-hashes. A replication authorizes nothing on its own: it neither transitions the candidate nor evaluates its acceptance criteria, and PROMOTION_CANDIDATE remains a human's move.",
+      "properties": {
+        "produced_by": { "const": "capability_evolution.run_shadow_replication" },
+        "run_kind": { "const": "replication" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "record_path": { "type": "string", "minLength": 1 },
+        "record_digest": { "type": "string", "minLength": 1 },
+        "workspace": { "type": "string", "minLength": 1 },
+        "stages": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "outcome": { "enum": ["IMPROVED", "UNCHANGED", "DEGRADED", "INCONCLUSIVE"] },
+        "regression_safe": { "type": "boolean" },
+        "measured_at": { "type": "string", "format": "date-time" },
+        "changed_files": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+      }
+    },
+
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document", "version", "page", "section", "source_location"],
+      "description": "The exact 5-key return shape of dv_harness.doc_extraction.evidence_ref(). Identical to research_evidence_card.schema.json's def of the same name, deliberately -- a candidate's provenance and its source card's provenance must be the same shape to be comparable.",
+      "properties": {
+        "document": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "page": { "type": "string" },
+        "section": { "type": "string" },
+        "source_location": { "type": "string" }
+      }
+    }
+  }
+}

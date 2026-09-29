@@ -1,0 +1,157 @@
+# M5 N-Way Capability Semantic Merge -- Capability Merge Queue
+
+Built per the approved M5-0 checkpoint (`a5ebbdc`, `CANONICAL_WORKTREE_READY_FOR_M5=YES`,
+`AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT=7`) and the explicit M5-start instruction:
+"Create the M5 Capability Merge Queue first. Do NOT begin by copying files."
+
+This document is COHORT 0's own deliverable (M5 prerequisite/dependency revalidation).
+No production code is touched by this file.
+
+## 0. Pre-work verification (instruction items 1-6)
+
+| # | Requirement | Result |
+|---|---|---|
+| 1 | Read Master Capability Status Matrix | Done -- `MASTER_CAPABILITY_STATUS_MATRIX.csv`, 91 rows, 24 `PRIMARY_OWNER_WAVE==M5` |
+| 2 | Read M5 prerequisite matrix | Done -- `M4_M5_PREREQUISITE_MATRIX.csv`, 10 target files (3 already CLOSED/RESOLVED in M4: `register_excel_extract.py`/`memory_vault.py`/`loop_telemetry.py`; 7 genuinely open) |
+| 3 | Read the approved M5 migration-input registry | **No file of that literal name exists.** The closest real artifact is this session's own M5-0 commit `4f45af5` + `AGENT_TASK_LIFECYCLE_ANALYSIS.md`, which registered `dv_harness/task_boundary_conformance.py` and `dv_harness/intake_field_resolution.py` as Parent-only `SOURCE_EVIDENCE_ONLY` migration inputs (`CAP-ATL-004`/`CAP-ATL-007`). Treated as the registry of record; disclosed rather than silently assumed to exist elsewhere. |
+| 4 | Read DE/DV Role-Based HITL architecture | Done -- `DE_DV_ROLE_BASED_HITL_ARCHITECTURE.md` in full. Binding constraint carried into every cohort below: `ONE_GENERIC_DE_DV_WORKFLOW`, no DE/DV engine, `DESIGN_AUTHORITY`/`VERIFICATION_AUTHORITY`/`SHARED_AUTHORITY` as logical roles never derived from identity/host. |
+| 5 | Read Article 0 + applicable task-scoped governance | Done -- `CLAUDE.md` lines 49-143 (5 dimensions: `LOCATION_INDEPENDENT`/`EVIDENCE_GROUNDED`/`KNOWLEDGE_DRIVEN`/`CONTINUOUS_EVOLUTION`/`END_TO_END_DV_ALIGNMENT`). Every capability's `ARTICLE_0_COMPLIANCE` field below is graded against these 5. |
+| 6 | Verify Parent/v50/b7a/b7b/b8 source integrity | **Byte-exact match, all 5**, re-verified this wave via direct `git rev-parse` in each source tree (not trusted from the doc): Parent `3e9dd736...` (`D:\DV\Task\DV_Agent_Harness_L5`), v50 `f3fd1732...` (`D:\DV\Task\DV_Agent_Harness_L5\v50`, git remote `origin` of this repo), b7a `7b2a65a4...`, b7b `c7c7fa09...`, b8 `c9cdd06c...` (all three as `impl/*` branches of the v50 repo, checked out at worktrees `D:/wt/b7a`, `D:/wt/b7b`, `D:/wt/b8`). All `UNCHANGED` vs. `MASTER_PROGRAM_STATUS.md`'s recorded values. |
+
+## 1. Real open M5 capability inventory (from MASTER_CAPABILITY_STATUS_MATRIX.csv, structural parse)
+
+24 rows carry `PRIMARY_OWNER_WAVE==M5`. Breakdown:
+
+- **1 already CLOSED** this session's prior M4 work: `CAP-M4-001` (RegisterFieldIR.enum_values) -- RESOLVED/ENHANCED/TESTED. Not requeued.
+- **8 real shared-file N-way semantic-merge targets** (the actual "M5 N-Way Capability Semantic Merge" work) -- see cohort table below.
+- **6 M3-Deferred-Pool new-file candidates** (Parent/B7A-only, `ABSENT from canonical`, all P3) -- lowest priority, Cohort 5.
+- **9 remaining Agent-Task-Lifecycle roadmap items** (`CAP-ATL-001/002/003/005/006/008/009/010` -- everything except the two migration-evidence rows already called out by name in the M5-start instruction) -- Cohort 5, since 5 of 9 are already `ALREADY_COVERED` (no merge work) and the rest are roadmap-only `DEFINED`/`DEFERRED`.
+
+## 2. Real sizing evidence (this wave, not assumed)
+
+| File | Canonical | Parent | v50 | B7x | Finding |
+|---|---|---|---|---|---|
+| `env_manifest.py` | 1952 | 1952 (byte-identical) | 1952 (byte-identical) | B7B: 2070 | Real merge target is a 2-way diff: canonical/Parent/v50 baseline vs. B7B's +118 lines (VIP-01/VIP-02). Not a fan-out 3-4-way merge. 44-caller fan-in (M4's own finding) is the real complexity driver, not diff size. |
+| `vip_capability_extraction.py` | 686 | 686 (byte-identical) | 686 (byte-identical) | B7B: 778 | Same shape: 2-way diff vs. B7B's +92 lines (VIP-04/05/18). Carries the KNOWN RISK `classify_by_inheritance()` 4-to-5-tuple signature break (M0.5 finding) -- every caller must be found before merge, not merely the diff read. |
+| `functional_coverage_signoff.py` | 630 | 663 (+33) | 630 (byte-identical to canonical) | -- | Parent carries real extra content canonical/v50 lack. HUMAN_DECISION_REQUIRED-flavored (DV-domain judgment call on which return-value contract is correct), not a pure engineering merge -- see CAP-M5-COV-001. |
+| `design_source_inventory.py` | 491 | 441 (-50) | 491 (byte-identical to canonical) | -- | Parent is SMALLER -- contract-question direction (which source's `authority_order_used`/rank-expression claim is current-evidence-correct), not a missing-content merge. |
+| `create_environment.py` | 426 | 430 (+4) | 426 (byte-identical) | B8: 544 (+118) | Small Parent delta; real size is in B8's ARCH-01 addition. M1's own known-defect disposition already documents the contract shape. |
+| `soc_environment_composer.py` | 557 | 649 (+92) | 557 (byte-identical) | B8: 614 (+57) | Two independent deltas (Parent +92, B8 +57) against the same canonical/v50 baseline -- genuinely 3-way, not 2-way. |
+| `amba_fabric_generator.py` | 422 | 422 (byte-identical) | 422 (byte-identical) | B8: 516 (+94) | Clean 2-way diff vs. B8 only. |
+
+## 3. Cohort assignment
+
+**COHORT 0 -- M5 prerequisite/dependency revalidation.** CLOSED this pass (Section 0 above).
+
+**COHORT 1 -- M6-unblocking capability inputs.**
+- `CAP-M5-ENV-001` (`env_manifest.py` N-way merge) -- named directly in `CAP-M5M6-VLEVEL-001`'s (M6, P0) own `SECONDARY_DEPENDENCY` field. Highest-priority M5 item overall (P0 + only real M6-blocking dependency).
+
+**COHORT 2 -- Environment semantic union.**
+- `CAP-M5-ARCH-001` (`create_environment.py`, B8 ARCH-01)
+- `CAP-M5-ARCH-002` (`soc_environment_composer.py`, Parent + B8 ARCH-03, genuinely 3-way)
+- `CAP-M5-ARCH-003` (`amba_fabric_generator.py`, B8 ARCH-04/12)
+
+**COHORT 3 -- VIP / multi-vendor semantic union.**
+- `CAP-M5-VIP-001` (`vip_capability_extraction.py`, B7B VIP-04/05/18, KNOWN RISK signature break)
+
+**COHORT 4 -- Contract / Intake semantic union.**
+- `CAP-ATL-004` (`TASK_SCOPE_CONTRACT` -- migrate `task_boundary_conformance.py`, Parent-only, `SOURCE_EVIDENCE_ONLY` until merged, explicitly named this wave)
+- `CAP-ATL-007` (`TASK_EVIDENCE_CONTRACT` -- clause-level admission of `intake_field_resolution.py`'s `DeclaredValue`/`AutoDiscoveredValue`/`DerivedValue`/`EffectiveValue`/`ValidationState`/`ConfirmationState` split, Parent-only, `SOURCE_EVIDENCE_ONLY` until merged, explicitly named this wave)
+- `CAP-M5-COV-001` (`functional_coverage_signoff.py` contract judgment call)
+- `CAP-M5-DSI-001` (`design_source_inventory.py` contract question)
+
+**COHORT 5 -- Remaining shared-file / roadmap semantic targets.**
+- 6 M3-Deferred-Pool candidates: `CAP-POOL-001/003/004/008/011/012` (all P3, `ABSENT from canonical`)
+- 7 remaining ATL roadmap items: `CAP-ATL-001/002/003/005/006/008/009/010` (5 of 7 already `ALREADY_COVERED` -- no merge action; 2 `DEFINED`-only roadmap concepts)
+
+## 4. Explicit constraints carried into every cohort (per this wave's instruction)
+
+- Capability/symbol/behavior/contract-level semantic merge only. **Whole-file winner strategies are prohibited.**
+- `ONE_GENERIC_DE_DV_WORKFLOW=YES` preserved; no separate DE/DV engines; M5 must not implement M6 Role-Based HITL prematurely (`VerificationLevel`/`HumanRole`/`QuestionOwner`/`ClarificationService`/`HumanGate` are M6-owned -- M5 may not create foundation architecture that conflicts with their still-pending design, and must not build them early).
+- `DeclaredValue`/`AutoDiscoveredValue`/`DerivedValue`/`EffectiveValue`/`Confidence`/`ValidationState`/`ConfirmationState`/`EvidenceRefs` preserved where verified (Cohort 4).
+- After each cohort: focused tests, Constitution/Anti-Drift, provenance update, Master Capability Status Matrix update, `SOURCE_CAPABILITY_LOSS=0` check, no new mandatory UNKNOWN, Parent/v50/b7a/b7b/b8 unchanged re-check. Full regression deferred to M5 closure only.
+
+STATUS: COHORT 0 CLOSED. COHORT 1 CLOSED (CAP-M5-ENV-001 resolved, see
+commit `a0650f4`). COHORT 2 CLOSED (CAP-M5-ARCH-003, CAP-M5-ARCH-001,
+CAP-M5-ARCH-002 all resolved -- see
+`COHORT_2/ARCH_002/M5_COHORT_2_ARCH002_FINAL_REPORT.md`).
+`CAP-M5-TOPTB-001` (discovered during Cohort 2, given its own dedicated
+disposition/merge task) RESOLVED -- see
+`TOPTB_001/M5_TOPT_B001_FINAL_REPORT.md`. COHORT 3 CLOSED (CAP-M5-VIP-001
+resolved -- see `COHORT_3/M5_COHORT_3_FINAL_REPORT.md`). COHORT 4 PARTIAL:
+`CAP-ATL-004` and `CAP-ATL-007` RESOLVED this pass, per a dedicated
+"Canonical Contract / OpenSpec Semantic Merge" task explicitly scoped to
+just those two -- see `COHORT_4/M5_COHORT_4_FINAL_REPORT.md`.
+`CAP-M5-COV-001` and `CAP-M5-DSI-001` (also nominally Cohort 4 per this
+queue's own Section 3 grouping) were **not** in that task's scope this
+pass. COHORT 5 CLOSED: `CAP-M5-COV-001` RESOLVED (CLOSED) and
+`CAP-M5-DSI-001` RESOLVED (SUPERSEDED) -- see
+`COHORT_5/M5_COHORT_5_FINAL_REPORT.md`. A full M5-owned capability
+reconciliation performed as part of Cohort 5 found 10 additional items
+(`CAP-ATL-001/002/003/008`, `CAP-POOL-001/003/004/008/011/012`) never
+actually dispatched by any Cohort 0-5 instruction; reassigned
+`PRIMARY_OWNER_WAVE` M5->M6 this wave (disclosed scope-closure
+decision) -- see `COHORT_5/M5_COHORT_5_CAPABILITY_INVENTORY.md`.
+**M5.9 OWNERSHIP RECONCILIATION (2026-09-23) reviewed that 10-item move
+and found it partially wrong**: the 4 `CAP-ATL-001/002/003/008` items
+are correctly `M6` (real, wiring/dispatch-conditioned work over
+already-present foundations); the 6 `CAP-POOL-*` items are reverted
+`M6` -> `M5` (real, un-migrated Parent code, which the explicit
+ownership rule keeps M5-owned) -- see
+`M5_9_OWNERSHIP_RECONCILIATION/M5_9_OWNERSHIP_RECONCILIATION.md`.
+`M5_CAPABILITIES_OPEN = 6` honestly (the reverted POOL items, all
+genuinely un-migrated) -- `M5_READY_FOR_FINAL_CLOSURE_REGRESSION = NO`
+until they are resolved or given a different disposition.
+`M5_STATUS` remains `IN_PROGRESS`.
+
+**M5 POOL CLOSURE -- BATCH 1 (2026-09-23)** resolved `CAP-POOL-008`
+(`l5dgva_v5_ss84_phase_entry_protocol_schema.py`) and `CAP-POOL-012`
+(`rtl_filelist_parser.py`) via direct migration -- see
+`M5_POOL_CLOSURE/M5_POOL_CLOSURE_FINAL_REPORT.md`.
+`CAP-POOL-001/003/004/011` remained OPEN, correctly identified as blocked
+on 4 real, un-migrated Parent dependency modules outside that task's own
+6-item scope.
+
+**M5 POOL CLOSURE -- BATCH 2 (2026-09-24)** resolved the remaining 4:
+`CAP-POOL-001` (`engine_maturity_state.py`), `CAP-POOL-003`
+(`l5dgva_directive_blackboard_work_queue.py`), `CAP-POOL-004`
+(`l5dgva_kc_extraction.py`), `CAP-POOL-011`
+(`eight_engine_telemetry_rollup.py`) -- by migrating the 4-module
+dependency chain Batch 1 identified (`l5dgva_gap_queue.py` ->
+`l5dgva_workitem_projection.py` -> `l5dgva_directive_registry.py`;
+`eight_engine_runtime_proof_matrix.py`, migrated WITH ADAPTATION -- a
+disclosed 8-to-5-signal reduction on its `five_level_memory_engine` rule,
+reflecting canonical's own independently-evolved `engine.py`) first, in
+dependency order, across 5 reviewable commits
+(`canonical/m4-dependency-closure`, `a55735a`/`f4f165a`/`ec27675`/
+`303a58d`/`dd6b90d`). 107/107 tests pass across all 8 migrated modules,
+matching Parent's own pre-migration 8-suite regression count exactly.
+See `M5_POOL_CLOSURE/M5_POOL_BATCH2_FINAL_REPORT.md` for full evidence.
+
+**`CAP_POOL_OPEN = 0` / `M5_CAPABILITIES_OPEN = 0` as of Batch 2.** All 21
+M5-owned rows in `MASTER_CAPABILITY_STATUS_MATRIX.csv` now carry a closed
+disposition -- see `M5_POOL_CLOSURE/M5_FINAL_PRE_CLOSURE_AUDIT.md` (fully
+re-derived, not hand-patched). `M5_READY_FOR_FINAL_CLOSURE_REGRESSION = YES`
+on the Pool-closure dimension; `M5_STATUS` remains `IN_PROGRESS` until a
+separately-dispatched M5 Final Closure Regression task actually runs
+against a stable qualified checkpoint -- not started by Batch 2 itself, per
+its own explicit instruction.
+
+**M5 FINAL CLOSURE REGRESSION (2026-09-24)** ran the full
+`dv_harness_tests/` suite against a fresh, freeze-verified checkpoint
+(`REGRESSION_HEAD = 789be4d1665f6c70eab90d64e30cb17db61ca7f6`): 13318
+passed, 40 failed, 69 skipped, 1 xfailed in 3386.51s, watched continuously
+for a hang (none occurred). Every one of the 40 failures individually
+classified by real error text + `git log -1`: 0 overlap with any
+M5-touched file, every failing file's last commit predates M5's own start
+entirely -- 28 `ENVIRONMENT` (missing `duckdb`, unset `core.hooksPath`,
+real `pueue`/Obsidian-CLI machine-state dependencies, missing reference
+fixtures) + 12 `PRE_EXISTING` (real, pre-M5 gaps). `REGRESSION_CAUSED_BY_
+M5 = 0`. Also caught and corrected a real counting-script defect in
+Batch 2's own report: `AUTHORITATIVE_MASTER_P0_BLOCKER_COUNT` is **5**, not
+6 (`CAP-POOL-005`'s own disclosed cross-ref to `CAP-M5M6-VLEVEL-001` was
+being double-counted by a naive prefix match). All 16 Section-16 closure
+conditions met -- see `M5_POOL_CLOSURE/M5_FINAL_REPORT.md`.
+
+**`M5_STATUS = READY_FOR_APPROVAL`.** M6/M10.5/M11/M12/M14 not started;
+Reference USB not consumed; Parent/v50/b7a/b7b/b8 unchanged throughout.

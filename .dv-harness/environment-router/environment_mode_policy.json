@@ -1,6 +1,34 @@
 {
   "enabled": true,
   "modes": {
+    "IP_MODE": {
+      "goal": "Generate a single IP/DUT-with-VIP verification environment; no subsystem registry is involved",
+      "note": "Added CAP-M5M6-VLEVEL-001 (verification_level=IP -> environment_mode_router.resolve_environment_mode()'s _resolve_with_level() branch). Not present in Parent's own copy of this file either (a real, disclosed gap there too, not reproduced here) -- Parent's router reads verification_level.LEVEL_SEMANTICS directly for the IP_MODE case rather than this policy JSON, and this file is reference/documentation only, never loaded at runtime by the router (see resolve_environment_mode()'s own docstring: rules are transcribed into code, not read from this file).",
+      "examples": [
+        "PCIe",
+        "USB",
+        "Ethernet",
+        "MIPI-CSI",
+        "MIPI-DSI",
+        "CAN-FD",
+        "AMBA4",
+        "eMMC",
+        "SD/SDIO",
+        "eDP",
+        "UCIe",
+        "new protocol/interface"
+      ],
+      "flow": [
+        "user_requirement",
+        "ip_selection",
+        "current_evidence_acquisition",
+        "protocol_specific_builder",
+        "compile",
+        "smoke",
+        "self_repair",
+        "baseline_ready"
+      ]
+    },
     "SUBSYSTEM_MODE": {
       "goal": "Generate/build a subsystem verification environment",
       "examples": [

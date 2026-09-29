@@ -1,0 +1,22 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB31 event buffer setup -- exact 4-step order and register offsets (GEVNTADR/SIZ/COUNT)",
+  "summary": "DWC_usb31_programming.txt Sec 4.2.2 'Event Buffers' (p.567, txt:28627-28658) gives the canonical, order-explicit recipe, quoted: 'To configure an Event Buffer, the software performs the following steps: 1. Sets up an empty buffer in system memory. 2. Writes the address of the beginning of the buffer into GEVNTADRn. This address must be aligned to the Event Buffer size. 3. Writes the size of the buffer and interrupt mask into GEVNTSIZn... 4. Write a 0 into the GEVNTCOUNTn register. This must be the last step, as it enables the Event Buffer.' (txt:28631-28640). Constraint: 'After the Event Buffer has been configured, software must not change the size or address' (txt:28641). Operates as a circular buffer: first event at GEVNTADRn, subsequent events at +4, wraps at GEVNTADRn+GEVNTSIZn (txt:28654-28658). This yields a THIRD checkable ordering rule (distinct from the two harness already confirmed): GEVNTADRn and GEVNTSIZn must be written BEFORE GEVNTCOUNTn is written to 0 -- a BFM pattern zeroing GEVNTCOUNTn before/without programming GEVNTADRn/GEVNTSIZn violates this documented order and is worth checking as an additional defect class. Register-level detail (Register Descriptions chapter, all offset 0xNNNN + i*0x10 for interrupter index i, i=0..DWC_USB31_DEVICE_NUM_INT-1): GEVNTADRLO(#n) p.249 txt:13626-13655 offset 0xc400+i*0x10, 32-bit low DMA address, 'Software must initialize this address once during power-on initialization... must not change... after it is initialized.' GEVNTADRHI(#n) p.250 txt:13662-13691 offset 0xc404+i*0x10, same rules for high 32 bits. GEVNTSIZ(#n) p.251 txt:13697-13746 offset 0xc408+i*0x10: bit31 EVNTINTRPTMASK (1=mask interrupt but events still written to buffer), bits[15:0] EVENTSIZ (must be multiple of 4, minimum 32 bytes). GEVNTCOUNT(#n) p.251 txt:13753-13769 offset 0xc40c+i*0x10: 'During initialization, software must initialize the count by writing 0 to the Event Count field... hardware raises the corresponding interrupt line... software processes one or more events... writes the Event Count field with the number of bytes it processed.' Also: 'The controller always leaves one entry free in each Event Buffer... hardware writes the Event Buffer Overflow event' when almost full (txt:28681-28686). Events are 4 bytes except the 12-byte VndrDevTstRcved event (txt:28659-28661).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_programming.txt",
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_programming.pdf"
+  ],
+  "category": "programming_guide",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-C7A17B6C47",
+  "level": "project",
+  "created_at": 1788366812.014929,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

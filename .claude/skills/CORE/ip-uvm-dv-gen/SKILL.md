@@ -20,7 +20,8 @@ legitimate evolution. Where a step has real generator code backing it in
 restating its schema independently -- currently: `bind_mechanism_generator.py`
 (two-hook skeleton + evidence-gated `bind`), `address_map_verifier.py`
 (Step 3's three-independent-source address method), and `generator.py`'s
-`virtual_sequences`/`SCOREBOARD_CHECKS` DSLs (Steps 7/8). If this skill and
+`virtual_sequences`/`SCOREBOARD_CHECKS`/`transaction_scoreboards` DSLs
+(Steps 7/8). If this skill and
 the agent file ever read as contradictory on the same point, that is a bug in
 one of them, not an acceptable state -- fix the stale one rather than
 picking whichever you read first.
@@ -36,8 +37,8 @@ workspaces, status bar, gates, and a kickoff-brief export.
 
 | Role | Tool | What it forces |
 |---|---|---|
-| Simulation | **Synopsys VCS** | Two-stage `vlogan` then `vcs`. Filelist paths resolve against the **working directory**. Partition compile rebuilds globally on any command-line change |
-| Debug | **Synopsys Verdi** | **FSDB only** -- never VCD or VPD. `-kdb` in **both** stages. `-debug_access`, not `+all`, for post-processing |
+| Simulation | **Synopsys VCS** | `vlogan` analyze then `vcs` elaborate, in `onestep` or the default `fourstep` incremental flow -- see Build system below. Filelist paths resolve against the **working directory**. Partition compile rebuilds globally on any command-line change |
+| Debug | **Synopsys Verdi** | **FSDB only** -- never VCD or VPD. `-kdb` in **every** stage. `-debug_access`, not `+all`, for post-processing. Protocol Analyzer where the VIP supports it -- see Build system below |
 | VIP | **Synopsys VC VIP (SVT)** | UVM flow includes the *unparameterised* interface. Needs `-ntb_opts uvm` plus the VIP's `use_sigprop`. Width defines truncate silently if unset |
 
 ## Target settings
@@ -50,6 +51,25 @@ Set by the user, recorded at the top of the environment's `CLAUDE.md`:
 | `IP_PREFIX` | `usb_` `pcie_` `eth_` `csi_` `dsi_` `canfd_` `edp_` `emmc_` `sdio_` `axi_` |
 | `DUT_ROLE` | **The VIP takes the opposite role.** Confirm from the RTL |
 | `ATTACH_LAYER` | `serial` (pads) or `digital` (controller-to-PHY). A build configuration, not a runtime switch |
+| `PORT_VIP_MAP` | For a multi-instance/multi-port target: which real instances get a bound VIP, and whether they share one config or need different ones per port -- **confirm explicitly, don't infer from the port count** (confirmed gap, 2026-08-31: a 2-port USB target's per-port VIP-binding topology was not asked until the human raised it) |
+
+**Standing rule (2026-09-01): the `<ip>`/`IP_PREFIX`/generic-naming
+convention applies ONLY to this harness's own reusable template assets
+(this file, the agent file, `dv_harness/uvm_generator/templates/`) --
+never to what you generate for a real project.** A real deliverable uses
+real, concrete names throughout (`usb_seq_launcher.sv`, `USB_GCTL`, real
+project signal/instance names) -- never leave literal `<ip>`/`IP_PREFIX`
+placeholder text in a real deliverable, and never genericize a real
+deliverable's already-concrete names back toward something generic.
+
+**The reverse direction (2026-09-01): when distilling a real pattern from
+a sibling project's own protocol-specific files (Iron Rules, a Makefile,
+any real-project knowledge) into a permanent harness asset, rewrite it in
+protocol-agnostic/generic form** -- do not copy the source's rule text
+verbatim with its concrete protocol/signal/task names left in place;
+extract the lesson and state it generically. A concrete real-project
+example may still be cited as an illustration; the rule's own statement
+must be generic.
 
 ---
 
@@ -99,14 +119,27 @@ nesting.
 | Need | Go to |
 |---|---|
 | IP configuration, role, enabled features | `DUT/RTLCAT/**/*_params.svh` |
-| Register base addresses | **The decoder in `DUT/RTLCAT/`.** `Doc/` corroborates, never decides. Cross-checked mechanically (three independent sources: decoder + BFM-access histogram + doc) by `dv_harness/uvm_generator/address_map_verifier.py:verify_address_map` -- see the agent file's Step 3 for the method, that module's docstring for the schema |
+| Register base addresses | **The decoder in `DUT/RTLCAT/`.** `Doc/` corroborates, never decides. Cross-checked mechanically (three independent sources: decoder + BFM-access histogram + doc) by `dv_harness/uvm_generator/address_map_verifier.py:verify_address_map` -- see the agent file's Step 3 for the method, that module's docstring for the schema. **Standing rule (2026-09-01, distilled/genericized):** this address-map discipline generalizes to ANY name-translation generation step (spreadsheet column -> target class field, legacy macro -> current name) -- check the target name against the REAL target API source before emitting, sort failures into unparsed/unmatched/legacy-duplicate buckets rather than one generic error |
 | Chip top ports, bus declarations, clock chain | `DUT/RTLCAT/` |
 | Where the register macros are defined | `DUT/MODEL/` -- the redirect must precede the model's task definitions |
 | Which `ifdef` branches are live | `DUT/vcs.opt` defines |
 | The IP initialisation table to audit patterns against | `Doc/` databook |
 | Clause numbers for the vPlan | `Spec/` |
-| Sequence collections, interfaces, class names | `VIP/src/`, `VIP/include/` |
-| DUT wiring templates, closest topology | `VIP/examples/` |
+| Sequence collections, interfaces, class names | `VIP/src/`, `VIP/include/` -- **standing rule (2026-09-01, distilled/genericized):** the tree is typically simulator-partitioned at the top level (one sibling dir per simulator, same class hierarchy repeated) -- scope every search to the one matching the Fixed toolchain's simulator, never sweep the whole tree. A fixed small entry-point filename set exists regardless of protocol (agent/agent-config/top-config/transaction[+exception]/system-virtual-sequencer/system-base-sequence); decode the filename grammar and `Glob`-narrow before `Grep`, don't sweep. The literal `.uvm.` filename infix, not context, is the real marker for which interface variant a UVM flow needs |
+| DUT wiring templates, closest topology | `VIP/examples/` -- **standing rule (2026-09-01, distilled/genericized):** when the closest example is still VIP-to-VIP (no real DUT anywhere in it), re-mapping it is a checklist: drop the far-side ACTIVE agent, drop callbacks that GENERATED far-side responses, keep the far-side PASSIVE monitor but repurpose it as the scoreboard's data source, add whatever buses a VIP-to-VIP example never needed (register/DMA bus, clock/reset, sideband) from scratch. Filter the VIP's own library by DUT config one named feature-slice at a time -- a disabled feature can eliminate a whole family of sequences/tests/callbacks together, not just a couple of tests |
+| Installed simulator/VIP version compatibility | **Standing rule (2026-09-01, distilled/genericized):** confirm explicitly, don't assume -- check the installed VIP/SVT version (a small metadata file alongside the VIP install, e.g. `.dw_vip.cfg`-style) and the vendor's release-notes PDF (typically under the VIP's own `doc/`) for its simulator-compatibility statement. No HTML/text reference and no PDF renderer available? Standardize on a layout-preserving PDF text-extraction CLI (e.g. `pdftotext -layout`) -- confirm which tool the authoring host actually has first, per the Tool Usage Verification Gate |
+| The DE's actual current compile/run script, by name | Not just `vcs.opt` -- ask for and read the real launcher (e.g. `runver_precomp`/`runver.sh`-style). **Confirmed drift (2026-08-31):** a real project had a second, plausible-looking launcher that silently built the wrong top-level config (an XMR-excluding `-top` override); the correct script's own header comment already documented the fix. A script's build-shaped name is not evidence it builds correctly |
+| Exact VIP interface bind location, per instance | Distinct from `ATTACH_LAYER` -- the real port-list entries on the real module each VIP interface connects to, confirmed per instance for `PORT_VIP_MAP`, never assumed to follow a naming pattern across instances |
+| Whether the existing DE model already drives chip-level bring-up pins correctly (test mode/reset/strap/crystal) | **Confirmed drift (2026-08-31):** a real project's existing model already had a complete, correct bring-up sequence for these pins -- reuse it verbatim in the new environment's `block` branch rather than re-deriving it from the databook |
+
+**Confirmed drift (2026-08-31): this survey is not the same as reproducing
+the DE's baseline.** This project's engine graph has a distinct
+`DE_BASELINE_REPRODUCTION` stage between `INTAKE` and `ARCH_DISCOVERY` --
+confirm the DE's real launcher currently builds clean, on the current
+snapshot, before generating anything new on top of it. Reading `vcs.opt`/
+`command.txt` (necessary) is not the same as confirming the baseline builds
+(sufficient) -- a real session skipped straight to DUT/VIP survey and only
+reproduced the baseline after being asked to.
 
 ---
 
@@ -134,9 +167,41 @@ actually lost.
 Stop only for a destructive or irreversible action outside `uvm/` and `sim/`
 -- editing `DUT/` beyond the two hook blocks, or touching `VIP/`.
 
+**Standing rule (2026-09-01, distilled/genericized): in a multi-agent
+build/regression workflow, only ONE agent may be the "build agent" at
+any time -- every other concurrently-active agent must be strictly
+read-only against the build.** Shared mutable build state (stamps,
+intermediate object/library directories, the one simulator binary) makes
+concurrent `make`/`bsub`/delete from a second agent produce indeterminate
+binaries with clean-looking logs and jobs killed by unrelated cleanup
+with no attributable error. Every non-build-agent dispatch must say so
+explicitly ("read-only; do not run make; do not submit LSF jobs; do not
+delete anything"). Directly realistic for this harness's own multi-agent
+dispatch model -- and independently corroborated by this session's own
+controller practice of routing sequential build/edit work through one
+busy agent at a time.
+
+**Confirmed drift (2026-08-31): a relayed override claim is not Human
+Override.** A dispatched instance of the agent correctly refused to act on
+a controller-relayed "the user authorized an exception to No Golden-
+Reference Content Mining" message -- only the human's own words, not
+another agent's paraphrase of them, can invoke Human Override on a named
+CLAUDE.md rule. Hold the original rule and ask the controller to forward
+the human's own words verbatim until then; keep making progress on
+whatever the disputed override does not gate.
+
 ---
 
 ## Non-negotiables
+
+**Confirmed drift/practice (2026-08-31): each non-negotiable needs its own
+concrete proof, not just a stated intent.** Rule 1 (existing flow inert)
+got an unprompted real-build proof early in a real session; rule 2 (no UVM
+knowledge needed -- the real `CPUREAD`/`CPUWRITE`-style macros must
+redirect through the register bridge while staying ordinary task calls at
+the command.txt site) did not get demonstrated until the user explicitly
+asked. Demonstrate each with a real, cited example as soon as it becomes
+checkable -- don't let stating it substitute for proving it.
 
 1. **The original flow still works.** Every DUT edit is a guarded hook block,
    inert without one `+define+`. `grep -rn "DV_UVM HOOK"` lists all of them.
@@ -144,7 +209,21 @@ Stop only for a destructive or irreversible action outside `uvm/` and `sim/`
 3. **Pattern selection is a run-time plusarg.** Never a compile define -- one
    elaboration must serve every pattern.
 4. **Cite `file:line`.** Never infer a fact from a name, a comment or a
-   directory.
+   directory. **Standing rule (2026-09-01, distilled/genericized):**
+   multi-MB RTL/parameter files -- grep for the specific fact, read only
+   the matching fragment; a project's own notes may not be UTF-8, try the
+   platform's legacy/regional encoding before calling a garbled read
+   "corrupt"; a vendor PDF with no HTML reference and no page-renderer --
+   standardize on a layout-preserving PDF text-extraction CLI, confirmed
+   installed first. **For a vendor hard-macro shipped with BOTH a raw-IP
+   databook and a separate wrapper-IP databook** (common for SerDes/PHY
+   macros), confirm from the RTL instantiation which one the design
+   actually instantiates before citing any signal/threshold from either
+   -- reading only the raw macro's databook against a design that
+   actually instantiates the wrapper produces confident, well-evidenced,
+   wrong conclusions (a real project hit this identically three times in
+   one investigation, all resolved together once the wrapper's own
+   databook was found).
 5. **"Statically checked" is not "compiles".** Say which one you mean.
 
 ---
@@ -196,6 +275,21 @@ an unexpected directory), but don't flag a relative path as broken on sight
 Everything else uses `bind`, targeted at **where the signals actually are** --
 signals declared at chip level with the subsystem merely connecting to them
 get bound at chip level.
+
+**Bind-location rules (CLAUDE.md's own "Bind-Location Rules" section, not
+restated here in full -- cross-reference, not duplicate): bare-module-name
+vs. full-instance-path scope, centralized `*_bind.sv` files under `tb/`
+(never a bind statement inserted directly into read-only RTL), clock/reset
+through the bind's own port list (never a cross-level hierarchical
+reference), and no generate/for-loop bind targets (explicit literal indices
+only).** `dv_harness/connectivity.py` is the real code backing the 4-tier
+bind-confidence classification (T1 already-decided / T2 structural
+protocol-fingerprint match / T3 naming-heuristic-only, always
+human-confirmed / T4 undecidable, routed to the question queue) and the
+3-gate pipeline (elaboration check, static zero-time connectivity,
+transaction-activity check) a connectivity plan must clear before it is
+presented for human confirmation -- see
+`.work/mcp-bind-connectivity-report.md`.
 
 ---
 
@@ -252,6 +346,13 @@ protocol whose physical layer has bidirectional or multiply-driven pins
   constant either; drive them with a `reg` under real time-sequenced control
   (or `tran` through a pullup/pulldown), matching how the real DUT bench
   expects them to come up.
+- **Whether a VIP genuinely replaces an existing proven bus-master task or
+  the bridge only wraps it for ordering/visibility is a decision to state,
+  not assume.** Confirmed real case (2026-08-31): the safer default (keep
+  the proven task as real master) was explicitly overridden by the user in
+  favor of real VIP ownership. If replacing: attach the new master at the
+  old master's own real top-level port (found in Step 3's survey), not at
+  a point deep inside the interconnect near an arbiter.
 - **When a VIP/AXI/APB-style bus VIP replaces a bus master via `force`**
   (rather than a real port connection), **force only that master's
   OUTPUTS** (address/data/valid/write-enable signals) onto the target bus.
@@ -270,6 +371,10 @@ protocol whose physical layer has bidirectional or multiply-driven pins
   module-scope `pattern_done` bit; the base test objects at time 0 and waits
   on it. **Forgetting to set it = instant pass.**
 - Forking a sequence and returning without joining = same silent pass.
+- **Both bridges need their own timeout layers, not just the sequence
+  launcher.** Confirmed real gap (2026-08-31): a register bridge with no
+  timeout turned a real hang into a dead simulation with zero diagnostic,
+  instead of a message naming the stalled address.
 - Three timeout layers, each naming what it waited for: per-request (fatal,
   names the sequence) -> per-group join (bounded, **lists what has not
   returned**) -> whole-pattern (error, epilogue, forced finish).
@@ -278,6 +383,45 @@ protocol whose physical layer has bidirectional or multiply-driven pins
 - Time-0 ordering between the pattern's first access and `run_test()` is
   undefined. The bridge **waits**; it does not check-and-fail.
 
+**Standing rule (2026-09-01, distilled/genericized): never `disable
+fork`/named `disable` across instances sharing one lock.** A bounded
+`fork ... join_any` inside a per-instance branch must save each spawned
+branch's `process::self()` handle and, after `join_any`, `.kill()` only
+the handles this fork itself produced -- never a bare `disable fork;` or
+a named `disable <label>;` when multiple instances share one
+capacity-limited resource lock. Failure mode: not a clean timeout, but a
+silent, total, permanent hang of every future access to that shared
+resource, because `disable fork` kills the calling process's whole
+descendant subtree -- which can reach a sibling instance mid-dispatch and
+holding the lock. A named-label variant is worse: two instances can share
+an identical label, letting one's disable kill the other's still-running
+block. Real worked example (USB, DWC_usb31 wrapper): a sibling project
+hit both forms (label collision between two ports' bring-up forks; a bare
+`disable fork` in one port's IRQ-service wake killing the other port's
+in-flight dispatch) and fixed every bounded-wait site with the
+`process::self()`/`.kill()`/`join_any` idiom above.
+
+**Standing rule (2026-09-01, distilled/genericized): never `$finish` --
+always end via a name-matched final-check call.** `$finish` skips
+whatever end-of-test hook prints the pass/fail line regression tooling
+parses. End every pattern via a project-defined final-check macro/task
+taking the pattern's own registered name, checked to match. For a
+multi-instance/multi-config pattern with per-instance applicability, use
+a shared run counter incremented only when an instance actually exercised
+applicable content, checked non-zero after join, with an explicit error
+if nothing applicable ran anywhere (must not read as the same clean pass
+as a real run). Real worked example: a sibling project's `FINAL_CHECK("<
+name>")` macro plus a shared `..._ports_run` counter with an explicit
+`ERROR: <name> exercised no port` message.
+
+**Standing rule (2026-09-01, distilled/genericized): fail-fast, not
+fail-silent -- the register-access bridge's own no-degradation
+contract.** Once the bridge is the SOLE path for register access, it
+needs a fatal-with-actionable-diagnostics response if its resident
+sequence isn't running or a request times out -- never stale/default
+data returned as if the access happened. No legitimate fallback exists
+for a register read whose real value was never obtained.
+
 ### Concurrency
 
 A capacity-1 semaphore held until the response event means **blocking
@@ -285,26 +429,95 @@ wrappers can never overlap**, however the pattern is written -- `fork ... join`
 of three blocking tasks is sequential, in an unpredictable order. Real
 concurrency needs a separate non-blocking launch path plus an explicit join.
 
+**Standing rule (2026-09-01, distilled/genericized): if serialization is
+already guaranteed at two levels (the bridge's own semaphore + the
+sequencer issuing one item at a time), the driver underneath must NOT add
+a THIRD lock.** A third lock deadlocks against the bridge's dispatch call,
+which is already holding the first lock while it waits for the third.
+
 **Never run register access concurrently with the bus VIP's random traffic**
 if both servers sit on the same sequencer: separate locks means they really
 do overlap, one sequencer means UVM interleaves them, and random-address
 writes land in the IP's register space with no error message at all.
+
+**Standing rule (2026-09-01, distilled/genericized): `join`, never
+`join_any`, on the outer per-instance host-script fork once a background
+service branch is independently forked.** Once `branch_fw`'s per-instance
+loops run independently, bring-up branches finish long before either host
+script -- `join_any` on the outer fork ends the whole pattern on the
+first (typically a bring-up branch, microseconds in) to return: 0 errors,
+looks like a clean pass, tested nothing. Close with a plain `join`.
+Patterns that legitimately need single coordinated closure across
+instances declare the deviation with an explicit project-chosen tag
+comment (a sibling project uses `//SIX-BRANCH-EXC: <reason>`); a static
+checker should hard-FAIL an undeclared deviation and flag a
+declared-but-unused exception too (it can silently hide the next real
+violation). **Generalize this beyond join/join_any:** the same
+declare-with-a-reason/flag-if-stale mechanism applies to ANY structural
+architecture-conformance rule with legitimate exceptions -- fold it into
+whatever audits generated environments against the canonical branch
+architecture. Design principle, quoted from a real sibling project's
+checker: an undeclared deviation is the violation -- a permanent
+unexplained FAIL only teaches people to ignore the checker, and a silent
+exemption teaches them nothing at all.
+
+**Two more concurrency traps, 2026-09-01, distilled/genericized:** (1) a
+bounded background dispatch needs a MATCHING bounded-wait call before the
+pattern claims completion -- a dispatch with no matching wait lets
+completion race ahead of a transfer still in flight, reporting a clean
+pass while it's silently abandoned. (2) a bare `fork...join` of two or
+more already-serialized (semaphore-wrapped) tasks LOOKS concurrent but
+isn't -- restating the capacity-1-semaphore fact above as its own named
+trap since it's easy to miss when skimming what looks like a parallel
+fork. Separately: a name-based static classifier (scanning for known
+macro/task literals) can be defeated by string-keyed factory dispatch (a
+sequence launched by class-name STRING, not a literal macro call) -- a
+real checker was false-PASSed by exactly this. General principle: a
+checker silently defeated by an indirection layer is worse than no
+checker at all.
 
 **A reusable multi-instance pattern architecture** (observed in a real
 multi-port project, 2026-08-28 -- consider for any target with >=2
 independent instances/ports, not USB-specific): one blocking "Global"
 section for once-only SoC bring-up (clock/PLL/reset), then per-instance
 controller/register bring-up branches (`branch_a<n>`) forked `join_none` so
-they run in parallel, then ONE background service branch (`branch_fw`) also
-forked `join_none` that internally services every instance rather than being
-duplicated per instance, and finally per-instance VIP-driven host-script
-branches (`branch_b<n>`) that the pattern itself `fork`s and `join`s (these
-are what actually gate the pattern's completion). The load-bearing
-distinction to preserve if you adopt this shape: the per-instance bring-up
-branches and the single shared service branch are NOT the same thing and
-must not be collapsed into one -- a background service loop that happens to
-serve multiple instances is not itself "the parallel per-instance work";
-that work is the separate bring-up branches running alongside it.
+they run in parallel, then ONE `branch_fw` CALL SITE forked `join_none`
+that itself forks **one independent per-instance service-loop process per
+instance** (not a single loop that internally iterates over every
+instance -- see "Correction (2026-09-01)" below), and finally per-instance
+VIP-driven host-script branches (`branch_b<n>`) that the pattern itself
+`fork`s and `join`s (these are what actually gate the pattern's
+completion). The load-bearing distinction to preserve if you adopt this
+shape: the per-instance bring-up branches and `branch_fw`'s own
+per-instance service-loop processes are NOT the same thing and must not
+be collapsed into one -- a background service loop that happens to serve
+multiple instances is not itself "the parallel per-instance work"; that
+work is the separate bring-up branches running alongside it.
+
+**Correction (2026-09-01, distilled from a real sibling project, matching
+the correction now in `IP_UVM_DV_Gen.md`):** this section previously
+described `branch_fw` as one shared loop internally servicing every
+instance -- wrong, and inconsistent with `interrupt-event-dispatch/
+SKILL.md`'s FW Service Loop section, which already had the correct
+per-instance-process shape. A single shared scheduler looping over
+instances in one process is a real, previously-tried, measured-worse
+alternative (a real cross-instance interrupt-service stall of several
+microseconds was measured when this was tried) -- do not regress to it.
+
+**Standing rule (2026-09-01, distilled/genericized): cross-branch
+synchronization needs one one-way barrier flag per synchronization
+point.** The branch kinds above aren't synchronized just by running in
+parallel -- declare a set-once, never-cleared module-scope flag for
+`block`'s completion, one per `branch_a<n>` instance's completion, and
+one per `branch_fw` instance's own one-time-setup completion. A
+`branch_b<n>` depending on more than one predecessor must wait on the AND
+of every relevant flag (never just one) and report which specific flag is
+missing on timeout, not one generic message. Real worked example (USB,
+DWC_usb31 wrapper): a sibling project's three such flags, ANDed in its
+host-script wait task with two distinct timeout messages -- this mattered
+because a fast controller bring-up could raise its own flag before that
+port's firmware instance finished setup, leaving a real window with
+nothing yet programmed to answer host-side traffic.
 
 ---
 
@@ -328,6 +541,24 @@ that work is the separate bring-up branches running alongside it.
   address-user width and similar explicitly or they silently truncate.
 - Vendors ship **misspelled class names**; copy them verbatim.
 
+**Standing rule (2026-09-01, distilled/genericized): check `` `ifdef ``
+guards around a VIP class BEFORE wiring its name, against the REAL VIP
+source, not a naming convention or a site install.** vlogan stops at the
+first unrecognized VIP class/type with no further explanation -- N wrong
+guesses cost N sequential rebuilds, and guessing which classes a build
+config enables from their names alone is unreliable (a real check scored
+well under half right on 16 related classes). Scan `VIP_HOME`'s real
+source, track the live `` `ifdef ``/`` `ifndef ``/`` `elsif ``/`` `else ``
+guard stack around each declaration. Scan the real source tree, not a
+separate site install -- an encrypted/protected delivery can hide a
+declaration where a plain text scan wrongly concludes "not found."
+
+**Standing rule (2026-09-01, distilled/genericized): existence of a named
+enum member is not the same as belonging to the RIGHT enum family.** A
+VIP package can declare more than one enum typedef with overlapping
+member names -- confirm which typedef block actually declares the member
+a given field expects, not merely that it exists somewhere in the class.
+
 ---
 
 ## Converting a BFM pattern
@@ -338,9 +569,65 @@ Delete        : everything that programs the far side the VIP replaces
 Add           : a few VIP task calls in its place
 ```
 
+**Standing rule (2026-09-01, distilled/genericized): preserve a deleted
+line as a tagged comment, never a silent deletion.** Keep a no-longer-run
+converted line as a comment tagged with one of three categories:
+already-dead-in-the-original (a record, not something this conversion
+skipped), superseded-by-a-live-line (state where), or
+host-side-original-now-performed-by-the-VIP (permanently uncompilable,
+never uncomment). A tag, once applied, is never removed. An untagged
+commented-out call to a known reference-API function is a defect a
+static checker should catch.
+
+**Standing rule (2026-09-01, distilled/genericized): pattern file
+sectioning convention.** Every pattern opens with a provenance banner
+(what it's ported from, pointer to the framework doc). A simply-ported
+pattern uses SETUP / TEST CONTENT / VERDICT section banners, with a
+"no counterpart in the original" marker on any newly-added section. A
+multi-branch pattern instead banners each fork branch by role and uses
+inline numbered sub-labels within a branch so each original scenario step
+has a traceable landing spot.
+
+**Standing rule (2026-09-01, distilled/genericized): never add a SILENT
+skip mechanism around any task the reference performs -- pause and ask at
+the moment of the omission, not afterward.** An `` `ifdef `` never
+defined, a call dropped into a never-invoked stage, or an untagged
+comment-out all leave NO trace in any log. A real project lost days
+chasing an unrelated symptom before finding the real defect was a
+required init step doubly-guarded out during an earlier conversion --
+stop and ask the moment a conversion would silently guard out or drop a
+reference step, rather than completing it and reporting the omission (if
+at all) afterward.
+
+**Standing rule (2026-09-01, distilled/genericized): audit every kept
+legacy comparison/checking task for `$display`-only reporting.**
+`$display` doesn't increment a severity-counted pass/fail mechanism -- a
+real mismatch inside such a task prints its own failure text while the
+run still ends with the overall pass banner. Applies equally to a NEW
+hand-written sanity check (PLL lock, bus liveness) with print-only
+reporting. Classify every kept task as configuration-only (fine as-is) or
+comparison/checking (must feed the real pass/fail decision if print-only).
+
 Then **prove equivalence**: resolve address macros to literals, compare
 register writes one-for-one against the original, and classify every
 difference.
+
+**Confirmed drift (2026-08-31): a proven task's real behavior is bigger
+than its headline protocol function.** Before replacing one, enumerate ALL
+of it -- a real session named a reset-gate wait, conflict detection,
+byte-strobe generation, clock-relative timing, and existing logging as
+candidates for the same silent right-transaction-wrong-data bug class a
+byte-shift/lane-extraction question started from. Read every real
+behavior, not only the transaction performed, before claiming equivalence.
+Following through on this, a real audit of three register-access widths
+found NO uniform shift rule -- the narrowest width shifted fully on both
+low address bits, the middle width used only one bit (silently serving a
+misaligned access as the aligned one below it), and the full-word width
+ignored alignment entirely. **Replicate quirks (including silent
+misalignment handling) exactly -- do not "fix" them**; equivalence is the
+requirement, a correctness improvement is a separate, opt-in decision that
+can silently change behavior for an existing pattern relying on the old
+shape.
 
 **Confirmed drift (2026-08-29):** this abstract equivalence-proving method
 has a concrete, real implementation shape worth using as the target for a
@@ -371,6 +658,16 @@ None of these fail compilation. The symptom is always a far-side timeout.
 
 ## Checkers and scoreboard
 
+> **Confirmed drift (2026-08-31): ask the user's checking priorities before
+> Step-8-equivalent design work, not during it.** A real session reached
+> this point without asking whether VIP built-in checkers alone were
+> sufficient, whether end-to-end payload comparison was required, or whether
+> the user had a specific named requirement (real example: an AXI DMA master
+> port from the DUT to system memory needed an explicit `<ip>_dma_scoreboard`
+> with a **passive-monitor-only** connection, since the DUT itself drives
+> that bus during DMA -- see "Keep 'our stimulus'..." below, this is the
+> textbook case it describes).
+
 - **Count the VIP's built-in checkers first.** Moving from BFM scripts (which
   usually check nothing) to a VIP is the largest single increase in checking
   the project gets.
@@ -388,6 +685,22 @@ None of these fail compilation. The symptom is always a far-side timeout.
   bus", with no Verdi/FSDB session needed at all. Check whether the current
   VIP exposes an equivalent plain-text trace file before reaching for a
   waveform tool.
+  **Standing rule (2026-09-01, distilled/genericized):** below even the
+  plain-text trace file, prefer a fixed-label tagged-line status script
+  over the run's text log plus a job-status query (e.g. `LATEST_TIME:`/
+  `JOBSTAT:`/`ERRCOUNT:`/`FINALCHECK:` each followed by its value) for a
+  cheap, greppable alive/pass/fail/progress check needing no waveform
+  tool at all -- the cheapest triage tier, before the fsdb-report tool,
+  before a full waveform viewer.
+  **Standing rule (2026-09-01, distilled/genericized):** targeted
+  per-component UVM verbosity (`+uvm_set_verbosity=<component>,_ALL_,
+  <level>,run`) is a zero-rebuild, run-time-only technique distinct from
+  the above -- keep tested named shorthands for commonly-inspected
+  components. A mistyped full path is silently accepted and matches
+  nothing, indistinguishable from real silence -- verify it resolves
+  before trusting it. Specifically the technique for peering inside an
+  encrypted/opaque VIP state machine when only its external task/port
+  declarations are readable.
 - **Check the right response field** -- a scalar initialised to OK and
   meaningful only for writes will pass every read error silently.
 - **Footprint is not payload.** `beats * bytes_per_beat` overstates a partial
@@ -401,12 +714,258 @@ None of these fail compilation. The symptom is always a far-side timeout.
   error on one means the testbench is wrong; on the other, the design is.
 - **`$realtime` is in the enclosing scope's timeunit.** Write
   `$realtime / real'(1s)` so the ratio is seconds in any timescale.
+- **Standing rule (2026-09-01, distilled/genericized): resource-numbering
+  consistency checker.** When DUT register-level indexing for a repeated
+  resource (endpoints/channels/queues/lanes) is independently derived
+  from the VIP's own config-array indexing for the same resource, nothing
+  guarantees agreement -- a mismatch surfaces only as "does nothing"/a
+  protocol rejection, looking exactly like a DUT bug. Build a checker
+  that reads back DUT config and compares it against the VIP's config
+  model. Two traps: a register that looks readable may be a one-shot
+  command-PARAMETER register with no obligation to return its value --
+  intercept the WRITE instead; two independently-authored components may
+  enumerate the same values in different bit-pattern order -- compare
+  through each side's named-enum decode, never the raw numeric code.
+- **A single lhs/rhs field-equality check (`scoreboard_rules` +
+  `check_name`, `generator.py`'s SCOREBOARD_CHECKS DSL) is a CHECKER, not a
+  SCOREBOARD.** For a real data-integrity requirement -- predicted vs.
+  observed transaction streams that must be matched by key, not just one
+  register readback compared once -- use the separate top-level manifest
+  key `transaction_scoreboards` (2026-09-01) instead: two TLM analysis
+  ports (`predicted`/`observed`), a `match_key`-based queue search
+  (`IN_ORDER` head-only or `OUT_OF_ORDER` full-queue), `compare_fields`
+  once matched, and explicit `on_orphan_predicted` (dropped) /
+  `on_orphan_observed` (fabricated/unexpected) / optional `on_duplicate`
+  disposition. See `generator.py`'s `scoreboard()` docstring for the full
+  schema and `dv_harness_tests/test_transaction_scoreboard_dsl.py` for a
+  worked DMA-scoreboard example. v1 scope, deliberately deferred (not
+  silently dropped): no `register_decode`/`enum_translation` on
+  `compare_fields` yet; orphan-predicted detection is report_phase-drain-
+  only (end of test), not a live per-transaction timeout; exactly 2 fixed
+  named ports, both carrying the same `item_class`. Instantiating and
+  wiring the generated class needs **no other generator change** -- it is
+  an ordinary `vip_components` entry, wired via the existing `connections`
+  `kind="call"` shape (real evidence: USB_UVM_Handoff `usb_top_env.sv:531`,
+  `dma_env.master[p].monitor.item_observed_port.connect(dma_sb[p].dma_export);`).
 
 ---
 
 ## Build system
 
-- Two stages, both given the debug-database flag if a viewer will be used.
+> **Standing rule (2026-09-01, explicit Human Override, permanent, updated
+> 2026-09-01 to record internalization): `sim/scripts/` build
+> infrastructure is based on a template now internalized at
+> `dv_harness/uvm_generator/templates/sim_scripts/`** -- originally copied
+> byte-identical from `D:\DV\Task\USB_UVM_Handoff\sim\scripts\` after
+> explicit, repeated user authorization, and now a permanent harness asset
+> in its own right. **The external path no longer needs to be read for
+> this purpose**, and note it is **no longer byte-identical** as of a
+> 2026-09-01 genericization pass (real `TARGET_IP`/`IP_PREFIX`
+> parameterization, verified working by re-importing `pattern_rules.py`
+> with `TARGET_IP=PCIE`; DUT-internal RTL/silicon facts in `waves.tcl`/
+> `reg_audit.py` kept as explicitly-labelled worked examples, not
+> mechanically substituted -- see `.work/genericize-sim-scripts-report.md`,
+> session-local). Internalized set: `Makefile` (canonical build entry
+> point), `waves.tcl`, `lsf_regress.sh`/`lsf_run.sh`/`lsf_wait.sh`,
+> `ip_run.sh` (renamed from the source's `usbrun.sh` -- not invoked by
+> literal filename in the Makefile, confirmed safe to rename, kept
+> `<ip>`-generic like every other file in this manifest),
+> `gen_pattern_pool.py`, and `check/`'s eleven-category static self-check
+> family (`include_order.py`, `macro_selfcontained.py`, `make_order.py`,
+> `pattern_rules.py`, `reg_audit.py` -- the same equivalence-proving tool
+> already cited under "Converting a BFM pattern" above, `vip_guards.py`,
+> `vip_members.py`, `zero_delay_loops.py`). Scope unchanged: build/
+> infrastructure mechanics only -- does NOT extend to any other file in
+> the reference tree and does NOT authorize protocol-behavior content
+> (sequences, scoreboard/checker logic, coverage, vPlan, command.txt
+> content) from it. Adapt paths/queue names/resource requests per project
+> -- only the template's shape is canonical, not its literal strings from
+> the USB session that produced it. **A real trap it documents:** `bsub
+> -K` ties a job to its submitting shell and reaps it (`TERM_OWNER`) the
+> moment that shell dies -- catastrophic over a transport with
+> per-command timeouts (e.g. a telnet/relay bridge) where the submitting
+> shell can legitimately die while the job stays healthy. Use plain
+> `bsub` (detached) and poll `bjobs` separately whenever the submission
+> channel might not outlive the job.
+
+**First-Failure Waveform Rerun -- concrete recipe (2026-09-01), using the
+already-internalized template's own knob names:** `make debug
+PATTERN=<p> WAVE=1 FSDB_START=<t0> FSDB_STOP=<t1> TOTAL_RUNTIME=<bound>
+RUNTAG=<tag>`. `WAVE=0|1|full` selects dump scope (confirm with the user
+per the Waveform Dump User Gate; prefer `1` over `full`).
+`FSDB_START`/`FSDB_STOP` bound the dump window instead of dumping from
+time zero. `TOTAL_RUNTIME` bounds simulated time so the rerun stops near
+the first failure. `RUNTAG` avoids overwriting the original WAVE=0
+failing run's artifacts.
+
+**The `wave.txt` FSDB scope-control file (2026-09-01,
+distilled/genericized):** the recipe above is Makefile-side plumbing
+that forwards the user's choice to a DUT-side hook file, conventionally
+`wave.txt`, purely via plusargs (`+fsdb_off`, `+fsdb_full`,
+`+fsdb_file=<path>`, `+fsdb_start=<ns>`, `+fsdb_stop=<ns>`) -- the
+Makefile does not decide dump scope itself. **A DUT delivery may already
+ship its own default `wave.txt` that dumps the whole chip and ignores
+these plusargs entirely** -- a real sibling project measured this: an
+FSDB dump that looked I/O-bound (94 MB/min, simulator CPU 20-53%) was
+actually a whole-chip-scoped `wave.txt`; a target-IP-scoped replacement
+dropped the rate to ~20 MB/min with the simulator over 100% CPU
+(compute-bound, the healthy state). Verifying/replacing `wave.txt`'s
+scope is therefore a real bring-up step no Makefile-side knob can
+substitute for. See `IP_UVM_DV_Gen.md`'s "The `wave.txt` FSDB
+scope-control file" for the full plusarg table and a generic
+`$fsdbDumpvars`/`$fsdbDumpon`/`$fsdbDumpoff` skeleton. `$fsdbDumpfile`/
+`$fsdbDumpvars`'s own call signatures are confirmed-real standard FSDB
+API; `$fsdbDumpon`/`$fsdbDumpoff` and the overall plusarg contract remain
+not independently confirmed against a real `wave.txt` file for this
+project -- kept doc-embedded rather than templated, since its dump
+scope must be re-derived from each project's own real RTL hierarchy,
+same treatment as `waves.tcl`'s signal hierarchy above). Windowing
+(rather than a size cap) was chosen after two alternatives were rejected
+on a real project: a hard size-limit plusarg isn't in every installed
+Verdi, and file-rotation rotates rather than truncates and needs its own
+naming scheme -- check what the installed Verdi actually supports before
+assuming either alternative exists. Never infer the window from a
+heartbeat/status-print timestamp (a repeated, real source of wrong-window
+reruns) -- default the first targeted rerun to the full range, read real
+event timing off that run, narrow only if file size is an actual problem.
+
+**Tracked-passing-suite list (regression.list / RECORD=1), 2026-09-01,
+distilled/genericized:** already implemented by the internalized
+template. Two modes: per-pattern record (`RECORD=1` on a single `make
+sim`, gated OFF inside a parallel regression batch to avoid a
+multi-host write race) and whole-suite record (`make regress RECORD=1`,
+run once after all jobs finish). Both strip any existing line for that
+pattern, re-append only on a real pass, then atomically replace the file
+-- a FAIL always evicts a stale PASS. Unregistering a pattern cascades
+into removing it from this list too. Authoring convention: record the
+honest current state (named FAIL reasons), not an aspirational
+always-growing list. Lives in `UVM_ROOT_PATH`, not `SIM_ROOT_PATH` --
+must survive `distclean`. As a real sibling project's header comment puts
+it: a list that only grows is worse than no list.
+
+**Registry-driven pattern registration and suite enumeration, 2026-09-01,
+distilled/genericized:** registering/un-registering a pattern is
+transactional -- back up the registry, edit, regenerate the dispatcher;
+on regeneration failure, restore the backup and regenerate again, so a
+rejected registration leaves the tree unchanged. Removing a pattern
+cross-removes it from the tracked-passing-suite list too. Separately: any
+script/checker/Makefile target enumerating suite/category names must
+derive them from the live registry file, never a hardcoded list (fallback
+only as documented last resort) -- this exact hardcoding defect has
+recurred independently in both a Makefile's own suite logic and an
+unrelated checker script on a real project, after the category taxonomy
+outgrew its initial split.
+
+**`sim/` directory contract beyond `log`/`fsdb`/`output`/`coverage`,
+2026-09-01, distilled/genericized:** also needs `report/` (a
+symlink-only VIEW into `run/`, never a lone real file mixed with links)
+and `run/` (the real simulator working directory and transcript, keyed by
+pattern+seed). A second symlink from `log/<job>.log` to the same
+transcript makes "which pattern failed" answerable with one grep over
+`log/*.log`. **Create both symlinks BEFORE the simulator starts**, not
+via a post-run collection step -- a real project measured seven
+hard-killed jobs in one day whose transcripts were unreachable
+specifically because the symlinks were only created on normal exit.
+
+**`EXTRA_TOPS` -- naming an uninstantiated-but-referenced module for
+elaboration, 2026-09-01, distilled/genericized:** a module referenced
+only by bare hierarchical name (never instantiated) needs to be named as
+an extra elaboration top in a multi-stage flow (a one-step flow
+auto-elaborates it for free). Three distinct error signatures per how
+badly the omission is guessed (missing entirely / one bare-module
+reference named / every similarly-named sibling guessed at once, which
+fails differently since only one is really expanded) -- add names one at
+a time against the real error, never as a guessed batch.
+
+**`SIM_ROOT_PATH` distinctness -- mechanical `$(error)` check, not just a
+documented assumption, 2026-09-01, distilled/genericized:** check
+distinctness from `DUT_ROOT_PATH`/`UVM_ROOT_PATH` before ANY build
+target runs; the destructive target additionally needs its OWN separate
+guard against the variable being empty or a bare `/` -- a distinct
+failure mode from a colliding-but-valid path.
+
+**Shared single elaboration, N parallel per-job run dirs, 2026-09-01,
+distilled/genericized:** build the simulator binary exactly once per
+regression (a prerequisite of running any pattern), then N parallel jobs
+open it read-only with only their own run/report/log/fsdb/coverage
+artifacts separate. Distinct axis from build-time parallelism -- name the
+variables distinctly. A target depending on both the binary and the run
+step must be two sequential Make invocations (recursive `$(MAKE)`), never
+two prerequisites of one target -- prerequisites have no defined order
+under parallel Make.
+
+**Two-tier LSF integration is site-specific -- verify before reusing,
+2026-09-01, distilled/genericized:** before wiring a site's
+`vcs`/`vlogan`/`verdi`/`urg`-equivalent tools through the template's
+wrapper-flag path, confirm whether those binaries are themselves
+site-authored LSF-aware wrappers (use their own flag vocabulary directly,
+never nest the project's own `bsub` around them) or plain unwrapped
+binaries (route them through the project's own `bsub` path instead, same
+mode selection already used for the simulator binary). Carrying one
+shape's flag vocabulary to the other silently fails or breaks the
+invocation.
+
+**Waiting on a remote command/LSF job without polling, 2026-09-01,
+distilled/genericized:** a background wait loop must check BOTH success
+and every known failure literal in one anchored match -- an unanchored
+match is a real source of exiting the instant the condition text appears
+anywhere, including in something that merely echoes it back. Match what
+has no ambiguity window: anchored job-ID (not a loose name prefix,
+false-negatives during a queue-empty window), a scoped `pgrep` for a
+whole process (no such gap), raw byte-level grep for a log that may hold
+embedded non-text bytes (line-oriented grep can silently treat it as
+binary and match nothing).
+
+- `vlogan` analyze then `vcs` elaborate, both given the debug-database
+  flag if a viewer will be used -- see "VCS compile flow" below for the
+  real mechanism.
+
+**VCS compile flow (2026-09-01), describing the harness's own
+already-internalized/generic template -- no further genericization
+needed:**
+- `FLOW=onestep|fourstep`, `fourstep` default. `onestep`: one `vcs` call,
+  no incremental analysis, one shared compilation unit. `fourstep`
+  (trust this over `onestep` beyond a first sanity check): stage 1a
+  (`vlogan` UVM library) / 1b (`vlogan` DUT) / 1c (`vlogan` testbench --
+  a TB-only edit re-runs 1c alone) / stage 2 (`vcs` elaborate). Stamp
+  files + a flags-signature file drive re-analysis: a `+define+`/flag
+  change triggers it, not a source timestamp change -- a define that
+  misses the right stage's flags variable makes a run look normal while
+  doing nothing different.
+- Defines belong on the `vlogan` stage's flags, never the `vcs`
+  elaboration stage's, in `fourstep` -- the elaboration call takes no
+  source files and rejects a `+define+` outright as illegal on a
+  parse-only invocation.
+- Partition compile (`PARTCOMP_EN`) is the default mode via
+  autopartitioning (no manual config file) -- it repartitions around
+  cross-partition limitations on its own, per the tool's documented
+  behavior. Any command-line/flag change still forces a global rebuild;
+  a source-only change that reshapes what's analyzed can produce a bare
+  nonzero-exit assertion failure with no explanatory message. UNR is
+  incompatible with partition compile and needs a separate elaboration
+  path. Three parallelism knobs, none substitutes for another: `-j`
+  (native codegen, elaboration-stage only), `-fastpartcomp=jN` (parallel
+  partition build), `-hsopt=j` (gate-level/GLS only).
+
+**Additional real build-system traps, 2026-09-01, distilled/genericized:**
+- GNU Make `:=` is immediate-expansion -- a reference to a variable
+  defined LATER silently resolves to empty, no warning; same hazard for a
+  rule's own prerequisite list (expanded when the rule is READ, not when
+  its recipe runs). Order definitions before use, or use `=` where
+  forward-reference is unavoidable.
+- Cleanup after force-killing an in-progress elaboration must remove more
+  than the obvious output -- a partially-written `simv.daidir`/partition
+  library is reused, not recreated, by the next build if left in place.
+- A full-build-only failure that resists minimal-repro isolation needs
+  bisection of the REAL build (toggle one coarse flag at a time), judged
+  by how far elaboration got, not error count -- fewer errors from an
+  earlier death isn't closer to correct.
+- Audit flags a build inherits from a pre-existing DUT-team launcher, not
+  just flags you add from a VIP example -- an inherited strictness switch
+  can be something the VIP vendor's own source (even its own working
+  example) isn't clean under. Symptom: many errors deep in encrypted VIP
+  source a known-working vendor example doesn't hit.
+
 - Consolidate the VIP examples' flags; cross-check against the tool manuals.
 - **Compute the timescale constraint** from the configured line rates and
   `$(error)` on a mismatch:
@@ -421,6 +980,11 @@ None of these fail compilation. The symptom is always a far-side timeout.
   than assuming the arithmetic answer is automatically simulatable, and
   don't commit the finest theoretical timescale to the Makefile until that's
   actually been tried.
+- **Standing rule (2026-09-01, distilled/genericized):** the
+  fail-immediately-with-`$(error)` idiom applies to EVERY required
+  environment variable, not only timescale -- check and `$(error)`
+  immediately with a message naming the missing variable, rather than
+  letting it silently propagate into a confusing far-later failure.
 - **One filelist owns the source list.** Every other filelist carries only
   include paths and defines. A file in two lists is a duplicate-module error.
 - Partition compile treats **any** command-line change as a global rebuild.
@@ -429,6 +993,43 @@ None of these fail compilation. The symptom is always a far-side timeout.
   (did the pattern reach UVM? did the write reach the bus? did the link come
   up?), not by hierarchy. Tolerate undumped signals: list them with the
   remedy rather than failing.
+  **Standing rule (2026-09-01, distilled/genericized):** for a group tied
+  to a known failure symptom, state a reading order (what to check
+  1st/2nd/3rd, what each value means), not just the question, and
+  cross-reference any project trap/issue log entry that motivated it;
+  split a missing-signal remedy by likely cause (scope too narrow vs.
+  signal renamed) rather than one flat list.
+- **Standing rule (2026-09-01, distilled/genericized):** a headless,
+  purpose-named report script is the non-GUI complement to the TCL above
+  -- for a question answerable without Verdi, run the fsdb-report tool
+  once (or once per signal / batched) over a time window sized to the
+  question (narrow for a specific transaction/edge, full-run for a
+  sparse async signal), writing one output file per topic with a
+  non-empty sanity check. `dv_harness/fsdb_report.py`'s
+  `write_topic_report()` implements this.
+- **Protocol Analyzer where the VIP supports it** -- packets/handshakes/
+  link-state as protocol events, generally the cheaper first debug step
+  for a protocol-level failure before a full waveform view.
+
+**Protocol Analyzer mechanism (2026-09-01), describing the harness's own
+already-internalized/generic template -- no further genericization
+needed:**
+- PA is bundled with FSDB dump capability as one "debug-access
+  capability, always built in" -- both stay compiled in by default so
+  toggling `WAVE`/`PA` at run time never forces a rebuild (they used to
+  each gate their own compile-time inclusion separately, forcing a real
+  rebuild on every toggle; now both are gated only by whether
+  `VERDI_HOME` was set at build time).
+- Graceful degrade, not a hard failure, when `VERDI_HOME` is unset at
+  build time: a build-time warning, not an error -- FSDB and PA are both
+  disabled for that build, and a later `WAVE=1/full` or `PA=1` run
+  against it silently no-ops.
+- The run-time gate is a plusarg, independent of the build -- `PA=1`
+  maps to a runtime plusarg the generated environment's own top-level
+  config reads; it does nothing if the build didn't have `VERDI_HOME`.
+- PA and FSDB waveform dumping are separate, complementary run-time
+  toggles sharing the same compile-time gate -- `PA=1` alone, `WAVE=1`
+  alone, or both together.
 
 ---
 
@@ -449,12 +1050,54 @@ Run after every change to the testbench tree. In value order:
 9. Duplicate labels in one `case`
 10. `extern` with no definition
 11. Config-DB set/get key and type agreement
+12. Include-chain ordering: type-used-before-`` `include ``-reached vs. a
+    genuine two-way cycle -- opposite fixes, identical compiler symptom
+13. Static zero-delay/hang-loop shape -- indistinguishable at the console
+    from a real hang, worth catching before ever running it
 
 > **The checker produces false positives. Fix the checker before drawing a
 > conclusion.** Known classes: mutually exclusive `ifdef`/`else` branches read
 > as duplicates; commas inside string literals read as argument separators;
 > macros compared against tasks across namespaces; keys built at run time with
 > a format function, which no static scan can see.
+
+**Category 4, 2026-09-01, distilled/genericized:** two independent
+multi-stage analyze invocations (e.g. a DUT-chain stage and a
+testbench-entry stage) do NOT share preprocessor state -- scope the
+undefined-macro check to each stage's own real, reachable include chain
+(live guard-stack tracking, never following an already-commented-out
+`` `include ``), and classify a macro gated only by another undefined
+macro as unreachable dead code, not a real missing include.
+
+**Category 12, 2026-09-01, distilled/genericized:** walk the include
+chain once, record each class's definition/use sequence numbers; a class
+already covered by `typedef class` forward declaration is correctly
+handled regardless of order -- a genuine two-way dependency cycle is
+real, legitimate SystemVerilog, not a defect.
+
+**Category 13, 2026-09-01, distilled/genericized:** tiered confidence --
+(1) no delay, no call at all = guaranteed spin; (2) no delay, a call
+exists = may consume time, needs human judgment; (3) delay exists but
+every instance sits inside a conditional. Exclude a loop that advances
+its own exit condition internally (a countdown) -- normal control flow,
+not a hang shape.
+
+**Category 7 third outcome, 2026-09-01, distilled/genericized:** a file
+reachable only through a run-time factory STRING lookup compiles fine
+but still needs its OWN reachability check against the registering
+context's real include chain -- compiling clean is not sufficient; a
+class registered but outside that chain fails only at run time with a
+factory-lookup fatal, not a compile error.
+
+**More false-positive classes + a first-run noise expectation,
+2026-09-01, distilled/genericized:** beyond the four above -- a
+commented-out `` `include `` still followed as live; text inside a `/* */`
+block not stripped first; a macro-paste parameter token misread as
+undefined; a task's own declaration parentheses miscounted as a call
+site. Expect real noise on the first run against a fresh tree, dropping
+sharply on the second (a real project: mostly-checker-bugs first pass, a
+small real-defect count, then a much smaller all-false second pass) --
+fix the checker's own false positives before judging the signal.
 
 ---
 
@@ -494,6 +1137,17 @@ uvm/tb/patterns/  README.md, dv_uvm_pattern_pool.svh (the +PATTERN dispatcher),
                   migration in a comment rather than hiding it. Expect and allow
                   this category taxonomy to grow past the initial split; don't
                   treat a richer taxonomy as a deviation to correct back.
+
+                  Standing rule (2026-09-01, distilled/genericized): a pattern
+                  .txt may be authored as a BARE BODY (generator wraps it in a
+                  named task automatically) or SELF-CONTAINED (it already
+                  declares its own named task -- generator emits a bare
+                  include instead); detection is by literal presence of the
+                  task-declaration string. A helper must produce one shape
+                  consistently; the two must never disagree within one file.
+                  The dispatcher must report an unrecognized +PATTERN= name
+                  explicitly, never silently fall back to a default -- a typo
+                  must never be recorded as a pass for a pattern that never ran.
 uvm/filelist/     dv_uvm_files.f  SOLE owner of the source list
                   <ip>.f          +incdir+ / +define+ only
 uvm/hex/          stimulus and descriptor images
@@ -517,6 +1171,15 @@ sim/scripts/      Makefile, waves.tcl
                   original-patterns directory at <root> as an acceptable
                   equivalent to reference/bfm_patterns/, not a missing deliverable.
 ```
+
+**Standing rule (2026-09-01, distilled/genericized): `uvm/hex/` stimulus
+must be passed as an ABSOLUTE path via `+define+`, never relative** -- a
+memory-load primitive (`$readmemh`) resolves a relative path against the
+simulation's working directory, not the source tree. Fail-loud
+convention: an unset defining variable's fallback should be a
+human-readable sentinel string (e.g. `<IP>_HEX_DIR_NOT_SET_BY_MAKEFILE`),
+not empty/a plausible default -- the load error then names the missing
+variable directly instead of silently loading zero bytes and "passing".
 
 ---
 
@@ -571,9 +1234,41 @@ random or directed | speed | instance | checkers active | notes
 - **`spec section` cites `Spec/` by clause.** No specification available? Say
   so in the sheet rather than filling it with chapter guesses.
 - **Validate before writing**: pattern file exists, task is a real
-  declaration, pattern is in the dispatcher. Refuse to write on a mismatch.
+  declaration, pattern is in the dispatcher, AND (2026-09-01,
+  distilled/genericized) every `constraint items` entry names a
+  constraint that actually exists in the written SV source -- once this
+  column drifts from real code, the vPlan loses its traceability value
+  entirely. Refuse to write on a mismatch.
 - **Keep the NOT COVERED rows**, and mark which are blocked on information
   rather than effort. A plan listing only what already runs is a report.
+
+**BUG FIX (2026-09-01, vplan-doc-and-wiring-fix):** the agent file used to
+say no generator existed for this ("confirmed absent... doc-only") -- FALSE.
+Real generator: `dv_harness/vplan_writer/writer.py`, CLI: `dv-harness
+vplan-export` (15-column layout + the 3 mandatory validation rules above,
+typed refuse-on-mismatch, tests in `dv_harness_tests/test_vplan_writer.py`).
+**Run it, don't hand-author the `.xlsx`:** `dv-harness vplan-export
+<items.json> --out <path>.xlsx --protocol <TARGET_IP> --pattern-dir <dir>
+--dispatcher-file <dv_uvm_pattern_pool.svh> --task-declaration-source
+'<tb/tests/*.sv>'` (`--help` for `--known-check-name`, `--sheet`, and the
+regex-override flags). Also now wired into the automatic `STAGE_GATES
+['VPLAN']` gate pipeline (`tools/vplan/vplan_writer_validation_gate.py`,
+alongside the pre-existing `spec_coverage_audit.py`), so LOCK re-checks the
+same 3 rules against real pattern-dir/dispatcher-file/task-declaration
+evidence, not just an agent-attested `requirements[]` summary.
+
+**BUG FIX (2026-09-01, vplan-4th-rule-implementation):** the 4th rule above
+("constraint items exist in SV source") was itself only documented, not
+implemented, until this pass. Now real: `ConstraintNotInSVSourceError` in
+`dv_harness/vplan_writer/writer.py`, exercised via `--constraint-declaration-
+source`/`--constraint-declaration-regex`/`--known-constraint-name` on
+`dv-harness vplan-export` and the matching optional
+`constraint_declaration_sources`/`known_constraint_names` fields on the
+`vplan_writer_validation_gate` evidence JSON. RULING: implemented as an
+OPTIONAL evidence-gated check (same precedent as `--known-check-name` /
+`UnknownCheckerNameError`) rather than unconditionally mandatory, so every
+existing caller without SV constraint-declaration evidence keeps producing
+byte-identical output; supplying the evidence makes the check fully strict.
 
 ---
 
@@ -610,6 +1305,38 @@ package rather than re-deriving these rules from this paragraph each time.
 
 For a target not listed, fill the same four columns from the IP databook
 before starting.
+
+**Confirmed drift (2026-08-31): an existing `` `ifdef ``/`` `ifndef DV_UVM ``
+guard around a delivered BFM's drive/force block is itself real evidence of
+the delivery's intended architecture.** A session's reasoned "safer
+default" (keep a proven bus-master task live) turned out to be broken by
+construction -- the delivery already severed that master under `DV_UVM` --
+provable only by reading that guard and, further, by actually running the
+smallest real test: the smoke run hung (a downstream `pready` never
+asserted), which no static argument would have surfaced. When an
+architecture choice is questioned, look for this class of guard and run
+the smallest real falsifying test where one exists.
+
+**Confirmed drift (2026-08-31): "disable the whole PHY instance" for a
+digital/PIPE-style attachment is not automatically correct.** A real
+session did exactly that for a PIPE4 USB3 attachment and was directly
+corrected by the user -- the PHY was still genuinely in the real data
+path; PIPE/UTMI/ULPI is often the PHY's own digital-side boundary, not a
+wire bundle floating entirely outside it. Confirm from real RTL/databook
+evidence which sub-block (if any) to actually bypass before disabling
+anything, and if the DUT has more than one speed-mode PHY (e.g. USB2 and
+USB3), confirm whether they are one shared model or genuinely separate
+ones first (confirmed separate in this case) -- see the main agent file's
+Step 5 for the full three-part verification method.
+
+**Standing rule (2026-09-01, distilled/genericized): a concrete
+file-organization mechanism for switching attachment-layer builds.**
+Organize each interface configuration as its own separate,
+identically-shaped wrapper file (one per attach mode); select among them
+with a pre-compile copy step (a Makefile variable naming the desired
+configuration, a `prescript`-style copy to one fixed canonical filename
+the build always compiles) rather than one file full of conditional
+compilation for every mode.
 
 ---
 

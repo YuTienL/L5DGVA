@@ -2,7 +2,7 @@
 import argparse,json,pathlib,sys
 ap=argparse.ArgumentParser(); ap.add_argument("--contract",required=True); a=ap.parse_args()
 d=json.loads(pathlib.Path(a.contract).read_text())
-required={"SPEC","COMMAND_TXT","USB_REFERENCE","RTL_SOURCE","DE_LOCAL_SIM"}
+required={"SPEC","COMMAND_TXT","PRIMARY_PROTOCOL_REFERENCE","RTL_SOURCE","DE_LOCAL_SIM"}
 provided=set(d.get("provided_source_classes",[]))
 missing=sorted(required-provided)
 if missing:

@@ -1,0 +1,48 @@
+{
+  "handoff_version": "1.0",
+  "task_id": "M7-V1-CHATGPT-DECISION-001",
+  "task_type": "research-route",
+  "source_model": "claude",
+  "target_model": "chatgpt",
+  "project_id": "L5_DGVA",
+  "current_head": "fb846e1ca992f0496626fce7b802f3e01398b65a",
+  "objective": "Independent decision analysis: is the M7 V1 dependency-ordered cohort plan (C1 Handoff/Result contracts, C2 Ingestion/Validation/Consumption, C3 Claude<->Codex round trip, C4 Claude<->ChatGPT round trip, C5 Minimum Sufficient Context, C6 Logical Orchestration Qualification) correctly ordered, and are there real risks in reusing TaskBoundary/evidence_refs/QuestionQueueStore as the Canonical Consumer for external model results that a fresh reviewer would flag?",
+  "scope": {
+    "task_id": "M7-V1-CHATGPT-DECISION-001",
+    "allowed_path_prefixes": [
+      "docs/architecture/L5DGVA_M7_STRUCTURED_MULTI_MODEL_MD_HANDOFF_ARCHITECTURE.md",
+      ".work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_IMPLEMENTATION_COHORT_PLAN.md"
+    ],
+    "forbidden_paths": [
+      "dv_harness/engine.py",
+      "dv_harness/cli.py"
+    ],
+    "require_new_file": false
+  },
+  "input_evidence_refs": [
+    "docs/architecture/L5DGVA_M7_STRUCTURED_MULTI_MODEL_MD_HANDOFF_ARCHITECTURE.md",
+    ".work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_IMPLEMENTATION_COHORT_PLAN.md"
+  ],
+  "required_governance_refs": [],
+  "known_facts": [
+    "C1-C2 are now real code (dv_harness/model_handoff.py",
+    "model_result.py",
+    "model_handoff_workflow.py)",
+    "tested (34/34); C3/C4 round trips are pending real human-mediated transport as of this handoff"
+  ],
+  "open_questions": [],
+  "independence_requirement": "Provide an independent assessment. Do not assume the proposed cohort order is correct merely because it is dependency-ordered on paper.",
+  "expected_output_type": "decision_analysis",
+  "expected_output_schema": "L5DGVA_MODEL_RESULT_V1",
+  "validation_requirements": [],
+  "human_decision_required": false,
+  "return_contract": "L5DGVA_MODEL_RESULT_V1 markdown, same TASK_ID",
+  "allowed_files": [
+    "docs/architecture/L5DGVA_M7_STRUCTURED_MULTI_MODEL_MD_HANDOFF_ARCHITECTURE.md",
+    ".work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_IMPLEMENTATION_COHORT_PLAN.md"
+  ],
+  "forbidden_files": [
+    "dv_harness/engine.py",
+    "dv_harness/cli.py"
+  ]
+}

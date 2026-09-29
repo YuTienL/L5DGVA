@@ -124,6 +124,28 @@ _CATEGORY_SEVERITY = {
     "other": "LOW",
 }
 
+#: This module's category enum, as data. Exported so a caller that classifies
+#: something OTHER than a log line (SYOSCB-21's per-transaction scoreboard
+#: result taxonomy is the first) can route its own findings into this triage
+#: vocabulary instead of inventing a second one -- the failure mode this
+#: project keeps catching. Derived from `_CATEGORY_SEVERITY`, so a category
+#: added there is exported here automatically rather than in a second list
+#: that would drift.
+TRIAGE_CATEGORIES: tuple = tuple(_CATEGORY_SEVERITY)
+
+
+def severity_for_category(category: str) -> str:
+    """The severity this module assigns a triage category.
+
+    Public because `SEVERITY_ORDER` alone does not say WHICH severity a given
+    category carries, and a caller reading `_CATEGORY_SEVERITY` through its
+    private name -- or, worse, re-typing the mapping -- is how the one severity
+    scale becomes two that disagree. An unrecognized category falls back to
+    "LOW" exactly as `classify_signatures()` does, because the two must not
+    answer the same question differently."""
+    return _CATEGORY_SEVERITY.get(category, "LOW")
+
+
 # ---------------------------------------------------------------------------
 # Signature normalization: strip the "obvious variable content" the task
 # names explicitly (timestamps, hex addresses, random seeds) so repeated
@@ -158,6 +180,16 @@ def _normalize_signature(line: str) -> str:
     # don't split one real signature into two.
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+#: Public name for the same normalization above, exported for the same reason
+#: `TRIAGE_CATEGORIES` is: a caller that needs to decide "is this the SAME
+#: failure as last time" outside a sim.log (`loop_budget.classify_failure()`'s
+#: signature, which the circuit breaker's REPEATED_IDENTICAL_FAILURE trigger
+#: counts) must use THIS normalization, not a second one -- two different
+#: answers to "is this the same failure" is exactly how a breaker either never
+#: trips or trips on nothing.
+normalize_failure_signature = _normalize_signature
 
 
 def _match_markers(line: str) -> List[str]:
@@ -274,7 +306,7 @@ def classify_signatures(signatures: Dict[str, Dict[str, Any]]) -> List[Dict[str,
             if marker_name in entry["markers"]:
                 category = _MARKER_TO_CATEGORY.get(marker_name, "other")
                 break
-        severity = _CATEGORY_SEVERITY.get(category, "LOW")
+        severity = severity_for_category(category)
         results.append({
             "signature": sig,
             "category": category,

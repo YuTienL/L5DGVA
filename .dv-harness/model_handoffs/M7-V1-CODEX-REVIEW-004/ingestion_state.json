@@ -1,0 +1,28 @@
+{
+  "auto_import_status": "DONE",
+  "auto_resume_status": "DONE",
+  "import_attempts": {
+    "59099ec77a93820819cd2ef52ff4f4784f2a2f63768d5265e9ce61b5b5df9127": 1
+  },
+  "last_detected_result_sha256": "59099ec77a93820819cd2ef52ff4f4784f2a2f63768d5265e9ce61b5b5df9127",
+  "observation": {
+    "first_seen_at": 1790520589.2140713,
+    "mtime_ns": 1790520584667039500,
+    "observations": 2,
+    "sha256": "59099ec77a93820819cd2ef52ff4f4784f2a2f63768d5265e9ce61b5b5df9127",
+    "size": 12402,
+    "stability_logged": true
+  },
+  "results": {
+    "59099ec77a93820819cd2ef52ff4f4784f2a2f63768d5265e9ce61b5b5df9127": {
+      "consumed_at": "2026-09-27T14:49:54.770392+00:00",
+      "import_attempt_id": "M7-V1-CODEX-REVIEW-004:59099ec77a93:dcf7ed47",
+      "import_state": "CONSUMED",
+      "imported_at": "2026-09-27T14:49:54.262473+00:00",
+      "question_id": null,
+      "result_path": ".dv-harness\\model_handoffs\\M7-V1-CODEX-REVIEW-004\\RESULT_V1.md"
+    }
+  },
+  "suppression_logged": [],
+  "task_id": "M7-V1-CODEX-REVIEW-004"
+}

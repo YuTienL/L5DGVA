@@ -1,6 +1,46 @@
 #!/usr/bin/env python3
 import argparse, json, pathlib, sys
 
+# BUG FIX (2026-09-02, second remaining audit gap): supporting_evidence/
+# counter_evidence (top-level and per-hypothesis) were free-text citation
+# strings with no freshness check -- an agent could paste a plausible-
+# looking but stale/remembered string (e.g. "sim.log:4021: FIFO_EMPTY") and
+# this gate would PASS identically to one that actually just re-read that
+# file. manual_lookup_before_edit_gate.py already solved the exact same
+# underlying problem ("is this citation real") for its own vip/dut_rtl
+# evidence_refs: an optional array of {"path": ..., "quote": ...} objects,
+# independently verified against the REAL current file on disk (real
+# existence + exact substring match, never trusted from agent text). Reusing
+# that gate's own _verify_evidence_refs() here (same directory import
+# convention it already establishes for protocol_isolation_gate's
+# _cites_forbidden_tree -- gate scripts under tools/verification_flow/ are
+# not required to be fully standalone) rather than re-implementing the same
+# check a second time or inventing new FAIL reason names for an identical
+# check.
+#
+# `evidence_refs` is OPTIONAL on the overall root_cause dict and on each
+# individual hypothesis -- when absent, the original free-text-only
+# supporting_evidence/counter_evidence check below is unchanged (the
+# weaker/legacy fallback, same "optional stronger check" shape
+# deep_rca_evidence_gate's own evidence_path already uses). When present, it
+# is independently verified; a bad ref FAILs with _verify_evidence_refs' own
+# real reasons (EVIDENCE_FILE_NOT_FOUND / EVIDENCE_QUOTE_NOT_FOUND_IN_FILE /
+# REFERENCE_TREE_CITATION_FORBIDDEN / etc.) rather than a silently-accepted
+# citation.
+#
+# No ContextFlag("--root", ...) is needed for this: gates.run_gate() already
+# invokes EVERY gate script (single-flag or multi-flag) with
+# cwd=str(<real project root>) (see gates.py's two `subprocess.run(...,
+# cwd=str(root), ...)` call sites), so a plain relative pathlib.Path already
+# resolves against the real project root -- exactly how
+# manual_lookup_before_edit_gate.py's own evidence_refs already work, with
+# no --root flag of its own. Converting to a multi-flag EvidenceFlag/
+# ContextFlag tuple here would also force-wrap this gate's evidence block
+# under a sub-key, breaking engine.py's two existing flat-dict readers of
+# this exact block (_score_root_cause_confidence and the verified_fix
+# auto-promotion path) for no real gain -- so this stays single-flag.
+from manual_lookup_before_edit_gate import _verify_evidence_refs
+
 # Multi-hypothesis extension (2026-08-28): .dv-harness/inference/inference_policy.json
 # declares a real "generate >=1 alternative hypothesis, record counter_evidence,
 # only then pick one" inference policy (hypothesis_fields/confidence_levels/
@@ -63,6 +103,16 @@ def main():
     if not d["supporting_evidence"]:
         print(json.dumps({"status": "FAIL", "reason": "NO_SUPPORTING_EVIDENCE"})); return 5
 
+    # Optional stronger check on the overall root cause's citations -- see
+    # module header. Only runs when the agent actually supplied
+    # evidence_refs; a finding that only ever used the legacy free-text
+    # supporting_evidence/counter_evidence strings is untouched by this.
+    top_evidence_refs = d.get("evidence_refs")
+    if top_evidence_refs is not None:
+        fail = _verify_evidence_refs(top_evidence_refs, "evidence_refs")
+        if fail:
+            print(json.dumps({"status": "FAIL", **fail})); return 18
+
     policy = load_policy()
     if policy is None:
         print(json.dumps({"status": "FAIL", "reason": "INFERENCE_POLICY_UNREADABLE",
@@ -119,6 +169,16 @@ def main():
                 print(json.dumps({"status": "FAIL", "reason": "HYPOTHESIS_INVALID_CONFIDENCE_LEVEL",
                                   "index": i, "confidence": h.get("confidence"),
                                   "allowed": confidence_levels})); return 13
+            # Same optional stronger check, per-hypothesis (a hypothesis's
+            # own supporting_evidence is still free-text-required by
+            # hypothesis_fields above; evidence_refs here is an OPTIONAL
+            # additional citation-freshness proof on top of that, not a
+            # replacement for it).
+            h_evidence_refs = h.get("evidence_refs")
+            if h_evidence_refs is not None:
+                fail = _verify_evidence_refs(h_evidence_refs, f"hypotheses[{i}].evidence_refs")
+                if fail:
+                    print(json.dumps({"status": "FAIL", "index": i, **fail})); return 19
             claim = h["claim"]
             if claim in seen_claims:
                 print(json.dumps({"status": "FAIL", "reason": "DUPLICATE_HYPOTHESIS_CLAIM",

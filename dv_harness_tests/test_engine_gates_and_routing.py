@@ -1,11 +1,12 @@
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 from dv_harness.policy import graph_next
-from dv_harness.gates import evaluate_stage_evidence
+from dv_harness.gates import evaluate_stage_evidence, _ccl_reuse_verified
 from dv_harness.stage_profile import StageExecutionProfiler, extract_provider_usage
 from dv_harness.memory_router import route_and_store, route_memory
 from dv_harness.memory import MemoryStore, MemoryRetriever, CornerCaseLibrary, CornerCaseLibraryConsolidator
@@ -14,6 +15,7 @@ from dv_harness.models import Stage as _Stage, Status
 from dv_harness.dashboard import (
     _lsf_summary, _graph_with_status, _first_failure, _execution_mode,
     _overall_progress, _coverage_credit, _failure_attribution,
+    _environment_mode_selected, _qualification_tier_reached,
 )
 from dv_harness.agent_profile import load_agent_profile
 from dv_harness.adapters.cli import ClaudeCLIAdapter
@@ -33,13 +35,14 @@ _VERIFY_EXTRA_GATES = (
     '```dv-harness-evidence:command_intent_semantic_closure_gate\n{"command_id": "cmd1", "command_hash": "h1", "expected_semantics": "X_DONE", "observed_semantics": "X_DONE", "sim_log_hash": "sh1", "simulation_result": "PASSED"}\n```\n'
     '```dv-harness-evidence:expected_data_provenance_gate\n{"scoreboards": [{"scoreboard_id": "SB1", "expected_source": "REFERENCE_MODEL", "expected_source_hash": "H1", "prediction_method": "PREDICT_BEFORE_DRIVE"}]}\n```\n'
     '```dv-harness-evidence:false_pass_false_fail_arbitration_gate\n{"simulation_status": "PASS", "semantic_status": "TRUE_PASS", "checker_status": "PASS", "fatal_or_uvm_error": false}\n```\n'
-    '```dv-harness-evidence:interrupt_storm_latency_gate\n{"sources": [{"source_id": "irq0", "max_ack_latency_cycles": 100, "observed_max_ack_latency_cycles": 50, "storm_rate": null, "lost_interrupts": 0}]}\n```\n'
-    '```dv-harness-evidence:multi_port_fairness_qos_gate\n{"ports": [{"port_id": "p0", "min_service_share_percent": 10, "observed_service_share_percent": 20, "qos_enabled": false}]}\n```\n'
+    '```dv-harness-evidence:interrupt_storm_latency_gate\n{"evidence_provenance": "AGENT_SELF_ATTESTED", "sources": [{"source_id": "irq0", "max_ack_latency_cycles": 100, "observed_max_ack_latency_cycles": 50, "storm_rate": null, "lost_interrupts": 0}]}\n```\n'
+    '```dv-harness-evidence:multi_port_fairness_qos_gate\n{"evidence_provenance": "AGENT_SELF_ATTESTED", "ports": [{"port_id": "p0", "min_service_share_percent": 10, "observed_service_share_percent": 20, "qos_enabled": false}]}\n```\n'
     '```dv-harness-evidence:negative_test_effectiveness_gate\n{"checks": [{"id": "c1", "positive_passed": true, "negative_mutation_applied": true, "negative_control_result": "FAIL"}]}\n```\n'
-    '```dv-harness-evidence:per_port_queue_starvation_gate\n{"ports": [{"port_id": "p0", "independent_queue": true, "max_wait_cycles": 100, "observed_wait_cycles": 50, "forward_progress_evidence": "log.txt"}]}\n```\n'
+    '```dv-harness-evidence:per_port_queue_starvation_gate\n{"evidence_provenance": "AGENT_SELF_ATTESTED", "ports": [{"port_id": "p0", "independent_queue": true, "max_wait_cycles": 100, "observed_wait_cycles": 50, "forward_progress_evidence": "log.txt"}]}\n```\n'
+    '```dv-harness-evidence:remote_execution_provenance_gate\n{"transcript_path": "/tmp/verify.txt", "claimed_exit_code": 0}\n```\n'
     '```dv-harness-evidence:rerun_determinism_gate\n{"runs": [{"input_fingerprint": "fp1", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "ck1"}, {"input_fingerprint": "fp1", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "ck1"}]}\n```\n'
     '```dv-harness-evidence:run_environment_reproducibility_gate\n{"rtl_hash": "abc", "testbench_hash": "def", "simulator_version": "vcs-2023", "vip_version": "1.0", "compile_options_hash": "co1", "runtime_options_hash": "ro1", "env_hash": "e1", "final_verdict": "PASS", "replay_command": "make replay"}\n```\n'
-    '```dv-harness-evidence:scoreboard_transaction_liveness_gate\n{"missing_expected_transactions": 0, "missing_actual_transactions": 0, "duplicate_transactions": 0, "max_transaction_latency": 100, "observed_max_transaction_latency": 50}\n```\n'
+    '```dv-harness-evidence:scoreboard_transaction_liveness_gate\n{"evidence_provenance": "AGENT_SELF_ATTESTED", "missing_expected_transactions": 0, "missing_actual_transactions": 0, "duplicate_transactions": 0, "max_transaction_latency": 100, "observed_max_transaction_latency": 50}\n```\n'
     '```dv-harness-evidence:semantic_evidence_strength_gate\n{"minimum_rank": 2, "expectations": [{"expectation_id": "e1", "evidence": [{"type": "ASSERTION", "contradicted": false}]}]}\n```\n'
     '```dv-harness-evidence:simulation_completion_recheck_gate\n{"simulation_ended": true, "semantic_workflow_started": true}\n```\n'
     '```dv-harness-evidence:simulation_semantic_trace_gate\n{"final_state": "TRUE_PASS", "signoff_credit_allowed": true, "results": [{"expectation_id": "E1", "status": "MATCH", "source_line": 12, "evidence_source": "sim.log"}]}\n```\n'
@@ -63,17 +66,45 @@ _VERIFICATION_ARCHITECTURE_EXTRA_GATES = (
     '```dv-harness-evidence:branch_topology_gate\n{"dut_port_count": 1, "vip_port_count": 1, "branches": ["block", "branch_fw", "branch_a0", "branch_b0"], "branch_fw_interrupt_driven": true}\n```\n'
     '```dv-harness-evidence:error_injection_coverage_gate\n{"required_error_classes": ["CRC_ERROR", "TIMEOUT"], "tests": [{"testcase_id": "T1", "checker_ids": ["CHK1"], "error_classes": ["CRC_ERROR"]}, {"testcase_id": "T2", "assertion_ids": ["A1"], "error_classes": ["TIMEOUT"]}]}\n```\n'
     '```dv-harness-evidence:observability_sufficiency_gate\n{"requirements": [{"requirement_id": "R1", "status": "OPEN", "observability": [{"type": "CHECKER", "evidence_point": "scoreboard.match"}]}]}\n```\n'
+    '```dv-harness-evidence:assertion_placeholder_closure_gate\n{"assertion_entries": [{"target_id": "obs_001", "classification": "PROTOCOL_STATE_MACHINE_LEGALITY", "generation_method": "state_machine_checks_dsl:valid_transition_table"}]}\n```\n'
     '```dv-harness-evidence:per_port_verification_matrix_gate\n{"required_feature_combinations": ["A", "B"], "ports": [{"port_id": "p0", "scoreboard": true, "checker": true, "performance_calculator": true, "coverage_collector": true, "covered_feature_combinations": ["A", "B"]}]}\n```\n'
     '```dv-harness-evidence:protocol_scheduler_gate\n{"protocol": "APB", "mode": "N_TO_1_SERIAL", "cross_port_global_lock": false}\n```\n'
     '```dv-harness-evidence:reference_uvm_adaptation_gate\n{"reference_uvm_hash": "h1", "new_dut_architecture_hash": "h2", "gap_analysis_hash": "h3", "adaptation_plan_hash": "h4", "blind_copy": false, "dut_specific_changes": "reworked scoreboard for new register map"}\n```\n'
     '```dv-harness-evidence:reference_uvm_compatibility_gate\n{"reference_name": "ref_usb_uvm", "reference_revision": "r12", "reference_hash": "abc123", "compatibility_analysis": {"protocol_role": "HOST", "interface_mapping": "mapped", "config_mapping": "mapped", "sequence_reuse": "partial", "scoreboard_checker_reuse": "full"}, "reuse_decision": "REUSE", "adaptation_plan": "plan.md"}\n```\n'
     '```dv-harness-evidence:reset_clock_power_sequence_gate\n{"events": [{"event": "reset_deassert"}, {"event": "clock_stable"}, {"event": "power_up"}], "ordering_rules": [{"before": "reset_deassert", "after": "clock_stable"}], "power_aware_design": false}\n```\n'
     '```dv-harness-evidence:scoreboard_reference_model_independence_gate\n{"shares_dut_implementation_code": false, "shared_algorithm_source_hash": "", "dut_algorithm_source_hash": "xyz", "independent_oracle_basis": "spec-derived C model", "negative_control_detected": true}\n```\n'
+    # ADDED (2026-09-07, engine-gates-verification-architecture-gap-close):
+    # vip_bind_generation_gate/scoreboard_generation_gate/assertion_generation_gate
+    # (registered onto this stage in the 2026-09-06 23-agent gap-closure
+    # integration pass -- see gates.py STAGE_GATES["VERIFICATION_ARCHITECTURE"])
+    # are a THIRD mandatory tuple on this stage: every flow must also supply
+    # real, RESOLVED dv_harness.verification_architecture IR records for
+    # these three, or the stage cannot reach PASS. These three payloads are
+    # not hand-typed placeholders -- each is the REAL `to_dict()` output of
+    # va.build_vip_bind_ir()/build_scoreboard_ir()/build_assertion_ir() run
+    # against real inputs (a bind entry with real PHY-boundary evidence, a
+    # scoreboard entry with real agreeing endpoint boundary kinds, an
+    # assertion candidate whose declared clock/reset domains real match a
+    # real `env_manifest.build_dut_facts_clock_reset()`-shaped clock_reset
+    # map), independently re-verified by running each real gate script
+    # (tools/verification_flow/{vip_bind,scoreboard,assertion}_generation_gate.py)
+    # against it to a real exit-0 PASS before being spliced in here.
+    '```dv-harness-evidence:vip_bind_generation_gate\n{"vip_bind": [{"ir_kind": "vip_bind", "target_instance": "chip.core.usb0", "ports": [{"name": "clk", "source": "chip.clk"}], "reason": "USB VIP bind", "tier": "T1_ALREADY_DECIDED", "bind_tier": "T1_ALREADY_DECIDED", "boundary_kind": "PARALLEL", "bindable": true, "mount_layer": "PARALLEL", "chain_classification": "DIRECT", "chain_path": [], "status": "RESOLVED", "confidence": "HIGH", "source_evidence": [{"fact_source": "connectivity.bind_entry", "detail": {"target_instance": "chip.core.usb0", "tier": "T1_ALREADY_DECIDED"}}, {"fact_source": "phy_boundary.decide_bind_location", "detail": {"mount_layer": "PARALLEL", "bindable": true}}]}], "placement_conflicts": []}\n```\n'
+    '```dv-harness-evidence:scoreboard_generation_gate\n{"scoreboard": [{"ir_kind": "scoreboard", "scoreboard_id": "SB1", "endpoint_pairs": [{"source": "chip.core.m0", "sink": "chip.core.s0"}], "unfilled_fields": [], "comparable": true, "comparability_reason": "endpoint boundary kinds agree for every declared pair", "status": "RESOLVED", "confidence": "HIGH", "source_evidence": [{"fact_source": "connectivity.generate_scoreboard_entry", "detail": {"scoreboard_id": "SB1"}}, {"fact_source": "phy_boundary.classify_boundary", "detail": {"reason": "endpoint boundary kinds agree for every declared pair"}}]}]}\n```\n'
+    '```dv-harness-evidence:assertion_generation_gate\n{"assertion": [{"ir_kind": "assertion", "assertion_id": "A1", "target_signal": "chip.core.usb0.valid", "target_instance": "chip.core.usb0", "clock_domain": "CLK_D0", "reset_domain": "CLK_D0", "checked_property": "valid_stable_until_ready", "clock_domain_match": true, "reset_domain_match": true, "status": "RESOLVED", "confidence": "HIGH", "source_evidence": [{"fact_source": "caller_declared_assertion_candidate", "detail": {"assertion_id": "A1"}}, {"fact_source": "env_manifest.build_dut_facts_clock_reset", "detail": {"known_clock_domains": ["CLK_D0"]}}]}]}\n```\n'
 )
 _FAILURE_RECOVERY_EXTRA_GATES = (
     '```dv-harness-evidence:failure_signature_recurrence_gate\n{"failures": [{"failure_id": "F1", "signature": "SIG_A"}, {"failure_id": "F2", "signature": "SIG_A", "linked_to_existing_failure": "F1"}]}\n```\n'
     '```dv-harness-evidence:issue_triage_classification_gate\n{"classification": "KNOWN", "classification_reason": "matches prior waiver", "evidence_hash": "abc123", "known_issue_id": "K-1"}\n```\n'
     '```dv-harness-evidence:unknown_failure_escalation_gate\n{"classification": "ENV_ISSUE"}\n```\n'
+    # ADDED (targeted-wave-debug-window-recovery-wiring, 2026-09-02):
+    # focused_wave_debug_window_gate is now also mandatory for
+    # FAILURE_RECOVERY (see gates.py STAGE_GATES) -- the "not needed this
+    # round" escape hatch (deep_debug_required:false +
+    # deep_debug_not_required_reason) is the realistic default for this
+    # fixture since none of the other FAILURE_RECOVERY tests below claim a
+    # real waveform rerun happened.
+    '```dv-harness-evidence:focused_wave_debug_window_gate\n{"deep_debug_required": false, "deep_debug_not_required_reason": "sim.log UVM_ERROR text alone identified the mismatch"}\n```\n'
 )
 _REGRESSION_MONITOR_EXTRA_GATES = (
     '```dv-harness-evidence:cross_run_evidence_consistency_gate\n{"runs": [{"run_id": "r1", "rtl_revision": "rev1", "tb_revision": "tb1", "vip_version": "v1", "config_hash": "c1", "testlist_hash": "t1", "evidence_bundle_hash": "e1"}, {"run_id": "r2", "rtl_revision": "rev1", "tb_revision": "tb1", "vip_version": "v1", "config_hash": "c1", "testlist_hash": "t1", "evidence_bundle_hash": "e2"}]}\n```\n'
@@ -87,10 +118,14 @@ _SOC_SCENARIO_PLANNER_EXTRA_GATES = (
 _INTAKE_EXTRA_GATES = (
     '```dv-harness-evidence:generated_artifact_boundary_gate\n{"artifacts": [{"class": "BUILD", "required_from_user": false, "owner": "HARNESS"}]}\n```\n'
     '```dv-harness-evidence:interactive_evidence_intake_gate\n{"questions_asked_in_batch": 1, "evidence_answer_available": false, "asked_user_anyway": false, "confidence": "HIGH", "asked_user_for_same_fact": false, "status": "READY"}\n```\n'
+    # NEW (2026-09-01, de-local-sim-env-intake design pass): additive 4th
+    # INTAKE gate -- "{}" is its own documented no-op PASS for a project
+    # with no pre-existing DE-local simulation environment to intake.
+    '```dv-harness-evidence:de_local_sim_env_intake_gate\n{}\n```\n'
 )
 _DISCOVERY_EXTRA_GATES = (
     '```dv-harness-evidence:evidence_source_priority_gate\n{"attempted_sources": ["EXISTING_PROJECT_FILES", "RTL_PARAMETERS_DEFINES", "DESIGN_DOCS"], "higher_priority_sources_exhausted": true}\n```\n'
-    '```dv-harness-evidence:input_source_contract_gate\n{"provided_source_classes": ["SPEC", "COMMAND_TXT", "USB_REFERENCE", "RTL_SOURCE", "DE_LOCAL_SIM"], "protocol_input_kind": "PUBLIC_STANDARD_SPEC", "forbidden_user_prerequisites": []}\n```\n'
+    '```dv-harness-evidence:input_source_contract_gate\n{"provided_source_classes": ["SPEC", "COMMAND_TXT", "PRIMARY_PROTOCOL_REFERENCE", "RTL_SOURCE", "DE_LOCAL_SIM"], "protocol_input_kind": "PUBLIC_STANDARD_SPEC", "forbidden_user_prerequisites": []}\n```\n'
 )
 
 # --- Evidence-block fixture for the multi-flag gate wired into
@@ -138,6 +173,48 @@ def test_extract_provider_usage_and_profiler_round_trip():
         ended = profiler.end_stage(rec["profile_id"], status="PASS")
         assert ended["input_tokens"] == 10
         assert ended["output_tokens"] == 5
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_records_add_agent_run_with_real_resolved_agent_name_not_stage_agent():
+    # Per-agent-attribution audit fix regression test: run_stage()'s real
+    # add_agent_run() call site previously hardcoded the literal string
+    # "stage-agent" no matter which real agent the router actually resolved.
+    # DISCOVERY's real main_graph.json node declares agent=analysis-agent
+    # (see test_run_stage_wires_plan_blackboard_react_and_agent_dispatch_on_pass
+    # above, which already asserts this same resolved name reaches the
+    # adapter_profile/prompt/task -- this test asserts the SAME real resolved
+    # name also reaches the stage profiler, not a hardcoded placeholder).
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+        from dv_harness.adapters.base import AgentResult
+
+        class FakeAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(
+                    ok=True, text="analysis done.\n" + _DISCOVERY_EXTRA_GATES,
+                    raw={"response": {"model": "claude-x",
+                                      "usage": {"input_tokens": 10, "output_tokens": 5}}},
+                    session_id="sess-1")
+
+        h = DVHarness(tmp)
+        h.adapter = FakeAdapter()
+        h.blackboard.write("project", {"target_name": "usb_dev"}, source="INTAKE")
+        h.set_stage("DISCOVERY")
+        h.run_stage("verify the USB device controller")
+
+        assert h.state.stages["DISCOVERY"]["status"] == "PASS"
+
+        recs = h.profiler.all_stages()
+        assert len(recs) == 1
+        agents = recs[0]["agents"]
+        assert len(agents) == 1
+        assert agents[0]["agent"] == "analysis-agent"
+        assert agents[0]["agent"] != "stage-agent"
+        assert agents[0]["input_tokens"] == 10
+        assert agents[0]["output_tokens"] == 5
     finally:
         shutil.rmtree(tmp)
 
@@ -201,9 +278,19 @@ def test_graph_next_walks_full_mechanism_first_pipeline():
         visited.append(nxt)
         cur = nxt
     assert visited[-1] == "SIGNOFF"
+    # UPDATED (2026-09-03, RCA_G1 multi-agent evidence fan-out): the four RCA
+    # stages join this expected-unvisited set for BOTH of the reasons already
+    # represented in it. They hang off FAILURE_RECOVERY, which this walk never
+    # enters (a FAIL-only branch); and they are themselves a parallel_group
+    # fan-out plus its join, which a single-target-per-step walker structurally
+    # cannot enumerate -- the same reason SOC_SCENARIO_PLANNER/
+    # INFRASTRUCTURE_AUDIT are listed. test_rca_multi_agent_fanout.py's
+    # next_frontier()/advance()-based tests are what prove all three RCA
+    # branches and RCA_JOIN are real, reachable, executed graph targets.
     assert set(ORDER) - set(visited) == {
         "FAILURE_RECOVERY", "BUILD_DEBUG", "INFRA_RECOVERY",
         "SOC_SCENARIO_PLANNER", "INFRASTRUCTURE_AUDIT",
+        "RCA_RTL_EVIDENCE", "RCA_LOG_EVIDENCE", "RCA_VIP_SPEC_EVIDENCE", "RCA_JOIN",
     }
     assert len(visited) == len(set(visited))
 
@@ -237,27 +324,49 @@ def test_verify_stage_with_matching_evidence_passes():
     # supplies verified-PASS evidence for all of them so this test still
     # demonstrates the original 3-gate behavior without silently ignoring
     # the 16 new mandatory gates.
-    text = (
-        "```dv-harness-evidence:simulation_semantic_validation_gate\n"
-        '{"simulation_passed": true, "sim_log": "UVM_INFO enum PASS", '
-        '"command_expectations": [{"expectation_id": "e1", "required": true, '
-        '"evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}]}\n'
-        "```\n"
-        "```dv-harness-evidence:test_result_provenance_gate\n"
-        '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
-        '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
-        '"config_hash": "h", "result": "PASS", "log_hash": "lh", "evidence_bundle_hash": "eh"}]}\n'
-        "```\n"
-        "```dv-harness-evidence:false_pass_resistance_gate\n"
-        '{"positive_test_pass": true, "negative_test_detects_fault": true, '
-        '"checker_detects_injected_fault": true, "semantic_log_match": true, '
-        '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
-        "```\n"
-        + _VERIFY_EXTRA_GATES
-    )
-    verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
-    assert verdict == "PASS", reasons
-    assert reasons == []
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        transcript_path = tmp / "verify.txt"
+        transcript_path.write_text("REMOTE_HOST=host-b\nEXIT_CODE=0\nSTATUS=PASS\nVerification passed\n")
+        # command_file_path/sim_log_path are mandatory (2026-09-02 TRUE_PASS
+        # prompt-gap fix) -- a trivial comment-only command.txt derives zero
+        # requirements from command_semantic_expectation_parser.parse_line(),
+        # so it doesn't affect this test's own PASS-shape assertion.
+        cf = tmp / "command.txt"
+        cf.write_text("# no command.txt content needed for this test\n", encoding="utf-8")
+        log_path = tmp / "sim.log"
+        log_path.write_text("UVM_INFO enum PASS", encoding="utf-8")
+        # Build VERIFY_EXTRA_GATES with real transcript path
+        verify_extra_with_transcript = _VERIFY_EXTRA_GATES.replace(
+            '```dv-harness-evidence:remote_execution_provenance_gate\n{"transcript_path": "/tmp/verify.txt", "claimed_exit_code": 0}\n```\n',
+            '```dv-harness-evidence:remote_execution_provenance_gate\n' + json.dumps({"transcript_path": str(transcript_path), "claimed_exit_code": 0}) + '\n```\n'
+        )
+        text = (
+            "```dv-harness-evidence:simulation_semantic_validation_gate\n"
+            + json.dumps({
+                "simulation_passed": True,
+                "command_file_path": str(cf),
+                "sim_log_path": str(log_path),
+                "command_expectations": [{"expectation_id": "e1", "required": True,
+                    "evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}],
+            }) + "\n```\n"
+            "```dv-harness-evidence:test_result_provenance_gate\n"
+            '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
+            '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
+            '"config_hash": "h", "result": "PASS", "log_hash": "lh", "evidence_bundle_hash": "eh"}]}\n'
+            "```\n"
+            "```dv-harness-evidence:false_pass_resistance_gate\n"
+            '{"positive_test_pass": true, "negative_test_detects_fault": true, '
+            '"checker_detects_injected_fault": true, "semantic_log_match": true, '
+            '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
+            "```\n"
+            + verify_extra_with_transcript
+        )
+        verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
+        assert verdict == "PASS", reasons
+        assert reasons == []
+    finally:
+        shutil.rmtree(tmp)
 
 
 def test_memory_router_was_previously_dead_code_now_wired():
@@ -266,7 +375,15 @@ def test_memory_router_was_previously_dead_code_now_wired():
     # with hardcoded levels). route_and_store() is the missing entry point.
     tmp = Path(tempfile.mkdtemp())
     try:
-        engineering = route_and_store(tmp, {"kind": "root_cause", "verified": True, "title": "t"})
+        engineering = route_and_store(tmp, {
+            "kind": "root_cause", "verified": True, "title": "t",
+            # Real evidence + HIGH confidence + a reusable claim: the bar
+            # memory_router.engineering_admission_gate() enforces at this tier
+            # boundary since 2026-09-03 (a bare {"verified": True} record is
+            # now correctly demoted to Working Memory instead).
+            "root_cause": "ep0 fifo prefetch guard missing", "confidence": "HIGH",
+            "evidence": ["sim.log:8821 UVM_ERROR ep0 underrun"],
+        })
         assert engineering["destination"] == "ENGINEERING_MEMORY"
         assert engineering["level"] == "engineering"
 
@@ -321,28 +438,103 @@ def test_env_check_execution_mode_validator_wired():
     assert reasons
 
 
+def _vplan_writer_validation_extra_gate_text(tmp: Path) -> str:
+    # NEW (2026-09-01, vplan-doc-and-wiring-fix): vplan_writer_validation_gate
+    # (STAGE_GATES["VPLAN"]'s second gate) calls the real dv_harness.
+    # vplan_writer.build_evidence_context()/validate_items() against REAL
+    # files on disk -- unlike every other _EXTRA_GATES constant above, its
+    # evidence cannot be a static JSON string; it needs a real pattern file,
+    # dispatcher file, and task-declaration source to exist at test time.
+    pattern_dir = tmp / "patterns"
+    pattern_dir.mkdir()
+    (pattern_dir / "USB2_bulkin.txt").write_text("bulkin pattern", encoding="utf-8")
+    dispatcher_file = tmp / "dv_uvm_pattern_pool.svh"
+    dispatcher_file.write_text(
+        'case (pattern_name)\n  "USB2_bulkin": run_bulkin();\nendcase\n', encoding="utf-8",
+    )
+    tests_dir = tmp / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "usb_bulkin_test.sv").write_text(
+        "task automatic usb_bulkin_test();\nendtask\n", encoding="utf-8",
+    )
+    payload = {
+        "items": [{
+            "req_id": "R1", "feature_area": "Bulk Transfers",
+            "verification_item": "Bulk IN transfer completes",
+            "pattern_name": "USB2_bulkin", "task_name": "usb_bulkin_test",
+            "suite": "USB2_sanity", "covered_by": "covered",
+            "description": "Directed bulk-in transfer test", "spec_section": "TBD-spec",
+            "constraint_items": [], "random_or_directed": "directed", "mode_speed": "HS",
+            "instance": "N/A", "checkers_active": ["sb_bulk_data_match"], "notes": "",
+            "blocked_on": None, "blocked_reason": None,
+        }],
+        "pattern_dir": str(pattern_dir),
+        "dispatcher_file": str(dispatcher_file),
+        "task_declaration_sources": [str(tests_dir / "*.sv")],
+    }
+    return "```dv-harness-evidence:vplan_writer_validation_gate\n" + json.dumps(payload) + "\n```\n"
+
+
+# NEW (2026-09-06/07, spec-to-vplan-quality-gate-wiring): VPLAN gained a
+# third mandatory gate (spec_to_vplan_quality_gate) alongside
+# spec_coverage_audit and vplan_writer_validation_gate -- see
+# tools/verification_flow/spec_to_vplan_quality_gate.py's own header and
+# CLAUDE.md's "Spec-to-vPlan Transform Quality Gate" section. This is a
+# minimal internally-coherent (one non-critical spec item, fully traced,
+# no contradictions/ambiguities) PASS payload -- the gate's own
+# dv_harness_tests/test_spec_to_vplan_quality_gate.py proves the rules in
+# depth; this fixture only needs a clean PASS so stage-level VPLAN tests
+# aren't blocked by the new mandatory tuple.
+_SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT = (
+    "```dv-harness-evidence:spec_to_vplan_quality_gate\n"
+    + json.dumps({
+        "spec_items": [{"spec_id": "S1", "criticality": "P2"}],
+        "vplan_items": [{"vplan_id": "V1", "traces_to": ["S1"]}],
+    })
+    + "\n```\n"
+)
+
+
 def test_newly_wired_orphan_gates_pass_with_valid_evidence():
     # SOC_SCENARIO_PLANNER and FAILURE_RECOVERY each gained more mandatory
     # gates in the 2026-08-28 mass-wiring pass -- their _EXTRA_GATES const
-    # supplies verified-PASS evidence for those too, INTAKE/VPLAN unaffected.
-    cases = {
-        "INTAKE": ("intake_readiness",
-            '{"mode": "SUBSYSTEM", "target_name": "usb_dev", "protocols": ["USB"], '
-            '"required_artifacts": {"protocol_spec": true, "dut_design_spec": true, '
-            '"rtl_top_or_interface_files": true}}', _INTAKE_EXTRA_GATES),
-        "VPLAN": ("spec_coverage_audit", '{"requirements": [{"req_id": "R1", "status": "VERIFIED"}]}', ""),
-        "SOC_SCENARIO_PLANNER": ("corner_risk_rank",
-            '{"cases": [{"corner_id": "c1", "risk_factors": ["reset", "cdc"]}]}',
-            _SOC_SCENARIO_PLANNER_EXTRA_GATES),
-        "FAILURE_RECOVERY": ("failure_attribution",
-            '{"boundary_trace": [{"stage": "SEQUENCE", "expected": 1, "observed": 1}, '
-            '{"stage": "DUT_INTERNAL", "expected": 1, "observed": 0}]}',
-            _FAILURE_RECOVERY_EXTRA_GATES),
-    }
-    for stage, (gate_id, body, extra) in cases.items():
-        text = f"```dv-harness-evidence:{gate_id}\n{body}\n```\n" + extra
-        verdict, reasons = evaluate_stage_evidence(ROOT, stage, text)
-        assert verdict == "PASS", f"{stage}/{gate_id}: {reasons}"
+    # supplies verified-PASS evidence for those too, INTAKE unaffected. VPLAN
+    # gained a second mandatory gate (vplan_writer_validation_gate) in the
+    # 2026-09-01 vplan-doc-and-wiring-fix pass -- see
+    # _vplan_writer_validation_extra_gate_text above for why its evidence
+    # needs a real tmp fixture rather than a static JSON string -- and a
+    # third (spec_to_vplan_quality_gate) in the spec-to-vplan-quality-gate-
+    # wiring pass, see _SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT above.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        cases = {
+            "INTAKE": ("intake_readiness",
+                '{"mode": "SUBSYSTEM", "target_name": "usb_dev", "protocols": ["USB"], '
+                '"required_artifacts": {"protocol_spec": true, "dut_design_spec": true, '
+                '"rtl_top_or_interface_files": true, '
+                # command_txt/vip_reference (2026-09-01, commandtxt-vip-intake-
+                # gate-implementation): now-mandatory required_artifacts keys --
+                # gate checks these paths for real existence relative to cwd
+                # (evaluate_stage_evidence(ROOT, ...) below runs the gate with
+                # cwd=ROOT), so these must name files that really exist in ROOT.
+                '"command_txt": ["CLAUDE.md"], "vip_reference": ["dv_harness/gates.py"]}}',
+                _INTAKE_EXTRA_GATES),
+            "VPLAN": ("spec_coverage_audit", '{"requirements": [{"req_id": "R1", "status": "VERIFIED"}]}',
+                _vplan_writer_validation_extra_gate_text(tmp) + _SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT),
+            "SOC_SCENARIO_PLANNER": ("corner_risk_rank",
+                '{"cases": [{"corner_id": "c1", "risk_factors": ["reset", "cdc"]}]}',
+                _SOC_SCENARIO_PLANNER_EXTRA_GATES),
+            "FAILURE_RECOVERY": ("failure_attribution",
+                '{"boundary_trace": [{"stage": "SEQUENCE", "expected": 1, "observed": 1}, '
+                '{"stage": "DUT_INTERNAL", "expected": 1, "observed": 0}]}',
+                _FAILURE_RECOVERY_EXTRA_GATES),
+        }
+        for stage, (gate_id, body, extra) in cases.items():
+            text = f"```dv-harness-evidence:{gate_id}\n{body}\n```\n" + extra
+            verdict, reasons = evaluate_stage_evidence(ROOT, stage, text)
+            assert verdict == "PASS", f"{stage}/{gate_id}: {reasons}"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_dashboard_overall_progress_uses_full_stage_enum_as_denominator():
@@ -469,6 +661,51 @@ def test_dashboard_execution_mode_reads_env_check_evidence():
     assert _execution_mode(Path(tempfile.mkdtemp())) is None
 
 
+def test_dashboard_environment_mode_selected_reads_evidence_from_any_stage():
+    # Mirrors test_dashboard_execution_mode_reads_env_check_evidence() above
+    # exactly, for _environment_mode_selected()'s environment_mode_selection
+    # block -- except unlike execution_mode_validator (always ENV_CHECK-only),
+    # no single canonical stage is nailed down for this evidence block yet,
+    # so the scan covers every stage (same scan-all-stages shape
+    # _dv_review_pending() already uses), proven here by putting it on a
+    # stage other than ENV_CHECK.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / ".dv-harness").mkdir()
+        state = {"stages": {"DISCOVERY": {"last_message": (
+            "```dv-harness-evidence:environment_mode_selection\n"
+            '{"environment_mode": "SUBSYSTEM_MODE"}\n'
+            "```\n"
+        )}}}
+        (tmp / ".dv-harness" / "state.json").write_text(json.dumps(state))
+        assert _environment_mode_selected(tmp) == "SUBSYSTEM_MODE"
+    finally:
+        shutil.rmtree(tmp)
+    assert _environment_mode_selected(Path(tempfile.mkdtemp())) is None
+
+
+def test_dashboard_qualification_tier_reached_derives_highest_from_protocol_registry():
+    # _qualification_tier_reached() is the real per-run counterpart to
+    # _qualification_tiers()'s static ladder: the highest CANONICAL_LADDER
+    # tier actually reached by any protocol in this project's real
+    # protocol_capability_registry.json.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        registry_dir = tmp / ".dv-harness" / "qualification"
+        registry_dir.mkdir(parents=True)
+        (registry_dir / "protocol_capability_registry.json").write_text(json.dumps({
+            "protocols": {
+                "USB": {"qualification_status": "ENV_GENERATED"},
+                "PCIe": {"qualification_status": "SMOKE_QUALIFIED"},
+            }
+        }))
+        assert _qualification_tier_reached(tmp) == "SMOKE_QUALIFIED"
+    finally:
+        shutil.rmtree(tmp)
+    # No registry at all -> honest None, never a fabricated tier.
+    assert _qualification_tier_reached(Path(tempfile.mkdtemp())) is None
+
+
 def test_dashboard_graph_reflects_real_stage_status():
     g = _graph_with_status(ROOT, "DISCOVERY")
     ids = {n["id"] for n in g["nodes"]}
@@ -485,10 +722,20 @@ def test_simulation_gate_reads_sim_log_from_real_file_path():
     try:
         log_path = tmp / "sim.log"
         log_path.write_text("UVM_INFO enum PASS at time 100")
+        cf = tmp / "command.txt"
+        cf.write_text("# no command.txt content needed for this test\n", encoding="utf-8")
+        transcript_path = tmp / "verify.txt"
+        transcript_path.write_text("REMOTE_HOST=host-b\nEXIT_CODE=0\nSTATUS=PASS\nVerification passed\n")
+        # Build VERIFY_EXTRA_GATES with real transcript path
+        verify_extra_with_transcript = _VERIFY_EXTRA_GATES.replace(
+            '```dv-harness-evidence:remote_execution_provenance_gate\n{"transcript_path": "/tmp/verify.txt", "claimed_exit_code": 0}\n```\n',
+            '```dv-harness-evidence:remote_execution_provenance_gate\n' + json.dumps({"transcript_path": str(transcript_path), "claimed_exit_code": 0}) + '\n```\n'
+        )
         text = (
             "```dv-harness-evidence:simulation_semantic_validation_gate\n"
             + json.dumps({
                 "simulation_passed": True,
+                "command_file_path": str(cf),
                 "sim_log_path": str(log_path),
                 "command_expectations": [{
                     "expectation_id": "e1", "required": True,
@@ -506,7 +753,7 @@ def test_simulation_gate_reads_sim_log_from_real_file_path():
             '"checker_detects_injected_fault": true, "semantic_log_match": true, '
             '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
             "```\n"
-            + _VERIFY_EXTRA_GATES
+            + verify_extra_with_transcript
         )
         verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
         assert verdict == "PASS", reasons
@@ -519,10 +766,13 @@ def test_simulation_gate_fails_closed_on_missing_sim_log_path():
     # (INSUFFICIENT_EVIDENCE), not silently fall back to an empty log.
     tmp = Path(tempfile.mkdtemp())
     try:
+        cf = tmp / "command.txt"
+        cf.write_text("# no command.txt content needed for this test\n", encoding="utf-8")
         text = (
             "```dv-harness-evidence:simulation_semantic_validation_gate\n"
             + json.dumps({
                 "simulation_passed": True,
+                "command_file_path": str(cf),
                 "sim_log_path": str(tmp / "does_not_exist.log"),
                 "command_expectations": [{
                     "expectation_id": "e1", "required": True,
@@ -585,6 +835,547 @@ def test_coverage_closure_requires_hole_regeneration_and_test_generation_gates()
     assert verdict2 == "PASS", reasons2
 
 
+def test_run_stage_appends_real_coverage_history_sample_on_coverage_closure_pass():
+    # Task 6 (poster-gap-closing round 2): dashboard.append_coverage_history_sample()
+    # was real, tested rendering/storage logic whose own docstring admitted "not
+    # currently called by any engine stage yet". A real COVERAGE_CLOSURE PASS
+    # must now grow .dv-harness/coverage/history.json with the actual
+    # coverage_signoff_verdict_gate-reported coverage_credit_percent (the one
+    # COVERAGE_CLOSURE gate whose evidence carries a real coverage percent --
+    # see coverage_signoff_verdict_gate.py's own `coverage_credit_percent`
+    # field) -- not a placeholder -- mirroring _promote_experience_knowledge's
+    # exact "helper method, gated on STAGE_GATES, called from the PASS branch"
+    # pattern.
+    from dv_harness.engine import DVHarness
+    from dv_harness.adapters.base import AgentResult
+
+    tmp = _mk_smoke_project()
+    try:
+        base = {
+            "signoff_requested": True, "true_pass": True, "active_failure_count": 0,
+            "coverage_credit_percent": 87, "waived_items": 0, "approved_waivers": True,
+        }
+        credit = {"active_failure_ids": [], "items": [
+            {"coverage_id": "c1", "credit": True, "active_checker_ids": ["chk1"],
+             "waived": False, "linked_failure_ids": []}]}
+        quality = {"coverage_items": [
+            {"coverage_id": "c1", "requirement_ids": ["r1"], "hit": True, "credit": True,
+             "checker_ids": ["chk1"], "execution_evidence": ["ev1"]}]}
+        complete_hole = {"coverage_holes": [
+            {"coverage_id": "c1", "waived": False, "root_cause_classification": "MISSING_TEST",
+             "regenerated_testcase_ids": ["t1"], "rerun_evidence": "rerun-ev-1"}]}
+        complete_item = {"items": [
+            {"id": "c1", "covered": False, "generated_test_ids": ["t1"], "closure_owner": "alice",
+             "trace_to_vplan": "vplan-item-1"}]}
+        text = (
+            f"```dv-harness-evidence:coverage_signoff_verdict_gate\n{json.dumps(base)}\n```\n"
+            f"```dv-harness-evidence:coverage_credit_consistency_gate\n{json.dumps(credit)}\n```\n"
+            f"```dv-harness-evidence:coverage_quality_gate\n{json.dumps(quality)}\n```\n"
+            f"```dv-harness-evidence:coverage_hole_regeneration_gate\n{json.dumps(complete_hole)}\n```\n"
+            f"```dv-harness-evidence:coverage_hole_to_test_generation_gate\n{json.dumps(complete_item)}\n```\n"
+            + _COVERAGE_CLOSURE_EXTRA_GATES
+        )
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h = DVHarness(tmp)
+        h.adapter = _PassAdapter()
+        h.set_stage("COVERAGE_CLOSURE")
+
+        history_path = tmp / ".dv-harness" / "coverage" / "history.json"
+        assert not history_path.exists()
+
+        h.run_stage("goal")
+        assert h.state.stages["COVERAGE_CLOSURE"]["status"] == Status.PASS.value
+
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+        assert len(history) == 1
+        assert history[0]["percent"] == 87
+        assert "timestamp" in history[0]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_promotes_project_topology_to_project_memory_on_pass():
+    # Task 9 (poster-gap-closing round 2): PROJECT_MODEL's
+    # project_model_topology_completeness_gate already structurally verifies
+    # a complete verification-boundary/VIP-topology/block-classification
+    # model (real subprocess-verified evidence) on PASS, but nothing
+    # persisted it as reusable Project-tier memory -- mirrors
+    # _promote_experience_knowledge's exact "helper method, gated on
+    # STAGE_GATES, called from the PASS branch" pattern.
+    from dv_harness.engine import DVHarness
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import ProjectMemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        gate_dir = tmp / "tools" / "verification_flow"
+        gate_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools" / "verification_flow" / "project_model_topology_completeness_gate.py",
+                    gate_dir / "project_model_topology_completeness_gate.py")
+        # ADDED (2026-09-01, route-skill-resolver-dynamic-implementation
+        # task): PROJECT_MODEL now also mandates environment_mode_selection_
+        # gate -- see gates.STAGE_GATES["PROJECT_MODEL"].
+        shutil.copy(ROOT / "tools" / "verification_flow" / "environment_mode_selection_gate.py",
+                    gate_dir / "environment_mode_selection_gate.py")
+        h.set_stage("PROJECT_MODEL")
+
+        complete = {"verification_boundary": "top.usb_dev",
+                    "vip_topology": [{"vip_id": "usb_vip", "bound_interface": "usb_if0"}],
+                    "blocks": [{"block_id": "b1", "branch": "BLOCK"}],
+                    "model_confidence": "HIGH", "confidence_basis": "cross-checked with RTL arch discovery",
+                    "dv_readiness": "READY", "dv_readiness_basis": "all boundary items resolved",
+                    "architecture_evidence_db_ref": "arch-db-v3"}
+        env_mode = {"environment_mode": "SUBSYSTEM_MODE", "requested_subsystems": ["usb"]}
+        text = (
+            f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(complete)}\n```\n"
+            f"```dv-harness-evidence:environment_mode_selection\n{json.dumps(env_mode)}\n```\n"
+        )
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["PROJECT_MODEL"]["status"] == Status.PASS.value
+
+        proj_store = ProjectMemoryStore(tmp)
+        rows = [r for r in proj_store.store._index() if r.get("level") == "project"]
+        assert rows, f"no Project Memory record written: {proj_store.store._index()}"
+        rec = proj_store.get(rows[0]["memory_id"])
+        assert rec is not None
+        assert rec["verification_boundary"] == "top.usb_dev"
+        assert rec["dv_readiness"] == "READY"
+        assert rec["level"] == "project"
+
+        events = (tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        promo_events = [json.loads(e) for e in events if json.loads(e).get("event") == "PROJECT_TOPOLOGY_PROMOTED"]
+        assert promo_events and promo_events[0]["promotion"]["memory_id"] == rec["memory_id"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_promotes_vplan_summary_to_project_memory_on_pass():
+    # memory-engine-schema-completion audit (2026-09-01): Project Memory was
+    # populated by exactly ONE gate (project_model_topology_completeness_gate,
+    # tested above) -- vPlan content had no separate write path at all. This
+    # proves the second real gate-triggered writer: a PASS on VPLAN's
+    # vplan_writer_validation_gate (gates.py, vplan-doc-and-wiring-fix) now
+    # also persists a vPlan summary as Project-tier memory.
+    import os
+    from dv_harness.engine import DVHarness
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import ProjectMemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        gate_dir = tmp / "tools" / "vplan"
+        gate_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools" / "vplan" / "spec_coverage_audit.py",
+                    gate_dir / "spec_coverage_audit.py")
+        shutil.copy(ROOT / "tools" / "vplan" / "vplan_writer_validation_gate.py",
+                    gate_dir / "vplan_writer_validation_gate.py")
+        # spec_to_vplan_quality_gate (VPLAN's third mandatory gate, see
+        # _SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT above) resolves relative to
+        # tools/verification_flow, unlike the two tools/vplan gates above.
+        vf_gate_dir = tmp / "tools" / "verification_flow"
+        vf_gate_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools" / "verification_flow" / "spec_to_vplan_quality_gate.py",
+                    vf_gate_dir / "spec_to_vplan_quality_gate.py")
+        h.set_stage("VPLAN")
+
+        # Real on-disk evidence vplan_writer_validation_gate's real
+        # dv_harness.vplan_writer.validate_items() actually checks against --
+        # same fixture shape as
+        # dv_harness_tests/test_vplan_writer_validation_gate.py's _make_fake_env.
+        pattern_dir = tmp / "patterns"
+        pattern_dir.mkdir()
+        (pattern_dir / "USB2_bulkin.txt").write_text("bulkin pattern", encoding="utf-8")
+        dispatcher_file = tmp / "dv_uvm_pattern_pool.svh"
+        dispatcher_file.write_text(
+            'case (pattern_name)\n  "USB2_bulkin": run_bulkin();\nendcase\n', encoding="utf-8",
+        )
+        tests_dir = tmp / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "usb_bulkin_test.sv").write_text(
+            "task automatic usb_bulkin_test();\nendtask\n", encoding="utf-8",
+        )
+        items = [
+            {"req_id": "USB2-BULK-001", "feature_area": "Bulk Transfers",
+             "verification_item": "Bulk IN transfer completes",
+             "pattern_name": "USB2_bulkin", "task_name": "usb_bulkin_test",
+             "suite": "USB2_sanity", "covered_by": "covered",
+             "description": "Directed bulk-in transfer test", "spec_section": "TBD-spec",
+             "constraint_items": [], "random_or_directed": "directed", "mode_speed": "HS",
+             "instance": "N/A", "checkers_active": ["sb_bulk_data_match"], "notes": "",
+             "blocked_on": None, "blocked_reason": None},
+        ]
+        vplan_validation_payload = {
+            "items": items,
+            "pattern_dir": str(pattern_dir),
+            "dispatcher_file": str(dispatcher_file),
+            "task_declaration_sources": [str(tests_dir / "*.sv")],
+        }
+        spec_coverage_payload = {"requirements": [{"req_id": "USB2-BULK-001", "status": "VERIFIED"}]}
+        text = (
+            f"```dv-harness-evidence:spec_coverage_audit\n{json.dumps(spec_coverage_payload)}\n```\n"
+            f"```dv-harness-evidence:vplan_writer_validation_gate\n{json.dumps(vplan_validation_payload)}\n```\n"
+            + _SPEC_TO_VPLAN_QUALITY_EXTRA_GATE_TEXT
+        )
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        # vplan_writer_validation_gate.py imports dv_harness.vplan_writer --
+        # its own sys.path.insert(0, ...) resolves to the copied script's
+        # location (tmp), not the real package, so the subprocess needs the
+        # real project root on PYTHONPATH to find dv_harness at all (see
+        # this file's own confirmed-empirically note in the implementation
+        # report for memory-engine-schema-completion).
+        env_patch = dict(os.environ)
+        env_patch["PYTHONPATH"] = str(ROOT) + os.pathsep + env_patch.get("PYTHONPATH", "")
+        with patch.dict(os.environ, env_patch):
+            h.run_stage("goal")
+        assert h.state.stages["VPLAN"]["status"] == Status.PASS.value
+
+        proj_store = ProjectMemoryStore(tmp)
+        rows = [r for r in proj_store.store._index() if r.get("level") == "project"]
+        assert rows, f"no Project Memory record written for VPLAN: {proj_store.store._index()}"
+        rec = proj_store.get(rows[0]["memory_id"])
+        assert rec is not None
+        assert rec["level"] == "project"
+        assert rec["vplan_item_count"] == 1
+        assert rec["vplan_feature_areas"] == ["Bulk Transfers"]
+        assert rec["vplan_req_ids"] == ["USB2-BULK-001"]
+        assert rec["vplan_suites"] == ["USB2_sanity"]
+
+        events = (tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        promo_events = [json.loads(e) for e in events if json.loads(e).get("event") == "VPLAN_SUMMARY_PROMOTED"]
+        assert promo_events and promo_events[0]["promotion"]["memory_id"] == rec["memory_id"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_does_not_promote_project_topology_when_gate_fails():
+    # No spurious Project Memory record when the gate rejects the evidence
+    # (a block missing its branch classification) -- PARTIAL, not PASS.
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import ProjectMemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        gate_dir = tmp / "tools" / "verification_flow"
+        gate_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "tools" / "verification_flow" / "project_model_topology_completeness_gate.py",
+                    gate_dir / "project_model_topology_completeness_gate.py")
+        h.set_stage("PROJECT_MODEL")
+
+        no_branch = {"verification_boundary": "top.usb_dev",
+                     "vip_topology": [{"vip_id": "usb_vip", "bound_interface": "usb_if0"}],
+                     "blocks": [{"block_id": "b1"}],
+                     "model_confidence": "HIGH", "confidence_basis": "x",
+                     "dv_readiness": "READY", "dv_readiness_basis": "x",
+                     "architecture_evidence_db_ref": "db1"}
+        text = f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(no_branch)}\n```\n"
+
+        class _PartialAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PartialAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["PROJECT_MODEL"]["status"] != Status.PASS.value
+
+        # No spurious PROJECT-tier record -- but a WORKING-tier record from
+        # ReactRecorder.record() (memory-engine-schema-completion, 2026-09-01)
+        # is now expected on EVERY stage attempt regardless of verdict, since
+        # that tier is exactly the provisional hypothesis/evidence/next-action
+        # bookkeeping this stage attempt genuinely produced -- see
+        # dv_harness/react.py's ReactRecorder module-header RULING comment.
+        proj_store = ProjectMemoryStore(tmp)
+        assert [r for r in proj_store.store._index() if r.get("level") == "project"] == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_retrieves_relevant_memory_into_the_prompt():
+    # Task 9: MemoryRetriever.search() had zero callers anywhere in the real
+    # engine flow before this -- a stage's prompt was never actually
+    # informed by prior memory, only by the Blackboard snapshot. Seed a
+    # Project-tier record relevant to the fixture goal and confirm its
+    # title actually reaches the prompt handed to the adapter.
+    from dv_harness.engine import DVHarness
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import MemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        marker = "MEMORY_MARKER_USB2_SCOREBOARD_PITFALL_ABCDE"
+        goal = "investigate scoreboard port ownership issues in the usb2 subsystem"
+        assert marker not in goal  # sanity: the marker must come from memory, not be echoed from the goal itself
+        MemoryStore(tmp).add("project", {
+            "title": marker,
+            "protocol": "USB2", "scope": "subsystem",
+            "root_cause": "usb2 scoreboard port ownership global expected queue shared across ports",
+        })
+
+        calls = []
+
+        class FakeAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                calls.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("DISCOVERY")
+        h.run_stage(goal)
+
+        assert calls, "adapter was never called"
+        assert marker not in goal
+        assert marker in calls[0]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_with_no_relevant_memory_is_a_pure_no_op():
+    # No seeded memory anywhere -- MemoryRetriever.search() must return no
+    # hits, and build_stage_prompt() must be called with a falsy
+    # relevant_memory (None or []), which prompts.build_stage_prompt's own
+    # additive-kwargs contract guarantees reproduces the exact same prompt
+    # as if relevant_memory had never been threaded in at all -- proven here
+    # by actually calling the real build_stage_prompt both ways and
+    # comparing, not merely asserting "no crash".
+    import dv_harness.engine as engine_mod
+    from dv_harness.adapters.base import AgentResult
+
+    tmp, h = _fresh_harness()
+    try:
+        calls = []
+        captured = {}
+        real_build_stage_prompt = engine_mod.build_stage_prompt
+
+        def _spy(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = dict(kwargs)
+            return real_build_stage_prompt(*args, **kwargs)
+
+        class FakeAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                calls.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("DISCOVERY")
+        with patch.object(engine_mod, "build_stage_prompt", side_effect=_spy):
+            h.run_stage("a goal with nothing seeded in memory")
+
+        assert calls, "adapter was never called"
+        assert "kwargs" in captured
+        assert not captured["kwargs"].get("relevant_memory")  # None or [] -- genuinely empty
+
+        with_kwarg = real_build_stage_prompt(*captured["args"], **captured["kwargs"])
+        without_memory_kwarg = real_build_stage_prompt(
+            *captured["args"],
+            **{k: v for k, v in captured["kwargs"].items() if k != "relevant_memory"})
+        assert with_kwarg == without_memory_kwarg
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_with_only_irrelevant_memory_is_a_pure_no_op():
+    # Finding I2 (2026-08-31 fix wave): the ORIGINAL no-op test above only
+    # proved "empty store" is a no-op -- it never proved "irrelevant record"
+    # is a no-op. MemoryRetriever.search() had an always-positive recency
+    # component (plus a confidence component independent of the query), so
+    # once ANY memory record exists -- guaranteed in normal operation by
+    # Task 9's own write sites (_promote_experience_knowledge,
+    # _promote_project_topology_knowledge, job-tier writes) -- a completely
+    # unrelated record could still be returned as "relevant" and leak into
+    # every stage's prompt. Seed one genuinely irrelevant record (unrelated
+    # protocol/scope/symptoms/text -- an ethernet/LSF record, matching the
+    # reviewer's own empirical repro) and confirm run_stage() is STILL a
+    # pure no-op: relevant_memory stays falsy and the prompt is byte-for-byte
+    # identical to the no-memory-kwarg prompt.
+    import dv_harness.engine as engine_mod
+    from dv_harness.adapters.base import AgentResult
+    from dv_harness.memory import MemoryStore
+
+    tmp, h = _fresh_harness()
+    try:
+        MemoryStore(tmp).add("project", {
+            "title": "Ethernet MAC LSF job stuck in PEND due to license checkout failure",
+            "protocol": "Ethernet", "scope": "lsf_infra",
+            "symptoms": ["lsf_pend", "license_checkout_failure"],
+            "root_cause": "LSF license server exhausted synopsys_vcs tokens during peak batch window",
+            "confidence": "CONFIRMED",
+        })
+
+        calls = []
+        captured = {}
+        real_build_stage_prompt = engine_mod.build_stage_prompt
+
+        def _spy(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = dict(kwargs)
+            return real_build_stage_prompt(*args, **kwargs)
+
+        class FakeAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                calls.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("DISCOVERY")
+        with patch.object(engine_mod, "build_stage_prompt", side_effect=_spy):
+            h.run_stage("investigate usb3 coverage closure holes in the scoreboard")
+
+        assert calls, "adapter was never called"
+        assert "kwargs" in captured
+        assert not captured["kwargs"].get("relevant_memory"), (
+            "an unrelated ethernet/LSF record leaked into an unrelated USB "
+            "coverage query's relevant_memory")
+        assert "Ethernet MAC LSF job" not in calls[0]
+
+        with_kwarg = real_build_stage_prompt(*captured["args"], **captured["kwargs"])
+        without_memory_kwarg = real_build_stage_prompt(
+            *captured["args"],
+            **{k: v for k, v in captured["kwargs"].items() if k != "relevant_memory"})
+        assert with_kwarg == without_memory_kwarg
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_memory_retriever_search_excludes_pure_recency_match():
+    # Unit-level companion to the run_stage-level no-op test above: directly
+    # exercises MemoryRetriever.search() (not through the engine) with the
+    # reviewer's exact empirical repro shape -- an unrelated ethernet/LSF
+    # record searched against an unrelated USB coverage query -- and proves
+    # it is excluded, not merely returned with a low score. Before the I2
+    # fix this returned the record at score 1.0 (pure recency, since the
+    # record's confidence defaults to "UNKNOWN" which contributes 0).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        store = MemoryStore(tmp)
+        store.add("project", {
+            "title": "Ethernet MAC LSF job stuck in PEND",
+            "protocol": "Ethernet", "scope": "lsf_infra",
+            "symptoms": ["lsf_pend"],
+            "root_cause": "LSF license server exhausted tokens",
+        })
+        hits = MemoryRetriever(store).search({"text": "usb3 coverage closure scoreboard"})
+        assert hits == []
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_failure_recovery_queries_knowledge_center_when_configured():
+    # Real gap (knowledge-center-pre-stage-read audit follow-up, 2026-09-02):
+    # KnowledgeCenterClient.search() (dv_harness/knowledge_center.py) had
+    # exactly two real callers -- the manual 'dv-harness knowledge search'
+    # CLI subcommand and the dashboard GUI -- never the real engine flow.
+    # The ONE automatic pre-stage memory read that DID exist (the
+    # relevant_memory tests directly above) queries the purely LOCAL
+    # per-project MemoryStore, a different store than the shared, cross-user
+    # Knowledge Center this proves is now actually consulted (and surfaced
+    # into the built prompt) before FAILURE_RECOVERY. A fake client is
+    # patched in so no real relay/network call is ever attempted.
+    import dv_harness.engine as engine_mod
+    from dv_harness.adapters.base import AgentResult
+
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["knowledge_center"] = {
+            "enabled": True, "remote_root": "/srv/dvhkc", "vchost": "vchost-a", "vchop": "host-a",
+        }
+        marker = "KC_MARKER_STUCK_FIFO_UNDERFLOW_ROOT_CAUSE_XYZ"
+        calls = []
+
+        class FakeKCClient:
+            def __init__(self, cfg, root):
+                calls.append(("init", cfg, root))
+
+            def configured(self):
+                return True
+
+            def search(self, category="", protocol="", text="", limit=8):
+                calls.append(("search", category, protocol, text, limit))
+                return {"ok": True, "count": 1, "records": [
+                    {"memory_id": "KC-DEADBEEF0001", "symptom": marker,
+                     "root_cause": "fifo pointer wraps one cycle early under back-to-back writes"},
+                ]}
+
+        class FakeAdapter:
+            def __init__(self):
+                self.prompts = []
+
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                self.prompts.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("FAILURE_RECOVERY")
+        with patch.object(engine_mod, "KnowledgeCenterClient", FakeKCClient):
+            h.run_stage("debug the recurring fifo underflow failure")
+
+        assert any(c[0] == "search" for c in calls), "KnowledgeCenterClient.search() was never called"
+        assert h.adapter.prompts, "adapter was never called"
+        assert marker in h.adapter.prompts[0], "KC search result never reached the built prompt"
+        assert "KC-DEADBEEF0001" in h.adapter.prompts[0]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_stage_failure_recovery_skips_knowledge_center_when_not_configured():
+    # Companion no-op proof: when the shared Knowledge Center is not
+    # configured (the real default -- see config.py's knowledge_center
+    # block, "Deliberately OFF and EMPTY by default"), search() must never
+    # even be attempted, and the stage must run exactly as before this gap
+    # was closed -- no exception, no dead-client instantiation surprise.
+    import dv_harness.engine as engine_mod
+    from dv_harness.adapters.base import AgentResult
+
+    tmp, h = _fresh_harness()
+    try:
+        assert h.cfg.get("knowledge_center", {}).get("enabled") is not True
+
+        calls = []
+
+        class ExplodingKCClient:
+            def __init__(self, cfg, root):
+                pass
+
+            def configured(self):
+                return False
+
+            def search(self, *a, **k):
+                calls.append("search")
+                raise AssertionError("search() must not be called when the KC is not configured")
+
+        class FakeAdapter:
+            def __init__(self):
+                self.prompts = []
+
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                self.prompts.append(prompt)
+                return AgentResult(ok=True, text="ok", raw={}, session_id=None)
+
+        h.adapter = FakeAdapter()
+        h.set_stage("FAILURE_RECOVERY")
+        with patch.object(engine_mod, "KnowledgeCenterClient", ExplodingKCClient):
+            h.run_stage("debug a one-off failure with no prior shared record")
+
+        assert not calls, "search() was called despite the shared Knowledge Center being unconfigured"
+        assert h.adapter.prompts, "adapter was never called"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_wave_analysis_requires_confirmed_dump_scope():
     # CLAUDE.md "Waveform Dump User Gate": found by the 2026-08-28 GUI/CLI
     # end-to-end confirmation audit to have a governance policy file
@@ -596,23 +1387,35 @@ def test_wave_analysis_requires_confirmed_dump_scope():
             "simulation_stopped_at_fsdb_stop": True, "job_killed_or_terminated": True,
             "identity_preserved": True, "waveform_or_fsdbreport_evidence_hash": "h1"}
 
+    # UPDATED 2026-09-04 (AI-mechanism #12 "AI Debug Closed Loop" gap
+    # closure): all three shapes below now resolve to NEEDS_USER_INPUT rather
+    # than GATE_FAIL, because all three mean the same thing -- no human has
+    # confirmed dump scope -- and none of them is fixable by the agent
+    # retrying. WAVE_ANALYSIS has exactly one mapped gate, so this stage is
+    # where that routing is visible undiluted. See
+    # test_waveform_dump_scope_human_confirmation.py for the PASS side, which
+    # needs a seeded question store this real ROOT deliberately does not have.
     text_no_confirmation = f"```dv-harness-evidence:focused_wave_debug_window_gate\n{json.dumps(base)}\n```\n"
     verdict, reasons = evaluate_stage_evidence(ROOT, "WAVE_ANALYSIS", text_no_confirmation)
-    assert verdict == "GATE_FAIL", reasons
-    assert any("WAVEFORM_DUMP_SCOPE_NOT_CONFIRMED" in str(r) for r in reasons)
+    assert verdict == "NEEDS_USER_INPUT", reasons
 
     incomplete = dict(base, dump_scope_confirmed={"scope": "top.usb_dev"})
     text_incomplete = f"```dv-harness-evidence:focused_wave_debug_window_gate\n{json.dumps(incomplete)}\n```\n"
     verdict2, reasons2 = evaluate_stage_evidence(ROOT, "WAVE_ANALYSIS", text_incomplete)
-    assert verdict2 == "GATE_FAIL", reasons2
-    assert any("WAVEFORM_DUMP_SCOPE_CONFIRMATION_INCOMPLETE" in str(r) for r in reasons2)
+    assert verdict2 == "NEEDS_USER_INPUT", reasons2
 
+    # The case this test was originally written to allow: every field filled
+    # in, `confirmed_by` a plausible-looking string. It used to PASS. It is
+    # exactly what a headless `claude -p` subprocess can produce without any
+    # human having been asked, so it must NOT pass -- and it must stop the
+    # loop for an answer rather than look like agent error.
     complete = dict(base, dump_scope_confirmed={
         "scope": "top.usb_dev.ctrl", "level_or_depth": "signal-level, block-scoped",
         "confirmed_by": "user"})
     text_complete = f"```dv-harness-evidence:focused_wave_debug_window_gate\n{json.dumps(complete)}\n```\n"
     verdict3, reasons3 = evaluate_stage_evidence(ROOT, "WAVE_ANALYSIS", text_complete)
-    assert verdict3 == "PASS", reasons3
+    assert verdict3 == "NEEDS_USER_INPUT", reasons3
+    assert any("Q-ENV-" in str(r) for r in reasons3), reasons3
 
 
 def test_regression_monitor_requires_run_identity_consistency():
@@ -665,7 +1468,7 @@ def test_requirement_closure_traceability_audit_two_evidence_flags():
     # just an isolated gate call.
     req_ids = [
         "STEP_BY_STEP_INTERACTIVE", "FIVE_CORE_INPUTS", "SPEC", "COMMAND_TXT",
-        "USB_STANDARD_REFERENCE", "REFERENCE_UVM", "RTL_FIRST_ARCH_DISCOVERY",
+        "PROTOCOL_STANDARD_REFERENCE", "REFERENCE_UVM", "RTL_FIRST_ARCH_DISCOVERY",
         "DE_LOCAL_SIM_BASELINE", "VPLAN_FIRST", "VERIFICATION_ARCHITECTURE",
         "SCOREBOARD_CHECKER_ASSERTION", "TEST_GENERATION", "NEGATIVE_TEST",
         "LOCAL_SIM", "COMMAND_SIMLOG_SEMANTIC", "FALSE_PASS_DEFENSE",
@@ -776,11 +1579,36 @@ def test_requirements_traceability_waiver_revalidation_gate_three_flags():
     assert any("WAIVER_EXPIRED" in r for r in reasons3), reasons3
 
 
-def test_promotion_readiness_feature_continuity_gate_context_and_evidence_flag():
+def test_promotion_readiness_feature_continuity_gate_context_and_evidence_flag(tmp_path):
     # feature_continuity_gate.py mixes a ContextFlag (--root: the real repo
     # root, supplied by the harness so an agent can't point the check
     # somewhere it would trivially pass) with an EvidenceFlag (--required:
     # the agent-attested list of paths that must still exist this revision).
+    #
+    # Isolated under tmp_path (GAP-M8-001 / M8 Cohort 1 follow-on): this
+    # stage's own chain evidence claims EXPERIENCE_READY, which
+    # promotion_chain_audit_gate.py now cross-verifies against a real
+    # promotion event in THIS project's own .dv-harness/events.jsonl (see
+    # test_promotion_chain_audit_gate_* below) -- running this test against
+    # the real live repo ROOT would make its PASS/FAIL outcome depend on
+    # whatever this repo's own real event history happens to contain at
+    # test time. tmp_path keeps it deterministic and mirrors the isolation
+    # every other tmp_path-based gate test in this file already uses.
+    from dv_harness.storage import StateStore
+    # evaluate_stage_evidence(root, ...) resolves each real gate SCRIPT from
+    # root/tools/verification_flow/ too (gates.py's own documented deployment
+    # model: "a real deployed project copies just the tools/verification_
+    # flow/*.py scripts under its own root") -- tmp_path needs its own real
+    # copy for all 8 PROMOTION_READINESS gates to resolve at all.
+    shutil.copytree(ROOT / "tools" / "verification_flow", tmp_path / "tools" / "verification_flow")
+    (tmp_path / "dv_harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "dv_harness" / "gates.py").write_text("# placeholder\n", encoding="utf-8")
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m1"},
+    })
+
     readiness = {"critical_dimensions": {"coverage": "READY"}, "active_failure_count": 0,
                  "signoff_bundle_complete": True, "evidence_fresh": True}
     chain = {"failure_detected": False, "events": [
@@ -818,18 +1646,386 @@ def test_promotion_readiness_feature_continuity_gate_context_and_evidence_flag()
             f"```dv-harness-evidence:feature_continuity_gate\n{json.dumps(required_block)}\n```\n"
         )
 
-    # PASS: a real file that genuinely exists under this repo's root -- the
+    # PASS: a real file that genuinely exists under the project root -- the
     # harness-supplied --root (not an agent-supplied one) is what makes this
     # resolve correctly.
     ok = {"required": {"required_paths": ["dv_harness/gates.py"]}}
-    verdict, reasons = evaluate_stage_evidence(ROOT, "PROMOTION_READINESS", build(ok))
+    verdict, reasons = evaluate_stage_evidence(tmp_path, "PROMOTION_READINESS", build(ok))
     assert verdict == "PASS", reasons
 
-    # FAIL: a path that does not exist under the real repo root.
+    # FAIL: a path that does not exist under the project root.
     bad = {"required": {"required_paths": ["dv_harness/gates.py", "does/not/exist.py"]}}
-    verdict2, reasons2 = evaluate_stage_evidence(ROOT, "PROMOTION_READINESS", build(bad))
+    verdict2, reasons2 = evaluate_stage_evidence(tmp_path, "PROMOTION_READINESS", build(bad))
     assert verdict2 == "GATE_FAIL", reasons2
     assert any("FEATURE_CONTINUITY_REGRESSION" in r for r in reasons2), reasons2
+
+
+def _run_gate_script_with_project_root(rel_path, flag, payload, project_root):
+    # Same shape as _run_gate_script (above), but sets DV_HARNESS_PROJECT_ROOT
+    # the way dv_harness/gates.py's real _gate_env() always does for every
+    # production gate subprocess -- needed here because promotion_chain_
+    # audit_gate.py's GAP-M8-001 cross-check (M8 Cohort 1) reads that env var
+    # to find the project's own .dv-harness/events.jsonl, exactly like the
+    # existing waiver_*_gate.py scripts' own project_root() helper already
+    # does. Neither _run_gate_script nor _run_gate_script_2flag sets env, so
+    # this is the smallest addition that lets a test control it.
+    import subprocess, sys
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        infile = tmp / "in.json"
+        infile.write_text(json.dumps(payload), encoding="utf-8")
+        script = ROOT / "tools" / rel_path
+        env = dict(os.environ)
+        env["DV_HARNESS_PROJECT_ROOT"] = str(project_root)
+        r = subprocess.run(
+            [sys.executable, str(script), flag, str(infile)],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        out = json.loads((r.stdout or "").strip() or "{}")
+        return r.returncode, out
+    finally:
+        shutil.rmtree(tmp)
+
+
+def _promotion_chain_audit_payload(*, extra_stages=()):
+    events = [
+        {"stage": "INTAKE_READY", "evidence": "e"},
+        {"stage": "VPLAN_READY", "evidence": "e"},
+        {"stage": "ARCHITECTURE_READY", "evidence": "e"},
+        {"stage": "MECHANISM_READY", "evidence": "e"},
+        {"stage": "TESTS_READY", "evidence": "e"},
+        {"stage": "TRACEABILITY_READY", "evidence": "e"},
+        {"stage": "EXECUTION_EVIDENCE_READY", "evidence": "e"},
+        {"stage": "COVERAGE_QUALITY_READY", "evidence": "e"},
+        {"stage": "EXPERT_REVIEW_READY", "evidence": "e"},
+        {"stage": "EXPERIENCE_READY", "evidence": "e"},
+        {"stage": "PROMOTABLE", "evidence": "e"},
+    ]
+    events.extend(extra_stages)
+    return {"failure_detected": False, "events": events}
+
+
+def test_promotion_chain_audit_gate_rejects_bare_experience_ready_self_attestation(tmp_path):
+    # GAP-M8-001 core negative case: no .dv-harness/events.jsonl exists at all
+    # for this project -- a bare self-attested EXPERIENCE_READY claim, with
+    # zero independent corroboration, must be rejected, not accepted the way
+    # it always was before this fix.
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+def test_promotion_chain_audit_gate_accepts_verified_experience_ready(tmp_path):
+    # GAP-M8-001 core positive case: a real EXPERIENCE_KNOWLEDGE_PROMOTED
+    # event with a real, non-failed destination -- the exact shape
+    # engine.py's _promote_experience_knowledge() already writes via
+    # route_and_store()+self.store.event() -- makes the same claim PASS.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m1"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PASS", out
+
+
+def test_promotion_chain_audit_gate_accepts_any_real_promotion_event_kind(tmp_path):
+    # Not hardcoded to just EXPERIENCE_KNOWLEDGE_PROMOTED -- any of engine.py's
+    # 5 real route_and_store() call sites corroborates the claim, e.g. the
+    # RE_AUDIT-stage _promote_verified_fix_knowledge()'s own event name.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "RE_AUDIT",
+        "event": "VERIFIED_FIX_PROMOTED",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m2"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PASS", out
+
+
+def test_promotion_chain_audit_gate_rejects_failed_promotion_as_evidence(tmp_path):
+    # Invalid evidence: a real route_and_store() call happened but FAILED
+    # (engine.py's own except-branch: promotion={"destination":
+    # "PROMOTION_FAILED", ...}) -- that is not proof anything was actually
+    # promoted, so it must not corroborate the claim either.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "PROMOTION_FAILED", "error": "disk full"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+def test_promotion_chain_audit_gate_ignores_unrelated_event_names(tmp_path):
+    # Invalid evidence, second shape: a real, successfully-written event
+    # exists, but under a name outside REAL_PROMOTION_EVENTS entirely (not a
+    # route_and_store()-backed promotion at all) -- must not corroborate.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "SOME_UNRELATED_TELEMETRY_EVENT", "detail": "noise",
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+def test_promotion_chain_audit_gate_rejects_wrong_project_correlation(tmp_path):
+    # Wrong task/project correlation: a real, successful promotion event
+    # exists, but in a DIFFERENT project's events.jsonl -- the project
+    # actually being audited (audited_root) has none of its own. The
+    # DV_HARNESS_PROJECT_ROOT scoping (same convention run_gate() always
+    # supplies from the real caller's own root) must not let one project's
+    # evidence corroborate another project's claim.
+    from dv_harness.storage import StateStore
+    audited_root = tmp_path / "project_a"
+    other_root = tmp_path / "project_b"
+    audited_root.mkdir()
+    other_root.mkdir()
+    StateStore(other_root).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m3"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), audited_root,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+def test_promotion_chain_audit_gate_duplicate_promotion_events_still_pass_once(tmp_path):
+    # Duplicate-promotion/idempotency: two real corroborating events (e.g. a
+    # retried stage promoting the same knowledge twice, engine.py's own
+    # disclosed accepted tradeoff at the _promote_experience_knowledge()
+    # call site) must not confuse the check into misbehaving -- it still
+    # simply PASSes once real evidence is present, duplicates or not.
+    from dv_harness.storage import StateStore
+    store = StateStore(tmp_path)
+    for i in range(2):
+        store.event({
+            "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+            "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+            "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": f"m{i}"},
+        })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PASS", out
+
+
+def test_promotion_chain_audit_gate_applies_uniformly_on_the_failure_path(tmp_path):
+    # EXPERIENCE_READY is unconditionally mandatory in BOTH of this gate's
+    # own mandatory-stage sets (ORDER[:8]+[...,"EXPERIENCE_READY",...] when
+    # failure_detected is False, the full ORDER -- which also contains
+    # EXPERIENCE_READY -- when it's True): there is no PASS-eligible chain
+    # that omits it. So the new check must apply on the failure_detected=True
+    # branch too, not only the default branch the tests above cover.
+    payload = {"failure_detected": True, "events": [
+        {"stage": "INTAKE_READY", "evidence": "e"},
+        {"stage": "VPLAN_READY", "evidence": "e"},
+        {"stage": "ARCHITECTURE_READY", "evidence": "e"},
+        {"stage": "MECHANISM_READY", "evidence": "e"},
+        {"stage": "TESTS_READY", "evidence": "e"},
+        {"stage": "TRACEABILITY_READY", "evidence": "e"},
+        {"stage": "EXECUTION_EVIDENCE_READY", "evidence": "e"},
+        {"stage": "COVERAGE_QUALITY_READY", "evidence": "e"},
+        {"stage": "RCA_READY", "evidence": "e"},
+        {"stage": "RERUN_READY", "evidence": "e"},
+        {"stage": "EXPERT_REVIEW_READY", "evidence": "e"},
+        {"stage": "EXPERIENCE_READY", "evidence": "e"},
+        {"stage": "PROMOTABLE", "evidence": "e"},
+    ]}
+    # failure_detected=True still requires the full ORDER including
+    # EXPERIENCE_READY (unchanged pre-existing behavior) -- so this remains a
+    # claim under test, not a case where the new check is bypassable via the
+    # failure path. No events.jsonl exists under tmp_path: must still FAIL.
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        payload, tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
+
+
+# --- M8 Cohort H (GAP-M8-010): closed_loop_promotion_gate's own sibling
+# experience_capture_status self-attestation loophole, closed with the SAME
+# shared dv_harness.promotion_evidence corroboration check GAP-M8-001 built
+# for promotion_chain_audit_gate's EXPERIENCE_READY stage -----------------
+
+def _closed_loop_payload(*, experience_capture_status="CAPTURED"):
+    return {
+        "passed_stages": ["INTAKE_READY", "VPLAN_READY", "ARCHITECTURE_READY",
+                           "MECHANISM_READY", "TESTS_READY", "EXECUTION_EVIDENCE_READY",
+                           "COVERAGE_QUALITY_READY"],
+        "failure_detected": False,
+        "expert_feedback_reviewed": True,
+        "experience_capture_status": experience_capture_status,
+    }
+
+
+def test_closed_loop_promotion_gate_rejects_bare_captured_self_attestation(tmp_path):
+    # No false success when evidence source is absent: no .dv-harness/
+    # events.jsonl exists for this project -- a bare experience_capture_
+    # status=CAPTURED claim must be rejected, not accepted the way it
+    # always was before this fix.
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_CAPTURE_NOT_VERIFIED", out
+
+
+def test_closed_loop_promotion_gate_accepts_verified_experience_capture(tmp_path):
+    # Real corroborating promotion evidence accepted: the exact shape
+    # engine.py's own _promote_experience_knowledge() already writes via
+    # route_and_store()+self.store.event() makes the same claim PASS.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m1"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PROMOTABLE", out
+
+
+def test_closed_loop_promotion_gate_not_applicable_still_exempt_with_no_evidence(tmp_path):
+    # experience_capture_status=NOT_APPLICABLE is a legitimate,
+    # non-suspicious claim ("no experience capture was expected this
+    # run"), never a claim that a real promotion occurred -- must remain
+    # exempt from the new corroboration check, matching the pre-existing
+    # shared test's own fixture shape (test_promotion_readiness_feature_
+    # continuity_gate_context_and_evidence_flag) and preserving backward
+    # compatibility with every existing caller that uses it.
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(experience_capture_status="NOT_APPLICABLE"), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PROMOTABLE", out
+
+
+def test_closed_loop_promotion_gate_rejects_failed_promotion_as_evidence(tmp_path):
+    # A real route_and_store() call happened but FAILED (engine.py's own
+    # except-branch shape) -- not proof anything was actually promoted.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "PROMOTION_FAILED", "error": "disk full"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_CAPTURE_NOT_VERIFIED", out
+
+
+def test_closed_loop_promotion_gate_ignores_unrelated_event_names(tmp_path):
+    # Malformed/invalid evidence: a real, successfully-written event
+    # exists, but under a name outside REAL_PROMOTION_EVENTS entirely.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "SOME_UNRELATED_TELEMETRY_EVENT", "detail": "noise",
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_CAPTURE_NOT_VERIFIED", out
+
+
+def test_closed_loop_promotion_gate_rejects_wrong_project_correlation(tmp_path):
+    # Wrong-project evidence rejected: a real, successful promotion event
+    # exists, but in a DIFFERENT project's events.jsonl.
+    from dv_harness.storage import StateStore
+    audited_root = tmp_path / "project_a"
+    other_root = tmp_path / "project_b"
+    audited_root.mkdir()
+    other_root.mkdir()
+    StateStore(other_root).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m2"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), audited_root,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_CAPTURE_NOT_VERIFIED", out
+
+
+def test_closed_loop_promotion_gate_duplicate_promotion_events_still_pass_once(tmp_path):
+    # Duplicate event remains idempotent: two real corroborating events
+    # must not confuse the check -- it simply PASSes once real evidence
+    # is present, duplicates or not.
+    from dv_harness.storage import StateStore
+    store = StateStore(tmp_path)
+    for i in range(2):
+        store.event({
+            "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+            "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+            "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": f"m{i}"},
+        })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PROMOTABLE", out
+
+
+def test_promotion_chain_audit_gate_and_closed_loop_promotion_gate_agree(tmp_path):
+    # Both relevant gate paths behave consistently: the SAME real
+    # corroborating event, in the SAME project root, makes BOTH sibling
+    # gates' own self-attested claim (EXPERIENCE_READY and
+    # experience_capture_status=CAPTURED) pass together -- proving they
+    # share the identical real evidence check (dv_harness.promotion_
+    # evidence), not two independently-drifting implementations.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m1"},
+    })
+    rc1, out1 = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    rc2, out2 = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc1 == 0 and out1["status"] == "PASS", out1
+    assert rc2 == 0 and out2["status"] == "PROMOTABLE", out2
 
 
 def test_expert_feedback_loop_requires_experience_knowledge_gate():
@@ -968,6 +2164,9 @@ def test_evaluate_stage_evidence_returns_needs_user_input_for_intake_gate_miss()
         '{"artifacts": []}\n```\n'
         '```dv-harness-evidence:interactive_evidence_intake_gate\n'
         '{"status": "PARTIAL", "confidence": "LOW", "ask_user": true}\n```\n'
+        # "{}" is de_local_sim_env_intake_gate's own no-op PASS -- see
+        # _INTAKE_EXTRA_GATES above.
+        '```dv-harness-evidence:de_local_sim_env_intake_gate\n{}\n```\n'
     )
     verdict, reasons = evaluate_stage_evidence(ROOT, "INTAKE", text)
     assert verdict == "NEEDS_USER_INPUT"
@@ -1006,6 +2205,9 @@ def _intake_needs_input_text(protocols=None, mode="SUBSYSTEM"):
         '```dv-harness-evidence:generated_artifact_boundary_gate\n{"artifacts": []}\n```\n'
         '```dv-harness-evidence:interactive_evidence_intake_gate\n'
         '{"status": "PARTIAL", "confidence": "LOW", "ask_user": true}\n```\n'
+        # "{}" is de_local_sim_env_intake_gate's own no-op PASS -- see
+        # _INTAKE_EXTRA_GATES above.
+        '```dv-harness-evidence:de_local_sim_env_intake_gate\n{}\n```\n'
     )
 
 
@@ -1084,7 +2286,8 @@ def test_run_stage_maps_needs_user_input_to_wait_user_status():
         shutil.copy(ROOT / "tools" / "vplan" / "intake_readiness.py", vplan_dir / "intake_readiness.py")
         vf_dir = tmp / "tools" / "verification_flow"
         vf_dir.mkdir(parents=True)
-        for name in ("generated_artifact_boundary_gate.py", "interactive_evidence_intake_gate.py"):
+        for name in ("generated_artifact_boundary_gate.py", "interactive_evidence_intake_gate.py",
+                     "de_local_sim_env_intake_gate.py"):
             shutil.copy(ROOT / "tools" / "verification_flow" / name, vf_dir / name)
         h.set_stage("INTAKE")
 
@@ -1095,6 +2298,9 @@ def test_run_stage_maps_needs_user_input_to_wait_user_status():
             '{"artifacts": []}\n```\n'
             '```dv-harness-evidence:interactive_evidence_intake_gate\n'
             '{"status": "PARTIAL", "confidence": "LOW", "ask_user": true}\n```\n'
+            # "{}" is de_local_sim_env_intake_gate's own no-op PASS -- see
+            # _INTAKE_EXTRA_GATES above.
+            '```dv-harness-evidence:de_local_sim_env_intake_gate\n{}\n```\n'
         )
 
         class _NeedsInputAdapter:
@@ -1141,9 +2347,14 @@ def test_run_stage_does_not_promote_experience_knowledge_when_gate_fails():
         h.run_stage("goal")
         assert h.state.stages["EXPERT_FEEDBACK_LOOP"]["status"] == Status.PARTIAL.value
 
+        # No spurious ENGINEERING-tier promotion -- but a WORKING-tier record
+        # from ReactRecorder.record() (memory-engine-schema-completion,
+        # 2026-09-01) is now expected on EVERY stage attempt regardless of
+        # verdict; see dv_harness/react.py's ReactRecorder module-header
+        # RULING comment.
         from dv_harness.memory import MemoryStore
         mem = MemoryStore(tmp)
-        assert mem._index() == []
+        assert [r for r in mem._index() if r.get("level") == "engineering"] == []
     finally:
         shutil.rmtree(tmp)
 
@@ -1198,6 +2409,103 @@ def test_corner_case_library_consolidator_requires_real_resolution_evidence():
         })
         assert rec["confidence"] == "VALIDATED"
         assert rec["evidence"]["semantic_verdict"] == "TRUE_PASS"
+        # Gap-close-engine cleanup (2026-09-03, item 3): the ONE write path
+        # that already requires real test_mapping/semantic_verdict/
+        # runtime_evidence_hash now explicitly stamps the record as no
+        # longer needing revalidation before reuse.
+        assert rec["current_evidence_required"] is False
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_ccl_reuse_rejects_a_record_that_still_requires_current_evidence():
+    # Gap-close-engine cleanup (2026-09-03, .work/gap-close-engine-
+    # investigation.md item 3): current_evidence_required previously had
+    # zero read sites anywhere -- a record could carry real
+    # runtime_evidence_hash/semantic_verdict AND status=="ACTIVE" and still
+    # be reuse-cited even though it never went through the validated
+    # from_resolved_corner_case() write path. This proves _ccl_reuse_verified
+    # now actually enforces the flag: a bare CornerCaseLibrary.add() record
+    # -- current_evidence_required defaults True there -- is rejected even
+    # when its evidence/status would otherwise satisfy every other check.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        lib = CornerCaseLibrary(tmp)
+        rec = lib.add({
+            "corner_id": "cc-hand-added", "protocol": "USB", "category": "reset_power",
+            "risk_tier": "P1", "status": "ACTIVE",
+            "evidence": {"runtime_evidence_hash": "handcrafted123", "semantic_verdict": "TRUE_PASS"},
+        })
+        assert rec["current_evidence_required"] is True  # the real default this fix reads
+        assert _ccl_reuse_verified(tmp, rec["ccl_id"]) is False
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_ccl_reuse_accepts_a_record_created_from_genuine_current_evidence():
+    # Symmetric positive case: a record that DID go through the validated
+    # from_resolved_corner_case() path (current_evidence_required == False)
+    # passes _ccl_reuse_verified() exactly as before this fix -- the new
+    # check is additive, not a regression on the already-real
+    # status/revalidate_by/evidence checks.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        consolidator = CornerCaseLibraryConsolidator(CornerCaseLibrary(tmp))
+        rec = consolidator.from_resolved_corner_case(
+            {"corner_id": "cc-validated", "protocol": "USB", "category": "reset_power", "risk_tier": "P1"},
+            {"test_mapping": "usb_reset_seq", "semantic_verdict": "TRUE_PASS", "runtime_evidence_hash": "abc123"},
+        )
+        assert _ccl_reuse_verified(tmp, rec["ccl_id"]) is True
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_ccl_reuse_gate_end_to_end_now_rejects_unverified_hand_added_record():
+    # End-to-end proof through the real co-sign-skip gate path (mirrors
+    # test_dv_review_cosign_enabled_ccl_reuse_bypasses_wrapping above): a
+    # hand-added CCL record cited via REUSED_CCL:<id> can no longer bypass
+    # co-sign just because it happens to carry evidence fields -- it must
+    # fall through to the normal wrapping requirement.
+    lib = CornerCaseLibrary(ROOT)
+    rec = lib.add({
+        "corner_id": "c-hand", "protocol": "USB", "category": "reset_power", "risk_tier": "P1",
+        "status": "ACTIVE", "evidence": {"runtime_evidence_hash": "x1", "semantic_verdict": "TRUE_PASS"},
+    })
+    ccl_id = rec["ccl_id"]
+    try:
+        text = f'''```dv-harness-evidence:corner_risk_rank
+{{"cases": [{{"corner_id": "c1", "risk_factors": ["reset", "cdc"],
+  "classification_basis": "REUSED_CCL:{ccl_id}"}}]}}
+```''' + "\n" + _SOC_SCENARIO_PLANNER_EXTRA_GATES
+        with _cosign_enabled():
+            verdict, reasons = evaluate_stage_evidence(ROOT, "SOC_SCENARIO_PLANNER", text)
+        assert verdict == "DV_REVIEW_PENDING", reasons
+        assert any(ccl_id in str(r) for r in reasons)
+    finally:
+        (lib.dir / f"{ccl_id}.json").unlink(missing_ok=True)
+        rows = [r for r in lib._index() if r.get("ccl_id") != ccl_id]
+        lib._save_index(rows)
+
+
+def test_memory_store_records_no_longer_carry_the_dead_current_evidence_required_field():
+    # Gap-close-engine cleanup (2026-09-03, item 3): plain MemoryStore
+    # records (all 5 tiers) never had any consumer for this flag -- every
+    # write site only ever set it True, so it carried no information. It has
+    # been removed from MemoryStore.add() and MemoryConsolidator.
+    # from_closed_finding() rather than left half-decorative.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        mem = MemoryStore(tmp)
+        rec = mem.add("project", {"title": "some finding"})
+        assert "current_evidence_required" not in rec
+
+        from dv_harness.memory import MemoryConsolidator
+        consolidator = MemoryConsolidator(mem)
+        closed_rec = consolidator.from_closed_finding(
+            {"status": "CLOSED", "title": "t", "finding_id": "F1"},
+            {"single_sim": "PASS", "regression": "NOT_REQUIRED", "reaudit": "CLEAN"},
+        )
+        assert "current_evidence_required" not in closed_rec
     finally:
         shutil.rmtree(tmp)
 
@@ -1496,6 +2804,71 @@ def test_failure_recovery_stage_now_fails_on_unknown_attribution():
     assert verdict2 == "PASS", reasons2
 
 
+def test_failure_recovery_requires_focused_wave_debug_window_gate():
+    # BUG FIX regression test (targeted-wave-debug-window-recovery-wiring,
+    # 2026-09-02): focused_wave_debug_window_gate.py is the one gate that
+    # precisely enforces CLAUDE.md's "First-Failure Waveform Rerun"
+    # (targeted, minimal window, cut near first failure) but was wired ONLY
+    # to WAVE_ANALYSIS -- reachable only from VERIFY's PASS edge in
+    # main_graph.json, never from the real post-batch-failure debug path
+    # (FAILURE_RECOVERY). Now mandatory there too, same script, plus a real
+    # escape hatch (deep_debug_required:false + a non-empty
+    # deep_debug_not_required_reason) so the many FAILURE_RECOVERY responses
+    # that never need a waveform at all (CLAUDE.md's own "low-cost evidence
+    # first" rule) can still legitimately pass without faking a rerun.
+    attribution = ('```dv-harness-evidence:failure_attribution\n'
+                   '{"boundary_trace": [{"stage": "SEQUENCE", "expected": 1, "observed": 1}, '
+                   '{"stage": "DUT_INTERNAL", "expected": 1, "observed": 0}]}\n```\n')
+    other_three = (
+        '```dv-harness-evidence:failure_signature_recurrence_gate\n{"failures": [{"failure_id": "F1", "signature": "SIG_A"}]}\n```\n'
+        '```dv-harness-evidence:issue_triage_classification_gate\n{"classification": "KNOWN", "classification_reason": "matches prior waiver", "evidence_hash": "abc123", "known_issue_id": "K-1"}\n```\n'
+        '```dv-harness-evidence:unknown_failure_escalation_gate\n{"classification": "ENV_ISSUE"}\n```\n'
+    )
+
+    # No focused_wave_debug_window_gate block at all -> the stage can no
+    # longer silently PASS without ever declaring whether a targeted
+    # waveform rerun happened.
+    verdict, reasons = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three)
+    assert verdict == "GATE_FAIL", reasons
+    assert any("focused_wave_debug_window_gate" in str(r) for r in reasons)
+
+    # deep_debug_required:false with no justification -> FAIL, not a silent
+    # skip.
+    no_reason = ('```dv-harness-evidence:focused_wave_debug_window_gate\n'
+                 '{"deep_debug_required": false}\n```\n')
+    verdict2, reasons2 = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three + no_reason)
+    assert verdict2 == "GATE_FAIL", reasons2
+    assert any("DEEP_DEBUG_NOT_REQUIRED_WITHOUT_REASON" in str(r) for r in reasons2)
+
+    # deep_debug_required:false WITH a real justification -> PASS, low-cost
+    # evidence was genuinely enough this round.
+    with_reason = ('```dv-harness-evidence:focused_wave_debug_window_gate\n'
+                   '{"deep_debug_required": false, '
+                   '"deep_debug_not_required_reason": "UVM_ERROR text alone was conclusive"}\n```\n')
+    verdict3, reasons3 = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three + with_reason)
+    assert verdict3 == "PASS", reasons3
+
+    # A real targeted rerun still gets the exact same precise window/scope
+    # check WAVE_ANALYSIS already enforced, proving this is the same gate and
+    # not a weaker copy. UPDATED 2026-09-04: with the dump-scope confirmation
+    # now verified against a real question-queue human answer, this ROOT (no
+    # question store, deliberately) stops the payload at the confirmation
+    # check before the window math is ever reached -- so what this assertion
+    # can prove here is that a claimed rerun still cannot pass FAILURE_RECOVERY,
+    # and that it stops for a human rather than as agent error. The window
+    # rule itself is proven against a real seeded store, on this same script,
+    # in test_waveform_dump_scope_human_confirmation.py.
+    bad_window = ('```dv-harness-evidence:focused_wave_debug_window_gate\n'
+                  '{"deep_debug_required": true, "dump_scope_confirmed": '
+                  '{"scope": "top.usb_dev.ctrl", "level_or_depth": "signal-level", "confirmed_by": "user"}, '
+                  '"wave_mode": 1, "fsdb_start_us": 0, "first_error_time_us": 100, '
+                  '"fsdb_stop_us": 5000, "simulation_stopped_at_fsdb_stop": true, '
+                  '"job_killed_or_terminated": true, "identity_preserved": true, '
+                  '"waveform_or_fsdbreport_evidence_hash": "h1"}\n```\n')
+    verdict4, reasons4 = evaluate_stage_evidence(ROOT, "FAILURE_RECOVERY", attribution + other_three + bad_window)
+    assert verdict4 == "NEEDS_USER_INPUT", reasons4
+
+
 def test_rca_replay_fix_closure_gate_cross_checks_boundary_trace():
     base = {"rca_id": "r1", "reproducer_hash": "h1", "fix_commit_hash": "c1", "rerun_evidence_hash": "e1",
             "replay_equivalent": True, "pre_fix_result": "FAIL", "post_fix_result": "PASS",
@@ -1695,8 +3068,11 @@ def test_de_explainer_is_additive_and_does_not_change_agent_prompt():
     )
 
 
-def test_all_35_stages_have_real_de_explainer_entries():
-    # DE onboarding gap fix: originally only 8/35 stages had a
+def test_every_declared_stage_has_a_real_de_explainer_entry():
+    # Named for the invariant, not a stage count -- the count really does move
+    # (35 -> 39 when the RCA_G1 fan-out stages landed, 2026-09-03) and a number
+    # baked into the test name goes stale silently.
+    # DE onboarding gap fix: originally only 8 of the then-35 stages had a
     # STAGE_DE_EXPLAINER entry, and the fallback text explicitly tells the DE
     # to "ask the DV owner" -- which is the opposite of useful for a DE with
     # no DV owner to ask, and previously covered the exact stages (ENV_CHECK/
@@ -1734,12 +3110,26 @@ def test_cli_lsf_submit_reports_lsf_unavailable_cleanly_when_bsub_missing():
     # end; the test/CI environment has no real `bsub` on PATH, which is
     # itself the deterministic, OS-independent condition being asserted --
     # a clean JSON error + exit 1, never a raw traceback.
+    #
+    # REGRESSION FIX (2026-09-03, governance-final-report cross-workstream
+    # sweep): the same-day lmstat+scheduler preflight gate
+    # (dv_harness/preflight.py, .work/governance-preflight-report.md) wired
+    # `bsub_submit_with_preflight()` into this CLI path, so on a bare temp
+    # project (no license server/queue configured) the gate now BLOCKS
+    # before `bsub` is even attempted, and this test's un-gated invocation
+    # deterministically got PREFLIGHT_BLOCKED instead of LSF_UNAVAILABLE --
+    # a real, 100%-reproducible failure, not a flake (confirmed by running
+    # this test alone). This test's own purpose is specifically the
+    # bsub-missing path (see BUG FIX note above), which is exactly what
+    # `--skip-preflight` (the CLI's own documented, explicit bypass) exists
+    # for; the PREFLIGHT_BLOCKED path itself is already covered by
+    # dv_harness_tests/test_cli_preflight.py.
     import subprocess, sys
     tmp = Path(tempfile.mkdtemp())
     try:
         r = subprocess.run(
             [sys.executable, "-m", "dv_harness.cli", "--project-root", str(tmp),
-             "lsf-submit", "echo hi", "--queue", "normal"],
+             "lsf-submit", "echo hi", "--queue", "normal", "--skip-preflight"],
             cwd=str(ROOT), capture_output=True, text=True, timeout=30, encoding="utf-8",
         )
         assert r.returncode == 1
@@ -2146,6 +3536,18 @@ def test_engine_persists_subsystem_registry_entry_on_signoff_pass():
     # behavior: insert, update-by-name, and the skip path.
     tmp, h = _fresh_harness()
     try:
+        # The method's real precondition, restored here explicitly since
+        # this test calls it directly instead of through run_stage(): it
+        # persists ONLY when the SIGNOFF stage's own recorded status is
+        # already PASS. run_stage() holds a gate-verified SIGNOFF at
+        # WAIT_USER until `dv-harness approve SIGNOFF`, and the side-effect
+        # block that calls this runs after that downgrade -- see
+        # test_signoff_stage_gate_e2e.py's
+        # test_signoff_gates_passing_without_human_approval_qualifies_nothing
+        # for the end-to-end proof through a real 9-gate run_stage().
+        _signoff_pass = lambda harness: harness.state.stages["SIGNOFF"].__setitem__(
+            "status", Status.PASS.value)
+        _signoff_pass(h)
         entry = {"name": "USB", "environment_manifest": "generated/usb/environment_manifest.json",
                   "release_sha": "sha-1", "qualification_state": "PRODUCTION_QUALIFIED",
                   "interface_compatibility": "PASS", "clock_reset_compatibility": "PASS"}
@@ -2182,6 +3584,7 @@ def test_engine_persists_subsystem_registry_entry_on_signoff_pass():
         # registration_applicable: false -> nothing persisted (no new write).
         h2_tmp, h2 = _fresh_harness()
         try:
+            _signoff_pass(h2)
             h2._persist_subsystem_registry_entry("SIGNOFF", {"subsystem_environment_registration_gate":
                 {"registration_applicable": False, "registration_not_applicable_reason": "full-SoC signoff"}})
             assert not (h2_tmp / ".dv-harness" / "soc-composer" / "subsystem_environment_registry.json").exists()
@@ -2196,6 +3599,101 @@ def test_engine_persists_subsystem_registry_entry_on_signoff_pass():
             assert not (h3_tmp / ".dv-harness" / "soc-composer" / "subsystem_environment_registry.json").exists()
         finally:
             shutil.rmtree(h3_tmp)
+
+        # A SIGNOFF whose gates all passed but that is still held at
+        # WAIT_USER for `dv-harness approve SIGNOFF` persists NOTHING --
+        # the human-approval hard-stop governs the durable qualification
+        # artifact, not just the stage status.
+        h4_tmp, h4 = _fresh_harness()
+        try:
+            h4.state.stages["SIGNOFF"]["status"] = Status.WAIT_USER.value
+            h4._persist_subsystem_registry_entry(
+                "SIGNOFF", {"subsystem_environment_registration_gate": entry})
+            assert not (h4_tmp / ".dv-harness" / "soc-composer"
+                        / "subsystem_environment_registry.json").exists()
+            assert h4.blackboard.read("subsystem_registry") is None
+        finally:
+            shutil.rmtree(h4_tmp)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_engine_composes_soc_environment_on_system_level_pass():
+    # Unit-tests _compose_soc_environment_files directly (same rationale as
+    # test_engine_persists_subsystem_registry_entry_on_signoff_pass
+    # immediately above: driving a full run_stage() SYSTEM_LEVEL PASS would
+    # require constructing valid payloads for every real SYSTEM_LEVEL gate
+    # unrelated to this feature). Verifies the real wiring: system_level_
+    # validator's multi-flag evidence shape ({"registry": {"subsystems": [...]}})
+    # is what _compose_soc_environment_files actually reads, and that a real
+    # SYSTEM_LEVEL PASS writes real soc_tb_top.sv/soc_virtual_sequencer.sv
+    # files under generated/soc_composition/<soc_name>/.
+    tmp, h = _fresh_harness()
+    try:
+        usb = {"name": "USB", "environment_manifest": "generated/usb/environment_manifest.json",
+               "release_sha": "sha-usb-1", "qualification_state": "PRODUCTION_QUALIFIED",
+               "interface_compatibility": "PASS", "clock_reset_compatibility": "PASS"}
+        pcie = {"name": "PCIE", "environment_manifest": "generated/pcie/environment_manifest.json",
+                "release_sha": "sha-pcie-1", "qualification_state": "REGRESSION_QUALIFIED",
+                "interface_compatibility": "PASS", "clock_reset_compatibility": "PASS"}
+        evidence_blocks = {
+            "system_level_validator": {"registry": {
+                "soc_name": "demo_soc", "subsystems": [usb, pcie],
+                "cross_subsystem_scenarios": [], "end_to_end_scoreboards": [], "system_coverage": [],
+            }},
+        }
+        h._compose_soc_environment_files("SYSTEM_LEVEL", evidence_blocks)
+
+        out_dir = tmp / "generated" / "soc_composition" / "demo_soc"
+        assert (out_dir / "soc_tb_top.sv").exists()
+        assert (out_dir / "soc_virtual_sequencer.sv").exists()
+        assert (out_dir / "soc_composition_manifest.json").exists()
+        tb = (out_dir / "soc_tb_top.sv").read_text(encoding="utf-8")
+        assert "usb_env usb_env_inst;" in tb and "pcie_env pcie_env_inst;" in tb
+
+        bb = h.blackboard.read("soc_composition")
+        assert bb["value"]["soc_name"] == "demo_soc"
+        assert set(bb["value"]["generated_files"]) == {
+            "soc_tb_top.sv", "soc_virtual_sequencer.sv", "soc_composition_manifest.json",
+        }
+
+        events = (tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        composed_events = [json.loads(e) for e in events if json.loads(e).get("event") == "SOC_ENVIRONMENT_COMPOSED"]
+        assert composed_events and composed_events[0]["soc_name"] == "demo_soc"
+
+        # A stage without system_level_validator in STAGE_GATES is a no-op.
+        h2_tmp, h2 = _fresh_harness()
+        try:
+            h2._compose_soc_environment_files("SIGNOFF", evidence_blocks)
+            assert not (h2_tmp / "generated" / "soc_composition").exists()
+        finally:
+            shutil.rmtree(h2_tmp)
+
+        # The escape hatch (system_level_applicable: false) composes nothing.
+        h3_tmp, h3 = _fresh_harness()
+        try:
+            h3._compose_soc_environment_files("SYSTEM_LEVEL", {"system_level_validator": {"registry": {
+                "system_level_applicable": False, "system_level_not_applicable_reason": "pure IP-level flow",
+            }}})
+            assert not (h3_tmp / "generated" / "soc_composition").exists()
+        finally:
+            shutil.rmtree(h3_tmp)
+
+        # manifest requesting genuinely-unimplemented cross_subsystem_scenarios
+        # content logs SOC_COMPOSITION_NOT_IMPLEMENTED and writes nothing --
+        # never a fabricated placeholder, never a downgraded stage PASS.
+        h4_tmp, h4 = _fresh_harness()
+        try:
+            h4._compose_soc_environment_files("SYSTEM_LEVEL", {"system_level_validator": {"registry": {
+                "soc_name": "demo_soc2", "subsystems": [usb, pcie],
+                "cross_subsystem_scenarios": [{"scenario_id": "s1"}],
+            }}})
+            assert not (h4_tmp / "generated" / "soc_composition").exists()
+            events4 = (h4_tmp / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            ni_events = [json.loads(e) for e in events4 if json.loads(e).get("event") == "SOC_COMPOSITION_NOT_IMPLEMENTED"]
+            assert ni_events
+        finally:
+            shutil.rmtree(h4_tmp)
     finally:
         shutil.rmtree(tmp)
 
@@ -2273,7 +3771,7 @@ def test_cli_adapter_threads_agent_profile_into_real_command():
     ap = load_agent_profile(ROOT, "build-agent")
     captured = {}
 
-    def fake_run(cmd, cwd, text, capture_output):
+    def fake_run(cmd, cwd, text, capture_output, encoding=None, errors=None, input=None):
         captured["cmd"] = cmd
         return MagicMock(stdout='{"result":"ok","session_id":"s1"}', stderr="", returncode=0)
 
@@ -2299,7 +3797,7 @@ def test_cli_adapter_without_agent_profile_matches_prior_behavior():
                                             "output_format": "json", "allowed_tools": []}})
     captured = {}
 
-    def fake_run(cmd, cwd, text, capture_output):
+    def fake_run(cmd, cwd, text, capture_output, encoding=None, errors=None, input=None):
         captured["cmd"] = cmd
         return MagicMock(stdout='{"result":"ok"}', stderr="", returncode=0)
 
@@ -2910,6 +4408,103 @@ def test_approve_gates_promotion_readiness_and_signoff_but_not_other_stages():
         shutil.rmtree(tmp)
 
 
+def _re_audit_evidence_text(**fix_risk_overrides):
+    plan = {
+        "root_cause_id": "RCA-1", "fix_plan": "add prefetch guard in ep0 fifo ctrl",
+        "risk_assessment": "contained to ep0 datapath", "affected_scope": "usb_dev.ep0",
+        "regression_plan": "rerun ep0 test suite", "rollback_plan": "revert commit c1",
+        "root_cause_confidence": "HIGH", "risk_level": "LOW", "approved_for_modify": True,
+    }
+    plan.update(fix_risk_overrides)
+    return "```dv-harness-evidence:fix_risk_approval_gate\n" + json.dumps(plan) + "\n```\n"
+
+
+def test_re_audit_dut_bug_fix_requires_real_control_plane_approval():
+    # Confirmed gap (2026-09-02, RE_AUDIT/FAILURE_RECOVERY approval-gate
+    # audit): unlike PROMOTION_READINESS/SIGNOFF above, RE_AUDIT previously
+    # had NO engine-level human-approval hard-stop at all -- a DUT_BUG/
+    # high-risk fix could close purely off the agent's own self-declared
+    # "approved_for_modify" boolean, in the same reply that proposed the
+    # fix. This must now behave exactly like PROMOTION_READINESS/SIGNOFF:
+    # gate evidence passing is not enough, a real `dv-harness approve
+    # RE_AUDIT` is required.
+    from dv_harness.control_plane import ControlPlane
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["policy"]["require_stage_gate_evidence"] = False
+        h.set_stage("RE_AUDIT")
+
+        text = _re_audit_evidence_text(classification="DUT_BUG", risk_level="LOW")
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.WAIT_USER.value
+        assert "HUMAN_APPROVAL_REQUIRED" in h.state.stages["RE_AUDIT"]["blocking_reason"]
+
+        # A real approve() call (the SAME ControlPlane mechanism
+        # PROMOTION_READINESS/SIGNOFF already use) unblocks it.
+        ControlPlane(tmp).approve("RE_AUDIT", note="reviewed", reviewer_id="alice")
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.PASS.value
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_re_audit_high_risk_fix_requires_real_control_plane_approval():
+    from dv_harness.control_plane import ControlPlane
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["policy"]["require_stage_gate_evidence"] = False
+        h.set_stage("RE_AUDIT")
+
+        text = _re_audit_evidence_text(classification="TB_BUG", risk_level="HIGH")
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.WAIT_USER.value
+        assert "HUMAN_APPROVAL_REQUIRED" in h.state.stages["RE_AUDIT"]["blocking_reason"]
+
+        ControlPlane(tmp).approve("RE_AUDIT", note="reviewed", reviewer_id="alice")
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.PASS.value
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_re_audit_tb_bug_low_risk_fix_needs_no_human_approval():
+    # Scoped narrowly on purpose: a routine TB_BUG/low-risk RE_AUDIT closure
+    # must NOT require a human `dv-harness approve` call -- that would make
+    # every routine testbench fix require a human, which is disproportionate
+    # and not what this hardening pass targets.
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["policy"]["require_stage_gate_evidence"] = False
+        h.set_stage("RE_AUDIT")
+
+        text = _re_audit_evidence_text(classification="TB_BUG", risk_level="LOW")
+
+        class _PassAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=True, text=text, raw={}, session_id=None)
+
+        h.adapter = _PassAdapter()
+        h.run_stage("goal")
+        assert h.state.stages["RE_AUDIT"]["status"] == Status.PASS.value
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_evidence_and_why_report_real_current_run_state_not_generic_text():
     from dv_harness.control_plane import describe_stage
     tmp, h = _fresh_harness()
@@ -3436,7 +5031,19 @@ def test_project_model_requires_topology_completeness():
                 "model_confidence": "HIGH", "confidence_basis": "cross-checked with RTL arch discovery",
                 "dv_readiness": "READY", "dv_readiness_basis": "all boundary items resolved",
                 "architecture_evidence_db_ref": "arch-db-v3"}
-    text_pass = f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(complete)}\n```\n"
+    # ADDED (2026-09-01, route-skill-resolver-dynamic-implementation task):
+    # PROJECT_MODEL now also mandates environment_mode_selection -- see
+    # gates.STAGE_GATES["PROJECT_MODEL"]. A single subsystem stays
+    # SUBSYSTEM_MODE regardless of whether it's registered yet (this test
+    # runs against the real ROOT, whose real subsystem registry is empty).
+    env_mode_evidence = (
+        '```dv-harness-evidence:environment_mode_selection\n'
+        '{"environment_mode": "SUBSYSTEM_MODE", "requested_subsystems": ["usb"]}\n```\n'
+    )
+    text_pass = (
+        f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(complete)}\n```\n"
+        + env_mode_evidence
+    )
     verdict3, reasons3 = evaluate_stage_evidence(ROOT, "PROJECT_MODEL", text_pass)
     assert verdict3 == "PASS", reasons3
 
@@ -3446,7 +5053,10 @@ def test_project_model_requires_topology_completeness():
                             "model_confidence": "MEDIUM", "confidence_basis": "partial cross-check",
                             "dv_readiness": "PARTIAL", "dv_readiness_basis": "pending calibration",
                             "architecture_evidence_db_ref": "arch-db-v3"}
-    text_pass2 = f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(no_vip_escape_hatch)}\n```\n"
+    text_pass2 = (
+        f"```dv-harness-evidence:project_model_topology_completeness_gate\n{json.dumps(no_vip_escape_hatch)}\n```\n"
+        + env_mode_evidence
+    )
     verdict4, reasons4 = evaluate_stage_evidence(ROOT, "PROJECT_MODEL", text_pass2)
     assert verdict4 == "PASS", reasons4
 
@@ -3478,6 +5088,49 @@ def test_regression_select_requires_four_categories_or_reason():
     assert verdict4 == "PASS", reasons4
 
 
+def test_regression_select_requires_single_test_reverify_when_following_fix_cycle():
+    # tools/verification_flow/regression_selection_completeness_gate.py
+    # RE_AUDIT-precondition audit follow-up (2026-09-02): the real single-test
+    # FAIL-before/PASS-after proof (same shape fix_regression_non_regression_gate
+    # checks) previously only ran POST-HOC at RE_AUDIT, after a full regression
+    # had already been submitted and counted. fix_cycle_id now makes it a real
+    # precondition at REGRESSION_SELECT, the stage immediately before REGRESSION
+    # submits jobs -- additive, does not replace the RE_AUDIT gate.
+    base = {"targeted_tests": ["t1"], "dependency_tests": ["t2"], "safety_tests": ["t3"],
+            "mandatory_signoff_tests": ["t4"], "selection_source": {"change_impact_evidence_id": "ci1"}}
+
+    # No fix_cycle_id at all -> unaffected, still PASS (ordinary regression
+    # selection with no preceding fix cycle never needs this evidence).
+    text_no_cycle = f"```dv-harness-evidence:regression_selection_completeness_gate\n{json.dumps(base)}\n```\n"
+    verdict0, reasons0 = evaluate_stage_evidence(ROOT, "REGRESSION_SELECT", text_no_cycle)
+    assert verdict0 == "PASS", reasons0
+
+    # fix_cycle_id set but no single_test_reverify_evidence at all -> FAIL.
+    with_cycle_no_evidence = {**base, "fix_cycle_id": "FC-1"}
+    text_missing = f"```dv-harness-evidence:regression_selection_completeness_gate\n{json.dumps(with_cycle_no_evidence)}\n```\n"
+    verdict1, reasons1 = evaluate_stage_evidence(ROOT, "REGRESSION_SELECT", text_missing)
+    assert verdict1 == "GATE_FAIL", reasons1
+    assert any("SINGLE_TEST_REVERIFY_MISSING_BEFORE_FULL_REGRESSION" in str(r) for r in reasons1)
+
+    # fix_cycle_id set, evidence present but wrong shape (target didn't
+    # actually FAIL before / PASS after) -> still FAIL, same reason.
+    with_cycle_wrong_shape = {**base, "fix_cycle_id": "FC-1",
+                               "single_test_reverify_evidence": {
+                                   "target_pre_fix_result": "PASS", "target_post_fix_result": "PASS"}}
+    text_wrong = f"```dv-harness-evidence:regression_selection_completeness_gate\n{json.dumps(with_cycle_wrong_shape)}\n```\n"
+    verdict2, reasons2 = evaluate_stage_evidence(ROOT, "REGRESSION_SELECT", text_wrong)
+    assert verdict2 == "GATE_FAIL", reasons2
+    assert any("SINGLE_TEST_REVERIFY_MISSING_BEFORE_FULL_REGRESSION" in str(r) for r in reasons2)
+
+    # fix_cycle_id set with a real FAIL-before/PASS-after reverify block -> PASS.
+    with_cycle_ok = {**base, "fix_cycle_id": "FC-1",
+                      "single_test_reverify_evidence": {
+                          "target_pre_fix_result": "FAIL", "target_post_fix_result": "PASS"}}
+    text_ok = f"```dv-harness-evidence:regression_selection_completeness_gate\n{json.dumps(with_cycle_ok)}\n```\n"
+    verdict3, reasons3 = evaluate_stage_evidence(ROOT, "REGRESSION_SELECT", text_ok)
+    assert verdict3 == "PASS", reasons3
+
+
 def test_regression_submission_enforces_agent_isolation_and_wave_pa_coverage_defaults():
     # tools/verification_flow/regression_submission_policy_gate.py
     # CLAUDE.md Core Operating Rules "One submitted LSF job = one isolated Job
@@ -3507,11 +5160,187 @@ def test_regression_submission_enforces_agent_isolation_and_wave_pa_coverage_def
     verdict4, reasons4 = evaluate_stage_evidence(ROOT, "REGRESSION", text_pass)
     assert verdict4 == "PASS", reasons4
 
-    override_ok = {"jobs": [{"job_id": "j1", "agent_id": "a1", "wave": 1, "pa": 0, "coverage": False,
-                              "override_reason": "representative testcase needs signal evidence"}]}
-    text_pass2 = f"```dv-harness-evidence:regression_submission_policy_gate\n{json.dumps(override_ok)}\n```\n"
-    verdict5, reasons5 = evaluate_stage_evidence(ROOT, "REGRESSION", text_pass2)
-    assert verdict5 == "PASS", reasons5
+
+def _run_regression_submission_gate_with_cwd(cwd, payload):
+    # Like _run_gate_script above, but with an explicit cwd -- exercises the
+    # exact same trust boundary run_gate() gives every gate script
+    # (subprocess.run(..., cwd=str(root))) so a fabricated .dv-harness
+    # fixture under a throwaway tmp dir can stand in for the real project's
+    # blackboard/lsf-jobs state without ever touching it. The gate script
+    # itself still lives under the real ROOT/tools/verification_flow/, only
+    # its reads of .dv-harness/... are relative to `cwd`.
+    import subprocess, sys
+    infile_dir = Path(tempfile.mkdtemp())
+    try:
+        infile = infile_dir / "in.json"
+        infile.write_text(json.dumps(payload), encoding="utf-8")
+        script = ROOT / "tools" / "verification_flow" / "regression_submission_policy_gate.py"
+        r = subprocess.run(
+            [sys.executable, str(script), "--jobs", str(infile)],
+            cwd=str(cwd), capture_output=True, text=True, timeout=30,
+        )
+        out = json.loads((r.stdout or "").strip() or "{}")
+        return r.returncode, out
+    finally:
+        shutil.rmtree(infile_dir, ignore_errors=True)
+
+
+def test_regression_submission_wave_override_requires_real_prior_failure_link():
+    # BUG FIX regression test (regression-submission-override-linkage-gap,
+    # 2026-09-02): override_reason alone used to be enough to bypass the
+    # WAVE/PA/Coverage default -- ANY non-empty free-text string, with zero
+    # correlation to a real prior failure. Now a non-empty override_reason
+    # also requires "prior_failure_ref" (testcase_id + a finding_id/job_id
+    # that this gate resolves against real on-disk evidence).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        # override_reason present but no prior_failure_ref at all -> FAIL.
+        override_no_ref = {"jobs": [{"job_id": "j1", "agent_id": "a1", "wave": 1, "pa": 0,
+                                      "coverage": False,
+                                      "override_reason": "representative testcase needs signal evidence"}]}
+        rc, out = _run_regression_submission_gate_with_cwd(tmp, override_no_ref)
+        assert rc != 0 and out["reason"] == "WAVE_OVERRIDE_NOT_LINKED_TO_FAILURE"
+
+        # prior_failure_ref present but pointing at nothing real (no
+        # blackboard finding, no job-state record on disk) -> still FAIL.
+        override_fake_ref = {"jobs": [{"job_id": "j1", "agent_id": "a1", "wave": 1, "pa": 0,
+                                        "coverage": False,
+                                        "override_reason": "representative testcase needs signal evidence",
+                                        "prior_failure_ref": {"testcase_id": "usb_bulkin_test",
+                                                               "finding_id": "does-not-exist"}}]}
+        rc2, out2 = _run_regression_submission_gate_with_cwd(tmp, override_fake_ref)
+        assert rc2 != 0 and out2["reason"] == "WAVE_OVERRIDE_NOT_LINKED_TO_FAILURE"
+
+        # A real blackboard finding (REGRESSION_MONITOR's own findings
+        # registry -- dv_harness/blackboard.py's Blackboard.upsert_finding)
+        # makes finding_id resolve -> PASS.
+        bb_dir = tmp / ".dv-harness" / "blackboard"
+        bb_dir.mkdir(parents=True)
+        (bb_dir / "findings.json").write_text(json.dumps({
+            "topic": "findings",
+            "value": {"items": {"F-usb-bulkin-mismatch": {"status": "open"}}},
+        }), encoding="utf-8")
+        override_real_finding = {"jobs": [{"job_id": "j1", "agent_id": "a1", "wave": 1, "pa": 0,
+                                            "coverage": False,
+                                            "override_reason": "representative testcase needs signal evidence",
+                                            "prior_failure_ref": {"testcase_id": "usb_bulkin_test",
+                                                                   "finding_id": "F-usb-bulkin-mismatch"}}]}
+        rc3, out3 = _run_regression_submission_gate_with_cwd(tmp, override_real_finding)
+        assert rc3 == 0 and out3["status"] == "PASS"
+
+        # A real prior JobState record showing an actual failure
+        # (dv_harness/lsf_client.py, one file per submitted LSF job) makes
+        # job_id resolve -> also PASS.
+        jobs_dir = tmp / ".dv-harness" / "lsf" / "jobs"
+        jobs_dir.mkdir(parents=True)
+        (jobs_dir / "998877.json").write_text(json.dumps({
+            "job_id": 998877, "sim_status": "FAIL", "uvm_error_count": 1,
+        }), encoding="utf-8")
+        override_real_job = {"jobs": [{"job_id": "j2", "agent_id": "a2", "wave": 0, "pa": 1,
+                                        "coverage": False,
+                                        "override_reason": "prior LSF failure needs PA rerun",
+                                        "prior_failure_ref": {"testcase_id": "usb_bulkin_test",
+                                                               "job_id": "998877"}}]}
+        rc4, out4 = _run_regression_submission_gate_with_cwd(tmp, override_real_job)
+        assert rc4 == 0 and out4["status"] == "PASS"
+
+        # A job-state record that exists but never actually failed must not
+        # count as a real prior failure -- still FAIL.
+        (jobs_dir / "111222.json").write_text(json.dumps({
+            "job_id": 111222, "sim_status": "PASS", "uvm_error_count": 0,
+        }), encoding="utf-8")
+        override_passing_job = {"jobs": [{"job_id": "j3", "agent_id": "a3", "wave": 1, "pa": 0,
+                                           "coverage": False,
+                                           "override_reason": "unrelated claim",
+                                           "prior_failure_ref": {"testcase_id": "usb_bulkin_test",
+                                                                  "job_id": "111222"}}]}
+        rc5, out5 = _run_regression_submission_gate_with_cwd(tmp, override_passing_job)
+        assert rc5 != 0 and out5["reason"] == "WAVE_OVERRIDE_NOT_LINKED_TO_FAILURE"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _run_fix_regression_non_regression_gate_with_cwd(cwd, payload):
+    # Same cwd-relative pattern as _run_regression_submission_gate_with_cwd
+    # above -- exercises fix_regression_non_regression_gate.py's real read of
+    # .dv-harness/lsf/jobs/<job_id>.json against a throwaway tmp fixture.
+    import subprocess, sys
+    infile_dir = Path(tempfile.mkdtemp())
+    try:
+        infile = infile_dir / "in.json"
+        infile.write_text(json.dumps(payload), encoding="utf-8")
+        script = ROOT / "tools" / "verification_flow" / "fix_regression_non_regression_gate.py"
+        r = subprocess.run(
+            [sys.executable, str(script), "--closure", str(infile)],
+            cwd=str(cwd), capture_output=True, text=True, timeout=30,
+        )
+        out = json.loads((r.stdout or "").strip() or "{}")
+        return r.returncode, out
+    finally:
+        shutil.rmtree(infile_dir)
+
+
+def test_fix_regression_non_regression_gate_cross_checks_job_registry():
+    # tools/verification_flow/fix_regression_non_regression_gate.py
+    # RE_AUDIT-precondition audit follow-up (2026-09-02): target_pre_fix_result/
+    # target_post_fix_result used to be pure self-attested strings, never
+    # cross-checked against REGRESSION_MONITOR's real per-job record
+    # (.dv-harness/lsf/jobs/<job_id>.json, dv_harness/lsf_client.py JobState,
+    # sim_status advanced by dv_harness/regression_reporter.py's real analysis
+    # cycle). target_pre_fix_job_id/target_post_fix_job_id are optional: when
+    # absent, behavior is unchanged (self-attestation only, still PASS).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        base = {"target_pre_fix_result": "FAIL", "target_post_fix_result": "PASS",
+                "replay_equivalent": True, "critical_non_regression_tests": [],
+                "fix_commit_hash": "c1", "rerun_bundle_hash": "b1"}
+
+        # No job_id refs at all -> unchanged self-attestation-only behavior, PASS.
+        rc0, out0 = _run_fix_regression_non_regression_gate_with_cwd(tmp, base)
+        assert rc0 == 0 and out0["status"] == "PASS", out0
+
+        # job_id refs supplied but no such JobState record exists on disk -> FAIL.
+        no_record = {**base, "target_pre_fix_job_id": "555001", "target_post_fix_job_id": "555002"}
+        rc1, out1 = _run_fix_regression_non_regression_gate_with_cwd(tmp, no_record)
+        assert rc1 != 0 and out1["reason"] == "TARGET_RESULT_JOB_REF_UNRESOLVED", out1
+
+        jobs_dir = tmp / ".dv-harness" / "lsf" / "jobs"
+        jobs_dir.mkdir(parents=True)
+        # Real prior job really did FAIL, real post-fix job really did PASS,
+        # both referencing the same testcase pattern -> claims match, PASS.
+        (jobs_dir / "555001.json").write_text(json.dumps({
+            "job_id": 555001, "sim_status": "FAIL", "pattern": "usb_bulkin_test",
+        }), encoding="utf-8")
+        (jobs_dir / "555002.json").write_text(json.dumps({
+            "job_id": 555002, "sim_status": "PASS", "pattern": "usb_bulkin_test",
+        }), encoding="utf-8")
+        matching = {**base, "target_pre_fix_job_id": "555001", "target_post_fix_job_id": "555002",
+                    "target_testcase_id": "usb_bulkin_test"}
+        rc2, out2 = _run_fix_regression_non_regression_gate_with_cwd(tmp, matching)
+        assert rc2 == 0 and out2["status"] == "PASS", out2
+
+        # Claimed PASS but the real recorded post-fix job actually still shows
+        # FAIL -- the agent's self-attestation disagrees with real ground
+        # truth -> FAIL TARGET_RESULT_CLAIM_MISMATCH.
+        (jobs_dir / "555003.json").write_text(json.dumps({
+            "job_id": 555003, "sim_status": "FAIL", "pattern": "usb_bulkin_test",
+        }), encoding="utf-8")
+        mismatched = {**base, "target_pre_fix_job_id": "555001", "target_post_fix_job_id": "555003"}
+        rc3, out3 = _run_fix_regression_non_regression_gate_with_cwd(tmp, mismatched)
+        assert rc3 != 0 and out3["reason"] == "TARGET_RESULT_CLAIM_MISMATCH", out3
+
+        # Real job resolves and its sim_status matches, but it was actually a
+        # run of a DIFFERENT testcase -- claimed target_testcase_id disagrees
+        # with the real job's recorded pattern -> still FAIL, same reason.
+        (jobs_dir / "555004.json").write_text(json.dumps({
+            "job_id": 555004, "sim_status": "PASS", "pattern": "usb_bulkout_test",
+        }), encoding="utf-8")
+        wrong_testcase = {**base, "target_pre_fix_job_id": "555001", "target_post_fix_job_id": "555004",
+                           "target_testcase_id": "usb_bulkin_test"}
+        rc4, out4 = _run_fix_regression_non_regression_gate_with_cwd(tmp, wrong_testcase)
+        assert rc4 != 0 and out4["reason"] == "TARGET_RESULT_CLAIM_MISMATCH", out4
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_server_sync_requires_head_and_submodule_sha_identity():
@@ -3680,9 +5509,17 @@ def test_self_audit_reports_tool_missing_when_scripts_absent():
 
 def test_self_audit_cli_subcommand_against_real_repo():
     import subprocess, sys
+    # TIMEOUT WIDENED 60->150 (2026-09-03, harness-self-test-ci pass): this test's own outer
+    # subprocess timeout must exceed the sum of what `self-audit --all` can legitimately take
+    # after self_audit.py's ROOT_GATES wrapper timeout was itself widened 30->100 (that change's
+    # own report: .work/harness-self-test-ci-report.md) -- test_collection_health_gate alone can
+    # now legitimately take up to that 100s under real load, which this test's prior 60s no
+    # longer covers (confirmed this session: this exact test TimeoutExpired'd at 60s under real
+    # concurrent multi-session load, not a code regression in self_audit.py -- it passes cleanly
+    # and quickly under normal load; this widening only removes a false failure under contention).
     r = subprocess.run(
         [sys.executable, "-m", "dv_harness.cli", "--project-root", ".", "self-audit", "--all"],
-        cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+        cwd=str(ROOT), capture_output=True, text=True, timeout=150,
     )
     # Real repo self-audit is now fully clean (see test above) -> exit 0, not
     # a crash and not a false FAIL either.
@@ -3869,6 +5706,128 @@ def test_manual_lookup_gate_dut_side_passes_with_rtl_plus_one_source():
         "verification_flow/manual_lookup_before_edit_gate.py", "--edit",
         {"branch": "branch_fw", "dut_rtl_checked": True, "dut_rtl_evidence_refs": [_REAL_REF],
          "phy_documents_checked": True},
+    )
+    assert rc == 0 and out["status"] == "PASS"
+
+
+def test_manual_lookup_gate_vip_side_rejects_forbidden_reference_tree_citation():
+    # Regression test for the 2026-08-31 final-review Critical finding: B1's
+    # forbidden-tree barrier used to live ONLY in protocol_isolation_gate.py's
+    # own, agent-optional evidence block -- an agent could cite
+    # USB_UVM_Handoff content right in THIS gate's real vip_evidence_refs
+    # (the block it is actually forced to supply) and still pass, as long as
+    # it left the separate isolation-gate block empty. This must now FAIL
+    # here, directly, independent of protocol_isolation_gate.py.
+    rc, out = _run_gate_script(
+        "verification_flow/manual_lookup_before_edit_gate.py", "--edit",
+        {"branch": "branch_b1", "vip_examples_checked": True, "vip_manual_checked": True,
+         "vip_source_checked": True, "vip_class_reference_checked": True,
+         "vip_evidence_refs": [{"path": "USB_UVM_Handoff/some_file.sv", "quote": "x"}]},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "REFERENCE_TREE_CITATION_FORBIDDEN"
+    assert out["forbidden_tree"] == "USB_UVM_Handoff"
+
+
+def test_manual_lookup_gate_dut_side_rejects_forbidden_reference_tree_citation():
+    # Same Critical-finding regression, DUT side (dut_rtl_evidence_refs).
+    rc, out = _run_gate_script(
+        "verification_flow/manual_lookup_before_edit_gate.py", "--edit",
+        {"branch": "branch_a1", "dut_rtl_checked": True,
+         "dut_rtl_evidence_refs": [{"path": "USB_UVM_Handoff/some_dut_file.sv", "quote": "x"}]},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "REFERENCE_TREE_CITATION_FORBIDDEN"
+    assert out["forbidden_tree"] == "USB_UVM_Handoff"
+
+
+def test_protocol_isolation_gate_blocks_forbidden_reference_citation():
+    rc, out = _run_gate_script(
+        "verification_flow/protocol_isolation_gate.py", "--edit",
+        {"branch": "branch_b0",
+         "vip_evidence_refs": [{"path": "USB_UVM_Handoff/some_file.sv", "quote": "x"}]},
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "REFERENCE_TREE_CITATION_FORBIDDEN"
+
+
+def test_protocol_isolation_gate_allows_real_source_citation():
+    rc, out = _run_gate_script(
+        "verification_flow/protocol_isolation_gate.py", "--edit",
+        {"branch": "branch_b1", "vip_evidence_refs": [_REAL_REF]},
+    )
+    assert rc == 0 and out["status"] == "PASS"
+
+
+def _write_rtl_protection_config(project_root, protected_paths):
+    dv_dir = project_root / ".dv-harness"
+    dv_dir.mkdir(parents=True, exist_ok=True)
+    (dv_dir / "config.json").write_text(
+        json.dumps({"rtl_protection": {"protected_paths": [str(p) for p in protected_paths]}}),
+        encoding="utf-8",
+    )
+
+
+def test_rtl_write_scope_guard_gate_blocks_dut_root_touch(tmp_path):
+    # The one confirmed real gap this gate closes (2026-09-02): the only
+    # thing that ever stopped the harness writing DUT/VIP RTL was a
+    # hand-added .claude/settings.json Edit-tool deny rule -- nothing in
+    # dv_harness itself checked what an IMPLEMENT edit actually touched.
+    dut_root = tmp_path / "DUT"
+    _write_rtl_protection_config(tmp_path, [dut_root, tmp_path / "VIP"])
+    rc, out = _run_gate_script_2flag(
+        "verification_flow/rtl_write_scope_guard_gate.py", "--edit",
+        {"touched_paths": [str(dut_root / "RTLCAT" / "top.v")]},
+        "--root", str(tmp_path),
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "RTL_WRITE_SCOPE_VIOLATION"
+    assert out["violations"][0]["path"] == str(dut_root / "RTLCAT" / "top.v")
+
+
+def test_rtl_write_scope_guard_gate_allows_uvm_touch_outside_protected_roots(tmp_path):
+    _write_rtl_protection_config(tmp_path, [tmp_path / "DUT", tmp_path / "VIP"])
+    rc, out = _run_gate_script_2flag(
+        "verification_flow/rtl_write_scope_guard_gate.py", "--edit",
+        {"touched_paths": [str(tmp_path / "uvm" / "tb" / "scoreboard.sv")]},
+        "--root", str(tmp_path),
+    )
+    assert rc == 0 and out["status"] == "PASS"
+
+
+def test_rtl_write_scope_guard_gate_honest_pass_when_unconfigured(tmp_path):
+    # No rtl_protection.protected_paths declared for this project yet -- an
+    # honest no-op PASS (never a fabricated block), matching the gate's own
+    # module docstring on what still requires real config to bite.
+    _write_rtl_protection_config(tmp_path, [])
+    rc, out = _run_gate_script_2flag(
+        "verification_flow/rtl_write_scope_guard_gate.py", "--edit",
+        {"touched_paths": [str(tmp_path / "DUT" / "RTLCAT" / "top.v")]},
+        "--root", str(tmp_path),
+    )
+    assert rc == 0 and out["status"] == "PASS" and out["reason"] == "NO_PROTECTED_PATHS_CONFIGURED"
+
+
+def test_rtl_write_scope_guard_gate_requires_touched_paths_list(tmp_path):
+    _write_rtl_protection_config(tmp_path, [tmp_path / "DUT"])
+    rc, out = _run_gate_script_2flag(
+        "verification_flow/rtl_write_scope_guard_gate.py", "--edit",
+        {}, "--root", str(tmp_path),
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "TOUCHED_PATHS_MISSING_OR_INVALID"
+
+
+def test_protocol_profile_binding_gate_requires_usb_profile_and_vip_lookup():
+    rc, out = _run_gate_script(
+        "verification_flow/protocol_profile_binding_gate.py", "--binding",
+        {"protocols": [{"protocol": "usb", "profile_skills_consulted": []}]},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "PROFILE_SKILL_NOT_CONSULTED"
+
+
+def test_protocol_profile_binding_gate_passes_when_fully_consulted():
+    rc, out = _run_gate_script(
+        "verification_flow/protocol_profile_binding_gate.py", "--binding",
+        {"protocols": [{"protocol": "usb",
+                        "profile_skills_consulted": ["USB/usb-profile", "USB/usb-vip-lookup"]}]},
     )
     assert rc == 0 and out["status"] == "PASS"
 
@@ -4128,3 +6087,1437 @@ def test_project_model_topic_is_a_different_shape_and_does_not_feed_state_projec
         assert h.state.project == "USB_HOST_SUBSYSTEM"
     finally:
         shutil.rmtree(tmp)
+
+
+# dut_version/tb_version (session-snapshot-extension, 2026-09-01): a
+# read-only derived view of blackboard "verification_state".results[],
+# mirroring state.project's own _sync_project_from_blackboard() pattern
+# above. Real source: VERIFY's test_result_provenance_gate evidence, which
+# REQUIRES non-empty rtl_revision/tb_revision per result
+# (tools/verification_flow/test_result_provenance_gate.py) -- so this is
+# always gate-validated evidence, never fabricated by the sync itself.
+
+def test_verify_blackboard_write_syncs_dut_and_tb_version_as_derived_view():
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        assert h.state.dut_version is None
+        assert h.state.tb_version is None
+
+        node = h.graph.nodes["VERIFY"]
+        assert node.blackboard_write == ["verification_state"]
+        evidence = {
+            "simulation_semantic_validation_gate": {"simulation_passed": True},
+            "test_result_provenance_gate": {"results": [
+                {"testcase_id": "t1", "run_id": "r1", "rtl_revision": "rtl-v7",
+                 "tb_revision": "tb-v3", "result": "PASS"},
+            ]},
+            "false_pass_resistance_gate": {"oracle_independent": True},
+        }
+        fake_result = AgentResult(ok=True, text="verify complete", raw={}, session_id=None)
+        h._write_blackboard_from_evidence(node, "VERIFY", evidence, fake_result)
+
+        # Blackboard "verification_state" holds VERIFY's own results record.
+        bb_verify = h.blackboard.read("verification_state")["value"]
+        assert bb_verify["results"][0]["rtl_revision"] == "rtl-v7"
+
+        # state.dut_version/tb_version are derived FROM it.
+        assert h.state.dut_version == "rtl-v7"
+        assert h.state.tb_version == "tb-v3"
+
+        # Reload proves it is a synced, persisted view, not a one-off
+        # in-memory assignment.
+        h2 = h.__class__(tmp)
+        assert h2.state.dut_version == "rtl-v7"
+        assert h2.state.tb_version == "tb-v3"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_dut_tb_version_takes_last_result_and_never_blanks_a_known_value():
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        node = h.graph.nodes["VERIFY"]
+        fake_result = AgentResult(ok=True, text="", raw={}, session_id=None)
+
+        h._write_blackboard_from_evidence(node, "VERIFY", {
+            "test_result_provenance_gate": {"results": [
+                {"testcase_id": "t1", "run_id": "r1", "rtl_revision": "rtl-v1", "tb_revision": "tb-v1"},
+                {"testcase_id": "t2", "run_id": "r2", "rtl_revision": "rtl-v2", "tb_revision": "tb-v2"},
+            ]},
+        }, fake_result)
+        assert h.state.dut_version == "rtl-v2"
+        assert h.state.tb_version == "tb-v2"
+
+        # A later write whose latest result carries an empty rtl_revision
+        # must never blank out the already-known value -- same "never
+        # regress a known value with an unknown one" rule
+        # _sync_project_from_blackboard() already follows.
+        h._write_blackboard_from_evidence(node, "VERIFY", {
+            "test_result_provenance_gate": {"results": [
+                {"testcase_id": "t3", "run_id": "r3", "rtl_revision": "", "tb_revision": None},
+            ]},
+        }, fake_result)
+        assert h.state.dut_version == "rtl-v2"
+        assert h.state.tb_version == "tb-v2"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_protocol_router_evidence_reads_the_topic_verify_actually_writes():
+    # BUG FIX (session-snapshot-extension, 2026-09-01): _protocol_router_
+    # evidence() used to read blackboard topic "verify", which nothing ever
+    # writes (VERIFY's real topic is "verification_state") -- failing_test_
+    # name was silently always None. Confirms the fix: a real VERIFY write
+    # with a non-PASS result is now actually visible to protocol_router.
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        node = h.graph.nodes["VERIFY"]
+        h._write_blackboard_from_evidence(node, "VERIFY", {
+            "test_result_provenance_gate": {"results": [
+                {"testcase_id": "test_pcie_ltssm_gen4_link_train", "run_id": "r1",
+                 "rtl_revision": "a", "tb_revision": "b", "result": "FAIL"},
+            ]},
+        }, AgentResult(ok=True, text="", raw={}, session_id=None))
+
+        ev = h._protocol_router_evidence("investigate the failure")
+        assert ev["failing_test_name"] == "test_pcie_ltssm_gen4_link_train"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_remote_execution_provenance_gate_blocks_exit_code_mismatch_at_build(tmp_path):
+    transcript = tmp_path / "build_transcript.txt"
+    transcript.write_text("REMOTE_HOST=host-b\nEXIT_CODE=2\nSTATUS=FAIL\ncompile error\n", encoding="utf-8")
+    rc, out = _run_gate_script(
+        "verification_flow/remote_execution_provenance_gate.py", "--provenance",
+        {"transcript_path": str(transcript), "claimed_exit_code": 0},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "EXIT_CODE_MISMATCH"
+
+
+def test_remote_execution_provenance_gate_passes_at_verify_with_real_transcript(tmp_path):
+    transcript = tmp_path / "verify_transcript.txt"
+    transcript.write_text("REMOTE_HOST=host-b\nEXIT_CODE=0\nSTATUS=PASS\nUVM_INFO ... TEST PASSED\n", encoding="utf-8")
+    rc, out = _run_gate_script(
+        "verification_flow/remote_execution_provenance_gate.py", "--provenance",
+        {"transcript_path": str(transcript), "claimed_exit_code": 0},
+    )
+    assert rc == 0 and out["status"] == "PASS"
+
+
+def test_remote_execution_provenance_gate_not_applicable_escape_hatch_passes_with_reason():
+    # I4 (2026-08-31 final review): unlike fabric_topology_completeness_gate
+    # and its siblings, this gate had no not-applicable escape hatch at all
+    # -- every BUILD/VERIFY response was forced to supply a real transcript
+    # even when no remote_exec.py invocation was ever made. Same convention
+    # as the precedent gates: a reason is mandatory, not a bare boolean.
+    rc, out = _run_gate_script(
+        "verification_flow/remote_execution_provenance_gate.py", "--provenance",
+        {"provenance_applicable": False,
+         "provenance_not_applicable_reason": "local-only static lint pass, no remote execution performed"},
+    )
+    assert rc == 0 and out["status"] == "SKIPPED_NOT_APPLICABLE"
+    assert "no remote execution" in out["reason"]
+
+
+def test_remote_execution_provenance_gate_not_applicable_without_reason_fails():
+    rc, out = _run_gate_script(
+        "verification_flow/remote_execution_provenance_gate.py", "--provenance",
+        {"provenance_applicable": False},
+    )
+    assert rc != 0 and out["status"] == "FAIL" and out["reason"] == "NOT_APPLICABLE_WITHOUT_JUSTIFICATION"
+
+
+# --- I3 (2026-08-31 final whole-branch review): the plan's Task 2/3/5
+# "run_stage()-level integration tests" all used _run_gate_script, a bare
+# subprocess call to the gate script alone that never touches STAGE_GATES or
+# evaluate_stage_evidence() -- proving nothing about real stage wiring. These
+# 4 tests call evaluate_stage_evidence(ROOT, "<STAGE>", text) directly (same
+# real signature/usage as test_verify_stage_with_matching_evidence_passes and
+# the many other full-stage tests above), with evidence for every OTHER gate
+# in that stage supplied as a genuine PASS so exactly ONE of the 3 new gates
+# fails and the resulting GATE_FAIL is unambiguously attributable to it.
+
+def test_protocol_isolation_gate_blocks_implement_stage_via_evaluate_stage_evidence():
+    text = (
+        '```dv-harness-evidence:traceability_consistency_gate\n'
+        '{"vplan_requirement_ids": ["R1"], "architecture_nodes": ["A1"], '
+        '"verification_mechanisms": [{"mechanism_id": "M1", "vplan_requirement_ids": ["R1"]}], '
+        '"planned_testcases": [{"testcase_id": "T1", "vplan_requirement_ids": ["R1"], '
+        '"mechanism_ids": ["M1"], "coverage_ids": ["C1"]}], "coverage_ids": ["C1"]}\n```\n'
+        '```dv-harness-evidence:checker_independence_gate\n{"checkers": []}\n```\n'
+        '```dv-harness-evidence:testcase_name_semantics_gate\n'
+        '{"tests": [{"testcase_id": "T1", "name": "usb_reset_recovery_test"}]}\n```\n'
+        '```dv-harness-evidence:verification_intent_gate\n'
+        '{"requirements": [{"req_id": "R1"}], "mechanisms": [{"mechanism_id": "M1"}], '
+        '"coverage": [{"coverage_id": "C1"}], "tests": [{"testcase_id": "T1", '
+        '"requirement_ids": ["R1"], "mechanism_ids": ["M1"], "coverage_ids": ["C1"]}]}\n```\n'
+        '```dv-harness-evidence:pattern_registry_completeness_gate\n'
+        '{"patterns": [{"name": "usb2_enum", "suite": "enumeration", "dir": "tb/patterns/enumeration"}], '
+        '"suite_names": ["enumeration"]}\n```\n'
+        '```dv-harness-evidence:manual_lookup_before_edit_gate\n{"branch": "block"}\n```\n'
+        '```dv-harness-evidence:protocol_isolation_gate\n'
+        '{"branch": "branch_b0", "vip_evidence_refs": '
+        '[{"path": "USB_UVM_Handoff/some_file.sv", "quote": "x"}]}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "IMPLEMENT", text)
+    assert verdict == "GATE_FAIL"
+    assert any("protocol_isolation_gate" in r and "REFERENCE_TREE_CITATION_FORBIDDEN" in r for r in reasons)
+
+
+_IMPLEMENT_BASE_GATES_PASS_TEXT = (
+    '```dv-harness-evidence:traceability_consistency_gate\n'
+    '{"vplan_requirement_ids": ["R1"], "architecture_nodes": ["A1"], '
+    '"verification_mechanisms": [{"mechanism_id": "M1", "vplan_requirement_ids": ["R1"]}], '
+    '"planned_testcases": [{"testcase_id": "T1", "vplan_requirement_ids": ["R1"], '
+    '"mechanism_ids": ["M1"], "coverage_ids": ["C1"]}], "coverage_ids": ["C1"]}\n```\n'
+    '```dv-harness-evidence:checker_independence_gate\n{"checkers": []}\n```\n'
+    '```dv-harness-evidence:testcase_name_semantics_gate\n'
+    '{"tests": [{"testcase_id": "T1", "name": "usb_reset_recovery_test"}]}\n```\n'
+    '```dv-harness-evidence:verification_intent_gate\n'
+    '{"requirements": [{"req_id": "R1"}], "mechanisms": [{"mechanism_id": "M1"}], '
+    '"coverage": [{"coverage_id": "C1"}], "tests": [{"testcase_id": "T1", '
+    '"requirement_ids": ["R1"], "mechanism_ids": ["M1"], "coverage_ids": ["C1"]}]}\n```\n'
+    '```dv-harness-evidence:pattern_registry_completeness_gate\n'
+    '{"patterns": [{"name": "usb2_enum", "suite": "enumeration", "dir": "tb/patterns/enumeration"}], '
+    '"suite_names": ["enumeration"]}\n```\n'
+    '```dv-harness-evidence:manual_lookup_before_edit_gate\n{"branch": "block"}\n```\n'
+    '```dv-harness-evidence:protocol_isolation_gate\n'
+    '{"vip_evidence_refs": [], "dut_rtl_evidence_refs": []}\n```\n'
+)
+
+
+def test_rtl_write_scope_guard_gate_blocks_implement_stage_via_evaluate_stage_evidence():
+    # Wiring proof: this repo's OWN real .dv-harness/config.json now declares
+    # rtl_protection.protected_paths for the real project this harness
+    # deployment governs (see .claude/settings.json's matching Edit/Write
+    # deny rules for the same two paths) -- so this exercises the real,
+    # currently-configured enforcement boundary, not a synthetic one.
+    text = _IMPLEMENT_BASE_GATES_PASS_TEXT + (
+        '```dv-harness-evidence:rtl_write_scope_guard_gate\n'
+        '{"edit": {"touched_paths": ["D:/DV/Task/USB/DUT/RTLCAT/top.v"]}}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "IMPLEMENT", text)
+    assert verdict == "GATE_FAIL"
+    assert any("rtl_write_scope_guard_gate" in r and "RTL_WRITE_SCOPE_VIOLATION" in r for r in reasons), reasons
+
+
+def test_rtl_write_scope_guard_gate_passes_implement_stage_for_uvm_only_touch():
+    text = _IMPLEMENT_BASE_GATES_PASS_TEXT + (
+        '```dv-harness-evidence:rtl_write_scope_guard_gate\n'
+        '{"edit": {"touched_paths": ["uvm/tb/scoreboard.sv"]}}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "IMPLEMENT", text)
+    assert verdict == "PASS", reasons
+
+
+def test_protocol_profile_binding_gate_blocks_protocol_capability_stage_via_evaluate_stage_evidence():
+    text = (
+        '```dv-harness-evidence:protocol_generator_binding_gate\n{"protocols": []}\n```\n'
+        '```dv-harness-evidence:protocol_profile_binding_gate\n'
+        '{"protocols": [{"protocol": "usb", "profile_skills_consulted": []}]}\n```\n'
+        '```dv-harness-evidence:protocol_onboarding_gate\n'
+        '{"protocol_name": "usb", "spec_sources": ["usb_spec.pdf"], "dut_mapping": "usb_dut.sv", '
+        '"vip_strategy": "synopsys usb vip", "state_model": "link state model", '
+        '"transaction_model": "transaction model", "error_recovery_model": "error recovery model", '
+        '"verification_mechanism_plan": "mechanism plan", "vplan_mapping": "vplan mapping", '
+        '"test_generation_strategy": "test gen strategy", "coverage_model": "coverage model", '
+        '"qualification_plan": "qualification plan", "evidence_refs": ["ev1"]}\n```\n'
+        '```dv-harness-evidence:protocol_profile_version_gate\n'
+        '{"protocol_name": "usb", "profile_version": "1.0", "spec_revision": "r1", '
+        '"profile_hash": "h1", "qualification_state": "DRAFT"}\n```\n'
+        '```dv-harness-evidence:protocol_qualification_status_gate\n{"protocols": []}\n```\n'
+        '```dv-harness-evidence:protocol_builder_registry_conformance_gate\n'
+        '{"registry_applicable": false, '
+        '"registry_not_applicable_reason": "stage-level regression test, not exercising checklist conformance"}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "PROTOCOL_CAPABILITY", text)
+    assert verdict == "GATE_FAIL"
+    assert any("protocol_profile_binding_gate" in r and "PROFILE_SKILL_NOT_CONSULTED" in r for r in reasons)
+
+
+def test_remote_execution_provenance_gate_blocks_build_stage_via_evaluate_stage_evidence():
+    text = (
+        '```dv-harness-evidence:shared_elaboration_collision_gate\n{"build_owner_count": 1}\n```\n'
+        '```dv-harness-evidence:stop_after_simv_policy_gate\n'
+        '{"build_fingerprint": "fp1", "simv_completion_marker": "m1", '
+        '"simv_completion_marker_build_fingerprint": "fp1"}\n```\n'
+        '```dv-harness-evidence:remote_execution_provenance_gate\n'
+        '{"transcript_path": "/no/such/build_transcript.txt", "claimed_exit_code": 0}\n```\n'
+    )
+    verdict, reasons = evaluate_stage_evidence(ROOT, "BUILD", text)
+    assert verdict == "GATE_FAIL"
+    assert any("remote_execution_provenance_gate" in r and "TRANSCRIPT_FILE_NOT_FOUND" in r for r in reasons)
+
+
+def test_remote_execution_provenance_gate_blocks_verify_stage_via_evaluate_stage_evidence():
+    # Reuses _VERIFY_EXTRA_GATES WITHOUT substituting a real transcript path
+    # for remote_execution_provenance_gate (unlike
+    # test_verify_stage_with_matching_evidence_passes above) -- every other
+    # VERIFY gate gets real, valid evidence, so the resulting GATE_FAIL is
+    # unambiguously this one gate's TRANSCRIPT_FILE_NOT_FOUND.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        cf = tmp / "command.txt"
+        cf.write_text("# no command.txt content needed for this test\n", encoding="utf-8")
+        log_path = tmp / "sim.log"
+        log_path.write_text("UVM_INFO enum PASS", encoding="utf-8")
+        text = (
+            "```dv-harness-evidence:simulation_semantic_validation_gate\n"
+            + json.dumps({
+                "simulation_passed": True,
+                "command_file_path": str(cf),
+                "sim_log_path": str(log_path),
+                "command_expectations": [{"expectation_id": "e1", "required": True,
+                    "evidence_requirements": [{"pattern": "enum PASS", "match_mode": "SUBSTRING"}]}],
+            }) + "\n```\n"
+            "```dv-harness-evidence:test_result_provenance_gate\n"
+            '{"results": [{"testcase_id": "t1", "run_id": "r1", "rtl_revision": "a", '
+            '"tb_revision": "b", "vip_version": "c", "tool_version": "d", "seed": "1", '
+            '"config_hash": "h", "result": "PASS", "log_hash": "lh", "evidence_bundle_hash": "eh"}]}\n'
+            "```\n"
+            "```dv-harness-evidence:false_pass_resistance_gate\n"
+            '{"positive_test_pass": true, "negative_test_detects_fault": true, '
+            '"checker_detects_injected_fault": true, "semantic_log_match": true, '
+            '"oracle_independent": true, "proof_bundle_hash": "h1"}\n'
+            "```\n"
+            + _VERIFY_EXTRA_GATES
+        )
+        verdict, reasons = evaluate_stage_evidence(ROOT, "VERIFY", text)
+        assert verdict == "GATE_FAIL"
+        assert any("remote_execution_provenance_gate" in r and "TRANSCRIPT_FILE_NOT_FOUND" in r for r in reasons)
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- Cross-cycle debug-loop counter + Health Monitor dispatch (2026-09-01,
+# ai-debug-closed-loop-counter-implementation task) --------------------------
+# Blackboard.append_debug_loop_round()/read_debug_loop_history()/
+# debug_loop_round_count() are the real, persisted, cross-cycle record this
+# task adds (see blackboard.py's own docstring); DVHarness.
+# _record_debug_loop_round()/_health_monitor_check() are engine.py's real,
+# wired call sites into it -- exercised end to end below via loop() itself,
+# not just as standalone units.
+
+def test_blackboard_debug_loop_history_round_trip_and_cross_cycle_query():
+    from dv_harness.blackboard import Blackboard
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        bb = Blackboard(tmp)
+        assert bb.read_debug_loop_history() == {"entries": []}
+        assert bb.debug_loop_round_count() == 0
+
+        for i in range(2):
+            bb.append_debug_loop_round({
+                "timestamp": f"t{i}", "failing_stage": "VERIFY",
+                "target_fail_edge": "FAILURE_RECOVERY", "attempt_number": 1,
+                "node_route": "build-route", "health_monitor_check": None,
+            }, source="VERIFY")
+        bb.append_debug_loop_round({
+            "timestamp": "t3", "failing_stage": "REGRESSION_MONITOR",
+            "target_fail_edge": "INFRA_RECOVERY", "attempt_number": 1,
+            "node_route": "regression-route", "health_monitor_check": None,
+        }, source="REGRESSION_MONITOR")
+
+        history = bb.read_debug_loop_history()
+        assert [e["round_number"] for e in history["entries"]] == [1, 2, 3]
+        # This is the real query an "how many full fix/push/rebuild passes
+        # has this failure gone through" question is answered from --
+        # uncapped and whole-run, unlike a per-node ss['attempts'] counter.
+        assert bb.debug_loop_round_count() == 3
+        assert bb.debug_loop_round_count("VERIFY") == 2
+        assert bb.debug_loop_round_count("REGRESSION_MONITOR") == 1
+        assert bb.debug_loop_round_count("NEVER_FAILED_STAGE") == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_remote_lsf_routes_ruling_matches_documented_build_and_regression_nodes():
+    # Regression-locks the RULING made in engine.py's module-level comment
+    # above REMOTE_LSF_ROUTES: real graph node.route values (main_graph.json)
+    # for every node that actually submits/monitors a VCS build or LSF
+    # regression job, no more and no less.
+    import dv_harness.engine as engine_mod
+    tmp, h = _fresh_harness()
+    try:
+        remote_ids = {n.id for n in h.graph.nodes.values() if n.route in engine_mod.REMOTE_LSF_ROUTES}
+        assert remote_ids == {
+            "DE_BASELINE_REPRODUCTION", "SERVER_SYNC", "BUILD", "BUILD_DEBUG", "VERIFY",
+            "REGRESSION_SELECT", "REGRESSION", "REGRESSION_MONITOR", "COVERAGE_CLOSURE", "INFRA_RECOVERY",
+        }
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_record_debug_loop_round_only_health_checks_remote_lsf_route_stages():
+    # FAILURE_RECOVERY (debug-route) never submits a build/regression job
+    # itself -- health_monitor_check must stay None, never a fabricated
+    # check. VERIFY (build-route) really does -- a real subprocess call to
+    # `dv-harness lsf-watch-status` (equivalent to the documented protocol
+    # command) must run and its real result must land in the entry.
+    tmp, h = _fresh_harness()
+    try:
+        registry = h._record_debug_loop_round("FAILURE_RECOVERY", None)
+        entry = registry["entries"][-1]
+        assert entry["round_number"] == 1
+        assert entry["failing_stage"] == "FAILURE_RECOVERY"
+        assert entry["target_fail_edge"] is None
+        assert entry["node_route"] == "debug-route"
+        assert entry["health_monitor_check"] is None
+
+        registry2 = h._record_debug_loop_round("VERIFY", "FAILURE_RECOVERY")
+        entry2 = registry2["entries"][-1]
+        assert entry2["round_number"] == 2
+        assert entry2["node_route"] == "build-route"
+        assert entry2["target_fail_edge"] == "FAILURE_RECOVERY"
+        hc = entry2["health_monitor_check"]
+        assert hc is not None, "VERIFY is a build-route stage -- a real Health Monitor check must have run"
+        assert hc["ok"] is True, hc
+        assert hc["result"] == {"running": False, "pid": None}
+        assert "lsf-watch-status" in hc["command"]
+        # The Telnet/SSH remote hop and watcher START are a deliberate,
+        # policy-mandated human/agent step per CLAUDE.md -- this must never
+        # be what the engine's own FAIL-edge health check invokes.
+        assert "lsf-watch-start" not in hc["command"]
+
+        assert h.blackboard.debug_loop_round_count() == 2
+        assert h.blackboard.debug_loop_round_count("VERIFY") == 1
+        assert h.blackboard.debug_loop_round_count("FAILURE_RECOVERY") == 1
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_loop_records_debug_loop_history_across_a_full_fail_edge_pass():
+    # Full end-to-end wiring test: VERIFY (build-route) fails via
+    # ADAPTER_FAIL, retries exhausted immediately (max_stage_retries=0),
+    # loop() routes via the graph's real FAIL edge (VERIFY ->
+    # FAILURE_RECOVERY per main_graph.json) -- which itself then also fails
+    # and exhausts (FAILURE_RECOVERY has no FAIL edge in main_graph.json,
+    # only PASS/BLOCKED, so loop() stops there). Two real, persisted
+    # debug_loop_history rounds must result, only the first (a build-route
+    # stage) carrying a real Health Monitor check.
+    from dv_harness.adapters.base import AgentResult
+    tmp, h = _fresh_harness()
+    try:
+        h.cfg["policy"]["max_stage_retries"] = 0
+        h.set_stage("VERIFY")
+
+        class _AlwaysAdapterFail:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return AgentResult(ok=False, text="", raw={"stderr": "boom"}, session_id=None)
+
+        h.adapter = _AlwaysAdapterFail()
+        h.loop("goal")
+
+        entries = h.blackboard.read_debug_loop_history()["entries"]
+        assert [e["failing_stage"] for e in entries] == ["VERIFY", "FAILURE_RECOVERY"]
+
+        assert entries[0]["target_fail_edge"] == "FAILURE_RECOVERY"
+        assert entries[0]["node_route"] == "build-route"
+        assert entries[0]["health_monitor_check"]["ok"] is True
+        assert entries[0]["health_monitor_check"]["result"] == {"running": False, "pid": None}
+
+        assert entries[1]["target_fail_edge"] is None
+        assert entries[1]["node_route"] == "debug-route"
+        assert entries[1]["health_monitor_check"] is None
+
+        assert h.blackboard.debug_loop_round_count() == 2
+        assert h.state.current_stage == "FAILURE_RECOVERY"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stage_profiler_read_retries_transient_windows_permission_error():
+    # PRE-EXISTING BUG fixed while testing this task (found via a real full
+    # `dv_harness_tests/` suite run, not manufactured): StageExecutionProfiler.
+    # all_stages()/_load() had no equivalent of storage.py's _atomic_replace()
+    # retry-on-PermissionError -- a real ThreadPoolExecutor fan-out run hit a
+    # bare PermissionError racing a concurrent writer's atomic os.replace().
+    # stage_profile._read_json_retrying() now retries transient PermissionErrors
+    # briefly before giving up.
+    from dv_harness.stage_profile import StageExecutionProfiler
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        profiler = StageExecutionProfiler(tmp)
+        rec = profiler.begin_stage("S1", "S1")
+
+        real_read_text = Path.read_text
+        calls = {"n": 0}
+
+        def flaky_read_text(self, *a, **k):
+            if self.name.startswith("STAGE-") and calls["n"] < 2:
+                calls["n"] += 1
+                raise PermissionError(13, "simulated concurrent-replace race")
+            return real_read_text(self, *a, **k)
+
+        with patch("pathlib.Path.read_text", flaky_read_text):
+            stages = profiler.all_stages()
+        assert len(stages) == 1
+        assert stages[0]["profile_id"] == rec["profile_id"]
+        assert calls["n"] == 2  # actually retried past 2 real failures, not a lucky first try
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stage_profiler_read_eventually_raises_on_persistent_permission_error():
+    # A genuinely, persistently locked file (not a transient race) must
+    # still surface as a real PermissionError after retries are exhausted --
+    # never silently swallowed or fabricated as an empty result.
+    from dv_harness.stage_profile import StageExecutionProfiler
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        profiler = StageExecutionProfiler(tmp)
+        profiler.begin_stage("S1", "S1")
+
+        def always_denied(self, *a, **k):
+            if self.name.startswith("STAGE-"):
+                raise PermissionError(13, "persistently locked")
+            return Path.read_text(self, *a, **k)
+
+        with patch("pathlib.Path.read_text", always_denied):
+            try:
+                profiler.all_stages()
+                assert False, "persistent PermissionError must still be raised, not swallowed"
+            except PermissionError:
+                pass
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_health_monitor_check_records_real_failure_when_subprocess_errors():
+    # A subprocess failure (bad python executable) must be recorded as real
+    # negative evidence, never fabricated as a pass, and must never raise
+    # out of _health_monitor_check() itself (it is a best-effort side
+    # effect that must never block FAIL-edge routing).
+    tmp, h = _fresh_harness()
+    try:
+        node = h.graph.nodes["VERIFY"]
+        with patch("dv_harness.engine.sys") as fake_sys:
+            fake_sys.executable = str(tmp / "no_such_python_binary_xyz.exe")
+            result = h._health_monitor_check(node)
+        assert result is not None
+        assert result["ok"] is False
+        assert "error" in result
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- Task 5 (2026-09-02 autonomous-gate-self-tuning-mechanism design):
+# DVHarness._maybe_run_self_tuning_review() -- the review-cycle orchestration
+# wired into run_stage()'s single real terminal exit point (see engine.py's
+# "Step 7" comment right before `return result`). These tests call
+# _maybe_run_self_tuning_review() directly (no main_graph.json/stage setup
+# needed) against a bare `DVHarness(tmp)` with `h.adapter` replaced by a fake
+# implementing the same run(prompt, cwd, resume_session=None,
+# agent_profile=None) -> AgentResult contract as the real adapter (same
+# pattern used throughout this file, e.g. FakeAdapter above).
+from dv_harness import self_tuning as _self_tuning_module
+from dv_harness.adapters.base import AgentResult as _SelfTuningAgentResult
+
+
+class _FakeSelfTuningAdapter:
+    def __init__(self, text=None, ok=True, raises=None):
+        self.text = text
+        self.ok = ok
+        self.raises = raises
+        self.calls = 0
+
+    def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+        self.calls += 1
+        if self.raises:
+            raise self.raises
+        return _SelfTuningAgentResult(ok=self.ok, text=self.text or "", raw={}, session_id="s")
+
+
+def _self_tuning_proposal_block(gate_id="unprotected_gate", confidence="HIGH", risk_level="LOW", to=2):
+    return (
+        "```dv-harness-evidence:self_tuning_proposal\n"
+        + json.dumps({"proposals": [{
+            "gate_id": gate_id, "change": {"param": "threshold", "from": 1, "to": to},
+            "rationale": "observed pattern", "confidence": confidence, "risk_level": risk_level,
+        }]})
+        + "\n```"
+    )
+
+
+def _mk_self_tuning_project():
+    # run_gate() (dv_harness/gates.py) resolves gate scripts as
+    # root/tools/verification_flow/<script>.py -- a plain tempfile.mkdtemp()
+    # has no such tree, so self_tuning_proposal_gate.py would resolve to
+    # GATE_TOOL_MISSING and gate_result.ok would be False regardless of the
+    # proposal content, making these tests pass for the wrong reason. Copy
+    # the real tools/ tree in, same as _mk_smoke_project() above, so the
+    # proposal gate genuinely executes.
+    tmp = Path(tempfile.mkdtemp())
+    shutil.copytree(ROOT / "tools", tmp / "tools")
+    return tmp
+
+
+def _self_tuning_proposal_gate_env():
+    # self_tuning_proposal_gate.py (tools/verification_flow/) does `from
+    # dv_harness.self_tuning import PROTECTED_REMOVALS`, resolving its own
+    # import root as Path(__file__).resolve().parents[2] -- correct when the
+    # script lives at the REAL dv_harness repo's tools/verification_flow/
+    # (parents[2] == the repo root, which contains the dv_harness package),
+    # but wrong for a copy under an isolated tempfile.mkdtemp() project (its
+    # parents[2] is just the empty tmp dir, no dv_harness package there).
+    # dv_harness itself is not pip-installed in this dev environment (no
+    # sdist/egg-info), so it is only importable via this repo's own root
+    # being on sys.path. run_gate()'s subprocess.run() inherits the calling
+    # process's environment unmodified, so putting the real ROOT on
+    # PYTHONPATH here lets the copied script's `from dv_harness...` import
+    # succeed the same way it would for a real pip-installed deployment,
+    # without changing any engine.py/gates.py production code.
+    existing = os.environ.get("PYTHONPATH", "")
+    return {"PYTHONPATH": (str(ROOT) + os.pathsep + existing) if existing else str(ROOT)}
+
+
+def test_self_tuning_review_triggers_after_n_executions_and_auto_applies():
+    tmp = _mk_self_tuning_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 2}
+        fake = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+        h.adapter = fake
+
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            _self_tuning_module.increment_execution_counter(h.root)  # 1st of 2
+            h._maybe_run_self_tuning_review()
+            assert fake.calls == 0
+
+            _self_tuning_module.increment_execution_counter(h.root)  # 2nd of 2 -- triggers
+            h._maybe_run_self_tuning_review()
+        assert fake.calls == 1
+
+        assert _self_tuning_module.get_param(h.root, "unprotected_gate", "threshold", None) == 2
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_defers_low_confidence_proposal():
+    tmp = _mk_self_tuning_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block(confidence="LOW"))
+
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            _self_tuning_module.increment_execution_counter(h.root)
+            h._maybe_run_self_tuning_review()
+
+        assert _self_tuning_module.get_param(h.root, "unprotected_gate", "threshold", None) is None
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_disabled_by_default_config():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        # no h.cfg["self_tuning"] override -- DEFAULT_CONFIG's own default applies
+        fake = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+        h.adapter = fake
+        for _ in range(100):
+            _self_tuning_module.increment_execution_counter(h.root)
+        h._maybe_run_self_tuning_review()
+        assert fake.calls == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_adapter_failure_does_not_reset_counter_or_raise():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(raises=RuntimeError("boom"))
+
+        _self_tuning_module.increment_execution_counter(h.root)
+        h._maybe_run_self_tuning_review()  # must not raise
+
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 1
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_run_stage_increments_counter_on_every_terminal_verdict():
+    # run_stage() must increment the execution counter on EVERY terminal
+    # verdict, not only PASS -- exercised here via an ADAPTER_FAIL (result.ok
+    # is False) and a GATE_FAIL/PARTIAL (result.ok True, no evidence block),
+    # both of which are real terminal run_stage() results that fall through
+    # to the single `return result` this task wired the counter/review call
+    # onto. self_tuning stays disabled (DEFAULT_CONFIG default) so this test
+    # is purely about the counter increment, not the review firing.
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+
+        class _AdapterFailAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return _SelfTuningAgentResult(ok=False, text="", raw={"stderr": "boom"}, session_id=None)
+
+        h = DVHarness(tmp)
+        h.adapter = _AdapterFailAdapter()
+        h.set_stage("VERIFY")
+
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 0
+        h.run_stage("goal")
+        ss = h.state.stages["VERIFY"]
+        assert ss["status"] == "FAIL"
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 1
+
+        class _PartialAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                # Same ok=True/no-evidence text as
+                # test_run_stage_replans_and_reuses_same_plan_across_retries_on_partial
+                # above (a known-good MISSING_EVIDENCE -> PARTIAL fixture for
+                # VERIFY), reused here rather than inventing a new string.
+                return _SelfTuningAgentResult(ok=True, text="I verified it, trust me.", raw={}, session_id="s")
+
+        h.adapter = _PartialAdapter()
+        h.run_stage("goal")
+        ss = h.state.stages["VERIFY"]
+        assert ss["status"] == "PARTIAL"
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 2
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- Task 5 code-review fixes (2026-09-02): 3 findings against the
+# self-tuning review-cycle wiring above --
+#   Finding 1 (Critical): the increment_execution_counter() call at
+#     run_stage()'s single terminal return point had no try/except -- a real
+#     I/O failure there (disk full/permission/transient Windows file-lock
+#     race) would propagate out of run_stage() and destroy the
+#     already-computed real stage result.
+#   Finding 2 (Important): run_gate() raising (e.g. its own
+#     subprocess.TimeoutExpired, uncaught inside gates.py) fell through to
+#     _maybe_run_self_tuning_review()'s OUTER blanket except -- which does
+#     NOT reset the counter, wrongly giving an internal gate failure the
+#     same non-reset treatment as a genuine adapter failure.
+#   Finding 3 (Important): read_gate_history_since(root, 0) always re-sent
+#     the ENTIRE cumulative gate_history.jsonl log every review cycle,
+#     never scoped to "since the last successful review".
+
+def test_run_stage_survives_increment_execution_counter_raising():
+    # Finding 1 regression: simulate the real I/O call raising and confirm
+    # run_stage() still returns its real, already-computed result rather
+    # than propagating the exception.
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+
+        class _AdapterFailAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                return _SelfTuningAgentResult(ok=False, text="", raw={"stderr": "boom"}, session_id=None)
+
+        h = DVHarness(tmp)
+        h.adapter = _AdapterFailAdapter()
+        h.set_stage("VERIFY")
+
+        with patch("dv_harness.self_tuning.increment_execution_counter",
+                   side_effect=RuntimeError("simulated disk-full/permission failure")):
+            result = h.run_stage("goal")
+
+        # The real stage result must still come back, unaltered by the
+        # simulated counter-write failure.
+        assert result is not None
+        assert result.ok is False
+        ss = h.state.stages["VERIFY"]
+        assert ss["status"] == "FAIL"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_run_gate_exception_resets_counter_unlike_adapter_failure():
+    # Finding 2 regression: run_gate() raising (not just returning
+    # ok=False) must get the SAME internal-failure "reset the counter"
+    # treatment as gate_result.ok is False already gets -- distinct from a
+    # genuine adapter failure, which must NOT reset (see
+    # test_self_tuning_review_adapter_failure_does_not_reset_counter_or_raise
+    # above). Also confirms the reset here does NOT advance
+    # last_reviewed_gate_history_index (only a successful cycle's
+    # completion should).
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", side_effect=RuntimeError("simulated gate subprocess timeout")):
+            h._maybe_run_self_tuning_review()  # must not raise
+
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 0
+        assert _self_tuning_module.read_last_reviewed_index(h.root) == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_scopes_gate_history_to_last_reviewed_index():
+    # Finding 3 regression: two consecutive SUCCESSFUL review cycles must
+    # each see only the history entries appended since the previous cycle,
+    # not the full cumulative gate_history.jsonl log both times.
+    from dv_harness.gates import GateResult
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+
+        prompts = []
+
+        class _RecordingAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                prompts.append(prompt)
+                return _SelfTuningAgentResult(
+                    ok=True, text=_self_tuning_proposal_block(), raw={}, session_id="s")
+
+        h.adapter = _RecordingAdapter()
+
+        # run_gate() is mocked here (rather than exercising the real
+        # self_tuning_proposal_gate.py subprocess, as the earlier
+        # auto-apply/defer tests do via _mk_self_tuning_project()) so this
+        # test stays focused purely on the history-scoping behavior, with
+        # no extra gate_history.jsonl entries appended as a side effect of
+        # the mechanical proposal-gate call itself.
+        ok_empty_gate_result = GateResult(
+            "self_tuning_proposal_gate", True, {"surviving_proposals": [], "stripped": []})
+
+        # Cycle 1: 2 pre-existing history entries, nothing reviewed yet
+        # (last_reviewed_index defaults to 0) -- both must be visible.
+        _self_tuning_module.append_gate_history(h.root, "gate_a", "IMPLEMENT", True, "PASS", 1.0)
+        _self_tuning_module.append_gate_history(h.root, "gate_b", "IMPLEMENT", False, "GATE_FAIL", 2.0)
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", return_value=ok_empty_gate_result):
+            h._maybe_run_self_tuning_review()
+
+        assert len(prompts) == 1
+        assert "most recent 2 gate invocations" in prompts[0]
+        assert _self_tuning_module.read_last_reviewed_index(h.root) == 2
+        assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 0
+
+        # Cycle 2: one NEW entry appended after cycle 1 completed -- only
+        # this one entry should appear, not the 2 from cycle 1 again.
+        _self_tuning_module.append_gate_history(h.root, "gate_c", "VERIFY", True, "PASS", 3.0)
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", return_value=ok_empty_gate_result):
+            h._maybe_run_self_tuning_review()
+
+        assert len(prompts) == 2
+        assert "most recent 1 gate invocations" in prompts[1]
+        assert _self_tuning_module.read_last_reviewed_index(h.root) == 3
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- Findings I5/I8 fix (2026-09-02 follow-up fix wave): I5 -- the review
+# prompt only ever included gate_history.jsonl (source 1 of the spec's 4
+# required evidence sources); I8 -- the review cycle emitted zero
+# self.store.event() breadcrumbs, and `self-tune status` reported only the
+# raw execution counter, not pending_count/last_review_at.
+
+def test_self_tuning_review_prompt_includes_all_four_evidence_sources():
+    # I5 regression: mock the adapter and confirm the captured prompt text
+    # actually contains content from all 4 spec-required sources -- a
+    # correction record, a tuned parameter, an overlay entry, and a past
+    # adjustment record -- not just gate_history.jsonl (source 1).
+    from dv_harness.gates import GateResult
+    from dv_harness.control_plane import ControlPlane
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+
+        # Source 1 seed: gate history for stage IMPLEMENT (drives which
+        # stage's corrections get pulled in for source 2).
+        _self_tuning_module.append_gate_history(h.root, "gate_a", "IMPLEMENT", True, "PASS", 1.0)
+
+        # Source 2 seed: an active human CORRECT record for IMPLEMENT.
+        ControlPlane(h.root).set_correction("IMPLEMENT", note="UNIQUE_CORRECTION_NOTE_MARKER")
+
+        # Source 3 seed: a tuned parameter and an overlay entry.
+        _self_tuning_module.set_param(h.root, "some_gate", "UNIQUE_PARAM_NAME", "UNIQUE_PARAM_VALUE")
+        _self_tuning_module.propose_add_override(h.root, "VERIFY", "UNIQUE_OVERLAY_GATE_ID")
+
+        # Source 4 seed: a past adjustment record.
+        _self_tuning_module.record_adjustment(
+            h.root,
+            {"gate_id": "UNIQUE_PAST_GATE_ID", "change": {"param": "x", "from": 1, "to": 2},
+             "rationale": "UNIQUE_PAST_RATIONALE_MARKER", "confidence": "LOW", "risk_level": "LOW"},
+            status="REJECTED",
+        )
+
+        prompts = []
+
+        class _RecordingAdapter:
+            def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+                prompts.append(prompt)
+                return _SelfTuningAgentResult(ok=True, text=_self_tuning_proposal_block(), raw={}, session_id="s")
+
+        h.adapter = _RecordingAdapter()
+        ok_empty_gate_result = GateResult(
+            "self_tuning_proposal_gate", True, {"surviving_proposals": [], "stripped": []})
+
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", return_value=ok_empty_gate_result):
+            h._maybe_run_self_tuning_review()
+
+        assert len(prompts) == 1
+        prompt = prompts[0]
+        assert "UNIQUE_CORRECTION_NOTE_MARKER" in prompt  # source 2: human corrections
+        assert "UNIQUE_PARAM_NAME" in prompt and "UNIQUE_PARAM_VALUE" in prompt  # source 3: parameters.json
+        assert "UNIQUE_OVERLAY_GATE_ID" in prompt  # source 3: stage_gate_overrides.json
+        assert "UNIQUE_PAST_GATE_ID" in prompt and "UNIQUE_PAST_RATIONALE_MARKER" in prompt  # source 4
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_evidence_sources_empty_when_nothing_seeded():
+    # I5 regression, negative case: with none of the 4 sources seeded beyond
+    # gate_history, the prompt must still build (empty corrections/
+    # parameters/overrides/adjustment-history sections are valid, not an
+    # error) and the adapter must still be reached.
+    from dv_harness.gates import GateResult
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        fake = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+        h.adapter = fake
+        ok_empty_gate_result = GateResult(
+            "self_tuning_proposal_gate", True, {"surviving_proposals": [], "stripped": []})
+
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch("dv_harness.gates.run_gate", return_value=ok_empty_gate_result):
+            h._maybe_run_self_tuning_review()
+
+        assert fake.calls == 1
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_emits_completed_event_on_success_path():
+    # I8 regression: self.store.event(...) must actually be called on a
+    # successful review-cycle completion, with a summary of how many
+    # proposals were found/applied/deferred -- previously this method
+    # emitted zero events anywhere.
+    tmp = _mk_self_tuning_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+
+        events = []
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+                _self_tuning_module.increment_execution_counter(h.root)
+                h._maybe_run_self_tuning_review()
+
+        completed = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_COMPLETED"]
+        assert len(completed) == 1
+        assert completed[0]["proposals_found"] == 1
+        assert completed[0]["applied"] == 1
+        assert completed[0]["deferred"] == 0
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_emits_skipped_event_on_internal_failure_path():
+    # I8 regression: an internal-failure early-return (here, run_gate()
+    # itself raising) must also emit a breadcrumb explaining WHY the cycle
+    # produced nothing, not just silently reset the counter.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(text=_self_tuning_proposal_block())
+
+        events = []
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            with patch("dv_harness.gates.run_gate", side_effect=RuntimeError("simulated gate subprocess timeout")):
+                h._maybe_run_self_tuning_review()
+
+        skipped = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_SKIPPED"]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "PROPOSAL_GATE_EXCEPTION"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_emits_skipped_event_on_adapter_exception():
+    # I8 regression: the adapter-exception early-return path (which does
+    # NOT reset the counter, unlike the internal-failure paths above) must
+    # still emit an observability breadcrumb.
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 1}
+        h.adapter = _FakeSelfTuningAdapter(raises=RuntimeError("boom"))
+
+        events = []
+        _self_tuning_module.increment_execution_counter(h.root)
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            h._maybe_run_self_tuning_review()
+
+        skipped = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_SKIPPED"]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "ADAPTER_EXCEPTION"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_reset_execution_counter_stamps_last_review_at():
+    # I8 regression: last_review_at must be a real, fresh timestamp after
+    # any review-cycle completion (success or internal-failure reset) --
+    # engine.py never calls reset_execution_counter() directly in the
+    # adapter-failure paths, so this checks the shared self_tuning.py
+    # primitive itself.
+    import time
+    root = Path(tempfile.mkdtemp())
+    try:
+        assert _self_tuning_module.read_last_review_at(root) is None
+        before = time.time()
+        _self_tuning_module.reset_execution_counter(root)
+        after = time.time()
+        stamped = _self_tuning_module.read_last_review_at(root)
+        assert stamped is not None
+        assert before <= stamped <= after
+    finally:
+        shutil.rmtree(root)
+
+
+# --- Finding I6 fix (2026-09-02 final-review fix wave): run_gate()'s
+# gate-history logging is also reached by non-stage-evaluation callers
+# (dv_harness/self_audit.py's smoke-testing, dv_harness/remote_control.py's
+# supervisory/audit gates) with no real `stage` -- these must never pollute
+# gate_history.jsonl with fabricated entries the self-tuning LLM would
+# otherwise treat as real accumulated execution history.
+
+def test_run_gate_with_no_stage_does_not_append_to_gate_history():
+    from dv_harness import gates as gates_mod
+    tmp = _mk_self_tuning_project()
+    try:
+        history_path = tmp / ".dv-harness" / "self_tuning" / "gate_history.jsonl"
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            gr = gates_mod.run_gate(tmp, "self_tuning_proposal_gate.py", "--proposal", {"proposals": []})
+        assert gr.ok is True
+        assert not history_path.exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_gate_with_empty_string_stage_does_not_append_to_gate_history():
+    from dv_harness import gates as gates_mod
+    tmp = _mk_self_tuning_project()
+    try:
+        history_path = tmp / ".dv-harness" / "self_tuning" / "gate_history.jsonl"
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            gr = gates_mod.run_gate(tmp, "self_tuning_proposal_gate.py", "--proposal", {"proposals": []}, stage="")
+        assert gr.ok is True
+        assert not history_path.exists()
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_run_gate_with_real_stage_does_append_to_gate_history():
+    from dv_harness import gates as gates_mod
+    tmp = _mk_self_tuning_project()
+    try:
+        history_path = tmp / ".dv-harness" / "self_tuning" / "gate_history.jsonl"
+        with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+            gr = gates_mod.run_gate(tmp, "self_tuning_proposal_gate.py", "--proposal", {"proposals": []},
+                                     stage="IMPLEMENT")
+        assert gr.ok is True
+        assert history_path.exists()
+        entries = _self_tuning_module.read_gate_history_since(tmp, 0)
+        assert len(entries) == 1
+        assert entries[0]["stage"] == "IMPLEMENT"
+        assert entries[0]["gate_id"] == "self_tuning_proposal_gate"
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- Follow-up I9 (2026-09-02 final whole-branch code review): the design
+# spec's own "Testing strategy" section (docs/superpowers/specs/2026-09-02-
+# autonomous-gate-self-tuning-design.md, "End-to-end") explicitly asks for
+# "a test driving run_stage() N times with a mocked adapter whose final call
+# returns a canned proposal, asserting the JSON files are written (auto-
+# apply case) or a PENDING record exists with no JSON writes (defer case)".
+# Every self-tuning test above this point calls _maybe_run_self_tuning_
+# review() DIRECTLY -- none drive the real, production run_stage() entry
+# point (engine.py's single terminal exit point, "Step 7" right before
+# `return result`) end to end. These two tests close that gap.
+#
+# Fixture reuse: _mk_smoke_project() (not _mk_self_tuning_project(), which
+# only copies tools/) is used here because it ALSO copies main_graph.json
+# and .claude/agents -- the minimum a real run_stage() call needs to
+# genuinely execute a graph node, not just the review's own gate subprocess.
+# VERIFY + the "I verified it, trust me." no-evidence text is the exact
+# fixture test_self_tuning_review_run_stage_increments_counter_on_every_
+# terminal_verdict above already established as a fast, real, terminal
+# (PARTIAL) run_stage() outcome via VERIFY's real gate rejecting missing
+# evidence -- reused verbatim here for the N-1 "normal" calls rather than
+# inventing a new stage/goal fixture.
+#
+# Distinguishing "this is the self-tuning review's own adapter call" from an
+# ordinary stage-evaluation call: _maybe_run_self_tuning_review()'s prompt
+# (engine.py) is built entirely in that one method and always instructs the
+# model to respond with a fenced "```dv-harness-evidence:self_tuning_
+# proposal```" block (see its literal prompt-construction text). No ordinary
+# stage prompt (prompts.build_stage_prompt(), grepped -- no match) ever
+# contains that substring, so checking for it in the fake adapter's run()
+# is a reliable, content-based signal -- not a call-count guess, which would
+# silently break the moment InnerReactLoop's inner reflection turns (up to
+# inner_react_max_iterations=3 extra adapter.run() calls per single
+# run_stage() attempt, react_loop.py) changed the number of normal calls per
+# terminal verdict.
+
+class _RunStageDrivingSelfTuningAdapter:
+    """Fake adapter for driving run_stage() itself (not just
+    _maybe_run_self_tuning_review()) through a real self-tuning review
+    cycle. See the module comment directly above for the content-based
+    review-vs-normal-call detection rationale."""
+
+    _REVIEW_MARKER = "dv-harness-evidence:self_tuning_proposal"
+
+    def __init__(self, proposal_text):
+        self.proposal_text = proposal_text
+        self.review_prompts = []
+        self.normal_calls = 0
+
+    def run(self, prompt, cwd, resume_session=None, agent_profile=None):
+        if self._REVIEW_MARKER in prompt:
+            self.review_prompts.append(prompt)
+            return _SelfTuningAgentResult(ok=True, text=self.proposal_text, raw={}, session_id="s")
+        self.normal_calls += 1
+        return _SelfTuningAgentResult(ok=True, text="I verified it, trust me.", raw={}, session_id="s")
+
+
+def test_self_tuning_review_run_stage_end_to_end_auto_applies():
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 2}
+        h.set_stage("VERIFY")
+        fake = _RunStageDrivingSelfTuningAdapter(
+            _self_tuning_proposal_block(confidence="HIGH", risk_level="LOW"))
+        h.adapter = fake
+
+        params_path = tmp / ".dv-harness" / "self_tuning" / "parameters.json"
+        overrides_path = tmp / ".dv-harness" / "self_tuning" / "stage_gate_overrides.json"
+
+        events = []
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+                # Call 1 of 2 (N=2): a real run_stage() terminal verdict
+                # (PARTIAL, via the real VERIFY gate genuinely rejecting the
+                # evidence-less text) -- the counter increments through the
+                # SAME production code path every real stage evaluation goes
+                # through (engine.py Step 7), not a test-only shortcut.
+                result1 = h.run_stage("goal")
+                assert h.state.stages["VERIFY"]["status"] == "PARTIAL"
+                assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 1
+                assert fake.review_prompts == []
+                assert not params_path.exists()
+                assert not any(e.get("event") == "SELF_TUNING_REVIEW_COMPLETED" for e in events)
+
+                # Call 2 of 2: crosses N=2 -- the review fires inline at this
+                # call's own single terminal exit point, still via run_stage().
+                result2 = h.run_stage("goal")
+                assert h.state.stages["VERIFY"]["status"] == "PARTIAL"
+
+        # The review's own adapter dispatch genuinely happened exactly once,
+        # driven purely by run_stage()'s internal counter crossing N.
+        assert len(fake.review_prompts) == 1
+
+        # Counter reset to 0 (not stuck, not merely decremented) and a real
+        # last_review_at timestamp stamped, both via reset_execution_counter
+        # -- the same production primitive a successful review cycle calls.
+        state = _self_tuning_module.read_execution_state(h.root)
+        assert state["executions_since_last_review"] == 0
+        assert _self_tuning_module.read_last_review_at(h.root) is not None
+
+        # SELF_TUNING_REVIEW_COMPLETED (I8 observability) actually fired,
+        # reachable only via the real success path inside
+        # _maybe_run_self_tuning_review() -- not asserted via a direct call.
+        completed = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_COMPLETED"]
+        assert len(completed) == 1
+        assert completed[0]["proposals_found"] == 1
+        assert completed[0]["applied"] == 1
+        assert completed[0]["deferred"] == 0
+
+        # Auto-apply case (per the spec's own testing-strategy wording): the
+        # JSON file was genuinely written by the real self_tuning_proposal_
+        # gate.py subprocess + apply_proposal() path -- read directly off
+        # disk (the actual file self-tuning is constrained to ever write to,
+        # per the design spec's "Global Constraints"), not only through the
+        # get_param() accessor.
+        assert params_path.exists()
+        on_disk = json.loads(params_path.read_text(encoding="utf-8"))
+        assert on_disk.get("unprotected_gate", {}).get("threshold") == 2
+        assert _self_tuning_module.get_param(h.root, "unprotected_gate", "threshold", None) == 2
+
+        # The membership-overlay file is untouched by a pure parameter
+        # change (only "add"/"remove" proposals ever write to it).
+        assert not overrides_path.exists() or json.loads(overrides_path.read_text(encoding="utf-8")) == {}
+
+        assert result1 is not None and result2 is not None
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_self_tuning_review_run_stage_end_to_end_defers_low_confidence():
+    tmp = _mk_smoke_project()
+    try:
+        from dv_harness.engine import DVHarness
+        h = DVHarness(tmp)
+        h.cfg["self_tuning"] = {"enabled": True, "review_every_n_executions": 2}
+        h.set_stage("VERIFY")
+        fake = _RunStageDrivingSelfTuningAdapter(
+            _self_tuning_proposal_block(confidence="LOW", risk_level="LOW"))
+        h.adapter = fake
+
+        params_path = tmp / ".dv-harness" / "self_tuning" / "parameters.json"
+
+        events = []
+        with patch.object(h.store, "event", side_effect=lambda e: events.append(e)):
+            with patch.dict(os.environ, _self_tuning_proposal_gate_env()):
+                h.run_stage("goal")
+                assert _self_tuning_module.read_execution_state(h.root)["executions_since_last_review"] == 1
+                assert fake.review_prompts == []
+
+                h.run_stage("goal")  # crosses N=2 -- review fires, LOW confidence defers
+
+        assert len(fake.review_prompts) == 1
+
+        # Counter still resets to 0 with a real last_review_at stamp even
+        # though this cycle's own proposal was deferred, not applied -- a
+        # deferred (not just an applied) outcome is still a real, completed
+        # review cycle.
+        state = _self_tuning_module.read_execution_state(h.root)
+        assert state["executions_since_last_review"] == 0
+        assert _self_tuning_module.read_last_review_at(h.root) is not None
+
+        completed = [e for e in events if e.get("event") == "SELF_TUNING_REVIEW_COMPLETED"]
+        assert len(completed) == 1
+        assert completed[0]["proposals_found"] == 1
+        assert completed[0]["applied"] == 0
+        assert completed[0]["deferred"] == 1
+
+        # Defer case (per the spec's own testing-strategy wording): NO JSON
+        # write at all -- parameters.json must not exist (nothing else in
+        # this test touches self-tuning's write surface), and the accessor
+        # confirms the same absence.
+        assert not params_path.exists()
+        assert _self_tuning_module.get_param(h.root, "unprotected_gate", "threshold", None) is None
+
+        # A PENDING self_tuning_adjustment record exists instead, carrying
+        # the real gate_id/confidence/risk_level the proposal gate let
+        # through.
+        pending = [r for r in _self_tuning_module.read_recent_adjustment_records(h.root, limit=10)
+                   if r.get("status") == "PENDING"]
+        assert len(pending) == 1
+        assert pending[0]["gate_id"] == "unprotected_gate"
+        assert pending[0]["confidence"] == "LOW"
+    finally:
+        shutil.rmtree(tmp)
+
+
+# --- M8 Cohort 2 (CAP-M8-EXPLOOP-002 / GAP-M8-002): GENERATION_EXPERIENCE_
+# LEARNING / SIGNOFF_EXPERIENCE_CONSOLIDATION real producers --------------
+
+def _implement_evidence_blocks():
+    return {
+        "verification_intent_gate": {"intent": "cover DMA burst path", "testcase": "t_dma_burst"},
+        "pattern_registry_completeness_gate": {"registry_entries": ["t_dma_burst"], "coverage": "PARTIAL"},
+    }
+
+
+def _signoff_evidence_blocks():
+    return {
+        "signoff_bundle_completeness_gate": {"bundle_id": "B1", "complete": True},
+        "false_pass_resistance_gate": {"proof": "negative-control mutation FAILed as expected"},
+    }
+
+
+def _last_event(tmp_path, event_name):
+    lines = (tmp_path / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    matches = [json.loads(l) for l in lines if json.loads(l).get("event") == event_name]
+    assert matches, f"no {event_name} event found in events.jsonl"
+    return matches[-1]
+
+
+def test_promote_generation_experience_knowledge_positive_end_to_end(tmp_path):
+    from dv_harness.engine import DVHarness
+    from dv_harness.memory import MemoryStore, MemoryRetriever
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(
+        _Stage.IMPLEMENT.value, _implement_evidence_blocks(), producing_agent_profile="agentA")
+    ev = _last_event(tmp_path, "GENERATION_EXPERIENCE_PROMOTED")
+    assert ev["promotion"]["destination"] == "ENGINEERING_MEMORY", ev
+    # KNOWLEDGE_DISCOVERABLE/RETRIEVED: the real, pre-existing MemoryRetriever
+    # -- not a new consumer -- actually finds it. search()'s own text match
+    # is title/root_cause only (memory.py:636), so query on real content of
+    # those two fields (this producer's own title/lesson text), not pattern.
+    store = MemoryStore(tmp_path)
+    hits = MemoryRetriever(store).search({"text": "generation decision"})
+    assert any(h["memory"].get("memory_id") == ev["promotion"]["memory_id"] for h in hits), hits
+
+
+def test_promote_signoff_experience_consolidation_positive_end_to_end(tmp_path):
+    from dv_harness.engine import DVHarness
+    from dv_harness.memory import MemoryStore, MemoryRetriever
+    h = DVHarness(tmp_path)
+    h._promote_signoff_experience_consolidation(
+        _Stage.SIGNOFF.value, _signoff_evidence_blocks(), producing_agent_profile="agentA")
+    ev = _last_event(tmp_path, "SIGNOFF_EXPERIENCE_CONSOLIDATED")
+    assert ev["promotion"]["destination"] == "ENGINEERING_MEMORY", ev
+    store = MemoryStore(tmp_path)
+    hits = MemoryRetriever(store).search({"text": "consolidated experience"})
+    assert any(h["memory"].get("memory_id") == ev["promotion"]["memory_id"] for h in hits), hits
+
+
+def test_promote_generation_experience_knowledge_wrong_stage_is_honest_noop(tmp_path):
+    # Rollback-boundary/no-false-success guard: fires only on IMPLEMENT --
+    # calling it with any other stage must be a true no-op (no event, no
+    # route_and_store() call at all), never a promotion under the wrong stage.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(_Stage.SIGNOFF.value, _implement_evidence_blocks())
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    assert not events_file.exists() or "GENERATION_EXPERIENCE_PROMOTED" not in events_file.read_text()
+
+
+def test_promote_signoff_experience_consolidation_wrong_stage_is_honest_noop(tmp_path):
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_signoff_experience_consolidation(_Stage.IMPLEMENT.value, _signoff_evidence_blocks())
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    assert not events_file.exists() or "SIGNOFF_EXPERIENCE_CONSOLIDATED" not in events_file.read_text()
+
+
+def test_promote_generation_experience_knowledge_missing_evidence_is_honest_noop(tmp_path):
+    # Invalid/missing knowledge: neither real generation-decision evidence
+    # block is present -- must never fabricate a lesson from nothing.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, {})
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    assert not events_file.exists() or "GENERATION_EXPERIENCE_PROMOTED" not in events_file.read_text()
+
+
+def test_promote_signoff_experience_consolidation_invalid_evidence_shape_is_honest_noop(tmp_path):
+    # Invalid knowledge, second shape: the keys exist but are not dicts
+    # (e.g. a malformed/partial agent response) -- treated as absent, never
+    # coerced into a promotion.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_signoff_experience_consolidation(
+        _Stage.SIGNOFF.value,
+        {"signoff_bundle_completeness_gate": "not-a-dict", "false_pass_resistance_gate": None})
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    assert not events_file.exists() or "SIGNOFF_EXPERIENCE_CONSOLIDATED" not in events_file.read_text()
+
+
+def test_promote_generation_experience_knowledge_persistence_failure_never_false_success(tmp_path, monkeypatch):
+    # Persistence/routing failure: route_and_store() raises -- the producer
+    # must still write its own event (visibility), with a promotion that
+    # honestly reports failure, exactly like the 5 pre-existing engine.py
+    # promotion call sites' own except-branch shape. Never silently drops
+    # the event, never reports success.
+    from dv_harness.engine import DVHarness
+    import dv_harness.engine as engine_mod
+
+    def _boom(*a, **kw):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(engine_mod, "route_and_store", _boom)
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, _implement_evidence_blocks())
+    ev = _last_event(tmp_path, "GENERATION_EXPERIENCE_PROMOTED")
+    assert ev["promotion"]["destination"] == "PROMOTION_FAILED", ev
+    assert "disk full" in ev["promotion"]["error"]
+
+
+def test_promote_signoff_experience_consolidation_persistence_failure_never_false_success(tmp_path, monkeypatch):
+    from dv_harness.engine import DVHarness
+    import dv_harness.engine as engine_mod
+
+    def _boom(*a, **kw):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(engine_mod, "route_and_store", _boom)
+    h = DVHarness(tmp_path)
+    h._promote_signoff_experience_consolidation(_Stage.SIGNOFF.value, _signoff_evidence_blocks())
+    ev = _last_event(tmp_path, "SIGNOFF_EXPERIENCE_CONSOLIDATED")
+    assert ev["promotion"]["destination"] == "PROMOTION_FAILED", ev
+    assert "disk full" in ev["promotion"]["error"]
+
+
+def test_promote_generation_experience_knowledge_duplicate_promotion_idempotency(tmp_path):
+    # Duplicate-promotion/idempotency: two real IMPLEMENT PASSes (e.g. a
+    # retried stage) each produce their own real event/memory_id -- matches
+    # the pre-existing 5 call sites' own disclosed accepted tradeoff
+    # (_promote_experience_knowledge's own comment: "a stage retried after a
+    # PARTIAL elsewhere can promote the same knowledge twice as two
+    # memory_ids") rather than silently deduping or crashing.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, _implement_evidence_blocks())
+    h._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, _implement_evidence_blocks())
+    lines = (tmp_path / ".dv-harness" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    matches = [json.loads(l) for l in lines if json.loads(l).get("event") == "GENERATION_EXPERIENCE_PROMOTED"]
+    assert len(matches) == 2
+    ids = {m["promotion"]["memory_id"] for m in matches}
+    assert len(ids) == 2, "each promotion should get its own real memory_id, not silently merge"
+
+
+def test_promote_generation_and_signoff_do_not_cross_project_correlate(tmp_path):
+    # Wrong-project correlation guard: two separate DVHarness roots each get
+    # their own fully independent event/memory record -- no leakage between
+    # projects (mirrors Cohort 1's own project-scoping discipline).
+    from dv_harness.engine import DVHarness
+    root_a = tmp_path / "project_a"
+    root_b = tmp_path / "project_b"
+    root_a.mkdir()
+    root_b.mkdir()
+    h_a = DVHarness(root_a)
+    h_a._promote_generation_experience_knowledge(_Stage.IMPLEMENT.value, _implement_evidence_blocks())
+    assert not (root_b / ".dv-harness" / "events.jsonl").exists()
+    ev_a = _last_event(root_a, "GENERATION_EXPERIENCE_PROMOTED")
+    assert ev_a["promotion"]["destination"] == "ENGINEERING_MEMORY"
+
+
+def test_promote_generation_experience_knowledge_existing_call_sites_unaffected(tmp_path):
+    # Existing-valid-path compatibility / Cohort-1 rollback boundary: the
+    # new call sites are additive lines in the same PASS branch as the 5
+    # pre-existing ones -- calling a pre-existing sibling directly still
+    # behaves exactly as it always has, byte-for-byte, with the new methods
+    # present alongside it.
+    from dv_harness.engine import DVHarness
+    h = DVHarness(tmp_path)
+    h._promote_experience_knowledge(_Stage.EXPERT_FEEDBACK_LOOP.value, {}, resolved_protocol=None,
+                                    producing_agent_profile=None)
+    events_file = tmp_path / ".dv-harness" / "events.jsonl"
+    # experience_knowledge_gate IS registered under EXPERT_FEEDBACK_LOOP, but
+    # no evidence_blocks entry for it was supplied here -- the pre-existing
+    # method's own "not isinstance(block, dict): return" honest no-op,
+    # unchanged by Cohort 2's additions.
+    assert not events_file.exists() or "EXPERIENCE_KNOWLEDGE_PROMOTED" not in events_file.read_text()

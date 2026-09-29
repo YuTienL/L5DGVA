@@ -43,6 +43,27 @@ class Stage(str, Enum):
     COVERAGE_CLOSURE = "COVERAGE_CLOSURE"
     INFRA_RECOVERY = "INFRA_RECOVERY"
     FAILURE_RECOVERY = "FAILURE_RECOVERY"
+    # RCA_G1 multi-agent evidence fan-out + independent synthesis (2026-09-03,
+    # multi-agent-orchestrator gap closure). These four are REAL executable
+    # Stages, not synthetic graph bookkeeping nodes: main_graph.json fans
+    # FAILURE_RECOVERY's PASS edge out to the three RCA_*_EVIDENCE branches
+    # (parallel_group "RCA_G1", one real specialist agent profile each --
+    # rtl-evidence-agent / log-evidence-agent / vip-spec-evidence-agent) and
+    # joins at RCA_JOIN (join_group "RCA_G1", played by analysis_debug), which
+    # independently re-reads the three branches' Blackboard topics before
+    # ruling. The fan-out is CONDITIONAL: it is taken only when
+    # FAILURE_RECOVERY's own issue_triage_classification_gate evidence
+    # classified this failure REAL_ISSUE (engine.py's
+    # _arm_rca_evidence_fanout/_resolve_conditional_fanout_frontier) -- a
+    # MISCLASSIFIED/KNOWN/BLOCKED triage keeps the original single-path
+    # FAILURE_RECOVERY -> CHANGE_IMPACT edge. This is what makes CLAUDE.md's
+    # "Important DUT/PHY/Register/VIP changes require Multi-Agent evidence
+    # acquisition plus independent synthesis" a real engine mechanism rather
+    # than a coordinating session's own remembered technique.
+    RCA_RTL_EVIDENCE = "RCA_RTL_EVIDENCE"
+    RCA_LOG_EVIDENCE = "RCA_LOG_EVIDENCE"
+    RCA_VIP_SPEC_EVIDENCE = "RCA_VIP_SPEC_EVIDENCE"
+    RCA_JOIN = "RCA_JOIN"
     RE_AUDIT = "RE_AUDIT"
     SYSTEM_LEVEL = "SYSTEM_LEVEL"
     EXPERT_FEEDBACK_LOOP = "EXPERT_FEEDBACK_LOOP"
@@ -81,6 +102,18 @@ class StageState:
     # runs the inner loop (react:false nodes, or verdict never reached
     # GATE_FAIL/DV_REVIEW_PENDING in the first place).
     react_reroute_target: Optional[str] = None
+    # This stage's own most recent submitted evidence blocks (2026-09-01,
+    # expected-evidence-checklist design pass) -- engine.run_stage() sets
+    # this from gates.extract_evidence_blocks()'s output on any attempt that
+    # produced at least one block (never cleared to {} by an attempt that
+    # produced none, e.g. ADAPTER_FAIL). Consumed by
+    # engine.build_stage_entry_checklist()'s "evidence_field" item
+    # resolution on a LATER attempt/stage -- see that function's docstring.
+    # Additive/optional: a stage state loaded from a state.json saved before
+    # this field existed simply has no key here, and every reader uses
+    # dict.get(..., {}) so that degrades to "nothing submitted yet", never a
+    # KeyError.
+    last_evidence_blocks: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class HarnessState:
@@ -98,6 +131,24 @@ class HarnessState:
     overall_status: str = Status.NOT_STARTED.value
     git_sha: Optional[str] = None
     server_sha: Optional[str] = None
+    # dut_version / tb_version (session-snapshot-extension, 2026-09-01):
+    # project-wide DUT RTL / testbench build identity, alongside git_sha/
+    # server_sha above -- same CLAUDE.md "same regression batch must use the
+    # same source/build/config identity" rule, but naming the DUT/TB
+    # revision specifically rather than this harness repo's own git SHA
+    # (a DUT/TB revision is generally a separate identity from the harness
+    # engine's source tree). Real writer:
+    # DVHarness._sync_dut_tb_version_from_blackboard() (engine.py) -- a
+    # read-only derived mirror of the blackboard "verification_state"
+    # topic's results[], populated only from VERIFY stage's real,
+    # gate-enforced test_result_provenance_gate evidence (rtl_revision/
+    # tb_revision are REQUIRED non-empty per result by that gate script --
+    # see tools/verification_flow/test_result_provenance_gate.py -- so any
+    # real VERIFY PASS already carries real identity strings here, never
+    # fabricated). None until a real VERIFY result has reported one -- the
+    # honest bootstrap default, not a placeholder value.
+    dut_version: Optional[str] = None
+    tb_version: Optional[str] = None
     closure_iteration: int = 0
     findings_total: int = 0
     findings_closed: int = 0
@@ -126,6 +177,35 @@ class HarnessState:
     # /api/state active_stages_detail, graph-highlight, and showExplain(),
     # and session_snapshot.py's saved-session manifest.
     active_stages: List[str] = field(default_factory=list)
+    # "Just transitioned" signal (2026-09-01, runtime-progress-visibility
+    # pass): a real, persisted "this stage just reached a terminal status"
+    # record, written by engine.run_stage() every time it sets ss["status"]
+    # to a terminal value (PASS/FAIL/PARTIAL/WAIT_USER/BLOCKED -- i.e.
+    # whenever the stage stops RUNNING). Distinct from current_stage/
+    # overall_status (a snapshot of WHERE things are now, silently
+    # overwritten every stage) -- this is WHEN the last change actually
+    # happened and WHAT it changed to, so a dashboard viewer polling every
+    # 3s can render a "Last transition" banner instead of a status tile that
+    # updates with no visible signal. None until the first stage completes
+    # in a project's history. Shape: {"stage": str, "status": str,
+    # "at": iso8601 str}. Additive/optional: a state.json saved before this
+    # field existed simply has no key here, degrading to None (no banner),
+    # never a KeyError -- same convention as last_evidence_blocks above.
+    last_transition: Optional[Dict[str, Any]] = None
+    # Conditional RCA_G1 fan-out arming token (2026-09-03, multi-agent-
+    # orchestrator gap closure). None/"" means "the RCA multi-agent evidence
+    # fan-out is NOT armed" -- advance() then takes FAILURE_RECOVERY's
+    # original single CHANGE_IMPACT edge, byte-identically to before this
+    # feature. Set to a real, human-readable token derived from
+    # FAILURE_RECOVERY's own gate-verified issue_triage_classification_gate
+    # evidence block (classification + its real evidence_hash) by
+    # engine._arm_rca_evidence_fanout(), and ONLY when that classification is
+    # genuinely REAL_ISSUE -- never a bare True, so the state file records
+    # WHICH real triage decision authorized the fan-out. Consumed (cleared)
+    # by advance() the moment it dispatches the fan-out, so one triage
+    # decision authorizes exactly one fan-out -- same single-use idiom
+    # run_stage() already uses for ControlPlane.clear_approval().
+    rca_evidence_fanout_armed: Optional[str] = None
 
     def effective_active_stages(self) -> List[str]:
         return self.active_stages or [self.current_stage]

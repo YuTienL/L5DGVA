@@ -13,6 +13,7 @@ skills:
   - CORE/tb-topology-planner
   - CORE/branch-mapper
   - CORE/command-inventory
+  - CORE/memory-retrieval
   - CORE/project-model
   - USB/usb-profile
   - PCIe/pcie-profile
@@ -106,4 +107,8 @@ traceability
 
 
 # v19 Verification Memory Retrieval
-可查 Project/Engineering Memory 加速 project analysis，但 current facts 必須重新取得 evidence。
+可查 Project/Engineering Memory 加速 project analysis -- 透過
+`MemoryRetriever.search()` / `python -m dv_harness.memory_cli search`
+（`CORE/memory-retrieval`，與 memory-agent.md 相同的 named-API
+contract），never by手動 Grep/Read 掃 `.dv-harness/memory/**` 底下的原始檔案。
+但 current facts 必須重新取得 evidence。

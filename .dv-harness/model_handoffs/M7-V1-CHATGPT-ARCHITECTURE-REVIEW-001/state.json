@@ -1,0 +1,11 @@
+{
+  "task_id": "M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001",
+  "target_model": "chatgpt",
+  "task_type": "architecture-governance-review",
+  "state": "RESULT_CONSUMED",
+  "handoff_path": "D:\\DV\\Task\\L5_DGVA\\.dv-harness\\model_handoffs\\M7-V1-CHATGPT-ARCHITECTURE-REVIEW-001\\HANDOFF_V1.md",
+  "result_sha256": "f9ce626c9f9367b617a1d452ea6b03566680a81f64c724e9c0614a8948f58c73",
+  "result_status": "FAIL",
+  "accepted_result_sha256": "f9ce626c9f9367b617a1d452ea6b03566680a81f64c724e9c0614a8948f58c73",
+  "question_id": "Q-ENV-CF3FB9CC"
+}

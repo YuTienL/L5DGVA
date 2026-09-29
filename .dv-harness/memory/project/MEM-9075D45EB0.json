@@ -1,0 +1,22 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "UTMI+ spec -- PHY interface signal encoding for chirp/speed-select, cross-referenced against usb_20.pdf's protocol-level chirp FSM",
+  "summary": "Deep extraction of D:\\DV\\Task\\USB\\DOC\\UTMI-PLUS-SPECIFICATION.pdf (UTMI+ Rev 1.0, Feb 2004), citations in .work\\pdftxt\\utmi.txt (1140 lines, much smaller than the other 3 docs -- this is a PHY-MAC parallel interface pinout/behavior spec, not a full bus protocol spec). Defines 4 conformance levels (sec 2, lines 68-86): Level 0 = USB2.0 peripherals only, minimal signals, implicitly NOT expected to implement chirp signaling (no HS-negotiation responsibility at this level). Level 1 = adds host-controller/OTG support, HS/FS only, adds HostDisconnect/long-EOP/data-line-pulsing/HS-keepalive signals. Level 2 = adds LS support (no hub), introduces XcvrSelect(1:0) and LineState decoding. Level 3 = adds preamble-packet generation (LS-via-FS-hub) and multi-port host controller support. KEY SIGNALS for PHY/VIP modeling (sec 2.4.1, lines 871-902): XcvrSelect(1:0) = 00b(HS transceiver)/01b(FS transceiver)/10b(LS transceiver)/11b(send-or-receive an LS packet on an FS bus, auto-generating an FS PRE packet before the actual LS data in host mode) -- the 11b case is a real host-mode-only behavior a low-speed-via-FS-hub test scenario needs. CROSS-REFERENCE TO usb_20.pdf CHIRP FSM (sec 3.1 'Chirp sequence', Figure 9, lines 914-960) -- THIS IS A GENUINE, DIRECTLY USEFUL PAIRING, not a paraphrase: Figure 9 shows the exact same chirp handshake described in usb_20.pdf sec 7.1.7.5 (see the separate usb_20.pdf memory record) but at the PHY-pin level: OpMode(1:0) transitions to 10b(Chirp) during the handshake window on both host and device sides; XcvrSelect(1:0) moves 01b(FS)->00b(HS); LINESTATE literally shows the sequence J -> SE0 -> Device Chirp K -> SE0 -> Host Chirp KJKJKJ... on both host and device timelines simultaneously. A UTMI-interface-based VIP/BFM chirp model needs BOTH documents together: protocol-level timing bounds (TUCH/TUCHEND/TFILT/TWTDCH/TDCHSE0/TDCHBIT/TWTHS/TWTFS) come from usb_20.pdf sec 7.1.7.5, while the exact pin-level encoding to drive at those times (OpMode/XcvrSelect/LineState values) comes from this UTMI+ Figure 9. Explicitly scoped: 'the case that both the peripheral and the host controller are using a UTMI+ level 1 or higher compliant transceiver core' -- worth checking which UTMI+ level any local PHY IP/VIP actually claims before assuming it drives chirp signals at all. Suspend/Resume timing (sec 3.2, lines 962-980+, partially read this pass): T1 timing detail (>=16 LS bit times minimum) prevents the LS state machine's data path being cut off before a full LS EOP transmits during resume; HS-vs-FS resume disambiguation rule requires the transceiver to switch to HS mode no later than 1/4 LS bit time (4 FS bit times) before SE0 ends, and no earlier than SE0-detection-on-LineState, to avoid resume-signaling ambiguity -- flagged as worth a closer re-read if a resume/L1-exit test scenario needs this specific edge, not fully transcribed this pass.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\UTMI-PLUS-SPECIFICATION.pdf",
+    "D:\\DV\\Task\\USB\\DOC\\usb_20.pdf"
+  ],
+  "category": "standard_specs",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-9075D45EB0",
+  "level": "project",
+  "created_at": 1788367476.983002,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

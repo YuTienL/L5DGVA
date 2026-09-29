@@ -1,0 +1,21 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "ss_vout USB JTAG/token muxing and IRQ-enable register sizing -- SS_VOUT_ALL.v plumbing",
+  "summary": "Supporting ss_vout-level plumbing around the two USB instances, from /home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/RTLCAT/SS_VOUT_ALL.v. JTAG: a shared 3-way JTAG mux arbitrates PCIe/USB1/USB0 ownership of one physical JTAG chain via a 2-bit jtagsel select (SS_VOUT_ALL.v:2213-2230): jtagsel==2'h3 selects PCIe, 2'h2 selects USB1, 2'h1 selects USB0, 2'h0 deselects all three; matching per-block ICT_ICG JTAG clock-gating cells (u_usb1_jtagclk/u_usb0_jtagclk) are enabled only while that block owns the mux. Token: SS_VOUT_ALL.v:2249-2255 assigns {usb1_token, usb0_token} = ss_vout_token[7:6] (usb0_token=bit6, usb1_token=bit7) among a larger token bus also covering trb/pkt/ctl (bits 2:0), mac1/mac0 (4:3), pcie (5), mipitx (9:8) -- the same usb1-before-usb0 relative ordering recurs identically across token, IRQ, FIQ, ESMERR, and CQ-event concatenations throughout this file, confirming a single deliberate SoC-wide bit-ordering convention rather than independent per-signal choices. IRQ/FIQ enable registers: module ss_vout_ctl (def'n SS_VOUT_ALL.v:5567, instantiated as u_ss_vout_ctl) owns two 73-bit software-visible enable registers ss_vout_irqen/ss_vout_fiqen (SS_VOUT_ALL.v:6754-6755), programmed 8 bits at a time via byte-enable strobes at register offsets 'h10 (IRQ-enable) and 'h20 (FIQ-enable) (SS_VOUT_ALL.v:6987-7013), both resetting to all-0 (all interrupts masked) at reset (SS_VOUT_ALL.v:6984/7001) and readable back via regr['h10*8+0+:73] (SS_VOUT_ALL.v:6911-6912). IMPORTANT GAP: these enable registers are 73 bits wide, NOT 16 like the ss_vout_irq/ss_vout_fiq aggregate buses -- the report could not determine in this pass which of the 73 enable bits actually gates usb0_irq/usb1_irq (73 != 16, so it is not a direct 1:1 bit-position match); this is flagged as an open follow-up for any testbench that needs to unmask/mask the USB interrupt path via ss_vout_irqen/ss_vout_fiqen.",
+  "source_paths": [
+    "RTLCAT/SS_VOUT_ALL.v"
+  ],
+  "category": "dut_rtl_model",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-DF6A8FB18D",
+  "level": "project",
+  "created_at": 1788368322.7112992,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

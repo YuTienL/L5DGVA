@@ -8,6 +8,7 @@ skills:
   - CORE/systematic-debug
   - CORE/failure-triage
   - CORE/protocol-router
+  - CORE/memory-retrieval
 ---
 # Debug Agent
 
@@ -119,7 +120,12 @@ related finding / requirement / vPlan context
 
 
 # v19 Memory-Assisted Debug
-Failure triage 前可搜尋相似 verified memory。Memory 只作 candidate hypothesis ranking；current sim.log/FSDB/RTL/VIP evidence 才能確認本次 root cause。
+Failure triage 前可搜尋相似 verified memory -- 透過 `MemoryRetriever.search()` /
+`python -m dv_harness.memory_cli search`（`CORE/memory-retrieval`，與
+memory-agent.md 相同的 named-API contract），never by手動 Grep/Read 掃
+`.dv-harness/memory/**` 底下的原始檔案（略過 redaction/ranking）。Memory 只作
+candidate hypothesis ranking；current sim.log/FSDB/RTL/VIP evidence 才能確認
+本次 root cause。
 
 # v19.1 Exact-Job Failure Fix Requirement
 

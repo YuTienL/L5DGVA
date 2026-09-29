@@ -17,6 +17,10 @@
       "tool": "tools/verification_flow/artifact_dependency_closure_gate.py"
     },
     {
+      "gate_id": "assertion_placeholder_closure_gate",
+      "tool": "tools/verification_flow/assertion_placeholder_closure_gate.py"
+    },
+    {
       "gate_id": "assertion_vacuity_and_reachability_gate",
       "tool": "tools/verification_flow/assertion_vacuity_and_reachability_gate.py"
     },
@@ -123,6 +127,10 @@
     {
       "gate_id": "de_baseline_reproduction_gate",
       "tool": "tools/verification_flow/de_baseline_reproduction_gate.py"
+    },
+    {
+      "gate_id": "de_local_sim_env_intake_gate",
+      "tool": "tools/verification_flow/de_local_sim_env_intake_gate.py"
     },
     {
       "gate_id": "deep_rca_evidence_gate",
@@ -361,8 +369,16 @@
       "tool": "tools/verification_flow/protocol_generator_binding_gate.py"
     },
     {
+      "gate_id": "protocol_isolation_gate",
+      "tool": "tools/verification_flow/protocol_isolation_gate.py"
+    },
+    {
       "gate_id": "protocol_onboarding_gate",
       "tool": "tools/verification_flow/protocol_onboarding_gate.py"
+    },
+    {
+      "gate_id": "protocol_profile_binding_gate",
+      "tool": "tools/verification_flow/protocol_profile_binding_gate.py"
     },
     {
       "gate_id": "protocol_profile_version_gate",
@@ -447,6 +463,10 @@
     {
       "gate_id": "remote_control_supervisory_gate",
       "tool": "tools/verification_flow/remote_control_supervisory_gate.py"
+    },
+    {
+      "gate_id": "remote_execution_provenance_gate",
+      "tool": "tools/verification_flow/remote_execution_provenance_gate.py"
     },
     {
       "gate_id": "remote_state_transition_gate",

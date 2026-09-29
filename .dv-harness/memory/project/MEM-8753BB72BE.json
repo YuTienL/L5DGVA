@@ -1,0 +1,23 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "USB IRQ bit-exact routing to GIC INTID 169/170 -- full RTL derivation ss_vout to SS_CPU GIC",
+  "summary": "Full bit-exact RTL derivation (not spec-asserted) of usb0_irq->GIC INTID 169 and usb1_irq->170, tracing three files on the remote server (/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/RTLCAT/). Step 1 (SS_VOUT_ALL.v, module ss_vout): usb0_irq/usb1_irq are 1-bit wires (declared SS_VOUT_ALL.v:1261-1262) aggregated into the 16-bit ss_vout_irq output (port decl :76) by the exact concatenation at SS_VOUT_ALL.v:2256-2259: {4'h0, mipitx_irq, usb1_irq, usb0_irq, pcie_irq, 1'b0, 1'b0, mac1_irq, mac0_irq, 1'b0, trb_irq, pkt_irq, ctl_irq} -- giving bit layout MSB->LSB [15:12]=0,[11]=mipitx,[10]=usb1_irq,[9]=usb0_irq,[8]=pcie,[7:6]=0,[5]=mac1,[4]=mac0,[3]=0,[2]=trb,[1]=pkt,[0]=ctl. So usb0_irq is bit 9, usb1_irq is bit 10 of ss_vout_irq. Step 2 (TOP_ALL.v, module lan063): cpuirq is a flat 512-bit bus (TOP_ALL.v:23991; port width parameter IRQN, `define CPU_IRQN 512` at SS_CPU_ALL.v:159, NOT the 256 shown in a stale nearby comment) fed to u_ss_cpu at TOP_ALL.v:25895. Its IRQ half is built at TOP_ALL.v:24763-24773, specifically assign cpuirq[128+:16] = ss_vout_irq; at line 24766 -- so ss_vout_irq[9] (usb0_irq) lands at cpuirq[137] and ss_vout_irq[10] (usb1_irq) at cpuirq[138]. The FIQ half mirrors this shifted +256 (TOP_ALL.v:24755, cpuirq[256+128+:16]=ss_vout_fiq) giving usb0_fiq/usb1_fiq at cpuirq[393]/[394]. Step 3 (SS_CPU_ALL.v, embedded ARM GICv3-style distributor with real GICR_CTLR/GICR_TYPER/GICR_ISENABLER0 register logic at :40285-40712): the controlling size relationship localparam NUM_INT = NUM_SPIS+32; at SS_CPU_ALL.v:41042 confirms the standard ARM GIC convention (INTID 0-15=SGI, 16-31=PPI, SPI index N -> INTID=N+32), with the SPI array itself declared as spi_i[NUM_SPIS-1:0] at SS_CPU_ALL.v:41646. Applying INTID=SPI_index+32 to the cpuirq bit indices from step 2: usb0_irq (cpuirq[137]) -> SPI 137 -> INTID 137+32=169; usb1_irq (cpuirq[138]) -> SPI 138 -> INTID 170. This independently reproduces both previously-recorded INTIDs from raw RTL structure alone. CAVEAT: the literal wire/net-name bridge from TOP_ALL.v's cpuirq port down to SS_CPU_ALL.v's internal spi_i bus was NOT traced signal-by-signal in this pass (relay stalled before that grep returned) -- the connection is inferred from the IRQN(512)/NUM_INT(NUM_SPIS+32, implying NUM_SPIS=480) parameter agreement and standard GIC convention, not from a literal .spi_i(cpuirq)-style port-map citation. A CQ-event mapping in SS_VOUT_ALL.v (12-bit-per-channel generate loop immediately after the ESMERR assign) uses the identical relative bit ordering (mipitx,usb1,usb0,pcie,...) as corroborating evidence this ordering is a deliberate SoC-wide convention, not a coincidence.",
+  "source_paths": [
+    "RTLCAT/SS_VOUT_ALL.v",
+    "RTLCAT/TOP_ALL.v",
+    "RTLCAT/SS_CPU_ALL.v"
+  ],
+  "category": "dut_rtl_model",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-8753BB72BE",
+  "level": "project",
+  "created_at": 1788368322.6918585,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/constraints.schema.json",
+  "title": "constraints",
+  "description": "INPUT CONTRACT for the asset-processing table's row-11 artifact ('IP user guide / digital+analog doc -> constraints.md: timing, electrical limits, untestable items -> exemption list'). Transcribed from a real IP user guide or analog/digital datasheet; dv_harness/design_intent.py validates it, renders docs/constraints.md, and -- the load-bearing part -- converts every `untestable_items` entry into a real exemption record conforming to exemptions.schema.json, so an untestable item becomes a tracked, expiring, owned exemption rather than a sentence in a document nobody re-reads. That conversion is why `owner` and `valid_until` are REQUIRED here: exemptions.schema.json requires them and has no 'no expiry' escape hatch, so an untestable item that cannot name an owner and a review date cannot silently become a permanent unchecked hole.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "ip_name", "source", "timing_constraints", "electrical_limits", "untestable_items"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "ip_name": { "type": "string", "minLength": 1 },
+    "source": { "$ref": "#/$defs/basis" },
+    "timing_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "parameter", "description", "basis"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "parameter": { "type": "string", "minLength": 1, "description": "The named timing parameter, e.g. 'tSETUP', 'tRESET_WIDTH'." },
+          "description": { "type": "string", "minLength": 1 },
+          "min": { "type": ["number", "null"] },
+          "typ": { "type": ["number", "null"] },
+          "max": { "type": ["number", "null"] },
+          "unit": { "type": ["string", "null"], "description": "e.g. 'ns', 'us'. Required in practice whenever any of min/typ/max is present -- a bare number with no unit is not a constraint." },
+          "basis": { "$ref": "#/$defs/basis" }
+        }
+      }
+    },
+    "electrical_limits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "parameter", "description", "basis"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "parameter": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "min": { "type": ["number", "null"] },
+          "max": { "type": ["number", "null"] },
+          "unit": { "type": ["string", "null"] },
+          "basis": { "$ref": "#/$defs/basis" }
+        }
+      }
+    },
+    "untestable_items": {
+      "type": "array",
+      "description": "Things the IP documentation states cannot be verified in this environment (analog behaviour with no digital observable, a feature needing real silicon, a mode the delivered model does not implement). Each becomes a real exemption record.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "check_id", "reason", "category", "owner", "valid_until", "basis"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "check_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The concrete check/assertion/coverage bin this exempts, matching exemptions.schema.json's own check_id field. A blanket 'everything analog' is not acceptable -- an exemption must name what it turns off."
+          },
+          "reason": { "type": "string", "minLength": 1 },
+          "category": {
+            "enum": ["analog_no_digital_observable", "requires_silicon", "not_implemented_in_model", "tooling_limitation", "out_of_scope_for_this_level"],
+            "description": "Why it is untestable. Recorded so a later reviewer can re-evaluate the whole class at once when, say, a better model arrives."
+          },
+          "owner": { "type": "string", "minLength": 1, "description": "The human accountable for re-reviewing this. Required because exemptions.schema.json requires it." },
+          "valid_until": { "type": "string", "format": "date", "description": "ISO 8601 review date. Required because exemptions.schema.json requires it and offers no 'no expiry' value." },
+          "basis": { "$ref": "#/$defs/basis" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document", "section"],
+      "properties": {
+        "document": { "type": "string", "minLength": 1 },
+        "section": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" },
+        "page": { "type": "string" }
+      }
+    }
+  }
+}

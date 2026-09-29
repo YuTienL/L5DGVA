@@ -81,10 +81,62 @@ Step-by-Step Interactive Intake：套用 BASE 的 Interactive Evidence Intake �
 ```dv-harness-evidence:intake_readiness
 {"mode": "SUBSYSTEM", "target_name": "...", "protocols": ["..."],
  "required_artifacts": {"protocol_spec": true, "dut_design_spec": true,
-   "rtl_top_or_interface_files": true}}
+   "rtl_top_or_interface_files": true,
+   "command_txt": ["<實際存在的 command.txt 路徑>", "..."],
+   "vip_reference": ["<實際存在的 VIP 文件/範例/Reference UVM 路徑>", "..."]}}
 ```
 （mode 為 SYSTEM_LEVEL 時改用 selected_subsystems + required_artifacts.system_level_use_cases +
-required_artifacts.existing_uvm_env。缺任何必要 artifact 都不算 READY_FOR_VPLAN。）
+required_artifacts.existing_uvm_env。缺任何必要 artifact 都不算 READY_FOR_VPLAN。
+SUBSYSTEM 模式下 required_artifacts.command_txt 與 required_artifacts.vip_reference 皆為必要欄位
+——gate 會實際檢查磁碟上是否存在對應檔案，兩者都必須是「真的存在的檔案路徑」陣列，不能只填
+true 或隨便寫個不存在的路徑；找不到既有 command.txt/VIP reference 材料時，先擴大搜尋 repo/VIP
+安裝目錄，仍然沒有才用 Interactive Evidence Intake 模式向使用者確認。）
+
+DE-local Simulation Environment Intake（選填、不強制）：先確認這個專案在 harness 介入之前，
+是否已經有一套 DE 自己在跑的 local simulation environment（compile script、run script、
+filelist、environment-setup script）。有的話，逐項記錄「真實存在的檔案路徑」加上「這個檔案是
+怎麼被確認存在/可用的」（例如：實際 Read 過內容、實際執行過並看到成功輸出、DE 口頭/文件確認）；
+完全沒有這套既有環境（例如全新專案、DE 尚未提供）時，直接附上空物件 `{}`，gate 會視為
+not-applicable 直接通過，不會強迫每個專案都要有 DE-local 環境。回覆結尾附上：
+
+```dv-harness-evidence:de_local_sim_env_intake_gate
+{"compile_script_path": {"path": "<真實存在的 compile script 路徑>", "evidence": "..."},
+ "run_script_path": {"path": "<真實存在的 run script 路徑>", "evidence": "..."},
+ "filelist_path": {"path": "<真實存在的 filelist 路徑>", "evidence": "..."},
+ "env_setup_script_path": {"path": "<真實存在的 environment-setup script 路徑>", "evidence": "..."}}
+```
+
+（沒有既有 DE-local 環境時改附 `{}`——四個欄位必須「全有或全無」：一旦填了任何一個欄位，
+其餘三個也都要真實存在且各自附上 evidence，不可以只填一部分就當作已完成。每個 path 都必須是
+磁碟上真的存在、且非空的檔案，不能是猜的路徑或空檔案；evidence 欄位必須是非空字串，說明這個
+檔案「怎麼被確認存在/可用」，不能留白。）
+
+本 stage 另外還有兩個獨立的 hard gate，也必須各自附上 evidence block，缺一個都會讓整個
+stage 卡在 GATE_FAIL（找到真實案例：agent 只附了 intake_readiness/de_local_sim_env_intake_gate
+兩個，另外兩個沒附，導致 INTAKE 重試多輪都停在同樣的 GATE_FAIL）：
+
+```dv-harness-evidence:generated_artifact_boundary_gate
+{"artifacts": [{"class": "BUILD|REGRESSION|VPLAN|CHECKER|SCOREBOARD|ASSERTION|WAVEFORM|LOGS|SYSTEM_LEVEL|HISTORY", "owner": "HARNESS", "required_from_user": false}]}
+```
+（盤點本階段實際碰到、屬於「本來就該由 harness 自己產生」的產出物類別（BUILD/REGRESSION/
+VPLAN/CHECKER/SCOREBOARD/ASSERTION/WAVEFORM/LOGS/SYSTEM_LEVEL/HISTORY 這幾種）——owner 一定要
+是 "HARNESS"、required_from_user 一定要是 false，代表沒有把 harness 該自己產生的東西誤要求
+使用者先準備好。這個階段通常還沒有真的產生任何這類產出物，`{"artifacts": []}` 是誠實、合法
+的預設值，不需要硬湊內容。）
+
+```dv-harness-evidence:interactive_evidence_intake_gate
+{"questions_asked_in_batch": 0, "user_requested_batch_mode": false,
+ "evidence_answer_available": true, "asked_user_anyway": false,
+ "confidence": "HIGH", "asked_user_for_same_fact": false,
+ "ask_user": false, "continue_evidence_search": false,
+ "status": "READY"}
+```
+（如實反映本階段真正發生的互動方式：questions_asked_in_batch 是這輪一次問了幾個問題（一次只
+問一個才符合 Step-by-Step 規定，> 1 且沒有 user_requested_batch_mode 會被判 FAIL）；如果證據
+其實找得到卻還是先問使用者，asked_user_anyway 要填 true（會被判 FAIL）；confidence 是 HIGH 卻
+又去問使用者同一件事，asked_user_for_same_fact 要填 true（會被判 FAIL）；confidence 是
+LOW/UNKNOWN 時，ask_user 或 continue_evidence_search 至少要有一個是 true（否則視為晾著不處理，
+判 FAIL）；status 必須是 READY/PARTIAL/BLOCKED 三選一，不能留空或填其他值。）
 """,
 Stage.DISCOVERY.value: """
 Five Source Discovery：並行盤點 Spec、RTL Source、command.txt、USB Standard/VIP/Reference UVM、
@@ -96,6 +148,33 @@ Canonical Flow Step 2「vPlan FIRST」：在深入 RTL/Architecture 之前，先
 generated/03_vplan/。後續 Architecture Discovery/Calibration、command.txt Analysis、
 Reference UVM Analysis、DE Baseline Reproduction 每個都會回頭精煉這份草稿
 （v0.2 → v0.3 → v0.4 → v1.0），最終在 VPLAN stage 定稿/LOCK。不得跳過這一步直接做 RTL 分析。
+
+本 stage 有兩個獨立的 hard gate，也必須各自附上 evidence block，缺一個都會讓整個 stage 卡在
+MISSING_EVIDENCE（找到真實案例：DISCOVERY 內容做得很完整，但沒附這兩個 gate 的 evidence，
+導致 gate completion 卡在 0%）：
+
+```dv-harness-evidence:evidence_source_priority_gate
+{"attempted_sources": ["EXISTING_PROJECT_FILES", "RTL_PARAMETERS_DEFINES", "EXISTING_UVM_VIP_CONFIG",
+  "EXISTING_TESTS_SEQUENCES", "DESIGN_DOCS", "VPLAN_TEST_TABLE", "BUILD_REGRESSION_SCRIPTS"],
+ "higher_priority_sources_exhausted": true}
+```
+（attempted_sources 只填本輪實際查過的來源，且必須依這個固定優先順序遞增排列：
+EXISTING_PROJECT_FILES → RTL_PARAMETERS_DEFINES → EXISTING_UVM_VIP_CONFIG →
+EXISTING_TESTS_SEQUENCES → DESIGN_DOCS → VPLAN_TEST_TABLE → BUILD_REGRESSION_SCRIPTS →
+GIT_HISTORY_COMMENTS → ASK_USER，不可跳序、不可倒序；只有真的把前面所有來源都查過還是不確定，
+才可以把 ASK_USER 加進來，且 higher_priority_sources_exhausted 一定要填 true。）
+
+```dv-harness-evidence:input_source_contract_gate
+{"provided_source_classes": ["SPEC", "COMMAND_TXT", "PRIMARY_PROTOCOL_REFERENCE", "RTL_SOURCE", "DE_LOCAL_SIM"],
+ "protocol_input_kind": "PUBLIC_STANDARD_SPEC", "forbidden_user_prerequisites": []}
+```
+（provided_source_classes 必須是這 5 類的完整集合：SPEC（protocol/DUT 規格）、COMMAND_TXT（既有
+command.txt/pattern）、PRIMARY_PROTOCOL_REFERENCE（VIP 文件/範例/Reference UVM）、RTL_SOURCE
+（RTL 原始碼）、DE_LOCAL_SIM（既有 DE local simulation 環境）——缺任何一類都會 FAIL；
+protocol_input_kind 必須是 PUBLIC_STANDARD_SPEC 或 OFFICIAL_STANDARD_SPEC 其中之一（代表協定輸入
+真的是公開/官方標準規格，不是憑空杜撰）；forbidden_user_prerequisites 列出「本來該由 harness 自己
+產生、卻被誤要求使用者先準備好」的產出物類別（BUILD/REGRESSION/VPLAN/CHECKER/WAVEFORM/LOGS/
+SYSTEM_LEVEL/HISTORY）——正常情況下這裡應該是空陣列 `[]`。）
 """,
 Stage.COMMAND_PATTERN.value: """
 將 command.txt 分為 REUSE/EXTEND/GENERATE，確認 USB Standard/VIP/Reference UVM 綁定。
@@ -104,6 +183,23 @@ Architecture（Scoreboard/Checker/Assertion 設計）、Build Flow（Regression/
 VIP Usage（Sequence/Config/API usage）——收斂成可重用的 Reusable Pattern。
 建立 command→branch-B VIP sequence→checker/coverage→pattern trace。
 確保 User-defined Pattern Make API 與 registry 可用。
+
+本 stage 的 PASS 由 harness 端 gate 腳本裁定。凡是被分類為 REUSE/EXTEND 而從舊路徑搬到新路徑（或
+新建成 command_inventory 條目）的 command.txt，都必須證明搬移過程中沒有偷偷改動內容——真的有改，
+一定要明確標記成「已核准的修改」，不能悄悄改了內容卻還宣稱是原封不動沿用。回覆結尾附上：
+
+```dv-harness-evidence:command_migration_integrity_gate
+{"commands": [
+  {"command_id": "usb_bulk_transfer_basic", "source_hash": "a1b2c3d4...", "destination_hash": "a1b2c3d4...", "approved_transform": false}
+]}
+```
+
+（`commands` 不能是空陣列——這個 gate 沒有「not-applicable 就填空」的預設值，只要這個 stage 有處理
+過任何 REUSE/EXTEND/GENERATE 的 command.txt，就至少要列一筆；每一筆都要有 `command_id`、
+`source_hash`、`destination_hash`，缺任一個 hash 都會被判 FAIL（MISSING_COMMAND_HASH）；當
+`source_hash` 與 `destination_hash` 不相同時，必須把 `approved_transform` 設為 true（代表這是有意、
+已核准的內容修改），否則會被判 FAIL（COMMAND_CONTENT_CHANGED）——沒有核准標記卻內容不同，等同
+「搬移途中內容被悄悄改掉」。）
 """,
 Stage.DE_BASELINE_REPRODUCTION.value: """
 DE Local Simulation → DE Baseline Reproduce：用既有 command.txt/build recipe/RTL 原樣重跑，
@@ -143,8 +239,16 @@ architecture evidence database 至少要涵蓋 TOP/HIERARCHY/INTERFACE/CLOCK_RES
  "auto_discovered_fields": ["TOP","HIERARCHY","INTERFACE","CLOCK_RESET","PARAM_DEFINE","PORT_CHANNEL"],
  "asked_user_before_rtl_analysis": false,
  "unknown_items": [], "architecture_evidence_db_generated": true,
+ "architectural_claims": [
+   {"kind": "MODULE", "name": "usb_top", "rtl_citation": "rtl/usb_top.v:12"},
+   {"kind": "PORT", "name": "phy_clk", "rtl_citation": "rtl/usb_top.v:18-20"}
+ ],
  "lock_requested": false, "calibration_complete": false}
 ```
+（`architectural_claims` 為必填、不得為空：每一個 module/port/interface/register_block 主張都要有
+`rtl_citation`（"path/to/file:start[-end]"，相對於 project root），gate 會實際比對該檔案該行附近
+是否真的出現這個名稱 -- 只是輕量 grep spot-check，不是完整 RTL parse，但杜絕「編出一個看似合理但
+RTL 裡查無此名」的假造。）
 """,
 Stage.ARCH_CALIBRATION.value: """
 Architecture Calibration → DUT Architecture LOCK：把 Architecture Model v0.x 與後續發現的新證據
@@ -165,6 +269,26 @@ lock 之後不得再有 unresolved unknown。
 {"conflicts": [], "architecture_locked": true, "unresolved_unknown_count": 0}
 ```
 （沒有 delta/conflict 時，"detected_deltas": [] 與 "conflicts": [] 即可通過。）
+
+VIP API Drift 確認（lock 之前必須確認目前實際用的 VIP 版本跟當初 qualify 過的版本是否一致，
+版本漂移不代表可以直接用——沒做過 API diff 分析、有 breaking change 卻沒更新 adapter、或漂移
+了卻沒有重新 requalify，都必須在 lock 前處理掉，不能留到後面才發現 sequence/adapter 對不上）：
+
+```dv-harness-evidence:vip_api_drift_gate
+{"current_vip_version": "2024.09", "qualified_vip_version": "2024.09",
+ "api_diff_analyzed": true, "breaking_api_changes": false, "adapter_updated": true,
+ "requalification_evidence": "...", "current_vip_source_or_manual_hash": "..."}
+```
+（"current_vip_version" 與 "qualified_vip_version" 不同才視為有漂移；兩者相同（如範例）時，
+後面 "api_diff_analyzed"／"breaking_api_changes"／"adapter_updated"／"requalification_evidence"
+四個欄位不會被檢查，可以照範例值填。有漂移時：先看 "api_diff_analyzed" 是否為 true——沒做過
+API diff 分析就標記漂移會直接 FAIL VIP_VERSION_DRIFT_WITHOUT_API_DIFF；"breaking_api_changes"
+為 true 卻 "adapter_updated" 不是 true 會 FAIL BREAKING_VIP_CHANGE_WITHOUT_ADAPTER_UPDATE（有
+breaking change 就必須先把 adapter/sequence library 更新完才能回報）；"requalification_evidence"
+沒填會 FAIL VIP_DRIFT_WITHOUT_REQUALIFICATION（漂移後要有重新 qualify 過的證據，不是只做完
+diff 分析就算數）。"current_vip_source_or_manual_hash" 不論有沒有漂移都一定要填——沒有把目前
+實際用的 VIP source/manual 釘住一個 hash 或版本識別，會直接 FAIL UNPINNED_CURRENT_VIP_REFERENCE，
+避免後面環境用的 VIP 跟這裡回報的版本其實對不上。）
 """,
 Stage.PROJECT_MODEL.value: """
 建立 Generic Project Model、verification boundary、VIP topology/bind、BLOCK/branch-A/branch_fw/branch-B topology、
@@ -180,6 +304,25 @@ confidence 與 DV readiness（承接 Architecture Evidence DB）。
  "architecture_evidence_db_ref": "..."}
 ```
 （沒有 VIP 時附 "vip_topology_not_applicable_reason" 取代 vip_topology。）
+
+CLAUDE.md「Environment Generation Mode」：CREATE ENVIRONMENT 之前必須明確選
+SUBSYSTEM_MODE（單一 subsystem/協定環境）或 SYSTEM_LEVEL_MODE（組合多個已完成
+subsystem 環境成 Full-SoC）。harness 已經在這次呼叫前用
+`dv_harness/environment_mode_router.py` 的 `resolve_environment_mode()`
+算過一次真實結果（依真實的 requested_subsystems + 真實 subsystem registry），
+結果會顯示在上面 Harness Plan 區塊的 "Resolved environment mode" 欄位——
+回覆結尾照那個結果附上（`environment_mode_selection_gate` 會拿同一份
+requested_subsystems 跟真正的 registry 檔案重新推導一次，兩者不一致會直接
+FAIL）：
+
+```dv-harness-evidence:environment_mode_selection
+{"environment_mode": "SUBSYSTEM_MODE|SYSTEM_LEVEL_MODE",
+ "requested_subsystems": ["usb"], "needs_subsystem_mode_first": false}
+```
+（`requested_subsystems` 為 2 個以上時必須是 SYSTEM_LEVEL_MODE；若其中有尚未
+登記在真實 subsystem registry 裡的項目，`needs_subsystem_mode_first` 必須是
+true，且依 CLAUDE.md 規則先透過 SUBSYSTEM_MODE 把它建好、註冊後再回來組
+SYSTEM_LEVEL_MODE。）
 """,
 Stage.PROTOCOL_CAPABILITY.value: """
 Protocol Capability Discovery：綜合 Spec + RTL + Register map + command.txt + Reference UVM + VIP
@@ -204,6 +347,85 @@ capability 要記錄為 gap，交給後續 vPlan 走 waiver。
 都會直接 FAIL——這是唯一能證明「真的有讀 registry」而不是憑印象隨便填的方式。
 本次協定不在 registry 裡（新協定/自訂協定）時改附
 `{"profile": {"registry_applicable": false, "registry_not_applicable_reason": "..."}}`。
+
+本 stage 另外還有五個獨立的 hard gate，涵蓋「generator 綁定」「profile skill 是否真的被查閱」
+「protocol onboarding 內容完整度」「profile 版本治理」「qualification 狀態與 evidence」五個面向，
+也都必須各自附上 evidence block，缺一個都會讓整個 stage 卡在 GATE_FAIL/MISSING_EVIDENCE：
+
+先是 generator 綁定與 profile-skill 綁定這兩個（都用同樣的 `--binding` 檔案格式，外層都是
+`{"protocols": [...]}`，但檢查的欄位完全不同，必須分別附兩個 block）：
+
+```dv-harness-evidence:protocol_generator_binding_gate
+{"protocols": [{"protocol": "usb", "profile_version": "...", "profile_hash": "...",
+  "spec_revision": "...", "generator_version": "...", "generator_hash": "...",
+  "qualification_evidence_hash": "..."}]}
+```
+（每個 protocol 項目都必須同時附上 profile_version/profile_hash/spec_revision/generator_version/
+generator_hash/qualification_evidence_hash 六個欄位，缺任何一個都會 FAIL
+INCOMPLETE_PROTOCOL_GENERATOR_BINDING；如果同時填了 qualified_generator_version 且它跟
+generator_version 不同（代表 generator 版本已經漂移），一定要附上 requalification_evidence_hash，
+否則 FAIL GENERATOR_VERSION_DRIFT_WITHOUT_REQUALIFICATION——沒有漂移的話不需要填
+qualified_generator_version。）
+
+```dv-harness-evidence:protocol_profile_binding_gate
+{"protocols": [{"protocol": "usb", "profile_skills_consulted": ["usb-protocol-profile"]}]}
+```
+（`protocol` 必須是 `.dv-harness/builder/protocol_builder_registry.json` 的 `protocols` 裡真實
+存在的 key，查無此協定會 FAIL UNKNOWN_PROTOCOL；gate 會去讀該協定 registry 條目的
+`profile_skill`／`vip_lookup_skill` 兩個欄位，只要其中有值（非 null）就必須出現在
+`profile_skills_consulted` 清單裡，代表這個 skill 真的被查閱過，漏掉任何一個都會 FAIL
+PROFILE_SKILL_NOT_CONSULTED 並列出 missing 清單；registry 裡這兩個欄位都是 null 的協定，
+`profile_skills_consulted` 可以留空陣列。）
+
+接著是 protocol onboarding 內容完整度（`--profile`，注意跟下面 profile 版本治理的 gate雖然都吃
+`--profile` 檔案，但欄位完全不同、彼此獨立）：
+
+```dv-harness-evidence:protocol_onboarding_gate
+{"protocol_name": "usb", "spec_sources": ["..."], "dut_mapping": "...",
+ "vip_strategy": "...", "state_model": "...", "transaction_model": "...",
+ "error_recovery_model": "...", "verification_mechanism_plan": "...",
+ "vplan_mapping": "...", "test_generation_strategy": "...",
+ "coverage_model": "...", "qualification_plan": "...",
+ "evidence_refs": ["..."]}
+```
+（protocol_name/spec_sources/dut_mapping/vip_strategy/state_model/transaction_model/
+error_recovery_model/verification_mechanism_plan/vplan_mapping/test_generation_strategy/
+coverage_model/qualification_plan 這 12 個欄位都必須有值，缺任何一個都會 FAIL
+INCOMPLETE_PROTOCOL_ONBOARDING 並列出 missing 清單；就算 12 個都填了，若沒有另外附上非空的
+evidence_refs，仍會 FAIL NO_PROTOCOL_EVIDENCE——代表每一項內容主張都要有可回溯的證據來源，不能
+只是文字敘述。）
+
+再來是 profile 版本治理（`--profile`）：
+
+```dv-harness-evidence:protocol_profile_version_gate
+{"protocol_name": "usb", "profile_version": "1.2.0", "spec_revision": "...",
+ "profile_hash": "...", "qualification_state": "QUALIFIED",
+ "qualification_evidence_hash": "..."}
+```
+（protocol_name/profile_version/spec_revision/profile_hash/qualification_state 五個欄位都必須
+有值，缺任何一個都會 FAIL UNVERSIONED_PROTOCOL_PROFILE 並指出缺的是哪個 key；
+qualification_state 若填 `"QUALIFIED"`，一定要另外附上 qualification_evidence_hash，否則 FAIL
+QUALIFIED_PROFILE_WITHOUT_EVIDENCE_HASH；這份 profile 若是取代舊版本（填了 supersedes），一定要
+同時附上 change_summary 說明版本差異，否則 FAIL PROFILE_SUPERSESSION_WITHOUT_CHANGE_SUMMARY——
+沒有取代舊版本時，supersedes/change_summary 兩者都可以省略。）
+
+最後是本 stage 匯總每個協定目前 qualification 狀態的整體 evidence（`--status`，注意這裡每個協定
+項目的 key 是 `"name"`，跟上面 generator/profile-skill 綁定 block 用的 `"protocol"` 不同，不要
+混用）：
+
+```dv-harness-evidence:protocol_qualification_status_gate
+{"protocols": [{"name": "usb", "qualification_state": "SMOKE_QUALIFIED",
+  "profile_version": "...", "spec_revision": "...",
+  "environment_manifest_hash": "...", "qualification_evidence_hash": "...",
+  "generation_supported": true, "profile_available": true}]}
+```
+（`qualification_state` 只要落在 SMOKE_QUALIFIED／REGRESSION_QUALIFIED／PRODUCTION_QUALIFIED
+任一個「已 qualified」等級，就必須同時附上 profile_version/spec_revision/
+environment_manifest_hash/qualification_evidence_hash 四個欄位，缺任何一個都會 FAIL
+QUALIFIED_PROTOCOL_WITHOUT_EVIDENCE；未達 qualified 等級（例如仍在 UNQUALIFIED/IN_PROGRESS）則
+不受這四個欄位限制。另外，只要 generation_supported 填 true（代表這個協定目前支援自動生成
+環境），就必須同時 profile_available 也是 true，否則 FAIL GENERATION_SUPPORT_WITHOUT_PROFILE——
+不能宣稱支援生成、卻沒有真的有可用的 profile。）
 """,
 Stage.REQUIREMENTS_TRACEABILITY.value: """
 Requirement Extraction + Applicability/Waiver：建立 Requirement → vPlan → scenario → command/pattern →
@@ -224,6 +446,22 @@ DUT 不支援的 requirement 要走 waiver（需 design_evidence 佐證），不
 ```
 （沒有任何 waiver 時，"waivers": [] 即可視為通過 —— 只在真的引用 waiver 卻缺欄位時才會 FAIL。）
 
+Waiver Revision Freshness（waiver 核准當下所依據的 spec_revision/rtl_hash，跟現在的版本不一樣時，
+要先確認這個 waiver 有沒有跟著重新驗證過，不能「核准過一次就永久沿用」）：
+
+```dv-harness-evidence:waiver_revision_freshness_gate
+{"current": {"spec_revision": "...", "rtl_hash": "..."},
+ "waivers": [{"waiver_id": "...", "spec_revision": "...", "rtl_hash": "...",
+   "revalidated": true, "revalidation_evidence_hash": "...", "expired": false}]}
+```
+
+（這個 gate 讀的是 --state 檔案本身的完整內容——不像 waiver_revalidation_gate 那樣要包一層
+sub-key，這裡整個 block 就是檔案內容本身。"current" 是目前真正的 spec_revision/rtl_hash；
+"waivers" 陣列裡每一筆的 spec_revision 或 rtl_hash，只要有一個跟 "current" 對不上，就代表這個
+waiver 是在舊版本核准的，此時必須同時填 revalidated=true 且 revalidation_evidence_hash 非空，
+否則會 FAIL STALE_WAIVER_AFTER_REVISION_CHANGE；expired 為 true 的 waiver，不論版本是否吻合都
+會直接 FAIL EXPIRED_WAIVER。沒有任何 waiver 時 "waivers": [] 一樣視為通過。）
+
 Waiver Revalidation（每次改版都要重新確認 waiver 還適不適用，不是寫一次永久有效）：
 
 ```dv-harness-evidence:waiver_revalidation_gate
@@ -240,6 +478,22 @@ spec/RTL revision 字串）兩個欄位——真正的目前時間（--now）由
 WAIVER_EXPIRED。revision 跟 current_revision 不同、且沒有 revalidated_for_revision
 時會 FAIL WAIVER_REVISION_STALE；expires_at 早於目前時間會 FAIL WAIVER_EXPIRED；
 trigger_conditions_changed 為 true 會 FAIL WAIVER_REVALIDATION_REQUIRED。）
+
+Waiver 的真正來源是 waiver ledger，不是你寫的 evidence block（2026-09-06，spec section 237）：
+只要專案有 `.dv-harness/waivers/waivers.json`（dv_harness/waiver_store.py，由真人透過 dashboard
+的 Waiver Authoring 表單或 `waiver_store.record_waiver()` 寫入），上面三個 waiver gate 判定的
+就是 ledger 裡的紀錄，不是你在 block 裡列出的 waiver。因此：
+- 你在 block 裡引用一個 ledger 沒有的 waiver_id，會 FAIL WAIVER_NOT_IN_STORE——沒有人核准過的
+  waiver 不豁免任何東西，不要自己編一筆出來。
+- ledger 裡的 waiver 每次都會被重新判定；過期（EXPIRED）、被撤銷（REVOKED）、或 revalidation
+  trigger（spec_revision/rtl_hash/revision）跟現在對不上（REVALIDATION_REQUIRED），都會讓它原本
+  豁免的 requirement 重新被 flag 出來，不論你有沒有提到它。狀態是從紀錄內容推導出來的，不是
+  存在檔案裡的欄位，你也無法覆寫。
+- 用 `python -m dv_harness.waiver_store status` 看目前每一筆 waiver 的真實狀態。
+- 專案還沒有 ledger 檔案時，行為完全跟以前一樣（以你的 evidence block 為準）。
+- 這三個 block 裡的 "current"／"current_revision" 仍然必須照實填：那是這次執行的真實
+  spec_revision/rtl_hash/revision，ledger 不會知道，也正是 ledger 的 revalidation trigger 要
+  拿來比對的對象。
 """,
 Stage.SOC_SCENARIO_PLANNER.value: """
 若 scope >= subsystem，建立 cross-subsystem/cross-protocol/shared-resource/concurrency/E2E/reset/error/performance scenarios。
@@ -275,10 +529,61 @@ risk/observability，不得只是分類、不排優先序。
 ```
 （risk_factors 只填實際適用的項目；分數越高風險越高，harness 只驗證證據格式，
 不會自動判定分數是否合理——corner 選擇的合理性仍需你自己判斷。）
+
+本 stage 另外還有一個獨立的 hard gate 專門檢查 Reset/Power/CDC 這三類 corner 是否真的規劃到位——
+這三類在 12 分類裡最容易被「只列出來但沒有真的收斂成可執行測試」，所以另外用
+`reset_power_cdc_corner_gate` 逐條檢查每個 corner 有沒有掛上 requirement/mechanism/test，
+以及 CDC/Reset 各自的專屬完整性欄位，缺一個都會 FAIL（找到真實案例：agent 只附了
+corner_risk_rank 一個，這個沒附，導致 SOC_SCENARIO_PLANNER 重試多輪都停在同樣的
+GATE_FAIL/MISSING_EVIDENCE）。回覆結尾另外附上：
+
+```dv-harness-evidence:reset_power_cdc_corner_gate
+{"corner_items": [
+  {"corner_id": "...", "domain": "RESET", "requirement_ids": ["..."],
+   "mechanism_ids": ["..."], "testcase_ids": ["..."],
+   "async_or_partial_reset_covered": true},
+  {"corner_id": "...", "domain": "CLOCK", "requirement_ids": ["..."],
+   "mechanism_ids": ["..."], "testcase_ids": ["..."]},
+  {"corner_id": "...", "domain": "CDC", "requirement_ids": ["..."],
+   "mechanism_ids": ["..."], "testcase_ids": ["..."],
+   "cdc_observation_or_assertion": "..."}
+], "power_aware_design": false}
+```
+（corner_items 裡的 domain 至少要涵蓋 RESET、CLOCK、CDC 三種（大小寫需完全相符），
+缺任何一種會被判 MISSING_MANDATORY_CORNER_DOMAINS；每一筆 corner_items 都要非空的
+requirement_ids/mechanism_ids/testcase_ids 三個陣列，分別代表這個 corner 回扣到哪個
+vPlan requirement、靠哪個驗證機制觀察、由哪個 testcase 實際覆蓋，缺任一項會依序被判
+CORNER_WITHOUT_REQUIREMENT/CORNER_WITHOUT_MECHANISM/CORNER_WITHOUT_TEST；domain 是
+"CDC" 的項目還要額外填非空的 cdc_observation_or_assertion（說明用什麼 observation 或
+assertion 抓 CDC 違規），沒填會被判 CDC_WITHOUT_OBSERVATION_OR_ASSERTION；domain 是
+"RESET" 的項目要額外填 truthy 的 async_or_partial_reset_covered（確認 async reset 或
+partial reset 情境有被涵蓋），沒填會被判 RESET_CORNER_INCOMPLETE；power_aware_design
+如實填這個 DUT 是不是 power-aware 設計——是 true 的話，corner_items 裡至少要有一筆
+domain 是 "POWER" 的項目，否則會被判 POWER_AWARE_WITHOUT_POWER_CORNERS，不是
+power-aware 設計時填 false 即可，不需要硬湊 POWER corner。）
 """,
 Stage.INFRASTRUCTURE_AUDIT.value: """
 詳細 audit scoreboard、DMA scoreboard、performance calculator、coverage collector 的
 by-instance/by-port/by-interface/concurrency/heterogeneous legal combination 能力。
+
+本 stage 的 PASS 由 harness 端 gate 腳本裁定（`environment_readiness_status_gate.py`，會實際讀取
+回報的 readiness JSON、自己重新算一次 expected status 再跟回報值比對，不是自由心證填寫）。回覆
+結尾附上：
+
+```dv-harness-evidence:environment_readiness_status_gate
+{"scores": {"DUT": 95, "ProtocolConfig": 92, "VIP": 90, "BuildFlow": 95,
+ "Testbench": 88, "Specification": 90, "vPlan": 85, "Regression": 80, "Coverage": 75},
+ "status": "READY"}
+```
+
+（`scores` 必須完整包含這 9 個維度：DUT、ProtocolConfig、VIP、BuildFlow、Testbench、Specification、
+vPlan、Regression、Coverage——缺任何一個都會被判 FAIL（MISSING_READINESS_DIMENSIONS）；每個維度的
+分數必須是 0–100 之間的數字，型別不對或超出範圍會被判 FAIL（INVALID_READINESS_SCORE）；`status`
+不是自由填寫，gate 會依固定公式自己算出 expected 值再跟回報的 status 比對，兩者不同就判 FAIL
+（READINESS_STATUS_MISMATCH）——公式是：DUT/ProtocolConfig/VIP/BuildFlow 這四個核心維度全部 ≥90，
+且九個維度的平均分（overall）≥85，才能填 READY；這四個核心維度只要有任一項 <50，就必須填 BLOCKED；
+其餘情況一律填 PARTIAL。回報前務必自己先照這個公式核算 overall 與四個核心維度，不能憑印象或樂觀猜測
+直接填 READY/PARTIAL/BLOCKED。）
 """,
 Stage.VPLAN.value: """
 vPlan 是逐步累積出來的草稿，不是一次寫完：
@@ -291,7 +596,17 @@ v1.0（比對 DE Baseline Reproduction 的可行性結果做 Executable feasibil
 本 stage 的工作：整合以上所有版本產出 vPlan v1.0，明確列出 SoC scenarios 與 audit gaps，
 向使用者確認 Verification Scope 後才能 LOCK；LOCK 之前不得進入 Verification Architecture/Implement。
 
-本 stage 的 PASS 由 harness 端 gate 腳本裁定。回覆結尾附上：
+實際產出 vPlan .xlsx 時，執行真正的 `dv-harness vplan-export`（見
+dv_harness/vplan_writer/writer.py、dv_harness/cli.py 的 `vplan-export`
+subcommand）——這是真的、可開啟的 openpyxl workbook 產生器，不是自由格式文件；
+它會先對真實的 pattern-dir / dispatcher-file / task-declaration-source 證據跑
+3 條 REQUIRED validation rules（每個 pattern name 都有對應檔案、每個 task name
+都是真的宣告、每個 pattern 都在 run-time dispatcher 裡），任何一條沒過就整份
+refuse 寫檔（2026-09-01，vplan-doc-and-wiring-fix；.claude/agents/
+IP_UVM_DV_Gen.md 曾經誤寫「無此 generator，仍為 doc-only」，該說法已過時並已
+更正）。
+
+本 stage 的 PASS 由 harness 端 gate 腳本裁定。回覆結尾附上兩個 evidence block：
 
 ```dv-harness-evidence:spec_coverage_audit
 {"requirements": [{"req_id": "...", "status": "VERIFIED"}]}
@@ -300,6 +615,19 @@ v1.0（比對 DE Baseline Reproduction 的可行性結果做 Executable feasibil
 （WAIVED 需另外滿足 support_status=UNSUPPORTED_BY_DUT + waiver.approved + waiver.evidence），
 不得留白——這是 vPlan 定案時的「100% 已歸類」檢查，跟後面 REQUIREMENT_CLOSURE 的
 runtime evidence 檢查是兩個不同層級，不要混淆。）
+
+```dv-harness-evidence:vplan_writer_validation_gate
+{"items": [...VPlanItem dicts, same schema `dv-harness vplan-export` consumes...],
+ "pattern_dir": "...", "dispatcher_file": "...", "task_declaration_sources": ["..."],
+ "constraint_declaration_sources": ["..."]}
+```
+（這個 gate 直接呼叫真正的 dv_harness.vplan_writer.validate_items()，對磁碟上真實的
+pattern-dir/dispatcher-file/task-declaration-source 證據重跑上述 3 條 mandatory
+validation rules——不是只檢查這個 JSON 本身格式對不對，2026-09-01,
+vplan-doc-and-wiring-fix：這是 STAGE_GATES["VPLAN"] 第二個 gate，補上
+spec_coverage_audit 一直沒做到的部分。`constraint_declaration_sources`
+是第 4 條 rule 的證據來源，2026-09-01 vplan-4th-rule-implementation 新增，
+選填——省略時第 4 條 rule 直接 skip，不會 fail closed。）
 """,
 Stage.VERIFICATION_ARCHITECTURE.value: """
 Verification Architecture + Observability Planning：定義本次 scope 需要哪些
@@ -379,6 +707,160 @@ stack；USB 的 transfer-type×speed matrix）。這 10 個協定以外的環境
 `tools/verification_flow/protocol_structural_completeness_gate.py` 內對應
 `check_<protocol>` 函式的說明；非以上 10 協定的環境改附
 `{"protocol_completeness_applicable": false, "protocol_completeness_not_applicable_reason": "..."}`。）
+
+本 stage 另外還有十一個獨立的 hard gate，涵蓋「branch topology 與 branch_fw 中斷契約」「per-port
+驗證矩陣與 protocol scheduler 模式」「reset/clock/power 事件排序」「error injection／observability／
+assertion placeholder 這條可觀察性鏈」與「Reference UVM 相容性、改編、scoreboard/reference model
+獨立性」五個面向，也都必須各自附上 evidence block，缺一個都會讓整個 stage 卡在
+GATE_FAIL/MISSING_EVIDENCE：
+
+先是 branch topology 與 branch_fw 中斷契約這兩個（呼應 CLAUDE.md「Event/control register 階層」與
+「真實 FW pattern 是 interrupt-driven」規則，在這個 stage 就先鎖死，不要等到 IMPLEMENT 才發現
+branch_fw 被寫成 polling）：
+
+```dv-harness-evidence:branch_topology_gate
+{"protocol": "USB", "dut_port_count": 1, "vip_port_count": 1,
+ "branches": ["block", "branch_fw", "branch_a0", "branch_b0"],
+ "branch_fw_interrupt_driven": true}
+```
+（`branches` 必須完整涵蓋 `block`、`branch_fw`，以及依 `dut_port_count`/`vip_port_count` 展開的
+0-indexed `branch_a0..branch_a{dut_port_count-1}`／`branch_b0..branch_b{vip_port_count-1}`——少一個
+FAIL MISSING_REQUIRED_BRANCHES，多出不在這個範圍內的 `branch_a*`/`branch_b*` FAIL
+PORT_COUNT_BRANCH_MISMATCH；`branch_fw_interrupt_driven` 一定要是 true，否則 FAIL
+BRANCH_FW_NOT_INTERRUPT_DRIVEN。`protocol` 含有 "amba"（大小寫不拘）且 `dut_port_count` > 1 時，
+還要附上 `cross_branch_bus_model`：`{"shared_resources": [...], "arbitration_policy": "..."}` 兩個
+子欄位缺一都會 FAIL MULTI_BRANCH_BUS_ARBITRATION_UNMODELED——這就是 CLAUDE.md「Concurrent 匯流排
+仲裁」規則落地的地方。）
+
+```dv-harness-evidence:branch_fw_interrupt_contract_gate
+{"interrupt_driven": true,
+ "interrupt_map": [{"irq_id": "...", "source_register": "..."}],
+ "acknowledge_path": "...", "polling_primary": false}
+```
+（`interrupt_driven` 必須是 true（FAIL FW_BRANCH_NOT_INTERRUPT_DRIVEN）；`interrupt_map` 不能是空的
+（FAIL NO_INTERRUPT_MAP）；`acknowledge_path` 必須非空（FAIL NO_INTERRUPT_ACK_PATH）；
+`polling_primary` 不能是 true（FAIL POLLING_CANNOT_BE_PRIMARY_FW_TRIGGER）——四項合起來就是
+「branch_fw 只能是 interrupt-driven dispatcher，不能把 CPU 週期性 READ 輪詢當主要偵測手段」這條
+規則的證據化。）
+
+再來是 per-port 驗證矩陣與 protocol scheduler 模式這兩個（確保多 port 環境每個 port 都有獨立機制、
+排程模式跟協定本身的並行/序列特性一致）：
+
+```dv-harness-evidence:per_port_verification_matrix_gate
+{"required_feature_combinations": ["BULK_HS", "BULK_FS"],
+ "ports": [{"port_id": "P0",
+   "scoreboard": "...", "checker": "...", "performance_calculator": "...", "coverage_collector": "...",
+   "covered_feature_combinations": ["BULK_HS", "BULK_FS"]}]}
+```
+（`ports` 裡每一個 port 都要同時附上 `scoreboard`／`checker`／`performance_calculator`／
+`coverage_collector` 四個機制，缺任一個 FAIL MISSING_PER_PORT_MECHANISM；每個 port 的
+`covered_feature_combinations` 必須涵蓋 `required_feature_combinations` 全集，缺任何一項 FAIL
+PORT_FEATURE_MATRIX_GAP。只有單一 port 時，`ports` 陣列填一筆即可；`ports: []` 時這兩項檢查都不會
+觸發，只適合真的沒有 per-port 拆分意義的環境，不要為了省事而把有意義的 port 拆分省略掉。）
+
+```dv-harness-evidence:protocol_scheduler_gate
+{"protocol": "USB", "mode": "N_TO_M_PARALLEL",
+ "cross_port_global_lock": false, "independent_port_queues": true}
+```
+（`protocol` 是 APB/APB2/APB3 時，`mode` 必須是 `"N_TO_1_SERIAL"`，否則 FAIL APB_MUST_SERIALIZE；
+`protocol` 是 USB/USB2/USB3/PCIe/AXI/AXI3/AXI4/AXIS/AXI-Stream 這類天生可並行的協定時，`mode`
+必須是 `N_TO_M_PARALLEL`/`M_TO_N_PARALLEL`/`M_TO_N_PARALLEL_INDEPENDENT_PORTS` 三選一，否則 FAIL
+PARALLEL_PROTOCOL_NOT_PARALLEL，且 `independent_port_queues` 必須是 true，否則 FAIL
+PARALLEL_PROTOCOL_NEEDS_INDEPENDENT_PORT_QUEUES；不論協定為何，`cross_port_global_lock` 都不能是
+true，否則直接 FAIL CROSS_PORT_GLOBAL_LOCK_FORBIDDEN——這是把「branch_fw 僅為 dispatcher、不是
+protocol traffic scheduler」與「各 port 各自獨立、不共用全域鎖」這兩條原則一起釘進 gate。）
+
+接著是 reset/clock/power 事件排序：
+
+```dv-harness-evidence:reset_clock_power_sequence_gate
+{"events": [{"event": "POR_RELEASE"}, {"event": "CLOCK_STABLE"}, {"event": "FW_BOOT_DONE"}],
+ "ordering_rules": [{"before": "POR_RELEASE", "after": "CLOCK_STABLE"},
+                     {"before": "CLOCK_STABLE", "after": "FW_BOOT_DONE"}],
+ "power_aware_design": false}
+```
+（`events` 不能是空陣列（FAIL NO_SEQUENCE_EVENTS）；`ordering_rules` 裡每一筆 `before`/`after` 都
+必須是 `events` 裡真的存在的 `event` 名稱（缺一個 FAIL ORDERING_RULE_EVENT_MISSING），且 `before`
+在 `events` 陣列裡的排列順序必須真的排在 `after` 前面，否則 FAIL SEQUENCE_ORDER_VIOLATION——不是
+自己宣告順序對就算數，是照 `events` 陣列實際排列去驗證。`power_aware_design` 是 true（有 power
+domain/isolation cell）時，`isolation_or_retention_checked` 也要是 true，否則 FAIL
+POWER_SEQUENCE_WITHOUT_ISOLATION_RETENTION_CHECK；非 power-aware 設計時 `power_aware_design` 填
+false 即可跳過這項。）
+
+然後是 error injection／observability／assertion placeholder 這條可觀察性鏈（assertion_placeholder_
+closure_gate 是刻意接在 observability_sufficiency_gate 之後同一批查的，兩者都在同一個
+observability 主題下，設計上要相鄰處理）：
+
+```dv-harness-evidence:observability_sufficiency_gate
+{"requirements": [{"requirement_id": "REQ-001", "status": "OPEN",
+   "observability": [{"type": "SCOREBOARD", "evidence_point": "sb_top.compare()"}]}]}
+```
+（`requirements` 裡每一筆 `status` 不是 `"WAIVED"` 的要求，都必須附非空的 `observability` 陣列
+（FAIL REQUIREMENT_WITHOUT_OBSERVABILITY），且陣列裡至少一筆的 `type` 要落在
+SCOREBOARD/CHECKER/ASSERTION/MONITOR/LOG_SEMANTIC 之一並附上非空的 `evidence_point`，否則 FAIL
+INSUFFICIENT_OBSERVABILITY——只是「掛個名字」不夠，要有實際指向的觀察點。）
+
+```dv-harness-evidence:assertion_placeholder_closure_gate
+{"assertion_entries": []}
+```
+（`assertion_entries` 對應 `generate_observability_plan.py` 產出的 `implementation_manifest.json`
+裡同名欄位；此 stage 尚未真的跑過那支 generator 時，附空陣列 `[]` 就是誠實的預設值，gate 不會為此
+FAIL。一旦有條目，其中任何一筆 `classification` 是 `"PROTOCOL_STATE_MACHINE_LEGALITY"`（planner
+自己判定「可從有限合法值/狀態加合法性關係機械決定」的需求）卻 `generation_method` 還是
+`"placeholder"`，就會 FAIL STATE_MACHINE_LEGALITY_ASSERTION_STILL_PLACEHOLDER——這條規則只堵「明明
+可以自動生成卻還停在 TODO 佔位」這一種情況，不是要求所有 assertion 都必須 DSL 生成
+（Q2/INTERRUPT_RESPONSE_SEMANTIC、Q3/CROSS_CYCLE_TEMPORAL_INVARIANT 類仍允許手寫）。）
+
+```dv-harness-evidence:error_injection_coverage_gate
+{"required_error_classes": ["CRC_ERROR", "TIMEOUT", "PROTOCOL_VIOLATION"],
+ "tests": [{"testcase_id": "tc_crc_error_injection", "error_classes": ["CRC_ERROR"],
+            "checker_ids": ["crc_checker"], "assertion_ids": []}]}
+```
+（`tests` 裡每一筆都必須至少附上非空的 `checker_ids` 或 `assertion_ids` 其中之一，否則 FAIL
+ERROR_TEST_WITHOUT_CHECK——代表這是「有注入錯誤但沒人在看結果」的無效測試；所有 `tests` 的
+`error_classes` 聯集起來，必須涵蓋 `required_error_classes` 全部，缺任何一類 FAIL
+MISSING_ERROR_INJECTION_CLASSES。本次 scope 若真的沒有需要錯誤注入的需求，`required_error_classes`
+與 `tests` 都填空陣列即可誠實通過。）
+
+最後是 Reference UVM 相容性、改編、與 scoreboard/reference model 獨立性這三個（呼應 CLAUDE.md
+「No Golden-Reference Content Mining」——可以參考既有 Reference UVM，但不能整段照抄，也不能讓
+scoreboard 的判斷依據跟 DUT 本身的實作邏輯共用同一個來源）：
+
+```dv-harness-evidence:reference_uvm_compatibility_gate
+{"reference_name": "USB_UVM_Handoff", "reference_revision": "...", "reference_hash": "...",
+ "compatibility_analysis": {"protocol_role": "...", "interface_mapping": "...",
+   "config_mapping": "...", "sequence_reuse": "...", "scoreboard_checker_reuse": "..."},
+ "reuse_decision": "REUSE", "adaptation_plan": "..."}
+```
+（`reference_name` 不能空（FAIL NO_REFERENCE_NAME）；`reference_revision`／`reference_hash` 都要
+非空，代表釘住了確切版本（缺一 FAIL UNPINNED_REFERENCE_ENV）；`compatibility_analysis` 必須是個
+物件且同時包含 `protocol_role`／`interface_mapping`／`config_mapping`／`sequence_reuse`／
+`scoreboard_checker_reuse` 五個 key，缺任一個 FAIL INCOMPLETE_REFERENCE_COMPATIBILITY；
+`reuse_decision` 是 `"REUSE"` 時，一定要附 `adaptation_plan`，否則 FAIL
+REUSE_WITHOUT_ADAPTATION_PLAN——不能宣告要重用卻沒說怎麼改。）
+
+```dv-harness-evidence:reference_uvm_adaptation_gate
+{"reference_uvm_hash": "...", "new_dut_architecture_hash": "...",
+ "gap_analysis_hash": "...", "adaptation_plan_hash": "...",
+ "blind_copy": false, "dut_specific_changes": ["..."]}
+```
+（`reference_uvm_hash`／`new_dut_architecture_hash`／`gap_analysis_hash`／`adaptation_plan_hash`
+四個欄位都必須非空，缺任一個 FAIL INCOMPLETE_REFERENCE_UVM_ADAPTATION；`blind_copy` 不能是 true，
+否則 FAIL REFERENCE_UVM_BLIND_COPY_FORBIDDEN；`dut_specific_changes` 必須非空，證明真的針對這顆
+DUT 做過調整，否則 FAIL NO_DUT_SPECIFIC_ADAPTATION_PROVEN。）
+
+```dv-harness-evidence:scoreboard_reference_model_independence_gate
+{"shares_dut_implementation_code": false,
+ "shared_algorithm_source_hash": "", "dut_algorithm_source_hash": "...",
+ "independent_oracle_basis": "protocol spec + register map (not DUT RTL)",
+ "negative_control_detected": true}
+```
+（`shares_dut_implementation_code` 不能是 true，否則 FAIL REFERENCE_MODEL_MIRRORS_DUT——reference
+model 不能直接搬 DUT 的實作程式碼當 oracle；若 `shared_algorithm_source_hash` 有填，且跟
+`dut_algorithm_source_hash` 完全相同，會 FAIL COMMON_MODE_DEFECT_RISK（兩邊共用同一份演算法來源，
+DUT 錯了 scoreboard 也會跟著錯，抓不出問題）；`independent_oracle_basis` 必須非空，說明這個
+scoreboard 的判斷依據是什麼獨立來源（例如協定規格，而非 DUT RTL 本身）；`negative_control_detected`
+必須是 true，代表真的證明過這個 scoreboard/reference model 對「刻意注入的錯誤」有反應、不是形同
+虛設，否則 FAIL SCOREBOARD_EFFECTIVENESS_UNPROVEN。）
 """,
 Stage.IMPLEMENT.value: """
 Test Generation + Negative Tests + Monitor/Scoreboard/Checker/Assertion/Reference Model 實作：
@@ -434,6 +916,88 @@ branch_b{N}（VIP pattern）修改前必須先查 VIP examples、VIP 使用手�
 {"branch": "branch_a0", "dut_rtl_checked": true, "programming_guide_checked": true,
  "dut_rtl_evidence_refs": [{"path": "<真實 RTL 檔案路徑>", "quote": "<從該檔案逐字擷取的一小段，例如暫存器/訊號名稱>"}]}
 ```
+
+測試/Checker 品質三個獨立 hard gate（checker_independence_gate / testcase_name_semantics_gate /
+verification_intent_gate）也必須各自附上 evidence block，缺任一個都會讓 stage 卡在
+MISSING_EVIDENCE（找到真實案例：IMPLEMENT 內容做得很完整，但這三個 gate 的 evidence 一個都沒附，
+導致同一組 GATE_FAIL 連續重試多輪）：
+
+Checker Independence Hard Gate：確保每個 checker 都有真正獨立於 DUT 的實作來源與期望值模型，
+不是拿 DUT 自己的邏輯來檢查自己。回覆結尾附上：
+
+```dv-harness-evidence:checker_independence_gate
+{"checkers": [{"checker_id": "...", "implementation_source": "<checker 實作檔案路徑>",
+  "dut_source": "<被檢查的 DUT RTL 檔案路徑>", "expected_data_source": "REFERENCE_MODEL",
+  "independent_predictor": true, "checker_disabled": false, "signoff_credit": true}]}
+```
+（`implementation_source` 為必填，缺了會判 FAIL（CHECKER_WITHOUT_IMPLEMENTATION_SOURCE）；
+`implementation_source` 不可以跟 `dut_source` 是同一個檔案，等於照抄 DUT 自己的邏輯來檢查自己，
+會判 FAIL（CHECKER_COPIES_DUT_LOGIC）；`expected_data_source` 若為 `"DUT_OUTPUT_ONLY"` 卻沒有
+`independent_predictor: true`，代表期望值本身就是從 DUT 輸出反推出來的，等同沒有獨立期望值模型，
+會判 FAIL（NO_INDEPENDENT_EXPECTED_MODEL）；`checker_disabled: true` 又同時 `signoff_credit: true`
+（checker 已停用卻仍計入 signoff）會判 FAIL（DISABLED_CHECKER_HAS_CREDIT）。本輪若還沒有任何
+新增/修改的 checker，`{"checkers": []}` 是誠實、合法的預設值。）
+
+Testcase Name Semantics Hard Gate：testcase 名稱必須真的表達驗證意圖，不能是 `test1`、`basic`、
+`tmp` 這種佔位式命名。回覆結尾附上：
+
+```dv-harness-evidence:testcase_name_semantics_gate
+{"tests": [{"testcase_id": "...", "name": "usb_bulk_transfer_error_recovery"}]}
+```
+（每筆都要有非空的 `testcase_id` 與 `name`，缺一會判 FAIL（TEST_WITHOUT_ID_OR_NAME）；`name` 不可
+等於 `test1`/`test2`/`basic`/`misc`/`case1`/`tmp`/`new_test`/`scenario1` 這幾個保留字（不分大小寫），
+長度也不可小於 8 字元，否則判 FAIL（ABSTRACT_TEST_NAME）；`name`（不分大小寫）裡至少要包含
+`reset`/`error`/`recovery`/`bulk`/`iso`/`dma`/`ltssm`/`traffic`/`interrupt`/`timeout`/`read`/`write`/
+`link`/`enumeration`/`concurrency`/`performance`/`power`/`clock`/`cdc`/`protocol` 其中一個關鍵字，
+否則判 FAIL（TEST_NAME_LACKS_VERIFICATION_SEMANTICS）。本輪若還沒有任何新增 testcase，
+`{"tests": []}` 是誠實、合法的預設值。）
+
+Verification Intent Hard Gate：requirement/mechanism/coverage/test 四者必須真的互相對得起來，
+每個 requirement 都要有至少一個 test 宣稱涵蓋到。回覆結尾附上：
+
+```dv-harness-evidence:verification_intent_gate
+{"requirements": [{"req_id": "..."}], "mechanisms": [{"mechanism_id": "..."}],
+ "coverage": [{"coverage_id": "..."}],
+ "tests": [{"testcase_id": "...", "requirement_ids": ["..."], "mechanism_ids": ["..."],
+   "coverage_ids": ["..."]}]}
+```
+（`requirements`/`mechanisms`/`coverage`/`tests` 四個陣列都不能是空的，缺任一個分別判 FAIL
+（NO_REQUIREMENTS/NO_MECHANISMS/NO_TESTS/NO_COVERAGE）；每筆 test 的 `requirement_ids`/
+`mechanism_ids`/`coverage_ids` 都不可以是空陣列，否則判 FAIL（INCOMPLETE_TEST_INTENT）；這三組
+id 也都必須是前面 `requirements`/`mechanisms`/`coverage` 陣列裡真的存在的 id 的子集合，引用到
+不存在的 id 會分別判 FAIL（TEST_UNKNOWN_REQUIREMENT/TEST_UNKNOWN_MECHANISM/TEST_UNKNOWN_COVERAGE）；
+最後所有 `requirements` 裡的 req_id 必須至少被一個 test 的 `requirement_ids` 引用到，有漏網的
+requirement 會判 FAIL（REQUIREMENT_WITHOUT_TEST_INTENT，並列出 `missing` 清單）。）
+
+Protocol Isolation Hard Gate（與上面 Manual Lookup Before Edit Hard Gate 共用同一組
+`vip_evidence_refs`／`dut_rtl_evidence_refs` 欄位，但檢查角度不同）：manual_lookup_before_edit_gate
+只管「有沒有查證」，這個 gate 另外管「查證的來源本身有沒有誤引用到禁止當作 primary source 的
+reference 環境樹（目前是 `USB_UVM_Handoff`，對應 CLAUDE.md 的 No Golden-Reference Content Mining
+規則）」。回覆結尾附上：
+
+```dv-harness-evidence:protocol_isolation_gate
+{"vip_evidence_refs": [], "dut_rtl_evidence_refs": []}
+```
+（沿用同一輪 manual_lookup_before_edit_gate 實際附上的 `vip_evidence_refs`／`dut_rtl_evidence_refs`
+內容即可；只要其中任何一筆 `path` resolve 之後的路徑片段包含 `USB_UVM_Handoff`，就代表把 reference
+環境當成 primary VIP/DUT 來源引用，會判 FAIL（REFERENCE_TREE_CITATION_FORBIDDEN）。這個 gate 本身
+允許兩個欄位都缺席或為空陣列直接 PASS——它不像 manual_lookup_before_edit_gate 會因為「沒查證」而
+FAIL，它只在「查證來源真的指向禁止的 reference 樹」時才 FAIL，所以誠實的空陣列或省略欄位都是合法
+的預設值。）
+
+RTL Write Scope Guard Hard Gate（rtl_write_scope_guard_gate，防止真的把 DUT/VIP RTL 寫壞的最後一道
+code-level 防線——過去唯一真正擋下這件事的只有 `.claude/settings.json` 手動加的 Edit-tool deny
+規則，既不管 Write，也不管 Bash/PowerShell 層級的寫入，dv_harness 自己完全沒有檢查）：本輪
+IMPLEMENT 實際新增/修改的每一個檔案路徑都要誠實列出，一個都不能漏。回覆結尾附上：
+
+```dv-harness-evidence:rtl_write_scope_guard_gate
+{"edit": {"touched_paths": ["<這輪真的新增/修改過的檔案路徑，例如 uvm/tb/scoreboard.sv>"]}}
+```
+（`touched_paths` 缺席或不是陣列會判 FAIL（TOUCHED_PATHS_MISSING_OR_INVALID）；只要其中任何一筆
+resolve 之後落在專案設定（`.dv-harness/config.json` 的 `rtl_protection.protected_paths`）宣告的
+DUT/VIP RTL 保護目錄之下，就會判 FAIL（RTL_WRITE_SCOPE_VIOLATION）——UVM/testbench 側的正常修改
+不受影響，只有真的觸碰到受保護的 DUT/VIP RTL 樹才會擋下來。專案若還沒設定 `protected_paths`，
+空陣列是誠實、合法的預設值，這個 gate 會 PASS 但不代表真的有保護生效。）
 """,
 Stage.CHANGE_IMPACT.value: """
 對 Git/RTL/UVM/spec/config 變更做 Verification Change Impact。
@@ -455,6 +1019,26 @@ Stage.CHANGE_IMPACT.value: """
 ```
 （`changed_items` 為空時直接 PASS，不需要走完整流程；`spec_changed`/`rtl_interface_or_arch_changed` 為 true 時
 對應的 `vplan_reanalyzed`/`architecture_rediscovered`/`mechanism_plan_revalidated` 必須是 true，不能留 null。）
+
+本 stage 另外還有一個獨立的 hard gate，也必須附上 evidence block，缺了會讓整個 stage 卡在
+GATE_FAIL/MISSING_EVIDENCE（同一種真實案例：agent 只附了 spec_rtl_change_impact_gate，
+artifact_dependency_closure_gate 沒附，導致 stage 反覆卡在同樣的 GATE_FAIL）：
+
+```dv-harness-evidence:artifact_dependency_closure_gate
+{"artifacts": [
+  {"artifact_id": "...", "hash": "...", "depends_on": ["..."], "stale": false}
+]}
+```
+
+（盤點本次 Change Impact 分析中實際涉及的產出物（例如受影響的 vPlan/regression selection/
+architecture model 等 artifact）及它們彼此的依賴關係——這個階段本來就沒有處理到任何 artifact
+時，`{"artifacts": []}` 是誠實、合法的預設值，gate 對空清單直接 PASS，不需要硬湊內容。一旦列出
+任何一筆，`artifact_id` 與 `hash` 都是必填：漏了 `hash`（或給空字串/null）會被判 FAIL
+（UNHASHED_ARTIFACT）；`depends_on` 裡列的每個 parent artifact_id 都必須也出現在同一份
+`artifacts` 清單裡，指向一個清單裡查不到的 artifact 會被判 FAIL（MISSING_ARTIFACT_DEPENDENCY）
+——不能只列出自己這筆卻漏了它依賴的 parent；某個 parent 的 `stale` 為 true 時，依賴它的這筆也會被
+判 FAIL（STALE_ARTIFACT_DEPENDENCY），代表不能在依賴鏈裡還有過期產出物的情況下宣稱這次的
+change impact 分析已經完整、可信。）
 """,
 Stage.GIT_SYNC.value: """
 安全執行 Git status/fetch/sync strategy discovery；保護 unrelated user changes。
@@ -472,17 +1056,56 @@ FETCH_ONLY/MERGE/REBASE/FAST_FORWARD，不得使用 reset --hard/clean -f 等破
 """,
 Stage.GIT_PUSH.value: """
 完成 diff review、secret/artifact gate、commit 與 push，記錄 exact commit SHA。禁止 force push。
+
+本 stage 還有一個獨立的 hard gate，確保「第一輪 workflow 發現的問題全部修完」之後，
+還要完整跑過一次第二輪詳細 workflow 分析、確認真的乾淨，才准許往下推進到
+push→build→verify 這條 pipeline（不是修完第一輪就直接 push）。回覆結尾附上：
+
+```dv-harness-evidence:workflow_second_pass_clean_gate
+{"first_workflow_complete": true, "all_first_pass_issues_fixed": true,
+ "second_detailed_workflow_run": true, "remaining_issue_count": 0,
+ "push_build_verify_run_requested": false, "clean_second_pass": true}
+```
+
+（first_workflow_complete 必須是 true，代表第一輪 workflow 分析真的跑完，不是還在進行中
+（否則 FAIL：FIRST_WORKFLOW_NOT_COMPLETE）；all_first_pass_issues_fixed 必須是 true，代表
+第一輪發現的所有 issue 都已經修完，不能只修一部分就宣稱完成（否則 FAIL：
+NOT_ALL_FIRST_PASS_ISSUES_FIXED）；second_detailed_workflow_run 必須是 true，代表真的完整
+再跑過一次詳細的第二輪 workflow 分析，不能省略這一步直接宣稱乾淨（否則 FAIL：
+SECOND_WORKFLOW_ANALYSIS_REQUIRED）；remaining_issue_count 必須是 0（省略時預設也是 0），
+代表第二輪分析後已經沒有殘留 issue，如實填入第二輪實際發現的殘留數量，大於 0 會直接 FAIL
+（SECOND_PASS_STILL_HAS_ISSUES，並回報這個殘留數量）；push_build_verify_run_requested 用來
+表示這次是否要緊接著請求進到 push→build→verify pipeline，本階段若還不打算立刻推進，可以
+省略或填 false；一旦填 true，就必須同時把 clean_second_pass 明確填成 true，代表第二輪確實
+乾淨、可以放行進到下一段 pipeline，否則會被判定「在還沒確認第二輪乾淨之前就要推進」
+（FAIL：PROMOTION_BEFORE_CLEAN_SECOND_PASS）。）
 """,
 Stage.SERVER_SYNC.value: """
 在 Linux Server 同步並確認 HEAD SHA = expected pushed SHA；submodule SHA 也需一致。
 
-本 stage 的 PASS 由 harness 端 gate 腳本裁定。回覆結尾附上：
+本 stage 的 PASS 由 harness 端 gate 腳本裁定。若這個專案在 PC 與 Linux 之間有 git
+remote，回覆結尾附上（identity_method 可省略，預設等同 "git_sha"）：
 
 ```dv-harness-evidence:server_sync_identity_gate
-{"expected_sha": "...", "server_head_sha": "...",
+{"identity_method": "git_sha", "expected_sha": "...", "server_head_sha": "...",
  "submodules": [{"name": "...", "expected_sha": "...", "server_sha": "..."}]}
 ```
 （沒有 submodule 時 "submodules": [] 即可。）
+
+若這個專案沒有 git remote（CLAUDE.md「Remote Linux Execution」規定的 SOURCE_ID
+git-free 備援路徑，"never skipped outright"），改附 identity_method="source_id"，
+並附上兩個「真實檔案路徑」（不是把內容直接寫進 JSON）：
+
+```dv-harness-evidence:server_sync_identity_gate
+{"identity_method": "source_id",
+ "local_md5sum_transcript_path": "<PC 端執行 md5sum 的真實輸出檔路徑>",
+ "remote_md5sum_transcript_path": "<真實 tools/remote/remote_exec.py \\"md5sum <files>\\" 呼叫的真實 stdout 轉錄檔路徑>"}
+```
+（gate 會實際讀這兩個檔案、用 tools/remote/source_identity.py 重新算一次
+three-way diff + aggregate id，PASS/FAIL 完全看這個真實重算的結果，不是看你
+宣稱的值；remote 端那份必須真的帶有 remote_exec.py 自己蓋的
+REMOTE_HOST=/EXIT_CODE=/STATUS= 標記且 EXIT_CODE=0，local 端只檢查檔案真實存在
+——PC 端目前沒有對應的轉錄真實性標記慣例，這是已知、記錄在案的殘留限制。）
 
 注意：本 stage 屬 REMOTE_EXECUTION，需先完成 CLAUDE.md 的 SSH/Remote Transport
 Connection Intake（詢問使用者是否建立連線、蒐集 account/vc machine/ssh machine/
@@ -490,6 +1113,60 @@ working path 四項，密碼不得寫入任何 evidence block）。
 """,
 Stage.BUILD.value: """
 依 project canonical flow 執行 build。Coverage 預設 OFF。保存 evidence。
+
+本 stage 有三個獨立的 hard gate，也必須各自附上 evidence block，缺一個都會讓整個 stage 卡在
+GATE_FAIL/MISSING_EVIDENCE：前兩個是 build 狀態機本身的正確性（有沒有多個 job 同時搶著寫同一份
+共用 elaboration 產出、build 完成後是否真的 stop 而不是滑落到 run），第三個是「這個 build 真的有
+在遠端伺服器上執行」的獨立證明（不能只靠 agent 自己宣稱 build 成功）：
+
+```dv-harness-evidence:shared_elaboration_collision_gate
+{"elaboration_jobs": [{"job_id": "elab_001", "state": "DONE", "write_paths": ["/proj/build/out/simv"]}],
+ "shared_output_paths": ["/proj/build/out/simv"],
+ "parallel_test_workers": 1, "each_worker_runs_full_compile": false,
+ "build_owner_count": 1,
+ "simv_valid": true, "worker_invokes_usbc_elab": false}
+```
+（elaboration_jobs 要如實列出本輪實際觀察到的 elaboration job，每個 job 的 state 只要是
+RUN/PEND/STARTING 就算「還在跑」，若有兩個以上這種 active job 的 write_paths 命中同一個列在
+shared_output_paths 裡的路徑，就會被判 FAIL（CONCURRENT_SHARED_ELABORATION_COLLISION）——代表有多個
+job 同時搶著寫同一份共用 elaboration 產出，這是不允許的；parallel_test_workers>1 又
+each_worker_runs_full_compile 為 true 會 FAIL（PARALLEL_WORKERS_MUST_NOT_RECOMPILE_SHARED_SIMV，
+平行的測試 worker 不該各自重新 compile 共用的 simv）；build_owner_count 一定要恰好是 1，不是 1
+就 FAIL（SINGLE_BUILD_OWNER_REQUIRED，build 必須有唯一 owner，不能沒人負責也不能多人搶著做）；
+simv_valid 為 true 又 worker_invokes_usbc_elab 為 true 會 FAIL
+（REDUNDANT_ELAB_WHEN_VALID_SIMV_EXISTS，已經有一份可用的 simv 時就不該再重新 elaborate 一次）。）
+
+```dv-harness-evidence:stop_after_simv_policy_gate
+{"compile_target_can_fall_through_to_run": true, "stop_after_simv": true,
+ "parallel_run_count": 1, "compile_completed_before_parallel_runs": true,
+ "build_fingerprint": "<實際 build 的 fingerprint/hash>",
+ "simv_completion_marker": "<實際 simv 完成標記內容>",
+ "simv_completion_marker_build_fingerprint": "<必須與 build_fingerprint 完全相同>"}
+```
+（如果這個專案的 compile target 本身「有可能」在沒有明確 stop 的情況下滑落直接跑下去
+（compile_target_can_fall_through_to_run 為 true），stop_after_simv 就一定要明確填 true，
+否則 FAIL（STOP_AFTER_SIMV_REQUIRED，build 完成後必須真的停在 simv，不能自動滑到 run）；
+parallel_run_count>1 時，compile_completed_before_parallel_runs 一定要是 true，否則 FAIL
+（PARALLEL_RUNS_STARTED_BEFORE_COMPILE_COMPLETE，平行跑多個 run 之前 compile 必須先真的完成）；
+build_fingerprint 與 simv_completion_marker 兩個欄位都不能留空，缺任一個就 FAIL
+（BUILD_COMPLETION_NOT_ATOMICALLY_PROVEN，build 完成這件事必須有原子性的證明，不能只憑口頭
+宣稱）；simv_completion_marker_build_fingerprint 必須和 build_fingerprint 逐字相同，不同就 FAIL
+（STALE_SIMV_COMPLETION_MARKER，代表這份 completion marker 其實是舊的、對不上這次的 build）。）
+
+```dv-harness-evidence:remote_execution_provenance_gate
+{"provenance_applicable": true,
+ "transcript_path": "<真實存在的 tools/remote/remote_exec.py 輸出 transcript 檔案路徑>",
+ "claimed_exit_code": 0}
+```
+（transcript_path 必須是磁碟上真實存在的檔案，內容是實際執行 tools/remote/remote_exec.py 產生的
+原始 stdout（必須真的含有它 format_result() 蓋的 REMOTE_HOST=/EXIT_CODE=/STATUS= 這三個 marker，
+少任一個或 REMOTE_HOST 是空的都會 FAIL，TRANSCRIPT_MISSING_MARKERS；檔案不存在則 FAIL，
+TRANSCRIPT_FILE_NOT_FOUND）——不能用一段自己編的 JSON 字串冒充真的 transcript；claimed_exit_code
+必須和 transcript 裡實際解析出來的 EXIT_CODE= 數字完全一致，兩者對不上就 FAIL
+（EXIT_CODE_MISMATCH），代表不能一邊 transcript 顯示遠端指令失敗、一邊卻宣稱 build 成功。這一輪
+如果根本沒有透過 remote_exec.py 做任何遠端操作（例如純本地整理既有 build 產出），才可以把
+provenance_applicable 填 false，但這時 provenance_not_applicable_reason 一定要附上非空的理由字串，
+否則同樣 FAIL（NOT_APPLICABLE_WITHOUT_JUSTIFICATION）——不接受沒有理由的裸 false。）
 """,
 Stage.BUILD_DEBUG.value: """
 Build 失敗的第一輪快速分流：讀 build log，判斷這是可以立即修的小問題
@@ -519,11 +1196,17 @@ PASS → 完成。FAIL → 停在第一個 failure/error/fatal/missing/mismatch�
 harness 會將本 stage 標為 PARTIAL 並附上原因，而不是預設 PASS）：
 
 ```dv-harness-evidence:simulation_semantic_validation_gate
-{"simulation_passed": true, "sim_log": "<真實 sim.log 內容或關鍵片段>",
+{"simulation_passed": true,
+ "command_file_path": "<這次真的驅動本次 simulation 的 command.txt 在磁碟上的真實路徑，必填>",
+ "sim_log_path": "<這次真實 sim.log 在磁碟上的真實路徑，必填，harness 會直接讀取此檔案內容，不接受純文字貼上>",
  "command_expectations": [{"expectation_id": "...", "source_file": "command.txt",
    "testcase_id": "...", "required": true,
    "evidence_requirements": [{"pattern": "...", "match_mode": "SUBSTRING"}]}]}
 ```
+（`command_file_path`/`sim_log_path` 缺一都會讓本 gate 判 INSUFFICIENT_EVIDENCE：harness
+會用 command_file_path 指向的真實 command.txt 獨立重新推導每一行的最低必要證據需求，
+比對你填的 command_expectations 是否有低報；harness 也會直接讀 sim_log_path 指向的真實
+檔案內容做語意比對，不是信任你貼上來的文字片段。）
 
 ```dv-harness-evidence:test_result_provenance_gate
 {"results": [{"testcase_id": "...", "run_id": "...", "rtl_revision": "...",
@@ -537,17 +1220,254 @@ harness 會將本 stage 標為 PARTIAL 並附上原因，而不是預設 PASS）
  "checker_detects_injected_fault": true, "semantic_log_match": true,
  "oracle_independent": true, "proof_bundle_hash": "..."}
 ```
+
+本 stage 另外還有一大批獨立的 hard gate，同樣各自必須附上 evidence block，缺任何一個都會讓
+VERIFY 卡在 GATE_FAIL/MISSING_EVIDENCE（找到真實案例：agent 只附了上面三個 gate，其餘全部
+沒附，導致同一個 stage 重跑多輪都停在一模一樣的 GATE_FAIL，即使實際分析工作本身沒有問題）。
+
+第一組：sim PASS 是否有真正的語意證據撐得住（不是抓到 sim.log 印 PASS 字樣就算數）：
+
+```dv-harness-evidence:checker_semantic_trace_consistency_gate
+{"items": [{"expectation_id": "...", "checker_expectation_id": "...", "testcase_id": "...",
+  "vplan_ids": ["..."], "semantic_status": "MATCH", "checker_status": "PASS"}]}
+```
+（每一筆 item 的 `semantic_status` 必須是 "MATCH"，否則 FAIL CHECKER_CREDIT_WITHOUT_SEMANTIC_MATCH；
+`checker_status` 必須是 "PASS"，否則 FAIL SEMANTIC_MATCH_WITHOUT_CHECKER_PASS；`testcase_id` 與
+`vplan_ids` 兩者都不能留空，否則 FAIL CHECKER_SEMANTIC_TRACE_INCOMPLETE；`checker_expectation_id`
+必須與 `expectation_id` 完全相同，否則 FAIL CHECKER_EXPECTATION_ID_MISMATCH——代表 checker 真的是在
+盯同一個 expectation，不是張冠李戴。）
+
+```dv-harness-evidence:command_intent_semantic_closure_gate
+{"command_id": "...", "command_hash": "...", "simulation_result": "PASSED",
+ "expected_semantics": "...", "observed_semantics": "...", "sim_log_hash": "..."}
+```
+（`command_id`/`command_hash`/`expected_semantics`/`observed_semantics`/`sim_log_hash` 五個欄位缺
+任一個都會 FAIL INCOMPLETE_COMMAND_INTENT_EVIDENCE 並回報缺的欄位名；`simulation_result` 必須逐字
+等於 "PASSED"，否則 FAIL SIMULATION_NOT_PASSED；`expected_semantics` 與 `observed_semantics` 必須
+完全相同，否則 FAIL SIM_PASS_BUT_COMMAND_INTENT_MISMATCH——代表 sim 印 PASS，但 command.txt 原本
+要驗的意圖跟實際觀察到的語意對不上，不能算真的過。）
+
+```dv-harness-evidence:simulation_semantic_trace_gate
+{"final_state": "TRUE_PASS", "signoff_credit_allowed": true,
+ "results": [{"expectation_id": "...", "status": "MATCH", "source_line": 12,
+   "evidence_source": "sim.log:1234"}]}
+```
+（`final_state` 必須是 "TRUE_PASS" 且 `signoff_credit_allowed` 必須為 true，否則 FAIL
+SEMANTIC_RESULT_NOT_TRUE_PASS；`results` 陣列中每一筆的 `status` 必須是 "MATCH"，否則 FAIL
+NON_MATCH_EXPECTATION；`source_line`（對應 command.txt 的來源行號）不得缺省，否則 FAIL
+MISSING_COMMAND_SOURCE_PROVENANCE；`evidence_source`（實際證據出處，如 sim.log 行號）不得留空，
+否則 FAIL MISSING_EVIDENCE_PROVENANCE。）
+
+```dv-harness-evidence:wave0_post_sim_semantic_gate
+{"wave_mode": 0, "command_hash": "...", "sim_log_hash": "...",
+ "command_intent": "...", "observed_semantics": "...", "simulation_ended": true,
+ "unexpected_error": false, "uvm_error_count": 0, "uvm_fatal_count": 0,
+ "first_error_time_us": null}
+```
+（`wave_mode` 必須是 0（本 stage 預設 FSDB OFF），否則 FAIL DEFAULT_POSTCHECK_REQUIRES_WAVE0；
+`command_hash`/`sim_log_hash`/`command_intent`/`observed_semantics` 四個欄位缺任一個都 FAIL
+INCOMPLETE_WAVE0_SEMANTIC_EVIDENCE；`simulation_ended` 必須為 true，否則 FAIL
+SIMULATION_NOT_ENDED；若 `command_intent` 與 `observed_semantics` 不相同，`first_error_time_us`
+必須填實際數字（否則 FAIL SEMANTIC_MISMATCH_WITHOUT_ERROR_TIMESTAMP），gate 會回報
+semantic_result=NEEDS_DEEP_DEBUG；若語意相符但 `unexpected_error`/`uvm_error_count`/
+`uvm_fatal_count` 顯示有錯誤，同樣必須填 `first_error_time_us`（否則 FAIL
+ERROR_WITHOUT_TIMESTAMP），gate 會回報 semantic_result=TRUE_FAIL；三者都乾淨才回報
+semantic_result=TRUE_PASS。）
+
+```dv-harness-evidence:semantic_evidence_strength_gate
+{"minimum_rank": 2, "expectations": [{"expectation_id": "...",
+  "evidence": [{"type": "SCOREBOARD", "contradicted": false, "detail": "..."}]}]}
+```
+（`minimum_rank` 未填時預設 2；`evidence` 的每個 `type` 依強度排序為 GENERIC_LOG(1) <
+PROTOCOL_TRANSACTION(2) < ASSERTION(3) < CHECKER(4) < SCOREBOARD(5)，每個 expectation 至少要有一筆
+evidence 且其中最高強度必須 ≥ minimum_rank，否則分別 FAIL NO_EVIDENCE 或 WEAK_SEMANTIC_EVIDENCE；
+任一筆 evidence 的 `contradicted` 為 true 都會 FAIL CONTRADICTED_EVIDENCE——代表這筆證據本身已知
+與其他觀察矛盾，不能拿來當作 PASS 的依據。）
+
+第二組：FALSE PASS/FALSE FAIL 防禦，對應 CLAUDE.md「LSF DONE 不等於 DV PASS」同一精神在單一
+simulation 層級的落地：
+
+```dv-harness-evidence:false_pass_false_fail_arbitration_gate
+{"simulation_status": "PASS", "semantic_status": "TRUE_PASS", "checker_status": "PASS",
+ "fatal_or_uvm_error": false, "infrastructure_failure_evidence": null,
+ "design_failure_evidence": null}
+```
+（gate 會交叉比對 `simulation_status`（sim 本身 PASS/FAIL）與 `semantic_status`/`checker_status`/
+`fatal_or_uvm_error`：sim PASS 但語意證據對不上（semantic_status 非 TRUE_PASS、或 checker FAIL、
+或有 fatal/UVM_ERROR）會直接 FAIL，classification=FALSE_PASS；sim FAIL 但語意/checker 其實都乾淨
+時，必須附上非空的 `infrastructure_failure_evidence` 才會判為 INFRASTRUCTURE_FAIL_NOT_DUT_FAIL，
+否則 FAIL，classification=UNRESOLVED_FALSE_FAIL；sim FAIL 且 checker FAIL/有 fatal/有
+`design_failure_evidence` 才會判為真正的 TRUE_FAIL；四種組合都不符合時 FAIL
+INSUFFICIENT_EVIDENCE，代表證據還不夠支撐任何一種裁定。）
+
+```dv-harness-evidence:negative_test_effectiveness_gate
+{"checks": [{"id": "...", "positive_passed": true, "negative_mutation_applied": true,
+  "negative_control_result": "FAIL"}]}
+```
+（每一筆 check 的 `positive_passed` 必須為 true，否則 FAIL POSITIVE_CONTROL_FAILED；
+`negative_mutation_applied` 必須為 true（代表真的注入過故意錯誤/mutation），否則 FAIL
+NO_NEGATIVE_MUTATION；`negative_control_result` 必須逐字等於 "FAIL"（代表 checker/test 真的抓得到
+這個故意注入的錯誤），否則 FAIL VACUOUS_TEST_OR_CHECKER——checker 連故意的錯誤都抓不到，PASS 就
+沒有意義。）
+
+```dv-harness-evidence:test_oracle_independence_gate
+{"oracles": [{"oracle_id": "...", "shares_prediction_source_with_dut": false,
+  "shares_bug_prone_algorithm_with_stimulus": false,
+  "reference_basis": "...", "oracle_hash": "..."}]}
+```
+（`shares_prediction_source_with_dut` 與 `shares_bug_prone_algorithm_with_stimulus` 任一個為
+true，都會 FAIL NON_INDEPENDENT_TEST_ORACLE——代表這個 oracle 跟 DUT 或 stimulus 共用了同一份可能
+有錯的邏輯，不是獨立的參考標準；`reference_basis`（oracle 的依據，如 spec 章節/reference model）與
+`oracle_hash` 兩者缺一都會 FAIL UNPROVEN_TEST_ORACLE。）
+
+第三組：scoreboard expected-data 的來源與 transaction liveness：
+
+```dv-harness-evidence:expected_data_provenance_gate
+{"scoreboards": [{"scoreboard_id": "...", "expected_source": "REFERENCE_MODEL",
+  "expected_source_hash": "...", "prediction_method": "..."}]}
+```
+（`expected_source` 不得留空，否則 FAIL NO_EXPECTED_SOURCE；`expected_source` 絕對不能是
+"DUT_OUTPUT"，否則 FAIL EXPECTED_DATA_DERIVED_FROM_DUT_OUTPUT——expected value 若取自 DUT 自己的
+輸出，等同拿 DUT 驗證 DUT，checker 永遠不會抓到錯；`expected_source_hash`（把 expected source 釘死
+的 hash）與 `prediction_method`（怎麼從 expected_source 推出預期值）兩者缺一分別 FAIL
+UNPINNED_EXPECTED_SOURCE / NO_PREDICTION_METHOD。）
+
+```dv-harness-evidence:scoreboard_transaction_liveness_gate
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "missing_expected_transactions": 0, "missing_actual_transactions": 0,
+ "duplicate_transactions": 0, "max_transaction_latency": 500,
+ "observed_max_transaction_latency": 120}
+```
+（`evidence_provenance` 為必填，規則見下一組說明。）
+（`missing_expected_transactions`/`missing_actual_transactions`/`duplicate_transactions` 三者只要
+有任何一個大於 0，就分別 FAIL MISSING_EXPECTED_TRANSACTIONS / MISSING_ACTUAL_TRANSACTIONS /
+DUPLICATE_TRANSACTIONS；`max_transaction_latency` 不得缺省，否則 FAIL
+NO_TRANSACTION_LATENCY_BOUND；`observed_max_transaction_latency` 超過 `max_transaction_latency`
+會 FAIL LATE_TRANSACTION。）
+
+第四組：多 port 場景下的 interrupt/fairness/starvation（單 port 或本輪未涉及多 port 行為時，
+對應清單可以誠實地留空陣列，gate 對空清單會直接通過，不需要硬湊資料）：
+
+這一組（連同下面的 scoreboard_transaction_liveness_gate）以及 SYSTEM_LEVEL 的
+deadlock/livelock 與 shared-resource contention gate，宣告的都是「系統動態行為」——
+沒有真的跑過東西就無法成立的性質。所以這些 evidence block 一律必須額外帶一個
+`evidence_provenance` 欄位，說明這些數字是誰產生的（缺欄位會 FAIL
+EVIDENCE_PROVENANCE_MISSING，值不在清單內會 FAIL EVIDENCE_PROVENANCE_INVALID）：
+- `"AGENT_SELF_ATTESTED"`：由你自己填寫、沒有經過任何工具或模擬獨立推導。這是誠實的
+  預設值，永遠會被接受，不需要附任何其他東西——不要為了讓 stage 過關而謊報更強的來源。
+- `"TOOL_DERIVED"` / `"SIMULATION_DERIVED"`：真的有工具／模擬跑出這些數字。此時必須同時附
+  `"evidence_derivation": {"tool": "<真實工具名>", "artifact_path": "<真實存在的檔案路徑>"}`，
+  且該路徑在 project root 底下必須真的存在，否則 FAIL EVIDENCE_PROVENANCE_DERIVATION_MISSING
+  / EVIDENCE_PROVENANCE_ARTIFACT_NOT_FOUND。
+（harness 只檢查該 artifact 檔案存在，不會去解析內容——所以這是「來源宣告」而不是
+「claim 已被驗證」。宣告為 AGENT_SELF_ATTESTED 的結論會在 dashboard 與 signoff 匯出上
+被明確標示為未經獨立推導。）
+
+```dv-harness-evidence:interrupt_storm_latency_gate
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "sources": [{"source_id": "...", "max_ack_latency_cycles": 64,
+  "observed_max_ack_latency_cycles": 20, "storm_rate": null,
+  "storm_test_evidence": null, "lost_interrupts": 0}]}
+```
+（每個 interrupt source 的 `max_ack_latency_cycles` 不得缺省，否則 FAIL NO_ACK_LATENCY_BOUND；
+`observed_max_ack_latency_cycles` 超過該上限會 FAIL ACK_LATENCY_VIOLATION；填了 `storm_rate` 卻
+沒有 `storm_test_evidence` 會 FAIL INTERRUPT_STORM_WITHOUT_EVIDENCE；`lost_interrupts` 大於 0 會
+FAIL LOST_INTERRUPTS。本輪測項未涉及任何 interrupt source 時，`{"sources": []}` 是誠實、合法的
+預設值。）
+
+```dv-harness-evidence:multi_port_fairness_qos_gate
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "ports": [{"port_id": "...", "min_service_share_percent": 20,
+  "observed_service_share_percent": 25, "qos_enabled": false,
+  "qos_policy_verified": false}]}
+```
+（每個 port 的 `min_service_share_percent` 不得缺省，否則 FAIL NO_MIN_SERVICE_SHARE；
+`observed_service_share_percent` 低於該下限會 FAIL FAIRNESS_VIOLATION；`qos_enabled` 為 true 卻
+`qos_policy_verified` 不是 true 會 FAIL QOS_NOT_VERIFIED。非多 port 測項可同樣附 `{"ports": []}`。）
+
+```dv-harness-evidence:per_port_queue_starvation_gate
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "ports": [{"port_id": "...", "independent_queue": true, "max_wait_cycles": 256,
+  "observed_wait_cycles": 40, "forward_progress_evidence": "..."}]}
+```
+（`independent_queue` 必須為 true，否則 FAIL PORT_NOT_INDEPENDENT_QUEUE；`max_wait_cycles` 不得
+缺省，否則 FAIL NO_STARVATION_BOUND；`observed_wait_cycles` 超過該上限會 FAIL
+PORT_STARVATION_DETECTED；`forward_progress_evidence` 不得留空，否則 FAIL
+NO_FORWARD_PROGRESS_EVIDENCE。非多 port 測項可同樣附 `{"ports": []}`。）
+
+第五組：remote 執行的真實性與 rerun/環境層級的可重現性——對應 CLAUDE.md 的 Source identity
+與 Same regression batch 精神，落到單一 VERIFY run 的層級：
+
+```dv-harness-evidence:remote_execution_provenance_gate
+{"transcript_path": "<真實存在、由 tools/remote/remote_exec.py 產生的 stdout transcript 檔案路徑>",
+ "claimed_exit_code": 0}
+```
+（`transcript_path` 必須是磁碟上真的存在的檔案，且內容必須包含 `remote_exec.py` 真正輸出的
+`REMOTE_HOST=`/`EXIT_CODE=`/`STATUS=` 標記（找不到檔案 FAIL TRANSCRIPT_FILE_NOT_FOUND，檔案存在
+但缺標記 FAIL TRANSCRIPT_MISSING_MARKERS）；`claimed_exit_code` 必須與 transcript 裡真正的
+`EXIT_CODE=` 完全相同，否則 FAIL EXIT_CODE_MISMATCH——不能自稱 BUILD/VERIFY 成功卻讓真實
+transcript 顯示非零 exit code。若本次 VERIFY 完全沒有透過 `remote_exec.py` 執行過任何指令，改附
+`{"provenance_applicable": false, "provenance_not_applicable_reason": "..."}`，reason 為必填，
+不接受單純的 false 空白帶過。）
+
+```dv-harness-evidence:rerun_determinism_gate
+{"runs": [{"input_fingerprint": "...", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "..."},
+  {"input_fingerprint": "...", "semantic_verdict": "TRUE_PASS", "critical_checker_hash": "..."}]}
+```
+（`runs` 至少要有 2 筆，否則 FAIL INSUFFICIENT_EQUIVALENT_RERUNS——代表真的執行過至少一次
+equivalent rerun，不是只跑一次就宣稱 deterministic；除第一筆外，其餘每一筆的 `input_fingerprint`
+必須與第一筆完全相同，否則 FAIL NON_EQUIVALENT_RERUN_INPUT（代表根本不是同一組輸入的 rerun）；
+`semantic_verdict` 與 `critical_checker_hash` 也必須與第一筆一致，否則 FAIL
+NON_DETERMINISTIC_VERIFICATION_RESULT。）
+
+```dv-harness-evidence:run_environment_reproducibility_gate
+{"rtl_hash": "...", "testbench_hash": "...", "simulator_version": "...",
+ "vip_version": "...", "compile_options_hash": "...", "runtime_options_hash": "...",
+ "env_hash": "...", "final_verdict": "PASS", "replay_command": "..."}
+```
+（`rtl_hash`/`testbench_hash`/`simulator_version`/`vip_version`/`compile_options_hash`/
+`runtime_options_hash`/`env_hash` 七個 fingerprint 欄位缺任一個都會 FAIL
+MISSING_REPRODUCIBILITY_FINGERPRINT 並回報缺的欄位名；`final_verdict` 為 "PASS" 時
+`replay_command`（可以逐字重跑出同一結果的指令）必須填，否則 FAIL
+PASS_WITHOUT_REPLAY_COMMAND。）
+
+第六組：長時間背景模擬的完成狀態必須定期主動 recheck，不能放著不管直到使用者自己回來問：
+
+```dv-harness-evidence:simulation_completion_recheck_gate
+{"simulation_ended": false, "background_completion_notification": false,
+ "minutes_since_last_check": 1.5, "recheck_performed": false,
+ "recheck_scheduled_for_minute": 4, "semantic_workflow_started": false}
+```
+（`simulation_ended` 為 true 時，`semantic_workflow_started` 必須為 true（否則 FAIL
+SIM_ENDED_BUT_SEMANTIC_WORKFLOW_NOT_STARTED），代表模擬一結束就真的接著做語意分析，不是放著；
+`simulation_ended` 為 false 時分三種情況：收到 `background_completion_notification` 卻沒有
+`recheck_performed` 會 FAIL BACKGROUND_NOTIFICATION_NOT_RECHECKED；`minutes_since_last_check` ≥ 4
+卻沒有 `recheck_performed` 會 FAIL FOUR_MINUTE_RECHECK_MISSED；以上皆非時，
+`recheck_scheduled_for_minute` 必須等於 4（代表已排程下一次主動檢查），否則 FAIL
+RECHECK_NOT_SCHEDULED_AT_FOUR_MINUTES。）
 """,
 Stage.WAVE_ANALYSIS.value: """
 對代表性 testcase 以 WAVE=1、FSDB_START=0、FSDB_STOP=simulation_end 執行，
 使用 fsdbreport；必要時 Verdi。保存 evidence。
 
 Waveform Dump User Gate（CLAUDE.md）：開啟波形前，先向使用者確認 dump scope 與 level/depth，
-優先根據目前 failure cone 用最小足夠波形，不可預設 full-chip/full-depth。回覆結尾附上：
+優先根據目前 failure cone 用最小足夠波形，不可預設 full-chip/full-depth。
+
+這個確認必須是 question queue 裡「真人回答過」的紀錄，不是你自己在 evidence block 填的字串
+（gate 會拿 scope 反推 question_key，去 decisions store 查 source 是否為 human_answer）：
+
+  1. `dv-harness waveform-dump-scope ask --scope <scope> --level-or-depth <level>`
+     （會開一筆 Tier-3 blocking 問題並印出 Q-ID；同一個 scope 重問是同一個 Q-ID）
+  2. 由真人執行 `dv-harness question-queue answer <Q-ID> --answer ... --basis ... --decided-by ...`
+  3. `confirmed_by` 必須填那位真人（即該筆 decision 的 `decided_by`），不是 "user"、"agent"
+     或你自己的名字。
+
+尚未被回答時，這個 stage 會停在 WAIT_USER 等人回答，不會重試——這是預期行為，不要改寫
+evidence 去繞過它。回覆結尾附上：
 
 ```dv-harness-evidence:focused_wave_debug_window_gate
 {"deep_debug_required": true, "dump_scope_confirmed": {"scope": "...",
-  "level_or_depth": "...", "confirmed_by": "..."},
+  "level_or_depth": "...", "confirmed_by": "<回答該 Q-ID 的真人>"},
  "wave_mode": 1, "fsdb_start_us": 0, "first_error_time_us": 0, "fsdb_stop_us": 200,
  "simulation_stopped_at_fsdb_stop": true, "job_killed_or_terminated": true,
  "identity_preserved": true, "waveform_or_fsdbreport_evidence_hash": "..."}
@@ -564,7 +1484,20 @@ Stage.REGRESSION_SELECT.value: """
  "selection_source": {"change_impact_evidence_id": "..."}}
 ```
 （任一類別真的沒有適用測試時，改附對應的 "<category>_empty_reason" 說明原因，
-不得直接留空交差。）
+不得直接留空交差。若這次選測是跟在一輪 FAILURE_RECOVERY/RE_AUDIT 修復循環後面
+——也就是這批 regression 是為了「修完某個 target test 之後」送出的——必須額外附上
+`"fix_cycle_id": "..."`，並且同時附上：
+
+```dv-harness-evidence:regression_selection_completeness_gate
+{..., "fix_cycle_id": "...",
+ "single_test_reverify_evidence": {"target_pre_fix_result": "FAIL",
+                                    "target_post_fix_result": "PASS"}}
+```
+
+證明修復目標那個 test 真的先 FAIL、修完後真的 PASS，否則 FAIL
+SINGLE_TEST_REVERIFY_MISSING_BEFORE_FULL_REGRESSION——這是送出完整 regression
+「之前」的硬性前置條件，不是等 RE_AUDIT 事後才補的 fix_regression_non_regression_gate
+自我證明；兩邊各自獨立把關，RE_AUDIT 那個檢查依然存在，不因為這裡新增就取消。）
 """,
 Stage.REGRESSION.value: """
 提交 LSF regression（一個 LSF job = 一個獨立 Job Agent context），Regression 預設 WAVE=0、PA=0、Coverage=OFF。
@@ -603,6 +1536,66 @@ Rule）：整批 regression 的每筆 evidence 都必須回到同一個 canonica
 {"canonical_run_id": "...", "canonical_build_hash": "...",
  "evidence": [{"evidence_id": "...", "run_id": "...", "build_hash": "..."}]}
 ```
+
+除了以上兩個既有 gate，本 stage 還有四個獨立的 hard gate，分別針對「多筆 run 之間的證據一致性」、
+「flaky test 是否被誠實分類與 owner 化，而不是靠重跑蒙混過去」、「random regression 宣稱的
+corner case 覆蓋是否真的靠夠多樣的 seed/config 支撐」、以及「每一筆 random run 的失敗是否都能
+重現」，也都必須各自附上 evidence block：
+
+```dv-harness-evidence:cross_run_evidence_consistency_gate
+{"runs": [
+  {"run_id": "...", "rtl_revision": "...", "tb_revision": "...", "vip_version": "...",
+   "config_hash": "...", "testlist_hash": "...", "evidence_bundle_hash": "..."},
+  {"run_id": "...", "rtl_revision": "...", "tb_revision": "...", "vip_version": "...",
+   "config_hash": "...", "testlist_hash": "...", "evidence_bundle_hash": "..."}
+]}
+```
+
+（`runs` 至少要有兩筆，只有一筆會直接 FAIL `NEED_AT_LEAST_TWO_RUNS`；gate 會以第一筆為 baseline，
+逐筆比對 `rtl_revision`/`tb_revision`/`vip_version`/`config_hash`/`testlist_hash` 這五個欄位是否
+與 baseline 完全相同，任何一筆有落差就 FAIL `RUN_CONTEXT_DRIFT`（回傳不一致的欄位名、baseline 值、
+實際值與 run_id）——這正是 CLAUDE.md「同一批 regression 必須用同一個 source/build/config identity」
+的直接檢查；每一筆 run 的 `evidence_bundle_hash` 都不能缺，缺了任何一筆就整批 FAIL
+`RUN_WITHOUT_EVIDENCE_BUNDLE_HASH`。）
+
+```dv-harness-evidence:flaky_test_policy_gate
+{"tests": [{"testcase_id": "...", "failure_rate_percent": 0, "classified": true,
+  "owner": "...", "quarantined": false, "quarantine_reason": "",
+  "retry_count": 0, "max_allowed_retry": 1, "credit_allowed": false}]}
+```
+
+（`failure_rate_percent` 為 0 的測試不受任何限制；一旦 > 0（代表這個 testcase 真的觀察到 flaky
+行為），就必須 `classified` 為 true（否則 FAIL `UNCLASSIFIED_FLAKY_TEST`）且 `owner` 非空
+（否則 FAIL `FLAKY_TEST_WITHOUT_OWNER`）；若 `quarantined` 為 true，`quarantine_reason` 不能是
+空字串（否則 FAIL `QUARANTINE_WITHOUT_REASON`）；`retry_count` 超過 `max_allowed_retry`（未填時
+gate 內部視為 1）就 FAIL `EXCESSIVE_RETRY_MASKING_FAILURE`，代表不能靠瘋狂重跑把真正的失敗洗掉；
+`credit_allowed` 與 `quarantined` 不能同時為 true（否則 FAIL `QUARANTINED_TEST_HAS_SIGNOFF_CREDIT`）
+——已經被隔離的測試不能同時又拿到 signoff credit。本輪沒有任何 flaky test 時，附上
+`{"tests": []}` 即為誠實、合法的預設值。）
+
+```dv-harness-evidence:seed_diversity_and_corner_case_gate
+{"random_corner_case_claim": false, "seeds": [], "config_hashes": [],
+ "minimum_unique_seeds": 2, "minimum_unique_configs": 1, "corner_case_bins_exercised": []}
+```
+
+（只有 `random_corner_case_claim` 為 true（代表這批 regression 有主張靠 random seed 涵蓋了某些
+corner case）才會觸發檢查：`seeds` 陣列去重後的數量必須 ≥ `minimum_unique_seeds`（未填時 gate
+內部視為 2），否則 FAIL `INSUFFICIENT_SEED_DIVERSITY`；`config_hashes` 去重後的數量必須 ≥
+`minimum_unique_configs`（未填時視為 1），否則 FAIL `INSUFFICIENT_CONFIG_DIVERSITY`；
+`corner_case_bins_exercised` 不能是空/缺省，否則 FAIL `NO_CORNER_CASE_EVIDENCE`——代表宣稱涵蓋
+corner case 卻拿不出真正被打中的 bin 清單。沒有主張 random corner case 覆蓋時，
+`random_corner_case_claim: false` 即可直接 PASS，不需要湊 seeds/configs。）
+
+```dv-harness-evidence:seed_reproducibility_gate
+{"runs": [{"run_id": "...", "randomized": true, "seed": "12345",
+  "failure": false, "reproducer_command": ""}]}
+```
+
+（跟 `cross_run_evidence_consistency_gate` 用的是同一個 `runs` 陣列概念，但欄位不同、獨立檢查：
+`randomized` 為 true 的 run，`seed` 不能是 `null` 或空字串，否則 FAIL `RANDOM_RUN_WITHOUT_SEED`
+——代表隨機跑但沒記下 seed，之後無法重現；`failure` 為 true 的 run，必須附上非空的
+`reproducer_command`，否則 FAIL `FAILURE_WITHOUT_REPRODUCER`——每一筆失敗都要留下可以直接重跑
+的指令，不能只留一句「失敗了」就結案。沒有任何 run 時 `{"runs": []}` 直接 PASS。）
 """,
 Stage.INFRA_RECOVERY.value: """
 Regression 失敗的第一輪快速分流：判斷是 Infrastructure failure（LSF/license/compute/
@@ -649,9 +1642,19 @@ evidence.semantic_verdict 為 TRUE_PASS/TRUE_FAIL，不能只看 confidence 欄�
 都從零猜測；沿用時標記 `classification_basis: "REUSED_CCL:<ccl_id>"`，自行判斷時標記
 `classification_basis: "DV_JUDGMENT"`。
 
-有 coverage hole 時，每個 hole 都要有 root_cause_classification（不是 waived 就必須分類；
-MISSING_TEST/INSUFFICIENT_CONSTRAINT/UNREACHABLE_STIMULUS 這三類必須附上重新產生的
-testcase 與 rerun 證據，不能只記錄分類就結案）：
+有 coverage hole 時，每個 hole 都要有 root_cause_classification（不是 waived 就必須分類）。
+分類共四種，**每一種要求的補救證據不同**（2026-09-04 起生效；先前四類被錯誤地一律要求「重新
+產生 testcase」，其中 UNREACHABLE_STIMULUS 這一類再生 testcase 本來就不可能關掉，已修正）：
+
+- `MISSING_TEST` / `INSUFFICIENT_CONSTRAINT`：附 `regenerated_testcase_ids` + `rerun_evidence`。
+- `INSUFFICIENT_SEED_ATTEMPTS`（新增）：這個 bin 的 seed 數還不夠多，還不能下結構性結論。
+  附 `added_seed_evidence`（加了哪些 seed、用這些 seed 重跑的證據）。**不要**為這一類另外生
+  testcase——test 已經存在，只是還沒跑夠。harness 端會用 evidence DB 裡 `jobs` 表真實的
+  distinct seed 數（經 `.dv-harness/requirements.csv` 的 COVERAGE_ID→PATTERN_ID 追溯）核對，
+  seed 數不足時即使你分類成 UNREACHABLE/CONSTRAINT 也會被降級成這一類。
+- `UNREACHABLE_STIMULUS`：附 `escalation_question_id`。這一類會被 harness 自動轉成
+  question queue 的 Tier-3（cannot-assume）問題、owner 是 designer；gate 會實際去
+  `.dv-harness/question_queue/questions.json` 確認那個 Q-ID 真的存在。
 
 ```dv-harness-evidence:coverage_hole_regeneration_gate
 {"coverage_holes": [{"coverage_id": "...", "waived": false,
@@ -663,6 +1666,126 @@ testcase 與 rerun 證據，不能只記錄分類就結案）：
 {"items": [{"id": "...", "covered": false, "generated_test_ids": ["..."],
   "closure_owner": "...", "trace_to_vplan": "..."}]}
 ```
+
+除了以上四個之外，COVERAGE_CLOSURE 還另外掛了 10 個獨立的 hard gate，把「這個 coverage credit
+給得正不正當」拆得更細——assertion 本身是不是真的有被驅動過又真的會失敗（不是恆真的死 assertion）、
+checker/scoreboard/assertion 是不是真的還活著在盯、有沒有該被收回的 credit 沒收回、credit 的來源
+能不能追溯、跟上一輪比有沒有異常掉點、protocol corner case/sequence 有沒有真的覆蓋到、以及最終
+verdict 跟底層的 semantic/checker/negative-test/assertion/scoreboard 證據是否一致——同樣缺一個都會
+卡在 GATE_FAIL/MISSING_EVIDENCE，逐一附上（找到真實案例：這 10 個 gate 在 STAGE_GATES 裡已經真的
+被 harness 呼叫，但先前 stage 指示完全沒提過，導致 agent 完全不知道要附這些 evidence）：
+
+Assertion vacuity/reachability（兩個 gate 都掃 assertions 陣列，但欄位名稱不同，必須各自照各自的
+schema 填，不能共用同一份 payload）：
+
+```dv-harness-evidence:assertion_vacuity_and_reachability_gate
+{"assertions": [{"id": "...", "signoff_credit": true, "antecedent_reached": true,
+  "attempt_count": 3, "negative_control_failed": true}]}
+```
+（只檢查 signoff_credit 為 true 的項目，其餘略過，沒有要拿來 signoff 的 assertion 時
+`{"assertions": []}` 是合法預設值；signoff_credit 為 true 時：antecedent_reached 必須是
+true，否則 FAIL（ASSERTION_UNREACHABLE，代表這個 assertion 的前提條件從沒被真的觸發過）；
+attempt_count 必須 >0，否則 FAIL（ASSERTION_VACUOUS，代表 antecedent 從沒被嘗試過，assertion
+是空跑的）；negative_control_failed 必須是 true（代表你曾經刻意讓這個 assertion 在錯誤情境下
+真的失敗過一次，證明它不是恆真、真的有在檢查東西），否則 FAIL
+（ASSERTION_EFFECTIVENESS_UNPROVEN）。）
+
+```dv-harness-evidence:assertion_vacuity_gate
+{"assertions": [{"assertion_id": "...", "enabled": true, "antecedent_attempts": 3,
+  "unknown_xz_masked_without_justification": false}]}
+```
+（enabled 為 false 的項目直接略過不檢查；enabled 為 true 時：antecedent_attempts 必須 >0，
+否則 FAIL（VACUOUS_ASSERTION）；unknown_xz_masked_without_justification 必須是 false，代表
+沒有在沒說明理由的情況下把 X/Z unknown 值遮蔽掉，否則 FAIL
+（ASSERTION_XZ_MASKING_UNJUSTIFIED，需要在 evidence 裡交代遮蔽 X/Z 的正當理由）。）
+
+Coverage credit 的正當性/存活性/來源可追溯性/與上一輪的變化，五個 gate 都掃同一種
+`items`/coverage-per-entry 的形狀，但檢查的面向各自獨立：
+
+```dv-harness-evidence:coverage_checker_linkage_gate
+{"items": [{"coverage_id": "...", "credit": true, "active_checker_ids": ["..."],
+  "waived": false, "waiver_approved": false, "waiver_evidence": ""}]}
+```
+（credit 為 true 時，active_checker_ids/active_scoreboard_ids/active_assertion_ids 三選一
+至少要有內容（代表真的有活著的 checker/scoreboard/assertion 在盯這個 coverage point），
+否則要有合法 waiver（waived 且 waiver_approved 且 waiver_evidence 三者皆真）——兩者都沒有
+就 FAIL（COVERAGE_CREDIT_WITHOUT_ACTIVE_CHECK_OR_VALID_WAIVER）；waived 為 true 卻缺
+waiver_approved 或 waiver_evidence 任一項，FAIL（INVALID_COVERAGE_WAIVER）。）
+
+```dv-harness-evidence:coverage_credit_revocation_gate
+{"items": [{"coverage_id": "...", "credit": true, "revocation_triggers": []}]}
+```
+（revocation_triggers 若包含 CHECKER_DISABLED/ASSERTION_DISABLED/STALE_EVIDENCE/
+FAILED_RERUN/INVALID_WAIVER/TEST_QUARANTINED 其中任一項，同時 credit 又是 true，就是
+「早該收回的 credit 卻沒收回」，FAIL（COVERAGE_CREDIT_MUST_BE_REVOKED）；沒有任何觸發原因時
+留空陣列 `[]` 即可。）
+
+```dv-harness-evidence:coverage_credit_source_integrity_gate
+{"items": [{"coverage_id": "...", "credit": true,
+  "source": {"type": "CHECKER", "source_id": "...", "evidence_hash": "..."}}]}
+```
+（credit 為 false 的項目直接略過；credit 為 true 時 source.type 必須是
+TEST/CHECKER/ASSERTION/SCOREBOARD/WAIVER 其中之一，否則 FAIL
+（INVALID_COVERAGE_CREDIT_SOURCE）；source.source_id 與 source.evidence_hash 兩者都必須非空，
+缺任一個 FAIL（COVERAGE_CREDIT_WITHOUT_PROVENANCE，代表這筆 credit 的來源無法追溯）；
+source.type 為 WAIVER 時，source.approved 與 source.waiver_scope_hash 兩者都必須真，
+否則 FAIL（UNAPPROVED_OR_UNSCOPED_WAIVER_CREDIT）。）
+
+```dv-harness-evidence:coverage_failure_state_linkage_gate
+{"active_failure_ids": [], "coverage_items": [{"coverage_id": "...", "credit": true,
+  "linked_failure_ids": []}]}
+```
+（頂層 active_failure_ids 是目前還在燒的 failure id 清單；coverage_items 裡任何一筆
+credit 為 true、且它的 linked_failure_ids 跟 active_failure_ids 有交集，就是「對還在燒的
+功能發了 coverage credit」，FAIL（COVERAGE_CREDIT_WITH_ACTIVE_FAILURE）——這條呼應
+coverage_credit_consistency_gate 已經在檢查的同一件事，但用 stage 層級的 active failure
+狀態再交叉驗證一次。）
+
+```dv-harness-evidence:coverage_regression_drift_gate
+{"allowed_drop_percent": 0, "items": [{"coverage_id": "...", "previous_credit": 100,
+  "current_credit": 100, "approved_drop": false}]}
+```
+（allowed_drop_percent 是本輪容許的最大掉點百分比門檻；每一筆 previous_credit<=0 的項目
+直接跳過不檢查（代表上一輪本來就沒有額度可掉）；掉點百分比
+`(previous_credit-current_credit)/previous_credit*100` 超過 allowed_drop_percent、且
+approved_drop 不是 true，FAIL（COVERAGE_REGRESSION_DRIFT，代表這筆 coverage 比上一輪明顯
+退步卻沒人核准這個退步）；真的有正當理由（例如上一輪的統計方式有誤、這次改了合法的排除範圍）
+才把 approved_drop 設 true。）
+
+Protocol corner case 與 sequence 這兩類「有沒有真的覆蓋到」的完整性檢查：
+
+```dv-harness-evidence:protocol_corner_case_matrix_gate
+{"required_corner_cases": [], "cases": []}
+```
+（required_corner_cases 是這個協定本來就該覆蓋的 corner case id 清單，沒有訂出必要 corner
+case 清單時留空陣列合法；cases 裡任何一筆 covered 為 true 卻沒有 evidence 欄位，FAIL
+（CORNER_COVERED_WITHOUT_EVIDENCE，代表宣稱覆蓋了卻拿不出證據）；required_corner_cases 減去
+cases 裡標記 covered 的 corner_id，剩下的就是還沒覆蓋到的，非空時 FAIL
+（MISSING_PROTOCOL_CORNER_CASES，並在 missing 欄位列出缺的 corner_id）。）
+
+```dv-harness-evidence:sequence_coverage_closure_gate
+{"required_sequences": [], "hit_sequences": [], "waivers": []}
+```
+（required_sequences 減去 hit_sequences，再減去 waivers 裡 approved 且 evidence 皆非空的
+sequence，剩下的就是真正的缺口，非空時 FAIL（SEQUENCE_COVERAGE_GAP，並在 missing 欄位列出
+缺的 sequence）；沒有必要 sequence 清單或全部命中時，三個欄位都留空陣列合法。）
+
+最後，coverage credit 最終能不能真的算數，還要跟底層驗證有效性的證據一致，不能只看 verdict
+本身：
+
+```dv-harness-evidence:verification_effectiveness_consistency_gate
+{"final_verdict": "PASS", "semantic_status": "TRUE_PASS", "checker_status": "PASS",
+ "negative_test_effective": true, "assertion_effective": true,
+ "scoreboard_independent": true, "coverage_credit_allowed": true}
+```
+（final_verdict 為 "PASS" 時，semantic_status 必須是 "TRUE_PASS"、checker_status 必須是
+"PASS"、negative_test_effective/assertion_effective/scoreboard_independent 三者都必須是
+true（不能是 false 或缺漏），只要有一項不符，FAIL
+（PASS_WITH_UNPROVEN_VERIFICATION_EFFECTIVENESS，代表宣稱 PASS 卻拿不出完整的有效性證據）；
+另外不論 final_verdict 為何，只要 negative_test_effective 是 false（negative test 被證明是
+vacuous、沒有真的失敗過）卻同時 coverage_credit_allowed 為 true，FAIL
+（COVERAGE_CREDIT_WITH_VACUOUS_NEGATIVE_TEST，代表不能拿一個空跑的 negative test 去換
+coverage 額度）。）
 """,
 Stage.FAILURE_RECOVERY.value: """
 RCA 方法：Failure Signature Extraction → First Bad Event → Expected vs Observed →
@@ -707,6 +1830,198 @@ low-cost 證據足夠定位問題就不要往下一級升級。
 → Verdi if needed → root cause →
 Replay 重現 → Fix all related findings → Non-Regression 確認沒有引入新問題 →
 Git push → exact SHA → build/verify/rerun。直到 failure closure。
+
+本 stage 另外還有三個獨立的 hard gate，也必須各自附上 evidence block，缺一個都會讓整個 stage
+卡在 GATE_FAIL/MISSING_EVIDENCE（同一類 bug 在 INTAKE 與 DISCOVERY 都已經真實復現過：gate
+腳本有註冊，但 stage instructions 沒提到 gate id，agent 完全不知道要附證據，導致重跑多輪都停在
+同樣的 GATE_FAIL/MISSING_EVIDENCE，即使實際分析內容本身已經做得很紮實）：
+
+```dv-harness-evidence:failure_signature_recurrence_gate
+{"failures": [
+  {"failure_id": "...", "signature": "...", "linked_to_existing_failure": false,
+   "previously_fixed": false, "recurrence_escalated": false}
+]}
+```
+（failures 陣列中每一筆都要有 signature 這個唯一識別特徵字串——缺 signature 就 FAIL
+（FAILURE_WITHOUT_SIGNATURE）；同一個 signature 在陣列中出現超過一次，代表是重複的 failure，
+第二筆以後必須把 linked_to_existing_failure 設為 true，否則 FAIL
+（DUPLICATE_FAILURE_NOT_LINKED）；若這個重複的 signature 屬於「先前已經修過
+（previously_fixed=true）」卻又復現，必須把 recurrence_escalated 設為 true 明確升級處理，
+否則 FAIL（RECURRENT_FIXED_BUG_NOT_ESCALATED）——不能讓一個號稱已修好的 bug 悄悄復發卻沒人管。
+這個 stage 目前沒有處理任何 failure 時，`{"failures": []}` 是誠實、合法的預設值。）
+
+```dv-harness-evidence:issue_triage_classification_gate
+{"classification": "REAL_ISSUE", "classification_reason": "...", "evidence_hash": "...",
+ "known_issue_id": null, "waiver_id": null, "prior_rca_id": null,
+ "deep_rca_triggered": true, "contradictory_new_evidence": null}
+```
+（classification 必須是 MISCLASSIFIED/KNOWN/REAL_ISSUE/BLOCKED 四選一，其他值 FAIL
+（INVALID_ISSUE_CLASSIFICATION）；classification_reason 與 evidence_hash 兩者都必須非空，
+否則 FAIL（CLASSIFICATION_WITHOUT_EVIDENCE）——分類結論一定要附理由與可追溯的證據雜湊，不能
+空口分類；classification 為 KNOWN 時，known_issue_id / waiver_id / prior_rca_id 三者至少填一個，
+否則 FAIL（KNOWN_WITHOUT_REFERENCE）；classification 為 REAL_ISSUE 時 deep_rca_triggered 必須是
+true，否則 FAIL（REAL_ISSUE_WITHOUT_DEEP_RCA）——真正的新問題一定要觸發完整 RCA；反過來，
+classification 為 MISCLASSIFIED 或 KNOWN 卻同時 deep_rca_triggered 為 true，就必須附上非空的
+contradictory_new_evidence 說明為什麼已知/誤判還要重跑一次深入 RCA，否則 FAIL
+（UNNECESSARY_DEEP_RCA）——不能對已有結論的 issue 做多餘的重複分析。）
+
+```dv-harness-evidence:unknown_failure_escalation_gate
+{"classification": "UNKNOWN", "missing_evidence": "...", "next_evidence_actions": "...",
+ "owner": "...", "blocking_scope": "...", "promotion_allowed": false}
+```
+（這個 gate 只在 classification 是 "UNKNOWN" 時才會真的檢查——非 UNKNOWN 時直接 PASS
+（CLASSIFIED），代表這個 evidence block 只有在真的分不出 root cause 時才需要認真填；一旦
+classification 是 UNKNOWN，missing_evidence、next_evidence_actions、owner、blocking_scope
+四個欄位都必須非空，缺任一個都會 FAIL（UNKNOWN_WITHOUT_ESCALATION_PLAN，並列出缺了哪些欄位）
+——「不知道」不能就這樣放著，一定要說清楚缺什麼證據、下一步要做什麼、誰負責、影響範圍多大；
+即使四個欄位都填了，只要 promotion_allowed 是 true 也會 FAIL
+（UNKNOWN_FAILURE_CANNOT_PROMOTE）——未分類的 failure 絕對不能被放行往下一階段推進；四者都
+滿足且 promotion_allowed 不是 true 時，gate 回報狀態是 BLOCKED_PENDING_EVIDENCE，代表這個
+failure 被合法卡住等新證據，不是 stage 本身失敗。）
+
+本 stage 另外必須附上第四個 evidence block，不論這次 RCA 有沒有真的開波形——這是唯一精確檢查
+「targeted、最小窗口、cut near first failure」波形 rerun 的 gate，之前只掛在 WAVE_ANALYSIS
+（僅 VERIFY PASS 後代表性 testcase 那條 pre-batch 分支才會走到），FAILURE_RECOVERY 這個真正的
+batch 失敗後除錯路徑完全沒有這一層檢查：
+
+若這次 RCA 需要用波形定位（First-Failure Waveform Rerun，CLAUDE.md）：只對這個 failure 做
+targeted、最小窗口的波形 rerun（WAVE=1、FSDB_START=0，在 first-failure 附近截止），不得整批重跑
+或預設 full-depth dump：
+
+```dv-harness-evidence:focused_wave_debug_window_gate
+{"deep_debug_required": true, "dump_scope_confirmed": {"scope": "...",
+  "level_or_depth": "...", "confirmed_by": "..."},
+ "wave_mode": 1, "fsdb_start_us": 0, "first_error_time_us": 0, "fsdb_stop_us": 200,
+ "simulation_stopped_at_fsdb_stop": true, "job_killed_or_terminated": true,
+ "identity_preserved": true, "waveform_or_fsdbreport_evidence_hash": "..."}
+```
+（跟 WAVE_ANALYSIS stage 用的是同一個 gate：`dump_scope_confirmed` 缺
+scope/level_or_depth/confirmed_by 任一欄位都 FAIL（WAVEFORM_DUMP_SCOPE_NOT_CONFIRMED /
+_CONFIRMATION_INCOMPLETE）；欄位齊全還不夠——gate 會用 scope 反推 question_key 去
+question queue 的 decisions store 查，必須真的有一筆 source=human_answer 的紀錄，且
+`confirmed_by` 要等於那筆的 `decided_by`，否則 FAIL（WAVEFORM_DUMP_SCOPE_NOT_ASKED /
+_NOT_HUMAN_ANSWERED / _CONFIRMED_BY_MISMATCH）。先跑
+`dv-harness waveform-dump-scope ask --scope <scope> --level-or-depth <level>` 開問題，
+再由真人 `dv-harness question-queue answer <Q-ID> ...` 回答；沒被回答前這個 stage 會停在
+WAIT_USER 等人，不會重試。若這次 RCA 根本不需要開波形，改用下面
+deep_debug_required:false 的路徑，不要偽造確認。
+`wave_mode` 必須是 1 且 `fsdb_start_us` 必須是 0，否則 FAIL
+（FOCUSED_RERUN_MUST_USE_WAVE1_FROM_TIME0）；`fsdb_stop_us` 必須精確等於
+`first_error_time_us`+200，否則 FAIL（INVALID_FOCUSED_FSDB_STOP_WINDOW）——不得截到比 first
+failure 之後 200us 更長的窗口；`simulation_stopped_at_fsdb_stop`/`job_killed_or_terminated`/
+`identity_preserved` 三者缺一即 FAIL。）
+
+若這次 RCA 依 Evidence 成本順序、低成本證據已經足夠定位問題，完全不需要開波形，附上：
+
+```dv-harness-evidence:focused_wave_debug_window_gate
+{"deep_debug_required": false, "deep_debug_not_required_reason": "..."}
+```
+（`deep_debug_required` 為 false 時，`deep_debug_not_required_reason` 必須非空說明為什麼低成本
+證據已足夠，否則 FAIL（DEEP_DEBUG_NOT_REQUIRED_WITHOUT_REASON）——不能什麼都不填就跳過波形
+window 檢查；理由夠了就直接 PASS，不必假裝做了一次不存在的 rerun。）
+
+Multi-Agent RCA Evidence Fan-Out（RCA_G1）觸發條件：只要你在
+`issue_triage_classification_gate` 裡把這個 failure 分類成 `REAL_ISSUE`（依那個 gate 本身的
+規則，REAL_ISSUE 必須同時 `deep_rca_triggered: true`），harness 會在這個 stage PASS 之後自動
+把 graph 分岔成 RCA_RTL_EVIDENCE / RCA_LOG_EVIDENCE / RCA_VIP_SPEC_EVIDENCE 三條真正並行的
+branch（各自跑 rtl-evidence-agent / log-evidence-agent / vip-spec-evidence-agent），再匯流到
+RCA_JOIN（analysis_debug）做獨立綜合，最後才進 CHANGE_IMPACT。分類成
+MISCLASSIFIED/KNOWN/BLOCKED 時不會分岔，直接走原本的 FAILURE_RECOVERY -> CHANGE_IMPACT。
+所以這裡的分類不只是紀錄，它會真的改變後面的執行路徑——不要為了省事把真的 REAL_ISSUE
+寫成 KNOWN，也不要把單一 log 就能解釋完的 TB 問題硬報成 REAL_ISSUE。
+""",
+Stage.RCA_RTL_EVIDENCE.value: """
+你是 RCA_G1 multi-agent evidence fan-out 的 RTL/TB 證據 branch（rtl-evidence-agent）。同一時間
+RCA_LOG_EVIDENCE 與 RCA_VIP_SPEC_EVIDENCE 兩條 branch 正在真的並行執行，而且對你的工作完全
+不知情（blind）——這是刻意的，目的是讓三個領域的證據彼此獨立，不互相污染。
+
+只蒐集真實的 RTL/testbench source 證據：module/instance 階層、signal、FSM、register default、
+bind 位置、clock/reset domain。每一條 claim 都要有精確的 file:line 引用。
+
+不要做的事：不要去讀 sim.log/trace/FSDB，不要查 VIP/spec（那是另外兩條 branch 的職責）；
+不要單憑 RTL 靜態閱讀就宣告 root cause——跨領域的綜合判定是 RCA_JOIN 的工作，你的輸出是
+給它的輸入。有把握不足的地方寫進 open_questions，不要補完成看起來完整的故事。
+
+這個 stage 沒有對應的 hard gate（NO_GATE_REQUIRED）；你的回覆內容本身會被寫進 Blackboard
+topic `rca_rtl_evidence`，RCA_JOIN 一定會真的去讀它。
+""",
+Stage.RCA_LOG_EVIDENCE.value: """
+你是 RCA_G1 multi-agent evidence fan-out 的 log/trace/scoreboard 證據 branch
+（log-evidence-agent）。同一時間 RCA_RTL_EVIDENCE 與 RCA_VIP_SPEC_EVIDENCE 兩條 branch 正在
+真的並行執行，而且對你的工作完全不知情（blind）。
+
+只蒐集真實的 sim.log / UVM report / scoreboard report / assertion / command.txt 語意證據：
+第一個異常事件的實際時間戳與訊息原文、UVM_ERROR/UVM_FATAL 全文、command.txt 宣稱要做的事
+與 log 實際發生的事之間的落差（command_semantic_gaps）。每一條 claim 要有
+file:line 或 timestamp 引用，引用原文不要改寫。
+
+不要做的事：不要讀 RTL、不要開 FSDB、不要查 VIP/spec；不要單憑 scoreboard mismatch 就宣告
+DUT bug——那需要 RTL 側證據支撐，而那是別的 branch 的輸出，由 RCA_JOIN 交叉比對。
+
+這個 stage 沒有對應的 hard gate（NO_GATE_REQUIRED）；你的回覆內容本身會被寫進 Blackboard
+topic `rca_log_evidence`，RCA_JOIN 一定會真的去讀它。
+""",
+Stage.RCA_VIP_SPEC_EVIDENCE.value: """
+你是 RCA_G1 multi-agent evidence fan-out 的 VIP/spec 證據 branch（vip-spec-evidence-agent）。
+同一時間 RCA_RTL_EVIDENCE 與 RCA_LOG_EVIDENCE 兩條 branch 正在真的並行執行，而且對你的
+工作完全不知情（blind）。
+
+只蒐集真實的 VIP source/example/user manual/class reference 與 protocol standard spec/PHY
+document 證據（依 CLAUDE.md 的 branch-B/VIP 規則：先查 VIP examples、user manual、source
+code、class/API reference，不得憑印象發明 VIP API/class/sequence）。每一條 claim 要有
+VIP file:line 或 spec 文件+clause 引用；spec 本身語意模糊的地方寫進 spec_ambiguity_notes，
+不要自己選一個解讀當成 spec 規定。
+
+不要做的事：不要讀 DUT RTL、不要讀 sim.log、不要開 FSDB。
+
+這個 stage 沒有對應的 hard gate（NO_GATE_REQUIRED）；你的回覆內容本身會被寫進 Blackboard
+topic `rca_vip_spec_evidence`，RCA_JOIN 一定會真的去讀它。
+""",
+Stage.RCA_JOIN.value: """
+你是 RCA_G1 的 join stage（analysis_debug）：三條 branch 剛剛真的並行跑完，這裡負責獨立綜合
+並做出唯一的 root cause 裁定。這是 CLAUDE.md「Important DUT/PHY/Register/VIP changes require
+Multi-Agent evidence acquisition plus independent synthesis」裡 independent synthesis 那一半。
+
+第一件事，先真的把三個 branch 的 Blackboard topic 讀出來，不要只憑 prompt 裡看到的摘要：
+
+    dv-harness blackboard read rca_rtl_evidence
+    dv-harness blackboard read rca_log_evidence
+    dv-harness blackboard read rca_vip_spec_evidence
+
+（console script 不在 PATH 時用 `python -m dv_harness.cli blackboard read <topic>`。）
+任何一個 topic 讀出來是 null，就代表那條 branch 沒有真的留下證據——照實反映在 confidence 與
+counter_evidence 裡，不要假裝三方都到齊。
+
+然後：
+1. 把三個領域的 findings 合併去重（同一個底層事實從兩個領域看到，合併成一條，並記錄是哪些
+   branch 支撐它）。
+2. 交叉比對：每一條合併後的 finding 要說明它跟其他領域的證據是互相印證、無關、還是衝突。
+3. 真正衝突的地方不准用「投票」或「取平均」解決——自己回去讀被引用的原始檔案判定，並把
+   兩邊的引用都保留在 counter_evidence 裡。
+4. attribution 只能由證據決定：不得只憑 scoreboard mismatch 就判 DUT_BUG，必須有 RTL 側證據。
+5. confidence 誠實填：證據真的不足就是 LOW/MEDIUM，不要為了看起來有結論而往上調。
+
+本 stage 的 PASS 由 harness 端 gate 腳本裁定。回覆結尾附上（欄位定義與 RE_AUDIT 用的同一個
+gate 完全相同——這是刻意重用同一個 `root_cause_evidence_gate`，不是另一個新 gate）：
+
+```dv-harness-evidence:root_cause_evidence_gate
+{"symptom": "...", "first_bad_event": "...", "causal_chain": ["..."],
+ "root_cause": "...", "supporting_evidence": ["..."], "counter_evidence": ["..."],
+ "confidence": "LOW|MEDIUM|HIGH|CONFIRMED",
+ "hypotheses": [{"claim": "...", "category": "...", "supporting_evidence": ["..."],
+   "counter_evidence": ["..."], "missing_evidence": ["..."], "confidence": "...",
+   "next_action": "..."}]}
+```
+（`hypotheses` 至少要兩筆、`root_cause` 必須等於其中一筆的 `claim`，而且至少要有另外一筆帶
+非空 `counter_evidence`（代表真的考慮並排除了替代解釋），否則 FAIL
+NO_ALTERNATIVE_HYPOTHESES/NO_ALTERNATIVE_HYPOTHESIS_REFUTED。confidence 填 HIGH/CONFIRMED
+時 `counter_evidence` 不得為空。可選的 `evidence_refs`: [{"path": ..., "quote": ...}] 會被
+harness 拿去真的開檔比對原文，寫了就必須是真的引用。）
+
+Harness 會在 PASS 之後把這份裁定寫進 Blackboard topic `rca_evidence_fusion`——跟
+`.claude/workflows/rca-multi-agent-fusion.js` 寫的是同一個 topic、同一個形狀，兩條路徑刻意
+共用一份記錄。其中 `contributing_agents` 由 harness 自己從真實的 branch 執行結果填入，不採用
+你自己聲稱有幾個 agent 支持——這是 Evidence Truth Rule。
 """,
 Stage.RE_AUDIT.value: """
 重新執行 original workflow audit，確認原 findings closed 且沒有新增 actionable issue。
@@ -746,6 +2061,17 @@ finding 明確判斷不需要多假設（例如單一、無歧義的低風險 ty
 {"trivial_finding": true, "trivial_finding_justification": "..."} 取代 hypotheses 陣列，
 說明為何不存在需要排除的替代解釋；trivial_finding 為 false 或缺省時仍套用上述 hypotheses 規則。）
 
+（選填、更強的證據驗證 -- `evidence_refs`：上面 supporting_evidence/counter_evidence 預設仍是純文字
+引註，agent 可以貼一段憑記憶回想、早就過時的字串，gate 目前無法分辨。若想證明「這是我剛剛真的重新
+讀過的」，可以在最外層 root_cause 物件、或任一 hypotheses[] 元素上，額外附上
+`"evidence_refs": [{"path": "相對 repo root 的檔案路徑", "quote": "檔案裡真的存在的一段文字"}, ...]`
+（與 manual_lookup_before_edit_gate 的 vip_evidence_refs/dut_rtl_evidence_refs 同一種
+{path, quote} 格式）。附上後，gate 會獨立打開該路徑指向的真實檔案目前內容，確認 `quote` 真的逐字
+出現在裡面；path 在磁碟上找不到就 FAIL EVIDENCE_FILE_NOT_FOUND，quote 對不上就 FAIL
+EVIDENCE_QUOTE_NOT_FOUND_IN_FILE，引用到禁止的參考環境樹（例如 USB_UVM_Handoff）則 FAIL
+REFERENCE_TREE_CITATION_FORBIDDEN。完全不附 `evidence_refs` 時行為與舊版完全相同（純文字引註仍然
+有效，這是較弱的舊版/相容路徑）。）
+
 若本次有走過 Failure Recovery 的 RCA/Fix/Replay 迴圈，額外附上：
 
 ```dv-harness-evidence:rca_replay_fix_closure_gate
@@ -761,6 +2087,177 @@ finding 明確判斷不需要多假設（例如單一、無歧義的低風險 ty
 與 stated_attribution 供比對）；若推導結果是 UNKNOWN，attribution 不受此限制（VIP_ISSUE/
 TEST_ISSUE/SPEC_AMBIGUITY/INFRA_ISSUE 這類單靠 boundary trace 無法排除的分類仍可使用）。
 不附 boundary_trace 時行為與舊版完全相同。）
+
+Deep RCA / Attribution 強化（deep_rca_evidence_gate、rca_confidence_escalation_gate、
+root_cause_attribution_consistency_gate、nondeterminism_attribution_gate）：RE_AUDIT 的根因
+分析不能只靠上面 root_cause_evidence_gate 那組 hypotheses，還要能證明「查過哪些真實證據來源」、
+confidence 的升級路徑站得住腳、跟其他 gate 一致的 attribution 分類，以及對不穩定
+（non-deterministic）failure 有獨立的歸屬判斷。四個 gate 分別從不同角度檢查同一份 RCA：
+
+```dv-harness-evidence:deep_rca_evidence_gate
+{"rca": {"first_bad_event": "...", "causal_chain": ["...", "..."],
+ "confidence": "HIGH",
+ "evidence_sources": [
+   {"source": "SIM_LOG", "checked": true, "evidence_hash": "...", "evidence_path": "run/.../sim.log"},
+   {"source": "TRACE", "checked": true, "evidence_hash": "...", "evidence_path": "run/.../trace.vcd"},
+   {"source": "RTL", "checked": true, "evidence_hash": "...", "evidence_path": "rtl/.../module.sv"},
+   {"source": "TESTBENCH", "checked": true, "evidence_hash": "..."},
+   {"source": "COMMAND", "checked": true, "evidence_hash": "..."},
+   {"source": "SCOREBOARD", "checked": true, "evidence_hash": "..."},
+   {"source": "PHY_MODEL", "checked": true, "evidence_hash": "..."},
+   {"source": "STANDARD_SPEC", "checked": true, "evidence_hash": "..."},
+   {"source": "VIP_EXAMPLE", "checked": true, "evidence_hash": "..."},
+   {"source": "VIP_SOURCE", "checked": true, "evidence_hash": "..."},
+   {"source": "VIP_DOCUMENT", "checked": true, "evidence_hash": "..."}
+ ]}}
+```
+（`rca` 這層包裝是必要的：這個 gate 現在會額外把 `evidence_path` 對應的真實檔案內容拿去跟你填的
+`evidence_hash` 比對，真正的 repo root 由 harness 自己帶入 --root，不接受你在 block 裡另外指定。
+`evidence_sources` 裡必須湊齊固定 11 種來源——SIM_LOG/TRACE/RTL/TESTBENCH/COMMAND/
+SCOREBOARD/PHY_MODEL/STANDARD_SPEC/VIP_EXAMPLE/VIP_SOURCE/VIP_DOCUMENT——每一種都要
+`checked:true` 且 `evidence_hash` 非空，缺一種就 FAIL DEEP_RCA_EVIDENCE_INCOMPLETE 並列出缺的
+來源。**SIM_LOG/RTL/TRACE 這三種一律要另外附上 `evidence_path`**（相對這個專案 repo root 的路徑，
+指向真正在磁碟上的當前 sim.log/RTL/waveform 檔案）：附上後，gate 會獨立重新計算該檔案目前內容的
+sha256，與你填的 `evidence_hash` 比對，兩者不符就直接 FAIL EVIDENCE_HASH_STALE_OR_FABRICATED（代表
+你引用的 hash 是憑記憶回想、或憑空捏造，不是這次真的重新讀取當前檔案算出來的）；路徑在磁碟上找
+不到則 FAIL EVIDENCE_PATH_NOT_FOUND。COMMAND/SCOREBOARD/TESTBENCH 等其餘來源、以及舊版尚未提供
+`evidence_path` 的呼叫者，仍可只靠 `evidence_hash` 非空通過（較弱的舊版檢查，之後應逐步補齊
+`evidence_path`）；`first_bad_event` 不得空白；`causal_chain` 至少要 2 個節點，代表真的有推導出
+因果鏈而不是只給結論；`confidence` 只接受 HIGH/VERIFIED/BLOCKED 三種——LOW/MEDIUM 在這個 gate 視為
+「還沒查完」而直接 FAIL；填 BLOCKED 時必須同時附 `missing_evidence` 與 `next_action`，說明卡在
+哪、下一步要做什麼，不能只寫 BLOCKED 就不了了之。）
+
+```dv-harness-evidence:rca_confidence_escalation_gate
+{"confidence": "HIGH", "first_bad_event": "...", "causal_chain": ["...", "..."],
+ "supporting_evidence": "...", "counter_evidence": "...",
+ "fix_effectiveness_evidence": "...", "promotion_requested": false}
+```
+（`confidence` 必須是 LOW/MEDIUM/HIGH/VERIFIED 之一；不論等級為何，`first_bad_event`/
+`causal_chain`/`supporting_evidence` 都是必填，缺任一項直接 FAIL RCA_EVIDENCE_INCOMPLETE。
+`confidence` 為 HIGH 或 VERIFIED 時 `counter_evidence` 必填（代表你真的主動找過反證，不是單方面
+只講支持證據）；`confidence` 為 VERIFIED 時還要再附 `fix_effectiveness_evidence`（代表這個 RCA
+已經用「修了之後 fix 真的有效」的證據回頭驗證過，不是只憑分析推論）。若這筆 RCA 打算被
+`promotion_requested:true` 拿去沉澱進 Verification Memory，`confidence` 至少要到 HIGH，MEDIUM/LOW
+一律 FAIL RCA_CONFIDENCE_TOO_LOW_FOR_PROMOTION。）
+
+```dv-harness-evidence:root_cause_attribution_consistency_gate
+{"attribution": "DUT", "attribution_confidence": "HIGH",
+ "first_bad_event": "...", "causal_chain": ["...", "..."],
+ "supporting_evidence": "...", "counter_evidence": "...",
+ "promotion_requested": false}
+```
+（`attribution` 只接受 DUT/TB/VIP/TOOL/INFRA/SPEC/UNKNOWN。填 UNKNOWN 時，若
+`promotion_requested:true` 會直接 FAIL UNKNOWN_RCA_CANNOT_PROMOTE（歸屬未定的 RCA 不得拿去
+promote）；不 promotion 的話 UNKNOWN 本身可以 PASS（視為 UNKNOWN_BLOCKED，代表誠實承認暫時無法
+歸屬，比亂猜一個分類更安全），此時不再要求其餘欄位。非 UNKNOWN 的分類則必須補齊
+`first_bad_event`/`causal_chain`/`supporting_evidence`/`counter_evidence` 四項因果證據（缺任一項
+FAIL RCA_ATTRIBUTION_WITHOUT_CAUSAL_EVIDENCE），且 `attribution_confidence` 必須是
+HIGH 或 VERIFIED，否則 FAIL ATTRIBUTION_CONFIDENCE_TOO_LOW。）
+
+```dv-harness-evidence:nondeterminism_attribution_gate
+{"deterministic": false, "attribution": "DUT",
+ "first_divergence": "...", "supporting_evidence": "...", "counter_evidence": "...",
+ "reproduction_matrix_hash": "..."}
+```
+（若這次 failure 其實是可重現、非 flaky 的，直接填 `deterministic:true` 即可 PASS，其餘欄位不看
+——只在真的確認是 non-deterministic/flaky 的 failure 時才需要走完整套歸屬流程。
+`deterministic` 非 true 時，`attribution` 只接受 DUT/TB/VIP/TOOL/ENVIRONMENT/UNKNOWN；填
+UNKNOWN 一律直接 FAIL UNRESOLVED_NONDETERMINISM（跟上面 attribution 系列 gate 不同，
+non-determinism 的歸屬不允許用 UNKNOWN 卡住不動）。非 UNKNOWN 時必須補齊
+`first_divergence`（第一個出現分歧的點）、`supporting_evidence`、`counter_evidence`、
+`reproduction_matrix_hash`（多次重跑/多 seed 的重現矩陣證據）四項，缺任一項 FAIL
+NONDETERMINISM_ATTRIBUTION_WITHOUT_EVIDENCE。）
+
+Fix 生命週期閉環（dut_request_record_gate、fix_risk_approval_gate、fix_effectiveness_gate、
+fix_regression_non_regression_gate、regression_replay_equivalence_gate）：如果這輪 RE_AUDIT
+判定是 DUT 端的 REAL_ISSUE 並且真的要送出修改，從「建立 DUT request 記錄」、「風險核准」、
+「修完之後證明真的有效」、「沒有引入新的 regression」到「重跑結果跟原始 run 逐項等價可比對」，
+每一段都要各自附證據，不能只靠前面的 root_cause_evidence_gate 蓋過去：
+
+```dv-harness-evidence:dut_request_record_gate
+{"dut_request_path": "generated/.../dut-request.md", "issue_id": "...",
+ "classification": "REAL_ISSUE", "root_cause": "...", "fix_summary": "...",
+ "risk_summary": "...", "verification_result": "...", "change_hash": "..."}
+```
+（`dut_request_path`/`issue_id`/`classification`/`root_cause`/`fix_summary`/`risk_summary`/
+`verification_result`/`change_hash` 八個欄位缺一都會 FAIL INCOMPLETE_DUT_REQUEST_RECORD 並回報
+是哪個欄位；`dut_request_path` 的檔名（basename）必須逐字是 `dut-request.md`，否則 FAIL
+DUT_REQUEST_WRONG_FILENAME；`classification` 必須逐字等於 `REAL_ISSUE` 才能建立這筆 fix
+record，否則 FAIL ONLY_REAL_ISSUE_CAN_CREATE_FIX_RECORD——代表這個 gate 只給「確認是真的 DUT
+問題」的情況用，誤報/非真實 issue 不該走到這裡。）
+
+```dv-harness-evidence:fix_risk_approval_gate
+{"root_cause_id": "...", "fix_plan": "...", "risk_assessment": "...",
+ "affected_scope": "...", "regression_plan": "...", "rollback_plan": "...",
+ "root_cause_confidence": "HIGH", "risk_level": "MEDIUM", "classification": "TB_BUG",
+ "high_risk_reviewed": false, "approved_for_modify": true}
+```
+（`root_cause_id`/`fix_plan`/`risk_assessment`/`affected_scope`/`regression_plan`/
+`rollback_plan` 六個欄位缺一都會 FAIL INCOMPLETE_FIX_RISK_PLAN 並回報欄位名；
+`root_cause_confidence` 必須是 HIGH 或 VERIFIED，否則 FAIL FIX_WITHOUT_HIGH_CONFIDENCE_RCA
+（confidence 不夠高不准送修）；`risk_level` 為 `HIGH` 時 `high_risk_reviewed` 必須是
+true，否則 FAIL HIGH_RISK_FIX_NOT_REVIEWED；最後 `approved_for_modify` 必須明確為
+true 才代表這個修改計畫真的被核准可以動手，否則 FAIL FIX_NOT_APPROVED_FOR_MODIFICATION。
+`classification` 欄位沿用 FAILURE_RECOVERY 階段 failure_attribution 的既有分類詞彙
+（TB_BUG/DUT_BUG/UNKNOWN，見該 gate）；`risk_level` 為 `HIGH` 或 `classification` 為
+`DUT_BUG` 時，這個「approved_for_modify」不能只是這一輪 agent 自己填的 boolean ——
+gate 會另外讀取真正的 .dv-harness/control.json Human Control Plane 狀態，要求 RE_AUDIT
+已經有一筆真實的 `dv-harness approve RE_AUDIT` 記錄，否則 FAIL
+HIGH_RISK_FIX_WITHOUT_CONTROL_PLANE_APPROVAL——同一個 PROMOTION_READINESS/SIGNOFF
+用的真人核准機制，此時對高風險/DUT 端修改一樣適用；TB_BUG/非 HIGH 風險的一般 testbench
+修正不受影響，不需要額外呼叫 `dv-harness approve`。）
+
+```dv-harness-evidence:fix_effectiveness_gate
+{"failure_signature_before": "...", "failure_signature_after": "...",
+ "root_cause_id": "...", "fix_revision": "...", "rerun_evidence": "...",
+ "targeted_reproducer_passed": true, "broader_regression_passed": true,
+ "new_failures_introduced": false}
+```
+（`failure_signature_before`/`root_cause_id`/`fix_revision`/`rerun_evidence` 四項缺一即 FAIL
+MISSING_FIELDS；`failure_signature_after` 必須跟 `failure_signature_before` 不同，代表 failure
+signature 真的變了而不是同一個 failure 換句話說（否則 FAIL FAILURE_SIGNATURE_PERSISTS）；
+`targeted_reproducer_passed` 與 `broader_regression_passed` 都必須是 true，分別代表原本會炸的
+reproducer 現在過了、以及更廣的 regression 也沒被這個 fix 拖垮（缺一即 FAIL
+TARGETED_REPRODUCER_NOT_PASS / BROADER_REGRESSION_NOT_PASS）；`new_failures_introduced` 必須是
+false/未填，一旦為 true 直接 FAIL FIX_INTRODUCED_NEW_FAILURES。）
+
+```dv-harness-evidence:fix_regression_non_regression_gate
+{"target_pre_fix_result": "FAIL", "target_post_fix_result": "PASS",
+ "replay_equivalent": true,
+ "critical_non_regression_tests": [
+   {"testcase_id": "...", "pre_fix_result": "PASS", "post_fix_result": "PASS",
+    "evidence_hash": "..."}
+ ],
+ "fix_commit_hash": "...", "rerun_bundle_hash": "..."}
+```
+（`target_pre_fix_result` 必須是 `FAIL` 且 `target_post_fix_result` 必須是 `PASS`，證明這個
+target 真的是修完才過（否則 FAIL TARGET_FIX_NOT_PROVEN）；`replay_equivalent` 必須是 true
+（否則 FAIL TARGET_RERUN_NOT_EQUIVALENT）；`critical_non_regression_tests` 清單中每一筆若
+`pre_fix_result` 是 PASS，`post_fix_result` 就必須也是 PASS，否則 FAIL FIX_CAUSED_REGRESSION
+並附上是哪個 testcase_id；這種「修前就過」的 testcase 還必須附 `evidence_hash`，否則 FAIL
+NON_REGRESSION_WITHOUT_EVIDENCE；最後 `fix_commit_hash` 與 `rerun_bundle_hash` 都是必填，
+缺一即 FAIL FIX_CLOSURE_WITHOUT_ARTIFACT_HASH。`target_pre_fix_result`/`target_post_fix_result`
+本身只是自陳述的字串，可選擇額外附上 `target_pre_fix_job_id`/`target_post_fix_job_id`
+——指向真正送出過的 LSF job id，gate 會拿它去讀 REGRESSION_MONITOR 真正維護的
+`.dv-harness/lsf/jobs/<job_id>.json`（JobState 的 `sim_status`），跟你剛剛自陳的
+FAIL/PASS 逐一核對，兜不起來就 FAIL TARGET_RESULT_CLAIM_MISMATCH，job id 根本查無此
+record 就 FAIL TARGET_RESULT_JOB_REF_UNRESOLVED——不再是純自我證明。附了
+`target_testcase_id` 的話也會核對該 job 記錄的 `pattern` 是否一致。這兩個 job_id
+欄位目前是可選（沒附就維持原本純自陳述行為），但只要附了就是真的拿硬證據核對，不是
+「填一個查不到的假 id 也能過」。）
+
+```dv-harness-evidence:regression_replay_equivalence_gate
+{"original": {"testcase_id": "...", "seed": "...", "config_hash": "...",
+   "build_hash": "...", "artifact_hash": "...", "command_hash": "...", "result": "FAIL"},
+ "replay": {"testcase_id": "...", "seed": "...", "config_hash": "...",
+   "build_hash": "...", "artifact_hash": "...", "command_hash": "...", "result": "FAIL"}}
+```
+（`original` 與 `replay` 兩邊必須在 `testcase_id`/`seed`/`config_hash`/`build_hash`/
+`artifact_hash`/`command_hash` 六個識別欄位上逐一相同，任何一項不一致就 FAIL
+REPLAY_NOT_EQUIVALENT 並列出不一致的欄位與兩邊的值——代表 replay 用的是同一顆 build、同一組
+config、同一個 command，不是拿另一個環境的結果魚目混珠；六項都一致之後，還要求兩邊的
+`result` 也相同，否則 FAIL NON_REPRODUCIBLE_RESULT，代表同樣的身份重跑卻得到不同結果，
+本身就是需要交給上面 nondeterminism_attribution_gate 處理的訊號。）
 """,
 Stage.SYSTEM_LEVEL.value: """
 System-Level：確認 system-level verdict 不會用整體 PASS 蓋掉個別 subsystem 的 FAIL
@@ -820,6 +2317,164 @@ subsystem_waivers 附上
 `{"subsystem": "...", "status": "WAIVED"|"NOT_APPLICABLE", "waiver_approved": true, "waiver_evidence": "..."}`；
 非 multi-subsystem system-level 組裝改附
 `{"system_level_applicable": false, "system_level_not_applicable_reason": "..."}`。）
+
+除了以上四個 gate，SYSTEM_LEVEL 這個 stage 實際上還註冊了另外十個 hard gate，涵蓋
+cross-protocol/cross-domain 情境證據、release 版本釘選與一致性、change impact 重跑範圍、
+subsystem 相依圖、deadlock/livelock、以及共享資源競爭六大類，缺任何一個都會讓 stage 卡在
+GATE_FAIL/MISSING_EVIDENCE（即使前面四個 gate 的 evidence 都已經附齊）：
+
+Cross-protocol / cross-domain 情境證據（三個 gate 概念相近但各自要求不同欄位，須各自附上）：
+
+```dv-harness-evidence:cross_protocol_scenario_gate
+{"scenarios": [{"scenario_id": "SC1", "protocols": ["USB", "PCIE"],
+  "requirement_ids": ["..."], "mechanism_ids": ["..."], "coverage_ids": ["..."],
+  "evidence": ["..."], "interaction_point": "..."}]}
+```
+（每個 scenario 的 protocols 至少要有 2 個不同協定，否則判 NOT_CROSS_PROTOCOL；requirement_ids/
+mechanism_ids/coverage_ids/evidence 四個欄位都不能是空值，缺任一個都會 FAIL
+INCOMPLETE_CROSS_PROTOCOL_TRACE 並標出缺哪個欄位；interaction_point 必須說明這個情境實際的
+協定交互點，沒填會 FAIL NO_PROTOCOL_INTERACTION_POINT。）
+
+```dv-harness-evidence:cross_domain_evidence_bundle_gate
+{"scenarios": [{"scenario_id": "SC1", "domains": ["SHARED_RESOURCE", "INTERRUPT"],
+  "contention_evidence": "...", "interrupt_evidence": "...",
+  "evidence_bundle_hash": "...", "subsystem_release_snapshot_hash": "..."}]}
+```
+（domains 至少要有 2 個不同值才算 cross-domain，否則 FAIL NOT_CROSS_DOMAIN；domains 出現
+SHARED_RESOURCE/INTERRUPT/RESET/POWER 時，分別要求對應欄位 contention_evidence/
+interrupt_evidence/recovery_evidence/power_transition_evidence 非空，缺了就 FAIL
+MISSING_DOMAIN_EVIDENCE 並標出是哪個 domain 缺哪個欄位；evidence_bundle_hash 與
+subsystem_release_snapshot_hash 兩者都必須存在，缺一個分別 FAIL NO_EVIDENCE_BUNDLE_HASH /
+NO_RELEASE_SNAPSHOT_HASH。）
+
+```dv-harness-evidence:system_level_cross_domain_gate
+{"scenarios": [{"scenario_id": "SC1", "domains": ["SHARED_RESOURCE", "RESET"],
+  "contention_policy": "...", "recovery_or_reinit_check": "...", "evidence": "..."}]}
+```
+（domains 同樣至少要 2 個不同值，否則 FAIL NOT_CROSS_DOMAIN；domains 含 SHARED_RESOURCE 時要有
+contention_policy（缺了 FAIL SHARED_RESOURCE_WITHOUT_POLICY）；含 INTERRUPT 時要有
+interrupt_latency_or_loss_check（缺了 FAIL INTERRUPT_DOMAIN_WITHOUT_CHECK）；含 RESET 或 POWER
+任一個時要有 recovery_or_reinit_check（缺了 FAIL RESET_POWER_DOMAIN_WITHOUT_RECOVERY_CHECK）；
+evidence 欄位一律必填，缺了 FAIL CROSS_DOMAIN_WITHOUT_EVIDENCE——這個 gate 跟上面
+cross_domain_evidence_bundle_gate 概念類似但欄位名稱不同，兩者要各自附上，不能共用同一組欄位。）
+
+Release 版本釘選與一致性（延續 system_level_validator 的 registry 精神，但各自檢查不同層面，
+須各自附上）：
+
+```dv-harness-evidence:system_level_composition_gate
+{"selected_subsystems": [{"name": "USB", "environment_manifest": "...", "release_sha": "...",
+  "qualification_state": "REGRESSION_QUALIFIED", "interface_compatibility": "PASS",
+  "clock_reset_compatibility": "PASS"}],
+ "system_level_scenarios": [{"scenario_id": "SC1", "participating_subsystems": ["USB", "PCIE"]}]}
+```
+（selected_subsystems 至少要有 2 個、name 不得重複，每個都要有 name/environment_manifest/
+release_sha/qualification_state/interface_compatibility/clock_reset_compatibility 六個欄位，
+缺任一個 FAIL INCOMPLETE_SUBSYSTEM_IDENTITY；qualification_state 只能是
+SMOKE_QUALIFIED/REGRESSION_QUALIFIED/PRODUCTION_QUALIFIED 三選一，否則 FAIL
+INVALID_QUALIFICATION_STATE；interface_compatibility 與 clock_reset_compatibility 都必須是字串
+"PASS"，否則 FAIL SUBSYSTEM_COMPATIBILITY_FAIL；system_level_scenarios 不能是空陣列（FAIL
+NO_SYSTEM_LEVEL_SCENARIOS），每個 scenario 的 participating_subsystems 必須引用上面
+selected_subsystems 裡真實存在的 name、且至少 2 個，否則分別 FAIL SCENARIO_UNKNOWN_SUBSYSTEM /
+NOT_CROSS_SUBSYSTEM_SCENARIO。
+另外（2026-09-05 起）：這個 gate 除了檢查上面欄位形狀，還會對 selected_subsystems 裡的
+subsystem 實際跑一次真的 cross-subsystem 分析（dv_harness/system_resource_inventory.py 的
+SYS-9..SYS-14），如果真實分析發現兩個 ACTIVE agent 同時 drive 同一個 physical interface
+（DRIVER_CONFLICT），就算你把 interface_compatibility / clock_reset_compatibility 都寫成
+"PASS" 也會 FAIL ACTIVE_DRIVER_CONFLICT_UNRESOLVED。這是 BLOCKED，要人類決定哪個 subsystem
+擁有該介面，不是改寫 evidence 就能過。真實分析跑不起來時（沒有 registry、環境不在磁碟上）
+會回報 SKIPPED_ANALYSIS_UNAVAILABLE 並附上原因，不會改變判定。）
+
+```dv-harness-evidence:system_level_release_pinning_gate
+{"selected_subsystems": [{"name": "USB", "release_sha": "...",
+  "environment_manifest_hash": "...", "qualification_evidence_hash": "..."}],
+ "composition_hash": "..."}
+```
+（selected_subsystems 至少要 2 筆，每筆都要有 name/release_sha/environment_manifest_hash/
+qualification_evidence_hash 四個欄位，缺任一個 FAIL UNPINNED_SUBSYSTEM_RELEASE 並標出缺哪個
+欄位——注意這裡要的是 environment_manifest_hash（雜湊值），不是上面 composition gate 的
+environment_manifest（路徑），兩者欄位名稱不同不能混用；composition_hash 一定要有，缺了 FAIL
+NO_COMPOSITION_HASH。）
+
+```dv-harness-evidence:system_level_release_evidence_consistency_gate
+{"subsystems": [{"subsystem": "USB", "release_sha": "...", "manifest_hash": "...",
+  "qualification_evidence_hash": "..."}],
+ "scenarios": [{"scenario_id": "SC1", "participating_subsystems": ["USB", "PCIE"],
+   "release_snapshot": {"USB": "...", "PCIE": "..."}, "evidence_bundle_hash": "..."}]}
+```
+（subsystems 至少要 2 筆（這裡的 key 是 "subsystem" 不是 "name"），每筆都要有 release_sha/
+manifest_hash/qualification_evidence_hash 三個欄位，缺任一個 FAIL
+INCOMPLETE_SUBSYSTEM_RELEASE_EVIDENCE；scenarios 每筆的 participating_subsystems 至少 2 個且都
+必須是上面 subsystems 已列出的 subsystem，否則分別 FAIL SYSTEM_SCENARIO_NOT_MULTI_SUBSYSTEM /
+SCENARIO_REFERENCES_UNKNOWN_RELEASE；release_snapshot 是 {subsystem 名稱: release_sha} 的對照
+表，裡面每個 participating subsystem 的值都必須跟上面 subsystems 該筆的 release_sha 完全一致，
+不一致就 FAIL SCENARIO_RELEASE_SNAPSHOT_MISMATCH；evidence_bundle_hash 缺了 FAIL
+SYSTEM_SCENARIO_WITHOUT_EVIDENCE_HASH。）
+
+Change Impact 重跑範圍：
+
+```dv-harness-evidence:system_level_change_impact_gate
+{"changed_subsystems": ["USB"], "selected_subsystems": ["USB", "PCIE"],
+ "system_scenarios": [{"scenario_id": "SC1", "participating_subsystems": ["USB", "PCIE"]}],
+ "rerun_scenarios": ["SC1"]}
+```
+（changed_subsystems 為空時直接 PASS（NO_SUBSYSTEM_CHANGE，代表這輪沒有 subsystem 內容變動）；
+非空時每個都必須是 selected_subsystems 的子集，否則 FAIL UNKNOWN_CHANGED_SUBSYSTEM；gate 會自己
+從 system_scenarios 算出「participating_subsystems 與 changed_subsystems 有交集」的情境集合，
+這些情境的 scenario_id 全部都要出現在 rerun_scenarios 裡，漏了任何一個都會 FAIL
+MISSING_IMPACTED_RERUN_SCENARIOS 並列出漏掉的 scenario_id——不可以自己判斷「這個改動應該不影響」
+就省略重跑清單，一定要讓 gate 用真實的 participating_subsystems 交集自己算出來。）
+
+Subsystem 相依圖（無環）：
+
+```dv-harness-evidence:system_level_dependency_graph_gate
+{"subsystems": ["USB", "PCIE", "ETHERNET"],
+ "dependencies": [{"from": "USB", "to": "PCIE"}]}
+```
+（subsystems 是節點集合；dependencies 每筆 from/to 都必須是 subsystems 裡存在的名稱，否則 FAIL
+DEPENDENCY_UNKNOWN_SUBSYSTEM；整張圖不能有環（例如 A→B→A），有環就 FAIL DEPENDENCY_CYCLE——這是
+在檢查 subsystem 之間的初始化/資源相依關係本身有沒有邏輯矛盾，不是檢查 scenario 內容。）
+
+Deadlock / Livelock 分析：
+
+```dv-harness-evidence:system_level_deadlock_livelock_gate
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "deadlock_detected": false, "livelock_detected": false,
+ "forward_progress_assertions": ["..."], "stress_scenario_evidence": ["..."]}
+```
+（`evidence_provenance` 為必填欄位：`"AGENT_SELF_ATTESTED"`（你自己填的，永遠被接受、不需附
+其他東西）／`"TOOL_DERIVED"`／`"SIMULATION_DERIVED"`。後兩者必須同時附
+`"evidence_derivation": {"tool": "...", "artifact_path": "..."}`，且該路徑在 project root 底下
+必須真的存在。缺欄位 FAIL EVIDENCE_PROVENANCE_MISSING。「system 沒有 deadlock」是動態行為結論，
+沒跑過任何東西就宣稱是不成立的——誠實標記為 AGENT_SELF_ATTESTED 不會擋住 stage，但會在
+dashboard 與 signoff 匯出上明確標示為未經獨立推導。）
+（deadlock_detected 或 livelock_detected 為 true 會直接 FAIL（分別是
+SYSTEM_DEADLOCK_DETECTED，會附上 deadlock_cycle；SYSTEM_LIVELOCK_DETECTED）——這兩個欄位必須
+反映真實分析結果，不是預設隨便填 false；forward_progress_assertions 與 stress_scenario_evidence
+兩者都不能是空值，缺任一個分別 FAIL NO_FORWARD_PROGRESS_ASSERTIONS /
+NO_STRESS_SCENARIO_EVIDENCE，代表沒有真的用 forward-progress assertion 搭配 stress scenario
+去驗證過 deadlock/livelock，不能只憑印象宣稱兩者都是 false。）
+
+共享資源競爭：
+
+```dv-harness-evidence:system_level_resource_contention_gate
+{"evidence_provenance": "AGENT_SELF_ATTESTED",
+ "shared_resources": ["DDR", "APB_BUS"],
+ "scenarios": [{"scenario_id": "SC1", "resources": ["DDR"],
+   "arbitration_or_contention_policy": "...", "contention_testcase_ids": ["..."]}]}
+```
+（shared_resources 是本次 system-level 組裝實際共用的資源清單；每個 scenario 的 resources 若與
+shared_resources 有交集（代表這個情境真的碰到共享資源），就必須同時附上
+arbitration_or_contention_policy（缺了 FAIL SHARED_RESOURCE_WITHOUT_CONTENTION_POLICY）與非空的
+contention_testcase_ids（缺了 FAIL NO_CONTENTION_TESTS）；沒有碰到共享資源的 scenario 不受此
+限制。
+另外（2026-09-05 起）：shared_resources 不再只跟你自己寫的 scenario 對帳。這個 gate 會對真實
+registry 裡註冊的 subsystem（或你在 payload 加的 selected_subsystems 名單）實跑
+dv_harness/system_resource_inventory.py 的 SYS-9..SYS-14 分析，兩種情況會 FAIL：
+真實分析判定 automatic integration 被 STOP/HOLD（FAIL ACTIVE_DRIVER_CONFLICT_UNRESOLVED，
+要人類仲裁 ownership，寫再完整的 arbitration policy 也不能過）；或你宣告 shared_resources 為
+空陣列但真實分析找到 SAME_PHYSICAL_RESOURCE / SHARED_LOGICAL_RESOURCE 關係
+（FAIL SHARED_RESOURCES_CONTRADICTED）。真實分析跑不起來時回報
+SKIPPED_ANALYSIS_UNAVAILABLE 並附上原因，不改變判定。）
 """,
 Stage.EXPERT_FEEDBACK_LOOP.value: """
 DV Expert Feedback Closed Loop：把本輪 AI Analyze/Generate/Verify 的產出交給人類 DV 專家
@@ -913,6 +2568,36 @@ WAIVED（要有 support_status=UNSUPPORTED_BY_DUT + waiver.approved + waiver.evi
 且不能是空陣列——沒有任何 requirement id 或引用了 vPlan 裡不存在的 requirement，
 都會被列進 orphan_testcases 而 FAIL，這是 requirement→testcase 反向追溯的完整性
 檢查，跟上面 requirement_runtime_evidence_gate 的正向追溯是同一條追溯鏈的兩端。）
+
+本 stage 另外還有一個獨立的 hard gate，也必須附上 evidence block，缺了會讓整個 stage
+卡在 GATE_FAIL（找到真實案例：REQUIREMENT_CLOSURE 的分析內容本身完整正確，但沒附這個
+gate 的 evidence，導致同樣的 GATE_FAIL/MISSING_EVIDENCE 卡了多輪重試）。這個 gate 會把
+requirement → mechanism → testcase → coverage → result（→ RCA，僅在該 result FAIL 時）
+整條鏈串起來重新驗一次，確認每個 requirement 真的有完整、前後一致的追溯鏈，而不是只在
+上面幾個 gate 各自的片段裡看起來對得上：
+
+```dv-harness-evidence:end_to_end_trace_chain_gate
+{"requirements": [{"req_id": "..."}],
+ "mechanisms": [{"mechanism_id": "..."}],
+ "tests": [{"testcase_id": "..."}],
+ "coverage": [{"coverage_id": "..."}],
+ "results": [{"result_id": "...", "result": "PASS"}],
+ "rcas": [{"rca_id": "..."}],
+ "links": [{"req_id": "...", "mechanism_id": "...", "testcase_id": "...",
+   "coverage_id": "...", "result_id": "...", "rca_id": "..."}]}
+```
+
+（"requirements"/"mechanisms"/"tests"/"coverage"/"results" 這五個清單都不能是空的
+（缺任何一個會直接 FAIL TRACE_CHAIN_DOMAIN_EMPTY，"rcas" 例外，只有真的有 FAIL 結果時
+才需要非空）；"links" 裡每一筆都要用 req_id/mechanism_id/testcase_id/coverage_id/
+result_id 把上面五個清單裡「真實存在」的 id 串成一條完整鏈——任何一個 id 對不到清單裡的
+項目都會被判 BROKEN_TRACE_LINK 而 FAIL；當某一筆 link 對應的 result 的 "result" 是
+"FAIL" 時，這筆 link 的 "rca_id" 一定要填、而且要對到 "rcas" 清單裡真實存在的
+rca_id，沒有 RCA 會被判 FAILED_RESULT_WITHOUT_RCA；最後，"requirements" 裡每一個
+req_id 都必須至少被一筆 link 覆蓋到，任何一個 requirement 完全沒有出現在 links 裡都會
+被列進 REQUIREMENTS_WITHOUT_FULL_TRACE_CHAIN 而 FAIL——這跟上面 traceability_audit
+只檢查 testcase→requirement 這一段不同，這個 gate 檢查的是 requirement 到 result（甚至
+到 RCA）的整條鏈都要串得起來、沒有斷點。）
 """,
 Stage.PROMOTION_READINESS.value: """
 Promotion Readiness：確認所有 critical dimension 沒有 BLOCKED/UNKNOWN/FAIL/INCOMPLETE，
@@ -949,6 +2634,88 @@ Feature Continuity（跨 package revision 的既有能力/檔案不能在這次 
 repo root）；真正的 repo root 由 harness 自己帶入 --root，不接受你在 block 裡另外
 指定，避免路徑被導向別處而繞過檢查。任何一個路徑在目前的 repo 裡找不到，就會
 FAIL FEATURE_CONTINUITY_REGRESSION，列出缺的路徑。）
+
+本 stage 另外還有五個獨立的 hard gate，也必須各自附上 evidence block，缺任何一個都會讓整個
+stage 卡在 GATE_FAIL/MISSING_EVIDENCE（跟上面 INTAKE/DISCOVERY 同一種真實案例：agent 的
+分析內容本身完整正確，卻只因為沒附這幾個 gate 的 evidence 卡住重試）。前兩個
+（closed_loop_promotion_gate/promotion_rollback_gate）確認「整條 promotion chain 真的閉環、
+而且一旦已經 PROMOTED 之後又出現該 rollback 的觸發條件，真的有做 rollback」；接下來兩個
+（qualification_matrix_consistency_gate/rollback_consistency_gate）分別確認 qualification
+matrix 本身數字沒有自相矛盾、rollback 這個動作本身也是自洽的（不會一邊說已經 rollback、
+一邊又還停在 PROMOTED）；最後一個（release_reproducibility_gate）確認這次要 promote 出去
+的 release 真的可以被重建，不是只有一個結論、沒有任何可回溯的組成資訊：
+
+```dv-harness-evidence:closed_loop_promotion_gate
+{"passed_stages": ["INTAKE_READY", "VPLAN_READY", "ARCHITECTURE_READY", "MECHANISM_READY",
+  "TESTS_READY", "EXECUTION_EVIDENCE_READY", "COVERAGE_QUALITY_READY"],
+ "failure_detected": false,
+ "expert_feedback_reviewed": true, "experience_capture_status": "CAPTURED"}
+```
+（"passed_stages" 必須完整涵蓋這七個前置 stage
+（INTAKE_READY/VPLAN_READY/ARCHITECTURE_READY/MECHANISM_READY/TESTS_READY/
+EXECUTION_EVIDENCE_READY/COVERAGE_QUALITY_READY），少任何一個會被列進 "missing" 並判
+MISSING_STAGES；若 "failure_detected" 是 true，還要額外附上 "root_cause"（必須同時填
+classification/first_bad_event/causal_chain/supporting_evidence/counter_evidence/confidence
+六個欄位，缺任何一個判 FAILURE_WITHOUT_VALID_RCA）、"calibration_or_fix_applied": true
+（否則判 FAILURE_WITHOUT_FIX_OR_CALIBRATION）、以及 "rerun_evidence"（非空，否則判
+FIX_WITHOUT_RERUN_EVIDENCE）；沒有 active failure 時（如上例 "failure_detected": false）
+這三個欄位可以省略。"expert_feedback_reviewed" 必須是 true（否則判
+NO_EXPERT_FEEDBACK_REVIEW）；"experience_capture_status" 必須是 "CAPTURED" 或
+"NOT_APPLICABLE" 其中之一（其他值或留空判 EXPERIENCE_LOOP_NOT_CLOSED）。）
+
+```dv-harness-evidence:promotion_rollback_gate
+{"promotion_state": "PROMOTED", "detected_triggers": [], "rollback_applied": false}
+```
+（"promotion_state" 若不是 "PROMOTED"，gate 直接 PASS（NOT_PROMOTED），不檢查其餘欄位；
+是 "PROMOTED" 時，才看 "detected_triggers" 這個清單有沒有命中
+STALE_EVIDENCE/NEW_CRITICAL_FAILURE/COVERAGE_REGRESSION/INVALID_WAIVER/
+SUBSYSTEM_RELEASE_CHANGED 這五種 rollback 觸發條件——如實反映實際偵測到的觸發條件，不要
+為了省事都填空陣列；一旦命中其中任何一個，"rollback_applied" 就必須是 true，否則判
+ROLLBACK_REQUIRED 並列出命中的觸發條件；沒有命中任何觸發條件時 gate 直接 PASS。）
+
+```dv-harness-evidence:qualification_matrix_consistency_gate
+{"protocols": [{"protocol": "USB", "qualification_state": "REGRESSION_QUALIFIED",
+  "passing_test_count": 42, "coverage_percent": 87.5, "evidence_count": 12}]}
+```
+（"protocols" 裡每一筆都用當下這個 protocol 真實的 "qualification_state" 搭配對應的數字
+證據，三種狀態各自的門檻不同：PRODUCTION_QUALIFIED 要求 passing_test_count > 0 且
+coverage_percent >= 100 且 evidence_count > 0（少一項判
+PRODUCTION_QUALIFICATION_INCONSISTENT）；REGRESSION_QUALIFIED 要求 passing_test_count > 0
+且 coverage_percent > 0 且 evidence_count > 0（判 REGRESSION_QUALIFICATION_INCONSISTENT）；
+SMOKE_QUALIFIED 只要求 passing_test_count > 0（判
+SMOKE_QUALIFICATION_WITHOUT_PASSING_TEST）。額外可選填 "canonical_qualification_status"
+（dv_harness/qualification.py 的 8 級 canonical ladder 之一：BUILDER_AVAILABLE/
+EVIDENCE_READY/ENV_GENERATED/COMPILE_QUALIFIED/SMOKE_QUALIFIED/PROTOCOL_QUALIFIED/
+REGRESSION_QUALIFIED/PRODUCTION_QUALIFIED）——填了就必須是這 8 個字串之一（否則判
+INVALID_CANONICAL_QUALIFICATION_STATUS）、且必須落在 SMOKE_QUALIFIED 以上（低於
+SMOKE_QUALIFIED 的四級沒有對應的 system-level 狀態，判
+CANONICAL_STATUS_BELOW_SYSTEM_LEVEL_FLOOR）、映射後的 system-level 狀態
+（PROTOCOL_QUALIFIED 會 floor 到 SMOKE_QUALIFIED，其餘 SMOKE/REGRESSION/PRODUCTION
+原樣對應）必須跟同一筆的 "qualification_state" 完全一致，不一致判
+QUALIFICATION_STATUS_STATE_MISMATCH；完全不填這個選填欄位時行為跟以前一樣，不受影響。）
+
+```dv-harness-evidence:release_reproducibility_gate
+{"release_id": "...", "rtl_revision": "...", "tb_revision": "...", "vip_version": "...",
+ "tool_versions": "...", "config_hash": "...", "testlist_hash": "...", "seed_policy": "...",
+ "evidence_bundle_hash": "...", "qualification_state": "REGRESSION_QUALIFIED"}
+```
+（rtl_revision/tb_revision/vip_version/tool_versions/config_hash/testlist_hash/
+seed_policy/evidence_bundle_hash 這八個欄位缺一不可、都不能是空字串（列進 "missing" 判
+NON_REPRODUCIBLE_RELEASE）——這些是重建這次 release 所需的最小可回溯組成資訊。若這次
+"qualification_state" 是 "PRODUCTION_QUALIFIED"，還必須額外附上非空的
+"promotion_chain_hash"（否則判 PRODUCTION_RELEASE_WITHOUT_PROMOTION_CHAIN_HASH）；
+"qualification_state" 不是 PRODUCTION_QUALIFIED 時可以省略 "promotion_chain_hash"。）
+
+```dv-harness-evidence:rollback_consistency_gate
+{"rollback_applied": false}
+```
+（"rollback_applied" 是 false（或沒有發生過 rollback）時，gate 直接 PASS，其餘欄位可以
+省略，如上例；一旦 "rollback_applied": true，就必須同時滿足三個條件：
+"promotion_state" 不可以還是 "PROMOTED"（否則判 ROLLBACK_BUT_STILL_PROMOTED——rollback
+了卻沒有真的把 promotion 狀態撤掉，自相矛盾）、"rollback_reason" 必須是非空字串（否則判
+ROLLBACK_WITHOUT_REASON）、"revalidation_required" 必須是 truthy（否則判
+ROLLBACK_WITHOUT_REVALIDATION——rollback 之後必須明確承認需要重新驗證，不能當作什麼都
+沒發生）。）
 """,
 Stage.SIGNOFF.value: """
 執行 final review/signoff gate。只有 CLOSED/BLOCKED/ACCEPTED_RISK 可結束。
@@ -967,8 +2734,15 @@ Stage.SIGNOFF.value: """
   {"class": "SCOREBOARD", "hash": "..."}, {"class": "COVERAGE", "hash": "..."},
   {"class": "REGRESSION", "hash": "..."}, {"class": "RCA_FIX", "hash": "..."},
   {"class": "ENV_FINGERPRINT", "hash": "..."}],
+ "bundle_dir": "<真實 `dv-harness signoff-export --out <dir>` 寫出的 out_dir>",
  "bundle_hash": "...", "final_verdict": "PASS"}
 ```
+（"bundle_dir" 必須是真的執行過 signoff-export 之後、real manifest.json 所在的
+那個目錄——gate 會實際讀那份 manifest.json、用
+dv_harness/signoff_export.py 的 compute_bundle_hash() 重新算一次，"bundle_hash"
+必須跟這個真實重算出來的值完全一致，不是自己隨便填一個字串；同時
+manifest.json 裡也必須看得到 self_audit_result 這筆 present:true，證明
+bundle_dir 真的是 signoff-export 的輸出，不是隨手放一個假的 manifest.json 進去。）
 
 若這次 SIGNOFF 是一個獨立 subsystem 驗證環境完成（可被之後 SYSTEM_LEVEL 組裝重複使用），
 必須附上這個環境的登記資訊；若這次 SIGNOFF 是一次 full-SoC/system-level 驗證、
@@ -985,22 +2759,193 @@ Stage.SIGNOFF.value: """
 `.dv-harness/soc-composer/subsystem_environment_registry.json`，之後 SYSTEM_LEVEL 階段的
 `system_level_validator` 會拿真正登記過的內容跟 SYSTEM_LEVEL 組裝時的宣稱互相比對，
 不接受 SYSTEM_LEVEL 階段憑空宣稱某個 subsystem「已經 ready」。）
+
+本 stage 另外還有六個獨立的 hard gate，同樣各自要附上 evidence block，缺一個都會讓整個
+stage 卡在 GATE_FAIL/MISSING_EVIDENCE（跟 INTAKE/DISCOVERY 曾經發生過的情況一樣：agent 的
+分析內容本身完全正確，卻因為漏附某個 gate 的 evidence，重試多輪還是卡在同樣的 GATE_FAIL）。
+這六個 gate 專門針對「signoff bundle 內部一致性」與「release attestation 是否完整、
+是否被事後竄改」把關，跟前面 false_pass_resistance_gate/signoff_bundle_completeness_gate/
+subsystem_environment_registration_gate 分別檢查不同面向：evidence_bundle_run_consistency_gate
+與 evidence_freshness_gate 確認證據本身沒有跑錯 run、沒有過期；release_attestation_gate 與
+signoff_snapshot_immutability_gate 確認 release 有被正確簽署、signoff snapshot 沒有被事後竄改；
+signoff_trace_crosscheck_gate 確認 snapshot 內部引用的各條 trace 彼此一致、沒有還沒收斂的
+active failure；verification_verdict_consistency_gate 確認最終 verdict 跟底層各層驗證結果
+邏輯一致，不是憑空宣稱 PASS：
+
+```dv-harness-evidence:evidence_bundle_run_consistency_gate
+{"run_id": "...", "bundle_hash": "...",
+ "evidence": [{"evidence_id": "...", "run_id": "...", "hash": "..."}]}
+```
+（頂層 "run_id" 與 "bundle_hash" 都必須非空，否則直接判 MISSING_BUNDLE_IDENTITY FAIL；
+"evidence" 陣列中每一筆的 "evidence_id" 不可缺漏、也不可跟同一份 bundle 裡其他筆重複
+（否則 DUPLICATE_OR_MISSING_EVIDENCE_ID FAIL）；每一筆的 "run_id" 必須跟頂層 "run_id"
+完全一致，代表這份 bundle 裡的每一筆證據都真的是同一次 run 產生的，不是從別次 run
+混進來的（否則 EVIDENCE_RUN_ID_MISMATCH FAIL）；每一筆都必須附上非空的 "hash"，代表這筆
+證據本身已經被雜湊固定，不能是還沒算過雜湊的暫存內容（否則 UNHASHED_EVIDENCE FAIL）。）
+
+```dv-harness-evidence:evidence_freshness_gate
+{"current": {"rtl_hash": "...", "build_hash": "...", "spec_revision": "..."},
+ "items": [{"evidence_id": "...", "rtl_hash": "...", "build_hash": "...",
+   "spec_revision": "...", "evidence_hash": "..."}]}
+```
+（"current" 代表這次 SIGNOFF 當下真正的 rtl_hash/build_hash/spec_revision 三個身分欄位；
+"items" 陣列中每一筆證據的 rtl_hash/build_hash/spec_revision 都必須跟 "current" 裡對應的值
+逐欄位完全相同，代表這筆證據是針對「這一版」RTL/build/spec 產生的，不是沿用舊版本留下來的
+過期證據（任何一個欄位不符都會判 STALE_SIGNOFF_EVIDENCE FAIL，並標出是哪個 field）；每一筆
+還必須附上非空的 "evidence_hash"（否則 UNHASHED_SIGNOFF_EVIDENCE FAIL）。此 gate 也相容舊版
+`{"evidence_items":[{"evidence_id":...,"revision":...,"content_hash":...}]}` schema，但那個
+schema 需要額外的 --current-revision 參數配合，新產生的 evidence 一律用上面 "current"/"items"
+這組新版欄位。）
+
+```dv-harness-evidence:release_attestation_gate
+{"release_id": "...", "release_hash": "...", "promotion_chain_hash": "...",
+ "evidence_bundle_hash": "...", "attested_by": "...", "attested_at": "...",
+ "attestation_signature": "..."}
+```
+（"release_id"/"release_hash"/"promotion_chain_hash"/"evidence_bundle_hash"/"attested_by"/
+"attested_at" 這六個欄位都必須非空，缺任何一個都會被列進 "missing" 陣列一起判
+INCOMPLETE_RELEASE_ATTESTATION FAIL；"attestation_signature" 必須另外非空，代表這份
+release attestation 真的有被簽署過，不是只填完欄位卻沒有實際簽署（否則
+UNSIGNED_RELEASE_ATTESTATION FAIL）。）
+
+```dv-harness-evidence:signoff_snapshot_immutability_gate
+{"release_hash": "...", "promotion_chain_hash": "...", "evidence_bundle_hash": "...",
+ "manifest_hash": "...", "attestation_signature": "...", "snapshot_hash": "...",
+ "post_signoff_mutation_detected": false}
+```
+（前五個欄位（release_hash/promotion_chain_hash/evidence_bundle_hash/manifest_hash/
+attestation_signature）都必須非空（否則 INCOMPLETE_SIGNOFF_SNAPSHOT FAIL）；"snapshot_hash"
+必須是拿這五個欄位組成的 JSON（key 排序、無多餘空白）重新算出的 sha256，不能自己隨便填一個
+字串——gate 會實際重算一次比對，算出來的值跟填的 "snapshot_hash" 不一致就判
+SIGNOFF_SNAPSHOT_HASH_MISMATCH FAIL；"post_signoff_mutation_detected" 必須誠實反映
+signoff snapshot 定案後是否被偵測到動過，正常情況下是 false，真的有事後被動過的證據時才填
+true（填 true 會直接判 POST_SIGNOFF_MUTATION_DETECTED FAIL，不是拿來隨便填的欄位）。）
+
+```dv-harness-evidence:signoff_trace_crosscheck_gate
+{"snapshot_hash": "...", "trace_chain_hash": "...", "coverage_state_hash": "...",
+ "result_bundle_hash": "...", "rca_bundle_hash": "...", "evidence_bundle_hash": "...",
+ "snapshot_references": {"trace_chain_hash": "...", "coverage_state_hash": "...",
+   "result_bundle_hash": "...", "rca_bundle_hash": "...", "evidence_bundle_hash": "..."},
+ "active_failure_count": 0}
+```
+（頂層六個欄位（snapshot_hash/trace_chain_hash/coverage_state_hash/result_bundle_hash/
+rca_bundle_hash/evidence_bundle_hash）都必須非空（否則 INCOMPLETE_SIGNOFF_CROSSCHECK FAIL）；
+"snapshot_references" 裡對應的五個 hash（trace_chain_hash/coverage_state_hash/
+result_bundle_hash/rca_bundle_hash/evidence_bundle_hash）都必須跟頂層同名欄位逐一完全一致，
+代表 snapshot 內部引用的各條 trace 真的互相對得上、不是各自獨立填的假資料（任何一個不符都會判
+SIGNOFF_REFERENCE_MISMATCH FAIL，並標出是哪個 field）；"active_failure_count" 必須是 0，代表
+這次 signoff 當下已經沒有還沒收斂的 active failure（大於 0 會直接判 SIGNOFF_WITH_ACTIVE_FAILURES
+FAIL，不能在還有未結案 failure 的狀態下 signoff）。）
+
+```dv-harness-evidence:verification_verdict_consistency_gate
+{"final_verdict": "PASS", "simulation_status": "PASS", "semantic_status": "TRUE_PASS",
+ "checker_status": "PASS", "active_failure_ids": [], "signoff_credit_allowed": true,
+ "failure_attribution": "N/A", "promotion_requested": true}
+```
+（"final_verdict" 必須是 "PASS"/"FAIL"/"BLOCKED" 三選一，其他值一律判 INVALID_FINAL_VERDICT
+FAIL；"final_verdict" 為 "PASS" 時，"simulation_status" 必須是 "PASS"、"semantic_status" 必須是
+"TRUE_PASS"、"checker_status" 必須是 "PASS"、"active_failure_ids" 必須是空陣列、
+"signoff_credit_allowed" 必須是布林值 true，這五個條件只要有一個不成立就會判
+INCONSISTENT_FINAL_PASS FAIL（代表不能在模擬層/語意層/checker 層任何一層還沒真正收斂、或還有
+active failure 的狀況下宣稱 final_verdict 是 PASS）；"final_verdict" 為 "FAIL" 且
+"failure_attribution" 是 "UNKNOWN"、同時 "promotion_requested" 為 true 時，會判
+UNKNOWN_FAILURE_ATTRIBUTION_CANNOT_PROMOTE FAIL（代表 root cause 歸因都還沒釐清，就不能同時
+要求把這次結果拿去 promote）。）
 """
 }
+
+def _format_vault_related_case(case: dict) -> str:
+    """One line per prior-evidence hit, formatted on the terms of whichever
+    store it came from (`source`, set by memory_vault.
+    search_related_memory_for_debug()).
+
+    An `evidence_db` row has no `frontmatter`/`note_id` at all, so the vault
+    row's accessors would render it as a content-free "- [?]" line. It is
+    labelled with its real identity instead -- its `signature_key`, plus the
+    aggregated `occurrence_count` that is exactly what the Evidence Layer
+    knows and the Markdown vault does not ("this same failure shape has been
+    recorded N times"). An unknown/absent `source` falls back to the vault
+    shape, which is what every caller produced before 2026-09-04."""
+    if case.get("source") == "evidence_db":
+        key = str(case.get("signature_key") or "?")[:12]
+        detail = " / ".join(str(v) for v in (case.get("symptom"), case.get("root_cause_hint")) if v)
+        occurrences = case.get("occurrence_count")
+        suffix = f"（evidence_db 累計出現 {occurrences} 次）" if occurrences else "（evidence_db）"
+        return f"- [sig:{key}] {detail}{suffix}"
+    fm = case.get("frontmatter") or {}
+    return f"- [{fm.get('id', case.get('note_id', '?'))}] {fm.get('failure') or ''}"
+
 
 def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
                         constraints: list | None = None,
                         correction_note: str | None = None,
-                        human_approval: dict | None = None) -> str:
+                        human_approval: dict | None = None,
+                        relevant_memory: list | None = None,
+                        kc_search_results: list | None = None,
+                        vault_related_cases: list | None = None) -> str:
     """Purely additive over the pre-control-plane signature: called with
     only the original 3 positional args (constraints/correction_note/
-    human_approval all default None), the returned prompt is byte-identical
-    to before -- see test_de_explainer_is_additive_and_does_not_change_agent_prompt
+    human_approval/relevant_memory all default None), the returned prompt is
+    byte-identical to before -- see test_de_explainer_is_additive_and_does_not_change_agent_prompt
     and the control-plane tests that check the None-default path explicitly.
 
-    engine.DVHarness.run_stage() is the one caller that passes the extra
-    three, sourced from control_plane.ControlPlane.load() for the CURRENT
-    stage:
+    relevant_memory (Task 9, 2026-08-31 poster-gap-closing round 2): an
+    optional list of Memory-tier records (dv_harness.memory.MemoryRetriever.
+    search()'s own "memory" payloads, e.g. from engine.run_stage()) --
+    surfaced to the agent as prior knowledge to consider, never as current
+    evidence (CLAUDE.md's Evidence Truth Rule/"Memory is prior knowledge,
+    not current evidence" applies here exactly as it does to `human_approval`
+    above). A falsy value (None or []) leaves the prompt unchanged, same as
+    every other additive kwarg here.
+
+    kc_search_results (2026-09-02, knowledge-center-pre-stage-read
+    gap-closing task): an optional list of shared, cross-user Knowledge
+    Center records (KnowledgeCenterClient.search()'s own "records" payload,
+    e.g. from engine.run_stage() for FAILURE_RECOVERY/RE_AUDIT only) --
+    surfaced to the agent as prior knowledge exactly like relevant_memory
+    above, never as current evidence. Distinct from relevant_memory: that
+    list comes from the purely LOCAL per-project MemoryStore, this one from
+    the shared, cross-user Knowledge Center (dv_harness/knowledge_center.py).
+    A falsy value (None or []) leaves the prompt unchanged, same as every
+    other additive kwarg here.
+
+    vault_related_cases (Phase 10, 2026-09-03, obsidian-memory-debugflow
+    task): an optional list of DV-Knowledge Vault search hits
+    (dv_harness.memory_vault.search_related_memory_for_debug()'s own
+    "related_cases" payload), e.g. from engine.run_stage() for
+    FAILURE_RECOVERY/RE_AUDIT only, BEFORE that attempt's own adapter call
+    runs. A third, distinct source from relevant_memory (local per-project
+    MemoryStore) and kc_search_results (shared cross-user Knowledge Center):
+    this one is the local, git/Obsidian-compatible Markdown vault.
+    Disclaimed exactly like the other two -- prior evidence to independently
+    re-verify, never an assumed answer (CLAUDE.md Evidence Truth Rule /
+    "不得直接假設 previous root cause == current root cause"). A falsy value
+    (None or []) leaves the prompt unchanged, same as every other additive
+    kwarg here.
+
+    Since 2026-09-04 that payload carries TWO row shapes, each tagged by its
+    own `source` field, and the renderer below formats each on its own terms
+    rather than assuming one: `source="vault"` rows are
+    FileSystemMarkdownAdapter.search() results ({"score","note_id","path",
+    "frontmatter"}) and `source="evidence_db"` rows are `failure_signatures`
+    rows read out of the Evidence Layer's DuckDB store (keyed by
+    `signature_key`, carrying protocol/symptom/root_cause_hint plus the
+    aggregated `occurrence_count` -- see memory_vault.
+    search_evidence_db_failure_signatures()). Rendering an evidence_db row
+    through the vault row's `frontmatter` accessor would emit a content-free
+    "- [?]" line, so the two are formatted separately here.
+
+    engine.DVHarness.run_stage() is the one caller that passes all six
+    extra kwargs: constraints/correction_note/human_approval are sourced
+    from control_plane.ControlPlane.load() for the CURRENT stage;
+    relevant_memory is sourced from a fresh MemoryRetriever.search() call
+    against this project's own Memory tiers (see relevant_memory above) --
+    a separate subsystem, not control-plane state; kc_search_results is
+    sourced from a fresh KnowledgeCenterClient.search() call, gated on
+    stage and on the client's own configured() check (see kc_search_results
+    above); vault_related_cases is sourced from a fresh
+    memory_vault.search_related_memory_for_debug() call, gated on stage the
+    same way (see vault_related_cases above).
     - constraints: every active CONSTRAINT (`dv-harness constraint --add`),
       folded into every subsequent stage prompt until removed.
     - correction_note: an active CORRECT (`dv-harness correct <stage>
@@ -1048,6 +2993,37 @@ def build_stage_prompt(stage: str, state_summary: str, user_goal: str,
               '({"value": ..., "reviewer_id": ..., "reviewer_confidence": ...})，'
               "請直接使用這組 reviewer_id/reviewer_confidence，不要自行編造。"
         )
+    if relevant_memory:
+        prompt += (
+            "\n\nMemory Tier 檢索到的相關既有記錄（Prior Knowledge，僅供參考 -- "
+            "依 CLAUDE.md Evidence Truth Rule，current evidence 永遠優先於這裡任何一筆記錄，"
+            "任何 root cause 仍須以當前證據重新驗證）：\n"
+            + "\n".join(
+                f"- [{m.get('level', '?')}] {m.get('title', '')}"
+                + (f"：{m.get('root_cause')}" if m.get("root_cause") else "")
+                for m in relevant_memory
+            )
+        )
+    if kc_search_results:
+        prompt += (
+            "\n\nKnowledge Center（跨用戶共享知識庫）搜尋到的既有記錄（Prior Knowledge，"
+            "僅供參考 -- 依 CLAUDE.md Evidence Truth Rule，current evidence 永遠優先於這裡任何一筆記錄，"
+            "任何 root cause 仍須以當前證據重新驗證。開始一輪新的 root cause 分析前，"
+            "請先確認是否已有相符的既有記錄；若有，請在分類/證據欄位中引用其 memory_id）：\n"
+            + "\n".join(
+                f"- [{r.get('memory_id', '?')}] {r.get('symptom') or ''}"
+                + (f"：{r.get('root_cause')}" if r.get("root_cause") else "")
+                for r in kc_search_results
+            )
+        )
+    if vault_related_cases:
+        prompt += (
+            "\n\nDV-Knowledge Vault（本機 Obsidian/Markdown 知識庫）搜尋到的既有記錄"
+            "（Prior Evidence，僅供參考 -- 依 CLAUDE.md Evidence Truth Rule，"
+            "current evidence 永遠優先於這裡任何一筆記錄；不得直接假設 previous root cause == "
+            "current root cause，目前 RTL/VIP/log/waveform 證據仍須獨立重新驗證）：\n"
+            + "\n".join(_format_vault_related_case(c) for c in vault_related_cases)
+        )
     return prompt
 
 # DE-facing (non-UVM-jargon) stage explainers. Purely additive: never
@@ -1076,6 +3052,41 @@ checker/scoreboard 盯著看過、而且真的驗證過結果對不對」。如�
 active failure（還在燒的 bug），不能因為程式跑到那一行就發 coverage 額度——
 這等於 regression 還在紅燈卻先蓋章通過。coverage 有洞的時候，正確做法是回頭
 補測試，而不是直接用 waiver 蓋過去（除非那個功能真的確認不支援/不適用）。
+""",
+Stage.RCA_RTL_EVIDENCE.value: """
+【白話說明】這是 REAL_ISSUE 深度除錯時「同時派三組人去查不同來源」裡的第一組：
+只負責從 RTL/testbench 原始碼裡撈真實證據（哪個 module、哪條訊號、哪個暫存器
+預設值、哪個 FSM 狀態），每一句話都要附上 file:line。它刻意不去看 sim.log、
+不去開波形、也不查 VIP/spec——那三件事同時由另外兩組在跑，而且三組彼此看不到
+對方的結果。這樣做的理由跟你請三個人各自獨立看同一個 bug 一樣：先各查各的，
+才不會第一個人講的方向把後面兩個人的判斷都帶偏；等三份證據都到齊，再由
+RCA_JOIN 那一關統一交叉比對。這一關本身不下結論、不判 root cause。
+""",
+Stage.RCA_LOG_EVIDENCE.value: """
+【白話說明】這是深度除錯三組平行證據裡的第二組：只負責 sim.log／UVM report／
+scoreboard report／assertion／command.txt 這些「執行當下真的發生了什麼」的文字
+證據。重點是找出第一個異常事件的實際時間戳和原文，以及 command.txt 說要做的事
+跟 log 裡實際發生的事有沒有對不上（這一項最常被忽略，卻常常就是真正的原因）。
+引用要原文照抄、附行號或時間戳，不能憑印象改寫。它不看 RTL、不開波形、不查
+VIP/spec。特別注意：光憑 scoreboard 對不上就說是 DUT 的錯是不成立的，那需要
+RTL 側的證據配合，而那是別組的工作，由 RCA_JOIN 統一裁定。
+""",
+Stage.RCA_VIP_SPEC_EVIDENCE.value: """
+【白話說明】這是深度除錯三組平行證據裡的第三組：只負責查 VIP 本身（source、
+example、user manual、class reference）和協定標準 spec／PHY 文件，回答「照規格
+和 VIP 的用法，這裡本來應該長什麼樣」。規矩是先查再說，不可以憑印象發明 VIP 的
+API/class/sequence 名稱——這跟你改 code 前一定會先翻 datasheet 是同一件事。
+如果 spec 本身寫得模稜兩可，要如實記成 spec_ambiguity_note，不能自己挑一種解讀
+當成規格規定。它不看 RTL、不看 sim.log、不開波形。
+""",
+Stage.RCA_JOIN.value: """
+【白話說明】三組平行查證跑完之後，這一關負責「把三份證據合在一起，做出唯一的
+結論」。做法是：先真的把三組各自寫下的紀錄讀出來（不是看別人轉述的摘要），把
+同一件事從不同角度看到的證據合併成一條，標記每一條是被哪幾組支持；三組講法真的
+互相衝突的時候，不准用「少數服從多數」或取平均帶過，要自己回去讀被引用的原始
+檔案判定，並且把兩邊的說法都留在紀錄裡。判定歸屬（DUT_BUG／TB_BUG／VIP_ISSUE／
+TEST_ISSUE／SPEC_AMBIGUITY／INFRA_ISSUE）只能靠證據，證據不足就誠實填 LOW，
+不為了看起來有結論而往上調。這一關是整個多方查證流程真正「下判斷」的地方。
 """,
 Stage.RE_AUDIT.value: """
 【白話說明】RE_AUDIT 就是修完 bug 之後的「第二輪 code review」：確認之前提的
@@ -1151,7 +3162,10 @@ task 前，要先搞清楚「這次驗證對象是誰、涉及哪些協定、手
 真的缺、而且是往下走必要的資訊，才會一次問你最少的必要問題（不會丟一長串
 表單轟炸你）。這裡也會確認「產出物」（例如 build、regression report、
 checker 這些本來就該由 harness 自己產生的東西）不會被要求由你先準備好，
-分不清楚 harness 該產生的東西跟你該提供的輸入會被判定失敗。
+分不清楚 harness 該產生的東西跟你該提供的輸入會被判定失敗。另外會順便
+問一句「你手上原本有沒有自己在跑的一套本地模擬環境（compile/run script、
+filelist、環境設定 script）」——有就記錄下來、附上怎麼確認過這些檔案真的
+存在/可用；完全沒有也沒關係，不會因為沒有就卡關。
 """,
 Stage.DISCOVERY.value: """
 【白話說明】這是正式動手前的「五路盤點」：Spec、RTL 原始碼、既有的

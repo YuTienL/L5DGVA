@@ -58,6 +58,30 @@ def _make_fake_env(tmp: Path):
     return evidence
 
 
+def _make_fake_env_with_constraints(tmp: Path):
+    """Same fake environment as _make_fake_env, plus a real SV file declaring
+    the two constraint names _realistic_items() uses (c_bulk_len,
+    c_isoc_payload) -- evidence for the 4th (constraint-items-exist-in-
+    SV-source, 2026-09-01) validation rule."""
+    _make_fake_env(tmp)  # builds pattern_dir/dispatcher_file/tests_dir on disk
+    tests_dir = tmp / "tb" / "tests"
+    (tests_dir / "constraints.sv").write_text(
+        "class usb_bulkin_test extends uvm_test;\n"
+        "  constraint c_bulk_len { len inside {[1:512]}; }\n"
+        "endclass\n"
+        "class usb_isoc_test extends uvm_test;\n"
+        "  constraint c_isoc_payload { payload_len < 1024; }\n"
+        "endclass\n",
+        encoding="utf-8",
+    )
+    return vplan_writer.build_evidence_context(
+        pattern_dir=tmp / "uvm" / "patterns",
+        dispatcher_file=tmp / "dv_uvm_pattern_pool.svh",
+        task_declaration_sources=[str(tests_dir / "*.sv")],
+        constraint_declaration_sources=[str(tests_dir / "*.sv")],
+    )
+
+
 def _base_item(**overrides):
     item = {
         "req_id": "USB2-BULK-001",
@@ -342,6 +366,117 @@ class TestValidationRefusals:
 
 
 # ---------------------------------------------------------------------------
+# 4th validation rule (2026-09-01): every `constraint_items` entry names a
+# constraint that actually exists in the written SV source. Implemented as
+# an OPTIONAL, evidence-gated check (evidence.sv_constraint_names is None
+# unless the caller supplied constraint_declaration_sources or
+# known_constraint_names) -- mirrors known_check_names/UnknownCheckerNameError.
+# ---------------------------------------------------------------------------
+
+class TestConstraintNotInSVSourceRule:
+    def setup_method(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.evidence = _make_fake_env(self.tmp)  # no constraint evidence supplied
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_skipped_when_no_constraint_evidence_supplied(self):
+        # self.evidence.sv_constraint_names is None -- the check must be a
+        # no-op, never a silent pass-by-vacuous-empty-set nor a false raise.
+        assert self.evidence.sv_constraint_names is None
+        items = [_base_item(
+            random_or_directed="random", constraint_items=["c_anything_goes"],
+        )]
+        vplan_writer.validate_items(items, self.evidence)  # no raise
+
+    def test_real_constraint_passes_when_evidence_supplied(self):
+        tmp2 = Path(tempfile.mkdtemp())
+        try:
+            evidence = _make_fake_env_with_constraints(tmp2)
+            assert evidence.sv_constraint_names == frozenset({"c_bulk_len", "c_isoc_payload"})
+            items = [_base_item(
+                random_or_directed="random", constraint_items=["c_bulk_len"],
+            )]
+            vplan_writer.validate_items(items, evidence)  # no raise
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+
+    def test_unknown_constraint_name_raises_typed_error(self):
+        tmp2 = Path(tempfile.mkdtemp())
+        try:
+            evidence = _make_fake_env_with_constraints(tmp2)
+            items = [_base_item(
+                random_or_directed="random", constraint_items=["c_totally_made_up"],
+            )]
+            with pytest.raises(vplan_writer.ConstraintNotInSVSourceError) as exc_info:
+                vplan_writer.validate_items(items, evidence)
+            e = exc_info.value
+            assert e.reason == "CONSTRAINT_NOT_IN_SV_SOURCE"
+            assert e.detail["constraint_name"] == "c_totally_made_up"
+            assert e.detail["req_id"] == "USB2-BULK-001"
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+
+    def test_write_vplan_workbook_refuses_and_writes_no_file_on_unknown_constraint(self):
+        tmp2 = Path(tempfile.mkdtemp())
+        try:
+            evidence = _make_fake_env_with_constraints(tmp2)
+            items = [_base_item(
+                random_or_directed="random", constraint_items=["c_nonexistent"],
+            )]
+            out_path = tmp2 / "should_not_exist.xlsx"
+            with pytest.raises(vplan_writer.ConstraintNotInSVSourceError):
+                vplan_writer.write_vplan_workbook(
+                    items, output_path=out_path, evidence=evidence, protocol="USB",
+                )
+            assert not out_path.exists()
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+
+    def test_write_vplan_workbook_succeeds_with_real_constraint_evidence(self):
+        tmp2 = Path(tempfile.mkdtemp())
+        try:
+            evidence = _make_fake_env_with_constraints(tmp2)
+            items = _realistic_items()  # uses c_bulk_len / c_isoc_payload
+            out_path = tmp2 / "usb_vplan.xlsx"
+            result = vplan_writer.write_vplan_workbook(
+                items, output_path=out_path, evidence=evidence, protocol="USB",
+                known_check_names=frozenset({"sb_bulk_data_match", "sb_isoc_data_match"}),
+            )
+            assert out_path.is_file()
+            assert result.row_count == len(items)
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+
+    def test_known_constraint_names_bypasses_scanning(self):
+        evidence2 = vplan_writer.build_evidence_context(
+            pattern_dir=Path(self.evidence.pattern_dir), dispatcher_file=Path(self.evidence.dispatcher_file),
+            task_declaration_sources=[str(self.tmp / "tb" / "tests" / "*.sv")],
+            known_constraint_names=frozenset({"c_custom_only"}),
+        )
+        assert evidence2.sv_constraint_names == frozenset({"c_custom_only"})
+        items = [_base_item(random_or_directed="random", constraint_items=["c_custom_only"])]
+        vplan_writer.validate_items(items, evidence2)  # no raise
+        bad_items = [_base_item(random_or_directed="random", constraint_items=["c_not_in_known_set"])]
+        with pytest.raises(vplan_writer.ConstraintNotInSVSourceError):
+            vplan_writer.validate_items(bad_items, evidence2)
+
+    def test_constraint_declaration_sources_yielding_nothing_raises_evidence_source_empty(self):
+        # tests_dir's real .sv files (from _make_fake_env) declare no
+        # `constraint` at all -- explicitly requesting this evidence and
+        # getting zero back must fail closed (wrong regex/path), never
+        # silently pass every constraint_items entry.
+        with pytest.raises(vplan_writer.EvidenceSourceEmptyError) as exc_info:
+            vplan_writer.build_evidence_context(
+                pattern_dir=Path(self.evidence.pattern_dir), dispatcher_file=Path(self.evidence.dispatcher_file),
+                task_declaration_sources=[str(self.tmp / "tb" / "tests" / "*.sv")],
+                constraint_declaration_sources=[str(self.tmp / "tb" / "tests" / "*.sv")],
+            )
+        assert exc_info.value.detail["which"] == "sv_constraint_names"
+
+
+# ---------------------------------------------------------------------------
 # build_evidence_context edge cases
 # ---------------------------------------------------------------------------
 
@@ -424,6 +559,55 @@ class TestCliVplanExport:
             assert out_path.is_file()
             payload = json.loads(r.stdout)
             assert payload["row_count"] == len(_realistic_items())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_cli_constraint_declaration_source_flag_passes_with_real_constraint(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            evidence_tmp = tmp / "env"
+            evidence_tmp.mkdir()
+            _make_fake_env_with_constraints(evidence_tmp)
+            items_path = tmp / "items.json"
+            items_path.write_text(json.dumps(_realistic_items()), encoding="utf-8")
+            out_path = tmp / "out.xlsx"
+            r = subprocess.run(
+                [sys.executable, "-m", "dv_harness.cli", "--project-root", str(tmp), "vplan-export",
+                 str(items_path), "--out", str(out_path), "--protocol", "USB",
+                 "--pattern-dir", str(evidence_tmp / "uvm" / "patterns"),
+                 "--dispatcher-file", str(evidence_tmp / "dv_uvm_pattern_pool.svh"),
+                 "--task-declaration-source", str(evidence_tmp / "tb" / "tests" / "*.sv"),
+                 "--constraint-declaration-source", str(evidence_tmp / "tb" / "tests" / "*.sv")],
+                cwd=str(ROOT), capture_output=True, text=True, timeout=30, encoding="utf-8",
+            )
+            assert r.returncode == 0, r.stdout + r.stderr
+            assert out_path.is_file()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_cli_constraint_declaration_source_flag_reports_typed_error_on_unknown_constraint(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            evidence_tmp = tmp / "env"
+            evidence_tmp.mkdir()
+            _make_fake_env_with_constraints(evidence_tmp)
+            items_path = tmp / "items.json"
+            items_path.write_text(json.dumps([_base_item(
+                random_or_directed="random", constraint_items=["c_not_in_sv_source"],
+            )]), encoding="utf-8")
+            out_path = tmp / "out.xlsx"
+            r = subprocess.run(
+                [sys.executable, "-m", "dv_harness.cli", "--project-root", str(tmp), "vplan-export",
+                 str(items_path), "--out", str(out_path), "--protocol", "USB",
+                 "--pattern-dir", str(evidence_tmp / "uvm" / "patterns"),
+                 "--dispatcher-file", str(evidence_tmp / "dv_uvm_pattern_pool.svh"),
+                 "--task-declaration-source", str(evidence_tmp / "tb" / "tests" / "*.sv"),
+                 "--constraint-declaration-source", str(evidence_tmp / "tb" / "tests" / "*.sv")],
+                cwd=str(ROOT), capture_output=True, text=True, timeout=30, encoding="utf-8",
+            )
+            assert r.returncode != 0
+            assert "ConstraintNotInSVSourceError" in r.stdout
+            assert not out_path.exists()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

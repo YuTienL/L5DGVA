@@ -1,0 +1,86 @@
+"""Persists the 2026-09-02 autonomous gate self-tuning feature build's
+lessons into Engineering Memory, via memory_router.route_and_store()
+(auto-loads cfg since the 2026-09-02 cfg-autoload fix, so this pushes to
+the shared Knowledge Center automatically).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from dv_harness.memory_router import route_and_store
+
+ROOT = Path(r"D:\DV\Task\DV_Agent_Harness_L5\v50")
+
+RECORD = {
+    "kind": "debug_lesson",
+    "verified": True,
+    "title": "Per-task code review cannot catch cross-task integration bugs -- a Critical safety bug in autonomous gate self-tuning survived 6 clean task reviews and was only caught by the final whole-branch review",
+    "scope": "engine",
+    "symptoms": [
+        "Building 'autonomous gate self-tuning' (a system that can automatically add/remove/adjust which verification gates apply, with a hardcoded protected-list safety boundary) via 6 sequential SDD tasks, each individually reviewed clean (0-1 Critical/Important each, all fixed and re-verified before moving on)",
+        "The final whole-branch review found a Critical bug that had been present since Task 4 and untouched through Tasks 5-6: classify_proposal() only deferred change.get('action')=='remove' to human approval, never 'add' -- so an autonomously-proposed 'add a gate to this stage' change could auto-apply with HIGH confidence/LOW risk, and effective_stage_gates() (Task 2) would materialize the added gate_id as an inert placeholder that can never produce a passing evidence block, permanently GATE_FAILing that stage with no auto-rollback",
+    ],
+    "root_cause": (
+        "Task 4's own reviewer explicitly rated the add-bypasses-defer asymmetry as 'correct per brief' (the brief only "
+        "described deferring 'remove' actions) and Task 2's reviewer separately rated the placeholder-gate-entry "
+        "mechanism as 'safe' (assuming a human would notice and hand-fix a hallucinated gate_id in the overlay file). "
+        "Each task-scoped review was locally correct about the piece it could see. Composed together across the two "
+        "tasks, the pieces produced a live path where an autonomous decision could permanently break a stage with zero "
+        "human involvement -- exactly the risk the whole feature's safety design existed to prevent. Neither reviewer "
+        "was wrong about their own task; neither could see the OTHER task's code to notice the composition. This is "
+        "structurally the same failure class as 'unit tests all pass, integration is broken' -- but for LLM-driven code "
+        "review, not just automated tests: a task-scoped reviewer's context is deliberately narrow (by design, to keep "
+        "review fast/cheap), and that narrowness is precisely what let a 2-task-spanning defect survive 6 review passes."
+    ),
+    "fix": (
+        "The final whole-branch review (dispatched on the most capable available model, given the full spec + plan + "
+        "ledger + complete diff since project start, explicitly instructed to trace cross-task composition and re-run "
+        "empirical verification scripts rather than just read code) caught this via an actual reproduction: constructing "
+        "a real 'add' proposal, running it through the real classify_proposal() + effective_stage_gates() pipeline "
+        "together, and observing the stage permanently GATE_FAIL. The fix itself was a one-line change (defer on "
+        "'action' in change, not just == 'remove'), but finding it required someone/something looking at BOTH tasks' "
+        "code at once with the specific question 'does this compose safely end to end', which no single task's review "
+        "prompt asked. 8 more Important findings of the same shape (a CLI path bypassing a safety check enforced only "
+        "in one other path; an audit trail recording success for a silently-blocked action; revert restoring a value "
+        "the LLM merely claimed rather than the real prior state; a hardcoded safety-tier list already missing a live "
+        "gate the dynamic-computation pattern was specifically designed to prevent) were found the same way -- each "
+        "one a defect at the SEAM between two tasks' otherwise-correct pieces."
+    ),
+    "verification": {
+        "single_sim": "N/A (engine/gate-logic feature, not a simulation fix)",
+        "regression": "16 new regression tests added in the one allowed final-review fix wave, all empirically re-verified by a second, independent scoped re-review (not just re-reading the diff -- the re-reviewer wrote and ran standalone Python scripts against real temp project roots to reproduce each fix's effect, including deliberately having a test proposal LIE about its own claimed prior value to prove revert doesn't trust unverified LLM output). Full local suite 1844 passed after the complete feature landed.",
+        "reaudit": "CONFIRMED: changes synced to and import-smoke-tested against the real /home/svcacct/AI/Agent deployment",
+    },
+    "confidence": "CONFIRMED",
+    "note": (
+        "GENERALIZABLE PROCESS LESSON for this harness's own future SDD-plan executions: a final whole-branch review is "
+        "not a formality once every task passed its own review -- it is the ONLY point in the process that ever looks "
+        "at two tasks' code in the same context asking 'does this compose safely', and this session found a real, "
+        "reproducible, safety-critical bug there that 6 clean task-level reviews collectively missed. Do not skip or "
+        "under-resource the final review (this session dispatched it on the most capable available model, gave it the "
+        "full spec+plan+ledger+complete diff, and explicitly told it to empirically reproduce claims rather than just "
+        "read code -- all three of those choices mattered: a lighter-weight final review would plausibly have also "
+        "missed the composition bug, since it looks correct from either task's code read in isolation). "
+        "SECOND LESSON, specific to building any 'safety boundary enforced by a protected list' pattern: verify the "
+        "protected list is enforced at EVERY code path that can trigger the protected action, not just the one path "
+        "the designer had in mind first (this session found the CLI's manual-approval path bypassed a safety check "
+        "the automatic path enforced, TWICE -- once for the parameter-protection list, once again when 'approve' and "
+        "'revert' turned out to be missing the same kind-check just fixed in 'reject'). When a safety check is added "
+        "to one path, grep for every other path that reaches the same underlying mutation function before considering "
+        "the fix complete."
+    ),
+    "provenance": "dv-agent-harness-l5 session, 2026-09-02, autonomous gate self-tuning feature build (brainstorm -> spec -> plan -> 6-task SDD execution -> final whole-branch review -> fix wave -> re-review)",
+}
+
+
+def main() -> int:
+    result = route_and_store(ROOT, RECORD)
+    print(f"[{RECORD['title'][:60]}...] -> {result}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

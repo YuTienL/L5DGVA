@@ -1,0 +1,25 @@
+{
+  "plan_id": "PLAN-C31496E5",
+  "node_id": "INTAKE",
+  "goal": "Continue USB gap-closing verification work: ENV_CHECK is PASS. Proceed to INTAKE (LOCAL_ANALYSIS only this session, no remote/LSF execution). :: stage=INTAKE",
+  "status": "RUNNING",
+  "steps": [
+    {
+      "step_id": "P01",
+      "name": "dv-intake",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "dv-intake",
+      "status": "RETRY_PENDING"
+    },
+    {
+      "step_id": "P02",
+      "name": "vplan-intake-wizard",
+      "route": "analysis-route",
+      "agent": "analysis-agent",
+      "skill": "vplan-intake-wizard",
+      "status": "RETRY_PENDING"
+    }
+  ],
+  "revision": 3
+}

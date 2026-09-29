@@ -1,0 +1,10 @@
+{
+  "approved": true,
+  "component": "ATB",
+  "component_full_name": "AutoTestBench",
+  "approved_by": "peter.lin",
+  "approved_at": "2026-09-06T00:00:00+00:00",
+  "l5_destination": "reference/ATB",
+  "source_reference": "D:/DV/Task/DV_Agent_Harness_L5/ATB",
+  "note": "Golden AMBA SoC bus M x N reference testbench tree (coretop/ + soc/, including a real SyoSil-based scoreboard under soc/uvc/scb/), explicitly approved by the project owner in-session for vendoring as read-only reference material under reference/ (same convention as reference/USB_UVM_Handoff and reference/uvm_syoscb-1.0.2.4). Formerly named L3, renamed to ATB (AutoTestBench) by explicit user instruction prior to this approval. Vendored verbatim (145/145 files, diff -rq confirmed identical) -- never modified, never content-mined for protocol-behavior generation per the No Golden-Reference Content Mining rule. Used to ground/validate the harness's AMBA M x N generation and analysis capability against a real golden architecture, never as a source to copy protocol-behavior content from."
+}

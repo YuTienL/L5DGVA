@@ -1,0 +1,29 @@
+{
+  "kind": "verified_fix",
+  "verified": true,
+  "title": "KnowledgeCenterClient bypassed the persistent relay, spawned remote_hop.py directly (credential exposure risk)",
+  "scope": "engine",
+  "symptoms": [
+    "Pushing a real Engineering/Organizational Memory record to the shared Knowledge Center required either setting VCPW in this process's own environment, or the call silently failing",
+    "remote_exec.py's --put/--get failures printed only STATUS=FAIL with no reason (the relay's real 'error' field, e.g. MD5_MISMATCH, was silently dropped)"
+  ],
+  "root_cause": "dv_harness/knowledge_center.py's KnowledgeCenterClient._invoke() spawned its own tools/remote/remote_hop.py subprocess directly ([sys.executable, str(hop), '--put', ...]), which reads the VC password from ITS OWN process environment -- the exact credential-exposure pattern CLAUDE.md's 'Remote Linux Execution' section already forbids for remote_relay.py. remote_hop.py is the same risk category (it performs a real login with a real password from env), so it must never be invoked directly from a Claude-issued call either, even indirectly through this client. Separately, tools/remote/remote_exec.py's format_result() silently dropped the relay's real 'error' field on put/get/status failures.",
+  "fix": "Rewrote _invoke() to route exclusively through the already-sanctioned, credential-free persistent relay (tools/remote/remote_exec.py's read_relay_info()/send_request()) -- the same mechanism every other real remote command in this project already uses. Added knowledge_center.vchost/vchop config fields (falling back to VCHOST/VCHOP env vars). Removed _resolve_hop_script() entirely as dead code. Also fixed remote_exec.py's format_result() to surface the real 'error' field.",
+  "verification": {
+    "single_sim": "N/A",
+    "regression": "48 tests passing (test_knowledge_center.py, test_remote_exec.py, test_source_identity.py), including a new relay-transport-only regression test and a VCPW-never-read safety test",
+    "reaudit": "CONFIRMED end-to-end against the REAL remote broker at /home/svcacct/AI/DB via the real, fixed KnowledgeCenterClient.test_connection() -- a genuine ping round-trip through the persistent relay succeeded"
+  },
+  "confidence": "CONFIRMED",
+  "note": "Commit 7ae3a28. This record itself is being persisted via the real production path (memory_router.route_and_store() with cfg) to prove maybe_push_to_shared() -> KnowledgeCenterClient.add() works end-to-end post-fix, not just test_connection().",
+  "provenance": "dv-agent-harness-l5-7a session, 2026-09-01, live Knowledge Center debugging",
+  "memory_id": "MEM-96F2A6E59C",
+  "level": "engineering",
+  "created_at": 1788277433.3626447,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

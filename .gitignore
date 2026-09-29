@@ -2,3 +2,183 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .superpowers/
+
+.worktrees/
+.work/put_debug.log
+
+# capability_evolution.run_controlled_experiment() (2026-09-05) writes each
+# isolated baseline/treatment fixture run under here -- ~67 untracked files
+# per real experiment run, per the three-loop gap-close review's own
+# measurement. Per-run scratch, never a deliverable.
+.dv-harness/experiments/
+
+# replay.ps1 was previously ignored here because it hardcoded one user's
+# real gateway/EDA host, account and remote workdir directly in script
+# text (CLAUDE.md 2026-09-03 amendment). M1's execution-profile extraction
+# (dv_harness/execution_profile.py) removed all of that host identity from
+# the script itself -- it now only resolves a profile and invokes the
+# existing remote transport -- so replay.ps1 is generic/host-identity-free
+# and is committed as canonical content. The real per-checkout values that
+# used to live in replay.ps1 now live in the file ignored just below.
+
+# Real per-checkout execution profile (M1 configuration extraction,
+# dv_harness/execution_profile.py) -- may contain a real gateway host,
+# remote-EDA hop host, account and remote workdir. Never committed; the
+# canonical repository ships only the schema-illustrating placeholder at
+# config/execution_profiles/example.profile.json.
+.dv-harness/execution_profile.json
+
+# Local DuckDB evidence store (evidence-db-wiring, 2026-09-03, default-ON --
+# see dv_harness/config.py's evidence_db block and dv_harness/evidence_db.py).
+# Generated locally by every reconciliation cycle; a multi-MB binary file
+# with no place in version control.
+.dv-harness/evidence/
+
+# Per-run harness RUNTIME STATE under .dv-harness/ (2026-09-03). Everything
+# below is rewritten continuously by a live session -- the LSF watcher's PID
+# file and log (dv-harness lsf-watch-start), the blackboard's current-truth
+# snapshots, the engine's own state/event journal -- so it churns on every
+# run and belongs to the machine it was produced on, not to version control.
+# Only .dv-harness/evidence/ was previously excluded, which left a careless
+# `git add -A` free to sweep a stale watcher.pid (and a multi-MB watcher.log)
+# into an unrelated commit.
+#
+# Two honest caveats, both verified against `git ls-files` on 2026-09-03
+# rather than assumed:
+#  1. .dv-harness/state.json, .dv-harness/events.jsonl, and several files
+#     under .dv-harness/lsf/ and .dv-harness/blackboard/ are ALREADY TRACKED
+#     from earlier commits. .gitignore does not apply to tracked files, so
+#     their modifications still show in `git status` and can still be staged.
+#     These lines stop NEW runtime files from being swept in; they are not a
+#     substitute for never running `git add -A` / `git add .dv-harness`.
+#     Untracking the already-tracked ones is a separate, deliberate decision
+#     (`git rm --cached`) that has not been made here.
+#  2. Real, intentionally-versioned content does live under these paths
+#     (lsf/*_policy.json, lsf/job_state_schema.json, the blackboard's seed
+#     *_state.json files). Add such a file explicitly with `git add -f` --
+#     it will not be picked up automatically any more.
+.dv-harness/lsf/
+.dv-harness/blackboard/
+.dv-harness/state.json
+.dv-harness/events.jsonl
+# Automatic External Result Ingestion runtime state (watcher heartbeat/log/stop flag, per-task locks)
+.dv-harness/model_handoffs/result_watcher.json
+.dv-harness/model_handoffs/result_watcher.log
+.dv-harness/model_handoffs/result_watcher.stop
+.dv-harness/model_handoffs/*/*.lock
+# CONTROL_PLANE_RUNTIME_HEAD_DRIFT gap-close: the watcher's own exclusive
+# role lock and monotonic restart-generation counter -- ephemeral runtime
+# state, same class as result_watcher.json above, never version-controlled.
+.dv-harness/model_handoffs/result_watcher_role.lock
+.dv-harness/model_handoffs/result_watcher_generation.json
+
+# Stage-boundary progress reports (2026-09-04,
+# dv_harness/stage_progress_display.py -- save_stage_report()). Two markdown
+# files are written per stage ATTEMPT, named by timestamp, so a single real
+# workflow run over the 39-stage order leaves dozens of new files and a
+# retried stage adds two more each time. Same reasoning as the runtime state
+# above: a per-machine record of what this run displayed, not shared history.
+# They are meant to be read where they were produced -- `dv-harness
+# stage-report <stage>` re-renders the latest, `--list` shows them all.
+.dv-harness/stage_reports/
+
+# Harness self-test run records (2026-09-04, tools/testing/self_test.py
+# --record; written by the pre-push hook's self-test gate and by CI). Same
+# reasoning as the runtime state above: an append-only per-machine execution
+# log, rewritten on every push, that answers "did an automated trigger
+# actually run the self-test on THIS machine" -- which is a local question,
+# not shared history. Read it with `cat .dv-harness/self_test/last_run.json`.
+.dv-harness/self_test/
+
+# USB_UVM_Handoff (2026-09-04) -- the canonical structural reference tree
+# named in CLAUDE.md's "Architecture-conformance audit" section, consolidated
+# into this repo at the user's request so an agent doesn't need to reach
+# outside the project tree to check structural conformance / post-hoc
+# fidelity. Read-only, reference-only per CLAUDE.md's "No Golden-Reference
+# Content Mining" rule -- the real EVIDENCE_QUOTE_NOT_FOUND_IN_FILE gate
+# (dv_harness/prompts.py) still fails any generation evidence quote whose
+# path resolves under this directory, unchanged by this consolidation.
+# Excluded from git because the tree itself contains real internal
+# identifiers (service accounts, internal hostnames) from the original DE
+# handoff -- the same class of data this repo's own history was cleaned of
+# on 2026-09-04. Present on disk, never in version control.
+reference/USB_UVM_Handoff/
+
+# Throwaway scratch/probe trees under .work/ (2026-09-05) -- synthetic
+# projects created by test/E2E-demo scripts this session
+# (.work/e2e_usb3_lfps_demo.py and several ad-hoc CLI probes) to exercise a
+# real code path against a disposable .dv-harness tree, never meant to be
+# committed. A leading underscore is this project's own convention for such
+# throwaway dirs (see .work/_p25_probe*, .work/_e2e_demo_usb3_lfps,
+# .work/_review_amba_e2e, .work/audit_tmp_project, .work/rp_cli_check).
+.work/_*/
+.work/_*
+.work/audit_tmp_project/
+.work/rp_cli_check/
+
+# Raw scratch dumps this session -- journal-style intermediate logs kept
+# only to unblock a specific in-progress audit/gap-close step, never a
+# deliverable in their own right (the actual finding lands in a real
+# gap-close-*.md report instead). Underscore-prefixed ones are already
+# covered by `.work/_*` above.
+.work/*_journal_*.txt
+
+# More per-machine runtime state (2026-09-05), same reasoning as the
+# .dv-harness/lsf|blackboard|state.json|events.jsonl block above: rewritten
+# continuously, a record of THIS machine's run, not shared history.
+# - .dv-harness/react/: Working Memory reasoning-step records -- per
+#   CLAUDE.md's own Engineering Memory Policy, Working Memory is short-term
+#   reasoning context, "預設不永久保存" (not permanently stored by default).
+# - .dv-harness/self_tuning/: the autonomous gate self-tuning gate_history.jsonl.
+# - .dv-harness/telemetry/: per-run workflow/stage timing profile.
+# - .dv-harness/sessions/_pre_restore_*/: timestamped pre-restore session
+#   backup snapshots.
+.dv-harness/react/
+.dv-harness/self_tuning/
+.dv-harness/telemetry/
+.dv-harness/sessions/_pre_restore_*/
+
+# Full extracted text of official third-party protocol specifications
+# (2026-09-05: USB 2.0/3.2, UTMI, xHCI -- .work/pdftxt/, produced by a PDF
+# text-extraction pass this session). A copyright concern distinct from the
+# internal-identifier class of data this repo's history was cleaned of:
+# redistributing full official spec text is not this project's call to make.
+# Present on disk for local reference, never in version control.
+.work/pdftxt/
+
+# The DV-Knowledge Vault (dv_harness/memory_vault.py) is its OWN git
+# repository as of 2026-09-04, when this project turned on
+# `memory.git_enabled` in .dv-harness/config.json -- that is the entire
+# point of the "Markdown + Git" design: every real memory promotion commits
+# its own note with a `memory(<protocol>): ...` message, inside the vault.
+# It was already untracked-but-not-ignored here (confirmed via `git
+# check-ignore` before this line was added, so nothing is being untracked by
+# it). Now that a real .git tree lives inside it, leaving it merely
+# untracked would let a `git add -A` embed it in THIS repo as a bare gitlink
+# -- a commit pointing at a SHA no clone can resolve. Browse its history
+# with `git -C .dv-harness/vault log --oneline`.
+.dv-harness/vault/
+
+# GUI-19 (2026-09-05): dashboard_session.json carries a live, per-session
+# auth token minted by dashboard_auth.issue_session_token() -- the same
+# class of secret the Engineering Memory Policy above forbids persisting
+# into any tracked artifact. Every sibling runtime-state file (state.json,
+# events.jsonl, blackboard/, lsf/) is already ignored; this one was missed,
+# and this session's own gap-close pass showed loose untracked files get
+# swept into unrelated commits (e0a3002) -- exactly the failure mode this
+# line prevents.
+.dv-harness/dashboard_session.json
+
+# NTFS alternate-data-stream artifacts from Windows-illegal `:` filenames
+# an agent attempted this session (gap-close-gui-gui-09:-report.md etc.) --
+# the colon was stripped for the real report, but a stray zero-byte file
+# using the original name remains on disk and is not covered by the
+# .work/_* scratch rule above.
+.work/gap-close-gui-gui-09
+.work/gap-close-gui-gui-19
+
+# Repository-hygiene audit 2026-09-22: close 3 confirmed root-level ignore gaps
+# (see .work/repository-hygiene-audit/16_GITIGNORE_HYGIENE_PLAN.md)
+.pytest_tmp/
+.pytest-tmp-*
+_tmp_*

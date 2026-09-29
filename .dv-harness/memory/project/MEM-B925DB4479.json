@@ -1,0 +1,23 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "DWC_usb31 Link-layer CSR register map (link_block_extract.txt) cross-referenced to config-time reset-value parameters",
+  "summary": "link_block_extract.txt (534 lines) is a pre-existing bitfield-level extract of the USB3.1 Link-layer CSR block (its own '=== NAME (lines N-M) ===' headers cite source line numbers 20573-24000 into the Programming Guide document, DWC_usb31_programming.txt/pdf, a different category's source, not re-read in this pass). Registers covered in order: LU1LFPSRXTIM, LU1LFPSTXTIM, LU2LFPSRXTIM, LU2LFPSTXTIM, LU3LFPSRXTIM, LU3LFPSTXTIM, LPINGLFPSTIM, LPOLLLFPSTXTIM, LSKIPFREQ, LLUCTL, LPTMDPDELAY, LSCDTIM1-4, LLPBMTIM1/2, LLPBMTXTIM, LLINKERRINJ, LLINKERRINJEN, GDBGLTSSM, GDBGLNMCC, LLINKDBGCTRL, LLINKDBGCNTTRIG, LCSR_TX_DEEMPH[_1/_2/_3], LCSRPTMDEBUG1/2, LPTMDPDELAY2. Each field entry gives bit range, name, R/W, description, and a 'Value After Reset' shown mostly as the literal computed placeholder '=mpformat \"0x%x\"' plus a numeric Reset Mask (i.e. reset values are NOT fixed hex constants). KEY CROSS-REFERENCE FINDING: these placeholder reset values map exactly onto Databook Chapter 4.8 'Register Power-On Value Parameters' (DWC_usb31_databook.txt line 7339+) -- confirmed direct hits: DWC_USB31_LINK_U1_LFPS_RX_TIMER_INIT (line 8302), _TX_TIMER_INIT (8323), LINK_U2_LFPS_RX/TX_TIMER_INIT (8354/8368), LINK_U3_LFPS_RX/TX_TIMER_INIT (8398/8415), LINK_PING_LFPS_TX_TIMER_INIT (8438), LINK_POLL_LFPS_TX_TIMER_INIT (8450), LINK_SKIP_FREQUENCY_INIT (8485), LINK_LUCTL_INIT (8567), LINK_PTM_DATAPATH_DELAY[2]_INIT (8582/8594), LINK_SCD_TIMER1-4_INIT (8619-8671), LINK_LPBM_TIMER1/2_INIT + _TX_TIMER_INIT (8697-8738), LINK_DEBUG_CONTROL_INIT (8745), LINK_DEBUG_CNT_TRIGGER_INIT (8752). CONCLUSION for verification: every LFPS/LPBM/SCD/PTM link-timing register's power-on value is a coreConsultant config-time parameter (software/synthesis-time programmable default), NOT a hardwired reset constant, and is ALSO re-programmable by software at runtime post-reset (per Databook: 'All global and link registers can be programmed by software later, but it is recommended to configure the power-on initialization... before synthesis'). A RAL/reg-model must pull the actual numeric default from the specific coreConsultant config report or workspace/src/DWC_usb31_params.v, never assume one fixed hex value across configs. FUNCTIONALLY NOTABLE FIELDS: LLUCTL bit28 support_p4 / bit29 support_p4_pg gate PHY P3.CPM/P4 support and correspond directly to Databook param DWC_USB31_SSPHY_SUPPORT_P3CPM_P4, whose description explicitly requires BOTH the config param enabled AND 'program LUCTL[28]=1' at runtime -- a two-part config-time+CSR enable a testbench must model. LLUCTL bit12 U2P3CPMok is the exact bit named in the Databook Usage Restriction 'Do not enable GUSB3PIECTL[U2P3ok] and LLUCTL[U2P3CPMok] together for P3/P3CPM in U2' -- this extract supplies the exact bit position for that restriction. LLUCTL bit10 force_gen1 is a software override forcing Gen1(5Gbps) link operation regardless of negotiated capability -- a direct testable knob for speed-degradation verification. LLINKERRINJ/LLINKERRINJEN form a full TX/RX error-injection register pair (corrupt TS1/TS2/TSEQ, CRC5/16/32, framing symbols, LFPS, deferred/delayed insertion, back-to-back error count threshold via disable_inj_err_cnt/B2B_err_cnt) -- the link-layer error-injection mechanism for negative/robustness test plans. GDBGLTSSM/GDBGLNMCC are LTSSM and Link-Number/Max-Capability-Count debug-observation registers (readable via completer IF per the Debug Features feature-list entry).",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\IP\\link_block_extract.txt",
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_databook.txt",
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_databook.pdf"
+  ],
+  "category": "ip_docs",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-B925DB4479",
+  "level": "project",
+  "created_at": 1788367138.0221334,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

@@ -1,0 +1,9 @@
+Synthetic fixture text for
+dv_harness_tests/test_error_recovery_flow_extraction.py -- not any real
+DUT's document. Deliberately carries no error/fault port names, no recovery
+statement, and no error-to-recovery link, to prove the module reports honest
+NOT_AVAILABLE rather than fabricating any of them.
+
+1 Overview
+
+This device is a simple UART bridge with no fault handling of any kind.

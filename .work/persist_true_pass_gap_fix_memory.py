@@ -1,0 +1,82 @@
+"""Persists the 2026-09-02 TRUE_PASS prompt-gap fix into Engineering Memory,
+via memory_router.route_and_store() (auto-loads cfg, pushes to the shared
+Knowledge Center automatically).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from dv_harness.memory_router import route_and_store
+
+ROOT = Path(r"D:\DV\Task\DV_Agent_Harness_L5\v50")
+
+RECORD = {
+    "kind": "verified_fix",
+    "verified": True,
+    "title": "TRUE_PASS semantic verification silently degraded to trusting the agent's own self-report -- the independent command.txt<->sim.log cross-check existed and worked but had never once fired in production because the VERIFY prompt never asked for the file paths it needs",
+    "scope": "engine",
+    "symptoms": [
+        "An 8-AI-engine wiring audit (multi-agent workflow, 2026-09-02) of DV Agent Harness L5's Qualification/Signoff engine found: 'the real VERIFY-stage prompt never asks the agent for command_file_path, so the independent check never triggers -- the exact don't-just-trust-the-agent's-self-report mechanism the design goal depends on is currently a no-op path'",
+        "tools/verification_flow/simulation_semantic_validation_gate.py's own header comment (from a 2026-09-01 wiring task) documented command_file_path/sim_log_path as deliberately OPTIONAL for backward compatibility -- a correct decision at the time, but nothing ever revisited whether the prompt template that agents actually see was ever updated to request the now-available field",
+    ],
+    "root_cause": (
+        "dv_harness/prompts.py's VERIFY-stage evidence-block example for simulation_semantic_validation_gate only "
+        "ever showed 'sim_log' (an inline pasted text excerpt) and 'command_expectations' (pure agent-attested "
+        "JSON) -- never 'command_file_path' or 'sim_log_path'. Since the gate script only ran its independent "
+        "cross-check when these optional fields happened to be present, and no agent following the real prompt "
+        "would ever supply fields the prompt never mentions, the mechanism was 100% correct and 100% dormant at "
+        "the same time. A field being technically OPTIONAL-but-supported in a gate script is not the same claim as "
+        "'this mechanism is exercised' -- the prompt template is the only thing that actually determines what "
+        "evidence a real agent supplies, and it had never been updated after the gate-side wiring landed."
+    ),
+    "fix": (
+        "Made both command_file_path and sim_log_path REQUIRED in the gate script (MISSING_COMMAND_FILE_PATH / "
+        "MISSING_SIM_LOG_PATH, INSUFFICIENT_EVIDENCE on absence -- same fail-closed treatment already used for a "
+        "bad path) and updated the VERIFY-stage prompt template to actually ask for both, with a short explanation "
+        "of why harness reads the real files instead of trusting pasted text. This is an intentional, real behavior "
+        "change (not backward compatible with the prior optional design) -- every existing test fixture that relied "
+        "on the optional behavior was found and updated (5 sites across 2 test files), and the one test that "
+        "explicitly asserted 'byte-identical PASS behavior when the field is absent' was replaced with two tests "
+        "proving the new fail-closed behavior instead."
+    ),
+    "verification": {
+        "single_sim": "N/A (evidence-gate/prompt-template fix, not a simulation fix)",
+        "regression": (
+            "14/14 parser-wiring tests, 7/7 specifically-affected fixtures in test_engine_gates_and_routing.py, "
+            "426/426 across the 3 directly touched test files, full local suite 1866/1866 (net +1 from replacing "
+            "1 backward-compat test with 2 fail-closed tests)."
+        ),
+        "reaudit": "CONFIRMED: synced to and passed on the real /home/svcacct/AI/Agent deployment (14/14 and 7/7 remotely, both confirmed after a relay restart mid-sync)",
+    },
+    "confidence": "CONFIRMED",
+    "note": (
+        "GENERALIZABLE LESSON: when a gate/mechanism is deliberately made OPTIONAL for backward compatibility "
+        "(a correct, careful engineering choice in isolation), that decision creates an implicit follow-up "
+        "obligation that is easy to forget -- someone must also verify the PROMPT TEMPLATE actually asks for the "
+        "newly-available field, or the optional mechanism can sit fully wired, fully tested, and fully dormant in "
+        "production indefinitely, discoverable only by an audit that specifically asks 'has this actually fired for "
+        "real' rather than 'does this code exist and pass its unit tests'. This is the same shape of gap as "
+        "MEM-34FD025AD6's STAGE_GATES/STAGE_INSTRUCTIONS completeness class (a gate registered without the prompt "
+        "ever mentioning it) -- both are 'the enforcement code is real, but nothing in the actual agent-facing text "
+        "ever asked for what it needs'. When wiring any new OPTIONAL evidence field into a gate script, check the "
+        "corresponding prompt template in the SAME change, not as a follow-up that might never happen."
+    ),
+    "provenance": (
+        "dv-agent-harness-l5 session, 2026-09-02, found by the '8-AI-engine wiring audit' multi-agent workflow "
+        "(Qualification/Signoff Engine verification agent), user-directed as the first fix to land from that "
+        "audit's findings. Commit 7045666."
+    ),
+}
+
+
+def main() -> int:
+    result = route_and_store(ROOT, RECORD)
+    print(f"[{RECORD['title'][:60]}...] -> {result}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

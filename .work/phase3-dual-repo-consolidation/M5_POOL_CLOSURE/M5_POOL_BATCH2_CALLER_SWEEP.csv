@@ -1,0 +1,11 @@
+SYMBOL,MODULE,CALLER,CALLER_KIND,STATUS
+ClosureRow/RuntimeStatus/PASSING_STATUSES,l5dgva_gap_queue.py,l5dgva_workitem_projection.py; l5dgva_kc_extraction.py,internal (this batch),"MIGRATED, wired"
+WorkItemState,l5dgva_workitem_projection.py,l5dgva_directive_registry.py; l5dgva_directive_blackboard_work_queue.py,internal (this batch),"MIGRATED, wired"
+DirectiveRecord/WorkItemDescriptor/seed_registry,l5dgva_directive_registry.py,l5dgva_directive_blackboard_work_queue.py,internal (this batch),"MIGRATED, wired"
+ENGINE_RULES/EngineProofRow/build_matrix,eight_engine_runtime_proof_matrix.py,engine_maturity_state.py; eight_engine_telemetry_rollup.py,internal (this batch),"MIGRATED, wired"
+derive_maturity_state/execute_verb,engine_maturity_state.py,(none in canonical engine.py/gates.py/cli.py -- confirmed by grep),n/a,NO_CANONICAL_CALLER (same disclosed state as Parent)
+build_rollup/execute_verb,eight_engine_telemetry_rollup.py,(none in canonical engine.py/gates.py/cli.py -- confirmed by grep),n/a,NO_CANONICAL_CALLER (same disclosed state as Parent)
+publish_directive_work_queue/evaluate_blackboard_work_queue,l5dgva_directive_blackboard_work_queue.py,"(none in canonical engine.py/gates.py/cli.py -- confirmed by grep, matches module's own docstring disclosure)",n/a,NO_CANONICAL_CALLER (same disclosed state as Parent)
+build_kc_extraction_record/classify_kc_scope_class,l5dgva_kc_extraction.py,"(none in canonical -- Parent's 2 real callers kc_extraction_trigger_and_outcome_registration_gap.py and l5dgva_kc_semantic_dedup.py are outside Batch 2's registered scope, not migrated)",n/a,"NO_CANONICAL_CALLER (disclosed, same 0-caller state Parent itself has for this module's own callers not being an engine.py auto-trigger either)"
+Blackboard.write/read,"blackboard.py (canonical, unchanged)","l5dgva_directive_blackboard_work_queue.py (new, this batch)",internal (this batch),"compatible, verified before migration"
+PROTOCOL_CAPABILITIES,"protocol_capability.py (canonical, unchanged)","l5dgva_kc_extraction.py (new, this batch)",internal (this batch),"compatible, verified before migration"

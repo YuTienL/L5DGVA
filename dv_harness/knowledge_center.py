@@ -1,16 +1,166 @@
 from __future__ import annotations
-import json, os, subprocess, sys, tempfile, time, uuid
+import json, os, socket, sys, tempfile, time, uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Marker line the server-side broker (tools/knowledge_center/broker.py) must
 # print as its LAST stdout line, exactly once, so this client can find its
-# JSON result inside remote_hop.py's own "=== cmd ===" banner/echo noise
-# (remote_hop.py's main() prints a banner + the command's raw output + an
-# "[exit N]" line for every trailing command it runs -- see
-# PACKAGE/remote_hop.py). A distinctive prefix is more robust than assuming
-# the broker's JSON is the only thing on stdout.
+# JSON result inside whatever else the remote command's real stdout happens
+# to contain (the persistent relay's 'run' op returns raw remote stdout
+# verbatim -- no banner/echo framing of its own, unlike the older
+# remote_hop.py-subprocess transport this replaced on 2026-09-01, but a
+# distinctive prefix is still more robust than assuming the broker's JSON
+# is the only thing on stdout, e.g. if the shell prints its own noise).
 RESULT_MARKER = "DVHKC_RESULT:"
+
+# --- SYS-3 SUBSYSTEM RECORD SHAPE -------------------------------------------
+# The System-Level Verification Integration workflow's SYS-3 ("KNOWLEDGE
+# CENTER CHECK") names 21 fields to retrieve per subsystem, and its own rule
+# is "Never create a parallel Knowledge Center". So this is a TYPED ACCESSOR
+# over the existing add/search verbs -- same broker, same shards, same
+# provenance/staleness lifecycle -- not a second store. All it adds is a
+# fixed category and a fixed field vocabulary, so that "what does the shared
+# KC know about subsystem X" is asked the same way by every caller instead of
+# each one inventing its own `record` shape inside the client's otherwise
+# opaque category/protocol/record envelope.
+SUBSYSTEM_CATEGORY = "subsystem_environment"
+SUBSYSTEM_RECORD_KIND = "subsystem_environment_record"
+
+SUBSYSTEM_RECORD_FIELDS: tuple = (
+    "SUBSYSTEM_ID", "PROTOCOL", "ROLE", "VERSION", "GIT_SHA",
+    "ENVIRONMENT_PATH", "RTL_PATH", "VIP", "VIP_VERSION", "BUILD_STATUS",
+    "LAST_KNOWN_PASS", "REGRESSION_STATUS", "COVERAGE_STATUS",
+    "KNOWN_LIMITATIONS", "KNOWN_FAILURES", "COMMAND_TXT", "OWNER_AGENT",
+    "OWNER_SKILL", "READINESS", "EVIDENCE", "CONFIDENCE",
+)
+
+
+# --- SYOSCB-3 THIRD-PARTY COMPONENT RECORD SHAPE ----------------------------
+# SYOSCB-3 ("KNOWLEDGE CENTER REGISTRATION") names nine fields to register per
+# reused third-party component, and closes with the same rule SYS-3 opens with:
+# "Do not create a parallel knowledge store." So this is the SUBSYSTEM_*
+# pattern above applied a second time -- another fixed category and field
+# vocabulary over the SAME add/search verbs, the same broker, the same
+# provenance/staleness lifecycle. It is deliberately a SEPARATE category from
+# `subsystem_environment`: a vendored library is not a subsystem environment,
+# has no COMMAND_TXT or REGRESSION_STATUS, and searching one shard for the
+# other would return neither.
+#
+# Two fields go beyond SYOSCB-3's own list, because a record without them is
+# not actionable: UPSTREAM_DEPENDENCIES (what the component itself needs in
+# order to compile at all -- a UVM version, here) and EVIDENCE (the same
+# citation field `SUBSYSTEM_RECORD_FIELDS` already carries, so a reader can
+# check a claim instead of trusting it).
+THIRD_PARTY_COMPONENT_CATEGORY = "third_party_component"
+THIRD_PARTY_COMPONENT_KIND = "third_party_component_record"
+
+THIRD_PARTY_COMPONENT_FIELDS: tuple = (
+    "COMPONENT", "VERSION", "SOURCE_REFERENCE", "ROLE", "INTEGRATION_POLICY",
+    "L5_DESTINATION", "BUILD_STATUS", "KNOWN_LIMITATIONS", "PROVENANCE",
+    "UPSTREAM_DEPENDENCIES", "EVIDENCE",
+)
+
+
+# --- SYS-34 SYSTEM COMPOSITION RECORD SHAPE ---------------------------------
+# SYS-34 ("KNOWLEDGE CENTER UPDATE") names what to write back after a System-
+# Level integration succeeds, and closes with the same rule SYS-3 opens with:
+# "No parallel knowledge store." So this is the SUBSYSTEM_*/THIRD_PARTY_*
+# pattern applied a third time -- one more fixed category and field vocabulary
+# over the SAME add/search verbs, the same broker, the same provenance/
+# staleness/confirm/deprecate lifecycle. No new transport, no new server-side
+# command, no schema change on the broker (broker.py's cmd_add() passes
+# `record` through verbatim, so this is a documented convention rather than
+# something the server had to learn).
+#
+# A SEPARATE category from `subsystem_environment` on purpose: a composition
+# is a statement about N subsystems AT SPECIFIC SHAs plus the decisions taken
+# between them, and none of SUBSYSTEM_RECORD_FIELDS' per-subsystem columns
+# (BUILD_STATUS, COMMAND_TXT, COVERAGE_STATUS) has a single well-defined value
+# for a set. Searching one shard for the other would return neither.
+SYSTEM_COMPOSITION_CATEGORY = "system_composition"
+SYSTEM_COMPOSITION_RECORD_KIND = "system_composition_record"
+
+#: SYS-34's own list, in its own order ("System composition, subsystem
+#: versions/SHAs, paths, shared-resource decisions, dedup decisions, command
+#: mappings, System command.txt, limitations, PASS/regression evidence,
+#: architecture decisions"), plus three fields a reader needs for the record to
+#: be usable at all: COMPOSITION_ID (what you look it up BY -- SYS-35's pin id,
+#: so the KC record and the on-disk pin name the same composition), PHASE (see
+#: PUBLISHABLE_PHASES below) and CONFIDENCE (the same citation-grade field
+#: SUBSYSTEM_RECORD_FIELDS already carries).
+SYSTEM_COMPOSITION_FIELDS: tuple = (
+    "COMPOSITION_ID", "SYSTEM_COMPOSITION", "SUBSYSTEM_VERSIONS",
+    "SUBSYSTEM_PATHS", "SHARED_RESOURCE_DECISIONS", "DEDUPLICATION_DECISIONS",
+    "COMMAND_MAPPINGS", "SYSTEM_COMMAND_TXT", "KNOWN_LIMITATIONS",
+    "PASS_EVIDENCE", "REGRESSION_EVIDENCE", "ARCHITECTURE_DECISIONS",
+    "SYSTEM_READINESS", "PHASE", "EVIDENCE", "CONFIDENCE",
+)
+
+#: SYS-34's first four words are "After successful integration". A Phase-1
+#: PLAN is not that, and this shard is cross-project and cross-user -- a plan
+#: published here would be read by a later project as "this composition was
+#: built and passed". So PHASE is a required field with exactly two admissible
+#: values on the WRITE path, and the Phase-1 value is deliberately not one of
+#: them: `record_system_composition()` refuses it rather than letting a
+#: planning artifact become shared knowledge. Reading a Phase-1-phase record
+#: back is unrestricted; it just cannot be published from here.
+PHASE_1_PLAN = "PHASE_1_PLAN_AWAITING_USER_APPROVAL"
+PHASE_2_INTEGRATED = "PHASE_2_INTEGRATION_COMPLETE"
+PHASE_2_REGRESSION_PASSED = "PHASE_2_SYSTEM_REGRESSION_PASSED"
+PUBLISHABLE_PHASES: frozenset = frozenset({PHASE_2_INTEGRATED,
+                                           PHASE_2_REGRESSION_PASSED})
+
+
+def normalize_system_composition_record(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Project an arbitrary stored KC record onto the SYS-34 field names,
+    case-insensitively, with the same present-and-null convention
+    `normalize_subsystem_record()` uses -- "the KC has no REGRESSION_EVIDENCE
+    for this composition" must be a readable fact, not a KeyError."""
+    lowered = {str(k).lower(): v for k, v in (raw or {}).items()}
+    out: Dict[str, Any] = {f: lowered.get(f.lower()) for f in SYSTEM_COMPOSITION_FIELDS}
+    out["_kc"] = {
+        k: (raw or {}).get(k)
+        for k in ("memory_id", "status", "written_at", "revalidate_by",
+                  "confirmation_count", "last_confirmed_at", "provenance")
+        if k in (raw or {})
+    }
+    return out
+
+
+def normalize_component_record(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Project an arbitrary stored KC record onto the SYOSCB-3 field names,
+    case-insensitively, with the same present-and-null convention
+    `normalize_subsystem_record()` uses -- "the KC has no L5_DESTINATION for
+    this component" must be a readable fact, not a KeyError."""
+    lowered = {str(k).lower(): v for k, v in (raw or {}).items()}
+    out: Dict[str, Any] = {f: lowered.get(f.lower()) for f in THIRD_PARTY_COMPONENT_FIELDS}
+    out["_kc"] = {
+        k: (raw or {}).get(k)
+        for k in ("memory_id", "status", "written_at", "revalidate_by",
+                  "confirmation_count", "last_confirmed_at", "provenance")
+        if k in (raw or {})
+    }
+    return out
+
+
+def normalize_subsystem_record(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Project an arbitrary stored KC record onto the 21 SYS-3 field names,
+    case-insensitively (a record written as `git_sha` and one written as
+    `GIT_SHA` are the same fact). A field the record does not carry maps to
+    None -- deliberately present-and-null rather than absent, so "the KC has
+    no ROLE for this subsystem" is a readable fact instead of a KeyError at
+    every call site. The broker's own lifecycle columns (memory_id/status/
+    written_at/revalidate_by/confirmation_count/provenance) are carried
+    through under `_kc` because SYS-3's staleness rule needs them."""
+    lowered = {str(k).lower(): v for k, v in (raw or {}).items()}
+    out: Dict[str, Any] = {f: lowered.get(f.lower()) for f in SUBSYSTEM_RECORD_FIELDS}
+    out["_kc"] = {
+        k: (raw or {}).get(k)
+        for k in ("memory_id", "status", "written_at", "revalidate_by",
+                  "confirmation_count", "last_confirmed_at", "provenance")
+        if k in (raw or {})
+    }
+    return out
 
 
 def _default_user() -> str:
@@ -25,14 +175,30 @@ def _default_host() -> str:
     return os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "unknown-host"
 
 
+def _remote_exec_module():
+    """Import tools/remote/remote_exec.py's read_relay_info()/send_request()
+    -- the same credential-free persistent-relay client every other
+    real remote-execution call site in this project already uses. Not a
+    package import: tools/remote/ has no __init__.py, so this sys.path-inserts
+    its directory once (same convention dv_harness_tests/test_source_identity.py
+    already establishes for this exact directory)."""
+    remote_dir = str(Path(__file__).resolve().parents[1] / "tools" / "remote")
+    if remote_dir not in sys.path:
+        sys.path.insert(0, remote_dir)
+    import remote_exec  # type: ignore
+    return remote_exec
+
+
 class KnowledgeCenterClient:
     """Local-side client for the shared, cross-user knowledge center that
     lives at a fixed path on a Linux server (dv_harness/config.py's
     `knowledge_center` block). Talks to it exclusively through
     tools/knowledge_center/broker.py running ON the server, invoked over the
-    same short-lived telnet+ssh transport (remote_hop.py) already built for
-    this project -- never a mounted network filesystem (see
-    PACKAGE/REMOTE_LOGIN_GUIDE.md and the design discussion this module came
+    same credential-free persistent relay (tools/remote/remote_exec.py,
+    talking to a remote_relay.py process a human already started) every
+    other real remote command in this project uses -- never a mounted
+    network filesystem (see
+    PACKAGE/docs/remote/REMOTE_LOGIN_GUIDE.md and the design discussion this module came
     out of: no file-locking exists anywhere in this codebase, and NFS-style
     cross-client locking is not something this project can rely on, so every
     concurrency-unsafe read-modify-write happens in ONE process on the
@@ -52,64 +218,107 @@ class KnowledgeCenterClient:
     def configured(self) -> bool:
         return bool(self.cfg.get("enabled")) and bool(self.cfg.get("remote_root"))
 
-    def _resolve_hop_script(self) -> Optional[Path]:
-        explicit = self.cfg.get("hop_script")
-        if explicit:
-            p = Path(explicit)
-            return p if p.is_file() else None
-        # Fall back to searching next to the project root and one level up
-        # (matches how remote_hop.py/remote_login.sh have been shipped this
-        # session: alongside PACKAGE/, or copied into a project root).
-        candidates = []
-        if self.project_root:
-            candidates += [self.project_root / "remote_hop.py",
-                           self.project_root.parent / "remote_hop.py"]
-        candidates.append(Path.cwd() / "remote_hop.py")
-        for c in candidates:
-            if c.is_file():
-                return c
-        return None
+    def _vc_host_hop(self) -> tuple:
+        vchost = self.cfg.get("vchost") or os.environ.get("VCHOST", "")
+        vchop = self.cfg.get("vchop") or os.environ.get("VCHOP", "")
+        return vchost, vchop
 
     def _invoke(self, verb: str, payload: Dict[str, Any], timeout: int = 90) -> Dict[str, Any]:
+        """REAL INCIDENT FIX (2026-09-01): this method used to spawn its own
+        tools/remote/remote_hop.py subprocess directly
+        (`[sys.executable, str(hop), "--put", ...]`), reading credentials
+        from ITS OWN process environment (remote_hop.py's own module-level
+        `PW = os.environ.get(<the password's env var name>, '')`). That is exactly the exposure
+        pattern CLAUDE.md's "Remote Linux Execution" section already forbids
+        for remote_relay.py -- "a persistent OS-level environment variable
+        can supply required credentials silently, defeating a 'missing env
+        vars' safety check" -- confirmed as a real, live incident risk this
+        session found while actually using this code path (see
+        docs/superpowers/... session notes / Engineering Memory record
+        MEM-78AD6C32EB for the full account, including the settings.local.json
+        angle of the same underlying anti-pattern). remote_hop.py is the
+        SAME risk category as remote_relay.py (it performs a real login with
+        a real password from env), so it must never be invoked directly from
+        a Claude-issued call either, even indirectly through this client.
+
+        Fixed by routing exclusively through the already-sanctioned,
+        credential-free persistent relay (tools/remote/remote_exec.py's
+        read_relay_info()/send_request(), the exact mechanism CLAUDE.md's
+        "Remote Linux Execution (Persistent Relay)" section already
+        mandates for every other real remote command in this project) --
+        this client now performs the identical two-step sequence
+        (put the payload JSON, then run the broker command) as a real relay
+        client, never spawning its own authenticated subprocess. If no
+        relay is up for the configured vchost/vchop, this fails cleanly
+        with RELAY_NOT_READY (mirroring remote_exec.py's own DOWN-state
+        message) instead of silently trying to authenticate on its own.
+        """
         if not self.configured():
             return {"ok": False, "error": "NOT_CONFIGURED"}
-        hop = self._resolve_hop_script()
-        if not hop:
-            return {"ok": False, "error": "REMOTE_HOP_NOT_FOUND",
-                     "detail": "set knowledge_center.hop_script or place remote_hop.py "
-                               "next to the project root"}
+
+        vchost, vchop = self._vc_host_hop()
+        if not vchost or not vchop:
+            return {"ok": False, "error": "VC_HOST_HOP_NOT_CONFIGURED",
+                     "detail": "set knowledge_center.vchost/vchop in config.json, or the "
+                               "VCHOST/VCHOP env vars (the same values used to start "
+                               "remote_relay.py)"}
+
+        remote_exec = _remote_exec_module()
+        info = remote_exec.read_relay_info(vchost, vchop)
+        if info is None:
+            return {"ok": False, "error": "RELAY_NOT_READY",
+                     "detail": f"no persistent relay found for {vchost}-{vchop}. Ask the "
+                               f"user to run, in their OWN terminal: VCUSER=... VCPW=... "
+                               f"VCHOST={vchost} VCHOP={vchop} VCWORKDIR=... python "
+                               f"tools/remote/remote_relay.py --start"}
+
         remote_root = str(self.cfg["remote_root"]).rstrip("/")
+        remote_tmp = f"/tmp/.dvhkc.{uuid.uuid4().hex[:12]}.json"
+        remote_cmd = (
+            f"python3 {remote_root}/broker.py {verb} --root {remote_root} "
+            f"--payload-file {remote_tmp}; rm -f {remote_tmp}"
+        )
+
         fd, local_tmp = tempfile.mkstemp(suffix=".json")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
-            remote_tmp = f"/tmp/.dvhkc.{uuid.uuid4().hex[:12]}.json"
-            remote_cmd = (
-                f"python3 {remote_root}/broker.py {verb} --root {remote_root} "
-                f"--payload-file {remote_tmp}; rm -f {remote_tmp}"
-            )
-            cmd = [sys.executable, str(hop), "--put", local_tmp, remote_tmp, remote_cmd]
             try:
-                proc = subprocess.run(cmd, capture_output=True, text=True,
-                                       timeout=timeout, encoding="utf-8", errors="replace")
-            except subprocess.TimeoutExpired:
-                return {"ok": False, "error": "TIMEOUT"}
-            except OSError as e:
-                return {"ok": False, "error": "TRANSPORT_EXEC_FAILED", "detail": str(e)}
+                put_resp = remote_exec.send_request(
+                    info["host"], info["port"],
+                    {"token": info["token"], "op": "put", "local": local_tmp, "remote": remote_tmp},
+                    timeout=timeout,
+                )
+            except (ConnectionRefusedError, OSError, socket.timeout) as e:
+                return {"ok": False, "error": "RELAY_UNREACHABLE", "detail": str(e)}
         finally:
             try:
                 os.unlink(local_tmp)
             except OSError:
                 pass
 
-        stdout = proc.stdout or ""
+        if not put_resp.get("ok"):
+            return {"ok": False, "error": "TRANSPORT_PUT_FAILED", "detail": put_resp.get("error", "")}
+
+        try:
+            run_resp = remote_exec.send_request(
+                info["host"], info["port"],
+                {"token": info["token"], "op": "run", "cmd": remote_cmd, "timeout": timeout},
+                timeout=timeout,
+            )
+        except (ConnectionRefusedError, OSError, socket.timeout) as e:
+            return {"ok": False, "error": "RELAY_UNREACHABLE", "detail": str(e)}
+
+        if not run_resp.get("ok"):
+            return {"ok": False, "error": "TRANSPORT_RUN_FAILED", "detail": run_resp.get("error", "")}
+
+        stdout = run_resp.get("stdout") or ""
         result_line = None
         for line in stdout.splitlines():
             if line.startswith(RESULT_MARKER):
                 result_line = line[len(RESULT_MARKER):]
         if result_line is None:
-            return {"ok": False, "error": "NO_RESULT_MARKER",
-                     "detail": (stdout + (proc.stderr or ""))[-2000:]}
+            return {"ok": False, "error": "NO_RESULT_MARKER", "detail": stdout[-2000:]}
         try:
             result = json.loads(result_line)
         except json.JSONDecodeError as e:
@@ -172,6 +381,180 @@ class KnowledgeCenterClient:
             "max_age_days": self.cfg.get("max_age_days", 180),
         }
         return self._invoke("confirm", payload)
+
+    def subsystem_record(self, subsystem_id: str, protocol: str = "",
+                         limit: int = 16) -> Dict[str, Any]:
+        """SYS-3: what does the shared Knowledge Center know about ONE
+        subsystem environment. Routes through the existing `search` verb on
+        the fixed SUBSYSTEM_CATEGORY shard -- no new transport, no new
+        server-side command, no second store.
+
+        Returns {"ok", "found", "record", "candidates"}. `found` is False
+        (not an error) when the KC is reachable but holds no record for this
+        subsystem: absence of a KC record is itself citable truth, and SYS-2
+        treats it very differently from "the KC could not be reached".
+
+        Matching is an exact, case-insensitive SUBSYSTEM_ID equality on the
+        normalized record -- never a substring hit on the free-text search,
+        which would happily return "USB3_DEVICE" for a query of "USB"."""
+        res = self.search(category=SUBSYSTEM_CATEGORY, protocol=protocol,
+                          text=str(subsystem_id), limit=limit)
+        if not res.get("ok", True) or res.get("error"):
+            return {"ok": False, "found": False, "record": None,
+                    "error": res.get("error", "SEARCH_FAILED"),
+                    "detail": res.get("detail", "")}
+        wanted = str(subsystem_id).strip().lower()
+        candidates = [normalize_subsystem_record(r) for r in (res.get("records") or [])]
+        exact = [c for c in candidates if str(c.get("SUBSYSTEM_ID") or "").strip().lower() == wanted]
+        return {
+            "ok": True,
+            "found": bool(exact),
+            # search() already sorts newest-first, so the first exact hit is
+            # the most recently written record for this subsystem.
+            "record": exact[0] if exact else None,
+            "candidates": [str(c.get("SUBSYSTEM_ID") or "") for c in candidates],
+        }
+
+    def record_subsystem(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """SYS-3 write half: publish/refresh one subsystem environment record
+        on the same shard `subsystem_record()` reads. Uses the existing `add`
+        verb, so the server stamps written_at/revalidate_by and the record
+        joins the same staleness/confirm/deprecate lifecycle every other
+        shared record has. Requires SUBSYSTEM_ID -- a record nobody can look
+        up by subsystem is not a subsystem record."""
+        subsystem_id = str((record or {}).get("SUBSYSTEM_ID") or "").strip()
+        if not subsystem_id:
+            return {"ok": False, "error": "SUBSYSTEM_ID_REQUIRED"}
+        payload = {f: (record or {}).get(f) for f in SUBSYSTEM_RECORD_FIELDS}
+        payload["SUBSYSTEM_ID"] = subsystem_id
+        payload["kind"] = SUBSYSTEM_RECORD_KIND
+        payload["title"] = f"{subsystem_id} subsystem environment"
+        return self.add(SUBSYSTEM_CATEGORY, str(record.get("PROTOCOL") or "_general"), payload)
+
+    def component_record(self, component: str, protocol: str = "",
+                         limit: int = 16) -> Dict[str, Any]:
+        """SYOSCB-3 read half: what does the shared Knowledge Center already
+        know about ONE reused third-party component. Routes through the
+        existing `search` verb on the fixed THIRD_PARTY_COMPONENT_CATEGORY
+        shard -- no new transport, no new server-side command, no second store.
+
+        Matching is exact, case-insensitive COMPONENT equality on the
+        normalized record, for the same reason `subsystem_record()` refuses a
+        substring hit: a free-text search for "uvm_syoscb" would happily return
+        a record about an AMBA adapter that merely mentions it."""
+        res = self.search(category=THIRD_PARTY_COMPONENT_CATEGORY, protocol=protocol,
+                          text=str(component), limit=limit)
+        if not res.get("ok", True) or res.get("error"):
+            return {"ok": False, "found": False, "record": None,
+                    "error": res.get("error", "SEARCH_FAILED"),
+                    "detail": res.get("detail", "")}
+        wanted = str(component).strip().lower()
+        candidates = [normalize_component_record(r) for r in (res.get("records") or [])]
+        exact = [c for c in candidates
+                 if str(c.get("COMPONENT") or "").strip().lower() == wanted]
+        return {
+            "ok": True,
+            "found": bool(exact),
+            "record": exact[0] if exact else None,
+            "candidates": [str(c.get("COMPONENT") or "") for c in candidates],
+        }
+
+    def record_component(self, record: Dict[str, Any],
+                         protocol: str = "_general") -> Dict[str, Any]:
+        """SYOSCB-3 write half: publish/refresh one third-party component
+        record on the same shard `component_record()` reads, through the
+        existing `add` verb, so the server stamps written_at/revalidate_by and
+        it joins the same staleness/confirm/deprecate lifecycle. Requires
+        COMPONENT -- a record nobody can look up by component name is not a
+        component record.
+
+        Build the record with
+        `syoscb_source_audit.build_component_registration_payload()`; that
+        function fills every field from a real read-only audit and never
+        performs transport, so "the payload was built" and "the payload was
+        published" stay two separately-visible events."""
+        component = str((record or {}).get("COMPONENT") or "").strip()
+        if not component:
+            return {"ok": False, "error": "COMPONENT_REQUIRED"}
+        payload = {f: (record or {}).get(f) for f in THIRD_PARTY_COMPONENT_FIELDS}
+        payload["COMPONENT"] = component
+        payload["kind"] = THIRD_PARTY_COMPONENT_KIND
+        version = str((record or {}).get("VERSION") or "").strip()
+        payload["title"] = f"{component} {version}".strip() + " third-party component"
+        return self.add(THIRD_PARTY_COMPONENT_CATEGORY, protocol, payload)
+
+    def system_composition_record(self, composition_id: str, protocol: str = "",
+                                  limit: int = 16) -> Dict[str, Any]:
+        """SYS-34 read half: what does the shared Knowledge Center already know
+        about ONE System composition. Routes through the existing `search` verb
+        on the fixed SYSTEM_COMPOSITION_CATEGORY shard -- no new transport, no
+        new server-side command, no second store.
+
+        Matching is exact, case-insensitive COMPOSITION_ID equality on the
+        normalized record, for the same reason `subsystem_record()` refuses a
+        substring hit: a free-text search for a composition id would happily
+        return a record that merely MENTIONS one of its subsystems."""
+        res = self.search(category=SYSTEM_COMPOSITION_CATEGORY, protocol=protocol,
+                          text=str(composition_id), limit=limit)
+        if not res.get("ok", True) or res.get("error"):
+            return {"ok": False, "found": False, "record": None,
+                    "error": res.get("error", "SEARCH_FAILED"),
+                    "detail": res.get("detail", "")}
+        wanted = str(composition_id).strip().lower()
+        candidates = [normalize_system_composition_record(r)
+                      for r in (res.get("records") or [])]
+        exact = [c for c in candidates
+                 if str(c.get("COMPOSITION_ID") or "").strip().lower() == wanted]
+        return {
+            "ok": True,
+            "found": bool(exact),
+            "record": exact[0] if exact else None,
+            "candidates": [str(c.get("COMPOSITION_ID") or "") for c in candidates],
+        }
+
+    def record_system_composition(self, record: Dict[str, Any],
+                                  protocol: str = "_general") -> Dict[str, Any]:
+        """SYS-34 write half: publish/refresh one System composition record on
+        the same shard `system_composition_record()` reads, through the existing
+        `add` verb, so the server stamps written_at/revalidate_by and it joins
+        the same staleness/confirm/deprecate lifecycle.
+
+        Two refusals, both returned as a result rather than raised so a
+        best-effort caller cannot be killed by them:
+
+          * COMPOSITION_ID_REQUIRED -- a record nobody can look up by
+            composition is not a composition record.
+          * PHASE_NOT_PUBLISHABLE -- SYS-34 is "After successful integration",
+            and this shard is shared across projects and users. A Phase-1 PLAN
+            published here would be read later as "this composition was built
+            and passed". Build the record with
+            `system_readiness.build_system_composition_record()`, which fills
+            every field from real artifacts and pins PHASE to
+            PHASE_1_PLAN_AWAITING_USER_APPROVAL; only a SYS-40 caller that has
+            really integrated may re-stamp it to a publishable phase. Keeping
+            "the payload was built" and "the payload was published" two
+            separately-visible events is the same split `record_component()`
+            makes.
+        """
+        composition_id = str((record or {}).get("COMPOSITION_ID") or "").strip()
+        if not composition_id:
+            return {"ok": False, "error": "COMPOSITION_ID_REQUIRED"}
+        phase = str((record or {}).get("PHASE") or "").strip()
+        if phase not in PUBLISHABLE_PHASES:
+            return {"ok": False, "error": "PHASE_NOT_PUBLISHABLE",
+                    "phase": phase or None,
+                    "publishable_phases": sorted(PUBLISHABLE_PHASES),
+                    "detail": "SYS-34 records knowledge AFTER successful integration; "
+                              "a Phase-1 plan is not publishable to the shared "
+                              "Knowledge Center (SYS-39 stops before SYS-40)"}
+        payload = {f: (record or {}).get(f) for f in SYSTEM_COMPOSITION_FIELDS}
+        payload["COMPOSITION_ID"] = composition_id
+        payload["kind"] = SYSTEM_COMPOSITION_RECORD_KIND
+        subsystems = (record or {}).get("SYSTEM_COMPOSITION") or []
+        joined = " + ".join(str(s) for s in subsystems) if isinstance(subsystems, (list, tuple)) \
+            else str(subsystems)
+        payload["title"] = f"System composition {composition_id} ({joined})".strip()
+        return self.add(SYSTEM_COMPOSITION_CATEGORY, protocol, payload)
 
     def db_info(self, category: str = "", protocol: str = "", action: str = "",
                 limit: int = 100) -> Dict[str, Any]:

@@ -1,0 +1,14 @@
+DV Agent Harness L5 - Periodic Regression Snapshot
+Snapshot Time: 2026-09-06 15:16:01
+SUMMARY: Total: 0
+
+Job        Pattern / Combination                LSF        DV Analysis        UVM_ERR   UVM_FATAL  Agent Action / Note
+----------------------------------------------------------------------------------------------------------------------------------
+
+ATTENTION
+- none
+
+NEXT ACTIONS
+- Analyze DONE jobs whose DV result is still UNKNOWN/pending.
+- Continue incremental monitoring of RUN jobs.
+- Triage EXIT/FAIL jobs and rerun fixed patterns when ready.

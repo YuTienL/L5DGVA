@@ -1,0 +1,28 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "A blind register write (writing a literal constant to a multi-field register without reading its reset value / full bit-field definition first) is a generalizable, mechanically-detectable defect CLASS -- this session hit it once (TCA_CTRLSYNCMODE bit 10 write as 0x00000400, clobbering 4 unexamined bits including one, auto_safe_state, that was genuinely live) and it produced a WRONG root-cause conclusion that took several further rounds to reverse",
+  "scope": "engine",
+  "symptoms": [
+    "A register write intended to set one bit (usb_p2_switch_en, bit 10) used the literal value 0x00000400 instead of a read-modify-write, silently clearing bits 8/9/13/16 at their non-zero reset defaults (real reset value 0x00012300) without ever having read what those bits do",
+    "Because the write appeared to have 'no effect' on the target symptom, the fix was wrongly concluded ineffective and retracted -- when in fact one of the clobbered bits (bit 16, auto_safe_state) was genuinely live and its corruption could have masked the real effect, meaning the 'no effect' observation was not sound evidence either way"
+  ],
+  "root_cause": "No check (static or process-level) in the Harness currently flags a literal-constant register write against a register whose reset value is non-zero or whose declared bit-field count exceeds the number of bits the write's own stated intent names.",
+  "fix": "Not yet fixed at the time of this record -- multi-agent implementation work to add a generalized 'register write safety' static check (flagging literal writes to multi-field registers without RMW, when a reset-value/bit-field source is available to check against) is being launched immediately following this analysis.",
+  "verification": {
+    "single_sim": "N/A -- the underlying TCA investigation itself is real and separately tracked",
+    "regression": "N/A",
+    "reaudit": "The clobbered-bit finding was independently confirmed by a fresh investigation agent that traced all 4 affected bits to real RTL consumption sites and the real PHY databook (dwc_usbc31sspphy_tsmc12ffcns databook section 14.1.7, pp.945-947), confirming bit 16 (auto_safe_state) is genuinely live and was genuinely corrupted by the blind write."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: 'the write landed (readback confirms the bus works) and the symptom didn't change' is NOT sound evidence that the targeted bit is ineffective, whenever the write was a blind literal-value write to a register with other live fields -- the symptom could be unchanged because the fix genuinely didn't work, OR because a side effect from the same write masked it. These two cases are indistinguishable without knowing the register's full reset value and bit-field semantics BEFORE writing, which is exactly what a register-write-safety check should enforce as a precondition, not something to reconstruct afterward when a conclusion turns out wrong.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, TCA NC->USB investigation (multiple rounds of the IP_UVM_DV_Gen build agent) + deep comparative analysis (fork a1745a6171cc312a9).",
+  "memory_id": "MEM-ACB5537F4C",
+  "level": "engineering",
+  "created_at": 1788437521.4925468,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

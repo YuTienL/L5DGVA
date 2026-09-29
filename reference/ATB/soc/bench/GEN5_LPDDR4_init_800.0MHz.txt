@@ -1,0 +1,26 @@
+WRITE8   (0x10015900, 0x02      );             # enable AXI transaction monitoring GEN5 reset flow
+WRITE8   (0x10015910, 0x02      );             # enable AXI transaction monitoring GEN5 reset flow
+WRITE8   (0x10015920, 0x02      );             # enable AXI transaction monitoring GEN5 reset flow
+WRITE8   (0x100159D0, 0x02      );             # enable AXI transaction monitoring GEN5 reset flow
+WRITE8   (0x100159E0, 0x02      );             # enable AXI transaction monitoring GEN5 reset flow
+WRITE32  (0x10600010, 0x00000000);             # assert reset of CTRL APB and AXI
+WRITE32  (0x10600010, 0x00000002);             # remove reset of CTRL APB
+WRITE8   (0x10600014, 0x00      );             # assert reset of inno phy apb 
+WRITE8   (0x10600014, 0x02      );             # remove reset of inno phy apb 
+#DRAM nCK=1.237500  CL=14  CWL=12   AL= 0   WR=16
+WRITE8   (0x10600014, 0x03      );             # remove reset of inno phy core
+WRITE32  (0x10600010, 0x00000003);             # remove reset of ctrl core
+WRITE32  (0x10600010, 0x00003f03);             # remove reset of CTRL APB and AXI
+
+# BSP tuning tag #
+WRITE8   (0x100000a9, 0x02);              # FM clock (540) div select; b:div12 (=180);
+WRITE8   (0x10004201, 0x88);              # ACT & RCV = 50ns
+
+#########
+END 0xc3500 # 800000 KHz (LPDDR4@800.0MHz), Power-on initial
+#########
+# Po=`DRAM_PHY_ODI Pi=`DRAM_PHY_ODT Pv=`DRAM_PHY_VREF
+# Do=`DRAM_DIE_ODI Di=`DRAM_DIE_ODT Dv=`DRAM_DIE_VREF
+
+# *** total duration = 183709.550ns-- ***
+

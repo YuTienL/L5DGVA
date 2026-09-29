@@ -1,0 +1,77 @@
+"""Persists the 2026-09-03 progress-display audit into Engineering Memory,
+via memory_router.route_and_store() (auto-loads cfg, pushes to the shared
+Knowledge Center automatically).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from dv_harness.memory_router import route_and_store
+
+ROOT = Path(r"D:\DV\Task\DV_Agent_Harness_L5\v50")
+
+RECORD = {
+    "kind": "debug_lesson",
+    "verified": True,
+    "title": "Stage progress/checklist/timing/token data is real and tracked, but never assembled into a user-facing display or saved report -- a 2-agent audit found the gap is presentation-layer, not data-layer",
+    "scope": "engine",
+    "symptoms": [
+        "User asked whether DV Agent Harness L5 can show: (1) current stage + pending items + % complete during execution, (2) a stage-start banner/logo + required-materials checklist + completeness %, (3) a stage-end banner/logo + output checklist + completeness % + total time (incl. per-agent) + token count, (4) saved reports of (2)/(3)",
+    ],
+    "root_cause": (
+        "None of the 4 requirements are fully real, but for a mixed set of reasons that matter differently: (1) is genuinely "
+        "computed (gates._stage_completion_from_signatures() -> stage_completion_percent, control_plane.py:353-406, "
+        "gates.py:1270-1303, regression-tested) but the command a user would naturally run (`dv-harness status`, cli.py:490) "
+        "does not print it -- it only surfaces via `dv-harness checklist`/`explain` and the dashboard's 3s-polled 'Why' "
+        "card. (2)/(3) have real underlying mechanisms (engine.py's build_stage_entry_checklist()/build_stage_exit_"
+        "checklist(), stage_profile.py's begin_stage/end_stage timing, extract_provider_usage() token tracking with a real "
+        "per-adapter-call agents[] array) but NO banner/logo of any kind exists anywhere in the codebase (grepped for ASCII "
+        "art/figlet/banner/logo: zero hits) -- the only start/end-tied display is a one-line plain-text print() "
+        "([DV-HARNESS-STAGE] ===== STAGE START/DONE: X =====, engine.py:148-155), and the entry/exit checklist data is only "
+        "populated for 6 of 36 real stage graph nodes (most stages declare no expected_evidence at all). (4) has zero "
+        "implementation -- stage_profile_report.render() is a real report but print-only, never written to disk, and no "
+        "'saved rendering' mechanism exists for any display. A structural finding compounds all of this: since the "
+        "dashboard runs the harness loop on a background thread in the SAME process (dashboard.py:1674-1718), even the "
+        "existing one-line console markers never reach the browser UI at all."
+    ),
+    "fix": "Not yet fixed -- this record captures the audit findings per the user's explicit instruction, pending a scoping decision (see note) before implementation.",
+    "verification": {
+        "single_sim": "N/A (UI/presentation-layer audit, not a simulation fix)",
+        "regression": "N/A",
+        "reaudit": (
+            "2-agent workflow audit, 2026-09-03: one agent verified data-layer reality (engine.py/gates.py/control_plane.py/"
+            "stage_profile.py real code + real .dv-harness/telemetry/stages/*.json samples), the other verified presentation-"
+            "layer reality (real captured `dv-harness status`/`checklist`/`stage-profile` output against a fresh project, "
+            "plus dashboard.py's real HTML-generation code). Full reports at .work/audit-progress-data-report.md and "
+            ".work/audit-progress-presentation-report.md."
+        ),
+    },
+    "confidence": "CONFIRMED",
+    "note": (
+        "GENERALIZABLE LESSON: 'can the system show X' splits into two independently-answerable questions that are easy to "
+        "conflate -- 'does the system track the data X needs' (here: mostly yes, real and tested) and 'does anything "
+        "assemble/render/save that data as X' (here: no, in every case investigated). A quick audit that only checks the "
+        "first question would wrongly report this as nearly done; checking both separately, with two independent agents "
+        "each owning one question, produced a much more precise and actionable gap list (small presentation-layer wiring "
+        "for #1, medium new banner+checklist-completeness-expansion work for #2/#3, small new report-persistence "
+        "mechanism for #4) than either the requester's framing or a single combined audit would have surfaced on its own. "
+        "OPEN AMBIGUITY flagged back to the user, not resolved by guessing: whether 'a prominent Logo' literally means a "
+        "graphical/ASCII-art banner or just 'a clearly distinct visual marker' -- the existing plain-text "
+        "[DV-HARNESS-STAGE] ===== markers may already satisfy the intent depending on which reading is meant, and this "
+        "materially changes the size of the implementation work."
+    ),
+    "provenance": "dv-agent-harness-l5 session, 2026-09-03, progress-display capability audit directed by the user.",
+}
+
+
+def main() -> int:
+    result = route_and_store(ROOT, RECORD)
+    print(f"[{RECORD['title'][:60]}...] -> {result}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

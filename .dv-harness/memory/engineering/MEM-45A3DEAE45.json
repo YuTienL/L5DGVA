@@ -1,0 +1,27 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "A workflow's own 'finish' consolidation report can misstate its session's real traceability footprint when concurrent unrelated work shares the git timeline -- an independent review phase (not the same agent grading its own work) caught it",
+  "scope": "engine",
+  "symptoms": [
+    "The governance workflow's finish-phase report stated 'Files touched this session: only test_engine_gates_and_routing.py... No other file was modified or committed' -- literally false, since commit 55d5b868 (an unrelated 42-test run_profile.json/justfile addition from the concurrently-running main session) landed inside the same session work window, between two of the governance workflow's own commits"
+  ],
+  "root_cause": "The finish-phase agent's own git-log inspection window was scoped to 'commits I recognize as belonging to my 6 workstreams', and it phrased its accounting claim as an absolute ('no other file'), not a scoped one ('no other file within my task's 6 workstreams') -- an easy category error when a session's git history legitimately contains other agents'/sessions' commits interleaved with your own.",
+  "fix": "Not fixed at the source (the finish-phase agent's own commit was already made and the workflow had already completed by the time this was caught); corrected via a follow-up addendum file (.work/governance-final-report-addendum.md) and a corrective commit, rather than editing history.",
+  "verification": {
+    "single_sim": "N/A",
+    "regression": "N/A -- documentation/accounting correction, not a code change",
+    "reaudit": "The review phase (a separate agent, not the finish-phase agent grading itself) is exactly the mechanism that caught this -- confirms the value of an independent review stage even for a report/accounting deliverable, not only for code."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: a 'files touched this session' or 'nothing else was modified' claim in any final report is only as reliable as the reporting agent's own git-log scoping -- in a shared working tree with concurrent sessions, that claim should be phrased as 'within this task's own scope' rather than absolute, or independently cross-checked via `git log --since=<task start>` against the FULL commit list, not just the commits the agent itself made. The Methodology Consolidation Rule's 'must be able to trace what was done' bar applies to a workflow's own self-reporting, not only to the code it produced.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, Production-Grade Execution Governance workflow (w79virzvx), review phase finding, corrected in commit a705c56.",
+  "memory_id": "MEM-45A3DEAE45",
+  "level": "engineering",
+  "created_at": 1788426362.2819157,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

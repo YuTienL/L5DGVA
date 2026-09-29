@@ -1,0 +1,76 @@
+# SYNTHETIC WORKED EXAMPLE -- the asset-processing table's row-10 artifact.
+#
+# Not a real chip's bring-up sequence. Fabricated deliberately and labeled as
+# such so dv_harness/init_seq.py has something real to be exercised against
+# without any project's confidential programming guide entering this repo.
+# A real project replaces this file wholesale with the order and wait
+# conditions transcribed from its own IP programming guide.
+#
+# Per CLAUDE.md's Evidence Truth Rule this is not evidence about any real DUT.
+# The ORDER below is the whole point of the artifact: an invented bring-up
+# order is exactly the plausible-looking content that produces a false PASS,
+# which is why init_seq.py generates the Gate-2 precondition and the directed
+# test FROM this file but never generates the file itself.
+
+schema_version: "1.0"
+interface: usb0
+
+source:
+  kind: programming_guide_transcription
+  document: "SYNTHETIC example programming guide (no real document)"
+  section: "Bring-up: clock, reset, pad selection"
+  description: >-
+    Register names and offsets resolve against
+    examples/asset_processing/inputs/sys_regmap.json. Note that no step here
+    carries a raw address: init_seq.schema.json has no address field at all,
+    so every reference resolves by name through the register map and a
+    renamed register becomes a hard error instead of a stale-address write.
+
+steps:
+  - index: 0
+    kind: write
+    block: CRU
+    register: CLK_ENABLE
+    field: usb0_clk_en
+    value: "0x1"
+    description: >-
+      Enable the usb0 functional clock FIRST. Every later step assumes a
+      running clock; this is the bit whose absence makes a Gate-2 dead-clock
+      result a bring-up defect rather than a connectivity defect.
+
+  - index: 1
+    kind: wait_us
+    wait_us: 10
+    description: Documented PLL/clock-tree settling time before reset release.
+
+  - index: 2
+    kind: write
+    block: CRU
+    register: RESET_CTRL
+    field: usb0_rst_release
+    value: "0x1"
+    description: >-
+      Release usb0 from reset, strictly AFTER the clock is running. Releasing
+      reset on an unclocked block leaves it in an undefined state.
+
+  - index: 3
+    kind: write
+    block: PINMUX
+    register: PAD_SEL0
+    field: usb0_pad_sel
+    value: "0x2"
+    description: >-
+      Select usb0 onto the shared pads. Until this write the pads belong to a
+      different function and usb0 observes no external activity, so a monitor
+      bound correctly would still see nothing.
+
+  - index: 4
+    kind: wait_condition
+    block: CRU
+    register: RESET_CTRL
+    field: usb0_rst_release
+    value: "0x1"
+    timeout_us: 100
+    description: >-
+      Poll until reset release is observed to have taken effect. A timeout is
+      mandatory in the schema -- a poll with no documented timeout is a hang.

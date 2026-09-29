@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0.0",
+  "migration_wave": "M1",
+  "bootstrap": {
+    "source_repo": "SOURCE_B_V50",
+    "source_path": "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50",
+    "source_head": "f3fd17326cf3654aca6fd83fad991a3f247e6682",
+    "canonical_path": "D:\\DV\\Task\\L5_DGVA",
+    "canonical_branch": "canonical/m1-bootstrap",
+    "bootstrap_method": "git clone (full history preserved)",
+    "note": "This bootstrap_source_head is historical provenance only, never read by production runtime code to derive REPO_ROOT or any other path -- see dv_harness/l5dgva_repo.py."
+  },
+  "items": [
+    {
+      "capability_id": "M1A-REPO-IDENTITY-GUARD",
+      "source_class": "NEW_CANONICAL_CODE",
+      "source_repo": null,
+      "source_path": null,
+      "source_sha256_or_blob": null,
+      "canonical_path": "dv_harness/l5dgva_repo.py; dv_harness_tests/test_l5dgva_repo.py; .l5dgva/repository.json",
+      "canonical_commit": "0622d56",
+      "migration_wave": "M1A",
+      "disposition": "NEW_CANONICAL_CODE, TDD, 12/12 tests pass"
+    },
+    {
+      "capability_id": "M1B-EXECUTION-PROFILE-EXTRACTION",
+      "source_class": "PRESERVE_CAPABILITY_WITH_MINIMAL_CONFIGURATION_EXTRACTION",
+      "source_repo": "SOURCE_B_V50 (local, never git-tracked)",
+      "source_path": "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\replay.ps1",
+      "source_sha256_or_blob": "not git-tracked; disk-resident local file only",
+      "canonical_path": "replay.ps1; dv_harness/execution_profile.py; tools/remote/resolve_execution_profile.py; config/execution_profiles/example.profile.json",
+      "canonical_commit": "0622d56",
+      "migration_wave": "M1B",
+      "disposition": "Rewritten as generic, host-identity-free launcher; real per-checkout profile at .dv-harness/execution_profile.json (gitignored, never committed)"
+    },
+    {
+      "capability_id": "M1B-CONFIG-JSON-HOST-IDENTITY-HYGIENE-FIX",
+      "source_class": "BASELINE_DATA_HYGIENE_FIX",
+      "source_repo": "SOURCE_B_V50",
+      "source_path": ".dv-harness/config.json",
+      "source_sha256_or_blob": "v50 commit d114a322 (2026-09-06)",
+      "canonical_path": ".dv-harness/config.json",
+      "canonical_commit": "0622d56",
+      "migration_wave": "M1B",
+      "disposition": "vchost/vchop reset to \"\" (code's own schema default), matching M1's execution-profile extraction; v50 itself left unmodified"
+    },
+    {
+      "capability_id": "M1-DV-DOCTOR-COMPOSED-REPORT",
+      "source_class": "NEW_CANONICAL_CODE (composes pre-existing memory_doctor.py, unmodified)",
+      "source_repo": null,
+      "source_path": null,
+      "source_sha256_or_blob": null,
+      "canonical_path": "dv_harness/dv_doctor.py; dv_harness_tests/test_dv_doctor.py; dv_harness/cli.py (doctor subcommand)",
+      "canonical_commit": "52a27a0",
+      "migration_wave": "M1",
+      "disposition": "NEW_CANONICAL_CODE, TDD, 9/9 tests pass"
+    },
+    {
+      "capability_id": "IN-005",
+      "source_class": "MIGRATE_REQUIRED_DIRECT",
+      "source_repo": "SOURCE_B_V50 (dirty working tree, uncommitted)",
+      "source_path": "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\tools\\remote\\remote_exec.py",
+      "source_sha256_or_blob": "HEAD blob ee812e2; working-tree diff +6/-4 lines",
+      "canonical_path": "tools/remote/remote_exec.py",
+      "canonical_commit": "52a27a0",
+      "migration_wave": "M1",
+      "disposition": "Applied with disclosed path-reference adaptation (.\\v50\\replay.ps1 -> replay.ps1); 18/18 existing tests pass"
+    },
+    {
+      "capability_id": "IN-006",
+      "source_class": "MIGRATE_REQUIRED_DIRECT",
+      "source_repo": "SOURCE_B_V50 (dirty working tree, uncommitted)",
+      "source_path": "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\tools\\remote\\remote_relay.py",
+      "source_sha256_or_blob": "HEAD blob a0d36da; working-tree diff +13/-0 lines",
+      "canonical_path": "tools/remote/remote_relay.py",
+      "canonical_commit": "52a27a0",
+      "migration_wave": "M1",
+      "disposition": "Applied with disclosed path-reference adaptation; ast.parse() clean, no dedicated test file exists for this module (by design -- never invoked live from an agent)"
+    },
+    {
+      "capability_id": "IN-003",
+      "source_class": "PROTECTED_MIGRATION_INPUT",
+      "source_repo": "PARENT (D:\\DV\\Task\\DV_Agent_Harness_L5, dirty working tree, uncommitted)",
+      "source_path": "D:\\DV\\Task\\DV_Agent_Harness_L5\\dv_harness\\multi_agent.py",
+      "source_sha256_or_blob": "working-tree diff +101/-5 lines (git diff --stat)",
+      "canonical_path": null,
+      "canonical_commit": null,
+      "migration_wave": "M6 (reserved, not M1)",
+      "disposition": "NOT applied. Recorded only. Corrects a stale pre-compaction claim that misattributed this source to v50 -- re-verified fresh, v50's own copy is clean and lacks the capability."
+    },
+    {
+      "capability_id": "KNOWN_SOURCE_B_DEFECT_create_environment_mode_string",
+      "source_class": "KNOWN_SOURCE_B_DEFECT_PRESERVED_FOR_LATER_FIX",
+      "source_repo": "SOURCE_B_V50",
+      "source_path": "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\dv_harness\\uvm_generator\\create_environment.py",
+      "source_sha256_or_blob": "M0_SOURCE_B_MANIFEST.csv sha 354c53eb...",
+      "canonical_path": null,
+      "canonical_commit": null,
+      "migration_wave": "M5 (coupled with b8/ARCH-01 in the same pass)",
+      "disposition": "NOT fixed in M1 -- v50 frozen, no canonical merge target exists yet; regression-test obligation recorded for Wave M5"
+    },
+    {
+      "capability_id": "SECURITY_PRESERVATION_GATE",
+      "source_class": "COMPARISON_RECORD_ONLY (no capability imported)",
+      "source_repo": "PARENT vs SOURCE_B_V50 comparison",
+      "source_path": "dv_harness/memory_vault.py (both sides)",
+      "source_sha256_or_blob": "memory_security.py/security_policy_ir.py confirmed byte-identical both sides",
+      "canonical_path": "dv_harness_tests/test_security_preservation_gate.py",
+      "canonical_commit": "0a4b780",
+      "migration_wave": "future (memory_vault.py reconciliation wave)",
+      "disposition": "3 Parent-only findings recorded as future obligations (Obsidian-CLI-probe hardening, wider detect_secrets() coverage, remote_relay.py override discrepancy); nothing imported"
+    }
+  ],
+  "explicitly_not_claimed": {
+    "parent_capability_migration_started": false,
+    "worktree_capability_migration_started": false,
+    "reference_usb_env_consumed": false,
+    "c6_started": false,
+    "platform_upgrade_started": false
+  }
+}

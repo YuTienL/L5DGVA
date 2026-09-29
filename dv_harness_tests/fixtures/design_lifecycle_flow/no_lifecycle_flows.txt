@@ -1,0 +1,9 @@
+Synthetic fixture -- a document with no initialization/shutdown/recovery
+heading and no list/arrow step chain at all, used to prove honest
+NOT_AVAILABLE reporting. Not any real DUT's programming guide.
+
+# Register Map Overview
+
+This block exposes a handful of control and status registers. Consult the
+register map document for field-level detail. Nothing here describes a
+bring-up, teardown, or error-recovery procedure.

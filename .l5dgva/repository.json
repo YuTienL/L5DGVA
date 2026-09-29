@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0.0",
+  "product_identity": "L5DGVA",
+  "product_full_name": "L5 DGVA -- DV Agent Harness Canonical Product Repository",
+  "repository_type": "l5dgva_canonical_product_repository",
+  "bootstrap": {
+    "bootstrap_source_repo": "SOURCE_B_V50",
+    "bootstrap_source_head": "f3fd17326cf3654aca6fd83fad991a3f247e6682",
+    "bootstrap_wave": "M1",
+    "note": "bootstrap_source_head is historical provenance only. It is never read by production runtime code to derive REPO_ROOT or any other path -- see dv_harness/l5dgva_repo.py's discover_repo_root(). Do not add a runtime dependency on this value."
+  },
+  "capabilities": {
+    "verification_levels": ["IP_MODE", "SUBSYSTEM_MODE", "SYSTEM_LEVEL_MODE"],
+    "knowledge_brain": true,
+    "obsidian_adapter": true
+  },
+  "location_independence": {
+    "policy": "This file's own presence and content -- never the absolute filesystem path it lives at -- is what identifies a directory as the L5DGVA canonical repository. This repository may be copied, cloned, moved, renamed, or extracted to any path or directory basename without modifying production source code. See dv_harness/l5dgva_repo.py."
+  }
+}

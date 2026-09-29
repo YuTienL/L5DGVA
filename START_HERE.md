@@ -43,7 +43,7 @@ TARGET = NEW_INTERFACE
 INPUT = RTL + Spec + registers + PHY docs + VIP if available
 ```
 These are typed into an interactive `claude` session (see CLAUDE.md), distinct
-from the stateful `dv-harness` CLI/dashboard below -- REMOTE_CONTROL_MODE.md
+from the stateful `dv-harness` CLI/dashboard below -- docs/remote/REMOTE_CONTROL_MODE.md
 covers controlling an already-running harness, not a third ENV mode.
 
 ## Getting started
@@ -81,6 +81,12 @@ violate the Evidence Truth Rule below.
 Both the CLI and the dashboard read/write the same on-disk state under
 `.dv-harness/` — there is no separate GUI-only state.
 
+Every mutating POST (`/api/control`, `/api/setup`, `/api/config`, `/api/waiver`,
+etc.) requires the per-session token `dashboard_auth.issue_session_token()`
+mints on startup into `.dv-harness/dashboard_session.json` (never committed —
+send it as `Authorization: Bearer <token>` or `?token=<token>`); GET endpoints
+stay open. The page's own `#authBanner` shows the token for local copy-paste.
+
 **Install into a target project:** `.\INSTALL.ps1 -ProjectRoot <target>`
 (copies `.claude/` in, backs up any existing one, runs preflight + workflow
 init). Known issue: on Windows PowerShell 5.1 this currently fails with a
@@ -111,7 +117,7 @@ init). Known issue: on Windows PowerShell 5.1 this currently fails with a
 
 ## Core mechanisms (verified against current code)
 
-- **Graph routing.** `.dv-harness/graph/main_graph.json` (37 nodes, 48
+- **Graph routing.** `.dv-harness/graph/main_graph.json` (41 nodes, 58
   edges) is read by `dv_harness/policy.py::graph_next()`, which is the real
   routing authority: a stage's PASS/FAIL/PARTIAL outcome is looked up in the
   graph to pick the next stage — e.g. a `BUILD`/`REGRESSION_MONITOR` failure
@@ -138,6 +144,16 @@ init). Known issue: on Windows PowerShell 5.1 this currently fails with a
   `audit`. `takeover` is checked first in both `loop()` and `run_stage()`,
   so a human can hold a stage even against a direct CLI bypass of the loop —
   this is the concrete implementation of "Human Override is always valid."
+- **Stage lifecycle + reliability modes.** `docs/ENGINE_STAGE_LIFECYCLE.md`
+  is the reference for what `run_stage()`/`loop()` actually do step by step,
+  which steps have real side effects, and the three modes layered on that
+  lifecycle: **dry-run** (`dv-harness run-stage --dry-run` — produce the full
+  plan and the exact prompt for review, execute nothing), **auto-checkpoint**
+  (a bounded-retention `session_snapshot` recovery point at every stage
+  transition, restorable with `dv-harness restore-session`), and **DEGRADED**
+  (on repeated adapter failure, a full EDA license, or a congested farm
+  queue, keep collecting data but make no judgment call — surfaced as
+  `operation_mode` in `dv-harness status`).
 - **Self-Audit.** `dv_harness/self_audit.py` runs 22 real gate scripts that
   check the HARNESS'S OWN registry/skill/pipeline/protocol-catalog
   consistency (not DUT evidence) via `dv-harness self-audit [--all|--gate ID]`
@@ -164,7 +180,7 @@ Before `CREATE ENVIRONMENT`, pick a mode (also in `CLAUDE.md`):
   compose a Full-SoC/System-Level environment; a missing subsystem routes
   back through SUBSYSTEM_MODE first, then returns to composition.
 
-Full procedural detail: `CREATE_ENVIRONMENT.md`.
+Full procedural detail: `docs/workflow/CREATE_ENVIRONMENT.md`.
 
 ## Where deeper detail lives
 
@@ -185,30 +201,48 @@ Full procedural detail: `CREATE_ENVIRONMENT.md`.
   `REFERENCE_BASE`, `SENIOR_DV_REASONING`, `ENVIRONMENT_ROUTER`,
   `SOC_COMPOSITION`, `UNIFIED_REAL_ENV`, `UNIVERSAL_PROTOCOL`,
   `REAL_PROJECT_GENERATION`, `REAL_ENV_GENERATION`).
-- **`SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md`** — the fuller narrative of
+- **`docs/architecture/SENIOR_DV_ENGINEER_FINAL_ARCHITECTURE.md`** — the fuller narrative of
   the senior-DV-engineer operating model and golden closed loop.
-- **`VERIFICATION_ARCHITECTURE_MECHANISM_FIRST.md`** — the detailed,
+- **`docs/architecture/VERIFICATION_ARCHITECTURE_MECHANISM_FIRST.md`** — the detailed,
   step-numbered source of truth for verification workflow *order*
   (Architecture Discovery/Calibration before vPlan finalization — mechanism
   before test generation).
-- **`FINAL_PACKAGE_INDEX.md`** — capability-group index and current
+- **`docs/release/FINAL_PACKAGE_INDEX.md`** — capability-group index and current
   skills/agents/iron-rules counts.
-- **`CHANGELOG_v0_to_v50.md`** — what actually changed this session versus
+- **`docs/release/CHANGELOG_v0_to_v50.md`** — what actually changed this session versus
   the untouched `v0/` baseline (gate wiring, engine bug fixes, memory router
   wiring, `lsf_client.py`, dashboard rework, graph routing) — read this
   before trusting any older doc's specific numbers or claims.
-- **`DUT_ARCHITECTURE_DISCOVERY_AND_CALIBRATION.md`,
-  `SCOREBOARD_CHECKER_ASSERTION_ANALYZER.md`,
-  `VPLAN_INTAKE_WIZARD.md`, `VPLAN_DRIVEN_SPEC_COVERAGE.md`,
-  `STAGE_EXECUTION_PROFILE.md`, `GIT_DEVOPS_ONE_PAGE.md`,
-  `REMOTE_CONTROL_MODE.md`, `SOC_SYSTEM_LEVEL_COMPOSER.md`,
-  `OPERATING_MODES.md`, `EVIDENCE_TRUTH_RULE.md`,
-  `DV_EXPERT_FEEDBACK_CLOSED_LOOP.md`, `WORKFLOW_CLOSURE_ONE_PAGE.md`,
-  `PROTOCOL_SUPPORT_MATRIX.md`, `LSF_PER_JOB_AGENT_MONITORING_v16_1.md`,
-  `LSF_STRICT_PER_JOB_IRON_RULES_v19_1.md` — standalone one-page mechanism
+- **`docs/verification/DUT_ARCHITECTURE_DISCOVERY_AND_CALIBRATION.md`,
+  `docs/verification/SCOREBOARD_CHECKER_ASSERTION_ANALYZER.md`,
+  `docs/verification/VPLAN_INTAKE_WIZARD.md`, `docs/verification/VPLAN_DRIVEN_SPEC_COVERAGE.md`,
+  `docs/workflow/STAGE_EXECUTION_PROFILE.md`, `docs/workflow/GIT_DEVOPS_ONE_PAGE.md`,
+  `docs/remote/REMOTE_CONTROL_MODE.md`, `docs/architecture/SOC_SYSTEM_LEVEL_COMPOSER.md`,
+  `docs/architecture/OPERATING_MODES.md`, `docs/architecture/EVIDENCE_TRUTH_RULE.md`,
+  `docs/workflow/DV_EXPERT_FEEDBACK_CLOSED_LOOP.md`, `docs/workflow/WORKFLOW_CLOSURE_ONE_PAGE.md`,
+  `docs/protocol/PROTOCOL_SUPPORT_MATRIX.md`, `docs/workflow/LSF_PER_JOB_AGENT_MONITORING_v16_1.md`,
+  `docs/workflow/LSF_STRICT_PER_JOB_IRON_RULES_v19_1.md` — standalone one-page mechanism
   references, each still accurate for the narrow topic it covers; not
   duplicated at length here to avoid yet another copy drifting out of sync.
+- **`docs/remote/REMOTE_LOGIN_GUIDE.md`** — connecting to the Linux DV server via the
+  persistent relay (`tools/remote/`): starting/reconnecting a relay,
+  `remote_exec.py` usage, the `VCWORKDIR` vs. `--project-root` distinction.
+- **`docs/knowledge/KNOWLEDGE_CENTER_GUIDE.md`** — the shared cross-user Knowledge Center
+  (`/home/svcacct/AI/DB`): setup, commands, and why it is safe for
+  concurrent multi-user writes (`fcntl.flock` + atomic writes in
+  `tools/knowledge_center/broker.py`).
+- **`docs/workflow/DEBUG_WORKFLOW_GUIDE.md`** — the end-to-end loop for debugging a
+  `UVM_ERROR` in a DE's own generated VIP environment from PC-side Claude
+  Code: evidence gathering, the Waveform Dump Gate, DE approval points,
+  running simulation in the DE's own `DVWORKDIR`, and redeploying a
+  regenerated environment.
+- **`docs/workflow/USAGE_MULTI_USER_SAFETY.md`** — the single place that answers "is it
+  safe for multiple people to use the shared `/home/svcacct/AI/Agent`
+  deployment at the same time," layer by layer (Knowledge Center: yes;
+  relay command execution: yes as of 2026-09-02; relay shared shell state:
+  only with `--cwd`; per-project `.dv-harness/` runtime state: never share
+  a `--project-root`).
 
 Every other root `.md` not listed above is either superseded (banner at the
 top says so and names the current doc) or a quick-start variant that now
-redirects to `CREATE_ENVIRONMENT.md`.
+redirects to `docs/workflow/CREATE_ENVIRONMENT.md`.

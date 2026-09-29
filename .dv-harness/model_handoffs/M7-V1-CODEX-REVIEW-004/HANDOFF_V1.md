@@ -1,0 +1,105 @@
+# L5DGVA_MODEL_HANDOFF_V1
+
+<!-- L5DGVA_VALUE_ENCODING=escaped-v1 -->
+
+## HANDOFF_VERSION
+1.0
+
+## TASK_ID
+M7-V1-CODEX-REVIEW-004
+
+## TASK_TYPE
+review-route
+
+## SOURCE_MODEL
+claude
+
+## TARGET_MODEL
+codex
+
+## PROJECT_ID
+L5_DGVA
+
+## CURRENT_HEAD
+d968316afe2f4a7628c8f19170167ef5f16c6839
+
+## OBJECTIVE
+Independent re-review of the remediation of YOUR OWN previous findings N1-N6 (TASK_ID=M7-V1-CODEX-REVIEW-003, RESULT_STATUS=FAIL), plus a first review of the new automatic external result ingestion capability (dv_harness/result_ingestion.py) and its wiring. For each of N1 (path traversal / aliasing bypasses of read and output boundaries), N2 (result identity is path plus status, not content), N3 (empty scalar vs None), N4 (document title and encoding-marker structure), N5 (boundary declarations not canonical) and N6 (NEXT_ACTION on exceptions, concurrent imports) decide from the CURRENT code whether it is genuinely closed, only relocated, or narrowed; probe with hostile hand-authored input and real failure injection. Then attack the new ingestion layer: can a file that is not the registered expected result be imported, can a partially written file be imported, can one task's result resume another task, can a quarantined or consumed hash be consumed twice, can a symlink or traversal in the expected path be followed, can the watcher or the manual import path bypass the canonical validator, and is the persisted state consistent after any crash point. Also hunt for NEW defects introduced by the fixes themselves (canonicalization edge cases on Windows and POSIX, registry migration, lock handling). Report any finding not closed, any new defect, and any place where a fix is narrower than the original finding required.
+
+## SCOPE
+task_id=M7-V1-CODEX-REVIEW-004; require_new_file=False
+
+## ALLOWED_FILES
+- dv_harness/md_kv_codec.py
+- dv_harness/model_handoff.py
+- dv_harness/model_result.py
+- dv_harness/model_handoff_workflow.py
+- dv_harness/result_ingestion.py
+- dv_harness/execution_contract.py
+- dv_harness_tests/test_model_handoff_v1.py
+- dv_harness_tests/test_model_handoff_review002_remediation.py
+- dv_harness_tests/test_model_handoff_review003_remediation.py
+- dv_harness_tests/test_result_ingestion.py
+- dv_harness_tests/test_execution_contract.py
+
+## FORBIDDEN_FILES
+- dv_harness/engine.py
+- dv_harness/cli.py
+- dv_harness/task_boundary_conformance.py
+- dv_harness/question_queue.py
+
+## INPUT_EVIDENCE_REFS
+- dv_harness/md_kv_codec.py
+- dv_harness/model_handoff.py
+- dv_harness/model_result.py
+- dv_harness/model_handoff_workflow.py
+- dv_harness/result_ingestion.py
+- dv_harness/execution_contract.py
+- dv_harness_tests/test_model_handoff_v1.py
+- dv_harness_tests/test_model_handoff_review002_remediation.py
+- dv_harness_tests/test_model_handoff_review003_remediation.py
+- dv_harness_tests/test_result_ingestion.py
+- dv_harness_tests/test_execution_contract.py
+- .dv-harness/model_handoffs/M7-V1-CODEX-REVIEW-003/RESULT_V1.md
+- .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_CODEX_REVIEW_003_FINDINGS_REMEDIATION_REPORT.md
+- .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_REVIEW_003_LIVE_INGESTION_EVIDENCE.md
+- .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_RESULT_WATCHER_ARCHITECTURE.md
+- .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_RESULT_QUARANTINE_AND_RETRY.md
+- .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_WATCHER_RECOVERY_EVIDENCE.md
+- .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_RESULT_V1_CONTRACT.md
+- .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/M7_HANDOFF_V1_CONTRACT.md
+- .work/phase3-dual-repo-consolidation/M6_PREFLIGHT/L5DGVA_CURRENT_SCOPE_GAP_REGISTER.csv
+- docs/architecture/canonical_detailed_governance/L5DGVA_AUTOMATIC_EXTERNAL_RESULT_INGESTION_REQUIREMENTS.md
+
+## REQUIRED_GOVERNANCE_REFS
+(none)
+
+## KNOWN_FACTS
+- The author reproduced N1-N6 on the pre-fix code and added 75 adversarial tests in dv_harness_tests/test_model_handoff_review003_remediation.py and 36 in dv_harness_tests/test_result_ingestion.py; 341 tests across the M7
+- execution-contract
+- ingestion and governance suites passed in the author environment
+- Your previous run needed a writable temp directory for the fixture-based tests; report an environment limitation as UNKNOWN and not as a defect
+- Design decisions to challenge: scope is compared on canonical paths AND on real filesystem identity for existing paths; boundary declarations must already be canonical and are rejected otherwise; result identity is the SHA-256 of the single read; RAW vs ESCAPED Markdown encoding; citation-vs-narrative evidence grammar
+- The result ingestion layer is not a second import engine: every import and the manual verb end in model_handoff_workflow.import_result; ingestion adds registration and stability and SHA-256 identity and duplicate or quarantine suppression and resume
+- question_queue.py returns the same id for a repeated question_key but persists a duplicate row; the consumer works around it by looking up question_key first and question_queue.py is forbidden to modify
+
+## OPEN_QUESTIONS
+(none)
+
+## INDEPENDENCE_REQUIREMENT
+Do not assume the fixes are correct because tests pass or because the remediation report says so. Two earlier CLOSED statuses of these gaps were wrong. Independently re-derive every finding against the CURRENT code with hostile raw input and report only what you can reproduce. Treat the new ingestion layer as unreviewed code.
+
+## EXPECTED_OUTPUT_TYPE
+review_findings
+
+## EXPECTED_OUTPUT_SCHEMA
+L5DGVA_MODEL_RESULT_V1
+
+## VALIDATION_REQUIREMENTS
+(none)
+
+## HUMAN_DECISION_REQUIRED
+False
+
+## RETURN_CONTRACT
+L5DGVA_MODEL_RESULT_V1 markdown, same TASK_ID; FILES_REFERENCED and path citations in EVIDENCE_REFS may cite only ALLOWED_FILES and INPUT_EVIDENCE_REFS (never FORBIDDEN_FILES); RETURNED_ARTIFACTS may name only ALLOWED_FILES or this result document itself

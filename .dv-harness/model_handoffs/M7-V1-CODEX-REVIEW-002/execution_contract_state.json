@@ -1,0 +1,8 @@
+{
+  "HUMAN_ACTION_REQUIRED": "YES",
+  "NEXT_REQUIRED_ACTION": "",
+  "RESUME_ACTION": "",
+  "STATE": "COMPLETE",
+  "STOP_EVIDENCE": "REVIEW-002 result imported+consumed (FAIL preserved); R1-R8 independently reproduced and remediated; superseded by re-review task M7-V1-CODEX-REVIEW-003",
+  "STOP_REASON": "TASK_COMPLETE"
+}

@@ -1,0 +1,28 @@
+{
+  "corner_id": "kc-retract-1",
+  "protocol": "USB",
+  "category": "reset_power",
+  "risk_tier": "P1",
+  "resolution": {
+    "test_mapping": "usb_y",
+    "semantic_verdict": "TRUE_PASS",
+    "runtime_evidence_hash": "def"
+  },
+  "evidence": {
+    "test_mapping": "usb_y",
+    "semantic_verdict": "TRUE_PASS",
+    "runtime_evidence_hash": "def"
+  },
+  "confidence": "VALIDATED",
+  "current_evidence_required": false,
+  "ccl_id": "CCL-86D79C2CF0",
+  "created_at": 1788546500.420443,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "applicability_conditions": [],
+  "revalidate_by": null,
+  "provenance": null,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

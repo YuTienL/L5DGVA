@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/requirement_contract.schema.json",
+  "title": "requirement_contract",
+  "description": "Spec section 184's CANONICAL REQUIREMENT CONTRACT: the structured IR the Spec Intelligence Agent emits and every downstream generator consumes, so protocol prose is interpreted ONCE instead of being re-read by the vPlan writer, the scenario planner, the checker generator and the coverage generator independently. The fifteen fields below are the document's own list, in the document's own order (ID / Source / Feature / Protocol / Configuration / Precondition / Stimulus / Expected Result / Observability / Checker / Coverage Intent / Priority / Criticality / Confidence / Status). `status` carries section 184's five-value vocabulary COMPLETE / PARTIAL / AMBIGUOUS / CONTRADICTORY / UNKNOWN. This schema fixes the SHAPE only; dv_harness/requirement_contract.py re-DERIVES `status` from the record's own content and rejects a status the content does not support, because a status field an agent fills in about its own work is a judgment, not evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "requirements"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "requirements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/requirement_contract" }
+    }
+  },
+  "$defs": {
+    "requirement_contract": {
+      "type": "object",
+      "description": "One canonical requirement. `contract_schema_version` is the DISCRIMINATOR: it is how a requirement record declares itself to be in this richer shape, so tools/verification_flow/spec_to_vplan_requirement_quality_gate.py can validate it against this contract while leaving records in the older, smaller shape on their original code path unchanged.",
+      "required": [
+        "contract_schema_version",
+        "requirement_id", "source", "feature", "protocol", "configuration",
+        "precondition", "stimulus", "expected_result", "observability",
+        "checker", "coverage_intent", "priority", "criticality",
+        "confidence", "status"
+      ],
+      "properties": {
+        "contract_schema_version": { "const": "1.0" },
+
+        "requirement_id": {
+          "type": "string", "minLength": 1,
+          "description": "Section 184 'ID'. Spelled `requirement_id` to match the identifier tools/verification_flow/master_requirement_completeness_gate.py already reads, so requirement identity has one name in this codebase."
+        },
+        "source": {
+          "$ref": "#/$defs/provenance",
+          "description": "Section 184 'Source'. A real citation (document + locator), never free prose: an unsourced requirement cannot be re-derived, and section 32 forbids converting unqualified spec prose straight into generated verification code."
+        },
+        "feature": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Feature'." },
+        "protocol": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Protocol'." },
+        "configuration": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Configuration'. Use the literal string NONE when the requirement genuinely has no configuration dependency -- that is a decision, unlike an empty string or TBD." },
+        "precondition": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Precondition'. NONE is legal here for the same reason." },
+        "stimulus": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Stimulus'. One of the two fields whose absence makes a requirement unverifiable rather than merely incomplete." },
+        "expected_result": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Expected Result'. The other one." },
+        "observability": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Observability': WHERE the expected result is visible (an interface, a register, a VIP callback, a log pattern)." },
+        "checker": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Checker': what mechanism decides pass/fail." },
+        "coverage_intent": { "$ref": "#/$defs/contract_text", "description": "Section 184 'Coverage Intent'." },
+
+        "priority": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"],
+          "description": "Section 184 'Priority' -- scheduling/ordering axis. The values are dv_harness.memory.CORNER_CASE_RISK_TIERS, reused rather than a second priority vocabulary."
+        },
+        "criticality": {
+          "type": "string",
+          "enum": ["BLOCKER", "MAJOR", "MINOR", "UNKNOWN"],
+          "description": "Section 184 'Criticality' -- consequence-of-failure axis, deliberately NOT the same question as priority: a MINOR requirement can still be P0 (cheap and early), and a BLOCKER can be P2 (late but must not ship broken)."
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["HIGH", "MEDIUM", "LOW", "UNKNOWN"],
+          "description": "Section 184 'Confidence'. HIGH/MEDIUM/LOW are dv_harness.inference.CONFIDENCE_LEVELS, reused; UNKNOWN is added because a requirement extracted from prose nobody could resolve has to be expressible, and it forces status UNKNOWN."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["COMPLETE", "PARTIAL", "AMBIGUOUS", "CONTRADICTORY", "UNKNOWN"],
+          "description": "Section 184's five-value requirement status vocabulary, verbatim."
+        },
+
+        "ambiguities": {
+          "type": "array",
+          "description": "Section 184's 'ambiguity detection' output. A declared AMBIGUOUS status must be backed by at least one entry here, and an entry with no resolution_or_question is an ambiguity nobody even filed a question about.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description"],
+            "properties": {
+              "description": { "type": "string", "minLength": 1 },
+              "resolution_or_question": {
+                "type": "string",
+                "description": "Either the resolution, or the open question raised about it. Same field meaning as the older shape's `ambiguity_resolution_or_question`, kept deliberately so there is one notion of 'this ambiguity was at least escalated'."
+              },
+              "resolved": {
+                "type": "boolean",
+                "description": "True ONLY when resolution_or_question holds a real answer. Filing a question does not close an ambiguity, so this flag -- not the mere presence of text -- is what lets derive_status() stop returning AMBIGUOUS. Defaults to false."
+              }
+            }
+          }
+        },
+        "contradictions": {
+          "type": "array",
+          "description": "Section 184's 'contradiction detection' output. A contradiction must name at least TWO conflicting sources -- one source disagreeing with nothing is not a contradiction, it is an opinion.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description", "conflicting_sources"],
+            "properties": {
+              "description": { "type": "string", "minLength": 1 },
+              "conflicting_sources": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/provenance" }
+              },
+              "resolution": { "type": "string" }
+            }
+          }
+        },
+        "support_status": {
+          "type": "string",
+          "description": "Optional, and deliberately NOT one of the fifteen: it answers 'does the DUT support this at all', an orthogonal question the older requirement shape already asked. Carried here unchanged so spec_to_vplan_requirement_quality_gate.py's UNSUPPORTED_WITHOUT_DESIGN_EVIDENCE rule keeps applying to contract-shaped records too."
+        },
+        "design_evidence": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "contract_text": {
+      "type": "string",
+      "description": "A contract field's content. The schema only requires it to be a string (the empty string is legal so a PARTIAL requirement can be persisted honestly rather than padded); requirement_contract.py's analysis is what decides whether it is RESOLVED, and it treats '', whitespace, UNKNOWN, TBD, TBD., N/A and NA as UNRESOLVED."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document"],
+      "properties": {
+        "document": { "type": "string", "minLength": 1, "description": "Real document/file/RTL path this came from." },
+        "locator": { "type": "string", "description": "Section number, table, page, or line range within that document." },
+        "quote": { "type": "string", "description": "Optional verbatim excerpt." }
+      }
+    }
+  }
+}

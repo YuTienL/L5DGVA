@@ -1,0 +1,28 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "A dispatched sub-agent read the completed reference environment's own docs during a root-cause investigation and produced 'already implemented in the mature tree' recommendations -- exactly the No-Golden-Reference-Content-Mining violation the standing rule forbids, self-caught and self-reported by the dispatching agent",
+  "scope": "engine",
+  "symptoms": [
+    "During the live USB VIP build's TCA-hang root-cause investigation, a sub-agent dispatched by the build agent read D:\\DV\\Task\\USB\\uvm\\docs\\ssphy-bringup.md and usb_stages.svh -- files belonging to the completed, mature reference environment (the exact reference tree this project's own CLAUDE.md names as usable ONLY for structural conformance checking, never as a content source)",
+    "That sub-agent's recommendations were framed as 'already implemented in the mature uvm tree' -- i.e. content mined from the golden reference and proposed for direct reuse, not independently re-derived from primary sources (DUT RTL, PHY databook)"
+  ],
+  "root_cause": "The dispatching agent's own prompt to its sub-agent did not explicitly fence off the reference-environment tree as off-limits for that specific investigation -- the No-Golden-Reference-Content-Mining rule was known and generally followed elsewhere in the same session's work (e.g. the ATTACH_LAYER/DUT_ROLE/bind-location decisions were all sourced from DUT RTL/VIP evidence, not the reference tree), but a dispatch prompt for a specific sub-investigation did not carry that constraint forward explicitly, and the sub-agent -- lacking that context -- took the path of least resistance (a working reference implementation exists, read it) rather than re-deriving the sequencing logic from the DUT RTL/PHY databook independently.",
+  "fix": "The dispatching agent caught this itself (not the user, not an external review) by recognizing the sub-agent's own framing ('already implemented in the mature tree') as a red flag matching the standing rule's exact prohibition. Split the sub-agent's result: kept everything genuinely DUT-RTL-sourced, quarantined (discarded, not merged) everything sourced from the reference environment's own docs. Explicitly stated intent to re-derive any genuinely-needed sequencing guidance from the databook and RTL directly if it turns out to matter, rather than falling back to the quarantined content.",
+  "verification": {
+    "single_sim": "N/A (process/rule-compliance defect, not a simulation fix)",
+    "regression": "N/A",
+    "reaudit": "Self-caught and self-corrected within the same investigation, 2026-09-03 -- no external verification was needed to catch it, which is itself the noteworthy part."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: knowing a rule generally applies to a session's work is not the same as that rule being carried forward into every sub-dispatch within that work. When an agent (or a controlling session) delegates a sub-investigation to another agent, any standing constraint that matters for THAT specific sub-task (here: 'never read the golden-reference tree for content, only for structural comparison after the fact') must be restated explicitly in the sub-dispatch's own prompt -- it cannot be assumed to survive by osmosis from the parent context. This mirrors a related lesson from earlier the same session (MEM-7F2DCD9E83): citing one instruction/file and expecting a dispatched agent to independently infer the full scope of a standing rule is not reliable; the specific constraint needs to be spelled out at each dispatch boundary where it could plausibly be missed. The positive half of this lesson is equally worth keeping: the SELF-catching of this violation, purely from recognizing the sub-agent's own suspicious framing, worked -- this is a real example of the independent-verification/self-skepticism discipline this session has repeatedly reinforced actually paying off in practice, not just in theory.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, live USB VIP build (IP_UVM_DV_Gen agent), self-caught and self-reported.",
+  "memory_id": "MEM-505D803B68",
+  "level": "engineering",
+  "created_at": 1788401465.4808483,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

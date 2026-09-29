@@ -7,10 +7,14 @@ itself synthesizes:
   - .claude/skills/USB/usb-vplan/SKILL.md (USB-specific mandatory columns,
     no-spec-book "TBD-spec" constraint, pattern/task provenance discipline)
   - .claude/agents/IP_UVM_DV_Gen.md's "The vPlan" section (four-sheet target,
-    the 15-field row layout, colour-coded "covered by", the 3 REQUIRED
-    validation rules: every pattern name has a matching file, every task
-    name is a real declaration, every pattern is in the run-time
-    dispatcher)
+    the 15-field row layout, colour-coded "covered by", the validation
+    rules: every pattern name has a matching file, every task name is a real
+    declaration, every pattern is in the run-time dispatcher (all 3
+    mandatory), AND every `constraint items` entry names a constraint that
+    actually exists in the written SV source (4th rule, added 2026-09-01,
+    implemented here as an OPTIONAL evidence-gated check -- see
+    ConstraintNotInSVSourceError/sv_constraint_names below for the
+    backward-compatibility ruling))
   - dv_harness/uvm_generator/generator.py's typed-error convention
     (`class XxxError(ValueError)` with `.reason`/`.detail`, evidence-required
     fields, additive/backward-compatible schema extensions, fail-fast one
@@ -106,21 +110,40 @@ _REQUIRED_NON_EMPTY_STR_FIELDS: Tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class VPlanEvidenceContext:
-    """The three ground-truth sets the three REQUIRED validation rules from
-    .claude/agents/IP_UVM_DV_Gen.md check against. The provenance fields below (pattern_dir/pattern_glob/
-    dispatcher_file/task_declaration_sources) are additive metadata carried
-    only so a raised typed error's `.detail` can cite exactly where a
-    ground-truth set came from -- they do not affect validation logic,
-    which reads only the three frozenset fields.
+    """The three ground-truth sets the three mandatory validation rules from
+    .claude/agents/IP_UVM_DV_Gen.md check against, plus one OPTIONAL fourth
+    set (sv_constraint_names) for the 4th rule added to that same doc section
+    on 2026-09-01 ("every `constraint items` entry names a constraint that
+    actually exists in the written SV source"). The provenance fields below
+    (pattern_dir/pattern_glob/dispatcher_file/task_declaration_sources/
+    constraint_declaration_sources) are additive metadata carried only so a
+    raised typed error's `.detail` can cite exactly where a ground-truth set
+    came from -- they do not affect validation logic, which reads only the
+    frozenset fields.
+
+    sv_constraint_names is None (not an empty frozenset) when the caller
+    supplied no constraint-declaration evidence at all -- RULING
+    (vplan-4th-rule-implementation, 2026-09-01): the 4th rule is implemented
+    as an OPTIONAL, evidence-gated check, exactly mirroring the existing
+    known_check_names/UnknownCheckerNameError precedent, not an
+    unconditionally mandatory one. Making it unconditional would break
+    additive/backward-compatibility for every existing caller (CLI usage,
+    STAGE_GATES['VPLAN'] JSON payloads, existing tests) that does not yet
+    supply SV constraint-declaration evidence -- None means "rule not
+    requested, skip"; a non-None (possibly built from a real scan) frozenset
+    means "rule requested, enforce strictly, fail-closed on any mismatch",
+    same fail-closed discipline as the three mandatory rules.
     """
     pattern_files: FrozenSet[str]        # stems of real files found under pattern_dir
     dispatcher_patterns: FrozenSet[str]  # pattern names extracted from the runtime dispatcher file
     declared_tasks: FrozenSet[str]       # task/test/vseq names extracted from task-declaration sources
+    sv_constraint_names: Optional[FrozenSet[str]] = None  # `constraint <name>` decls found in SV source; None = rule skipped
 
     pattern_dir: str = ""
     pattern_glob: str = ""
     dispatcher_file: str = ""
     task_declaration_sources: Tuple[str, ...] = ()
+    constraint_declaration_sources: Tuple[str, ...] = ()
 
 
 class EvidenceSourceEmptyError(ValueError):
@@ -146,10 +169,13 @@ def build_evidence_context(
     task_declaration_sources: Optional[List["str | Path"]] = None,
     task_declaration_regex: str = r'\btask\s+automatic\s+(?P<task>[A-Za-z0-9_]+)\b|\bclass\s+(?P<task2>[A-Za-z0-9_]+)\s+extends\b',
     known_task_names: Optional[FrozenSet[str]] = None,
+    constraint_declaration_sources: Optional[List["str | Path"]] = None,
+    constraint_declaration_regex: str = r'\bconstraint\s+(?P<constraint>[A-Za-z0-9_]+)\b',
+    known_constraint_names: Optional[FrozenSet[str]] = None,
 ) -> VPlanEvidenceContext:
     """Scans real files (glob + regex text scan -- same evidence-by-citation
     discipline as generator.py's evidence-string requirement, not a full SV
-    parser) to build the three ground-truth sets the three REQUIRED
+    parser) to build the three ground-truth sets the three mandatory
     validation rules check against. Raises EvidenceSourceEmptyError if any
     resulting set is empty -- an empty ground-truth set almost always means
     a wrong path/regex was wired, not that zero real patterns/tasks exist,
@@ -160,6 +186,19 @@ def build_evidence_context(
     dispatcher_file=.../dv_uvm_pattern_pool.svh,
     task_declaration_sources=[.../tb/tests/*.sv]; a different IP supplies
     its own paths/regexes.
+
+    constraint_declaration_sources/constraint_declaration_regex/
+    known_constraint_names build the OPTIONAL 4th ground-truth set
+    (sv_constraint_names) for the 2026-09-01 "constraint items exist in SV
+    source" rule -- mirrors task_declaration_sources/known_task_names'
+    scan-vs-bypass shape exactly. Neither supplied -> sv_constraint_names
+    stays None and ConstraintNotInSVSourceError's check is skipped entirely
+    (same optional-check precedent as known_check_names below). Either
+    supplied but the resulting set comes back empty -> EvidenceSourceEmptyError
+    (which="sv_constraint_names"), same fail-closed discipline as the three
+    mandatory sets: a caller that explicitly asked for this check getting
+    zero constraints back almost always means a wrong path/regex, not that
+    the SV source truly declares none.
     """
     pattern_dir_path = Path(pattern_dir)
     pattern_files = frozenset(
@@ -208,14 +247,46 @@ def build_evidence_context(
             "source_path_or_paths": scanned_sources or [str(s) for s in (task_declaration_sources or [])],
         })
 
+    # 4th (OPTIONAL) ground-truth set: `constraint <name>` declarations found
+    # in real SV source, for the 2026-09-01 "constraint items exist in SV
+    # source" rule. None (not an empty frozenset) when the caller supplied
+    # neither known_constraint_names nor constraint_declaration_sources --
+    # that means "rule not requested", handled by validate_items skipping
+    # the check entirely, never by silently treating an unrequested check as
+    # a vacuously-passing empty set.
+    constraint_scanned_sources: List[str] = []
+    if known_constraint_names is not None:
+        sv_constraint_names: Optional[FrozenSet[str]] = frozenset(known_constraint_names)
+    elif constraint_declaration_sources is not None:
+        for src in constraint_declaration_sources:
+            constraint_scanned_sources.extend(sorted(_glob_module.glob(str(src))))
+        found_constraints: set = set()
+        for path_str in constraint_scanned_sources:
+            text = Path(path_str).read_text(encoding="utf-8", errors="replace")
+            for m in re.finditer(constraint_declaration_regex, text):
+                name = m.group("constraint")
+                if name:
+                    found_constraints.add(name)
+        sv_constraint_names = frozenset(found_constraints)
+    else:
+        sv_constraint_names = None
+
+    if sv_constraint_names is not None and not sv_constraint_names:
+        raise EvidenceSourceEmptyError("EVIDENCE_SOURCE_EMPTY", {
+            "which": "sv_constraint_names",
+            "source_path_or_paths": constraint_scanned_sources or [str(s) for s in (constraint_declaration_sources or [])],
+        })
+
     return VPlanEvidenceContext(
         pattern_files=pattern_files,
         dispatcher_patterns=dispatcher_patterns,
         declared_tasks=declared_tasks,
+        sv_constraint_names=sv_constraint_names,
         pattern_dir=str(pattern_dir_path),
         pattern_glob=pattern_glob,
         dispatcher_file=str(dispatcher_path),
         task_declaration_sources=tuple(scanned_sources),
+        constraint_declaration_sources=tuple(constraint_scanned_sources),
     )
 
 
@@ -285,6 +356,30 @@ class UnknownCheckerNameError(ValueError):
     pre-generator BFM environments have no such manifest, so a None
     known_check_names skips this rule entirely rather than failing closed.
     detail: {"req_id": str, "checker_name": str, "known_check_names": list[str]}"""
+    def __init__(self, reason: str, detail: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+class ConstraintNotInSVSourceError(ValueError):
+    """Raised by validate_items when an item's constraint_items entry does
+    not name a constraint that actually exists in the written SV source --
+    the 4th vPlan validation rule added to .claude/agents/IP_UVM_DV_Gen.md's
+    "The vPlan" section on 2026-09-01: "every `constraint items` entry names
+    a constraint that actually exists in the written SV source". Only
+    checked when evidence.sv_constraint_names is not None, i.e. the caller
+    supplied constraint_declaration_sources or known_constraint_names to
+    build_evidence_context (same OPTIONAL-check precedent as
+    UnknownCheckerNameError/known_check_names -- a caller with no
+    constraint-declaration evidence at all, e.g. a legacy pre-generator BFM
+    environment, skips this rule entirely rather than failing closed on
+    evidence it never supplied). Once requested, a caller never accepts a
+    guessed/aspirational constraint name -- refuses to write rather than
+    letting the vPlan's `constraint items` column drift from real testbench
+    code.
+    detail: {"req_id": str, "constraint_name": str,
+    "constraint_declaration_sources": list[str]}"""
     def __init__(self, reason: str, detail: dict):
         super().__init__(reason)
         self.reason = reason
@@ -378,6 +473,7 @@ def _validate_item_evidence(
     pattern_name = item["pattern_name"]
     task_name = item["task_name"]
     checkers_active = item["checkers_active"]
+    constraint_items = item["constraint_items"]
 
     if pattern_name is not None:
         if pattern_name not in evidence.pattern_files:
@@ -406,6 +502,14 @@ def _validate_item_evidence(
                     "known_check_names": sorted(known_check_names),
                 })
 
+    if evidence.sv_constraint_names is not None:
+        for constraint_name in constraint_items:
+            if constraint_name not in evidence.sv_constraint_names:
+                raise ConstraintNotInSVSourceError("CONSTRAINT_NOT_IN_SV_SOURCE", {
+                    "req_id": req_id, "constraint_name": constraint_name,
+                    "constraint_declaration_sources": list(evidence.constraint_declaration_sources),
+                })
+
 
 def validate_items(
     items: List[dict],
@@ -420,7 +524,12 @@ def validate_items(
       (2) VPlanSchemaError over every item in list order,
       (3) evidence checks (UnresolvedPatternFileError ->
           PatternNotInDispatcherError -> UnknownTaskDeclarationError ->
-          UnknownCheckerNameError) over every item in list order.
+          UnknownCheckerNameError -> ConstraintNotInSVSourceError) over every
+          item in list order. ConstraintNotInSVSourceError is only raised
+          when evidence.sv_constraint_names is not None (see
+          build_evidence_context's constraint_declaration_sources/
+          known_constraint_names) -- an OPTIONAL check, same precedent as
+          UnknownCheckerNameError/known_check_names.
     Returns None on success. Callable standalone by gates.py or an audit
     script without writing a workbook.
 
@@ -695,6 +804,46 @@ _SHEET_BUILDERS: Dict[str, Callable[[Workbook, _SheetContext], None]] = {
     "mode_speed_matrix": _unimplemented_sheet_stub("mode_speed_matrix"),
     "reference": _unimplemented_sheet_stub("reference"),
 }
+
+
+# ---------------------------------------------------------------------------
+# Public query entry point (no file written)
+# ---------------------------------------------------------------------------
+
+def summarize_coverage_gaps(items: List[dict]) -> Dict[str, Any]:
+    """The per-item gap answer -- "which verification items have no test, and
+    why" -- computed without writing an .xlsx.
+
+    write_vplan_workbook() has always computed exactly this (_rank_gaps() /
+    _deferred_rows(), returned on VPlanWriteResult.gaps_ranked), but only as
+    a side effect of producing a workbook, so the only way to obtain it was
+    to run `dv-harness vplan-export` and write a file. That left the VPLAN
+    stage gate -- the thing an agent actually runs at a stage transition --
+    able to report a PASS and an aggregate coverage_percent and nothing
+    else, which is the "answer a number of unhit bins, never which feature
+    has zero tests" shape this vPlan work exists to replace. This function
+    is the same computation with no file involved, so a gate can surface it.
+
+    `items` must already have passed validate_items(); this reads
+    covered_by/blocked_on/feature_area/req_id and does no validation of its
+    own. covered_by is the caller's asserted state -- deriving it from real
+    regression results is a separate, unbuilt chain, and this function does
+    not pretend otherwise.
+
+    Returns {"total_items", "coverage_percent", "counts_by_state",
+    "gap_count", "gaps_ranked", "deferred"} -- gaps_ranked in close-first
+    order, each entry carrying rank/req_id/feature_area/verification_item/
+    covered_by/blocked_on/why."""
+    feature_order = _feature_area_order(items)
+    gaps = _rank_gaps(items, feature_order)
+    return {
+        "total_items": len(items),
+        "coverage_percent": _coverage_percent(items),
+        "counts_by_state": _counts_by_state(items),
+        "gap_count": len(gaps),
+        "gaps_ranked": gaps,
+        "deferred": _deferred_rows(items, feature_order),
+    }
 
 
 # ---------------------------------------------------------------------------

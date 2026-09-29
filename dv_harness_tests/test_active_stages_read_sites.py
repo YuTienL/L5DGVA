@@ -51,7 +51,15 @@ def _write_synthetic_fanout_graph(tmp: Path):
          "parallel_group": "TESTG1", "blackboard_write": ["bw_b"]},
         {"id": "COMMAND_PATTERN", "route": "analysis-route", "agent": "analysis-agent",
          "parallel_group": "TESTG1", "blackboard_write": ["bw_c"]},
-        {"id": "DE_BASELINE_REPRODUCTION", "route": "lead-route", "agent": "dv-lead",
+        # Deliberately a SYNTHETIC join node id with no Stage enum member --
+        # this fixture models the real graph's ANALYSIS_JOIN (also synthetic),
+        # whose whole point is that _advance_with_fanout() passes THROUGH it
+        # to the next real Stage. It used to borrow the real
+        # DE_BASELINE_REPRODUCTION Stage id here purely for convenience,
+        # which stopped modelling ANALYSIS_JOIN once RCA_JOIN made
+        # "join node that IS a real executable Stage" a genuinely different,
+        # separately-tested case (see test_rca_multi_agent_fanout.py).
+        {"id": "TESTG1_JOIN", "route": "lead-route", "agent": "dv-lead",
          "join_group": "TESTG1"},
         {"id": "ARCH_DISCOVERY", "route": "analysis-route", "agent": "analysis-agent"},
     ]
@@ -59,10 +67,10 @@ def _write_synthetic_fanout_graph(tmp: Path):
         {"source": "ENV_CHECK", "target": "INTAKE", "condition": "PASS"},
         {"source": "ENV_CHECK", "target": "DISCOVERY", "condition": "PASS"},
         {"source": "ENV_CHECK", "target": "COMMAND_PATTERN", "condition": "PASS"},
-        {"source": "INTAKE", "target": "DE_BASELINE_REPRODUCTION", "condition": "PASS"},
-        {"source": "DISCOVERY", "target": "DE_BASELINE_REPRODUCTION", "condition": "PASS"},
-        {"source": "COMMAND_PATTERN", "target": "DE_BASELINE_REPRODUCTION", "condition": "PASS"},
-        {"source": "DE_BASELINE_REPRODUCTION", "target": "ARCH_DISCOVERY", "condition": "PASS"},
+        {"source": "INTAKE", "target": "TESTG1_JOIN", "condition": "PASS"},
+        {"source": "DISCOVERY", "target": "TESTG1_JOIN", "condition": "PASS"},
+        {"source": "COMMAND_PATTERN", "target": "TESTG1_JOIN", "condition": "PASS"},
+        {"source": "TESTG1_JOIN", "target": "ARCH_DISCOVERY", "condition": "PASS"},
     ]
     (tmp / ".dv-harness" / "graph").mkdir(parents=True)
     (tmp / ".dv-harness" / "graph" / "main_graph.json").write_text(

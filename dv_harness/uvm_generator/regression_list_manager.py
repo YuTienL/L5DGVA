@@ -18,6 +18,7 @@ pattern regress" a plain `grep -xF <pattern> regression.list` check.
 from __future__ import annotations
 
 from collections import OrderedDict
+from pathlib import Path
 
 
 def record_verdict(existing_lines, pattern: str, verdict_passed: bool):
@@ -31,6 +32,26 @@ def record_verdict(existing_lines, pattern: str, verdict_passed: bool):
     if verdict_passed:
         filtered.append(pattern)
     return filtered
+
+
+def apply_verdict_to_file(regression_list_path, pattern: str, verdict_passed: bool) -> None:
+    """File-I/O wrapper around the pure record_verdict() -- reads the current
+    regression.list (missing file treated as empty, matching a project's
+    first-ever recorded pattern), applies record_verdict(), writes back.
+    record_verdict() itself is unchanged and untouched by this wrapper.
+
+    File format uses LF line endings (\\n only, never \\r\\n) to stay
+    grep/comm-friendly for the real Linux-side Makefile."""
+    path = Path(regression_list_path)
+    if path.exists():
+        with path.open("r", encoding="utf-8", newline="") as f:
+            existing = f.read().splitlines()
+    else:
+        existing = []
+    updated = record_verdict(existing, pattern, verdict_passed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(updated) + ("\n" if updated else ""))
 
 
 def record_suite(existing_lines, verdicts):

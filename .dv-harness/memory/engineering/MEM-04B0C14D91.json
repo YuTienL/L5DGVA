@@ -1,0 +1,28 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "Knowledge Center (/home/svcacct/AI/DB) is genuinely safe for concurrent multi-user writes",
+  "scope": "architecture",
+  "symptoms": [
+    "Direct user question: does /home/svcacct/AI/DB have real multi-user concurrency safety, or could concurrent users corrupt each other's writes"
+  ],
+  "root_cause": "N/A -- this is a verified architecture property, not a bug.",
+  "fix": "N/A -- no fix needed. Verified by reading tools/knowledge_center/broker.py's real code (not relying on memory/assumption): a real cross-process _ShardLock using fcntl.flock(LOCK_EX), scoped per (category, protocol) shard via a locks/<category>__<protocol>.lock file (different shards never block each other; the same shard is fully serialized across every concurrent user/process), with the full read-index -> write-record -> update-index critical section inside the lock. Writes use _atomic_write_json() (tempfile + os.replace(), an atomic POSIX rename) so a reader can never observe a torn/partial write. This holds only because every write goes through the one server-side broker.py process (invoked per-call via the relay) -- never a network-mounted directory written to directly by multiple machines.",
+  "verification": {
+    "single_sim": "N/A",
+    "regression": "N/A -- pre-existing code, verified by direct source inspection this session",
+    "reaudit": "N/A"
+  },
+  "confidence": "CONFIRMED",
+  "note": "Explicit contrast for future reference: dv_harness/memory.py and dv_harness/blackboard.py (the per-project .dv-harness/ runtime state -- state.json, blackboard/, react/, events.jsonl) have NO such locking -- plain read-modify-write, safe for one process, a silent lost-update race for two. This is why the multi-user usage pattern (USAGE_MULTI_USER_SAFETY.md) treats the Knowledge Center and a project's own --project-root runtime state completely oppositely: share the former freely, never share the latter.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-02, multi-user safety verification",
+  "memory_id": "MEM-04B0C14D91",
+  "level": "engineering",
+  "created_at": 1788284616.7249787,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "current_evidence_required": true,
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

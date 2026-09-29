@@ -1,0 +1,42 @@
+{
+  "auto_import_status": "DONE",
+  "auto_resume_status": "DONE",
+  "import_attempts": {
+    "51f4b0e53769aa318abe977d08da929d2026d46c69946cfc3430f6045b724890": 1,
+    "e14c2ef27fdeb4d800b5f96c9be543f508189c8af859a162914ead3c1d2a1b28": 1
+  },
+  "last_detected_result_sha256": "e14c2ef27fdeb4d800b5f96c9be543f508189c8af859a162914ead3c1d2a1b28",
+  "observation": {
+    "first_seen_at": 1790611693.8583822,
+    "mtime_ns": 1790611693616068400,
+    "observations": 2,
+    "sha256": "e14c2ef27fdeb4d800b5f96c9be543f508189c8af859a162914ead3c1d2a1b28",
+    "size": 8426,
+    "stability_logged": true
+  },
+  "results": {
+    "51f4b0e53769aa318abe977d08da929d2026d46c69946cfc3430f6045b724890": {
+      "consumed_at": null,
+      "import_attempt_id": "M7-V1-CODEX-REVIEW-007:51f4b0e53769:cdadf1cf",
+      "import_state": "QUARANTINED",
+      "imported_at": "2026-09-28T10:44:16.977945+00:00",
+      "quarantined_at": "2026-09-28T10:44:17.032960+00:00",
+      "rejection_reason": "MALFORMED_ESCAPE",
+      "result_path": ".dv-harness\\model_handoffs\\M7-V1-CODEX-REVIEW-007\\RESULT_V1.md",
+      "retry_eligibility": "ON_CHANGED_HASH_OR_SCHEDULED_REPLAY_OR_AUTHORIZED_RECOVERY",
+      "validation_findings": []
+    },
+    "e14c2ef27fdeb4d800b5f96c9be543f508189c8af859a162914ead3c1d2a1b28": {
+      "consumed_at": "2026-09-28T16:08:19.477814+00:00",
+      "import_attempt_id": "M7-V1-CODEX-REVIEW-007:e14c2ef27fde:2ac53465",
+      "import_state": "CONSUMED",
+      "imported_at": "2026-09-28T16:08:18.910116+00:00",
+      "question_id": null,
+      "result_path": ".dv-harness\\model_handoffs\\M7-V1-CODEX-REVIEW-007\\RESULT_V1.md"
+    }
+  },
+  "suppression_logged": [
+    "51f4b0e53769aa318abe977d08da929d2026d46c69946cfc3430f6045b724890:QUARANTINED_HASH_NOT_RETRIED"
+  ],
+  "task_id": "M7-V1-CODEX-REVIEW-007"
+}

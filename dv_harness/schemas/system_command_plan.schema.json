@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-harness.local/schemas/system_command_plan.schema.json",
+  "title": "System Architecture and System command.txt Plan (SYS-18..SYS-22)",
+  "description": "The Phase-1 planning deliverable for SYS-18 (System-Level architecture), SYS-19 (System command.txt reuse/routing plan), SYS-20 (backward compatibility), SYS-21 (System Command IR) and SYS-22 (command collision detection). This document DESCRIBES a System-Level composition; it never contains one. `system_command_txt_emitted` is required to be false and `artifacts_generated` is required to be empty, so a document that had emitted a real System command.txt, adapter or virtual sequencer could not validate against this schema at all -- building any of them is SYS-40 and requires a separate explicit human approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "system_architecture",
+    "system_command_routing_plan",
+    "backward_compatibility",
+    "system_command_ir",
+    "command_collisions",
+    "summary",
+    "artifacts_generated",
+    "phase_boundary"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "artifacts_generated": {
+      "type": "array",
+      "maxItems": 0,
+      "description": "Always empty. SYS-18..22 is discovery/analysis/planning/reporting; generating a System command.txt, router, planner, virtual sequencer or adapter is SYS-40."
+    },
+    "phase_boundary": { "type": "string", "minLength": 1 },
+
+    "system_architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "root", "selected_subsystems", "nodes", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "root": { "type": "string", "minLength": 1 },
+        "selected_subsystems": { "type": "array", "items": { "type": "string" } },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "kind", "name", "status", "basis", "backing_resources", "evidence"],
+            "properties": {
+              "path": { "type": "array", "items": { "type": "string" }, "minItems": 2 },
+              "kind": { "enum": ["SYSTEM_CONTROL", "SHARED_SOC_RESOURCE", "SUBSYSTEM_ENV"] },
+              "name": { "type": "string", "minLength": 1 },
+              "status": {
+                "enum": [
+                  "PLANNED_NOT_IMPLEMENTED",
+                  "PROPOSED_FROM_REGISTRY",
+                  "BLOCKED_PENDING_OWNERSHIP",
+                  "NOT_PRESENT_IN_SELECTION",
+                  "SELECTED_SUBSYSTEM_ENV"
+                ]
+              },
+              "basis": { "type": "string", "minLength": 1 },
+              "backing_resources": { "type": "array", "items": { "type": "string" } },
+              "evidence": { "type": "array", "items": { "type": "string" } },
+              "command_count": { "type": "integer", "minimum": 0 }
+            },
+            "allOf": [
+              {
+                "if": { "properties": { "kind": { "const": "SYSTEM_CONTROL" } }, "required": ["kind"] },
+                "then": {
+                  "properties": { "status": { "const": "PLANNED_NOT_IMPLEMENTED" } },
+                  "description": "A System Command Parser/Router, Scenario Planner or Virtual Sequencer is code. Any other status would be a claim that this workflow built one, which is SYS-40."
+                }
+              }
+            ]
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "system_command_routing_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "namespace_separator", "rows", "summary",
+                   "system_command_txt_emitted", "system_command_txt_path"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "namespace_separator": { "type": "string", "minLength": 1 },
+        "system_command_txt_emitted": {
+          "const": false,
+          "description": "SYS-19 is a PLAN. A document reporting an emitted System command.txt cannot validate."
+        },
+        "system_command_txt_path": { "type": "null" },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["system_command", "source_subsystem", "source_command",
+                         "command_category", "routes_to_agent", "routes_to_vip",
+                         "routes_to_sequence", "route_verdict", "route_reason"],
+            "properties": {
+              "system_command": { "type": "string", "minLength": 1 },
+              "source_subsystem": { "type": "string", "minLength": 1 },
+              "source_command": { "type": "string", "minLength": 1 },
+              "source_command_file": { "type": "string" },
+              "command_category": { "type": "string" },
+              "routes_to_agent": { "type": "string" },
+              "routes_to_vip": { "type": "string" },
+              "routes_to_sequence": { "type": "string" },
+              "route_verdict": {
+                "enum": ["REUSES_SUBSYSTEM_SEMANTICS", "AMBIGUOUS_NAMESPACE", "TARGET_UNRESOLVED"]
+              },
+              "route_reason": { "type": "string", "minLength": 1 },
+              "name_shared_with": { "type": "array", "items": { "type": "string" } },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "backward_compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "subsystems", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "subsystems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subsystem_id", "compatibility_verdict", "reason",
+                         "command_txt_files", "command_txt_modified", "commands_routed",
+                         "ambiguous_commands", "unresolved_targets", "adapter_plan"],
+            "properties": {
+              "subsystem_id": { "type": "string", "minLength": 1 },
+              "compatibility_verdict": {
+                "enum": ["SUBSYSTEM_MODE_PRESERVED", "SUBSYSTEM_MODE_AT_RISK"]
+              },
+              "reason": { "type": "string", "minLength": 1 },
+              "command_txt_files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path", "sha256"],
+                  "properties": {
+                    "path": { "type": "string" },
+                    "sha256": { "type": ["string", "null"] }
+                  }
+                },
+                "description": "Recorded so SYS-20's 'the subsystem's own command.txt still works' is checkable by a caller rather than asserted."
+              },
+              "command_txt_modified": {
+                "const": false,
+                "description": "SYS-7: do not modify command.txt during discovery. SYS-8: keep the original intact."
+              },
+              "commands_routed": { "type": "integer", "minimum": 0 },
+              "ambiguous_commands": { "type": "array", "items": { "type": "string" } },
+              "unresolved_targets": { "type": "array", "items": { "type": "string" } },
+              "adapter_plan": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["adapter_name", "status", "mechanism", "reuses_existing_parser",
+                             "rewrites_required_in_subsystem", "generated"],
+                "properties": {
+                  "adapter_name": { "type": "string", "minLength": 1 },
+                  "status": { "const": "PLANNED_NOT_IMPLEMENTED" },
+                  "mechanism": { "type": "string", "minLength": 1 },
+                  "reuses_existing_parser": { "type": "boolean" },
+                  "rewrites_required_in_subsystem": { "type": "array", "items": { "type": "string" } },
+                  "generated": {
+                    "const": false,
+                    "description": "SYS-20 names the adapter. Building it is SYS-40."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "system_command_ir": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "fields", "entries", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "fields": {
+          "type": "array",
+          "description": "SYS-21's own 17 field names, in the requirement's order.",
+          "minItems": 17,
+          "maxItems": 17,
+          "items": { "type": "string" }
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "system_command_id", "source_subsystem", "source_command",
+              "command_category", "target_resource", "target_sequence", "arguments",
+              "dependencies", "preconditions", "postconditions", "parallel_group",
+              "serialization_group", "shared_resource", "priority", "timeout",
+              "completion_condition", "evidence"
+            ],
+            "properties": {
+              "system_command_id": { "type": "string", "minLength": 1 },
+              "source_subsystem": { "type": "string", "minLength": 1 },
+              "source_command": { "type": "string", "minLength": 1 },
+              "command_category": { "type": "string" },
+              "target_resource": { "type": "array", "items": { "type": "string" } },
+              "target_sequence": { "type": "string" },
+              "arguments": { "type": "array" },
+              "dependencies": { "type": "array" },
+              "preconditions": { "type": "array" },
+              "postconditions": { "type": "array" },
+              "parallel_group": { "type": "string" },
+              "serialization_group": { "type": "string" },
+              "shared_resource": { "type": "array", "items": { "type": "string" } },
+              "priority": {
+                "const": "UNASSIGNED_PENDING_SYSTEM_SCHEDULING_DECISION",
+                "description": "Nothing in a subsystem command.txt states a System-level priority. Deriving one would present an invented verification parameter as evidence."
+              },
+              "timeout": {
+                "const": "NOT_SPECIFIED_IN_SOURCE_COMMAND_TXT",
+                "description": "A delay is not a timeout and an unbounded wait has none."
+              },
+              "completion_condition": {
+                "enum": ["INTERRUPT_HANDSHAKE", "CONDITION_WAIT",
+                         "IMMEDIATE_ON_COMMAND_RETURN", "TERMINATES_THE_SEQUENCE", "UNKNOWN"]
+              },
+              "evidence": { "type": "array", "items": { "type": "string" } },
+              "derivation": {
+                "type": "object",
+                "description": "The BASIS of every derived field, beside the 17 and never inside them: a derived value whose basis is not recorded next to it cannot be checked."
+              }
+            }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "command_collisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "collisions", "summary"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "collisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["collision_id", "collision_type", "subject", "subsystems",
+                         "commands", "detail", "evidence", "derived_from", "severity",
+                         "blocks_integration", "resolution"],
+            "properties": {
+              "collision_id": { "type": "string", "pattern": "^SYSCOL-[0-9A-F]{10}$" },
+              "collision_type": {
+                "enum": [
+                  "DUPLICATE_INITIALIZATION", "DUPLICATE_RESET_SETUP",
+                  "DUPLICATE_CLOCK_SETUP", "DUPLICATE_CPU_CONFIGURATION",
+                  "DUPLICATE_APB_PROGRAMMING", "DUPLICATE_MEMORY_INIT",
+                  "CONFLICTING_REGISTER_WRITE", "CONFLICTING_ADDRESS_SETUP",
+                  "COMPETING_ACTIVE_VIP_TRAFFIC", "INCOMPATIBLE_MODE_SETUP",
+                  "ORDERING_CONFLICT", "SHARED_RESOURCE_CONTENTION"
+                ],
+                "description": "SYS-22's own twelve classes, read off its own sentence."
+              },
+              "subject": { "type": "string", "minLength": 1 },
+              "subsystems": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+              "commands": { "type": "array", "items": { "type": "string" } },
+              "detail": { "type": "string", "minLength": 1 },
+              "evidence": { "type": "array", "items": { "type": "string" } },
+              "evidence_by_subsystem": {
+                "type": "object",
+                "description": "One real citation list PER side. source_authority.escalate_conflict() refuses a conflict question that names a disagreement without citing where both halves of it live, and a single merged evidence list cannot supply that.",
+                "additionalProperties": { "type": "array", "items": { "type": "string" } }
+              },
+              "written_values": { "type": "object" },
+              "derived_from": { "type": "string", "minLength": 1 },
+              "severity": { "type": "integer", "minimum": 0 },
+              "blocks_integration": { "type": "boolean" },
+              "resolution": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "summary": { "type": "object" }
+      }
+    },
+
+    "summary": { "type": "object" }
+  }
+}

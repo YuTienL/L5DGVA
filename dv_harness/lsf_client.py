@@ -12,13 +12,46 @@ import subprocess, json, hashlib, re, time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional
+try:
+    from typing import Literal
+except ImportError:  # pragma: no cover - exercised for real on this
+    # project's real Python 3.7 remote deployment (typing.Literal was only
+    # added in Python 3.8). `from __future__ import annotations` above
+    # makes ANNOTATIONS lazy (never actually executed), but this file's own
+    # `LsfStatus = Literal[...]` below is a plain module-level ASSIGNMENT,
+    # not an annotation -- it genuinely runs at import time regardless of
+    # that future import, and genuinely needs typing.Literal to exist.
+    # No new dependency (e.g. typing_extensions) is assumed to be
+    # installed on that remote environment either, so this degrades to a
+    # plain `str` alias on old Python -- LsfStatus was never enforced at
+    # runtime anyway (grep-confirmed: no isinstance/runtime check against
+    # it anywhere in this codebase), only used for static type-checker
+    # precision on modern Python.
+    Literal = None  # type: ignore[assignment]
 
 JOBS_DIR_NAME = (".dv-harness", "lsf", "jobs")
 EARLY_FAIL_POLICY_PATH = (".dv-harness", "lsf", "early_fail_policy.json")
 
-LsfStatus = Literal["PEND", "RUN", "DONE", "EXIT", "KILLED",
-                     "MEMLIMIT", "TIMEOUT", "LICENSE_WAIT", "UNKNOWN"]
+# REMOVED (2026-09-03, gap-close-obsidian-memory phase 4+5): "MEMLIMIT",
+# "TIMEOUT" and "LICENSE_WAIT" used to be declared here alongside the five
+# real values below, but NO code path could ever produce them --
+# map_bjobs_stat_to_lsf_status() is the one and only writer of
+# JobState.lsf_status, and _BJOBS_STAT_MAP has no entry yielding any of the
+# three (bjobs' STAT column reports PEND/RUN/DONE/EXIT/... ; a run-limit or
+# memory-limit kill surfaces there as plain EXIT, with the distinguishing
+# detail in an exit/pending REASON field this module deliberately does not
+# request -- see _run_bjobs()'s -o list). Declaring statuses nothing can emit
+# made JobState look like it captured a timeout/memlimit/license-wait
+# distinction it never did. Restoring that distinction for real needs a
+# reason-field mapping validated against a live LSF instance, which this
+# environment has none of; a Job Memory record's real, honest timeout input
+# today is the run limit the submitter itself requested
+# (JobState.runlimit_minutes below, the `-W` value actually passed to bsub).
+if Literal is not None:
+    LsfStatus = Literal["PEND", "RUN", "DONE", "EXIT", "KILLED", "UNKNOWN"]
+else:  # pragma: no cover - real fallback path, only reachable on Python < 3.8
+    LsfStatus = str
 
 _BJOBS_STAT_MAP = {
     "PEND": "PEND", "PROV": "PEND", "WAIT": "PEND",
@@ -36,6 +69,27 @@ class LsfUnavailableError(RuntimeError):
     pass
 
 
+class _BjobsBatchUnparseable(LsfUnavailableError):
+    """Raised only when a bjobs -json invocation actually ran (the binary
+    was found, the call did not time out) but its stdout could not be
+    parsed as JSON -- e.g. one id in the batch LSF has completely forgotten
+    can corrupt the whole batch's -json output. This is a strict subclass
+    of LsfUnavailableError (BUG FIX, 2026-09-01
+    lsf-reconcile-terminal-status-hardening full-suite regression check):
+    _run_bjobs_with_fallback() must retry per-id ONLY for this specific,
+    genuinely-salvageable failure, never for the plain LsfUnavailableError
+    FileNotFoundError/TimeoutExpired raise when bjobs is not on PATH at all
+    or hangs. Catching every LsfUnavailableError at the fallback's outer
+    try/except silently swallowed a completely-unavailable LSF toolchain --
+    every per-id retry would fail identically (the binary still would not
+    exist), and bjobs_query_many() would return an all-empty result instead
+    of propagating the real LSF_UNAVAILABLE that dv_harness.cli surfaces to
+    callers, exactly the case
+    test_cli_lsf_reconcile_picks_up_existing_job_state_files
+    (test_engine_gates_and_routing.py) already covers and caught this."""
+    pass
+
+
 @dataclass
 class JobState:
     job_id: Optional[int] = None
@@ -44,6 +98,58 @@ class JobState:
     options: Optional[str] = None
     run_dir: Optional[str] = None
     sim_log: Optional[str] = None
+    # seed / fsdb_path (session-snapshot-extension, 2026-09-01): promoted to
+    # first-class fields closing the RESIDUAL GAP the memory-engine-schema-
+    # completion audit (2026-09-01, see this module's own
+    # extract_seed_from_options/extract_fsdb_path_from_options and
+    # _write_job_tier_memory_on_terminal_reconcile below) explicitly left
+    # open -- "JobState has no dedicated seed/fsdb_path field". Real writers:
+    # cli.py's `lsf-submit` (--seed/--fsdb-path, explicit at the point a
+    # caller submits a job -- the moment a seed is naturally known -- or
+    # auto-extracted from --options text when omitted) and
+    # register_external_job() below (for a job submitted outside this
+    # module's own bsub_submit(), e.g. a generated environment's own
+    # Makefile-native `bsub`/lsf_regress.sh, where a caller wrapping that
+    # path already knows the seed it assigned). Optional and additive: a
+    # JobState loaded from an older on-disk record with neither key simply
+    # gets None here (load_job_state()'s _JOB_STATE_FIELDS filter already
+    # handles an absent key exactly like every other optional field).
+    seed: Optional[str] = None
+    fsdb_path: Optional[str] = None
+    # command / runlimit_minutes / submit_time / run_time / observed_terminal_at
+    # (2026-09-03, gap-close-obsidian-memory phase 4+5): the Job Memory tier's
+    # spec-named "start/end time, command, timeout" fields. Each is populated
+    # from a real source, never derived or guessed, and each stays None when
+    # that source genuinely did not supply it:
+    #   command           -- the exact command string handed to bsub
+    #                        (cli.py's `lsf-submit`, or register_external_job()'s
+    #                        optional kwarg for a job submitted by someone
+    #                        else's script). Without it a Job Memory record
+    #                        could say a job failed but never what it ran.
+    #   runlimit_minutes  -- the `-W <minutes>` wall-clock limit actually
+    #                        requested at submit time (bsub_submit() emits it),
+    #                        i.e. this job's real timeout budget. Same units and
+    #                        meaning as the generated environments' own
+    #                        LSF_TIMEOUT (templates/sim_scripts/lsf_regress.sh).
+    #   submit_time /     -- LSF's OWN reported times, captured by
+    #   run_time             reconcile_job() from the bjobs -json record's
+    #                        SUBMIT_TIME/RUN_TIME fields (already requested by
+    #                        _run_bjobs()'s -o list, and until now discarded).
+    #                        Stored verbatim as LSF's own strings -- never
+    #                        reformatted into a fabricated epoch/ISO value.
+    #   observed_terminal_at -- ISO-8601 UTC, the moment THIS harness first
+    #                        observed a terminal (DONE/EXIT) status for the job.
+    #                        Deliberately named for what it is (a harness
+    #                        observation) rather than "end_time": LSF's own
+    #                        finish time is not in this module's -o list, and
+    #                        claiming a poll timestamp is the job's finish time
+    #                        would be exactly the kind of dressed-up inference
+    #                        the Evidence Truth Rule forbids.
+    command: Optional[str] = None
+    runlimit_minutes: Optional[int] = None
+    submit_time: Optional[str] = None
+    run_time: Optional[str] = None
+    observed_terminal_at: Optional[str] = None
     lsf_status: str = "UNKNOWN"
     sim_status: str = "UNKNOWN"
     last_log_offset: int = 0
@@ -58,6 +164,24 @@ class JobState:
     fix_proposal_status: str = "NOT_STARTED"
     git_sha: Optional[str] = None
     server_sha: Optional[str] = None
+    # runtime_seconds (cross-run-trend task, 2026-09-03): this DUT testcase's
+    # own real LSF wall-clock runtime as a NUMBER of seconds, parsed by
+    # parse_run_time_seconds() in reconcile_job() from the `run_time` column
+    # _run_bjobs()'s -o list has always requested and every caller discarded.
+    # A number rather than LSF's own free-form string because this is what the
+    # cross-run trend database aggregates -- the daily runtime and
+    # license-hour curves, and the per-pattern baseline trend_analysis.py
+    # compares a suspiciously slow PASS against -- none of which a string can
+    # be SUMmed or MEDIANed into.
+    #
+    # This is DUT simulation time, NOT any agent/LLM orchestration timing --
+    # that is dv_harness/stage_profile.py's separate, unrelated concept and
+    # the two must never be conflated into one curve. None means LSF reported
+    # no runtime for this job yet, or reported it in a format
+    # parse_run_time_seconds() has not confirmed against a real LSF instance
+    # -- never 0, which would be a real measured "finished instantly" claim
+    # this field has no evidence for.
+    runtime_seconds: Optional[float] = None
     last_change_time: Optional[str] = None
     state_fingerprint: Optional[str] = None
 
@@ -90,12 +214,101 @@ def _validate_job_id(job_id) -> int:
     return job_id
 
 
+class PreflightBlockedError(RuntimeError):
+    """Raised by bsub_submit_with_preflight() when the preflight gate
+    (dv_harness/preflight.py) reports overall != "PASS". Carries the full
+    PreflightResult on `.result` so a caller can report every check's
+    detail, not just a bare blocked boolean. Deliberately a DIFFERENT
+    exception class from LsfUnavailableError: that one means "LSF itself
+    could not be reached/parsed"; this one means "LSF is reachable but the
+    real preflight gate refused to let this job go out" -- a caller must
+    not, and cannot accidentally, catch one and silently treat it as the
+    other."""
+
+    def __init__(self, result):
+        self.result = result
+        blocked = ", ".join(result.blocked_on) or "unknown"
+        super().__init__(f"PREFLIGHT_BLOCKED: {blocked}")
+
+
+def bsub_submit_with_preflight(command: str, *, queue: str, cores: int = 1,
+                                mem_mb: Optional[int] = None, run_dir: Optional[str] = None,
+                                runlimit_minutes: Optional[int] = None,
+                                extra_args: Optional[list[str]] = None,
+                                preflight_cfg=None, preflight_runner=None,
+                                skip_preflight: bool = False, notifier=None):
+    """The real, GATED submission entry point (2026-09-03 lmstat + scheduler
+    preflight task -- highest-priority workstream per the user's own spec:
+    "bsub / sbatch 前先做 license、queue、host、disk、workdir、EDA env 檢查。
+    沒過就 BLOCKED，不派 job"). Runs dv_harness.preflight.run_preflight()
+    FIRST; bsub_submit() below is never even called when the gate reports
+    BLOCKED -- this is a real, structural block, not a logged warning.
+
+    `dv_harness.cli`'s `lsf-submit` command (the one real, wired job-
+    submission call site in this project as of this task -- confirmed by
+    grepping every real caller of bsub_submit()) calls this function, not
+    bsub_submit() directly. bsub_submit() itself stays ungated below for
+    any caller (and the pre-existing test suite) that already has its own
+    reason to bypass this; `skip_preflight=True` is an explicit, audited
+    escape hatch here, never a silent default.
+
+    `notifier` (2026-09-03, dv_harness/escalation_notify.py): an optional
+    EscalationNotifier. Omitted (the default) means no notification is
+    ever attempted -- this function stays pure/side-effect-free for the
+    existing test suite and any caller with no escalation config. When
+    supplied (dv_harness/cli.py's `lsf-submit` builds one from
+    `h.cfg["escalation"]`), it is consulted at exactly the two real
+    escalation-worthy failure points below: an eda_license-starvation
+    PreflightBlockedError, and a genuine post-preflight-PASS `bsub`
+    failure (LsfUnavailableError) -- never on PASS, never on a
+    non-starvation preflight block (e.g. a down LSF queue), matching the
+    user's own "license starvation" / "farm/job submission failure" as
+    two DISTINCT named conditions.
+
+    Returns (job_id, PreflightResult) on success -- PreflightResult is
+    None only when skip_preflight=True (there is genuinely nothing to
+    report). Raises PreflightBlockedError (never a bare bool/log line) on
+    BLOCKED, and LsfUnavailableError (unchanged) if bsub itself then
+    fails.
+    """
+    from . import preflight as _preflight
+    cfg = preflight_cfg or _preflight.PreflightConfig(queue=queue, workdir=run_dir or "")
+    result = None
+    if not skip_preflight:
+        result = _preflight.run_preflight(cfg, runner=preflight_runner)
+        if result.overall != "PASS":
+            if notifier is not None:
+                for check in result.checks:
+                    if check.name == "eda_license" and check.status == "FAIL":
+                        notifier.license_starvation(check)
+            raise PreflightBlockedError(result)
+    try:
+        job_id = bsub_submit(command, queue=queue, cores=cores, mem_mb=mem_mb,
+                              run_dir=run_dir, runlimit_minutes=runlimit_minutes,
+                              extra_args=extra_args)
+    except LsfUnavailableError as e:
+        if notifier is not None:
+            notifier.job_submission_failure(command=command, queue=queue, reason=str(e))
+        raise
+    return job_id, result
+
+
 def bsub_submit(command: str, *, queue: str, cores: int = 1,
                 mem_mb: Optional[int] = None, run_dir: Optional[str] = None,
+                runlimit_minutes: Optional[int] = None,
                 extra_args: Optional[list[str]] = None) -> int:
+    """`runlimit_minutes` (2026-09-03) emits the real `bsub -W <minutes>`
+    wall-clock run limit -- the same knob the generated environments' own
+    lsf_regress.sh already drives via LSF_TIMEOUT. Omitted (the default)
+    means no -W is passed at all, exactly as before this parameter existed:
+    the queue's own default limit applies and JobState.runlimit_minutes
+    honestly stays None rather than recording a limit this harness never
+    actually requested."""
     argv = ["bsub", "-q", queue, "-n", str(cores)]
     if mem_mb is not None:
         argv += ["-R", f"rusage[mem={mem_mb}]"]
+    if runlimit_minutes is not None:
+        argv += ["-W", str(int(runlimit_minutes))]
     if run_dir:
         argv += ["-cwd", run_dir]
     if extra_args:
@@ -128,10 +341,64 @@ def _run_bjobs(job_ids: list[int]) -> dict:
     try:
         parsed = json.loads(proc.stdout)
     except (json.JSONDecodeError, TypeError) as e:
-        raise LsfUnavailableError(
+        raise _BjobsBatchUnparseable(
             f"failed to parse bjobs -json output: {e}; stdout={proc.stdout!r} stderr={proc.stderr!r}"
         ) from e
     return parsed
+
+
+def _run_bjobs_with_fallback(job_ids: list[int]) -> dict:
+    """Wraps _run_bjobs() with a per-id retry when the batch call itself
+    fails. A single job id LSF has completely forgotten can make the whole
+    batch's -json output unparseable (BUG, 2026-09-01
+    lsf-reconcile-terminal-status-hardening) -- without this, every OTHER,
+    perfectly healthy job in that batch loses one full analysis cycle. This
+    function never changes bjobs_query_many()'s return contract: on success
+    it returns exactly what _run_bjobs() would have returned; on batch
+    failure it merges the per-id fallback results into the same
+    {"RECORDS": [...]} shape, and an id that still fails its own individual
+    call contributes no entry to RECORDS (bjobs_query_many()'s own
+    default-to-{} handling for a missing id already covers that case
+    correctly, unchanged).
+
+    Design boundary: only a _BjobsBatchUnparseable batch failure (stdout ran
+    but did not parse as JSON) triggers the per-id retry -- NOT the plain
+    LsfUnavailableError _run_bjobs() raises for FileNotFoundError (bjobs not
+    on PATH at all) or a timeout (BUG FIX, 2026-09-01 full-suite regression
+    check: an earlier version of this function caught every
+    LsfUnavailableError here, which silently downgraded a completely
+    unavailable LSF toolchain into an all-empty result instead of
+    propagating LSF_UNAVAILABLE -- see _BjobsBatchUnparseable's own
+    docstring and test_cli_lsf_reconcile_picks_up_existing_job_state_files).
+    A real LSF invocation that returns a nonzero exit code but still emits
+    valid, parseable JSON (e.g. some requested ids known, others long
+    forgotten) never raises at all in the first place -- it already flows
+    through the normal happy path, and a genuinely-missing id in that JSON
+    is already handled correctly by bjobs_query_many()'s existing per-id
+    default-to-{} logic, with no fallback call needed. This codebase has no
+    access to a real LSF instance to confirm the exact real-world
+    nonzero-but-parseable behavior beyond that (per this project's
+    evidence-before-conclusion discipline, not assumed either way) -- but
+    no additional handling is required here regardless of which way it
+    goes, since that case never reaches this except block at all.
+
+    Cost, stated plainly: only on a genuine batch parse failure does this
+    become up to len(job_ids) additional real bjobs calls. The healthy-batch
+    path (the common case) is exactly as fast as before -- one call, no
+    change; and a completely-unavailable LSF toolchain still fails fast
+    with a single call, exactly as it did before this function existed."""
+    try:
+        return _run_bjobs(job_ids)
+    except _BjobsBatchUnparseable:
+        pass
+    records = []
+    for jid in job_ids:
+        try:
+            single = _run_bjobs([jid])
+        except LsfUnavailableError:
+            continue
+        records.extend(single.get("RECORDS") or [])
+    return {"RECORDS": records}
 
 
 def bjobs_query(job_id: int) -> dict:
@@ -145,7 +412,7 @@ def bjobs_query(job_id: int) -> dict:
 def bjobs_query_many(job_ids: list[int]) -> dict:
     if not job_ids:
         return {}
-    parsed = _run_bjobs(job_ids)
+    parsed = _run_bjobs_with_fallback(job_ids)
     records = parsed.get("RECORDS") or []
     result = {jid: {} for jid in job_ids}
     for rec in records:
@@ -154,6 +421,66 @@ def bjobs_query_many(job_ids: list[int]) -> dict:
         except (TypeError, ValueError):
             continue
         result[jid] = rec
+    return result
+
+
+def discover_live_jobs(vcuser: str) -> list[dict]:
+    """Real LSF status for every job under `vcuser`, independent of whether
+    any of them were ever submitted via this module's own bsub_submit() or
+    registered via register_external_job(). Used by Part 2's reconciliation
+    cycle for baseline visibility -- a job with no registered JobState still
+    shows up here with RUN/DONE/EXIT/PEND status.
+
+    `-a` is REQUIRED, not optional (BUG FIX, 2026-09-01 whole-branch review):
+    plain `bjobs -u <user>` lists only PEND/RUN/SUSPENDED jobs, so a job that
+    finishes between two poll cycles vanishes from this output entirely
+    instead of ever being observed in a terminal DONE/EXIT state. Since Part
+    2's reconciliation cycle gates its whole log-analysis branch on
+    lsf_status in ("DONE", "EXIT"), omitting `-a` meant Part 3's
+    regression-list safety net structurally never fired in production. `-a`
+    keeps finished jobs in the listing so that terminal transition is
+    actually observable.
+
+    TRANSPORT (deliberate, confirmed architectural assumption -- NOT a
+    deviation from the spec's original `remote_exec.py` wording): this
+    function, like every other subprocess call in this module
+    (bsub_submit(), _run_bjobs(), bkill_job()), invokes the LSF client
+    binaries LOCALLY, because dv_harness itself runs server-side on the
+    Linux DV server where bsub/bjobs/bkill are natively on PATH.
+    tools/remote/remote_exec.py is a different transport entirely -- it lets
+    an interactive Claude Code session on a separate Windows PC reach that
+    server -- and has no bearing on dv_harness's own server-side Python
+    code.
+    """
+    argv = ["bjobs", "-u", vcuser, "-a", "-json", "-o",
+            "jobid stat queue exec_host job_name submit_time"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    except FileNotFoundError as e:
+        raise LsfUnavailableError(f"bjobs not found on PATH: {e}") from e
+    except subprocess.TimeoutExpired as e:
+        raise LsfUnavailableError(f"bjobs timed out: {e}") from e
+    try:
+        parsed = json.loads(proc.stdout)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise LsfUnavailableError(
+            f"failed to parse bjobs -json output: {e}; stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        ) from e
+    records = parsed.get("RECORDS") or []
+    result = []
+    for rec in records:
+        try:
+            jid = int(rec.get("JOBID"))
+        except (TypeError, ValueError):
+            continue
+        result.append({
+            "job_id": jid,
+            "stat": rec.get("STAT") or "",
+            "queue": rec.get("QUEUE") or "",
+            "exec_host": rec.get("EXEC_HOST") or "",
+            "job_name": rec.get("JOB_NAME") or "",
+            "submit_time": rec.get("SUBMIT_TIME") or "",
+        })
     return result
 
 
@@ -185,6 +512,37 @@ def bkill_job(job_id: int, *, verify: bool = True, poll_timeout_s: int = 30) -> 
     return False
 
 
+def register_external_job(root: Path, job_id: int, *, log_path: str,
+                           pattern: Optional[str] = None,
+                           seed: Optional[str] = None,
+                           fsdb_path: Optional[str] = None,
+                           command: Optional[str] = None,
+                           runlimit_minutes: Optional[int] = None) -> None:
+    """Register a job that was submitted OUTSIDE this module's own
+    bsub_submit() -- e.g. a generated environment's own Makefile-native
+    `bsub` -- so reconcile_batch()/save_job_state() treat it identically to
+    a bsub_submit()-originated job. Writes a fresh JobState with
+    lsf_status="UNKNOWN" (the next reconcile_batch() call fills in the real
+    status from a live bjobs poll).
+
+    `seed`/`fsdb_path` (session-snapshot-extension, 2026-09-01): optional,
+    structural pass-throughs onto the new JobState fields -- populated only
+    when the caller wrapping the external submission genuinely knows them
+    (e.g. the same value it assigned to the generated environment's own
+    lsf_regress.sh $SEED before invoking it), never guessed here.
+
+    `command`/`runlimit_minutes` (2026-09-03): the same structural
+    pass-through for the Job Memory tier's spec-named "command"/"timeout"
+    fields -- the external submitter's own command string and its `-W`
+    minutes (e.g. lsf_regress.sh's $LSF_TIMEOUT). Omitted stays None; this
+    function never reconstructs a command line it did not receive."""
+    jid = _validate_job_id(job_id)
+    state = JobState(job_id=jid, pattern=pattern, sim_log=log_path,
+                      seed=seed, fsdb_path=fsdb_path,
+                      command=command, runlimit_minutes=runlimit_minutes)
+    save_job_state(root, state)
+
+
 def load_early_fail_policy(root: Path) -> dict:
     """Read .dv-harness/lsf/early_fail_policy.json (see EARLY_FAIL_POLICY_PATH).
 
@@ -207,7 +565,7 @@ def evaluate_auto_kill(state: JobState, policy: dict) -> dict:
     .dv-harness/lsf/early_fail_policy.json schema (uvm_error_threshold,
     kill_on_uvm_fatal, kill_on_uvm_error_above_threshold, kill_on_fatal_assertion,
     kill_on_simulator_crash, kill_on_explicit_fail_marker, allowlist) -- see
-    LSF_PER_JOB_AGENT_MONITORING_v16_1.md's "Early-Fail" section and the
+    docs/workflow/LSF_PER_JOB_AGENT_MONITORING_v16_1.md's "Early-Fail" section and the
     lsf-early-fail-stop skill for the documented terminal triggers this mirrors.
 
     Reads only fields already on JobState (uvm_fatal_count, uvm_error_count,
@@ -303,17 +661,124 @@ def save_job_state(root: Path, state: JobState) -> None:
     path.write_text(json.dumps(asdict(state), indent=2), encoding="utf-8")
 
 
-def to_snapshot_row(state: JobState, *, agent_action: str, note: Optional[str] = None) -> dict:
-    return {
+JOB_TIER_MEMORY_ID_TEMPLATE = "JOB-{job_id}-TERMINAL-RECONCILE"
+
+
+def job_tier_memory_id(job_id) -> str:
+    """The one deterministic Job-tier memory id for a job, so the two writers
+    (`_upsert_job_tier_memory_record()` below) and every reader
+    (`load_job_tier_memory_record()`, the periodic snapshot's failure-knowledge
+    columns) key on the same string instead of each re-spelling the format."""
+    return JOB_TIER_MEMORY_ID_TEMPLATE.format(job_id=job_id)
+
+
+def load_job_tier_memory_record(root: Path, job_id) -> Optional[dict]:
+    """The Job-tier memory record this harness wrote for `job_id`, or None.
+
+    Read-only and best-effort: a project with no memory store yet, or a
+    job that never reached a terminal reconcile, is a normal state and
+    returns None rather than raising -- a reporting join must never be the
+    thing that breaks a regression snapshot."""
+    try:
+        from .memory import MemoryStore
+        return MemoryStore(root).get(job_tier_memory_id(job_id))
+    except Exception:
+        return None
+
+
+def format_failure_signature(signature: Optional[dict]) -> Optional[str]:
+    """One-line rendering of a `memory_vault.build_failure_signature()` dict
+    for the periodic regression table's Failure Signature column.
+
+    Deliberately NOT `evidence_db.signature_key()`: that is a sha256 dedup
+    key, unreadable to the engineer reading the table. This renders only
+    fields the signature genuinely carries (an absent/zero one is omitted, not
+    printed as `0`), so the column shows the real failure shape --
+    `EXIT/FATAL=1/ERR=5/assert` -- rather than a hash."""
+    if not signature:
+        return None
+    parts = []
+    lsf_status = signature.get("lsf_status")
+    if lsf_status:
+        parts.append(str(lsf_status))
+    if signature.get("uvm_fatal_count"):
+        parts.append(f"FATAL={signature['uvm_fatal_count']}")
+    if signature.get("uvm_error_count"):
+        parts.append(f"ERR={signature['uvm_error_count']}")
+    if signature.get("assertion_failure"):
+        parts.append("assert")
+    if signature.get("simulator_crash"):
+        parts.append("crash")
+    terminal_signature = signature.get("terminal_signature")
+    if terminal_signature:
+        parts.append(str(terminal_signature))
+    if not parts and signature.get("abnormal_termination"):
+        parts.append("abnormal_termination")
+    return "/".join(parts) or None
+
+
+def to_snapshot_row(state: JobState, *, agent_action: str, note: Optional[str] = None,
+                     job_memory: Optional[dict] = None) -> dict:
+    """One row of the periodic per-job regression table.
+
+    `job_memory` (2026-09-04, Phase 11 gap closure) is that job's Job-tier
+    memory record, from `load_job_tier_memory_record()`. Before it, the three
+    debug-knowledge columns the spec names -- failure signature, prior related
+    knowledge, and confidence -- existed ONLY inside that separate JSON record
+    and were surfaced by no per-job view anywhere (grep-confirmed: zero hits
+    in regression_reporter.py, dashboard.py or cli.py), so an engineer reading
+    the regression table could not see that the harness had already matched
+    this failure against prior knowledge. Optional: a caller that has no
+    memory record (or does not want the join) gets exactly the pre-existing
+    eight-key row, and `render_snapshot()` renders those columns as `-`."""
+    row = {
         "job_id": state.job_id,
         "pattern": state.pattern,
         "lsf_status": state.lsf_status,
         "dv_analysis_status": state.sim_status,
-        "uvm_error": state.uvm_error_count,
-        "uvm_fatal": state.uvm_fatal_count,
+        "uvm_error_count": state.uvm_error_count,
+        "uvm_fatal_count": state.uvm_fatal_count,
         "agent_action": agent_action,
         "note": note,
     }
+    if job_memory:
+        row["confidence"] = job_memory.get("confidence")
+        row["failure_signature"] = format_failure_signature(job_memory.get("failure_signature"))
+        row["prior_related_knowledge_count"] = len(job_memory.get("prior_related_knowledge") or [])
+    return row
+
+
+_RUN_TIME_SECONDS_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:second\(s\)|seconds?|s)?\s*$",
+                                   re.IGNORECASE)
+
+
+def parse_run_time_seconds(raw) -> Optional[float]:
+    """Real `bjobs -o run_time` value -> seconds as a float, or None.
+
+    LSF renders this column as a bare number of seconds, usually with the
+    literal unit suffix `second(s)` (e.g. `"1234 second(s)"`); this repo's own
+    existing test fixture for a live bjobs record uses the bare-number form
+    (`"RUN_TIME": "10"`, test_lsf_client.py). Both are accepted, plus a
+    numeric type if a caller ever hands one through unstringified.
+
+    Returns None -- never 0.0 -- for anything that is not a real measured
+    duration: an empty string, LSF's `"-"` placeholder for a job that has not
+    started, or any other unit/format this function has NOT confirmed against
+    a real LSF instance. Per this project's Tool Usage Verification Gate, an
+    unrecognized format is reported as "no runtime evidence" rather than
+    guessed at -- a wrongly-parsed duration would silently poison both the
+    daily runtime curve and the runtime-anomaly baseline that read this
+    field."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    m = _RUN_TIME_SECONDS_RE.match(str(raw))
+    if not m:
+        return None
+    return float(m.group(1))
 
 
 def reconcile_job(state: JobState, live_bjobs_record: dict, *,
@@ -333,13 +798,75 @@ def reconcile_job(state: JobState, live_bjobs_record: dict, *,
                 f"live bjobs record job id {live_id} does not match state.job_id {state.job_id}"
             )
 
+    # LSF's own SUBMIT_TIME/RUN_TIME (2026-09-03, gap-close-obsidian-memory
+    # phase 4+5): _run_bjobs()'s -o list has always requested both, and every
+    # caller discarded them, so the Job Memory tier had no start-time or
+    # elapsed-runtime evidence at all. Copied verbatim onto the state (LSF's
+    # own strings, never reparsed into a fabricated timestamp) and only when
+    # the live record genuinely carries a value -- an absent field must never
+    # blank out a time this state already recorded from an earlier poll,
+    # exactly like the terminal-status protection below.
+    for live_key, field in (("SUBMIT_TIME", "submit_time"), ("RUN_TIME", "run_time")):
+        live_value = live_bjobs_record.get(live_key)
+        if live_value and live_value != getattr(state, field):
+            setattr(state, field, live_value)
+            changed = True
+
     live_status = map_bjobs_stat_to_lsf_status(live_bjobs_record.get("STAT"))
-    if live_status != state.lsf_status:
+    # BUG FIX (2026-09-01, lsf-reconcile-terminal-status-hardening): a real,
+    # previously-confirmed terminal status must outlive LSF's own retention
+    # window. bjobs_query_many() returns {} (no "STAT" key at all) for a job
+    # id LSF has completely forgotten -- that is an ABSENCE of information,
+    # not new evidence that the job's outcome changed. Downgrading an
+    # already-recorded DONE/EXIT/KILLED to UNKNOWN here previously destroyed
+    # real evidence for no reason other than the tool's own bookkeeping
+    # lifetime expiring -- exactly the decay CLAUDE.md's "LSF DONE is not
+    # equal to DV PASS" rule exists to prevent. Scoped precisely to the
+    # absent-record case: a live call that explicitly reports an ambiguous
+    # real status (e.g. UNKWN/ZOMBI) for a job IS new evidence and is not
+    # protected here.
+    record_absent = live_bjobs_record.get("STAT") is None
+    already_terminal = state.lsf_status in ("DONE", "EXIT", "KILLED")
+    if record_absent and already_terminal:
+        discrepancies.append(Discrepancy(
+            job_id=state.job_id, field="lsf_status",
+            reported=state.lsf_status, live=live_status, severity="INFO",
+        ))
+    elif live_status != state.lsf_status:
         discrepancies.append(Discrepancy(
             job_id=state.job_id, field="lsf_status",
             reported=state.lsf_status, live=live_status, severity="WARN",
         ))
         state.lsf_status = live_status
+        changed = True
+
+    # Real DUT-testcase runtime capture (cross-run-trend task, 2026-09-03).
+    # `run_time` is already in every _run_bjobs() `-o` column list above -- it
+    # was requested on every single poll and then discarded. This parses it
+    # into the queryable number the cross-run trend database aggregates (daily
+    # runtime/license-hour curves, and the per-pattern baseline
+    # `trend_analysis.detect_runtime_anomalies()` compares a passing job
+    # against), which LSF's own free-form string cannot be SUMmed or MEDIANed.
+    #
+    # Recorded MONOTONICALLY: a poll that reports a smaller runtime than one
+    # already recorded (or none at all, which is what bjobs_query_many()
+    # returns for a job LSF has forgotten past CLEAN_PERIOD) must never
+    # overwrite a larger, real, previously-observed duration -- the same "an
+    # ABSENCE of information is not new evidence that the outcome changed"
+    # reasoning the terminal-status protection above rests on. A job polled at
+    # 200s and again after it finished at 900s keeps 900s.
+    live_runtime = parse_run_time_seconds(live_bjobs_record.get("RUN_TIME"))
+    if live_runtime is not None and (state.runtime_seconds is None
+                                     or live_runtime > state.runtime_seconds):
+        state.runtime_seconds = live_runtime
+        changed = True
+
+    # First observation of a terminal LSF status for this job (2026-09-03):
+    # set once and never overwritten, so repeated polls of the same finished
+    # job keep reporting when this harness ACTUALLY first saw it finish
+    # rather than the timestamp of the most recent poll.
+    if live_status in ("DONE", "EXIT") and state.observed_terminal_at is None:
+        state.observed_terminal_at = datetime.now(timezone.utc).isoformat()
         changed = True
 
     if live_status in ("DONE", "EXIT") and state.sim_status in ("UNKNOWN", "RUNNING"):
@@ -362,6 +889,342 @@ def reconcile_job(state: JobState, live_bjobs_record: dict, *,
     return state, discrepancies
 
 
+# seed/fsdb_path FALLBACK extraction (memory-engine-schema-completion audit,
+# 2026-09-01; JobState/job_state_schema.json gained first-class seed/
+# fsdb_path fields in the session-snapshot-extension follow-up the same
+# day -- see JobState's own docstring comment). These two regexes remain as
+# a fallback for a JobState whose structural field was never populated
+# (an older on-disk record, or a caller that never passed --seed/
+# --fsdb-path/register_external_job(seed=...)) but whose free-text
+# `options` -- the string a caller passes straight through to the
+# underlying `bsub`/simulator invocation, e.g.
+# "+ntb_random_seed=1234 +fsdb_file=/path/run.fsdb" -- still happens to
+# carry one of these markers. Extracts a value ONLY when the text genuinely
+# contains one of these real, already-documented markers (the seed pattern
+# mirrors gates.py's own log-scrubbing regex for the same marker vocabulary;
+# the fsdb pattern mirrors the uvm_generator Makefile template's own
+# `+fsdb_file=$(PAT_FSDB)` RUN_FLAGS convention) -- never guessed, never a
+# fabricated default.
+_SEED_IN_OPTIONS_RE = re.compile(r"\b(?:ntb_random_)?seed\s*[:=]\s*(\d+)\b", re.IGNORECASE)
+_FSDB_FILE_IN_OPTIONS_RE = re.compile(r"\+fsdb_file[:=](\S+)", re.IGNORECASE)
+
+
+def extract_seed_from_options(options: Optional[str]) -> Optional[str]:
+    if not options:
+        return None
+    m = _SEED_IN_OPTIONS_RE.search(options)
+    return m.group(1) if m else None
+
+
+def extract_fsdb_path_from_options(options: Optional[str]) -> Optional[str]:
+    if not options:
+        return None
+    m = _FSDB_FILE_IN_OPTIONS_RE.search(options)
+    return m.group(1) if m else None
+
+
+def _write_job_tier_memory_on_terminal_reconcile(root: Path, jid: int, state: JobState,
+                                                  discrepancies: list) -> None:
+    """Job-tier memory wiring (Task 9, 2026-08-31 poster-gap-closing round 2):
+    reconcile_job()'s own CRITICAL "sim_status"->"ANALYSIS_OWED" discrepancy
+    is the real, structurally-guaranteed signal that a submitted LSF job has
+    just reached a terminal live LSF status (DONE/EXIT) with DV analysis not
+    yet recorded against it -- never a fabricated trigger. Per CLAUDE.md's
+    "LSF DONE is not equal to DV PASS", this persists the real LSF-level
+    completion fact (never a DV verdict this function has no evidence for);
+    the job_result/job_failure kind split below is itself derived only from
+    real evidence already present on `state` at reconcile time (a live EXIT
+    status, or an already-recorded uvm_fatal_count/assertion_failure/
+    simulator_crash signal), never guessed. Naturally stops recurring once
+    something downstream advances state.sim_status off UNKNOWN/RUNNING (the
+    same condition that stops the CRITICAL discrepancy itself from firing).
+    Best-effort, mirrors engine.py's _promote_experience_knowledge pattern:
+    a persistence failure here must never break an already-completed
+    reconciliation.
+
+    IDEMPOTENCY (2026-08-31 fix wave, finding I3): unlike
+    _promote_experience_knowledge (fires once per stage PASS),
+    lsf-reconcile is DESIGNED to be polled repeatedly, and this CRITICAL
+    discrepancy keeps firing on every reconcile_batch() call while a job
+    stays stuck at sim_status UNKNOWN/RUNNING with a terminal live LSF
+    status -- exactly the stuck-job case this write exists to record.
+    Without a stable key, each poll minted a fresh memory_id via
+    route_and_store (MemoryStore.add() only reuses an ID the caller already
+    supplies -- see memory.py's `mid=mem.get("memory_id") or f"MEM-..."`),
+    so 3 reconciles of the same stuck job produced 3 duplicate Job-tier
+    records. Keying `memory_id` deterministically on `job_id` makes repeat
+    polls of the SAME stuck job update the SAME record in place (add() is an
+    upsert-by-memory_id: it overwrites the file at
+    `<level>/<memory_id>.json` and replaces, not appends, that id's row in
+    index.json) instead of minting a new one -- no store-API change needed,
+    this only supplies the id the existing upsert behavior already keys on.
+
+    SEED/FSDB_PATH (memory-engine-schema-completion audit, 2026-09-01;
+    CLOSED by session-snapshot-extension, 2026-09-01): JobState now has
+    first-class `seed`/`fsdb_path` fields (see JobState's own docstring
+    comment), populated at submission time by cli.py's `lsf-submit`
+    (explicit --seed/--fsdb-path, or auto-extracted from --options) and by
+    register_external_job()'s optional kwargs. Those first-class fields are
+    used here when present; `extract_seed_from_options`/
+    `extract_fsdb_path_from_options` remain as a fallback ONLY for a
+    JobState that never got the structural field populated (an older
+    on-disk record predating this change, or a caller of
+    register_external_job()/`lsf-submit` that genuinely never supplied
+    either) but whose free-text `options` still happens to carry one of the
+    documented markers. Rather than writing `"seed": None` /
+    `"fsdb_path": None` (a null placeholder that LOOKS like the schema
+    captured this data when it did not), the keys are simply omitted from
+    the record when neither the field nor the fallback extraction finds
+    anything, so a reader can tell "not captured" apart from "captured as
+    null".
+    """
+    if not any(d.field == "sim_status" and d.severity == "CRITICAL" for d in discrepancies):
+        return
+    _upsert_job_tier_memory_record(root, jid, state)
+
+
+def _score_job_memory_confidence(state: JobState) -> dict:
+    """Real per-job confidence, via `inference.score_confidence()` -- the same
+    function CLAUDE.md's Engineering Memory Policy already names as THE
+    quantitative confidence input, never a second scoring scheme.
+
+    THE GAP THIS CLOSES: `confidence` is a first-class field of both the JSON
+    record (`MemoryStore.add()`'s setdefault) and the vault-note frontmatter
+    (`memory_vault.build_frontmatter_from_memory_record`), it is a ranking
+    term in `MemoryRetriever.search()`, and it is one of the columns the
+    per-job regression view is supposed to carry -- but nothing in the
+    job-tier write path ever set it, so every Job Memory record this harness
+    has ever written carried the literal string "UNKNOWN".
+
+    Every input below is read off real evidence already on `state`, never
+    guessed:
+
+    * independent_sources_count -- how many genuinely DIFFERENT evidence
+      sources agree this job reached a terminal outcome: (1) LSF itself
+      (a terminal `bjobs` status), (2) a real sim.log epilogue parse (a
+      determinate PASS/FAIL `sim_status`, which only
+      `regression_reporter.run_reconciliation_cycle()` sets, and only from a
+      real parsed epilogue), (3) a marker-level signal from the log body
+      (UVM_ERROR/UVM_FATAL counts, an assertion failure, a simulator crash,
+      or a terminal signature).
+    * evidence_refs_verified -- the cited sim.log path EXISTS on disk. This is
+      a real filesystem check, so a record citing a path that has since been
+      swept scores lower rather than claiming verified references.
+    * counter_evidence_count -- a genuine contradiction, not a formality:
+      `sim_status == "PASS"` while a real failure marker is present is
+      exactly CLAUDE.md's "LSF DONE is not equal to DV PASS" hazard in
+      reverse, and `score_confidence()`'s own safety floor then caps the
+      result below HIGH.
+    * multi_agent_consensus_count -- honestly 0: no multi-agent evidence
+      acquisition happens at this reconcile layer, and inventing a nonzero
+      value would manufacture confidence out of nothing.
+
+    Returns score_confidence()'s own dict plus the inputs it was given, so the
+    stored `confidence_basis` shows exactly why the level is what it is.
+    """
+    from .inference import score_confidence
+
+    has_marker_evidence = bool(
+        state.uvm_error_count or state.uvm_fatal_count or state.assertion_failure
+        or state.simulator_crash or state.terminal_signature
+    )
+    independent_sources_count = sum((
+        state.lsf_status in ("DONE", "EXIT", "KILLED"),
+        state.sim_status in ("PASS", "FAIL"),
+        has_marker_evidence,
+    ))
+    try:
+        evidence_refs_verified = bool(state.sim_log) and Path(state.sim_log).exists()
+    except (OSError, ValueError):
+        # A malformed path string (a Windows-illegal character, an embedded
+        # NUL) is not verified evidence -- and must not make a memory write
+        # raise on its way through a confidence calculation.
+        evidence_refs_verified = False
+    counter_evidence_count = 1 if (state.sim_status == "PASS" and has_marker_evidence) else 0
+
+    inputs = {
+        "independent_sources_count": independent_sources_count,
+        "evidence_refs_verified": evidence_refs_verified,
+        "counter_evidence_count": counter_evidence_count,
+        "multi_agent_consensus_count": 0,
+    }
+    result = score_confidence(**inputs)
+    return {**result, "inputs": inputs}
+
+
+def _upsert_job_tier_memory_record(root: Path, jid: int, state: JobState) -> None:
+    """The real persistence body behind `_write_job_tier_memory_on_terminal_
+    reconcile()` above, factored out (Phase 11, 2026-09-03, obsidian-memory-
+    debugflow task -- Regression Integration) so a SECOND real caller can
+    upsert the SAME deterministic `JOB-{jid}-TERMINAL-RECONCILE` record once
+    it has BETTER evidence, without re-deriving the CRITICAL-discrepancy gate
+    (which only ever reflects the coarse `lsf_status` bjobs already knew,
+    BEFORE any real sim.log epilogue has been parsed).
+
+    THE GAP THIS CLOSES: `reconcile_job()`'s CRITICAL "sim_status"->
+    "ANALYSIS_OWED" discrepancy fires the FIRST time a job reaches a
+    terminal live LSF status with DV analysis not yet recorded -- at that
+    exact moment, `state.uvm_error_count`/`uvm_fatal_count` are whatever
+    they were BEFORE this cycle's real sim.log epilogue parse (typically
+    still 0/unset for a job whose failure only shows up in the log body,
+    e.g. `lsf_status=="DONE"` with a real UVM_FATAL inside). The gated
+    wrapper above, called from `reconcile_batch()`, can therefore
+    legitimately write `kind="job_result"` (not yet knowing better) for a
+    job that a moment later, in the SAME reconciliation cycle, turns out to
+    be a real failure once `regression_reporter.run_reconciliation_cycle()`
+    parses its epilogue (real `UVM_ERROR`/`UVM_FATAL` counts, or a `verdict`
+    of `FAILED`). That real epilogue-parse call site calls this function
+    directly (no discrepancy re-derivation needed -- the epilogue itself,
+    already reflected onto `state.uvm_error_count`/`uvm_fatal_count` by that
+    caller, IS the newer, better evidence), upserting the same
+    `memory_id` -- MemoryStore.add()'s existing upsert-by-memory_id behavior
+    (see this function's own idempotency note above) replaces the earlier,
+    premature `job_result` classification with the accurate `job_failure`
+    one, complete with a real failure_signature/prior_related_knowledge
+    search this time. Never invents a new record for the same job."""
+    # `state.sim_status == "FAIL"` (added Phase 11, 2026-09-03): the ORIGINAL
+    # `is_failure` definition below only ever looked at LSF-level/UVM-marker
+    # evidence -- never the real DV verdict itself. That was harmless at the
+    # gated call site above (state.sim_status is guaranteed UNKNOWN/RUNNING
+    # there, by the very CRITICAL discrepancy that gates this function), but
+    # left a real gap at the SECOND call site
+    # (regression_reporter.run_reconciliation_cycle(), called once
+    # state.sim_status has just been set from a real sim.log epilogue
+    # verdict): a "FAILED" epilogue with BOTH uvm_error/uvm_fatal counts
+    # genuinely zero (a real, parser-permitted combination -- a timeout, or
+    # an objection/phase-declared failure that raised neither) would
+    # otherwise never be classified `is_failure` here despite being a real,
+    # confirmed DV FAIL. Included unconditionally rather than only at that
+    # second call site so both callers share one honest definition.
+    is_failure = (
+        state.lsf_status == "EXIT" or state.uvm_fatal_count > 0
+        or state.assertion_failure or state.simulator_crash
+        or state.sim_status == "FAIL"
+    )
+    kind = "job_failure" if is_failure else "job_result"
+    record = {
+        "memory_id": job_tier_memory_id(jid),
+        "kind": kind,
+        "job_id": jid,
+        "pattern": state.pattern,
+        "scope": "regression",
+        "title": f"LSF job {jid} reached {state.lsf_status} (dv_analysis_status=ANALYSIS_OWED)",
+        "lsf_status": state.lsf_status,
+        "dv_analysis_status": "ANALYSIS_OWED",
+        "uvm_error_count": state.uvm_error_count,
+        "uvm_fatal_count": state.uvm_fatal_count,
+        "terminal_signature": state.terminal_signature,
+        # FIX ATTEMPT + RESULT (2026-09-03, gap-close-obsidian-memory phase
+        # 4+5): the Job Memory tier's spec-named "fix attempt"/"result"
+        # fields. root_cause_status/fix_proposal_status are real JobState
+        # enums the per-job debug flow advances off "NOT_STARTED"; dv_result
+        # is state.sim_status, the real DV verdict (deliberately a separate
+        # key from lsf_status above, per CLAUDE.md's "LSF DONE is not equal
+        # to DV PASS"). All three always carry a real value, so unlike the
+        # optional fields below they are never omitted -- "NOT_STARTED"/
+        # "UNKNOWN" is itself the honest, informative answer.
+        "root_cause_status": state.root_cause_status,
+        "fix_proposal_status": state.fix_proposal_status,
+        "dv_result": state.sim_status,
+    }
+    # Optional fields follow the same convention seed/fsdb_path established:
+    # a key is OMITTED when its source genuinely captured nothing, never
+    # written as a null placeholder that would look like the schema captured
+    # this data when it did not.
+    seed = state.seed or extract_seed_from_options(state.options)
+    if seed is not None:
+        record["seed"] = seed
+    fsdb_path = state.fsdb_path or extract_fsdb_path_from_options(state.options)
+    if fsdb_path is not None:
+        record["fsdb_path"] = fsdb_path
+    for field in ("command", "runlimit_minutes", "submit_time", "run_time",
+                   "observed_terminal_at", "run_dir", "sim_log", "regression_id"):
+        value = getattr(state, field)
+        if value is not None:
+            record[field] = value
+    if state.early_kill:
+        record["early_kill"] = True
+        record["kill_reason"] = state.kill_reason
+
+    # Phase 11/12 record ENRICHMENT (2026-09-04), best-effort like the
+    # failure-signature search below and for the same reason: this function's
+    # first call site (`reconcile_batch()`) does not wrap it, so a problem
+    # while computing an added field must never break an already-completed,
+    # already-saved reconciliation. A failure here costs the enrichment only
+    # -- the real job record is still written by route_and_store() below.
+    #
+    #   confidence / confidence_basis -- a real, evidence-derived level from
+    #     inference.score_confidence(); see _score_job_memory_confidence().
+    #     Omitted on failure, leaving MemoryStore.add()'s honest "UNKNOWN"
+    #     default rather than a fabricated level.
+    #   evidence -- the spec's `{sim_log, fsdb, coverage, lsf_job}` reference
+    #     block from the one shared builder, which takes PATHS AND IDS ONLY
+    #     and raises on anything multi-line or content-sized. `coverage` is
+    #     deliberately not passed: no code path anywhere in this repo records
+    #     a per-job coverage-database path today, and the builder omits an
+    #     absent key rather than writing a null placeholder that would look
+    #     like coverage was captured. The loose top-level `sim_log`/
+    #     `fsdb_path` keys stay for the existing readers
+    #     (evidence_db.insert_job_memory_record() selects them by name); this
+    #     block is the additive, spec-named view of the same facts.
+    try:
+        from .memory_artifact_policy import build_evidence_reference
+        confidence_basis = _score_job_memory_confidence(state)
+        record["confidence"] = confidence_basis["level"]
+        record["confidence_basis"] = confidence_basis
+        evidence = build_evidence_reference(
+            sim_log=state.sim_log, fsdb=fsdb_path, lsf_job=jid, run_dir=state.run_dir)
+        if evidence:
+            record["evidence"] = evidence
+    except Exception:
+        pass
+
+    # Phase 11 (2026-09-03, obsidian-memory-debugflow task -- Regression
+    # Integration): on a real UVM_ERROR/UVM_FATAL/abnormal-termination signal
+    # (the exact same `is_failure` evidence this function already derives
+    # above, never a second definition), extract a failure signature and
+    # search prior knowledge via the SAME shared Phase 10/11 interface
+    # engine.py's FAILURE_RECOVERY debug flow calls
+    # (memory_vault.build_failure_signature()/search_related_memory_for_debug()
+    # -- see their own docstrings). The result is attached to this SAME
+    # job_failure record as `prior_related_knowledge`, so the Debug Agent
+    # that later picks this job up (a separate, pre-existing agent role) has
+    # it without a second search -- but per CLAUDE.md's Evidence Truth Rule,
+    # this is candidate prior evidence only: the Debug Agent must always
+    # independently re-verify against current RTL/VIP/log/waveform evidence
+    # and never copy a previous fix verbatim, exactly as the user's spec
+    # requires. Never attempted for a plain job_result (no failure signal to
+    # search against) -- searching would just be noise.
+    if is_failure:
+        try:
+            from .memory_vault import build_failure_signature, search_related_memory_for_debug
+            failure_signature = build_failure_signature(
+                pattern=state.pattern,
+                # `extra_text=state.pattern`: the real testcase/pattern name
+                # is the one text signal this low-level reconcile hook
+                # genuinely has for a prior-knowledge search (no protocol/
+                # symptom text is available at this layer) -- a recurring
+                # testcase name across vault notes is meaningful search
+                # signal, not noise.
+                extra_text=state.pattern,
+                uvm_error_count=state.uvm_error_count, uvm_fatal_count=state.uvm_fatal_count,
+                assertion_failure=state.assertion_failure, simulator_crash=state.simulator_crash,
+                terminal_signature=state.terminal_signature, lsf_status=state.lsf_status,
+            )
+            search = search_related_memory_for_debug(root, None, failure_signature, limit=5)
+            record["failure_signature"] = failure_signature
+            if search.get("related_cases"):
+                record["prior_related_knowledge"] = search["related_cases"]
+        except Exception:
+            pass  # a memory-search problem must never block the real job-memory write below
+
+    try:
+        from .memory_router import route_and_store
+        route_and_store(root, record)
+    except Exception:
+        pass
+
+
 def reconcile_batch(root: Path, job_ids: list[int]) -> dict:
     states = {jid: load_job_state(root, jid) for jid in job_ids}
     live = bjobs_query_many(job_ids)
@@ -379,5 +1242,6 @@ def reconcile_batch(root: Path, job_ids: list[int]) -> dict:
             result[jid] = (state, discrepancies)
             continue
         save_job_state(root, state)
+        _write_job_tier_memory_on_terminal_reconcile(root, jid, state, discrepancies)
         result[jid] = (state, discrepancies)
     return result

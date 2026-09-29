@@ -1,0 +1,26 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "command_semantic_expectation_parser.py yields ZERO derived requirements against the DUT's real native command.txt (empirically verified)",
+  "summary": "tools/verification_flow/command_semantic_expectation_parser.py is the deterministic extractor simulation_semantic_validation_gate.py wires in (per that file's own header comment) to independently re-derive each command.txt line's minimum evidence/contradiction requirements, so an agent's self-reported command_expectations can't silently under-report what the real file requires. Its design assumes a synthetic key=value scenario DSL: a PROTOCOLS list (pcie/usb/ethernet/mipi/csi/dsi/amba/axi/apb/edp/emmc/sdio/sd/ucie), an OPS list (read/write/bulk/iso/interrupt/reset/recovery/enumeration/link/ltssm/timeout/error/dma/traffic/training), and key=value token parsing (port=, addr=, expect=, result=, etc.). EMPIRICALLY RAN (not just read) against the real DUT command.txt captured this session (90 lines, 66 non-blank): result = 0 of 66 lines produced ANY evidence_requirement or contradiction_requirement. Root cause confirmed by inspection: (1) none of the 14 PROTOCOLS keywords appear anywhere in the file -- register-address style (0x0002_0000) and macro names (CPUWRITE1B, GREGTOP) never match; (2) the OPS list's read/write require a token boundary regex ((?<![a-z0-9_])read), so `CPUWRITE1B(...)/`CPUREAD4B(...) never match because write/read are glued onto CPU/4B with no boundary; (3) the file has no key=value syntax at all, so parse_kv returns {} on every line. PRACTICAL CONSEQUENCE (traced into simulation_semantic_validation_gate.py's cross_check_against_command_file()): with a derived baseline of zero requirements on every line, under_reported is trivially empty no matter what the agent claims -- the independent cross-check this gate exists to provide is a COMPLETE NO-OP against this DUT's native command.txt content class. Also ran against 2 of the 24 catalogued USB BFM pattern files for contrast: extreg_rw.txt (CMD-001, 33 lines) -- ALSO 0 lines with any derived requirement. USB31_SSPbulkin.txt (CMD-016, 300 lines) -- 22/300 lines produced a requirement, but inspection shows this is largely COINCIDENTAL substring matching inside comments/file paths, not genuine scenario-intent extraction -- e.g. line 330's protocol=USB fires only because the line loads a file whose PATH contains the directory name 'USB' (`SMEMMODEL.FILLMEM(\".../CMD/USB/dev_bulkintrb...\")), not because the line performs a USB operation the parser correctly identified. CONCLUSION for any future generation/debug agent: a MATCH/clean cross-check result from simulation_semantic_validation_gate.py, on either command.txt style (native DUT testbench-style or USB-scenario key=value-adjacent style), should NOT be treated as strong evidence that self-reported expectations were genuinely validated against real file intent -- the parser's real coverage is a hard zero on one whole class of real content and coincidental on much of the other.",
+  "source_paths": [
+    "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\tools\\verification_flow\\command_semantic_expectation_parser.py",
+    "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\tools\\verification_flow\\simulation_semantic_validation_gate.py",
+    "/home/svcacct/DV/DUT/0820/dlan063/SIMV_GIT/command.txt (remote)",
+    "D:\\DV\\Task\\USB\\usb31_dev_uvm\\reference\\bfm_patterns\\extreg_rw.txt",
+    "D:\\DV\\Task\\USB\\usb31_dev_uvm\\reference\\bfm_patterns\\USB31_SSPbulkin.txt",
+    "D:\\DV\\Task\\DV_Agent_Harness_L5\\v50\\.work\\intake-top_tb_commandtxt-report.md"
+  ],
+  "category": "top_tb_commandtxt",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-3840008524",
+  "level": "project",
+  "created_at": 1788367702.8637083,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

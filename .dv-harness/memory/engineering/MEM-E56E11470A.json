@@ -1,0 +1,27 @@
+{
+  "kind": "debug_lesson",
+  "verified": true,
+  "title": "lmstat+scheduler preflight gate is now real, wired in front of the harness's one bsub call site -- but 'the gate exists and blocks correctly' and 'a real job can get through it' are two separate facts, and only the first is true today",
+  "scope": "engine",
+  "symptoms": [
+    "dv_harness/preflight.py's 6 checks (license/queue/host/disk/workdir/EDA-env-vars) were built, tested (52 new tests), and independently re-verified live against the real remote server (host-c/vchost-b): license/queue/host/disk/workdir all PASS, but eda_env_vars genuinely FAILs -- VCS_HOME/UVM_HOME/VERDI_HOME are unset on the persistent relay's shell, so real overall verdict is BLOCKED"
+  ],
+  "root_cause": "The persistent relay's shell was never configured to `module load synopsys/vcs/...` (or equivalent EDA env setup) -- this is a real infrastructure/operations gap, not a preflight.py code defect. The gate is doing exactly its job: refusing to let bsub_submit_with_preflight() call the real bsub_submit() when the environment genuinely isn't ready.",
+  "fix": "Not fixed this session -- explicitly named as an infra decision requiring the user's own action (wiring the real module-load step on the remote server's execution shell), correctly declined to be automated by either the implementing workstream or the finish-phase reviewer.",
+  "verification": {
+    "single_sim": "N/A",
+    "regression": "Live check against the real server, not a mock: lmutil lmstat -a -c 2900@host-a -> UP (VCSRuntime/VCSCompiler 99/0 in use); bqueues vcs -> Open:Active, 12 RUN; hostname -> host-c; df -Pk on the real sim dir -> ~1.58 TiB free; workdir exists+writable; EDA env vars genuinely unset via a real tcsh $?VAR check.",
+    "reaudit": "Independent review phase re-ran dv_harness_tests/test_preflight_lsf_wiring.py live (6/6 pass) and confirmed via code inspection (lsf_client.py:207-217) that PreflightBlockedError is a structural raise, never a logged-but-ignored warning."
+  },
+  "confidence": "CONFIRMED",
+  "note": "GENERALIZABLE LESSON: when a new gate/guard is built against a real remote environment, 'the gate's logic is correct' should be reported and tracked SEPARATELY from 'the environment the gate checks is actually ready' -- conflating the two into one PASS/READY status hides exactly the kind of real infra gap (missing module load) that the gate exists to catch in the first place. This mirrors the earlier session lesson about TRUE_PASS semantic verification: a mechanism working correctly and a target condition being met are different claims.",
+  "provenance": "dv-agent-harness-l5 session, 2026-09-03, Production-Grade Execution Governance workflow, preflight workstream + finish/review phases. Commit 1459f99. See .work/governance-preflight-report.md.",
+  "memory_id": "MEM-E56E11470A",
+  "level": "engineering",
+  "created_at": 1788426362.9554687,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}

@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dv-agent-harness-l5/schemas/verification_architecture.schema.json",
+  "title": "verification_architecture",
+  "description": "GENERATED artifact: dv_harness/verification_architecture.py assembles this from real evidence produced elsewhere -- env_manifest.py (vip_config/dut_facts), connectivity.py (bind-tier classification, protocol-check/scoreboard planning-entry shapes), and phy_boundary.py (serial/parallel boundary decisions). It carries five typed IR record kinds (vip_selection/vip_bind/checker/scoreboard/assertion), each an EXTENSION of an existing producer's own dict shape (recorded verbatim under that IR's own fields, e.g. instance_path/vip_type for vip_selection) plus a common status/confidence/source_evidence trio, and the placement-conflict / intra-subsystem-duplicate findings a comparator derived from those IRs. Every record's confidence is drawn from inference.CONFIDENCE_LEVELS plus the honest addition UNKNOWN (no evidence to grade) -- never a second confidence vocabulary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "vip_selection", "vip_bind", "checker", "scoreboard", "assertion", "placement_conflicts", "intra_subsystem_duplicates", "matrices"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "vip_selection": { "type": "array", "items": { "$ref": "#/$defs/vip_selection_ir" } },
+    "vip_bind": { "type": "array", "items": { "$ref": "#/$defs/vip_bind_ir" } },
+    "checker": { "type": "array", "items": { "$ref": "#/$defs/checker_ir" } },
+    "scoreboard": { "type": "array", "items": { "$ref": "#/$defs/scoreboard_ir" } },
+    "assertion": { "type": "array", "items": { "$ref": "#/$defs/assertion_ir" } },
+    "placement_conflicts": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "intra_subsystem_duplicates": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "matrices": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vip_bind", "interface_to_verification", "function_to_checker", "assertion_placement", "scoreboard_architecture"],
+      "properties": {
+        "vip_bind": { "type": "string" },
+        "interface_to_verification": { "type": "string" },
+        "function_to_checker": { "type": "string" },
+        "assertion_placement": { "type": "string" },
+        "scoreboard_architecture": { "type": "string" }
+      },
+      "description": "Rendered markdown pipe tables (connectivity.render_markdown_table()), one per required output matrix: VIP Bind, Interface-to-Verification, Function-to-Checker, Assertion Placement, Scoreboard Architecture."
+    }
+  },
+  "$defs": {
+    "confidence": {
+      "enum": ["HIGH", "MEDIUM", "LOW", "UNKNOWN"],
+      "description": "inference.CONFIDENCE_LEVELS (HIGH/MEDIUM/LOW) plus UNKNOWN -- no evidence existed to grade this record. Never a second confidence vocabulary."
+    },
+    "status": {
+      "enum": ["RESOLVED", "PARTIAL", "NOT_AVAILABLE", "UNKNOWN"],
+      "description": "RESOLVED: every field this IR needs was derived from real evidence. PARTIAL: some fields resolved, others still need more evidence or a human answer. NOT_AVAILABLE: the underlying producer itself reported no evidence. UNKNOWN: this module could not classify the record at all."
+    },
+    "source_evidence_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fact_source", "detail"],
+      "properties": {
+        "fact_source": { "type": "string", "minLength": 1, "description": "Dotted path of the real producing module.function this fact came from (e.g. 'env_manifest.build_vip_config')." },
+        "detail": { "type": "object" }
+      }
+    },
+    "vip_selection_ir": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ir_kind", "instance_path", "vip_type", "bind_tier", "release_status", "status", "confidence", "source_evidence"],
+      "properties": {
+        "ir_kind": { "const": "vip_selection" },
+        "instance_path": { "type": "string", "minLength": 1 },
+        "vip_type": { "type": "string", "minLength": 1 },
+        "config_fields": { "type": "object" },
+        "bind_tier": { "type": "string" },
+        "release_status": { "type": "string" },
+        "release_version": { "type": ["string", "null"] },
+        "active_passive": { "type": ["string", "null"] },
+        "status": { "$ref": "#/$defs/status" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "source_evidence": { "type": "array", "items": { "$ref": "#/$defs/source_evidence_entry" } }
+      }
+    },
+    "vip_bind_ir": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ir_kind", "target_instance", "bind_tier", "boundary_kind", "chain_classification", "status", "confidence", "source_evidence"],
+      "properties": {
+        "ir_kind": { "const": "vip_bind" },
+        "target_instance": { "type": "string", "minLength": 1 },
+        "ports": { "type": "array" },
+        "reason": { "type": "string" },
+        "bind_tier": { "type": "string" },
+        "boundary_kind": { "type": "string" },
+        "bindable": { "type": ["boolean", "null"] },
+        "mount_layer": { "type": ["string", "null"] },
+        "chain_classification": { "enum": ["DIRECT", "WRAPPER_ONLY", "BRIDGE_IN_PATH", "UNKNOWN"] },
+        "chain_path": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["instance", "module", "role", "rationale"],
+            "properties": {
+              "instance": { "type": ["string", "null"] },
+              "module": { "type": ["string", "null"] },
+              "role": { "enum": ["WRAPPER", "BRIDGE", "UNCLASSIFIED"] },
+              "rationale": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "status": { "$ref": "#/$defs/status" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "source_evidence": { "type": "array", "items": { "$ref": "#/$defs/source_evidence_entry" } }
+      }
+    },
+    "checker_ir": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ir_kind", "interface_row_id", "vip_type", "status", "confidence", "source_evidence"],
+      "properties": {
+        "ir_kind": { "const": "checker" },
+        "interface_row_id": { "type": "string", "minLength": 1 },
+        "vip_type": { "type": "string" },
+        "enabled_builtin_checks": { "type": "array", "items": { "type": "string" } },
+        "disabled_builtin_checks": { "type": "array" },
+        "target_instance": { "type": ["string", "null"] },
+        "mount_side": { "enum": ["PRE_BRIDGE", "POST_BRIDGE", null] },
+        "checker_domain": { "enum": ["REGISTER_CSR", "INTERRUPT", "DMA", "STATE", "TIMING", null] },
+        "status": { "$ref": "#/$defs/status" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "source_evidence": { "type": "array", "items": { "$ref": "#/$defs/source_evidence_entry" } }
+      }
+    },
+    "scoreboard_ir": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ir_kind", "scoreboard_id", "unfilled_fields", "status", "confidence", "source_evidence"],
+      "properties": {
+        "ir_kind": { "const": "scoreboard" },
+        "scoreboard_id": { "type": "string", "minLength": 1 },
+        "endpoint_pairs": {},
+        "matching_key": {},
+        "unfilled_fields": { "type": "array", "items": { "type": "string" } },
+        "comparable": { "type": ["boolean", "null"] },
+        "comparability_reason": { "type": "string" },
+        "status": { "$ref": "#/$defs/status" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "source_evidence": { "type": "array", "items": { "$ref": "#/$defs/source_evidence_entry" } }
+      }
+    },
+    "assertion_ir": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ir_kind", "assertion_id", "status", "confidence", "source_evidence"],
+      "properties": {
+        "ir_kind": { "const": "assertion" },
+        "assertion_id": { "type": "string", "minLength": 1 },
+        "target_signal": { "type": ["string", "null"] },
+        "target_instance": { "type": ["string", "null"] },
+        "clock_domain": { "type": ["string", "null"] },
+        "reset_domain": { "type": ["string", "null"] },
+        "checked_property": { "type": ["string", "null"] },
+        "clock_domain_match": { "type": ["boolean", "null"] },
+        "reset_domain_match": { "type": ["boolean", "null"] },
+        "status": { "$ref": "#/$defs/status" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "source_evidence": { "type": "array", "items": { "$ref": "#/$defs/source_evidence_entry" } }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "severity", "summary", "evidence"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "VIP_AFTER_BRIDGE", "CHECKER_WRONG_SIDE_OF_BRIDGE", "ASSERTION_WRONG_CLOCK_DOMAIN",
+            "SCOREBOARD_INPUTS_NOT_COMPARABLE", "DUPLICATE_ACTIVE_VIP", "WRONG_RESET_DOMAIN",
+            "VIP_CHECKER_DUPLICATES_SVA", "SCOREBOARD_DUPLICATES_CHECKER", "DUPLICATE_SCOREBOARD_PATH",
+            "CSR_CHECKER_WRONG_TARGET_DOMAIN", "INTERRUPT_CHECKER_WRONG_TARGET_DOMAIN",
+            "DMA_CHECKER_WRONG_TARGET_DOMAIN", "STATE_CHECKER_WRONG_TARGET_DOMAIN",
+            "TIMING_CHECKER_WRONG_TARGET_DOMAIN"
+          ]
+        },
+        "severity": { "enum": ["HIGH", "MEDIUM", "LOW"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/source_evidence_entry" } }
+      }
+    }
+  }
+}

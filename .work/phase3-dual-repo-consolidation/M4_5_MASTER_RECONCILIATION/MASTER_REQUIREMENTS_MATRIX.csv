@@ -1,0 +1,28 @@
+REQUIREMENT_ID,SOURCE_SECTION,REQUIREMENT_NAME,DESCRIPTION,APPLIES_TO_LEVELS,STATUS,EVIDENCE_REFS,OWNING_CAPABILITY_IDS,NOTES
+REQ-GATE-M1,Article0/S4,Canonical >= v50 baseline,Canonical must be behaviorally >= v50 HEAD+dirty+untracked,ALL,MET,M1_FINAL_REPORT.md,"(program-level, not a single CAPABILITY_ID)",M1 approved and frozen per user
+REQ-GATE-M8,Article0/S4,Canonical >= Maximum Verified Source Union,"Canonical must reach capability parity with the union of Parent+v50+b7a+b7b+b8 (verified, not file-count)",ALL,NOT_YET_MET,M4_FINAL_REPORT.md;CANONICAL_CAPABILITY_SUPERSET_MATRIX.md,see MASTER_CAPABILITY_STATUS_MATRIX rows with CANONICAL_STATE != superset-resolved,Explicitly NOT claimed this wave
+REQ-GATE-M13,Article0/S4,Canonical > Maximum Verified Source Union,Final gate: canonical strictly exceeds the source union,ALL,NOT_YET_MET; NOT APPLICABLE UNTIL M8 MET,,,Final-only gate; not claimed
+REQ-DOM-01,S7,Repository/Product Identity,"Canonical repo identity verifiable, location-independent",ALL,MET,l5dgva_repo.discover_repo_root/is_l5dgva_repo re-verified this wave,,REPO_ROOT=D:\DV\Task\L5_DGVA confirmed
+REQ-DOM-02,S7,Constitution / Article 0,"Highest governing principle installed, enforceable, anti-drift gated",ALL,PARTIAL (installed+enforced; compliance NOT_YET_QUALIFIED),docs/architecture/L5DGVA_CONSTITUTION.md;dv_harness/constitution_gate.py,CAP-M4.5-003,
+REQ-DOM-03,S7/S8,CLAUDE Context / Markdown Governance,"Compact CLAUDE.md + task-scoped governance retrieval, 3 context tiers",ALL,PARTIAL,dv_harness/governance_registry.py,CAP-M4.5-001;CAP-M4.5-002,"CLAUDE.md size still 2.07MB, a real disclosed problem"
+REQ-DOM-04,S7/S11,Multi-Model Orchestration (ChatGPT/Codex),"Token-efficient multi-model handoff loop, real telemetry",ALL,NOT_PRESENT (as automated loop); building blocks PARTIAL,M4_5_MULTI_MODEL_ORCHESTRATION_AUDIT.md,CAP-M4.5-005..011,
+REQ-DOM-05,S7,OpenSpec/Intake/Clarification,"Single ClarificationService, VerificationLevel foundation for all 3 levels",ALL,BLOCKED (design pending; genericity gap open),M4_FINAL_REPORT.md;M_MINUS_1_ARCHITECTURE_DECISIONS.md D2,CAP-M6-CLARSVC-001;CAP-M5M6-VLEVEL-001,Architecture decision ALREADY MADE (D2) -- not reopened
+REQ-DOM-06,S7/S18,IP/Subsystem/System-Level E2E flow,Full product flow operational per level,IP;SUBSYSTEM;SYSTEM_LEVEL,PARTIAL/UNKNOWN per level (see MASTER_END_TO_END_DV_STATUS.md),MASTER_END_TO_END_DV_STATUS.md,,IP_MODE has no router support at all today
+REQ-DOM-07,S7,VIP discovery/binding/multi-vendor,,ALL,NOT_RE-AUDITED_THIS_WAVE,,,Reused M1/M4 evidence only; no new audit performed
+REQ-DOM-08,S7,vPlan/tests/sequences/scenarios/FW,,ALL,NOT_RE-AUDITED_THIS_WAVE (M4: VPLAN_COVERAGE_TRACEABILITY_FOUNDATION=READY),M4_VPLAN_COVERAGE_TRACEABILITY_FOUNDATION.md,,
+REQ-DOM-09,S7,Checker/scoreboard/assertion/performance,,ALL,NOT_RE-AUDITED_THIS_WAVE,,,
+REQ-DOM-10,S7/S16,Execution Architecture,CURRENT replay.ps1 path real; TARGET ExecutionService not operational,ALL,"PARTIAL (CURRENT works, TARGET not built)",M4_EXECUTION_FOUNDATION.md,CAP-M9-EXEC-001,
+REQ-DOM-11,S7,Regression/triage/RCA,,ALL,NOT_RE-AUDITED_THIS_WAVE (M4 closure regression itself real and clean),M4_FINAL_REPORT.md,,"REGRESSION_CAUSED_BY_M4=0, UNKNOWN=0"
+REQ-DOM-12,S7,Coverage/closure/signoff,,ALL,PARTIAL,CANONICAL_CAPABILITY_SUPERSET_MATRIX.md,CAP-M3-005;CAP-M8-EXPLOOP-002,
+REQ-DOM-13,S7,Requirements/evidence traceability/change-impact,,ALL,NOT_RE-AUDITED_THIS_WAVE,,,
+REQ-DOM-14,S7/S17,Knowledge Brain / Obsidian,"5-tier memory, KnowledgeService, Obsidian adapter, cross-session recall",ALL,PARTIAL (preserved unchanged; KnowledgeService facade confirmed NOT to exist),M4_FINAL_REPORT.md (KNOWLEDGE_BRAIN_PRESERVED=YES),CAP-M8-MAKC-001,
+REQ-DOM-15,S7,Research/DV paper/new technology (external evolution loop),,ALL,"IMPLEMENTED,WIRED,TESTED (external loop research->candidate->experiment path)",CANONICAL_CAPABILITY_SUPERSET_MATRIX.md,,Strongest-evidenced domain in this reconciliation
+REQ-DOM-16,S7,Project/User Experience Learning (internal evolution loop),,ALL,"PARTIAL/ABSENT (confirmed-broken EXPERIENCE_READY wiring, all trees)",CANONICAL_CAPABILITY_SUPERSET_MATRIX.md #Confirmed-broken-mechanism,CAP-M8-EXPLOOP-001;CAP-M8-EXPLOOP-002,"Pre-existing defect, not a migration gap"
+REQ-DOM-17,S7,Multi-Agent orchestration,,ALL,"NOT_VERIFIED (protected input recorded, not applied)",M4_PROTECTED_INPUT_STATUS.md,CAP-M8-MAKC-001,
+REQ-DOM-18,S7,Governance/Self-Audit,Constitution/Anti-Drift gate operational,ALL,PARTIAL,dv_harness/constitution_gate.py,CAP-M4.5-003,
+REQ-DOM-19,S7,WSL2/Docker/local runtime,,ALL,NOT_RE-AUDITED_THIS_WAVE,,,
+REQ-DOM-20,S7/S19,"Platform Architecture (3 zones, P1-P6)",ZONE1/2/3 separation; P1-P6 wave content,ALL,NOT_YET_SCOPED,,CAP-PLATFORM-000,No accepted prior artifact defines P1-P6 content; disclosed meta-gap
+REQ-DOM-21,S7,USB/PCIe/Ethernet/MIPI/CAN-FD/AMBA genericity,,ALL,NOT_RE-AUDITED_THIS_WAVE,,,
+REQ-DOM-22,S7,USB Golden,Reference USB Environment consumption,ALL,"BLOCKED (REFERENCE_USB_ENV_CONSUMED=NO, by policy until M11)",M4_FINAL_REPORT.md,CAP-M11-REFUSB-001,Must remain NO per standing constraint
+REQ-DOM-23,S7,PCIe Zero-Core-Change,,ALL,NOT_RE-AUDITED_THIS_WAVE / NOT_STARTED,,,
+REQ-DOM-24,S7,Release/Cutover/Productization,,ALL,NOT_STARTED,,,M12/M13 territory

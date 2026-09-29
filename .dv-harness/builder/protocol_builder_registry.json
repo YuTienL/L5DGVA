@@ -6,6 +6,8 @@
     "pcie": {
       "display_name": "PCIe",
       "skill": "pcie-environment-builder",
+      "profile_skill": "PCIe/pcie-profile",
+      "vip_lookup_skill": null,
       "discover": [
         "RC/EP/Switch role",
         "Gen2-Gen6",
@@ -28,6 +30,8 @@
     "ethernet": {
       "display_name": "Ethernet",
       "skill": "ethernet-environment-builder",
+      "profile_skill": "Ethernet/ethernet-profile",
+      "vip_lookup_skill": null,
       "discover": [
         "MAC/PCS/PMA boundary",
         "speed/mode",
@@ -49,6 +53,8 @@
     "mipi-csi": {
       "display_name": "MIPI CSI-2",
       "skill": "mipi-csi-environment-builder",
+      "profile_skill": "MIPI/csi2-profile",
+      "vip_lookup_skill": null,
       "discover": [
         "TX/RX role",
         "CSI-2 version",
@@ -70,6 +76,8 @@
     "mipi-dsi": {
       "display_name": "MIPI DSI",
       "skill": "mipi-dsi-environment-builder",
+      "profile_skill": "MIPI/dsi-profile",
+      "vip_lookup_skill": null,
       "discover": [
         "Host/Peripheral role",
         "Video/Command mode",
@@ -91,6 +99,8 @@
     "canfd": {
       "display_name": "CAN / CAN-FD",
       "skill": "canfd-environment-builder",
+      "profile_skill": "CAN/canfd-profile",
+      "vip_lookup_skill": null,
       "discover": [
         "node/controller role",
         "Classical CAN/CAN-FD",
@@ -113,6 +123,8 @@
     "amba4-soc": {
       "display_name": "AMBA4 SoC Multi-Master × Multi-Slave",
       "skill": "amba4-soc-environment-builder",
+      "profile_skill": "AMBA/amba-profile",
+      "vip_lookup_skill": null,
       "discover": [
         "AXI3/AXI4/AXI4-Lite/AXI-Stream/AHB/AHB-Lite/APB3/APB4",
         "master/slave topology",
@@ -138,6 +150,8 @@
     "emmc": {
       "display_name": "eMMC",
       "skill": "emmc-environment-builder",
+      "profile_skill": null,
+      "vip_lookup_skill": null,
       "discover": [
         "host/device role",
         "bus width",
@@ -160,6 +174,8 @@
     "sd": {
       "display_name": "SD / SDIO",
       "skill": "sd-environment-builder",
+      "profile_skill": null,
+      "vip_lookup_skill": null,
       "discover": [
         "host/card role",
         "SD/SDHC/SDXC/SDIO",
@@ -181,6 +197,8 @@
     "edp": {
       "display_name": "eDP / DisplayPort",
       "skill": "edp-environment-builder",
+      "profile_skill": null,
+      "vip_lookup_skill": null,
       "discover": [
         "source/sink role",
         "link rate",
@@ -204,6 +222,8 @@
     "ucie": {
       "display_name": "UCIe",
       "skill": "ucie-environment-builder",
+      "profile_skill": null,
+      "vip_lookup_skill": null,
       "discover": [
         "die/adapter role",
         "UCIe version",
@@ -225,6 +245,8 @@
     "usb": {
       "display_name": "USB 2.0 / USB 3.x",
       "skill": "usb-environment-builder",
+      "profile_skill": "USB/usb-profile",
+      "vip_lookup_skill": "USB/usb-vip-lookup",
       "discover": [
         "Host/Device role",
         "USB2/USB3 mode",

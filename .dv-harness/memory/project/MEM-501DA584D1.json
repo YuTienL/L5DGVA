@@ -1,0 +1,21 @@
+{
+  "kind": "project_fact",
+  "verified": true,
+  "scope": "project",
+  "title": "DWC_usb31 Install Guide -- required tool/VIP versions, licenses, env vars, and version-drift history",
+  "summary": "DWC_usb31_install.pdf (v2.10a, Jan 2024, converted via pdftotext -layout, 1378 lines). Table 1-5 'Synopsys Supported VIP and Tool Versions' (line 612-677) pins exact tool versions qualified for THIS IP version: coreConsultant 2023.09; Design Compiler / Fusion Compiler 2022.12-SP6 (64-bit only); Formality 2022.12-SP6; TestMAX ATPG 2022.12-SP6; Spyglass 2023.03-SP2 (GuideWare 2023.03 ONLY); PrimeTime 2022.12-SP5-1; Synplify 2023.03-SP1; RTL Architect 2022.12-SP5; VC Static / VC LP / VC SpyGlass 2023.03-SP1-1/2023.03-SP2; VCS Simulator U-2023.03-SP1-1; Verdi U-2023.03-SP1-1; Python 3.5.0; Perl 5.8.3 (Perl DBI needed for SQLite in perf-analysis flow); Discovery VIP = AMBA_SVT U-2023.06, SVT U-2023.03, USB_SVT U-2023.06, MPHY_SVT U-2023.06 (AMBA_SVT and USB_SVT must be downloaded/installed SEPARATELY from the controller image -- only USB_TS TestSuite ships packaged). Footnote: 'You need a VCS license to run simulations. You can compile and elaborate RTL with NCSim and ModelSim; however, Synopsys does not provide compilation, elaboration, or simulation support as a deliverable using NCSim and ModelSim' -- matches Release Notes' 'only VCS is supported' statement. No VHDL simulators supported (can generate VHDL GTECH netlist only). System requirements (Table 1-2): RHEL 5.0/64+, csh >=6.18.01, make >=3.8, 300MB(coreConsultant)+400MB(install)+14GB(post-sim) disk, 4GB swap + 4GB RAM minimum. Env vars required (Table 1-6): LM_LICENSE_FILE / SNPSLMD_LICENSE_FILE (must be set BEFORE running the .run installer), LD_LIBRARY_PATH, DESIGNWARE_HOME (base install dir, must be writable -- VIP wrappers get installed there), $DESIGNWARE_HOME/bin must be on PATH. License requirements (Table 1-4): Device=DWC-USB31-DEV-SRC; Host=DWC-USB31-HST-SRC(+DWC-USB31-HOSTMP for multi-port); DRD=DWC-USB31-DEV-SRC+DWC-USB31-HST-SRC; add-ons Hibernation=DWC-USB31-2PWR, LPDDR4-QoS=DWC-USB31-LPDDR4-QOS, Premium=DWC-USB31-V2; VIP licenses (separate) = VIP-USB3-SVT, VIP-AMBA-AXI-SVT, VIP-AMBA-AHB-SVT, VIP-USB31-IIPPACK, VIP-USB-31-OPT-SVT; tool license DWC-coreAssembler. Customer Verification Environment caveat (SS1.6.4.3, line 577-586, IMPORTANT SCOPE BOUNDARY): 'The VC VIP library license shipped with DWC_usb31 is intended only to verify the interface level testing of the specific IP configuration out-of-the-box in coreConsultant... NOT intended to be used as a full featured verification model at the subsystem or SOC level.' VERSION-DRIFT HISTORY from Revision History table (line 109-199): NC-Verilog support was ADDED ~May 2016 then later REMOVED (bundled with removal of Solaris platform support and Leda RTL checker support, undated entry between 1.00a-lca01 and 1.30a) -- so by 2.10a only VCS is supported despite the lingering NCSim/ModelSim compile-only footnote being a legacy carve-out, not active support; Aug 2016 entry removed all references to encrypted-RTL support ('no longer supported'); Jan 2017 added minimum csh/make versions and LPDDR4-QoS-Add-On licensing; Jan 2015 = initial version of this document.",
+  "source_paths": [
+    "D:\\DV\\Task\\USB\\DOC\\IP\\DWC_usb31_install.pdf"
+  ],
+  "category": "ip_docs",
+  "provenance": "intake-extraction-usb workflow, 2026-09-03",
+  "memory_id": "MEM-501DA584D1",
+  "level": "project",
+  "created_at": 1788367138.0114887,
+  "last_used_at": null,
+  "reuse_count": 0,
+  "confidence": "UNKNOWN",
+  "status": "ACTIVE",
+  "confirmation_count": 0,
+  "last_confirmed_at": null
+}
